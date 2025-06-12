@@ -1,100 +1,51 @@
-#pragma once  // Single-include guard (portable and less error-prone than traditional #ifndef)
+#pragma once
 
-#include <iostream>
-#include <string>
 #include <exception>
+#include <string>
 
-namespace Planck::Exceptions {
-
-    // Describes broad categories of recoverable errors
-    enum class ErrorCategory {
-        IO,    // Input/output failures
-        SCF,   // SCF convergence issues
-        GEOM,  // Geometry parsing/validation failures
-        OPT    // Optimization failures
+namespace Planck::Exceptions
+{
+    enum class ExceptionTypes
+    {
+        IO,
+        Geom,
+        SCF,
+        Opt
     };
 
-    // Base exception carrying a message and error category
-    class PlanckException : public std::exception {
+    class BaseException : public std::exception
+    {
     private:
-        std::string _error_message;
-        ErrorCategory _error_category;
+        std::string _error;
+        ExceptionTypes _exception;
 
     public:
-        explicit PlanckException(std::string message, ErrorCategory category)
-            : _error_message(std::move(message)), _error_category(category) {}
-
-        const char* what() const noexcept override { return _error_message.c_str(); }
-        ErrorCategory category() const noexcept { return _error_category; }
+        explicit BaseException(const std::string &message, ExceptionTypes exception) : _error(std::move(message)), _exception(exception) {}
+        const char *what() const noexcept override { return _error.c_str(); }
     };
 
-    // Thrown when input/output fails (e.g. file not found)
-    class IOError : public PlanckException {
+    class IOException : public BaseException
+    {
     public:
-        explicit IOError(const std::string message) noexcept
-            : PlanckException("IO Error: " + message, ErrorCategory::IO) {}
+        explicit IOException(const std::string &message) noexcept : BaseException("IOError : " + message, ExceptionTypes::IO) {}
     };
 
-    // Thrown on SCF convergence errors
-    class SCFError : public PlanckException {
+    class GeomException : public BaseException
+    {
     public:
-        explicit SCFError(const std::string& message) noexcept
-            : PlanckException("SCF Error: " + message, ErrorCategory::SCF) {}
+        explicit GeomException(const std::string &message) noexcept : BaseException("GeomError : " + message, ExceptionTypes::Geom) {}
     };
 
-    // Converts ErrorCategory to printable label
-    inline const char* to_string(ErrorCategory category) {
-        switch (category) {
-            case ErrorCategory::IO:   return "IO";
-            case ErrorCategory::SCF:  return "SCF";
-            case ErrorCategory::GEOM: return "GEOM";
-            case ErrorCategory::OPT:  return "OPT";
-            default:                  return "Unknown";
-        }
-    }
-}
-
-namespace Planck::Exceptions::Diagnostics {
-
-    // Controls verbosity of logged output
-    enum class LogLevel {
-        Minimal,   // Only the error message
-        Standard,  // Category + message
-        Debug      // Full context: file, line, function
-    };
-
-    // Logs exceptions based on configured verbosity level
-    class Logger {
-    private:
-        LogLevel _level;
-
+    class SCFException : public BaseException
+    {
     public:
-        explicit Logger(LogLevel level) : _level(level) {}
-
-        void log(const Planck::Exceptions::PlanckException& ex,
-                 const char* file = "",
-                 int line = 0,
-                 const char* function = "") const
-        {
-            switch (_level) {
-                case LogLevel::Minimal:
-                    std::cerr << ex.what() << '\n';
-                    break;
-
-                case LogLevel::Standard:
-                    std::cerr << "[PlanckException] Category: "
-                              << Planck::Exceptions::to_string(ex.category())
-                              << " | Message: " << ex.what() << '\n';
-                    break;
-
-                case LogLevel::Debug:
-                    std::cerr << "[PlanckException] Category: "
-                              << Planck::Exceptions::to_string(ex.category())
-                              << " | Message: " << ex.what()
-                              << " | Location: " << file << ":" << line
-                              << " (" << function << ")" << std::endl;
-                    break;
-            }
-        }
+        explicit SCFException(const std::string &message) noexcept : BaseException("SCFError : " + message, ExceptionTypes::SCF) {}
     };
-}
+
+    class OptException : public BaseException
+    {
+    public:
+        explicit OptException(const std::string &message) noexcept : BaseException("OptError : " + message, ExceptionTypes::Opt) {}
+    };
+
+};
