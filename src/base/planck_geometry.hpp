@@ -66,9 +66,7 @@ namespace Planck::Geometry
         void update_coordinates(const std::vector<Eigen::Vector3f> &coords)
         {
             for (size_t i = 0; i < coords.size(); i++)
-            {
                 _geometry[i].set_coordinates(coords[i]);    // update the coordinates of each atom;
-            }
         }
 
     private:
@@ -80,9 +78,7 @@ namespace Planck::Geometry
 
             auto iterator_ = atomicNumber.find(atom);
             if (iterator_ != atomicNumber.end())
-            {
                 return iterator_->second;
-            }
             throw Planck::Exceptions::GeomException("No atom called " + atom);
         }
 
@@ -94,9 +90,7 @@ namespace Planck::Geometry
 
             auto iterator_ = atomicMass.find(atom);
             if (iterator_ != atomicMass.end())
-            {
                 return iterator_->second;
-            }
             throw Planck::Exceptions::GeomException("No atom called " + atom);
         }
     };

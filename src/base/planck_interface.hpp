@@ -6,6 +6,7 @@
 
 namespace Planck::Interface
 {
+
     class BaseInterface
     {
     protected:
@@ -19,16 +20,12 @@ namespace Planck::Interface
         {
             auto iterator_ = _options.find(key);
             if (iterator_ == _options.end())
-            {
                 throw std::out_of_range("Key " + key + " was not found in the options");
-            }
 
             std::istringstream buffer_(iterator_->second);
             T value;
             if (!(buffer_ >> value))
-            {
-                throw std::invalid_argument("Failed to convert " + value + " to target type")
-            }
+                throw std::invalid_argument("Failed to convert " + value + " to target type") 
             return value;
         }
 
@@ -37,27 +34,40 @@ namespace Planck::Interface
         {
             auto iterator_ = _options.find(key);
             if (iterator_ == _options.end())
-            {
                 throw std::out_of_range("Key " + key + " was not found in the options");
-            }
 
             const std::string value = iterator_->second;
             if (value == "TRUE" || value == "True" || value == "true" || value == "1")
-            {
                 return true;
-            }
             if (value == "FALSE" || value == "False" || value == "false" || value == "0")
-            {
                 return false;
-            }
             throw std::invalid_argument("Invalid Boolean argument for " + key);
         }
+
+        virtual void set_parameters_from_input();
     };
 
-    class InputInterface : public BaseInterface
+    class SetupInterface : public BaseInterface
     {
+    private:
+        std::string _calc_type;
+        std::string _theory;
+        std::string _basis;
+        std::string _coor_type;
+        bool _use_diis;
+        bool _use_symm;
+
     public:
-        explicit InputInterface(const std::vector<std::string> &keys, const std::vector<std::string> &values) : BaseInterface(build_map(keys, values)) {}
+        explicit SetupInterface(const std::vector<std::string> &keys, const std::vector<std::string> &values) : BaseInterface(build_map(keys, values)) {}
+
+        void set_parameters_from_input() override
+        {
+            _calc_type = get_value<std::string>("CALC_TYPE");
+            _theory    = get_value<std::string>("THEORY");
+            _basis     = get_value<std::string>("BASIS");
+            _use_diis  = get_value<bool>("USE_DIIS");
+            _use_symm  = get_value<bool>("USE_SYMM");
+        }
 
     private:
         static std::unordered_map<std::string, std::string> build_map(const std::vector<std::string> &keys, const std::vector<std::string> &values)
@@ -72,10 +82,19 @@ namespace Planck::Interface
         }
     };
 
-    class CalculationInterface : public BaseInterface
+    class ControlInterface : public BaseInterface
     {
     public:
-        explicit CalculationInterface(const std::vector<std::string> &keys, const std::vector<std::string> &values) : BaseInterface(build_map(keys, values)) {}
+        explicit ControlInterface(const std::vector<std::string> &keys, const std::vector<std::string> &values) : BaseInterface(build_map(keys, values)) {}
+
+        void set_parameters_from_input() override
+        {
+            _calc_type = get_value<std::string>("CALC_TYPE");
+            _theory    = get_value<std::string>("THEORY");
+            _basis     = get_value<std::string>("BASIS");
+            _use_diis  = get_value<bool>("USE_DIIS");
+            _use_symm  = get_value<bool>("USE_SYMM");
+        }
 
     private:
         static std::unordered_map<std::string, std::string> build_map(const std::vector<std::string> &keys, const std::vector<std::string> &values)
