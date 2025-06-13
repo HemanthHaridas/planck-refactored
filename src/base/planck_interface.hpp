@@ -161,7 +161,7 @@ namespace Planck::Interface
     private:
         std::uint64_t _multiplicity;
         std::int64_t _charge;
-        
+
         Planck::Geometry::Molecule _molecule;
 
     public:
@@ -183,4 +183,5 @@ namespace Planck::Interface
             return result;
         }
     };
+    
 };

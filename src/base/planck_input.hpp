@@ -117,7 +117,7 @@ namespace Planck::IO
 
             while (getline(*file_pointer, line_))
             {
-                if (line_.starts_with("COORDS") == 0)
+                if (line_.starts_with("COORDS"))
                 {
                     std::string coords_, _atom;
                     Eigen::Vector3f _coords;
@@ -138,4 +138,5 @@ namespace Planck::IO
             throw Planck::Exceptions::IOException("Section [COORDS] not found or incomplete");
         }
     };
+    
 };
