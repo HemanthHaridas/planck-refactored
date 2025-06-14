@@ -1,6 +1,6 @@
 #pragma once
 
-                       // Standard library includes for file I/O, data structures, and string processing
+// Standard library includes for file I/O, data structures, and string processing
 #include <string>      // String handling for file paths and parsing
 #include <fstream>     // File stream operations for reading input files
 #include <tuple>       // Tuple for returning multiple values from parsing functions
@@ -9,11 +9,11 @@
 #include <sstream>     // String stream for parsing individual lines
 #include <Eigen/Core>  // Linear algebra library for coordinate vectors
 
-                                  // Planck-specific includes for configuration interfaces and error handling
+// Planck-specific includes for configuration interfaces and error handling
 #include "planck_interface.hpp"   // Configuration interface classes
 #include "planck_exceptions.hpp"  // Exception handling for input errors
 
-  /**
+/**
  * @namespace Planck::IO
  * @brief Input/Output operations for the Planck quantum chemistry package
  * 
@@ -26,7 +26,7 @@
  */
 namespace Planck::IO
 {
-      /**
+    /**
      * @class InputReader
      * @brief Parses structured input files for quantum chemistry calculations
      * 
@@ -68,16 +68,16 @@ namespace Planck::IO
     class InputReader
     {
     private: 
-        std::string                    _input;  ///< Path to the input file
+        std::string _input;                     ///< Path to the input file
         std::shared_ptr<std::ifstream> _file;   ///< Smart pointer to file stream for safe resource management
 
     public: 
-                                                        // Public interface objects that store parsed configuration data
+        // Public interface objects that store parsed configuration data
         Planck::Interface::ControlInterface  _control;  ///< Convergence parameters and iteration limits
         Planck::Interface::SetupInterface    _setup;    ///< Calculation type, theory, and basis set
         Planck::Interface::GeometryInterface _geom;     ///< Molecular structure and electronic properties
 
-          /**
+        /**
          * @brief Constructs InputReader and immediately parses the specified input file
          * @param input Path to the input file to be parsed
          * @throws IOException if the file cannot be opened or read
@@ -109,7 +109,7 @@ namespace Planck::IO
         }
 
     private: 
-          /**
+         /**
          * @brief Converts a string to lowercase for case-insensitive comparisons
          * @param parsedString Input string to be converted
          * @return Lowercase version of the input string
@@ -128,7 +128,7 @@ namespace Planck::IO
             return lowerString;  // Return the transformed string
         }
 
-          /**
+        /**
          * @brief Converts string representations to boolean values
          * @param parsedString String to be converted ("ON"/"OFF", case-insensitive)
          * @return Boolean value corresponding to the input string
@@ -155,7 +155,7 @@ namespace Planck::IO
                 throw std::invalid_argument("Invalid string for boolean conversion.");  // Handle unexpected input
         }
 
-          /**
+        /**
          * @brief Builds the control interface by parsing the CONTROL section
          * @return Configured ControlInterface object with parsed parameters
          * @throws IOException if CONTROL section is missing or malformed
@@ -174,7 +174,7 @@ namespace Planck::IO
             return Planck::Interface::ControlInterface(keys, values);
         }
 
-          /**
+        /**
          * @brief Builds the setup interface by parsing the SETUP section
          * @return Configured SetupInterface object with parsed parameters
          * @throws IOException if SETUP section is missing or malformed
@@ -192,7 +192,7 @@ namespace Planck::IO
             return Planck::Interface::SetupInterface(keys, values);
         }
 
-          /**
+        /**
          * @brief Builds the geometry interface by parsing MOL_SPEC and COORDS sections
          * @return Configured GeometryInterface object with molecular structure
          * @throws IOException if required sections are missing or malformed
@@ -209,7 +209,7 @@ namespace Planck::IO
             return Planck::Interface::GeometryInterface(keys, values, atoms, coords);
         }
 
-          /**
+        /**
          * @brief Parses a sectioned input block into key-value pairs
          * @param header Name of the section to parse (without brackets)
          * @param file_pointer Shared pointer to the input file stream
@@ -280,11 +280,11 @@ namespace Planck::IO
                 }
             }
 
-              // Section not found or incomplete
+            // Section not found or incomplete
             throw Planck::Exceptions::IOException("Section [" + header + "] not found or incomplete");
         }
 
-          /**
+        /**
          * @brief Parses molecular coordinates from the COORDS section
          * @param file_pointer Shared pointer to the input file stream
          * @return Tuple containing vectors of atom symbols and coordinate vectors
@@ -344,7 +344,7 @@ namespace Planck::IO
                 }
             }
 
-              // COORDS section not found or incomplete
+            // COORDS section not found or incomplete
             throw Planck::Exceptions::IOException("Section [COORDS] not found or incomplete");
         }
     };
