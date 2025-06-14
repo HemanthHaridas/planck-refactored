@@ -117,13 +117,13 @@ namespace Planck::IO
 
             while (getline(*file_pointer, line_))
             {
-                if (line_.starts_with("COORDS"))
+                if (line_.starts_with("[") && line_.ends_with("]") && (line_.substr(1, line_.length() - 2) == "COORDS"))
                 {
                     std::string coords_, _atom;
                     Eigen::Vector3f _coords;
                     while (getline(*file_pointer, coords_))
                     {
-                        if (coords_.find("END_COORDS") == std::string::npos)
+                        if (coords_.find("END_COORDS") != std::string::npos)
                             return {atoms, coords};
 
                         std::stringstream _coord_buffer(coords_);

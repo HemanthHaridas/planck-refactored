@@ -38,6 +38,7 @@ namespace Planck::Interface
         std::unordered_map<std::string, std::string> _options;
 
     public:
+        BaseInterface() = default;
         explicit BaseInterface(const std::unordered_map<std::string, std::string> &options) : _options(options) {}
 
         template <typename T>
@@ -50,7 +51,7 @@ namespace Planck::Interface
             std::istringstream buffer_(iterator_->second);
             T value;
             if (!(buffer_ >> value))
-                throw std::invalid_argument("Failed to convert " + value + " to target type");
+                throw std::invalid_argument("Failed to convert " + iterator_->second + " to target type");
             return value;
         }
 
@@ -70,7 +71,12 @@ namespace Planck::Interface
             throw std::invalid_argument("Invalid Boolean argument for " + key);
         }
 
-        virtual void set_parameters_from_input();
+        std::unordered_map<std::string, std::string> get_input_parameters()
+        {
+            return _options;
+        }
+
+        virtual void set_parameters_from_input() = 0;
     };
 
     class SetupInterface : public BaseInterface
@@ -92,13 +98,13 @@ namespace Planck::Interface
 
         void set_parameters_from_input() override
         {
-            _calc_type    = get_value<std::string>("CALC_TYPE", Defaults::DEFAULT_CALC);
-            _theory       = get_value<std::string>("THEORY", Defaults::DEFAULT_THEORY);
-            _basis        = get_value<std::string>("BASIS", Defaults::DEFAULT_BASIS);
+            _calc_type = get_value<std::string>("CALC_TYPE", Defaults::DEFAULT_CALC);
+            _theory = get_value<std::string>("THEORY", Defaults::DEFAULT_THEORY);
+            _basis = get_value<std::string>("BASIS", Defaults::DEFAULT_BASIS);
 
-            _use_diis     = get_value<bool>("USE_DIIS", Defaults::USE_DIIS);
-            _use_symm     = get_value<bool>("USE_SYMM", Defaults::USE_SYMM);
-            
+            _use_diis = get_value<bool>("USE_DIIS", Defaults::USE_DIIS);
+            _use_symm = get_value<bool>("USE_SYMM", Defaults::USE_SYMM);
+
             _is_initialized_by_user = true;
         }
 
@@ -133,12 +139,12 @@ namespace Planck::Interface
 
         void set_parameters_from_input() override
         {
-            _max_scf  = get_value<std::uint64_t>("MAX_SCF", Defaults::MAXSCF);
+            _max_scf = get_value<std::uint64_t>("MAX_SCF", Defaults::MAXSCF);
             _max_iter = get_value<std::uint64_t>("MAX_ITER", Defaults::MAXITER);
             _diis_dim = get_value<std::uint64_t>("DIIS_DIM", Defaults::DIIS_DIM);
 
-            _tol_scf  = get_value<std::double_t>("TOL_SCF", Defaults::TOLSCF);
-            _tol_eri  = get_value<std::double_t>("TOL_ERI", Defaults::TOLERI);
+            _tol_scf = get_value<std::double_t>("TOL_SCF", Defaults::TOLSCF);
+            _tol_eri = get_value<std::double_t>("TOL_ERI", Defaults::TOLERI);
 
             _is_initialized_by_user = true;
         }
@@ -166,7 +172,10 @@ namespace Planck::Interface
 
     public:
         GeometryInterface() = default;
-        explicit GeometryInterface(const std::vector<std::string> &keys, const std::vector<std::string> &values, std::vector<std::string> &atoms, std::vector<Eigen::Vector3f> &coords) : BaseInterface(build_map(keys, values)), _molecule(atoms, coords) {
+        explicit GeometryInterface(const std::vector<std::string> &keys, const std::vector<std::string> &values, std::vector<std::string> &atoms, std::vector<Eigen::Vector3f> &coords) : BaseInterface(build_map(keys, values)), _molecule(atoms, coords) {}
+
+        void set_parameters_from_input() override
+        {
             _multiplicity = get_value<std::uint64_t>("MULTI", 1);
             _charge       = get_value<std::int64_t>("CHARGE", 0);
         }
@@ -183,5 +192,5 @@ namespace Planck::Interface
             return result;
         }
     };
-    
+
 };

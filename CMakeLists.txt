@@ -46,7 +46,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(Boost)
 
 # Gather source files
-file(GLOB MAIN_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+file(GLOB MAIN_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/base/*.cpp)
 file(GLOB BASE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/base/*.hpp)
 
 # Add the executable target
@@ -91,3 +91,6 @@ target_link_libraries(planck
 
 # Add dependencies to ensure the external project is built first
 add_dependencies(planck libmsym eigen)
+
+# Install the executable
+install(TARGETS planck DESTINATION)
