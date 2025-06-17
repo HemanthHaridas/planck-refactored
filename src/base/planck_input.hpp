@@ -121,12 +121,12 @@ namespace Planck::IO
          * 
          * Used primarily for boolean value parsing and keyword normalization.
          */
-        std::string toLower(const std::string &parsedString)
-        {
-            std::string lowerString = parsedString;  // Create a copy to preserve the original string
-            std::transform(lowerString.begin(), lowerString.end(), lowerString.begin(), ::tolower);
-            return lowerString;  // Return the transformed string
-        }
+        // std::string toLower(const std::string &parsedString)
+        // {
+        //     std::string lowerString = parsedString;  // Create a copy to preserve the original string
+        //     std::transform(lowerString.begin(), lowerString.end(), lowerString.begin(), ::tolower);
+        //     return lowerString;  // Return the transformed string
+        // }
 
         /**
          * @brief Converts string representations to boolean values
@@ -142,18 +142,18 @@ namespace Planck::IO
          * The case-insensitive conversion improves usability by accepting
          * common variations like "on", "On", "ON", etc.
          */
-        bool stringToBool(const std::string &parsedString)
-        {
-            std::string upperStr = parsedString;
-            std::transform(upperStr.begin(), upperStr.end(), upperStr.begin(), ::toupper);  // Convert to uppercase
+        // bool stringToBool(const std::string &parsedString)
+        // {
+        //     std::string upperStr = parsedString;
+        //     std::transform(upperStr.begin(), upperStr.end(), upperStr.begin(), ::toupper);  // Convert to uppercase
 
-            if (upperStr == "ON")
-                return true;  // "ON" maps to true
-            else if (upperStr == "OFF")
-                return false;  // "OFF" maps to false
-            else
-                throw std::invalid_argument("Invalid string for boolean conversion.");  // Handle unexpected input
-        }
+        //     if (upperStr == "ON")
+        //         return true;  // "ON" maps to true
+        //     else if (upperStr == "OFF")
+        //         return false;  // "OFF" maps to false
+        //     else
+        //         throw std::invalid_argument("Invalid string for boolean conversion.");  // Handle unexpected input
+        // }
 
         /**
          * @brief Builds the control interface by parsing the CONTROL section

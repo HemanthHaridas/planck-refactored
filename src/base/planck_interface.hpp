@@ -4,6 +4,7 @@
 #include <unordered_map>  // Hash map for efficient atomic data lookups
 #include <string>         // Standard string class for atom names
 #include <vector>         // Dynamic arrays for storing parsed data
+#include <ranges>         //
 
 // Planck-specific includes for molecule geometry
 #include "planck_geometry.hpp"
@@ -131,8 +132,8 @@ namespace Planck::Interface
             if (iterator_ == _options.end())
                 return default_value;
 
-            const std::string value = iterator_->second;
-                  // std::ranges::transform(value, value.begin(), ::toupper);  // Future: case-insensitive parsing
+            std::string value = iterator_->second;
+            std::transform(value.begin(), value.end(), value.begin(), ::toupper);
             if (value == "true" || value == "1")
                 return true;
             if (value == "false" || value == "0")
@@ -382,6 +383,18 @@ namespace Planck::Interface
         {
             _multiplicity = get_value<std::uint64_t>("MULTI", 1);  // Default: singlet state
             _charge       = get_value<std::int64_t>("CHARGE", 0);  // Default: neutral molecule
+        }
+
+        /**
+         * @brief Returns a view of the current coordinates
+         * 
+         * This method is essential for:
+         * - Geometry optimization algorithms
+         * - Molecular dynamics simulations
+         */
+        std::vector<std::tuple<std::string, Eigen::Vector3f>> get_coordinates()
+        {
+            return _molecule.get_coordinates();
         }
 
     private: 

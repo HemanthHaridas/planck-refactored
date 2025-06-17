@@ -86,6 +86,17 @@ namespace Planck::Main
             // Create input reader with proper RAII
             auto input_reader = std::make_unique<Planck::IO::InputReader>(input_filepath);
 
+            auto _input_parameters = input_reader->_control.get_input_parameters();
+            auto _setup_parameters = input_reader->_setup.get_input_parameters();
+            auto _mol_parameters   = input_reader->_geom.get_input_parameters();
+            auto _mol_coordinates  = input_reader->_geom.get_coordinates();
+            std::cout << "Successfully processed input file: " << input_filepath << std::endl;
+            
+            for (auto [name_,coord_] : _mol_coordinates)
+            {
+                std::cout << name_ << " " << coord_ << "\n";
+            }
+            
             // TODO: Add actual calculation processing here
             // Example workflow:
             // 1. Parse input parameters
@@ -95,7 +106,6 @@ namespace Planck::Main
             // 5. Post-processing (properties, analysis)
             // 6. Output results
 
-            std::cout << "Successfully processed input file: " << input_filepath << std::endl;
             std::cout << "Calculation completed normally." << std::endl;
 
             return 0; // Success
