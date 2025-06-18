@@ -368,7 +368,7 @@ namespace Planck::Interface
         explicit GeometryInterface(const std::vector<std::string> &keys, 
                                  const std::vector<std::string> &values, 
                                  std::vector<std::string> &atoms, 
-                                 std::vector<Eigen::Vector3f> &coords) 
+                                 std::vector<Eigen::Vector3d> &coords) 
             :    BaseInterface(build_map(keys, values)), _molecule(atoms, coords) {}
 
         /**
@@ -392,7 +392,7 @@ namespace Planck::Interface
          * - Geometry optimization algorithms
          * - Molecular dynamics simulations
          */
-        std::vector<std::tuple<std::string, Eigen::Vector3f>> get_coordinates()
+        std::vector<std::tuple<std::string, Eigen::Vector3d>> get_coordinates()
         {
             return _molecule.get_coordinates();
         }

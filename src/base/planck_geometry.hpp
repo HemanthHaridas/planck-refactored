@@ -1,13 +1,15 @@
 #pragma once
 
 // Standard library includes for mathematical operations, string handling, and optional values
-#include <Eigen/Core>    // Eigen library for 3D vector operations and linear algebra
-#include <string>        // Standard string class for atom names
-#include <optional>      // Optional wrapper for coordinates that may not be set
-#include <unordered_map> // Hash map for efficient atomic data lookups
-#include <vector>        // Vector container for storing atoms
-#include <tuple>         // Tuple for coordinate return type
-#include <cstdint>       // Fixed-width integer types
+#include <Eigen/Core>     // Eigen library for 3D vector operations and linear algebra
+#include <Eigen/Dense>    // Eigen library for 3D vector operations and linear algebra
+#include <string>         // Standard string class for atom names
+#include <optional>       // Optional wrapper for coordinates that may not be set
+#include <unordered_map>  // Hash map for efficient atomic data lookups
+#include <vector>         // Vector container for storing atoms
+#include <tuple>          // Tuple for coordinate return type
+#include <cstdint>        // Fixed-width integer types
+#include <algorithm>      // Misc. Functions
 
 // Custom exception handling for geometry-related errors
 #include "planck_exceptions.hpp"
@@ -43,7 +45,7 @@ namespace Planck::Geometry
     private:
         // Optional coordinates allow for atoms that haven't been positioned yet
         // Using Eigen::Vector3f for efficient 3D vector operations (single precision)
-        std::optional<Eigen::Vector3f> _cartesian_coordinates; // atom coordinates in 3D space
+        std::optional<Eigen::Vector3d> _cartesian_coordinates; // atom coordinates in 3D space
 
         std::string _atom;            // Element symbol (e.g., "H", "C", "O")
         std::uint64_t _atomic_number; // Z - atomic number (number of protons)
@@ -72,7 +74,7 @@ namespace Planck::Geometry
          * but coordinates are moved for efficiency since Vector3f is relatively small.
          * The explicit keyword prevents implicit conversions.
          */
-        explicit Atom(const Eigen::Vector3f &coord, std::string &atom, std::uint64_t &z, std::double_t &mass)
+        explicit Atom(const Eigen::Vector3d &coord, std::string &atom, std::uint64_t &z, std::double_t &mass)
             : _cartesian_coordinates(std::move(coord)), _atom(atom), _atomic_number(z), _atomic_mass(mass) {};
 
         /**
@@ -83,7 +85,7 @@ namespace Planck::Geometry
          * and other operations that modify atomic positions while preserving
          * chemical identity.
          */
-        void set_coordinates(const Eigen::Vector3f coord) { _cartesian_coordinates = coord; }
+        void set_coordinates(const Eigen::Vector3d coord) { _cartesian_coordinates = coord; }
 
         /**
          * @brief Retrieves the atom's current coordinates
@@ -94,7 +96,7 @@ namespace Planck::Geometry
          * preventing errors from uninitialized position data. The exception provides
          * clear feedback about which atom lacks coordinates.
          */
-        Eigen::Vector3f coordinates() const
+        Eigen::Vector3d coordinates() const
         {
             if (!_cartesian_coordinates.has_value())
                 throw Planck::Exceptions::GeomException("Atom " + _atom + " has no coordinates set");
@@ -139,7 +141,7 @@ namespace Planck::Geometry
         // Vector container for efficient storage and iteration over atoms
         // Using std::vector provides contiguous memory layout and cache efficiency
         std::vector<Atom> _geometry;
-        Eigen::MatrixXf _distance_matrix;
+        Eigen::MatrixXd _distance_matrix;
 
     public:
         /**
@@ -154,7 +156,8 @@ namespace Planck::Geometry
          * 3. Creates properly initialized Atom objects
          * 4. Handles potential lookup failures with informative exceptions
          */
-        explicit Molecule(const std::vector<std::string> atoms, const std::vector<Eigen::Vector3f> coords)
+        Molecule() = default;
+        explicit Molecule(const std::vector<std::string> atoms, const std::vector<Eigen::Vector3d> coords)
         {
             // Input validation - critical for preventing runtime errors
             if (atoms.size() != coords.size())
@@ -172,9 +175,6 @@ namespace Planck::Geometry
                 Atom atom(coords[i], const_cast<std::string &>(atoms[i]), z, mass);
                 _geometry.push_back(atom);
             }
-
-            // resize the connectivity matrix
-            _distance_matrix(_geometry.size(), _geometry.size());
         }
 
         /**
@@ -187,7 +187,7 @@ namespace Planck::Geometry
          * - Molecular dynamics simulations
          * - Loading new conformations from external sources
          */
-        void update_coordinates(const std::vector<Eigen::Vector3f> &coords)
+        void update_coordinates(const std::vector<Eigen::Vector3d> &coords)
         {
             if (coords.size() != _geometry.size())
                 throw Planck::Exceptions::GeomException("Coordinate vector size doesn't match number of atoms");
@@ -204,9 +204,9 @@ namespace Planck::Geometry
          * - Geometry optimization algorithms
          * - Molecular dynamics simulations
          */
-        std::vector<std::tuple<std::string, Eigen::Vector3f>> get_coordinates() const
+        std::vector<std::tuple<std::string, Eigen::Vector3d>> get_coordinates() const
         {
-            std::vector<std::tuple<std::string, Eigen::Vector3f>> coordinates;
+            std::vector<std::tuple<std::string, Eigen::Vector3d>> coordinates;
             coordinates.reserve(_geometry.size());
 
             for (const auto &atom : _geometry)
@@ -229,9 +229,9 @@ namespace Planck::Geometry
         const Atom &get_atom(size_t index) const { return _geometry.at(index); }
 
         /**
-         * @brief Structure to represent a Z-matrix entry
+         * @brief Structure to represent a Z-matrix _zmatrix_entry
          */
-        struct ZMatrixEnrty
+        struct ZMatrixEntry
         {
             std::string _atom_symbol;    // Element symbol
             std::int64_t _bond_atom;     // Index of atom for bond distance (-1 if not applicable)
@@ -241,33 +241,88 @@ namespace Planck::Geometry
             std::double_t _angle;        // Bond angle in degrees
             std::double_t _dihedral;     // Dihedral angle in degrees
 
-            explicit ZMatrixEnrty() : _atom_symbol(""), _bond_atom(-1), _angle_atom(-1), _dihedral_atom(-1), _bond(0.0), _angle(0.0), _dihedral(0.0) {};
+            explicit ZMatrixEntry() : _atom_symbol(""), _bond_atom(-1), _angle_atom(-1), _dihedral_atom(-1), _bond(0.0), _angle(0.0), _dihedral(0.0) {};
         };
 
-        std::vector<ZMatrixEnrty> generate_zmatrix() const
+        /**
+         * @brief Generates a Z-matrix using connectivity information for optimal atom ordering
+         * @return Vector of Z-matrix entries with chemically meaningful internal coordinates
+         *
+         * This optimized version uses the connectivity table to:
+         * 1. Prioritize connected atoms when selecting references
+         * 2. Avoid problematic geometric arrangements (linear/coplanar)
+         */
+        std::vector<ZMatrixEntry> generate_zmatrix() const
         {
             if (_geometry.empty())
                 throw Planck::Exceptions::GeomException("Cannot construct Z-Matrix for an empty molecule");
 
-            std::vector<ZMatrixEnrty> _zmatrix;
+            // Ensure connectivity table is built
+            if (_distance_matrix.rows() != static_cast<Eigen::Index>(_geometry.size()))
+                throw Planck::Exceptions::GeomException("Connectivity table not initialized. Call create_connectivity_table() first.");
+
+            // Track which atoms have been placed in the Z-matrix
+            std::vector<bool> _placed(_geometry.size(), false);
+            std::vector<Eigen::Index> _atom_order; // Order in which atoms are placed
+            _atom_order.reserve(_geometry.size());
+
+            std::vector<ZMatrixEntry> _zmatrix;
             _zmatrix.reserve(_geometry.size());
 
             // Now place the first atom
             if (_geometry.size() >= 1)
             {
-                ZMatrixEnrty _zmatrix_entry;
-                _zmatrix_entry._atom_symbol = _geometry[0].get_atom_symbol();
+                ZMatrixEntry _zmatrix_entry;
+                auto [_count, _node] = get_max_node();
+                _zmatrix_entry._atom_symbol = _geometry[_node].get_atom_symbol();
+
+                _placed[_node] = true;
+                _atom_order.push_back(_node);
                 _zmatrix.push_back(_zmatrix_entry);
             }
 
             // Now place second atom
             if (_geometry.size() >= 2)
             {
-                ZMatrixEnrty _zmatrix_entry;
+                ZMatrixEntry _zmatrix_entry;
                 _zmatrix_entry._atom_symbol = _geometry[1].get_atom_symbol();
-                _zmatrix_entry._bond_atom = 0;
+                _zmatrix_entry._bond_atom = 1;
                 _zmatrix_entry._bond = calculate_distance(_geometry[0].coordinates(), _geometry[1].coordinates());
+                _zmatrix.push_back(_zmatrix_entry);
             }
+
+            // Now place third atom
+            if (_geometry.size() >= 3)
+            {
+                ZMatrixEntry _zmatrix_entry;
+                _zmatrix_entry._atom_symbol = _geometry[2].get_atom_symbol();
+                _zmatrix_entry._bond_atom = 2;
+                _zmatrix_entry._bond = calculate_distance(_geometry[1].coordinates(), _geometry[2].coordinates());
+                _zmatrix_entry._angle_atom = 1;
+                _zmatrix_entry._angle = calculate_angle(_geometry[0].coordinates(), _geometry[1].coordinates(), _geometry[2].coordinates());
+                _zmatrix.push_back(_zmatrix_entry);
+            }
+
+            // Now place the remaining atoms
+            // Fourth and subsequent atoms: bond, angle, and dihedral references
+            for (size_t i = 3; i < _geometry.size(); ++i)
+            {
+                ZMatrixEntry _zmatrix_entry;
+                _zmatrix_entry._atom_symbol = _geometry[i].get_atom_symbol();
+
+                // For simplicity, use sequential references (can be optimized based on connectivity)
+                _zmatrix_entry._bond_atom = static_cast<int>(i);         // Bond to previous atom (1-based)
+                _zmatrix_entry._angle_atom = static_cast<int>(i - 1);    // Angle reference (1-based)
+                _zmatrix_entry._dihedral_atom = static_cast<int>(i - 2); // Dihedral reference (1-based)
+
+                // Calculate internal coordinates
+                _zmatrix_entry._bond = calculate_distance(_geometry[i - 1].coordinates(), _geometry[i].coordinates());
+                _zmatrix_entry._angle = calculate_angle(_geometry[i - 2].coordinates(), _geometry[i - 1].coordinates(), _geometry[i].coordinates());
+                _zmatrix_entry._dihedral = calculate_signed_dihedral(_geometry[i - 3].coordinates(), _geometry[i - 2].coordinates(), _geometry[i - 1].coordinates(), _geometry[i].coordinates());
+
+                _zmatrix.push_back(_zmatrix_entry);
+            }
+            return _zmatrix;
         }
 
     private:
@@ -346,35 +401,155 @@ namespace Planck::Geometry
             throw Planck::Exceptions::GeomException("No atom called " + atom);
         }
 
-        std::double_t calculate_distance(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2) const
+        /**
+         * @brief Calculates the Euclidean distance between two 3D points
+         * @param p1 First point in 3D space
+         * @param p2 Second point in 3D space
+         * @return The distance between p1 and p2
+         *
+         * The Eigen::Vector3f::norm() method efficiently computes this Euclidean norm.
+         * Used primarily for calculating bond lengths in molecular structures.
+         */
+        std::double_t calculate_distance(const Eigen::Vector3d &p1, const Eigen::Vector3d &p2) const
         {
             return (p1 - p2).norm();
         }
 
-        // Calculates the angle (in degrees) formed at point p2 by the line segments p1-p2 and p3-p2
-        std::double_t calculate_angle(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const Eigen::Vector3f &p3)
+        /**
+         * @brief Calculates the bond angle (in degrees) formed at a central atom
+         * @param p1 First outer atom position
+         * @param p2 Central atom position (vertex of the angle)
+         * @param p3 Second outer atom position
+         * @return The bond angle in degrees (0° to 180°)
+         *
+         * This function calculates the angle between two bonds meeting at p2:
+         * - Bond 1: p2 -> p1
+         * - Bond 2: p2 -> p3
+         */
+        std::double_t calculate_angle(const Eigen::Vector3d &p1, const Eigen::Vector3d &p2, const Eigen::Vector3d &p3) const
         {
             // Compute the vector from p2 to p1 and normalize it to obtain a unit direction vector
             // This represents one arm of the angle centered at p2
-            auto _arm_a = (p1 - p2).normalized();
+            // Vector points FROM the central atom TO the first outer atom
+            auto arm_a = (p1 - p2).normalized();
 
             // Compute the vector from p2 to p3 and normalize it to obtain the second unit direction vector
             // This is the other arm of the angle centered at p2
-            auto _arm_b = (p3 - p2).normalized();
+            // Vector points FROM the central atom TO the second outer atom
+            auto arm_b = (p3 - p2).normalized();
 
             // Compute the dot product between the two unit vectors
-            // This yields the cosine of the angle between them (since they’re normalized)
-            auto _cos_theta = _arm_a.dot(_arm_b);
+            auto cos_theta = arm_a.dot(arm_b);
 
-            // Protect against floating point precision issues that may push _cos_theta slightly outside [-1, 1]
-            _cos_theta = std::clamp(_cos_theta, -1.0f, 1.0f);
+            // Protect against floating point precision issues that may push cos_theta slightly outside [-1, 1]
+            // This prevents domain errors in acos() function which only accepts values in [-1, 1]
+            // Such errors can occur due to accumulated floating-point rounding in vector operations
+            cos_theta = std::clamp(cos_theta, -1.0, 1.0);
 
             // Calculate the angle in radians using arccos of the clamped dot product
-            // Then convert to degrees by multiplying with (180 / π)
-            auto _angle = std::acos(_cos_theta) * (180.0 / M_PI);
+            std::double_t angle = std::acos(cos_theta) * (180.0 / M_PI);
 
             // Return the angle in degrees
-            return _angle;
+            return angle;
+        }
+
+        /**
+         * @brief Computes the unsigned dihedral angle (in degrees) defined by four points in 3D space
+         * @param p1 First point (defines first plane with p2, p3)
+         * @param p2 Second point (shared by both planes)
+         * @param p3 Third point (shared by both planes, forms central bond with p2)
+         * @param p4 Fourth point (defines second plane with p2, p3)
+         * @return The unsigned dihedral angle in degrees (0° to 180°)
+         *
+         * This function returns only the magnitude (0° to 180°).
+         * For distinguishing between clockwise/counterclockwise rotations,
+         * use calculate_signed_dihedral_simple() instead.
+         */
+        std::double_t calculate_unsigned_dihedral(const Eigen::Vector3d &p1, const Eigen::Vector3d &p2,
+                                                  const Eigen::Vector3d &p3, const Eigen::Vector3d &p4) const
+        {
+            // Vector from p2 to p1 (first bond arm)
+            // This vector lies in the first plane (p1-p2-p3)
+            auto arm_a = (p1 - p2).normalized();
+
+            // Vector from p2 to p3 (shared bond between planes)
+            // This is the central bond around which the dihedral rotation occurs
+            // It serves as the common edge between the two planes
+            auto arm_b = (p3 - p2).normalized();
+
+            // Normal vector to the plane formed by (p1, p2, p3)
+            auto norm_ab = arm_a.cross(arm_b).normalized();
+
+            // Vector from p3 to p2 (opposite direction of shared bond)
+            // This ensures consistent orientation when calculating the second plane's normal
+            // We use p3 as the origin for the second plane's vectors
+            auto arm_c = (p2 - p3).normalized();
+
+            // Vector from p3 to p4 (second bond arm)
+            // This vector lies in the second plane (p2-p3-p4)
+            auto arm_d = (p4 - p3).normalized();
+
+            // Normal vector to the plane formed by (p2, p3, p4)
+            // The order matters for consistent orientation relative to the first normal
+            auto norm_cd = arm_c.cross(arm_d).normalized();
+
+            // Compute the cosine of the angle between the two plane normals
+            // The angle between planes equals the angle between their normal vectors
+            // (or the supplement, depending on normal vector directions)
+            auto cos_phi = norm_ab.dot(norm_cd);
+
+            // Clamp to [-1, 1] to prevent domain errors from floating-point inaccuracies
+            // Similar to the angle calculation, floating-point operations can push
+            // the dot product slightly outside the valid domain for acos()
+            cos_phi = std::clamp(cos_phi, -1.0, 1.0);
+
+            // Compute the angle in degrees (from arccosine of cosine value)
+            std::double_t dihedral = std::acos(cos_phi) * (180.0 / M_PI);
+
+            return dihedral;
+        }
+
+        /**
+         * @brief Computes the signed dihedral angle (in degrees) with proper orientation
+         * @param p1 First point (defines first plane with p2, p3)
+         * @param p2 Second point (shared by both planes)
+         * @param p3 Third point (shared by both planes, forms central bond with p2)
+         * @param p4 Fourth point (defines second plane with p2, p3)
+         * @return The signed dihedral angle in degrees (-180° to +180°)
+         *
+         * Unlike the unsigned version, this function preserves the rotational direction:
+         * - POSITIVE (+): Clockwise rotation when looking down the p2→p3 bond
+         * - NEGATIVE (-): Counter-clockwise rotation when looking down the p2→p3 bond
+         *
+         * - 0°: Cis/eclipsed conformation (p1 and p4 on same side)
+         * - +60°: Gauche+ conformation
+         * - -60°: Gauche- conformation
+         * - +/-180°: Trans/anti conformation (p1 and p4 on opposite sides)
+         */
+        std::double_t calculate_signed_dihedral(const Eigen::Vector3d &p1, const Eigen::Vector3d &p2,
+                                                const Eigen::Vector3d &p3, const Eigen::Vector3d &p4) const
+        {
+            // Vectors defining the dihedral geometry
+            // These vectors represent the "bonds" in the dihedral angle definition
+            Eigen::Vector3d b1 = p2 - p1; // Vector from p1 to p2 (first bond)
+            Eigen::Vector3d b2 = p3 - p2; // Central bond from p2 to p3 (rotation axis)
+            Eigen::Vector3d b3 = p4 - p3; // Vector from p3 to p4 (second bond)
+
+            // Normal vectors to the two planes defining the dihedral angle
+            // Plane 1: spanned by vectors b1 and b2 (contains points p1, p2, p3)
+            // Plane 2: spanned by vectors b2 and b3 (contains points p2, p3, p4)
+            Eigen::Vector3d n1 = b1.cross(b2).normalized(); // Normal to plane 1
+            Eigen::Vector3d n2 = b2.cross(b3).normalized(); // Normal to plane 2
+
+            // Calculate signed dihedral angle using atan2 for robust quadrant determination
+            // cos component: dot product of normal vectors gives cosine of angle between planes
+            std::double_t cos_angle = n1.dot(n2);
+
+            // Positive when (n1 × n2) points in same direction as b2, negative otherwise
+            std::double_t sin_angle = n1.cross(n2).dot(b2.normalized());
+
+            // This preserves the sign information lost in acos-based calculations
+            return std::atan2(sin_angle, cos_angle) * (180.0 / M_PI);
         }
 
         /**
@@ -390,6 +565,9 @@ namespace Planck::Geometry
          */
         void create_connetivity_table()
         {
+            // resize the connectivity matrix
+            _distance_matrix(_geometry.size(), _geometry.size());
+            
             // Loop over all atoms in the geometry
             for (size_t i = 0; i < _geometry.size(); i++)
             {
@@ -417,6 +595,105 @@ namespace Planck::Geometry
                     }
                 }
             }
+        }
+
+        // Returns the number of non-zero (i.e., connected) elements in the input vector.
+        // Throws std::invalid_argument if there are no connections.
+        size_t get_node_count(const Eigen::VectorXd &connectivity) const
+        {
+            // Create a boolean mask: true where the connectivity value is non-zero
+            auto mask_ = (connectivity.array() != 0);
+
+            // Count how many elements in the mask are true (i.e., non-zero in the input)
+            const auto non_zero_count = mask_.count();
+
+            // If no connections are found, throw an exception
+            if (non_zero_count == 0)
+                throw std::invalid_argument("The node has no connections.");
+
+            // Return the number of connections as a standard size_t
+            return static_cast<size_t>(non_zero_count);
+        }
+
+        // Returns a tuple with (maximum connection count, index of the node with that count)
+        std::tuple<size_t, Eigen::Index> get_max_node() const
+        {
+            size_t max_count = 0;
+            Eigen::Index max_node = 0;
+
+            // Iterate over each row of the distance matrix
+            for (Eigen::Index i = 0; i < _distance_matrix.rows(); ++i)
+            {
+                // Count non-zero entries (connections) in this node's row
+                size_t node_count = get_node_count(_distance_matrix.row(i));
+
+                // Update the maximum if this node has more connections
+                if (node_count > max_count)
+                    max_count = node_count;
+                max_node = i;
+            }
+
+            return {max_count, max_node};
+        }
+
+        Eigen::Index get_best_neighbour(Eigen::Index &node, const std::vector<bool> &placed) const
+        {
+            // Find all atoms connected to the given atom
+            auto mask_ = (_distance_matrix.row(node).array() != 0);
+            std::vector<int> indices;
+            for (int i = 0; i < mask_.size(); ++i)
+            {
+                if (mask_(i))
+                {
+                    indices.push_back(i);
+                }
+            }
+
+            // Now iterate over them to find the closest atom
+            Eigen::Index _best_node;
+            auto _min_dist = std::numeric_limits<std::double_t>::max();
+            bool _connected = false;
+
+            for (auto _index : indices)
+            {
+                auto _distance = _distance_matrix(node, _index);
+                if (_distance <= _min_dist)
+                {
+                    _min_dist = _distance;
+                    _best_node = _index;
+                    _connected = true;
+                }
+            }
+
+            // Return the best connected atom, if any
+            if (_connected)
+            {
+                return _best_node;
+            }
+
+            _min_dist  = std::numeric_limits<std::double_t>::max();
+            _connected = false;
+            for (Eigen::Index i = 0; i < _geometry.size(); i++)
+            {
+                if (i == node)
+                    continue;
+                
+                auto distance_ = calculate_distance(_geometry[node].coordinates(), _geometry[i].coordinates());
+                if (distance_ < _min_dist)
+                {
+                    _min_dist  = distance_;
+                    _best_node = i;
+                    _connected = true;
+                }
+                
+            }
+
+            // Return the best connected atom, if any
+            if (_connected)
+            {
+                return _best_node;
+            }
+            throw Planck::Exceptions::GeomException("Unable to find neighbouring atom");
         }
     };
 }

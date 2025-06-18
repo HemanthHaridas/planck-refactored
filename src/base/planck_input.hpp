@@ -311,11 +311,11 @@ namespace Planck::IO
          * END_COORDS
          * @endcode
          */
-        std::tuple<std::vector<std::string>, std::vector<Eigen::Vector3f>> tokenize_coords(std::shared_ptr<std::ifstream> file_pointer)
+        std::tuple<std::vector<std::string>, std::vector<Eigen::Vector3d>> tokenize_coords(std::shared_ptr<std::ifstream> file_pointer)
         {
             std::string line_;
             std::vector<std::string> atoms;
-            std::vector<Eigen::Vector3f> coords;
+            std::vector<Eigen::Vector3d> coords;
 
               // Search for COORDS section
             while (getline(*file_pointer, line_))
@@ -324,7 +324,7 @@ namespace Planck::IO
                 if (line_.starts_with("[") && line_.ends_with("]") && (line_.substr(1, line_.length() - 2) == "COORDS"))
                 {
                     std::string coords_, _atom;
-                    Eigen::Vector3f _coords;
+                    Eigen::Vector3d _coords;
                     
                       // Parse coordinate lines
                     while (getline(*file_pointer, coords_))
