@@ -238,7 +238,7 @@ namespace Planck::IO
          */
         std::tuple<std::vector<std::string>, std::vector<std::string>> tokenize_input(const std::string &header, std::shared_ptr<std::ifstream> file_pointer)
         {
-              // Validate file stream accessibility
+            // Validate file stream accessibility
             if (!file_pointer || !file_pointer->is_open())
                 throw Planck::Exceptions::IOException("Input stream is unavailable");
 
@@ -246,30 +246,31 @@ namespace Planck::IO
             std::vector<std::string> values;
 
             std::string line_;
-              // Search for the target section header
+            // Search for the target section header
             while (std::getline(*file_pointer, line_))
             {
-                  // Check for section header format: [SECTION_NAME]
+                // Check for section header format: [SECTION_NAME]
                 if (line_.starts_with("[") && line_.ends_with("]"))
                 {
-                      // Extract section name by removing brackets
+                    // Extract section name by removing brackets
                     std::string header_ = line_.substr(1, line_.length() - 2);
                     if (header == header_)
                     {
-                          // Parse key-value pairs within the section
+                        // Parse key-value pairs within the section
                         std::string data_;
                         while (std::getline(*file_pointer, data_))
                         {
-                              // Check for section termination
+                            // Check for section termination
                             if (data_.find("END_" + header_) != std::string::npos)
                                 return {keys, values};
 
-                              // Parse key-value pair from line
+                            // Parse key-value pair from line
                             std::string _key, _value;
                             std::stringstream _data_buffer(data_);
                             _data_buffer >> _key >> _value;
 
-                              // Only add non-empty key-value pairs
+                            std::transform(_value.begin(), _value.end(), _value.begin(), ::tolower);
+                            // Only add non-empty key-value pairs
                             if (!_key.empty() && !_value.empty())
                             {
                                 keys.emplace_back(_key);

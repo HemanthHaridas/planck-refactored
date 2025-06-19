@@ -1,15 +1,18 @@
 #pragma once
 
 // Standard library includes for mathematical operations, string handling, and optional values
-#include <Eigen/Core>     // Eigen library for 3D vector operations and linear algebra
-#include <Eigen/Dense>    // Eigen library for 3D vector operations and linear algebra
-#include <string>         // Standard string class for atom names
-#include <optional>       // Optional wrapper for coordinates that may not be set
-#include <unordered_map>  // Hash map for efficient atomic data lookups
-#include <vector>         // Vector container for storing atoms
-#include <tuple>          // Tuple for coordinate return type
-#include <cstdint>        // Fixed-width integer types
-#include <algorithm>      // Misc. Functions
+#include <Eigen/Core>    // Eigen library for 3D vector operations and linear algebra
+#include <Eigen/Dense>   // Eigen library for 3D vector operations and linear algebra
+#include <string>        // Standard string class for atom names
+#include <optional>      // Optional wrapper for coordinates that may not be set
+#include <unordered_map> // Hash map for efficient atomic data lookups
+#include <vector>        // Vector container for storing atoms
+#include <tuple>         // Tuple for coordinate return type
+#include <cstdint>       // Fixed-width integer types
+#include <algorithm>     // Misc. Functions
+#include <functional>    // Required for std::greater
+#include <utility>       // Required for std::pair
+#include <queue>         // Required for std::priority_queue
 
 // Custom exception handling for geometry-related errors
 #include "planck_exceptions.hpp"
@@ -164,7 +167,7 @@ namespace Planck::Geometry
                 throw Planck::Exceptions::GeomException("Mismatch between atom names and coordinate list size");
 
             // Construct each atom with complete chemical and spatial information
-            for (size_t i = 0; i < atoms.size(); i++)
+            for (std::uint64_t i = 0; i < atoms.size(); i++)
             {
                 // Automatic lookup of atomic properties from element symbols
                 std::uint64_t z = get_atomic_number_from_name(atoms[i]);
@@ -192,8 +195,106 @@ namespace Planck::Geometry
             if (coords.size() != _geometry.size())
                 throw Planck::Exceptions::GeomException("Coordinate vector size doesn't match number of atoms");
 
-            for (size_t i = 0; i < coords.size(); i++)
+            for (std::uint64_t i = 0; i < coords.size(); i++)
                 _geometry[i].set_coordinates(coords[i]);
+        }
+
+        /**
+         * @brief Converts all atomic coordinates in the molecule from Angstrom to Bohr units
+         *
+         * This function iterates through all atoms in the molecular geometry and
+         * converts their Cartesian coordinates from Angstrom units to Bohr units
+         * (atomic units) by multiplying each coordinate by the conversion factor
+         * 1.8897259886 Bohr/Angstrom.
+         *
+         * The conversion is performed in-place, modifying the original coordinate
+         * values stored in each atom's _cartesian_coordinates member through the
+         * Atom::set_coordinates() method.
+         *
+         * @note The conversion factor 1.8897259886 is the standard CODATA value
+         *       for converting Angstrom to Bohr units (1/0.5291772109 Å/Bohr)
+         * @note This operation preserves all other atomic properties (symbol, mass, etc.)
+         *
+         * @throws GeomException if any atom in the molecule has unset coordinates
+         * @throws GeomException if the molecule is empty (no atoms)
+         *
+         * @see convert_coords_to_angstrom() for the inverse conversion
+         * @see https://physics.nist.gov/cgi-bin/cuu/Value?bohrrada0 for CODATA values
+         *
+         * @warning Repeated conversions (Å→Bohr→Å) may introduce small numerical
+         *          errors due to floating-point precision limitations
+         */
+        void convert_coords_to_bohr()
+        {
+            // Check if molecule contains any atoms
+            if (_geometry.empty())
+                throw Planck::Exceptions::GeomException("Cannot convert coordinates of an empty molecule");
+
+            // Conversion factor: Angstrom to Bohr (1 Å = 1.8897259886 Bohr)
+            constexpr std::double_t ANGSTROM_TO_BOHR = 1.8897259886;
+
+            // Iterate through all atoms in the molecular geometry
+            for (auto &atom : _geometry)
+            {
+                // Get current coordinates (this will throw if coordinates are not set)
+                Eigen::Vector3d current_coords = atom.coordinates();
+
+                // Convert coordinates by multiplying with conversion factor
+                Eigen::Vector3d bohr_coords = current_coords * ANGSTROM_TO_BOHR;
+
+                // Update the atom's coordinates with the converted values
+                atom.set_coordinates(bohr_coords);
+            }
+        }
+
+        /**
+         * @brief Converts all atomic coordinates in the molecule from Bohr to Angstrom units
+         *
+         * This function iterates through all atoms in the molecular geometry and
+         * converts their Cartesian coordinates from Bohr units (atomic units) to
+         * Angstrom units by multiplying each coordinate by the conversion factor
+         * 0.5291772109 Angstrom/Bohr.
+         *
+         * The conversion is performed in-place, modifying the original coordinate
+         * values stored in each atom's _cartesian_coordinates member through the
+         * Atom::set_coordinates() method.
+         *
+         * @note The conversion factor 0.5291772109 is the standard CODATA value
+         *       for the Bohr radius (approximately 0.529177210903 Angstrom)
+         * @note This operation preserves all other atomic properties (symbol, mass, etc.)
+         *
+         * @throws GeomException if any atom in the molecule has unset coordinates
+         * @throws GeomException if the molecule is empty (no atoms)
+         *
+         * @see convert_coords_to_bohr() for the inverse conversion
+         * @see https://physics.nist.gov/cgi-bin/cuu/Value?bohrrada0 for CODATA values
+         *
+         * @warning The conversion factor used is more precise than the truncated
+         *          version (0.52917725) shown in the original example, reducing
+         *          numerical errors in repeated conversions
+         */
+        void convert_coords_to_angstrom()
+        {
+            // Check if molecule contains any atoms
+            if (_geometry.empty())
+                throw Planck::Exceptions::GeomException("Cannot convert coordinates of an empty molecule");
+
+            // Conversion factor: Bohr to Angstrom (1 Bohr = 0.5291772109 Å)
+            // Using more precise CODATA value than the truncated 0.52917725
+            constexpr std::double_t BOHR_TO_ANGSTROM = 0.5291772109;
+
+            // Iterate through all atoms in the molecular geometry
+            for (auto &atom : _geometry)
+            {
+                // Get current coordinates (this will throw if coordinates are not set)
+                Eigen::Vector3d current_coords = atom.coordinates();
+
+                // Convert coordinates by multiplying with conversion factor
+                Eigen::Vector3d angstrom_coords = current_coords * BOHR_TO_ANGSTROM;
+
+                // Update the atom's coordinates with the converted values
+                atom.set_coordinates(angstrom_coords);
+            }
         }
 
         /**
@@ -218,7 +319,7 @@ namespace Planck::Geometry
          * @brief Get the number of atoms in the molecule
          * @return Number of atoms
          */
-        size_t size() const { return _geometry.size(); }
+        std::uint64_t size() const { return _geometry.size(); }
 
         /**
          * @brief Get atom by index
@@ -226,7 +327,9 @@ namespace Planck::Geometry
          * @return Const reference to the atom
          * @throws std::out_of_range if index is invalid
          */
-        const Atom &get_atom(size_t index) const { return _geometry.at(index); }
+        const Atom &get_atom(std::uint64_t index) const { return _geometry.at(index); }
+
+        const Eigen::MatrixXd get_connectity_table() const { return _distance_matrix; }
 
         /**
          * @brief Structure to represent a Z-matrix _zmatrix_entry
@@ -258,71 +361,104 @@ namespace Planck::Geometry
                 throw Planck::Exceptions::GeomException("Cannot construct Z-Matrix for an empty molecule");
 
             // Ensure connectivity table is built
-            if (_distance_matrix.rows() != static_cast<Eigen::Index>(_geometry.size()))
+            if (_distance_matrix.rows() != static_cast<std::uint64_t>(_geometry.size()))
                 throw Planck::Exceptions::GeomException("Connectivity table not initialized. Call create_connectivity_table() first.");
 
-            // Track which atoms have been placed in the Z-matrix
-            std::vector<bool> _placed(_geometry.size(), false);
-            std::vector<Eigen::Index> _atom_order; // Order in which atoms are placed
-            _atom_order.reserve(_geometry.size());
+            // Generate a Minimum Spanning Tree from connetivity table
+            // First find the node with maximum connections to use as the seed
+            auto [_count, _root] = get_max_node();
 
-            std::vector<ZMatrixEntry> _zmatrix;
-            _zmatrix.reserve(_geometry.size());
+            // Set up the MST
+            std::vector<std::uint64_t> _parent(_geometry.size(), -1);
+            std::vector<std::double_t> _keys(_geometry.size(), std::numeric_limits<std::double_t>::max());
+            std::vector<bool> _inMST(_geometry.size(), false);
 
-            // Now place the first atom
-            if (_geometry.size() >= 1)
+            // Use priority_queue for efficient access
+            using _node = std::pair<std::double_t, std::uint64_t>;
+            std::priority_queue<_node, std::vector<_node>, std::greater<_node>> _mst;
+
+            // Set the key to the root node as 0.0
+            // Because distance from root to root is 0.0
+            _keys[_root] = 0.0;
+            _mst.push({0.0, _root});
+
+            // Now build MST
+            while (!_mst.empty())
             {
-                ZMatrixEntry _zmatrix_entry;
-                auto [_count, _node] = get_max_node();
-                _zmatrix_entry._atom_symbol = _geometry[_node].get_atom_symbol();
+                auto [_dist, _index] = _mst.top();
+                _mst.pop();
 
-                _placed[_node] = true;
-                _atom_order.push_back(_node);
-                _zmatrix.push_back(_zmatrix_entry);
+                // Check if the currently visited node is already in MST
+                if (_inMST[_index])
+                    continue;
+
+                // Place the node in MST
+                _inMST[_index] = true;
+
+                // Now loop over all nodes (atoms) in the molecule
+                for (std::uint64_t i = 0; i < _geometry.size(); i++)
+                {
+                    // Check if the node is the current root or if it is already in MST
+                    if (_index == i || _inMST[i])
+                        continue;
+
+                    // Get the distance from distance matrix
+                    // Assign the node to MST based on the distance
+                    auto _distance = _distance_matrix(_index, i);
+                    if (_distance < _keys[i] && (_distance - 0.00) > 1.0e-6)
+                    {
+                        _keys[i] = _distance;
+                        _parent[i] = _index;
+                        _mst.push({_distance, i});
+                    }
+                }
             }
+        }
 
-            // Now place second atom
-            if (_geometry.size() >= 2)
+        /**
+         * @brief Constructs a pairwise atomic connectivity table based on interatomic distances.
+         *
+         * This function loops through all unique pairs of atoms in a molecular geometry
+         * and checks if they are close enough (based on their van der Waals radii)
+         * to be considered "connected" or potentially bonded. If so, it records the
+         * distance in a symmetric distance matrix.
+         *
+         * The cutoff distance is defined as 1.2 times the sum of van der Waals radii
+         * for the atom pair.
+         */
+        void create_connetivity_table()
+        {
+            // resize the connectivity matrix
+            _distance_matrix.resize(_geometry.size(), _geometry.size());
+            _distance_matrix.setZero();
+
+            // Loop over all atoms in the geometry
+            for (std::uint64_t i = 0; i < _geometry.size(); i++)
             {
-                ZMatrixEntry _zmatrix_entry;
-                _zmatrix_entry._atom_symbol = _geometry[1].get_atom_symbol();
-                _zmatrix_entry._bond_atom = 1;
-                _zmatrix_entry._bond = calculate_distance(_geometry[0].coordinates(), _geometry[1].coordinates());
-                _zmatrix.push_back(_zmatrix_entry);
+                // Get coordinates of atom i
+                auto _i_coords = _geometry[i].coordinates();
+
+                // Loop only over atoms j > i to avoid redundant pairings (i,j) and (j,i)
+                for (std::uint64_t j = i + 1; j < _geometry.size(); j++)
+                {
+                    // Get coordinates of atom j
+                    auto _j_coords = _geometry[j].coordinates();
+
+                    // Compute Euclidean distance between atom i and atom j
+                    auto _distance = calculate_distance(_i_coords, _j_coords);
+
+                    // Compute cutoff distance using van der Waals radii for atom i and atom j
+                    auto _cut_off = 1.2 * (get_vdw_radii_from_name(_geometry[i].get_atom_symbol()) +
+                                           get_vdw_radii_from_name(_geometry[j].get_atom_symbol()));
+
+                    // If atoms are within the cutoff distance, register the connection in the distance matrix
+                    if (_distance <= _cut_off)
+                    {
+                        _distance_matrix(i, j) = _distance;
+                        _distance_matrix(j, i) = _distance; // ensure symmetry
+                    }
+                }
             }
-
-            // Now place third atom
-            if (_geometry.size() >= 3)
-            {
-                ZMatrixEntry _zmatrix_entry;
-                _zmatrix_entry._atom_symbol = _geometry[2].get_atom_symbol();
-                _zmatrix_entry._bond_atom = 2;
-                _zmatrix_entry._bond = calculate_distance(_geometry[1].coordinates(), _geometry[2].coordinates());
-                _zmatrix_entry._angle_atom = 1;
-                _zmatrix_entry._angle = calculate_angle(_geometry[0].coordinates(), _geometry[1].coordinates(), _geometry[2].coordinates());
-                _zmatrix.push_back(_zmatrix_entry);
-            }
-
-            // Now place the remaining atoms
-            // Fourth and subsequent atoms: bond, angle, and dihedral references
-            for (size_t i = 3; i < _geometry.size(); ++i)
-            {
-                ZMatrixEntry _zmatrix_entry;
-                _zmatrix_entry._atom_symbol = _geometry[i].get_atom_symbol();
-
-                // For simplicity, use sequential references (can be optimized based on connectivity)
-                _zmatrix_entry._bond_atom = static_cast<int>(i);         // Bond to previous atom (1-based)
-                _zmatrix_entry._angle_atom = static_cast<int>(i - 1);    // Angle reference (1-based)
-                _zmatrix_entry._dihedral_atom = static_cast<int>(i - 2); // Dihedral reference (1-based)
-
-                // Calculate internal coordinates
-                _zmatrix_entry._bond = calculate_distance(_geometry[i - 1].coordinates(), _geometry[i].coordinates());
-                _zmatrix_entry._angle = calculate_angle(_geometry[i - 2].coordinates(), _geometry[i - 1].coordinates(), _geometry[i].coordinates());
-                _zmatrix_entry._dihedral = calculate_signed_dihedral(_geometry[i - 3].coordinates(), _geometry[i - 2].coordinates(), _geometry[i - 1].coordinates(), _geometry[i].coordinates());
-
-                _zmatrix.push_back(_zmatrix_entry);
-            }
-            return _zmatrix;
         }
 
     private:
@@ -552,54 +688,9 @@ namespace Planck::Geometry
             return std::atan2(sin_angle, cos_angle) * (180.0 / M_PI);
         }
 
-        /**
-         * @brief Constructs a pairwise atomic connectivity table based on interatomic distances.
-         *
-         * This function loops through all unique pairs of atoms in a molecular geometry
-         * and checks if they are close enough (based on their van der Waals radii)
-         * to be considered "connected" or potentially bonded. If so, it records the
-         * distance in a symmetric distance matrix.
-         *
-         * The cutoff distance is defined as 1.2 times the sum of van der Waals radii
-         * for the atom pair.
-         */
-        void create_connetivity_table()
-        {
-            // resize the connectivity matrix
-            _distance_matrix(_geometry.size(), _geometry.size());
-            
-            // Loop over all atoms in the geometry
-            for (size_t i = 0; i < _geometry.size(); i++)
-            {
-                // Get coordinates of atom i
-                auto _i_coords = _geometry[i].coordinates();
-
-                // Loop only over atoms j > i to avoid redundant pairings (i,j) and (j,i)
-                for (size_t j = i + 1; j < _geometry.size(); j++)
-                {
-                    // Get coordinates of atom j
-                    auto _j_coords = _geometry[j].coordinates();
-
-                    // Compute Euclidean distance between atom i and atom j
-                    auto _distance = calculate_distance(_i_coords, _j_coords);
-
-                    // Compute cutoff distance using van der Waals radii for atom i and atom j
-                    auto _cut_off = 1.2 * (get_vdw_radii_from_name(_geometry[i].get_atom_symbol()) +
-                                           get_vdw_radii_from_name(_geometry[j].get_atom_symbol()));
-
-                    // If atoms are within the cutoff distance, register the connection in the distance matrix
-                    if (_distance <= _cut_off)
-                    {
-                        _distance_matrix(i, j) = _distance;
-                        _distance_matrix(j, i) = _distance; // ensure symmetry
-                    }
-                }
-            }
-        }
-
         // Returns the number of non-zero (i.e., connected) elements in the input vector.
         // Throws std::invalid_argument if there are no connections.
-        size_t get_node_count(const Eigen::VectorXd &connectivity) const
+        std::uint64_t get_node_count(const Eigen::VectorXd &connectivity) const
         {
             // Create a boolean mask: true where the connectivity value is non-zero
             auto mask_ = (connectivity.array() != 0);
@@ -611,21 +702,21 @@ namespace Planck::Geometry
             if (non_zero_count == 0)
                 throw std::invalid_argument("The node has no connections.");
 
-            // Return the number of connections as a standard size_t
-            return static_cast<size_t>(non_zero_count);
+            // Return the number of connections as a standard std::uint64_t
+            return static_cast<std::uint64_t>(non_zero_count);
         }
 
         // Returns a tuple with (maximum connection count, index of the node with that count)
-        std::tuple<size_t, Eigen::Index> get_max_node() const
+        std::tuple<std::uint64_t, std::uint64_t> get_max_node() const
         {
-            size_t max_count = 0;
-            Eigen::Index max_node = 0;
+            std::uint64_t max_count = 0;
+            std::uint64_t max_node = 0;
 
             // Iterate over each row of the distance matrix
-            for (Eigen::Index i = 0; i < _distance_matrix.rows(); ++i)
+            for (std::uint64_t i = 0; i < _distance_matrix.rows(); ++i)
             {
                 // Count non-zero entries (connections) in this node's row
-                size_t node_count = get_node_count(_distance_matrix.row(i));
+                std::uint64_t node_count = get_node_count(_distance_matrix.row(i));
 
                 // Update the maximum if this node has more connections
                 if (node_count > max_count)
@@ -636,7 +727,7 @@ namespace Planck::Geometry
             return {max_count, max_node};
         }
 
-        Eigen::Index get_best_neighbour(Eigen::Index &node, const std::vector<bool> &placed) const
+        std::uint64_t get_best_neighbour(const std::uint64_t &node, const std::vector<bool> &placed) const
         {
             // Find all atoms connected to the given atom
             auto mask_ = (_distance_matrix.row(node).array() != 0);
@@ -650,14 +741,14 @@ namespace Planck::Geometry
             }
 
             // Now iterate over them to find the closest atom
-            Eigen::Index _best_node;
+            std::uint64_t _best_node;
             auto _min_dist = std::numeric_limits<std::double_t>::max();
             bool _connected = false;
 
             for (auto _index : indices)
             {
                 auto _distance = _distance_matrix(node, _index);
-                if (_distance <= _min_dist)
+                if (_distance <= _min_dist && !placed[_index])
                 {
                     _min_dist = _distance;
                     _best_node = _index;
@@ -671,21 +762,19 @@ namespace Planck::Geometry
                 return _best_node;
             }
 
-            _min_dist  = std::numeric_limits<std::double_t>::max();
-            _connected = false;
-            for (Eigen::Index i = 0; i < _geometry.size(); i++)
+            // Fall back if no connected atoms
+            for (std::uint64_t i = 0; i < _geometry.size(); i++)
             {
                 if (i == node)
                     continue;
-                
+
                 auto distance_ = calculate_distance(_geometry[node].coordinates(), _geometry[i].coordinates());
-                if (distance_ < _min_dist)
+                if (distance_ < _min_dist && !placed[i])
                 {
-                    _min_dist  = distance_;
+                    _min_dist = distance_;
                     _best_node = i;
                     _connected = true;
                 }
-                
             }
 
             // Return the best connected atom, if any
@@ -693,7 +782,9 @@ namespace Planck::Geometry
             {
                 return _best_node;
             }
-            throw Planck::Exceptions::GeomException("Unable to find neighbouring atom");
+
+            // Throw error if no atom was found
+            throw Planck::Exceptions::GeomException("Unable to find any neighbouring atoms for " + std::to_string(node));
         }
     };
 }

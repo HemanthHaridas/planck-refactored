@@ -3,6 +3,7 @@
 #include <memory>
 #include <stdexcept>
 #include <filesystem>
+#include <iomanip> // IO manipulation
 
 #include "planck_input.hpp"
 
@@ -91,12 +92,35 @@ namespace Planck::Main
             auto _mol_parameters   = input_reader->_geom.get_input_parameters();
             auto _mol_coordinates  = input_reader->_geom.get_coordinates();
             std::cout << "Successfully processed input file: " << input_filepath << std::endl;
-            
-            for (auto [name_,coord_] : _mol_coordinates)
+
+            for (auto [name_, coord_] : _mol_coordinates)
             {
-                std::cout << name_ << " " << coord_ << "\n";
+                std::cout << std::setw(10) << std::left << name_
+                          << std::fixed << std::setw(15) << std::right << coord_[0]
+                          << std::fixed << std::setw(15) << std::right << coord_[1]
+                          << std::fixed << std::setw(15) << std::right << coord_[2] << "\n";
             }
             
+            // convert coordinates to bohr if the input coordinates are in angstroms
+            if (_input_parameters.find("COOR_TYPE")->second == Planck::Interface::Defaults::DEFAULT_COORD)
+            {
+                input_reader->_geom.convert_coords_to_bohr();
+            }
+
+            // get the converted coordinates
+            auto _conv_coordinates = input_reader->_geom.get_coordinates();
+
+            for (auto [name_, coord_] : _conv_coordinates)
+            {
+                std::cout << std::setw(10) << std::left << name_
+                          << std::fixed << std::setw(15) << std::right << coord_[0]
+                          << std::fixed << std::setw(15) << std::right << coord_[1]
+                          << std::fixed << std::setw(15) << std::right << coord_[2] << "\n";
+            }
+
+            // Generate connectivity matrix from distances
+            input_reader->_geom.generate_distance_matrix();
+
             // TODO: Add actual calculation processing here
             // Example workflow:
             // 1. Parse input parameters
