@@ -19,17 +19,3 @@ std::vector <HartreeFock::ShellPair> build_shellpairs(HartreeFock::Basis &basis)
     
     return shell_pairs;
 }
-
-inline std::size_t pair_index(std::size_t i, std::size_t j)
-{
-    if (i < j) std::swap(i, j); // enforce i >= j
-    return i*(i+1)/2 + j;
-}
-
-inline std::pair<std::size_t, std::size_t> invert_pair_index(std::size_t k, std::size_t nshells)
-{
-    std::size_t i = static_cast<std::size_t>((std::sqrt(8.0 * k + 1) - 1) / 2);
-    std::size_t j = k - i * (i + 1) /2;
-
-    return {i, j};
-}

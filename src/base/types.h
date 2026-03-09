@@ -5,6 +5,7 @@
 #include <array>
 #include <vector>
 #include <string>
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <expected>
@@ -12,6 +13,8 @@
 
 #include "tables.h"
 #include "basis.h"
+
+constexpr int MAX_L = 6;
 
 namespace HartreeFock
 {
@@ -149,6 +152,7 @@ namespace HartreeFock
     {
         const Shell* _shell = nullptr;
         Eigen::Vector3i _cartesian = Eigen::Vector3i::Zero();
+        std::size_t _index = 0;   // position in Basis::_basis_functions
 
         std::span<const double> exponents() const noexcept
         {
@@ -343,11 +347,15 @@ namespace HartreeFock
 
     struct PrimitivePair
     {
-        double zeta;                // gaussian exponent
-        double inv_zeta;            // 1 / gaussian exponent
-        double prefactor;           // gaussian integral
-        double coeff_product;       // c_i * c_j
-        Eigen::Vector3d center;     // Gaussian product center
+        double alpha;               // exponent of primitive on A
+        double beta;                // exponent of primitive on B
+        double zeta;                // alpha + beta
+        double inv_zeta;            // 1 / (alpha + beta)
+        double prefactor;           // (pi/zeta)^1.5 * exp(-alpha*beta/zeta * R^2)
+        double coeff_product;       // c_i * c_j * N_i * N_j
+        Eigen::Vector3d center;     // Gaussian product center P
+        Eigen::Vector3d pA;         // P - A
+        Eigen::Vector3d pB;         // P - B
     };
 
     struct ShellPair
@@ -389,14 +397,22 @@ namespace HartreeFock
                     const double alpha_beta_over_zeta = alpha * beta * inv_zeta;
 
                     PrimitivePair pp;
+                    pp.alpha        = alpha;
+                    pp.beta         = beta;
                     pp.zeta         = zeta;
                     pp.inv_zeta     = inv_zeta;
-                    pp.coeff_product= cA * cB;
-                    pp.prefactor    = std::exp(-alpha_beta_over_zeta * R2);
+                    pp.coeff_product= cA * cB
+                                    * A._shell->_normalizations[i]
+                                    * B._shell->_normalizations[j];
+                    pp.prefactor    = std::pow(M_PI * inv_zeta, 1.5)
+                                    * std::exp(-alpha_beta_over_zeta * R2);
 
                     // Gaussian product center
                     pp.center = (alpha * A._shell->_center + beta * B._shell->_center) * inv_zeta;
 
+                    pp.pA = pp.center - A._shell->_center;
+                    pp.pB = pp.center - B._shell->_center;
+                    
                     primitive_pairs.emplace_back(pp);
                 }
             }
@@ -485,46 +501,47 @@ namespace HartreeFock
         CalculationType _calculation = CalculationType::SinglePoint;    // Default is Single point energy calculation
         PostHF          _correlation = PostHF::None;                    // No Post HF corrections
         
-        double          _total_energy       = 0;    // Total Energy (SCF + Nuclear Repulsion)
-        double          _nuclear_replusion  = 0;    // Nuclear Repulsion
-        
-    private:
-        // Setter
-        void _angstrom_to_bohr() noexcept
+        double          _total_energy      = 0;    // Total Energy (SCF + Nuclear Repulsion)
+        double          _nuclear_repulsion = 0;    // Nuclear Repulsion Energy (Bohr)
+
+        Eigen::MatrixXd _overlap;   // Overlap matrix S
+        Eigen::MatrixXd _hcore;     // Core Hamiltonian H = T + V
+
+        void _compute_nuclear_repulsion() noexcept
         {
-            _molecule._coordinates = _molecule.coordinates * ANGSTROM_TO_BOHR;
+            const std::size_t N = _molecule.natoms;
+            double E_nuc = 0.0;
+            for (std::size_t a = 0; a < N; a++) {
+                for (std::size_t b = a + 1; b < N; b++) {
+                    const double Za = static_cast<double>(_molecule.atomic_numbers[a]);
+                    const double Zb = static_cast<double>(_molecule.atomic_numbers[b]);
+                    const double dx = _molecule._standard(a, 0) - _molecule._standard(b, 0);
+                    const double dy = _molecule._standard(a, 1) - _molecule._standard(b, 1);
+                    const double dz = _molecule._standard(a, 2) - _molecule._standard(b, 2);
+                    E_nuc += Za * Zb / std::sqrt(dx*dx + dy*dy + dz*dz);
+                }
+            }
+            _nuclear_repulsion = E_nuc;
         }
         
-//        void _nuclear_repulsion() noexcept
-//        {
-//            // Compute distances in x, y and z directions
-//            Eigen::MatrixXd dx = _molecule.standard.col(0).rowwise() - _molecule.standard.col(0).transpose();
-//            Eigen::MatrixXd dy = _molecule.standard.col(1).rowwise() - _molecule.standard.col(1).transpose();
-//            Eigen::MatrixXd dz = _molecule.standard.col(2).rowwise() - _molecule.standard.col(2).transpose();
-//            
-//            // Compute total distance as (N,N) matrix
-//            Eigen::MatrixXd ds = (dx.array().square() + dy.array().square() + dz.array().square()).sqrt();
-//            
-//            // Set diagonal to infinity to avoid division by zero
-//            ds.diagonal().setConstant(std::numeric_limits<double>::infinity());
-//            
-//            // Compute product of charges as (N,N) matrix
-//            Eigen::MatrixXd zsq = _molecule.atomic_numbers * _molecule.atomic_numbers.transpose();
-//            
-//            // Sum the contributions and halve to avoid double counting
-//            _nuclear_repulsion = (zsq.array() / ds.array()).sum() * 0.5;
-//        }
-        
-//        std::expected <void, std::string> _hartree_fock()
-//        {
-//            // Compute Overlap
-//            // Compute Kinetic
-//            // Compute Electron - Nuclear Attraction
-//            // Compute Electron - Electron Repulsion
-//            // Populate Data
-//        }
-        
     public:
+        // Convert input coordinates to Bohr and store in _coordinates.
+        // Must be called once, before detectSymmetry() and read_gbs_basis().
+        void prepare_coordinates() noexcept
+        {
+            if (_molecule._is_bohr)
+                return;
+            if (_geometry._units == Units::Bohr)
+            {
+                _molecule._coordinates = _molecule.coordinates;
+            }
+            else
+            {
+                _molecule._coordinates = _molecule.coordinates * ANGSTROM_TO_BOHR;
+            }
+            _molecule._is_bohr = true;
+        }
+
         // Getter
         const Eigen::VectorXd _bohr_to_angstrom() const noexcept
         {
@@ -541,17 +558,19 @@ namespace HartreeFock
                 
                 // Now initialize the matrices
                 _info._scf.initialize(_shells.nbasis());
+                
+                // Set SCF Mode
+                _scf.set_scf_mode_auto(_shells.nbasis());
+                
+                // Set Max SCF cycles
+                _scf.set_max_cycles_auto(_shells.nbasis());
             }
             
-            // Check if coordinates are in Bohr
-            _molecule._is_bohr = (_geometry._units == Units::Bohr);
-            
-            if (!_molecule._is_bohr)
-            {
-                _angstrom_to_bohr();
-                _molecule._is_bohr = true;
-            }
-            
+            // prepare_coordinates() must have been called before initialize().
+            // Nothing to do here for coordinate conversion.
+
+            _compute_nuclear_repulsion();
+
             return {};
         }
     };

@@ -177,7 +177,22 @@ HartreeFock::Basis HartreeFock::BasisFunctions::read_gbs_basis(const std::string
     
     // Initialize Basis object
     HartreeFock::Basis basis;
-    
+
+    // Count total shells across all atoms and reserve upfront.
+    // Without this, push_back on _shells may reallocate, invalidating all Shell*
+    // pointers already stored in _basis_functions (ContractedView::_shell).
+    {
+        std::size_t total_shells = 0;
+        for (std::size_t i = 0; i < molecule.natoms; i++)
+        {
+            const std::string sym = std::string(element_from_z(molecule.atomic_numbers[i]).symbol);
+            auto it = gbs.find(sym);
+            if (it != gbs.end())
+                total_shells += it->second.size();
+        }
+        basis._shells.reserve(total_shells);
+    }
+
     for (std::size_t i = 0; i < molecule.natoms; i++)
     {
         std::string element = std::string(
@@ -226,7 +241,9 @@ HartreeFock::Basis HartreeFock::BasisFunctions::read_gbs_basis(const std::string
             
             for (auto am : HartreeFock::BasisFunctions::_cartesian_shell_order(L))
             {
+                const std::size_t idx = basis._basis_functions.size();
                 basis._basis_functions.emplace_back(shell_ptr, am);
+                basis._basis_functions.back()._index = idx;
             }
         }
     }

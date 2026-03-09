@@ -92,6 +92,12 @@ file(GLOB INT_SRC
     ${SRC_DIR}/integrals/*.cpp
 )
 
+# Collect sources automatically
+file(GLOB SCF_SRC
+    ${SRC_DIR}/scf/*.h
+    ${SRC_DIR}/scf/*.cpp
+)
+
 # Executable target
 add_executable(hartree-fock
     ${BASE_SRC}
@@ -101,6 +107,7 @@ add_executable(hartree-fock
     ${BASIS_SRC}
     ${INT_SRC}
     ${IO_SRC}
+    ${SCF_SRC}
 )
 
 # Include directories

@@ -14,6 +14,8 @@
 #include "symmetry/symmetry.h"
 #include "basis/basis.h"
 #include "integrals/shellpair.h"
+#include "integrals/base.h"
+#include "scf/scf.h"
 
 using SystemClock = std::chrono::system_clock;
 
@@ -62,7 +64,11 @@ int main(int argc, const char* argv[])
     }
 
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");
-    
+
+    // Convert input coordinates to Bohr immediately — must happen before symmetry
+    // detection and basis reading, both of which need _coordinates in Bohr.
+    calculator.prepare_coordinates();
+
     // Now log all input options
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :",           map_enum(calculator._integral._engine));
@@ -72,7 +78,7 @@ int main(int argc, const char* argv[])
     if (!calculator._geometry._use_symm)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :", "Symmetry detection is turned off by request");
-        // If symmetry is not detected, set standar coordinates to input coordinates
+        // No reorientation — standard frame equals input frame.
         calculator._molecule._standard = calculator._molecule._coordinates;
     }
 
@@ -122,7 +128,7 @@ int main(int argc, const char* argv[])
             for (std::size_t cindex = 0; cindex < 3; ++cindex)
             {
                 std::ostringstream oss;
-                oss << std::setw(10) << std::setprecision(3) << std::fixed << calculator._molecule._standard(index, cindex);
+                oss << std::setw(10) << std::setprecision(3) << std::fixed << calculator._molecule.standard(index, cindex);
                 cstr += oss.str();
             }
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "", cstr);
@@ -151,7 +157,52 @@ int main(int argc, const char* argv[])
     std::vector <HartreeFock::ShellPair> shellpairs = build_shellpairs(calculator._shells);
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Number of Shell pairs :", shellpairs.size());
     
-    // Initialize one-electron integrals
-    // Initialize two-electron integrals
-    const auto program_end      = SystemClock::now();   // End time
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "SCF Mode :", map_enum<HartreeFock::SCFMode>(calculator._scf._mode));
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Nuclear Repulsion :", std::format("{:.10f} Eh", calculator._nuclear_repulsion));
+
+    // ── One-electron integrals ────────────────────────────────────────────────
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing overlap and kinetic energy matrices");
+
+    auto [S, T] = _compute_1e(shellpairs, calculator._shells.nbasis(), calculator._integral._engine);
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Overlap and kinetic done");
+
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing nuclear attraction matrix");
+    Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, calculator._shells.nbasis(),
+                                                    calculator._molecule,
+                                                    calculator._integral._engine);
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Nuclear attraction done");
+
+    // ── Core Hamiltonian H = T + V ────────────────────────────────────────────
+    calculator._overlap = S;
+    calculator._hcore   = T + V;
+
+    if (calculator._output._print_matrices)
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Overlap Matrix S :", "");
+        std::cout << S << "\n";
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Core Hamiltonian H :", "");
+        std::cout << calculator._hcore << "\n";
+    }
+
+    // ── SCF ───────────────────────────────────────────────────────────────────
+    if (calculator._scf._scf == HartreeFock::SCFType::RHF)
+    {
+        if (auto res = HartreeFock::SCF::run_rhf(calculator); !res)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
+            return EXIT_FAILURE;
+        }
+    }
+    else
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF :", "UHF not yet implemented");
+        return EXIT_FAILURE;
+    }
+
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Total Energy :",
+        std::format("{:.10f} Eh", calculator._total_energy));
+
+    const auto program_end = SystemClock::now();
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Wall Time :",
+        std::format("{:.3f} s", std::chrono::duration<double>(program_end - program_start).count()));
 }

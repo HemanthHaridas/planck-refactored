@@ -2,6 +2,10 @@
 #define HF_LOGGING_H
 
 #include <string>
+#include <iostream>
+#include <iomanip>
+#include <chrono>
+
 #include "base/types.h"
 
 namespace HartreeFock
@@ -164,10 +168,24 @@ const inline std::string map_enum<HartreeFock::SCFType>(HartreeFock::SCFType s)
 {
     switch (s)
     {
-    case HartreeFock::SCFType::RHF:
-        return "RHF";
-    case HartreeFock::SCFType::UHF:
-        return "UHF";
+        case HartreeFock::SCFType::RHF:
+            return "RHF";
+        case HartreeFock::SCFType::UHF:
+            return "UHF";
+    }
+    return "Unknown";
+}
+
+// Specialization for SCF Mode
+template <>
+const inline std::string map_enum<HartreeFock::SCFMode>(HartreeFock::SCFMode s)
+{
+    switch (s)
+    {
+        case HartreeFock::SCFMode::Conventional:
+            return "Conventional";
+        case HartreeFock::SCFMode::Direct:
+            return "Direct";
     }
     return "Unknown";
 }
