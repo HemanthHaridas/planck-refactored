@@ -1,0 +1,28 @@
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation rmp2
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     -5.489879    2.740157    0.045198
+H     -6.330361    2.133606    0.413562
+H     -5.690746    2.839010   -1.031783
+%end_coords

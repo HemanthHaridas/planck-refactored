@@ -4,3 +4,4 @@ src/external
 inputs
 install
 .DS*
+bin

@@ -7,6 +7,6 @@
 #include "shellpair.h"
 #include "shellquartet.h"
 
-Eigen::MatrixXd _overlap_1d(const std::vector <HartreeFock::ShellPair> &shell_pairs);
+
 
 #endif // !HF_OS_H
