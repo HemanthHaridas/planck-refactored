@@ -17,6 +17,13 @@ namespace HartreeFock
         std::tuple<double, double> _compute_3d_overlap_kinetic(const HartreeFock::ShellPair &shell_pair);
         std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_1e(const std::vector<HartreeFock::ShellPair> &shell_pairs, const std::size_t nbasis);
         Eigen::MatrixXd _compute_nuclear_attraction(const std::vector<HartreeFock::ShellPair> &shell_pairs, const std::size_t nbasis, const HartreeFock::Molecule &molecule);
+
+        // Build the two-electron Fock contribution G = J - 0.5*K.
+        // Iterates over all unique shell-pair quartets and accumulates Coulomb
+        // and exchange contributions using 8-fold permutation symmetry.
+        Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair>& shell_pairs,
+                                         const Eigen::MatrixXd& density,
+                                         std::size_t nbasis);
     }
 }
 

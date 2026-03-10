@@ -6,6 +6,7 @@
 #include <string>
 
 #include "base/types.h"
+#include "integrals/shellpair.h"
 
 namespace HartreeFock
 {
@@ -25,7 +26,8 @@ namespace HartreeFock
         // Run the RHF SCF procedure.
         // Stores converged density, Fock, MO energies/coefficients in calculator._info._scf.
         // Returns an error string if convergence is not achieved.
-        std::expected<void, std::string> run_rhf(HartreeFock::Calculator& calculator);
+        std::expected<void, std::string> run_rhf(HartreeFock::Calculator& calculator,
+                                                  const std::vector<HartreeFock::ShellPair>& shell_pairs);
     }
 }
 

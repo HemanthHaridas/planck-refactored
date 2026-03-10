@@ -2,30 +2,12 @@
 #include "base.h"
 #include "boys.h"
 
-// Local copy of the Boys function so the IDE and compiler both see it
-// unambiguously within this translation unit.
-// F_n(x) = integral_0^1 t^(2n) exp(-x*t^2) dt
-static double _boys(const int n, const double x)
-{
-    if (x < 1e-7)
-        return 1.0 / (2 * n + 1);
-
-    if (x > 20.0)
-        return std::tgamma(n + 0.5) / (2.0 * std::pow(x, n + 0.5));
-
-    const double sqrt_x = std::sqrt(x);
-    const double ex     = std::exp(-x);
-    double f = 0.5 * std::sqrt(M_PI / x) * std::erf(sqrt_x);
-
-    for (int m = 0; m < n; m++)
-        f = ((2 * m + 1) * f - ex) / (2.0 * x);
-
-    return f;
-}
 
 inline double HartreeFock::ObaraSaika::_os_1d(const double gamma, const double distPA, const double distPB, const int lA, const int lB)
 {
-    double S[MAX_L + 1][MAX_L + 1] = {};
+    // +2 shifted overlaps are needed by the kinetic energy formula (lB+2),
+    // so the second dimension must accommodate lB = MAX_L + 2.
+    double S[MAX_L + 3][MAX_L + 3] = {};
     
     S[0][0] = 1.0;  // Set base factor
     
@@ -140,13 +122,34 @@ std::tuple<double, double> HartreeFock::ObaraSaika::_compute_3d_overlap_kinetic(
     return {S, T};
 }
 
-// ─── Nuclear attraction ────────────────────────────────────────────────────────
+// ─Nuclear attraction ─────────────
 
-// Recursive HRR: transfer angular momentum from A-centre to B-centre.
-// [a | b+1_q] = [a+1_q | b] + (A-B)_q * [a | b]
-// V0[ax][ay][az] contains the VRR result at m=0.
+// Iterative HRR: transfer angular momentum from A-centre to B-centre.
+// Recurrence: [a | b+1_q] = [a+1_q | b] + (A-B)_q * [a | b]
+//
+// Three sequential passes (z → y → x) each sweep the working array
+// in ascending index order.  Because each update reads W[i+1] before
+// writing W[i], W[i+1] is always the old (pre-pass) value — so the
+// scan is safe in-place without an auxiliary buffer.
+//
+// Complexity: O(L^3 * (bx+by+bz))  vs  O(2^(bx+by+bz)) for the
+// recursive version.
+// VRR spatial dimension: each axis of the VRR table runs from 0 to
+// lAx+lBx (or y,z equivalents).  lAx can be MAX_L and lBx can be
+// MAX_L independently, so the table needs 2*MAX_L+1 entries per axis.
+static constexpr int VRR_DIM  = 2 * MAX_L + 1;  // = 13; per-axis bound for 1-pair VRR
+static constexpr int MMAX_4C  = 4 * MAX_L + 2;  // = 26; Boys m upper bound for 4-center ERI
+
+// Thread-local scratch buffers for 4-center ERI (too large for the stack).
+// VRR buffer: V[ax][ay][az][cx][cy][cz][m]
+// HRR buffer: W[ax][ay][az][cx][cy][cz]  (m=0 slice used during HRR)
+static thread_local double _vrr_buf[VRR_DIM][VRR_DIM][VRR_DIM]
+                                    [VRR_DIM][VRR_DIM][VRR_DIM][MMAX_4C];
+static thread_local double _hrr_buf[VRR_DIM][VRR_DIM][VRR_DIM]
+                                    [VRR_DIM][VRR_DIM][VRR_DIM];
+
 static double _nuclear_hrr(
-    const double V0[MAX_L + 1][MAX_L + 1][MAX_L + 1],
+    const double V0[VRR_DIM][VRR_DIM][VRR_DIM],
     const int ax, const int ay, const int az,
     const int bx, const int by, const int bz,
     const double ABx, const double ABy, const double ABz)
@@ -154,16 +157,41 @@ static double _nuclear_hrr(
     if (bx == 0 && by == 0 && bz == 0)
         return V0[ax][ay][az];
 
-    if (bx > 0)
-        return _nuclear_hrr(V0, ax + 1, ay, az, bx - 1, by, bz, ABx, ABy, ABz)
-             + ABx * _nuclear_hrr(V0, ax, ay, az, bx - 1, by, bz, ABx, ABy, ABz);
+    // Working copy — same footprint as V0.
+    double W[VRR_DIM][VRR_DIM][VRR_DIM];
+    for (int ix = 0; ix <= ax + bx; ix++)
+        for (int iy = 0; iy <= ay + by; iy++)
+            for (int iz = 0; iz <= az + bz; iz++)
+                W[ix][iy][iz] = V0[ix][iy][iz];
 
-    if (by > 0)
-        return _nuclear_hrr(V0, ax, ay + 1, az, bx, by - 1, bz, ABx, ABy, ABz)
-             + ABy * _nuclear_hrr(V0, ax, ay, az, bx, by - 1, bz, ABx, ABy, ABz);
+    // Phase 1 — transfer bz quanta to az.
+    // After k steps: W[ix][iy][iz] = [ix, iy, iz | 0, 0, k]
+    // for iz in [0, az + bz - k].
+    for (int kz = 0; kz < bz; kz++)
+        for (int ix = 0; ix <= ax + bx; ix++)
+            for (int iy = 0; iy <= ay + by; iy++)
+                for (int iz = 0; iz <= az + bz - kz - 1; iz++)
+                    W[ix][iy][iz] = W[ix][iy][iz + 1] + ABz * W[ix][iy][iz];
 
-    return _nuclear_hrr(V0, ax, ay, az + 1, bx, by, bz - 1, ABx, ABy, ABz)
-         + ABz * _nuclear_hrr(V0, ax, ay, az, bx, by, bz - 1, ABx, ABy, ABz);
+    // Phase 2 — transfer by quanta to ay (iz range now [0, az]).
+    // After k steps: W[ix][iy][iz] = [ix, iy, iz | 0, k, bz]
+    // for iy in [0, ay + by - k].
+    for (int ky = 0; ky < by; ky++)
+        for (int ix = 0; ix <= ax + bx; ix++)
+            for (int iy = 0; iy <= ay + by - ky - 1; iy++)
+                for (int iz = 0; iz <= az; iz++)
+                    W[ix][iy][iz] = W[ix][iy + 1][iz] + ABy * W[ix][iy][iz];
+
+    // Phase 3 — transfer bx quanta to ax (iy range now [0, ay]).
+    // After k steps: W[ix][iy][iz] = [ix, iy, iz | k, by, bz]
+    // for ix in [0, ax + bx - k].
+    for (int kx = 0; kx < bx; kx++)
+        for (int ix = 0; ix <= ax + bx - kx - 1; ix++)
+            for (int iy = 0; iy <= ay; iy++)
+                for (int iz = 0; iz <= az; iz++)
+                    W[ix][iy][iz] = W[ix + 1][iy][iz] + ABx * W[ix][iy][iz];
+
+    return W[ax][ay][az];
 }
 
 // Compute <A| -Z/|r-C| |B> for a single primitive pair and a single nucleus.
@@ -189,13 +217,18 @@ static double _os_nuclear_primitive(
     //                   = pp.prefactor * 2 * sqrt(zeta/pi)
     const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / M_PI);
 
-    // ── VRR table V[ix][iy][iz][m] ──────────────────────────────────────────
-    constexpr int MMAX  = 2 * MAX_L + 2;
-    double V[MAX_L + 1][MAX_L + 1][MAX_L + 1][MMAX] = {};
+    // VRR table V[ix][iy][iz][m]
+    // Spatial dims: each axis runs 0..lAq+lBq ≤ 2*MAX_L, so VRR_DIM = 2*MAX_L+1.
+    // m dimension: m+1 is accessed up to L+1 ≤ 2*MAX_L+1, so MMAX = 2*MAX_L+2.
+    constexpr int MMAX = 2 * MAX_L + 2;
+    double V[VRR_DIM][VRR_DIM][VRR_DIM][MMAX] = {};
 
+    // Compute all Boys values
     for (int m = 0; m <= L; m++)
-        V[0][0][0][m] = nuc_pref * _boys(m, T);
-
+    {
+        V[0][0][0][m] = nuc_pref * HartreeFock::Lookup::boys(m, T);
+    }
+    
     const double pAx       = pp.pA[0], pAy = pp.pA[1], pAz = pp.pA[2];
     const double hiz       = pp.inv_zeta * 0.5;
     const int    lx_max    = lAx + lBx;
@@ -203,50 +236,71 @@ static double _os_nuclear_primitive(
     const int    lz_max    = lAz + lBz;
 
     // x-VRR: V[ix][0][0][m]
-    for (int ix = 1; ix <= lx_max; ix++) {
-        for (int m = 0; m <= L - ix; m++) {
+    for (int ix = 1; ix <= lx_max; ix++)
+    {
+        for (int m = 0; m <= L - ix; m++)
+        {
             V[ix][0][0][m] = pAx * V[ix - 1][0][0][m] - pCx * V[ix - 1][0][0][m + 1];
             if (ix > 1)
+            {
                 V[ix][0][0][m] += (ix - 1) * hiz * (V[ix - 2][0][0][m] - V[ix - 2][0][0][m + 1]);
-        }
-    }
-
-    // y-VRR: V[ix][iy][0][m]
-    for (int ix = 0; ix <= lx_max; ix++) {
-        for (int iy = 1; iy <= ly_max; iy++) {
-            const int mmax = L - ix - iy;
-            if (mmax < 0) continue;
-            for (int m = 0; m <= mmax; m++) {
-                V[ix][iy][0][m] = pAy * V[ix][iy - 1][0][m] - pCy * V[ix][iy - 1][0][m + 1];
-                if (iy > 1)
-                    V[ix][iy][0][m] += (iy - 1) * hiz * (V[ix][iy - 2][0][m] - V[ix][iy - 2][0][m + 1]);
             }
         }
     }
 
-    // z-VRR: V[ix][iy][iz][m]
-    for (int ix = 0; ix <= lx_max; ix++) {
-        for (int iy = 0; iy <= ly_max; iy++) {
-            for (int iz = 1; iz <= lz_max; iz++) {
-                const int mmax = L - ix - iy - iz;
-                if (mmax < 0) continue;
-                for (int m = 0; m <= mmax; m++) {
-                    V[ix][iy][iz][m] = pAz * V[ix][iy][iz - 1][m] - pCz * V[ix][iy][iz - 1][m + 1];
-                    if (iz > 1)
-                        V[ix][iy][iz][m] += (iz - 1) * hiz * (V[ix][iy][iz - 2][m] - V[ix][iy][iz - 2][m + 1]);
+    // y-VRR: V[ix][iy][0][m]
+    for (int ix = 0; ix <= lx_max; ix++)
+    {
+        for (int iy = 1; iy <= ly_max; iy++)
+        {
+            const int mmax = L - ix - iy;
+            if (mmax < 0) continue;
+            for (int m = 0; m <= mmax; m++)
+            {
+                V[ix][iy][0][m] = pAy * V[ix][iy - 1][0][m] - pCy * V[ix][iy - 1][0][m + 1];
+                if (iy > 1)
+                {
+                    V[ix][iy][0][m] += (iy - 1) * hiz * (V[ix][iy - 2][0][m] - V[ix][iy - 2][0][m + 1]);
                 }
             }
         }
     }
 
-    // ── Extract m=0 slice for HRR ───────────────────────────────────────────
-    double V0[MAX_L + 1][MAX_L + 1][MAX_L + 1] = {};
+    // z-VRR: V[ix][iy][iz][m]
     for (int ix = 0; ix <= lx_max; ix++)
+    {
         for (int iy = 0; iy <= ly_max; iy++)
-            for (int iz = 0; iz <= lz_max; iz++)
-                V0[ix][iy][iz] = V[ix][iy][iz][0];
+        {
+            for (int iz = 1; iz <= lz_max; iz++)
+            {
+                const int mmax = L - ix - iy - iz;
+                if (mmax < 0) continue;
+                for (int m = 0; m <= mmax; m++)
+                {
+                    V[ix][iy][iz][m] = pAz * V[ix][iy][iz - 1][m] - pCz * V[ix][iy][iz - 1][m + 1];
+                    if (iz > 1)
+                    {
+                        V[ix][iy][iz][m] += (iz - 1) * hiz * (V[ix][iy][iz - 2][m] - V[ix][iy][iz - 2][m + 1]);
+                    }
+                }
+            }
+        }
+    }
 
-    // ── HRR: transfer angular momentum to B ─────────────────────────────────
+    // Extract m=0 slice for HRR
+    double V0[VRR_DIM][VRR_DIM][VRR_DIM] = {};
+    for (int ix = 0; ix <= lx_max; ix++)
+    {
+        for (int iy = 0; iy <= ly_max; iy++)
+        {
+            for (int iz = 0; iz <= lz_max; iz++)
+            {
+                V0[ix][iy][iz] = V[ix][iy][iz][0];
+            }
+        }
+    }
+
+    // HRR: transfer angular momentum to B 
     return _nuclear_hrr(V0, lAx, lAy, lAz, lBx, lBy, lBz, ABx, ABy, ABz);
 }
 
@@ -294,4 +348,418 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_nuclear_attraction(
     }
 
     return V;
+}
+
+// ─── 4-center ERI: VRR ───────────────────────────────────────────────────────
+//
+// Builds V[ax][ay][az][cx][cy][cz][m] for a single primitive quartet.
+// ax runs 0..lABx (= lAx+lBx), cy runs 0..lCDy, etc.
+// On return, V[...][0] holds (a 0 | c 0)^{m=0} ready for the HRR stage.
+//
+// Recurrences (Obara-Saika 1986, Eq. 6):
+//   (a+1_q 0|c 0)^m = PA_q (a0|c0)^m + WP_q (a0|c0)^{m+1}
+//                   + (a_q/2ζ)[(a-1_q 0|c0)^m - (ρ/ζ)(a-1_q 0|c0)^{m+1}]
+//                   + (c_q/2δ)(a-1_q 0|c-1_q 0)^{m+1}
+//
+//   (a 0|c+1_q 0)^m = QC_q (a0|c0)^m + WQ_q (a0|c0)^{m+1}
+//                   + (c_q/2ζ')[(a0|c-1_q 0)^m - (ρ/ζ')(a0|c-1_q 0)^{m+1}]
+//                   + (a_q/2δ)(a-1_q 0|c-1_q 0)^{m+1}
+static void _eri_vrr(
+    const HartreeFock::PrimitivePair& ppAB,
+    const HartreeFock::PrimitivePair& ppCD,
+    const int lABx, const int lABy, const int lABz,
+    const int lCDx, const int lCDy, const int lCDz,
+    double V[VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][MMAX_4C])
+{
+    const double zetaAB = ppAB.zeta;
+    const double zetaCD = ppCD.zeta;
+    const double delta  = zetaAB + zetaCD;
+    const double rho    = zetaAB * zetaCD / delta;
+
+    const double inv_2_zetaAB    = 0.5 / zetaAB;
+    const double inv_2_zetaCD    = 0.5 / zetaCD;
+    const double inv_2_delta     = 0.5 / delta;
+    const double rho_over_zetaAB = rho / zetaAB;
+    const double rho_over_zetaCD = rho / zetaCD;
+
+    const auto& P = ppAB.center;
+    const auto& Q = ppCD.center;
+
+    // W = weighted average of Gaussian product centers
+    const double Wx = (zetaAB * P[0] + zetaCD * Q[0]) / delta;
+    const double Wy = (zetaAB * P[1] + zetaCD * Q[1]) / delta;
+    const double Wz = (zetaAB * P[2] + zetaCD * Q[2]) / delta;
+
+    // WP = W - P,  WQ = W - Q
+    const double WPx = Wx - P[0],  WPy = Wy - P[1],  WPz = Wz - P[2];
+    const double WQx = Wx - Q[0],  WQy = Wy - Q[1],  WQz = Wz - Q[2];
+
+    // PA = P - A = ppAB.pA;  QC = Q - C = ppCD.pA (since ppCD.A is shell C)
+    const double PAx = ppAB.pA[0], PAy = ppAB.pA[1], PAz = ppAB.pA[2];
+    const double QCx = ppCD.pA[0], QCy = ppCD.pA[1], QCz = ppCD.pA[2];
+
+    const double PQx = P[0] - Q[0], PQy = P[1] - Q[1], PQz = P[2] - Q[2];
+    const double T   = rho * (PQx*PQx + PQy*PQy + PQz*PQz);
+
+    const int MMAX = lABx + lABy + lABz + lCDx + lCDy + lCDz;
+
+    const double prefac = ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / M_PI);
+
+    // ── Seed ─────────────────────────────────────────────────────────────────
+    for (int m = 0; m <= MMAX; ++m)
+        V[0][0][0][0][0][0][m] = prefac * HartreeFock::Lookup::boys(m, T);
+
+    // ── A-VRR: x-axis ─────────────────────────────────────────────────────
+    for (int ax = 1; ax <= lABx; ++ax)
+    {
+        const int mlim = MMAX - ax;
+        for (int m = 0; m <= mlim; ++m)
+        {
+            V[ax][0][0][0][0][0][m] =
+                PAx * V[ax-1][0][0][0][0][0][m]
+              + WPx * V[ax-1][0][0][0][0][0][m+1];
+            if (ax > 1)
+                V[ax][0][0][0][0][0][m] +=
+                    (ax-1) * inv_2_zetaAB *
+                    (V[ax-2][0][0][0][0][0][m] - rho_over_zetaAB * V[ax-2][0][0][0][0][0][m+1]);
+        }
+    }
+
+    // ── A-VRR: y-axis ─────────────────────────────────────────────────────
+    for (int ax = 0; ax <= lABx; ++ax)
+    {
+        for (int ay = 1; ay <= lABy; ++ay)
+        {
+            const int mlim = MMAX - ax - ay;
+            if (mlim < 0) continue;
+            for (int m = 0; m <= mlim; ++m)
+            {
+                V[ax][ay][0][0][0][0][m] =
+                    PAy * V[ax][ay-1][0][0][0][0][m]
+                  + WPy * V[ax][ay-1][0][0][0][0][m+1];
+                if (ay > 1)
+                    V[ax][ay][0][0][0][0][m] +=
+                        (ay-1) * inv_2_zetaAB *
+                        (V[ax][ay-2][0][0][0][0][m] - rho_over_zetaAB * V[ax][ay-2][0][0][0][0][m+1]);
+            }
+        }
+    }
+
+    // ── A-VRR: z-axis ─────────────────────────────────────────────────────
+    for (int ax = 0; ax <= lABx; ++ax)
+    {
+        for (int ay = 0; ay <= lABy; ++ay)
+        {
+            for (int az = 1; az <= lABz; ++az)
+            {
+                const int mlim = MMAX - ax - ay - az;
+                if (mlim < 0) continue;
+                for (int m = 0; m <= mlim; ++m)
+                {
+                    V[ax][ay][az][0][0][0][m] =
+                        PAz * V[ax][ay][az-1][0][0][0][m]
+                      + WPz * V[ax][ay][az-1][0][0][0][m+1];
+                    if (az > 1)
+                        V[ax][ay][az][0][0][0][m] +=
+                            (az-1) * inv_2_zetaAB *
+                            (V[ax][ay][az-2][0][0][0][m] - rho_over_zetaAB * V[ax][ay][az-2][0][0][0][m+1]);
+                }
+            }
+        }
+    }
+
+    // ── C-VRR: x-axis ─────────────────────────────────────────────────────
+    for (int ax = 0; ax <= lABx; ++ax)
+    {
+        for (int ay = 0; ay <= lABy; ++ay)
+        {
+            for (int az = 0; az <= lABz; ++az)
+            {
+                for (int cx = 1; cx <= lCDx; ++cx)
+                {
+                    const int mlim = MMAX - ax - ay - az - cx;
+                    if (mlim < 0) continue;
+                    for (int m = 0; m <= mlim; ++m)
+                    {
+                        V[ax][ay][az][cx][0][0][m] =
+                            QCx * V[ax][ay][az][cx-1][0][0][m]
+                          + WQx * V[ax][ay][az][cx-1][0][0][m+1];
+                        if (cx > 1)
+                            V[ax][ay][az][cx][0][0][m] +=
+                                (cx-1) * inv_2_zetaCD *
+                                (V[ax][ay][az][cx-2][0][0][m] - rho_over_zetaCD * V[ax][ay][az][cx-2][0][0][m+1]);
+                        if (ax > 0)
+                            V[ax][ay][az][cx][0][0][m] +=
+                                ax * inv_2_delta * V[ax-1][ay][az][cx-1][0][0][m+1];
+                    }
+                }
+            }
+        }
+    }
+
+    // ── C-VRR: y-axis ─────────────────────────────────────────────────────
+    for (int ax = 0; ax <= lABx; ++ax)
+    {
+        for (int ay = 0; ay <= lABy; ++ay)
+        {
+            for (int az = 0; az <= lABz; ++az)
+            {
+                for (int cx = 0; cx <= lCDx; ++cx)
+                {
+                    for (int cy = 1; cy <= lCDy; ++cy)
+                    {
+                        const int mlim = MMAX - ax - ay - az - cx - cy;
+                        if (mlim < 0) continue;
+                        for (int m = 0; m <= mlim; ++m)
+                        {
+                            V[ax][ay][az][cx][cy][0][m] =
+                                QCy * V[ax][ay][az][cx][cy-1][0][m]
+                              + WQy * V[ax][ay][az][cx][cy-1][0][m+1];
+                            if (cy > 1)
+                                V[ax][ay][az][cx][cy][0][m] +=
+                                    (cy-1) * inv_2_zetaCD *
+                                    (V[ax][ay][az][cx][cy-2][0][m] - rho_over_zetaCD * V[ax][ay][az][cx][cy-2][0][m+1]);
+                            if (ay > 0)
+                                V[ax][ay][az][cx][cy][0][m] +=
+                                    ay * inv_2_delta * V[ax][ay-1][az][cx][cy-1][0][m+1];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── C-VRR: z-axis ─────────────────────────────────────────────────────
+    for (int ax = 0; ax <= lABx; ++ax)
+    {
+        for (int ay = 0; ay <= lABy; ++ay)
+        {
+            for (int az = 0; az <= lABz; ++az)
+            {
+                for (int cx = 0; cx <= lCDx; ++cx)
+                {
+                    for (int cy = 0; cy <= lCDy; ++cy)
+                    {
+                        for (int cz = 1; cz <= lCDz; ++cz)
+                        {
+                            const int mlim = MMAX - ax - ay - az - cx - cy - cz;
+                            if (mlim < 0) continue;
+                            for (int m = 0; m <= mlim; ++m)
+                            {
+                                V[ax][ay][az][cx][cy][cz][m] =
+                                    QCz * V[ax][ay][az][cx][cy][cz-1][m]
+                                  + WQz * V[ax][ay][az][cx][cy][cz-1][m+1];
+                                if (cz > 1)
+                                    V[ax][ay][az][cx][cy][cz][m] +=
+                                        (cz-1) * inv_2_zetaCD *
+                                        (V[ax][ay][az][cx][cy][cz-2][m] - rho_over_zetaCD * V[ax][ay][az][cx][cy][cz-2][m+1]);
+                                if (az > 0)
+                                    V[ax][ay][az][cx][cy][cz][m] +=
+                                        az * inv_2_delta * V[ax][ay][az-1][cx][cy][cz-1][m+1];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── 4-center ERI: A→B HRR on 6D array ──────────────────────────────────────
+//
+// Modifies W[ax][ay][az][cx][cy][cz] in-place using the same 3-phase iterative
+// sweep as _nuclear_hrr, but keeping the CD indices in the inner loop so all
+// (cx,cy,cz) entries are updated simultaneously.
+//
+// After this call, W[lAx][lAy][lAz][cx][cy][cz] = (lA lB | cx cy cz 0).
+static void _eri_hrr_ab(
+    double W[VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM],
+    const int lAx, const int lAy, const int lAz,
+    const int lBx, const int lBy, const int lBz,
+    const int lCDx, const int lCDy, const int lCDz,
+    const double ABx, const double ABy, const double ABz)
+{
+    // Phase 1: transfer lBz quanta from az to bz
+    for (int kz = 0; kz < lBz; ++kz)
+        for (int ax = 0; ax <= lAx + lBx; ++ax)
+            for (int ay = 0; ay <= lAy + lBy; ++ay)
+                for (int az = 0; az <= lAz + lBz - kz - 1; ++az)
+                    for (int cx = 0; cx <= lCDx; ++cx)
+                        for (int cy = 0; cy <= lCDy; ++cy)
+                            for (int cz = 0; cz <= lCDz; ++cz)
+                                W[ax][ay][az][cx][cy][cz] =
+                                    W[ax][ay][az+1][cx][cy][cz]
+                                  + ABz * W[ax][ay][az][cx][cy][cz];
+
+    // Phase 2: transfer lBy quanta (az range now [0, lAz])
+    for (int ky = 0; ky < lBy; ++ky)
+        for (int ax = 0; ax <= lAx + lBx; ++ax)
+            for (int ay = 0; ay <= lAy + lBy - ky - 1; ++ay)
+                for (int az = 0; az <= lAz; ++az)
+                    for (int cx = 0; cx <= lCDx; ++cx)
+                        for (int cy = 0; cy <= lCDy; ++cy)
+                            for (int cz = 0; cz <= lCDz; ++cz)
+                                W[ax][ay][az][cx][cy][cz] =
+                                    W[ax][ay+1][az][cx][cy][cz]
+                                  + ABy * W[ax][ay][az][cx][cy][cz];
+
+    // Phase 3: transfer lBx quanta (ay range now [0, lAy])
+    for (int kx = 0; kx < lBx; ++kx)
+        for (int ax = 0; ax <= lAx + lBx - kx - 1; ++ax)
+            for (int ay = 0; ay <= lAy; ++ay)
+                for (int az = 0; az <= lAz; ++az)
+                    for (int cx = 0; cx <= lCDx; ++cx)
+                        for (int cy = 0; cy <= lCDy; ++cy)
+                            for (int cz = 0; cz <= lCDz; ++cz)
+                                W[ax][ay][az][cx][cy][cz] =
+                                    W[ax+1][ay][az][cx][cy][cz]
+                                  + ABx * W[ax][ay][az][cx][cy][cz];
+}
+
+// ─── 4-center ERI: single primitive quartet ──────────────────────────────────
+static double _os_eri_primitive(
+    const HartreeFock::PrimitivePair& ppAB,
+    const HartreeFock::PrimitivePair& ppCD,
+    const int lAx, const int lAy, const int lAz,
+    const int lBx, const int lBy, const int lBz,
+    const int lCx, const int lCy, const int lCz,
+    const int lDx, const int lDy, const int lDz,
+    const double ABx, const double ABy, const double ABz,
+    const double CDx, const double CDy, const double CDz)
+{
+    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+    // Zero the needed sub-region of the thread-local VRR buffer
+    for (int ax = 0; ax <= lABx; ++ax)
+        for (int ay = 0; ay <= lABy; ++ay)
+            for (int az = 0; az <= lABz; ++az)
+                for (int cx = 0; cx <= lCDx; ++cx)
+                    for (int cy = 0; cy <= lCDy; ++cy)
+                        for (int cz = 0; cz <= lCDz; ++cz)
+                            for (int m = 0; m < MMAX_4C; ++m)
+                                _vrr_buf[ax][ay][az][cx][cy][cz][m] = 0.0;
+
+    // Build VRR table
+    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, _vrr_buf);
+
+    // Extract m=0 slice into HRR buffer and zero unused entries
+    for (int ax = 0; ax <= lABx; ++ax)
+        for (int ay = 0; ay <= lABy; ++ay)
+            for (int az = 0; az <= lABz; ++az)
+                for (int cx = 0; cx <= lCDx; ++cx)
+                    for (int cy = 0; cy <= lCDy; ++cy)
+                        for (int cz = 0; cz <= lCDz; ++cz)
+                            _hrr_buf[ax][ay][az][cx][cy][cz] = _vrr_buf[ax][ay][az][cx][cy][cz][0];
+
+    // A→B HRR: modifies _hrr_buf in-place
+    _eri_hrr_ab(_hrr_buf, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
+
+    // Extract C-side slice at (lAx, lAy, lAz) for C→D HRR
+    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM] = {};
+    for (int cx = 0; cx <= lCDx; ++cx)
+        for (int cy = 0; cy <= lCDy; ++cy)
+            for (int cz = 0; cz <= lCDz; ++cz)
+                V0_CD[cx][cy][cz] = _hrr_buf[lAx][lAy][lAz][cx][cy][cz];
+
+    // C→D HRR reusing the existing _nuclear_hrr (same 3-phase sweep)
+    return _nuclear_hrr(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+}
+
+// ─── 4-center ERI: contracted shell quartet ──────────────────────────────────
+static double _contracted_eri(
+    const HartreeFock::ShellPair& spAB,
+    const HartreeFock::ShellPair& spCD,
+    const int lAx, const int lAy, const int lAz,
+    const int lBx, const int lBy, const int lBz,
+    const int lCx, const int lCy, const int lCz,
+    const int lDx, const int lDy, const int lDz)
+{
+    const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
+    const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
+
+    double eri = 0.0;
+    for (const auto& ppAB : spAB.primitive_pairs)
+        for (const auto& ppCD : spCD.primitive_pairs)
+            eri += ppAB.coeff_product * ppCD.coeff_product
+                 * _os_eri_primitive(ppAB, ppCD,
+                                     lAx, lAy, lAz, lBx, lBy, lBz,
+                                     lCx, lCy, lCz, lDx, lDy, lDz,
+                                     ABx, ABy, ABz, CDx, CDy, CDz);
+    return eri;
+}
+
+// ─── Public: build 2e Fock (G = J - 0.5*K) ──────────────────────────────────
+//
+// Phase 1: build the full (μν|λσ) ERI tensor by iterating over unique shell-pair
+//          quartets (p ≤ q) and filling all 8 permutation-symmetry slots.
+// Phase 2: contract with density to form G[μν] = Σ_{λσ} P[λσ]·[(μν|λσ) − ½(μλ|νσ)].
+//
+// This avoids all symmetry-factor edge-cases in the scatter approach.
+Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
+    const std::vector<HartreeFock::ShellPair>& shell_pairs,
+    const Eigen::MatrixXd& density,
+    const std::size_t nbasis)
+{
+    const std::size_t nb  = nbasis;
+    const std::size_t nb2 = nb * nb;
+    const std::size_t nb3 = nb * nb * nb;
+
+    // ── Phase 1: build ERI tensor ─────────────────────────────────────────────
+    std::vector<double> eri(nb * nb * nb * nb, 0.0);
+
+    const std::size_t npairs = shell_pairs.size();
+
+    // Disjoint writes per (p,q) pair → lock-free parallelism.
+    // thread_local _vrr_buf / _hrr_buf give each thread private scratch space.
+#pragma omp parallel for schedule(dynamic)
+    for (std::size_t p = 0; p < npairs; ++p)
+    {
+        const auto& spAB = shell_pairs[p];
+        const std::size_t i = spAB.A._index;
+        const std::size_t j = spAB.B._index;
+        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
+        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+
+        for (std::size_t q = p; q < npairs; ++q)
+        {
+            const auto& spCD = shell_pairs[q];
+            const std::size_t k = spCD.A._index;
+            const std::size_t l = spCD.B._index;
+            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+
+            const double val = _contracted_eri(spAB, spCD,
+                                               lAx, lAy, lAz, lBx, lBy, lBz,
+                                               lCx, lCy, lCz, lDx, lDy, lDz);
+
+            // Fill all 8 permutation-symmetry equivalent slots:
+            //   (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk)
+            //           = (kl|ij) = (lk|ij) = (kl|ji) = (lk|ji)
+            eri[i*nb3 + j*nb2 + k*nb + l] = val;
+            eri[j*nb3 + i*nb2 + k*nb + l] = val;
+            eri[i*nb3 + j*nb2 + l*nb + k] = val;
+            eri[j*nb3 + i*nb2 + l*nb + k] = val;
+            eri[k*nb3 + l*nb2 + i*nb + j] = val;
+            eri[l*nb3 + k*nb2 + i*nb + j] = val;
+            eri[k*nb3 + l*nb2 + j*nb + i] = val;
+            eri[l*nb3 + k*nb2 + j*nb + i] = val;
+        }
+    }
+
+    // ── Phase 2: contract with density ────────────────────────────────────────
+    // G[μ][ν] = Σ_{λσ} P[λσ] · ( ERI[μ][ν][λ][σ]  −  0.5 · ERI[μ][λ][ν][σ] )
+    // Parallel over μ: thread i owns row i of G → no shared writes.
+    Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
+
+#pragma omp parallel for schedule(static)
+    for (std::size_t mu = 0; mu < nb; ++mu)
+        for (std::size_t nu = 0; nu < nb; ++nu)
+            for (std::size_t lam = 0; lam < nb; ++lam)
+                for (std::size_t sig = 0; sig < nb; ++sig)
+                    G(mu, nu) += density(lam, sig) *
+                                 (eri[mu*nb3 + nu*nb2 + lam*nb + sig]
+                                  - 0.5 * eri[mu*nb3 + lam*nb2 + nu*nb + sig]);
+
+    return G;
 }

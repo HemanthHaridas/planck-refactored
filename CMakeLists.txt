@@ -8,6 +8,19 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 message(STATUS "Building on : ${CMAKE_SYSTEM_NAME} using following compiler flags : ${CMAKE_CXX_FLAGS}")
 
+# OpenMP support (enabled by default; pass -DUSE_OPENMP=OFF to disable)
+option(USE_OPENMP "Enable OpenMP parallelism" ON)
+if(USE_OPENMP)
+    find_package(OpenMP)
+    if(OpenMP_CXX_FOUND)
+        message(STATUS "OpenMP : Found (${OpenMP_CXX_VERSION})")
+    else()
+        message(WARNING "OpenMP : Requested but not found — building without it")
+    endif()
+else()
+    message(STATUS "OpenMP : Disabled")
+endif()
+
 include(FetchContent)
 set(FETCHCONTENT_QUIET TRUE)
 
@@ -121,6 +134,12 @@ target_include_directories(hartree-fock PUBLIC
 target_link_libraries(hartree-fock
     ${MSYM_INSTALL_DIR}/lib/libmsym.a
 )
+
+# OpenMP linkage
+if(USE_OPENMP AND OpenMP_CXX_FOUND)
+    target_link_libraries(hartree-fock OpenMP::OpenMP_CXX)
+    target_compile_definitions(hartree-fock PRIVATE USE_OPENMP)
+endif()
 
 # Install executable
 install(TARGETS hartree-fock DESTINATION bin)

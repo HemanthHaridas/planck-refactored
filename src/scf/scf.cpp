@@ -3,6 +3,7 @@
 #include <format>
 
 #include "scf.h"
+#include "integrals/base.h"
 #include "io/logging.h"
 
 // ─── Orthogonalization ────────────────────────────────────────────────────────
@@ -46,7 +47,8 @@ Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd& H,
 // ─── SCF iteration ───────────────────────────────────────────────────────────
 
 std::expected<void, std::string>
-HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator)
+HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator,
+                           const std::vector<HartreeFock::ShellPair>& shell_pairs)
 {
     const Eigen::MatrixXd& S = calculator._overlap;
     const Eigen::MatrixXd& H = calculator._hcore;
@@ -83,9 +85,7 @@ HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator)
         const auto iter_start = std::chrono::steady_clock::now();
 
         // ── Build two-electron contribution G = J - 0.5*K ────────────────────
-        // TODO: implement ERI-based G build (conventional or direct)
-        // For now G = 0 so this is purely a core-Hamiltonian calculation.
-        Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        Eigen::MatrixXd G = _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine);
 
         // ── Fock matrix ───────────────────────────────────────────────────────
         const Eigen::MatrixXd F = H + G;

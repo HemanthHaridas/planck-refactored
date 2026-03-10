@@ -167,9 +167,7 @@ int main(int argc, const char* argv[])
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Overlap and kinetic done");
 
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing nuclear attraction matrix");
-    Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, calculator._shells.nbasis(),
-                                                    calculator._molecule,
-                                                    calculator._integral._engine);
+    Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, calculator._shells.nbasis(), calculator._molecule, calculator._integral._engine);
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Nuclear attraction done");
 
     // ── Core Hamiltonian H = T + V ────────────────────────────────────────────
@@ -187,7 +185,7 @@ int main(int argc, const char* argv[])
     // ── SCF ───────────────────────────────────────────────────────────────────
     if (calculator._scf._scf == HartreeFock::SCFType::RHF)
     {
-        if (auto res = HartreeFock::SCF::run_rhf(calculator); !res)
+        if (auto res = HartreeFock::SCF::run_rhf(calculator, shellpairs); !res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
             return EXIT_FAILURE;
@@ -199,10 +197,8 @@ int main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Total Energy :",
-        std::format("{:.10f} Eh", calculator._total_energy));
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Total Energy :", std::format("{:.10f} Eh", calculator._total_energy));
 
     const auto program_end = SystemClock::now();
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Wall Time :",
-        std::format("{:.3f} s", std::chrono::duration<double>(program_end - program_start).count()));
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Wall Time :", std::format("{:.3f} s", std::chrono::duration<double>(program_end - program_start).count()));
 }

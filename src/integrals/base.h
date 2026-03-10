@@ -31,4 +31,19 @@ inline Eigen::MatrixXd _compute_nuclear_attraction(const std::vector<HartreeFock
     }
 }
 
+inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair>& shell_pairs,
+                                         const Eigen::MatrixXd& density,
+                                         const std::size_t nbasis,
+                                         const HartreeFock::IntegralMethod& engine)
+{
+    switch (engine)
+    {
+        case HartreeFock::IntegralMethod::ObaraSaika:
+            return HartreeFock::ObaraSaika::_compute_2e_fock(shell_pairs, density, nbasis);
+
+        default:
+            throw std::runtime_error("Unsupported integral engine for 2e Fock");
+    }
+}
+
 #endif // !HF_INTEGRALS_H
