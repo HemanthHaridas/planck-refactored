@@ -8,8 +8,7 @@
 
 // ─── Orthogonalization ────────────────────────────────────────────────────────
 
-std::expected<Eigen::MatrixXd, std::string>
-HartreeFock::SCF::build_orthogonalizer(const Eigen::MatrixXd& S, double threshold)
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::SCF::build_orthogonalizer(const Eigen::MatrixXd& S, double threshold)
 {
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(S);
     if (solver.info() != Eigen::Success)
@@ -17,8 +16,7 @@ HartreeFock::SCF::build_orthogonalizer(const Eigen::MatrixXd& S, double threshol
 
     const Eigen::VectorXd& evals = solver.eigenvalues();
     if (evals.minCoeff() < threshold)
-        return std::unexpected(
-            std::format("Overlap matrix is near-singular (min eigenvalue = {:.3e})", evals.minCoeff()));
+        return std::unexpected(std::format("Overlap matrix is near-singular (min eigenvalue = {:.3e})", evals.minCoeff()));
 
     // X = U * s^{-1/2} * U^T
     const Eigen::MatrixXd& U = solver.eigenvectors();
@@ -28,9 +26,7 @@ HartreeFock::SCF::build_orthogonalizer(const Eigen::MatrixXd& S, double threshol
 
 // ─── Initial density ─────────────────────────────────────────────────────────
 
-Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd& H,
-                                                    const Eigen::MatrixXd& X,
-                                                    std::size_t n_occ)
+Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd& H, const Eigen::MatrixXd& X, std::size_t n_occ)
 {
     // Transform H to orthonormal basis: H' = X^T * H * X
     const Eigen::MatrixXd Hprime = X.transpose() * H * X;
@@ -46,9 +42,7 @@ Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd& H,
 
 // ─── SCF iteration ───────────────────────────────────────────────────────────
 
-std::expected<void, std::string>
-HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator,
-                           const std::vector<HartreeFock::ShellPair>& shell_pairs)
+std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator, const std::vector<HartreeFock::ShellPair>& shell_pairs)
 {
     const Eigen::MatrixXd& S = calculator._overlap;
     const Eigen::MatrixXd& H = calculator._hcore;
@@ -76,6 +70,11 @@ HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator,
     const double tol_energy  = calculator._scf._tol_energy;
     const double tol_density = calculator._scf._tol_density;
 
+    // ── DIIS state ────────────────────────────────────────────────────────────
+    HartreeFock::DIISState diis;
+    diis.max_vecs         = calculator._scf._DIIS_dim;
+    const bool use_diis   = calculator._scf._use_DIIS;
+
     double E_prev = 0.0;
 
     HartreeFock::Logger::scf_header();
@@ -91,11 +90,27 @@ HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator,
         const Eigen::MatrixXd F = H + G;
 
         // ── Electronic energy  E = 0.5 * tr(P * (H + F)) ────────────────────
-        const double E_elec = 0.5 * (P.array() * (H + F).array()).sum();
+        // Always computed from the raw (non-extrapolated) Fock matrix.
+        const double E_elec  = 0.5 * (P.array() * (H + F).array()).sum();
         const double E_total = E_elec + calculator._nuclear_repulsion;
 
-        // ── Transform F to orthonormal basis and diagonalize ─────────────────
-        const Eigen::MatrixXd Fprime = X.transpose() * F * X;
+        // ── DIIS: compute Pulay error and push to subspace ────────────────────
+        // Error matrix (orthonormal basis): e = X^T (FPS - SPF) X
+        double diis_err = 0.0;
+        if (use_diis)
+        {
+            const Eigen::MatrixXd e = X.transpose() * (F * P * S - S * P * F) * X;
+            diis.push(F, e);
+            diis_err = diis.error_norm();
+        }
+
+        // ── Select Fock matrix for diagonalization ────────────────────────────
+        // Once DIIS has ≥2 vectors, use the extrapolated Fock; otherwise plain F.
+        const bool do_diis           = use_diis && diis.ready();
+        const Eigen::MatrixXd F_diag = do_diis ? diis.extrapolate() : F;
+
+        // ── Transform to orthonormal basis and diagonalize ────────────────────
+        const Eigen::MatrixXd Fprime = X.transpose() * F_diag * X;
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(Fprime);
         if (solver.info() != Eigen::Success)
             return std::unexpected(std::format("Fock diagonalization failed at iteration {}", iter));
@@ -114,7 +129,7 @@ HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator,
 
         const double iter_time = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - iter_start).count();
-        HartreeFock::Logger::scf_iteration(iter, E_total, delta_E, delta_P_rms, 0.0, 0.0, iter_time);
+        HartreeFock::Logger::scf_iteration(iter, E_total, delta_E, delta_P_rms, delta_P_max, diis_err, 0.0, iter_time);
 
         P      = P_new;
         E_prev = E_total;
@@ -124,15 +139,26 @@ HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator,
         calculator._info._scf.alpha.density         = P;
         calculator._info._scf.alpha.mo_energies     = eps;
         calculator._info._scf.alpha.mo_coefficients = C;
+        calculator._info._energy                    = E_elec;
+        calculator._info._delta_energy              = delta_E;
+        calculator._info._delta_density_max         = delta_P_max;
+        calculator._info._delta_density_rms         = delta_P_rms;
+        
         calculator._total_energy                    = E_total;
-
-        if (iter > 1 && delta_E < tol_energy && delta_P_rms < tol_density)
+        
+        if (iter > 1 && delta_E < tol_energy && delta_P_rms < tol_density && delta_P_max < tol_density)
         {
             calculator._info._scf.alpha.mo_energies     = eps;
             calculator._info._scf.alpha.mo_coefficients = C;
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                "SCF Converged :",
-                std::format("E = {:.10f} Eh  after {} iterations", E_total, iter));
+            calculator._info._is_converged              = true;
+
+            HartreeFock::Logger::scf_footer();
+            HartreeFock::Logger::blank();
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "SCF Converged :", std::format("E = {:.10f} Eh  after {} iterations", E_total, iter));
+            HartreeFock::Logger::blank();
+            HartreeFock::Logger::mo_header();
+            HartreeFock::Logger::mo_energies(calculator._info._scf.alpha.mo_energies, n_electrons);
+            HartreeFock::Logger::blank();
             return {};
         }
     }

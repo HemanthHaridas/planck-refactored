@@ -2,7 +2,6 @@
 #include "base.h"
 #include "boys.h"
 
-
 inline double HartreeFock::ObaraSaika::_os_1d(const double gamma, const double distPA, const double distPB, const int lA, const int lB)
 {
     // +2 shifted overlaps are needed by the kinetic energy formula (lB+2),

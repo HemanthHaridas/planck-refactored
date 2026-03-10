@@ -73,6 +73,7 @@ int main(int argc, const char* argv[])
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :",           map_enum(calculator._integral._engine));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis :",            calculator._basis._basis_name);
+    HartreeFock::Logger::blank();
 
     // Detect Symmetry
     if (!calculator._geometry._use_symm)
@@ -80,20 +81,22 @@ int main(int argc, const char* argv[])
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :", "Symmetry detection is turned off by request");
         // No reorientation — standard frame equals input frame.
         calculator._molecule._standard = calculator._molecule._coordinates;
+        HartreeFock::Logger::blank();
     }
 
     else
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :", "We use libmsym library to detect point groups");
-        
+
         if (auto res = HartreeFock::Symmetry::detectSymmetry(calculator._molecule); !res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Symmetry Detection Failed :", res.error());
             return EXIT_FAILURE;
         }
-        
+
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :", "Successful");
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Point Group :", calculator._molecule._point_group);
+        HartreeFock::Logger::blank();
     }
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Coordinates :", "");
 
@@ -134,11 +137,12 @@ int main(int argc, const char* argv[])
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "", cstr);
         }
     }
+    HartreeFock::Logger::blank();
 
     // Now read basis set
     std::filesystem::path gbs_path = calculator._basis._basis_path + "/" + calculator._basis._basis_name;
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Reading Basis Set :", gbs_path.string());
-    
+
     try
     {
         calculator._shells = HartreeFock::BasisFunctions::read_gbs_basis(gbs_path, calculator._molecule, calculator._basis._basis); // cartesian or pure
@@ -148,17 +152,19 @@ int main(int argc, const char* argv[])
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Basis Parsing Failed :", e.what());
         return EXIT_FAILURE;
     }
-    
+
     // Now initialize SCF data structures
     calculator.initialize();
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis Construction :", std::format("Generated {} Shells and {} contracted functions", calculator._shells.nshells(), calculator._shells.nbasis()));
-    
+
     // Now generate shell pairs
     std::vector <HartreeFock::ShellPair> shellpairs = build_shellpairs(calculator._shells);
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Number of Shell pairs :", shellpairs.size());
-    
+    HartreeFock::Logger::blank();
+
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "SCF Mode :", map_enum<HartreeFock::SCFMode>(calculator._scf._mode));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Nuclear Repulsion :", std::format("{:.10f} Eh", calculator._nuclear_repulsion));
+    HartreeFock::Logger::blank();
 
     // ── One-electron integrals ────────────────────────────────────────────────
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing overlap and kinetic energy matrices");
@@ -169,6 +175,7 @@ int main(int argc, const char* argv[])
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing nuclear attraction matrix");
     Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, calculator._shells.nbasis(), calculator._molecule, calculator._integral._engine);
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Nuclear attraction done");
+    HartreeFock::Logger::blank();
 
     // ── Core Hamiltonian H = T + V ────────────────────────────────────────────
     calculator._overlap = S;
@@ -180,11 +187,13 @@ int main(int argc, const char* argv[])
         std::cout << S << "\n";
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Core Hamiltonian H :", "");
         std::cout << calculator._hcore << "\n";
+        HartreeFock::Logger::blank();
     }
 
     // ── SCF ───────────────────────────────────────────────────────────────────
     if (calculator._scf._scf == HartreeFock::SCFType::RHF)
     {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin SCF Cycles :", "");
         if (auto res = HartreeFock::SCF::run_rhf(calculator, shellpairs); !res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());

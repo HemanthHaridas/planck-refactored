@@ -5,6 +5,7 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
+#include <mutex>
 
 #include "base/types.h"
 
@@ -15,7 +16,8 @@ namespace HartreeFock
         Info,
         Warning,
         Error,
-        Matrix
+        Matrix,
+//        Cycle
     };
 
     namespace Logger
@@ -28,6 +30,7 @@ namespace HartreeFock
             constexpr const char *error_prefix  = "[Planck][ERR]    ";
             constexpr const char *matrix_prefix = "[Planck][MAT]    ";
             constexpr const char *warn_prefix   = "[Planck][WARN]   ";
+//            constexpr const char *scf_prefix    = "[Planck][SCF]    ";
         }
     
         template<typename... Args>
@@ -39,10 +42,11 @@ namespace HartreeFock
             const char* prefix = nullptr;
             switch(level)
             {
-                case Info:    prefix = info_prefix; break;
-                case Warning: prefix = warn_prefix; break;
-                case Error:   prefix = error_prefix; break;
-                case Matrix:  prefix = matrix_prefix; break;
+                case Info:      prefix = info_prefix;   break;
+                case Warning:   prefix = warn_prefix;   break;
+                case Error:     prefix = error_prefix;  break;
+                case Matrix:    prefix = matrix_prefix; break;
+//                case Cycle:       prefix = scf_prefix;    break;
             }
             
             // Timestamp
@@ -64,7 +68,7 @@ namespace HartreeFock
                        << std::put_time(&local_tm, "%Y-%m-%d %H:%M:%S")
                        << "] "
                        << std::setw(20) << std::left << prefix
-                       << std::setw(35) << std::left << label;
+                       << std::setw(30) << std::left << label;
 
             // Variadic message printing
             (out_stream << ... << message);
@@ -77,20 +81,21 @@ namespace HartreeFock
         {
             std::lock_guard<std::mutex> lock(log_mutex);
 
-            std::cout << "\n[Planck][SCF] Self-Consistent Field Iterations\n"
-                      << "--------------------------------------------------------------------------------------------\n"
+//            logging(Cycle, "Self-Consistent Field Iterations","");
+            std::cout << std::string(110, '-') << "\n"
                       << std::setw(6)  << "Iter"
                       << std::setw(20) << "Energy"
                       << std::setw(15) << "DeltaE"
                       << std::setw(15) << "RMS(D)"
+                      << std::setw(15) << "Max(D)"
                       << std::setw(15) << "DIIS Err"
                       << std::setw(12) << "Damp"
                       << std::setw(12) << "Time(s)"
                       << "\n"
-                      << "--------------------------------------------------------------------------------------------\n";
+                      << std::string(110, '-') << "\n";
         }
     
-        inline void scf_iteration(std::size_t iter, double energy, double deltaE, double rmsD, double diis_error, double damping, double time_sec)
+        inline void scf_iteration(std::size_t iter, double energy, double deltaE, double rmsD, double maxD, double diis_error, double damping, double time_sec)
         {
             std::lock_guard<std::mutex> lock(log_mutex);
 
@@ -98,10 +103,54 @@ namespace HartreeFock
                       << std::setw(20) << std::scientific << energy
                       << std::setw(15) << deltaE
                       << std::setw(15) << rmsD
+                      << std::setw(15) << maxD
                       << std::setw(15) << diis_error
                       << std::setw(12) << std::fixed << std::setprecision(3) << damping
                       << std::setw(12) << std::fixed << std::setprecision(3) << time_sec
                       << "\n";
+        }
+    
+        inline void mo_header()
+        {
+            std::lock_guard<std::mutex> lock(log_mutex);
+            constexpr int W = 31;   // total width of the table
+            std::cout << std::string(W, '-') << "\n"
+                      << std::setw(6)  << std::right << "MO"
+                      << std::setw(25) << std::right << "Energy (Eh)"
+                      << "\n"
+                      << std::string(W, '-') << "\n";
+        }
+
+        inline void mo_energies(const Eigen::VectorXd& mo_energies, const std::size_t n_electrons)
+        {
+            std::lock_guard<std::mutex> lock(log_mutex);
+
+            const std::size_t n_occ = n_electrons / 2;
+            const std::size_t homo = n_occ - 1;
+            const std::size_t lumo = n_occ;
+
+            for (std::size_t i = 0; i < static_cast<std::size_t>(mo_energies.size()); i++)
+            {
+                std::string label = "";
+                if (i == homo) label = "  <-- HOMO";
+                if (i == lumo) label = "  <-- LUMO";
+
+                std::cout << std::setw(6)  << std::right << (i + 1)
+                          << std::setw(25) << std::right << mo_energies(i)
+                          << label
+                          << "\n";
+            }
+        }
+
+        inline void blank()
+        {
+            std::cout << '\n';
+        }
+
+        inline void scf_footer()
+        {
+            std::lock_guard<std::mutex> lock(log_mutex);
+            std::cout << std::string(110, '-') << "\n";
         }
     }
 }

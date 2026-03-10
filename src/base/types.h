@@ -3,6 +3,7 @@
 
 #include <span>
 #include <array>
+#include <deque>
 #include <vector>
 #include <string>
 #include <cmath>
@@ -10,6 +11,7 @@
 #include <stdexcept>
 #include <expected>
 #include <Eigen/Core>
+#include <Eigen/QR>
 
 #include "tables.h"
 #include "basis.h"
@@ -478,13 +480,97 @@ namespace HartreeFock
 
     struct InfoSCF
     {
-        unsigned int _iteration     = 0;        // Number of iterations
         double _energy              = 0;        // SCF Energy in Hartree
         double _delta_energy        = 0;        // Difference in SCF energy
         double _delta_density_max   = 0;        // Difference in Max SCF Density
         double _delta_density_rms   = 0;        // Difference in RMS SCF Density
         bool _is_converged          = false;    // Is convergence signalled
         DataSCF _scf;                           // SCF Data for current step
+    };
+
+    // ── DIIS working state for one spin channel ───────────────────────────────
+    //
+    // Implements Pulay's DIIS for SCF convergence acceleration.
+    //
+    // At each iteration, the caller supplies:
+    //   F  — current Fock matrix (AO basis)
+    //   e  — error matrix = X^T (F*P*S - S*P*F) X  (orthonormal basis)
+    //        where X = S^{-1/2} is the orthogonalizer.
+    //
+    // Once at least 2 vectors are stored, extrapolate() returns a new Fock
+    // matrix as a linear combination of the stored Fock matrices chosen to
+    // minimise the DIIS error norm subject to sum(c_i)=1.
+    struct DIISState
+    {
+        std::deque<Eigen::MatrixXd> fock_history;   // stored F matrices (AO basis)
+        std::deque<Eigen::MatrixXd> error_history;  // stored error matrices (orthonormal)
+        std::size_t max_vecs = 8;                   // maximum subspace size
+
+        // Append a new (F, e) pair, evicting the oldest if at capacity.
+        void push(const Eigen::MatrixXd& F, const Eigen::MatrixXd& e)
+        {
+            fock_history.push_back(F);
+            error_history.push_back(e);
+            if (fock_history.size() > max_vecs)
+            {
+                fock_history.pop_front();
+                error_history.pop_front();
+            }
+        }
+
+        std::size_t size() const noexcept { return fock_history.size(); }
+
+        bool ready() const noexcept { return size() >= 2; }
+
+        // Build the augmented B matrix and solve for DIIS coefficients, then
+        // return the extrapolated Fock matrix.  Requires ready() == true.
+        Eigen::MatrixXd extrapolate() const
+        {
+            const std::size_t m = size();
+
+            // B_{ij} = Tr( e_i^T e_j )
+            // Augmented system (Lagrange multiplier for sum(c)=1):
+            //   [ B  -1 ] [ c   ]   [ 0 ]
+            //   [-1   0 ] [ lam ] = [-1 ]
+            Eigen::MatrixXd B = Eigen::MatrixXd::Zero(m + 1, m + 1);
+            for (std::size_t i = 0; i < m; ++i)
+            {
+                for (std::size_t j = i; j < m; ++j)
+                {
+                    const double bij = (error_history[i].array() * error_history[j].array()).sum();
+                    B(i, j) = bij;
+                    B(j, i) = bij;
+                }
+                B(i, m) = -1.0;
+                B(m, i) = -1.0;
+            }
+
+            Eigen::VectorXd rhs = Eigen::VectorXd::Zero(m + 1);
+            rhs(m) = -1.0;
+
+            const Eigen::VectorXd c = B.colPivHouseholderQr().solve(rhs);
+
+            Eigen::MatrixXd F_extrap = Eigen::MatrixXd::Zero(fock_history[0].rows(),
+                                                              fock_history[0].cols());
+            for (std::size_t i = 0; i < m; ++i)
+                F_extrap += c(i) * fock_history[i];
+
+            return F_extrap;
+        }
+
+        // Return the DIIS error norm (RMS of the most recent error matrix).
+        double error_norm() const
+        {
+            if (error_history.empty()) return 0.0;
+            const auto& e = error_history.back();
+            return std::sqrt(e.squaredNorm() / static_cast<double>(e.size()));
+        }
+
+        void clear() noexcept
+        {
+            fock_history.clear();
+            error_history.clear();
+        }
     };
 
     struct Calculator
