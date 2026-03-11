@@ -223,6 +223,23 @@ namespace HartreeFock::IO
     }
 
     template<>
+    HartreeFock::SCFGuess map_string_enum<HartreeFock::SCFGuess>(const std::string& value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::SCFGuess> _table =
+        {
+            {"hcore", HartreeFock::SCFGuess::HCore},
+            {"read",  HartreeFock::SCFGuess::Read}
+        };
+
+        auto _value = toLower(value);
+        auto it = _table.find(_value);
+        if (it != _table.end())
+            return it->second;
+
+        throw std::invalid_argument("Invalid SCFGuess: " + value);
+    }
+
+    template<>
     HartreeFock::SCFType map_string_enum<HartreeFock::SCFType>(const std::string& value)
     {
         static const std::unordered_map<std::string, HartreeFock::SCFType> _table =
@@ -299,7 +316,9 @@ namespace HartreeFock::IO
             
             {"correlation", [&correlation](const std::string &value){correlation        = map_string_enum <HartreeFock::PostHF>(value);}},
             {"engine",      [&integral](const std::string &value)   {integral._engine   = map_string_enum <HartreeFock::IntegralMethod>(value);}},
-            {"tol_eri",     [&integral](const std::string &value)   {integral._tol_eri  = std::stod(value);}}
+            {"tol_eri",        [&integral](const std::string &value)   {integral._tol_eri       = std::stod(value);}},
+            {"guess",          [&scf](const std::string &value)        {scf._guess              = map_string_enum<HartreeFock::SCFGuess>(value);}},
+            {"save_checkpoint",[&scf](const std::string &value)        {scf._save_checkpoint    = toBool(value);}}
         };
         
         for (const std::string line : lines)
@@ -473,7 +492,7 @@ namespace HartreeFock::IO
         }
         
         // Now set other variables
-        molecule.nelectrons = std::accumulate(molecule.atomic_numbers.begin(), molecule.atomic_numbers.end(), 0) + molecule.charge;
+        molecule.nelectrons = std::accumulate(molecule.atomic_numbers.begin(), molecule.atomic_numbers.end(), 0) - molecule.charge;
         
         return {};
     }

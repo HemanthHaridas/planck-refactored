@@ -28,6 +28,13 @@ namespace HartreeFock
         // Returns an error string if convergence is not achieved.
         std::expected<void, std::string> run_rhf(HartreeFock::Calculator& calculator,
                                                   const std::vector<HartreeFock::ShellPair>& shell_pairs);
+
+        // Run the UHF SCF procedure.
+        // Uses molecule.multiplicity to derive n_alpha and n_beta.
+        // Stores converged alpha and beta channels in calculator._info._scf.
+        // Returns an error string if convergence is not achieved.
+        std::expected<void, std::string> run_uhf(HartreeFock::Calculator& calculator,
+                                                  const std::vector<HartreeFock::ShellPair>& shell_pairs);
     }
 }
 

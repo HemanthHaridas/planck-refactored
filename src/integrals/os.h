@@ -24,6 +24,21 @@ namespace HartreeFock
         Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair>& shell_pairs,
                                          const Eigen::MatrixXd& density,
                                          std::size_t nbasis);
+
+        // UHF variant: returns {G_alpha, G_beta}.
+        // Builds the ERI tensor once (spin-independent) and contracts with
+        // Pa, Pb, and Pt = Pa+Pb to form both spin Fock contributions.
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+        _compute_2e_fock_uhf(const std::vector<HartreeFock::ShellPair>& shell_pairs,
+                             const Eigen::MatrixXd& Pa,
+                             const Eigen::MatrixXd& Pb,
+                             std::size_t nbasis);
+
+        // Compute the cross-overlap matrix S_cross(μ, ν) = <χ_μ^large | χ_ν^small>
+        // between two basis sets centered on the same molecule.
+        // Result has dimensions nbasis_large × nbasis_small.
+        Eigen::MatrixXd _compute_cross_overlap(const HartreeFock::Basis& large_basis,
+                                               const HartreeFock::Basis& small_basis);
     }
 }
 

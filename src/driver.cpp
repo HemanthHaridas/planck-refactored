@@ -10,6 +10,7 @@
 
 #include "base/types.h"
 #include "io/io.h"
+#include "io/checkpoint.h"
 #include "io/logging.h"
 #include "symmetry/symmetry.h"
 #include "basis/basis.h"
@@ -65,13 +66,20 @@ int main(int argc, const char* argv[])
 
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");
 
+    // Derive checkpoint path: same directory + stem + ".hfchk"
+    {
+        std::filesystem::path inp(input_file);
+        calculator._checkpoint_path =
+            (inp.parent_path() / inp.stem()).string() + ".hfchk";
+    }
+
     // Convert input coordinates to Bohr immediately — must happen before symmetry
     // detection and basis reading, both of which need _coordinates in Bohr.
     calculator.prepare_coordinates();
 
     // Now log all input options
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :",           map_enum(calculator._integral._engine));
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :",           map_enum(calculator._scf._scf));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis :",            calculator._basis._basis_name);
     HartreeFock::Logger::blank();
 
@@ -166,25 +174,146 @@ int main(int argc, const char* argv[])
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Nuclear Repulsion :", std::format("{:.10f} Eh", calculator._nuclear_repulsion));
     HartreeFock::Logger::blank();
 
-    // ── One-electron integrals ────────────────────────────────────────────────
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing overlap and kinetic energy matrices");
+    // ── One-electron integrals (or load from checkpoint) ─────────────────────
+    bool loaded_from_checkpoint = false;
 
-    auto [S, T] = _compute_1e(shellpairs, calculator._shells.nbasis(), calculator._integral._engine);
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Overlap and kinetic done");
+    if (calculator._scf._guess == HartreeFock::SCFGuess::Read)
+    {
+        // ── Fast path: same-basis restart ─────────────────────────────────────
+        if (auto res = HartreeFock::Checkpoint::load(calculator, calculator._checkpoint_path); res)
+        {
+            loaded_from_checkpoint = true;
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
+                std::format("Loaded from {}", calculator._checkpoint_path));
+            HartreeFock::Logger::blank();
+        }
+        else
+        {
+            // ── Cross-basis projection path ────────────────────────────────────
+            auto mos_res = HartreeFock::Checkpoint::load_mos(calculator._checkpoint_path);
 
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing nuclear attraction matrix");
-    Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, calculator._shells.nbasis(), calculator._molecule, calculator._integral._engine);
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Nuclear attraction done");
-    HartreeFock::Logger::blank();
+            if (mos_res && mos_res->nbasis != calculator._shells.nbasis())
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
+                    std::format("Basis change detected ({} → {}); projecting density",
+                                mos_res->basis_name, calculator._basis._basis_name));
 
-    // ── Core Hamiltonian H = T + V ────────────────────────────────────────────
-    calculator._overlap = S;
-    calculator._hcore   = T + V;
+                // 1e integrals must be computed in the large (current) basis
+                const std::size_t large_nb = calculator._shells.nbasis();
+
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing overlap and kinetic energy matrices");
+                auto [S, T] = _compute_1e(shellpairs, large_nb, calculator._integral._engine);
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing nuclear attraction matrix");
+                Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, large_nb, calculator._molecule, calculator._integral._engine);
+                HartreeFock::Logger::blank();
+
+                calculator._overlap = S;
+                calculator._hcore   = T + V;
+                loaded_from_checkpoint = true;  // skip the unconditional 1e block below
+
+                // Re-read the small basis for cross-overlap
+                std::filesystem::path small_gbs =
+                    calculator._basis._basis_path + "/" + mos_res->basis_name;
+
+                bool projection_ok = false;
+                try
+                {
+                    const HartreeFock::Basis small_shells =
+                        HartreeFock::BasisFunctions::read_gbs_basis(
+                            small_gbs, calculator._molecule, calculator._basis._basis);
+
+                    auto X_res = HartreeFock::SCF::build_orthogonalizer(S);
+                    if (X_res)
+                    {
+                        const Eigen::MatrixXd S_cross =
+                            HartreeFock::ObaraSaika::_compute_cross_overlap(
+                                calculator._shells, small_shells);
+
+                        // Derive occupations from current molecule
+                        int n_elec = 0;
+                        for (auto z : calculator._molecule.atomic_numbers) n_elec += z;
+                        n_elec -= calculator._molecule.charge;
+                        const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+                        const int n_alpha    = (n_elec + n_unpaired) / 2;
+                        const int n_beta     = (n_elec - n_unpaired) / 2;
+
+                        const bool cur_uhf = (calculator._scf._scf == HartreeFock::SCFType::UHF);
+
+                        if (mos_res->is_uhf)
+                        {
+                            calculator._info._scf.alpha.density =
+                                HartreeFock::Checkpoint::project_density(
+                                    *X_res, S_cross, mos_res->C_alpha.leftCols(n_alpha), 1.0);
+                            calculator._info._scf.beta.density =
+                                HartreeFock::Checkpoint::project_density(
+                                    *X_res, S_cross, mos_res->C_beta.leftCols(n_beta), 1.0);
+                        }
+                        else
+                        {
+                            // RHF checkpoint
+                            const double factor = cur_uhf ? 1.0 : 2.0;
+                            calculator._info._scf.alpha.density =
+                                HartreeFock::Checkpoint::project_density(
+                                    *X_res, S_cross, mos_res->C_alpha.leftCols(n_alpha), factor);
+                            if (cur_uhf)
+                            {
+                                // Use the same RHF MOs as the beta-spin initial guess
+                                calculator._info._scf.beta.density =
+                                    HartreeFock::Checkpoint::project_density(
+                                        *X_res, S_cross, mos_res->C_alpha.leftCols(n_beta), 1.0);
+                            }
+                        }
+
+                        projection_ok = true;
+                        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :", "Density projection successful");
+                        HartreeFock::Logger::blank();
+                    }
+                    else
+                    {
+                        HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
+                            std::format("Orthogonalizer failed: {} — using H_core guess", X_res.error()));
+                    }
+                }
+                catch (const std::exception& e)
+                {
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
+                        std::format("Projection failed: {} — using H_core guess", e.what()));
+                }
+
+                if (!projection_ok)
+                    calculator._scf._guess = HartreeFock::SCFGuess::HCore;
+            }
+            else
+            {
+                // Same basis or checkpoint unreadable — full fallback to H_core
+                calculator._scf._guess = HartreeFock::SCFGuess::HCore;
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
+                    std::format("Could not load '{}': {} — computing integrals from scratch",
+                                calculator._checkpoint_path, res.error()));
+            }
+        }
+    }
+
+    if (!loaded_from_checkpoint)
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing overlap and kinetic energy matrices");
+
+        auto [S, T] = _compute_1e(shellpairs, calculator._shells.nbasis(), calculator._integral._engine);
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Overlap and kinetic done");
+
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing nuclear attraction matrix");
+        Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, calculator._shells.nbasis(), calculator._molecule, calculator._integral._engine);
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Nuclear attraction done");
+        HartreeFock::Logger::blank();
+
+        calculator._overlap = S;
+        calculator._hcore   = T + V;
+    }
 
     if (calculator._output._print_matrices)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Overlap Matrix S :", "");
-        std::cout << S << "\n";
+        std::cout << calculator._overlap << "\n";
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Core Hamiltonian H :", "");
         std::cout << calculator._hcore << "\n";
         HartreeFock::Logger::blank();
@@ -202,8 +331,23 @@ int main(int argc, const char* argv[])
     }
     else
     {
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF :", "UHF not yet implemented");
-        return EXIT_FAILURE;
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin UHF SCF Cycles :", "");
+        if (auto res = HartreeFock::SCF::run_uhf(calculator, shellpairs); !res)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
+            return EXIT_FAILURE;
+        }
+    }
+
+    // ── Save checkpoint ───────────────────────────────────────────────────────
+    if (calculator._scf._save_checkpoint && calculator._info._is_converged)
+    {
+        if (auto res = HartreeFock::Checkpoint::save(calculator, calculator._checkpoint_path); res)
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
+                std::format("Saved to {}", calculator._checkpoint_path));
+        else
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
+                std::format("Save failed: {}", res.error()));
     }
 
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Total Energy :", std::format("{:.10f} Eh", calculator._total_energy));

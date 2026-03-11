@@ -63,8 +63,12 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
         return std::unexpected(X_result.error());
     const Eigen::MatrixXd X = std::move(*X_result);
 
-    // ── Initial density from core Hamiltonian ────────────────────────────────
-    Eigen::MatrixXd P = initial_density(H, X, n_occ);
+    // ── Initial density ───────────────────────────────────────────────────────
+    // SCFGuess::Read: reuse density loaded from checkpoint.
+    // The driver already reset _guess to HCore if the checkpoint load failed.
+    Eigen::MatrixXd P = (calculator._scf._guess == HartreeFock::SCFGuess::Read)
+        ? calculator._info._scf.alpha.density
+        : initial_density(H, X, n_occ);
 
     const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
     const double tol_energy  = calculator._scf._tol_energy;
@@ -164,4 +168,196 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     }
 
     return std::unexpected(std::format("SCF did not converge in {} iterations", max_iter));
+}
+
+// ─── Spin contamination ───────────────────────────────────────────────────────
+
+static void _log_spin_contamination(
+    const Eigen::MatrixXd& Ca,
+    const Eigen::MatrixXd& Cb,
+    const Eigen::MatrixXd& S,
+    int n_alpha, int n_beta,
+    unsigned int multiplicity)
+{
+    // <S^2> = Sz*(Sz+1) + N_beta - ||C_alpha_occ^T S C_beta_occ||_F^2
+    const double Sz = 0.5 * static_cast<double>(n_alpha - n_beta);
+    const Eigen::MatrixXd OV = Ca.leftCols(n_alpha).transpose() * S * Cb.leftCols(n_beta);
+    const double S2       = Sz * (Sz + 1.0) + static_cast<double>(n_beta) - OV.squaredNorm();
+    const double S_exact  = 0.5 * static_cast<double>(multiplicity - 1);
+    const double S2_exact = S_exact * (S_exact + 1.0);
+
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "<S^2> :",
+        std::format("{:.6f}  (exact: {:.6f})", S2, S2_exact));
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "<S>   :",
+        std::format("{:.6f}", std::sqrt(std::max(0.0, S2))));
+}
+
+// ─── UHF SCF ─────────────────────────────────────────────────────────────────
+
+std::expected<void, std::string> HartreeFock::SCF::run_uhf(
+    HartreeFock::Calculator& calculator,
+    const std::vector<HartreeFock::ShellPair>& shell_pairs)
+{
+    const Eigen::MatrixXd& S = calculator._overlap;
+    const Eigen::MatrixXd& H = calculator._hcore;
+    const std::size_t nbasis = calculator._shells.nbasis();
+
+    const int n_electrons = static_cast<int>(
+        calculator._molecule.atomic_numbers.cast<int>().sum()
+        - calculator._molecule.charge);
+
+    const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+
+    if (n_unpaired < 0 || n_unpaired > n_electrons)
+        return std::unexpected("Invalid multiplicity for given electron count");
+    if ((n_electrons - n_unpaired) % 2 != 0)
+        return std::unexpected("Multiplicity inconsistent with electron count parity");
+
+    const int n_alpha = (n_electrons + n_unpaired) / 2;
+    const int n_beta  = (n_electrons - n_unpaired) / 2;
+
+    // ── Orthogonalization matrix X = S^{-1/2} ────────────────────────────────
+    auto X_result = build_orthogonalizer(S);
+    if (!X_result)
+        return std::unexpected(X_result.error());
+    const Eigen::MatrixXd X = std::move(*X_result);
+
+    // ── Initial spin densities from core Hamiltonian ─────────────────────────
+    // Factor 1.0 per spin (UHF), vs 2.0 in RHF.
+    auto make_density_spin = [&](int n_occ) -> Eigen::MatrixXd
+    {
+        const Eigen::MatrixXd Hp = X.transpose() * H * X;
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> s(Hp);
+        const Eigen::MatrixXd C = X * s.eigenvectors();
+        return C.leftCols(n_occ) * C.leftCols(n_occ).transpose();
+    };
+
+    // SCFGuess::Read: reuse densities loaded from checkpoint.
+    const bool use_chk_uhf = (calculator._scf._guess == HartreeFock::SCFGuess::Read);
+
+    Eigen::MatrixXd Pa = use_chk_uhf
+        ? calculator._info._scf.alpha.density
+        : make_density_spin(n_alpha);
+    Eigen::MatrixXd Pb = use_chk_uhf
+        ? calculator._info._scf.beta.density
+        : make_density_spin(n_beta);
+
+    const unsigned int max_iter  = calculator._scf.get_max_cycles(nbasis);
+    const double tol_energy      = calculator._scf._tol_energy;
+    const double tol_density     = calculator._scf._tol_density;
+
+    // ── DIIS state per spin ───────────────────────────────────────────────────
+    HartreeFock::DIISState diis_a, diis_b;
+    diis_a.max_vecs = diis_b.max_vecs = calculator._scf._DIIS_dim;
+    const bool use_diis = calculator._scf._use_DIIS;
+
+    double E_prev = 0.0;
+
+    HartreeFock::Logger::scf_header();
+
+    for (unsigned int iter = 1; iter <= max_iter; ++iter)
+    {
+        const auto iter_start = std::chrono::steady_clock::now();
+
+        // ── Two-electron Fock contributions ───────────────────────────────────
+        auto [Ga, Gb] = _compute_2e_fock_uhf(
+            shell_pairs, Pa, Pb, nbasis, calculator._integral._engine);
+
+        const Eigen::MatrixXd Fa = H + Ga;
+        const Eigen::MatrixXd Fb = H + Gb;
+
+        // ── Electronic energy ─────────────────────────────────────────────────
+        // E_elec = 0.5 * [tr(Pa*(H+Fa)) + tr(Pb*(H+Fb))]
+        const double E_elec  = 0.5 * ((Pa.array() * (H + Fa).array()).sum()
+                                    +  (Pb.array() * (H + Fb).array()).sum());
+        const double E_total = E_elec + calculator._nuclear_repulsion;
+
+        // ── DIIS: per-spin Pulay errors ───────────────────────────────────────
+        double diis_err = 0.0;
+        if (use_diis)
+        {
+            const Eigen::MatrixXd ea = X.transpose() * (Fa * Pa * S - S * Pa * Fa) * X;
+            const Eigen::MatrixXd eb = X.transpose() * (Fb * Pb * S - S * Pb * Fb) * X;
+            diis_a.push(Fa, ea);
+            diis_b.push(Fb, eb);
+            diis_err = std::max(diis_a.error_norm(), diis_b.error_norm());
+        }
+
+        const Eigen::MatrixXd Fa_diag = (use_diis && diis_a.ready()) ? diis_a.extrapolate() : Fa;
+        const Eigen::MatrixXd Fb_diag = (use_diis && diis_b.ready()) ? diis_b.extrapolate() : Fb;
+
+        // ── Diagonalize alpha ─────────────────────────────────────────────────
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sa(X.transpose() * Fa_diag * X);
+        if (sa.info() != Eigen::Success)
+            return std::unexpected(std::format("Alpha Fock diagonalization failed at iter {}", iter));
+        const Eigen::MatrixXd Ca  = X * sa.eigenvectors();
+        const Eigen::VectorXd epsa = sa.eigenvalues();
+
+        // ── Diagonalize beta ──────────────────────────────────────────────────
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sb(X.transpose() * Fb_diag * X);
+        if (sb.info() != Eigen::Success)
+            return std::unexpected(std::format("Beta Fock diagonalization failed at iter {}", iter));
+        const Eigen::MatrixXd Cb  = X * sb.eigenvectors();
+        const Eigen::VectorXd epsb = sb.eigenvalues();
+
+        // ── New spin densities ────────────────────────────────────────────────
+        const Eigen::MatrixXd Pa_new = Ca.leftCols(n_alpha) * Ca.leftCols(n_alpha).transpose();
+        const Eigen::MatrixXd Pb_new = Cb.leftCols(n_beta)  * Cb.leftCols(n_beta).transpose();
+
+        // ── Convergence on total density ──────────────────────────────────────
+        const Eigen::MatrixXd dPt   = (Pa_new + Pb_new) - (Pa + Pb);
+        const double delta_E        = std::abs(E_total - E_prev);
+        const double delta_P_max    = dPt.cwiseAbs().maxCoeff();
+        const double delta_P_rms    = std::sqrt(dPt.squaredNorm() / (nbasis * nbasis));
+
+        const double iter_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - iter_start).count();
+        HartreeFock::Logger::scf_iteration(iter, E_total, delta_E, delta_P_rms, delta_P_max, diis_err, 0.0, iter_time);
+
+        Pa = Pa_new;  Pb = Pb_new;  E_prev = E_total;
+
+        // ── Store current SCF state ───────────────────────────────────────────
+        calculator._info._scf.alpha.fock            = Fa;
+        calculator._info._scf.alpha.density         = Pa;
+        calculator._info._scf.alpha.mo_energies     = epsa;
+        calculator._info._scf.alpha.mo_coefficients = Ca;
+        calculator._info._scf.beta.fock             = Fb;
+        calculator._info._scf.beta.density          = Pb;
+        calculator._info._scf.beta.mo_energies      = epsb;
+        calculator._info._scf.beta.mo_coefficients  = Cb;
+        calculator._info._energy                    = E_elec;
+        calculator._info._delta_energy              = delta_E;
+        calculator._info._delta_density_max         = delta_P_max;
+        calculator._info._delta_density_rms         = delta_P_rms;
+        calculator._total_energy                    = E_total;
+
+        if (iter > 1 && delta_E < tol_energy && delta_P_rms < tol_density && delta_P_max < tol_density)
+        {
+            calculator._info._is_converged = true;
+
+            HartreeFock::Logger::scf_footer();
+            HartreeFock::Logger::blank();
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "UHF Converged :",
+                std::format("E = {:.10f} Eh  after {} iterations", E_total, iter));
+            HartreeFock::Logger::blank();
+
+            _log_spin_contamination(Ca, Cb, S, n_alpha, n_beta,
+                                    calculator._molecule.multiplicity);
+            HartreeFock::Logger::blank();
+
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Alpha MOs :", "");
+            HartreeFock::Logger::mo_header();
+            HartreeFock::Logger::mo_energies_uhf(epsa, static_cast<std::size_t>(n_alpha));
+            HartreeFock::Logger::blank();
+
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Beta MOs :", "");
+            HartreeFock::Logger::mo_header();
+            HartreeFock::Logger::mo_energies_uhf(epsb, static_cast<std::size_t>(n_beta));
+            HartreeFock::Logger::blank();
+
+            return {};
+        }
+    }
+
+    return std::unexpected(std::format("UHF SCF did not converge in {} iterations", max_iter));
 }

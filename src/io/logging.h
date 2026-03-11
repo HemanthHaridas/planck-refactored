@@ -100,11 +100,11 @@ namespace HartreeFock
             std::lock_guard<std::mutex> lock(log_mutex);
 
             std::cout << std::setw(6)  << iter
-                      << std::setw(20) << std::scientific << energy
+                      << std::setw(20) << std::setprecision(10) << energy
                       << std::setw(15) << deltaE
-                      << std::setw(15) << rmsD
-                      << std::setw(15) << maxD
-                      << std::setw(15) << diis_error
+                      << std::setw(15) << std::setprecision(3) << std::scientific << rmsD
+                      << std::setw(15) << std::setprecision(3) << std::scientific << maxD
+                      << std::setw(15) << std::setprecision(3) << std::scientific << diis_error
                       << std::setw(12) << std::fixed << std::setprecision(3) << damping
                       << std::setw(12) << std::fixed << std::setprecision(3) << time_sec
                       << "\n";
@@ -139,6 +139,22 @@ namespace HartreeFock
                           << std::setw(25) << std::right << mo_energies(i)
                           << label
                           << "\n";
+            }
+        }
+
+        inline void mo_energies_uhf(const Eigen::VectorXd& eps, const std::size_t n_occ)
+        {
+            std::lock_guard<std::mutex> lock(log_mutex);
+            const std::size_t homo = (n_occ > 0) ? n_occ - 1 : 0;
+            const std::size_t lumo = n_occ;
+            for (std::size_t i = 0; i < static_cast<std::size_t>(eps.size()); ++i)
+            {
+                std::string label = "";
+                if (i == homo && n_occ > 0) label = "  <-- HOMO";
+                if (i == lumo)              label = "  <-- LUMO";
+                std::cout << std::setw(6)  << std::right << (i + 1)
+                          << std::setw(25) << std::right << eps(i)
+                          << label << "\n";
             }
         }
 

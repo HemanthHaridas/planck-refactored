@@ -6,12 +6,10 @@
 %end_control
 
 %begin_scf
-    scf_type    rhf
-    correlation rmp2
+    scf_type    uhf
     use_diis    .true.
     diis_dim    8
     engine      os
-    guess       read
 %end_scf
 
 %begin_geom
@@ -22,8 +20,8 @@
 
 %begin_coords
 3
-0   1
-O     -0.000000    -0.000000     0.033204
+0   3
+O     -0.000000    -0.000000     0.000000
 H      0.758077     0.000000    -0.602602
 H     -0.758077     0.000000    -0.602602
 %end_coords

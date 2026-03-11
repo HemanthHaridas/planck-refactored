@@ -199,10 +199,17 @@ namespace HartreeFock
         }
     };
 
+    enum class SCFGuess
+    {
+        HCore,  // Diagonalize core Hamiltonian (default)
+        Read    // Load density from checkpoint file
+    };
+
     struct OptionsSCF
     {
-        SCFType _scf  = SCFType::RHF;           // SCF Type (Default is RHF)
-        SCFMode _mode = SCFMode::Conventional;  // SCF Mode (Default is Conventional)
+        SCFType  _scf   = SCFType::RHF;           // SCF Type (Default is RHF)
+        SCFMode  _mode  = SCFMode::Conventional;  // SCF Mode (Default is Conventional)
+        SCFGuess _guess = SCFGuess::HCore;         // Initial guess
         
         unsigned int _max_cycles    = 0;    // Maximum number of SCF Cycles
         unsigned int _threshold     = 100;  // Threshold before switching to Direct mode (Default is 100)
@@ -212,6 +219,7 @@ namespace HartreeFock
         
         unsigned int _DIIS_dim = 8;         // Dimension of DIIS Error Vector (Default is 8)
         bool _use_DIIS = true;              // Use DIIS (Default is true)
+        bool _save_checkpoint = true;       // Save checkpoint after convergence
         
         
         // Automatic setter based on system size
@@ -592,6 +600,8 @@ namespace HartreeFock
 
         Eigen::MatrixXd _overlap;   // Overlap matrix S
         Eigen::MatrixXd _hcore;     // Core Hamiltonian H = T + V
+
+        std::string _checkpoint_path;   // Path to checkpoint file (set by driver)
 
         void _compute_nuclear_repulsion() noexcept
         {

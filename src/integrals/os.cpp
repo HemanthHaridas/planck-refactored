@@ -762,3 +762,154 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
 
     return G;
 }
+
+// ─── Public: UHF 2e Fock (G_alpha and G_beta) ────────────────────────────────
+//
+// UHF Fock formula (per spin σ ∈ {α, β}):
+//   G_σ(μν) = Σ_{λσ} P_total(λσ)·(μν|λσ) − P_σ(λσ)·(μλ|νσ)
+//
+// Phase 1 is identical to _compute_2e_fock — the ERI tensor is spin-independent.
+// Phase 2 contracts once for each spin simultaneously, avoiding a second O(N⁴) build.
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
+    const std::vector<HartreeFock::ShellPair>& shell_pairs,
+    const Eigen::MatrixXd& Pa,
+    const Eigen::MatrixXd& Pb,
+    const std::size_t nbasis)
+{
+    const std::size_t nb  = nbasis;
+    const std::size_t nb2 = nb * nb;
+    const std::size_t nb3 = nb * nb * nb;
+
+    // ── Phase 1: build ERI tensor (identical to _compute_2e_fock) ────────────
+    std::vector<double> eri(nb * nb * nb * nb, 0.0);
+
+    const std::size_t npairs = shell_pairs.size();
+
+#pragma omp parallel for schedule(dynamic)
+    for (std::size_t p = 0; p < npairs; ++p)
+    {
+        const auto& spAB = shell_pairs[p];
+        const std::size_t i = spAB.A._index;
+        const std::size_t j = spAB.B._index;
+        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
+        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+
+        for (std::size_t q = p; q < npairs; ++q)
+        {
+            const auto& spCD = shell_pairs[q];
+            const std::size_t k = spCD.A._index;
+            const std::size_t l = spCD.B._index;
+            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+
+            const double val = _contracted_eri(spAB, spCD,
+                                               lAx, lAy, lAz, lBx, lBy, lBz,
+                                               lCx, lCy, lCz, lDx, lDy, lDz);
+
+            eri[i*nb3 + j*nb2 + k*nb + l] = val;
+            eri[j*nb3 + i*nb2 + k*nb + l] = val;
+            eri[i*nb3 + j*nb2 + l*nb + k] = val;
+            eri[j*nb3 + i*nb2 + l*nb + k] = val;
+            eri[k*nb3 + l*nb2 + i*nb + j] = val;
+            eri[l*nb3 + k*nb2 + i*nb + j] = val;
+            eri[k*nb3 + l*nb2 + j*nb + i] = val;
+            eri[l*nb3 + k*nb2 + j*nb + i] = val;
+        }
+    }
+
+    // ── Phase 2: spin-resolved contraction ───────────────────────────────────
+    // Ga(μ,ν) += Pt(λ,σ)·(μν|λσ) − Pa(λ,σ)·(μλ|νσ)
+    // Gb(μ,ν) += Pt(λ,σ)·(μν|λσ) − Pb(λ,σ)·(μλ|νσ)
+    // Parallel over μ: each thread owns a full row of Ga and Gb → no races.
+    const Eigen::MatrixXd Pt = Pa + Pb;
+    Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
+    Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
+
+#pragma omp parallel for schedule(static)
+    for (std::size_t mu = 0; mu < nb; ++mu)
+        for (std::size_t nu = 0; nu < nb; ++nu)
+            for (std::size_t lam = 0; lam < nb; ++lam)
+                for (std::size_t sig = 0; sig < nb; ++sig)
+                {
+                    const double coulomb = eri[mu*nb3 + nu*nb2 + lam*nb + sig];
+                    const double exch    = eri[mu*nb3 + lam*nb2 + nu*nb + sig];
+                    Ga(mu, nu) += Pt(lam, sig) * coulomb - Pa(lam, sig) * exch;
+                    Gb(mu, nu) += Pt(lam, sig) * coulomb - Pb(lam, sig) * exch;
+                }
+
+    return {Ga, Gb};
+}
+
+// ─── Cross-overlap between two basis sets ────────────────────────────────────
+//
+// Computes S_cross(μ, ν) = <χ_μ^large | χ_ν^small> using the same Obara-Saika
+// 1D recursion as the standard overlap.  The two bases are defined on the same
+// molecule but may differ in size (e.g. large = 6-31G, small = STO-3G).
+//
+// Used for basis-set projection: projecting small-basis MOs onto a larger basis.
+Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_cross_overlap(
+    const HartreeFock::Basis& large_basis,
+    const HartreeFock::Basis& small_basis)
+{
+    const std::size_t nb_large = large_basis.nbasis();
+    const std::size_t nb_small = small_basis.nbasis();
+    Eigen::MatrixXd S_cross = Eigen::MatrixXd::Zero(nb_large, nb_small);
+
+    const auto& large_bfs = large_basis._basis_functions;
+    const auto& small_bfs = small_basis._basis_functions;
+
+    for (std::size_t mu = 0; mu < nb_large; ++mu)
+    {
+        const HartreeFock::ContractedView& cvA = large_bfs[mu];
+        const HartreeFock::Shell& shellA = *cvA._shell;
+        const int lAx = cvA._cartesian[0];
+        const int lAy = cvA._cartesian[1];
+        const int lAz = cvA._cartesian[2];
+        const Eigen::Vector3d& A = shellA._center;
+
+        for (std::size_t nu = 0; nu < nb_small; ++nu)
+        {
+            const HartreeFock::ContractedView& cvB = small_bfs[nu];
+            const HartreeFock::Shell& shellB = *cvB._shell;
+            const int lBx = cvB._cartesian[0];
+            const int lBy = cvB._cartesian[1];
+            const int lBz = cvB._cartesian[2];
+            const Eigen::Vector3d& B = shellB._center;
+
+            const double R2 = (A - B).squaredNorm();
+
+            double s = 0.0;
+            for (int i = 0; i < static_cast<int>(shellA.nprimitives()); ++i)
+            {
+                const double alpha  = shellA._primitives[i];
+                const double cA     = shellA._coefficients[i] * shellA._normalizations[i];
+
+                for (int j = 0; j < static_cast<int>(shellB.nprimitives()); ++j)
+                {
+                    const double beta      = shellB._primitives[j];
+                    const double cB        = shellB._coefficients[j] * shellB._normalizations[j];
+                    const double zeta      = alpha + beta;
+                    const double inv_zeta  = 1.0 / zeta;
+                    const double half_inv_zeta = inv_zeta * 0.5;
+
+                    const Eigen::Vector3d P  = (alpha * A + beta * B) * inv_zeta;
+                    const Eigen::Vector3d pA = P - A;
+                    const Eigen::Vector3d pB = P - B;
+
+                    const double prefactor = std::pow(M_PI * inv_zeta, 1.5)
+                                           * std::exp(-alpha * beta * inv_zeta * R2);
+
+                    const double Sx = _os_1d(half_inv_zeta, pA[0], pB[0], lAx, lBx);
+                    const double Sy = _os_1d(half_inv_zeta, pA[1], pB[1], lAy, lBy);
+                    const double Sz = _os_1d(half_inv_zeta, pA[2], pB[2], lAz, lBz);
+
+                    s += cA * cB * prefactor * Sx * Sy * Sz;
+                }
+            }
+            S_cross(mu, nu) = s;
+        }
+    }
+
+    return S_cross;
+}
