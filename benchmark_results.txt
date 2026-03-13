@@ -1,0 +1,21 @@
+Planck Benchmark Results
+Date   : 2026-03-13 21:36:28
+Commit : 5b0eb2b
+
+System           Basis          Method  Iters      E(RHF) / Eh            E(corr) / Eh           E(MP2) / Eh           
+-----------------------------------------------------------------------------------------------------------------
+He               sto-3g         RHF     2          -2.8077839566          -                      -                     
+H2               sto-3g         RHF     2          -1.1167593103          -0.0131380723          -1.1298973826         
+LiH              sto-3g         RHF     8          -7.8620238776          -0.0128646371          -7.8748885147         
+H2O              sto-3g         RHF     11         -74.9458807581         -0.0308965639          -74.9767773220        
+HF               sto-3g         RHF     7          -98.5707800505         -0.0173443160          -98.5881243665        
+NH3              sto-3g         RHF     13         -55.4363868783         -0.0632801891          -55.4996670673        
+CH4              sto-3g         RHF     7          -39.7267433254         -0.0564597487          -39.7832030740        
+H2O (cc-DZ)      cc-pvdz-unc    RHF     18         -76.0265729929         -0.2614223877          -76.2879953806        
+H2 (cc-DZ)       cc-pvdz-unc    RHF     8          -1.1310536239          -0.0279115353          -1.1589651592         
+-----------------------------------------------------------------------------------------------------------------
+
+Notes:
+  Basis: STO-3G unless labelled; cc-DZ = cc-pVDZ-unc (fully uncontracted)
+  Method: RHF + RMP2 for all systems
+  Normalization: per-component contracted normalization, S[uu]=1 for all basis functions

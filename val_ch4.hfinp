@@ -1,5 +1,5 @@
 %begin_control
-    basis       cc-pvdz-unc
+    basis       sto-3g
     calculation energy
     verbosity   normal
     basis_type  cartesian
@@ -11,22 +11,22 @@
     use_diis        .true.
     diis_dim        8
     engine          os
-    guess           read
-    level_shift     0.3
-    diis_restart    2.0
-    save_checkpoint .true.
+    guess           hcore
+    save_checkpoint .false.
 %end_scf
 
 %begin_geom
     coord_type  cartesian
     coord_units angstrom
-    use_symm    .true.
+    use_symm    .false.
 %end_geom
 
 %begin_coords
-3
-0   3
-O     -0.000000    -0.000000     0.033204
-H      0.758077     0.000000    -0.602602
-H     -0.758077     0.000000    -0.602602
+5
+0   1
+C      0.000000     0.000000     0.000000
+H      0.000000     0.000000     1.089000
+H      1.026719     0.000000    -0.363000
+H     -0.513360    -0.889165    -0.363000
+H     -0.513360     0.889165    -0.363000
 %end_coords

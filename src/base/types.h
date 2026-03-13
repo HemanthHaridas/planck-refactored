@@ -154,7 +154,8 @@ namespace HartreeFock
     {
         const Shell* _shell = nullptr;
         Eigen::Vector3i _cartesian = Eigen::Vector3i::Zero();
-        std::size_t _index = 0;   // position in Basis::_basis_functions
+        std::size_t _index = 0;          // position in Basis::_basis_functions
+        double _component_norm = 1.0;    // 1/sqrt((2lx-1)!! (2ly-1)!! (2lz-1)!!)
 
         std::span<const double> exponents() const noexcept
         {
@@ -417,7 +418,9 @@ namespace HartreeFock
                     pp.inv_zeta     = inv_zeta;
                     pp.coeff_product= cA * cB
                                     * A._shell->_normalizations[i]
-                                    * B._shell->_normalizations[j];
+                                    * B._shell->_normalizations[j]
+                                    * A._component_norm
+                                    * B._component_norm;
                     pp.prefactor    = std::pow(M_PI * inv_zeta, 1.5)
                                     * std::exp(-alpha_beta_over_zeta * R2);
 

@@ -1,5 +1,5 @@
 %begin_control
-    basis       6-31g
+    basis       cc-pvdz
     calculation energy
     verbosity   normal
     basis_type  cartesian

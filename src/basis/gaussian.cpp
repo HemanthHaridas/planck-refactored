@@ -158,6 +158,15 @@ static BasisSet read_gbs(std::ifstream &input)
     return basis;
 }
 
+// Returns (2n-1)!! with the convention (-1)!! = 1.
+static int double_factorial(int n)
+{
+    if (n <= 0) return 1;
+    int result = 1;
+    while (n > 0) { result *= n; n -= 2; }
+    return result;
+}
+
 HartreeFock::Basis HartreeFock::BasisFunctions::read_gbs_basis(const std::string file_name, const HartreeFock::Molecule &molecule, const HartreeFock::BasisType &basis_type)
 {
     if (!(basis_type == HartreeFock::BasisType::Cartesian))
@@ -244,6 +253,11 @@ HartreeFock::Basis HartreeFock::BasisFunctions::read_gbs_basis(const std::string
                 const std::size_t idx = basis._basis_functions.size();
                 basis._basis_functions.emplace_back(shell_ptr, am);
                 basis._basis_functions.back()._index = idx;
+
+                const int df = double_factorial(2 * am[0] - 1)
+                             * double_factorial(2 * am[1] - 1)
+                             * double_factorial(2 * am[2] - 1);
+                basis._basis_functions.back()._component_norm = 1.0 / std::sqrt(static_cast<double>(df));
             }
         }
     }

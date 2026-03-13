@@ -54,11 +54,11 @@ double HartreeFock::BasisFunctions::contracted_normalization(unsigned int L, con
     // Pairwise sums ai + aj
     Eigen::MatrixXd aij = exponents.replicate(1, n) + exponents.transpose().replicate(n, 1);
 
-    // Pairwise products ai * aj
-    Eigen::MatrixXd aji = exponents * exponents.transpose();
-
-    // Overlap integrals sij
-    Eigen::MatrixXd sij = (pi / aij.array()).pow(1.5).matrix().array() * ((2.0 * aji.array().sqrt()) / aij.array()).pow(L);
+    // Overlap integrals sij = pi^(3/2) / (2^L * (ai+aj)^(L+3/2))
+    // This is the primitive pair self-overlap for same-center Cartesian Gaussians
+    // x^lx y^ly z^lz exp(-alpha*r^2) where each lx,ly,lz <= 1 (the "off-diagonal" convention).
+    const double pi_factor = std::pow(pi, 1.5) / std::pow(2.0, L);
+    Eigen::MatrixXd sij = (pi_factor / aij.array().pow(L + 1.5)).matrix();
 
     // Outer products of contraction coefficients and primitive normalizations
     Eigen::MatrixXd cij = coefficients * coefficients.transpose();

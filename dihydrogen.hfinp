@@ -1,17 +1,17 @@
 %begin_control
-    basis       6-31g
+    basis       cc-pvdz-unc
     calculation energy
     verbosity   normal
     basis_type  cartesian
 %end_control
 
 %begin_scf
-    scf_type    uhf
+    scf_type    rhf
     correlation rmp2
     use_diis    .true.
     diis_dim    8
     engine      os
-    guess       hcore
+    guess       read
 %end_scf
 
 %begin_geom
@@ -22,7 +22,7 @@
 
 %begin_coords
 2
-0   3
-H    -0.000    -0.000     3.94000000000000000000
-H    -0.000    -0.000    -3.94000000000000000000
+0   1
+H    -0.000    -0.000     0.000
+H    -0.000    -0.000     0.741
 %end_coords
