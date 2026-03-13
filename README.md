@@ -32,7 +32,7 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 ### 1. Clone the repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/HemanthHaridas/planck-refactored.git
 cd planck-refactored
 ```
 

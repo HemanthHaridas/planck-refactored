@@ -7,13 +7,14 @@ This guide gets you from zero to a converged Hartree-Fock calculation in five mi
 ## 1. Build
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/HemanthHaridas/planck-refactored.git
 cd planck-refactored
 cmake -B build .
 cmake --build build
+cmake --install build
 ```
 
-The first build fetches Eigen and libmsym automatically. The executable is `./build/hartree-fock`.
+The first build fetches Eigen and libmsym automatically. The executable is `./install/bin/hartree-fock`.
 
 ---
 
