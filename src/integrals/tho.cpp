@@ -32,7 +32,8 @@ static double _ipow(double x, int n)
 // Double factorial: n!! = n*(n-2)*...  with (-1)!! = 1, 0!! = 1
 static double _dfact(int n)
 {
-    if (n <= 1) return 1.0;
+    if (n <= -2) return 0.0;
+    if (n <=  1) return 1.0;
     double r = 1.0;
     for (int i = n; i > 1; i -= 2) r *= i;
     return r;

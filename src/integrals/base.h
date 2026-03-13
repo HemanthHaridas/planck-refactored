@@ -41,12 +41,13 @@ inline Eigen::MatrixXd _compute_nuclear_attraction(const std::vector<HartreeFock
 inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair>& shell_pairs,
                                          const Eigen::MatrixXd& density,
                                          const std::size_t nbasis,
-                                         const HartreeFock::IntegralMethod& engine)
+                                         const HartreeFock::IntegralMethod& engine,
+                                         double tol_eri = 1e-10)
 {
     switch (engine)
     {
         case HartreeFock::IntegralMethod::ObaraSaika:
-            return HartreeFock::ObaraSaika::_compute_2e_fock(shell_pairs, density, nbasis);
+            return HartreeFock::ObaraSaika::_compute_2e_fock(shell_pairs, density, nbasis, tol_eri);
 
         default:
             throw std::runtime_error("Unsupported integral engine for 2e Fock");
@@ -58,12 +59,13 @@ _compute_2e_fock_uhf(const std::vector<HartreeFock::ShellPair>& shell_pairs,
                      const Eigen::MatrixXd& Pa,
                      const Eigen::MatrixXd& Pb,
                      const std::size_t nbasis,
-                     const HartreeFock::IntegralMethod& engine)
+                     const HartreeFock::IntegralMethod& engine,
+                     double tol_eri = 1e-10)
 {
     switch (engine)
     {
         case HartreeFock::IntegralMethod::ObaraSaika:
-            return HartreeFock::ObaraSaika::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis);
+            return HartreeFock::ObaraSaika::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, tol_eri);
 
         case HartreeFock::IntegralMethod::Huzinaga:
             return HartreeFock::Huzinaga::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis);

@@ -8,6 +8,7 @@
 #include <mutex>
 
 #include "base/types.h"
+#include "base/tables.h"
 
 namespace HartreeFock
 {
@@ -156,6 +157,50 @@ namespace HartreeFock
                           << std::setw(25) << std::right << eps(i)
                           << label << "\n";
             }
+        }
+
+        inline void converged_energy(double energy_hartree)
+        {
+            std::lock_guard<std::mutex> lock(log_mutex);
+
+            constexpr int LW = 32;  // label column
+            constexpr int VW = 20;  // value column
+
+            std::cout << std::string(LW + VW * 3, '-') << "\n"
+                      << std::setw(LW) << std::left  << "  Quantity"
+                      << std::setw(VW) << std::right << "Hartree"
+                      << std::setw(VW) << std::right << "eV"
+                      << std::setw(VW) << std::right << "kcal/mol"
+                      << "\n"
+                      << std::string(LW + VW * 3, '-') << "\n"
+                      << std::setw(LW) << std::left  << "  Total Energy"
+                      << std::fixed << std::setprecision(10)
+                      << std::setw(VW) << std::right << energy_hartree
+                      << std::setw(VW) << std::right << energy_hartree * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << energy_hartree * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::string(LW + VW * 3, '-') << "\n";
+        }
+
+        inline void correlation_energy(const double E_scf, const double E_corr)
+        {
+            std::lock_guard<std::mutex> lock(log_mutex);
+            const double E_total = E_scf + E_corr;
+            constexpr int LW = 32;
+            constexpr int VW = 20;
+            std::cout << std::setw(LW) << std::left  << "  Correlation Energy"
+                      << std::fixed << std::setprecision(10)
+                      << std::setw(VW) << std::right << E_corr
+                      << std::setw(VW) << std::right << E_corr * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_corr * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::string(LW + VW * 3, '-') << "\n"
+                      << std::setw(LW) << std::left  << "  Total MP2 Energy"
+                      << std::setw(VW) << std::right << E_total
+                      << std::setw(VW) << std::right << E_total * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_total * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::string(LW + VW * 3, '-') << "\n";
         }
 
         inline void blank()

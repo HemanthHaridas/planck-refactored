@@ -688,6 +688,11 @@ static double _contracted_eri(
     return eri;
 }
 
+// Forward declaration — defined later in this file before _compute_2e.
+static Eigen::MatrixXd _compute_schwarz_table(
+    const std::vector<HartreeFock::ShellPair>& shell_pairs,
+    std::size_t nbasis);
+
 // ─── Public: build 2e Fock (G = J - 0.5*K) ──────────────────────────────────
 //
 // Phase 1: build the full (μν|λσ) ERI tensor by iterating over unique shell-pair
@@ -698,11 +703,14 @@ static double _contracted_eri(
 Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,
     const Eigen::MatrixXd& density,
-    const std::size_t nbasis)
+    const std::size_t nbasis,
+    const double tol_eri)
 {
     const std::size_t nb  = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
+
+    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb);
 
     // ── Phase 1: build ERI tensor ─────────────────────────────────────────────
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
@@ -725,6 +733,10 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
             const auto& spCD = shell_pairs[q];
             const std::size_t k = spCD.A._index;
             const std::size_t l = spCD.B._index;
+
+            // Schwarz screening
+            if (Q(i, j) * Q(k, l) < tol_eri) continue;
+
             const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
             const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
 
@@ -775,11 +787,14 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,
     const Eigen::MatrixXd& Pa,
     const Eigen::MatrixXd& Pb,
-    const std::size_t nbasis)
+    const std::size_t nbasis,
+    const double tol_eri)
 {
     const std::size_t nb  = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
+
+    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb);
 
     // ── Phase 1: build ERI tensor (identical to _compute_2e_fock) ────────────
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
@@ -800,6 +815,10 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
             const auto& spCD = shell_pairs[q];
             const std::size_t k = spCD.A._index;
             const std::size_t l = spCD.B._index;
+
+            // Schwarz screening
+            if (Q(i, j) * Q(k, l) < tol_eri) continue;
+
             const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
             const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
 
@@ -912,4 +931,141 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_cross_overlap(
     }
 
     return S_cross;
+}
+
+// ─── Schwarz screening table ─────────────────────────────────────────────────
+//
+// Q(i,j) = sqrt(|(ij|ij)|) for each basis-function pair covered by a shell pair.
+// Bounds any quartet: |(ij|kl)| ≤ Q(i,j)·Q(k,l)  (Cauchy-Schwarz inequality).
+static Eigen::MatrixXd _compute_schwarz_table(
+    const std::vector<HartreeFock::ShellPair>& shell_pairs,
+    std::size_t nbasis)
+{
+    Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(nbasis, nbasis);
+
+    for (const auto& sp : shell_pairs)
+    {
+        const std::size_t i = sp.A._index;
+        const std::size_t j = sp.B._index;
+        const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
+        const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
+
+        const double diag = _contracted_eri(sp, sp,
+                                            lAx, lAy, lAz, lBx, lBy, lBz,
+                                            lAx, lAy, lAz, lBx, lBy, lBz);
+        const double q = std::sqrt(std::abs(diag));
+        Q(i, j) = q;
+        Q(j, i) = q;
+    }
+
+    return Q;
+}
+
+// Compute ERI and store it for conventional SCF
+std::vector <double> HartreeFock::ObaraSaika::_compute_2e(
+    const std::vector<HartreeFock::ShellPair>& shell_pairs,
+    const std::size_t nbasis,
+    const double tol_eri)
+{
+    const std::size_t nb  = nbasis;
+    const std::size_t nb2 = nb * nb;
+    const std::size_t nb3 = nb * nb * nb;
+
+    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb);
+
+    // ── Phase 1: build ERI tensor ─────────────────────────────────────────────
+    std::vector<double> eri(nb * nb * nb * nb, 0.0);
+
+    const std::size_t npairs = shell_pairs.size();
+
+    // Disjoint writes per (p,q) pair → lock-free parallelism.
+    // thread_local _vrr_buf / _hrr_buf give each thread private scratch space.
+#pragma omp parallel for schedule(dynamic)
+    for (std::size_t p = 0; p < npairs; ++p)
+    {
+        const auto& spAB = shell_pairs[p];
+        const std::size_t i = spAB.A._index;
+        const std::size_t j = spAB.B._index;
+        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
+        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+
+        for (std::size_t q = p; q < npairs; ++q)
+        {
+            const auto& spCD = shell_pairs[q];
+            const std::size_t k = spCD.A._index;
+            const std::size_t l = spCD.B._index;
+
+            // Schwarz screening: |(ij|kl)| ≤ Q(i,j)·Q(k,l)
+            if (Q(i, j) * Q(k, l) < tol_eri) continue;
+
+            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+
+            const double val = _contracted_eri(spAB, spCD,
+                                               lAx, lAy, lAz, lBx, lBy, lBz,
+                                               lCx, lCy, lCz, lDx, lDy, lDz);
+
+            // Fill all 8 permutation-symmetry equivalent slots:
+            //   (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk)
+            //           = (kl|ij) = (lk|ij) = (kl|ji) = (lk|ji)
+            eri[i*nb3 + j*nb2 + k*nb + l] = val;
+            eri[j*nb3 + i*nb2 + k*nb + l] = val;
+            eri[i*nb3 + j*nb2 + l*nb + k] = val;
+            eri[j*nb3 + i*nb2 + l*nb + k] = val;
+            eri[k*nb3 + l*nb2 + i*nb + j] = val;
+            eri[l*nb3 + k*nb2 + i*nb + j] = val;
+            eri[k*nb3 + l*nb2 + j*nb + i] = val;
+            eri[l*nb3 + k*nb2 + j*nb + i] = val;
+        }
+    }
+
+    return eri;
+}
+
+Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_fock_rhf(const std::vector <double>& _eri, const Eigen::MatrixXd& density, const std::size_t nbasis)
+{
+    const std::size_t nb  = nbasis;
+    const std::size_t nb2 = nb * nb;
+    const std::size_t nb3 = nb * nb * nb;
+    Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
+    
+#pragma omp parallel for schedule(static)
+    for (std::size_t mu = 0; mu < nb; ++mu)
+        for (std::size_t nu = 0; nu < nb; ++nu)
+            for (std::size_t lam = 0; lam < nb; ++lam)
+                for (std::size_t sig = 0; sig < nb; ++sig)
+                    G(mu, nu) += density(lam, sig) *
+                                 (_eri[mu*nb3 + nu*nb2 + lam*nb + sig]
+                                  - 0.5 * _eri[mu*nb3 + lam*nb2 + nu*nb + sig]);
+    
+    return G;
+}
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_fock_uhf(
+    const std::vector<double>& _eri,
+    const Eigen::MatrixXd& Pa,
+    const Eigen::MatrixXd& Pb,
+    std::size_t nbasis)
+{
+    const std::size_t nb  = nbasis;
+    const std::size_t nb2 = nb * nb;
+    const std::size_t nb3 = nb * nb * nb;
+    
+    const Eigen::MatrixXd Pt = Pa + Pb;
+    Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
+    Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
+
+#pragma omp parallel for schedule(static)
+    for (std::size_t mu = 0; mu < nb; ++mu)
+        for (std::size_t nu = 0; nu < nb; ++nu)
+            for (std::size_t lam = 0; lam < nb; ++lam)
+                for (std::size_t sig = 0; sig < nb; ++sig)
+                {
+                    const double coulomb = _eri[mu*nb3 + nu*nb2 + lam*nb + sig];
+                    const double exch    = _eri[mu*nb3 + lam*nb2 + nu*nb + sig];
+                    Ga(mu, nu) += Pt(lam, sig) * coulomb - Pa(lam, sig) * exch;
+                    Gb(mu, nu) += Pt(lam, sig) * coulomb - Pb(lam, sig) * exch;
+                }
+
+    return {Ga, Gb};
 }

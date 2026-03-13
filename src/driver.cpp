@@ -17,6 +17,7 @@
 #include "integrals/shellpair.h"
 #include "integrals/base.h"
 #include "scf/scf.h"
+#include "post_hf/mp2.h"
 
 using SystemClock = std::chrono::system_clock;
 
@@ -350,7 +351,40 @@ int main(int argc, const char* argv[])
                 std::format("Save failed: {}", res.error()));
     }
 
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Total Energy :", std::format("{:.10f} Eh", calculator._total_energy));
+    HartreeFock::Logger::converged_energy(calculator._total_energy);
+
+    // ── Post-HF correlation ───────────────────────────────────────────────────
+    if (calculator._info._is_converged)
+    {
+        std::expected<void, std::string> corr_res;
+        std::string corr_tag;
+
+        if (calculator._correlation == HartreeFock::PostHF::RMP2)
+        {
+            corr_tag = "RMP2 :";
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Computing MP2 correlation energy");
+            corr_res = HartreeFock::Correlation::run_rmp2(calculator, shellpairs);
+        }
+        else if (calculator._correlation == HartreeFock::PostHF::UMP2)
+        {
+            corr_tag = "UMP2 :";
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Computing MP2 correlation energy");
+            corr_res = HartreeFock::Correlation::run_ump2(calculator, shellpairs);
+        }
+
+        if (corr_res.has_value() == false && !corr_tag.empty())
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error,
+                corr_tag + " Failed :", corr_res.error());
+            return EXIT_FAILURE;
+        }
+
+        if (!corr_tag.empty())
+        {
+            HartreeFock::Logger::blank();
+            HartreeFock::Logger::correlation_energy(calculator._total_energy, calculator._correlation_energy);
+        }
+    }
 
     const auto program_end = SystemClock::now();
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Wall Time :", std::format("{:.3f} s", std::chrono::duration<double>(program_end - program_start).count()));

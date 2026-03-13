@@ -220,6 +220,9 @@ namespace HartreeFock
         unsigned int _DIIS_dim = 8;         // Dimension of DIIS Error Vector (Default is 8)
         bool _use_DIIS = true;              // Use DIIS (Default is true)
         bool _save_checkpoint = true;       // Save checkpoint after convergence
+
+        double _level_shift = 0.0;          // Virtual orbital level shift in Hartree (0 = off)
+        double _diis_restart_factor = 2.0;  // Restart DIIS when error grows by this factor (0 = off)
         
         
         // Automatic setter based on system size
@@ -244,10 +247,11 @@ namespace HartreeFock
             50;
         }
         
-        // Automatic setter for SCF Mode based on system size
+        // Resolve Auto mode based on system size; explicit Conventional/Direct are left unchanged.
         void set_scf_mode_auto(std::size_t nbasis)
         {
-            _mode = (nbasis > _threshold) ? SCFMode::Direct : SCFMode::Conventional;
+            if (_mode == SCFMode::Auto)
+                _mode = (nbasis > _threshold) ? SCFMode::Direct : SCFMode::Conventional;
         }
         
         // Getter
@@ -595,12 +599,14 @@ namespace HartreeFock
         CalculationType _calculation = CalculationType::SinglePoint;    // Default is Single point energy calculation
         PostHF          _correlation = PostHF::None;                    // No Post HF corrections
         
-        double          _total_energy      = 0;    // Total Energy (SCF + Nuclear Repulsion)
-        double          _nuclear_repulsion = 0;    // Nuclear Repulsion Energy (Bohr)
+        double          _total_energy        = 0;    // Total Energy (SCF + Nuclear Repulsion)
+        double          _nuclear_repulsion  = 0;    // Nuclear Repulsion Energy (Bohr)
+        double          _correlation_energy = 0.0;  // Post-HF correlation energy (0 if not computed)
 
-        Eigen::MatrixXd _overlap;   // Overlap matrix S
-        Eigen::MatrixXd _hcore;     // Core Hamiltonian H = T + V
-
+        Eigen::MatrixXd         _overlap;   // Overlap matrix S
+        Eigen::MatrixXd         _hcore;     // Core Hamiltonian H = T + V
+        std::vector <double>    _eri;       // ERI
+        
         std::string _checkpoint_path;   // Path to checkpoint file (set by driver)
 
         void _compute_nuclear_repulsion() noexcept

@@ -1,0 +1,47 @@
+%begin_control
+    basis       6-31g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type        rhf
+    correlation     rmp2
+    use_diis        .true.
+    diis_dim        8
+    engine          os
+    guess           read
+    level_shift     0.3
+    diis_restart    2.0
+    save_checkpoint .true.
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+18
+0   1
+C     -3.462546    1.374163   -0.016559
+H     -4.414745    1.728072    0.385801
+H     -3.386303    1.739673   -1.043578
+C     -2.299360    1.942979    0.824495
+C     -3.438151   -0.169422   -0.012307
+H     -2.311027    3.034458    0.776898
+H     -2.432323    1.660497    1.871995
+C     -0.940338    1.415622    0.314108
+H     -4.246620   -0.552029   -0.639552
+C     -2.083082   -0.697533   -0.531375
+H     -3.610743   -0.536676    1.002789
+H     -1.957638   -0.415706   -1.579963
+C     -0.913544   -0.128687    0.301490
+H     -2.071413   -1.788954   -0.483188
+H      0.035484   -0.475635   -0.114097
+H     -0.977570   -0.504109    1.325992
+H     -0.757527    1.792873   -0.695286
+H     -0.137807    1.791191    0.953225
+%end_coords

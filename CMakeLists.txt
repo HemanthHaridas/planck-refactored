@@ -111,6 +111,12 @@ file(GLOB SCF_SRC
     ${SRC_DIR}/scf/*.cpp
 )
 
+# Collect sources automatically
+file(GLOB POSTHF_SRC
+    ${SRC_DIR}/post_hf/*.h
+    ${SRC_DIR}/post_hf/*.cpp
+)
+
 # Executable target
 add_executable(hartree-fock
     ${BASE_SRC}
@@ -121,6 +127,7 @@ add_executable(hartree-fock
     ${INT_SRC}
     ${IO_SRC}
     ${SCF_SRC}
+    ${POSTHF_SRC}
 )
 
 # Include directories

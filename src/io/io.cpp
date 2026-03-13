@@ -240,6 +240,24 @@ namespace HartreeFock::IO
     }
 
     template<>
+    HartreeFock::SCFMode map_string_enum<HartreeFock::SCFMode>(const std::string& value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::SCFMode> _table =
+        {
+            {"conventional", HartreeFock::SCFMode::Conventional},
+            {"direct",       HartreeFock::SCFMode::Direct},
+            {"auto",         HartreeFock::SCFMode::Auto}
+        };
+
+        auto _value = toLower(value);
+        auto it = _table.find(_value);
+        if (it != _table.end())
+            return it->second;
+
+        throw std::invalid_argument("Invalid SCFMode: " + value);
+    }
+
+    template<>
     HartreeFock::SCFType map_string_enum<HartreeFock::SCFType>(const std::string& value)
     {
         static const std::unordered_map<std::string, HartreeFock::SCFType> _table =
@@ -318,7 +336,10 @@ namespace HartreeFock::IO
             {"engine",      [&integral](const std::string &value)   {integral._engine   = map_string_enum <HartreeFock::IntegralMethod>(value);}},
             {"tol_eri",        [&integral](const std::string &value)   {integral._tol_eri       = std::stod(value);}},
             {"guess",          [&scf](const std::string &value)        {scf._guess              = map_string_enum<HartreeFock::SCFGuess>(value);}},
-            {"save_checkpoint",[&scf](const std::string &value)        {scf._save_checkpoint    = toBool(value);}}
+            {"save_checkpoint",[&scf](const std::string &value)        {scf._save_checkpoint    = toBool(value);}},
+            {"level_shift",    [&scf](const std::string &value)        {scf._level_shift        = std::stod(value);}},
+            {"diis_restart",   [&scf](const std::string &value)        {scf._diis_restart_factor = std::stod(value);}},
+            {"scf_mode",       [&scf](const std::string &value)        {scf._mode                = map_string_enum<HartreeFock::SCFMode>(value);}}
         };
         
         for (const std::string line : lines)

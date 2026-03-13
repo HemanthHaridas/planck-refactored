@@ -1,17 +1,20 @@
 %begin_control
-    basis       sto-3g
+    basis       6-31g
     calculation energy
     verbosity   normal
     basis_type  cartesian
 %end_control
 
 %begin_scf
-    scf_type    rhf
-    correlation rmp2
-    use_diis    .true.
-    diis_dim    8
-    engine      os
-    guess       read
+    scf_type        rhf
+    correlation     rmp2
+    use_diis        .true.
+    diis_dim        8
+    engine          os
+    guess           read
+    level_shift     0.3
+    diis_restart    2.0
+    save_checkpoint .true.
 %end_scf
 
 %begin_geom
@@ -22,7 +25,7 @@
 
 %begin_coords
 3
-0   1
+0   3
 O     -0.000000    -0.000000     0.033204
 H      0.758077     0.000000    -0.602602
 H     -0.758077     0.000000    -0.602602

@@ -1,6 +1,7 @@
 #include <Eigen/Eigenvalues>
 #include <chrono>
 #include <format>
+#include <limits>
 
 #include "scf.h"
 #include "integrals/base.h"
@@ -74,11 +75,34 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     const double tol_energy  = calculator._scf._tol_energy;
     const double tol_density = calculator._scf._tol_density;
 
+    // ── Conventional vs Direct ─────────────────────────────────────────────────
+    // Conventional: ERI tensor built once; each iteration only contracts.
+    // Direct: ERI recomputed from integrals every iteration.
+    // Auto: conventional when nbasis ≤ _threshold, direct otherwise.
+    // Only ObaraSaika supports precomputed ERI storage; other engines always direct.
+    const bool use_conventional =
+        calculator._integral._engine == HartreeFock::IntegralMethod::ObaraSaika &&
+        (calculator._scf._mode == HartreeFock::SCFMode::Conventional ||
+         (calculator._scf._mode == HartreeFock::SCFMode::Auto &&
+          nbasis <= static_cast<std::size_t>(calculator._scf._threshold)));
+
+    std::vector<double> eri;
+    if (use_conventional)
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
+            std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
+        eri = HartreeFock::ObaraSaika::_compute_2e(shell_pairs, nbasis, calculator._integral._tol_eri);
+        calculator._eri = eri;  // persist for post-HF use
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
+        HartreeFock::Logger::blank();
+    }
+
     // ── DIIS state ────────────────────────────────────────────────────────────
     HartreeFock::DIISState diis;
     diis.max_vecs         = calculator._scf._DIIS_dim;
     const bool use_diis   = calculator._scf._use_DIIS;
 
+    const double tol_eri = calculator._integral._tol_eri;
     double E_prev = 0.0;
 
     HartreeFock::Logger::scf_header();
@@ -88,7 +112,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
         const auto iter_start = std::chrono::steady_clock::now();
 
         // ── Build two-electron contribution G = J - 0.5*K ────────────────────
-        Eigen::MatrixXd G = _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine);
+        Eigen::MatrixXd G = use_conventional
+            ? HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis)
+            : _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine, tol_eri);
 
         // ── Fock matrix ───────────────────────────────────────────────────────
         const Eigen::MatrixXd F = H + G;
@@ -158,7 +184,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
 
             HartreeFock::Logger::scf_footer();
             HartreeFock::Logger::blank();
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "SCF Converged :", std::format("E = {:.10f} Eh  after {} iterations", E_total, iter));
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, std::format("SCF Converged after {} iterations", iter));
             HartreeFock::Logger::blank();
             HartreeFock::Logger::mo_header();
             HartreeFock::Logger::mo_energies(calculator._info._scf.alpha.mo_energies, n_electrons);
@@ -245,13 +271,40 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     const unsigned int max_iter  = calculator._scf.get_max_cycles(nbasis);
     const double tol_energy      = calculator._scf._tol_energy;
     const double tol_density     = calculator._scf._tol_density;
+    const double level_shift     = calculator._scf._level_shift;
+    const double restart_factor  = calculator._scf._diis_restart_factor;
+
+    // ── Conventional vs Direct ────────────────────────────────────────────────
+    const bool use_conventional =
+        calculator._integral._engine == HartreeFock::IntegralMethod::ObaraSaika &&
+        (calculator._scf._mode == HartreeFock::SCFMode::Conventional ||
+         (calculator._scf._mode == HartreeFock::SCFMode::Auto &&
+          nbasis <= static_cast<std::size_t>(calculator._scf._threshold)));
+
+    std::vector<double> eri;
+    if (use_conventional)
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
+            std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
+        eri = HartreeFock::ObaraSaika::_compute_2e(shell_pairs, nbasis, calculator._integral._tol_eri);
+        calculator._eri = eri;  // persist for post-HF use
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
+        HartreeFock::Logger::blank();
+    }
 
     // ── DIIS state per spin ───────────────────────────────────────────────────
     HartreeFock::DIISState diis_a, diis_b;
     diis_a.max_vecs = diis_b.max_vecs = calculator._scf._DIIS_dim;
     const bool use_diis = calculator._scf._use_DIIS;
 
-    double E_prev = 0.0;
+    const double tol_eri = calculator._integral._tol_eri;
+    double E_prev      = 0.0;
+    double diis_err_prev = std::numeric_limits<double>::max();
+
+    // Level-shift: save orthonormal MO coefficients from the previous iteration
+    // to build the virtual projector Q = I - C_occ * C_occ^T  (in ortho basis).
+    Eigen::MatrixXd Ca_orth_prev, Cb_orth_prev;
+    const Eigen::MatrixXd I_nb = Eigen::MatrixXd::Identity(nbasis, nbasis);
 
     HartreeFock::Logger::scf_header();
 
@@ -260,45 +313,94 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         const auto iter_start = std::chrono::steady_clock::now();
 
         // ── Two-electron Fock contributions ───────────────────────────────────
-        auto [Ga, Gb] = _compute_2e_fock_uhf(
-            shell_pairs, Pa, Pb, nbasis, calculator._integral._engine);
+        auto [Ga, Gb] = use_conventional
+            ? HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis)
+            : _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine, tol_eri);
 
         const Eigen::MatrixXd Fa = H + Ga;
         const Eigen::MatrixXd Fb = H + Gb;
 
-        // ── Electronic energy ─────────────────────────────────────────────────
-        // E_elec = 0.5 * [tr(Pa*(H+Fa)) + tr(Pb*(H+Fb))]
+        // ── Electronic energy — always from the bare (unshifted) Fock ───────────
         const double E_elec  = 0.5 * ((Pa.array() * (H + Fa).array()).sum()
                                     +  (Pb.array() * (H + Fb).array()).sum());
         const double E_total = E_elec + calculator._nuclear_repulsion;
 
-        // ── DIIS: per-spin Pulay errors ───────────────────────────────────────
+        // ── Level shift: build Fa_s/Fb_s before DIIS ─────────────────────────
+        // The shift  F_s = F + λ·X·(I − P_occ^orth)·X^T  raises virtual orbital
+        // energies, widening the gap and preventing occupied–virtual swapping.
+        // DIIS stores and extrapolates the shifted Fock so the subspace is
+        // self-consistent; energy is always reported from the bare Fock.
+        const bool shift_active = (level_shift > 0.0 && Ca_orth_prev.cols() > 0);
+        Eigen::MatrixXd Fa_s = Fa, Fb_s = Fb;
+        if (shift_active)
+        {
+            const Eigen::MatrixXd shift_a =
+                level_shift * X * (I_nb - Ca_orth_prev.leftCols(n_alpha) *
+                                           Ca_orth_prev.leftCols(n_alpha).transpose()) * X.transpose();
+            const Eigen::MatrixXd shift_b =
+                level_shift * X * (I_nb - Cb_orth_prev.leftCols(n_beta)  *
+                                           Cb_orth_prev.leftCols(n_beta).transpose())  * X.transpose();
+            Fa_s += shift_a;
+            Fb_s += shift_b;
+        }
+
+        // ── DIIS: Pulay errors from the shifted Fock ─────────────────────────
         double diis_err = 0.0;
         if (use_diis)
         {
-            const Eigen::MatrixXd ea = X.transpose() * (Fa * Pa * S - S * Pa * Fa) * X;
-            const Eigen::MatrixXd eb = X.transpose() * (Fb * Pb * S - S * Pb * Fb) * X;
-            diis_a.push(Fa, ea);
-            diis_b.push(Fb, eb);
+            const Eigen::MatrixXd ea = X.transpose() * (Fa_s * Pa * S - S * Pa * Fa_s) * X;
+            const Eigen::MatrixXd eb = X.transpose() * (Fb_s * Pb * S - S * Pb * Fb_s) * X;
+
+            // RMS norm — same normalization as DIISState::error_norm()
+            const auto rms_norm = [](const Eigen::MatrixXd& m) {
+                return std::sqrt(m.squaredNorm() / static_cast<double>(m.size()));
+            };
+            const double cur_err = std::max(rms_norm(ea), rms_norm(eb));
+
+            // ── DIIS restart ──────────────────────────────────────────────────
+            if (restart_factor > 0.0 && iter > 2 && cur_err > diis_err_prev * restart_factor)
+            {
+                diis_a.clear();
+                diis_b.clear();
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                    "DIIS :", std::format("Subspace restarted at iter {} (error grew {:.1f}×)",
+                                          iter, cur_err / diis_err_prev));
+            }
+
+            diis_a.push(Fa_s, ea);
+            diis_b.push(Fb_s, eb);
             diis_err = std::max(diis_a.error_norm(), diis_b.error_norm());
+            diis_err_prev = cur_err;
         }
 
-        const Eigen::MatrixXd Fa_diag = (use_diis && diis_a.ready()) ? diis_a.extrapolate() : Fa;
-        const Eigen::MatrixXd Fb_diag = (use_diis && diis_b.ready()) ? diis_b.extrapolate() : Fb;
+        // Extrapolated (shifted) Fock for diagonalization
+        const Eigen::MatrixXd Fa_diag = (use_diis && diis_a.ready()) ? diis_a.extrapolate() : Fa_s;
+        const Eigen::MatrixXd Fb_diag = (use_diis && diis_b.ready()) ? diis_b.extrapolate() : Fb_s;
 
         // ── Diagonalize alpha ─────────────────────────────────────────────────
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sa(X.transpose() * Fa_diag * X);
         if (sa.info() != Eigen::Success)
             return std::unexpected(std::format("Alpha Fock diagonalization failed at iter {}", iter));
         const Eigen::MatrixXd Ca  = X * sa.eigenvectors();
-        const Eigen::VectorXd epsa = sa.eigenvalues();
+
+        // Subtract level shift from virtual eigenvalues to report physical energies
+        Eigen::VectorXd epsa = sa.eigenvalues();
+        if (shift_active)
+            epsa.tail(nbasis - n_alpha).array() -= level_shift;
 
         // ── Diagonalize beta ──────────────────────────────────────────────────
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sb(X.transpose() * Fb_diag * X);
         if (sb.info() != Eigen::Success)
             return std::unexpected(std::format("Beta Fock diagonalization failed at iter {}", iter));
         const Eigen::MatrixXd Cb  = X * sb.eigenvectors();
-        const Eigen::VectorXd epsb = sb.eigenvalues();
+
+        Eigen::VectorXd epsb = sb.eigenvalues();
+        if (shift_active)
+            epsb.tail(nbasis - n_beta).array() -= level_shift;
+
+        // Save orthonormal eigenvectors for next iteration's virtual projector
+        Ca_orth_prev = sa.eigenvectors();
+        Cb_orth_prev = sb.eigenvectors();
 
         // ── New spin densities ────────────────────────────────────────────────
         const Eigen::MatrixXd Pa_new = Ca.leftCols(n_alpha) * Ca.leftCols(n_alpha).transpose();
