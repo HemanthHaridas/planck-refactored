@@ -346,6 +346,55 @@ static void assign_mo_symmetry_linear(HartreeFock::Calculator& calc)
     }
 }
 
+// ── Fix B1/B2 convention to match standard chemistry (σv = xz plane) ─────────
+//
+// libmsym labels B1 as the irrep symmetric under whichever σv plane it
+// encounters first (typically the molecular plane).  The standard chemistry
+// convention always uses the xz plane as σv, so B1 is symmetric under xz and
+// B2 is symmetric under yz.  When the two conventions disagree we detect it by
+// checking: if libmsym's B2 has character +1 under the xz reflection (normal
+// ≈ y-hat), B1 and B2 are swapped → rename them in the label list.
+static void fix_b1b2_convention(const msym_character_table_t* ct,
+                                 std::vector<std::string>&     labels)
+{
+    const int    nc    = ct->d;
+    const double* table = static_cast<const double*>(ct->table);
+
+    // Find B1 and B2 irrep row indices (exact-name match for C2v labels).
+    int b1_idx = -1, b2_idx = -1;
+    for (int g = 0; g < nc; ++g)
+    {
+        const std::string name = ct->s[g].name;
+        if (name == "B1") b1_idx = g;
+        if (name == "B2") b2_idx = g;
+    }
+    if (b1_idx < 0 || b2_idx < 0) return;   // group has no separate B1/B2
+
+    // Find the conjugacy class whose representative is a reflection in the xz
+    // plane (normal ≈ ±y-hat).
+    for (int c = 0; c < nc; ++c)
+    {
+        const msym_symmetry_operation_t* sop = ct->sops[c];
+        if (static_cast<int>(sop->type) != 3) continue;   // not a reflection
+
+        Eigen::Vector3d n(sop->v[0], sop->v[1], sop->v[2]);
+        n.normalize();
+        if (std::abs(std::abs(n[1]) - 1.0) > 0.1) continue;   // not y-hat
+
+        // This is the xz-plane reflection.  Standard convention: B1 should be
+        // +1 here.  If libmsym's B2 is +1 → they are swapped → correct.
+        if (table[b2_idx * nc + c] > 0.5)
+        {
+            for (auto& lbl : labels)
+            {
+                if      (lbl == "B1") lbl = "B2";
+                else if (lbl == "B2") lbl = "B1";
+            }
+        }
+        break;
+    }
+}
+
 // ── Assign irreps to MO columns using the character table ────────────────────
 static void assign_for_channel(
     const Eigen::MatrixXd&        C,          // nbasis × nmo
@@ -463,6 +512,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator& calculat
         calculator._overlap,
         SD, ct,
         calculator._info._scf.alpha.mo_symmetry);
+    fix_b1b2_convention(ct, calculator._info._scf.alpha.mo_symmetry);
 
     if (calculator._info._scf.is_uhf &&
         calculator._info._scf.beta.mo_coefficients.cols() > 0)
@@ -472,5 +522,6 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator& calculat
             calculator._overlap,
             SD, ct,
             calculator._info._scf.beta.mo_symmetry);
+        fix_b1b2_convention(ct, calculator._info._scf.beta.mo_symmetry);
     }
 }
