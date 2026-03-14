@@ -80,8 +80,6 @@ namespace HartreeFock
     enum class IntegralMethod
     {
         ObaraSaika,        // Obara-Saika recursion (default)
-        McMurchieDavidson, // McMurchie-Davidson (Hermite)
-        Huzinaga           // Huzinaga method
     };
 
     enum class Verbosity
@@ -442,6 +440,7 @@ namespace HartreeFock
         Eigen::MatrixXd fock;
         Eigen::VectorXd mo_energies;
         Eigen::MatrixXd mo_coefficients;
+        std::vector<std::string> mo_symmetry;   // irrep labels (empty when symmetry is off)
     };
 
     struct DataSCF

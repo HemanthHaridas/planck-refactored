@@ -186,9 +186,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
             HartreeFock::Logger::blank();
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, std::format("SCF Converged after {} iterations", iter));
             HartreeFock::Logger::blank();
-            HartreeFock::Logger::mo_header();
-            HartreeFock::Logger::mo_energies(calculator._info._scf.alpha.mo_energies, n_electrons);
-            HartreeFock::Logger::blank();
             return {};
         }
     }
@@ -445,16 +442,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
 
             _log_spin_contamination(Ca, Cb, S, n_alpha, n_beta,
                                     calculator._molecule.multiplicity);
-            HartreeFock::Logger::blank();
-
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Alpha MOs :", "");
-            HartreeFock::Logger::mo_header();
-            HartreeFock::Logger::mo_energies_uhf(epsa, static_cast<std::size_t>(n_alpha));
-            HartreeFock::Logger::blank();
-
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Beta MOs :", "");
-            HartreeFock::Logger::mo_header();
-            HartreeFock::Logger::mo_energies_uhf(epsb, static_cast<std::size_t>(n_beta));
             HartreeFock::Logger::blank();
 
             return {};

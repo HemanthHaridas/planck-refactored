@@ -111,18 +111,22 @@ namespace HartreeFock
                       << "\n";
         }
     
-        inline void mo_header()
+        inline void mo_header(bool with_symmetry = false)
         {
             std::lock_guard<std::mutex> lock(log_mutex);
-            constexpr int W = 31;   // total width of the table
+            const int W = with_symmetry ? 43 : 31;
             std::cout << std::string(W, '-') << "\n"
-                      << std::setw(6)  << std::right << "MO"
-                      << std::setw(25) << std::right << "Energy (Eh)"
+                      << std::setw(6)  << std::right << "MO";
+            if (with_symmetry)
+                std::cout << std::setw(12) << std::right << "Symmetry";
+            std::cout << std::setw(25) << std::right << "Energy (Eh)"
                       << "\n"
                       << std::string(W, '-') << "\n";
         }
 
-        inline void mo_energies(const Eigen::VectorXd& mo_energies, const std::size_t n_electrons)
+        inline void mo_energies(const Eigen::VectorXd& mo_energies,
+                                 const std::size_t n_electrons,
+                                 const std::vector<std::string>& symm = {})
         {
             std::lock_guard<std::mutex> lock(log_mutex);
 
@@ -136,14 +140,18 @@ namespace HartreeFock
                 if (i == homo) label = "  <-- HOMO";
                 if (i == lumo) label = "  <-- LUMO";
 
-                std::cout << std::setw(6)  << std::right << (i + 1)
-                          << std::setw(25) << std::right << mo_energies(i)
+                std::cout << std::setw(6)  << std::right << (i + 1);
+                if (!symm.empty() && i < symm.size())
+                    std::cout << std::setw(12) << std::right << symm[i];
+                std::cout << std::setw(25) << std::right << mo_energies(i)
                           << label
                           << "\n";
             }
         }
 
-        inline void mo_energies_uhf(const Eigen::VectorXd& eps, const std::size_t n_occ)
+        inline void mo_energies_uhf(const Eigen::VectorXd& eps,
+                                     const std::size_t n_occ,
+                                     const std::vector<std::string>& symm = {})
         {
             std::lock_guard<std::mutex> lock(log_mutex);
             const std::size_t homo = (n_occ > 0) ? n_occ - 1 : 0;
@@ -153,8 +161,10 @@ namespace HartreeFock
                 std::string label = "";
                 if (i == homo && n_occ > 0) label = "  <-- HOMO";
                 if (i == lumo)              label = "  <-- LUMO";
-                std::cout << std::setw(6)  << std::right << (i + 1)
-                          << std::setw(25) << std::right << eps(i)
+                std::cout << std::setw(6)  << std::right << (i + 1);
+                if (!symm.empty() && i < symm.size())
+                    std::cout << std::setw(12) << std::right << symm[i];
+                std::cout << std::setw(25) << std::right << eps(i)
                           << label << "\n";
             }
         }
@@ -248,10 +258,6 @@ const inline std::string map_enum<HartreeFock::IntegralMethod>(HartreeFock::Inte
     {
     case HartreeFock::IntegralMethod::ObaraSaika:
         return "Obara-Saika";
-    case HartreeFock::IntegralMethod::McMurchieDavidson:
-        return "McMurchie-Davidson";
-    case HartreeFock::IntegralMethod::Huzinaga:
-        return "Huzinaga";
     }
     return "Unknown";
 }

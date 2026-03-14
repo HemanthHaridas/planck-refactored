@@ -13,6 +13,7 @@
 #include "io/checkpoint.h"
 #include "io/logging.h"
 #include "symmetry/symmetry.h"
+#include "symmetry/mo_symmetry.h"
 #include "basis/basis.h"
 #include "integrals/shellpair.h"
 #include "integrals/base.h"
@@ -337,6 +338,61 @@ int main(int argc, const char* argv[])
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
             return EXIT_FAILURE;
+        }
+    }
+
+    // ── MO table (with optional symmetry labels) ──────────────────────────────
+    if (calculator._info._is_converged)
+    {
+        // Assign irrep labels when molecule has non-trivial symmetry
+        if (calculator._molecule._symmetry)
+        {
+            try
+            {
+                HartreeFock::Symmetry::assign_mo_symmetry(calculator);
+            }
+            catch (const std::exception& e)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                    "MO Symmetry :", std::format("Skipped: {}", e.what()));
+            }
+        }
+
+        const bool have_symm = !calculator._info._scf.alpha.mo_symmetry.empty();
+        int n_elec = 0;
+        for (auto z : calculator._molecule.atomic_numbers) n_elec += z;
+        n_elec -= calculator._molecule.charge;
+
+        if (calculator._scf._scf == HartreeFock::SCFType::RHF)
+        {
+            HartreeFock::Logger::mo_header(have_symm);
+            HartreeFock::Logger::mo_energies(
+                calculator._info._scf.alpha.mo_energies,
+                static_cast<std::size_t>(n_elec),
+                calculator._info._scf.alpha.mo_symmetry);
+            HartreeFock::Logger::blank();
+        }
+        else
+        {
+            const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+            const std::size_t n_alpha = static_cast<std::size_t>((n_elec + n_unpaired) / 2);
+            const std::size_t n_beta  = static_cast<std::size_t>((n_elec - n_unpaired) / 2);
+
+            const bool have_symm_b = !calculator._info._scf.beta.mo_symmetry.empty();
+
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Alpha MOs :", "");
+            HartreeFock::Logger::mo_header(have_symm);
+            HartreeFock::Logger::mo_energies_uhf(
+                calculator._info._scf.alpha.mo_energies, n_alpha,
+                calculator._info._scf.alpha.mo_symmetry);
+            HartreeFock::Logger::blank();
+
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Beta MOs :", "");
+            HartreeFock::Logger::mo_header(have_symm_b);
+            HartreeFock::Logger::mo_energies_uhf(
+                calculator._info._scf.beta.mo_energies, n_beta,
+                calculator._info._scf.beta.mo_symmetry);
+            HartreeFock::Logger::blank();
         }
     }
 

@@ -1,5 +1,5 @@
 %begin_control
-    basis       cc-pvdz-unc
+    basis       sto-3g
     calculation energy
     verbosity   normal
     basis_type  cartesian
@@ -11,7 +11,7 @@
     use_diis        .true.
     diis_dim        8
     engine          os
-    guess           read
+    guess           hcore
     level_shift     0.3
     diis_restart    2.0
     save_checkpoint .true.

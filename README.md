@@ -10,6 +10,8 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 - **DIIS** — Pulay extrapolation with optional automatic subspace restart
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
+- **MO symmetry** — irreducible representation labels (A1, B1, E1, …) assigned to each converged orbital via character-table projection
+- **Post-HF** — RMP2 and UMP2 correlation energy corrections
 - **Checkpoint system** — binary `.hfchk` files; same-basis restart (skips 1e integrals) and cross-basis density projection (Löwdin SVD)
 - **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*
 
@@ -126,8 +128,8 @@ SCF procedure and convergence settings.
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
 | `scf_type` | enum | `rhf`, `uhf` | `rhf` | Wavefunction type |
-| `engine` | enum | `os` / `obara-saika`, `tho` / `huzinaga`, `md` / `hermite` | `os` | Integral engine. Use `os` for production. |
-| `correlation` | enum | `rmp2`, `ump2`, `casscf`, `rasscf` | none | Post-HF correction (stubs: only parsing is implemented) |
+| `engine` | enum | `os` / `obara-saika` | `os` | Integral engine (Obara-Saika recursive algorithm) |
+| `correlation` | enum | `rmp2`, `ump2` | none | Post-HF correlation energy correction |
 | `use_diis` | bool | `.true.`, `.false.` | `.true.` | Enable DIIS convergence acceleration |
 | `diis_dim` | int | ≥ 2 | `8` | Maximum DIIS subspace size |
 | `diis_restart` | float | ≥ 0 | `2.0` | Clear the DIIS subspace when the Pulay error grows by more than this factor relative to the previous iteration. Set to `0` to disable. |
@@ -307,9 +309,9 @@ The program prints a structured log to standard output. Key sections:
 - **1e Integrals** — overlap, kinetic, nuclear attraction
 - **2e Integrals** — ERI tensor size and build status (conventional mode only)
 - **SCF Iterations** — energy, ΔE, RMS(ΔP), Max(ΔP), DIIS error, wall time per iteration
-- **MO Energies** — orbital energies in Hartree with HOMO/LUMO labels
+- **MO Energies** — orbital energies in Hartree with HOMO/LUMO labels and irrep labels when symmetry is enabled
 - **⟨S²⟩ / ⟨S⟩** — spin contamination diagnostics (UHF only)
-- **Converged Energy** — total energy in Hartree, eV, and kcal/mol
+- **Converged Energy** — total energy in Hartree, eV, and kcal/mol; MP2 correlation and corrected total if post-HF enabled
 - **Wall Time** — total elapsed time
 
 ---

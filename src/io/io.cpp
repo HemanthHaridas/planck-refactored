@@ -301,14 +301,8 @@ namespace HartreeFock::IO
     {
         static const std::unordered_map<std::string, HartreeFock::IntegralMethod> _table =
         {
-            // All possible combinations
-            {"hermite",     HartreeFock::IntegralMethod::McMurchieDavidson},
-            {"huzinaga",    HartreeFock::IntegralMethod::Huzinaga},
             {"obara-saika", HartreeFock::IntegralMethod::ObaraSaika},
-            
-            {"md",  HartreeFock::IntegralMethod::McMurchieDavidson},
-            {"tho", HartreeFock::IntegralMethod::Huzinaga},
-            {"os",  HartreeFock::IntegralMethod::ObaraSaika},
+            {"os",          HartreeFock::IntegralMethod::ObaraSaika},
         };
         
         auto _value = toLower(value);   // First convert to lowercase

@@ -68,11 +68,14 @@ Iter  Energy              DeltaE         RMS(D)      ...
 ...
 [INF]  SCF Converged after 18 iterations
 
-    MO       Energy (Eh)
-     1          -20.252
-     ...
-     5           -0.393  <-- HOMO
-     6            0.582  <-- LUMO
+    MO       Symmetry      Energy (Eh)
+     1        A1              -20.252
+     2        A1               -1.257
+     3        B1               -0.594
+     4        A1               -0.460
+     5        B2               -0.393  <-- HOMO
+     6        A1                0.582  <-- LUMO
+     7        B1                0.693
 
   Total Energy    -74.9659012173    -2039.190    -47012.6
 ```
@@ -203,7 +206,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 %begin_scf
     scf_type       rhf | uhf
     scf_mode       conventional | direct | auto
-    engine         os | tho | md
+    engine         os
     guess          hcore | read
     save_checkpoint .true. | .false.
     use_diis       .true. | .false.
@@ -215,7 +218,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
     tol_density    1e-10
     tol_eri        1e-10
     threshold      100                        # auto-mode nbasis cutoff
-    correlation    rmp2 | ump2 | casscf | rasscf
+    correlation    rmp2 | ump2
 %end_scf
 
 %begin_geom
