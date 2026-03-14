@@ -143,7 +143,7 @@ namespace HartreeFock
                 std::cout << std::setw(6)  << std::right << (i + 1);
                 if (!symm.empty() && i < symm.size())
                     std::cout << std::setw(12) << std::right << symm[i];
-                std::cout << std::setw(25) << std::right << mo_energies(i)
+                std::cout << std::setw(25) << std::setprecision(6) << std::right << mo_energies(i)
                           << label
                           << "\n";
             }
@@ -164,7 +164,7 @@ namespace HartreeFock
                 std::cout << std::setw(6)  << std::right << (i + 1);
                 if (!symm.empty() && i < symm.size())
                     std::cout << std::setw(12) << std::right << symm[i];
-                std::cout << std::setw(25) << std::right << eps(i)
+                std::cout << std::setw(25) << std::setprecision(6) << std::right << eps(i)
                           << label << "\n";
             }
         }

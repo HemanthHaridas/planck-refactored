@@ -6,6 +6,8 @@
 #include <numeric>
 #include <cmath>
 
+#include <Eigen/Geometry>
+
 #include "io.h"
 #include "lookup/elements.h"
 
@@ -702,7 +704,7 @@ namespace HartreeFock::IO
         // coords
         if (auto it = _sections.find("coords"); it != _sections.end())
         {
-            if (auto res = _parse_coords(it->second, calculator._molecule); !res)
+            if (auto res = _parse_coords(it->second, calculator._molecule, calculator._geometry._type); !res)
                 return std::unexpected(res.error());
         }
         else

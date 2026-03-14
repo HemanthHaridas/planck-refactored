@@ -9,6 +9,7 @@
 #include "mo_symmetry.h"
 #include "wrapper.h"
 #include "external/libmsym/install/include/libmsym/msym.h"
+#include "io/logging.h"
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -489,6 +490,35 @@ static Eigen::MatrixXd cart_to_sph_block(int L)
         std::to_string(L) + " (max supported: L=2)");
 }
 
+// ── Does a point group have only 1D real irreps? ─────────────────────────────
+//
+// Groups with all-1D irreps in the real character table (no E, T, … types):
+//   Ci, Cs             — always
+//   Cn, Cnh, Cnv,      — only for n ≤ 2
+//   Dn, Dnh, Dnd, Sn   — only for n ≤ 2
+//
+// Note: S6, C3, C3v, … are Abelian groups but have 2D real irreps ("E").
+// We require all-1D so every MO gets a unique, unambiguous irrep label.
+static bool is_all_1d_irreps(msym_point_group_type_t t, int n)
+{
+    switch (static_cast<int>(t))
+    {
+        case 2:  // Ci  — always 1D
+        case 3:  // Cs  — always 1D
+            return true;
+        case 4:  // Cn
+        case 5:  // Cnh
+        case 6:  // Cnv
+        case 7:  // Dn
+        case 8:  // Dnh
+        case 9:  // Dnd
+        case 10: // Sn
+            return n <= 2;
+        default:
+            return false;
+    }
+}
+
 } // anonymous namespace
 
 // ─── Public entry point ───────────────────────────────────────────────────────
@@ -527,6 +557,60 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator& calculat
     // Re-detect symmetry (do NOT align axes — keep same frame as basis centers)
     if (MSYM_SUCCESS != msymFindSymmetry(ctx.get()))
         throw std::runtime_error("assign_mo_symmetry: msymFindSymmetry failed");
+
+    // ── Select largest Abelian subgroup if the full group is non-Abelian ─────
+    //
+    // Standard quantum chemistry uses Abelian groups so every MO gets a unique
+    // 1D irrep label.  For non-Abelian groups (D3d, Td, Oh, …) we find and
+    // activate the largest Abelian subgroup before registering basis functions.
+    {
+        msym_point_group_type_t pg_type;
+        int pg_n = 0;
+        if (MSYM_SUCCESS != msymGetPointGroupType(ctx.get(), &pg_type, &pg_n))
+            throw std::runtime_error("assign_mo_symmetry: msymGetPointGroupType failed");
+
+        if (!is_all_1d_irreps(pg_type, pg_n))
+        {
+            int nsg = 0;
+            const msym_subgroup_t* sgs = nullptr;
+            if (MSYM_SUCCESS != msymGetSubgroups(ctx.get(), &nsg, &sgs))
+                throw std::runtime_error("assign_mo_symmetry: msymGetSubgroups failed");
+
+            const msym_subgroup_t* best = nullptr;
+            int best_order = 0;
+            for (int k = 0; k < nsg; ++k)
+            {
+                if (is_all_1d_irreps(sgs[k].type, sgs[k].n) && sgs[k].order > best_order)
+                {
+                    best_order = sgs[k].order;
+                    best       = &sgs[k];
+                }
+            }
+
+            if (best != nullptr)
+            {
+                // Capture name BEFORE SelectSubgroup may invalidate the pointer
+                const std::string sg_name = best->name;
+
+                if (MSYM_SUCCESS != msymSelectSubgroup(ctx.get(), best))
+                    throw std::runtime_error("assign_mo_symmetry: msymSelectSubgroup failed");
+
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "MO Symmetry :",
+                    "Using Abelian subgroup " + sg_name +
+                    " of " + calculator._molecule._point_group + " for MO labels");
+            }
+        }
+        else
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "MO Symmetry :",
+                "Using point group " + calculator._molecule._point_group +
+                " for MO labels");
+        }
+    }
 
     // Get the internal element array (needed to set element pointers on BFs)
     int nelems = 0;
