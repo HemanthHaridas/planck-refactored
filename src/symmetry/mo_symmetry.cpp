@@ -1,4 +1,5 @@
 #include <cmath>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -210,6 +211,141 @@ static Eigen::MatrixXd build_ao_transform(const Eigen::Matrix3d& M,
     return D;
 }
 
+// ── Identify Λ and assign irrep labels for a linear molecule ─────────────────
+//
+// After msymAlignAxes the molecular axis is z.  A rotation R_θ about z gives:
+//
+//   Λ | χ(π/2) | χ(π/3)
+//   ──┼────────┼───────
+//   0 |  1.0   |  1.0    → Σ
+//   1 |  0.0   |  0.5    → Π
+//   2 | -1.0   | -0.5    → Δ
+//   3 |  0.0   | -1.0    → Φ
+//   4 |  1.0   | -0.5    → Γ
+//
+// For Σ: sign of χ_i(σv) distinguishes + (symmetric) from − (antisymmetric).
+// For D∞h: sign of χ_i(i) distinguishes g from u.
+static void assign_for_linear(
+    const Eigen::MatrixXd&     C,
+    const Eigen::MatrixXd&     SD_pi2,   // S · D_{R_{π/2}}
+    const Eigen::MatrixXd&     SD_pi3,   // S · D_{R_{π/3}}
+    const Eigen::MatrixXd&     SD_sv,    // S · D_{σv(xz)}
+    const Eigen::MatrixXd*     SD_inv,   // S · D_{i}  (nullptr for C∞v)
+    std::vector<std::string>&  labels)
+{
+    struct LamMatch { double c1, c2; int lam; };
+    static const LamMatch LAMBDA_TABLE[] = {
+        { 1.0,  1.0, 0 },   // Σ
+        { 0.0,  0.5, 1 },   // Π
+        {-1.0, -0.5, 2 },   // Δ
+        { 0.0, -1.0, 3 },   // Φ
+        { 1.0, -0.5, 4 },   // Γ
+    };
+
+    const int nb = static_cast<int>(C.cols());
+    labels.resize(nb);
+
+    for (int i = 0; i < nb; ++i)
+    {
+        const Eigen::VectorXd ci = C.col(i);
+
+        const double chi_pi2 = ci.dot(SD_pi2 * ci);
+        const double chi_pi3 = ci.dot(SD_pi3 * ci);
+
+        // Nearest-neighbour match in (χ(π/2), χ(π/3)) space
+        int    best_lam  = 0;
+        double best_dist = 1e10;
+        for (const auto& m : LAMBDA_TABLE)
+        {
+            const double d = (chi_pi2 - m.c1)*(chi_pi2 - m.c1)
+                           + (chi_pi3 - m.c2)*(chi_pi3 - m.c2);
+            if (d < best_dist) { best_dist = d; best_lam = m.lam; }
+        }
+
+        std::string label;
+        if (best_lam == 0)
+        {
+            const double chi_sv = ci.dot(SD_sv * ci);
+            label = (chi_sv >= 0.0) ? "SIG+" : "SIG-";
+        }
+        else if (best_lam == 1) label = "PI";
+        else if (best_lam == 2) label = "DEL";
+        else if (best_lam == 3) label = "PHI";
+        else                    label = "LAM" + std::to_string(best_lam);
+
+        if (SD_inv != nullptr)
+        {
+            const double chi_inv = ci.dot((*SD_inv) * ci);
+            label += (chi_inv >= 0.0) ? "g" : "u";
+        }
+
+        labels[i] = label;
+    }
+}
+
+// ── Full linear-molecule MO symmetry driver ───────────────────────────────────
+//
+// Builds the five operator matrices (two rotations, σv, optionally i) and
+// calls assign_for_linear for alpha (and beta for UHF).
+static void assign_mo_symmetry_linear(HartreeFock::Calculator& calc)
+{
+    const HartreeFock::Molecule& mol = calc._molecule;
+    const HartreeFock::Basis&    bs  = calc._shells;
+    const Eigen::MatrixXd&       S   = calc._overlap;
+
+    // D∞h contains both 'D' and 'inf'; C∞v contains only 'C'.
+    const bool is_Dinfh = (mol._point_group.find('D') != std::string::npos);
+
+    // After msymAlignAxes the molecular axis is z.
+    // All atoms lie on (0,0,z_a) → rotation about z leaves each atom fixed,
+    // σv through xz-plane leaves each atom fixed,
+    // inversion maps (0,0,z_a) → (0,0,−z_a) (finds the paired image atom).
+
+    auto build_SD = [&](const Eigen::Matrix3d& M) -> Eigen::MatrixXd {
+        const std::vector<int> perm = build_permutation(M, mol);
+        const Eigen::MatrixXd  D    = build_ao_transform(M, perm, bs);
+        return S * D;
+    };
+
+    // Rotation about z by angle θ
+    auto rot_z = [](double theta) -> Eigen::Matrix3d {
+        const double c = std::cos(theta), s = std::sin(theta);
+        Eigen::Matrix3d R;
+        R << c, -s, 0.0,
+             s,  c, 0.0,
+           0.0, 0.0, 1.0;
+        return R;
+    };
+
+    const Eigen::MatrixXd SD_pi2 = build_SD(rot_z(M_PI / 2.0));
+    const Eigen::MatrixXd SD_pi3 = build_SD(rot_z(M_PI / 3.0));
+
+    // σv through xz-plane: flip y → diag(1, -1, 1)
+    Eigen::Matrix3d R_sv = Eigen::Matrix3d::Identity();
+    R_sv(1, 1) = -1.0;
+    const Eigen::MatrixXd SD_sv = build_SD(R_sv);
+
+    // Inversion for D∞h
+    std::unique_ptr<Eigen::MatrixXd> SD_inv_ptr;
+    if (is_Dinfh)
+        SD_inv_ptr = std::make_unique<Eigen::MatrixXd>(
+            build_SD(-Eigen::Matrix3d::Identity()));
+
+    auto classify = [&](const Eigen::MatrixXd& C, std::vector<std::string>& lbl) {
+        assign_for_linear(C, SD_pi2, SD_pi3, SD_sv, SD_inv_ptr.get(), lbl);
+    };
+
+    classify(calc._info._scf.alpha.mo_coefficients,
+             calc._info._scf.alpha.mo_symmetry);
+
+    if (calc._info._scf.is_uhf &&
+        calc._info._scf.beta.mo_coefficients.cols() > 0)
+    {
+        classify(calc._info._scf.beta.mo_coefficients,
+                 calc._info._scf.beta.mo_symmetry);
+    }
+}
+
 // ── Assign irreps to MO columns using the character table ────────────────────
 static void assign_for_channel(
     const Eigen::MatrixXd&        C,          // nbasis × nmo
@@ -271,9 +407,13 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator& calculat
     if (!calculator._molecule._symmetry)   return;
     if (!calculator._info._is_converged)   return;
 
-    // Skip linear molecules (C∞v / D∞h — infinite number of irreps)
+    // Linear molecules (C∞v / D∞h) use a dedicated handler.
     const std::string& pg = calculator._molecule._point_group;
-    if (pg.find("inf") != std::string::npos) return;
+    if (pg.find("inf") != std::string::npos)
+    {
+        assign_mo_symmetry_linear(calculator);
+        return;
+    }
 
     // ── Rebuild msym context on the symmetrized coordinates ──────────────────
     // molecule.standard is in Angstrom (symmetrized, pre-alignment frame).
