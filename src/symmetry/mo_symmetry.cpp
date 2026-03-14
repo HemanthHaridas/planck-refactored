@@ -1,4 +1,7 @@
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -346,6 +349,32 @@ static void assign_mo_symmetry_linear(HartreeFock::Calculator& calc)
     }
 }
 
+// ── Strip redundant E-type subscript "1" when no higher E exists ─────────────
+//
+// libmsym names the doubly-degenerate irrep "E1" (and "E1g"/"E1u") for groups
+// like D3d, C3v, D3h, where there is only one E type.  The standard Mulliken
+// convention omits the subscript number in that case ("Eg", "Eu", "E").
+// Groups like D6h, D4h have both E1 and E2, so the digit must be kept.
+//
+// Rule: if the character table contains no irrep whose name starts with "E"
+// followed by a digit ≥ 2, strip the leading "1" from every "E1..." label.
+static void normalize_e_labels(const msym_character_table_t* ct,
+                                std::vector<std::string>&     labels)
+{
+    const int nc = ct->d;
+    for (int g = 0; g < nc; ++g)
+    {
+        const std::string name = ct->s[g].name;
+        // "E2...", "E3..." → multiple E types present → keep numbering
+        if (name.size() >= 2 && name[0] == 'E' && name[1] >= '2' && name[1] <= '9')
+            return;
+    }
+    // Only "E1" (or plain "E") → strip the "1" subscript
+    for (auto& lbl : labels)
+        if (lbl.size() >= 2 && lbl[0] == 'E' && lbl[1] == '1')
+            lbl = "E" + lbl.substr(2);
+}
+
 // ── Fix B1/B2 convention to match standard chemistry (σv = xz plane) ─────────
 //
 // libmsym labels B1 as the irrep symmetric under whichever σv plane it
@@ -395,56 +424,69 @@ static void fix_b1b2_convention(const msym_character_table_t* ct,
     }
 }
 
-// ── Assign irreps to MO columns using the character table ────────────────────
-static void assign_for_channel(
-    const Eigen::MatrixXd&        C,          // nbasis × nmo
-    const Eigen::MatrixXd&        S,          // overlap matrix
-    const std::vector<Eigen::MatrixXd>& SD,   // S · D_Rc for each class c
-    const msym_character_table_t* ct,
-    std::vector<std::string>&     labels)
+// ── Per-shell Cartesian→Spherical pseudoinverse T⁺  [n_sph × n_cart] ─────────
+//
+// Cartesian order follows _cartesian_shell_order(L): lx descending, then ly.
+// Spherical order: m = −L, −L+1, …, 0, …, +L  (libmsym convention).
+//
+// Libmsym convention (from msym.h comment):
+//   pz = m=0,  px = m=+1,  py = m=-1
+//   dz2 = m=0, dxz = m=+1, dyz = m=-1, dx2y2 = m=+2, dxy = m=-2
+//
+// T [n_cart × n_sph]:  column m = coefficients of φ_sph_m in the
+//   component-norm-weighted Cartesian basis.
+// T⁺ = (TᵀT)⁻¹ Tᵀ  [n_sph × n_cart]:  maps Cartesian AO coefficients
+//   to spherical AO coefficients (discards the r²-contamination subspace for L≥2).
+static Eigen::MatrixXd cart_to_sph_block(int L)
 {
-    const int nb  = static_cast<int>(C.cols());
-    const int nc  = ct->d;   // number of classes = number of irreps
+    if (L == 0)
+        return Eigen::MatrixXd::Identity(1, 1);
 
-    // Group order h = Σ_c classc[c]
-    int h = 0;
-    for (int c = 0; c < nc; ++c) h += ct->classc[c];
-
-    const double* table = static_cast<const double*>(ct->table);
-
-    labels.resize(nb);
-
-    for (int i = 0; i < nb; ++i)
+    if (L == 1)
     {
-        const Eigen::VectorXd ci = C.col(i);
-
-        // Character of MO i under representative op of class c:
-        //   χ_i(R_c) = cᵢᵀ (S D_{R_c}) cᵢ
-        std::vector<double> chars(nc);
-        for (int c = 0; c < nc; ++c)
-            chars[c] = ci.dot(SD[c] * ci);
-
-        // Projection weight for irrep Γ:
-        //   w_Γ = (dΓ / h) Σ_c n_c χ^Γ_c χ_i(R_c)
-        int    best_irrep = 0;
-        double best_w    = -1.0;
-
-        for (int gamma = 0; gamma < nc; ++gamma)
-        {
-            double w = 0.0;
-            for (int c = 0; c < nc; ++c)
-                w += ct->classc[c] * table[gamma * nc + c] * chars[c];
-            w *= ct->s[gamma].d / static_cast<double>(h);
-            w = std::abs(w);
-
-            if (w > best_w)
-            {
-                best_w    = w;
-                best_irrep = gamma;
-            }
-        }
-        labels[i] = ct->s[best_irrep].name;
+        // Cartesian order: px(1,0,0)=col0, py(0,1,0)=col1, pz(0,0,1)=col2
+        // Spherical order: m=-1=py, m=0=pz, m=+1=px
+        // T is a 3×3 permutation → T⁺ = Tᵀ
+        Eigen::MatrixXd T = Eigen::MatrixXd::Zero(3, 3);
+        T(0, 1) = 1.0;   // m=-1 ← py
+        T(1, 2) = 1.0;   // m= 0 ← pz
+        T(2, 0) = 1.0;   // m=+1 ← px
+        return T;
     }
+
+    if (L == 2)
+    {
+        // Cartesian order: xx=0, xy=1, xz=2, yy=3, yz=4, zz=5
+        // Spherical order: m=-2=dxy, m=-1=dyz, m=0=dz2, m=+1=dxz, m=+2=dx2y2
+        //
+        // T (6×5):
+        //   col m=-2: T[xy,m=-2] = 1
+        //   col m=-1: T[yz,m=-1] = 1
+        //   col m= 0: T[xx,m=0]=-1/2, T[yy,m=0]=-1/2, T[zz,m=0]=1
+        //   col m=+1: T[xz,m=+1] = 1
+        //   col m=+2: T[xx,m=+2]=√3/2, T[yy,m=+2]=-√3/2
+        //
+        // TᵀT = diag(1, 1, 3/2, 1, 3/2)  →  (TᵀT)⁻¹ = diag(1,1,2/3,1,2/3)
+        // T⁺ (5×6) = (TᵀT)⁻¹ Tᵀ:
+        //   row m=-2:  [0,    1,  0,    0,    0,   0   ]
+        //   row m=-1:  [0,    0,  0,    0,    1,   0   ]
+        //   row m= 0:  [-1/3, 0,  0,   -1/3,  0,  2/3 ]
+        //   row m=+1:  [0,    0,  1,    0,    0,   0   ]
+        //   row m=+2:  [1/√3, 0,  0,  -1/√3,  0,   0  ]
+        const double s3 = std::sqrt(3.0);
+        Eigen::MatrixXd T = Eigen::MatrixXd::Zero(5, 6);
+        //            xx      xy  xz    yy      yz  zz
+        T(0, 1) = 1.0;                                        // m=-2: dxy
+        T(1, 4) = 1.0;                                        // m=-1: dyz
+        T(2, 0) = -1.0/3.0; T(2, 3) = -1.0/3.0; T(2, 5) = 2.0/3.0; // m=0: dz2
+        T(3, 2) = 1.0;                                        // m=+1: dxz
+        T(4, 0) = 1.0/s3;   T(4, 3) = -1.0/s3;              // m=+2: dx2y2
+        return T;
+    }
+
+    throw std::runtime_error(
+        "assign_mo_symmetry: Cartesian→Spherical transform not implemented for L=" +
+        std::to_string(L) + " (max supported: L=2)");
 }
 
 } // anonymous namespace
@@ -486,42 +528,143 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator& calculat
     if (MSYM_SUCCESS != msymFindSymmetry(ctx.get()))
         throw std::runtime_error("assign_mo_symmetry: msymFindSymmetry failed");
 
+    // Get the internal element array (needed to set element pointers on BFs)
+    int nelems = 0;
+    msym_element_t* melems = nullptr;
+    if (MSYM_SUCCESS != msymGetElements(ctx.get(), &nelems, &melems))
+        throw std::runtime_error("assign_mo_symmetry: msymGetElements failed");
+
+    // ── Build Cart→Sph transform T⁺ and libmsym basis function array ─────────
+    //
+    // T⁺ is block-diagonal; each shell s contributes a (2Ls+1) × n_cart_s block.
+    // The libmsym basis functions are ordered shell-by-shell, m = −L … +L.
+    // The 'id' field of each BF stores its index in our ordering, so that after
+    // msymGetBasisFunctions we can map internal → our ordering for wf reindexing.
+
+    const auto& shells      = calculator._shells._shells;
+    const int   n_cart_total = static_cast<int>(calculator._shells.nbasis());
+
+    int n_sph_total = 0;
+    for (const auto& sh : shells)
+        n_sph_total += 2 * static_cast<int>(sh._shell) + 1;
+
+    // Block-diagonal T⁺  [n_sph_total × n_cart_total]
+    Eigen::MatrixXd T_cs = Eigen::MatrixXd::Zero(n_sph_total, n_cart_total);
+
+    std::vector<msym_basis_function_t> bfs(n_sph_total);
+    std::memset(bfs.data(), 0, n_sph_total * sizeof(msym_basis_function_t));
+
+    // Track shell count per (atom, L) to give each contracted shell a unique n
+    std::map<std::pair<int,int>, int> shell_n_counter;
+
+    int sph_row  = 0;
+    int cart_col = 0;
+    int bf_idx   = 0;
+
+    for (std::size_t si = 0; si < shells.size(); ++si)
+    {
+        const auto& sh     = shells[si];
+        const int   L      = static_cast<int>(sh._shell);
+        const int   n_cart = (L + 1) * (L + 2) / 2;
+        const int   n_sph  = 2 * L + 1;
+        const int   atom   = static_cast<int>(sh._atom_index);
+
+        // Unique principal quantum number per (atom, L) — required when the same
+        // atom has multiple contracted shells of the same angular momentum.
+        const int shell_n = ++shell_n_counter[{atom, L}];
+
+        // Place the per-shell T⁺ block
+        T_cs.block(sph_row, cart_col, n_sph, n_cart) = cart_to_sph_block(L);
+
+        // Fill libmsym BFs for this shell (m: −L … +L)
+        for (int m = -L; m <= L; ++m, ++bf_idx)
+        {
+            // type field = 0 = MSYM_BASIS_TYPE_REAL_SPHERICAL_HARMONIC (already zeroed by memset)
+            bfs[bf_idx].id      = reinterpret_cast<void*>(static_cast<std::intptr_t>(bf_idx));
+            bfs[bf_idx].element = &melems[atom];
+            bfs[bf_idx].f.rsh.n = L + shell_n;  // n >= l+1 required by libmsym
+            bfs[bf_idx].f.rsh.l = L;
+            bfs[bf_idx].f.rsh.m = m;
+        }
+
+        sph_row  += n_sph;
+        cart_col += n_cart;
+    }
+
+    // ── Register basis functions ──────────────────────────────────────────────
+    if (MSYM_SUCCESS != msymSetBasisFunctions(ctx.get(), n_sph_total, bfs.data()))
+        throw std::runtime_error("assign_mo_symmetry: msymSetBasisFunctions failed");
+
     // ── Obtain character table ────────────────────────────────────────────────
     const msym_character_table_t* ct = nullptr;
     if (MSYM_SUCCESS != msymGetCharacterTable(ctx.get(), &ct) || ct == nullptr)
         throw std::runtime_error("assign_mo_symmetry: msymGetCharacterTable failed");
+    const int n_species = ct->d;
 
-    const int nc = ct->d;   // number of conjugacy classes (= number of irreps for finite groups)
+    // ── Build reindex map: our_bf_idx → internal_bf_idx ──────────────────────
+    // After msymSetBasisFunctions the context may reorder basis functions
+    // internally.  We tagged each BF with its original index in the 'id' field.
+    int             mbfsl = 0;
+    msym_basis_function_t* mbfs = nullptr;
+    if (MSYM_SUCCESS != msymGetBasisFunctions(ctx.get(), &mbfsl, &mbfs))
+        throw std::runtime_error("assign_mo_symmetry: msymGetBasisFunctions failed");
 
-    // ── For each conjugacy class: build 3×3 matrix, atom permutation, AO transform ──
-    std::vector<Eigen::MatrixXd> SD(nc);
-    for (int c = 0; c < nc; ++c)
+    // to_internal[our_idx] = internal_idx
+    std::vector<int> to_internal(n_sph_total);
+    for (int j = 0; j < mbfsl; ++j)
     {
-        const Eigen::Matrix3d M    = sop_to_matrix(*ct->sops[c]);
-        const std::vector<int> perm = build_permutation(M, calculator._molecule);
-        const Eigen::MatrixXd D     = build_ao_transform(M, perm, calculator._shells);
-        SD[c] = calculator._overlap * D;
+        const int our_idx = static_cast<int>(
+            reinterpret_cast<std::intptr_t>(mbfs[j].id));
+        to_internal[our_idx] = j;
     }
 
-    // ── Assign irreps ─────────────────────────────────────────────────────────
-    const Eigen::MatrixXd& S = calculator._overlap;
-    (void)S;
+    // ── Classify MOs ─────────────────────────────────────────────────────────
+    //
+    // For each MO column c_i (Cartesian AO coefficients):
+    //   1. Transform to spherical basis: d_i = T⁺ c_i
+    //   2. Reindex to internal libmsym ordering
+    //   3. Call msymSymmetrySpeciesComponents → component weights per species
+    //   4. Label = species with largest weight
+    auto classify = [&](const Eigen::MatrixXd& C, std::vector<std::string>& labels)
+    {
+        const int n_mo = static_cast<int>(C.cols());
 
-    assign_for_channel(
-        calculator._info._scf.alpha.mo_coefficients,
-        calculator._overlap,
-        SD, ct,
-        calculator._info._scf.alpha.mo_symmetry);
+        // C_sph[n_sph_total × n_mo]
+        const Eigen::MatrixXd C_sph = T_cs * C;
+
+        labels.resize(n_mo);
+        std::vector<double> wf(mbfsl, 0.0);
+        std::vector<double> comp(n_species, 0.0);
+
+        for (int i = 0; i < n_mo; ++i)
+        {
+            // Reorder coefficients to internal libmsym basis ordering
+            for (int k = 0; k < n_sph_total; ++k)
+                wf[to_internal[k]] = C_sph(k, i);
+
+            if (MSYM_SUCCESS != msymSymmetrySpeciesComponents(
+                    ctx.get(), mbfsl, wf.data(), n_species, comp.data()))
+                throw std::runtime_error(
+                    "assign_mo_symmetry: msymSymmetrySpeciesComponents failed for MO " +
+                    std::to_string(i));
+
+            const int best = static_cast<int>(
+                std::max_element(comp.begin(), comp.end()) - comp.begin());
+            labels[i] = ct->s[best].name;
+        }
+    };
+
+    classify(calculator._info._scf.alpha.mo_coefficients,
+             calculator._info._scf.alpha.mo_symmetry);
+    normalize_e_labels(ct, calculator._info._scf.alpha.mo_symmetry);
     fix_b1b2_convention(ct, calculator._info._scf.alpha.mo_symmetry);
 
     if (calculator._info._scf.is_uhf &&
         calculator._info._scf.beta.mo_coefficients.cols() > 0)
     {
-        assign_for_channel(
-            calculator._info._scf.beta.mo_coefficients,
-            calculator._overlap,
-            SD, ct,
-            calculator._info._scf.beta.mo_symmetry);
+        classify(calculator._info._scf.beta.mo_coefficients,
+                 calculator._info._scf.beta.mo_symmetry);
+        normalize_e_labels(ct, calculator._info._scf.beta.mo_symmetry);
         fix_b1b2_convention(ct, calculator._info._scf.beta.mo_symmetry);
     }
 }

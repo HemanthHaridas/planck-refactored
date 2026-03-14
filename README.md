@@ -10,7 +10,7 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 - **DIIS** — Pulay extrapolation with optional automatic subspace restart
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
-- **MO symmetry** — irreducible representation labels (A1, B1, E1, …) assigned to each converged orbital via character-table projection
+- **MO symmetry** — irreducible representation labels (A1, B2, E, …) assigned to each converged orbital; Cartesian AO coefficients are transformed to the real spherical harmonic basis and decomposed into symmetry species via libmsym's SALC machinery; linear molecules (C∞v / D∞h) use a dedicated character-based handler
 - **Post-HF** — RMP2 and UMP2 correlation energy corrections
 - **Checkpoint system** — binary `.hfchk` files; same-basis restart (skips 1e integrals) and cross-basis density projection (Löwdin SVD)
 - **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*

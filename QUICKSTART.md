@@ -68,14 +68,14 @@ Iter  Energy              DeltaE         RMS(D)      ...
 ...
 [INF]  SCF Converged after 18 iterations
 
-    MO       Symmetry      Energy (Eh)
-     1        A1              -20.252
-     2        A1               -1.257
-     3        B1               -0.594
-     4        A1               -0.460
-     5        B2               -0.393  <-- HOMO
-     6        A1                0.582  <-- LUMO
-     7        B1                0.693
+    MO    Symmetry              Energy (Eh)
+     1          A1                  -20.252
+     2          A1                   -1.258
+     3          B2                   -0.594
+     4          A1                   -0.460
+     5          B1                   -0.393  <-- HOMO
+     6          A1                    0.582  <-- LUMO
+     7          B2                    0.693
 
   Total Energy    -74.9659012173    -2039.190    -47012.6
 ```
