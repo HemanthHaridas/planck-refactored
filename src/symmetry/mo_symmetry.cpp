@@ -485,9 +485,72 @@ static Eigen::MatrixXd cart_to_sph_block(int L)
         return T;
     }
 
+    if (L == 3)
+    {
+        // n_cart=10, n_sph=7
+        // Cartesian: xxx=0 xxy=1 xxz=2 xyy=3 xyz=4 xzz=5 yyy=6 yyz=7 yzz=8 zzz=9
+        // Spherical: m=-3..+3 → cols 0..6
+        Eigen::MatrixXd T = Eigen::MatrixXd::Zero(10, 7);
+        T(1,0)= 3; T(6,0)=-1;                        // m=-3: y(3x²-y²)
+        T(4,1)= 1;                                    // m=-2: xyz
+        T(8,2)= 4; T(1,2)=-1; T(6,2)=-1;            // m=-1: y(4z²-x²-y²)
+        T(9,3)= 2; T(2,3)=-3; T(7,3)=-3;            // m= 0: z(2z²-3x²-3y²)
+        T(5,4)= 4; T(0,4)=-1; T(3,4)=-1;            // m=+1: x(4z²-x²-y²)
+        T(2,5)= 1; T(7,5)=-1;                        // m=+2: z(x²-y²)
+        T(0,6)= 1; T(3,6)=-3;                        // m=+3: x(x²-3y²)
+        return T.completeOrthogonalDecomposition().pseudoInverse();
+    }
+
+    if (L == 4)
+    {
+        // n_cart=15, n_sph=9
+        // Cartesian: x⁴=0 x³y=1 x³z=2 x²y²=3 x²yz=4 x²z²=5 xy³=6 xy²z=7 xyz²=8
+        //            xz³=9 y⁴=10 y³z=11 y²z²=12 yz³=13 z⁴=14
+        // Spherical: m=-4..+4 → cols 0..8
+        Eigen::MatrixXd T = Eigen::MatrixXd::Zero(15, 9);
+        T(1,0)= 1; T(6,0)=-1;                                   // m=-4: xy(x²-y²)
+        T(4,1)= 3; T(11,1)=-1;                                  // m=-3: yz(3x²-y²)
+        T(8,2)= 6; T(1,2)=-1; T(6,2)=-1;                       // m=-2: xy(6z²-x²-y²)
+        T(13,3)=4; T(4,3)=-3; T(11,3)=-3;                      // m=-1: yz(4z²-3x²-3y²)
+        T(0,4)= 3; T(3,4)= 6; T(5,4)=-24;                      // m= 0: 3x⁴+6x²y²-24x²z²
+        T(10,4)=3; T(12,4)=-24; T(14,4)= 8;                    //       +3y⁴-24y²z²+8z⁴
+        T(9,5)= 4; T(2,5)=-3; T(7,5)=-3;                       // m=+1: xz(4z²-3x²-3y²)
+        T(0,6)=-1; T(10,6)=1; T(5,6)= 6; T(12,6)=-6;          // m=+2: (x²-y²)(6z²-x²-y²)
+        T(2,7)= 1; T(7,7)=-3;                                   // m=+3: xz(x²-3y²)
+        T(0,8)= 1; T(3,8)=-6; T(10,8)=1;                       // m=+4: x⁴-6x²y²+y⁴
+        return T.completeOrthogonalDecomposition().pseudoInverse();
+    }
+
+    if (L == 5)
+    {
+        // n_cart=21, n_sph=11
+        // Cartesian: x⁵=0 x⁴y=1 x⁴z=2 x³y²=3 x³yz=4 x³z²=5 x²y³=6 x²y²z=7 x²yz²=8 x²z³=9
+        //            xy⁴=10 xy³z=11 xy²z²=12 xyz³=13 xz⁴=14
+        //            y⁵=15 y⁴z=16 y³z²=17 y²z³=18 yz⁴=19 z⁵=20
+        // Spherical: m=-5..+5 → cols 0..10
+        Eigen::MatrixXd T = Eigen::MatrixXd::Zero(21, 11);
+        T(1,0)= 5; T(6,0)=-10; T(15,0)=1;                      // m=-5: y(5x⁴-10x²y²+y⁴)
+        T(4,1)= 4; T(11,1)=-4;                                  // m=-4: 4xyz(x²-y²)
+        T(8,2)=24; T(1,2)=-3; T(6,2)=-2;                       // m=-3: y(3x²-y²)(8z²-x²-y²)
+        T(17,2)=-8; T(15,2)=1;
+        T(13,3)=2; T(4,3)=-1; T(11,3)=-1;                      // m=-2: xyz(2z²-x²-y²)
+        T(1,4)= 1; T(6,4)= 2; T(15,4)=1;                       // m=-1: y(x⁴+2x²y²+y⁴+8z⁴-12x²z²-12y²z²)
+        T(19,4)=8; T(8,4)=-12; T(17,4)=-12;
+        T(20,5)=8; T(9,5)=-40; T(18,5)=-40;                    // m= 0: z(8z⁴-40x²z²-40y²z²+15x⁴+30x²y²+15y⁴)
+        T(2,5)=15; T(7,5)= 30; T(16,5)=15;
+        T(0,6)= 1; T(3,6)= 2; T(10,6)= 1;                      // m=+1: x(x⁴+2x²y²+y⁴+8z⁴-12x³z²-12xy²z²)
+        T(14,6)=8; T(5,6)=-12; T(12,6)=-12;
+        T(9,7)= 2; T(2,7)=-1; T(16,7)=1; T(18,7)=-2;          // m=+2: z(x²-y²)(2z²-x²-y²)
+        T(0,8)=-1; T(3,8)= 2; T(10,8)=3;                       // m=+3: x(x²-3y²)(8z²-x²-y²)
+        T(5,8)= 8; T(12,8)=-24;
+        T(2,9)= 1; T(7,9)=-6; T(16,9)=1;                       // m=+4: z(x⁴-6x²y²+y⁴)
+        T(0,10)=1; T(3,10)=-10; T(10,10)=5;                    // m=+5: x(x⁴-10x²y²+5y⁴)
+        return T.completeOrthogonalDecomposition().pseudoInverse();
+    }
+
     throw std::runtime_error(
         "assign_mo_symmetry: Cartesian→Spherical transform not implemented for L=" +
-        std::to_string(L) + " (max supported: L=2)");
+        std::to_string(L) + " (max supported: L=5)");
 }
 
 // ── Does a point group have only 1D real irreps? ─────────────────────────────

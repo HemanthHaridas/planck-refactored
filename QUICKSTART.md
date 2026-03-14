@@ -142,7 +142,31 @@ After a converged run, `water.hfchk` is written automatically. Add `guess read` 
 
 ---
 
-## 5. SCF mode
+## 5. Z-matrix input
+
+Coordinates can be given in Z-matrix (internal coordinate) format. Set `coord_type zmatrix` in `%begin_geom`. Bond lengths are in the units from `coord_units`; angles and dihedrals are always in degrees.
+
+```
+%begin_geom
+    coord_type  zmatrix
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O
+H  1  0.9572
+H  1  0.9572  2  104.52
+%end_coords
+```
+
+Each row after the header gives the element symbol followed by reference atom index, bond length, and (for atom 3+) additional reference indices, angle, and dihedral. Atom indices are 1-based. The converted Cartesian coordinates are passed through the rest of the pipeline, so symmetry detection (`use_symm .true.`) works normally.
+
+---
+
+## 6. SCF mode
 
 | Mode | Keyword | When to use |
 |---|---|---|
@@ -169,7 +193,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 
 ---
 
-## 6. Basis sets
+## 7. Basis sets
 
 | Keyword | Description |
 |---|---|
@@ -180,7 +204,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 
 ---
 
-## 7. Convergence tips
+## 8. Convergence tips
 
 | Problem | Fix |
 |---|---|
@@ -189,10 +213,11 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | Slow convergence | Increase `diis_dim` (default 8) |
 | Wrong spin state | Check `multiplicity` in `%begin_coords` |
 | Wrong energy on restart | Delete `.hfchk` and re-run from scratch |
+| MO labels are Ag/Bg/Au/Bu instead of Eg/Eu | Expected — for non-Abelian groups (D3d, Oh, …) the program uses the largest Abelian subgroup (e.g. C2h for D3d). The active group is printed to the log. |
 
 ---
 
-## 8. All input keywords at a glance
+## 9. All input keywords at a glance
 
 ```
 %begin_control
@@ -230,7 +255,14 @@ For large systems set `scf_mode direct` or lower `threshold`:
 %begin_coords
 <natoms>
 <charge>  <multiplicity>
+# Cartesian (coord_type cartesian):
 <symbol>  <x>  <y>  <z>
+...
+# Z-matrix (coord_type zmatrix):
+<symbol>
+<symbol>  <i1>  <r>
+<symbol>  <i1>  <r>  <i2>  <angle>
+<symbol>  <i1>  <r>  <i2>  <angle>  <i3>  <dihedral>
 ...
 %end_coords
 ```

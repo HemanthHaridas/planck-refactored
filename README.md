@@ -10,7 +10,7 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 - **DIIS** — Pulay extrapolation with optional automatic subspace restart
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
-- **MO symmetry** — irreducible representation labels (A1, B2, E, …) assigned to each converged orbital; Cartesian AO coefficients are transformed to the real spherical harmonic basis and decomposed into symmetry species via libmsym's SALC machinery; linear molecules (C∞v / D∞h) use a dedicated character-based handler
+- **MO symmetry** — irreducible representation labels (A1, B2, Ag, Bu, …) assigned to each converged orbital; Cartesian AO coefficients are transformed to the real spherical harmonic basis and decomposed into symmetry species via libmsym's SALC machinery; the Cartesian→spherical block transform covers all shells supported by the integral engine (S through H, L=0–5); for non-Abelian groups (D3d, Td, Oh, …) the largest Abelian subgroup with all one-dimensional irreps is automatically selected (e.g. C2h for D3d) so every MO receives a unique, unambiguous label — the active group or subgroup is printed to the log; linear molecules (C∞v / D∞h) use a dedicated character-based handler
 - **Post-HF** — RMP2 and UMP2 correlation energy corrections
 - **Checkpoint system** — binary `.hfchk` files; same-basis restart (skips 1e integrals) and cross-basis density projection (Löwdin SVD)
 - **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*
@@ -145,19 +145,50 @@ Molecular geometry options.
 
 ### Section: `%begin_coords`
 
-Molecular geometry specification. The format is:
+Molecular geometry specification. The header lines are the same for both coordinate types:
 
 ```
 <natoms>
 <charge>  <multiplicity>
-<symbol>  <x>  <y>  <z>
-...
 ```
 
 - **natoms** — number of atoms (integer)
 - **charge** — total molecular charge (integer, can be negative)
 - **multiplicity** — spin multiplicity M = 2S+1 (integer ≥ 1; 1 = singlet, 2 = doublet, 3 = triplet)
-- Subsequent lines: element symbol followed by x, y, z coordinates in the units specified by `coord_units`
+
+#### Cartesian format (`coord_type cartesian`)
+
+```
+<symbol>  <x>  <y>  <z>
+...
+```
+
+Each subsequent line gives the element symbol and x, y, z coordinates in the units from `coord_units`.
+
+#### Z-matrix format (`coord_type zmatrix`)
+
+```
+<symbol>
+<symbol>  <i1>  <r>
+<symbol>  <i1>  <r>   <i2>  <angle>
+<symbol>  <i1>  <r>   <i2>  <angle>   <i3>  <dihedral>
+...
+```
+
+- `i1`, `i2`, `i3` — 1-based indices of reference atoms
+- `r` — bond length to atom `i1` (units from `coord_units`)
+- `angle` — bond angle at `i1` relative to `i2` (degrees)
+- `dihedral` — dihedral angle about the `i1`–`i2` bond relative to `i3` (degrees)
+
+Example (water):
+
+```
+3
+0   1
+O
+H  1  0.9572
+H  1  0.9572  2  104.52
+```
 
 ### Basis Sets
 
@@ -287,6 +318,7 @@ The program prints a structured log to standard output. Key sections:
 - **1e Integrals** — overlap, kinetic, nuclear attraction
 - **2e Integrals** — ERI tensor size and build status (conventional mode only)
 - **SCF Iterations** — energy, ΔE, RMS(ΔP), Max(ΔP), DIIS error, wall time per iteration
+- **MO Symmetry** — when the detected point group is non-Abelian, a line `MO Symmetry: Using Abelian subgroup <X> of <G> for MO labels` is printed; otherwise `Using point group <G> for MO labels`
 - **MO Energies** — orbital energies in Hartree with HOMO/LUMO labels and irrep labels when symmetry is enabled
 - **⟨S²⟩ / ⟨S⟩** — spin contamination diagnostics (UHF only)
 - **Converged Energy** — total energy in Hartree, eV, and kcal/mol; MP2 correlation and corrected total if post-HF enabled
