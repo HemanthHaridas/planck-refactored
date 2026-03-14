@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <numeric>
+#include <cmath>
 
 #include "io.h"
 #include "lookup/elements.h"
@@ -445,50 +446,184 @@ namespace HartreeFock::IO
         return {};
     }
 
-    std::expected <void, std::string> _parse_coords(const std::vector <std::string>&lines, HartreeFock::Molecule &molecule)
+    // Convert a Z-matrix row to Cartesian given already-placed atoms.
+    // Uses the standard NeRF / Natural Extension Reference Frame algorithm.
+    static Eigen::Vector3d zmat_to_cart(
+        const Eigen::MatrixXd &xyz,   // Nx3, rows already filled
+        int ia, double r,              // bond to atom ia, length r
+        int ib, double theta,          // angle at ia, referencing ib (radians)
+        int ic, double phi)            // dihedral about ia-ib axis, referencing ic (radians)
     {
+        Eigen::Vector3d A = xyz.row(ia);
+        Eigen::Vector3d B = xyz.row(ib);
+        Eigen::Vector3d C = xyz.row(ic);
+
+        // Unit vectors
+        Eigen::Vector3d bc = (A - B).normalized();
+        Eigen::Vector3d n  = (B - C).cross(bc).normalized();
+        Eigen::Vector3d m  = n.cross(bc);
+
+        // New atom position in local frame
+        double cos_t = std::cos(theta);
+        double sin_t = std::sin(theta);
+        double cos_p = std::cos(phi);
+        double sin_p = std::sin(phi);
+
+        return A + r * (-cos_t * bc + sin_t * (cos_p * m + sin_p * n));
+    }
+
+    std::expected<void, std::string> _parse_zmatrix_coords(
+        const std::vector<std::string> &lines, HartreeFock::Molecule &molecule)
+    {
+        // lines[0] = natoms, lines[1] = charge multiplicity, lines[2..] = Z-matrix rows
+        std::istringstream iss0(lines[0]);
+        if (!(iss0 >> molecule.natoms))
+            return std::unexpected("Malformed header line: " + lines[0]);
+
+        std::istringstream iss1(lines[1]);
+        if (!(iss1 >> molecule.charge >> molecule.multiplicity))
+            return std::unexpected("Malformed charge/multiplicity line: " + lines[1]);
+
+        if (molecule.natoms != (lines.size() - 2))
+            return std::unexpected("Not enough Z-matrix lines: expected " +
+                std::to_string(molecule.natoms) + ", got " + std::to_string(lines.size() - 2));
+
+        molecule.atomic_numbers.resize(molecule.natoms);
+        molecule.atomic_masses.resize(molecule.natoms);
+        molecule.coordinates.resize(molecule.natoms, 3);
+        molecule.standard.resize(molecule.natoms, 3);
+        molecule._coordinates.resize(molecule.natoms, 3);
+        molecule._standard.resize(molecule.natoms, 3);
+        molecule.coordinates.setZero();
+
+        const double deg2rad = M_PI / 180.0;
+
+        for (std::size_t i = 0; i < molecule.natoms; i++)
+        {
+            std::istringstream iss(lines[i + 2]);
+            std::string sym;
+            if (!(iss >> sym))
+                return std::unexpected("Invalid Z-matrix line: " + lines[i + 2]);
+
+            try
+            {
+                const ElementData el   = element_from_symbol(sym);
+                molecule.atomic_numbers[i] = el.Z;
+                molecule.atomic_masses[i]  = el.mass;
+            }
+            catch (...)
+            {
+                return std::unexpected("Unknown atomic symbol: " + sym);
+            }
+
+            if (i == 0)
+            {
+                // Atom 1: origin
+                molecule.coordinates.row(i).setZero();
+            }
+            else if (i == 1)
+            {
+                // Atom 2: along +z from atom 1
+                int ia; double r;
+                if (!(iss >> ia >> r))
+                    return std::unexpected("Atom 2 Z-matrix line needs: sym i1 r");
+                ia--;
+                molecule.coordinates(i, 0) = 0.0;
+                molecule.coordinates(i, 1) = 0.0;
+                molecule.coordinates(i, 2) = r;
+            }
+            else if (i == 2)
+            {
+                // Atom 3: in xz-plane
+                int ia, ib; double r, theta;
+                if (!(iss >> ia >> r >> ib >> theta))
+                    return std::unexpected("Atom 3 Z-matrix line needs: sym i1 r i2 angle");
+                ia--; ib--;
+                theta *= deg2rad;
+
+                Eigen::Vector3d A = molecule.coordinates.row(ia);
+                Eigen::Vector3d B = molecule.coordinates.row(ib);
+                Eigen::Vector3d AB = (B - A).normalized();
+
+                // Pick a perpendicular in the xz-plane
+                Eigen::Vector3d perp(-AB(2), 0.0, AB(0));
+                if (perp.norm() < 1e-10)
+                    perp = Eigen::Vector3d(0.0, 1.0, 0.0);
+                perp.normalize();
+
+                Eigen::Vector3d pos = A + r * (std::cos(M_PI - theta) * AB.normalized() +
+                                               std::sin(M_PI - theta) * perp);
+                molecule.coordinates.row(i) = pos.transpose();
+            }
+            else
+            {
+                // General atom: bond, angle, dihedral
+                int ia, ib, ic; double r, theta, phi;
+                if (!(iss >> ia >> r >> ib >> theta >> ic >> phi))
+                    return std::unexpected("Z-matrix line " + std::to_string(i+1) +
+                        " needs: sym i1 r i2 angle i3 dihedral");
+                ia--; ib--; ic--;
+                theta *= deg2rad;
+                phi   *= deg2rad;
+
+                Eigen::Vector3d pos = zmat_to_cart(molecule.coordinates, ia, r, ib, theta, ic, phi);
+                molecule.coordinates.row(i) = pos.transpose();
+            }
+        }
+
+        molecule.nelectrons = std::accumulate(molecule.atomic_numbers.begin(),
+                                              molecule.atomic_numbers.end(), 0) - molecule.charge;
+        return {};
+    }
+
+    std::expected <void, std::string> _parse_coords(const std::vector <std::string>&lines, HartreeFock::Molecule &molecule,
+                                                    HartreeFock::CoordType coord_type)
+    {
+        if (coord_type == HartreeFock::CoordType::ZMatrix)
+            return _parse_zmatrix_coords(lines, molecule);
+
         // Parse first two lines separately
         std::istringstream _iss0(lines[0]);
         if (!(_iss0 >> molecule.natoms))
         {
             return std::unexpected("Malformed header line: " + lines[0]);
         }
-        
+
         std::istringstream _iss1(lines[1]);
         if (!(_iss1 >> molecule.charge >> molecule.multiplicity))
         {
             return std::unexpected("Malformed charge/multiplicity line: " + lines[1]);
         }
-        
+
         // Check if input is consistent
         if (molecule.natoms != (lines.size() - 2))
         {
             return std::unexpected("Not enough coordinate lines: expected " + std::to_string(molecule.natoms) + ", got " + std::to_string(lines.size() - 2));
         }
-        
+
         molecule.atomic_numbers.resize(molecule.natoms);
         molecule.atomic_masses.resize(molecule.natoms);
-        
+
         molecule.coordinates.resize(molecule.natoms, 3);
         molecule.standard.resize(molecule.natoms, 3);
-        
+
         molecule._coordinates.resize(molecule.natoms, 3);
         molecule._standard.resize(molecule.natoms, 3);
-        
+
         // Temporary variables
         std::string _atom;
         double _x, _y, _z;
-        
+
         for (std::size_t i = 0; i < molecule.natoms; i++)
         {
             std::istringstream _iss(lines[i + 2]);
-            
+
             // Check if valid
             if (!(_iss >> _atom >> _x >> _y >> _z))
             {
                 return std::unexpected("Invalid coordinate line: " + lines[i + 2]);
             }
-            
+
             // Check if element is supported
             try
             {
@@ -500,15 +635,15 @@ namespace HartreeFock::IO
             {
                 return std::unexpected(std::string("Unknown atomic symbol: ") + _atom);
             }
-            
+
             molecule.coordinates(i, 0) = _x;
             molecule.coordinates(i, 1) = _y;
             molecule.coordinates(i, 2) = _z;
         }
-        
+
         // Now set other variables
         molecule.nelectrons = std::accumulate(molecule.atomic_numbers.begin(), molecule.atomic_numbers.end(), 0) - molecule.charge;
-        
+
         return {};
     }
 

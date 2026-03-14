@@ -1,8 +1,8 @@
-# Planck
+### Planck
 
 A Hartree-Fock quantum chemistry program implementing restricted and unrestricted SCF theory with an Obara-Saika integral engine, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
 
-## Features
+### Features
 
 - **RHF / UHF** — closed-shell and open-shell Hartree-Fock
 - **Obara-Saika integral engine** — recursive 1e and 2e integrals (S, P, D, F, G, H shells)
@@ -15,9 +15,7 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 - **Checkpoint system** — binary `.hfchk` files; same-basis restart (skips 1e integrals) and cross-basis density projection (Löwdin SVD)
 - **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*
 
----
-
-## Requirements
+### Requirements
 
 | Dependency | Version | Source |
 |---|---|---|
@@ -27,9 +25,7 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 | libmsym | latest | Fetched automatically |
 | OpenMP | any | Optional; system package manager |
 
----
-
-## Installation
+### Installation
 
 ### 1. Clone the repository
 
@@ -78,9 +74,7 @@ This installs the `hartree-fock` executable to `<prefix>/bin/` and the basis set
 ./build/hartree-fock molecule.hfinp
 ```
 
----
-
-## Input File Format
+### Input File Format
 
 Input files use an INI-style block format with the extension `.hfinp`. Each section is delimited by `%begin_<section>` and `%end_<section>` markers. Keywords are case-insensitive; boolean values accept `.true.` / `.false.`.
 
@@ -105,9 +99,7 @@ Input files use an INI-style block format with the extension `.hfinp`. Each sect
 %end_coords
 ```
 
----
-
-## Section: `%begin_control`
+### Section: `%begin_control`
 
 General calculation settings.
 
@@ -119,9 +111,7 @@ General calculation settings.
 | `verbosity` | enum | `silent`, `minimal`, `normal`, `verbose`, `debug` | `minimal` | Output level |
 | `basis_path` | string | filesystem path | compiled-in | Override the basis set search directory |
 
----
-
-## Section: `%begin_scf`
+### Section: `%begin_scf`
 
 SCF procedure and convergence settings.
 
@@ -143,9 +133,7 @@ SCF procedure and convergence settings.
 | `guess` | enum | `hcore`, `read` | `hcore` | Initial density guess. `read` loads from the checkpoint file; falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.true.` | Write a `.hfchk` checkpoint file after successful convergence |
 
----
-
-## Section: `%begin_geom`
+### Section: `%begin_geom`
 
 Molecular geometry options.
 
@@ -155,9 +143,7 @@ Molecular geometry options.
 | `coord_units` | enum | `angstrom`, `bohr` | `angstrom` | Units for input coordinates |
 | `use_symm` | bool | `.true.`, `.false.` | `.true.` | Detect molecular point group and reorient to standard frame using libmsym |
 
----
-
-## Section: `%begin_coords`
+### Section: `%begin_coords`
 
 Molecular geometry specification. The format is:
 
@@ -173,9 +159,7 @@ Molecular geometry specification. The format is:
 - **multiplicity** — spin multiplicity M = 2S+1 (integer ≥ 1; 1 = singlet, 2 = doublet, 3 = triplet)
 - Subsequent lines: element symbol followed by x, y, z coordinates in the units specified by `coord_units`
 
----
-
-## Basis Sets
+### Basis Sets
 
 Basis set files are in Gaussian `.gbs` format and are installed to `<prefix>/share/basis-sets/`.
 
@@ -186,9 +170,7 @@ Basis set files are in Gaussian `.gbs` format and are installed to `<prefix>/sha
 | 6-31G | `6-31g` | Pople split-valence |
 | 6-31G\* | `6-31g*` | 6-31G plus d polarization on heavy atoms |
 
----
-
-## Checkpoint System
+### Checkpoint System
 
 After a successful SCF, a binary checkpoint file `<input_stem>.hfchk` is written automatically (when `save_checkpoint .true.`).
 
@@ -206,9 +188,7 @@ To warm-start a larger basis from a converged smaller-basis checkpoint:
 
 The projected density is used as the SCF starting point, typically reducing the number of required iterations.
 
----
-
-## Examples
+### Examples
 
 ### RHF single point — water, STO-3G
 
@@ -297,9 +277,7 @@ Run STO-3G first (saves `mol.hfchk`), then change the basis and add `guess read`
 ...
 ```
 
----
-
-## Output
+### Output
 
 The program prints a structured log to standard output. Key sections:
 
@@ -313,8 +291,6 @@ The program prints a structured log to standard output. Key sections:
 - **⟨S²⟩ / ⟨S⟩** — spin contamination diagnostics (UHF only)
 - **Converged Energy** — total energy in Hartree, eV, and kcal/mol; MP2 correlation and corrected total if post-HF enabled
 - **Wall Time** — total elapsed time
-
----
 
 ## Build Options
 
