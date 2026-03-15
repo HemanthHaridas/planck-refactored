@@ -611,6 +611,15 @@ namespace HartreeFock
         
         std::string _checkpoint_path;   // Path to checkpoint file (set by driver)
 
+        // Symmetry-adapted orbital (SAO) blocking — populated by build_sao_basis() pre-SCF.
+        // When _use_sao_blocking is true, run_rhf/run_uhf use per-irrep block diagonalization.
+        Eigen::MatrixXd          _sao_transform;      // U [nb×nb]: AO→SAO unitary
+        std::vector<int>         _sao_irrep_index;    // irrep index per SAO column
+        std::vector<std::string> _sao_irrep_names;    // Mulliken name per irrep index
+        std::vector<int>         _sao_block_sizes;    // n_SAOs per irrep block
+        std::vector<int>         _sao_block_offsets;  // start offset per block in SAO ordering
+        bool                     _use_sao_blocking = false;
+
         void _compute_nuclear_repulsion() noexcept
         {
             const std::size_t N = _molecule.natoms;

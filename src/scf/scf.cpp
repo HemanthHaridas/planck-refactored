@@ -1,7 +1,9 @@
 #include <Eigen/Eigenvalues>
+#include <algorithm>
 #include <chrono>
 #include <format>
 #include <limits>
+#include <numeric>
 
 #include "scf.h"
 #include "integrals/base.h"
@@ -63,6 +65,13 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     if (!X_result)
         return std::unexpected(X_result.error());
     const Eigen::MatrixXd X = std::move(*X_result);
+
+    // ── SAO blocking setup ────────────────────────────────────────────────────
+    // SAOs are orthonormal (U^T S U = I), so the orthogonalizer in SAO basis
+    // is the identity — each block is diagonalized directly without an X step.
+    const bool sao_active = calculator._use_sao_blocking &&
+                            (calculator._sao_transform.rows() > 0);
+    const Eigen::MatrixXd& U = calculator._sao_transform;   // ref, no copy
 
     // ── Initial density ───────────────────────────────────────────────────────
     // SCFGuess::Read: reuse density loaded from checkpoint.
@@ -139,14 +148,73 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
         const bool do_diis           = use_diis && diis.ready();
         const Eigen::MatrixXd F_diag = do_diis ? diis.extrapolate() : F;
 
-        // ── Transform to orthonormal basis and diagonalize ────────────────────
-        const Eigen::MatrixXd Fprime = X.transpose() * F_diag * X;
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(Fprime);
-        if (solver.info() != Eigen::Success)
-            return std::unexpected(std::format("Fock diagonalization failed at iteration {}", iter));
+        // ── Diagonalize Fock matrix ───────────────────────────────────────────
+        Eigen::MatrixXd C(nbasis, nbasis);
+        Eigen::VectorXd eps(nbasis);
 
-        const Eigen::MatrixXd C     = X * solver.eigenvectors();
-        const Eigen::VectorXd eps   = solver.eigenvalues();
+        if (!sao_active)
+        {
+            // ── Full AO diagonalization (original path) ───────────────────────
+            const Eigen::MatrixXd Fprime = X.transpose() * F_diag * X;
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(Fprime);
+            if (solver.info() != Eigen::Success)
+                return std::unexpected(std::format("Fock diagonalization failed at iteration {}", iter));
+            C   = X * solver.eigenvectors();
+            eps = solver.eigenvalues();
+        }
+        else
+        {
+            // ── SAO block-diagonal diagonalization ────────────────────────────
+            // F in SAO basis is block-diagonal (one block per irrep).
+            // Since SAOs are orthonormal, diagonalize each block directly.
+            const Eigen::MatrixXd F_sao = U.transpose() * F_diag * U;
+            const int n_blocks = static_cast<int>(calculator._sao_block_sizes.size());
+
+            Eigen::VectorXd  eps_sao(nbasis);
+            Eigen::MatrixXd  C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            std::vector<int> mo_irrep_idx(nbasis);
+
+            for (int b = 0; b < n_blocks; ++b)
+            {
+                const int off = calculator._sao_block_offsets[b];
+                const int ni  = calculator._sao_block_sizes[b];
+                if (ni == 0) continue;
+
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sb(
+                    F_sao.block(off, off, ni, ni));
+                if (sb.info() != Eigen::Success)
+                    return std::unexpected(std::format(
+                        "Block Fock diagonalization failed (block {}) at iteration {}", b, iter));
+
+                eps_sao.segment(off, ni)           = sb.eigenvalues();
+                C_sao.block(off, off, ni, ni)      = sb.eigenvectors();
+                for (int k = 0; k < ni; ++k)
+                    mo_irrep_idx[off + k] = calculator._sao_irrep_index[off + k];
+            }
+
+            // Sort all MOs globally by energy; MOs from different irreps interleave.
+            std::vector<int> order(nbasis);
+            std::iota(order.begin(), order.end(), 0);
+            std::stable_sort(order.begin(), order.end(),
+                [&](int a, int b){ return eps_sao[a] < eps_sao[b]; });
+
+            Eigen::VectorXd  eps_sorted(nbasis);
+            Eigen::MatrixXd  C_sao_sorted(nbasis, nbasis);
+            std::vector<std::string> mo_sym(nbasis);
+            for (int k = 0; k < static_cast<int>(nbasis); ++k)
+            {
+                eps_sorted[k]           = eps_sao[order[k]];
+                C_sao_sorted.col(k)     = C_sao.col(order[k]);
+                mo_sym[k]               = calculator._sao_irrep_names[mo_irrep_idx[order[k]]];
+            }
+
+            eps = eps_sorted;
+            C   = U * C_sao_sorted;
+            // Write symmetry labels every iteration; the final write at convergence
+            // will be the authoritative set.
+            calculator._info._scf.alpha.mo_symmetry = std::move(mo_sym);
+        }
+
         const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
 
         // ── New density P_new ─────────────────────────────────────────────────
@@ -244,6 +312,14 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     if (!X_result)
         return std::unexpected(X_result.error());
     const Eigen::MatrixXd X = std::move(*X_result);
+
+    // ── SAO blocking setup ────────────────────────────────────────────────────
+    // Same U used for both alpha and beta (basis and geometry are spin-independent).
+    // When SAO is active, Ca_orth_prev/Cb_orth_prev are never filled, so
+    // shift_active stays false throughout — level shift is incompatible with SAO.
+    const bool sao_active_uhf = calculator._use_sao_blocking &&
+                                (calculator._sao_transform.rows() > 0);
+    const Eigen::MatrixXd& U_uhf = calculator._sao_transform;   // ref, no copy
 
     // ── Initial spin densities from core Hamiltonian ─────────────────────────
     // Factor 1.0 per spin (UHF), vs 2.0 in RHF.
@@ -374,30 +450,104 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         const Eigen::MatrixXd Fa_diag = (use_diis && diis_a.ready()) ? diis_a.extrapolate() : Fa_s;
         const Eigen::MatrixXd Fb_diag = (use_diis && diis_b.ready()) ? diis_b.extrapolate() : Fb_s;
 
-        // ── Diagonalize alpha ─────────────────────────────────────────────────
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sa(X.transpose() * Fa_diag * X);
-        if (sa.info() != Eigen::Success)
-            return std::unexpected(std::format("Alpha Fock diagonalization failed at iter {}", iter));
-        const Eigen::MatrixXd Ca  = X * sa.eigenvectors();
+        // ── Diagonalize alpha and beta ────────────────────────────────────────
+        Eigen::MatrixXd Ca(nbasis, nbasis), Cb(nbasis, nbasis);
+        Eigen::VectorXd epsa(nbasis),       epsb(nbasis);
 
-        // Subtract level shift from virtual eigenvalues to report physical energies
-        Eigen::VectorXd epsa = sa.eigenvalues();
-        if (shift_active)
-            epsa.tail(nbasis - n_alpha).array() -= level_shift;
+        if (!sao_active_uhf)
+        {
+            // ── Full AO diagonalization (original path) ───────────────────────
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sa(X.transpose() * Fa_diag * X);
+            if (sa.info() != Eigen::Success)
+                return std::unexpected(std::format("Alpha Fock diagonalization failed at iter {}", iter));
+            Ca   = X * sa.eigenvectors();
+            epsa = sa.eigenvalues();
+            if (shift_active) epsa.tail(nbasis - n_alpha).array() -= level_shift;
 
-        // ── Diagonalize beta ──────────────────────────────────────────────────
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sb(X.transpose() * Fb_diag * X);
-        if (sb.info() != Eigen::Success)
-            return std::unexpected(std::format("Beta Fock diagonalization failed at iter {}", iter));
-        const Eigen::MatrixXd Cb  = X * sb.eigenvectors();
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sb(X.transpose() * Fb_diag * X);
+            if (sb.info() != Eigen::Success)
+                return std::unexpected(std::format("Beta Fock diagonalization failed at iter {}", iter));
+            Cb   = X * sb.eigenvectors();
+            epsb = sb.eigenvalues();
+            if (shift_active) epsb.tail(nbasis - n_beta).array() -= level_shift;
 
-        Eigen::VectorXd epsb = sb.eigenvalues();
-        if (shift_active)
-            epsb.tail(nbasis - n_beta).array() -= level_shift;
+            // Save orthonormal eigenvectors for next iteration's virtual projector
+            Ca_orth_prev = sa.eigenvectors();
+            Cb_orth_prev = sb.eigenvectors();
+        }
+        else
+        {
+            // ── SAO block-diagonal diagonalization ────────────────────────────
+            // Helper lambda: block-diagonalize one spin's Fock in SAO basis.
+            // Returns {C_AO [nb×nb], eps [nb]}.  Also fills mo_sym_out with
+            // sorted irrep labels.
+            auto sao_diag_spin = [&](const Eigen::MatrixXd& F_diag_spin,
+                                     std::vector<std::string>& mo_sym_out,
+                                     const std::string& spin_tag)
+                -> std::expected<std::pair<Eigen::MatrixXd, Eigen::VectorXd>, std::string>
+            {
+                const Eigen::MatrixXd F_sao = U_uhf.transpose() * F_diag_spin * U_uhf;
+                const int n_blocks = static_cast<int>(calculator._sao_block_sizes.size());
 
-        // Save orthonormal eigenvectors for next iteration's virtual projector
-        Ca_orth_prev = sa.eigenvectors();
-        Cb_orth_prev = sb.eigenvectors();
+                Eigen::VectorXd  eps_sao(nbasis);
+                Eigen::MatrixXd  C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                std::vector<int> mo_irrep_idx(nbasis);
+
+                for (int b = 0; b < n_blocks; ++b)
+                {
+                    const int off = calculator._sao_block_offsets[b];
+                    const int ni  = calculator._sao_block_sizes[b];
+                    if (ni == 0) continue;
+
+                    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> s(
+                        F_sao.block(off, off, ni, ni));
+                    if (s.info() != Eigen::Success)
+                        return std::unexpected(std::format(
+                            "{} block Fock diagonalization failed (block {}) at iter {}",
+                            spin_tag, b, iter));
+
+                    eps_sao.segment(off, ni)      = s.eigenvalues();
+                    C_sao.block(off, off, ni, ni) = s.eigenvectors();
+                    for (int k = 0; k < ni; ++k)
+                        mo_irrep_idx[off + k] = calculator._sao_irrep_index[off + k];
+                }
+
+                // Sort MOs globally by energy
+                std::vector<int> order(nbasis);
+                std::iota(order.begin(), order.end(), 0);
+                std::stable_sort(order.begin(), order.end(),
+                    [&](int a, int b){ return eps_sao[a] < eps_sao[b]; });
+
+                Eigen::VectorXd eps_sorted(nbasis);
+                Eigen::MatrixXd C_sao_sorted(nbasis, nbasis);
+                mo_sym_out.resize(nbasis);
+                for (int k = 0; k < static_cast<int>(nbasis); ++k)
+                {
+                    eps_sorted[k]           = eps_sao[order[k]];
+                    C_sao_sorted.col(k)     = C_sao.col(order[k]);
+                    mo_sym_out[k]           = calculator._sao_irrep_names[mo_irrep_idx[order[k]]];
+                }
+
+                return std::make_pair(U_uhf * C_sao_sorted, eps_sorted);
+            };
+
+            std::vector<std::string> mo_sym_a, mo_sym_b;
+
+            auto res_a = sao_diag_spin(Fa_diag, mo_sym_a, "Alpha");
+            if (!res_a) return std::unexpected(res_a.error());
+            Ca = std::move(res_a->first);
+            epsa = std::move(res_a->second);
+
+            auto res_b = sao_diag_spin(Fb_diag, mo_sym_b, "Beta");
+            if (!res_b) return std::unexpected(res_b.error());
+            Cb = std::move(res_b->first);
+            epsb = std::move(res_b->second);
+
+            calculator._info._scf.alpha.mo_symmetry = std::move(mo_sym_a);
+            calculator._info._scf.beta.mo_symmetry  = std::move(mo_sym_b);
+            // Ca_orth_prev / Cb_orth_prev intentionally NOT updated →
+            // shift_active stays false (level shift incompatible with SAO blocking).
+        }
 
         // ── New spin densities ────────────────────────────────────────────────
         const Eigen::MatrixXd Pa_new = Ca.leftCols(n_alpha) * Ca.leftCols(n_alpha).transpose();

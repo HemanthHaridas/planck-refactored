@@ -312,6 +312,42 @@ int main(int argc, const char* argv[])
         calculator._hcore   = T + V;
     }
 
+    // ── SAO basis for symmetry-blocked Fock diagonalization ──────────────────
+    if (calculator._molecule._symmetry &&
+        calculator._molecule._point_group != "C1" &&
+        calculator._molecule._point_group.find("inf") == std::string::npos)
+    {
+        try
+        {
+            auto sao = HartreeFock::Symmetry::build_sao_basis(calculator);
+            if (sao.valid)
+            {
+                calculator._sao_transform     = std::move(sao.transform);
+                calculator._sao_irrep_index   = std::move(sao.sao_irrep_index);
+                calculator._sao_irrep_names   = std::move(sao.irrep_names);
+                calculator._sao_block_sizes   = std::move(sao.block_sizes);
+                calculator._sao_block_offsets = std::move(sao.block_offsets);
+                calculator._use_sao_blocking  = true;
+
+                // Log irrep distribution, e.g. "A1(4)  B1(1)  B2(2)"
+                std::string dist;
+                for (std::size_t g = 0; g < calculator._sao_irrep_names.size(); ++g)
+                {
+                    if (g > 0) dist += "  ";
+                    dist += calculator._sao_irrep_names[g] + "(" +
+                            std::to_string(calculator._sao_block_sizes[g]) + ")";
+                }
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "SAO Basis :", dist);
+                HartreeFock::Logger::blank();
+            }
+        }
+        catch (const std::exception& e)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                "SAO Basis :", std::format("Skipped: {}", e.what()));
+        }
+    }
+
     if (calculator._output._print_matrices)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Overlap Matrix S :", "");
@@ -344,8 +380,9 @@ int main(int argc, const char* argv[])
     // ── MO table (with optional symmetry labels) ──────────────────────────────
     if (calculator._info._is_converged)
     {
-        // Assign irrep labels when molecule has non-trivial symmetry
-        if (calculator._molecule._symmetry)
+        // Assign irrep labels when molecule has non-trivial symmetry.
+        // When SAO blocking is active, labels are already filled during SCF.
+        if (calculator._molecule._symmetry && !calculator._use_sao_blocking)
         {
             try
             {

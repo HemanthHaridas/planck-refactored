@@ -176,6 +176,11 @@ static std::vector<int> build_permutation(const Eigen::Matrix3d& M,
 //
 // D_R[ν][μ] = transform coeff of Cartesian function μ into ν, accounting for
 // the component-norm ratio between the two functions.
+//
+// Shell-level correspondence: when atom a has multiple contracted shells of the
+// same angular momentum l (e.g. O 1s and O 2s are both l=0), the k-th shell of
+// type l at atom a maps to the k-th shell of type l at atom b = perm[a].  This
+// prevents mixing of O 1s and O 2s under operations that fix atom a.
 static Eigen::MatrixXd build_ao_transform(const Eigen::Matrix3d& M,
                                            const std::vector<int>& perm,
                                            const HartreeFock::Basis& basis)
@@ -183,28 +188,50 @@ static Eigen::MatrixXd build_ao_transform(const Eigen::Matrix3d& M,
     const std::size_t nb = basis.nbasis();
     Eigen::MatrixXd D = Eigen::MatrixXd::Zero(nb, nb);
 
-    const auto& bfs = basis._basis_functions;
+    const auto& bfs    = basis._basis_functions;
+    const auto& shells = basis._shells;
+
+    // Precompute: for each (atom, l), the ordered list of shell pointers.
+    // Used to find the k-th shell of angular type l at a given atom.
+    std::map<std::pair<int,int>, std::vector<const HartreeFock::Shell*>> atom_l_shells;
+    for (const auto& sh : shells)
+    {
+        const int atm = static_cast<int>(sh._atom_index);
+        const int  l  = static_cast<int>(sh._shell);
+        atom_l_shells[{atm, l}].push_back(&sh);
+    }
 
     for (std::size_t mu = 0; mu < nb; ++mu)
     {
-        const auto& cv_mu   = bfs[mu];
-        const int   atom_a  = static_cast<int>(cv_mu._shell->_atom_index);
-        const int   atom_b  = perm[atom_a];
-        const int   lx = cv_mu._cartesian[0];
-        const int   ly = cv_mu._cartesian[1];
-        const int   lz = cv_mu._cartesian[2];
-        const int   l  = lx + ly + lz;
+        const auto& cv_mu  = bfs[mu];
+        const int   atom_a = static_cast<int>(cv_mu._shell->_atom_index);
+        const int   atom_b = perm[atom_a];
+        const int   lx     = cv_mu._cartesian[0];
+        const int   ly     = cv_mu._cartesian[1];
+        const int   lz     = cv_mu._cartesian[2];
+        const int   l      = lx + ly + lz;
         const double norm_mu = cv_mu._component_norm;
+
+        // Identify which shell (within the set of l-type shells at atom_a) μ belongs to.
+        const auto& src_list = atom_l_shells.at({atom_a, l});
+        int shell_k = -1;
+        for (int k = 0; k < static_cast<int>(src_list.size()); ++k)
+        {
+            if (src_list[k] == cv_mu._shell) { shell_k = k; break; }
+        }
+
+        // Corresponding target shell: k-th l-type shell at atom_b.
+        const auto& tgt_list = atom_l_shells.at({atom_b, l});
+        const HartreeFock::Shell* tgt_shell = tgt_list[shell_k];
 
         for (std::size_t nu = 0; nu < nb; ++nu)
         {
             const auto& cv_nu = bfs[nu];
-            if (static_cast<int>(cv_nu._shell->_atom_index) != atom_b) continue;
+            if (cv_nu._shell != tgt_shell) continue;   // must come from the corresponding shell
 
             const int ax = cv_nu._cartesian[0];
             const int ay = cv_nu._cartesian[1];
             const int az = cv_nu._cartesian[2];
-            if (ax + ay + az != l) continue;
 
             const double c = angular_coeff(M, lx, ly, lz, ax, ay, az);
             if (std::abs(c) < 1e-14) continue;
@@ -583,6 +610,269 @@ static bool is_all_1d_irreps(msym_point_group_type_t t, int n)
 }
 
 } // anonymous namespace
+
+// ─── SAO basis construction ───────────────────────────────────────────────────
+//
+// Builds the unitary transform U whose columns are symmetry-adapted orbitals
+// (SAOs), grouped by irreducible representation.  The SAOs are orthonormal by
+// construction (modified Gram-Schmidt), so U^T S U = I and the Fock matrix
+// transformed to the SAO basis is block-diagonal.
+//
+// Algorithm (for a non-linear Abelian group):
+//   1. Rebuild libmsym context (same frame as assign_mo_symmetry — no axis align).
+//   2. Select largest Abelian subgroup if the full group is non-Abelian.
+//   3. Get the character table.  For Abelian groups, ct->d = h = group order,
+//      and ct->sops[c] is the unique operation of conjugacy class c.
+//   4. Build D_R[c] = AO representation matrix for each group operation c.
+//   5. For each irrep g: P_Γ = (1/h) Σ_c χ_Γ(c) D_R[c].
+//      Apply P_Γ to every AO unit vector; keep linearly independent images via
+//      modified Gram-Schmidt (threshold 1e-8).
+//   6. Verify SAO count == nbasis.
+//   7. Assemble U, fill metadata (block_sizes, block_offsets, irrep_names).
+//   8. Apply the same B1/B2 and E-label normalisations as assign_mo_symmetry.
+
+HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFock::Calculator& calculator)
+{
+    SAOBasis result;   // valid = false by default
+
+    if (!calculator._molecule._symmetry)
+        return result;
+
+    const std::string& pg = calculator._molecule._point_group;
+
+    // Skip linear molecules — SAO blocking not implemented for infinite groups.
+    if (pg.find("inf") != std::string::npos)
+        return result;
+
+    // Skip C1 — one trivial block, no benefit.
+    if (pg == "C1")
+        return result;
+
+    const std::size_t nb = calculator._shells.nbasis();
+
+    // ── Rebuild libmsym context (NO axis alignment) ───────────────────────────
+    HartreeFock::Symmetry::SymmetryContext  ctx;
+    HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
+
+    for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)
+    {
+        atoms.data()[i].m    = calculator._molecule.atomic_masses[i];
+        atoms.data()[i].n    = calculator._molecule.atomic_numbers[i];
+        atoms.data()[i].v[0] = calculator._molecule.standard(i, 0);
+        atoms.data()[i].v[1] = calculator._molecule.standard(i, 1);
+        atoms.data()[i].v[2] = calculator._molecule.standard(i, 2);
+    }
+
+    if (MSYM_SUCCESS != msymSetElements(ctx.get(), atoms.size(), atoms.data()))
+        throw std::runtime_error("build_sao_basis: msymSetElements failed");
+
+    if (MSYM_SUCCESS != msymFindSymmetry(ctx.get()))
+        throw std::runtime_error("build_sao_basis: msymFindSymmetry failed");
+
+    // ── Select largest Abelian subgroup if needed ─────────────────────────────
+    {
+        msym_point_group_type_t pg_type;
+        int pg_n = 0;
+        if (MSYM_SUCCESS != msymGetPointGroupType(ctx.get(), &pg_type, &pg_n))
+            throw std::runtime_error("build_sao_basis: msymGetPointGroupType failed");
+
+        if (!is_all_1d_irreps(pg_type, pg_n))
+        {
+            int nsg = 0;
+            const msym_subgroup_t* sgs = nullptr;
+            if (MSYM_SUCCESS != msymGetSubgroups(ctx.get(), &nsg, &sgs))
+                throw std::runtime_error("build_sao_basis: msymGetSubgroups failed");
+
+            const msym_subgroup_t* best = nullptr;
+            int best_order = 0;
+            for (int k = 0; k < nsg; ++k)
+            {
+                if (is_all_1d_irreps(sgs[k].type, sgs[k].n) && sgs[k].order > best_order)
+                {
+                    best_order = sgs[k].order;
+                    best       = &sgs[k];
+                }
+            }
+            if (best != nullptr)
+            {
+                if (MSYM_SUCCESS != msymSelectSubgroup(ctx.get(), best))
+                    throw std::runtime_error("build_sao_basis: msymSelectSubgroup failed");
+            }
+        }
+    }
+
+    // ── Register minimal basis functions to initialise the character table ────
+    // msymGetCharacterTable requires msymSetBasisFunctions to have been called.
+    // We register one s-type spherical harmonic per atom (the minimal valid set).
+    // The character table is a group property and independent of this choice.
+    {
+        int nelems = 0;
+        msym_element_t* melems = nullptr;
+        if (MSYM_SUCCESS != msymGetElements(ctx.get(), &nelems, &melems))
+            throw std::runtime_error("build_sao_basis: msymGetElements failed");
+
+        std::vector<msym_basis_function_t> bfs(nelems);
+        std::memset(bfs.data(), 0, nelems * sizeof(msym_basis_function_t));
+        for (int i = 0; i < nelems; ++i)
+        {
+            bfs[i].element  = &melems[i];
+            bfs[i].f.rsh.n  = 1;
+            bfs[i].f.rsh.l  = 0;
+            bfs[i].f.rsh.m  = 0;
+            // type = 0 = MSYM_BASIS_TYPE_REAL_SPHERICAL_HARMONIC (already zeroed)
+        }
+        if (MSYM_SUCCESS != msymSetBasisFunctions(ctx.get(), nelems, bfs.data()))
+            throw std::runtime_error("build_sao_basis: msymSetBasisFunctions failed");
+    }
+
+    // ── Get character table ───────────────────────────────────────────────────
+    const msym_character_table_t* ct = nullptr;
+    if (MSYM_SUCCESS != msymGetCharacterTable(ctx.get(), &ct) || ct == nullptr)
+        throw std::runtime_error("build_sao_basis: msymGetCharacterTable failed");
+
+    // For an Abelian group the number of irreps == group order h.
+    const int h        = ct->d;
+    const int n_irreps = h;
+    const double* ctable = static_cast<const double*>(ct->table);
+
+    // ── Overlap matrix S (needed for S-metric orthogonalisation) ─────────────
+    const Eigen::MatrixXd& S = calculator._overlap;
+
+    // ── Build AO representation matrices D_R for each group operation ─────────
+    // ct->sops[c] = representative of conjugacy class c.  For Abelian groups
+    // each class has exactly one element, so this gives all h operations.
+    std::vector<Eigen::MatrixXd> D_ops(h);
+    for (int c = 0; c < h; ++c)
+    {
+        const Eigen::Matrix3d  M    = sop_to_matrix(*ct->sops[c]);
+        const std::vector<int> perm = build_permutation(M, calculator._molecule);
+        D_ops[c] = build_ao_transform(M, perm, calculator._shells);
+    }
+
+    // ── Project and S-orthonormalise SAOs for each irrep ──────────────────────
+    // Use the physical (overlap) inner product <u,v>_S = u^T S v so that the
+    // resulting transform U satisfies U^T S U = I.  This is required for the
+    // blocked SCF diagonalisation which assumes no X step per block.
+    constexpr double NORM_THRESH = 1e-8;
+
+    std::vector<Eigen::MatrixXd> sao_blocks(n_irreps);
+    std::vector<int>             block_sizes(n_irreps, 0);
+
+    for (int g = 0; g < n_irreps; ++g)
+    {
+        // Projection operator: P_Γ = (1/h) Σ_c χ_Γ(R_c) D_R[c]
+        Eigen::MatrixXd P = Eigen::MatrixXd::Zero(nb, nb);
+        for (int c = 0; c < h; ++c)
+            P += ctable[g * h + c] * D_ops[c];
+        P /= static_cast<double>(h);
+
+        // Apply P to each AO unit vector e_μ = μ-th column of the identity.
+        // Collect the non-zero images and build an S-orthonormal basis for the
+        // irrep-Γ subspace via modified Gram-Schmidt with the S-inner product.
+        Eigen::MatrixXd accepted(nb, nb);
+        int n_accepted = 0;
+
+        for (std::size_t mu = 0; mu < nb; ++mu)
+        {
+            // v = P * e_mu = mu-th column of P
+            Eigen::VectorXd v = P.col(static_cast<Eigen::Index>(mu));
+
+            // S-orthogonalise against already-accepted SAOs:
+            //   remove component along each accepted_k in the S-metric
+            for (int k = 0; k < n_accepted; ++k)
+            {
+                const double proj = accepted.col(k).dot(S * v);
+                v -= proj * accepted.col(k);
+            }
+
+            // S-norm: ||v||_S = sqrt(v^T S v)
+            const double nrm = std::sqrt(v.dot(S * v));
+            if (nrm > NORM_THRESH)
+            {
+                v /= nrm;   // now v^T S v = 1
+                accepted.col(n_accepted++) = v;
+            }
+        }
+
+        sao_blocks[g] = accepted.leftCols(n_accepted);
+        block_sizes[g] = n_accepted;
+    }
+
+    // ── Verify completeness ───────────────────────────────────────────────────
+    int total = 0;
+    for (int g = 0; g < n_irreps; ++g) total += block_sizes[g];
+    if (total != static_cast<int>(nb))
+        throw std::runtime_error(
+            "build_sao_basis: SAO count mismatch: got " + std::to_string(total) +
+            ", expected " + std::to_string(nb));
+
+    // ── Assemble U, block offsets, irrep_names ────────────────────────────────
+    result.transform       = Eigen::MatrixXd(nb, nb);
+    result.sao_irrep_index .resize(nb);
+    result.block_sizes     = block_sizes;
+    result.block_offsets   .resize(n_irreps);
+    result.irrep_names     .resize(n_irreps);
+
+    int col = 0;
+    for (int g = 0; g < n_irreps; ++g)
+    {
+        result.block_offsets[g] = col;
+        result.irrep_names[g]   = ct->s[g].name;   // raw Mulliken label from libmsym
+
+        for (int k = 0; k < block_sizes[g]; ++k)
+        {
+            result.transform.col(col)   = sao_blocks[g].col(k);
+            result.sao_irrep_index[col] = g;
+            ++col;
+        }
+    }
+
+    // ── Apply E-label normalisation (strip "E1" → "E" when no E2/E3 exist) ────
+    {
+        bool has_e2_or_higher = false;
+        for (const auto& nm : result.irrep_names)
+            if (nm.size() >= 2 && nm[0] == 'E' && nm[1] >= '2' && nm[1] <= '9')
+                { has_e2_or_higher = true; break; }
+
+        if (!has_e2_or_higher)
+            for (auto& nm : result.irrep_names)
+                if (nm.size() >= 2 && nm[0] == 'E' && nm[1] == '1')
+                    nm = "E" + nm.substr(2);
+    }
+
+    // ── Apply B1/B2 convention fix ────────────────────────────────────────────
+    // Standard chemistry: B1 is symmetric under the xz-plane reflection (y-hat normal).
+    // If libmsym labels B2 as +1 under the xz reflection, swap the name strings.
+    // Only the names are swapped; the SAO columns (and thus block ordering) remain
+    // unchanged — this is intentional since the SAOs themselves are correct.
+    {
+        int b1_idx = -1, b2_idx = -1;
+        for (int g = 0; g < n_irreps; ++g)
+        {
+            if (result.irrep_names[g] == "B1") b1_idx = g;
+            if (result.irrep_names[g] == "B2") b2_idx = g;
+        }
+        if (b1_idx >= 0 && b2_idx >= 0)
+        {
+            for (int c = 0; c < h; ++c)
+            {
+                const msym_symmetry_operation_t* sop = ct->sops[c];
+                if (static_cast<int>(sop->type) != 3) continue;   // not a reflection
+                Eigen::Vector3d n(sop->v[0], sop->v[1], sop->v[2]);
+                n.normalize();
+                if (std::abs(std::abs(n[1]) - 1.0) > 0.1) continue;   // not y-hat
+
+                // xz reflection found.  Standard B1 must be +1 here.
+                if (ctable[b2_idx * h + c] > 0.5)
+                    std::swap(result.irrep_names[b1_idx], result.irrep_names[b2_idx]);
+                break;
+            }
+        }
+    }
+
+    result.valid = true;
+    return result;
+}
 
 // ─── Public entry point ───────────────────────────────────────────────────────
 
