@@ -584,11 +584,14 @@ static Eigen::MatrixXd cart_to_sph_block(int L)
 //
 // Groups with all-1D irreps in the real character table (no E, T, … types):
 //   Ci, Cs             — always
-//   Cn, Cnh, Cnv,      — only for n ≤ 2
-//   Dn, Dnh, Dnd, Sn   — only for n ≤ 2
+//   Cn, Cnh, Cnv       — only for n ≤ 2  (C3, C3v, C3h, … have a 2D E irrep)
+//   Dn, Dnh            — only for n ≤ 2  (D3, D3h, … have a 2D E irrep)
+//   Dnd                — only for n ≤ 1  (D2d already has a 2D E irrep)
+//   Sn                 — never           (S4, S6, … all have 2D irreps; S2=Ci)
 //
-// Note: S6, C3, C3v, … are Abelian groups but have 2D real irreps ("E").
-// We require all-1D so every MO gets a unique, unambiguous irrep label.
+// Note: S6, C3, C3v, D2d, … are groups that might appear as "subgroups" but
+// still have multi-dimensional irreps.  We require all-1D so every MO gets a
+// unique, unambiguous irrep label and the projection formula is valid.
 static bool is_all_1d_irreps(msym_point_group_type_t t, int n)
 {
     switch (static_cast<int>(t))
@@ -601,9 +604,11 @@ static bool is_all_1d_irreps(msym_point_group_type_t t, int n)
         case 6:  // Cnv
         case 7:  // Dn
         case 8:  // Dnh
-        case 9:  // Dnd
-        case 10: // Sn
             return n <= 2;
+        case 9:  // Dnd — D2d already has a 2D E irrep; only D1d (≅ C2h) qualifies
+            return n <= 1;
+        case 10: // Sn  — S4 and higher all have 2D irreps; S2 = Ci (case 2)
+            return false;
         default:
             return false;
     }
@@ -693,11 +698,13 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
                     best       = &sgs[k];
                 }
             }
-            if (best != nullptr)
+            if (best == nullptr)
             {
-                if (MSYM_SUCCESS != msymSelectSubgroup(ctx.get(), best))
-                    throw std::runtime_error("build_sao_basis: msymSelectSubgroup failed");
+                // No Abelian all-1D subgroup found — SAO blocking is not possible.
+                return result;
             }
+            if (MSYM_SUCCESS != msymSelectSubgroup(ctx.get(), best))
+                throw std::runtime_error("build_sao_basis: msymSelectSubgroup failed");
         }
     }
 
