@@ -549,6 +549,154 @@ int main(int argc, const char* argv[])
                     opt_result.final_coords(a, 2)));
         }
         HartreeFock::Logger::blank();
+
+        // ── Final SCF at optimized geometry with symmetry enabled ─────────────
+        //
+        // Run detectSymmetry on the converged structure, then rebuild
+        // basis/integrals/SCF and print the point group and MO table.
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+            "Final Symmetry SCF :", "Re-running SCF at optimized geometry with symmetry");
+        HartreeFock::Logger::blank();
+
+        // Detect point group of the optimized structure
+        if (auto res = HartreeFock::Symmetry::detectSymmetry(calculator._molecule); !res)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                "Symmetry Detection :", std::format("Failed: {} — skipping symmetry SCF", res.error()));
+        }
+        else
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                "Point Group :", calculator._molecule._point_group);
+            HartreeFock::Logger::blank();
+
+            // Rebuild basis from the symmetry-reoriented standard frame
+            const std::string gbs_path_sym =
+                calculator._basis._basis_path + "/" + calculator._basis._basis_name;
+            calculator._shells = HartreeFock::BasisFunctions::read_gbs_basis(
+                gbs_path_sym, calculator._molecule, calculator._basis._basis);
+
+            // Reset SCF state
+            calculator._info._scf = HartreeFock::DataSCF(
+                calculator._scf._scf == HartreeFock::SCFType::UHF);
+            calculator._info._scf.initialize(calculator._shells.nbasis());
+            calculator._scf.set_scf_mode_auto(calculator._shells.nbasis());
+            calculator._info._is_converged = false;
+            calculator._use_sao_blocking   = false;
+
+            calculator._compute_nuclear_repulsion();
+
+            auto sp_sym  = build_shellpairs(calculator._shells);
+            auto [S_sym, T_sym] = _compute_1e(sp_sym, calculator._shells.nbasis(),
+                                               calculator._integral._engine);
+            auto V_sym = _compute_nuclear_attraction(sp_sym, calculator._shells.nbasis(),
+                                                      calculator._molecule,
+                                                      calculator._integral._engine);
+            calculator._overlap = S_sym;
+            calculator._hcore   = T_sym + V_sym;
+
+            // Try SAO symmetry blocking
+            if (calculator._molecule._point_group != "C1" &&
+                calculator._molecule._point_group.find("inf") == std::string::npos)
+            {
+                try
+                {
+                    auto sao = HartreeFock::Symmetry::build_sao_basis(calculator);
+                    if (sao.valid)
+                    {
+                        calculator._sao_transform     = std::move(sao.transform);
+                        calculator._sao_irrep_index   = std::move(sao.sao_irrep_index);
+                        calculator._sao_irrep_names   = std::move(sao.irrep_names);
+                        calculator._sao_block_sizes   = std::move(sao.block_sizes);
+                        calculator._sao_block_offsets = std::move(sao.block_offsets);
+                        calculator._use_sao_blocking  = true;
+
+                        std::string dist;
+                        for (std::size_t g = 0; g < calculator._sao_irrep_names.size(); ++g)
+                        {
+                            if (g > 0) dist += "  ";
+                            dist += calculator._sao_irrep_names[g] + "(" +
+                                    std::to_string(calculator._sao_block_sizes[g]) + ")";
+                        }
+                        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                            "SAO Basis :", dist);
+                        HartreeFock::Logger::blank();
+                    }
+                }
+                catch (const std::exception& e)
+                {
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                        "SAO Basis :", std::format("Skipped: {}", e.what()));
+                }
+            }
+
+            // Run SCF
+            std::expected<void, std::string> scf_sym_res;
+            if (calculator._scf._scf == HartreeFock::SCFType::UHF)
+                scf_sym_res = HartreeFock::SCF::run_uhf(calculator, sp_sym);
+            else
+                scf_sym_res = HartreeFock::SCF::run_rhf(calculator, sp_sym);
+
+            if (!scf_sym_res)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                    "Final Symmetry SCF :",
+                    std::format("SCF failed: {}", scf_sym_res.error()));
+            }
+            else
+            {
+                // Assign MO symmetry labels (if not already set by SAO blocking)
+                if (calculator._molecule._symmetry && !calculator._use_sao_blocking)
+                {
+                    try { HartreeFock::Symmetry::assign_mo_symmetry(calculator); }
+                    catch (const std::exception& e)
+                    {
+                        HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                            "MO Symmetry :", std::format("Skipped: {}", e.what()));
+                    }
+                }
+
+                // Print MO table
+                const bool have_symm_f = !calculator._info._scf.alpha.mo_symmetry.empty();
+                int n_elec_f = 0;
+                for (auto z : calculator._molecule.atomic_numbers) n_elec_f += z;
+                n_elec_f -= calculator._molecule.charge;
+
+                if (calculator._scf._scf == HartreeFock::SCFType::RHF)
+                {
+                    HartreeFock::Logger::mo_header(have_symm_f);
+                    HartreeFock::Logger::mo_energies(
+                        calculator._info._scf.alpha.mo_energies,
+                        static_cast<std::size_t>(n_elec_f),
+                        calculator._info._scf.alpha.mo_symmetry);
+                    HartreeFock::Logger::blank();
+                }
+                else
+                {
+                    const int n_unpaired_f = static_cast<int>(calculator._molecule.multiplicity) - 1;
+                    const std::size_t n_alpha_f = static_cast<std::size_t>((n_elec_f + n_unpaired_f) / 2);
+                    const std::size_t n_beta_f  = static_cast<std::size_t>((n_elec_f - n_unpaired_f) / 2);
+                    const bool have_symm_b_f = !calculator._info._scf.beta.mo_symmetry.empty();
+
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Alpha MOs :", "");
+                    HartreeFock::Logger::mo_header(have_symm_f);
+                    HartreeFock::Logger::mo_energies_uhf(
+                        calculator._info._scf.alpha.mo_energies, n_alpha_f,
+                        calculator._info._scf.alpha.mo_symmetry);
+                    HartreeFock::Logger::blank();
+
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Beta MOs :", "");
+                    HartreeFock::Logger::mo_header(have_symm_b_f);
+                    HartreeFock::Logger::mo_energies_uhf(
+                        calculator._info._scf.beta.mo_energies, n_beta_f,
+                        calculator._info._scf.beta.mo_symmetry);
+                    HartreeFock::Logger::blank();
+                }
+
+                HartreeFock::Logger::converged_energy(calculator._total_energy);
+                HartreeFock::Logger::blank();
+            }
+        }
     }
 
     const auto program_end = SystemClock::now();
