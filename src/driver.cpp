@@ -81,6 +81,49 @@ int main(int argc, const char* argv[])
     // detection and basis reading, both of which need _coordinates in Bohr.
     calculator.prepare_coordinates();
 
+    // ── guess full: restore geometry from checkpoint before symmetry/basis setup ─
+    //
+    // When the user requests guess full, the molecule geometry, charge, and
+    // multiplicity are taken from the checkpoint (e.g. an optimized geometry)
+    // rather than the input file.  This must happen before detectSymmetry() and
+    // read_gbs_basis() so that they operate on the checkpoint geometry.
+    if (calculator._scf._guess == HartreeFock::SCFGuess::ReadFull)
+    {
+        if (auto geo = HartreeFock::Checkpoint::load_geometry(calculator._checkpoint_path); geo)
+        {
+            // Validate atom count matches
+            if (geo->natoms != calculator._molecule.natoms)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Checkpoint :",
+                    std::format("Atom count mismatch: checkpoint has {}, input has {}",
+                                geo->natoms, calculator._molecule.natoms));
+                return EXIT_FAILURE;
+            }
+
+            // Override geometry, charge, and multiplicity
+            calculator._molecule._standard     = geo->coords_bohr;
+            calculator._molecule._coordinates  = geo->coords_bohr;
+            calculator._molecule.coordinates   = geo->coords_bohr / ANGSTROM_TO_BOHR;
+            calculator._molecule.charge        = geo->charge;
+            calculator._molecule.multiplicity  = geo->multiplicity;
+            calculator._molecule.atomic_numbers = geo->atomic_numbers;
+
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
+                std::format("Restoring {} geometry from {}{}",
+                            geo->has_opt_coords ? "optimized" : "input",
+                            calculator._checkpoint_path,
+                            geo->has_opt_coords ? " (converged geomopt)" : ""));
+        }
+        else
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
+                std::format("Could not read geometry: {} — falling back to guess density",
+                            geo.error()));
+            // Downgrade to density-only restart
+            calculator._scf._guess = HartreeFock::SCFGuess::ReadDensity;
+        }
+    }
+
     // Now log all input options
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :",           map_enum(calculator._scf._scf));
@@ -181,14 +224,26 @@ int main(int argc, const char* argv[])
     // ── One-electron integrals (or load from checkpoint) ─────────────────────
     bool loaded_from_checkpoint = false;
 
-    if (calculator._scf._guess == HartreeFock::SCFGuess::Read)
+    const bool want_checkpoint =
+        (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
+         calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
+
+    if (want_checkpoint)
     {
-        // ── Fast path: same-basis restart ─────────────────────────────────────
-        if (auto res = HartreeFock::Checkpoint::load(calculator, calculator._checkpoint_path); res)
+        // guess full:    load 1e matrices (geometry matches checkpoint) — skips integral recompute
+        // guess density: load density only (geometry from input) — integrals recomputed below
+        const bool load_1e = (calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
+
+        if (auto res = HartreeFock::Checkpoint::load(
+                calculator, calculator._checkpoint_path, load_1e); res)
         {
-            loaded_from_checkpoint = true;
+            // For guess full the 1e matrices are valid → skip recompute.
+            // For guess density we still need to compute fresh integrals.
+            loaded_from_checkpoint = load_1e;
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
-                std::format("Loaded from {}", calculator._checkpoint_path));
+                std::format("Loaded from {} ({})",
+                            calculator._checkpoint_path,
+                            load_1e ? "geometry + density" : "density only"));
             HartreeFock::Logger::blank();
         }
         else
@@ -695,6 +750,22 @@ int main(int argc, const char* argv[])
 
                 HartreeFock::Logger::converged_energy(calculator._total_energy);
                 HartreeFock::Logger::blank();
+
+                // ── Save checkpoint with optimized geometry ───────────────────
+                // Re-save after the final symmetry SCF so the checkpoint holds
+                // the converged geometry, the symmetry-frame density, and has
+                // has_opt_coords = 1.  This allows "guess full" on a later run.
+                if (calculator._scf._save_checkpoint)
+                {
+                    if (auto cres = HartreeFock::Checkpoint::save(
+                            calculator, calculator._checkpoint_path); cres)
+                        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                            "Checkpoint :", std::format("Updated with optimized geometry: {}",
+                                                         calculator._checkpoint_path));
+                    else
+                        HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                            "Checkpoint :", std::format("Save failed: {}", cres.error()));
+                }
             }
         }
     }

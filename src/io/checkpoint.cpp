@@ -103,7 +103,7 @@ static void read_spin_channel(std::istream& in, HartreeFock::SpinChannel& ch)
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 static constexpr char MAGIC[8] = {'P','L','N','K','C','H','K','\0'};
-static constexpr uint32_t VERSION = 1;
+static constexpr uint32_t VERSION = 2;
 
 std::expected<void, std::string> HartreeFock::Checkpoint::save(
     const HartreeFock::Calculator& calc,
@@ -144,6 +144,11 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
     // Basis name for informational validation
     write_string(out, calc._basis._basis_name);
 
+    // has_opt_coords: 1 if these coordinates came from a converged geometry optimization
+    const bool is_opt = (calc._calculation == HartreeFock::CalculationType::GeomOpt
+                         && calc._info._is_converged);
+    write_pod<uint8_t>(out, static_cast<uint8_t>(is_opt ? 1 : 0));
+
     // ── One-electron matrices ─────────────────────────────────────────────────
     write_matrix(out, calc._overlap);
     write_matrix(out, calc._hcore);
@@ -161,7 +166,8 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
 
 std::expected<void, std::string> HartreeFock::Checkpoint::load(
     HartreeFock::Calculator& calc,
-    const std::string& path)
+    const std::string& path,
+    bool load_1e_matrices)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in)
@@ -208,6 +214,8 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
         // The nbasis check below will catch incompatible sizes.
     }
 
+    read_pod<uint8_t>(in);   // has_opt_coords (informational; geometry handled by load_geometry)
+
     // ── Validate basis size ───────────────────────────────────────────────────
     const std::size_t cur_nb = calc._shells.nbasis();
     if (chk_nb != static_cast<uint64_t>(cur_nb))
@@ -217,8 +225,18 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
                         chk_nb, cur_nb));
 
     // ── One-electron matrices ─────────────────────────────────────────────────
-    calc._overlap = read_matrix(in);
-    calc._hcore   = read_matrix(in);
+    // Only apply when the stored geometry matches current geometry (guess full).
+    // For guess density the caller recomputes fresh integrals; skip the matrices.
+    if (load_1e_matrices)
+    {
+        calc._overlap = read_matrix(in);
+        calc._hcore   = read_matrix(in);
+    }
+    else
+    {
+        read_matrix(in);  // overlap — discard
+        read_matrix(in);  // hcore   — discard
+    }
 
     // ── SCF results ───────────────────────────────────────────────────────────
     read_spin_channel(in, calc._info._scf.alpha);
@@ -275,6 +293,7 @@ HartreeFock::Checkpoint::load_mos(const std::string& path)
         read_pod<double>(in);    // coordinates
 
     result.basis_name = read_string(in);
+    read_pod<uint8_t>(in);   // has_opt_coords
 
     // ── Skip 1e matrices ───────────────────────────────────────────────────────
     read_matrix(in);  // overlap
@@ -300,6 +319,56 @@ HartreeFock::Checkpoint::load_mos(const std::string& path)
             std::format("I/O error while reading MOs from checkpoint: {}", path));
 
     return result;
+}
+
+std::expected<HartreeFock::Checkpoint::GeometryData, std::string>
+HartreeFock::Checkpoint::load_geometry(const std::string& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+        return std::unexpected(std::format("Cannot open checkpoint file: {}", path));
+
+    char magic[8] = {};
+    in.read(magic, 8);
+    if (std::memcmp(magic, MAGIC, 8) != 0)
+        return std::unexpected("Not a valid Planck checkpoint file (bad magic)");
+
+    const uint32_t version = read_pod<uint32_t>(in);
+    if (version != VERSION)
+        return std::unexpected(
+            std::format("Checkpoint version mismatch: file={}, expected={}", version, VERSION));
+
+    // Skip: nbasis, is_uhf, is_converged, last_iter, total_energy, nuclear_repulsion
+    read_pod<uint64_t>(in);  // nbasis
+    read_pod<uint8_t>(in);   // is_uhf
+    read_pod<uint8_t>(in);   // is_converged
+    read_pod<uint32_t>(in);  // last_iter
+    read_pod<double>(in);    // total_energy
+    read_pod<double>(in);    // nuclear_repulsion
+
+    GeometryData geo;
+    geo.natoms       = static_cast<std::size_t>(read_pod<uint64_t>(in));
+    geo.charge       = static_cast<int>(read_pod<int32_t>(in));
+    geo.multiplicity = static_cast<unsigned int>(read_pod<uint32_t>(in));
+
+    geo.atomic_numbers.resize(static_cast<int>(geo.natoms));
+    for (std::size_t i = 0; i < geo.natoms; ++i)
+        geo.atomic_numbers[static_cast<int>(i)] = read_pod<int32_t>(in);
+
+    geo.coords_bohr.resize(static_cast<int>(geo.natoms), 3);
+    for (std::size_t i = 0; i < geo.natoms; ++i)
+        for (int k = 0; k < 3; ++k)
+            geo.coords_bohr(static_cast<int>(i), k) = read_pod<double>(in);
+
+    read_string(in);  // basis_name (not needed here)
+
+    geo.has_opt_coords = (read_pod<uint8_t>(in) != 0);
+
+    if (!in)
+        return std::unexpected(
+            std::format("I/O error while reading geometry from checkpoint: {}", path));
+
+    return geo;
 }
 
 Eigen::MatrixXd HartreeFock::Checkpoint::project_density(

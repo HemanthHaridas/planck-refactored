@@ -251,8 +251,10 @@ namespace HartreeFock::IO
     {
         static const std::unordered_map<std::string, HartreeFock::SCFGuess> _table =
         {
-            {"hcore", HartreeFock::SCFGuess::HCore},
-            {"read",  HartreeFock::SCFGuess::Read}
+            {"hcore",   HartreeFock::SCFGuess::HCore},
+            {"read",    HartreeFock::SCFGuess::ReadDensity},  // backward compat alias
+            {"density", HartreeFock::SCFGuess::ReadDensity},
+            {"full",    HartreeFock::SCFGuess::ReadFull},
         };
 
         auto _value = toLower(value);

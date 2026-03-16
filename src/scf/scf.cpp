@@ -74,9 +74,12 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     const Eigen::MatrixXd& U = calculator._sao_transform;   // ref, no copy
 
     // ── Initial density ───────────────────────────────────────────────────────
-    // SCFGuess::Read: reuse density loaded from checkpoint.
+    // ReadDensity / ReadFull: reuse density loaded from checkpoint.
     // The driver already reset _guess to HCore if the checkpoint load failed.
-    Eigen::MatrixXd P = (calculator._scf._guess == HartreeFock::SCFGuess::Read)
+    const bool use_chk_density =
+        (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
+         calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
+    Eigen::MatrixXd P = use_chk_density
         ? calculator._info._scf.alpha.density
         : initial_density(H, X, n_occ);
 
@@ -331,8 +334,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         return C.leftCols(n_occ) * C.leftCols(n_occ).transpose();
     };
 
-    // SCFGuess::Read: reuse densities loaded from checkpoint.
-    const bool use_chk_uhf = (calculator._scf._guess == HartreeFock::SCFGuess::Read);
+    // ReadDensity / ReadFull: reuse densities loaded from checkpoint.
+    const bool use_chk_uhf =
+        (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
+         calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
 
     Eigen::MatrixXd Pa = use_chk_uhf
         ? calculator._info._scf.alpha.density
