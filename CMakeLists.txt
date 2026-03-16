@@ -162,3 +162,28 @@ endif()
 
 # Install executable
 install(TARGETS hartree-fock DESTINATION bin)
+
+# ── Optional utility tools ────────────────────────────────────────────────────
+option(BUILD_TOOLS "Build utility tools (chkdump checkpoint formatter)" ON)
+
+if(BUILD_TOOLS)
+    add_executable(chkdump
+        ${CMAKE_SOURCE_DIR}/tools/chkdump.cpp
+    )
+
+    target_include_directories(chkdump PRIVATE
+        ${eigen_SOURCE_DIR}
+    )
+
+    set_target_properties(chkdump PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    install(TARGETS chkdump DESTINATION bin)
+
+    message(STATUS "Tools : chkdump enabled")
+else()
+    message(STATUS "Tools : disabled (BUILD_TOOLS=OFF)")
+endif()
