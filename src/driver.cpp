@@ -21,6 +21,7 @@
 #include "post_hf/mp2.h"
 #include "gradient/gradient.h"
 #include "opt/geomopt.h"
+#include "freq/hessian.h"
 
 using SystemClock = std::chrono::system_clock;
 
@@ -767,6 +768,82 @@ int main(int argc, const char* argv[])
                             "Checkpoint :", std::format("Save failed: {}", cres.error()));
                 }
             }
+        }
+    }
+
+    // ── Vibrational frequency analysis ───────────────────────────────────────
+    if (calculator._info._is_converged &&
+        calculator._calculation == HartreeFock::CalculationType::Frequency)
+    {
+        // Ensure gradient has been computed for the reference geometry.
+        // (For a frequency-only run the analytic gradient was not computed above;
+        //  the Hessian routine will call _run_sp_gradient_freq internally which
+        //  also updates _gradient, so we don't need a separate gradient call here.)
+
+        HartreeFock::Logger::blank();
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+            "Frequency :", "Computing semi-numerical Hessian (analytic gradients)");
+
+        try
+        {
+            auto freq_result = HartreeFock::Freq::compute_hessian(calculator);
+
+            // Store results on the calculator
+            calculator._hessian      = freq_result.hessian;
+            calculator._frequencies  = freq_result.frequencies;
+            calculator._normal_modes = freq_result.normal_modes;
+            calculator._zpe          = freq_result.zpe;
+
+            // ── Print frequency table ─────────────────────────────────────────
+            HartreeFock::Logger::blank();
+            const int n_vib   = freq_result.n_vib;
+            const int n_tr    = static_cast<int>(calculator._molecule.natoms * 3) - n_vib;
+            const std::string geo_label = freq_result.is_linear ? "linear" : "non-linear";
+
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                "Vibrational Frequencies :", "");
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                std::format("  Molecule: {} ({} T+R modes removed, {} vibrational modes)",
+                            geo_label, n_tr, n_vib));
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                "  ──────────────────────────────────────────");
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                "    Mode    Frequency (cm⁻¹)");
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                "  ────────────────────────────────────────────");
+
+            for (int i = 0; i < n_vib; ++i)
+            {
+                const double freq = freq_result.frequencies[i];
+                if (freq < 0.0)
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                        std::format("  {:6d}  {:14.2f}i  (imaginary)", i + 1, -freq));
+                else
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                        std::format("  {:6d}  {:14.2f}", i + 1, freq));
+            }
+
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                "  ────────────────────────────────────────────");
+
+            if (freq_result.n_imaginary > 0)
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                    "Frequency :",
+                    std::format("{} imaginary frequency(ies) — structure may be a saddle point",
+                                freq_result.n_imaginary));
+
+            const double zpe_kcal = freq_result.zpe * 627.509474;
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                "Zero-point energy :",
+                std::format("{:.6f} Eh  ({:.2f} kcal/mol)",
+                            freq_result.zpe, zpe_kcal));
+            HartreeFock::Logger::blank();
+        }
+        catch (const std::exception& e)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error,
+                "Frequency Failed :", e.what());
+            return EXIT_FAILURE;
         }
     }
 

@@ -1,6 +1,6 @@
 ### Planck
 
-A Hartree-Fock quantum chemistry program implementing restricted and unrestricted SCF theory with an Obara-Saika integral engine, analytic nuclear gradients, geometry optimization, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
+A Hartree-Fock quantum chemistry program implementing restricted and unrestricted SCF theory with an Obara-Saika integral engine, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
 
 ### Features
 
@@ -14,7 +14,8 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 - **Post-HF** — RMP2 and UMP2 correlation energy corrections
 - **Analytic nuclear gradients** — RHF and UHF nuclear gradients via the Obara-Saika AM-shift rule; all five terms (1e GTO-centre, nucleus-position V, ERI, Pulay/overlap, nuclear repulsion) assembled exactly
 - **Geometry optimization** — L-BFGS optimizer in Cartesian coordinates or BFGS optimizer in redundant generalized internal coordinates (GIC); Wolfe/Armijo line search; convergence on max Cartesian gradient component
-- **Checkpoint system** — binary `.hfchk` files; same-basis restart (skips 1e integrals) and cross-basis density projection (Löwdin SVD)
+- **Vibrational frequency analysis** — semi-numerical Hessian from central finite differences of analytic gradients (2×3N evaluations); mass-weighted normal mode analysis with Eckart T+R projection; outputs vibrational frequencies in cm⁻¹ (imaginary encoded negative), zero-point energy in Ha and kcal/mol; linearity auto-detected
+- **Checkpoint system** — binary `.hfchk` files (version 2); same-basis restart (`guess density`), full geometry+density restart (`guess full`), and cross-basis density projection (Löwdin SVD); checkpoint stores `has_opt_coords` flag set after a converged geometry optimization
 - **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*
 
 ### Requirements
@@ -109,7 +110,7 @@ General calculation settings.
 |---|---|---|---|---|
 | `basis` | string | `sto-3g`, `3-21g`, `6-31g`, `6-31g*` | — | Basis set name |
 | `basis_type` | enum | `cartesian`, `spherical` | `cartesian` | Angular function type. Only Cartesian is fully supported. |
-| `calculation` | enum | `energy` / `sp`, `gradient` / `grad`, `geomopt` / `opt`, `freq` / `frequency` | — | Calculation type. `gradient` computes the analytic nuclear gradient at the input geometry and stops. `geomopt` optimizes the geometry. |
+| `calculation` | enum | `energy` / `sp`, `gradient` / `grad`, `geomopt` / `opt`, `freq` / `frequency` | — | Calculation type. `gradient` computes the analytic nuclear gradient at the input geometry and stops. `geomopt` optimizes the geometry. `freq` computes the semi-numerical Hessian and vibrational frequencies. |
 | `verbosity` | enum | `silent`, `minimal`, `normal`, `verbose`, `debug` | `minimal` | Output level |
 | `basis_path` | string | filesystem path | compiled-in | Override the basis set search directory |
 
@@ -132,7 +133,7 @@ SCF procedure and convergence settings.
 | `scf_mode` | enum | `conventional`, `direct`, `auto` | `conventional` | ERI strategy. `conventional`: build the full ERI tensor once before the SCF loop and reuse it (fast per-iteration, higher memory). `direct`: recompute ERIs every iteration (low memory, slower). `auto`: selects `conventional` when `nbasis ≤ threshold`, otherwise `direct`. Only the Obara-Saika engine supports conventional mode; other engines always use direct. |
 | `tol_eri` | float | > 0 | `1e-10` | ERI screening threshold (Schwarz) |
 | `threshold` | int | ≥ 1 | `100` | Basis function count cutoff used by `scf_mode auto` to decide between conventional and direct. |
-| `guess` | enum | `hcore`, `read` | `hcore` | Initial density guess. `read` loads from the checkpoint file; falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. |
+| `guess` | enum | `hcore`, `density`, `full` | `hcore` | Initial density guess. `density` loads only the density matrix from the checkpoint (geometry and 1e integrals are recomputed from the input file). `full` restores geometry, charge, multiplicity, and density from the checkpoint — useful to restart from an optimized geometry. Falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.true.` | Write a `.hfchk` checkpoint file after successful convergence |
 
 ### Section: `%begin_geom`
@@ -377,6 +378,55 @@ Add `opt_coords internal` in `%begin_geom`. Bonds, valence bends, and proper tor
 %end_geom
 ```
 
+### Vibrational frequency analysis — water, STO-3G
+
+Set `calculation freq` to compute a semi-numerical Hessian (central finite differences of analytic gradients) and perform mass-weighted normal mode analysis. For best results run at an optimized geometry (no imaginary frequencies):
+
+```
+%begin_control
+    basis       sto-3g
+    calculation freq
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.000000
+H     0.000000     0.756951     0.585766
+H     0.000000    -0.756951     0.585766
+%end_coords
+```
+
+Expected output at the HF/STO-3G optimized geometry:
+
+```
+[INF]  Vibrational Frequencies :
+[INF]    Molecule: non-linear (6 T+R modes removed, 3 vibrational modes)
+[INF]      Mode    Frequency (cm⁻¹)
+[INF]         1         1749.xx
+[INF]         2         3949.xx
+[INF]         3         4131.xx
+[INF]  Zero-point energy :  0.020xxx Eh  (12.xx kcal/mol)
+```
+
+The step size for finite differences can be changed with `hessian_step` in `%begin_control` (default 5×10⁻³ Bohr). For 2×3N gradient evaluations are required (18 for water). Imaginary frequencies are printed as negative values.
+
 ### Cross-basis restart — STO-3G → 6-31G
 
 Run STO-3G first (saves `mol.hfchk`), then change the basis and add `guess read`:
@@ -416,11 +466,34 @@ The program prints a structured log to standard output. Key sections:
 - **IC System** — when `opt_coords internal`, logs the count of stretches, bends, and torsions in the redundant GIC set
 - **Opt Step N** — per-step log line: energy, max Cartesian gradient, and RMS IC gradient (IC mode) or RMS Cartesian gradient (Cartesian mode)
 - **Optimized Geometry** — final Cartesian coordinates in Bohr after convergence
+- **Vibrational Frequencies** — when `calculation freq`: molecule type (linear/non-linear), number of T+R modes removed, n_vib vibrational frequencies in cm⁻¹ (negative = imaginary), and zero-point energy in Eh and kcal/mol
 - **Wall Time** — total elapsed time
+
+### Section: `%begin_control` (additional keywords)
+
+| Keyword | Type | Default | Description |
+|---|---|---|---|
+| `grad_tol` | float | `3e-4` | Geometry optimization convergence threshold: maximum Cartesian gradient component in Ha/Bohr |
+| `max_geomopt_iter` | int | `50` | Maximum number of geometry optimization steps |
+| `hessian_step` | float | `5e-3` | Finite-difference step size in Bohr for the semi-numerical Hessian |
 
 ## Build Options
 
 | CMake variable | Default | Description |
 |---|---|---|
 | `USE_OPENMP` | `ON` | Enable OpenMP parallelism for integral loops |
+| `BUILD_TOOLS` | `ON` | Build utility tools (`chkdump` checkpoint formatter) |
 | `CMAKE_INSTALL_PREFIX` | `./install` | Installation prefix |
+
+## Utility Tools
+
+### `chkdump`
+
+Converts a binary `.hfchk` checkpoint file to formatted human-readable text:
+
+```bash
+./build/chkdump mol.hfchk            # → stdout
+./build/chkdump mol.hfchk mol.txt    # → file
+```
+
+Output includes: format version, SCF type, convergence status, total energy, nuclear repulsion, geometry (with element symbols), MO energies with HOMO/LUMO labels, overlap matrix, core Hamiltonian, density matrix, Fock matrix, and MO coefficients. Disable with `-DBUILD_TOOLS=OFF`.

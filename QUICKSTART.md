@@ -234,7 +234,74 @@ Water/STO-3G converges in 3 steps with IC-BFGS vs. 4 with Cartesian L-BFGS:
 
 ---
 
-## 6. Z-matrix input
+## 6. Vibrational frequency analysis
+
+Set `calculation freq` to compute vibrational frequencies at the current geometry. The program uses a semi-numerical Hessian (central finite differences of analytic gradients): for each Cartesian DOF, two displaced SCF+gradient evaluations are performed, requiring 2×3N gradient calls in total (18 for water).
+
+For physically meaningful results, run at a stationary point (optimized geometry) — imaginary frequencies indicate a saddle point.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation freq
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.000000
+H     0.000000     0.756951     0.585766
+H     0.000000    -0.756951     0.585766
+%end_coords
+```
+
+Output (abbreviated):
+
+```
+[INF]  Hessian :  Semi-numerical (central differences, h = 0.0050 Bohr, 18 evaluations)
+[INF]  Hessian :    9/9 displacements done
+
+[INF]  Vibrational Frequencies :
+[INF]    Molecule: non-linear (6 T+R modes removed, 3 vibrational modes)
+[INF]      Mode    Frequency (cm⁻¹)
+[INF]         1         1749.xx
+[INF]         2         3949.xx
+[INF]         3         4131.xx
+[INF]  Zero-point energy :  0.020xxx Eh  (12.xx kcal/mol)
+```
+
+### Combined geomopt + freq workflow
+
+A common pattern: optimize to a minimum, then compute frequencies to confirm it is a true minimum (no imaginary frequencies):
+
+1. Run `calculation geomopt` → saves `mol.hfchk` with `has_opt_coords = 1`
+2. Run `calculation freq` with `guess full` → restores optimized geometry from checkpoint, runs SCF in one step, then computes Hessian
+
+```
+%begin_scf
+    guess full   # restore geometry + density from checkpoint
+%end_scf
+```
+
+---
+
+## 7. Z-matrix input
 
 Coordinates can be given in Z-matrix (internal coordinate) format. Set `coord_type zmatrix` in `%begin_geom`. Bond lengths are in the units from `coord_units`; angles and dihedrals are always in degrees.
 
@@ -258,7 +325,7 @@ Each row after the header gives the element symbol followed by reference atom in
 
 ---
 
-## 7. SCF mode
+## 8. SCF mode
 
 | Mode | Keyword | When to use |
 |---|---|---|
@@ -285,7 +352,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 
 ---
 
-## 8. Basis sets
+## 9. Basis sets
 
 | Keyword | Description |
 |---|---|
@@ -296,7 +363,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 
 ---
 
-## 9. Convergence tips
+## 10. Convergence tips
 
 | Problem | Fix |
 |---|---|
@@ -309,24 +376,25 @@ For large systems set `scf_mode direct` or lower `threshold`:
 
 ---
 
-## 10. All input keywords at a glance
+## 11. All input keywords at a glance
 
 ```
 %begin_control
     basis        sto-3g | 3-21g | 6-31g | 6-31g*
     basis_type   cartesian | spherical
-    calculation  energy | gradient | geomopt | freq
+    calculation  energy | gradient | geomopt | freq   # freq = frequency analysis
     verbosity    silent | minimal | normal | verbose | debug
     basis_path   /path/to/basis-sets          # optional override
     grad_tol     3e-4                         # geomopt convergence threshold (Ha/Bohr)
     max_geomopt_iter  50                      # maximum geometry optimization steps
+    hessian_step 5e-3                         # finite-difference step (Bohr) for freq
 %end_control
 
 %begin_scf
     scf_type       rhf | uhf
     scf_mode       conventional | direct | auto
     engine         os
-    guess          hcore | read
+    guess          hcore | density | full
     save_checkpoint .true. | .false.
     use_diis       .true. | .false.
     diis_dim       8

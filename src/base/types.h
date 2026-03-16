@@ -635,6 +635,13 @@ namespace HartreeFock
         int    _geomopt_lbfgs_m   = 10;     // L-BFGS history size
         OptCoords _opt_coords = OptCoords::Cartesian;  // coordinate system for optimization
 
+        // Hessian / frequency analysis
+        Eigen::MatrixXd _hessian;           // 3N×3N Cartesian Hessian, Ha/Bohr²
+        Eigen::VectorXd _frequencies;       // n_vib vibrational frequencies in cm⁻¹
+        Eigen::MatrixXd _normal_modes;      // 3N × n_vib mass-unweighted normal modes
+        double          _zpe = 0.0;         // zero-point energy in Ha
+        double          _hessian_step = 5e-3; // finite-difference step in Bohr
+
         void _compute_nuclear_repulsion() noexcept
         {
             const std::size_t N = _molecule.natoms;

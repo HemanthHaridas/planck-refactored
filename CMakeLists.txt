@@ -127,6 +127,11 @@ file(GLOB OPT_SRC
     ${SRC_DIR}/opt/*.cpp
 )
 
+file(GLOB FREQ_SRC
+    ${SRC_DIR}/freq/*.h
+    ${SRC_DIR}/freq/*.cpp
+)
+
 # Executable target
 add_executable(hartree-fock
     ${BASE_SRC}
@@ -140,6 +145,7 @@ add_executable(hartree-fock
     ${POSTHF_SRC}
     ${GRADIENT_SRC}
     ${OPT_SRC}
+    ${FREQ_SRC}
 )
 
 # Include directories
