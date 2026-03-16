@@ -142,7 +142,99 @@ After a converged run, `water.hfchk` is written automatically. Add `guess read` 
 
 ---
 
-## 5. Z-matrix input
+## 5. Analytic gradient and geometry optimization
+
+### Gradient only
+
+Set `calculation gradient` to compute the analytic nuclear gradient at the input geometry and stop. The gradient is printed in Ha/Bohr, one row per atom:
+
+```
+%begin_control
+    basis       sto-3g
+    calculation gradient
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    engine      os
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.100000
+H     0.800000     0.000000    -0.500000
+H    -0.800000     0.000000    -0.500000
+%end_coords
+```
+
+Expected output (abbreviated):
+
+```
+[INF]  Nuclear Gradient (Ha/Bohr) :
+[INF]    Atom   1:     0.00000000     0.00000000    -0.00819754
+[INF]    Atom   2:     0.02280618     0.00000000     0.00409877
+[INF]    Atom   3:    -0.02280618     0.00000000     0.00409877
+[INF]  Gradient max|g| :   2.281e-02 Ha/Bohr
+```
+
+### Geometry optimization — Cartesian L-BFGS
+
+Change `calculation gradient` to `calculation geomopt`. The optimizer runs L-BFGS with a strong-Wolfe line search and stops when the maximum Cartesian gradient component falls below `grad_tol` (default 3×10⁻⁴ Ha/Bohr):
+
+```
+%begin_control
+    basis       sto-3g
+    calculation geomopt
+    ...
+```
+
+Per-step output:
+
+```
+[INF]  Opt Step 0 :  E = -74.9638050907 Eh   max|g| = 2.281e-02   rms|g| = 1.126e-02
+[INF]  Opt Step 1 :  E = -74.9647769650 Eh   max|g| = 1.484e-02   rms|g| = 8.133e-03
+...
+[INF]  Geometry Optimization :  Converged in 4 steps
+[INF]  Final Energy :           -74.9659011679 Eh
+```
+
+### Geometry optimization — internal coordinates (IC-BFGS)
+
+Add `opt_coords internal` (or `ic`) in `%begin_geom` to optimize in redundant generalized internal coordinates. Bonds, bends, and torsions are auto-detected from the geometry using covalent radii. The Hessian is initialized diagonally and updated via BFGS. IC steps are back-transformed to Cartesian via Schlegel microiterations. This typically converges in fewer steps than the Cartesian optimizer:
+
+```
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+    opt_coords  internal
+%end_geom
+```
+
+Water/STO-3G converges in 3 steps with IC-BFGS vs. 4 with Cartesian L-BFGS:
+
+```
+[INF]  IC System :   2 stretches, 1 bends, 0 torsions (3 total)
+[INF]  Opt Step 0 :  E = -74.9638050907 Eh   max|g| = 2.281e-02   rms|g_ic| = 2.255e-02
+[INF]  Opt Step 1 :  E = -74.9653705229 Eh   max|g| = 1.295e-02   rms|g_ic| = 1.226e-02
+[INF]  Opt Step 2 :  E = -74.9658997244 Eh   max|g| = 7.026e-04   rms|g_ic| = 6.552e-04
+[INF]  Opt Step 3 :  E = -74.9659012162 Eh   max|g| = 1.487e-05   rms|g_ic| = 1.532e-05
+[INF]  Geometry Optimization :  Converged in 3 steps
+[INF]  Final Energy :           -74.9659012162 Eh
+```
+
+---
+
+## 6. Z-matrix input
 
 Coordinates can be given in Z-matrix (internal coordinate) format. Set `coord_type zmatrix` in `%begin_geom`. Bond lengths are in the units from `coord_units`; angles and dihedrals are always in degrees.
 
@@ -166,7 +258,7 @@ Each row after the header gives the element symbol followed by reference atom in
 
 ---
 
-## 6. SCF mode
+## 7. SCF mode
 
 | Mode | Keyword | When to use |
 |---|---|---|
@@ -193,7 +285,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 
 ---
 
-## 7. Basis sets
+## 8. Basis sets
 
 | Keyword | Description |
 |---|---|
@@ -204,7 +296,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 
 ---
 
-## 8. Convergence tips
+## 9. Convergence tips
 
 | Problem | Fix |
 |---|---|
@@ -217,15 +309,17 @@ For large systems set `scf_mode direct` or lower `threshold`:
 
 ---
 
-## 9. All input keywords at a glance
+## 10. All input keywords at a glance
 
 ```
 %begin_control
     basis        sto-3g | 3-21g | 6-31g | 6-31g*
     basis_type   cartesian | spherical
-    calculation  energy | geomopt | freq
+    calculation  energy | gradient | geomopt | freq
     verbosity    silent | minimal | normal | verbose | debug
     basis_path   /path/to/basis-sets          # optional override
+    grad_tol     3e-4                         # geomopt convergence threshold (Ha/Bohr)
+    max_geomopt_iter  50                      # maximum geometry optimization steps
 %end_control
 
 %begin_scf
@@ -250,6 +344,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
     coord_type   cartesian | zmatrix
     coord_units  angstrom | bohr
     use_symm     .true. | .false.
+    opt_coords   cartesian | internal           # geomopt coordinate system
 %end_geom
 
 %begin_coords

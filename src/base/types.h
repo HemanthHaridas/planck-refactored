@@ -66,6 +66,7 @@ namespace HartreeFock
     enum class CalculationType
     {
         SinglePoint,    // Single point Energy Calculation
+        Gradient,       // Analytic nuclear gradient
         GeomOpt,        // Geometry Optimization
         Frequency       // Frequency Calculation
     };
@@ -80,6 +81,12 @@ namespace HartreeFock
     enum class IntegralMethod
     {
         ObaraSaika,        // Obara-Saika recursion (default)
+    };
+
+    enum class OptCoords
+    {
+        Cartesian,  // Optimize in Cartesian coordinates (L-BFGS, default)
+        Internal    // Optimize in generalized internal coordinates (BFGS)
     };
 
     enum class Verbosity
@@ -619,6 +626,13 @@ namespace HartreeFock
         std::vector<int>         _sao_block_sizes;    // n_SAOs per irrep block
         std::vector<int>         _sao_block_offsets;  // start offset per block in SAO ordering
         bool                     _use_sao_blocking = false;
+
+        // Gradient and geometry optimization
+        Eigen::MatrixXd _gradient;          // natoms×3, Ha/Bohr; set by compute_rhf/uhf_gradient()
+        double _geomopt_grad_tol  = 3e-4;   // convergence: max |∂E/∂x_i| in Ha/Bohr
+        int    _geomopt_max_iter  = 50;     // maximum geometry steps
+        int    _geomopt_lbfgs_m   = 10;     // L-BFGS history size
+        OptCoords _opt_coords = OptCoords::Cartesian;  // coordinate system for optimization
 
         void _compute_nuclear_repulsion() noexcept
         {

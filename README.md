@@ -1,6 +1,6 @@
 ### Planck
 
-A Hartree-Fock quantum chemistry program implementing restricted and unrestricted SCF theory with an Obara-Saika integral engine, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
+A Hartree-Fock quantum chemistry program implementing restricted and unrestricted SCF theory with an Obara-Saika integral engine, analytic nuclear gradients, geometry optimization, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
 
 ### Features
 
@@ -12,6 +12,8 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
 - **MO symmetry** — irreducible representation labels (A1, B2, Ag, Bu, …) assigned to each converged orbital; Cartesian AO coefficients are transformed to the real spherical harmonic basis and decomposed into symmetry species via libmsym's SALC machinery; the Cartesian→spherical block transform covers all shells supported by the integral engine (S through H, L=0–5); for non-Abelian groups (D3d, Td, Oh, …) the largest Abelian subgroup with all one-dimensional irreps is automatically selected (e.g. C2h for D3d) so every MO receives a unique, unambiguous label — the active group or subgroup is printed to the log; linear molecules (C∞v / D∞h) use a dedicated character-based handler
 - **Post-HF** — RMP2 and UMP2 correlation energy corrections
+- **Analytic nuclear gradients** — RHF and UHF nuclear gradients via the Obara-Saika AM-shift rule; all five terms (1e GTO-centre, nucleus-position V, ERI, Pulay/overlap, nuclear repulsion) assembled exactly
+- **Geometry optimization** — L-BFGS optimizer in Cartesian coordinates or BFGS optimizer in redundant generalized internal coordinates (GIC); Wolfe/Armijo line search; convergence on max Cartesian gradient component
 - **Checkpoint system** — binary `.hfchk` files; same-basis restart (skips 1e integrals) and cross-basis density projection (Löwdin SVD)
 - **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*
 
@@ -107,7 +109,7 @@ General calculation settings.
 |---|---|---|---|---|
 | `basis` | string | `sto-3g`, `3-21g`, `6-31g`, `6-31g*` | — | Basis set name |
 | `basis_type` | enum | `cartesian`, `spherical` | `cartesian` | Angular function type. Only Cartesian is fully supported. |
-| `calculation` | enum | `energy` / `sp`, `geomopt` / `opt`, `freq` / `frequency` | — | Calculation type |
+| `calculation` | enum | `energy` / `sp`, `gradient` / `grad`, `geomopt` / `opt`, `freq` / `frequency` | — | Calculation type. `gradient` computes the analytic nuclear gradient at the input geometry and stops. `geomopt` optimizes the geometry. |
 | `verbosity` | enum | `silent`, `minimal`, `normal`, `verbose`, `debug` | `minimal` | Output level |
 | `basis_path` | string | filesystem path | compiled-in | Override the basis set search directory |
 
@@ -142,6 +144,14 @@ Molecular geometry options.
 | `coord_type` | enum | `cartesian`, `zmatrix` / `internal` | `cartesian` | Coordinate specification type |
 | `coord_units` | enum | `angstrom`, `bohr` | `angstrom` | Units for input coordinates |
 | `use_symm` | bool | `.true.`, `.false.` | `.true.` | Detect molecular point group and reorient to standard frame using libmsym |
+| `opt_coords` | enum | `cartesian`, `internal` / `ic` / `gic` | `cartesian` | Coordinate system for geometry optimization. `cartesian`: L-BFGS in 3N Cartesian coordinates. `internal`: BFGS in redundant generalized internal coordinates (bonds, bends, torsions); back-transforms to Cartesian via Schlegel microiterations. Only used when `calculation geomopt`. |
+
+Geometry optimization convergence is controlled by two additional keywords accepted in `%begin_control`:
+
+| Keyword | Type | Default | Description |
+|---|---|---|---|
+| `grad_tol` | float | `3e-4` | Convergence threshold: maximum Cartesian gradient component in Ha/Bohr |
+| `max_geomopt_iter` | int | `50` | Maximum number of geometry optimization steps |
 
 ### Section: `%begin_coords`
 
@@ -287,6 +297,86 @@ H     0.000000   -0.756950    -0.468703
 %end_coords
 ```
 
+### Analytic gradient — water, STO-3G
+
+```
+%begin_control
+    basis       sto-3g
+    calculation gradient
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.100000
+H     0.800000     0.000000    -0.500000
+H    -0.800000     0.000000    -0.500000
+%end_coords
+```
+
+### Geometry optimization — Cartesian L-BFGS
+
+Set `calculation geomopt`. The optimizer uses L-BFGS with a strong-Wolfe line search and converges when the maximum Cartesian gradient component falls below `grad_tol` (default 3×10⁻⁴ Ha/Bohr):
+
+```
+%begin_control
+    basis       sto-3g
+    calculation geomopt
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.100000
+H     0.800000     0.000000    -0.500000
+H    -0.800000     0.000000    -0.500000
+%end_coords
+```
+
+### Geometry optimization — internal coordinates (BFGS/GIC)
+
+Add `opt_coords internal` in `%begin_geom`. Bonds, valence bends, and proper torsions are detected automatically using Alvarez (2008) covalent radii. The Hessian is initialized diagonally (0.5 Ha/Bohr² for stretches, 0.2 Ha/rad² for bends, 0.1 Ha/rad² for torsions) and updated via BFGS at each step. Steps exceeding 0.3 Bohr or 0.3 rad are scaled down before back-transforming:
+
+```
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+    opt_coords  internal
+%end_geom
+```
+
 ### Cross-basis restart — STO-3G → 6-31G
 
 Run STO-3G first (saves `mol.hfchk`), then change the basis and add `guess read`:
@@ -322,6 +412,10 @@ The program prints a structured log to standard output. Key sections:
 - **MO Energies** — orbital energies in Hartree with HOMO/LUMO labels and irrep labels when symmetry is enabled
 - **⟨S²⟩ / ⟨S⟩** — spin contamination diagnostics (UHF only)
 - **Converged Energy** — total energy in Hartree, eV, and kcal/mol; MP2 correlation and corrected total if post-HF enabled
+- **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms
+- **IC System** — when `opt_coords internal`, logs the count of stretches, bends, and torsions in the redundant GIC set
+- **Opt Step N** — per-step log line: energy, max Cartesian gradient, and RMS IC gradient (IC mode) or RMS Cartesian gradient (Cartesian mode)
+- **Optimized Geometry** — final Cartesian coordinates in Bohr after convergence
 - **Wall Time** — total elapsed time
 
 ## Build Options

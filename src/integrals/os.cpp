@@ -688,6 +688,383 @@ static double _contracted_eri(
     return eri;
 }
 
+// ─── Gradient: derivative integral helpers ────────────────────────────────────
+//
+// Thread-local scratch for nuclear dVRR (two arrays: V and dV per direction).
+// MMAX_NUC_D = 2*MAX_L+4 ensures F_{m+1} is always available at the base case.
+static constexpr int MMAX_NUC_D = 2 * MAX_L + 4;
+static thread_local double _nuc_vrr_d [VRR_DIM][VRR_DIM][VRR_DIM][MMAX_NUC_D];
+static thread_local double _nuc_dvrr_d[VRR_DIM][VRR_DIM][VRR_DIM][MMAX_NUC_D];
+
+// Raw (S3d, T3d) primitive products at given AM without scale factor.
+// Identical formula to _compute_3d_overlap_kinetic but accepts explicit AM.
+static std::pair<double,double> _st_raw(
+    double hiz, const Eigen::Vector3d& pA, const Eigen::Vector3d& pB, double beta,
+    int lAx, int lAy, int lAz, int lBx, int lBy, int lBz)
+{
+    using HartreeFock::ObaraSaika::_os_1d;
+    const double Sx = _os_1d(hiz, pA[0], pB[0], lAx, lBx);
+    const double Sy = _os_1d(hiz, pA[1], pB[1], lAy, lBy);
+    const double Sz = _os_1d(hiz, pA[2], pB[2], lAz, lBz);
+
+    const double Sxp = _os_1d(hiz, pA[0], pB[0], lAx, lBx+2);
+    const double Syp = _os_1d(hiz, pA[1], pB[1], lAy, lBy+2);
+    const double Szp = _os_1d(hiz, pA[2], pB[2], lAz, lBz+2);
+    const double Sxm = (lBx>=2) ? _os_1d(hiz, pA[0], pB[0], lAx, lBx-2) : 0.0;
+    const double Sym = (lBy>=2) ? _os_1d(hiz, pA[1], pB[1], lAy, lBy-2) : 0.0;
+    const double Szm = (lBz>=2) ? _os_1d(hiz, pA[2], pB[2], lAz, lBz-2) : 0.0;
+
+    const double b2 = beta * beta;
+    const double Tx = -0.5*lBx*(lBx-1)*Sxm + beta*(2*lBx+1)*Sx - 2.0*b2*Sxp;
+    const double Ty = -0.5*lBy*(lBy-1)*Sym + beta*(2*lBy+1)*Sy - 2.0*b2*Syp;
+    const double Tz = -0.5*lBz*(lBz-1)*Szm + beta*(2*lBz+1)*Sz - 2.0*b2*Szp;
+
+    return {Sx*Sy*Sz, Tx*Sy*Sz + Sx*Ty*Sz + Sx*Sy*Tz};
+}
+
+// dV_μν^{C}/dC_{direction} for one primitive pair.
+// Runs VRR+dVRR in parallel, then applies HRR to the dV m=0 slice.
+// Returns value without -Z or coeff_product (caller applies those).
+static double _os_nuclear_primitive_dC(
+    const HartreeFock::PrimitivePair& pp,
+    const int lAx, const int lAy, const int lAz,
+    const int lBx, const int lBy, const int lBz,
+    const double ABx, const double ABy, const double ABz,
+    const Eigen::Vector3d& nuc_pos,
+    const int direction)
+{
+    const int L      = lAx + lAy + lAz + lBx + lBy + lBz;
+    const int lx_max = lAx + lBx, ly_max = lAy + lBy, lz_max = lAz + lBz;
+
+    const double pCx = pp.center[0] - nuc_pos[0];
+    const double pCy = pp.center[1] - nuc_pos[1];
+    const double pCz = pp.center[2] - nuc_pos[2];
+    const double T   = pp.zeta * (pCx*pCx + pCy*pCy + pCz*pCz);
+
+    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / M_PI);
+    const double pAx = pp.pA[0], pAy = pp.pA[1], pAz = pp.pA[2];
+    const double hiz = pp.inv_zeta * 0.5;
+    const double PC_dir = (direction == 0) ? pCx : (direction == 1) ? pCy : pCz;
+
+    auto& V  = _nuc_vrr_d;
+    auto& dV = _nuc_dvrr_d;
+
+    // Zero needed region (+2 in m for m+1 accesses)
+    const int mclr = L + 3;
+    for (int ix = 0; ix <= lx_max; ix++)
+        for (int iy = 0; iy <= ly_max; iy++)
+            for (int iz = 0; iz <= lz_max; iz++)
+                for (int m = 0; m < mclr; m++)
+                    V[ix][iy][iz][m] = dV[ix][iy][iz][m] = 0.0;
+
+    // Seed Boys values
+    for (int m = 0; m <= L + 2; m++)
+        V[0][0][0][m] = nuc_pref * HartreeFock::Lookup::boys(m, T);
+
+    // dVRR base case: 2*zeta*PC_dir * F_{m+1}
+    for (int m = 0; m <= L + 1; m++)
+        dV[0][0][0][m] = 2.0 * pp.zeta * PC_dir * nuc_pref * HartreeFock::Lookup::boys(m + 1, T);
+
+    // x-VRR + x-dVRR
+    for (int ix = 1; ix <= lx_max; ix++) {
+        for (int m = 0; m <= L - ix; m++) {
+            V[ix][0][0][m] = pAx*V[ix-1][0][0][m] - pCx*V[ix-1][0][0][m+1];
+            dV[ix][0][0][m] = pAx*dV[ix-1][0][0][m] - pCx*dV[ix-1][0][0][m+1];
+            if (direction == 0) dV[ix][0][0][m] += V[ix-1][0][0][m+1];
+            if (ix > 1) {
+                V[ix][0][0][m]  += (ix-1)*hiz*(V[ix-2][0][0][m]  - V[ix-2][0][0][m+1]);
+                dV[ix][0][0][m] += (ix-1)*hiz*(dV[ix-2][0][0][m] - dV[ix-2][0][0][m+1]);
+            }
+        }
+    }
+
+    // y-VRR + y-dVRR
+    for (int ix = 0; ix <= lx_max; ix++) {
+        for (int iy = 1; iy <= ly_max; iy++) {
+            const int mmax = L - ix - iy;
+            if (mmax < 0) continue;
+            for (int m = 0; m <= mmax; m++) {
+                V[ix][iy][0][m] = pAy*V[ix][iy-1][0][m] - pCy*V[ix][iy-1][0][m+1];
+                dV[ix][iy][0][m] = pAy*dV[ix][iy-1][0][m] - pCy*dV[ix][iy-1][0][m+1];
+                if (direction == 1) dV[ix][iy][0][m] += V[ix][iy-1][0][m+1];
+                if (iy > 1) {
+                    V[ix][iy][0][m]  += (iy-1)*hiz*(V[ix][iy-2][0][m]  - V[ix][iy-2][0][m+1]);
+                    dV[ix][iy][0][m] += (iy-1)*hiz*(dV[ix][iy-2][0][m] - dV[ix][iy-2][0][m+1]);
+                }
+            }
+        }
+    }
+
+    // z-VRR + z-dVRR
+    for (int ix = 0; ix <= lx_max; ix++) {
+        for (int iy = 0; iy <= ly_max; iy++) {
+            for (int iz = 1; iz <= lz_max; iz++) {
+                const int mmax = L - ix - iy - iz;
+                if (mmax < 0) continue;
+                for (int m = 0; m <= mmax; m++) {
+                    V[ix][iy][iz][m] = pAz*V[ix][iy][iz-1][m] - pCz*V[ix][iy][iz-1][m+1];
+                    dV[ix][iy][iz][m] = pAz*dV[ix][iy][iz-1][m] - pCz*dV[ix][iy][iz-1][m+1];
+                    if (direction == 2) dV[ix][iy][iz][m] += V[ix][iy][iz-1][m+1];
+                    if (iz > 1) {
+                        V[ix][iy][iz][m]  += (iz-1)*hiz*(V[ix][iy][iz-2][m]  - V[ix][iy][iz-2][m+1]);
+                        dV[ix][iy][iz][m] += (iz-1)*hiz*(dV[ix][iy][iz-2][m] - dV[ix][iy][iz-2][m+1]);
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract m=0 slice of dV for HRR
+    double dV0[VRR_DIM][VRR_DIM][VRR_DIM] = {};
+    for (int ix = 0; ix <= lx_max; ix++)
+        for (int iy = 0; iy <= ly_max; iy++)
+            for (int iz = 0; iz <= lz_max; iz++)
+                dV0[ix][iy][iz] = dV[ix][iy][iz][0];
+
+    return _nuclear_hrr(dV0, lAx, lAy, lAz, lBx, lBy, lBz, ABx, ABy, ABz);
+}
+
+// ─── Public: 1e GTO-centre derivatives ───────────────────────────────────────
+//
+// AM shift rule: ∂φ(α,lA,A)/∂A_q = +2α φ(lA+ê_q) − lA_q φ(lA−ê_q)
+// Returns {dS/dAx, dS/dAy, dS/dAz, dT/dAx, dT/dAy, dT/dAz}
+std::array<double,6> HartreeFock::ObaraSaika::_compute_1e_deriv_A(
+    const HartreeFock::ShellPair& sp)
+{
+    const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
+    const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
+
+    std::array<double,6> result{};
+
+    for (int q = 0; q < 3; ++q) {
+        const int lAq = sp.A._cartesian[q];
+        double dS = 0.0, dT = 0.0;
+
+        for (const auto& pp : sp.primitive_pairs) {
+            const double hiz  = pp.inv_zeta * 0.5;
+            const double w    = pp.prefactor * pp.coeff_product;
+            const double w2al = 2.0 * pp.alpha * w;
+
+            // +1 shift: 2α * raw_st(lA+ê_q, lB)
+            const int axp = lAx + (q == 0), ayp = lAy + (q == 1), azp = lAz + (q == 2);
+            auto [Sp, Tp] = _st_raw(hiz, pp.pA, pp.pB, pp.beta, axp, ayp, azp, lBx, lBy, lBz);
+            dS += w2al * Sp;
+            dT += w2al * Tp;
+
+            // -1 shift: lAq * raw_st(lA-ê_q, lB)
+            if (lAq > 0) {
+                const int axm = lAx - (q == 0), aym = lAy - (q == 1), azm = lAz - (q == 2);
+                auto [Sm, Tm] = _st_raw(hiz, pp.pA, pp.pB, pp.beta, axm, aym, azm, lBx, lBy, lBz);
+                dS -= static_cast<double>(lAq) * w * Sm;
+                dT -= static_cast<double>(lAq) * w * Tm;
+            }
+        }
+        result[q]     = dS;
+        result[q + 3] = dT;
+    }
+    return result;
+}
+
+// ─── Public: nuclear-attraction GTO-centre derivative ────────────────────────
+//
+// Returns {dV/dAx, dV/dAy, dV/dAz} summed over all nuclei (AM shift rule).
+std::array<double,3> HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
+    const HartreeFock::ShellPair& sp,
+    const HartreeFock::Molecule& mol)
+{
+    const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
+    const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
+    const double ABx = sp.R[0], ABy = sp.R[1], ABz = sp.R[2];
+
+    std::array<double,3> result{};
+
+    for (int q = 0; q < 3; ++q) {
+        const int lAq = sp.A._cartesian[q];
+        double dV = 0.0;
+
+        for (std::size_t a = 0; a < mol.natoms; ++a) {
+            const double Z = static_cast<double>(mol.atomic_numbers[a]);
+            const Eigen::Vector3d C(mol._standard(a, 0),
+                                    mol._standard(a, 1),
+                                    mol._standard(a, 2));
+
+            for (const auto& pp : sp.primitive_pairs) {
+                const double w    = pp.coeff_product;
+                const double w2al = 2.0 * pp.alpha * w;
+
+                // +1 shift: -Z * 2α * V_prim(lA+ê_q, lB)
+                {
+                    const int axp = lAx+(q==0), ayp = lAy+(q==1), azp = lAz+(q==2);
+                    double Vp = _os_nuclear_primitive(pp, axp, ayp, azp,
+                                                     lBx, lBy, lBz, ABx, ABy, ABz, C);
+                    dV -= Z * w2al * Vp;
+                }
+                // -1 shift: +Z * lAq * V_prim(lA-ê_q, lB)
+                if (lAq > 0) {
+                    const int axm = lAx-(q==0), aym = lAy-(q==1), azm = lAz-(q==2);
+                    double Vm = _os_nuclear_primitive(pp, axm, aym, azm,
+                                                     lBx, lBy, lBz, ABx, ABy, ABz, C);
+                    dV += Z * static_cast<double>(lAq) * w * Vm;
+                }
+            }
+        }
+        result[q] = dV;
+    }
+    return result;
+}
+
+// ─── Public: nuclear-position derivative dV/dC ───────────────────────────────
+//
+// Returns contracted dV_μν/dC_{direction} for one nucleus at C with charge Z.
+double HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
+    const HartreeFock::ShellPair& sp,
+    const Eigen::Vector3d& C, const double Z, const int direction)
+{
+    const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
+    const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
+    const double ABx = sp.R[0], ABy = sp.R[1], ABz = sp.R[2];
+
+    double dV = 0.0;
+    for (const auto& pp : sp.primitive_pairs) {
+        double dv = _os_nuclear_primitive_dC(pp, lAx, lAy, lAz, lBx, lBy, lBz,
+                                              ABx, ABy, ABz, C, direction);
+        dV += pp.coeff_product * dv;
+    }
+    return -Z * dV;   // -Z factor (V includes nuclear charge sign)
+}
+
+// ─── Public: ERI derivatives for one contracted (μν|λσ) quartet ──────────────
+//
+// AM shift rule applied to each of the four centres.
+// result[cen*3 + dir], cen∈{0=A,1=B,2=C,3=D}, dir∈{0,1,2}
+std::array<double,12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
+    const HartreeFock::ShellPair& spAB,
+    const HartreeFock::ShellPair& spCD)
+{
+    const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
+    const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+    const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+    const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+
+    const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
+    const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
+
+    std::array<double,12> result{};
+
+    // We need per-primitive 2α weighting. Compute a weighted contracted ERI.
+    // weighted_ceri_A(ax,ay,az,...) = Σ_{k,l,m,n} 2α_k * cAB_{kl} * cCD_{mn} * ERI_prim
+    auto wceri_A = [&](int ax, int ay, int az, int bx, int by, int bz,
+                       int cx, int cy, int cz, int dx, int dy, int dz) -> double {
+        double eri = 0.0;
+        for (const auto& ppAB : spAB.primitive_pairs)
+            for (const auto& ppCD : spCD.primitive_pairs)
+                eri += (2.0 * ppAB.alpha) * ppAB.coeff_product * ppCD.coeff_product
+                     * _os_eri_primitive(ppAB, ppCD,
+                                        ax, ay, az, bx, by, bz,
+                                        cx, cy, cz, dx, dy, dz,
+                                        ABx, ABy, ABz, CDx, CDy, CDz);
+        return eri;
+    };
+
+    auto wceri_B = [&](int ax, int ay, int az, int bx, int by, int bz,
+                       int cx, int cy, int cz, int dx, int dy, int dz) -> double {
+        double eri = 0.0;
+        for (const auto& ppAB : spAB.primitive_pairs)
+            for (const auto& ppCD : spCD.primitive_pairs)
+                eri += ppAB.coeff_product * (2.0 * ppAB.beta) * ppCD.coeff_product
+                     * _os_eri_primitive(ppAB, ppCD,
+                                        ax, ay, az, bx, by, bz,
+                                        cx, cy, cz, dx, dy, dz,
+                                        ABx, ABy, ABz, CDx, CDy, CDz);
+        return eri;
+    };
+
+    auto wceri_C = [&](int ax, int ay, int az, int bx, int by, int bz,
+                       int cx, int cy, int cz, int dx, int dy, int dz) -> double {
+        double eri = 0.0;
+        for (const auto& ppAB : spAB.primitive_pairs)
+            for (const auto& ppCD : spCD.primitive_pairs)
+                eri += ppAB.coeff_product * (2.0 * ppCD.alpha) * ppCD.coeff_product
+                     * _os_eri_primitive(ppAB, ppCD,
+                                        ax, ay, az, bx, by, bz,
+                                        cx, cy, cz, dx, dy, dz,
+                                        ABx, ABy, ABz, CDx, CDy, CDz);
+        return eri;
+    };
+
+    auto wceri_D = [&](int ax, int ay, int az, int bx, int by, int bz,
+                       int cx, int cy, int cz, int dx, int dy, int dz) -> double {
+        double eri = 0.0;
+        for (const auto& ppAB : spAB.primitive_pairs)
+            for (const auto& ppCD : spCD.primitive_pairs)
+                eri += ppAB.coeff_product * ppCD.coeff_product * (2.0 * ppCD.beta)
+                     * _os_eri_primitive(ppAB, ppCD,
+                                        ax, ay, az, bx, by, bz,
+                                        cx, cy, cz, dx, dy, dz,
+                                        ABx, ABy, ABz, CDx, CDy, CDz);
+        return eri;
+    };
+
+    auto nceri = [&](int ax, int ay, int az, int bx, int by, int bz,
+                     int cx, int cy, int cz, int dx, int dy, int dz) -> double {
+        return _contracted_eri(spAB, spCD,
+                               ax, ay, az, bx, by, bz,
+                               cx, cy, cz, dx, dy, dz);
+    };
+
+    for (int q = 0; q < 3; ++q) {
+        // Centre A: +2α·ERI(lA+ê_q) − lAq·ERI(lA−ê_q)
+        {
+            const int lAq = spAB.A._cartesian[q];
+            const int axp = lAx+(q==0), ayp = lAy+(q==1), azp = lAz+(q==2);
+            result[0*3 + q] += wceri_A(axp, ayp, azp, lBx, lBy, lBz,
+                                       lCx, lCy, lCz, lDx, lDy, lDz);
+            if (lAq > 0) {
+                const int axm = lAx-(q==0), aym = lAy-(q==1), azm = lAz-(q==2);
+                result[0*3 + q] -= static_cast<double>(lAq) *
+                    nceri(axm, aym, azm, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz);
+            }
+        }
+        // Centre B: +2β·ERI(lB+ê_q) − lBq·ERI(lB−ê_q)
+        {
+            const int lBq = spAB.B._cartesian[q];
+            const int bxp = lBx+(q==0), byp = lBy+(q==1), bzp = lBz+(q==2);
+            result[1*3 + q] += wceri_B(lAx, lAy, lAz, bxp, byp, bzp,
+                                       lCx, lCy, lCz, lDx, lDy, lDz);
+            if (lBq > 0) {
+                const int bxm = lBx-(q==0), bym = lBy-(q==1), bzm = lBz-(q==2);
+                result[1*3 + q] -= static_cast<double>(lBq) *
+                    nceri(lAx, lAy, lAz, bxm, bym, bzm, lCx, lCy, lCz, lDx, lDy, lDz);
+            }
+        }
+        // Centre C: +2γ·ERI(lC+ê_q) − lCq·ERI(lC−ê_q)
+        {
+            const int lCq = spCD.A._cartesian[q];
+            const int cxp = lCx+(q==0), cyp = lCy+(q==1), czp = lCz+(q==2);
+            result[2*3 + q] += wceri_C(lAx, lAy, lAz, lBx, lBy, lBz,
+                                       cxp, cyp, czp, lDx, lDy, lDz);
+            if (lCq > 0) {
+                const int cxm = lCx-(q==0), cym = lCy-(q==1), czm = lCz-(q==2);
+                result[2*3 + q] -= static_cast<double>(lCq) *
+                    nceri(lAx, lAy, lAz, lBx, lBy, lBz, cxm, cym, czm, lDx, lDy, lDz);
+            }
+        }
+        // Centre D: +2δ·ERI(lD+ê_q) − lDq·ERI(lD−ê_q)
+        {
+            const int lDq = spCD.B._cartesian[q];
+            const int dxp = lDx+(q==0), dyp = lDy+(q==1), dzp = lDz+(q==2);
+            result[3*3 + q] += wceri_D(lAx, lAy, lAz, lBx, lBy, lBz,
+                                       lCx, lCy, lCz, dxp, dyp, dzp);
+            if (lDq > 0) {
+                const int dxm = lDx-(q==0), dym = lDy-(q==1), dzm = lDz-(q==2);
+                result[3*3 + q] -= static_cast<double>(lDq) *
+                    nceri(lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, dxm, dym, dzm);
+            }
+        }
+    }
+    return result;
+}
+
 // Forward declaration — defined later in this file before _compute_2e.
 static Eigen::MatrixXd _compute_schwarz_table(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,

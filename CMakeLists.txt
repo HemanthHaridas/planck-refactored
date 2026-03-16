@@ -117,6 +117,16 @@ file(GLOB POSTHF_SRC
     ${SRC_DIR}/post_hf/*.cpp
 )
 
+file(GLOB GRADIENT_SRC
+    ${SRC_DIR}/gradient/*.h
+    ${SRC_DIR}/gradient/*.cpp
+)
+
+file(GLOB OPT_SRC
+    ${SRC_DIR}/opt/*.h
+    ${SRC_DIR}/opt/*.cpp
+)
+
 # Executable target
 add_executable(hartree-fock
     ${BASE_SRC}
@@ -128,6 +138,8 @@ add_executable(hartree-fock
     ${IO_SRC}
     ${SCF_SRC}
     ${POSTHF_SRC}
+    ${GRADIENT_SRC}
+    ${OPT_SRC}
 )
 
 # Include directories

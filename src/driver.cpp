@@ -19,6 +19,8 @@
 #include "integrals/base.h"
 #include "scf/scf.h"
 #include "post_hf/mp2.h"
+#include "gradient/gradient.h"
+#include "opt/geomopt.h"
 
 using SystemClock = std::chrono::system_clock;
 
@@ -477,6 +479,76 @@ int main(int argc, const char* argv[])
             HartreeFock::Logger::blank();
             HartreeFock::Logger::correlation_energy(calculator._total_energy, calculator._correlation_energy);
         }
+    }
+
+    // ── Analytic gradient ─────────────────────────────────────────────────────
+    if (calculator._info._is_converged &&
+        (calculator._calculation == HartreeFock::CalculationType::Gradient ||
+         calculator._calculation == HartreeFock::CalculationType::GeomOpt))
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient :", "Computing analytic nuclear gradient");
+
+        Eigen::MatrixXd grad;
+        if (calculator._info._scf.is_uhf)
+            grad = HartreeFock::Gradient::compute_uhf_gradient(calculator, shellpairs);
+        else
+            grad = HartreeFock::Gradient::compute_rhf_gradient(calculator, shellpairs);
+        calculator._gradient = grad;
+
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Nuclear Gradient (Ha/Bohr) :", "");
+        const std::size_t natoms_g = calculator._molecule.natoms;
+        for (std::size_t a = 0; a < natoms_g; ++a)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                std::format("  Atom {:3d}: {:14.8f}  {:14.8f}  {:14.8f}",
+                    static_cast<int>(a + 1),
+                    grad(a, 0), grad(a, 1), grad(a, 2)));
+        }
+        const double gmax = grad.cwiseAbs().maxCoeff();
+        const double grms = std::sqrt(grad.squaredNorm() / static_cast<double>(natoms_g * 3));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient max|g| :",
+            std::format("{:.6e} Ha/Bohr", gmax));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient rms|g| :",
+            std::format("{:.6e} Ha/Bohr", grms));
+        HartreeFock::Logger::blank();
+    }
+
+    // ── Geometry optimization ─────────────────────────────────────────────────
+    if (calculator._info._is_converged &&
+        calculator._calculation == HartreeFock::CalculationType::GeomOpt)
+    {
+        const bool use_ic = (calculator._opt_coords == HartreeFock::OptCoords::Internal);
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Geometry Optimization :",
+            use_ic ? "Starting IC-BFGS optimizer" : "Starting L-BFGS optimizer");
+        HartreeFock::Logger::blank();
+
+        auto opt_result = use_ic
+            ? HartreeFock::Opt::run_geomopt_ic(calculator)
+            : HartreeFock::Opt::run_geomopt(calculator);
+
+        HartreeFock::Logger::blank();
+        if (opt_result.converged)
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Geometry Optimization :",
+                std::format("Converged in {} steps", opt_result.iterations));
+        else
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Geometry Optimization :",
+                std::format("Did NOT converge after {} steps", opt_result.iterations));
+
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Final Energy :",
+            std::format("{:.10f} Eh", opt_result.energy));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Final max|g| :",
+            std::format("{:.6e} Ha/Bohr", opt_result.grad_max));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Optimized Geometry (Bohr) :", "");
+        for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                std::format("  Atom {:3d}: {:14.8f}  {:14.8f}  {:14.8f}",
+                    static_cast<int>(a + 1),
+                    opt_result.final_coords(a, 0),
+                    opt_result.final_coords(a, 1),
+                    opt_result.final_coords(a, 2)));
+        }
+        HartreeFock::Logger::blank();
     }
 
     const auto program_end = SystemClock::now();

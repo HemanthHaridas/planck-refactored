@@ -270,6 +270,8 @@ const inline std::string map_enum<HartreeFock::CalculationType>(HartreeFock::Cal
     {
     case HartreeFock::CalculationType::SinglePoint:
         return "Single Point Calculation";
+    case HartreeFock::CalculationType::Gradient:
+        return "Analytic Gradient";
     case HartreeFock::CalculationType::GeomOpt:
         return "Geometry Optimization";
     case HartreeFock::CalculationType::Frequency:

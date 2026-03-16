@@ -126,13 +126,15 @@ namespace HartreeFock::IO
         static const std::unordered_map<std::string, HartreeFock::CalculationType> _table =
         {
             // All possible combinations
-            {"energy",  HartreeFock::CalculationType::SinglePoint},
-            {"geomopt", HartreeFock::CalculationType::GeomOpt},
-            {"freq",    HartreeFock::CalculationType::Frequency},
-            
+            {"energy",      HartreeFock::CalculationType::SinglePoint},
+            {"geomopt",     HartreeFock::CalculationType::GeomOpt},
+            {"freq",        HartreeFock::CalculationType::Frequency},
+            {"gradient",    HartreeFock::CalculationType::Gradient},
+
             {"sp",          HartreeFock::CalculationType::SinglePoint},
             {"opt",         HartreeFock::CalculationType::GeomOpt},
-            {"frequency",   HartreeFock::CalculationType::Frequency}
+            {"frequency",   HartreeFock::CalculationType::Frequency},
+            {"grad",        HartreeFock::CalculationType::Gradient}
         };
         
         auto _value = toLower(value);   // First convert to lowercase
@@ -179,6 +181,25 @@ namespace HartreeFock::IO
             return it->second;
         
         throw std::invalid_argument("Invalid BasisType : " + value);
+    }
+
+    template<>
+    HartreeFock::OptCoords map_string_enum<HartreeFock::OptCoords>(const std::string& value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::OptCoords> _table =
+        {
+            {"cartesian", HartreeFock::OptCoords::Cartesian},
+            {"internal",  HartreeFock::OptCoords::Internal},
+            {"ic",        HartreeFock::OptCoords::Internal},
+            {"gic",       HartreeFock::OptCoords::Internal}
+        };
+
+        auto _value = toLower(value);
+        auto it = _table.find(_value);
+        if (it != _table.end())
+            return it->second;
+
+        throw std::invalid_argument("Invalid OptCoords : " + value);
     }
 
     std::expected <void, std::string> _parse_control(const std::vector <std::string> &lines, HartreeFock::CalculationType &calculation, HartreeFock::OptionsBasis &basis, HartreeFock::OptionsOutput &output)
@@ -407,14 +428,15 @@ namespace HartreeFock::IO
         throw std::invalid_argument("Invalid Units : " + value);
     }
 
-    std::expected <void, std::string> _parse_geom(const std::vector <std::string> &lines, HartreeFock::OptionsGeometry &geom)
+    std::expected <void, std::string> _parse_geom(const std::vector <std::string> &lines, HartreeFock::OptionsGeometry &geom, HartreeFock::OptCoords &opt_coords)
     {
         // (key, value) pairs
         const std::unordered_map <std::string, std::function <void(const std::string &)>> _geom_map =
         {
             {"coord_type",  [&geom](const std::string &value){geom._type        = map_string_enum <HartreeFock::CoordType>(value);}},
             {"coord_units", [&geom](const std::string &value){geom._units       = map_string_enum <HartreeFock::Units>(value);}},
-            {"use_symm",    [&geom](const std::string &value){geom._use_symm    = toBool(value);}}
+            {"use_symm",    [&geom](const std::string &value){geom._use_symm    = toBool(value);}},
+            {"opt_coords",  [&opt_coords](const std::string &value){opt_coords  = map_string_enum <HartreeFock::OptCoords>(value);}}
         };
         
         for (const std::string line : lines)
@@ -693,7 +715,7 @@ namespace HartreeFock::IO
         // geom
         if (auto it = _sections.find("geom"); it != _sections.end())
         {
-            if (auto res = _parse_geom(it->second, calculator._geometry); !res)
+            if (auto res = _parse_geom(it->second, calculator._geometry, calculator._opt_coords); !res)
                 return std::unexpected(res.error());
         }
         else
