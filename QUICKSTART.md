@@ -232,6 +232,50 @@ Water/STO-3G converges in 3 steps with IC-BFGS vs. 4 with Cartesian L-BFGS:
 [INF]  Final Energy :           -74.9659012162 Eh
 ```
 
+### Constrained geometry optimization
+
+Add a `%begin_constraints` block to freeze bonds, angles, dihedrals, or whole atoms during an IC-BFGS run. **Both** `opt_coords internal` and `coord_type zmatrix` are required.
+
+Constraint line formats (atom indices are 1-based):
+
+| Line | Meaning |
+|---|---|
+| `b  i  j` | Fix bond distance between atoms `i` and `j` |
+| `a  i  j  k` | Fix angle `i`–`j`–`k` (`j` = vertex) |
+| `d  i  j  k  l` | Fix dihedral `i`–`j`–`k`–`l` |
+| `f  i` | Freeze atom `i` (all Cartesian DOFs) |
+
+Example — optimize the H–O–H angle of water while holding both O–H bonds fixed:
+
+```
+%begin_geom
+    coord_type  zmatrix
+    coord_units angstrom
+    use_symm    .false.
+    opt_coords  internal
+%end_geom
+
+%begin_coords
+3
+0   1
+O
+H  1  0.9572
+H  1  0.9572  2  104.52
+%end_coords
+
+%begin_constraints
+    b  1  2   # fix O-H1 bond
+    b  1  3   # fix O-H2 bond
+%end_constraints
+```
+
+The log will confirm which coordinates are frozen before optimization starts:
+
+```
+[INF]  Constraints :   2 constraint(s) active
+[INF]  Constraints :   2 IC(s) frozen, 0 atom(s) frozen
+```
+
 ---
 
 ## 6. Vibrational frequency analysis
@@ -428,4 +472,12 @@ For large systems set `scf_mode direct` or lower `threshold`:
 <symbol>  <i1>  <r>  <i2>  <angle>  <i3>  <dihedral>
 ...
 %end_coords
+
+# Optional: constrained IC geomopt (requires opt_coords internal + coord_type zmatrix)
+%begin_constraints
+    b  i  j              # fix bond i-j
+    a  i  j  k           # fix angle i-j-k
+    d  i  j  k  l        # fix dihedral i-j-k-l
+    f  i                 # freeze atom i (all Cartesian DOFs)
+%end_constraints
 ```

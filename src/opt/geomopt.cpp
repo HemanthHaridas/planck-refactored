@@ -354,7 +354,7 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
     // ── Build IC system ───────────────────────────────────────────────────────
     auto ics = IntCoordSystem::build(calc._molecule._standard,
                                      calc._molecule.atomic_numbers);
-    const int nq = ics.nics();
+    int nq = ics.nics();
 
     if (nq == 0) {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
@@ -373,9 +373,50 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
         std::format("{} stretches, {} bends, {} torsions ({} total)",
                     n_stretch, n_bend, n_torsion, nq));
 
+    // ── Constraint setup ──────────────────────────────────────────────────────
+    std::vector<bool> ic_frozen(nq, false);
+    std::vector<bool> atom_frozen(natoms, false);
+
+    for (const auto& con : calc._constraints) {
+        const int a0 = con.atoms[0] - 1;
+        const int a1 = (con.atoms[1] >= 0) ? con.atoms[1] - 1 : -1;
+        const int a2 = (con.atoms[2] >= 0) ? con.atoms[2] - 1 : -1;
+        const int a3 = (con.atoms[3] >= 0) ? con.atoms[3] - 1 : -1;
+
+        if (con.type == HartreeFock::GeomConstraint::Type::FrozenAtom) {
+            if (a0 >= 0 && a0 < (int)natoms) atom_frozen[a0] = true;
+            continue;
+        }
+
+        InternalCoord ic;
+        if (con.type == HartreeFock::GeomConstraint::Type::Bond) {
+            ic.type = ICType::Stretch; ic.atoms = {a0, a1, -1, -1};
+        } else if (con.type == HartreeFock::GeomConstraint::Type::Angle) {
+            ic.type = ICType::Bend; ic.atoms = {a0, a1, a2, -1};
+        } else {
+            ic.type = ICType::Torsion; ic.atoms = {a0, a1, a2, a3};
+        }
+        const int idx = ics.add_coord(ic);
+        if (idx >= (int)ic_frozen.size())
+            ic_frozen.resize(idx + 1, false);
+        ic_frozen[idx] = true;
+    }
+    nq = ics.nics();
+
+    if (!calc._constraints.empty()) {
+        int n_frozen_ic = 0, n_frozen_atom = 0;
+        for (bool f : ic_frozen)   if (f) ++n_frozen_ic;
+        for (bool f : atom_frozen) if (f) ++n_frozen_atom;
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Constraints :",
+            std::format("{} IC(s) frozen, {} atom(s) frozen", n_frozen_ic, n_frozen_atom));
+    }
+
     // ── Initial SCF + gradient ────────────────────────────────────────────────
     Eigen::MatrixXd xyz = calc._molecule._standard;
     Eigen::VectorXd g_cart = _run_sp_gradient(calc);
+    // Zero frozen-atom gradient contributions
+    for (std::size_t a = 0; a < natoms; ++a)
+        if (atom_frozen[a]) g_cart.segment(static_cast<int>(a) * 3, 3).setZero();
     double E = calc._total_energy;
     result.energies.push_back(E);
 
@@ -406,6 +447,10 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
             break;
         }
 
+        // Zero constrained IC gradient components before solve
+        for (int c = 0; c < nq; ++c)
+            if (ic_frozen[c]) g_ic[c] = 0.0;
+
         // ── Quasi-Newton step in IC space ─────────────────────────────────────
         // Use LDLt for the (possibly indefinite after BFGS) matrix.
         // If LDLT fails or gives a bad direction, fall back to negative gradient.
@@ -425,6 +470,10 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
                 scale = std::max(scale, std::abs(dq[i]) / limit);
         }
         if (scale > 1.0) dq /= scale;
+
+        // Zero constrained IC step components
+        for (int c = 0; c < nq; ++c)
+            if (ic_frozen[c]) dq[c] = 0.0;
 
         // ── Back-transform to Cartesian + energy-decrease line search ─────────
         // Halve the IC step until energy decreases, with a minimum-alpha fallback.
@@ -447,6 +496,9 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
             }
             try {
                 g_cart_new = _run_sp_gradient(calc);
+                // Zero frozen-atom gradient contributions
+                for (std::size_t a = 0; a < natoms; ++a)
+                    if (atom_frozen[a]) g_cart_new.segment(static_cast<int>(a) * 3, 3).setZero();
                 E_new      = calc._total_energy;
                 // Accept if energy decreases OR step is negligibly small
                 if (E_new < E || alpha < 1e-6)
@@ -470,6 +522,9 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
         }
 
         Eigen::VectorXd g_ic_new = ics.cart_to_ic_grad(xyz_new, g_cart_new);
+        // Zero constrained IC gradient components
+        for (int c = 0; c < nq; ++c)
+            if (ic_frozen[c]) g_ic_new[c] = 0.0;
 
         // ── BFGS Hessian update in IC space ───────────────────────────────────
         // s_bfgs = actual IC displacement; y_bfgs = gradient change
@@ -484,6 +539,10 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
             }
         }
         Eigen::VectorXd y_bfgs = g_ic_new - g_ic;
+        // Zero constrained IC components before BFGS update
+        for (int c = 0; c < nq; ++c) {
+            if (ic_frozen[c]) { s_bfgs[c] = 0.0; y_bfgs[c] = 0.0; }
+        }
         const double sy = s_bfgs.dot(y_bfgs);
 
         // BFGS update: H_new = H - (H s sᵀ H)/(sᵀ H s) + (y yᵀ)/(sᵀ y)

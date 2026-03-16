@@ -43,6 +43,11 @@ namespace HartreeFock
             static IntCoordSystem build(const Eigen::MatrixXd& xyz_bohr,
                                         const Eigen::VectorXi& Z);
 
+            // Insert ic into the system if an equivalent coordinate is not already
+            // present (checks both forward and reverse orderings).  Returns the
+            // 0-based index of the (possibly pre-existing) coordinate.
+            int add_coord(const InternalCoord& ic);
+
             // Evaluate all IC values.
             Eigen::VectorXd values(const Eigen::MatrixXd& xyz) const;
 

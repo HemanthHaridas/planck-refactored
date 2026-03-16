@@ -472,6 +472,76 @@ namespace HartreeFock::IO
         return {};
     }
 
+    // ── Constraint section parser ─────────────────────────────────────────────
+    //
+    // Accepted line formats (all indices are 1-based):
+    //   b  i  j           — fix bond between atoms i and j
+    //   a  i  j  k        — fix angle at atoms i-j-k (j is the vertex)
+    //   d  i  j  k  l     — fix dihedral i-j-k-l
+    //   f  i              — freeze atom i (all three Cartesian DOFs)
+    //
+    // Lines starting with '#' and blank lines are ignored.
+    std::expected<void, std::string>
+    _parse_constraints(const std::vector<std::string>& lines,
+                       std::vector<HartreeFock::GeomConstraint>& constraints)
+    {
+        for (const auto& raw : lines)
+        {
+            // Strip leading/trailing whitespace and skip blank/comment lines
+            std::string line = raw;
+            if (auto pos = line.find('#'); pos != std::string::npos)
+                line = line.substr(0, pos);
+            // trim
+            std::size_t s = line.find_first_not_of(" \t\r\n");
+            if (s == std::string::npos) continue;
+            line = line.substr(s);
+            std::size_t e = line.find_last_not_of(" \t\r\n");
+            if (e != std::string::npos) line = line.substr(0, e + 1);
+            if (line.empty()) continue;
+
+            std::istringstream iss(line);
+            std::string key;
+            iss >> key;
+            if (key.empty()) continue;
+            char kind = static_cast<char>(std::tolower(static_cast<unsigned char>(key[0])));
+
+            HartreeFock::GeomConstraint con;
+            con.atoms = {-1, -1, -1, -1};
+
+            if (kind == 'b')
+            {
+                con.type = HartreeFock::GeomConstraint::Type::Bond;
+                if (!(iss >> con.atoms[0] >> con.atoms[1]))
+                    return std::unexpected("Constraint 'b' requires two atom indices: " + line);
+            }
+            else if (kind == 'a')
+            {
+                con.type = HartreeFock::GeomConstraint::Type::Angle;
+                if (!(iss >> con.atoms[0] >> con.atoms[1] >> con.atoms[2]))
+                    return std::unexpected("Constraint 'a' requires three atom indices: " + line);
+            }
+            else if (kind == 'd')
+            {
+                con.type = HartreeFock::GeomConstraint::Type::Dihedral;
+                if (!(iss >> con.atoms[0] >> con.atoms[1] >> con.atoms[2] >> con.atoms[3]))
+                    return std::unexpected("Constraint 'd' requires four atom indices: " + line);
+            }
+            else if (kind == 'f')
+            {
+                con.type = HartreeFock::GeomConstraint::Type::FrozenAtom;
+                if (!(iss >> con.atoms[0]))
+                    return std::unexpected("Constraint 'f' requires one atom index: " + line);
+            }
+            else
+            {
+                return std::unexpected("Unknown constraint type '" + key + "': " + line);
+            }
+
+            constraints.push_back(con);
+        }
+        return {};
+    }
+
     // Convert a Z-matrix row to Cartesian given already-placed atoms.
     // Uses the standard NeRF / Natural Extension Reference Frame algorithm.
     static Eigen::Vector3d zmat_to_cart(
@@ -735,7 +805,14 @@ namespace HartreeFock::IO
         {
             return std::unexpected("Missing coords section");
         }
-        
+
+        // constraints (optional)
+        if (auto it = _sections.find("constraints"); it != _sections.end())
+        {
+            if (auto res = _parse_constraints(it->second, calculator._constraints); !res)
+                return std::unexpected(res.error());
+        }
+
         return {};
     }
 }

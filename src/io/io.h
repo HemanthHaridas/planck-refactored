@@ -22,6 +22,7 @@ namespace HartreeFock
         std::expected <void, std::string> _parse_scf(const std::vector <std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral);
         std::expected <void, std::string> _parse_geom(const std::vector <std::string> &lines, HartreeFock::OptionsGeometry &geom);
         std::expected <void, std::string> _parse_coords(const std::vector <std::string> &lines, HartreeFock::Molecule &molecule);
+        std::expected <void, std::string> _parse_constraints(const std::vector <std::string> &lines, std::vector<HartreeFock::GeomConstraint> &constraints);
     
         // Public API
         std::expected <void, std::string> parse_input(std::ifstream &input, HartreeFock::Calculator &calculator);

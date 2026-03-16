@@ -89,6 +89,22 @@ namespace HartreeFock
         Internal    // Optimize in generalized internal coordinates (BFGS)
     };
 
+    // ── Geometry constraint ───────────────────────────────────────────────────
+    //
+    // Specifies one constraint for a constrained IC-BFGS geometry optimization.
+    // Atom indices are 1-based (as given in the input file); unused slots = -1.
+    //
+    //   Bond       — fix the distance between atoms[0] and atoms[1]
+    //   Angle      — fix the angle atoms[0]–atoms[1]–atoms[2]
+    //   Dihedral   — fix the dihedral atoms[0]–atoms[1]–atoms[2]–atoms[3]
+    //   FrozenAtom — hold all 3 Cartesian DOFs of atoms[0] fixed
+    struct GeomConstraint
+    {
+        enum class Type { Bond, Angle, Dihedral, FrozenAtom };
+        Type              type;
+        std::array<int,4> atoms = {-1, -1, -1, -1};   // 1-based indices
+    };
+
     enum class Verbosity
     {
         Silent,         // No output
@@ -634,6 +650,7 @@ namespace HartreeFock
         int    _geomopt_max_iter  = 50;     // maximum geometry steps
         int    _geomopt_lbfgs_m   = 10;     // L-BFGS history size
         OptCoords _opt_coords = OptCoords::Cartesian;  // coordinate system for optimization
+        std::vector<GeomConstraint> _constraints;       // from %begin_constraints section
 
         // Hessian / frequency analysis
         Eigen::MatrixXd _hessian;           // 3N×3N Cartesian Hessian, Ha/Bohr²

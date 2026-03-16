@@ -300,6 +300,49 @@ HartreeFock::Opt::IntCoordSystem HartreeFock::Opt::IntCoordSystem::build(
     return ics;
 }
 
+// ── IntCoordSystem::add_coord ─────────────────────────────────────────────────
+//
+// Inserts ic into the coordinate list if no equivalent IC is already present,
+// checking both forward and reverse orderings.  Returns the 0-based index of
+// the (possibly pre-existing) coordinate.
+
+int HartreeFock::Opt::IntCoordSystem::add_coord(const InternalCoord& ic)
+{
+    for (int k = 0; k < nics(); ++k)
+    {
+        const auto& c = coords[k];
+        if (c.type != ic.type) continue;
+
+        if (ic.type == ICType::Stretch)
+        {
+            // {i,j} == {j,i}
+            if ((c.atoms[0] == ic.atoms[0] && c.atoms[1] == ic.atoms[1]) ||
+                (c.atoms[0] == ic.atoms[1] && c.atoms[1] == ic.atoms[0]))
+                return k;
+        }
+        else if (ic.type == ICType::Bend)
+        {
+            // {i,j,k} == {k,j,i}  (same central atom j)
+            if (c.atoms[1] == ic.atoms[1] &&
+                ((c.atoms[0] == ic.atoms[0] && c.atoms[2] == ic.atoms[2]) ||
+                 (c.atoms[0] == ic.atoms[2] && c.atoms[2] == ic.atoms[0])))
+                return k;
+        }
+        else if (ic.type == ICType::Torsion)
+        {
+            // {i,j,k,l} == {l,k,j,i}
+            if ((c.atoms[0] == ic.atoms[0] && c.atoms[1] == ic.atoms[1] &&
+                 c.atoms[2] == ic.atoms[2] && c.atoms[3] == ic.atoms[3]) ||
+                (c.atoms[0] == ic.atoms[3] && c.atoms[1] == ic.atoms[2] &&
+                 c.atoms[2] == ic.atoms[1] && c.atoms[3] == ic.atoms[0]))
+                return k;
+        }
+    }
+    // Not present — insert
+    coords.push_back(ic);
+    return static_cast<int>(coords.size()) - 1;
+}
+
 // ── IntCoordSystem::values ────────────────────────────────────────────────────
 
 Eigen::VectorXd HartreeFock::Opt::IntCoordSystem::values(

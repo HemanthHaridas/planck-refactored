@@ -13,7 +13,7 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 - **MO symmetry** — irreducible representation labels (A1, B2, Ag, Bu, …) assigned to each converged orbital; Cartesian AO coefficients are transformed to the real spherical harmonic basis and decomposed into symmetry species via libmsym's SALC machinery; the Cartesian→spherical block transform covers all shells supported by the integral engine (S through H, L=0–5); for non-Abelian groups (D3d, Td, Oh, …) the largest Abelian subgroup with all one-dimensional irreps is automatically selected (e.g. C2h for D3d) so every MO receives a unique, unambiguous label — the active group or subgroup is printed to the log; linear molecules (C∞v / D∞h) use a dedicated character-based handler
 - **Post-HF** — RMP2 and UMP2 correlation energy corrections
 - **Analytic nuclear gradients** — RHF and UHF nuclear gradients via the Obara-Saika AM-shift rule; all five terms (1e GTO-centre, nucleus-position V, ERI, Pulay/overlap, nuclear repulsion) assembled exactly
-- **Geometry optimization** — L-BFGS optimizer in Cartesian coordinates or BFGS optimizer in redundant generalized internal coordinates (GIC); Wolfe/Armijo line search; convergence on max Cartesian gradient component
+- **Geometry optimization** — L-BFGS optimizer in Cartesian coordinates or BFGS optimizer in redundant generalized internal coordinates (GIC); Wolfe/Armijo line search; convergence on max Cartesian gradient component; optional constraints (fixed bonds, angles, dihedrals, frozen atoms) via `%begin_constraints`
 - **Vibrational frequency analysis** — semi-numerical Hessian from central finite differences of analytic gradients (2×3N evaluations); mass-weighted normal mode analysis with Eckart T+R projection; outputs vibrational frequencies in cm⁻¹ (imaginary encoded negative), zero-point energy in Ha and kcal/mol; linearity auto-detected
 - **Checkpoint system** — binary `.hfchk` files (version 2); same-basis restart (`guess density`), full geometry+density restart (`guess full`), and cross-basis density projection (Löwdin SVD); checkpoint stores `has_opt_coords` flag set after a converged geometry optimization
 - **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*
@@ -100,6 +100,10 @@ Input files use an INI-style block format with the extension `.hfinp`. Each sect
 <symbol>  <x>  <y>  <z>
 ...
 %end_coords
+
+%begin_constraints     (optional; IC geomopt only)
+    ...
+%end_constraints
 ```
 
 ### Section: `%begin_control`
@@ -153,6 +157,28 @@ Geometry optimization convergence is controlled by two additional keywords accep
 |---|---|---|---|
 | `grad_tol` | float | `3e-4` | Convergence threshold: maximum Cartesian gradient component in Ha/Bohr |
 | `max_geomopt_iter` | int | `50` | Maximum number of geometry optimization steps |
+
+### Section: `%begin_constraints` (optional)
+
+Geometry constraints for IC-BFGS optimization. This section is only valid when `opt_coords internal` and `coord_type zmatrix` are set; the program will exit with an error if constraints are present without both of these options. Atom indices are 1-based. Lines starting with `#` are treated as comments and ignored.
+
+| Line format | Constraint type | Description |
+|---|---|---|
+| `b  i  j` | Bond | Fix the distance between atoms `i` and `j` |
+| `a  i  j  k` | Angle | Fix the angle at atoms `i`–`j`–`k` (`j` is the vertex) |
+| `d  i  j  k  l` | Dihedral | Fix the dihedral angle `i`–`j`–`k`–`l` |
+| `f  i` | Frozen atom | Hold all three Cartesian DOFs of atom `i` fixed |
+
+Example — fix the O–H bond length (atoms 1–2) and freeze the oxygen (atom 1):
+
+```
+%begin_constraints
+    b  1  2   # fix O-H1 bond
+    f  1      # freeze oxygen
+%end_constraints
+```
+
+When constraints are active, the optimizer zeros the corresponding IC gradient components and IC step components at each iteration, so the constrained coordinates do not move. The log prints how many IC coordinates and atoms are frozen before the optimization starts.
 
 ### Section: `%begin_coords`
 
@@ -376,6 +402,55 @@ Add `opt_coords internal` in `%begin_geom`. Bonds, valence bends, and proper tor
     use_symm    .false.
     opt_coords  internal
 %end_geom
+```
+
+### Constrained geometry optimization — fixed bond
+
+Requires `opt_coords internal` and `coord_type zmatrix`. The `%begin_constraints` block lists one constraint per line using 1-based atom indices. Here the O–H bond (atoms 1–2) is held fixed while the H–O–H angle is allowed to relax:
+
+```
+%begin_control
+    basis       sto-3g
+    calculation geomopt
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  zmatrix
+    coord_units angstrom
+    use_symm    .false.
+    opt_coords  internal
+%end_geom
+
+%begin_coords
+3
+0   1
+O
+H  1  0.9572
+H  1  0.9572  2  104.52
+%end_coords
+
+%begin_constraints
+    b  1  2   # fix O-H1 bond length
+    b  1  3   # fix O-H2 bond length
+%end_constraints
+```
+
+Log output at startup:
+
+```
+[INF]  Constraints :   2 constraint(s) active
+...
+[INF]  Constraints :   2 IC(s) frozen, 0 atom(s) frozen
 ```
 
 ### Vibrational frequency analysis — water, STO-3G

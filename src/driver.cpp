@@ -569,6 +569,25 @@ int main(int argc, const char* argv[])
         HartreeFock::Logger::blank();
     }
 
+    // ── Constraint validation ─────────────────────────────────────────────────
+    if (!calculator._constraints.empty())
+    {
+        if (calculator._opt_coords != HartreeFock::OptCoords::Internal)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Constraints :",
+                "Constrained optimization requires opt_coords internal");
+            return EXIT_FAILURE;
+        }
+        if (calculator._geometry._type != HartreeFock::CoordType::ZMatrix)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Constraints :",
+                "Constrained optimization requires coord_type zmatrix");
+            return EXIT_FAILURE;
+        }
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Constraints :",
+            std::format("{} constraint(s) active", calculator._constraints.size()));
+    }
+
     // ── Geometry optimization ─────────────────────────────────────────────────
     if (calculator._info._is_converged &&
         calculator._calculation == HartreeFock::CalculationType::GeomOpt)
