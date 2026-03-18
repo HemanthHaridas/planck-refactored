@@ -19,7 +19,7 @@ namespace HartreeFock
         std::expected <SectionMap, std::string> _split_into_sections(std::istream &input);
     
         std::expected <void, std::string> _parse_control(const std::vector <std::string> &lines, HartreeFock::CalculationType &calculation, HartreeFock::OptionsBasis &basis, HartreeFock::OptionsOutput &output);
-        std::expected <void, std::string> _parse_scf(const std::vector <std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral);
+        std::expected <void, std::string> _parse_scf(const std::vector <std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space);
         std::expected <void, std::string> _parse_geom(const std::vector <std::string> &lines, HartreeFock::OptionsGeometry &geom);
         std::expected <void, std::string> _parse_coords(const std::vector <std::string> &lines, HartreeFock::Molecule &molecule);
         std::expected <void, std::string> _parse_constraints(const std::vector <std::string> &lines, std::vector<HartreeFock::GeomConstraint> &constraints);

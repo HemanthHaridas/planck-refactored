@@ -19,6 +19,7 @@
 #include "integrals/base.h"
 #include "scf/scf.h"
 #include "post_hf/mp2.h"
+#include "post_hf/casscf.h"
 #include "gradient/gradient.h"
 #include "opt/geomopt.h"
 #include "freq/hessian.h"
@@ -522,6 +523,18 @@ int main(int argc, const char* argv[])
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Computing MP2 correlation energy");
             corr_res = HartreeFock::Correlation::run_ump2(calculator, shellpairs);
         }
+        else if (calculator._correlation == HartreeFock::PostHF::CASSCF)
+        {
+            corr_tag = "CASSCF :";
+            calculator._casscf_rhf_energy = calculator._total_energy;
+            corr_res = HartreeFock::Correlation::run_casscf(calculator, shellpairs);
+        }
+        else if (calculator._correlation == HartreeFock::PostHF::RASSCF)
+        {
+            corr_tag = "RASSCF :";
+            calculator._casscf_rhf_energy = calculator._total_energy;
+            corr_res = HartreeFock::Correlation::run_rasscf(calculator, shellpairs);
+        }
 
         if (corr_res.has_value() == false && !corr_tag.empty())
         {
@@ -533,7 +546,20 @@ int main(int argc, const char* argv[])
         if (!corr_tag.empty())
         {
             HartreeFock::Logger::blank();
-            HartreeFock::Logger::correlation_energy(calculator._total_energy, calculator._correlation_energy);
+            if (calculator._correlation == HartreeFock::PostHF::CASSCF ||
+                calculator._correlation == HartreeFock::PostHF::RASSCF)
+            {
+                HartreeFock::Logger::casscf_summary(
+                    calculator._casscf_rhf_energy,
+                    calculator._total_energy,
+                    calculator._cas_nat_occ,
+                    calculator._active_space.nroots,
+                    calculator._active_space.nactorb);
+            }
+            else
+            {
+                HartreeFock::Logger::correlation_energy(calculator._total_energy, calculator._correlation_energy);
+            }
         }
     }
 
@@ -613,15 +639,17 @@ int main(int argc, const char* argv[])
             std::format("{:.10f} Eh", opt_result.energy));
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Final max|g| :",
             std::format("{:.6e} Ha/Bohr", opt_result.grad_max));
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Optimized Geometry (Bohr) :", "");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Optimized Geometry (Angstrom) :", "");
         for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                std::format("  Atom {:3d}: {:14.8f}  {:14.8f}  {:14.8f}",
+                std::format("  Atom {:3d}:  {:14d}  {:14.8f}  {:14.8f}  {:14.8f}",
                     static_cast<int>(a + 1),
-                    opt_result.final_coords(a, 0),
-                    opt_result.final_coords(a, 1),
-                    opt_result.final_coords(a, 2)));
+                    static_cast<int>(calculator._molecule.atomic_numbers[a]),
+                    opt_result.final_coords(a, 0) * BOHR_TO_ANGSTROM,
+                    opt_result.final_coords(a, 1) * BOHR_TO_ANGSTROM,
+                    opt_result.final_coords(a, 2) * BOHR_TO_ANGSTROM)
+                    );
         }
         HartreeFock::Logger::blank();
 

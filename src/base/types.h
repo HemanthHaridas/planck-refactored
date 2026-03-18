@@ -304,6 +304,33 @@ namespace HartreeFock
         double _tol_eri = 1E-10;                                // ERI tolerance for Shwartz screening;
     };
 
+    // ── Active space specification (CASSCF / RASSCF) ─────────────────────────
+    struct OptionsActiveSpace
+    {
+        // CASSCF / SA-CASSCF
+        int  nactele   = 0;      // number of active electrons
+        int  nactorb   = 0;      // number of active orbitals
+        int  nroots    = 1;      // number of CI roots for state averaging (1 = single-state)
+        std::vector<double> weights;  // SA weights (length nroots); empty → equal weights
+
+        // RASSCF extensions (ignored for plain CASSCF)
+        int  nras1     = 0;      // RAS1 orbital count (high-occ. restricted space)
+        int  nras2     = 0;      // RAS2 orbital count (full CAS subspace)
+        int  nras3     = 0;      // RAS3 orbital count (low-virt. restricted space)
+        int  max_holes = 2;      // max electrons removed from RAS1
+        int  max_elec  = 2;      // max electrons added to RAS3
+
+        // MCSCF convergence
+        unsigned int mcscf_max_iter   = 100;
+        double       tol_mcscf_energy = 1e-8;
+        double       tol_mcscf_grad   = 1e-5;
+        unsigned int ci_max_dim       = 10000; // abort if CI space exceeds this
+
+        // Symmetry filtering: target CI state irrep (e.g. "A1", "B1g").
+        // Empty string → use the totally-symmetric irrep of the detected point group.
+        std::string target_irrep = "";
+    };
+
     struct OptionsOutput
     {
         Verbosity _verbosity    = Verbosity::Minimal; // Default Verbosity is Minimal
@@ -628,6 +655,12 @@ namespace HartreeFock
         double          _total_energy        = 0;    // Total Energy (SCF + Nuclear Repulsion)
         double          _nuclear_repulsion  = 0;    // Nuclear Repulsion Energy (Bohr)
         double          _correlation_energy = 0.0;  // Post-HF correlation energy (0 if not computed)
+
+        // CASSCF / RASSCF results
+        OptionsActiveSpace  _active_space;              // active space specification
+        Eigen::VectorXd     _cas_nat_occ;               // active natural occupation numbers
+        Eigen::MatrixXd     _cas_mo_coefficients;       // final CASSCF MO coefficients [nb×nb]
+        double              _casscf_rhf_energy = 0.0;  // RHF reference energy (for ΔE printout)
 
         Eigen::MatrixXd         _overlap;   // Overlap matrix S
         Eigen::MatrixXd         _hcore;     // Core Hamiltonian H = T + V
