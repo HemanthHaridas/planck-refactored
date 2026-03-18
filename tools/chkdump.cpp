@@ -1,22 +1,26 @@
-// chkdump — convert a Planck binary checkpoint (.hfchk) to formatted text
+// chkdump -- export a Planck binary checkpoint (.hfchk) as a Gaussian-style
+// formatted checkpoint text file (.fchk-like).
 //
-// Usage:  chkdump <file.hfchk> [output.txt]
+// Usage:
+//   chkdump <file.hfchk> [output.fchk]
 //
-// When no output file is given, the formatted text is written to stdout.
-// The tool is self-contained and requires no link dependencies beyond the
-// C++ standard library.
+// Notes:
+// - The Planck checkpoint does not store the full Gaussian basis metadata that a
+//   canonical Gaussian .fchk would contain, so this exporter writes the common
+//   scalar, vector, and matrix sections that can be reconstructed exactly from
+//   the checkpoint contents.
+// - Symmetric matrices are emitted in packed lower-triangular form, matching
+//   the usual formatted-checkpoint convention.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <cmath>
 #include <fstream>
-#include <iostream>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
-
-// ─── Binary helpers ───────────────────────────────────────────────────────────
 
 template<typename T>
 static T read_pod(std::istream& in)
@@ -34,11 +38,16 @@ static std::string read_string(std::istream& in)
     return s;
 }
 
-// Read an int64 × int64 matrix stored column-major
-struct Matrix {
-    int64_t rows = 0, cols = 0;
-    std::vector<double> data;   // column-major
-    double operator()(int r, int c) const { return data[c * rows + r]; }
+struct Matrix
+{
+    int64_t rows = 0;
+    int64_t cols = 0;
+    std::vector<double> data; // column-major
+
+    double operator()(int64_t r, int64_t c) const
+    {
+        return data[static_cast<std::size_t>(c * rows + r)];
+    }
 };
 
 static Matrix read_matrix(std::istream& in)
@@ -48,108 +57,111 @@ static Matrix read_matrix(std::istream& in)
     in.read(reinterpret_cast<char*>(&m.cols), 8);
     m.data.resize(static_cast<std::size_t>(m.rows * m.cols));
     in.read(reinterpret_cast<char*>(m.data.data()),
-            m.rows * m.cols * static_cast<int64_t>(sizeof(double)));
+            static_cast<std::streamsize>(m.rows * m.cols * static_cast<int64_t>(sizeof(double))));
     return m;
 }
 
 static Matrix read_vector_as_matrix(std::istream& in)
 {
-    return read_matrix(in);   // stored as n × 1
+    return read_matrix(in);
 }
 
-// ─── Element symbol lookup (Z = 1 … 118) ─────────────────────────────────────
-
-static const char* element_symbol(int Z)
+static std::string uppercase(std::string s)
 {
-    static constexpr const char* sym[] = {
-        "?",
-        "H",  "He", "Li", "Be", "B",  "C",  "N",  "O",  "F",  "Ne",
-        "Na", "Mg", "Al", "Si", "P",  "S",  "Cl", "Ar", "K",  "Ca",
-        "Sc", "Ti", "V",  "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
-        "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y",  "Zr",
-        "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
-        "Sb", "Te", "I",  "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
-        "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb",
-        "Lu", "Hf", "Ta", "W",  "Re", "Os", "Ir", "Pt", "Au", "Hg",
-        "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th",
-        "Pa", "U",  "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm",
-        "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",
-        "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og"
-    };
-    if (Z < 1 || Z > 118) return sym[0];
-    return sym[Z];
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::toupper(ch));
+    });
+    return s;
 }
 
-// ─── Formatting helpers ───────────────────────────────────────────────────────
-
-static const int LINE_WIDTH = 78;
-
-static void rule(std::ostream& out)
+static std::vector<double> packed_lower_triangle(const Matrix& m)
 {
-    out << std::string(LINE_WIDTH, '=') << "\n";
+    std::vector<double> packed;
+    const int64_t n = std::min(m.rows, m.cols);
+    packed.reserve(static_cast<std::size_t>(n * (n + 1) / 2));
+    for (int64_t i = 0; i < n; ++i)
+        for (int64_t j = 0; j <= i; ++j)
+            packed.push_back(m(i, j));
+    return packed;
 }
 
-static void section(std::ostream& out, const std::string& title)
+static std::vector<double> flatten_matrix(const Matrix& m)
 {
-    out << "\n";
-    rule(out);
-    out << "  " << title << "\n";
-    rule(out);
+    return m.data;
 }
 
-static void kv(std::ostream& out, const std::string& key, const std::string& val)
+static std::vector<int32_t> to_int32_vector(const std::vector<int32_t>& values)
 {
-    out << "  " << std::setw(22) << std::left << key << ": " << val << "\n";
+    return values;
 }
 
-static void print_matrix(std::ostream& out, const Matrix& m, int max_cols = 8)
+static std::vector<double> to_double_vector(const std::vector<int32_t>& values)
 {
-    // Print at most max_cols columns per pass to keep lines manageable.
-    // Column header
-    const int w = 14;
-    const int label_w = 8;
+    std::vector<double> out;
+    out.reserve(values.size());
+    for (int32_t v : values)
+        out.push_back(static_cast<double>(v));
+    return out;
+}
 
-    for (int64_t col_start = 0; col_start < m.cols; col_start += max_cols)
+static void write_scalar_int(std::ostream& out, const std::string& label, long long value)
+{
+    out << std::left << std::setw(43) << label
+        << "I"
+        << std::right << std::setw(12) << value << "\n";
+}
+
+static void write_scalar_real(std::ostream& out, const std::string& label, double value)
+{
+    out << std::left << std::setw(43) << label
+        << "R"
+        << std::right << std::setw(27) << std::uppercase << std::scientific
+        << std::setprecision(15) << value << "\n";
+}
+
+static void write_array_header(std::ostream& out, const std::string& label, char kind, std::size_t n)
+{
+    out << std::left << std::setw(43) << label
+        << kind
+        << "   N="
+        << std::right << std::setw(12) << n << "\n";
+}
+
+static void write_integer_array(std::ostream& out, const std::string& label,
+                                const std::vector<int32_t>& values)
+{
+    write_array_header(out, label, 'I', values.size());
+    for (std::size_t i = 0; i < values.size(); ++i)
     {
-        const int64_t col_end = std::min(col_start + max_cols, m.cols);
-
-        // Column indices
-        out << std::string(label_w, ' ');
-        for (int64_t c = col_start; c < col_end; ++c)
-            out << std::setw(w) << std::right << (c + 1);
-        out << "\n";
-
-        // Separator
-        out << std::string(label_w + (col_end - col_start) * w, '-') << "\n";
-
-        // Rows
-        for (int64_t r = 0; r < m.rows; ++r)
-        {
-            out << std::setw(label_w) << std::right << (r + 1);
-            for (int64_t c = col_start; c < col_end; ++c)
-            {
-                std::ostringstream oss;
-                oss << std::fixed << std::setprecision(7) << m(static_cast<int>(r), static_cast<int>(c));
-                out << std::setw(w) << std::right << oss.str();
-            }
+        out << std::setw(12) << values[i];
+        if ((i + 1) % 6 == 0 || i + 1 == values.size())
             out << "\n";
-        }
-        out << "\n";
     }
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+static void write_real_array(std::ostream& out, const std::string& label,
+                             const std::vector<double>& values)
+{
+    write_array_header(out, label, 'R', values.size());
+    out << std::uppercase << std::scientific << std::setprecision(8);
+    for (std::size_t i = 0; i < values.size(); ++i)
+    {
+        out << std::setw(16) << values[i];
+        if ((i + 1) % 5 == 0 || i + 1 == values.size())
+            out << "\n";
+    }
+}
 
 int main(int argc, char* argv[])
 {
     if (argc < 2 || argc > 3)
     {
-        std::cerr << "Usage: chkdump <file.hfchk> [output.txt]\n";
+        std::cerr << "Usage: chkdump <file.hfchk> [output.fchk]\n";
         return EXIT_FAILURE;
     }
 
-    const std::string in_path  = argv[1];
-    const bool        to_file  = (argc == 3);
+    const std::string in_path = argv[1];
+    const bool to_file = (argc == 3);
     const std::string out_path = to_file ? argv[2] : "";
 
     std::ifstream in(in_path, std::ios::binary);
@@ -173,7 +185,6 @@ int main(int argc, char* argv[])
     }
     std::ostream& out = *outp;
 
-    // ── Header ────────────────────────────────────────────────────────────────
     char magic[8] = {};
     in.read(magic, 8);
     if (std::memcmp(magic, "PLNKCHK\0", 8) != 0)
@@ -182,7 +193,7 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    const uint32_t version   = read_pod<uint32_t>(in);
+    const uint32_t version = read_pod<uint32_t>(in);
     if (version != 2)
     {
         std::cerr << "chkdump: unsupported checkpoint version " << version
@@ -190,40 +201,36 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    const uint64_t nbasis      = read_pod<uint64_t>(in);
-    const uint8_t  is_uhf      = read_pod<uint8_t>(in);
-    const uint8_t  is_conv     = read_pod<uint8_t>(in);
-    const uint32_t last_iter   = read_pod<uint32_t>(in);
-    const double   tot_energy  = read_pod<double>(in);
-    const double   nuc_rep     = read_pod<double>(in);
+    const uint64_t nbasis    = read_pod<uint64_t>(in);
+    const uint8_t  is_uhf    = read_pod<uint8_t>(in);
+    const uint8_t  converged = read_pod<uint8_t>(in);
+    const uint32_t last_iter = read_pod<uint32_t>(in);
+    const double   tot_energy = read_pod<double>(in);
+    const double   nuc_rep    = read_pod<double>(in);
 
-    // ── Molecule ──────────────────────────────────────────────────────────────
-    const uint64_t natoms   = read_pod<uint64_t>(in);
-    const int32_t  charge   = read_pod<int32_t>(in);
-    const uint32_t mult     = read_pod<uint32_t>(in);
+    const uint64_t natoms = read_pod<uint64_t>(in);
+    const int32_t  charge = read_pod<int32_t>(in);
+    const uint32_t mult   = read_pod<uint32_t>(in);
 
     std::vector<int32_t> atomic_numbers(natoms);
     for (uint64_t i = 0; i < natoms; ++i)
-        atomic_numbers[i] = read_pod<int32_t>(in);
+        atomic_numbers[static_cast<std::size_t>(i)] = read_pod<int32_t>(in);
 
     std::vector<double> coords(natoms * 3);
     for (uint64_t i = 0; i < natoms * 3; ++i)
-        coords[i] = read_pod<double>(in);
+        coords[static_cast<std::size_t>(i)] = read_pod<double>(in);
 
-    const std::string basis_name     = read_string(in);
-    const uint8_t     has_opt_coords = read_pod<uint8_t>(in);
+    const std::string basis_name = read_string(in);
+    const uint8_t has_opt_coords = read_pod<uint8_t>(in);
 
-    // ── 1e matrices ───────────────────────────────────────────────────────────
     const Matrix overlap = read_matrix(in);
     const Matrix hcore   = read_matrix(in);
 
-    // ── Alpha spin channel ────────────────────────────────────────────────────
     const Matrix alpha_density = read_matrix(in);
     const Matrix alpha_fock    = read_matrix(in);
     const Matrix alpha_mo_e    = read_vector_as_matrix(in);
     const Matrix alpha_mo_c    = read_matrix(in);
 
-    // ── Beta spin channel (UHF only) ──────────────────────────────────────────
     Matrix beta_density, beta_fock, beta_mo_e, beta_mo_c;
     if (is_uhf)
     {
@@ -239,153 +246,72 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    // ── Derive electron counts ────────────────────────────────────────────────
-    int Z_total = 0;
-    for (auto z : atomic_numbers) Z_total += z;
-    const int n_elec   = Z_total - charge;
-    const int n_unpair = static_cast<int>(mult) - 1;
-    const int n_alpha  = (n_elec + n_unpair) / 2;
-    const int n_beta   = (n_elec - n_unpair) / 2;
-    const int homo_a   = n_alpha - 1;
-    const int lumo_a   = n_alpha;
-    const int homo_b   = n_beta  - 1;
-    const int lumo_b   = n_beta;
+    int z_total = 0;
+    for (int32_t z : atomic_numbers)
+        z_total += z;
+    const int n_elec = z_total - charge;
+    const int n_unpaired = static_cast<int>(mult) - 1;
+    const int n_alpha = (n_elec + n_unpaired) / 2;
+    const int n_beta  = (n_elec - n_unpaired) / 2;
 
-    // ── Output ────────────────────────────────────────────────────────────────
-    rule(out);
-    out << "  Planck Checkpoint File  —  " << in_path << "\n";
-    rule(out);
-    out << "\n";
-
-    // General info
-    kv(out, "Format version",  std::to_string(version));
-    kv(out, "SCF type",        is_uhf ? "UHF" : "RHF");
-    kv(out, "Converged",       is_conv ? "yes" : "no");
-    if (last_iter > 0) kv(out, "Last SCF iter", std::to_string(last_iter));
-    {
-        std::ostringstream s;
-        s << std::fixed << std::setprecision(10) << tot_energy << " Eh";
-        kv(out, "Total energy", s.str());
-    }
-    {
-        std::ostringstream s;
-        s << std::fixed << std::setprecision(10) << nuc_rep << " Eh";
-        kv(out, "Nuclear repulsion", s.str());
-    }
-    kv(out, "Basis set",       basis_name);
-    kv(out, "Nbasis",          std::to_string(nbasis));
-    kv(out, "Geometry source", has_opt_coords
-                               ? "optimized (converged geomopt)"
-                               : "input (single-point or gradient)");
-
-    // Molecule
-    section(out, "Molecule");
-    kv(out, "Natoms",       std::to_string(natoms));
-    kv(out, "Charge",       std::to_string(charge));
-    kv(out, "Multiplicity", std::to_string(mult));
-    kv(out, "Electrons",    std::to_string(n_elec)
-                            + "  (" + std::to_string(n_alpha) + " alpha, "
-                            + std::to_string(n_beta)  + " beta)");
-
-    out << "\n";
-    out << "  " << std::setw(4) << "Atom"
-        << std::setw(4) << "Z"
-        << std::setw(5) << "Sym"
-        << std::setw(18) << "X (Bohr)"
-        << std::setw(16) << "Y (Bohr)"
-        << std::setw(16) << "Z (Bohr)" << "\n";
-    out << "  " << std::string(59, '-') << "\n";
-    for (uint64_t i = 0; i < natoms; ++i)
-    {
-        const int    Z  = atomic_numbers[i];
-        const double x  = coords[i * 3 + 0];
-        const double y  = coords[i * 3 + 1];
-        const double z  = coords[i * 3 + 2];
-        out << "  "
-            << std::setw(4) << (i + 1)
-            << std::setw(4) << Z
-            << std::setw(5) << element_symbol(Z)
-            << std::setw(18) << std::fixed << std::setprecision(8) << x
-            << std::setw(16) << std::fixed << std::setprecision(8) << y
-            << std::setw(16) << std::fixed << std::setprecision(8) << z
-            << "\n";
-    }
-
-    // MO energies
-    auto print_mo_energies = [&](const Matrix& mo_e, int homo, int lumo,
-                                 const std::string& spin_label)
-    {
-        section(out, spin_label + " MO Energies (Eh)");
-        out << "  " << std::setw(6)  << "MO"
-            << std::setw(18) << "Energy (Eh)"
-            << "  \n";
-        out << "  " << std::string(26, '-') << "\n";
-        for (int64_t i = 0; i < mo_e.rows; ++i)
-        {
-            out << "  " << std::setw(6) << (i + 1)
-                << std::setw(18) << std::fixed << std::setprecision(6) << mo_e.data[i];
-            if (i == homo) out << "  <-- HOMO";
-            if (i == lumo) out << "  <-- LUMO";
-            out << "\n";
-        }
-    };
+    std::vector<double> nuclear_charges = to_double_vector(atomic_numbers);
+    std::vector<double> overlap_packed  = packed_lower_triangle(overlap);
+    std::vector<double> hcore_packed    = packed_lower_triangle(hcore);
+    std::vector<double> alpha_density_packed = packed_lower_triangle(alpha_density);
+    std::vector<double> total_density_packed = alpha_density_packed;
 
     if (is_uhf)
     {
-        print_mo_energies(alpha_mo_e, homo_a, lumo_a, "Alpha");
-        print_mo_energies(beta_mo_e,  homo_b, lumo_b, "Beta");
+        total_density_packed.clear();
+        const int64_t n = std::min(alpha_density.rows, alpha_density.cols);
+        total_density_packed.reserve(static_cast<std::size_t>(n * (n + 1) / 2));
+        for (int64_t i = 0; i < n; ++i)
+            for (int64_t j = 0; j <= i; ++j)
+                total_density_packed.push_back(alpha_density(i, j) + beta_density(i, j));
     }
-    else
-    {
-        print_mo_energies(alpha_mo_e, homo_a, lumo_a, "");
-    }
 
-    // 1e matrices
-    section(out, "Overlap Matrix  (" + std::to_string(overlap.rows)
-                 + " x " + std::to_string(overlap.cols) + ")");
-    print_matrix(out, overlap);
+    out << "Planck checkpoint export\n";
+    out << std::left << std::setw(10) << "SP"
+        << std::setw(10) << (is_uhf ? "UHF" : "RHF")
+        << uppercase(basis_name) << "\n";
 
-    section(out, "Core Hamiltonian  (" + std::to_string(hcore.rows)
-                 + " x " + std::to_string(hcore.cols) + ")");
-    print_matrix(out, hcore);
+    write_scalar_int(out, "Number of atoms", static_cast<long long>(natoms));
+    write_scalar_int(out, "Charge", static_cast<long long>(charge));
+    write_scalar_int(out, "Multiplicity", static_cast<long long>(mult));
+    write_scalar_int(out, "Number of electrons", static_cast<long long>(n_elec));
+    write_scalar_int(out, "Number of alpha electrons", static_cast<long long>(n_alpha));
+    write_scalar_int(out, "Number of beta electrons", static_cast<long long>(n_beta));
+    write_scalar_int(out, "Number of basis functions", static_cast<long long>(nbasis));
+    write_scalar_int(out, "Number of independent functions", static_cast<long long>(nbasis));
+    write_scalar_int(out, "SCF converged", static_cast<long long>(converged));
+    write_scalar_int(out, "Last SCF iteration", static_cast<long long>(last_iter));
+    write_scalar_int(out, "Has optimized geometry", static_cast<long long>(has_opt_coords));
+    write_scalar_real(out, "SCF Energy", tot_energy);
+    write_scalar_real(out, "Nuclear repulsion energy", nuc_rep);
 
-    // SCF results
-    auto print_spin = [&](const Matrix& dens, const Matrix& fock,
-                          const Matrix& mo_c, const std::string& label)
-    {
-        const std::string prefix = label.empty() ? "" : label + " ";
-
-        section(out, prefix + "Density Matrix  ("
-                + std::to_string(dens.rows) + " x " + std::to_string(dens.cols) + ")");
-        print_matrix(out, dens);
-
-        section(out, prefix + "Fock Matrix  ("
-                + std::to_string(fock.rows) + " x " + std::to_string(fock.cols) + ")");
-        print_matrix(out, fock);
-
-        section(out, prefix + "MO Coefficients  ("
-                + std::to_string(mo_c.rows) + " x " + std::to_string(mo_c.cols) + ")");
-        print_matrix(out, mo_c);
-    };
+    write_integer_array(out, "Atomic numbers", to_int32_vector(atomic_numbers));
+    write_real_array(out, "Nuclear charges", nuclear_charges);
+    write_real_array(out, "Current cartesian coordinates", coords);
+    write_real_array(out, "Alpha Orbital Energies", flatten_matrix(alpha_mo_e));
+    write_real_array(out, "Alpha MO coefficients", flatten_matrix(alpha_mo_c));
 
     if (is_uhf)
     {
-        print_spin(alpha_density, alpha_fock, alpha_mo_c, "Alpha");
-        print_spin(beta_density,  beta_fock,  beta_mo_c,  "Beta");
-    }
-    else
-    {
-        print_spin(alpha_density, alpha_fock, alpha_mo_c, "");
+        write_real_array(out, "Beta Orbital Energies", flatten_matrix(beta_mo_e));
+        write_real_array(out, "Beta MO coefficients", flatten_matrix(beta_mo_c));
     }
 
-    out << "\n";
-    rule(out);
-    out << "  End of checkpoint dump\n";
-    rule(out);
-    out << "\n";
+    write_real_array(out, "Total SCF Density", total_density_packed);
+    write_real_array(out, "Alpha Density Matrix", alpha_density_packed);
+    if (is_uhf)
+        write_real_array(out, "Beta Density Matrix", packed_lower_triangle(beta_density));
 
-    if (to_file)
-        std::cerr << "chkdump: wrote " << out_path << "\n";
+    write_real_array(out, "Alpha Fock Matrix", packed_lower_triangle(alpha_fock));
+    if (is_uhf)
+        write_real_array(out, "Beta Fock Matrix", packed_lower_triangle(beta_fock));
+
+    write_real_array(out, "Core Hamiltonian Matrix", hcore_packed);
+    write_real_array(out, "Overlap Matrix", overlap_packed);
 
     return EXIT_SUCCESS;
 }

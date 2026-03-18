@@ -4,6 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <Eigen/SVD>
+#include <Eigen/Geometry>
 
 // ── Covalent radii (Angstrom) from Alvarez (2008) ────────────────────────────
 // Indexed by atomic number Z (1-based; index 0 unused).

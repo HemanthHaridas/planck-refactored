@@ -129,11 +129,17 @@ namespace HartreeFock::IO
             {"energy",      HartreeFock::CalculationType::SinglePoint},
             {"geomopt",     HartreeFock::CalculationType::GeomOpt},
             {"freq",        HartreeFock::CalculationType::Frequency},
+            {"optfreq",     HartreeFock::CalculationType::GeomOptFrequency},
+            {"geomoptfreq", HartreeFock::CalculationType::GeomOptFrequency},
+            {"geomopt+freq",HartreeFock::CalculationType::GeomOptFrequency},
+            {"geomopt_freq",HartreeFock::CalculationType::GeomOptFrequency},
             {"gradient",    HartreeFock::CalculationType::Gradient},
 
             {"sp",          HartreeFock::CalculationType::SinglePoint},
             {"opt",         HartreeFock::CalculationType::GeomOpt},
             {"frequency",   HartreeFock::CalculationType::Frequency},
+            {"opt+freq",    HartreeFock::CalculationType::GeomOptFrequency},
+            {"opt_freq",    HartreeFock::CalculationType::GeomOptFrequency},
             {"grad",        HartreeFock::CalculationType::Gradient}
         };
         

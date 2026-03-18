@@ -145,7 +145,8 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
     write_string(out, calc._basis._basis_name);
 
     // has_opt_coords: 1 if these coordinates came from a converged geometry optimization
-    const bool is_opt = (calc._calculation == HartreeFock::CalculationType::GeomOpt
+    const bool is_opt = ((calc._calculation == HartreeFock::CalculationType::GeomOpt ||
+                          calc._calculation == HartreeFock::CalculationType::GeomOptFrequency)
                          && calc._info._is_converged);
     write_pod<uint8_t>(out, static_cast<uint8_t>(is_opt ? 1 : 0));
 

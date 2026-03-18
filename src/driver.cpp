@@ -571,7 +571,20 @@ int main(int argc, const char* argv[])
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient :", "Computing analytic nuclear gradient");
 
         Eigen::MatrixXd grad;
-        if (calculator._info._scf.is_uhf)
+        if (calculator._correlation == HartreeFock::PostHF::RMP2)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient :",
+                "Using central-difference RMP2 total-energy gradient");
+            calculator._total_energy += calculator._correlation_energy;
+            grad = HartreeFock::Gradient::compute_rmp2_gradient(calculator);
+        }
+        else if (calculator._correlation == HartreeFock::PostHF::UMP2)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
+                "UMP2 gradient is not implemented");
+            return EXIT_FAILURE;
+        }
+        else if (calculator._info._scf.is_uhf)
             grad = HartreeFock::Gradient::compute_uhf_gradient(calculator, shellpairs);
         else
             grad = HartreeFock::Gradient::compute_rhf_gradient(calculator, shellpairs);
@@ -616,7 +629,8 @@ int main(int argc, const char* argv[])
 
     // ── Geometry optimization ─────────────────────────────────────────────────
     if (calculator._info._is_converged &&
-        calculator._calculation == HartreeFock::CalculationType::GeomOpt)
+        (calculator._calculation == HartreeFock::CalculationType::GeomOpt ||
+         calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency))
     {
         const bool use_ic = (calculator._opt_coords == HartreeFock::OptCoords::Internal);
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Geometry Optimization :",
@@ -820,7 +834,8 @@ int main(int argc, const char* argv[])
 
     // ── Vibrational frequency analysis ───────────────────────────────────────
     if (calculator._info._is_converged &&
-        calculator._calculation == HartreeFock::CalculationType::Frequency)
+        (calculator._calculation == HartreeFock::CalculationType::Frequency ||
+         calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency))
     {
         // Ensure gradient has been computed for the reference geometry.
         // (For a frequency-only run the analytic gradient was not computed above;
@@ -839,6 +854,7 @@ int main(int argc, const char* argv[])
             calculator._hessian      = freq_result.hessian;
             calculator._frequencies  = freq_result.frequencies;
             calculator._normal_modes = freq_result.normal_modes;
+            calculator._vibrational_symmetry = freq_result.mode_symmetry;
             calculator._zpe          = freq_result.zpe;
 
             // ── Print frequency table ─────────────────────────────────────────
@@ -852,26 +868,47 @@ int main(int argc, const char* argv[])
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
                 std::format("  Molecule: {} ({} T+R modes removed, {} vibrational modes)",
                             geo_label, n_tr, n_vib));
+            const bool have_mode_symmetry =
+                freq_result.mode_symmetry.size() == static_cast<std::size_t>(n_vib) &&
+                !freq_result.mode_symmetry.empty();
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                "  ──────────────────────────────────────────");
+                have_mode_symmetry
+                    ? "  ─────────────────────────────────────────────────────"
+                    : "  ──────────────────────────────────────────");
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                "    Mode    Frequency (cm⁻¹)");
+                have_mode_symmetry
+                    ? "    Mode    Symmetry    Frequency (cm⁻¹)"
+                    : "    Mode    Frequency (cm⁻¹)");
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                "  ────────────────────────────────────────────");
+                have_mode_symmetry
+                    ? "  ─────────────────────────────────────────────────────"
+                    : "  ────────────────────────────────────────────");
 
             for (int i = 0; i < n_vib; ++i)
             {
                 const double freq = freq_result.frequencies[i];
                 if (freq < 0.0)
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                        std::format("  {:6d}  {:14.2f}i  (imaginary)", i + 1, -freq));
+                        have_mode_symmetry
+                            ? std::format("  {:6d}  {:10s}  {:14.2f}i  (imaginary)",
+                                          i + 1,
+                                          freq_result.mode_symmetry[static_cast<std::size_t>(i)],
+                                          -freq)
+                            : std::format("  {:6d}  {:14.2f}i  (imaginary)", i + 1, -freq));
                 else
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                        std::format("  {:6d}  {:14.2f}", i + 1, freq));
+                        have_mode_symmetry
+                            ? std::format("  {:6d}  {:10s}  {:14.2f}",
+                                          i + 1,
+                                          freq_result.mode_symmetry[static_cast<std::size_t>(i)],
+                                          freq)
+                            : std::format("  {:6d}  {:14.2f}", i + 1, freq));
             }
 
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                "  ────────────────────────────────────────────");
+                have_mode_symmetry
+                    ? "  ─────────────────────────────────────────────────────"
+                    : "  ────────────────────────────────────────────");
 
             if (freq_result.n_imaginary > 0)
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,

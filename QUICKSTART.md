@@ -1,10 +1,8 @@
-# Quickstart
+### Quickstart
 
 This guide gets you from zero to a converged Hartree-Fock calculation in five minutes.
 
----
-
-## 1. Build
+### 1. Build
 
 ```bash
 git clone https://github.com/HemanthHaridas/planck-refactored.git
@@ -16,9 +14,7 @@ cmake --install build
 
 The first build fetches Eigen and libmsym automatically. The executable is `./install/bin/hartree-fock`.
 
----
-
-## 2. First calculation
+### 2. First calculation
 
 Save the following as `water.hfinp`:
 
@@ -82,9 +78,7 @@ Iter  Energy              DeltaE         RMS(D)      ...
 
 The total energy is printed in Hartree, eV, and kcal/mol.
 
----
-
-## 3. Open-shell calculation (UHF)
+### 3. Open-shell calculation (UHF)
 
 For open-shell systems set `scf_type uhf` and the correct multiplicity. Triplet water (M=3):
 
@@ -109,9 +103,8 @@ UHF output includes spin contamination diagnostics:
 <S>   :   1.415390
 ```
 
----
 
-## 4. Checkpoint and restart
+### 4. Checkpoint and restart
 
 ### Same-basis restart
 
@@ -140,9 +133,8 @@ After a converged run, `water.hfchk` is written automatically. Add `guess read` 
     ...
 ```
 
----
 
-## 5. Analytic gradient and geometry optimization
+### 5. Analytic gradient and geometry optimization
 
 ### Gradient only
 
@@ -276,9 +268,8 @@ The log will confirm which coordinates are frozen before optimization starts:
 [INF]  Constraints :   2 IC(s) frozen, 0 atom(s) frozen
 ```
 
----
 
-## 6. Vibrational frequency analysis
+### 6. Vibrational frequency analysis
 
 Set `calculation freq` to compute vibrational frequencies at the current geometry. The program uses a semi-numerical Hessian (central finite differences of analytic gradients): for each Cartesian DOF, two displaced SCF+gradient evaluations are performed, requiring 2×3N gradient calls in total (18 for water).
 
@@ -343,9 +334,8 @@ A common pattern: optimize to a minimum, then compute frequencies to confirm it 
 %end_scf
 ```
 
----
 
-## 7. Z-matrix input
+### 7. Z-matrix input
 
 Coordinates can be given in Z-matrix (internal coordinate) format. Set `coord_type zmatrix` in `%begin_geom`. Bond lengths are in the units from `coord_units`; angles and dihedrals are always in degrees.
 
@@ -367,9 +357,8 @@ H  1  0.9572  2  104.52
 
 Each row after the header gives the element symbol followed by reference atom index, bond length, and (for atom 3+) additional reference indices, angle, and dihedral. Atom indices are 1-based. The converted Cartesian coordinates are passed through the rest of the pipeline, so symmetry detection (`use_symm .true.`) works normally.
 
----
 
-## 8. SCF mode
+### 8. SCF mode
 
 | Mode | Keyword | When to use |
 |---|---|---|
@@ -394,9 +383,8 @@ For large systems set `scf_mode direct` or lower `threshold`:
     ...
 ```
 
----
 
-## 9. Basis sets
+### 9. Basis sets
 
 | Keyword | Description |
 |---|---|
@@ -405,9 +393,8 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | `6-31g` | Standard split-valence |
 | `6-31g*` | 6-31G + d polarization on heavy atoms |
 
----
 
-## 10. Convergence tips
+### 10. Convergence tips
 
 | Problem | Fix |
 |---|---|
@@ -418,9 +405,8 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | Wrong energy on restart | Delete `.hfchk` and re-run from scratch |
 | MO labels are Ag/Bg/Au/Bu instead of Eg/Eu | Expected — for non-Abelian groups (D3d, Oh, …) the program uses the largest Abelian subgroup (e.g. C2h for D3d). The active group is printed to the log. |
 
----
 
-## 11. All input keywords at a glance
+### 11. All input keywords at a glance
 
 ```
 %begin_control

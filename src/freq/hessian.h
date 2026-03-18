@@ -3,6 +3,8 @@
 
 #include "base/types.h"
 #include <Eigen/Dense>
+#include <string>
+#include <vector>
 
 namespace HartreeFock
 {
@@ -13,6 +15,7 @@ namespace HartreeFock
             Eigen::MatrixXd hessian;        // 3N×3N Cartesian Hessian, Ha/Bohr²
             Eigen::VectorXd frequencies;    // n_vib, cm⁻¹ (negative = imaginary)
             Eigen::MatrixXd normal_modes;   // 3N × n_vib mass-unweighted, column-normalised
+            std::vector<std::string> mode_symmetry; // n_vib Mulliken labels when symmetry analysis succeeds
             double          zpe;            // zero-point energy, Ha
             int             n_imaginary;    // count of imaginary frequencies
             bool            is_linear;      // molecule linearity flag
