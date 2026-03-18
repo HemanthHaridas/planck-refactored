@@ -223,6 +223,43 @@ namespace HartreeFock
             std::lock_guard<std::mutex> lock(log_mutex);
             std::cout << std::string(110, '-') << "\n";
         }
+
+        // ── CASSCF / RASSCF printers ────────────────────────────────────────
+
+        inline void casscf_summary(double E_rhf, double E_cas,
+                                    const Eigen::VectorXd& nat_occ,
+                                    int nroots, int nactorb)
+        {
+            std::lock_guard<std::mutex> lock(log_mutex);
+            constexpr int LW = 32;
+            constexpr int VW = 20;
+            std::cout << std::string(LW + VW * 3, '-') << "\n"
+                      << "  CASSCF Natural Occupations :\n";
+            // nat_occ is sorted descending (reversed eigenvalue order)
+            const int norb = static_cast<int>(nat_occ.size());
+            for (int k = 0; k < norb; ++k)
+                std::cout << std::format("    MO {:3d}     {:.6f}\n",
+                                         nactorb - norb + k + 1, nat_occ(k));
+
+            const double E_corr = E_cas - E_rhf;
+            std::cout << std::string(LW + VW * 3, '-') << "\n"
+                      << std::setw(LW) << std::left  << "  CASSCF Correlation Energy"
+                      << std::fixed << std::setprecision(10)
+                      << std::setw(VW) << std::right << E_corr
+                      << std::setw(VW) << std::right << E_corr * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_corr * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::string(LW + VW * 3, '-') << "\n"
+                      << std::setw(LW) << std::left  << "  CASSCF Total Energy"
+                      << std::setw(VW) << std::right << E_cas
+                      << std::setw(VW) << std::right << E_cas * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_cas * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::string(LW + VW * 3, '-') << "\n";
+
+            if (nroots > 1)
+                std::cout << "  (State-averaged over " << nroots << " roots)\n";
+        }
     }
 }
 

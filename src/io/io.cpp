@@ -339,7 +339,7 @@ namespace HartreeFock::IO
         throw std::invalid_argument("Invalid Correlation : " + value);
     }
 
-    std::expected <void, std::string> _parse_scf(const std::vector <std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral)
+    std::expected <void, std::string> _parse_scf(const std::vector <std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space)
     {
         // (key, value) pairs
         const std::unordered_map <std::string, std::function <void(const std::string &)>> _scf_map =
@@ -351,7 +351,7 @@ namespace HartreeFock::IO
             {"tol_energy",  [&scf](const std::string &value)        {scf._tol_energy    = std::stod(value);}},
             {"tol_density", [&scf](const std::string &value)        {scf._tol_density   = std::stod(value);}},
             {"threshold",   [&scf](const std::string &value)        {scf._threshold     = std::stoi(value);}},
-            
+
             {"correlation", [&correlation](const std::string &value){correlation        = map_string_enum <HartreeFock::PostHF>(value);}},
             {"engine",      [&integral](const std::string &value)   {integral._engine   = map_string_enum <HartreeFock::IntegralMethod>(value);}},
             {"tol_eri",        [&integral](const std::string &value)   {integral._tol_eri       = std::stod(value);}},
@@ -359,19 +359,49 @@ namespace HartreeFock::IO
             {"save_checkpoint",[&scf](const std::string &value)        {scf._save_checkpoint    = toBool(value);}},
             {"level_shift",    [&scf](const std::string &value)        {scf._level_shift        = std::stod(value);}},
             {"diis_restart",   [&scf](const std::string &value)        {scf._diis_restart_factor = std::stod(value);}},
-            {"scf_mode",       [&scf](const std::string &value)        {scf._mode                = map_string_enum<HartreeFock::SCFMode>(value);}}
+            {"scf_mode",       [&scf](const std::string &value)        {scf._mode                = map_string_enum<HartreeFock::SCFMode>(value);}},
+
+            // Active space (CASSCF / RASSCF)
+            {"nactele",          [&active_space](const std::string &v){ active_space.nactele          = std::stoi(v); }},
+            {"nactorb",          [&active_space](const std::string &v){ active_space.nactorb          = std::stoi(v); }},
+            {"nroots",           [&active_space](const std::string &v){ active_space.nroots           = std::stoi(v); }},
+            {"nras1",            [&active_space](const std::string &v){ active_space.nras1            = std::stoi(v); }},
+            {"nras2",            [&active_space](const std::string &v){ active_space.nras2            = std::stoi(v); }},
+            {"nras3",            [&active_space](const std::string &v){ active_space.nras3            = std::stoi(v); }},
+            {"max_holes",        [&active_space](const std::string &v){ active_space.max_holes        = std::stoi(v); }},
+            {"max_elec",         [&active_space](const std::string &v){ active_space.max_elec         = std::stoi(v); }},
+            {"mcscf_max_iter",   [&active_space](const std::string &v){ active_space.mcscf_max_iter   = static_cast<unsigned int>(std::stoi(v)); }},
+            {"tol_mcscf_energy", [&active_space](const std::string &v){ active_space.tol_mcscf_energy = std::stod(v); }},
+            {"tol_mcscf_grad",   [&active_space](const std::string &v){ active_space.tol_mcscf_grad   = std::stod(v); }},
+            {"ci_max_dim",       [&active_space](const std::string &v){ active_space.ci_max_dim       = static_cast<unsigned int>(std::stoi(v)); }},
+            {"target_irrep",     [&active_space](const std::string &v){ active_space.target_irrep     = v; }}
         };
-        
+
         for (const std::string line : lines)
         {
             std::istringstream _iss(line);
             std::string key, value;
-            
-            if (!(_iss >> key >> value))
+
+            if (!(_iss >> key))
+                continue;
+
+            // Special case: weights is a space-separated list of doubles
+            if (key == "weights")
+            {
+                active_space.weights.clear();
+                double w = 0.0;
+                while (_iss >> w)
+                    active_space.weights.push_back(w);
+                if (active_space.weights.empty())
+                    return std::unexpected("weights keyword requires at least one value");
+                continue;
+            }
+
+            if (!(_iss >> value))
             {
                 return std::unexpected("Missing value for scf keyword: " + key);
             }
-            
+
             // Find the (key, value) pair
             if (auto it = _scf_map.find(key); it != _scf_map.end())
             {
@@ -389,7 +419,7 @@ namespace HartreeFock::IO
                 return std::unexpected("Unknown scf keyword: " + key);
             }
         }
-        
+
         return {};
     }
 
@@ -776,7 +806,7 @@ namespace HartreeFock::IO
         // scf
         if (auto it = _sections.find("scf"); it != _sections.end())
         {
-            if (auto res = _parse_scf(it->second, calculator._scf, calculator._correlation, calculator._integral); !res)
+            if (auto res = _parse_scf(it->second, calculator._scf, calculator._correlation, calculator._integral, calculator._active_space); !res)
                 return std::unexpected(res.error());
         }
         else
