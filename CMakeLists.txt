@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.15)
 project(planck LANGUAGES CXX)
 
+include(CTest)
+
 # C++ standard settings
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -192,4 +194,69 @@ if(BUILD_TOOLS)
     message(STATUS "Tools : chkdump enabled")
 else()
     message(STATUS "Tools : disabled (BUILD_TOOLS=OFF)")
+endif()
+
+find_package(Python3 COMPONENTS Interpreter)
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+    add_test(
+        NAME planck-regression-smoke
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/run_regressions.py
+                --build-dir ${CMAKE_BINARY_DIR}
+                --suite smoke
+    )
+
+    add_test(
+        NAME planck-regression-core
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/run_regressions.py
+                --build-dir ${CMAKE_BINARY_DIR}
+                --suite core
+    )
+
+    add_test(
+        NAME planck-regression-extended
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/run_regressions.py
+                --build-dir ${CMAKE_BINARY_DIR}
+                --suite extended
+    )
+
+    add_custom_target(regression-smoke
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/run_regressions.py
+                --build-dir ${CMAKE_BINARY_DIR}
+                --suite smoke
+        DEPENDS hartree-fock
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        USES_TERMINAL
+    )
+
+    add_custom_target(regression-core
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/run_regressions.py
+                --build-dir ${CMAKE_BINARY_DIR}
+                --suite core
+        DEPENDS hartree-fock
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        USES_TERMINAL
+    )
+
+    add_custom_target(regression-extended
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/run_regressions.py
+                --build-dir ${CMAKE_BINARY_DIR}
+                --suite extended
+        DEPENDS hartree-fock
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        USES_TERMINAL
+    )
+
+    add_custom_target(teaching-site
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/docs/build_teaching_site.py
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        USES_TERMINAL
+    )
 endif()

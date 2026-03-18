@@ -17,6 +17,7 @@
 #include "integrals/base.h"
 #include "scf/scf.h"
 #include "gradient/gradient.h"
+#include "symmetry/vibrational_symmetry.h"
 
 // ─── Physical constants ────────────────────────────────────────────────────────
 //
@@ -218,6 +219,8 @@ void HartreeFock::Freq::vibrational_analysis(
         if (norm > 1e-12) L_cart.col(c) /= norm;
     }
     result.normal_modes = std::move(L_cart);
+    result.mode_symmetry = HartreeFock::Symmetry::assign_vibrational_symmetry(
+        calc, result.normal_modes);
 
     // Zero-point energy (sum over real modes only)
     result.zpe = 0.0;

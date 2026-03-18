@@ -68,7 +68,8 @@ namespace HartreeFock
         SinglePoint,    // Single point Energy Calculation
         Gradient,       // Analytic nuclear gradient
         GeomOpt,        // Geometry Optimization
-        Frequency       // Frequency Calculation
+        Frequency,      // Frequency Calculation
+        GeomOptFrequency // Geometry optimization followed by frequency calculation
     };
 
     enum class SCFMode
@@ -689,6 +690,7 @@ namespace HartreeFock
         Eigen::MatrixXd _hessian;           // 3N×3N Cartesian Hessian, Ha/Bohr²
         Eigen::VectorXd _frequencies;       // n_vib vibrational frequencies in cm⁻¹
         Eigen::MatrixXd _normal_modes;      // 3N × n_vib mass-unweighted normal modes
+        std::vector<std::string> _vibrational_symmetry; // n_vib Mulliken labels
         double          _zpe = 0.0;         // zero-point energy in Ha
         double          _hessian_step = 5e-3; // finite-difference step in Bohr
 

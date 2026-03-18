@@ -18,6 +18,11 @@ namespace HartreeFock
         // Returns natoms×3 matrix in Ha/Bohr.
         Eigen::MatrixXd compute_uhf_gradient(const HartreeFock::Calculator& calc,
                                              const std::vector<HartreeFock::ShellPair>& shell_pairs);
+
+        // RMP2 nuclear gradient via central differences of the total RMP2 energy.
+        // Returns natoms×3 matrix in Ha/Bohr.
+        // Requires a converged RHF reference and correlation = RMP2.
+        Eigen::MatrixXd compute_rmp2_gradient(const HartreeFock::Calculator& calc);
     }
 }
 

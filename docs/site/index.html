@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Planck Teaching Guide</title>
+  <style>
+    :root {
+      --bg: #f6f1e8;
+      --panel: #fffdf8;
+      --ink: #1d2b36;
+      --muted: #566472;
+      --accent: #9a3d22;
+      --rule: #dbcdb9;
+      --code-bg: #f2ece2;
+      --shadow: 0 18px 60px rgba(42, 33, 20, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(154, 61, 34, 0.08), transparent 22rem),
+        linear-gradient(180deg, #fbf7f0 0%, var(--bg) 100%);
+      line-height: 1.65;
+    }
+    .page {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+    .hero {
+      background: linear-gradient(135deg, rgba(154, 61, 34, 0.95), rgba(123, 53, 31, 0.92));
+      color: #fff9f2;
+      border-radius: 24px;
+      padding: 28px 30px;
+      box-shadow: var(--shadow);
+      margin-bottom: 24px;
+    }
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: clamp(2rem, 3vw, 3.2rem);
+      line-height: 1.1;
+    }
+    .hero p {
+      margin: 0;
+      max-width: 65ch;
+      color: rgba(255, 249, 242, 0.92);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+      gap: 24px;
+      align-items: start;
+    }
+    .sidebar, .content {
+      background: var(--panel);
+      border: 1px solid var(--rule);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+    }
+    .sidebar {
+      position: sticky;
+      top: 20px;
+      padding: 22px 20px;
+    }
+    .sidebar h2 {
+      margin: 0 0 12px;
+      font-size: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+    }
+    .sidebar ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .sidebar li {
+      margin: 0;
+      padding: 0;
+    }
+    .sidebar a {
+      display: block;
+      padding: 6px 0;
+      color: var(--muted);
+      text-decoration: none;
+    }
+    .sidebar a:hover {
+      color: var(--accent);
+    }
+    .toc-level-2 a { padding-left: 12px; }
+    .toc-level-3 a { padding-left: 24px; font-size: 0.96rem; }
+    .content {
+      padding: 34px;
+    }
+    .content h1, .content h2, .content h3, .content h4 {
+      line-height: 1.2;
+      color: #13202b;
+      scroll-margin-top: 24px;
+    }
+    .content h1 {
+      font-size: 2.1rem;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .content h2 {
+      font-size: 1.55rem;
+      margin-top: 2.3rem;
+      padding-top: 0.2rem;
+    }
+    .content h3 {
+      font-size: 1.18rem;
+      margin-top: 1.8rem;
+    }
+    .content p, .content li {
+      font-size: 1.02rem;
+    }
+    .content code {
+      background: var(--code-bg);
+      border: 1px solid #e0d7c9;
+      border-radius: 6px;
+      padding: 0.08rem 0.35rem;
+      font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+      font-size: 0.94em;
+    }
+    .content pre {
+      background: #201a17;
+      color: #f8efe5;
+      border-radius: 16px;
+      padding: 18px;
+      overflow-x: auto;
+    }
+    .content pre code {
+      background: transparent;
+      border: 0;
+      padding: 0;
+      color: inherit;
+    }
+    .content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.2rem 0;
+      font-size: 0.96rem;
+    }
+    .content td {
+      border: 1px solid var(--rule);
+      padding: 10px 12px;
+      vertical-align: top;
+    }
+    .content a {
+      color: var(--accent);
+    }
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        position: static;
+      }
+      .content {
+        padding: 24px 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <h1>Planck Teaching Guide</h1>
+      <p>A teaching-first, theory-linked walkthrough of the Planck codebase and its current quantum chemistry methods.</p>
+    </section>
+    <div class="layout">
+      <aside class="sidebar">
+        <h2>Contents</h2>
+        <ul>
+<li class="toc-level-1"><a href="#planck-teaching-guide">Planck Teaching Guide</a></li>
+<li class="toc-level-2"><a href="#1-what-planck-is">1. What Planck Is</a></li>
+<li class="toc-level-2"><a href="#2-big-picture-architecture">2. Big-Picture Architecture</a></li>
+<li class="toc-level-3"><a href="#directory-map">Directory Map</a></li>
+<li class="toc-level-3"><a href="#src-base">`src/base`</a></li>
+<li class="toc-level-3"><a href="#src-io">`src/io`</a></li>
+<li class="toc-level-3"><a href="#src-lookup">`src/lookup`</a></li>
+<li class="toc-level-3"><a href="#src-basis">`src/basis`</a></li>
+<li class="toc-level-3"><a href="#src-integrals">`src/integrals`</a></li>
+<li class="toc-level-3"><a href="#src-scf">`src/scf`</a></li>
+<li class="toc-level-3"><a href="#src-symmetry">`src/symmetry`</a></li>
+<li class="toc-level-3"><a href="#src-post-hf">`src/post_hf`</a></li>
+<li class="toc-level-3"><a href="#src-gradient">`src/gradient`</a></li>
+<li class="toc-level-3"><a href="#src-opt">`src/opt`</a></li>
+<li class="toc-level-3"><a href="#src-freq">`src/freq`</a></li>
+<li class="toc-level-3"><a href="#tests">`tests`</a></li>
+<li class="toc-level-2"><a href="#3-core-data-structures">3. Core Data Structures</a></li>
+<li class="toc-level-3"><a href="#molecule">`Molecule`</a></li>
+<li class="toc-level-3"><a href="#basis">`Basis`</a></li>
+<li class="toc-level-3"><a href="#datascf-and-spinchannel">`DataSCF` and `SpinChannel`</a></li>
+<li class="toc-level-3"><a href="#diisstate">`DIISState`</a></li>
+<li class="toc-level-3"><a href="#calculator">`Calculator`</a></li>
+<li class="toc-level-2"><a href="#4-theoretical-foundations">4. Theoretical Foundations</a></li>
+<li class="toc-level-2"><a href="#5-gaussian-basis-functions">5. Gaussian Basis Functions</a></li>
+<li class="toc-level-2"><a href="#6-one-and-two-electron-integrals">6. One- and Two-Electron Integrals</a></li>
+<li class="toc-level-3"><a href="#conventional-vs-direct-scf">Conventional vs Direct SCF</a></li>
+<li class="toc-level-2"><a href="#7-hartree-fock-theory">7. Hartree-Fock Theory</a></li>
+<li class="toc-level-3"><a href="#where-it-lives-in-code">Where It Lives in Code</a></li>
+<li class="toc-level-3"><a href="#scf-cycle">SCF Cycle</a></li>
+<li class="toc-level-2"><a href="#8-diis-convergence-acceleration">8. DIIS Convergence Acceleration</a></li>
+<li class="toc-level-2"><a href="#9-symmetry">9. Symmetry</a></li>
+<li class="toc-level-2"><a href="#10-mp2-correlation-energy">10. MP2 Correlation Energy</a></li>
+<li class="toc-level-3"><a href="#where-it-lives">Where It Lives</a></li>
+<li class="toc-level-3"><a href="#mp2-gradient-infrastructure">MP2 Gradient Infrastructure</a></li>
+<li class="toc-level-2"><a href="#11-active-space-methods-casscf-and-rasscf">11. Active-Space Methods: CASSCF and RASSCF</a></li>
+<li class="toc-level-2"><a href="#12-analytic-nuclear-gradients">12. Analytic Nuclear Gradients</a></li>
+<li class="toc-level-3"><a href="#where-it-lives">Where It Lives</a></li>
+<li class="toc-level-3"><a href="#uhf-gradient">UHF Gradient</a></li>
+<li class="toc-level-3"><a href="#current-rmp2-gradient-status">Current RMP2 Gradient Status</a></li>
+<li class="toc-level-2"><a href="#13-geometry-optimization">13. Geometry Optimization</a></li>
+<li class="toc-level-3"><a href="#cartesian-optimization">Cartesian Optimization</a></li>
+<li class="toc-level-3"><a href="#internal-coordinate-optimization">Internal-Coordinate Optimization</a></li>
+<li class="toc-level-2"><a href="#14-vibrational-frequencies-and-hessians">14. Vibrational Frequencies and Hessians</a></li>
+<li class="toc-level-2"><a href="#15-checkpointing-and-restart">15. Checkpointing and Restart</a></li>
+<li class="toc-level-2"><a href="#16-execution-flow-of-a-typical-run">16. Execution Flow of a Typical Run</a></li>
+<li class="toc-level-2"><a href="#17-teaching-map-how-theory-matches-functions">17. Teaching Map: How Theory Matches Functions</a></li>
+<li class="toc-level-2"><a href="#18-limitations-and-honest-status-notes">18. Limitations and Honest Status Notes</a></li>
+<li class="toc-level-2"><a href="#19-how-to-study-this-codebase-efficiently">19. How to Study This Codebase Efficiently</a></li>
+<li class="toc-level-2"><a href="#20-summary">20. Summary</a></li>
+</ul>
+      </aside>
+      <main class="content">
+        <h1 id="planck-teaching-guide">Planck Teaching Guide</h1>
+<p>This document is a teaching-oriented guide to the <code>planck-refactored</code> codebase. It explains what the program does, how the major algorithms work, how the source tree is organized, and how the quantum-chemistry theory maps onto the implementation.</p>
+<p>The intended audience is:</p>
+<ul>
+<li>a student learning Hartree-Fock and post-Hartree-Fock methods</li>
+<li>a contributor trying to understand where to change the code</li>
+<li>a researcher who wants to audit the mathematical and software structure</li>
+</ul>
+<p>The guide is written in the same order that a calculation usually happens in the executable:</p>
+<p>1. parse the input</p>
+<p>2. build the molecule and basis</p>
+<p>3. generate shell pairs and integrals</p>
+<p>4. solve SCF</p>
+<p>5. optionally run correlation methods</p>
+<p>6. optionally compute gradients, optimize geometry, or build vibrational data</p>
+<h2 id="1-what-planck-is">1. What Planck Is</h2>
+<p>Planck is a compact quantum chemistry program centered on Gaussian-basis electronic structure methods. At the moment it implements:</p>
+<ul>
+<li>RHF and UHF self-consistent field theory</li>
+<li>Obara-Saika one- and two-electron integrals</li>
+<li>conventional and direct SCF modes</li>
+<li>DIIS acceleration</li>
+<li>point-group detection and MO irrep labeling</li>
+<li>RMP2 and UMP2 correlation energies</li>
+<li>RHF and UHF analytic nuclear gradients</li>
+<li>geometry optimization in Cartesian and internal coordinates</li>
+<li>semi-numerical Hessians and vibrational frequencies</li>
+<li>CASSCF and RASSCF active-space calculations</li>
+<li>binary checkpoint restart support</li>
+</ul>
+<p>There is also in-progress infrastructure for a true analytic RMP2 gradient:</p>
+<ul>
+<li>RHF response matrix construction</li>
+<li>MP2 amplitudes</li>
+<li>MP2 unrelaxed density builders</li>
+<li>MP2 Z-vector and relaxed-density helpers</li>
+</ul>
+<p>Important implementation status:</p>
+<ul>
+<li>RHF and UHF gradients are analytic</li>
+<li>the current public RMP2 gradient path is still central-difference total-energy</li>
+<p>differentiation, even though the codebase now contains some response-theory building blocks for a future analytic implementation</p>
+</ul>
+<h2 id="2-big-picture-architecture">2. Big-Picture Architecture</h2>
+<p>At a high level, the executable in <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/driver.cpp">src/driver.cpp</a> orchestrates everything.</p>
+<p>The main data object is <code>HartreeFock::Calculator</code> in <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/base/types.h">src/base/types.h</a>. It holds:</p>
+<ul>
+<li>input options</li>
+<li>molecule and coordinates</li>
+<li>basis and shell information</li>
+<li>SCF state</li>
+<li>integral tensors and one-electron matrices</li>
+<li>post-HF energies and active-space results</li>
+<li>gradient, Hessian, and geometry optimization state</li>
+</ul>
+<p>Conceptually, <code>Calculator</code> is the shared world-state for one calculation.</p>
+<h3 id="directory-map">Directory Map</h3>
+<h3 id="src-base"><code>src/base</code></h3>
+<ul>
+<li><code>types.h</code>: central enums, options, molecule/basis containers, SCF state, DIIS</li>
+<p>state, checkpoint-related data, and the <code>Calculator</code> object</p>
+<li><code>tables.h</code>: chemical or optimization helper tables</li>
+<li><code>basis.h.in</code> and generated <code>basis.h</code>: compiled-in basis path configuration</li>
+</ul>
+<h3 id="src-io"><code>src/io</code></h3>
+<ul>
+<li><code>io.cpp/.h</code>: input parsing from <code>.hfinp</code></li>
+<li><code>checkpoint.cpp/.h</code>: binary checkpoint load/save and projection support</li>
+<li><code>logging.h</code>: formatted program output</li>
+</ul>
+<h3 id="src-lookup"><code>src/lookup</code></h3>
+<ul>
+<li>periodic-table and Boys-function support data</li>
+</ul>
+<h3 id="src-basis"><code>src/basis</code></h3>
+<ul>
+<li>Gaussian primitives, contractions, and <code>.gbs</code> basis parsing</li>
+</ul>
+<h3 id="src-integrals"><code>src/integrals</code></h3>
+<ul>
+<li>shell-pair generation</li>
+<li>Obara-Saika recursions for overlap, kinetic, nuclear attraction, ERIs</li>
+<li>derivative integral kernels for gradients</li>
+</ul>
+<h3 id="src-scf"><code>src/scf</code></h3>
+<ul>
+<li>orthogonalization</li>
+<li>initial density construction</li>
+<li>RHF and UHF SCF loops</li>
+</ul>
+<h3 id="src-symmetry"><code>src/symmetry</code></h3>
+<ul>
+<li>point-group detection through <code>libmsym</code></li>
+<li>symmetry-adapted orbital basis support</li>
+<li>MO irrep assignment</li>
+</ul>
+<h3 id="src-post-hf"><code>src/post_hf</code></h3>
+<ul>
+<li>MP2 energy code</li>
+<li>MP2 gradient-response support code</li>
+<li>CASSCF and RASSCF code</li>
+<li>AO to MO integral transformations</li>
+<li>RHF response matrix builders</li>
+</ul>
+<h3 id="src-gradient"><code>src/gradient</code></h3>
+<ul>
+<li>analytic RHF and UHF nuclear gradients</li>
+<li>current numerical RMP2 gradient driver</li>
+<li>shared closed-shell AO derivative contraction helper</li>
+</ul>
+<h3 id="src-opt"><code>src/opt</code></h3>
+<ul>
+<li>geometry optimization in Cartesian and internal coordinates</li>
+<li>generalized internal coordinate construction and constraint handling</li>
+</ul>
+<h3 id="src-freq"><code>src/freq</code></h3>
+<ul>
+<li>finite-difference Hessian and vibrational analysis</li>
+</ul>
+<h3 id="tests"><code>tests</code></h3>
+<ul>
+<li>manifest-driven executable regression tests</li>
+</ul>
+<h2 id="3-core-data-structures">3. Core Data Structures</h2>
+<p>The most important single file is <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/base/types.h">src/base/types.h</a>.</p>
+<h3 id="molecule"><code>Molecule</code></h3>
+<p>The molecule object stores:</p>
+<ul>
+<li>atomic numbers</li>
+<li>charge and multiplicity</li>
+<li>input-frame coordinates</li>
+<li>standard-orientation coordinates</li>
+<li>flags such as whether coordinates are already in Bohr</li>
+</ul>
+<p>Two coordinate representations are important:</p>
+<ul>
+<li><code>coordinates</code>: user-facing geometry, often in Angstrom</li>
+<li><code>_standard</code> and <code>_coordinates</code>: internal Bohr-space geometry used by the</li>
+<p>integrals and optimization machinery</p>
+</ul>
+<h3 id="basis"><code>Basis</code></h3>
+<p>The basis object contains:</p>
+<ul>
+<li>shells</li>
+<li>basis functions / contracted Cartesian components</li>
+<li>bookkeeping like number of shells and number of basis functions</li>
+</ul>
+<h3 id="datascf-and-spinchannel"><code>DataSCF</code> and <code>SpinChannel</code></h3>
+<p>The SCF state stores, per spin channel:</p>
+<ul>
+<li>density matrix</li>
+<li>Fock matrix</li>
+<li>MO energies</li>
+<li>MO coefficients</li>
+<li>optional MO symmetry labels</li>
+</ul>
+<p>This is enough to reconstruct most later quantities.</p>
+<h3 id="diisstate"><code>DIISState</code></h3>
+<p>The DIIS object stores:</p>
+<ul>
+<li>a history of Fock matrices</li>
+<li>a history of Pulay error matrices</li>
+<li>the subspace dimension</li>
+</ul>
+<p>It then solves the standard augmented Pulay linear system to build an extrapolated Fock matrix.</p>
+<h3 id="calculator"><code>Calculator</code></h3>
+<p><code>Calculator</code> gathers everything together and also owns:</p>
+<ul>
+<li><code>_overlap</code> and <code>_hcore</code></li>
+<li><code>_eri</code> if conventional SCF has stored the AO ERI tensor</li>
+<li>energies</li>
+<li>gradient and Hessian storage</li>
+<li>active-space results such as natural occupations</li>
+<li>SAO blocking data for symmetry-aware diagonalization</li>
+</ul>
+<p>If you want to understand “where state lives,” it is almost always here.</p>
+<h2 id="4-theoretical-foundations">4. Theoretical Foundations</h2>
+<p>This section summarizes the theory behind the implemented methods and explains how the code mirrors that theory.</p>
+<h2 id="5-gaussian-basis-functions">5. Gaussian Basis Functions</h2>
+<p>The code works in an atom-centered Gaussian basis:</p>
+<p>\[ \chi_\mu(\mathbf r) = \sum_p d_{p\mu} \, (x-A_x)^{l_x}(y-A_y)^{l_y}(z-A_z)^{l_z} e^{-\alpha_p |\mathbf r-\mathbf A|^2} \]</p>
+<p>Why Gaussians?</p>
+<ul>
+<li>products of Gaussians on different centers are again Gaussians</li>
+<li>integrals can be reduced recursively</li>
+<li>this makes them practical for Hartree-Fock and post-HF methods</li>
+</ul>
+<p>The implementation details are split across:</p>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/basis/basis.cpp">src/basis/basis.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/basis/gaussian.cpp">src/basis/gaussian.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/shellpair.h">src/integrals/shellpair.h</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/shellpair.cpp">src/integrals/shellpair.cpp</a></li>
+</ul>
+<p><code>ShellPair</code> precomputes Gaussian-product data such as:</p>
+<ul>
+<li>combined exponent</li>
+<li>prefactors</li>
+<li>Gaussian product center</li>
+<li>displacement vectors needed in recurrence relations</li>
+</ul>
+<p>That is a classic quantum-chemistry optimization: precompute shell-pair data once and reuse it many times.</p>
+<h2 id="6-one-and-two-electron-integrals">6. One- and Two-Electron Integrals</h2>
+<p>Electronic structure in a Gaussian basis depends on several integral classes:</p>
+<ul>
+<li>overlap:</li>
+<p>\[ S_{\mu\nu} = \langle \chi_\mu | \chi_\nu \rangle \]</p>
+<li>kinetic:</li>
+<p>\[ T_{\mu\nu} = \left\langle \chi_\mu \left| -\frac{1}{2}\nabla^2 \right| \chi_\nu \right\rangle \]</p>
+<li>nuclear attraction:</li>
+<p>\[ V_{\mu\nu} = \sum_A \left\langle \chi_\mu \left| -\frac{Z_A}{r_A} \right| \chi_\nu \right\rangle \]</p>
+<li>electron repulsion:</li>
+<p>\[ (\mu\nu|\lambda\sigma) = \iint \chi_\mu(1)\chi_\nu(1)\frac{1}{r_{12}}\chi_\lambda(2)\chi_\sigma(2)\, d1\, d2 \]</p>
+</ul>
+<p>Planck computes these with Obara-Saika recursions in:</p>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.cpp">src/integrals/os.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.h">src/integrals/os.h</a></li>
+</ul>
+<p>The important implementation split is:</p>
+<ul>
+<li><code>_compute_1e(...)</code>: overlap and kinetic</li>
+<li><code>_compute_nuclear_attraction(...)</code>: nuclear attraction</li>
+<li><code>_compute_2e(...)</code>: full AO ERI tensor</li>
+<li><code>_compute_fock_rhf(...)</code> and <code>_compute_fock_uhf(...)</code>: ERI contraction into</li>
+<p>Coulomb and exchange contributions</p>
+</ul>
+<h3 id="conventional-vs-direct-scf">Conventional vs Direct SCF</h3>
+<p>There are two major strategies for ERIs:</p>
+<ul>
+<li>conventional SCF:</li>
+<p>build the full AO ERI tensor once and reuse it</p>
+<li>direct SCF:</li>
+<p>recompute or contract on the fly each iteration</p>
+</ul>
+<p>This is controlled in <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/scf/scf.cpp">src/scf/scf.cpp</a>.</p>
+<p>Tradeoff:</p>
+<ul>
+<li>conventional is faster per SCF iteration</li>
+<li>direct uses less memory</li>
+</ul>
+<p>The code also uses Schwarz screening thresholds to skip negligible quartets.</p>
+<h2 id="7-hartree-fock-theory">7. Hartree-Fock Theory</h2>
+<p>Hartree-Fock approximates the many-electron wavefunction as a Slater determinant built from molecular orbitals.</p>
+<p>Each spatial orbital is expanded in the AO basis:</p>
+<p>\[ \phi_i = \sum_\mu C_{\mu i}\chi_\mu \]</p>
+<p>The RHF variational equations become the Roothaan equations:</p>
+<p>\[ \mathbf F \mathbf C = \mathbf S \mathbf C \boldsymbol \varepsilon \]</p>
+<p>where:</p>
+<ul>
+<li><code>S</code> is the overlap matrix</li>
+<li><code>F</code> is the Fock matrix</li>
+<li><code>C</code> contains molecular orbital coefficients</li>
+<li><code>ε</code> are orbital energies</li>
+</ul>
+<p>For RHF, the closed-shell density is:</p>
+<p>\[ P_{\mu\nu} = 2\sum_{i \in occ} C_{\mu i} C_{\nu i} \]</p>
+<p>and the Fock matrix is:</p>
+<p>\[ F_{\mu\nu} = H_{\mu\nu}^{core} + G_{\mu\nu} \]</p>
+<p>with:</p>
+<p>\[ G_{\mu\nu} = \sum_{\lambda\sigma} P_{\lambda\sigma} \left[(\mu\nu|\lambda\sigma) - \frac{1}{2}(\mu\lambda|\nu\sigma)\right] \]</p>
+<p>For UHF, alpha and beta densities are separate, and the exchange is spin-dependent.</p>
+<h3 id="where-it-lives-in-code">Where It Lives in Code</h3>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/scf/scf.h">src/scf/scf.h</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/scf/scf.cpp">src/scf/scf.cpp</a></li>
+</ul>
+<p>Important functions:</p>
+<ul>
+<li><code>build_orthogonalizer</code>: constructs \(S^{-1/2}\)</li>
+<li><code>initial_density</code>: core-Hamiltonian guess</li>
+<li><code>run_rhf</code></li>
+<li><code>run_uhf</code></li>
+</ul>
+<h3 id="scf-cycle">SCF Cycle</h3>
+<p>Each iteration does roughly this:</p>
+<p>1. build <code>G</code></p>
+<p>2. form <code>F = H + G</code></p>
+<p>3. compute energy</p>
+<p>4. optionally update DIIS</p>
+<p>5. diagonalize in an orthonormal basis</p>
+<p>6. rebuild density</p>
+<p>7. test convergence</p>
+<p>The orthogonalization step uses:</p>
+<p>\[ \mathbf X = \mathbf S^{-1/2} \]</p>
+<p>and diagonalizes:</p>
+<p>\[ \mathbf F&#x27; = \mathbf X^T \mathbf F \mathbf X \]</p>
+<p>then transforms back:</p>
+<p>\[ \mathbf C = \mathbf X \mathbf C&#x27; \]</p>
+<h2 id="8-diis-convergence-acceleration">8. DIIS Convergence Acceleration</h2>
+<p>Planck uses Pulay DIIS to accelerate SCF convergence.</p>
+<p>The key idea is:</p>
+<ul>
+<li>store several recent Fock matrices</li>
+<li>store the corresponding error matrices</li>
+<li>solve for a linear combination of Fock matrices that minimizes the residual</li>
+</ul>
+<p>The residual is the commutator in the orthonormal basis:</p>
+<p>\[ \mathbf e = \mathbf X^T(\mathbf F \mathbf P \mathbf S - \mathbf S \mathbf P \mathbf F)\mathbf X \]</p>
+<p>When the SCF is converged, this should go to zero.</p>
+<p>This is implemented in the <code>DIISState</code> object in <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/base/types.h">src/base/types.h</a>.</p>
+<h2 id="9-symmetry">9. Symmetry</h2>
+<p>Planck can:</p>
+<ul>
+<li>detect molecular point groups</li>
+<li>rotate the molecule to a standard frame</li>
+<li>construct symmetry-adapted AO block structure</li>
+<li>label converged MOs by irreducible representation</li>
+</ul>
+<p>This logic lives in:</p>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/symmetry/symmetry.cpp">src/symmetry/symmetry.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/symmetry/mo_symmetry.cpp">src/symmetry/mo_symmetry.cpp</a></li>
+</ul>
+<p>The code uses <code>libmsym</code> for group theory tasks.</p>
+<p>The main implementation point is not “using symmetry to derive the HF equations,” but “using symmetry to block orbital spaces and label results in a chemically meaningful way.”</p>
+<h2 id="10-mp2-correlation-energy">10. MP2 Correlation Energy</h2>
+<p>Second-order Moller-Plesset perturbation theory adds a perturbative correction to the Hartree-Fock energy.</p>
+<p>For closed-shell RHF, the standard spatial-orbital expression is:</p>
+<p>\[ E_{MP2} = \sum_{ijab} \frac{(ia|jb)\left[2(ia|jb) - (ib|ja)\right]} {\varepsilon_i + \varepsilon_j - \varepsilon_a - \varepsilon_b} \]</p>
+<p>Indices:</p>
+<ul>
+<li><code>i, j</code>: occupied orbitals</li>
+<li><code>a, b</code>: virtual orbitals</li>
+</ul>
+<p>For UMP2, same-spin and opposite-spin channels are treated separately.</p>
+<h3 id="where-it-lives">Where It Lives</h3>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2.cpp">src/post_hf/mp2.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2.h">src/post_hf/mp2.h</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/integrals.cpp">src/post_hf/integrals.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/integrals.h">src/post_hf/integrals.h</a></li>
+</ul>
+<p>The post-HF integral helper code does AO to MO tensor transformations. That is needed because MP2 is naturally expressed in MO-space two-electron integrals, while SCF and integrals are generated in AO space.</p>
+<h3 id="mp2-gradient-infrastructure">MP2 Gradient Infrastructure</h3>
+<p>Files:</p>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2_gradient.cpp">src/post_hf/mp2_gradient.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2_gradient.h">src/post_hf/mp2_gradient.h</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/rhf_response.cpp">src/post_hf/rhf_response.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/rhf_response.h">src/post_hf/rhf_response.h</a></li>
+</ul>
+<p>This code now contains:</p>
+<ul>
+<li>RMP2 amplitudes</li>
+<li>unrelaxed MP2 one-particle density pieces</li>
+<li>RHF response matrix construction</li>
+<li>MP2 Z-vector source terms</li>
+<li>MP2 relaxed-density helpers</li>
+</ul>
+<p>But the production <code>compute_rmp2_gradient</code> entry point still uses numerical central differences, not the fully assembled analytic MP2 Lagrangian.</p>
+<p>That distinction is important for both science and software maintenance.</p>
+<h2 id="11-active-space-methods-casscf-and-rasscf">11. Active-Space Methods: CASSCF and RASSCF</h2>
+<p>CASSCF combines:</p>
+<ul>
+<li>a CI problem in an active orbital space</li>
+<li>orbital optimization outside and inside that space</li>
+</ul>
+<p>The core idea is that the wavefunction is no longer a single determinant:</p>
+<p>\[ |\Psi\rangle = \sum_I c_I |D_I\rangle \]</p>
+<p>where the determinants <code>|D_I&gt;</code> span the active space.</p>
+<p>The energy is optimized with respect to:</p>
+<ul>
+<li>CI coefficients</li>
+<li>orbital rotations</li>
+</ul>
+<p>Planck’s implementation is in:</p>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/casscf.cpp">src/post_hf/casscf.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/casscf.h">src/post_hf/casscf.h</a></li>
+</ul>
+<p>Main ingredients:</p>
+<ul>
+<li>active-space selection</li>
+<li>determinant generation</li>
+<li>exact CI diagonalization in the active space</li>
+<li>1-RDM and 2-RDM construction</li>
+<li>orbital gradient evaluation</li>
+<li>macro-iterations for orbital optimization</li>
+</ul>
+<p>The recent fixes in this area centered on:</p>
+<ul>
+<li>making the initial CI energy variational relative to RHF</li>
+<li>repairing density reconstruction</li>
+<li>stabilizing orbital updates</li>
+</ul>
+<p>From a teaching perspective, the most important concept is:</p>
+<ul>
+<li>HF optimizes a single determinant</li>
+<li>CASSCF optimizes both multiconfigurational CI coefficients and orbitals</li>
+</ul>
+<h2 id="12-analytic-nuclear-gradients">12. Analytic Nuclear Gradients</h2>
+<p>For RHF and UHF, Planck computes analytic nuclear gradients.</p>
+<p>The RHF gradient has several contributions:</p>
+<p>1. one-electron derivative terms</p>
+<p>2. nuclear-attraction center derivatives</p>
+<p>3. two-electron ERI derivative terms</p>
+<p>4. Pulay overlap terms</p>
+<p>5. nuclear repulsion derivative</p>
+<p>The code explains this directly in <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/gradient/gradient.cpp">src/gradient/gradient.cpp</a>.</p>
+<p>Symbolically:</p>
+<p>\[ \frac{dE}{dR_A} = \sum_{\mu\nu} P_{\mu\nu}\frac{dh_{\mu\nu}}{dR_A} + \frac{1}{2}\sum_{\mu\nu\lambda\sigma}\Gamma_{\mu\nu\lambda\sigma} \frac{d(\mu\nu|\lambda\sigma)}{dR_A} E_{Pulay} \frac{dE_{nuc}}{dR_A} \]</p>
+<p>The Pulay term is needed because the AO basis itself depends on nuclear positions. In a finite atom-centered basis, moving nuclei changes the basis functions, so there are extra overlap-related contributions even when the orbital coefficients are variationally optimized.</p>
+<h3 id="where-it-lives">Where It Lives</h3>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/gradient/gradient.cpp">src/gradient/gradient.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.cpp">src/integrals/os.cpp</a></li>
+</ul>
+<p>Recent refactoring added a reusable closed-shell derivative assembly helper that takes:</p>
+<ul>
+<li>density matrix <code>P</code></li>
+<li>energy-weighted density <code>W</code></li>
+<li>a generic two-particle contraction function <code>Gamma</code></li>
+</ul>
+<p>That was done specifically to make future correlated gradients easier to plug in without duplicating the entire RHF derivative engine.</p>
+<h3 id="uhf-gradient">UHF Gradient</h3>
+<p>The UHF gradient is similar but uses separate alpha and beta densities and the appropriate spin-resolved two-particle structure.</p>
+<h3 id="current-rmp2-gradient-status">Current RMP2 Gradient Status</h3>
+<p>The current public <code>RMP2</code> gradient path:</p>
+<ul>
+<li>recomputes the total MP2 energy at slightly displaced geometries</li>
+<li>forms a central difference</li>
+</ul>
+<p>This is numerically useful but not a true analytic gradient.</p>
+<h2 id="13-geometry-optimization">13. Geometry Optimization</h2>
+<p>Planck supports geometry optimization in:</p>
+<ul>
+<li>Cartesian coordinates</li>
+<li>internal coordinates</li>
+</ul>
+<p>Files:</p>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/opt/geomopt.cpp">src/opt/geomopt.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/opt/intcoords.cpp">src/opt/intcoords.cpp</a></li>
+</ul>
+<h3 id="cartesian-optimization">Cartesian Optimization</h3>
+<p>Uses an L-BFGS strategy on the flattened Cartesian coordinate vector.</p>
+<p>Why L-BFGS?</p>
+<ul>
+<li>full BFGS stores an approximate Hessian explicitly</li>
+<li>that becomes expensive for larger systems</li>
+<li>L-BFGS stores only recent update history</li>
+</ul>
+<h3 id="internal-coordinate-optimization">Internal-Coordinate Optimization</h3>
+<p>Uses generalized internal coordinates:</p>
+<ul>
+<li>bond stretches</li>
+<li>angle bends</li>
+<li>torsions</li>
+</ul>
+<p>Why internal coordinates?</p>
+<ul>
+<li>they align better with chemically relevant motions</li>
+<li>optimization often converges in fewer steps</li>
+<li>constraints are much easier to impose naturally</li>
+</ul>
+<p>The internal-coordinate machinery uses:</p>
+<ul>
+<li>a Wilson B matrix</li>
+<li>generalized inverse / back-transformation steps</li>
+<li>Schlegel-style microiterations</li>
+</ul>
+<h2 id="14-vibrational-frequencies-and-hessians">14. Vibrational Frequencies and Hessians</h2>
+<p>Files:</p>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/freq/hessian.cpp">src/freq/hessian.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/freq/hessian.h">src/freq/hessian.h</a></li>
+</ul>
+<p>The Hessian is obtained by finite differences of analytic gradients.</p>
+<p>That is a common compromise:</p>
+<ul>
+<li>gradients are much cheaper and more reliable than total-energy Hessians</li>
+<li>full analytic Hessians are substantially more complicated</li>
+</ul>
+<p>Workflow:</p>
+<p>1. displace each Cartesian coordinate positively and negatively</p>
+<p>2. compute analytic gradients</p>
+<p>3. build the Hessian by central differences</p>
+<p>4. mass-weight</p>
+<p>5. project translations and rotations</p>
+<p>6. diagonalize</p>
+<p>7. convert eigenvalues into frequencies</p>
+<p>This yields:</p>
+<ul>
+<li>vibrational frequencies</li>
+<li>normal modes</li>
+<li>zero-point energy</li>
+</ul>
+<h2 id="15-checkpointing-and-restart">15. Checkpointing and Restart</h2>
+<p>Files:</p>
+<ul>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/io/checkpoint.cpp">src/io/checkpoint.cpp</a></li>
+<li><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/io/checkpoint.h">src/io/checkpoint.h</a></li>
+</ul>
+<p>The checkpoint system stores:</p>
+<ul>
+<li>density data</li>
+<li>geometry</li>
+<li>basis-related data</li>
+<li>optimization metadata</li>
+</ul>
+<p>It supports:</p>
+<ul>
+<li>density restart in the same basis</li>
+<li>full geometry + density restart</li>
+<li>cross-basis projection using overlap-based techniques</li>
+</ul>
+<p>Pedagogically, this is a good example of how practical electronic structure codes reduce wall time by reusing chemically meaningful state.</p>
+<h2 id="16-execution-flow-of-a-typical-run">16. Execution Flow of a Typical Run</h2>
+<p>The main calculation path in <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/driver.cpp">src/driver.cpp</a> looks like this:</p>
+<p>1. parse the input file</p>
+<p>2. construct <code>Calculator</code></p>
+<p>3. convert coordinates to internal Bohr form</p>
+<p>4. optionally restore checkpoint geometry</p>
+<p>5. detect symmetry and standard orientation</p>
+<p>6. read the basis set</p>
+<p>7. initialize matrices and options</p>
+<p>8. build shell pairs</p>
+<p>9. compute one-electron integrals</p>
+<p>10. run SCF</p>
+<p>11. optionally run MP2 or CASSCF/RASSCF</p>
+<p>12. optionally compute gradient</p>
+<p>13. optionally run geometry optimization</p>
+<p>14. optionally run frequency analysis</p>
+<p>15. optionally write checkpoint</p>
+<p>This ordering is why <code>driver.cpp</code> is the best “map file” for new contributors.</p>
+<h2 id="17-teaching-map-how-theory-matches-functions">17. Teaching Map: How Theory Matches Functions</h2>
+<p>Use this section as a quick lookup table.</p>
+<table>
+<tbody>
+<tr><td>Theory topic</td><td>Main implementation files</td></tr>
+<table>
+<tbody>
+<tr><td>molecule/options/state</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/base/types.h">src/base/types.h</a></td></tr>
+<table>
+<tbody>
+<tr><td>input parsing</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/io/io.cpp">src/io/io.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>basis parsing</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/basis/basis.cpp">src/basis/basis.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>shell-pair construction</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/shellpair.cpp">src/integrals/shellpair.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>one-electron integrals</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.cpp">src/integrals/os.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>ERIs and Fock builds</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.cpp">src/integrals/os.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>RHF/UHF SCF</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/scf/scf.cpp">src/scf/scf.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>symmetry and MO labels</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/symmetry/symmetry.cpp">src/symmetry/symmetry.cpp</a>, <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/symmetry/mo_symmetry.cpp">src/symmetry/mo_symmetry.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>MP2 energy</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2.cpp">src/post_hf/mp2.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>MP2 response groundwork</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2_gradient.cpp">src/post_hf/mp2_gradient.cpp</a>, <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/rhf_response.cpp">src/post_hf/rhf_response.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>CASSCF/RASSCF</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/casscf.cpp">src/post_hf/casscf.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>analytic HF gradients</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/gradient/gradient.cpp">src/gradient/gradient.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>geometry optimization</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/opt/geomopt.cpp">src/opt/geomopt.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>internal coordinates</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/opt/intcoords.cpp">src/opt/intcoords.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>vibrational analysis</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/freq/hessian.cpp">src/freq/hessian.cpp</a></td></tr>
+<table>
+<tbody>
+<tr><td>checkpointing</td><td><a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/io/checkpoint.cpp">src/io/checkpoint.cpp</a></td></tr>
+<h2 id="18-limitations-and-honest-status-notes">18. Limitations and Honest Status Notes</h2>
+<p>This is the section a teacher or contributor should read before presenting the program as “finished.”</p>
+<ul>
+<li>RHF and UHF are mature enough for small teaching calculations.</li>
+<li>MP2 energies are implemented for RHF and UHF.</li>
+<li>RHF and UHF analytic gradients are implemented.</li>
+<li>The public RMP2 gradient path is still numerical, not fully analytic.</li>
+<li>The code contains partial response-theory infrastructure for future analytic</li>
+<p>RMP2 gradients, but the final Lagrangian assembly is not yet wired into the production gradient entry point.</p>
+<li>CASSCF and RASSCF are present and the recently fixed cases now behave</li>
+<p>variationally in the tested inputs.</p>
+<li>Hessians are finite-difference of gradients, not fully analytic second</li>
+<p>derivatives.</p>
+</ul>
+<h2 id="19-how-to-study-this-codebase-efficiently">19. How to Study This Codebase Efficiently</h2>
+<p>Recommended reading order:</p>
+<p>1. <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/base/types.h">src/base/types.h</a></p>
+<p>2. <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/driver.cpp">src/driver.cpp</a></p>
+<p>3. <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/io/io.cpp">src/io/io.cpp</a></p>
+<p>4. <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/scf/scf.cpp">src/scf/scf.cpp</a></p>
+<p>5. <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.cpp">src/integrals/os.cpp</a></p>
+<p>6. <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/gradient/gradient.cpp">src/gradient/gradient.cpp</a></p>
+<p>7. <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2.cpp">src/post_hf/mp2.cpp</a></p>
+<p>8. <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/casscf.cpp">src/post_hf/casscf.cpp</a></p>
+<p>9. <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/opt/geomopt.cpp">src/opt/geomopt.cpp</a></p>
+<p>10. <a href="/Users/hemanthharidas/Desktop/codes/planck-refactored/src/freq/hessian.cpp">src/freq/hessian.cpp</a></p>
+<p>This order follows the dependency graph from basic state and control flow to methods and then to downstream workflows.</p>
+<h2 id="20-summary">20. Summary</h2>
+<p>Planck is a compact but nontrivial electronic-structure code. It is useful for teaching because the theory-to-code mapping is still visible:</p>
+<ul>
+<li>basis functions become shell and primitive objects</li>
+<li>integrals become explicit recursive kernels</li>
+<li>SCF becomes a density-Fock fixed-point iteration</li>
+<li>DIIS becomes a small linear algebra problem on stored residuals</li>
+<li>MP2 becomes AO-to-MO integral transformation plus perturbative energy sums</li>
+<li>CASSCF becomes CI + orbital optimization + reduced density matrices</li>
+<li>gradients become derivative integral contractions plus Pulay terms</li>
+<li>geometry optimization becomes an iterative minimization around those</li>
+<p>gradients</p>
+</ul>
+<p>That transparency is the main educational value of the codebase.</p>
+</tbody>
+</table>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

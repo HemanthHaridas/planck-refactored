@@ -12,6 +12,7 @@
 #include "integrals/base.h"
 #include "scf/scf.h"
 #include "gradient/gradient.h"
+#include "post_hf/mp2.h"
 #include "base/tables.h"
 
 // ─── Single-point helper ─────────────────────────────────────────────────────
@@ -64,9 +65,20 @@ static Eigen::VectorXd _run_sp_gradient(HartreeFock::Calculator& calc)
     if (!scf_res)
         throw std::runtime_error("GeomOpt SCF failed: " + scf_res.error());
 
-    // Analytic gradient
+    // Post-HF correction / gradient
     Eigen::MatrixXd grad_mat;
-    if (calc._scf._scf == HartreeFock::SCFType::UHF)
+    if (calc._correlation == HartreeFock::PostHF::RMP2)
+    {
+        if (auto corr_res = HartreeFock::Correlation::run_rmp2(calc, shell_pairs); !corr_res)
+            throw std::runtime_error("GeomOpt RMP2 failed: " + corr_res.error());
+        calc._total_energy += calc._correlation_energy;
+        grad_mat = HartreeFock::Gradient::compute_rmp2_gradient(calc);
+    }
+    else if (calc._correlation == HartreeFock::PostHF::UMP2)
+    {
+        throw std::runtime_error("GeomOpt UMP2 gradient is not implemented");
+    }
+    else if (calc._scf._scf == HartreeFock::SCFType::UHF)
         grad_mat = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
     else
         grad_mat = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
