@@ -13,4 +13,4 @@ ammonia*
 *.log
 *tga
 .pytest*
-.github/*.yml
+.github/*/*.yml
