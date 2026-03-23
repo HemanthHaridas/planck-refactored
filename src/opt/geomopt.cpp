@@ -94,6 +94,26 @@ static Eigen::VectorXd _run_sp_gradient(HartreeFock::Calculator& calc)
     return g_am;
 }
 
+// ─── Per-step geometry logger ─────────────────────────────────────────────────
+//
+// Logs the current geometry (Angstrom) using the same
+// {Z:5d}{x:10.3f}{y:10.3f}{z:10.3f} format as "Input Coordinates" /
+// "Standard Coordinates" in the driver, so the parser can read it.
+
+static void _log_step_geometry(const HartreeFock::Calculator& calc)
+{
+    const std::size_t natoms = calc._molecule.natoms;
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Step Geometry :", "");
+    for (std::size_t a = 0; a < natoms; ++a) {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+            std::format("{:5d}{:10.3f}{:10.3f}{:10.3f}",
+                static_cast<int>(calc._molecule.atomic_numbers[a]),
+                calc._molecule._standard(a, 0) * BOHR_TO_ANGSTROM,
+                calc._molecule._standard(a, 1) * BOHR_TO_ANGSTROM,
+                calc._molecule._standard(a, 2) * BOHR_TO_ANGSTROM));
+    }
+}
+
 // ─── Two-loop L-BFGS search direction ────────────────────────────────────────
 //
 // Given current gradient g and stored (s_i, y_i, rho_i) history,
@@ -163,6 +183,7 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
                     E,
                     g.cwiseAbs().maxCoeff(),
                     std::sqrt(g.squaredNorm() / static_cast<double>(g.size()))));
+    _log_step_geometry(calc);
 
     // L-BFGS history
     std::vector<Eigen::VectorXd> s_hist, y_hist;
@@ -312,6 +333,7 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
                             E,
                             g.cwiseAbs().maxCoeff(),
                             std::sqrt(g.squaredNorm() / static_cast<double>(g.size()))));
+            _log_step_geometry(calc);
         } else {
             // All line search strategies failed — restore geometry and stop
             for (std::size_t a = 0; a < natoms; ++a) {
@@ -433,12 +455,18 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
     result.energies.push_back(E);
 
     Eigen::VectorXd g_ic = ics.cart_to_ic_grad(xyz, g_cart);
+    const double g_rms = std::sqrt(g_cart.squaredNorm() /
+                                   static_cast<double>(g_cart.size()));
+    const double g_ic_rms = std::sqrt(g_ic.squaredNorm() /
+                                      static_cast<double>(nq));
 
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Opt Step 0 :",
-        std::format("E = {:.10f} Eh   max|g| = {:.3e}   rms|g_ic| = {:.3e}",
+        std::format("E = {:.10f} Eh   max|g| = {:.3e}   rms|g| = {:.3e}   rms|g_ic| = {:.3e}",
                     E,
                     g_cart.cwiseAbs().maxCoeff(),
-                    std::sqrt(g_ic.squaredNorm() / static_cast<double>(nq))));
+                    g_rms,
+                    g_ic_rms));
+    _log_step_geometry(calc);
 
     // ── Initial diagonal Hessian ──────────────────────────────────────────────
     Eigen::MatrixXd H = Eigen::MatrixXd::Zero(nq, nq);
@@ -572,13 +600,19 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
         g_ic   = g_ic_new;
         E      = E_new;
         result.energies.push_back(E);
+        const double g_rms_step = std::sqrt(g_cart.squaredNorm() /
+                                            static_cast<double>(g_cart.size()));
+        const double g_ic_rms_step = std::sqrt(g_ic.squaredNorm() /
+                                               static_cast<double>(nq));
 
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
             std::format("Opt Step {} :", iter + 1),
-            std::format("E = {:.10f} Eh   max|g| = {:.3e}   rms|g_ic| = {:.3e}",
+            std::format("E = {:.10f} Eh   max|g| = {:.3e}   rms|g| = {:.3e}   rms|g_ic| = {:.3e}",
                         E,
                         g_cart.cwiseAbs().maxCoeff(),
-                        std::sqrt(g_ic.squaredNorm() / static_cast<double>(nq))));
+                        g_rms_step,
+                        g_ic_rms_step));
+        _log_step_geometry(calc);
     }
 
     // Final convergence check

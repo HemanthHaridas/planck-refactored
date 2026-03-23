@@ -560,6 +560,18 @@ int main(int argc, const char* argv[])
             {
                 HartreeFock::Logger::correlation_energy(calculator._total_energy, calculator._correlation_energy);
             }
+
+            // Re-save after converged post-HF runs so restartable correlated
+            // orbitals/energies land in the checkpoint.
+            if (calculator._scf._save_checkpoint)
+            {
+                if (auto res = HartreeFock::Checkpoint::save(calculator, calculator._checkpoint_path); res)
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
+                        std::format("Updated {}", calculator._checkpoint_path));
+                else
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
+                        std::format("Post-HF save failed: {}", res.error()));
+            }
         }
     }
 

@@ -82,6 +82,8 @@ namespace HartreeFock
     enum class IntegralMethod
     {
         ObaraSaika,        // Obara-Saika recursion (default)
+        RysQuadrature,     // Rys quadrature for all quartets
+        Auto               // OS for L<4, Rys for L>=4 per quartet
     };
 
     enum class OptCoords
@@ -639,6 +641,12 @@ namespace HartreeFock
         }
     };
 
+    struct SignedAOSymOp
+    {
+        std::vector<int>      ao_map;   // mu -> nu under the symmetry operation
+        std::vector<int8_t>   ao_sign;  // phase of the mapped Cartesian AO (+1 / -1)
+    };
+
     struct Calculator
     {
         OptionsSCF      _scf;
@@ -677,6 +685,8 @@ namespace HartreeFock
         std::vector<int>         _sao_block_sizes;    // n_SAOs per irrep block
         std::vector<int>         _sao_block_offsets;  // start offset per block in SAO ordering
         bool                     _use_sao_blocking = false;
+        std::vector<SignedAOSymOp> _integral_symmetry_ops; // signed AO permutations used to reduce integral work
+        bool                       _use_integral_symmetry = false;
 
         // Gradient and geometry optimization
         Eigen::MatrixXd _gradient;          // natoms×3, Ha/Bohr; set by compute_rhf/uhf_gradient()

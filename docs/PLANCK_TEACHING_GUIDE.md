@@ -1,779 +1,1287 @@
-# Planck Teaching Guide
+### Planck Teaching Guide
 
-This document is a teaching-oriented guide to the `planck-refactored` codebase.
-It explains what the program does, how the major algorithms work, how the
-source tree is organized, and how the quantum-chemistry theory maps onto the
-implementation.
+A complete theory-to-code walkthrough of the Planck quantum chemistry program.
+Intended for students learning Hartree-Fock and post-HF methods, contributors
+reading the source, and researchers auditing the implementation.
 
-The intended audience is:
+### 1. What Planck Is
 
-- a student learning Hartree-Fock and post-Hartree-Fock methods
-- a contributor trying to understand where to change the code
-- a researcher who wants to audit the mathematical and software structure
+Planck is a compact electronic structure program built around Gaussian-basis
+self-consistent field theory. It implements:
 
-The guide is written in the same order that a calculation usually happens in
-the executable:
-
-1. parse the input
-2. build the molecule and basis
-3. generate shell pairs and integrals
-4. solve SCF
-5. optionally run correlation methods
-6. optionally compute gradients, optimize geometry, or build vibrational data
-
-## 1. What Planck Is
-
-Planck is a compact quantum chemistry program centered on Gaussian-basis
-electronic structure methods. At the moment it implements:
-
-- RHF and UHF self-consistent field theory
-- Obara-Saika one- and two-electron integrals
-- conventional and direct SCF modes
-- DIIS acceleration
-- point-group detection and MO irrep labeling
+- Restricted and unrestricted Hartree-Fock (RHF/UHF) with DIIS acceleration
+- Obara-Saika and Rys-quadrature two-electron integral engines
+- Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF
+- Point-group detection, symmetry-adapted orbitals, and MO irrep labeling
 - RMP2 and UMP2 correlation energies
-- RHF and UHF analytic nuclear gradients
-- geometry optimization in Cartesian and internal coordinates
-- semi-numerical Hessians and vibrational frequencies
-- CASSCF and RASSCF active-space calculations
-- binary checkpoint restart support
+- Analytic RHF and UHF nuclear gradients
+- Analytic RMP2 nuclear gradients (Z-vector / CPHF)
+- Geometry optimization in Cartesian and internal coordinates
+- Semi-numerical Hessians and harmonic vibrational analysis
+- CASSCF and RASSCF active-space multiconfigurational SCF
+- Binary checkpoint save/restart with cross-basis Löwdin projection
 
-There is also in-progress infrastructure for a true analytic RMP2 gradient:
+The entire calculation is coordinated by `src/driver.cpp`. The central data
+object is `HartreeFock::Calculator` in `src/base/types.h`, which carries all
+options, molecular data, basis data, SCF state, and results.
 
-- RHF response matrix construction
-- MP2 amplitudes
-- MP2 unrelaxed density builders
-- MP2 Z-vector and relaxed-density helpers
+### 2. Architecture Overview
 
-Important implementation status:
+### Data Flow
 
-- RHF and UHF gradients are analytic
-- the current public RMP2 gradient path is still central-difference total-energy
-  differentiation, even though the codebase now contains some response-theory
-  building blocks for a future analytic implementation
+```
+Input file (.hfinp)
+  → parse (src/io/io.cpp)
+  → Molecule + options in Calculator
+  → coordinate conversion + symmetry detection (src/symmetry/)
+  → GBS basis reading + normalization (src/basis/)
+  → shell-pair construction (src/integrals/shellpair.cpp)
+  → one-electron integrals S, T, V (src/integrals/os.cpp)
+  → optional SAO basis construction (src/symmetry/mo_symmetry.cpp)
+  → SCF loop (src/scf/scf.cpp)
+       ├── conventional:  build ERI tensor once, reuse
+       └── direct:        rebuild G(P) from scratch each iteration
+  → post-HF: MP2 or CASSCF (src/post_hf/)
+  → gradient (src/gradient/)
+  → geometry optimization (src/opt/)
+  → frequency analysis (src/freq/)
+  → checkpoint write (src/io/checkpoint.cpp)
+```
 
-## 2. Big-Picture Architecture
+### Directory Summary
 
-At a high level, the executable in [src/driver.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/driver.cpp)
-orchestrates everything.
+| Directory | Contents |
+|---|---|
+| `src/base` | `types.h` (all structs/enums/Calculator), `tables.h`, `basis.h` |
+| `src/io` | input parsing, checkpoint I/O, logging |
+| `src/basis` | GBS file reading, primitive normalization, contraction |
+| `src/integrals` | shell pairs, Obara-Saika OS engine, Rys quadrature engine |
+| `src/scf` | orthogonalizer, initial guess, RHF/UHF SCF loops |
+| `src/symmetry` | libmsym wrapper, SAO basis, MO labeling, integral sym ops |
+| `src/post_hf` | MP2 energy/gradient, CASSCF/RASSCF, AO→MO transforms, CPHF |
+| `src/gradient` | analytic RHF, UHF, RMP2 gradients |
+| `src/opt` | L-BFGS/BFGS optimizer, internal coordinates, constraints |
+| `src/freq` | finite-difference Hessian, vibrational analysis |
 
-The main data object is `HartreeFock::Calculator` in
-[src/base/types.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/base/types.h).
-It holds:
-
-- input options
-- molecule and coordinates
-- basis and shell information
-- SCF state
-- integral tensors and one-electron matrices
-- post-HF energies and active-space results
-- gradient, Hessian, and geometry optimization state
-
-Conceptually, `Calculator` is the shared world-state for one calculation.
-
-### Directory Map
-
-### `src/base`
-
-- `types.h`: central enums, options, molecule/basis containers, SCF state, DIIS
-  state, checkpoint-related data, and the `Calculator` object
-- `tables.h`: chemical or optimization helper tables
-- `basis.h.in` and generated `basis.h`: compiled-in basis path configuration
-
-### `src/io`
-
-- `io.cpp/.h`: input parsing from `.hfinp`
-- `checkpoint.cpp/.h`: binary checkpoint load/save and projection support
-- `logging.h`: formatted program output
-
-### `src/lookup`
-
-- periodic-table and Boys-function support data
-
-### `src/basis`
-
-- Gaussian primitives, contractions, and `.gbs` basis parsing
-
-### `src/integrals`
-
-- shell-pair generation
-- Obara-Saika recursions for overlap, kinetic, nuclear attraction, ERIs
-- derivative integral kernels for gradients
-
-### `src/scf`
-
-- orthogonalization
-- initial density construction
-- RHF and UHF SCF loops
-
-### `src/symmetry`
-
-- point-group detection through `libmsym`
-- symmetry-adapted orbital basis support
-- MO irrep assignment
-
-### `src/post_hf`
-
-- MP2 energy code
-- MP2 gradient-response support code
-- CASSCF and RASSCF code
-- AO to MO integral transformations
-- RHF response matrix builders
-
-### `src/gradient`
-
-- analytic RHF and UHF nuclear gradients
-- current numerical RMP2 gradient driver
-- shared closed-shell AO derivative contraction helper
-
-### `src/opt`
-
-- geometry optimization in Cartesian and internal coordinates
-- generalized internal coordinate construction and constraint handling
-
-### `src/freq`
-
-- finite-difference Hessian and vibrational analysis
-
-### `tests`
-
-- manifest-driven executable regression tests
-
-## 3. Core Data Structures
-
-The most important single file is
-[src/base/types.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/base/types.h).
+### 3. Core Data Structures
 
 ### `Molecule`
 
-The molecule object stores:
+Holds atomic numbers, charge, multiplicity, and three coordinate
+representations that are easy to confuse:
 
-- atomic numbers
-- charge and multiplicity
-- input-frame coordinates
-- standard-orientation coordinates
-- flags such as whether coordinates are already in Bohr
+- `coordinates` — user-input geometry in Angstrom
+- `_coordinates` — same in Bohr, set by `prepare_coordinates()`
+- `standard` — symmetry-standard orientation in Angstrom (set by `detectSymmetry()`)
+- `_standard` — symmetry-standard orientation in Bohr (used by all integrals)
 
-Two coordinate representations are important:
+Basis centers and the nuclear repulsion sum both use `_standard`. Moving
+a geometry (e.g. in a geometry optimization step) must update `_standard`.
 
-- `coordinates`: user-facing geometry, often in Angstrom
-- `_standard` and `_coordinates`: internal Bohr-space geometry used by the
-  integrals and optimization machinery
+### `Shell` and `ContractedView`
 
-### `Basis`
+`Shell` stores the angular momentum type (`ShellType::S/P/D/F/G/H`), center
+position in Bohr, atom index, primitive exponents, contracted coefficients (with
+the contracted norm \(N_c\) pre-folded in), and per-primitive normalizations.
 
-The basis object contains:
+`ContractedView` is a lightweight reference into one Cartesian component of one
+shell: it holds a pointer to its parent `Shell`, the Cartesian exponent triple
+\((l_x, l_y, l_z)\), its global AO index `_index`, and a component norm factor.
+The `shell_pairs` array is a flat list of all unique `(ContractedView_i,
+ContractedView_j)` pairs with \(i \le j\), one entry per unique AO pair.
 
-- shells
-- basis functions / contracted Cartesian components
-- bookkeeping like number of shells and number of basis functions
+### `ShellPair`
 
-### `DataSCF` and `SpinChannel`
+Precomputed data for one pair of contracted AOs:
 
-The SCF state stores, per spin channel:
+- `R = A - B`, `R2 = |R|^2`
+- a `primitive_pairs` vector, one entry per \((\alpha_i, \beta_j)\) combination
+- each `PrimitivePair` stores combined exponent \(\zeta = \alpha + \beta\),
+  the Gaussian product center \(\mathbf P\), displacements \(\mathbf{PA}\) and
+  \(\mathbf{PB}\), prefactor, and contracted coefficient product
 
-- density matrix
-- Fock matrix
-- MO energies
-- MO coefficients
-- optional MO symmetry labels
-
-This is enough to reconstruct most later quantities.
-
-### `DIISState`
-
-The DIIS object stores:
-
-- a history of Fock matrices
-- a history of Pulay error matrices
-- the subspace dimension
-
-It then solves the standard augmented Pulay linear system to build an
-extrapolated Fock matrix.
+The Gaussian product theorem guarantees that the product of two Gaussians on
+different centers is a Gaussian on their weighted center, so precomputing these
+quantities once is a large speedup.
 
 ### `Calculator`
 
-`Calculator` gathers everything together and also owns:
+The top-level object. Owns everything: options structs
+(`OptionsSCF`, `OptionsBasis`, `OptionsGeometry`, `OptionsIntegral`,
+`OptionsOutput`), `Molecule`, `Basis`, `DataSCF`, all integral matrices
+(`_overlap`, `_hcore`, `_eri`), energies, gradient, Hessian, SAO data, integral
+symmetry ops, and active-space results.
 
-- `_overlap` and `_hcore`
-- `_eri` if conventional SCF has stored the AO ERI tensor
-- energies
-- gradient and Hessian storage
-- active-space results such as natural occupations
-- SAO blocking data for symmetry-aware diagonalization
+---
 
-If you want to understand “where state lives,” it is almost always here.
+## 4. Gaussian Basis Functions
 
-## 4. Theoretical Foundations
+### Primitive Gaussians
 
-This section summarizes the theory behind the implemented methods and explains
-how the code mirrors that theory.
-
-## 5. Gaussian Basis Functions
-
-The code works in an atom-centered Gaussian basis:
+A primitive Cartesian Gaussian centered at \(\mathbf A\) is:
 
 \[
-\chi_\mu(\mathbf r) = \sum_p d_{p\mu} \, (x-A_x)^{l_x}(y-A_y)^{l_y}(z-A_z)^{l_z}
-e^{-\alpha_p |\mathbf r-\mathbf A|^2}
+g(\mathbf r; \alpha, \mathbf A, l_x, l_y, l_z)
+= (x - A_x)^{l_x}(y - A_y)^{l_y}(z - A_z)^{l_z}
+  e^{-\alpha |\mathbf r - \mathbf A|^2}
 \]
 
-Why Gaussians?
+The total angular momentum is \(L = l_x + l_y + l_z\). For \(L=0\) there is
+one s-type function; for \(L=1\) there are three p-type functions
+(\(l_x l_y l_z = 100, 010, 001\)); for \(L=2\) there are six Cartesian
+d-type functions, and so on. Planck uses only Cartesian Gaussians; spherical
+harmonics are not supported.
 
-- products of Gaussians on different centers are again Gaussians
-- integrals can be reduced recursively
-- this makes them practical for Hartree-Fock and post-HF methods
+### Contracted Gaussians
 
-The implementation details are split across:
+Real basis sets contract primitives into shells. A contracted basis function is:
 
-- [src/basis/basis.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/basis/basis.cpp)
-- [src/basis/gaussian.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/basis/gaussian.cpp)
-- [src/integrals/shellpair.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/shellpair.h)
-- [src/integrals/shellpair.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/shellpair.cpp)
+\[
+\chi_\mu(\mathbf r) = N_c \sum_{p=1}^{K} d_p \, N_p \,
+  (x-A_x)^{l_x}(y-A_y)^{l_y}(z-A_z)^{l_z}
+  e^{-\alpha_p |\mathbf r - \mathbf A|^2}
+\]
 
-`ShellPair` precomputes Gaussian-product data such as:
+where \(d_p\) are contraction coefficients, \(N_p\) is the primitive
+normalization, and \(N_c\) is the contracted normalization that ensures
+\(\langle \chi_\mu | \chi_\mu \rangle = 1\) for the \(s\)-type component.
 
-- combined exponent
-- prefactors
-- Gaussian product center
-- displacement vectors needed in recurrence relations
+**Implementation note**: Planck folds \(N_c\) into `Shell._coefficients` during
+GBS reading (`shell._coefficients *= N_c`). Integral code therefore does not
+apply a separate \(N_c\) factor. The per-primitive normalization \(N_p\) is
+stored in `Shell._normalizations` and multiplied into `PrimitivePair.coeff_product`.
 
-That is a classic quantum-chemistry optimization: precompute shell-pair data
-once and reuse it many times.
+### Normalization of a Primitive
 
-## 6. One- and Two-Electron Integrals
+For a Cartesian Gaussian with angular momentum \((l_x, l_y, l_z)\) and exponent \(\alpha\):
 
-Electronic structure in a Gaussian basis depends on several integral classes:
+\[
+N_p = \left(\frac{2\alpha}{\pi}\right)^{3/4}
+\left(\frac{(4\alpha)^L}{(2l_x-1)!!(2l_y-1)!!(2l_z-1)!!}\right)^{1/2}
+\]
 
-- overlap:
-  \[
-  S_{\mu\nu} = \langle \chi_\mu | \chi_\nu \rangle
-  \]
-- kinetic:
-  \[
-  T_{\mu\nu} = \left\langle \chi_\mu \left| -\frac{1}{2}\nabla^2 \right| \chi_\nu \right\rangle
-  \]
-- nuclear attraction:
-  \[
-  V_{\mu\nu} = \sum_A \left\langle \chi_\mu \left| -\frac{Z_A}{r_A} \right| \chi_\nu \right\rangle
-  \]
-- electron repulsion:
-  \[
-  (\mu\nu|\lambda\sigma) =
-  \iint \chi_\mu(1)\chi_\nu(1)\frac{1}{r_{12}}\chi_\lambda(2)\chi_\sigma(2)\, d1\, d2
-  \]
+The contracted norm \(N_c\) is determined so that the \(s\)-component of the shell
+integrates to 1. Each `ContractedView` stores a `_component_norm` factor equal
+to \(1/\sqrt{(2l_x-1)!!(2l_y-1)!!(2l_z-1)!!}\) which handles the
+\((l_x,l_y,l_z)\)-dependent part of \(N_p\) at the AO level.
 
-Planck computes these with Obara-Saika recursions in:
+---
 
-- [src/integrals/os.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.cpp)
-- [src/integrals/os.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.h)
+## 5. The Obara-Saika Integral Engine
 
-The important implementation split is:
+All one- and two-electron integrals in Planck are evaluated using the
+Obara-Saika (OS) recursion. The key idea is to express integrals over
+high-angular-momentum Gaussians in terms of simpler integrals via
+horizontal and vertical recursion relations.
 
-- `_compute_1e(...)`: overlap and kinetic
-- `_compute_nuclear_attraction(...)`: nuclear attraction
-- `_compute_2e(...)`: full AO ERI tensor
-- `_compute_fock_rhf(...)` and `_compute_fock_uhf(...)`: ERI contraction into
-  Coulomb and exchange contributions
+### Overlap Integral
 
-### Conventional vs Direct SCF
+The one-dimensional OS overlap table \(S(l_A, l_B)\) is seeded at
+\(S(0,0) = 1\) (the Gaussian prefactor is applied by the caller), where
+\(\zeta = \alpha + \beta\) and \(\mu = \alpha\beta/\zeta\). The full
+\(l_A \times l_B\) table is built in three phases.
 
-There are two major strategies for ERIs:
+*Phase 1 — A-column* \((l_B = 0)\): increment angular momentum on center A
+with \(l_B\) fixed at zero:
 
-- conventional SCF:
-  build the full AO ERI tensor once and reuse it
-- direct SCF:
-  recompute or contract on the fly each iteration
+\[
+S(l_A+1,\,0) = (P_x - A_x)\,S(l_A,\,0) + \frac{l_A}{2\zeta}\,S(l_A-1,\,0)
+\]
 
-This is controlled in [src/scf/scf.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/scf/scf.cpp).
+*Phase 2 — B-row* \((l_A = 0)\): increment angular momentum on center B
+with \(l_A\) fixed at zero:
 
-Tradeoff:
+\[
+S(0,\,l_B+1) = (P_x - B_x)\,S(0,\,l_B) + \frac{l_B}{2\zeta}\,S(0,\,l_B-1)
+\]
 
-- conventional is faster per SCF iteration
-- direct uses less memory
+*Phase 3 — full table* \((l_A > 0,\; l_B > 0)\): fill remaining entries using
+the general A-increment, which now has a non-zero \(l_B\) coupling term:
 
-The code also uses Schwarz screening thresholds to skip negligible quartets.
+\[
+S(l_A+1,\,l_B) = (P_x - A_x)\,S(l_A,\,l_B)
+               + \frac{l_A}{2\zeta}\,S(l_A-1,\,l_B)
+               + \frac{l_B}{2\zeta}\,S(l_A,\,l_B-1)
+\]
+
+The symmetric B-increment (not used in the main table fill but structurally
+identical with \(A \leftrightarrow B\)) is:
+
+\[
+S(l_A,\,l_B+1) = (P_x - B_x)\,S(l_A,\,l_B)
+               + \frac{l_B}{2\zeta}\,S(l_A,\,l_B-1)
+               + \frac{l_A}{2\zeta}\,S(l_A-1,\,l_B)
+\]
+
+The two recursions differ only in the first term (\(P_x - A_x\) vs
+\(P_x - B_x\)); the remainder terms are identical. The 3D overlap is a product
+of three independent 1D tables.
+
+In `os.cpp`, `_os_1d` evaluates the three-phase table for one Cartesian
+direction.
+`_compute_3d_overlap_kinetic` builds the overlap and kinetic energy for one
+`ShellPair` using this recursion and the kinetic energy relation:
+
+\[
+T(l_A, l_B) = \frac{\beta(2l_B+3)}{1}\,S(l_A,l_B)
+            - 2\beta^2 \,S(l_A, l_B+2)
+            - \frac{l_B(l_B-1)}{2}\,S(l_A, l_B-2)
+\]
+
+The final overlap and kinetic integrals are assembled by `_compute_1e`, which
+loops over all `ShellPair` entries and places results into the \(n_b \times n_b\)
+matrices \(S\) and \(T\) using `sp.A._index` and `sp.B._index`.
+
+### Nuclear Attraction Integral
+
+The nuclear attraction integral requires the Boys function:
+
+\[
+V_{\mu\nu} = -\sum_C Z_C \langle \chi_\mu | |\mathbf r - \mathbf C|^{-1} | \chi_\nu \rangle
+\]
+
+Evaluation uses the Obara-Saika vertical recursion involving auxiliary integrals
+\([0|0]^{(m)}\):
+
+\[
+[0|0]^{(m)} = \frac{2\pi}{\zeta}\, e^{-\mu R_{AB}^2}\, F_m(\zeta R_{PC}^2)
+\]
+
+where \(F_m\) is the \(m\)-th order Boys function:
+
+\[
+F_m(t) = \int_0^1 u^{2m} e^{-t u^2}\, du
+\]
+
+For large \(t\), the Boys function is computed via the asymptotic expansion
+\(F_m(t) \approx (2m-1)!!/(2t)^{m+1}\sqrt{\pi/t}\). For small \(t\), a
+Taylor series or Horner-scheme polynomial is used. Planck stores precomputed
+Boys function tables in `src/lookup/`.
+
+The vertical recursion for nuclear attraction auxiliary integrals:
+
+\[
+(a+1_i|0)^{(m)} = (P_i - A_i)(a|0)^{(m)} - (P_i - C_i)(a|0)^{(m+1)}
++ \frac{a_i}{2\zeta}\left[(a-1_i|0)^{(m)} - (a-1_i|0)^{(m+1)}\right]
+\]
+
+seeds at \([0|0]^{(m)}\) and builds up angular momentum.
+
+### Two-Electron Repulsion Integrals (ERIs)
+
+The electron repulsion integral over contracted Gaussians:
+
+\[
+(\mu\nu|\lambda\sigma) =
+\iint \chi_\mu(\mathbf r_1)\chi_\nu(\mathbf r_1)
+\frac{1}{r_{12}}
+\chi_\lambda(\mathbf r_2)\chi_\sigma(\mathbf r_2)\,
+d\mathbf r_1\, d\mathbf r_2
+\]
+
+The OS scheme splits ERI evaluation into two stages.
+
+**Vertical Recursion Relation (VRR)**. Starting from the primitive auxiliary
+integral:
+
+\[
+(ss|ss)^{(m)} = \frac{2\pi^{5/2}}{\zeta\eta\sqrt{\zeta+\eta}}\,
+e^{-\mu_{AB} R_{AB}^2 - \mu_{CD} R_{CD}^2}\,
+F_m\!\left(\frac{\zeta\eta}{\zeta+\eta} R_{PQ}^2\right)
+\]
+
+the VRR first builds angular momentum on bra center A (with the ket still at
+zero), then on ket center C. Let δ = ζ + η, ρ = ζη/δ, and
+W = (ζP + ηQ)/δ be the weighted Gaussian product center.
+
+*A-side VRR* — increments angular momentum on center A while the ket center C
+is held at angular momentum **c** (initially zero):
+
+\[
+(a+1_i\,0\,|\,c\,0)^{(m)} =
+  (P_i - A_i)\,(a\,0\,|\,c\,0)^{(m)}
++ (W_i - P_i)\,(a\,0\,|\,c\,0)^{(m+1)}
++ \frac{a_i}{2\zeta}\!\left[
+    (a{-}1_i\,0\,|\,c\,0)^{(m)}
+  - \frac{\rho}{\zeta}(a{-}1_i\,0\,|\,c\,0)^{(m+1)}
+  \right]
++ \frac{c_i}{2\delta}\,(a{-}1_i\,0\,|\,c{-}1_i\,0)^{(m+1)}
+\]
+
+*C-side VRR* — after the A-side VRR has produced \((a\,0\,|\,0\,0)^{(m)}\),
+angular momentum is built on ket center C:
+
+\[
+(a\,0\,|\,c+1_i\,0)^{(m)} =
+  (Q_i - C_i)\,(a\,0\,|\,c\,0)^{(m)}
++ (W_i - Q_i)\,(a\,0\,|\,c\,0)^{(m+1)}
++ \frac{c_i}{2\eta}\!\left[
+    (a\,0\,|\,c{-}1_i\,0)^{(m)}
+  - \frac{\rho}{\eta}(a\,0\,|\,c{-}1_i\,0)^{(m+1)}
+  \right]
++ \frac{a_i}{2\delta}\,(a{-}1_i\,0\,|\,c{-}1_i\,0)^{(m+1)}
+\]
+
+The A-side and C-side recurrences are structurally symmetric: P↔Q, A↔C, ζ↔η.
+The cross-coupling term \(a_i/2\delta\) in the C-side VRR is non-zero because
+the A-side VRR has already built up nonzero bra angular momentum a by that
+point; the analogous \(c_i/2\delta\) term in the A-side VRR is zero when the
+A-side is applied first (c = 0 then).
+
+**Horizontal Recursion Relation (HRR)**. After the VRR produces
+\((a\,0\,|\,c\,0)\) integrals, angular momentum is transferred to the second
+center of each shell-pair without re-running the VRR. The bra transfer (A→B):
+
+\[
+(a\,b\,|\,cd) = (a+1_i\,b-1_i\,|\,cd) + (A_i - B_i)\,(a\,b-1_i\,|\,cd)
+\]
+
+and the symmetric ket transfer (C→D):
+
+\[
+(ab\,|\,c\,d) = (ab\,|\,c+1_i\,d-1_i) + (C_i - D_i)\,(ab\,|\,c\,d-1_i)
+\]
+
+In the implementation the same three-phase sweeping routine (`_nuclear_hrr`) is
+reused for both transfers; the C→D pass operates on the fixed A-side slice
+extracted after the A→B pass completes.
+
+**Thread-local scratch buffers**. The VRR and HRR accumulators are large
+temporary arrays. Planck uses `thread_local` static arrays (`_vrr_buf`,
+`_hrr_buf`) so that each OpenMP thread has its own workspace without heap
+allocation per quartet.
+
+### Schwarz Screening
+
+Before evaluating a quartet, the Schwarz inequality provides an upper bound:
+
+\[
+|(\mu\nu|\lambda\sigma)| \le \sqrt{(\mu\nu|\mu\nu)}\,\sqrt{(\lambda\sigma|\lambda\sigma)}
+\]
+
+Planck precomputes the Schwarz table \(Q(i,j) = \sqrt{|(ij|ij)|}\) for all
+unique diagonal pairs and skips any quartet where:
+
+\[
+Q(i,j) \cdot Q(k,l) < \epsilon_{ERI}
+\]
+
+This screening is applied in `_compute_2e` and `_compute_2e_fock` in `os.cpp`
+and analogously in `rys.cpp`.
+
+### Permutation Symmetry of the ERI Tensor
+
+The ERI tensor has 8-fold permutation symmetry:
+
+\[
+(\mu\nu|\lambda\sigma) = (\nu\mu|\lambda\sigma) = (\mu\nu|\sigma\lambda)
+= (\nu\mu|\sigma\lambda) = (\lambda\sigma|\mu\nu) = \cdots
+\]
+
+Planck iterates only over pairs \(p \le q\) in the AO-pair index and fills all
+8 equivalent slots after each computation, reducing work by a factor of 8.
+
+---
+
+## 6. Rys Quadrature
+
+The Rys quadrature method evaluates ERIs by converting the Boys function
+integral into a Gauss-Legendre-type quadrature:
+
+\[
+F_m(t) = \sum_{r=1}^{n_r} w_r\, x_r^{2m}
+\]
+
+where \(\{x_r, w_r\}\) are the Rys roots and weights that depend on \(t = \zeta\eta/(\zeta+\eta) R_{PQ}^2\).
+Each quadrature point decouples the 3D integral into three independent 1D
+integrals, one per Cartesian direction, which are then multiplied together.
+
+The Rys method naturally handles high-angular-momentum quartets without the
+recursive intermediate storage required by the VRR/HRR scheme. Planck uses it
+as an alternative engine (controlled by `IntegralMethod::RysQuadrature` or
+`IntegralMethod::Auto`). The implementation lives in `src/integrals/rys.cpp`
+and `rys_roots.cpp`.
+
+---
 
 ## 7. Hartree-Fock Theory
 
-Hartree-Fock approximates the many-electron wavefunction as a Slater
-determinant built from molecular orbitals.
+### The Variational Principle
 
-Each spatial orbital is expanded in the AO basis:
-
-\[
-\phi_i = \sum_\mu C_{\mu i}\chi_\mu
-\]
-
-The RHF variational equations become the Roothaan equations:
+HF approximates the ground state \(|\Psi\rangle\) as a single Slater
+determinant built from \(N\) molecular spin-orbitals:
 
 \[
-\mathbf F \mathbf C = \mathbf S \mathbf C \boldsymbol \varepsilon
+|\Psi_{HF}\rangle = |\phi_1 \phi_2 \cdots \phi_N\rangle
 \]
 
-where:
-
-- `S` is the overlap matrix
-- `F` is the Fock matrix
-- `C` contains molecular orbital coefficients
-- `ε` are orbital energies
-
-For RHF, the closed-shell density is:
+The HF energy is:
 
 \[
-P_{\mu\nu} = 2\sum_{i \in occ} C_{\mu i} C_{\nu i}
+E_{HF} = \langle \Psi_{HF} | \hat H | \Psi_{HF} \rangle
+= \sum_i h_{ii} + \frac{1}{2}\sum_{ij}(J_{ij} - K_{ij})
 \]
 
-and the Fock matrix is:
+where \(h_{ii}\) are core one-electron energies, \(J_{ij}\) are Coulomb
+integrals, and \(K_{ij}\) are exchange integrals.
+
+### Roothaan Equations (RHF)
+
+Expanding spatial MOs in the AO basis \(\chi_\mu\):
+
+\[
+\phi_i(\mathbf r) = \sum_\mu C_{\mu i}\, \chi_\mu(\mathbf r)
+\]
+
+and applying the variational condition yields the Roothaan matrix eigenvalue problem:
+
+\[
+\mathbf F \mathbf C = \mathbf S \mathbf C \boldsymbol\varepsilon
+\]
+
+where \(\mathbf S\) is the AO overlap matrix, \(\mathbf C\) contains MO
+coefficients (columns = MOs), and \(\boldsymbol\varepsilon\) contains orbital
+energies.
+
+The **Fock matrix** is:
 
 \[
 F_{\mu\nu} = H_{\mu\nu}^{core} + G_{\mu\nu}
 \]
 
-with:
+The core Hamiltonian is:
+
+\[
+H_{\mu\nu}^{core} = T_{\mu\nu} + V_{\mu\nu}
+\]
+
+The two-electron contribution for closed-shell RHF is:
 
 \[
 G_{\mu\nu} = \sum_{\lambda\sigma} P_{\lambda\sigma}
 \left[(\mu\nu|\lambda\sigma) - \frac{1}{2}(\mu\lambda|\nu\sigma)\right]
 \]
 
-For UHF, alpha and beta densities are separate, and the exchange is
-spin-dependent.
+The **density matrix** for \(n_{occ}\) doubly-occupied orbitals is:
 
-### Where It Lives in Code
+\[
+P_{\mu\nu} = 2\sum_{i=1}^{n_{occ}} C_{\mu i}\, C_{\nu i}
+\]
 
-- [src/scf/scf.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/scf/scf.h)
-- [src/scf/scf.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/scf/scf.cpp)
+The total RHF energy is:
 
-Important functions:
+\[
+E_{RHF} = \frac{1}{2}\sum_{\mu\nu} P_{\mu\nu}\left(H_{\mu\nu}^{core} + F_{\mu\nu}\right)
++ E_{nuc}
+\]
 
-- `build_orthogonalizer`: constructs \(S^{-1/2}\)
-- `initial_density`: core-Hamiltonian guess
-- `run_rhf`
-- `run_uhf`
+### Pople-Nesbet Equations (UHF)
 
-### SCF Cycle
+For open-shell systems, separate spin-orbital sets are maintained. Defining
+\(P^\alpha_{\mu\nu} = \sum_{i \in \alpha} C^\alpha_{\mu i} C^\alpha_{\nu i}\)
+and similarly for \(\beta\), the total density is
+\(P^T = P^\alpha + P^\beta\). The UHF Fock matrices are:
 
-Each iteration does roughly this:
+\[
+F^\alpha_{\mu\nu} = H^{core}_{\mu\nu}
++ \sum_{\lambda\sigma}\left[P^T_{\lambda\sigma}(\mu\nu|\lambda\sigma)
+- P^\alpha_{\lambda\sigma}(\mu\lambda|\nu\sigma)\right]
+\]
 
-1. build `G`
-2. form `F = H + G`
-3. compute energy
-4. optionally update DIIS
-5. diagonalize in an orthonormal basis
-6. rebuild density
-7. test convergence
+\[
+F^\beta_{\mu\nu} = H^{core}_{\mu\nu}
++ \sum_{\lambda\sigma}\left[P^T_{\lambda\sigma}(\mu\nu|\lambda\sigma)
+- P^\beta_{\lambda\sigma}(\mu\lambda|\nu\sigma)\right]
+\]
 
-The orthogonalization step uses:
+The UHF energy is:
+
+\[
+E_{UHF} = \frac{1}{2}\sum_{\mu\nu}
+\left[P^T_{\mu\nu} H^{core}_{\mu\nu}
++ P^\alpha_{\mu\nu} F^\alpha_{\mu\nu}
++ P^\beta_{\mu\nu} F^\beta_{\mu\nu}\right]
++ E_{nuc}
+\]
+
+---
+
+## 8. SCF Algorithm
+
+### Symmetric Orthogonalization
+
+The AO basis is non-orthogonal (\(\mathbf S \ne \mathbf I\)). To diagonalize
+the Fock matrix, it is transformed to an orthonormal basis using:
 
 \[
 \mathbf X = \mathbf S^{-1/2}
 \]
 
-and diagonalizes:
+computed via the eigendecomposition \(\mathbf S = \mathbf U \boldsymbol\sigma \mathbf U^T\):
+
+\[
+\mathbf X = \mathbf U\,\mathrm{diag}(\sigma_i^{-1/2})\,\mathbf U^T
+\]
+
+The transformed Fock matrix is then:
 
 \[
 \mathbf F' = \mathbf X^T \mathbf F \mathbf X
 \]
 
-then transforms back:
+which is a standard symmetric eigenvalue problem \(\mathbf F' \mathbf C' = \mathbf C' \boldsymbol\varepsilon\).
+The AO-basis MO coefficients are recovered by:
 
 \[
 \mathbf C = \mathbf X \mathbf C'
 \]
 
-## 8. DIIS Convergence Acceleration
+Implemented in `build_orthogonalizer` in `src/scf/scf.cpp`.
 
-Planck uses Pulay DIIS to accelerate SCF convergence.
+### Initial Density Guess
 
-The key idea is:
+The default initial guess (`SCFGuess::HCore`) diagonalizes the core
+Hamiltonian \(\mathbf H^{core} = \mathbf T + \mathbf V\) to produce an initial
+set of MO coefficients and a starting density matrix. This corresponds to
+completely neglecting electron-electron repulsion in the initial guess.
 
-- store several recent Fock matrices
-- store the corresponding error matrices
-- solve for a linear combination of Fock matrices that minimizes the residual
+### SCF Iteration Loop
 
-The residual is the commutator in the orthonormal basis:
+Each RHF iteration in `run_rhf`:
+
+1. Compute \(G_{\mu\nu}[P]\) from the current density (either from the stored ERI
+   tensor via `_compute_fock_rhf`, or on-the-fly via `_compute_2e_fock`)
+2. Form \(\mathbf F = \mathbf H^{core} + \mathbf G\)
+3. Compute the current energy
+4. Form the DIIS error vector and call `diis.push(F, e)`; if DIIS is ready,
+   replace \(\mathbf F\) with the extrapolated Fock
+5. Transform to orthonormal basis: \(\mathbf F' = \mathbf X^T \mathbf F \mathbf X\)
+6. Diagonalize \(\mathbf F' \mathbf C' = \mathbf C' \boldsymbol\varepsilon\)
+7. Back-transform: \(\mathbf C = \mathbf X \mathbf C'\)
+8. Build new density \(P_{\mu\nu} = 2\sum_i^{occ} C_{\mu i} C_{\nu i}\)
+9. Test convergence: \(|\Delta E| < \epsilon_E\) and \(\|\Delta P\|_{max} < \epsilon_P\)
+
+Convergence is declared when both criteria are simultaneously satisfied.
+
+### Level Shifting
+
+If `_level_shift > 0`, the virtual orbital energies are shifted upward by
+\(\Delta\) before each diagonalization:
 
 \[
-\mathbf e = \mathbf X^T(\mathbf F \mathbf P \mathbf S - \mathbf S \mathbf P \mathbf F)\mathbf X
+F'_{ab} \leftarrow F'_{ab} + \Delta
+\quad \text{(virtual-virtual block in the MO basis)}
 \]
 
-When the SCF is converged, this should go to zero.
+This increases the HOMO-LUMO gap and prevents the SCF from alternating between
+states with different orbital occupations, at the cost of slower convergence
+near the solution. Level shift is applied in `run_rhf` and `run_uhf`.
 
-This is implemented in the `DIISState` object in
-[src/base/types.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/base/types.h).
+---
 
-## 9. Symmetry
+## 9. DIIS Convergence Acceleration
 
-Planck can:
+Pulay's Direct Inversion in the Iterative Subspace (DIIS) accelerates SCF
+convergence by extrapolating a Fock matrix from a stored subspace of recent
+Fock matrices that minimizes the residual.
 
-- detect molecular point groups
-- rotate the molecule to a standard frame
-- construct symmetry-adapted AO block structure
-- label converged MOs by irreducible representation
+### Error Metric
 
-This logic lives in:
-
-- [src/symmetry/symmetry.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/symmetry/symmetry.cpp)
-- [src/symmetry/mo_symmetry.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/symmetry/mo_symmetry.cpp)
-
-The code uses `libmsym` for group theory tasks.
-
-The main implementation point is not “using symmetry to derive the HF
-equations,” but “using symmetry to block orbital spaces and label results in a
-chemically meaningful way.”
-
-## 10. MP2 Correlation Energy
-
-Second-order Moller-Plesset perturbation theory adds a perturbative correction
-to the Hartree-Fock energy.
-
-For closed-shell RHF, the standard spatial-orbital expression is:
+The Pulay error vector at iteration \(k\) is the FPS-SPF commutator in the
+orthonormal basis:
 
 \[
-E_{MP2} =
-\sum_{ijab}
+\mathbf e_k = \mathbf X^T(\mathbf F_k \mathbf P_k \mathbf S - \mathbf S \mathbf P_k \mathbf F_k)\mathbf X
+\]
+
+When the SCF is converged, \(\mathbf F\) and \(\mathbf P\) commute and
+\(\mathbf e = \mathbf 0\). The norm \(\|\mathbf e\|_{RMS}\) is the primary
+convergence diagnostic.
+
+### DIIS Linear System
+
+Given \(m\) stored pairs \(\{(\mathbf F_k, \mathbf e_k)\}\), find coefficients
+\(\{c_k\}\) such that:
+
+\[
+\mathbf F^{extrap} = \sum_{k=1}^m c_k \mathbf F_k
+\quad \text{subject to} \quad \sum_k c_k = 1
+\]
+
+minimizes \(\|\sum_k c_k \mathbf e_k\|^2\). Using a Lagrange multiplier
+\(\lambda\) for the constraint, this becomes the augmented linear system:
+
+\[
+\begin{pmatrix} \mathbf B & -\mathbf 1 \\ -\mathbf 1^T & 0 \end{pmatrix}
+\begin{pmatrix} \mathbf c \\ \lambda \end{pmatrix}
+=
+\begin{pmatrix} \mathbf 0 \\ -1 \end{pmatrix}
+\]
+
+where \(B_{ij} = \mathrm{Tr}(\mathbf e_i^T \mathbf e_j)\).
+
+Solved via column-pivoted QR decomposition in Eigen. Implemented in the
+`DIISState::extrapolate()` method in `src/base/types.h`. Subspace is capped at
+`_DIIS_dim` (default 8) vectors, evicting the oldest on overflow.
+
+---
+
+## 10. Symmetry
+
+### Point Group Detection
+
+The `detectSymmetry` function in `src/symmetry/symmetry.cpp` wraps the
+`libmsym` library to:
+
+1. Identify the molecular point group
+2. Reorient the molecule into the standard frame (principal axis along \(z\), etc.)
+3. Store the standard-orientation geometry in `molecule._standard` (Angstrom)
+   and `molecule._standard * ANGSTROM_TO_BOHR` (Bohr)
+
+### Symmetry-Adapted Orbitals (SAO Basis)
+
+For non-trivial point groups, the Fock matrix is block-diagonal in the
+symmetry-adapted orbital (SAO) basis. `build_sao_basis` in
+`src/symmetry/mo_symmetry.cpp`:
+
+1. Re-enters libmsym to obtain the character table and group operations
+2. For groups with multi-dimensional irreps, selects the **largest Abelian
+   subgroup** with all-1D irreducible representations (at most D\(_{2h}\))
+3. Builds projection operators for each irrep \(\Gamma_g\):
+   \[
+   \hat P^{(\Gamma)} = \frac{d_\Gamma}{h} \sum_{R} \chi^{(\Gamma)}(R)^* \hat R
+   \]
+4. Applies these to each AO to generate SAO trial vectors; orthonormalizes via
+   modified Gram-Schmidt
+
+The resulting unitary transformation \(\mathbf U\) (columns = SAOs) is stored
+in `calculator._sao_transform`. In the SAO basis, the Fock and overlap matrices
+block-diagonalize, and each block is diagonalized independently. This reduces
+the \(O(n_b^3)\) diagonalization cost to \(\sum_g O(n_g^3)\) where \(n_g\) is
+the number of SAOs in irrep \(g\).
+
+### MO Irrep Assignment
+
+After convergence, each MO is labeled by its irreducible representation.
+`assign_mo_symmetry` in `mo_symmetry.cpp` builds the AO representation matrix
+\(D_R\) for each group operation \(R\) — for the all-1D Abelian subgroups used,
+each Cartesian Gaussian transforms with a sign \(\pm 1\) under each operation,
+so \(D_R\) is diagonal. The irrep label of MO \(i\) is determined by finding
+the character pattern \(\chi_i(R) = \sum_\mu |C_{\mu i}|^2 D_R(\mu,\mu)\) and
+matching it against the character table.
+
+### Integral Symmetry Reduction
+
+The `update_integral_symmetry` function in `src/symmetry/integral_symmetry.cpp`
+finds which of the seven axis-sign-flip candidates
+\(\{(-1,1,1),(1,-1,1),(1,1,-1),(-1,-1,1),(-1,1,-1),(1,-1,-1),(-1,-1,-1)\}\)
+are true symmetry operations of the molecule. Each valid operation is stored as
+a `SignedAOSymOp` — a permutation `ao_map[mu] = nu` and sign `ao_sign[mu] = ±1`
+that maps each AO to its symmetry-equivalent partner.
+
+Since the Abelian subgroups used are subgroups of D\(_{2h}\), all operations
+are products of coordinate-axis reflections. Under any such reflection, a
+Cartesian Gaussian \(x^{l_x} y^{l_y} z^{l_z} e^{-\alpha r^2}\) maps to
+\(\pm 1\) times a Gaussian on the equivalent atom — no mixing of Cartesian
+components occurs. This means `ao_sign ∈ {+1, -1}` is always exact for all
+angular momenta.
+
+These operations are used to reduce integral work in the ERI loops (described
+further in the implementation plan).
+
+---
+
+## 11. MP2 Correlation Energy
+
+### Second-Order Perturbation Theory
+
+Møller-Plesset perturbation theory partitions the Hamiltonian as
+\(\hat H = \hat F + \hat V'\), where \(\hat F = \sum_i \hat f_i\) is the Fock
+operator and \(\hat V'\) is the fluctuation potential. The second-order energy
+correction is:
+
+\[
+E^{(2)} = \sum_{ijab} \frac{|\langle ij || ab \rangle|^2}{\varepsilon_i + \varepsilon_j - \varepsilon_a - \varepsilon_b}
+\]
+
+where \(i, j\) label occupied and \(a, b\) label virtual orbitals, and
+\(\langle ij || ab \rangle\) are antisymmetrized two-electron integrals in the
+MO basis.
+
+### RMP2 (Closed-Shell)
+
+For RHF reference, using spatial orbitals and factoring out spin:
+
+\[
+E_{RMP2} = \sum_{i \le j}^{occ} \sum_{a \le b}^{virt}
 \frac{(ia|jb)\left[2(ia|jb) - (ib|ja)\right]}
 {\varepsilon_i + \varepsilon_j - \varepsilon_a - \varepsilon_b}
 \]
 
-Indices:
-
-- `i, j`: occupied orbitals
-- `a, b`: virtual orbitals
-
-For UMP2, same-spin and opposite-spin channels are treated separately.
-
-### Where It Lives
-
-- [src/post_hf/mp2.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2.cpp)
-- [src/post_hf/mp2.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2.h)
-- [src/post_hf/integrals.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/integrals.cpp)
-- [src/post_hf/integrals.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/integrals.h)
-
-The post-HF integral helper code does AO to MO tensor transformations. That is
-needed because MP2 is naturally expressed in MO-space two-electron integrals,
-while SCF and integrals are generated in AO space.
-
-### MP2 Gradient Infrastructure
-
-Files:
-
-- [src/post_hf/mp2_gradient.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2_gradient.cpp)
-- [src/post_hf/mp2_gradient.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2_gradient.h)
-- [src/post_hf/rhf_response.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/rhf_response.cpp)
-- [src/post_hf/rhf_response.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/rhf_response.h)
-
-This code now contains:
-
-- RMP2 amplitudes
-- unrelaxed MP2 one-particle density pieces
-- RHF response matrix construction
-- MP2 Z-vector source terms
-- MP2 relaxed-density helpers
-
-But the production `compute_rmp2_gradient` entry point still uses numerical
-central differences, not the fully assembled analytic MP2 Lagrangian.
-
-That distinction is important for both science and software maintenance.
-
-## 11. Active-Space Methods: CASSCF and RASSCF
-
-CASSCF combines:
-
-- a CI problem in an active orbital space
-- orbital optimization outside and inside that space
-
-The core idea is that the wavefunction is no longer a single determinant:
+where \((ia|jb)\) are MO-basis ERIs obtained by the AO→MO four-index
+transformation:
 
 \[
-|\Psi\rangle = \sum_I c_I |D_I\rangle
+(ia|jb) = \sum_{\mu\nu\lambda\sigma} C_{\mu i} C_{\nu a} (\mu\nu|\lambda\sigma) C_{\lambda j} C_{\sigma b}
 \]
 
-where the determinants `|D_I>` span the active space.
+Planck performs this transformation via a sequence of half-transformations
+(AO→MO in bra, then AO→MO in ket) to reduce the \(O(n^8)\) naive cost to
+\(O(n^5)\). Implemented in `src/post_hf/integrals.cpp`.
 
-The energy is optimized with respect to:
+### UMP2 (Open-Shell)
 
-- CI coefficients
-- orbital rotations
+For UHF reference, same-spin (SS) and opposite-spin (OS) channels are computed
+separately:
 
-Planck’s implementation is in:
+\[
+E_{UMP2}^{SS} = -\frac{1}{4}\sum_{ijab}
+\frac{|\langle ij||ab\rangle_{\alpha\alpha}|^2 + |\langle ij||ab\rangle_{\beta\beta}|^2}
+{\varepsilon_i + \varepsilon_j - \varepsilon_a - \varepsilon_b}
+\]
 
-- [src/post_hf/casscf.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/casscf.cpp)
-- [src/post_hf/casscf.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/casscf.h)
+\[
+E_{UMP2}^{OS} = -\sum_{i^\alpha j^\beta a^\alpha b^\beta}
+\frac{|\langle i^\alpha j^\beta|a^\alpha b^\beta\rangle|^2}
+{\varepsilon_{i^\alpha} + \varepsilon_{j^\beta} - \varepsilon_{a^\alpha} - \varepsilon_{b^\beta}}
+\]
 
-Main ingredients:
+Implemented in `run_ump2` in `src/post_hf/mp2.cpp`.
 
-- active-space selection
-- determinant generation
-- exact CI diagonalization in the active space
-- 1-RDM and 2-RDM construction
-- orbital gradient evaluation
-- macro-iterations for orbital optimization
-
-The recent fixes in this area centered on:
-
-- making the initial CI energy variational relative to RHF
-- repairing density reconstruction
-- stabilizing orbital updates
-
-From a teaching perspective, the most important concept is:
-
-- HF optimizes a single determinant
-- CASSCF optimizes both multiconfigurational CI coefficients and orbitals
+---
 
 ## 12. Analytic Nuclear Gradients
 
-For RHF and UHF, Planck computes analytic nuclear gradients.
+### Hellmann-Feynman Theorem and Pulay Forces
 
-The RHF gradient has several contributions:
+For a variational wavefunction, the nuclear gradient has the
+Hellmann-Feynman form only when the basis is complete. For finite atom-centered
+Gaussian basis sets, the basis functions move with the nuclei, introducing
+**Pulay forces** — additional terms arising from the nuclear-coordinate
+dependence of the basis.
 
-1. one-electron derivative terms
-2. nuclear-attraction center derivatives
-3. two-electron ERI derivative terms
-4. Pulay overlap terms
-5. nuclear repulsion derivative
-
-The code explains this directly in
-[src/gradient/gradient.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/gradient/gradient.cpp).
-
-Symbolically:
+The full RHF energy gradient with respect to nuclear coordinate \(X_A\) is:
 
 \[
-\frac{dE}{dR_A}
-=
-\sum_{\mu\nu} P_{\mu\nu}\frac{dh_{\mu\nu}}{dR_A}
-+
-\frac{1}{2}\sum_{\mu\nu\lambda\sigma}\Gamma_{\mu\nu\lambda\sigma}
-\frac{d(\mu\nu|\lambda\sigma)}{dR_A}
- E_{Pulay}
- \frac{dE_{nuc}}{dR_A}
+\frac{dE}{dX_A} =
+\sum_{\mu\nu} P_{\mu\nu} \frac{\partial H^{core}_{\mu\nu}}{\partial X_A}
++ \frac{1}{2}\sum_{\mu\nu\lambda\sigma} \Gamma_{\mu\nu\lambda\sigma}
+\frac{\partial(\mu\nu|\lambda\sigma)}{\partial X_A}
+- \sum_{\mu\nu} W_{\mu\nu} \frac{\partial S_{\mu\nu}}{\partial X_A}
++ \frac{\partial E_{nuc}}{\partial X_A}
 \]
 
-The Pulay term is needed because the AO basis itself depends on nuclear
-positions. In a finite atom-centered basis, moving nuclei changes the basis
-functions, so there are extra overlap-related contributions even when the
-orbital coefficients are variationally optimized.
+where:
 
-### Where It Lives
+- \(P_{\mu\nu}\) is the one-particle density matrix
+- \(\Gamma_{\mu\nu\lambda\sigma} = 2P_{\mu\nu}P_{\lambda\sigma} - P_{\mu\lambda}P_{\nu\sigma}\) is the two-particle density for RHF
+- \(W_{\mu\nu} = \sum_{i}^{occ} \varepsilon_i C_{\mu i} C_{\nu i}\) is the
+  **energy-weighted density matrix** (the Pulay term coefficient)
 
-- [src/gradient/gradient.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/gradient/gradient.cpp)
-- [src/integrals/os.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.cpp)
+### Derivative Integrals
 
-Recent refactoring added a reusable closed-shell derivative assembly helper that
-takes:
+The derivative of the overlap integral with respect to center \(\mathbf A\):
 
-- density matrix `P`
-- energy-weighted density `W`
-- a generic two-particle contraction function `Gamma`
+\[
+\frac{\partial S_{\mu\nu}}{\partial A_x}
+= l_{Ax}\, S(l_{Ax}-1, l_{Bx}; \ldots) - 2\alpha\, S(l_{Ax}+1, l_{Bx}; \ldots)
+\]
 
-That was done specifically to make future correlated gradients easier to plug
-in without duplicating the entire RHF derivative engine.
+by the Gaussian angular-momentum shift rule. Similarly for kinetic, nuclear
+attraction, and ERI derivative integrals. These are computed in
+`_compute_1e_deriv_A`, `_compute_nuclear_deriv_A_elem`,
+`_compute_nuclear_deriv_C_elem`, and `_compute_eri_deriv_elem` in `os.cpp`.
+
+The gradient assembly loops over all contributing shell pairs/quartets,
+contracts the derivative integrals against the appropriate density matrices,
+and accumulates into the \(N_{atoms} \times 3\) gradient array.
+Implemented in `compute_rhf_gradient` in `src/gradient/gradient.cpp`.
 
 ### UHF Gradient
 
-The UHF gradient is similar but uses separate alpha and beta densities and the
-appropriate spin-resolved two-particle structure.
+The UHF gradient has the same structure but uses the total density
+\(P^T = P^\alpha + P^\beta\) for the Coulomb part and separate \(P^\alpha\),
+\(P^\beta\) for the spin-specific exchange. The energy-weighted density is:
 
-### Current RMP2 Gradient Status
+\[
+W_{\mu\nu} = \sum_{i}^{\alpha,occ} \varepsilon^\alpha_i C^\alpha_{\mu i} C^\alpha_{\nu i}
+           + \sum_{i}^{\beta,occ}  \varepsilon^\beta_i  C^\beta_{\mu i}  C^\beta_{\nu i}
+\]
 
-The current public `RMP2` gradient path:
+---
 
-- recomputes the total MP2 energy at slightly displaced geometries
-- forms a central difference
+## 13. Coupled-Perturbed HF and the MP2 Gradient
 
-This is numerically useful but not a true analytic gradient.
+### The Z-Vector Method
 
-## 13. Geometry Optimization
+The RMP2 energy gradient requires the response of the HF density to a nuclear
+perturbation. Rather than solving the full CPHF equations for every nuclear
+displacement (which would scale as \(O(3N \cdot n_b^3)\)), the Z-vector method
+(Handy and Schaefer, 1984) collapses the response into a single solve.
 
-Planck supports geometry optimization in:
+The unrelaxed MP2 one-particle density is:
 
-- Cartesian coordinates
-- internal coordinates
+\[
+\tilde P_{\mu\nu} = P^{HF}_{\mu\nu} + D^{MP2}_{\mu\nu}
+\]
 
-Files:
+where \(D^{MP2}\) contains the orbital-response correction from the second-order
+amplitudes:
 
-- [src/opt/geomopt.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/opt/geomopt.cpp)
-- [src/opt/intcoords.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/opt/intcoords.cpp)
+\[
+t_{ij}^{ab} = \frac{(ia|jb)}{\varepsilon_i + \varepsilon_j - \varepsilon_a - \varepsilon_b}
+\]
 
-### Cartesian Optimization
+The relaxed density is obtained from the Z-vector equation:
 
-Uses an L-BFGS strategy on the flattened Cartesian coordinate vector.
+\[
+\sum_{bj} A_{ai,bj} Z_{bj} = L_{ai}
+\]
 
-Why L-BFGS?
+where \(\mathbf A\) is the orbital Hessian (also the CPHF matrix) and
+\(\mathbf L\) is the MP2 Lagrangian source term. `build_rhf_cphf_matrix` in
+`src/post_hf/rhf_response.cpp` builds \(\mathbf A\). The final gradient is then
+assembled from the relaxed density and the appropriate derivative integrals.
 
-- full BFGS stores an approximate Hessian explicitly
-- that becomes expensive for larger systems
-- L-BFGS stores only recent update history
+---
 
-### Internal-Coordinate Optimization
+## 14. CASSCF and RASSCF
 
-Uses generalized internal coordinates:
+### Motivation
 
-- bond stretches
-- angle bends
-- torsions
+Hartree-Fock fails near bond breaking, in transition metal chemistry, and
+wherever a single Slater determinant is qualitatively wrong. CASSCF (Complete
+Active Space SCF) partitions orbitals into:
 
-Why internal coordinates?
+- **inactive** — doubly occupied, excluded from CI
+- **active** — partially occupied, included in CI
+- **virtual** — unoccupied, excluded from CI
 
-- they align better with chemically relevant motions
-- optimization often converges in fewer steps
-- constraints are much easier to impose naturally
+The wavefunction is a full CI expansion within the active space:
 
-The internal-coordinate machinery uses:
+\[
+|\Psi_{CASSCF}\rangle = \sum_I c_I |D_I\rangle
+\]
 
-- a Wilson B matrix
-- generalized inverse / back-transformation steps
-- Schlegel-style microiterations
+where \(|D_I\rangle\) ranges over all Slater determinants formed by distributing
+the active electrons among the active orbitals.
 
-## 14. Vibrational Frequencies and Hessians
+### Determinant Representation
 
-Files:
+Each determinant is stored as a pair of 64-bit integers (one per spin), where
+bit \(k\) indicates occupation of active orbital \(k\). These `CIString = uint64_t`
+bitmasks allow efficient generation of all \(\binom{n_{act}}{n_\alpha}\) alpha
+strings and \(\binom{n_{act}}{n_\beta}\) beta strings via Gosper's algorithm
+(which enumerates all integers with exactly \(k\) set bits in ascending order).
 
-- [src/freq/hessian.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/freq/hessian.cpp)
-- [src/freq/hessian.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/freq/hessian.h)
+### CI Hamiltonian Matrix-Vector Product
 
-The Hessian is obtained by finite differences of analytic gradients.
+The CI energy and gradient require the Hamiltonian acting on a CI vector,
+\(\mathbf H \mathbf c\). Matrix elements between determinants \(|D_I\rangle\)
+and \(|D_J\rangle\) are evaluated using Slater-Condon rules:
 
-That is a common compromise:
+- **Zero excitation** (\(|D_I\rangle = |D_J\rangle\)):
+  \(H_{II} = \sum_i h_{ii} + \frac{1}{2}\sum_{ij}(2J_{ij} - K_{ij})\) over occupied active MOs
 
-- gradients are much cheaper and more reliable than total-energy Hessians
-- full analytic Hessians are substantially more complicated
+- **Single excitation** (\(|D_I\rangle\) and \(|D_J\rangle\) differ by one orbital):
+  \(H_{IJ} = \langle I|\hat h|J\rangle \pm \text{exchange terms}\)
 
-Workflow:
+- **Double excitation**: pure two-electron term involving \((ij|kl)\)
 
-1. displace each Cartesian coordinate positively and negatively
-2. compute analytic gradients
-3. build the Hessian by central differences
-4. mass-weight
-5. project translations and rotations
-6. diagonalize
-7. convert eigenvalues into frequencies
+For large active spaces, the CI problem is solved iteratively using the
+**Davidson algorithm**: build a small Krylov subspace, diagonalize the projected
+Hamiltonian, and extend until convergence. For smaller spaces, full
+diagonalization via Eigen is used.
 
-This yields:
+### Reduced Density Matrices
 
-- vibrational frequencies
-- normal modes
-- zero-point energy
+The orbital gradient requires the one- and two-particle reduced density matrices
+(RDMs) of the CI wavefunction.
 
-## 15. Checkpointing and Restart
+**1-RDM**:
+\[
+D_{pq} = \langle \Psi | \hat a^\dagger_p \hat a_q | \Psi \rangle
+= \sum_{IJ} c_I c_J \langle D_I | \hat a^\dagger_p \hat a_q | D_J \rangle
+\]
 
-Files:
+**2-RDM**:
+\[
+d_{pqrs} = \langle \Psi | \hat a^\dagger_p \hat a^\dagger_r \hat a_s \hat a_q | \Psi \rangle
+\]
 
-- [src/io/checkpoint.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/io/checkpoint.cpp)
-- [src/io/checkpoint.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/io/checkpoint.h)
+These are assembled in `compute_1rdm` and `compute_2rdm` by looping over string
+pairs and applying creation/annihilation operators via bitmask arithmetic.
 
-The checkpoint system stores:
+### Orbital Gradient and Generalized Fock Matrix
 
-- density data
-- geometry
-- basis-related data
-- optimization metadata
+The CASSCF orbital gradient \(\mathbf g = \partial E / \partial \boldsymbol\kappa\)
+with respect to orbital rotation parameters \(\kappa_{pq}\) is:
 
-It supports:
+\[
+g_{pq} = 2(F^{gen}_{pq} - F^{gen}_{qp})
+\]
 
-- density restart in the same basis
-- full geometry + density restart
-- cross-basis projection using overlap-based techniques
+where the generalized Fock matrix is:
 
-Pedagogically, this is a good example of how practical electronic structure
-codes reduce wall time by reusing chemically meaningful state.
+\[
+F^{gen}_{pq} = \sum_r h_{pr} D_{rq} + \sum_{rst} (pr|st) d_{qrst}
+\]
 
-## 16. Execution Flow of a Typical Run
+This is computed via two AO→MO half-transformations of the four-index integral
+tensor contracted with the 2-RDM.
 
-The main calculation path in
-[src/driver.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/driver.cpp)
-looks like this:
+### Orbital Update: Cayley Transform
 
-1. parse the input file
-2. construct `Calculator`
-3. convert coordinates to internal Bohr form
-4. optionally restore checkpoint geometry
-5. detect symmetry and standard orientation
-6. read the basis set
-7. initialize matrices and options
-8. build shell pairs
-9. compute one-electron integrals
-10. run SCF
-11. optionally run MP2 or CASSCF/RASSCF
-12. optionally compute gradient
-13. optionally run geometry optimization
-14. optionally run frequency analysis
-15. optionally write checkpoint
+Orbital rotations are parameterized by an anti-symmetric matrix \(\mathbf \kappa\)
+and applied as a unitary transformation. The Cayley transform avoids the
+exponential:
 
-This ordering is why `driver.cpp` is the best “map file” for new contributors.
+\[
+\mathbf U(\boldsymbol\kappa) = \left(\mathbf I + \frac{\boldsymbol\kappa}{2}\right)^{-1}
+\left(\mathbf I - \frac{\boldsymbol\kappa}{2}\right)
+\]
 
-## 17. Teaching Map: How Theory Matches Functions
+This is exact for small rotations and ensures the transformed orbitals remain
+unitary (orthonormal) without computing a matrix exponential.
 
-Use this section as a quick lookup table.
+### Macro-Iteration Structure
 
-| Theory topic | Main implementation files |
+The full CASSCF macro-iteration (one pass of `run_casscf`):
+
+1. Form one-electron integrals in the current MO basis (transform \(h_{\mu\nu}\))
+2. Form active-active two-electron integrals from AO ERIs
+3. Solve CI eigenproblem to get \(\{c_I\}\) and \(E_{CI}\)
+4. Compute 1-RDM and 2-RDM
+5. Compute generalized Fock matrix and orbital gradient \(\mathbf g\)
+6. Update orbital rotation with DIIS-accelerated Cayley step
+7. Rotate MO coefficients: \(\mathbf C \leftarrow \mathbf C \mathbf U\)
+8. Update AO integrals from new MOs
+9. Check convergence: \(\|\mathbf g\| < \epsilon_{grad}\) and \(|\Delta E| < \epsilon_E\)
+
+### RASSCF Extensions
+
+RASSCF (Restricted Active Space SCF) partitions the active space into three
+subspaces:
+
+- **RAS1**: orbitals from which at most `max_holes` electrons may be removed
+- **RAS2**: full CAS subspace (no restrictions)
+- **RAS3**: orbitals into which at most `max_elec` electrons may be added
+
+The same CI machinery is used, but the string generation enforces the
+occupation restrictions via bitcount masks on the RAS1 and RAS3 blocks.
+
+---
+
+## 15. Geometry Optimization
+
+### L-BFGS (Cartesian Coordinates)
+
+Cartesian L-BFGS minimizes \(E(\mathbf x)\) where \(\mathbf x \in \mathbb{R}^{3N}\) is
+the flattened nuclear coordinate vector. The quasi-Newton update direction is:
+
+\[
+\mathbf p_k = -\mathbf H_k^{-1} \mathbf g_k
+\]
+
+L-BFGS avoids forming the approximate inverse Hessian \(\mathbf H_k^{-1}\)
+explicitly. Instead it stores \(m\) recent displacement-gradient pairs
+\(\{(\mathbf s_j, \mathbf y_j)\}\) where:
+
+\[
+\mathbf s_j = \mathbf x_{j+1} - \mathbf x_j,\quad
+\mathbf y_j = \mathbf g_{j+1} - \mathbf g_j
+\]
+
+The matrix-vector product \(\mathbf H_k^{-1} \mathbf g_k\) is computed via the
+two-loop recursion (Nocedal, 1980) in \(O(m \cdot 3N)\) operations, where
+\(m\) (default 10 in `_geomopt_lbfgs_m`) is the history size.
+
+A **Wolfe line search** (both sufficient-decrease and curvature conditions)
+ensures the step satisfies:
+
+\[
+E(\mathbf x_k + \alpha_k \mathbf p_k) \le E(\mathbf x_k) + c_1 \alpha_k \mathbf g_k^T \mathbf p_k
+\quad \text{and} \quad
+|\mathbf g(\mathbf x_k + \alpha_k \mathbf p_k)^T \mathbf p_k| \le c_2 |\mathbf g_k^T \mathbf p_k|
+\]
+
+### Internal Coordinate Optimization (BFGS)
+
+Internal coordinates (bond distances, valence angles, dihedral angles) are more
+natural for describing molecular geometry changes. The Wilson **B matrix**
+relates infinitesimal changes in internal coordinates \(\mathbf q\) to
+Cartesian displacements \(\mathbf x\):
+
+\[
+d\mathbf q = \mathbf B\, d\mathbf x, \quad B_{kl} = \frac{\partial q_k}{\partial x_l}
+\]
+
+The gradient in internal coordinates is:
+
+\[
+\mathbf g^{int} = (\mathbf B \mathbf B^T)^{-1} \mathbf B\, \mathbf g^{Cart}
+\]
+
+A BFGS Hessian update is performed in internal coordinate space. The
+back-transformation from internal to Cartesian steps uses iterative
+microiterations that converge \(\Delta \mathbf q\) for a given \(\Delta \mathbf x\).
+
+Geometry constraints (fixed bonds, angles, dihedrals, frozen atoms) are
+enforced by projecting out the constrained internal coordinate contributions
+from the gradient before the BFGS step.
+
+Convergence criterion: maximum absolute gradient element
+\(\max_i |\partial E / \partial X_i| < \epsilon_{grad}\) (default \(3 \times 10^{-4}\)
+Ha/Bohr).
+
+---
+
+## 16. Vibrational Analysis
+
+### Semi-Numerical Hessian
+
+The Hessian matrix is computed by central finite differences of analytic
+gradients:
+
+\[
+H_{ij} = \frac{\partial^2 E}{\partial X_i \partial X_j}
+\approx \frac{\mathbf g_i(\mathbf x + h\hat e_j) - \mathbf g_i(\mathbf x - h\hat e_j)}{2h}
+\]
+
+with step size \(h\) (default \(5 \times 10^{-3}\) Bohr, stored in
+`_hessian_step`). This requires \(2 \times 3N\) SCF+gradient calculations.
+The symmetry of the Hessian is enforced by averaging \((H_{ij} + H_{ji})/2\).
+
+### Mass-Weighting and Eckart Projection
+
+The mass-weighted Hessian is:
+
+\[
+\tilde H_{ij} = \frac{H_{ij}}{\sqrt{m_i m_j}}
+\]
+
+where \(m_i\) is the mass of the atom to which Cartesian coordinate \(i\)
+belongs.
+
+Six vibrational modes correspond to rigid-body translation and rotation and
+have zero frequency. These are projected out using the **Eckart conditions**:
+six orthonormal vectors in \(\mathbb{R}^{3N}\) are constructed that span the
+translational and rotational subspace, and the \(3N \times 3N\) projector onto
+the vibrational subspace is applied to \(\tilde{\mathbf H}\) before diagonalization:
+
+\[
+\tilde{\mathbf H}^{vib} = \mathbf P \tilde{\mathbf H} \mathbf P,\quad
+\mathbf P = \mathbf I - \sum_{k=1}^{6} \mathbf d_k \mathbf d_k^T
+\]
+
+### Normal Mode Frequencies
+
+The \(3N - 6\) non-zero eigenvalues \(\lambda_k\) of \(\tilde{\mathbf H}^{vib}\)
+give vibrational frequencies:
+
+\[
+\tilde\nu_k = \frac{1}{2\pi c}\sqrt{\lambda_k}
+\]
+
+converted to cm\(^{-1}\) by multiplying by appropriate unit factors. Imaginary
+frequencies (negative \(\lambda_k\)) correspond to transition states or saddle
+points on the potential energy surface.
+
+The zero-point energy is:
+
+\[
+E_{ZPE} = \frac{1}{2}\sum_{k=1}^{3N-6} h\nu_k
+\]
+
+Vibrational symmetry labels are assigned in `src/symmetry/vibrational_symmetry.cpp`
+by projecting each normal mode onto the SAO blocks and determining its irrep.
+
+---
+
+## 17. Checkpoint and Restart
+
+### Binary Checkpoint Format
+
+The checkpoint file (`*.hfchk`) stores:
+
+- A 4-byte magic number and format version (v2)
+- Molecular geometry (standard-orientation, Bohr)
+- Basis set name
+- Density matrices (alpha and optionally beta)
+- Total SCF energy
+- Optional geometry optimization metadata
+
+### Cross-Basis Löwdin Projection
+
+When restarting from a checkpoint computed with a smaller basis
+(e.g., STO-3G) to a larger basis (e.g., 6-31G*), the stored density matrix
+cannot be used directly. Planck projects the old density into the new basis
+using the cross-overlap matrix:
+
+\[
+S^{cross}_{\mu\nu} = \langle \chi^{large}_\mu | \chi^{small}_\nu \rangle
+\]
+
+computed by `_compute_cross_overlap` in `os.cpp`. The projection is then:
+
+\[
+P^{large}_{\mu\nu} = \sum_{\lambda\sigma}
+(S^{LL})^{-1}_{\mu\lambda}\, S^{cross}_{\lambda\lambda'}\,
+P^{small}_{\lambda'\sigma'}\, (S^{cross})^T_{\sigma'\mu}\,
+(S^{LL})^{-1}_{\mu\nu}
+\]
+
+implemented via a singular value decomposition (Löwdin SVD) of the
+cross-overlap in `src/io/checkpoint.cpp`. This provides a physically motivated
+initial density for the new basis, significantly reducing the number of SCF
+iterations required.
+
+---
+
+## 18. Execution Flow of a Typical Run
+
+```
+driver.cpp
+  parse_input()                → Calculator._scf, _basis, _geometry, etc.
+  prepare_coordinates()        → molecule._coordinates (Bohr)
+  checkpoint restore (if any)  → geometry / density
+  detectSymmetry()             → molecule._standard (Bohr), _point_group
+  read_gbs_basis()             → shells, basis functions, normalization
+  build_shellpairs()           → shell_pairs[0..nb*(nb+1)/2-1]
+  _compute_1e()                → S, T  (os.cpp)
+  _compute_nuclear_attraction()→ V     (os.cpp)
+  H_core = T + V
+  build_sao_basis()            → U, block sizes, irrep names
+  update_integral_symmetry()   → _integral_symmetry_ops
+  build_canonical_pairs()      → _canonical_ao_pair[]
+
+  if Conventional SCF:
+      _compute_2e()            → _eri[nb^4]  (os.cpp)
+
+  run_rhf() or run_uhf()       → C, ε, P, E_SCF  (scf.cpp)
+      each iteration:
+          G = _compute_fock_rhf(eri, P) or _compute_2e_fock(shell_pairs, P)
+          F = H_core + G
+          DIIS.push(F, e)
+          F' = X^T F X
+          diagonalize F' → C', ε
+          C = X C'
+          rebuild P
+          check convergence
+
+  if post_hf == RMP2:
+      AO→MO transform → (ia|jb) MO integrals
+      run_rmp2()               → E_MP2
+  elif post_hf == CASSCF:
+      run_casscf()             → E_CASSCF, natural orbitals
+
+  if gradient or geomopt or frequency:
+      compute_rhf_gradient()   → _gradient (gradient.cpp)
+
+  if geomopt:
+      run_geomopt()            → optimized geometry (geomopt.cpp)
+          each step: SCF → gradient → L-BFGS or BFGS update
+
+  if frequency:
+      compute_hessian()        → _hessian (hessian.cpp)
+          for each displacement: SCF → gradient (2×3N calculations)
+      vibrational_analysis()   → _frequencies, _normal_modes, _zpe
+
+  save_checkpoint()
+```
+
+---
+
+## 19. Theory-to-Code Map
+
+| Theory concept | Primary file(s) | Key function(s) |
+|---|---|---|
+| Data structures | `src/base/types.h` | `Calculator`, `Shell`, `Basis`, `ShellPair` |
+| Input parsing | `src/io/io.cpp` | `parse_input` |
+| Basis reading | `src/basis/gaussian.cpp` | `read_gbs_basis` |
+| Shell pairs | `src/integrals/shellpair.cpp` | `build_shellpairs` |
+| Overlap and kinetic | `src/integrals/os.cpp` | `_compute_1e`, `_compute_3d_overlap_kinetic` |
+| Boys function | `src/lookup/` | table lookup and asymptotic expansion |
+| Nuclear attraction | `src/integrals/os.cpp` | `_compute_nuclear_attraction` |
+| ERI tensor | `src/integrals/os.cpp` | `_compute_2e`, `_contracted_eri` |
+| Direct Fock build | `src/integrals/os.cpp` | `_compute_2e_fock`, `_compute_2e_fock_uhf` |
+| Rys quadrature | `src/integrals/rys.cpp` | `_rys_eri_primitive`, `_rys_contracted_eri` |
+| Orthogonalizer | `src/scf/scf.cpp` | `build_orthogonalizer` |
+| RHF SCF | `src/scf/scf.cpp` | `run_rhf` |
+| UHF SCF | `src/scf/scf.cpp` | `run_uhf` |
+| DIIS | `src/base/types.h` | `DIISState::push`, `DIISState::extrapolate` |
+| Symmetry detection | `src/symmetry/symmetry.cpp` | `detectSymmetry` |
+| SAO basis | `src/symmetry/mo_symmetry.cpp` | `build_sao_basis` |
+| MO irrep labels | `src/symmetry/mo_symmetry.cpp` | `assign_mo_symmetry` |
+| Integral symmetry ops | `src/symmetry/integral_symmetry.cpp` | `update_integral_symmetry` |
+| AO→MO transform | `src/post_hf/integrals.cpp` | half-transformation functions |
+| RMP2 energy | `src/post_hf/mp2.cpp` | `run_rmp2` |
+| UMP2 energy | `src/post_hf/mp2.cpp` | `run_ump2` |
+| MP2 amplitudes | `src/post_hf/mp2.cpp` | `build_rmp2_amplitudes` |
+| CPHF Z-vector | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix` |
+| RMP2 gradient | `src/post_hf/mp2_gradient.cpp` | `compute_rmp2_gradient` |
+| CI string generation | `src/post_hf/casscf.cpp` | Gosper enumeration |
+| CI solve (Davidson) | `src/post_hf/casscf.cpp` | Davidson solver |
+| 1-RDM, 2-RDM | `src/post_hf/casscf.cpp` | `compute_1rdm`, `compute_2rdm` |
+| Orbital gradient | `src/post_hf/casscf.cpp` | generalized Fock matrix |
+| Orbital update | `src/post_hf/casscf.cpp` | Cayley transform |
+| RHF gradient | `src/gradient/gradient.cpp` | `compute_rhf_gradient` |
+| UHF gradient | `src/gradient/gradient.cpp` | `compute_uhf_gradient` |
+| Derivative integrals | `src/integrals/os.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem` |
+| L-BFGS optimizer | `src/opt/geomopt.cpp` | `run_geomopt` |
+| Internal coordinates | `src/opt/intcoords.cpp` | Wilson B matrix |
+| Semi-numerical Hessian | `src/freq/hessian.cpp` | `compute_hessian` |
+| Vibrational analysis | `src/freq/hessian.cpp` | `vibrational_analysis` |
+| Vibrational symmetry | `src/symmetry/vibrational_symmetry.cpp` | mode irrep assignment |
+| Checkpoint I/O | `src/io/checkpoint.cpp` | `save_checkpoint`, `load_checkpoint` |
+| Cross-basis projection | `src/io/checkpoint.cpp` | Löwdin SVD projection |
+
+---
+
+## 20. Current Implementation Status
+
+| Feature | Status |
 |---|---|
-| molecule/options/state | [src/base/types.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/base/types.h) |
-| input parsing | [src/io/io.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/io/io.cpp) |
-| basis parsing | [src/basis/basis.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/basis/basis.cpp) |
-| shell-pair construction | [src/integrals/shellpair.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/shellpair.cpp) |
-| one-electron integrals | [src/integrals/os.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.cpp) |
-| ERIs and Fock builds | [src/integrals/os.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.cpp) |
-| RHF/UHF SCF | [src/scf/scf.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/scf/scf.cpp) |
-| symmetry and MO labels | [src/symmetry/symmetry.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/symmetry/symmetry.cpp), [src/symmetry/mo_symmetry.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/symmetry/mo_symmetry.cpp) |
-| MP2 energy | [src/post_hf/mp2.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2.cpp) |
-| MP2 response groundwork | [src/post_hf/mp2_gradient.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2_gradient.cpp), [src/post_hf/rhf_response.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/rhf_response.cpp) |
-| CASSCF/RASSCF | [src/post_hf/casscf.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/casscf.cpp) |
-| analytic HF gradients | [src/gradient/gradient.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/gradient/gradient.cpp) |
-| geometry optimization | [src/opt/geomopt.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/opt/geomopt.cpp) |
-| internal coordinates | [src/opt/intcoords.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/opt/intcoords.cpp) |
-| vibrational analysis | [src/freq/hessian.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/freq/hessian.cpp) |
-| checkpointing | [src/io/checkpoint.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/io/checkpoint.cpp) |
+| RHF and UHF SCF | Complete |
+| Obara-Saika 1e and 2e integrals | Complete |
+| Rys quadrature ERIs | Complete |
+| Conventional and direct SCF | Complete |
+| Schwarz screening | Complete |
+| DIIS acceleration | Complete |
+| Level shifting | Complete |
+| Point group detection and SAO blocking | Complete |
+| MO irrep labeling | Complete |
+| RMP2 and UMP2 energy | Complete |
+| Analytic RHF gradient | Complete |
+| Analytic UHF gradient | Complete |
+| Analytic RMP2 gradient (Z-vector) | Complete |
+| UMP2 gradient | Not implemented (throws at runtime) |
+| CASSCF / RASSCF | Complete |
+| Geometry optimization (RHF/UHF/RMP2) | Complete |
+| UMP2 geometry optimization | Blocked by missing UMP2 gradient |
+| Semi-numerical Hessian | Complete |
+| Harmonic vibrational analysis | Complete |
+| Checkpoint save/restart | Complete |
+| Cross-basis density projection | Complete |
+| Spherical harmonic basis | Not supported (Cartesian only) |
 
-## 18. Limitations and Honest Status Notes
+---
 
-This is the section a teacher or contributor should read before presenting the
-program as “finished.”
-
-- RHF and UHF are mature enough for small teaching calculations.
-- MP2 energies are implemented for RHF and UHF.
-- RHF and UHF analytic gradients are implemented.
-- The public RMP2 gradient path is still numerical, not fully analytic.
-- The code contains partial response-theory infrastructure for future analytic
-  RMP2 gradients, but the final Lagrangian assembly is not yet wired into the
-  production gradient entry point.
-- CASSCF and RASSCF are present and the recently fixed cases now behave
-  variationally in the tested inputs.
-- Hessians are finite-difference of gradients, not fully analytic second
-  derivatives.
-
-## 19. How to Study This Codebase Efficiently
+## 21. How to Study This Codebase
 
 Recommended reading order:
 
-1. [src/base/types.h](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/base/types.h)
-2. [src/driver.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/driver.cpp)
-3. [src/io/io.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/io/io.cpp)
-4. [src/scf/scf.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/scf/scf.cpp)
-5. [src/integrals/os.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/integrals/os.cpp)
-6. [src/gradient/gradient.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/gradient/gradient.cpp)
-7. [src/post_hf/mp2.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/mp2.cpp)
-8. [src/post_hf/casscf.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/post_hf/casscf.cpp)
-9. [src/opt/geomopt.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/opt/geomopt.cpp)
-10. [src/freq/hessian.cpp](/Users/hemanthharidas/Desktop/codes/planck-refactored/src/freq/hessian.cpp)
+1. `src/base/types.h` — understand every struct before reading any algorithm
+2. `src/driver.cpp` — the control flow map for one complete calculation
+3. `src/io/io.cpp` — how input files become a Calculator
+4. `src/integrals/os.cpp` — the Obara-Saika integral engine top to bottom
+5. `src/scf/scf.cpp` — the SCF iteration in detail
+6. `src/gradient/gradient.cpp` — how analytic gradients are assembled
+7. `src/post_hf/mp2.cpp` and `src/post_hf/integrals.cpp` — MP2 energy
+8. `src/post_hf/casscf.cpp` — the most complex module: CI, RDMs, orbital update
+9. `src/opt/geomopt.cpp` — L-BFGS and internal coordinate optimization
+10. `src/freq/hessian.cpp` — finite-difference Hessian and normal modes
 
-This order follows the dependency graph from basic state and control flow to
-methods and then to downstream workflows.
-
-## 20. Summary
-
-Planck is a compact but nontrivial electronic-structure code. It is useful for
-teaching because the theory-to-code mapping is still visible:
-
-- basis functions become shell and primitive objects
-- integrals become explicit recursive kernels
-- SCF becomes a density-Fock fixed-point iteration
-- DIIS becomes a small linear algebra problem on stored residuals
-- MP2 becomes AO-to-MO integral transformation plus perturbative energy sums
-- CASSCF becomes CI + orbital optimization + reduced density matrices
-- gradients become derivative integral contractions plus Pulay terms
-- geometry optimization becomes an iterative minimization around those
-  gradients
-
-That transparency is the main educational value of the codebase.
+This order follows the dependency graph: basic state and types first, then
+integral machinery, then the SCF loop that uses those integrals, then the
+higher-level methods that build on SCF.

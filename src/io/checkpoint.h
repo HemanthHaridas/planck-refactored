@@ -11,7 +11,7 @@
 // Binary checkpoint format (.hfchk).  Layout (in order, all little-endian):
 //
 //  [8]  magic: "PLNKCHK\0"
-//  [4]  version: uint32 = 2
+//  [4]  version: uint32 = 3
 //  [8]  nbasis: uint64
 //  [1]  is_uhf: uint8
 //  [1]  is_converged: uint8
@@ -31,6 +31,28 @@
 //    density matrix, fock matrix, mo_energies (as n×1), mo_coefficients
 //
 //  Each matrix block: [8 rows][8 cols][rows×cols×8 data in column-major order]
+//
+//  Version 3 appends:
+//    [1]              has_casscf_mos: uint8
+//    [matrix]         casscf_mo_coefficients (nbasis×nbasis) when flag is 1
+//
+//  Version 4 further appends (basis shell data for cube file generation):
+//    [1]              has_basis: uint8 (always 1 in new saves)
+//    [8]              nshells: uint64
+//    For each shell:
+//      [4]            shell_type: int32 (0=S 1=P 2=D 3=F 4=G 5=H)
+//      [4]            nprim: uint32
+//      [8×3]          center_x, center_y, center_z: double (Bohr, standard frame)
+//      [nprim×8]      primitives: double[]     (exponents alpha_k)
+//      [nprim×8]      coefficients: double[]   (c_k × Nc, contracted norm folded in)
+//      [nprim×8]      normalizations: double[] (per-primitive N_k)
+//    [8]              nbf: uint64 (= nbasis)
+//    For each basis function (ContractedView):
+//      [8]            shell_index: uint64 (index into the shells array above)
+//      [4]            lx: int32
+//      [4]            ly: int32
+//      [4]            lz: int32
+//      [8]            component_norm: double (1/sqrt((2lx-1)!!(2ly-1)!!(2lz-1)!!))
 //
 // Restart semantics:
 //   guess density — load() fills _overlap, _hcore, _info._scf.{alpha,beta},
@@ -94,6 +116,7 @@ namespace HartreeFock
             std::string    basis_name;       // basis name stored in the checkpoint
             Eigen::MatrixXd C_alpha;         // all alpha MO columns (nbasis × nbasis)
             Eigen::MatrixXd C_beta;          // beta MOs if is_uhf
+            Eigen::MatrixXd C_casscf;        // converged CASSCF MOs if present
         };
 
         // Read MO coefficients from checkpoint without enforcing nbasis match.

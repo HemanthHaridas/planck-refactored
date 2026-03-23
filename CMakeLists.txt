@@ -10,6 +10,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 message(STATUS "Building on : ${CMAKE_SYSTEM_NAME} using following compiler flags : ${CMAKE_CXX_FLAGS}")
 
+# GPU / CUDA acceleration (disabled by default; enable with -DUSE_CUDA=ON)
+option(USE_CUDA "Enable CUDA GPU acceleration (requires CUDA toolkit)" OFF)
+
 # OpenMP support (enabled by default; pass -DUSE_OPENMP=OFF to disable)
 option(USE_OPENMP "Enable OpenMP parallelism" ON)
 if(USE_OPENMP)
@@ -44,12 +47,12 @@ configure_file(
 )
 
 # Fetch Eigen
-FetchContent_Declare(
+fetchcontent_declare(
   eigen
   GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
   GIT_TAG 3.4.0 # You can also use master
 )
-FetchContent_MakeAvailable(eigen)
+fetchcontent_makeavailable(eigen)
 
 # External project: libmsym
 set(MSYM_INSTALL_DIR ${SRC_DIR}/external/libmsym/install)
@@ -58,7 +61,7 @@ set(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_SOURCE_DIR}/install)
 
 include(ExternalProject)
 
-ExternalProject_Add(
+externalproject_add(
     libmsym
     PREFIX ${SRC_DIR}/external/libmsym
     GIT_REPOSITORY https://github.com/mcodev31/libmsym.git
@@ -168,6 +171,19 @@ if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_compile_definitions(hartree-fock PRIVATE USE_OPENMP)
 endif()
 
+# ── GPU acceleration (optional) ───────────────────────────────────────────────
+# Must be added after Eigen is fetched (gpu/CMakeLists.txt uses eigen_SOURCE_DIR)
+# and after SRC_DIR is defined, but before the install rules.
+if(USE_CUDA)
+    add_subdirectory(gpu)
+    target_include_directories(hartree-fock PUBLIC ${PLANCK_GPU_INCLUDE})
+    target_link_libraries(hartree-fock ${PLANCK_GPU_LIB})
+    target_compile_definitions(hartree-fock PRIVATE USE_CUDA)
+    message(STATUS "GPU        : CUDA acceleration enabled")
+else()
+    message(STATUS "GPU        : disabled (USE_CUDA=OFF)")
+endif()
+
 # Install executable
 install(TARGETS hartree-fock DESTINATION bin)
 
@@ -260,3 +276,36 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
         USES_TERMINAL
     )
 endif()
+
+# ── Basis set fetcher ─────────────────────────────────────────────────────────
+# Reads basis-sets/basis at configure time; for each name that is not yet on
+# disk, emits a custom command that runs:
+#   bse get-basis <name> > basis-sets/<name>
+# The ALL target runs automatically during the normal build; already-present
+# files are never re-fetched.  Manual trigger: cmake --build build --target fetch-basis-sets
+file(STRINGS "${CMAKE_SOURCE_DIR}/basis-sets/basis" _BASIS_NAMES)
+
+set(_BASIS_OUTPUTS "")
+foreach(_bname IN LISTS _BASIS_NAMES)
+    string(STRIP "${_bname}" _bname)
+    if(_bname STREQUAL "")
+        continue()
+    endif()
+    set(_bfile "${CMAKE_SOURCE_DIR}/basis-sets/${_bname}")
+    add_custom_command(
+        OUTPUT  "${_bfile}"
+        COMMAND ${CMAKE_COMMAND}
+                -D BSE_NAME=${_bname}
+                -D BSE_OUT=${_bfile}
+                -P ${CMAKE_SOURCE_DIR}/cmake/fetch_basis.cmake
+        COMMENT "Fetching basis set: ${_bname}"
+        VERBATIM
+    )
+    list(APPEND _BASIS_OUTPUTS "${_bfile}")
+endforeach()
+
+add_custom_target(fetch-basis-sets ALL
+    DEPENDS ${_BASIS_OUTPUTS}
+)
+
+add_dependencies(hartree-fock fetch-basis-sets)

@@ -103,7 +103,7 @@ static void read_spin_channel(std::istream& in, HartreeFock::SpinChannel& ch)
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 static constexpr char MAGIC[8] = {'P','L','N','K','C','H','K','\0'};
-static constexpr uint32_t VERSION = 2;
+static constexpr uint32_t VERSION = 4;
 
 std::expected<void, std::string> HartreeFock::Checkpoint::save(
     const HartreeFock::Calculator& calc,
@@ -159,6 +159,48 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
     if (is_uhf)
         write_spin_channel(out, calc._info._scf.beta);
 
+    // ── Optional post-HF restart data ────────────────────────────────────────
+    const bool has_casscf_mos =
+        calc._cas_mo_coefficients.rows() == static_cast<int>(nb) &&
+        calc._cas_mo_coefficients.cols() == static_cast<int>(nb);
+    write_pod<uint8_t>(out, static_cast<uint8_t>(has_casscf_mos ? 1 : 0));
+    if (has_casscf_mos)
+        write_matrix(out, calc._cas_mo_coefficients);
+
+    // ── v4: Basis shell data (enables cube file generation in chkdump) ────────
+    write_pod<uint8_t>(out, 1u);  // has_basis = 1
+
+    const auto& shells = calc._shells._shells;
+    const auto& bfs    = calc._shells._basis_functions;
+    write_pod<uint64_t>(out, static_cast<uint64_t>(shells.size()));
+
+    for (const auto& sh : shells)
+    {
+        write_pod<int32_t> (out, static_cast<int32_t>(sh._shell));
+        write_pod<uint32_t>(out, static_cast<uint32_t>(sh._primitives.size()));
+        write_pod<double>  (out, sh._center.x());
+        write_pod<double>  (out, sh._center.y());
+        write_pod<double>  (out, sh._center.z());
+        for (Eigen::Index k = 0; k < sh._primitives.size(); ++k)
+            write_pod<double>(out, sh._primitives[k]);
+        for (Eigen::Index k = 0; k < sh._coefficients.size(); ++k)
+            write_pod<double>(out, sh._coefficients[k]);
+        for (Eigen::Index k = 0; k < sh._normalizations.size(); ++k)
+            write_pod<double>(out, sh._normalizations[k]);
+    }
+
+    write_pod<uint64_t>(out, static_cast<uint64_t>(bfs.size()));
+
+    for (const auto& bf : bfs)
+    {
+        const uint64_t shell_idx = static_cast<uint64_t>(bf._shell - shells.data());
+        write_pod<uint64_t>(out, shell_idx);
+        write_pod<int32_t> (out, bf._cartesian.x());
+        write_pod<int32_t> (out, bf._cartesian.y());
+        write_pod<int32_t> (out, bf._cartesian.z());
+        write_pod<double>  (out, bf._component_norm);
+    }
+
     if (!out)
         return std::unexpected(std::format("I/O error while writing checkpoint: {}", path));
 
@@ -181,7 +223,7 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
         return std::unexpected("Not a valid Planck checkpoint file (bad magic)");
 
     const uint32_t version = read_pod<uint32_t>(in);
-    if (version != VERSION)
+    if (version < 2 || version > VERSION)
         return std::unexpected(
             std::format("Checkpoint version mismatch: file={}, expected={}", version, VERSION));
 
@@ -244,6 +286,14 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
     if (chk_uhf)
         read_spin_channel(in, calc._info._scf.beta);
 
+    calc._cas_mo_coefficients.resize(0, 0);
+    if (version >= 3)
+    {
+        const bool has_casscf_mos = (read_pod<uint8_t>(in) != 0);
+        if (has_casscf_mos)
+            calc._cas_mo_coefficients = read_matrix(in);
+    }
+
     calc._total_energy      = tot_e;
     calc._nuclear_repulsion = nuc_e;
     calc._info._is_converged = static_cast<bool>(chk_conv);
@@ -268,7 +318,7 @@ HartreeFock::Checkpoint::load_mos(const std::string& path)
         return std::unexpected("Not a valid Planck checkpoint file (bad magic)");
 
     const uint32_t version = read_pod<uint32_t>(in);
-    if (version != VERSION)
+    if (version < 2 || version > VERSION)
         return std::unexpected(
             std::format("Checkpoint version mismatch: file={}, expected={}", version, VERSION));
 
@@ -315,6 +365,14 @@ HartreeFock::Checkpoint::load_mos(const std::string& path)
         result.C_beta = read_matrix(in);
     }
 
+    result.C_casscf.resize(0, 0);
+    if (version >= 3)
+    {
+        const bool has_casscf_mos = (read_pod<uint8_t>(in) != 0);
+        if (has_casscf_mos)
+            result.C_casscf = read_matrix(in);
+    }
+
     if (!in)
         return std::unexpected(
             std::format("I/O error while reading MOs from checkpoint: {}", path));
@@ -335,7 +393,7 @@ HartreeFock::Checkpoint::load_geometry(const std::string& path)
         return std::unexpected("Not a valid Planck checkpoint file (bad magic)");
 
     const uint32_t version = read_pod<uint32_t>(in);
-    if (version != VERSION)
+    if (version < 2 || version > VERSION)
         return std::unexpected(
             std::format("Checkpoint version mismatch: file={}, expected={}", version, VERSION));
 

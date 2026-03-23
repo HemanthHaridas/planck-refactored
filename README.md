@@ -26,6 +26,7 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 | CMake | ≥ 3.15 | System package manager |
 | Eigen | 3.4.0 | Fetched automatically |
 | libmsym | latest | Fetched automatically |
+| basis-set-exchange | any | `pip install basis-set-exchange` (required for basis set fetching) |
 | OpenMP | any | Optional; system package manager |
 
 ### Installation
@@ -229,14 +230,52 @@ H  1  0.9572  2  104.52
 
 ### Basis Sets
 
-Basis set files are in Gaussian `.gbs` format and are installed to `<prefix>/share/basis-sets/`.
+Basis set files are in Gaussian94 (`.gbs`) format and are installed to `<prefix>/share/basis-sets/`. The build system fetches missing basis sets automatically from the [Basis Set Exchange](https://www.basissetexchange.org/) before compiling.
 
-| Name | Keyword | Description |
-|---|---|---|
-| STO-3G | `sto-3g` | Minimal basis, 3 Gaussians per STO |
-| 3-21G | `3-21g` | Split-valence |
-| 6-31G | `6-31g` | Pople split-valence |
-| 6-31G\* | `6-31g*` | 6-31G plus d polarization on heavy atoms |
+#### Prerequisite — `basis-set-exchange`
+
+The automatic fetch requires the `bse` command-line tool, which is part of the `basis-set-exchange` Python package. Install it once before building:
+
+```bash
+pip install basis-set-exchange
+```
+
+Verify the install:
+
+```bash
+bse --version
+```
+
+#### How automatic fetching works
+
+The file `basis-sets/basis` is a plain-text manifest — one basis set name per line. At configure time CMake reads this manifest and, for each name not already present on disk, registers a custom command that runs:
+
+```
+bse get-basis <name> gaussian94 > basis-sets/<name>
+```
+
+The `fetch-basis-sets` target is added to `ALL` and is a dependency of `hartree-fock`, so missing basis sets are downloaded automatically during the first `cmake --build build`. Already-present files are never re-fetched. You can also trigger the fetch manually:
+
+```bash
+cmake --build build --target fetch-basis-sets
+```
+
+#### Adding a new basis set
+
+1. Add its name (exactly as `bse` recognises it) on a new line in `basis-sets/basis`.
+2. Re-run `cmake --build build` — the missing file is fetched and the build proceeds.
+
+#### Included basis sets
+
+| Family | Sets |
+|---|---|
+| STO-nG (minimal) | `STO-2G`, `STO-3G`, `STO-3G*`, `STO-4G`, `STO-5G`, `STO-6G` |
+| Pople split-valence | `3-21G`, `4-31G`, `5-21G`, `6-21G`, `6-31G`, `6-31G*`, `6-31G**`, `6-31G(d,p)`, `6-31G(2df,p)`, `6-31G(3df,3pd)`, `6-31+G`, `6-31+G*`, `6-31+G**`, `6-31++G`, `6-31++G*`, `6-31++G**`, and J-basis variants |
+| Pople triple-zeta | `6-311G`, `6-311G*`, `6-311G**`, `6-311G(d,p)`, `6-311G(2df,2pd)`, `6-311+G`, `6-311+G*`, `6-311+G**`, `6-311++G`, `6-311++G*`, `6-311++G**`, `6-311++G(2d,2p)`, `6-311++G(3df,3pd)`, and J/RIFIT variants |
+| Dunning cc | `cc-pVDZ`, `cc-pVTZ`, `cc-pVQZ`, `cc-pV5Z`, `cc-pV6Z`, `cc-pV8Z`, `cc-pV9Z` |
+| Core-valence Dunning | `cc-pCVDZ`, `cc-pCVTZ`, `cc-pCVQZ`, `cc-pCV5Z` |
+| Augmented Dunning | `aug-cc-pVDZ`, `aug-cc-pVTZ`, `aug-cc-pVQZ`, `aug-cc-pV5Z`, `aug-cc-pV6Z`, `aug-cc-pV7Z` |
+| Augmented core-valence Dunning | `aug-cc-pCVDZ`, `aug-cc-pCVTZ`, `aug-cc-pCVQZ`, `aug-cc-pCV5Z` |
 
 ### Checkpoint System
 

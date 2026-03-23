@@ -30,6 +30,7 @@
 #include <deque>
 #include <format>
 #include <numeric>
+#include <ranges>
 #include <unordered_map>
 #include <vector>
 
@@ -520,6 +521,18 @@ struct RASParams
     int nras1 = 0, nras2 = 0, nras3 = 0;
     int max_holes = 100, max_elec = 100;  // 100 = no constraint (pure CAS)
     bool active = false;  // true when RAS constraints apply
+};
+
+struct StepCandidate
+{
+    Eigen::MatrixXd kappa;
+    const char*     label = "";
+};
+
+struct RotationPair
+{
+    int p = 0;
+    int q = 0;
 };
 
 // Generate strings with optional RAS constraints and symmetry screening.
@@ -1109,7 +1122,10 @@ Eigen::MatrixXd compute_orbital_gradient(
 
     // Generalized Fock: F_gen[p,q]
     // q = inactive i: F_gen[p,i] = 2 * (F^I + F^A)[p,i]
-    // q = active  t: F_gen[p,t] = Σ_u γ[t,u] * (F^I + F^A)[p,u+n_core] + Q[p, t-n_core]
+    // q = active  t: F_gen[p,t] = Σ_u γ[t,u] * F^I[p,u+n_core] + Q[p, t-n_core]
+    // The active Fock contribution for active columns is already represented by
+    // the explicit Q contraction; including F^A here double counts it and
+    // produces a spurious large orbital gradient.
     // q = virtual a: F_gen[p,a] = 0
     Eigen::MatrixXd F_gen = Eigen::MatrixXd::Zero(nb, nb);
 
@@ -1124,7 +1140,7 @@ Eigen::MatrixXd compute_orbital_gradient(
         {
             double val = 0.0;
             for (int u = 0; u < n_act; ++u)
-                val += gamma(t, u) * FA_plus_FI(p, n_core + u);
+                val += gamma(t, u) * F_I_mo(p, n_core + u);
             val += Q(p, t);
             F_gen(p, n_core + t) = val;
         }
@@ -1200,17 +1216,11 @@ Eigen::MatrixXd apply_orbital_rotation(
 
 // Build the κ matrix from the gradient and the augmented-Hessian preconditioner.
 // Returns the antisymmetric κ restricted to non-redundant pairs, capped to max_rot radians.
-Eigen::MatrixXd build_kappa(
-    const Eigen::MatrixXd& g,          // nb × nb antisymmetric gradient
-    const Eigen::MatrixXd& F_I_mo,
-    const Eigen::MatrixXd& F_A_mo,
-    int n_core, int n_act, int n_virt,
-    double min_shift = 0.3,            // minimum denominator to prevent huge steps
-    double max_rot   = 0.05)           // maximum single-element rotation (radians)
+std::vector<RotationPair> build_rotation_pairs(int n_core, int n_act, int n_virt)
 {
     const int nb = n_core + n_act + n_virt;
-    const Eigen::MatrixXd FA_plus_FI = F_I_mo + F_A_mo;
-    Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nb, nb);
+    std::vector<RotationPair> pairs;
+    pairs.reserve(static_cast<std::size_t>(n_core * n_act + n_core * n_virt + n_act * n_virt));
 
     auto cls = [&](int k) -> int {
         if (k < n_core) return 0;
@@ -1219,23 +1229,99 @@ Eigen::MatrixXd build_kappa(
     };
 
     for (int p = 0; p < nb; ++p)
-    for (int q = 0; q < nb; ++q)
+    for (int q = p + 1; q < nb; ++q)
     {
-        if (p == q || std::abs(g(p, q)) < 1e-18) continue;
-        if (cls(p) == cls(q)) continue;  // only non-redundant pairs
-
-        // Diagonal Hessian: |2*(F_pp - F_qq)| + min_shift
-        double delta_F = FA_plus_FI(p, p) - FA_plus_FI(q, q);
-        double H_diag  = std::abs(2.0 * delta_F) + min_shift;
-        kappa(p, q)    = g(p, q) / H_diag;
+        if (cls(p) == cls(q)) continue;
+        pairs.push_back({p, q});
     }
-    // Enforce antisymmetry
-    kappa = 0.5 * (kappa - kappa.transpose());
+    return pairs;
+}
 
-    // Global trust-radius cap: scale down if any element exceeds max_rot
-    double max_k = kappa.cwiseAbs().maxCoeff();
+Eigen::MatrixXd build_kappa(
+    const Eigen::MatrixXd& g,          // nb × nb antisymmetric gradient
+    const Eigen::MatrixXd& F_I_mo,
+    const Eigen::MatrixXd& F_A_mo,
+    int n_core, int n_act, int n_virt,
+    double min_shift = 0.05,           // minimum denominator to prevent huge steps
+    double max_rot   = 0.25)           // maximum single-element rotation (radians)
+{
+    const int nb = n_core + n_act + n_virt;
+    const Eigen::MatrixXd FA_plus_FI = F_I_mo + F_A_mo;
+    Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nb, nb);
+    constexpr double trust_radius = 0.50; // Frobenius-norm trust radius for the full rotation
+    constexpr double ah_level_shift = 1e-4;
+
+    const auto pairs = build_rotation_pairs(n_core, n_act, n_virt);
+    const int nrot = static_cast<int>(pairs.size());
+    if (nrot == 0) return kappa;
+
+    Eigen::VectorXd g_vec = Eigen::VectorXd::Zero(nrot);
+    Eigen::VectorXd hdiag = Eigen::VectorXd::Zero(nrot);
+    for (int idx = 0; idx < nrot; ++idx)
+    {
+        const auto [p, q] = pairs[static_cast<std::size_t>(idx)];
+        g_vec(idx) = g(p, q);
+
+        // Diagonal Hessian proxy from orbital-energy gaps.
+        const double delta_F = FA_plus_FI(p, p) - FA_plus_FI(q, q);
+        hdiag(idx) = std::hypot(2.0 * delta_F, min_shift) + ah_level_shift;
+    }
+
+    // Dense augmented Hessian in the nonredundant rotation space:
+    // [ 0   g^T ]
+    // [ g   H   ]
+    // with H approximated by its diagonal, as in a simple AH microstep model.
+    Eigen::MatrixXd AH = Eigen::MatrixXd::Zero(nrot + 1, nrot + 1);
+    AH.block(0, 1, 1, nrot) = g_vec.transpose();
+    AH.block(1, 0, nrot, 1) = g_vec;
+    AH.block(1, 1, nrot, nrot) = hdiag.asDiagonal();
+
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(AH);
+    const Eigen::VectorXd evals = es.eigenvalues();
+    const Eigen::MatrixXd evecs = es.eigenvectors();
+
+    int best_idx = 0;
+    for (int i = 0; i < evals.size(); ++i)
+    {
+        if (std::abs(evecs(0, i)) > 1e-10)
+        {
+            best_idx = i;
+            break;
+        }
+    }
+
+    const Eigen::VectorXd aug_vec = evecs.col(best_idx);
+    const double alpha = aug_vec(0);
+
+    Eigen::VectorXd step_vec = Eigen::VectorXd::Zero(nrot);
+    if (std::abs(alpha) > 1e-10)
+    {
+        step_vec = aug_vec.tail(nrot) / alpha;
+    }
+    else
+    {
+        // Fallback to preconditioned steepest descent if the AH eigenvector is
+        // numerically singular in the leading component.
+        for (int idx = 0; idx < nrot; ++idx)
+            step_vec(idx) = -g_vec(idx) / hdiag(idx);
+    }
+
+    for (int idx = 0; idx < nrot; ++idx)
+    {
+        const auto [p, q] = pairs[static_cast<std::size_t>(idx)];
+        kappa(p, q) = step_vec(idx);
+        kappa(q, p) = -step_vec(idx);
+    }
+
+    // Per-element trust cap.
+    const double max_k = kappa.cwiseAbs().maxCoeff();
     if (max_k > max_rot)
         kappa *= max_rot / max_k;
+
+    // Global trust-radius cap in Frobenius norm for the full antisymmetric step.
+    const double frob = kappa.norm();
+    if (frob > trust_radius)
+        kappa *= trust_radius / frob;
 
     return kappa;
 }
@@ -1347,8 +1433,17 @@ std::expected<void, std::string> run_mcscf_loop(
     const int  target_irr = resolve_target_irrep(as.target_irrep, calc._sao_irrep_names);
     const bool use_sym    = have_sym && !irr_act.empty();
 
-    // ── Initial MO coefficients (from RHF) ───────────────────────────────────
+    // ── Initial MO coefficients ───────────────────────────────────────────────
+    // Prefer a stored converged CASSCF orbital set from checkpoint restart when
+    // available; otherwise start from the RHF canonical orbitals.
     Eigen::MatrixXd C = calc._info._scf.alpha.mo_coefficients;
+    if (calc._cas_mo_coefficients.rows() == nbasis &&
+        calc._cas_mo_coefficients.cols() == nbasis)
+    {
+        C = calc._cas_mo_coefficients;
+        logging(LogLevel::Info, tag + " :",
+            "Restarting orbital optimization from checkpoint CASSCF orbitals");
+    }
     if (C.cols() != nbasis || C.rows() != nbasis)
         return std::unexpected(tag + ": MO coefficient matrix has wrong size.");
 
@@ -1374,7 +1469,7 @@ std::expected<void, std::string> run_mcscf_loop(
         logging(LogLevel::Info, tag + " :",
             std::format("State-averaged over {:d} roots", nroots));
     HartreeFock::Logger::blank();
-    HartreeFock::Logger::scf_header();
+    HartreeFock::Logger::casscf_header();
 
     // ── MCSCF iteration ───────────────────────────────────────────────────────
     HartreeFock::DIISState diis;
@@ -1469,8 +1564,7 @@ std::expected<void, std::string> run_mcscf_loop(
         const bool e_conv  = iter > 1 && std::abs(dE) < as.tol_mcscf_energy;
         const bool g_conv  = gnorm < as.tol_mcscf_grad;
 
-        // Print iteration (reuse SCF format: rmsD=maxD=gnorm, diis_error=diis.error_norm, damp=0, t=0)
-        HartreeFock::Logger::scf_iteration(iter, E_cas, dE, gnorm, gnorm,
+        HartreeFock::Logger::casscf_iteration(iter, E_cas, dE, gnorm, gnorm,
             diis_active ? diis.error_norm() : gnorm, 0.0, 0.0);
 
         if (e_conv && g_conv)
@@ -1480,7 +1574,9 @@ std::expected<void, std::string> run_mcscf_loop(
         }
 
         // ── (l) Build κ and DIIS ──────────────────────────────────────────────
-        Eigen::MatrixXd kappa = build_kappa(g_orb, F_I_mo, F_A_mo, n_core, n_act, n_virt);
+        Eigen::MatrixXd raw_kappa =
+            build_kappa(g_orb, F_I_mo, F_A_mo, n_core, n_act, n_virt);
+        Eigen::MatrixXd diis_kappa = raw_kappa;
 
         // DIIS: activate once we have at least 2 steps
         if (calc._scf._use_DIIS && iter >= 2)
@@ -1488,7 +1584,7 @@ std::expected<void, std::string> run_mcscf_loop(
 
         if (diis_active)
         {
-            diis.push(kappa, g_orb);
+            diis.push(raw_kappa, g_orb);
 
             // Divergence check: trim oldest vector if error grows
             const double cur_err = diis.error_norm();
@@ -1513,7 +1609,7 @@ std::expected<void, std::string> run_mcscf_loop(
             }
 
             if (diis.ready())
-                kappa = diis.extrapolate();
+                diis_kappa = diis.extrapolate();
         }
 
         // ── (m) Orbital rotation with backtracking ────────────────────────────
@@ -1522,35 +1618,138 @@ std::expected<void, std::string> run_mcscf_loop(
         double g_best = gnorm;
         bool accepted = false;
 
-        for (double scale : {1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125})
+        std::vector<StepCandidate> candidates;
+        candidates.push_back({raw_kappa, "raw"});
+        if (diis_active && diis.ready())
         {
-            Eigen::MatrixXd C_trial = apply_orbital_rotation(C, scale * kappa, calc._overlap);
-            auto trial_res = evaluate_mcscf_state(C_trial);
-            if (!trial_res) continue;
+            candidates.push_back({diis_kappa, "diis"});
+            candidates.push_back({0.5 * (raw_kappa + diis_kappa), "blend"});
+        }
+        candidates.push_back({-raw_kappa, "raw-reverse"});
+        if (diis_active && diis.ready())
+            candidates.push_back({-diis_kappa, "diis-reverse"});
 
-            const auto& trial = *trial_res;
-            if (trial.E_cas < E_best ||
-                (std::abs(trial.E_cas - E_best) < 1e-10 && trial.gnorm < g_best))
+        const auto is_better = [](double E_trial, double g_trial,
+                                  double E_ref,   double g_ref) -> bool
+        {
+            if (E_trial < E_ref - 1e-10) return true;
+            if (std::abs(E_trial - E_ref) < 1e-10 && g_trial < g_ref - 1e-8) return true;
+            return false;
+        };
+
+        for (const auto& cand : candidates)
+        {
+            for (double scale : {2.0, 1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625})
             {
-                C_best = std::move(C_trial);
-                E_best = trial.E_cas;
-                g_best = trial.gnorm;
+                Eigen::MatrixXd C_trial =
+                    apply_orbital_rotation(C, scale * cand.kappa, calc._overlap);
+                auto trial_res = evaluate_mcscf_state(C_trial);
+                if (!trial_res) continue;
+
+                const auto& trial = *trial_res;
+                if (is_better(trial.E_cas, trial.gnorm, E_best, g_best))
+                {
+                    C_best = std::move(C_trial);
+                    E_best = trial.E_cas;
+                    g_best = trial.gnorm;
+                }
+
+                const bool energy_accept =
+                    trial.E_cas < E_cas - 1e-8 ||
+                    (trial.E_cas <= E_cas + 1e-10 && trial.gnorm < 0.7 * gnorm);
+                const bool gradient_accept =
+                    trial.gnorm < 0.8 * gnorm &&
+                    trial.E_cas <= E_cas + std::max(1e-8, 1e-4 * std::abs(dE));
+
+                if (energy_accept || gradient_accept)
+                {
+                    accepted = true;
+                }
             }
+        }
 
-            if (trial.E_cas <= E_cas + 1e-10 && trial.gnorm <= gnorm)
+        if (!accepted)
+        {
+            // Final steepest-descent fallback with very small trust radii.
+            for (double scale : {0.0078125, 0.00390625})
             {
-                accepted = true;
-                break;
+                Eigen::MatrixXd C_trial =
+                    apply_orbital_rotation(C, scale * raw_kappa, calc._overlap);
+                auto trial_res = evaluate_mcscf_state(C_trial);
+                if (!trial_res) continue;
+                const auto& trial = *trial_res;
+                if (is_better(trial.E_cas, trial.gnorm, E_best, g_best))
+                {
+                    C_best = std::move(C_trial);
+                    E_best = trial.E_cas;
+                    g_best = trial.gnorm;
+                }
+                if (trial.E_cas < E_cas - 1e-10 || trial.gnorm < 0.9 * gnorm)
+                {
+                    accepted = true;
+                    break;
+                }
+            }
+        }
+
+        if (!accepted)
+        {
+            // Pair-rotation fallback: rotate the largest-gradient nonredundant
+            // orbital pairs individually to escape flat or poorly conditioned
+            // block steps.
+            struct PairGrad { int p; int q; double mag; };
+            std::vector<PairGrad> pair_grads;
+            pair_grads.reserve(static_cast<std::size_t>(nbasis * nbasis / 2));
+            auto cls = [&](int k) -> int {
+                if (k < n_core) return 0;
+                if (k < n_core + n_act) return 1;
+                return 2;
+            };
+            for (int p = 0; p < nbasis; ++p)
+            for (int q = p + 1; q < nbasis; ++q)
+            {
+                if (cls(p) == cls(q)) continue;
+                const double mag = std::abs(g_orb(p, q));
+                if (mag > 1e-10)
+                    pair_grads.push_back({p, q, mag});
+            }
+            std::ranges::sort(pair_grads, [](const PairGrad& a, const PairGrad& b) {
+                return a.mag > b.mag;
+            });
+
+            const int npairs = std::min<int>(6, static_cast<int>(pair_grads.size()));
+            for (int idx = 0; idx < npairs; ++idx)
+            {
+                const auto [p, q, mag] = pair_grads[static_cast<std::size_t>(idx)];
+                (void)mag;
+                for (double theta : {0.50, 0.25, 0.125, 0.0625, -0.50, -0.25, -0.125, -0.0625})
+                {
+                    Eigen::MatrixXd pair_kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                    pair_kappa(p, q) = theta;
+                    pair_kappa(q, p) = -theta;
+
+                    Eigen::MatrixXd C_trial =
+                        apply_orbital_rotation(C, pair_kappa, calc._overlap);
+                    auto trial_res = evaluate_mcscf_state(C_trial);
+                    if (!trial_res) continue;
+
+                    const auto& trial = *trial_res;
+                    if (is_better(trial.E_cas, trial.gnorm, E_best, g_best))
+                    {
+                        C_best = std::move(C_trial);
+                        E_best = trial.E_cas;
+                        g_best = trial.gnorm;
+                    }
+                    if (trial.E_cas < E_cas - 1e-8 || trial.gnorm < 0.8 * gnorm)
+                    {
+                        accepted = true;
+                    }
+                }
             }
         }
 
         if (!accepted && E_best >= E_cas && g_best >= gnorm)
         {
-            if (iter > 1 && std::abs(dE) < as.tol_mcscf_energy)
-            {
-                converged = true;
-                break;
-            }
             diis.clear();
             diis_active = false;
         }
