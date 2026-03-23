@@ -561,7 +561,7 @@ def main() -> int:
         )
     )
     parser.add_argument("--input", default="docs/PLANCK_TEACHING_GUIDE.md")
-    parser.add_argument("--output", default="docs/site/index.html")
+    parser.add_argument("--output", default="docs/index.html")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
