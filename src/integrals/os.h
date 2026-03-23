@@ -16,13 +16,21 @@ namespace HartreeFock
     {
         double _os_1d(const double gamma, const double distPA, const double distPB, const int lA, const int lB);
         std::tuple<double, double> _compute_3d_overlap_kinetic(const HartreeFock::ShellPair &shell_pair);
-        std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_1e(const std::vector<HartreeFock::ShellPair> &shell_pairs, const std::size_t nbasis);
-        Eigen::MatrixXd _compute_nuclear_attraction(const std::vector<HartreeFock::ShellPair> &shell_pairs, const std::size_t nbasis, const HartreeFock::Molecule &molecule);
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_1e(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const std::size_t nbasis,
+            const std::vector<HartreeFock::SignedAOSymOp>* sym_ops = nullptr);
+        Eigen::MatrixXd _compute_nuclear_attraction(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const std::size_t nbasis,
+            const HartreeFock::Molecule &molecule,
+            const std::vector<HartreeFock::SignedAOSymOp>* sym_ops = nullptr);
         // Build the full AO ERI tensor. Applies Schwarz screening:
         // quartets with Q(i,j)·Q(k,l) < tol_eri are skipped.
         std::vector <double> _compute_2e(const std::vector<HartreeFock::ShellPair>& shell_pairs,
                                          std::size_t nbasis,
-                                         double tol_eri = 1e-10);
+                                         double tol_eri = 1e-10,
+                                         const std::vector<HartreeFock::SignedAOSymOp>* sym_ops = nullptr);
 
         Eigen::MatrixXd _compute_fock_rhf(const std::vector<double> &_eri,
                                           const Eigen::MatrixXd &density,
@@ -38,7 +46,8 @@ namespace HartreeFock
         Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair>& shell_pairs,
                                          const Eigen::MatrixXd& density,
                                          std::size_t nbasis,
-                                         double tol_eri = 1e-10);
+                                         double tol_eri = 1e-10,
+                                         const std::vector<HartreeFock::SignedAOSymOp>* sym_ops = nullptr);
 
         // UHF direct-SCF variant: returns {G_alpha, G_beta}.
         // Applies Schwarz screening; builds the ERI tensor once per call.
@@ -47,7 +56,8 @@ namespace HartreeFock
                              const Eigen::MatrixXd& Pa,
                              const Eigen::MatrixXd& Pb,
                              std::size_t nbasis,
-                             double tol_eri = 1e-10);
+                             double tol_eri = 1e-10,
+                             const std::vector<HartreeFock::SignedAOSymOp>* sym_ops = nullptr);
 
         // ── Gradient derivative integrals ──────────────────────────────────────────
 

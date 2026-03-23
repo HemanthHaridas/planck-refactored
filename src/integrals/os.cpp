@@ -48,7 +48,7 @@ inline double HartreeFock::ObaraSaika::_os_1d(const double gamma, const double d
     return S[lA][lB];
 }
 
-std::pair<Eigen::MatrixXd, Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_1e(const std::vector<HartreeFock::ShellPair> &shell_pairs, const std::size_t nbasis)
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_1e(const std::vector<HartreeFock::ShellPair> &shell_pairs, const std::size_t nbasis, const std::vector<HartreeFock::SignedAOSymOp>*)
 {
     const std::size_t npairs = shell_pairs.size();
     Eigen::MatrixXd overlap  = Eigen::MatrixXd::Zero(nbasis, nbasis);
@@ -306,7 +306,8 @@ static double _os_nuclear_primitive(
 Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_nuclear_attraction(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,
     const std::size_t nbasis,
-    const HartreeFock::Molecule& molecule)
+    const HartreeFock::Molecule& molecule,
+    const std::vector<HartreeFock::SignedAOSymOp>*)
 {
     const std::size_t npairs = shell_pairs.size();
     Eigen::MatrixXd V        = Eigen::MatrixXd::Zero(nbasis, nbasis);
@@ -1081,7 +1082,8 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,
     const Eigen::MatrixXd& density,
     const std::size_t nbasis,
-    const double tol_eri)
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp>*)
 {
     const std::size_t nb  = nbasis;
     const std::size_t nb2 = nb * nb;
@@ -1165,7 +1167,8 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
     const Eigen::MatrixXd& Pa,
     const Eigen::MatrixXd& Pb,
     const std::size_t nbasis,
-    const double tol_eri)
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp>*)
 {
     const std::size_t nb  = nbasis;
     const std::size_t nb2 = nb * nb;
@@ -1342,7 +1345,8 @@ static Eigen::MatrixXd _compute_schwarz_table(
 std::vector <double> HartreeFock::ObaraSaika::_compute_2e(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,
     const std::size_t nbasis,
-    const double tol_eri)
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp>*)
 {
     const std::size_t nb  = nbasis;
     const std::size_t nb2 = nb * nb;

@@ -110,6 +110,38 @@ namespace HartreeFock
                       << std::setw(12) << std::fixed << std::setprecision(3) << time_sec
                       << "\n";
         }
+
+        inline void casscf_header()
+        {
+            std::lock_guard<std::mutex> lock(log_mutex);
+
+            std::cout << std::string(110, '-') << "\n"
+                      << std::setw(6)  << "Iter"
+                      << std::setw(20) << "Energy"
+                      << std::setw(15) << "DeltaE"
+                      << std::setw(15) << "Grad"
+                      << std::setw(15) << "MaxGrad"
+                      << std::setw(15) << "Step Err"
+                      << std::setw(12) << "Damp"
+                      << std::setw(12) << "Time(s)"
+                      << "\n"
+                      << std::string(110, '-') << "\n";
+        }
+
+        inline void casscf_iteration(std::size_t iter, double energy, double deltaE, double grad, double max_grad, double step_error, double damping, double time_sec)
+        {
+            std::lock_guard<std::mutex> lock(log_mutex);
+
+            std::cout << std::setw(6)  << iter
+                      << std::setw(20) << std::setprecision(10) << energy
+                      << std::setw(15) << deltaE
+                      << std::setw(15) << std::setprecision(3) << std::scientific << grad
+                      << std::setw(15) << std::setprecision(3) << std::scientific << max_grad
+                      << std::setw(15) << std::setprecision(3) << std::scientific << step_error
+                      << std::setw(12) << std::fixed << std::setprecision(3) << damping
+                      << std::setw(12) << std::fixed << std::setprecision(3) << time_sec
+                      << "\n";
+        }
     
         inline void mo_header(bool with_symmetry = false)
         {

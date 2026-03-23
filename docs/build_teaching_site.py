@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""Build a static HTML page from the Planck teaching guide markdown.
+
+Math notation:
+  Display math  -- delimited by \\[ ... \\]
+  Inline math   -- delimited by \\( ... \\)
+
+MathJax 3 is loaded from the jsDelivr CDN and renders all LaTeX at page
+load. Math regions are extracted before any HTML escaping so that
+backslashes, angle brackets, and other LaTeX syntax are preserved verbatim.
+"""
 
 from __future__ import annotations
 
@@ -8,53 +18,150 @@ import re
 from pathlib import Path
 
 
-def slugify(text: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", text.strip().lower()).strip("-")
-    return slug or "section"
+# ── Math extraction ───────────────────────────────────────────────────────
+#
+# Pull every \[...\] and \(...\) region out of the markdown text and replace
+# each with a short alphanumeric token before any HTML processing.  Tokens
+# contain only [A-Z0-9] so html.escape() leaves them untouched.
+# After the full HTML body is assembled, substitute the tokens back with the
+# original LaTeX, which MathJax typesets in the browser.
 
+def _extract_math(text: str) -> tuple[str, dict[str, str]]:
+    """Replace math regions with placeholder tokens.
+
+    Returns the modified text and a mapping {token: raw_latex}.
+    """
+    store: dict[str, str] = {}
+    counter = [0]
+
+    def _token() -> str:
+        tok = f"XMATHX{counter[0]}XMATHX"
+        counter[0] += 1
+        return tok
+
+    # Display math: \[ ... \]  (may span multiple lines)
+    def _sub_display(m: re.Match) -> str:
+        tok = _token()
+        store[tok] = m.group(0)
+        return tok
+
+    text = re.sub(r"\\\[.*?\\\]", _sub_display, text, flags=re.DOTALL)
+
+    # Inline math: \( ... \)
+    def _sub_inline(m: re.Match) -> str:
+        tok = _token()
+        store[tok] = m.group(0)
+        return tok
+
+    text = re.sub(r"\\\(.*?\\\)", _sub_inline, text, flags=re.DOTALL)
+
+    return text, store
+
+
+def _restore_math(html_text: str, store: dict[str, str]) -> str:
+    """Put math back, wrapped in a <span> so MathJax can locate it."""
+    for tok, latex in store.items():
+        if latex.startswith(r"\["):
+            replacement = (
+                f'<span class="math-display">{latex}</span>'
+            )
+        else:
+            replacement = (
+                f'<span class="math-inline">{latex}</span>'
+            )
+        html_text = html_text.replace(tok, replacement)
+    return html_text
+
+
+# ── Inline Markdown formatting ────────────────────────────────────────────
 
 def inline_format(text: str) -> str:
+    """Apply inline markdown (code, bold, italic, links)."""
     text = html.escape(text)
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", text)
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
+    text = re.sub(
+        r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text
+    )
     return text
 
 
-def render_markdown(markdown_text: str) -> tuple[str, list[tuple[int, str, str]]]:
+# ── Markdown renderer ─────────────────────────────────────────────────────
+
+TocEntry = tuple[int, str, str]
+
+
+def render_markdown(
+    markdown_text: str,
+) -> tuple[str, list[TocEntry]]:
+    """Convert Markdown (math tokens already substituted) to HTML.
+
+    Returns (html_body, toc) where each toc entry is
+    (level, heading_text, anchor).
+    """
     lines = markdown_text.splitlines()
     output: list[str] = []
-    toc: list[tuple[int, str, str]] = []
+    toc: list[TocEntry] = []
     in_code = False
-    code_lang = ""
     in_list = False
+    in_ordered_list = False
+    in_table = False
+    pending_header: list[str] | None = None  # first row before separator
     paragraph: list[str] = []
+
+    def slugify(t: str) -> str:
+        slug = re.sub(r"[^a-zA-Z0-9]+", "-", t.strip().lower()).strip("-")
+        return slug or "section"
 
     def flush_paragraph() -> None:
         nonlocal paragraph
         if paragraph:
-            text = " ".join(part.strip() for part in paragraph if part.strip())
-            if text:
-                output.append(f"<p>{inline_format(text)}</p>")
+            joined = " ".join(
+                part.strip() for part in paragraph if part.strip()
+            )
+            if joined:
+                output.append(f"<p>{inline_format(joined)}</p>")
             paragraph = []
 
     def close_list() -> None:
-        nonlocal in_list
+        nonlocal in_list, in_ordered_list
         if in_list:
             output.append("</ul>")
             in_list = False
+        if in_ordered_list:
+            output.append("</ol>")
+            in_ordered_list = False
+
+    def close_table() -> None:
+        nonlocal in_table, pending_header
+        if in_table:
+            output.append("</tbody></table>")
+            in_table = False
+        if pending_header is not None:
+            # Headerless single row — emit as plain table
+            output.append("<table><tbody>")
+            row = "".join(
+                f"<td>{inline_format(c)}</td>" for c in pending_header
+            )
+            output.append(f"<tr>{row}</tr>")
+            output.append("</tbody></table>")
+            pending_header = None
 
     for raw_line in lines:
         line = raw_line.rstrip("\n")
 
+        # ── Fenced code block ─────────────────────────────────────────
         if line.startswith("```"):
             flush_paragraph()
             close_list()
             if not in_code:
                 in_code = True
                 code_lang = line[3:].strip()
-                cls = f' class="language-{html.escape(code_lang)}"' if code_lang else ""
+                cls = (
+                    f' class="language-{html.escape(code_lang)}"'
+                    if code_lang else ""
+                )
                 output.append(f"<pre><code{cls}>")
             else:
                 in_code = False
@@ -65,100 +172,176 @@ def render_markdown(markdown_text: str) -> tuple[str, list[tuple[int, str, str]]
             output.append(html.escape(line))
             continue
 
+        # ── Blank line ────────────────────────────────────────────────
         if not line.strip():
             flush_paragraph()
             close_list()
+            close_table()
             continue
 
+        # ── Headings ──────────────────────────────────────────────────
         heading = re.match(r"^(#{1,6})\s+(.*)$", line)
         if heading:
             flush_paragraph()
             close_list()
+            close_table()
             level = len(heading.group(1))
             text = heading.group(2).strip()
             anchor = slugify(text)
             toc.append((level, text, anchor))
+            tag = inline_format(text)
             output.append(
-                f'<h{level} id="{anchor}">{inline_format(text)}</h{level}>'
+                f'<h{level} id="{anchor}">{tag}</h{level}>'
             )
             continue
 
-        if line.startswith("- "):
+        # ── Horizontal rule ───────────────────────────────────────────
+        if re.match(r"^---+\s*$", line):
             flush_paragraph()
+            close_list()
+            close_table()
+            output.append("<hr>")
+            continue
+
+        # ── Unordered list ────────────────────────────────────────────
+        if re.match(r"^- ", line):
+            flush_paragraph()
+            close_table()
+            if in_ordered_list:
+                output.append("</ol>")
+                in_ordered_list = False
             if not in_list:
                 output.append("<ul>")
                 in_list = True
-            output.append(f"<li>{inline_format(line[2:].strip())}</li>")
+            output.append(
+                f"<li>{inline_format(line[2:].strip())}</li>"
+            )
             continue
 
-        if re.match(r"^\d+\.\s+", line):
+        # ── Ordered list ──────────────────────────────────────────────
+        m_ol = re.match(r"^(\d+)\.\s+(.*)", line)
+        if m_ol:
             flush_paragraph()
-            close_list()
-            output.append(f"<p>{inline_format(line)}</p>")
+            close_table()
+            if in_list:
+                output.append("</ul>")
+                in_list = False
+            if not in_ordered_list:
+                output.append("<ol>")
+                in_ordered_list = True
+            output.append(
+                f"<li>{inline_format(m_ol.group(2).strip())}</li>"
+            )
             continue
 
+        # ── List item continuation (indented line) ────────────────────
+        if (in_list or in_ordered_list) and re.match(r"^ {2,}", line):
+            flush_paragraph()
+            close_table()
+            if output and output[-1].endswith("</li>"):
+                inner = output[-1][4:-5]  # strip <li> and </li>
+                output[-1] = f"<li>{inner} {inline_format(line.strip())}</li>"
+            continue
+
+        # ── Table row ─────────────────────────────────────────────────
         if line.startswith("|") and line.endswith("|"):
             flush_paragraph()
             close_list()
-            cells = [inline_format(cell.strip()) for cell in line.strip("|").split("|")]
-            if all(re.fullmatch(r"[-: ]+", cell.replace("&amp;", "&")) for cell in cells):
+            cells = [c.strip() for c in line.strip("|").split("|")]
+
+            # Separator row (|---|---|): emit buffered header, open tbody
+            if all(re.fullmatch(r"[-: ]+", c) for c in cells):
+                if pending_header is not None:
+                    output.append("<table>")
+                    output.append("<thead><tr>")
+                    for c in pending_header:
+                        output.append(
+                            f"<th>{inline_format(c)}</th>"
+                        )
+                    output.append("</tr></thead>")
+                    output.append("<tbody>")
+                    pending_header = None
+                    in_table = True
                 continue
-            row = "".join(f"<td>{cell}</td>" for cell in cells)
-            if not output or not output[-1].startswith("<table"):
-                output.append("<table>")
-                output.append("<tbody>")
-            output.append(f"<tr>{row}</tr>")
+
+            if in_table:
+                # Body row
+                row = "".join(
+                    f"<td>{inline_format(c)}</td>" for c in cells
+                )
+                output.append(f"<tr>{row}</tr>")
+            else:
+                # First data row — buffer it; next line may be separator
+                pending_header = cells
             continue
 
-        if output and output[-1] == "</tbody>" and not line.startswith("|"):
-            output.append("</table>")
-
+        # Non-table line: close any open table
+        close_table()
         paragraph.append(line)
 
     flush_paragraph()
     close_list()
+    close_table()
 
-    if output and output[-1] == "</tbody>":
-        output.append("</table>")
-
-    html_body = "\n".join(output).replace("<table>\n<tbody>\n", "<table>\n<tbody>\n")
-    html_body = html_body.replace("</tbody>\n<table>", "</tbody>\n</table>\n<table>")
-    html_body = html_body.replace("<table>\n<tbody>", "<table>\n<tbody>")
-    if "<table>" in html_body and "</tbody>" not in html_body:
-        html_body += "\n</tbody>\n</table>"
-    if "<tbody>" in html_body and "</table>" not in html_body:
-        html_body += "\n</table>"
-
-    return html_body, toc
+    return "\n".join(output), toc
 
 
-def build_toc(toc: list[tuple[int, str, str]]) -> str:
-    items = []
+# ── Table of contents ─────────────────────────────────────────────────────
+
+def build_toc(toc: list[TocEntry]) -> str:
+    items: list[str] = []
     for level, text, anchor in toc:
         cls = f"toc-level-{level}"
+        label = html.escape(text)
         items.append(
-            f'<li class="{cls}"><a href="#{anchor}">{html.escape(text)}</a></li>'
+            f'<li class="{cls}">'
+            f'<a href="#{anchor}">{label}</a></li>'
         )
     return "<ul>\n" + "\n".join(items) + "\n</ul>"
 
 
+# ── HTML page template ────────────────────────────────────────────────────
+
 def page_template(title: str, toc_html: str, content_html: str) -> str:
+    et = html.escape(title)
+    # CSS lines that exceed 79 chars are intentional inside the HTML
+    # template string and cannot be wrapped without breaking the CSS.
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{html.escape(title)}</title>
+  <title>{et}</title>
+
+  <!-- MathJax 3: render \\( ... \\) inline and \\[ ... \\] display -->
+  <script>
+    MathJax = {{
+      tex: {{
+        inlineMath:  [['\\\\(', '\\\\)']],
+        displayMath: [['\\\\[', '\\\\]']],
+        packages:    {{'[+]': ['ams']}},
+        tags:        'none'
+      }},
+      options: {{
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+      }},
+      startup: {{ typeset: true }}
+    }};
+  </script>
+  <script async
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js">
+  </script>
+
   <style>
     :root {{
-      --bg: #f6f1e8;
-      --panel: #fffdf8;
-      --ink: #1d2b36;
-      --muted: #566472;
-      --accent: #9a3d22;
-      --rule: #dbcdb9;
+      --bg:      #f6f1e8;
+      --panel:   #fffdf8;
+      --ink:     #1d2b36;
+      --muted:   #566472;
+      --accent:  #9a3d22;
+      --rule:    #dbcdb9;
       --code-bg: #f2ece2;
-      --shadow: 0 18px 60px rgba(42, 33, 20, 0.08);
+      --shadow:  0 18px 60px rgba(42, 33, 20, 0.08);
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -166,9 +349,11 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
       font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
       color: var(--ink);
       background:
-        radial-gradient(circle at top left, rgba(154, 61, 34, 0.08), transparent 22rem),
+        radial-gradient(
+          circle at top left, rgba(154,61,34,0.08), transparent 22rem
+        ),
         linear-gradient(180deg, #fbf7f0 0%, var(--bg) 100%);
-      line-height: 1.65;
+      line-height: 1.7;
     }}
     .page {{
       max-width: 1280px;
@@ -176,10 +361,12 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
       padding: 32px 20px 56px;
     }}
     .hero {{
-      background: linear-gradient(135deg, rgba(154, 61, 34, 0.95), rgba(123, 53, 31, 0.92));
+      background: linear-gradient(
+        135deg, rgba(154,61,34,0.95), rgba(123,53,31,0.92)
+      );
       color: #fff9f2;
       border-radius: 24px;
-      padding: 28px 30px;
+      padding: 28px 34px;
       box-shadow: var(--shadow);
       margin-bottom: 24px;
     }}
@@ -191,7 +378,8 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
     .hero p {{
       margin: 0;
       max-width: 65ch;
-      color: rgba(255, 249, 242, 0.92);
+      color: rgba(255,249,242,0.92);
+      font-size: 1.05rem;
     }}
     .layout {{
       display: grid;
@@ -208,38 +396,37 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
     .sidebar {{
       position: sticky;
       top: 20px;
+      max-height: calc(100vh - 40px);
+      overflow-y: auto;
       padding: 22px 20px;
     }}
     .sidebar h2 {{
       margin: 0 0 12px;
-      font-size: 1rem;
+      font-size: 0.9rem;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.09em;
       color: var(--accent);
     }}
-    .sidebar ul {{
-      list-style: none;
-      padding: 0;
-      margin: 0;
-    }}
-    .sidebar li {{
-      margin: 0;
-      padding: 0;
-    }}
+    .sidebar ul {{ list-style: none; padding: 0; margin: 0; }}
+    .sidebar li {{ margin: 0; padding: 0; }}
     .sidebar a {{
       display: block;
-      padding: 6px 0;
+      padding: 4px 0;
       color: var(--muted);
       text-decoration: none;
+      font-size: 0.9rem;
+      line-height: 1.4;
     }}
-    .sidebar a:hover {{
-      color: var(--accent);
+    .sidebar a:hover {{ color: var(--accent); }}
+    .toc-level-1 a {{
+      font-weight: 600;
+      padding-top: 7px;
+      color: var(--ink);
+      font-size: 0.93rem;
     }}
     .toc-level-2 a {{ padding-left: 12px; }}
-    .toc-level-3 a {{ padding-left: 24px; font-size: 0.96rem; }}
-    .content {{
-      padding: 34px;
-    }}
+    .toc-level-3 a {{ padding-left: 24px; font-size: 0.85rem; }}
+    .content {{ padding: 36px 40px; }}
     .content h1, .content h2, .content h3, .content h4 {{
       line-height: 1.2;
       color: #13202b;
@@ -249,72 +436,106 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
       font-size: 2.1rem;
       padding-bottom: 10px;
       border-bottom: 1px solid var(--rule);
+      margin-top: 0;
     }}
     .content h2 {{
       font-size: 1.55rem;
-      margin-top: 2.3rem;
-      padding-top: 0.2rem;
+      margin-top: 2.8rem;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--rule);
     }}
     .content h3 {{
       font-size: 1.18rem;
-      margin-top: 1.8rem;
+      margin-top: 2rem;
+      color: var(--accent);
+    }}
+    .content h4 {{
+      font-size: 1rem;
+      margin-top: 1.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }}
+    .content hr {{
+      border: none;
+      border-top: 1px solid var(--rule);
+      margin: 2.5rem 0;
     }}
     .content p, .content li {{
       font-size: 1.02rem;
+      text-align: justify;
+      hyphens: auto;
     }}
+    .content ul, .content ol {{ padding-left: 1.6rem; }}
+    .content li {{ margin-bottom: 0.25rem; }}
     .content code {{
       background: var(--code-bg);
       border: 1px solid #e0d7c9;
       border-radius: 6px;
-      padding: 0.08rem 0.35rem;
+      padding: 0.08rem 0.38rem;
       font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
-      font-size: 0.94em;
+      font-size: 0.91em;
     }}
     .content pre {{
       background: #201a17;
       color: #f8efe5;
-      border-radius: 16px;
-      padding: 18px;
+      border-radius: 14px;
+      padding: 20px 22px;
       overflow-x: auto;
+      line-height: 1.5;
     }}
     .content pre code {{
       background: transparent;
       border: 0;
       padding: 0;
       color: inherit;
+      font-size: 0.93rem;
     }}
     .content table {{
       width: 100%;
       border-collapse: collapse;
-      margin: 1.2rem 0;
-      font-size: 0.96rem;
+      margin: 1.4rem 0;
+      font-size: 0.95rem;
+    }}
+    .content th {{
+      border: 1px solid var(--rule);
+      padding: 10px 14px;
+      text-align: left;
+      background: rgba(154,61,34,0.08);
+      font-weight: 600;
+      font-size: 0.93rem;
+      white-space: nowrap;
     }}
     .content td {{
       border: 1px solid var(--rule);
-      padding: 10px 12px;
+      padding: 10px 14px;
       vertical-align: top;
     }}
-    .content a {{
-      color: var(--accent);
+    .content tr:nth-child(even) td {{
+      background: rgba(219,205,185,0.18);
     }}
+    .content a {{ color: var(--accent); }}
+    .math-display {{
+      display: block;
+      overflow-x: auto;
+      padding: 0.5rem 0;
+      text-align: center;
+    }}
+    .math-inline {{ white-space: nowrap; }}
     @media (max-width: 980px) {{
-      .layout {{
-        grid-template-columns: 1fr;
-      }}
-      .sidebar {{
-        position: static;
-      }}
-      .content {{
-        padding: 24px 18px;
-      }}
+      .layout {{ grid-template-columns: 1fr; }}
+      .sidebar {{ position: static; max-height: none; }}
+      .content {{ padding: 24px 18px; }}
     }}
   </style>
 </head>
 <body>
   <div class="page">
     <section class="hero">
-      <h1>{html.escape(title)}</h1>
-      <p>A teaching-first, theory-linked walkthrough of the Planck codebase and its current quantum chemistry methods.</p>
+      <h1>{et}</h1>
+      <p>A teaching-first, theory-linked walkthrough of the Planck codebase
+         and its quantum chemistry algorithms — from Gaussian integrals to
+         CASSCF and vibrational analysis.</p>
     </section>
     <div class="layout">
       <aside class="sidebar">
@@ -331,8 +552,14 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
 """
 
 
+# ── Entry point ───────────────────────────────────────────────────────────
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build a static HTML page from the teaching guide markdown")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Build a static HTML page from the teaching guide markdown"
+        )
+    )
     parser.add_argument("--input", default="docs/PLANCK_TEACHING_GUIDE.md")
     parser.add_argument("--output", default="docs/site/index.html")
     args = parser.parse_args()
@@ -343,10 +570,22 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     markdown_text = input_path.read_text(encoding="utf-8")
-    content_html, toc = render_markdown(markdown_text)
+
+    # 1. Extract math regions → tokens
+    markdown_no_math, math_store = _extract_math(markdown_text)
+
+    # 2. Render the rest of the markdown to HTML
+    content_html, toc = render_markdown(markdown_no_math)
+
+    # 3. Restore math tokens as MathJax-ready LaTeX
+    content_html = _restore_math(content_html, math_store)
+
+    # 4. Build TOC and assemble page
     toc_html = build_toc(toc)
-    title = "Planck Teaching Guide"
-    output_path.write_text(page_template(title, toc_html, content_html), encoding="utf-8")
+    title = "Planck"
+    page = page_template(title, toc_html, content_html)
+
+    output_path.write_text(page, encoding="utf-8")
     print(f"Wrote {output_path}")
     return 0
 

@@ -6,3 +6,11 @@ install
 .DS*
 bin
 .claude
+CLAUDE*
+gpu
+*/__pycache__
+ammonia*
+*.log
+*tga
+.pytest*
+.github/*/*.yml

@@ -333,8 +333,11 @@ namespace HartreeFock::IO
     {
         static const std::unordered_map<std::string, HartreeFock::IntegralMethod> _table =
         {
-            {"obara-saika", HartreeFock::IntegralMethod::ObaraSaika},
-            {"os",          HartreeFock::IntegralMethod::ObaraSaika},
+            {"obara-saika",     HartreeFock::IntegralMethod::ObaraSaika},
+            {"os",              HartreeFock::IntegralMethod::ObaraSaika},
+            {"rys",             HartreeFock::IntegralMethod::RysQuadrature},
+            {"rys-quadrature",  HartreeFock::IntegralMethod::RysQuadrature},
+            {"auto",            HartreeFock::IntegralMethod::Auto},
         };
         
         auto _value = toLower(value);   // First convert to lowercase
