@@ -140,7 +140,11 @@ namespace HartreeFock::IO
             {"frequency",   HartreeFock::CalculationType::Frequency},
             {"opt+freq",    HartreeFock::CalculationType::GeomOptFrequency},
             {"opt_freq",    HartreeFock::CalculationType::GeomOptFrequency},
-            {"grad",        HartreeFock::CalculationType::Gradient}
+            {"grad",        HartreeFock::CalculationType::Gradient},
+
+            {"imagfollow",  HartreeFock::CalculationType::ImaginaryFollow},
+            {"imag_follow", HartreeFock::CalculationType::ImaginaryFollow},
+            {"irc_follow",  HartreeFock::CalculationType::ImaginaryFollow}
         };
         
         auto _value = toLower(value);   // First convert to lowercase
@@ -469,15 +473,16 @@ namespace HartreeFock::IO
         throw std::invalid_argument("Invalid Units : " + value);
     }
 
-    std::expected <void, std::string> _parse_geom(const std::vector <std::string> &lines, HartreeFock::OptionsGeometry &geom, HartreeFock::OptCoords &opt_coords)
+    std::expected <void, std::string> _parse_geom(const std::vector <std::string> &lines, HartreeFock::OptionsGeometry &geom, HartreeFock::OptCoords &opt_coords, double &imag_follow_step)
     {
         // (key, value) pairs
         const std::unordered_map <std::string, std::function <void(const std::string &)>> _geom_map =
         {
-            {"coord_type",  [&geom](const std::string &value){geom._type        = map_string_enum <HartreeFock::CoordType>(value);}},
-            {"coord_units", [&geom](const std::string &value){geom._units       = map_string_enum <HartreeFock::Units>(value);}},
-            {"use_symm",    [&geom](const std::string &value){geom._use_symm    = toBool(value);}},
-            {"opt_coords",  [&opt_coords](const std::string &value){opt_coords  = map_string_enum <HartreeFock::OptCoords>(value);}}
+            {"coord_type",       [&geom](const std::string &value){geom._type        = map_string_enum <HartreeFock::CoordType>(value);}},
+            {"coord_units",      [&geom](const std::string &value){geom._units       = map_string_enum <HartreeFock::Units>(value);}},
+            {"use_symm",         [&geom](const std::string &value){geom._use_symm    = toBool(value);}},
+            {"opt_coords",       [&opt_coords](const std::string &value){opt_coords  = map_string_enum <HartreeFock::OptCoords>(value);}},
+            {"imag_follow_step", [&imag_follow_step](const std::string &value){imag_follow_step = std::stod(value);}}
         };
         
         for (const std::string line : lines)
@@ -826,7 +831,7 @@ namespace HartreeFock::IO
         // geom
         if (auto it = _sections.find("geom"); it != _sections.end())
         {
-            if (auto res = _parse_geom(it->second, calculator._geometry, calculator._opt_coords); !res)
+            if (auto res = _parse_geom(it->second, calculator._geometry, calculator._opt_coords, calculator._imag_follow_step); !res)
                 return std::unexpected(res.error());
         }
         else
