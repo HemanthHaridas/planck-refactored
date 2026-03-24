@@ -49,6 +49,9 @@ static Eigen::VectorXd _run_sp_gradient(HartreeFock::Calculator& calc)
     calc._use_sao_blocking   = false;
 
     // Restore the saved density and tell SCF to use it as the initial guess.
+    // Save and restore _scf._guess so this warm-start doesn't leak into subsequent
+    // operations (e.g. Hessian SCF calls, post-opt symmetry SCF).
+    const auto saved_guess = calc._scf._guess;
     if (have_prev_density)
     {
         calc._info._scf.alpha.density = prev_alpha;
@@ -76,6 +79,9 @@ static Eigen::VectorXd _run_sp_gradient(HartreeFock::Calculator& calc)
         scf_res = HartreeFock::SCF::run_uhf(calc, shell_pairs);
     else
         scf_res = HartreeFock::SCF::run_rhf(calc, shell_pairs);
+
+    // Restore the original guess mode so it doesn't contaminate subsequent SCF calls.
+    calc._scf._guess = saved_guess;
 
     if (!scf_res)
         throw std::runtime_error("GeomOpt SCF failed: " + scf_res.error());
