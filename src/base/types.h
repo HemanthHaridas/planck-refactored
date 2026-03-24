@@ -65,11 +65,12 @@ namespace HartreeFock
 
     enum class CalculationType
     {
-        SinglePoint,    // Single point Energy Calculation
-        Gradient,       // Analytic nuclear gradient
-        GeomOpt,        // Geometry Optimization
-        Frequency,      // Frequency Calculation
-        GeomOptFrequency // Geometry optimization followed by frequency calculation
+        SinglePoint,      // Single point Energy Calculation
+        Gradient,         // Analytic nuclear gradient
+        GeomOpt,          // Geometry Optimization
+        Frequency,        // Frequency Calculation
+        GeomOptFrequency, // Geometry optimization followed by frequency calculation
+        ImaginaryFollow   // Freq → displace along largest imaginary mode → geomopt
     };
 
     enum class SCFMode
@@ -702,7 +703,8 @@ namespace HartreeFock
         Eigen::MatrixXd _normal_modes;      // 3N × n_vib mass-unweighted normal modes
         std::vector<std::string> _vibrational_symmetry; // n_vib Mulliken labels
         double          _zpe = 0.0;         // zero-point energy in Ha
-        double          _hessian_step = 5e-3; // finite-difference step in Bohr
+        double          _hessian_step = 5e-3;     // finite-difference step in Bohr
+        double          _imag_follow_step = 0.2; // Cartesian displacement along imaginary mode, Bohr
 
         void _compute_nuclear_repulsion() noexcept
         {

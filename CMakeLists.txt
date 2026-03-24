@@ -283,29 +283,29 @@ endif()
 #   bse get-basis <name> > basis-sets/<name>
 # The ALL target runs automatically during the normal build; already-present
 # files are never re-fetched.  Manual trigger: cmake --build build --target fetch-basis-sets
-file(STRINGS "${CMAKE_SOURCE_DIR}/basis-sets/basis" _BASIS_NAMES)
+# file(STRINGS "${CMAKE_SOURCE_DIR}/basis-sets/basis" _BASIS_NAMES)
 
-set(_BASIS_OUTPUTS "")
-foreach(_bname IN LISTS _BASIS_NAMES)
-    string(STRIP "${_bname}" _bname)
-    if(_bname STREQUAL "")
-        continue()
-    endif()
-    set(_bfile "${CMAKE_SOURCE_DIR}/basis-sets/${_bname}")
-    add_custom_command(
-        OUTPUT  "${_bfile}"
-        COMMAND ${CMAKE_COMMAND}
-                -D BSE_NAME=${_bname}
-                -D BSE_OUT=${_bfile}
-                -P ${CMAKE_SOURCE_DIR}/cmake/fetch_basis.cmake
-        COMMENT "Fetching basis set: ${_bname}"
-        VERBATIM
-    )
-    list(APPEND _BASIS_OUTPUTS "${_bfile}")
-endforeach()
+# set(_BASIS_OUTPUTS "")
+# foreach(_bname IN LISTS _BASIS_NAMES)
+#     string(STRIP "${_bname}" _bname)
+#     if(_bname STREQUAL "")
+#         continue()
+#     endif()
+#     set(_bfile "${CMAKE_SOURCE_DIR}/basis-sets/${_bname}")
+#     add_custom_command(
+#         OUTPUT  "${_bfile}"
+#         COMMAND ${CMAKE_COMMAND}
+#                 -D BSE_NAME=${_bname}
+#                 -D BSE_OUT=${_bfile}
+#                 -P ${CMAKE_SOURCE_DIR}/cmake/fetch_basis.cmake
+#         COMMENT "Fetching basis set: ${_bname}"
+#         VERBATIM
+#     )
+#     list(APPEND _BASIS_OUTPUTS "${_bfile}")
+# endforeach()
 
-add_custom_target(fetch-basis-sets ALL
-    DEPENDS ${_BASIS_OUTPUTS}
-)
+# add_custom_target(fetch-basis-sets ALL
+#     DEPENDS ${_BASIS_OUTPUTS}
+# )
 
-add_dependencies(hartree-fock fetch-basis-sets)
+# add_dependencies(hartree-fock fetch-basis-sets)

@@ -360,6 +360,8 @@ const inline std::string map_enum<HartreeFock::CalculationType>(HartreeFock::Cal
         return "Frequency Calculation";
     case HartreeFock::CalculationType::GeomOptFrequency:
         return "Geometry Optimization + Frequency";
+    case HartreeFock::CalculationType::ImaginaryFollow:
+        return "Imaginary Mode Follow";
     }
     return "Unknown";
 }

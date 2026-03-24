@@ -136,16 +136,16 @@ def render_markdown(
     def close_table() -> None:
         nonlocal in_table, pending_header
         if in_table:
-            output.append("</tbody></table>")
+            output.append("</tbody></table></div>")
             in_table = False
         if pending_header is not None:
             # Headerless single row — emit as plain table
-            output.append("<table><tbody>")
+            output.append('<div class="table-wrap"><table><tbody>')
             row = "".join(
                 f"<td>{inline_format(c)}</td>" for c in pending_header
             )
             output.append(f"<tr>{row}</tr>")
-            output.append("</tbody></table>")
+            output.append("</tbody></table></div>")
             pending_header = None
 
     for raw_line in lines:
@@ -252,7 +252,7 @@ def render_markdown(
             # Separator row (|---|---|): emit buffered header, open tbody
             if all(re.fullmatch(r"[-: ]+", c) for c in cells):
                 if pending_header is not None:
-                    output.append("<table>")
+                    output.append('<div class="table-wrap"><table>')
                     output.append("<thead><tr>")
                     for c in pending_header:
                         output.append(
@@ -522,10 +522,59 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
       text-align: center;
     }}
     .math-inline {{ white-space: nowrap; }}
+    /* ── Scrollable table wrapper ─────────────────────────────── */
+    .table-wrap {{
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin: 1.4rem 0;
+    }}
+    .table-wrap table {{ margin: 0; min-width: 480px; }}
+    /* ── Mobile TOC toggle button ─────────────────────────────── */
+    .toc-toggle {{
+      display: none;
+      width: 100%;
+      background: var(--accent);
+      color: #fff9f2;
+      border: none;
+      border-radius: 12px;
+      padding: 10px 16px;
+      font-family: inherit;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: left;
+      margin-bottom: 12px;
+    }}
+    /* ── Tablet breakpoint (≤ 980 px) ────────────────────────── */
     @media (max-width: 980px) {{
       .layout {{ grid-template-columns: 1fr; }}
       .sidebar {{ position: static; max-height: none; }}
       .content {{ padding: 24px 18px; }}
+      .toc-toggle {{ display: block; }}
+      .sidebar-nav {{ display: none; }}
+      .sidebar-nav.open {{ display: block; }}
+      .sidebar h2 {{ display: none; }}
+    }}
+    /* ── Phone breakpoint (≤ 600 px) ─────────────────────────── */
+    @media (max-width: 600px) {{
+      .page {{ padding: 12px 10px 40px; }}
+      .hero {{ padding: 18px 18px; border-radius: 16px; }}
+      .hero h1 {{ font-size: clamp(1.6rem, 7vw, 2.4rem); }}
+      .hero p {{ font-size: 0.95rem; }}
+      .content {{ padding: 18px 14px; border-radius: 16px; }}
+      .sidebar {{ border-radius: 16px; padding: 16px 14px; }}
+      .content p, .content li {{
+        text-align: left;
+        -webkit-hyphens: none;
+        hyphens: none;
+      }}
+      .content h1 {{ font-size: 1.7rem; }}
+      .content h2 {{ font-size: 1.3rem; margin-top: 2rem; }}
+      .content h3 {{ font-size: 1.1rem; }}
+      .content pre {{ padding: 14px 14px; border-radius: 10px; }}
+      .sidebar a {{ padding: 7px 0; font-size: 0.97rem; }}
+      .toc-level-2 a {{ padding-left: 14px; }}
+      .toc-level-3 a {{ padding-left: 26px; font-size: 0.9rem; }}
     }}
   </style>
 </head>
@@ -539,14 +588,31 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
     </section>
     <div class="layout">
       <aside class="sidebar">
+        <button class="toc-toggle" aria-expanded="false" aria-controls="toc-nav">
+          Contents &#9662;
+        </button>
         <h2>Contents</h2>
-        {toc_html}
+        <nav id="toc-nav" class="sidebar-nav">
+          {toc_html}
+        </nav>
       </aside>
       <main class="content">
         {content_html}
       </main>
     </div>
   </div>
+  <script>
+    (function () {{
+      var btn = document.querySelector('.toc-toggle');
+      var nav = document.getElementById('toc-nav');
+      if (!btn || !nav) return;
+      btn.addEventListener('click', function () {{
+        var open = nav.classList.toggle('open');
+        btn.setAttribute('aria-expanded', String(open));
+        btn.innerHTML = open ? 'Contents &#9652;' : 'Contents &#9662;';
+      }});
+    }})();
+  </script>
 </body>
 </html>
 """

@@ -641,10 +641,93 @@ int main(int argc, const char* argv[])
             std::format("{} constraint(s) active", calculator._constraints.size()));
     }
 
+    // ── Imaginary Mode Follow: Hessian → find mode → displace → geomopt ─────
+    bool imag_follow_armed = false;
+    if (calculator._info._is_converged &&
+        calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow)
+    {
+        HartreeFock::Logger::blank();
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+            "Imaginary Follow :", "Computing semi-numerical Hessian");
+        try
+        {
+            auto freq_result = HartreeFock::Freq::compute_hessian(calculator);
+
+            // Store for completeness
+            calculator._hessian              = freq_result.hessian;
+            calculator._frequencies          = freq_result.frequencies;
+            calculator._normal_modes         = freq_result.normal_modes;
+            calculator._vibrational_symmetry = freq_result.mode_symmetry;
+            calculator._zpe                  = freq_result.zpe;
+
+            if (freq_result.n_imaginary == 0)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                    "Imaginary Follow :",
+                    "No imaginary frequencies found — structure is a minimum; skipping optimization.");
+            }
+            else
+            {
+                // frequencies[] is sorted ascending; imaginary modes are negative and first.
+                // Scan to find the one with the largest absolute value.
+                int    imag_idx = 0;
+                double max_abs  = std::abs(freq_result.frequencies[0]);
+                for (int i = 1; i < freq_result.n_vib; ++i)
+                {
+                    if (freq_result.frequencies[i] >= 0.0) break;
+                    const double a = std::abs(freq_result.frequencies[i]);
+                    if (a > max_abs) { max_abs = a; imag_idx = i; }
+                }
+
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                    "Imaginary Follow :",
+                    std::format("{} imaginary mode(s); following mode {} ({:.2f}i cm\u207b\u00b9), step {:.4f} Bohr",
+                        freq_result.n_imaginary, imag_idx + 1,
+                        -freq_result.frequencies[imag_idx],
+                        calculator._imag_follow_step));
+
+                // Displace _standard (Bohr) along the chosen mode column.
+                // normal_modes is 3N×n_vib, unit-norm Cartesian columns, mass-unweighted.
+                const std::size_t N_if = calculator._molecule.natoms;
+                const double      stp  = calculator._imag_follow_step;
+                for (std::size_t a = 0; a < N_if; ++a)
+                    for (int d = 0; d < 3; ++d)
+                        calculator._molecule._standard(a, d) +=
+                            stp * freq_result.normal_modes(static_cast<int>(a) * 3 + d, imag_idx);
+
+                // Keep all three coordinate frames in sync
+                calculator._molecule._coordinates = calculator._molecule._standard;
+                calculator._molecule.coordinates  = calculator._molecule._standard / ANGSTROM_TO_BOHR;
+
+                // Log displaced geometry
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                    "Displaced Geometry (Angstrom) :", "");
+                for (std::size_t a = 0; a < N_if; ++a)
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                        std::format("  Atom {:3d}:  {:14d}  {:14.8f}  {:14.8f}  {:14.8f}",
+                            static_cast<int>(a + 1),
+                            static_cast<int>(calculator._molecule.atomic_numbers[a]),
+                            calculator._molecule.coordinates(a, 0),
+                            calculator._molecule.coordinates(a, 1),
+                            calculator._molecule.coordinates(a, 2)));
+                HartreeFock::Logger::blank();
+
+                imag_follow_armed = true;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error,
+                "Imaginary Follow :", e.what());
+            return EXIT_FAILURE;
+        }
+    }
+
     // ── Geometry optimization ─────────────────────────────────────────────────
     if (calculator._info._is_converged &&
         (calculator._calculation == HartreeFock::CalculationType::GeomOpt ||
-         calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency))
+         calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
+         (calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow && imag_follow_armed)))
     {
         const bool use_ic = (calculator._opt_coords == HartreeFock::OptCoords::Internal);
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Geometry Optimization :",
