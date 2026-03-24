@@ -82,6 +82,8 @@ class ParsedRun:
     scf_type: Optional[str] = None
     basis: Optional[str] = None
     point_group: Optional[str] = None
+    charge: Optional[int] = None
+    multiplicity: Optional[int] = None
 
     # --- geometry ---
     input_atoms: list[AtomCoord] = field(default_factory=list)
@@ -94,7 +96,9 @@ class ParsedRun:
     # --- geometry optimisation ---
     opt_steps: list[OptStep] = field(default_factory=list)
     opt_converged: bool = False
-    opt_step_geometries: dict[int, list[AtomCoord]] = field(default_factory=dict)
+    opt_step_geometries: dict[int, list[AtomCoord]] = field(
+        default_factory=dict
+    )
 
     # --- vibrational frequencies ---
     freq_modes: list[FreqMode] = field(default_factory=list)
@@ -107,7 +111,13 @@ class ParsedRun:
     gradient_max: Optional[float] = None
     gradient_rms: Optional[float] = None
 
+    # --- normal mode displacements ---
+    # normal_modes[mode_idx][atom_idx] = [dx, dy, dz]
+    normal_modes: list[list[list[float]]] = field(default_factory=list)
+
     # --- final energies ---
+    electronic_energy: Optional[float] = None
+    nuclear_repulsion_energy: Optional[float] = None
     total_energy: Optional[float] = None
     mp2_corr_energy: Optional[float] = None
     mp2_total_energy: Optional[float] = None
@@ -189,9 +199,20 @@ _GRAD_MSG_RE = re.compile(
 )
 
 # Raw energy table lines (no timestamp).
+_ELECTRONIC_ENERGY_RE = re.compile(r'^\s*Electronic Energy\s+([-+\d.eE]+)')
+_NUCLEAR_REPULSION_RE = re.compile(r'^\s*Nuclear Repulsion\s+([-+\d.eE]+)')
 _TOTAL_ENERGY_RE = re.compile(r'^\s*Total Energy\s+([-+\d.eE]+)')
 _CORR_ENERGY_RE = re.compile(r'^\s*Correlation Energy\s+([-+\d.eE]+)')
 _MP2_ENERGY_RE = re.compile(r'^\s*Total MP2 Energy\s+([-+\d.eE]+)')
+
+# Normal mode displacement header: "Normal Mode    1 :"
+_MODE_LABEL_RE = re.compile(r'^Normal Mode\s+(\d+)\s*:')
+
+# Normal mode displacement row: "  {atom}   {dx}   {dy}   {dz}"
+_MODE_DISP_RE = re.compile(
+    r'^\s*(\d+)'
+    r'\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s*$'
+)
 
 # Geometry optimisation convergence sentinel in message.
 _OPT_CONV_RE = re.compile(r'Converged in \d+ steps')
@@ -210,6 +231,7 @@ class _State:
     FREQ_TABLE = "FREQ_TABLE"
     GRADIENT = "GRADIENT"
     STEP_GEOM = "STEP_GEOM"
+    NORMAL_MODE = "NORMAL_MODE"
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +243,8 @@ def _parse_log_line(raw: str):
     m = _LOG_RE.match(raw)
     if not m:
         return None
-    field30 = m.group(1)   # exactly 30 chars (label field, may have trailing spaces)
+    # exactly 30 chars (label field, may have trailing spaces)
+    field30 = m.group(1)
     message = m.group(2)
     # Handle label overflow: setw(30) is a minimum, not a maximum.
     # "Optimized Geometry (Angstrom) :" is 31 chars — the trailing ':'
@@ -319,6 +342,14 @@ def parse_log(path: str | Path) -> ParsedRun:
 
         # Raw energy table lines (after first SCF has completed).
         if scf_done:
+            m = _ELECTRONIC_ENERGY_RE.match(raw)
+            if m and run.electronic_energy is None:
+                run.electronic_energy = float(m.group(1))
+                continue
+            m = _NUCLEAR_REPULSION_RE.match(raw)
+            if m and run.nuclear_repulsion_energy is None:
+                run.nuclear_repulsion_energy = float(m.group(1))
+                continue
             m = _TOTAL_ENERGY_RE.match(raw)
             if m and run.total_energy is None:
                 run.total_energy = float(m.group(1))
@@ -350,6 +381,18 @@ def parse_log(path: str | Path) -> ParsedRun:
             continue
         if label == "Point Group :" and run.point_group is None:
             run.point_group = message.strip()
+            continue
+        if label == "Charge :":
+            try:
+                run.charge = int(message.strip())
+            except ValueError:
+                pass
+            continue
+        if label == "Multiplicity :":
+            try:
+                run.multiplicity = int(message.strip())
+            except ValueError:
+                pass
             continue
 
         # Arm the SCF gate on "Begin SCF Cycles :".
@@ -427,6 +470,16 @@ def parse_log(path: str | Path) -> ParsedRun:
                 run.zpe_kcal = float(m.group(2))
             continue
 
+        # ── Normal mode displacements ───────────────────────────────────────
+        if label == "Normal Mode Displacements :":
+            state = _State.INIT  # individual modes handled by _MODE_LABEL_RE
+            continue
+        m = _MODE_LABEL_RE.match(label)
+        if m:
+            run.normal_modes.append([])
+            state = _State.NORMAL_MODE
+            continue
+
         # ── State-dependent line processing ────────────────────────────────
         if state == _State.INPUT_COORDS:
             if label == "":
@@ -471,6 +524,20 @@ def parse_log(path: str | Path) -> ParsedRun:
                 if atom:
                     run.opt_step_geometries[_current_step_n].append(atom)
             else:
+                state = _State.INIT
+
+        elif state == _State.NORMAL_MODE:
+            if label == "":
+                md = _MODE_DISP_RE.match(message)
+                if md and run.normal_modes:
+                    run.normal_modes[-1].append([
+                        float(md.group(2)),
+                        float(md.group(3)),
+                        float(md.group(4)),
+                    ])
+            else:
+                # Any named label exits; _MODE_LABEL_RE above will re-enter
+                # for the next mode before we ever reach here.
                 state = _State.INIT
 
         elif state == _State.GRADIENT:

@@ -201,9 +201,11 @@ namespace HartreeFock
             }
         }
 
-        inline void converged_energy(double energy_hartree)
+        inline void converged_energy(double energy_hartree, double nuclear_repulsion)
         {
             std::lock_guard<std::mutex> lock(log_mutex);
+
+            const double electronic = energy_hartree - nuclear_repulsion;
 
             constexpr int LW = 32;  // label column
             constexpr int VW = 20;  // value column
@@ -215,8 +217,19 @@ namespace HartreeFock
                       << std::setw(VW) << std::right << "kcal/mol"
                       << "\n"
                       << std::string(LW + VW * 3, '-') << "\n"
-                      << std::setw(LW) << std::left  << "  Total Energy"
                       << std::fixed << std::setprecision(10)
+                      << std::setw(LW) << std::left  << "  Electronic Energy"
+                      << std::setw(VW) << std::right << electronic
+                      << std::setw(VW) << std::right << electronic * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << electronic * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::setw(LW) << std::left  << "  Nuclear Repulsion"
+                      << std::setw(VW) << std::right << nuclear_repulsion
+                      << std::setw(VW) << std::right << nuclear_repulsion * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << nuclear_repulsion * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::string(LW + VW * 3, '-') << "\n"
+                      << std::setw(LW) << std::left  << "  Total Energy"
                       << std::setw(VW) << std::right << energy_hartree
                       << std::setw(VW) << std::right << energy_hartree * HARTREE_TO_EV
                       << std::setw(VW) << std::right << energy_hartree * HARTREE_TO_KCALMOL

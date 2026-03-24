@@ -35,12 +35,27 @@ static Eigen::VectorXd _run_sp_gradient(HartreeFock::Calculator& calc)
     calc._shells = HartreeFock::BasisFunctions::read_gbs_basis(
         gbs_path, calc._molecule, calc._basis._basis);
 
+    // Save converged density from the previous step to warm-start the next SCF.
+    // (initialize() zeros the density, so we must capture it beforehand.)
+    const Eigen::MatrixXd prev_alpha = calc._info._scf.alpha.density;
+    const Eigen::MatrixXd prev_beta  = calc._info._scf.beta.density;
+    const bool have_prev_density     = (prev_alpha.size() > 0);
+
     // Reset SCF data structures
     calc._info._scf = HartreeFock::DataSCF(calc._scf._scf == HartreeFock::SCFType::UHF);
     calc._info._scf.initialize(calc._shells.nbasis());
     calc._scf.set_scf_mode_auto(calc._shells.nbasis());
     calc._info._is_converged = false;
     calc._use_sao_blocking   = false;
+
+    // Restore the saved density and tell SCF to use it as the initial guess.
+    if (have_prev_density)
+    {
+        calc._info._scf.alpha.density = prev_alpha;
+        if (calc._scf._scf == HartreeFock::SCFType::UHF && prev_beta.size() > 0)
+            calc._info._scf.beta.density = prev_beta;
+        calc._scf._guess = HartreeFock::SCFGuess::ReadDensity;
+    }
 
     // Nuclear repulsion
     calc._compute_nuclear_repulsion();
