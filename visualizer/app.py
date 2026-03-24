@@ -11,7 +11,6 @@ GET endpoint:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from flask import Flask, jsonify, render_template
 
@@ -41,6 +40,7 @@ _SPH_R_Z: dict[int, float] = {
     35: 0.80,  53: 0.90,
 }
 
+
 # ---------------------------------------------------------------------------
 # Bond detection
 # ---------------------------------------------------------------------------
@@ -68,21 +68,21 @@ def _detect_bonds(atoms: list, tol: float = 0.45) -> list[list[int]]:
 def _run_to_json(run: ParsedRun, log_path: str) -> dict:
     atoms = run.opt_atoms or run.standard_atoms or run.input_atoms
 
-    symbols     = [ELEMENT_SYMBOLS.get(a.Z, f"X{a.Z}") for a in atoms]
-    coords_ang  = [[a.x, a.y, a.z] for a in atoms]
-    bonds       = _detect_bonds(atoms)
-    n_elec      = sum(a.Z for a in atoms)  # neutral-molecule approximation
+    symbols = [ELEMENT_SYMBOLS.get(a.Z, f"X{a.Z}") for a in atoms]
+    coords_ang = [[a.x, a.y, a.z] for a in atoms]
+    bonds = _detect_bonds(atoms)
+    n_elec = sum(a.Z for a in atoms)  # neutral-molecule approximation
 
     mol_data = {
-        "symbols":      symbols,
-        "coords_ang":   coords_ang,
-        "bonds":        bonds,
-        "hbonds":       [],
-        "cpk_colors":   [_CPK_Z.get(a.Z, "#ff69b4") for a in atoms],
+        "symbols": symbols,
+        "coords_ang": coords_ang,
+        "bonds": bonds,
+        "hbonds": [],
+        "cpk_colors": [_CPK_Z.get(a.Z, "#ff69b4") for a in atoms],
         "sphere_radii": [_SPH_R_Z.get(a.Z, 0.55) for a in atoms],
-        "num_atoms":    len(atoms),
+        "num_atoms": len(atoms),
         "num_electrons": n_elec,
-        "charge":       0,
+        "charge": 0,
         "multiplicity": 1,
     }
 
@@ -90,16 +90,20 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
     scf_data = None
     if run.scf_iters:
         energy_history = [it.energy for it in run.scf_iters]
-        final_energy   = run.total_energy if run.total_energy is not None else energy_history[-1]
+        final_energy = (
+            run.total_energy
+            if run.total_energy is not None
+            else energy_history[-1]
+        )
         scf_data = {
-            "energy":          final_energy,
-            "e_nuclear":       None,
-            "e_electronic":    None,
-            "converged":       run.total_energy is not None,
-            "iterations":      len(run.scf_iters),
-            "energy_history":  energy_history,
-            "n_occ":           None,
-            "orbital_energies":    [],
+            "energy": final_energy,
+            "e_nuclear": run.nuclear_repulsion_energy,
+            "e_electronic": run.electronic_energy,
+            "converged": run.total_energy is not None,
+            "iterations": len(run.scf_iters),
+            "energy_history": energy_history,
+            "n_occ": None,
+            "orbital_energies": [],
             "orbital_energies_ev": [],
         }
 
@@ -108,16 +112,18 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
     if run.opt_steps:
         last = run.opt_steps[-1]
         geopt_data = {
-            "converged":      run.opt_converged,
-            "iterations":     len(run.opt_steps),
+            "converged": run.opt_converged,
+            "iterations": len(run.opt_steps),
             "n_energy_evals": len(run.opt_steps),
-            "gradient_rms":   float(last.grad_rms),
-            "gradient_max":   float(last.grad_max),
-            "message":        "Converged" if run.opt_converged else "Not converged",
+            "gradient_rms": float(last.grad_rms),
+            "gradient_max": float(last.grad_max),
+            "message": (
+                "Converged" if run.opt_converged else "Not converged"
+            ),
             "trajectory": [
                 {
-                    "step":         s.step,
-                    "energy":       float(s.energy),
+                    "step": s.step,
+                    "energy": float(s.energy),
                     "gradient_max": float(s.grad_max),
                     "gradient_rms": float(s.grad_rms),
                 }
@@ -130,31 +136,39 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
     if run.mp2_total_energy is not None:
         mp2_data = {
             "energy": float(run.mp2_total_energy),
-            "e_corr": float(run.mp2_corr_energy) if run.mp2_corr_energy else None,
+            "e_corr": (
+                float(run.mp2_corr_energy)
+                if run.mp2_corr_energy else None
+            ),
         }
 
-    # Freq (normal modes not available from log file)
+    # Freq
     freq_data = None
     if run.freq_modes:
         freq_data = {
-            "frequencies":  [m.frequency for m in run.freq_modes],
-            "normal_modes": [],
-            "n_imaginary":  run.n_imaginary,
-            "zpe":          float(run.zpe_hartree) if run.zpe_hartree is not None else None,
+            "frequencies": [m.frequency for m in run.freq_modes],
+            "normal_modes": run.normal_modes,
+            "n_imaginary": run.n_imaginary,
+            "zpe": (
+                float(run.zpe_hartree)
+                if run.zpe_hartree is not None else None
+            ),
         }
 
     return {
-        "status":           "done",
-        "level":            run.scf_type or "RHF",
-        "basis":            run.basis or "unknown",
-        "log_file":         str(Path(log_path).name) if log_path else "",
+        "status": "done",
+        "level": run.scf_type or "RHF",
+        "basis": run.basis or "unknown",
+        "log_file": str(Path(log_path).name) if log_path else "",
         "calculation_type": run.calculation_type,
-        "point_group":      run.point_group,
-        "molecule":         mol_data,
-        "scf":              scf_data,
-        "mp2":              mp2_data,
-        "geopt":            geopt_data,
-        "freq":             freq_data,
+        "point_group": run.point_group,
+        "charge": run.charge,
+        "multiplicity": run.multiplicity,
+        "molecule": mol_data,
+        "scf": scf_data,
+        "mp2": mp2_data,
+        "geopt": geopt_data,
+        "freq": freq_data,
     }
 
 

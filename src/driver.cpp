@@ -130,6 +130,8 @@ int main(int argc, const char* argv[])
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :",           map_enum(calculator._scf._scf));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis :",            calculator._basis._basis_name);
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Charge :",           calculator._molecule.charge);
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Multiplicity :",     calculator._molecule.multiplicity);
     HartreeFock::Logger::blank();
 
     // Detect Symmetry
@@ -503,7 +505,7 @@ int main(int argc, const char* argv[])
                 std::format("Save failed: {}", res.error()));
     }
 
-    HartreeFock::Logger::converged_energy(calculator._total_energy);
+    HartreeFock::Logger::converged_energy(calculator._total_energy, calculator._nuclear_repulsion);
 
     // ── Post-HF correlation ───────────────────────────────────────────────────
     if (calculator._info._is_converged)
@@ -822,7 +824,7 @@ int main(int argc, const char* argv[])
                     HartreeFock::Logger::blank();
                 }
 
-                HartreeFock::Logger::converged_energy(calculator._total_energy);
+                HartreeFock::Logger::converged_energy(calculator._total_energy, calculator._nuclear_repulsion);
                 HartreeFock::Logger::blank();
 
                 // ── Save checkpoint with optimized geometry ───────────────────
@@ -933,6 +935,28 @@ int main(int argc, const char* argv[])
                 "Zero-point energy :",
                 std::format("{:.6f} Eh  ({:.2f} kcal/mol)",
                             freq_result.zpe, zpe_kcal));
+
+            // ── Normal mode displacements (mass-unweighted, Cartesian-normalised) ──
+            HartreeFock::Logger::blank();
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                "Normal Mode Displacements :", "");
+            for (int i = 0; i < n_vib; ++i)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                    std::format("Normal Mode {:4d} :", i + 1),
+                    have_mode_symmetry
+                        ? freq_result.mode_symmetry[static_cast<std::size_t>(i)]
+                        : std::string{});
+                for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
+                {
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                        std::format("  {:4d}   {:12.8f}   {:12.8f}   {:12.8f}",
+                                    static_cast<int>(a + 1),
+                                    freq_result.normal_modes(static_cast<int>(a) * 3 + 0, i),
+                                    freq_result.normal_modes(static_cast<int>(a) * 3 + 1, i),
+                                    freq_result.normal_modes(static_cast<int>(a) * 3 + 2, i)));
+                }
+            }
             HartreeFock::Logger::blank();
         }
         catch (const std::exception& e)
