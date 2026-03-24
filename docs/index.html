@@ -214,10 +214,59 @@
       text-align: center;
     }
     .math-inline { white-space: nowrap; }
+    /* ── Scrollable table wrapper ─────────────────────────────── */
+    .table-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin: 1.4rem 0;
+    }
+    .table-wrap table { margin: 0; min-width: 480px; }
+    /* ── Mobile TOC toggle button ─────────────────────────────── */
+    .toc-toggle {
+      display: none;
+      width: 100%;
+      background: var(--accent);
+      color: #fff9f2;
+      border: none;
+      border-radius: 12px;
+      padding: 10px 16px;
+      font-family: inherit;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: left;
+      margin-bottom: 12px;
+    }
+    /* ── Tablet breakpoint (≤ 980 px) ────────────────────────── */
     @media (max-width: 980px) {
       .layout { grid-template-columns: 1fr; }
       .sidebar { position: static; max-height: none; }
       .content { padding: 24px 18px; }
+      .toc-toggle { display: block; }
+      .sidebar-nav { display: none; }
+      .sidebar-nav.open { display: block; }
+      .sidebar h2 { display: none; }
+    }
+    /* ── Phone breakpoint (≤ 600 px) ─────────────────────────── */
+    @media (max-width: 600px) {
+      .page { padding: 12px 10px 40px; }
+      .hero { padding: 18px 18px; border-radius: 16px; }
+      .hero h1 { font-size: clamp(1.6rem, 7vw, 2.4rem); }
+      .hero p { font-size: 0.95rem; }
+      .content { padding: 18px 14px; border-radius: 16px; }
+      .sidebar { border-radius: 16px; padding: 16px 14px; }
+      .content p, .content li {
+        text-align: left;
+        -webkit-hyphens: none;
+        hyphens: none;
+      }
+      .content h1 { font-size: 1.7rem; }
+      .content h2 { font-size: 1.3rem; margin-top: 2rem; }
+      .content h3 { font-size: 1.1rem; }
+      .content pre { padding: 14px 14px; border-radius: 10px; }
+      .sidebar a { padding: 7px 0; font-size: 0.97rem; }
+      .toc-level-2 a { padding-left: 14px; }
+      .toc-level-3 a { padding-left: 26px; font-size: 0.9rem; }
     }
   </style>
 </head>
@@ -231,8 +280,12 @@
     </section>
     <div class="layout">
       <aside class="sidebar">
+        <button class="toc-toggle" aria-expanded="false" aria-controls="toc-nav">
+          Contents &#9662;
+        </button>
         <h2>Contents</h2>
-        <ul>
+        <nav id="toc-nav" class="sidebar-nav">
+          <ul>
 <li class="toc-level-3"><a href="#planck-teaching-guide">Planck Teaching Guide</a></li>
 <li class="toc-level-3"><a href="#1-what-planck-is">1. What Planck Is</a></li>
 <li class="toc-level-3"><a href="#2-architecture-overview">2. Architecture Overview</a></li>
@@ -305,6 +358,7 @@
 <li class="toc-level-2"><a href="#20-current-implementation-status">20. Current Implementation Status</a></li>
 <li class="toc-level-2"><a href="#21-how-to-study-this-codebase">21. How to Study This Codebase</a></li>
 </ul>
+        </nav>
       </aside>
       <main class="content">
         <h3 id="planck-teaching-guide">Planck Teaching Guide</h3>
@@ -346,7 +400,7 @@ Input file (.hfinp)
   → checkpoint write (src/io/checkpoint.cpp)
 </code></pre>
 <h3 id="directory-summary">Directory Summary</h3>
-<table>
+<div class="table-wrap"><table>
 <thead><tr>
 <th>Directory</th>
 <th>Contents</th>
@@ -362,7 +416,7 @@ Input file (.hfinp)
 <tr><td><code>src/gradient</code></td><td>analytic RHF, UHF, RMP2 gradients</td></tr>
 <tr><td><code>src/opt</code></td><td>L-BFGS/BFGS optimizer, internal coordinates, constraints</td></tr>
 <tr><td><code>src/freq</code></td><td>finite-difference Hessian, vibrational analysis</td></tr>
-</tbody></table>
+</tbody></table></div>
 <h3 id="3-core-data-structures">3. Core Data Structures</h3>
 <h3 id="molecule"><code>Molecule</code></h3>
 <p>Holds atomic numbers, charge, multiplicity, and three coordinate representations that are easy to confuse:</p>
@@ -997,7 +1051,7 @@ driver.cpp
 </code></pre>
 <hr>
 <h2 id="19-theory-to-code-map">19. Theory-to-Code Map</h2>
-<table>
+<div class="table-wrap"><table>
 <thead><tr>
 <th>Theory concept</th>
 <th>Primary file(s)</th>
@@ -1043,10 +1097,10 @@ driver.cpp
 <tr><td>Vibrational symmetry</td><td><code>src/symmetry/vibrational_symmetry.cpp</code></td><td>mode irrep assignment</td></tr>
 <tr><td>Checkpoint I/O</td><td><code>src/io/checkpoint.cpp</code></td><td><code>save_checkpoint</code>, <code>load_checkpoint</code></td></tr>
 <tr><td>Cross-basis projection</td><td><code>src/io/checkpoint.cpp</code></td><td>Löwdin SVD projection</td></tr>
-</tbody></table>
+</tbody></table></div>
 <hr>
 <h2 id="20-current-implementation-status">20. Current Implementation Status</h2>
-<table>
+<div class="table-wrap"><table>
 <thead><tr>
 <th>Feature</th>
 <th>Status</th>
@@ -1074,7 +1128,7 @@ driver.cpp
 <tr><td>Checkpoint save/restart</td><td>Complete</td></tr>
 <tr><td>Cross-basis density projection</td><td>Complete</td></tr>
 <tr><td>Spherical harmonic basis</td><td>Not supported (Cartesian only)</td></tr>
-</tbody></table>
+</tbody></table></div>
 <hr>
 <h2 id="21-how-to-study-this-codebase">21. How to Study This Codebase</h2>
 <p>Recommended reading order:</p>
@@ -1094,5 +1148,17 @@ driver.cpp
       </main>
     </div>
   </div>
+  <script>
+    (function () {
+      var btn = document.querySelector('.toc-toggle');
+      var nav = document.getElementById('toc-nav');
+      if (!btn || !nav) return;
+      btn.addEventListener('click', function () {
+        var open = nav.classList.toggle('open');
+        btn.setAttribute('aria-expanded', String(open));
+        btn.innerHTML = open ? 'Contents &#9652;' : 'Contents &#9662;';
+      });
+    })();
+  </script>
 </body>
 </html>
