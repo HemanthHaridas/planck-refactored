@@ -385,22 +385,188 @@ Planck iterates only over pairs \(p \le q\) in the AO-pair index and fills all
 
 ## 6. Rys Quadrature
 
-The Rys quadrature method evaluates ERIs by converting the Boys function
-integral into a Gauss-Legendre-type quadrature:
+### The Basic Idea
+
+The Obara-Saika VRR builds an \((L+1)\)-deep stack of auxiliary integrals at
+each auxiliary order \(m\). For high-angular-momentum quartets (d+d, f+p, …)
+the stack grows large, and intermediate storage dominates the cost. The Rys
+quadrature method avoids auxiliary-order recursion entirely by converting the
+Boys function integral into a discrete sum:
 
 \[
-F_m(t) = \sum_{r=1}^{n_r} w_r\, x_r^{2m}
+F_m(T) = \int_0^1 t^{2m}\, e^{-T t^2}\, dt
+       = \sum_{r=1}^{n} w_r(T)\, \bigl[t_r^2(T)\bigr]^m
 \]
 
-where \(\{x_r, w_r\}\) are the Rys roots and weights that depend on \(t = \zeta\eta/(\zeta+\eta) R_{PQ}^2\).
-Each quadrature point decouples the 3D integral into three independent 1D
-integrals, one per Cartesian direction, which are then multiplied together.
+where \(\{t_r^2, w_r\}\) are the Rys roots (squared) and weights, which depend
+on the Boys argument \(T = \rho\,|\mathbf{PQ}|^2\). When this representation
+is substituted into the ERI expression, the integral factorizes into independent
+1D integrals in \(x\), \(y\), and \(z\) for each quadrature point \(r\).
 
-The Rys method naturally handles high-angular-momentum quartets without the
-recursive intermediate storage required by the VRR/HRR scheme. Planck uses it
-as an alternative engine (controlled by `IntegralMethod::RysQuadrature` or
-`IntegralMethod::Auto`). The implementation lives in `src/integrals/rys.cpp`
-and `rys_roots.cpp`.
+### Number of Roots
+
+For a quartet with total angular momentum \(L = l_A + l_B + l_C + l_D\), the
+exact number of Rys roots required is:
+
+\[
+n = \left\lfloor \frac{L}{2} \right\rfloor + 1
+\]
+
+Planck supports up to \(n = 11\) roots (`RYS_MAX_ROOTS`), corresponding to
+\(L \le 20\) (two H-shells). For S, P, D, F, G shells the root counts are:
+
+| Shell quartet | L | Roots |
+|---|---|---|
+| (ss∣ss) | 0 | 1 |
+| (sp∣ss) | 1 | 1 |
+| (pp∣ss) | 2 | 2 |
+| (pp∣pp) | 4 | 3 |
+| (dd∣ss) | 4 | 3 |
+| (dd∣pp) | 6 | 4 |
+| (dd∣dd) | 8 | 5 |
+| (ff∣dd) | 10 | 6 |
+
+### Root Finding
+
+Computing the roots and weights for a given \(T\) is the central numerical
+challenge. Planck uses two strategies, selected by `rys_roots_weights` in
+`src/integrals/rys_roots.cpp`:
+
+**T ≈ 0 (Gauss-Legendre limit)**: As \(T \to 0\) the weight function
+\(e^{-Tt^2} \to 1\), so the Rys quadrature degenerates to the standard
+Gauss-Legendre rule on \([0,1]\). Pre-tabulated GL roots and weights for
+\(n = 1, \ldots, 11\) are stored in `gl_roots` and `gl_weights` and used
+directly when \(T < 10^{-14}\).
+
+**T > 0 (Stieltjes–Jacobi procedure)**: For non-zero \(T\) the Rys
+measure is \(e^{-Tt^2} dt\) on \([0,1]\). The roots and weights are obtained
+by building the three-term recurrence (Jacobi) matrix of the orthogonal
+polynomial family with respect to this measure. The algorithm:
+
+1. Compute \(2n+1\) Boys moments
+   \(F_m(T) = \int_0^1 t^{2m} e^{-Tt^2} dt\) in long double precision.
+2. Construct orthonormal polynomials via the Gram-Schmidt Stieltjes procedure,
+   recording the diagonal (\(\alpha_k\)) and sub-diagonal (\(\beta_k\)) entries
+   of the symmetric \(n \times n\) Jacobi matrix \(\mathbf J\).
+3. Diagonalize \(\mathbf J\) using Eigen's `SelfAdjointEigenSolver`. The
+   eigenvalues are the Rys roots \(t_r^2\); the weight for root \(r\) is
+   \(w_r = F_0(T) \cdot V_{0r}^2\) where \(V_{0r}\) is the first component of
+   the \(r\)-th eigenvector. This is the Golub–Welsch formula.
+4. If the Gram-Schmidt procedure encounters a degenerate norm, the algorithm
+   falls back to the Gauss-Legendre table.
+
+### The Rys 1D VRR
+
+For each Rys root \(u = t_r^2\), the ERI factorizes into three independent 1D
+integrals. Each 1D table \(I[a][c]\) is filled by its own three-term recursion:
+
+\[
+I[0][0] = 1 \qquad\text{(seed)}
+\]
+
+*Bra increment* (\(c = 0\)):
+
+\[
+I[a+1][0] = C_{00}\, I[a][0] + a\, B_{10}\, I[a-1][0]
+\]
+
+*Ket increment* (general \(a\)):
+
+\[
+I[a][c+1] = D_{00}\, I[a][c] + c\, B_{01}\, I[a][c-1] + a\, B_{00}\, I[a-1][c-1]
+\]
+
+The root-dependent coefficients are:
+
+\[
+B_{00} = \frac{u}{2\delta}, \qquad
+B_{10} = \frac{1}{2\zeta} - B_{00}, \qquad
+B_{01} = \frac{1}{2\eta}  - B_{00}
+\]
+
+\[
+C_{00} = (P_q - A_q) + u\,(W_q - P_q), \qquad
+D_{00} = (Q_q - C_q) + u\,(W_q - Q_q)
+\]
+
+where \(\delta = \zeta + \eta\), \(\mathbf W = (\zeta\mathbf P + \eta\mathbf Q)/\delta\) is the
+weighted Gaussian product center, and \(q\) is the Cartesian direction. As
+\(u \to 0\) the root sits at the A-center (\(C_{00} \to P_q - A_q\)); as
+\(u \to 1\) the root sits at the W-center. These recurrences are implemented
+in `_rys_vrr_1d` in `src/integrals/rys.cpp`.
+
+### 6D Accumulation and HRR
+
+After running `_rys_vrr_1d` for all three Cartesian directions, the 3D outer
+product is accumulated into a six-index buffer:
+
+\[
+W[a_x][a_y][a_z][c_x][c_y][c_z]
+  \mathrel{+}= w_r \cdot I_x[a_x][c_x] \cdot I_y[a_y][c_y] \cdot I_z[a_z][c_z]
+\]
+
+This sum runs over all \(n\) roots. After the root loop the buffer holds
+\((a\,0\,|\,c\,0)\) intermediates analogous to those produced by the OS VRR.
+The thread-local six-index array `_rys_sum_buf[13][13][13][13][13][13]`
+is the Rys counterpart of `_vrr_buf` in `os.cpp`.
+
+Angular momentum is then transferred to the second center of each shell pair
+using the same HRR as the OS path:
+
+- **AB-HRR** (`_rys_hrr_ab`): \((a+1_i\,b-1_i\,|\,c\,d) + (A_i - B_i)(a\,b-1_i\,|\,c\,d)\)
+- **CD-HRR** (`_rys_hrr_cd`): operates on the 3D slice extracted at \((l_A, l_A, l_A)\)
+  after the AB sweep.
+
+The contracted ERI is obtained by summing the primitive results over all
+\((\alpha, \beta)\) and \((\gamma, \delta)\) primitive pairs inside
+`_rys_contracted_eri`.
+
+### Auto-Dispatch: OS vs. Rys Cost Model
+
+Planck's `auto` engine mode selects OS or Rys per contracted shell quartet using
+an analytic operation-count estimate (`_auto_prefers_rys` in `rys.cpp`).
+
+Define:
+
+\[
+\text{six\_d} = (l_{AB,x}+1)(l_{AB,y}+1)(l_{AB,z}+1)
+                (l_{CD,x}+1)(l_{CD,y}+1)(l_{CD,z}+1)
+\]
+
+This counts the number of entries in the 6D accumulation buffer. The estimated
+flop counts are:
+
+\[
+W_{\text{OS}}  = \text{six\_d}\cdot(L+1)
+               + (l_B + l_D + 1)\cdot\text{six\_d}\cdot 0.25
+\]
+
+\[
+W_{\text{Rys}} = \text{six\_d}\cdot n
+               + (l_B + l_D + 1)\cdot\text{six\_d}\cdot 0.20
+               + 24\cdot n
+\]
+
+where \(n = \lfloor L/2 \rfloor + 1\) is the number of Rys roots and the
+constant 24 accounts for the per-root overhead of root finding and 1D
+coefficient computation. Rys is preferred when \(W_{\text{Rys}} < W_{\text{OS}}\).
+
+For a (dd|dd) quartet: \(L = 8\), \(n = 5\),
+\(\text{six\_d} = 3^4 \cdot 3^4 = \ldots\), and the Rys path wins because the
+OS stack grows as \(L+1 = 9\) deep while Rys only needs 5 root evaluations.
+For (ss|ss) through (sp|sp) the OS path is cheaper. The empirical crossover is
+around \(L = 4\) (constant `RYS_CROSSOVER_L`). The `_auto_contracted_eri`
+wrapper dispatches to `_rys_contracted_eri` or `ObaraSaika::_contracted_eri_elem`
+at this level.
+
+### Implementation Files
+
+| File | Role |
+|---|---|
+| `src/integrals/rys.h` | Public API: `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf`, and `_auto` variants |
+| `src/integrals/rys.cpp` | VRR (`_rys_vrr_1d`), HRR (`_rys_hrr_ab`, `_rys_hrr_cd`), primitive and contracted ERI, Schwarz table, Fock builders, auto-dispatch |
+| `src/integrals/rys_roots.h` | `rys_roots_weights` declaration; exact 1-point formula `rys_1pt` |
+| `src/integrals/rys_roots.cpp` | Pre-tabulated GL rules; Boys moment recursion; Stieltjes–Jacobi Gram-Schmidt + Eigen eigendecomposition |
 
 ---
 

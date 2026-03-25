@@ -5,7 +5,7 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 ### Features
 
 - **RHF / UHF** — closed-shell and open-shell Hartree-Fock
-- **Obara-Saika integral engine** — recursive 1e and 2e integrals (S, P, D, F, G, H shells)
+- **Two integral engines** — Obara-Saika (OS) recursive VRR/HRR for low angular momentum; Rys quadrature for high angular momentum; automatic engine selection per shell quartet based on an analytic flop-count model (`engine auto`)
 - **Conventional and Direct SCF** — ERI tensor stored once (conventional) or recomputed per iteration (direct); auto-selection based on system size
 - **DIIS** — Pulay extrapolation with optional automatic subspace restart
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
@@ -126,7 +126,7 @@ SCF procedure and convergence settings.
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
 | `scf_type` | enum | `rhf`, `uhf` | `rhf` | Wavefunction type |
-| `engine` | enum | `os` / `obara-saika` | `os` | Integral engine (Obara-Saika recursive algorithm) |
+| `engine` | enum | `os` / `obara-saika`, `rys`, `auto` | `os` | Two-electron integral engine. `os`: Obara-Saika VRR/HRR recursion. `rys`: Rys quadrature (converts the Boys integral to a Gauss-type quadrature; exact with ⌊L/2⌋+1 roots). `auto`: selects the engine per contracted shell quartet using an analytic flop-count model — OS for low total angular momentum (L < 4), Rys for L ≥ 4 (d+d and higher). |
 | `correlation` | enum | `rmp2`, `ump2` | none | Post-HF correlation energy correction |
 | `use_diis` | bool | `.true.`, `.false.` | `.true.` | Enable DIIS convergence acceleration |
 | `diis_dim` | int | ≥ 2 | `8` | Maximum DIIS subspace size |

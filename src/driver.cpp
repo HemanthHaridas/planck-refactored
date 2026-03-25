@@ -90,6 +90,7 @@ int main(int argc, const char* argv[])
     // multiplicity are taken from the checkpoint (e.g. an optimized geometry)
     // rather than the input file.  This must happen before detectSymmetry() and
     // read_gbs_basis() so that they operate on the checkpoint geometry.
+    bool preserve_checkpoint_ao_frame = false;
     if (calculator._scf._guess == HartreeFock::SCFGuess::ReadFull)
     {
         if (auto geo = HartreeFock::Checkpoint::load_geometry(calculator._checkpoint_path); geo)
@@ -110,6 +111,7 @@ int main(int argc, const char* argv[])
             calculator._molecule.charge        = geo->charge;
             calculator._molecule.multiplicity  = geo->multiplicity;
             calculator._molecule.atomic_numbers = geo->atomic_numbers;
+            preserve_checkpoint_ao_frame = true;
 
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
                 std::format("Restoring {} geometry from {}{}",
@@ -136,7 +138,18 @@ int main(int argc, const char* argv[])
     HartreeFock::Logger::blank();
 
     // Detect Symmetry
-    if (!calculator._geometry._use_symm)
+    if (preserve_checkpoint_ao_frame)
+    {
+        calculator._molecule._point_group = "C1";
+        calculator._molecule._symmetry = false;
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :",
+            "Skipped for guess full restart to preserve checkpoint AO frame");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :",
+            "Checkpoint density and 1e matrices are reused in the stored standard orientation");
+        HartreeFock::Logger::blank();
+    }
+
+    else if (!calculator._geometry._use_symm)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :", "Symmetry detection is turned off by request");
         // No reorientation — standard frame equals input frame.
