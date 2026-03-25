@@ -1242,12 +1242,13 @@ Eigen::MatrixXd build_kappa(
     const Eigen::MatrixXd& F_I_mo,
     const Eigen::MatrixXd& F_A_mo,
     int n_core, int n_act, int n_virt,
-    double min_shift = 0.3,            // minimum denominator to prevent huge steps
-    double max_rot   = 0.05)           // maximum single-element rotation (radians)
+    double level_shift = 0.1,          // diagonal LM shift for damped Newton
+    double max_rot   = 0.10)           // maximum single-element rotation (radians)
 {
     const int nb = n_core + n_act + n_virt;
     const Eigen::MatrixXd FA_plus_FI = F_I_mo + F_A_mo;
     Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nb, nb);
+    constexpr double trust_radius = 0.80; // Frobenius norm cap for global step size
 
     auto cls = [&](int k) -> int {
         if (k < n_core) return 0;
@@ -1261,10 +1262,11 @@ Eigen::MatrixXd build_kappa(
         if (p == q || std::abs(g(p, q)) < 1e-18) continue;
         if (cls(p) == cls(q)) continue;  // only non-redundant pairs
 
-        // Diagonal Hessian: |2*(F_pp - F_qq)| + min_shift
-        const double delta_F = FA_plus_FI(p, p) - FA_plus_FI(q, q);
-        const double H_diag  = std::abs(2.0 * delta_F) + min_shift;
-        kappa(p, q)          = g(p, q) / H_diag;
+        // Damped diagonal Newton step:
+        //   step = -g / h  with LM regularization via h/(h^2 + mu^2).
+        const double h = 2.0 * (FA_plus_FI(p, p) - FA_plus_FI(q, q));
+        const double denom = h * h + level_shift * level_shift;
+        kappa(p, q) = -g(p, q) * h / std::max(denom, 1e-18);
     }
     // Enforce antisymmetry
     kappa = 0.5 * (kappa - kappa.transpose());
@@ -1274,7 +1276,45 @@ Eigen::MatrixXd build_kappa(
     if (max_k > max_rot)
         kappa *= max_rot / max_k;
 
+    // Additional global cap controls the full rotation amplitude and helps
+    // keep Newton steps stable when many pair rotations are active.
+    const double frob = kappa.norm();
+    if (frob > trust_radius)
+        kappa *= trust_radius / frob;
+
     return kappa;
+}
+
+double diagonal_newton_model_delta(
+    const Eigen::MatrixXd& g_orb,
+    const Eigen::MatrixXd& kappa,
+    const Eigen::MatrixXd& F_I_mo,
+    const Eigen::MatrixXd& F_A_mo,
+    int n_core, int n_act, int n_virt)
+{
+    const int nb = n_core + n_act + n_virt;
+    const Eigen::MatrixXd FA_plus_FI = F_I_mo + F_A_mo;
+
+    auto cls = [&](int k) -> int {
+        if (k < n_core) return 0;
+        if (k < n_core + n_act) return 1;
+        return 2;
+    };
+
+    double linear = 0.0;
+    double quad = 0.0;
+    for (int p = 0; p < nb; ++p)
+    for (int q = p + 1; q < nb; ++q)
+    {
+        if (cls(p) == cls(q)) continue;
+        const double step = kappa(p, q);
+        if (std::abs(step) < 1e-18) continue;
+
+        const double h = 2.0 * (FA_plus_FI(p, p) - FA_plus_FI(q, q));
+        linear += g_orb(p, q) * step;
+        quad += 0.5 * h * step * step;
+    }
+    return linear + quad;
 }
 
 
@@ -1431,6 +1471,7 @@ std::expected<void, std::string> run_mcscf_loop(
     int    diis_stall  = 0;     // consecutive iterations with growing DIIS error
     bool   diis_active = false;
     bool   converged   = false;
+    double newton_mu   = 0.20;  // Levenberg damping for diagonal Newton orbital steps
 
     std::vector<double> ga;               // active 4c ERI (cached)
     std::vector<std::pair<int,int>> dets; // CI determinant list (stable across macro-iters)
@@ -1524,22 +1565,28 @@ std::expected<void, std::string> run_mcscf_loop(
             break;
         }
 
-        // ── (l) Build κ and DIIS ──────────────────────────────────────────────
+        // ── (l) Build damped diagonal-Newton step and optional DIIS blend ─────
+        newton_mu = std::clamp(newton_mu, 1e-4, 20.0);
         Eigen::MatrixXd raw_kappa =
-            build_kappa(g_orb, F_I_mo, F_A_mo, n_core, n_act, n_virt);
+            build_kappa(g_orb, F_I_mo, F_A_mo, n_core, n_act, n_virt, newton_mu, 0.20);
         Eigen::MatrixXd diis_kappa = raw_kappa;
 
-        // DIIS: activate once we have at least 2 steps
-        if (calc._scf._use_DIIS && iter >= 2)
+        if (calc._scf._use_DIIS && iter >= 2 && gnorm > 2.0 * as.tol_mcscf_grad)
             diis_active = true;
+        else
+        {
+            diis.clear();
+            diis_active = false;
+            diis_stall = 0;
+            best_gnorm = std::min(best_gnorm, gnorm);
+        }
 
         if (diis_active)
         {
             diis.push(raw_kappa, g_orb);
-
-            // Divergence check: trim oldest vector if error grows
             const double cur_err = diis.error_norm();
-            if (cur_err > best_gnorm * calc._scf._diis_restart_factor && calc._scf._diis_restart_factor > 0.0)
+            if (cur_err > best_gnorm * calc._scf._diis_restart_factor &&
+                calc._scf._diis_restart_factor > 0.0)
             {
                 ++diis_stall;
                 diis_pop_oldest(diis);
@@ -1550,48 +1597,75 @@ std::expected<void, std::string> run_mcscf_loop(
                 best_gnorm = std::min(best_gnorm, cur_err);
             }
 
-            // Full DIIS reset after 3 consecutive diverging steps after trimming
             if (diis_stall >= 3)
             {
                 diis.clear();
-                diis_stall  = 0;
-                best_gnorm  = gnorm;
+                diis_stall = 0;
                 diis_active = false;
             }
 
-            if (diis.ready())
+            if (diis_active && diis.ready())
                 diis_kappa = diis.extrapolate();
         }
 
-        // ── (m) Orbital rotation with backtracking ────────────────────────────
+        // ── (m) Trust-region Newton line search ───────────────────────────────
         Eigen::MatrixXd C_best = C;
         double E_best = E_cas;
         double g_best = gnorm;
+        double best_rho = -1.0;
         bool accepted = false;
 
-        Eigen::MatrixXd kappa = raw_kappa;
+        struct StepCandidate { Eigen::MatrixXd kappa; };
+        std::vector<StepCandidate> candidates;
+        candidates.push_back({raw_kappa});
         if (diis_active && diis.ready())
-            kappa = diis_kappa;
-
-        for (double scale : {1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125})
         {
-            Eigen::MatrixXd C_trial = apply_orbital_rotation(C, scale * kappa, calc._overlap);
-            auto trial_res = evaluate_mcscf_state(C_trial);
-            if (!trial_res) continue;
+            candidates.push_back({diis_kappa});
+            candidates.push_back({0.7 * diis_kappa + 0.3 * raw_kappa});
+        }
 
-            const auto& trial = *trial_res;
-            if (trial.E_cas < E_best ||
-                (std::abs(trial.E_cas - E_best) < 1e-10 && trial.gnorm < g_best))
-            {
-                C_best = std::move(C_trial);
-                E_best = trial.E_cas;
-                g_best = trial.gnorm;
-            }
+        const double merit_weight = (gnorm > 3.0 * as.tol_mcscf_grad) ? 0.002 : 0.05;
+        const double energy_window = std::max(2e-5, 2e-2 * as.tol_mcscf_energy);
+        const double ref_merit = E_cas + merit_weight * gnorm;
+        double best_merit = ref_merit;
 
-            if (trial.E_cas <= E_cas + 1e-10 && trial.gnorm <= gnorm)
+        for (const auto& cand : candidates)
+        {
+            for (double scale : {2.0, 1.0, 0.5, 0.25, 0.125, 0.0625})
             {
-                accepted = true;
-                break;
+                Eigen::MatrixXd kappa_trial = scale * cand.kappa;
+                const double pred = diagonal_newton_model_delta(
+                    g_orb, kappa_trial, F_I_mo, F_A_mo, n_core, n_act, n_virt);
+                if (pred >= -1e-12) continue;
+
+                Eigen::MatrixXd C_trial =
+                    apply_orbital_rotation(C, kappa_trial, calc._overlap);
+                auto trial_res = evaluate_mcscf_state(C_trial);
+                if (!trial_res) continue;
+
+                const auto& trial = *trial_res;
+                const double actual = trial.E_cas - E_cas;
+                const double rho = actual / pred; // pred < 0
+
+                const bool energy_ok = trial.E_cas <= E_cas + energy_window;
+                const bool grad_win = trial.gnorm < gnorm - 0.1 * as.tol_mcscf_grad;
+                if (!energy_ok && !grad_win) continue;
+
+                const double trial_merit = trial.E_cas + merit_weight * trial.gnorm;
+                if (trial_merit < best_merit - 1e-12 ||
+                    (std::abs(trial_merit - best_merit) < 1e-12 &&
+                     (trial.gnorm < g_best - 1e-12 ||
+                      (std::abs(trial.gnorm - g_best) < 1e-12 && trial.E_cas < E_best))))
+                {
+                    C_best = std::move(C_trial);
+                    E_best = trial.E_cas;
+                    g_best = trial.gnorm;
+                    best_merit = trial_merit;
+                    best_rho = rho;
+                }
+
+                if (rho > 0.02 && trial_merit < ref_merit - 1e-10)
+                    accepted = true;
             }
         }
 
@@ -1605,6 +1679,14 @@ std::expected<void, std::string> run_mcscf_loop(
             diis.clear();
             diis_active = false;
         }
+        else
+        {
+            if (best_rho > 0.75)      newton_mu = std::max(1e-4, newton_mu * 0.7);
+            else if (best_rho < 0.25) newton_mu = std::min(20.0, newton_mu * 1.8);
+        }
+
+        if (!accepted)
+            newton_mu = std::min(20.0, newton_mu * 1.4);
 
         C = C_best;
     }
