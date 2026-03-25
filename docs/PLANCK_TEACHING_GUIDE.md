@@ -18,12 +18,17 @@ self-consistent field theory. It implements:
 - Analytic RMP2 nuclear gradients (Z-vector / CPHF)
 - Geometry optimization in Cartesian and internal coordinates
 - Semi-numerical Hessians and harmonic vibrational analysis
-- CASSCF and RASSCF active-space multiconfigurational SCF
+- Experimental CASSCF and RASSCF active-space multiconfigurational SCF
 - Binary checkpoint save/restart with cross-basis Löwdin projection
 
 The entire calculation is coordinated by `src/driver.cpp`. The central data
 object is `HartreeFock::Calculator` in `src/base/types.h`, which carries all
 options, molecular data, basis data, SCF state, and results.
+
+The active-space CASSCF/RASSCF code paths are currently experimental. They are
+useful for code reading and manual exploration, but they are not part of the
+automated regression gate and should not yet be treated as production-stable
+teaching workflows.
 
 ### 2. Architecture Overview
 
@@ -1011,7 +1016,7 @@ assembled from the relaxed density and the appropriate derivative integrals.
 
 ---
 
-## 14. CASSCF and RASSCF
+## 14. CASSCF and RASSCF (Experimental)
 
 ### Motivation
 

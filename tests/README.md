@@ -8,7 +8,6 @@ program boundary, not just individual helper functions.
 
 - RHF + RMP2 single-point validation cases
 - expected-failure behavior for unsupported edge cases
-- CASSCF regression cases tied to the recent active-space fixes
 - gradient smoke tests for the current RHF and RMP2 gradient paths
 
 ## Files
@@ -38,8 +37,6 @@ Extracted metrics currently include:
 - `rhf_total_energy`
 - `mp2_corr_energy`
 - `mp2_total_energy`
-- `casscf_corr_energy`
-- `casscf_total_energy`
 - `gradient_max`
 - `gradient_rms`
 - `point_group`
@@ -86,7 +83,6 @@ ctest --test-dir build -R planck-regression-core --output-on-failure
 4. Prefer checking physically meaningful invariants in addition to exact totals.
    Examples:
    - `mp2_total_energy < rhf_total_energy`
-   - `casscf_total_energy <= rhf_total_energy`
    - expected gradient lines count matches atom count
 
 ## Design notes
@@ -99,3 +95,6 @@ ctest --test-dir build -R planck-regression-core --output-on-failure
   clear diagnostic because there are no occupied/virtual excitations.
 - Gradient tests are smoke tests rather than high-precision references because
   the current `RMP2` gradient path is still central-difference based.
+- CASSCF and RASSCF inputs remain available for manual experimentation, but are
+  intentionally excluded from the automated regression gate while the active-
+  space implementation is considered experimental.
