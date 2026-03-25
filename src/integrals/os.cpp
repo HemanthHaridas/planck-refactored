@@ -2,6 +2,145 @@
 #include "base.h"
 #include "boys.h"
 
+#include <algorithm>
+#include <array>
+#include <cstdint>
+
+namespace
+{
+using SymOps = std::vector<HartreeFock::SignedAOSymOp>;
+
+struct PairOrbitElem
+{
+    std::size_t i = 0;
+    std::size_t j = 0;
+    int sign = 1;
+};
+
+struct QuartetOrbitElem
+{
+    std::size_t i = 0;
+    std::size_t j = 0;
+    std::size_t k = 0;
+    std::size_t l = 0;
+    int sign = 1;
+};
+
+static bool use_symmetry_ops(const SymOps* sym_ops)
+{
+    return sym_ops != nullptr && sym_ops->size() > 1;
+}
+
+static void canonicalize_pair(std::size_t& i, std::size_t& j)
+{
+    if (i > j)
+        std::swap(i, j);
+}
+
+static void canonicalize_quartet(std::size_t& i, std::size_t& j,
+                                 std::size_t& k, std::size_t& l)
+{
+    canonicalize_pair(i, j);
+    canonicalize_pair(k, l);
+    if (std::tie(i, j) > std::tie(k, l))
+    {
+        std::swap(i, k);
+        std::swap(j, l);
+    }
+}
+
+static bool append_pair_orbit(std::vector<PairOrbitElem>& orbit,
+                              std::size_t i, std::size_t j, int sign)
+{
+    for (const auto& elem : orbit)
+    {
+        if (elem.i == i && elem.j == j)
+            return elem.sign == sign;
+    }
+    orbit.push_back({i, j, sign});
+    return true;
+}
+
+static bool append_quartet_orbit(std::vector<QuartetOrbitElem>& orbit,
+                                 std::size_t i, std::size_t j,
+                                 std::size_t k, std::size_t l, int sign)
+{
+    for (const auto& elem : orbit)
+    {
+        if (elem.i == i && elem.j == j && elem.k == k && elem.l == l)
+            return elem.sign == sign;
+    }
+    orbit.push_back({i, j, k, l, sign});
+    return true;
+}
+
+static std::pair<std::vector<PairOrbitElem>, bool> build_pair_orbit(
+    std::size_t i, std::size_t j, const SymOps& sym_ops)
+{
+    std::vector<PairOrbitElem> orbit;
+    orbit.reserve(sym_ops.size());
+
+    for (const auto& op : sym_ops)
+    {
+        std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
+        std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
+        const int sign = static_cast<int>(op.ao_sign[i]) * static_cast<int>(op.ao_sign[j]);
+        canonicalize_pair(ii, jj);
+        if (!append_pair_orbit(orbit, ii, jj, sign))
+            return {orbit, true};
+    }
+
+    std::sort(orbit.begin(), orbit.end(),
+              [](const PairOrbitElem& a, const PairOrbitElem& b) {
+                  return std::tie(a.i, a.j) < std::tie(b.i, b.j);
+              });
+    return {orbit, false};
+}
+
+static std::pair<std::vector<QuartetOrbitElem>, bool> build_quartet_orbit(
+    std::size_t i, std::size_t j, std::size_t k, std::size_t l,
+    const SymOps& sym_ops)
+{
+    std::vector<QuartetOrbitElem> orbit;
+    orbit.reserve(sym_ops.size());
+
+    for (const auto& op : sym_ops)
+    {
+        std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
+        std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
+        std::size_t kk = static_cast<std::size_t>(op.ao_map[k]);
+        std::size_t ll = static_cast<std::size_t>(op.ao_map[l]);
+        const int sign = static_cast<int>(op.ao_sign[i]) * static_cast<int>(op.ao_sign[j]) *
+                         static_cast<int>(op.ao_sign[k]) * static_cast<int>(op.ao_sign[l]);
+        canonicalize_quartet(ii, jj, kk, ll);
+        if (!append_quartet_orbit(orbit, ii, jj, kk, ll, sign))
+            return {orbit, true};
+    }
+
+    std::sort(orbit.begin(), orbit.end(),
+              [](const QuartetOrbitElem& a, const QuartetOrbitElem& b) {
+                  return std::tie(a.i, a.j, a.k, a.l) < std::tie(b.i, b.j, b.k, b.l);
+              });
+    return {orbit, false};
+}
+
+static void write_eri_permutations(std::vector<double>& eri,
+                                   std::size_t nb, std::size_t nb2, std::size_t nb3,
+                                   std::size_t i, std::size_t j,
+                                   std::size_t k, std::size_t l,
+                                   double val)
+{
+    eri[i*nb3 + j*nb2 + k*nb + l] = val;
+    eri[j*nb3 + i*nb2 + k*nb + l] = val;
+    eri[i*nb3 + j*nb2 + l*nb + k] = val;
+    eri[j*nb3 + i*nb2 + l*nb + k] = val;
+    eri[k*nb3 + l*nb2 + i*nb + j] = val;
+    eri[l*nb3 + k*nb2 + i*nb + j] = val;
+    eri[k*nb3 + l*nb2 + j*nb + i] = val;
+    eri[l*nb3 + k*nb2 + j*nb + i] = val;
+}
+} // namespace
+
 inline double HartreeFock::ObaraSaika::_os_1d(const double gamma, const double distPA, const double distPB, const int lA, const int lB)
 {
     // +2 shifted overlaps are needed by the kinetic energy formula (lB+2),
@@ -48,23 +187,53 @@ inline double HartreeFock::ObaraSaika::_os_1d(const double gamma, const double d
     return S[lA][lB];
 }
 
-std::pair<Eigen::MatrixXd, Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_1e(const std::vector<HartreeFock::ShellPair> &shell_pairs, const std::size_t nbasis, const std::vector<HartreeFock::SignedAOSymOp>*)
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_1e(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::size_t nbasis,
+    const std::vector<HartreeFock::SignedAOSymOp>* sym_ops)
 {
     const std::size_t npairs = shell_pairs.size();
     Eigen::MatrixXd overlap  = Eigen::MatrixXd::Zero(nbasis, nbasis);
     Eigen::MatrixXd kinetic  = Eigen::MatrixXd::Zero(nbasis, nbasis);
+    const bool use_sym       = use_symmetry_ops(sym_ops);
 
 #pragma omp parallel for schedule(dynamic)
     for (std::size_t i = 0; i < npairs; i++)
     {
         const std::size_t ii = shell_pairs[i].A._index;
         const std::size_t jj = shell_pairs[i].B._index;
-        const auto [s, t]    = _compute_3d_overlap_kinetic(shell_pairs[i]);
+        std::vector<PairOrbitElem> orbit;
 
-        overlap(ii, jj) = s;
-        overlap(jj, ii) = s;
-        kinetic(ii, jj) = t;
-        kinetic(jj, ii) = t;
+        if (use_sym)
+        {
+            auto [orb, forced_zero] = build_pair_orbit(ii, jj, *sym_ops);
+            if (forced_zero)
+                continue;
+            orbit = std::move(orb);
+            if (orbit.front().i != ii || orbit.front().j != jj)
+                continue;
+        }
+
+        const auto [s, t] = _compute_3d_overlap_kinetic(shell_pairs[i]);
+
+        if (!use_sym)
+        {
+            overlap(ii, jj) = s;
+            overlap(jj, ii) = s;
+            kinetic(ii, jj) = t;
+            kinetic(jj, ii) = t;
+            continue;
+        }
+
+        for (const auto& elem : orbit)
+        {
+            const double se = static_cast<double>(elem.sign) * s;
+            const double te = static_cast<double>(elem.sign) * t;
+            overlap(elem.i, elem.j) = se;
+            overlap(elem.j, elem.i) = se;
+            kinetic(elem.i, elem.j) = te;
+            kinetic(elem.j, elem.i) = te;
+        }
     }
 
     return {overlap, kinetic};
@@ -307,10 +476,11 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_nuclear_attraction(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,
     const std::size_t nbasis,
     const HartreeFock::Molecule& molecule,
-    const std::vector<HartreeFock::SignedAOSymOp>*)
+    const std::vector<HartreeFock::SignedAOSymOp>* sym_ops)
 {
     const std::size_t npairs = shell_pairs.size();
     Eigen::MatrixXd V        = Eigen::MatrixXd::Zero(nbasis, nbasis);
+    const bool use_sym       = use_symmetry_ops(sym_ops);
 
 #pragma omp parallel for schedule(dynamic)
     for (std::size_t p = 0; p < npairs; p++)
@@ -318,6 +488,17 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_nuclear_attraction(
         const auto& sp = shell_pairs[p];
         const std::size_t ii = sp.A._index;
         const std::size_t jj = sp.B._index;
+        std::vector<PairOrbitElem> orbit;
+
+        if (use_sym)
+        {
+            auto [orb, forced_zero] = build_pair_orbit(ii, jj, *sym_ops);
+            if (forced_zero)
+                continue;
+            orbit = std::move(orb);
+            if (orbit.front().i != ii || orbit.front().j != jj)
+                continue;
+        }
 
         const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
         const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
@@ -343,8 +524,19 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_nuclear_attraction(
             v_elem -= Z_C * v_nuc; // nuclear attraction is negative
         }
 
-        V(ii, jj) = v_elem;
-        V(jj, ii) = v_elem;
+        if (!use_sym)
+        {
+            V(ii, jj) = v_elem;
+            V(jj, ii) = v_elem;
+            continue;
+        }
+
+        for (const auto& elem : orbit)
+        {
+            const double ve = static_cast<double>(elem.sign) * v_elem;
+            V(elem.i, elem.j) = ve;
+            V(elem.j, elem.i) = ve;
+        }
     }
 
     return V;
@@ -687,6 +879,19 @@ static double _contracted_eri(
                                      lCx, lCy, lCz, lDx, lDy, lDz,
                                      ABx, ABy, ABz, CDx, CDy, CDz);
     return eri;
+}
+
+double HartreeFock::ObaraSaika::_contracted_eri_elem(
+    const HartreeFock::ShellPair& spAB,
+    const HartreeFock::ShellPair& spCD,
+    int lAx, int lAy, int lAz,
+    int lBx, int lBy, int lBz,
+    int lCx, int lCy, int lCz,
+    int lDx, int lDy, int lDz)
+{
+    return _contracted_eri(spAB, spCD,
+                           lAx, lAy, lAz, lBx, lBy, lBz,
+                           lCx, lCy, lCz, lDx, lDy, lDz);
 }
 
 // ─── Gradient: derivative integral helpers ────────────────────────────────────
@@ -1069,7 +1274,8 @@ std::array<double,12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
 // Forward declaration — defined later in this file before _compute_2e.
 static Eigen::MatrixXd _compute_schwarz_table(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,
-    std::size_t nbasis);
+    std::size_t nbasis,
+    const std::vector<HartreeFock::SignedAOSymOp>* sym_ops);
 
 // ─── Public: build 2e Fock (G = J - 0.5*K) ──────────────────────────────────
 //
@@ -1083,13 +1289,14 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
     const Eigen::MatrixXd& density,
     const std::size_t nbasis,
     const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp>*)
+    const std::vector<HartreeFock::SignedAOSymOp>* sym_ops)
 {
     const std::size_t nb  = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
+    const bool use_sym = use_symmetry_ops(sym_ops);
 
-    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb);
+    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
 
     // ── Phase 1: build ERI tensor ─────────────────────────────────────────────
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
@@ -1112,9 +1319,21 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
             const auto& spCD = shell_pairs[q];
             const std::size_t k = spCD.A._index;
             const std::size_t l = spCD.B._index;
+            std::vector<QuartetOrbitElem> orbit;
 
             // Schwarz screening
             if (Q(i, j) * Q(k, l) < tol_eri) continue;
+
+            if (use_sym)
+            {
+                auto [orb, forced_zero] = build_quartet_orbit(i, j, k, l, *sym_ops);
+                if (forced_zero)
+                    continue;
+                orbit = std::move(orb);
+                if (orbit.front().i != i || orbit.front().j != j ||
+                    orbit.front().k != k || orbit.front().l != l)
+                    continue;
+            }
 
             const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
             const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
@@ -1123,17 +1342,16 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
                                                lAx, lAy, lAz, lBx, lBy, lBz,
                                                lCx, lCy, lCz, lDx, lDy, lDz);
 
-            // Fill all 8 permutation-symmetry equivalent slots:
-            //   (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk)
-            //           = (kl|ij) = (lk|ij) = (kl|ji) = (lk|ji)
-            eri[i*nb3 + j*nb2 + k*nb + l] = val;
-            eri[j*nb3 + i*nb2 + k*nb + l] = val;
-            eri[i*nb3 + j*nb2 + l*nb + k] = val;
-            eri[j*nb3 + i*nb2 + l*nb + k] = val;
-            eri[k*nb3 + l*nb2 + i*nb + j] = val;
-            eri[l*nb3 + k*nb2 + i*nb + j] = val;
-            eri[k*nb3 + l*nb2 + j*nb + i] = val;
-            eri[l*nb3 + k*nb2 + j*nb + i] = val;
+            if (!use_sym)
+            {
+                write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+                continue;
+            }
+
+            for (const auto& elem : orbit)
+                write_eri_permutations(eri, nb, nb2, nb3,
+                                       elem.i, elem.j, elem.k, elem.l,
+                                       static_cast<double>(elem.sign) * val);
         }
     }
 
@@ -1168,13 +1386,14 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
     const Eigen::MatrixXd& Pb,
     const std::size_t nbasis,
     const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp>*)
+    const std::vector<HartreeFock::SignedAOSymOp>* sym_ops)
 {
     const std::size_t nb  = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
+    const bool use_sym = use_symmetry_ops(sym_ops);
 
-    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb);
+    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
 
     // ── Phase 1: build ERI tensor (identical to _compute_2e_fock) ────────────
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
@@ -1195,9 +1414,21 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
             const auto& spCD = shell_pairs[q];
             const std::size_t k = spCD.A._index;
             const std::size_t l = spCD.B._index;
+            std::vector<QuartetOrbitElem> orbit;
 
             // Schwarz screening
             if (Q(i, j) * Q(k, l) < tol_eri) continue;
+
+            if (use_sym)
+            {
+                auto [orb, forced_zero] = build_quartet_orbit(i, j, k, l, *sym_ops);
+                if (forced_zero)
+                    continue;
+                orbit = std::move(orb);
+                if (orbit.front().i != i || orbit.front().j != j ||
+                    orbit.front().k != k || orbit.front().l != l)
+                    continue;
+            }
 
             const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
             const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
@@ -1206,14 +1437,16 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
                                                lAx, lAy, lAz, lBx, lBy, lBz,
                                                lCx, lCy, lCz, lDx, lDy, lDz);
 
-            eri[i*nb3 + j*nb2 + k*nb + l] = val;
-            eri[j*nb3 + i*nb2 + k*nb + l] = val;
-            eri[i*nb3 + j*nb2 + l*nb + k] = val;
-            eri[j*nb3 + i*nb2 + l*nb + k] = val;
-            eri[k*nb3 + l*nb2 + i*nb + j] = val;
-            eri[l*nb3 + k*nb2 + i*nb + j] = val;
-            eri[k*nb3 + l*nb2 + j*nb + i] = val;
-            eri[l*nb3 + k*nb2 + j*nb + i] = val;
+            if (!use_sym)
+            {
+                write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+                continue;
+            }
+
+            for (const auto& elem : orbit)
+                write_eri_permutations(eri, nb, nb2, nb3,
+                                       elem.i, elem.j, elem.k, elem.l,
+                                       static_cast<double>(elem.sign) * val);
         }
     }
 
@@ -1319,14 +1552,28 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_cross_overlap(
 // Bounds any quartet: |(ij|kl)| ≤ Q(i,j)·Q(k,l)  (Cauchy-Schwarz inequality).
 static Eigen::MatrixXd _compute_schwarz_table(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,
-    std::size_t nbasis)
+    std::size_t nbasis,
+    const std::vector<HartreeFock::SignedAOSymOp>* sym_ops)
 {
     Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(nbasis, nbasis);
+    const bool use_sym = use_symmetry_ops(sym_ops);
 
     for (const auto& sp : shell_pairs)
     {
         const std::size_t i = sp.A._index;
         const std::size_t j = sp.B._index;
+        std::vector<PairOrbitElem> orbit;
+
+        if (use_sym)
+        {
+            auto [orb, forced_zero] = build_pair_orbit(i, j, *sym_ops);
+            if (forced_zero)
+                continue;
+            orbit = std::move(orb);
+            if (orbit.front().i != i || orbit.front().j != j)
+                continue;
+        }
+
         const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
         const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
 
@@ -1334,8 +1581,18 @@ static Eigen::MatrixXd _compute_schwarz_table(
                                             lAx, lAy, lAz, lBx, lBy, lBz,
                                             lAx, lAy, lAz, lBx, lBy, lBz);
         const double q = std::sqrt(std::abs(diag));
-        Q(i, j) = q;
-        Q(j, i) = q;
+        if (!use_sym)
+        {
+            Q(i, j) = q;
+            Q(j, i) = q;
+            continue;
+        }
+
+        for (const auto& elem : orbit)
+        {
+            Q(elem.i, elem.j) = q;
+            Q(elem.j, elem.i) = q;
+        }
     }
 
     return Q;
@@ -1346,13 +1603,14 @@ std::vector <double> HartreeFock::ObaraSaika::_compute_2e(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,
     const std::size_t nbasis,
     const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp>*)
+    const std::vector<HartreeFock::SignedAOSymOp>* sym_ops)
 {
     const std::size_t nb  = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
+    const bool use_sym = use_symmetry_ops(sym_ops);
 
-    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb);
+    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
 
     // ── Phase 1: build ERI tensor ─────────────────────────────────────────────
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
@@ -1375,9 +1633,21 @@ std::vector <double> HartreeFock::ObaraSaika::_compute_2e(
             const auto& spCD = shell_pairs[q];
             const std::size_t k = spCD.A._index;
             const std::size_t l = spCD.B._index;
+            std::vector<QuartetOrbitElem> orbit;
 
             // Schwarz screening: |(ij|kl)| ≤ Q(i,j)·Q(k,l)
             if (Q(i, j) * Q(k, l) < tol_eri) continue;
+
+            if (use_sym)
+            {
+                auto [orb, forced_zero] = build_quartet_orbit(i, j, k, l, *sym_ops);
+                if (forced_zero)
+                    continue;
+                orbit = std::move(orb);
+                if (orbit.front().i != i || orbit.front().j != j ||
+                    orbit.front().k != k || orbit.front().l != l)
+                    continue;
+            }
 
             const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
             const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
@@ -1386,17 +1656,16 @@ std::vector <double> HartreeFock::ObaraSaika::_compute_2e(
                                                lAx, lAy, lAz, lBx, lBy, lBz,
                                                lCx, lCy, lCz, lDx, lDy, lDz);
 
-            // Fill all 8 permutation-symmetry equivalent slots:
-            //   (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk)
-            //           = (kl|ij) = (lk|ij) = (kl|ji) = (lk|ji)
-            eri[i*nb3 + j*nb2 + k*nb + l] = val;
-            eri[j*nb3 + i*nb2 + k*nb + l] = val;
-            eri[i*nb3 + j*nb2 + l*nb + k] = val;
-            eri[j*nb3 + i*nb2 + l*nb + k] = val;
-            eri[k*nb3 + l*nb2 + i*nb + j] = val;
-            eri[l*nb3 + k*nb2 + i*nb + j] = val;
-            eri[k*nb3 + l*nb2 + j*nb + i] = val;
-            eri[l*nb3 + k*nb2 + j*nb + i] = val;
+            if (!use_sym)
+            {
+                write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+                continue;
+            }
+
+            for (const auto& elem : orbit)
+                write_eri_permutations(eri, nb, nb2, nb3,
+                                       elem.i, elem.j, elem.k, elem.l,
+                                       static_cast<double>(elem.sign) * val);
         }
     }
 

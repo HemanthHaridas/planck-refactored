@@ -18,6 +18,7 @@
 #include "scf/scf.h"
 #include "gradient/gradient.h"
 #include "symmetry/vibrational_symmetry.h"
+#include "symmetry/integral_symmetry.h"
 
 // ─── Physical constants ────────────────────────────────────────────────────────
 //
@@ -59,11 +60,14 @@ static Eigen::MatrixXd _run_sp_gradient_freq(HartreeFock::Calculator& calc)
     calc._compute_nuclear_repulsion();
 
     auto shell_pairs = build_shellpairs(calc._shells);
+    HartreeFock::Symmetry::update_integral_symmetry(calc);
 
     auto [S, T] = _compute_1e(shell_pairs, calc._shells.nbasis(),
-                               calc._integral._engine);
+                               calc._integral._engine,
+                               calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
     auto V = _compute_nuclear_attraction(shell_pairs, calc._shells.nbasis(),
-                                          calc._molecule, calc._integral._engine);
+                                          calc._molecule, calc._integral._engine,
+                                          calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
     calc._overlap = S;
     calc._hcore   = T + V;
 

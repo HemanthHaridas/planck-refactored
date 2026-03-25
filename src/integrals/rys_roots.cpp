@@ -3,6 +3,9 @@
 #include <cstring>
 #include <cmath>
 #include <stdexcept>
+#include <algorithm>
+
+#include <Eigen/Eigenvalues>
 
 // ─── Gauss-Legendre roots/weights on [0,1] for t^2 variable ─────────────────
 //
@@ -84,151 +87,116 @@ static const double gl_weights[HartreeFock::Rys::RYS_MAX_ROOTS]
      0.093145105463867014, 0.062790184732452390, 0.027834283558086833},
 };
 
-// ─── Golub-Welsch algorithm ──────────────────────────────────────────────────
-//
-// Computes Rys roots and weights for intermediate T (RYS_T_ZERO <= T <= RYS_T_MAX)
-// via the n×n symmetric tridiagonal Jacobi matrix built from modified moments.
-//
-// Moments: mu_k = integral_0^1 x^k * exp(-T*x) dx  (substitution x = t^2)
-//        = (1/2) * integral_0^1 u^k * exp(-T*u) du   [not quite — see below]
-//
-// Actually with the Rys weight function w(t;T) = exp(-T*t^2) on [0,1] and
-// variable x = t^2: dx = 2t dt, so:
-//   mu_k = integral_0^1 t^{2k} * exp(-T*t^2) * 2t dt  ← NOT this form
-//
-// Correct moments for the Jacobi matrix (using x=t^2 directly):
-//   mu_k = integral_0^1 x^k * (exp(-T*x) / (2*sqrt(x))) dx
-//         = (1/2) * integral_0^1 x^{k-1/2} * exp(-T*x) dx
-//
-// For the simpler formulation used in practice (DRK 1976), we work with:
-//   nu_k = integral_0^1 (t^2)^k * exp(-T*t^2) dt
-//         = (1/2) * integral_0^{sqrt(T)} (u^2/T)^k * exp(-u^2) * (du/sqrt(T))   [u=t*sqrt(T)]
-//
-// Via recurrence:  nu_0 = erf(sqrt(T))*sqrt(pi)/(2*sqrt(T))   [Boys F_0(T)]
-//                  nu_k = ((2k-1)*nu_{k-1} - exp(-T)) / (2T)
-
-static void _golub_welsch(int n, double T,
-                          double* __restrict__ roots,
-                          double* __restrict__ weights) noexcept
+static long double _boys_moment(int m, long double T) noexcept
 {
-    // ── Compute moments nu_k = integral_0^1 t^{2k} exp(-T*t^2) dt ────────────
-    // nu_0 = sqrt(pi)/(2*sqrt(T)) * erf(sqrt(T))
-    // nu_k = ((2k-1)*nu_{k-1} - exp(-T)) / (2*T)
-    const int nmoments = 2 * n;
-    double nu[2 * HartreeFock::Rys::RYS_MAX_ROOTS];
+    if (T < static_cast<long double>(HartreeFock::Rys::RYS_T_ZERO))
+        return 1.0L / static_cast<long double>(2 * m + 1);
 
-    const double sqrtT = std::sqrt(T);
-    nu[0] = std::sqrt(M_PI) / (2.0 * sqrtT) * std::erf(sqrtT);
-    const double expT = std::exp(-T);
-    for (int k = 1; k < nmoments; ++k)
-        nu[k] = ((2*k - 1) * nu[k-1] - expT) / (2.0 * T);
+    const long double sqrtT = std::sqrt(T);
+    long double F = 0.5L * std::sqrt(static_cast<long double>(M_PI) / T) * std::erfl(sqrtT);
+    if (m == 0)
+        return F;
 
-    // ── Modified Chebyshev algorithm → Jacobi matrix diagonal/off-diagonal ───
-    // alpha[k] = diagonal,  beta[k] = off-diagonal^2  (beta[0] = nu[0] = total weight)
-    double alpha[HartreeFock::Rys::RYS_MAX_ROOTS];
-    double beta [HartreeFock::Rys::RYS_MAX_ROOTS];
+    const long double eT = std::expl(-T);
+    for (int k = 1; k <= m; ++k)
+        F = ((2 * k - 1) * F - eT) / (2.0L * T);
+    return F;
+}
 
-    // sigma[k][j] working array (use two rows, alternating)
-    double sig_prev[2 * HartreeFock::Rys::RYS_MAX_ROOTS + 1] = {};
-    double sig_curr[2 * HartreeFock::Rys::RYS_MAX_ROOTS + 1] = {};
+static long double _poly_inner(const long double* a, int da,
+                               const long double* b, int db,
+                               const long double* moments) noexcept
+{
+    long double s = 0.0L;
+    for (int i = 0; i <= da; ++i)
+        for (int j = 0; j <= db; ++j)
+            s += a[i] * b[j] * moments[i + j];
+    return s;
+}
 
-    beta[0]  = nu[0];
-    alpha[0] = nu[1] / nu[0];
+static void _stieltjes_jacobi(int n, double T,
+                              double* __restrict__ roots,
+                              double* __restrict__ weights) noexcept
+{
+    constexpr int max_n = HartreeFock::Rys::RYS_MAX_ROOTS;
+    long double moments[2 * max_n + 1] = {};
+    for (int k = 0; k <= 2 * n; ++k)
+        moments[k] = _boys_moment(k, static_cast<long double>(T));
 
-    // Initialize sig_prev = nu[j] for j = 0..2n-1
-    for (int j = 0; j < nmoments; ++j)
-        sig_prev[j] = nu[j];
+    long double polys[max_n + 1][max_n + 1] = {};
+    long double alphas[max_n] = {};
+    long double betas[max_n]  = {};
 
-    for (int k = 1; k < n; ++k) {
-        for (int j = k; j < nmoments - k; ++j) {
-            sig_curr[j] = sig_prev[j + 1]
-                        - alpha[k - 1] * sig_prev[j]
-                        - beta [k - 1] * (k >= 2 ? sig_prev[j] : nu[j]);
-            // (more accurate: use two-row recurrence properly)
+    polys[0][0] = 1.0L / std::sqrt(moments[0]);
+
+    for (int k = 0; k < n; ++k)
+    {
+        long double xpk[max_n + 1] = {};
+        for (int i = 0; i <= k; ++i)
+            xpk[i + 1] = polys[k][i];
+
+        alphas[k] = _poly_inner(xpk, k + 1, polys[k], k, moments);
+
+        if (k == n - 1)
+            break;
+
+        long double q[max_n + 1] = {};
+        for (int i = 0; i <= k + 1; ++i)
+            q[i] += xpk[i];
+        for (int i = 0; i <= k; ++i)
+            q[i] -= alphas[k] * polys[k][i];
+        if (k > 0)
+            for (int i = 0; i <= k - 1; ++i)
+                q[i] -= betas[k - 1] * polys[k - 1][i];
+
+        long double norm2 = _poly_inner(q, k + 1, q, k + 1, moments);
+        if (norm2 < 0.0L && std::abs(norm2) < 1.0e-24L)
+            norm2 = 0.0L;
+        betas[k] = std::sqrt(norm2);
+        if (!(betas[k] > 0.0L))
+        {
+            for (int r = 0; r < n; ++r)
+            {
+                roots[r] = gl_roots[n - 1][r];
+                weights[r] = gl_weights[n - 1][r];
+            }
+            return;
         }
-        // This simplified Chebyshev is approximate — the full version uses
-        // sigma[k][j] = sig_prev[j+1] - alpha[k-1]*sig_prev[j] - beta[k-1]*sig_pprev[j]
-        // For the scaffold, use the correct two-array scheme below.
-        alpha[k] = sig_curr[k + 1] / sig_curr[k] - sig_prev[k] / sig_prev[k - 1];
-        beta [k] = sig_curr[k] / sig_prev[k - 1];
 
-        std::memcpy(sig_prev, sig_curr, sizeof(double) * (nmoments));
+        for (int i = 0; i <= k + 1; ++i)
+            polys[k + 1][i] = q[i] / betas[k];
     }
 
-    // ── Build symmetric tridiagonal Jacobi matrix J ───────────────────────────
-    // J diagonal: alpha[0..n-1]
-    // J off-diagonal: sqrt(beta[1..n-1])
-    // Diagonalize via simple QR iteration (QL with implicit shifts).
-    // For n<=11, this converges rapidly.
-
-    double d[HartreeFock::Rys::RYS_MAX_ROOTS];  // diagonal
-    double e[HartreeFock::Rys::RYS_MAX_ROOTS];  // off-diagonal (e[0] unused)
-    double z[HartreeFock::Rys::RYS_MAX_ROOTS];  // eigenvector first components
-
-    for (int k = 0; k < n; ++k) d[k] = alpha[k];
-    for (int k = 1; k < n; ++k) e[k] = std::sqrt(std::abs(beta[k]));
-    e[0] = 0.0;
-
-    // z = first standard basis vector (e_0): eigenvector first component squared
-    // gives the weights after scaling by nu[0].
-    for (int k = 0; k < n; ++k) z[k] = (k == 0) ? 1.0 : 0.0;
-
-    // QL algorithm with implicit shifts for symmetric tridiagonal matrix.
-    // After convergence: d[k] = eigenvalues (Rys roots), z[k]^2 * nu[0] = weights.
-    const int max_iter = 300;
-    for (int l = 0; l < n; ++l) {
-        int iter = 0;
-        int m;
-        do {
-            for (m = l; m < n - 1; ++m) {
-                const double dd = std::abs(d[m]) + std::abs(d[m + 1]);
-                if (std::abs(e[m + 1]) + dd == dd) break;
-            }
-            if (m != l) {
-                if (iter++ >= max_iter) break;
-                double g = (d[l + 1] - d[l]) / (2.0 * e[l + 1]);
-                double r = std::sqrt(g * g + 1.0);
-                g = d[m] - d[l] + e[l + 1] / (g + std::copysign(r, g));
-                double s = 1.0, c = 1.0, p = 0.0;
-                for (int i = m - 1; i >= l; --i) {
-                    double f = s * e[i + 1];
-                    double b = c * e[i + 1];
-                    r = std::sqrt(f * f + g * g);
-                    e[i + 2] = r;
-                    if (r == 0.0) { d[i + 1] -= p; e[m + 1] = 0.0; break; }
-                    s = f / r; c = g / r;
-                    g = d[i + 1] - p;
-                    r = (d[i] - g) * s + 2.0 * c * b;
-                    p = s * r;
-                    d[i + 1] = g + p;
-                    g = c * r - b;
-                    // Update first eigenvector component
-                    f    = z[i + 1];
-                    z[i + 1] = s * z[i] + c * f;
-                    z[i]     = c * z[i] - s * f;
-                }
-                d[l] -= p;
-                e[l + 1] = g;
-                e[m + 1] = 0.0;
-            }
-        } while (m != l);
-    }
-
-    // Roots are eigenvalues d[k]; weights are nu[0] * z[k]^2.
-    for (int k = 0; k < n; ++k) {
-        roots  [k] = d[k];
-        weights[k] = nu[0] * z[k] * z[k];
-    }
-
-    // Sort by ascending root value (QL may not preserve order).
-    for (int i = 0; i < n - 1; ++i) {
-        for (int j = i + 1; j < n; ++j) {
-            if (roots[j] < roots[i]) {
-                double tmp;
-                tmp = roots[i];   roots[i]   = roots[j];   roots[j]   = tmp;
-                tmp = weights[i]; weights[i] = weights[j]; weights[j] = tmp;
-            }
+    Eigen::MatrixXd J = Eigen::MatrixXd::Zero(n, n);
+    for (int i = 0; i < n; ++i)
+    {
+        J(i, i) = static_cast<double>(alphas[i]);
+        if (i + 1 < n)
+        {
+            const double b = static_cast<double>(betas[i]);
+            J(i, i + 1) = b;
+            J(i + 1, i) = b;
         }
+    }
+
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(J);
+    if (solver.info() != Eigen::Success)
+    {
+        for (int r = 0; r < n; ++r)
+        {
+            roots[r] = gl_roots[n - 1][r];
+            weights[r] = gl_weights[n - 1][r];
+        }
+        return;
+    }
+
+    const auto& evals = solver.eigenvalues();
+    const auto& evecs = solver.eigenvectors();
+    const double m0 = static_cast<double>(moments[0]);
+    for (int i = 0; i < n; ++i)
+    {
+        roots[i] = std::clamp(evals[i], 0.0, 1.0);
+        weights[i] = std::max(0.0, m0 * evecs(0, i) * evecs(0, i));
     }
 }
 
@@ -253,6 +221,5 @@ void HartreeFock::Rys::rys_roots_weights(int n, double T,
         return;
     }
 
-    // General case: Golub-Welsch from modified moments.
-    _golub_welsch(n, T, roots, weights);
+    _stieltjes_jacobi(n, T, roots, weights);
 }

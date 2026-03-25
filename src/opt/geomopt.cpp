@@ -14,6 +14,7 @@
 #include "gradient/gradient.h"
 #include "post_hf/mp2.h"
 #include "base/tables.h"
+#include "symmetry/integral_symmetry.h"
 
 // ─── Single-point helper ─────────────────────────────────────────────────────
 //
@@ -65,11 +66,14 @@ static Eigen::VectorXd _run_sp_gradient(HartreeFock::Calculator& calc)
 
     // Shell pairs
     auto shell_pairs = build_shellpairs(calc._shells);
+    HartreeFock::Symmetry::update_integral_symmetry(calc);
 
     // 1e integrals
-    auto [S, T] = _compute_1e(shell_pairs, calc._shells.nbasis(), calc._integral._engine);
+    auto [S, T] = _compute_1e(shell_pairs, calc._shells.nbasis(), calc._integral._engine,
+                              calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
     auto V = _compute_nuclear_attraction(shell_pairs, calc._shells.nbasis(),
-                                         calc._molecule, calc._integral._engine);
+                                         calc._molecule, calc._integral._engine,
+                                         calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
     calc._overlap = S;
     calc._hcore   = T + V;
 

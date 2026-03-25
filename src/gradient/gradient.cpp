@@ -10,6 +10,7 @@
 #include "integrals/shellpair.h"
 #include "post_hf/mp2.h"
 #include "scf/scf.h"
+#include "symmetry/integral_symmetry.h"
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -65,9 +66,12 @@ static double run_sp_rmp2_energy(HartreeFock::Calculator& calc)
     calc._compute_nuclear_repulsion();
 
     auto shell_pairs = build_shellpairs(calc._shells);
-    auto [S, T] = _compute_1e(shell_pairs, calc._shells.nbasis(), calc._integral._engine);
+    HartreeFock::Symmetry::update_integral_symmetry(calc);
+    auto [S, T] = _compute_1e(shell_pairs, calc._shells.nbasis(), calc._integral._engine,
+                              calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
     auto V = _compute_nuclear_attraction(shell_pairs, calc._shells.nbasis(),
-                                         calc._molecule, calc._integral._engine);
+                                         calc._molecule, calc._integral._engine,
+                                         calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
     calc._overlap = S;
     calc._hcore   = T + V;
 

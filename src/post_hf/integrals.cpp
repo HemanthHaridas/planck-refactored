@@ -1,7 +1,7 @@
 #include <format>
 
 #include "integrals.h"
-#include "integrals/os.h"
+#include "integrals/base.h"
 #include "io/logging.h"
 
 namespace HartreeFock::Correlation
@@ -21,7 +21,8 @@ const std::vector<double>& ensure_eri(
     const std::size_t nb = calc._shells.nbasis();
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, tag,
         std::format("Building AO ERI tensor ({:.1f} MB)", nb * nb * nb * nb * 8.0 / 1e6));
-    eri_local = HartreeFock::ObaraSaika::_compute_2e(shell_pairs, nb);
+    eri_local = _compute_2e(shell_pairs, nb, calc._integral._engine, 1e-10,
+                            calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
     return eri_local;
 }
 
