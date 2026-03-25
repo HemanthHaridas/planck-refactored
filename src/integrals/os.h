@@ -32,6 +32,15 @@ namespace HartreeFock
                                          double tol_eri = 1e-10,
                                          const std::vector<HartreeFock::SignedAOSymOp>* sym_ops = nullptr);
 
+        // Contracted shell-quartet ERI for explicit angular-momentum components.
+        double _contracted_eri_elem(
+            const HartreeFock::ShellPair& spAB,
+            const HartreeFock::ShellPair& spCD,
+            int lAx, int lAy, int lAz,
+            int lBx, int lBy, int lBz,
+            int lCx, int lCy, int lCz,
+            int lDx, int lDy, int lDz);
+
         Eigen::MatrixXd _compute_fock_rhf(const std::vector<double> &_eri,
                                           const Eigen::MatrixXd &density,
                                           const std::size_t nbasis);

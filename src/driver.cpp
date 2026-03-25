@@ -14,6 +14,7 @@
 #include "io/logging.h"
 #include "symmetry/symmetry.h"
 #include "symmetry/mo_symmetry.h"
+#include "symmetry/integral_symmetry.h"
 #include "basis/basis.h"
 #include "integrals/shellpair.h"
 #include "integrals/base.h"
@@ -263,11 +264,15 @@ int main(int argc, const char* argv[])
 
                 // 1e integrals must be computed in the large (current) basis
                 const std::size_t large_nb = calculator._shells.nbasis();
+                HartreeFock::Symmetry::update_integral_symmetry(calculator);
 
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing overlap and kinetic energy matrices");
-                auto [S, T] = _compute_1e(shellpairs, large_nb, calculator._integral._engine);
+                auto [S, T] = _compute_1e(shellpairs, large_nb, calculator._integral._engine,
+                                          calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing nuclear attraction matrix");
-                Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, large_nb, calculator._molecule, calculator._integral._engine);
+                Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, large_nb, calculator._molecule,
+                                                                calculator._integral._engine,
+                                                                calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
                 HartreeFock::Logger::blank();
 
                 calculator._overlap = S;
@@ -359,13 +364,24 @@ int main(int argc, const char* argv[])
 
     if (!loaded_from_checkpoint)
     {
+        HartreeFock::Symmetry::update_integral_symmetry(calculator);
+        if (calculator._use_integral_symmetry)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Integral Symmetry :",
+                std::format("{} signed AO symmetry operations enabled",
+                            calculator._integral_symmetry_ops.size()));
+        }
+
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing overlap and kinetic energy matrices");
 
-        auto [S, T] = _compute_1e(shellpairs, calculator._shells.nbasis(), calculator._integral._engine);
+        auto [S, T] = _compute_1e(shellpairs, calculator._shells.nbasis(), calculator._integral._engine,
+                                  calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Overlap and kinetic done");
 
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing nuclear attraction matrix");
-        Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, calculator._shells.nbasis(), calculator._molecule, calculator._integral._engine);
+        Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, calculator._shells.nbasis(),
+                                                        calculator._molecule, calculator._integral._engine,
+                                                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Nuclear attraction done");
         HartreeFock::Logger::blank();
 
@@ -801,11 +817,14 @@ int main(int argc, const char* argv[])
             calculator._compute_nuclear_repulsion();
 
             auto sp_sym  = build_shellpairs(calculator._shells);
+            HartreeFock::Symmetry::update_integral_symmetry(calculator);
             auto [S_sym, T_sym] = _compute_1e(sp_sym, calculator._shells.nbasis(),
-                                               calculator._integral._engine);
+                                               calculator._integral._engine,
+                                               calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
             auto V_sym = _compute_nuclear_attraction(sp_sym, calculator._shells.nbasis(),
                                                       calculator._molecule,
-                                                      calculator._integral._engine);
+                                                      calculator._integral._engine,
+                                                      calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
             calculator._overlap = S_sym;
             calculator._hcore   = T_sym + V_sym;
 

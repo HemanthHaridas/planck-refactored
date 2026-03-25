@@ -28,6 +28,49 @@ static Eigen::MatrixXd _rys_schwarz_table(
     const std::vector<HartreeFock::ShellPair>& shell_pairs,
     std::size_t nbasis);
 
+static bool _auto_prefers_rys(const HartreeFock::ShellPair& spAB,
+                              const HartreeFock::ShellPair& spCD) noexcept
+{
+    const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
+    const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+    const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+    const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+
+    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+    const int L = lABx + lABy + lABz + lCDx + lCDy + lCDz;
+    const int nroots = L / 2 + 1;
+
+    const double six_d = static_cast<double>(lABx + 1) * static_cast<double>(lABy + 1) *
+                         static_cast<double>(lABz + 1) * static_cast<double>(lCDx + 1) *
+                         static_cast<double>(lCDy + 1) * static_cast<double>(lCDz + 1);
+    const double os_work =
+        six_d * static_cast<double>(L + 1) +
+        static_cast<double>((lBx + lBy + lBz + lDx + lDy + lDz) + 1) * six_d * 0.25;
+    const double rys_work =
+        six_d * static_cast<double>(nroots) +
+        static_cast<double>((lBx + lBy + lBz + lDx + lDy + lDz) + 1) * six_d * 0.20 +
+        24.0 * static_cast<double>(nroots);
+
+    return rys_work < os_work;
+}
+
+static double _auto_contracted_eri(
+    const HartreeFock::ShellPair& spAB,
+    const HartreeFock::ShellPair& spCD,
+    int lAx, int lAy, int lAz,
+    int lBx, int lBy, int lBz,
+    int lCx, int lCy, int lCz,
+    int lDx, int lDy, int lDz) noexcept
+{
+    if (_auto_prefers_rys(spAB, spCD))
+        return HartreeFock::RysQuad::_rys_contracted_eri(
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz);
+
+    return HartreeFock::ObaraSaika::_contracted_eri_elem(
+        spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz);
+}
+
 // ─── 1D Rys VRR ───────────────────────────────────────────────────────────────
 //
 // Fills vrr[a][c] for a in [0, lAB], c in [0, lCD] using the recurrences:
@@ -85,35 +128,38 @@ static void _rys_hrr_ab(
     const int lCDx, const int lCDy, const int lCDz,
     const double ABx, const double ABy, const double ABz) noexcept
 {
-    // X transfer: step lBx quanta from A to B
-    for (int bx = 0; bx < lBx; ++bx)
-        for (int ax = lAx + lBx - 1 - bx; ax >= lAx; --ax)
+    for (int kz = 0; kz < lBz; ++kz)
+        for (int ax = 0; ax <= lAx + lBx; ++ax)
             for (int ay = 0; ay <= lAy + lBy; ++ay)
-                for (int az = 0; az <= lAz + lBz; ++az)
+                for (int az = 0; az <= lAz + lBz - kz - 1; ++az)
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] +=
-                                    ABx * W[ax + 1][ay][az][cx][cy][cz];
+                                W[ax][ay][az][cx][cy][cz] =
+                                    W[ax][ay][az + 1][cx][cy][cz]
+                                  + ABz * W[ax][ay][az][cx][cy][cz];
 
-    // Y transfer
-    for (int by = 0; by < lBy; ++by)
-        for (int ay = lAy + lBy - 1 - by; ay >= lAy; --ay)
-            for (int az = 0; az <= lAz + lBz; ++az)
-                for (int cx = 0; cx <= lCDx; ++cx)
-                    for (int cy = 0; cy <= lCDy; ++cy)
-                        for (int cz = 0; cz <= lCDz; ++cz)
-                            W[lAx][ay][az][cx][cy][cz] +=
-                                ABy * W[lAx][ay + 1][az][cx][cy][cz];
+    for (int ky = 0; ky < lBy; ++ky)
+        for (int ax = 0; ax <= lAx + lBx; ++ax)
+            for (int ay = 0; ay <= lAy + lBy - ky - 1; ++ay)
+                for (int az = 0; az <= lAz; ++az)
+                    for (int cx = 0; cx <= lCDx; ++cx)
+                        for (int cy = 0; cy <= lCDy; ++cy)
+                            for (int cz = 0; cz <= lCDz; ++cz)
+                                W[ax][ay][az][cx][cy][cz] =
+                                    W[ax][ay + 1][az][cx][cy][cz]
+                                  + ABy * W[ax][ay][az][cx][cy][cz];
 
-    // Z transfer
-    for (int bz = 0; bz < lBz; ++bz)
-        for (int az = lAz + lBz - 1 - bz; az >= lAz; --az)
-            for (int cx = 0; cx <= lCDx; ++cx)
-                for (int cy = 0; cy <= lCDy; ++cy)
-                    for (int cz = 0; cz <= lCDz; ++cz)
-                        W[lAx][lAy][az][cx][cy][cz] +=
-                            ABz * W[lAx][lAy][az + 1][cx][cy][cz];
+    for (int kx = 0; kx < lBx; ++kx)
+        for (int ax = 0; ax <= lAx + lBx - kx - 1; ++ax)
+            for (int ay = 0; ay <= lAy; ++ay)
+                for (int az = 0; az <= lAz; ++az)
+                    for (int cx = 0; cx <= lCDx; ++cx)
+                        for (int cy = 0; cy <= lCDy; ++cy)
+                            for (int cz = 0; cz <= lCDz; ++cz)
+                                W[ax][ay][az][cx][cy][cz] =
+                                    W[ax + 1][ay][az][cx][cy][cz]
+                                  + ABx * W[ax][ay][az][cx][cy][cz];
 }
 
 // CD-HRR: transfer C→D using a 3D slice V0[cx][cy][cz].
@@ -132,23 +178,20 @@ static double _rys_hrr_cd(
             for (int cz = 0; cz <= lCz + lDz; ++cz)
                 W[cx][cy][cz] = V0[cx][cy][cz];
 
-    // X transfer
-    for (int dx = 0; dx < lDx; ++dx)
-        for (int cx = lCx + lDx - 1 - dx; cx >= lCx; --cx)
+    for (int kx = 0; kx < lDx; ++kx)
+        for (int cx = 0; cx <= lCx + lDx - kx - 1; ++cx)
             for (int cy = 0; cy <= lCy + lDy; ++cy)
                 for (int cz = 0; cz <= lCz + lDz; ++cz)
-                    W[cx][cy][cz] += CDx * W[cx + 1][cy][cz];
+                    W[cx][cy][cz] = W[cx + 1][cy][cz] + CDx * W[cx][cy][cz];
 
-    // Y transfer
-    for (int dy = 0; dy < lDy; ++dy)
-        for (int cy = lCy + lDy - 1 - dy; cy >= lCy; --cy)
+    for (int ky = 0; ky < lDy; ++ky)
+        for (int cy = 0; cy <= lCy + lDy - ky - 1; ++cy)
             for (int cz = 0; cz <= lCz + lDz; ++cz)
-                W[lCx][cy][cz] += CDy * W[lCx][cy + 1][cz];
+                W[lCx][cy][cz] = W[lCx][cy + 1][cz] + CDy * W[lCx][cy][cz];
 
-    // Z transfer
-    for (int dz = 0; dz < lDz; ++dz)
-        for (int cz = lCz + lDz - 1 - dz; cz >= lCz; --cz)
-            W[lCx][lCy][cz] += CDz * W[lCx][lCy][cz + 1];
+    for (int kz = 0; kz < lDz; ++kz)
+        for (int cz = 0; cz <= lCz + lDz - kz - 1; ++cz)
+            W[lCx][lCy][cz] = W[lCx][lCy][cz + 1] + CDz * W[lCx][lCy][cz];
 
     return W[lCx][lCy][lCz];
 }
@@ -319,6 +362,102 @@ static Eigen::MatrixXd _rys_schwarz_table(
     return Q;
 }
 
+std::vector<double> HartreeFock::RysQuad::_compute_2e(
+    const std::vector<HartreeFock::ShellPair>& shell_pairs,
+    const std::size_t nbasis,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp>*)
+{
+    const std::size_t nb  = nbasis;
+    const std::size_t nb2 = nb * nb;
+    const std::size_t nb3 = nb * nb * nb;
+
+    const Eigen::MatrixXd Q = _rys_schwarz_table(shell_pairs, nb);
+    std::vector<double> eri(nb * nb * nb * nb, 0.0);
+
+    const std::size_t npairs = shell_pairs.size();
+#pragma omp parallel for schedule(dynamic)
+    for (std::size_t p = 0; p < npairs; ++p) {
+        const auto& spAB = shell_pairs[p];
+        const std::size_t i = spAB.A._index;
+        const std::size_t j = spAB.B._index;
+        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
+        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+
+        for (std::size_t q = p; q < npairs; ++q) {
+            const auto& spCD = shell_pairs[q];
+            const std::size_t k = spCD.A._index;
+            const std::size_t l = spCD.B._index;
+            if (Q(i, j) * Q(k, l) < tol_eri) continue;
+
+            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+            const double val = _auto_contracted_eri(spAB, spCD,
+                                                    lAx, lAy, lAz, lBx, lBy, lBz,
+                                                    lCx, lCy, lCz, lDx, lDy, lDz);
+
+            eri[i*nb3 + j*nb2 + k*nb + l] = val;
+            eri[j*nb3 + i*nb2 + k*nb + l] = val;
+            eri[i*nb3 + j*nb2 + l*nb + k] = val;
+            eri[j*nb3 + i*nb2 + l*nb + k] = val;
+            eri[k*nb3 + l*nb2 + i*nb + j] = val;
+            eri[l*nb3 + k*nb2 + i*nb + j] = val;
+            eri[k*nb3 + l*nb2 + j*nb + i] = val;
+            eri[l*nb3 + k*nb2 + j*nb + i] = val;
+        }
+    }
+
+    return eri;
+}
+
+std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
+    const std::vector<HartreeFock::ShellPair>& shell_pairs,
+    const std::size_t nbasis,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp>*)
+{
+    const std::size_t nb  = nbasis;
+    const std::size_t nb2 = nb * nb;
+    const std::size_t nb3 = nb * nb * nb;
+
+    const Eigen::MatrixXd Q = _rys_schwarz_table(shell_pairs, nb);
+    std::vector<double> eri(nb * nb * nb * nb, 0.0);
+
+    const std::size_t npairs = shell_pairs.size();
+#pragma omp parallel for schedule(dynamic)
+    for (std::size_t p = 0; p < npairs; ++p) {
+        const auto& spAB = shell_pairs[p];
+        const std::size_t i = spAB.A._index;
+        const std::size_t j = spAB.B._index;
+        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
+        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+
+        for (std::size_t q = p; q < npairs; ++q) {
+            const auto& spCD = shell_pairs[q];
+            const std::size_t k = spCD.A._index;
+            const std::size_t l = spCD.B._index;
+            if (Q(i, j) * Q(k, l) < tol_eri) continue;
+
+            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+            const double val = _auto_contracted_eri(spAB, spCD,
+                                                    lAx, lAy, lAz, lBx, lBy, lBz,
+                                                    lCx, lCy, lCz, lDx, lDy, lDz);
+
+            eri[i*nb3 + j*nb2 + k*nb + l] = val;
+            eri[j*nb3 + i*nb2 + k*nb + l] = val;
+            eri[i*nb3 + j*nb2 + l*nb + k] = val;
+            eri[j*nb3 + i*nb2 + l*nb + k] = val;
+            eri[k*nb3 + l*nb2 + i*nb + j] = val;
+            eri[l*nb3 + k*nb2 + i*nb + j] = val;
+            eri[k*nb3 + l*nb2 + j*nb + i] = val;
+            eri[l*nb3 + k*nb2 + j*nb + i] = val;
+        }
+    }
+
+    return eri;
+}
+
 // ─── Public: RHF 2e Fock (direct SCF) ────────────────────────────────────────
 
 Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock(
@@ -332,44 +471,7 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock(
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
 
-    const Eigen::MatrixXd Q = _rys_schwarz_table(shell_pairs, nb);
-
-    std::vector<double> eri(nb * nb * nb * nb, 0.0);
-
-    const std::size_t npairs = shell_pairs.size();
-
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; ++p) {
-        const auto& spAB = shell_pairs[p];
-        const std::size_t i = spAB.A._index;
-        const std::size_t j = spAB.B._index;
-        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
-        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
-
-        for (std::size_t q = p; q < npairs; ++q) {
-            const auto& spCD = shell_pairs[q];
-            const std::size_t k = spCD.A._index;
-            const std::size_t l = spCD.B._index;
-
-            if (Q(i, j) * Q(k, l) < tol_eri) continue;
-
-            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-
-            const double val = _rys_contracted_eri(spAB, spCD,
-                                                   lAx, lAy, lAz, lBx, lBy, lBz,
-                                                   lCx, lCy, lCz, lDx, lDy, lDz);
-
-            eri[i*nb3 + j*nb2 + k*nb + l] = val;
-            eri[j*nb3 + i*nb2 + k*nb + l] = val;
-            eri[i*nb3 + j*nb2 + l*nb + k] = val;
-            eri[j*nb3 + i*nb2 + l*nb + k] = val;
-            eri[k*nb3 + l*nb2 + i*nb + j] = val;
-            eri[l*nb3 + k*nb2 + i*nb + j] = val;
-            eri[k*nb3 + l*nb2 + j*nb + i] = val;
-            eri[l*nb3 + k*nb2 + j*nb + i] = val;
-        }
-    }
+    std::vector<double> eri = _compute_2e(shell_pairs, nbasis, tol_eri);
 
     Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
 
@@ -401,43 +503,7 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf(
     const std::size_t nb3 = nb * nb * nb;
 
     const Eigen::MatrixXd Pt = Pa + Pb;
-    const Eigen::MatrixXd Q  = _rys_schwarz_table(shell_pairs, nb);
-
-    std::vector<double> eri(nb * nb * nb * nb, 0.0);
-    const std::size_t npairs = shell_pairs.size();
-
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; ++p) {
-        const auto& spAB = shell_pairs[p];
-        const std::size_t i = spAB.A._index;
-        const std::size_t j = spAB.B._index;
-        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
-        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
-
-        for (std::size_t q = p; q < npairs; ++q) {
-            const auto& spCD = shell_pairs[q];
-            const std::size_t k = spCD.A._index;
-            const std::size_t l = spCD.B._index;
-
-            if (Q(i, j) * Q(k, l) < tol_eri) continue;
-
-            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-
-            const double val = _rys_contracted_eri(spAB, spCD,
-                                                   lAx, lAy, lAz, lBx, lBy, lBz,
-                                                   lCx, lCy, lCz, lDx, lDy, lDz);
-
-            eri[i*nb3 + j*nb2 + k*nb + l] = val;
-            eri[j*nb3 + i*nb2 + k*nb + l] = val;
-            eri[i*nb3 + j*nb2 + l*nb + k] = val;
-            eri[j*nb3 + i*nb2 + l*nb + k] = val;
-            eri[k*nb3 + l*nb2 + i*nb + j] = val;
-            eri[l*nb3 + k*nb2 + i*nb + j] = val;
-            eri[k*nb3 + l*nb2 + j*nb + i] = val;
-            eri[l*nb3 + k*nb2 + j*nb + i] = val;
-        }
-    }
+    std::vector<double> eri = _compute_2e(shell_pairs, nbasis, tol_eri);
 
     Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
     Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
@@ -472,9 +538,21 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp>* sym_ops)
 {
-    // TODO: route low-L quartets to OS once _contracted_eri is exposed.
-    return HartreeFock::RysQuad::_compute_2e_fock(
-        shell_pairs, density, nbasis, tol_eri, sym_ops);
+    const std::size_t nb  = nbasis;
+    const std::size_t nb2 = nb * nb;
+    const std::size_t nb3 = nb * nb * nb;
+    std::vector<double> eri = _compute_2e_auto(shell_pairs, nbasis, tol_eri, sym_ops);
+    Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
+
+#pragma omp parallel for schedule(static)
+    for (std::size_t mu = 0; mu < nb; ++mu)
+        for (std::size_t nu = 0; nu < nb; ++nu)
+            for (std::size_t lam = 0; lam < nb; ++lam)
+                for (std::size_t sig = 0; sig < nb; ++sig)
+                    G(mu, nu) += density(lam, sig) *
+                                 (eri[mu*nb3 + nu*nb2 + lam*nb + sig]
+                                  - 0.5 * eri[mu*nb3 + lam*nb2 + nu*nb + sig]);
+    return G;
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
@@ -486,7 +564,23 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp>* sym_ops)
 {
-    // TODO: route low-L quartets to OS once _contracted_eri is exposed.
-    return HartreeFock::RysQuad::_compute_2e_fock_uhf(
-        shell_pairs, Pa, Pb, nbasis, tol_eri, sym_ops);
+    const std::size_t nb  = nbasis;
+    const std::size_t nb2 = nb * nb;
+    const std::size_t nb3 = nb * nb * nb;
+    const Eigen::MatrixXd Pt = Pa + Pb;
+    std::vector<double> eri = _compute_2e_auto(shell_pairs, nbasis, tol_eri, sym_ops);
+    Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
+    Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
+
+#pragma omp parallel for schedule(static)
+    for (std::size_t mu = 0; mu < nb; ++mu)
+        for (std::size_t nu = 0; nu < nb; ++nu)
+            for (std::size_t lam = 0; lam < nb; ++lam)
+                for (std::size_t sig = 0; sig < nb; ++sig) {
+                    const double coulomb = eri[mu*nb3 + nu*nb2 + lam*nb + sig];
+                    const double exch    = eri[mu*nb3 + lam*nb2 + nu*nb + sig];
+                    Ga(mu, nu) += Pt(lam, sig) * coulomb - Pa(lam, sig) * exch;
+                    Gb(mu, nu) += Pt(lam, sig) * coulomb - Pb(lam, sig) * exch;
+                }
+    return {Ga, Gb};
 }

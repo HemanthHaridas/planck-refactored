@@ -91,9 +91,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     // Conventional: ERI tensor built once; each iteration only contracts.
     // Direct: ERI recomputed from integrals every iteration.
     // Auto: conventional when nbasis ≤ _threshold, direct otherwise.
-    // Only ObaraSaika supports precomputed ERI storage; other engines always direct.
     const bool use_conventional =
-        calculator._integral._engine == HartreeFock::IntegralMethod::ObaraSaika &&
         (calculator._scf._mode == HartreeFock::SCFMode::Conventional ||
          (calculator._scf._mode == HartreeFock::SCFMode::Auto &&
           nbasis <= static_cast<std::size_t>(calculator._scf._threshold)));
@@ -103,7 +101,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
             std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
-        eri = HartreeFock::ObaraSaika::_compute_2e(shell_pairs, nbasis, calculator._integral._tol_eri);
+        eri = _compute_2e(shell_pairs, nbasis, calculator._integral._engine,
+                          calculator._integral._tol_eri,
+                          calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
         calculator._eri = eri;  // persist for post-HF use
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
         HartreeFock::Logger::blank();
@@ -126,7 +126,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
         // ── Build two-electron contribution G = J - 0.5*K ────────────────────
         Eigen::MatrixXd G = use_conventional
             ? HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis)
-            : _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine, tol_eri);
+            : _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine, tol_eri,
+                               calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
         // ── Fock matrix ───────────────────────────────────────────────────────
         const Eigen::MatrixXd F = H + G;
@@ -354,7 +355,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
 
     // ── Conventional vs Direct ────────────────────────────────────────────────
     const bool use_conventional =
-        calculator._integral._engine == HartreeFock::IntegralMethod::ObaraSaika &&
         (calculator._scf._mode == HartreeFock::SCFMode::Conventional ||
          (calculator._scf._mode == HartreeFock::SCFMode::Auto &&
           nbasis <= static_cast<std::size_t>(calculator._scf._threshold)));
@@ -364,7 +364,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
             std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
-        eri = HartreeFock::ObaraSaika::_compute_2e(shell_pairs, nbasis, calculator._integral._tol_eri);
+        eri = _compute_2e(shell_pairs, nbasis, calculator._integral._engine,
+                          calculator._integral._tol_eri,
+                          calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
         calculator._eri = eri;  // persist for post-HF use
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
         HartreeFock::Logger::blank();
@@ -393,7 +395,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         // ── Two-electron Fock contributions ───────────────────────────────────
         auto [Ga, Gb] = use_conventional
             ? HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis)
-            : _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine, tol_eri);
+            : _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine, tol_eri,
+                                   calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
         const Eigen::MatrixXd Fa = H + Ga;
         const Eigen::MatrixXd Fb = H + Gb;

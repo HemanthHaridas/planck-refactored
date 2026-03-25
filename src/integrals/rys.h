@@ -44,6 +44,12 @@ namespace HartreeFock
     // ── Public API — mirrors ObaraSaika:: signatures ───────────────────────────
 
     // Build 2e Fock contribution G = J - 0.5*K (direct SCF, RHF).
+    std::vector<double> _compute_2e(
+        const std::vector<HartreeFock::ShellPair>& shell_pairs,
+        std::size_t nbasis,
+        double tol_eri = 1e-10,
+        const std::vector<HartreeFock::SignedAOSymOp>* sym_ops = nullptr);
+
     Eigen::MatrixXd _compute_2e_fock(
         const std::vector<HartreeFock::ShellPair>& shell_pairs,
         const Eigen::MatrixXd& density,
@@ -65,6 +71,12 @@ namespace HartreeFock
     //
     // Selects OS for L < RYS_CROSSOVER_L, Rys for L >= RYS_CROSSOVER_L,
     // at the contracted shell-quartet level.
+
+    std::vector<double> _compute_2e_auto(
+        const std::vector<HartreeFock::ShellPair>& shell_pairs,
+        std::size_t nbasis,
+        double tol_eri = 1e-10,
+        const std::vector<HartreeFock::SignedAOSymOp>* sym_ops = nullptr);
 
     Eigen::MatrixXd _compute_2e_fock_auto(
         const std::vector<HartreeFock::ShellPair>& shell_pairs,
