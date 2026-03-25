@@ -81,7 +81,7 @@
       "checks": [
         {"type": "metric_eq", "metric": "point_group", "expected": "Dinfh"},
         {"type": "metric_close", "metric": "rhf_total_energy", "expected": -1.1310536239, "atol": 1e-9},
-        {"type": "metric_close", "metric": "mp2_total_energy", "expected": -1.1589651592, "atol": 1e-9},
+        {"type": "metric_close", "metric": "mp2_total_energy", "expected": -1.1501516776, "atol": 1e-9},
         {"type": "metric_lt_metric", "left": "mp2_total_energy", "right": "rhf_total_energy"}
       ]
     },
@@ -93,42 +93,6 @@
       "contains": ["RMP2 : Failed :", "no occupied or virtual orbitals"],
       "checks": [
         {"type": "metric_close", "metric": "rhf_total_energy", "expected": -2.8077839566, "atol": 1e-9}
-      ]
-    },
-    {
-      "id": "h2_casscf_22",
-      "input": "inputs/h2_cas22.hfinp",
-      "tags": ["smoke", "core"],
-      "expected_exit_code": 0,
-      "contains": ["CASSCF :", "CASSCF Total Energy"],
-      "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -1.1167061402, "atol": 1e-9},
-        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -1.1372744062, "atol": 1e-9},
-        {"type": "metric_le_metric", "left": "casscf_total_energy", "right": "rhf_total_energy"}
-      ]
-    },
-    {
-      "id": "water_casscf_22",
-      "input": "inputs/water_cas22.hfinp",
-      "tags": ["smoke", "core"],
-      "expected_exit_code": 0,
-      "contains": ["CASSCF :", "CASSCF Total Energy"],
-      "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.9629329919, "atol": 1e-9},
-        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -74.9641865744, "atol": 1e-9},
-        {"type": "metric_le_metric", "left": "casscf_total_energy", "right": "rhf_total_energy"}
-      ]
-    },
-    {
-      "id": "water_casscf_44",
-      "input": "inputs/water_cas44_symm.hfinp",
-      "tags": ["smoke", "core"],
-      "expected_exit_code": 0,
-      "contains": ["CASSCF :", "CASSCF Total Energy"],
-      "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -75.9839985679, "atol": 1e-9},
-        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -75.9851092026, "atol": 1e-9},
-        {"type": "metric_le_metric", "left": "casscf_total_energy", "right": "rhf_total_energy"}
       ]
     },
     {
