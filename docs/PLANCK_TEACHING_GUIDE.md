@@ -18,17 +18,12 @@ self-consistent field theory. It implements:
 - Analytic RMP2 nuclear gradients (Z-vector / CPHF)
 - Geometry optimization in Cartesian and internal coordinates
 - Semi-numerical Hessians and harmonic vibrational analysis
-- Experimental CASSCF and RASSCF active-space multiconfigurational SCF
+- CASSCF and RASSCF active-space multiconfigurational SCF
 - Binary checkpoint save/restart with cross-basis Löwdin projection
 
 The entire calculation is coordinated by `src/driver.cpp`. The central data
 object is `HartreeFock::Calculator` in `src/base/types.h`, which carries all
 options, molecular data, basis data, SCF state, and results.
-
-The active-space CASSCF/RASSCF code paths are currently experimental. They are
-useful for code reading and manual exploration, but they are not part of the
-automated regression gate and should not yet be treated as production-stable
-teaching workflows.
 
 ### 2. Architecture Overview
 
@@ -1016,7 +1011,7 @@ assembled from the relaxed density and the appropriate derivative integrals.
 
 ---
 
-## 14. CASSCF and RASSCF (Experimental)
+## 14. CASSCF and RASSCF
 
 ### Motivation
 
@@ -1128,6 +1123,20 @@ The full CASSCF macro-iteration (one pass of `run_casscf`):
 7. Rotate MO coefficients: \(\mathbf C \leftarrow \mathbf C \mathbf U\)
 8. Update AO integrals from new MOs
 9. Check convergence: \(\|\mathbf g\| < \epsilon_{grad}\) and \(|\Delta E| < \epsilon_E\)
+
+### Convergence and Robustness
+
+The orbital macro-step includes energy-aware backtracking: after computing the Cayley-transform rotation, the new CASSCF energy is evaluated and the step is kept only if it does not worsen the energy. If no improving extrapolated (DIIS) step exists, DIIS is reset and a damped gradient step is tried. The macro-iteration terminates cleanly when the energy is stationary and no improving orbital step can be found, rather than cycling indefinitely.
+
+The CI density matrices (1-RDM and 2-RDM) are built using exact creation/annihilation operators applied in the spin-orbital determinant basis with a determinant lookup table, rather than case-by-case difference logic. This ensures the CI eigenvalue, density matrices, and reconstructed energy are mutually consistent for all active-space sizes.
+
+Validation energies (RHF/STO-3G geometry):
+
+| System | Active space | E(CASSCF) / Eh |
+|---|---|---|
+| H₂ | CAS(2,2) | −1.1372744062 |
+| H₂O | CAS(2,2) | −74.9641865744 |
+| H₂O | CAS(4,4) | −75.9851092026 |
 
 ### RASSCF Extensions
 
