@@ -2,6 +2,8 @@
 
 #include <format>
 
+#include "integrals/base.h"
+#include "integrals/os.h"
 #include "post_hf/integrals.h"
 #include "post_hf/rhf_response.h"
 
@@ -16,6 +18,72 @@ inline std::size_t idx_pqrs(int p, int q, int r, int s, int nq, int nr, int ns)
 {
     return ((static_cast<std::size_t>(p) * nq + q) * nr + r) * ns + s;
 }
+
+inline std::size_t idx_dm2(int p, int q, int r, int s, int nmo)
+{
+    return ((static_cast<std::size_t>(p) * nmo + q) * nmo + r) * nmo + s;
+}
+
+Eigen::MatrixXd build_full_mo_coeff(const HartreeFock::Correlation::RMP2AmplitudeData& amp)
+{
+    const int nao = static_cast<int>(amp.C_occ.rows());
+    const int nmo = amp.n_occ + amp.n_virt;
+    Eigen::MatrixXd C(nao, nmo);
+    C.leftCols(amp.n_occ) = amp.C_occ;
+    C.rightCols(amp.n_virt) = amp.C_virt;
+    return C;
+}
+
+Eigen::MatrixXd build_rhf_reference_density_mo(int n_occ, int nmo)
+{
+    Eigen::MatrixXd P = Eigen::MatrixXd::Zero(nmo, nmo);
+    P.topLeftCorner(n_occ, n_occ) = 2.0 * Eigen::MatrixXd::Identity(n_occ, n_occ);
+    return P;
+}
+
+Eigen::MatrixXd build_rhf_reference_weighted_density_ao(
+    const HartreeFock::Correlation::RMP2AmplitudeData& amp)
+{
+    return 2.0 * amp.C_occ * amp.eps_occ.asDiagonal() * amp.C_occ.transpose();
+}
+
+Eigen::MatrixXd contract_imat_from_pair_density(
+    const std::vector<double>& eri,
+    const std::vector<double>& pair_dm2,
+    int nb)
+{
+    Eigen::MatrixXd imat = Eigen::MatrixXd::Zero(nb, nb);
+    for (int p = 0; p < nb; ++p)
+    for (int q = 0; q < nb; ++q)
+    {
+        double val = 0.0;
+        for (int i = 0; i < nb; ++i)
+        for (int r = 0; r < nb; ++r)
+        for (int s = 0; s < nb; ++s)
+        {
+            const std::size_t iprs = ((static_cast<std::size_t>(i) * nb + p) * nb + r) * nb + s;
+            const std::size_t iqrs = idx_dm2(i, q, r, s, nb);
+            val += eri[iprs] * pair_dm2[iqrs];
+        }
+        imat(p, q) = val;
+    }
+    return imat;
+}
+
+Eigen::MatrixXd build_veff_from_density(
+    HartreeFock::Calculator& calculator,
+    const std::vector<HartreeFock::ShellPair>& shell_pairs,
+    const Eigen::MatrixXd& density)
+{
+    return _compute_2e_fock(
+        shell_pairs,
+        density,
+        calculator._shells.nbasis(),
+        calculator._integral._engine,
+        calculator._integral._tol_eri,
+        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+}
+
 }
 
 namespace HartreeFock::Correlation
@@ -149,6 +217,73 @@ std::expected<Eigen::MatrixXd, std::string> build_rmp2_unrelaxed_density_ao(
     return P2;
 }
 
+std::expected<std::vector<double>, std::string> build_rmp2_unrelaxed_2pdm_mo(
+    HartreeFock::Calculator& calculator,
+    const std::vector<HartreeFock::ShellPair>& shell_pairs)
+{
+    auto amp_res = build_rmp2_amplitudes(calculator, shell_pairs);
+    if (!amp_res) return std::unexpected(amp_res.error());
+    const auto& amp  = *amp_res;
+    const int nmo = amp.n_occ + amp.n_virt;
+    const int o = amp.n_occ;
+
+    std::vector<double> dm2(static_cast<std::size_t>(nmo) * nmo * nmo * nmo, 0.0);
+
+    for (int i = 0; i < amp.n_occ; ++i)
+    for (int j = 0; j < amp.n_occ; ++j)
+    for (int a = 0; a < amp.n_virt; ++a)
+    for (int b = 0; b < amp.n_virt; ++b)
+    {
+        const double t_ijab = amp.t2[idx_iajb(i, a, j, b, amp.n_occ, amp.n_virt)];
+        const double t_ijba = amp.t2[idx_iajb(i, b, j, a, amp.n_occ, amp.n_virt)];
+        const double dovov = 4.0 * t_ijab - 2.0 * t_ijba;
+
+        dm2[idx_dm2(i, o + a, j, o + b, nmo)] += dovov;
+        dm2[idx_dm2(o + a, i, o + b, j, nmo)] += dovov;
+    }
+
+    return dm2;
+}
+
+std::expected<std::vector<double>, std::string> build_rmp2_unrelaxed_2pdm_ao(
+    HartreeFock::Calculator& calculator,
+    const std::vector<HartreeFock::ShellPair>& shell_pairs)
+{
+    auto amp_res = build_rmp2_amplitudes(calculator, shell_pairs);
+    if (!amp_res) return std::unexpected(amp_res.error());
+    auto dm2_res = build_rmp2_unrelaxed_2pdm_mo(calculator, shell_pairs);
+    if (!dm2_res) return std::unexpected(dm2_res.error());
+
+    const auto& amp = *amp_res;
+    const auto& dm2_mo = *dm2_res;
+    const int nmo = amp.n_occ + amp.n_virt;
+    const int nao = static_cast<int>(calculator._shells.nbasis());
+
+    Eigen::MatrixXd C(nao, nmo);
+    C.leftCols(amp.n_occ) = amp.C_occ;
+    C.rightCols(amp.n_virt) = amp.C_virt;
+
+    std::vector<double> dm2_ao(static_cast<std::size_t>(nao) * nao * nao * nao, 0.0);
+    for (int mu = 0; mu < nao; ++mu)
+    for (int nu = 0; nu < nao; ++nu)
+    for (int la = 0; la < nao; ++la)
+    for (int si = 0; si < nao; ++si)
+    {
+        double val = 0.0;
+        for (int p = 0; p < nmo; ++p)
+        for (int q = 0; q < nmo; ++q)
+        for (int r = 0; r < nmo; ++r)
+        for (int s = 0; s < nmo; ++s)
+        {
+            val += C(mu, p) * C(nu, q) * C(la, r) * C(si, s)
+                 * dm2_mo[idx_dm2(p, q, r, s, nmo)];
+        }
+        dm2_ao[idx_dm2(mu, nu, la, si, nao)] = val;
+    }
+
+    return dm2_ao;
+}
+
 std::expected<Eigen::MatrixXd, std::string> build_rmp2_zvector_rhs(
     HartreeFock::Calculator& calculator,
     const std::vector<HartreeFock::ShellPair>& shell_pairs)
@@ -220,40 +355,108 @@ std::expected<RMP2RelaxedDensity, std::string> build_rmp2_relaxed_density(
     HartreeFock::Calculator& calculator,
     const std::vector<HartreeFock::ShellPair>& shell_pairs)
 {
+    auto grad_res = build_rmp2_gradient_intermediates(calculator, shell_pairs);
+    if (!grad_res) return std::unexpected(grad_res.error());
+
+    RMP2RelaxedDensity relaxed;
+    relaxed.P_mo = std::move(grad_res->P_mo);
+    relaxed.P_ao = std::move(grad_res->P_ao);
+    return relaxed;
+}
+
+std::expected<RMP2GradientIntermediates, std::string> build_rmp2_gradient_intermediates(
+    HartreeFock::Calculator& calculator,
+    const std::vector<HartreeFock::ShellPair>& shell_pairs)
+{
     auto amp_res = build_rmp2_amplitudes(calculator, shell_pairs);
     if (!amp_res) return std::unexpected(amp_res.error());
     auto dens_res = build_rmp2_unrelaxed_density(calculator, shell_pairs);
     if (!dens_res) return std::unexpected(dens_res.error());
-    auto z_res = solve_rmp2_zvector(calculator, shell_pairs);
-    if (!z_res) return std::unexpected(z_res.error());
+    auto pair_res = build_rmp2_unrelaxed_2pdm_ao(calculator, shell_pairs);
+    if (!pair_res) return std::unexpected(pair_res.error());
 
     const auto& amp  = *amp_res;
     const auto& dens = *dens_res;
-    const auto& z    = *z_res;
+    const auto& pair_dm2_ao = *pair_res;
 
     const int nb = amp.n_occ + amp.n_virt;
-    Eigen::MatrixXd P_mo = Eigen::MatrixXd::Zero(nb, nb);
+    const Eigen::MatrixXd C = build_full_mo_coeff(amp);
 
-    // RHF reference occupations.
-    P_mo.topLeftCorner(amp.n_occ, amp.n_occ) = 2.0 * Eigen::MatrixXd::Identity(amp.n_occ, amp.n_occ);
+    Eigen::MatrixXd dm1_corr_mo = Eigen::MatrixXd::Zero(nb, nb);
+    dm1_corr_mo.topLeftCorner(amp.n_occ, amp.n_occ) = dens.P_occ + dens.P_occ.transpose();
+    dm1_corr_mo.bottomRightCorner(amp.n_virt, amp.n_virt) = dens.P_virt + dens.P_virt.transpose();
+    const Eigen::MatrixXd dm1_corr_ao = C * dm1_corr_mo * C.transpose();
 
-    // Add the MP2 oo/vv corrections and the ov response block.
-    P_mo.topLeftCorner(amp.n_occ, amp.n_occ) += dens.P_occ;
-    P_mo.bottomRightCorner(amp.n_virt, amp.n_virt) = dens.P_virt;
+    std::vector<double> eri_local;
+    const std::vector<double>& eri = ensure_eri(
+        calculator, shell_pairs, eri_local, "RMP2 Gradient :");
 
-    // The Z-vector lives in the virtual-occupied space. In the spin-summed
-    // spatial density this enters as a symmetric occupied-virtual correction.
-    P_mo.bottomLeftCorner(amp.n_virt, amp.n_occ) = 2.0 * z;
-    P_mo.topRightCorner(amp.n_occ, amp.n_virt) = 2.0 * z.transpose();
+    const Eigen::MatrixXd veff_corr_ao =
+        2.0 * build_veff_from_density(calculator, shell_pairs, dm1_corr_ao);
 
-    Eigen::MatrixXd C(nb, nb);
-    C.leftCols(amp.n_occ) = amp.C_occ;
-    C.rightCols(amp.n_virt) = amp.C_virt;
+    Eigen::MatrixXd imat_ao = contract_imat_from_pair_density(eri, pair_dm2_ao, nb);
+    Eigen::MatrixXd imat_mo = -C.transpose() * imat_ao * calculator._overlap * C;
 
-    RMP2RelaxedDensity relaxed;
-    relaxed.P_mo = P_mo;
-    relaxed.P_ao = C * P_mo * C.transpose();
-    return relaxed;
+    Eigen::MatrixXd Xvo =
+        amp.C_virt.transpose() * veff_corr_ao * amp.C_occ
+        + imat_mo.topRightCorner(amp.n_occ, amp.n_virt).transpose()
+        - imat_mo.bottomLeftCorner(amp.n_virt, amp.n_occ);
+
+    auto z_res = solve_rhf_cphf(calculator, shell_pairs, -Xvo);
+    if (!z_res) return std::unexpected(z_res.error());
+    const auto& z = *z_res;
+
+    Eigen::MatrixXd corr_relaxed_mo = dm1_corr_mo;
+    corr_relaxed_mo.bottomLeftCorner(amp.n_virt, amp.n_occ) = z;
+    corr_relaxed_mo.topRightCorner(amp.n_occ, amp.n_virt) = z.transpose();
+
+    Eigen::MatrixXd P_mo = build_rhf_reference_density_mo(amp.n_occ, nb) + corr_relaxed_mo;
+    Eigen::MatrixXd P_ao = C * P_mo * C.transpose();
+
+    Eigen::MatrixXd zeta_weights = Eigen::MatrixXd::Zero(nb, nb);
+    Eigen::VectorXd mo_energies(nb);
+    mo_energies << amp.eps_occ, amp.eps_virt;
+
+    for (int p = 0; p < nb; ++p)
+    for (int q = 0; q < nb; ++q)
+        zeta_weights(p, q) = 0.5 * (mo_energies(p) + mo_energies(q));
+
+    for (int a = 0; a < amp.n_virt; ++a)
+    for (int i = 0; i < amp.n_occ; ++i)
+    {
+        zeta_weights(amp.n_occ + a, i) = amp.eps_occ(i);
+        zeta_weights(i, amp.n_occ + a) = amp.eps_occ(i);
+    }
+
+    Eigen::MatrixXd zeta_ao = build_rhf_reference_weighted_density_ao(amp)
+        + C * zeta_weights.cwiseProduct(corr_relaxed_mo) * C.transpose();
+
+    imat_mo.topRightCorner(amp.n_occ, amp.n_virt) =
+        imat_mo.bottomLeftCorner(amp.n_virt, amp.n_occ).transpose();
+    imat_ao = C * imat_mo * C.transpose();
+
+    const Eigen::MatrixXd occ_projector = amp.C_occ * amp.C_occ.transpose();
+    const Eigen::MatrixXd dm1_corr_relaxed_ao = P_ao - calculator._info._scf.alpha.density;
+    const Eigen::MatrixXd vhf_s1occ =
+        occ_projector
+        * build_veff_from_density(
+            calculator,
+            shell_pairs,
+            dm1_corr_relaxed_ao + dm1_corr_relaxed_ao.transpose())
+        * occ_projector;
+
+    RMP2GradientIntermediates out;
+    out.P_mo = P_mo;
+    out.P_ao = P_ao;
+    out.W_ao = 0.5 * (zeta_ao + zeta_ao.transpose() - imat_ao - imat_ao.transpose()) + vhf_s1occ;
+    out.P_total_ao = P_ao;
+    out.P_gamma_ao = calculator._info._scf.alpha.density + 2.0 * dm1_corr_relaxed_ao;
+    out.im1_ao = std::move(imat_ao);
+    out.zeta_ao = std::move(zeta_ao);
+    out.vhf_s1occ_ao = std::move(vhf_s1occ);
+    out.Gamma_pair_ao = pair_dm2_ao;
+    out.pair_dm2_ao = pair_dm2_ao;
+    return out;
 }
 
 } // namespace HartreeFock::Correlation

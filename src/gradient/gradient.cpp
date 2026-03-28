@@ -9,6 +9,7 @@
 #include "integrals/base.h"
 #include "integrals/shellpair.h"
 #include "post_hf/mp2.h"
+#include "post_hf/mp2_gradient.h"
 #include "scf/scf.h"
 #include "symmetry/integral_symmetry.h"
 
@@ -43,46 +44,9 @@ static std::vector<int> build_shell_atom_map(
     return map;
 }
 
-// Rebuild the RHF + RMP2 total energy for the geometry currently stored in
-// calc._molecule._standard (Bohr). Used by the semi-numerical RMP2 gradient.
-static double run_sp_rmp2_energy(HartreeFock::Calculator& calc)
+static std::size_t idx_dm2_grad(int p, int q, int r, int s, int nbf)
 {
-    calc._molecule._coordinates = calc._molecule._standard;
-    calc._molecule.coordinates  = calc._molecule._standard / ANGSTROM_TO_BOHR;
-
-    const std::string gbs_path =
-        calc._basis._basis_path + "/" + calc._basis._basis_name;
-    calc._shells = HartreeFock::BasisFunctions::read_gbs_basis(
-        gbs_path, calc._molecule, calc._basis._basis);
-
-    calc._info._scf = HartreeFock::DataSCF(false);
-    calc._info._scf.initialize(calc._shells.nbasis());
-    calc._scf.set_scf_mode_auto(calc._shells.nbasis());
-    calc._info._is_converged   = false;
-    calc._use_sao_blocking     = false;
-    calc._correlation_energy   = 0.0;
-    calc._eri.clear();
-
-    calc._compute_nuclear_repulsion();
-
-    auto shell_pairs = build_shellpairs(calc._shells);
-    HartreeFock::Symmetry::update_integral_symmetry(calc);
-    auto [S, T] = _compute_1e(shell_pairs, calc._shells.nbasis(), calc._integral._engine,
-                              calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
-    auto V = _compute_nuclear_attraction(shell_pairs, calc._shells.nbasis(),
-                                         calc._molecule, calc._integral._engine,
-                                         calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
-    calc._overlap = S;
-    calc._hcore   = T + V;
-
-    if (auto scf_res = HartreeFock::SCF::run_rhf(calc, shell_pairs); !scf_res)
-        throw std::runtime_error("RMP2 gradient RHF failed: " + scf_res.error());
-
-    if (auto mp2_res = HartreeFock::Correlation::run_rmp2(calc, shell_pairs); !mp2_res)
-        throw std::runtime_error("RMP2 gradient MP2 failed: " + mp2_res.error());
-
-    calc._total_energy += calc._correlation_energy;
-    return calc._total_energy;
+    return ((static_cast<std::size_t>(p) * nbf + q) * nbf + r) * nbf + s;
 }
 
 template <typename GammaFn>
@@ -416,35 +380,46 @@ Eigen::MatrixXd HartreeFock::Gradient::compute_uhf_gradient(
 }
 
 Eigen::MatrixXd HartreeFock::Gradient::compute_rmp2_gradient(
-    const HartreeFock::Calculator& calc)
+    HartreeFock::Calculator& calc,
+    const std::vector<HartreeFock::ShellPair>& shell_pairs)
 {
     if (calc._correlation != HartreeFock::PostHF::RMP2)
         throw std::runtime_error("RMP2 gradient requested without correlation = RMP2");
     if (calc._scf._scf != HartreeFock::SCFType::RHF || calc._info._scf.is_uhf)
         throw std::runtime_error("RMP2 gradient requires an RHF reference");
 
-    const std::size_t natoms = calc._molecule.natoms;
-    Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(natoms, 3);
+    auto grad_res = HartreeFock::Correlation::build_rmp2_gradient_intermediates(calc, shell_pairs);
+    if (!grad_res)
+        throw std::runtime_error("RMP2 gradient build failed: " + grad_res.error());
+    const auto& grad_data = *grad_res;
 
-    // Central-difference step in Bohr. Chosen smaller than the Hessian default
-    // because we are differentiating total energies directly.
-    constexpr double step = 1e-3;
+    const Eigen::MatrixXd& P_ref = calc._info._scf.alpha.density;
+    const Eigen::MatrixXd P_corr = grad_data.P_gamma_ao - P_ref;
+    const int nb = static_cast<int>(calc._shells.nbasis());
+    const auto& gamma_pair = grad_data.Gamma_pair_ao;
 
-    for (std::size_t a = 0; a < natoms; ++a)
+    auto gamma_fn = [&P_ref, &P_corr, &gamma_pair, nb](std::size_t ii, std::size_t jj,
+                                                       std::size_t kk, std::size_t ll) -> double
     {
-        for (int q = 0; q < 3; ++q)
-        {
-            HartreeFock::Calculator calc_fwd = calc;
-            HartreeFock::Calculator calc_bck = calc;
+        const double P0_ij = P_ref(ii, jj);
+        const double P0_kl = P_ref(kk, ll);
+        const double P0_ik = P_ref(ii, kk);
+        const double P0_jl = P_ref(jj, ll);
 
-            calc_fwd._molecule._standard(a, q) += step;
-            calc_bck._molecule._standard(a, q) -= step;
+        const double dP_ij = P_corr(ii, jj);
+        const double dP_kl = P_corr(kk, ll);
+        const double dP_ik = P_corr(ii, kk);
+        const double dP_jl = P_corr(jj, ll);
 
-            const double e_fwd = run_sp_rmp2_energy(calc_fwd);
-            const double e_bck = run_sp_rmp2_energy(calc_bck);
-            grad(a, q) = (e_fwd - e_bck) / (2.0 * step);
-        }
-    }
+        return 2.0 * P0_ij * P0_kl - P0_ik * P0_jl
+             + 2.0 * (dP_ij * P0_kl + P0_ij * dP_kl)
+             - (dP_ik * P0_jl + P0_ik * dP_jl)
+             + gamma_pair[idx_dm2_grad(
+                 static_cast<int>(ii), static_cast<int>(jj),
+                 static_cast<int>(kk), static_cast<int>(ll),
+                 nb)];
+    };
 
-    return grad;
+    return compute_closed_shell_gradient_from_density(calc, shell_pairs,
+                                                      grad_data.P_ao, grad_data.W_ao, gamma_fn);
 }

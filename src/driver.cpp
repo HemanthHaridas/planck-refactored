@@ -20,6 +20,7 @@
 #include "integrals/base.h"
 #include "scf/scf.h"
 #include "post_hf/mp2.h"
+#include "post_hf/mp2_gradient.h"
 #include "post_hf/casscf.h"
 #include "gradient/gradient.h"
 #include "opt/geomopt.h"
@@ -589,6 +590,16 @@ int main(int argc, const char* argv[])
             }
             else
             {
+                if (calculator._correlation == HartreeFock::PostHF::RMP2)
+                {
+                    auto nat_res = HartreeFock::Correlation::compute_rmp2_natural_occupancies(
+                        calculator, shellpairs);
+                    if (nat_res)
+                        HartreeFock::Logger::mp2_natural_orbitals(*nat_res);
+                    else
+                        HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                            "RMP2 :", "Natural orbitals unavailable: " + nat_res.error());
+                }
                 HartreeFock::Logger::correlation_energy(calculator._total_energy, calculator._correlation_energy);
             }
 
@@ -617,9 +628,9 @@ int main(int argc, const char* argv[])
         if (calculator._correlation == HartreeFock::PostHF::RMP2)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient :",
-                "Using central-difference RMP2 total-energy gradient");
+                "Using analytic RMP2 gradient (relaxed density + pair density + Z-vector)");
             calculator._total_energy += calculator._correlation_energy;
-            grad = HartreeFock::Gradient::compute_rmp2_gradient(calculator);
+            grad = HartreeFock::Gradient::compute_rmp2_gradient(calculator, shellpairs);
         }
         else if (calculator._correlation == HartreeFock::PostHF::UMP2)
         {

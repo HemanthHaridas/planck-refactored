@@ -114,7 +114,7 @@
       "tags": ["extended"],
       "expected_exit_code": 0,
       "contains": [
-        "Using central-difference RMP2 total-energy gradient",
+        "Using analytic RMP2 gradient (relaxed density + pair density + Z-vector)",
         "Nuclear Gradient (Ha/Bohr) :"
       ],
       "checks": [
