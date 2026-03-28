@@ -97,7 +97,7 @@ static Eigen::VectorXd _run_sp_gradient(HartreeFock::Calculator& calc)
         if (auto corr_res = HartreeFock::Correlation::run_rmp2(calc, shell_pairs); !corr_res)
             throw std::runtime_error("GeomOpt RMP2 failed: " + corr_res.error());
         calc._total_energy += calc._correlation_energy;
-        grad_mat = HartreeFock::Gradient::compute_rmp2_gradient(calc);
+        grad_mat = HartreeFock::Gradient::compute_rmp2_gradient(calc, shell_pairs);
     }
     else if (calc._correlation == HartreeFock::PostHF::UMP2)
     {

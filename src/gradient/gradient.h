@@ -19,10 +19,12 @@ namespace HartreeFock
         Eigen::MatrixXd compute_uhf_gradient(const HartreeFock::Calculator& calc,
                                              const std::vector<HartreeFock::ShellPair>& shell_pairs);
 
-        // RMP2 nuclear gradient via central differences of the total RMP2 energy.
+        // Analytic RMP2 nuclear gradient from the relaxed MP2 density and
+        // Z-vector response.
         // Returns natoms×3 matrix in Ha/Bohr.
         // Requires a converged RHF reference and correlation = RMP2.
-        Eigen::MatrixXd compute_rmp2_gradient(const HartreeFock::Calculator& calc);
+        Eigen::MatrixXd compute_rmp2_gradient(HartreeFock::Calculator& calc,
+                                             const std::vector<HartreeFock::ShellPair>& shell_pairs);
     }
 }
 
