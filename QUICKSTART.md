@@ -358,7 +358,65 @@ H  1  0.9572  2  104.52
 Each row after the header gives the element symbol followed by reference atom index, bond length, and (for atom 3+) additional reference indices, angle, and dihedral. Atom indices are 1-based. The converted Cartesian coordinates are passed through the rest of the pipeline, so symmetry detection (`use_symm .true.`) works normally.
 
 
-### 8. SCF mode
+### 8. CASSCF active-space calculation
+
+CASSCF (Complete Active Space SCF) provides a multireference wavefunction by performing a full CI expansion within a chosen active space of `nactorb` orbitals containing `nactele` electrons. The RHF orbitals serve as the starting reference; CASSCF then simultaneously optimizes the CI coefficients and orbital rotations until convergence.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type           rhf
+    correlation        casscf
+    use_diis           .true.
+    diis_dim           8
+    engine             os
+    guess              hcore
+    nactele            4        # active electrons
+    nactorb            4        # active orbitals
+    nroots             1        # 1 = single-state; >1 = state-averaged
+    mcscf_max_iter     200
+    mcscf_micro_per_macro  4
+    tol_mcscf_energy   1e-8
+    tol_mcscf_grad     1e-4
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O    0.000000    0.000000    0.117176
+H    0.000000    0.757005   -0.468704
+H    0.000000   -0.757005   -0.468704
+%end_coords
+```
+
+Output includes the RHF reference energy, the CASSCF energy at each macro-iteration, orbital gradient norm, and natural orbital occupation numbers:
+
+```
+[INF]  CASSCF  macro  0:  E = -75.9849xxxx Eh   |g| = x.xxxe-xx
+...
+[INF]  CASSCF Converged in N macro-iterations
+[INF]  E(RHF)    = -74.9659xxxx Eh
+[INF]  E(CASSCF) = -75.9851xxxx Eh
+[INF]  Natural occupation numbers (active): 1.9xxx  1.9xxx  0.0xxx  0.0xxx
+```
+
+**Choosing the active space**: A good starting point is to include all strongly correlated orbitals — bonding/antibonding pairs, lone pairs involved in bond breaking, frontier orbitals. For H₂O with STO-3G, CAS(4,4) includes the four valence-like orbitals. Start small and check the natural occupation numbers: values near 0 or 2 indicate weakly correlated orbitals that may not need to be active.
+
+**State averaging (SA-CASSCF)**: Set `nroots 2` (or more) to simultaneously optimize orbitals for multiple electronic states with equal weights. Custom weights are not currently exposed as keywords; use equal-weight averaging.
+
+### 9. SCF mode
 
 | Mode | Keyword | When to use |
 |---|---|---|
@@ -384,7 +442,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 ```
 
 
-### 9. Basis sets
+### 10. Basis sets
 
 | Keyword | Description |
 |---|---|
@@ -394,7 +452,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | `6-31g*` | 6-31G + d polarization on heavy atoms |
 
 
-### 10. Convergence tips
+### 11. Convergence tips
 
 | Problem | Fix |
 |---|---|
@@ -406,7 +464,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | MO labels are Ag/Bg/Au/Bu instead of Eg/Eu | Expected — for non-Abelian groups (D3d, Oh, …) the program uses the largest Abelian subgroup (e.g. C2h for D3d). The active group is printed to the log. |
 
 
-### 11. All input keywords at a glance
+### 12. All input keywords at a glance
 
 ```
 %begin_control
@@ -435,7 +493,14 @@ For large systems set `scf_mode direct` or lower `threshold`:
     tol_density    1e-10
     tol_eri        1e-10
     threshold      100                        # auto-mode nbasis cutoff
-    correlation    rmp2 | ump2
+    correlation    rmp2 | ump2 | casscf | rasscf
+    nactele        4                        # active electrons (casscf/rasscf)
+    nactorb        4                        # active orbitals  (casscf/rasscf)
+    nroots         1                        # CI roots; >1 = state-averaged
+    mcscf_max_iter     200
+    mcscf_micro_per_macro  4
+    tol_mcscf_energy   1e-8
+    tol_mcscf_grad     1e-4
 %end_scf
 
 %begin_geom

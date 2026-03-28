@@ -349,6 +349,7 @@
 <li class="toc-level-3"><a href="#orbital-gradient-and-generalized-fock-matrix">Orbital Gradient and Generalized Fock Matrix</a></li>
 <li class="toc-level-3"><a href="#orbital-update-cayley-transform">Orbital Update: Cayley Transform</a></li>
 <li class="toc-level-3"><a href="#macro-iteration-structure">Macro-Iteration Structure</a></li>
+<li class="toc-level-3"><a href="#convergence-and-robustness">Convergence and Robustness</a></li>
 <li class="toc-level-3"><a href="#rasscf-extensions">RASSCF Extensions</a></li>
 <li class="toc-level-2"><a href="#15-geometry-optimization">15. Geometry Optimization</a></li>
 <li class="toc-level-3"><a href="#l-bfgs-cartesian-coordinates">L-BFGS (Cartesian Coordinates)</a></li>
@@ -1011,6 +1012,21 @@ F^{gen}_{pq} = \sum_r h_{pr} D_{rq} + \sum_{rst} (pr|st) d_{qrst}
 <li>Update AO integrals from new MOs</li>
 <li>Check convergence: <span class="math-inline">\(\|\mathbf g\| < \epsilon_{grad}\)</span> and <span class="math-inline">\(|\Delta E| < \epsilon_E\)</span></li>
 </ol>
+<h3 id="convergence-and-robustness">Convergence and Robustness</h3>
+<p>The orbital macro-step includes energy-aware backtracking: after computing the Cayley-transform rotation, the new CASSCF energy is evaluated and the step is kept only if it does not worsen the energy. If no improving extrapolated (DIIS) step exists, DIIS is reset and a damped gradient step is tried. The macro-iteration terminates cleanly when the energy is stationary and no improving orbital step can be found, rather than cycling indefinitely.</p>
+<p>The CI density matrices (1-RDM and 2-RDM) are built using exact creation/annihilation operators applied in the spin-orbital determinant basis with a determinant lookup table, rather than case-by-case difference logic. This ensures the CI eigenvalue, density matrices, and reconstructed energy are mutually consistent for all active-space sizes.</p>
+<p>Validation energies (RHF/STO-3G geometry):</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>System</th>
+<th>Active space</th>
+<th>E(CASSCF) / Eh</th>
+</tr></thead>
+<tbody>
+<tr><td>H₂</td><td>CAS(2,2)</td><td>−1.1372744062</td></tr>
+<tr><td>H₂O</td><td>CAS(2,2)</td><td>−74.9641865744</td></tr>
+<tr><td>H₂O</td><td>CAS(4,4)</td><td>−75.9851092026</td></tr>
+</tbody></table></div>
 <h3 id="rasscf-extensions">RASSCF Extensions</h3>
 <p>RASSCF (Restricted Active Space SCF) partitions the active space into three subspaces:</p>
 <ul>

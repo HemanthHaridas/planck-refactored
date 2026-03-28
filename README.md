@@ -11,8 +11,9 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
 - **MO symmetry** — irreducible representation labels (A1, B2, Ag, Bu, …) assigned to each converged orbital; Cartesian AO coefficients are transformed to the real spherical harmonic basis and decomposed into symmetry species via libmsym's SALC machinery; the Cartesian→spherical block transform covers all shells supported by the integral engine (S through H, L=0–5); for non-Abelian groups (D3d, Td, Oh, …) the largest Abelian subgroup with all one-dimensional irreps is automatically selected (e.g. C2h for D3d) so every MO receives a unique, unambiguous label — the active group or subgroup is printed to the log; linear molecules (C∞v / D∞h) use a dedicated character-based handler
-- **Post-HF** — RMP2 and UMP2 correlation energy corrections
-- **Experimental multireference** — CASSCF and RASSCF active-space workflows are available for manual exploration, but they are still considered experimental and are not part of the automated regression gate
+- **Post-HF** — RMP2 and UMP2 correlation energy corrections; CASSCF and RASSCF multireference active-space calculations
+- **CASSCF** — Complete Active Space SCF with full CI Davidson solver, exact determinant-based 1-RDM/2-RDM construction, generalized Fock orbital gradient, Cayley-transform orbital rotation, energy-aware macro-step backtracking, and DIIS-accelerated macro-iterations; supports state-averaged (SA-CASSCF) with configurable weights; convergence validated for H₂ CAS(2,2) and H₂O CAS(2,2)/CAS(4,4)
+- **RASSCF** — Restricted Active Space SCF extending CASSCF with RAS1/RAS2/RAS3 subspace partitioning and configurable hole/electron occupation restrictions
 - **Analytic nuclear gradients** — RHF and UHF nuclear gradients via the Obara-Saika AM-shift rule; all five terms (1e GTO-centre, nucleus-position V, ERI, Pulay/overlap, nuclear repulsion) assembled exactly
 - **Geometry optimization** — L-BFGS optimizer in Cartesian coordinates or BFGS optimizer in redundant generalized internal coordinates (GIC); Wolfe/Armijo line search; convergence on max Cartesian gradient component; optional constraints (fixed bonds, angles, dihedrals, frozen atoms) via `%begin_constraints`
 - **Vibrational frequency analysis** — semi-numerical Hessian from central finite differences of analytic gradients (2×3N evaluations); mass-weighted normal mode analysis with Eckart T+R projection; outputs vibrational frequencies in cm⁻¹ (imaginary encoded negative), zero-point energy in Ha and kcal/mol; linearity auto-detected
@@ -128,7 +129,14 @@ SCF procedure and convergence settings.
 |---|---|---|---|---|
 | `scf_type` | enum | `rhf`, `uhf` | `rhf` | Wavefunction type |
 | `engine` | enum | `os` / `obara-saika`, `rys`, `auto` | `os` | Two-electron integral engine. `os`: Obara-Saika VRR/HRR recursion. `rys`: Rys quadrature (converts the Boys integral to a Gauss-type quadrature; exact with ⌊L/2⌋+1 roots). `auto`: selects the engine per contracted shell quartet using an analytic flop-count model — OS for low total angular momentum (L < 4), Rys for L ≥ 4 (d+d and higher). |
-| `correlation` | enum | `rmp2`, `ump2` | none | Post-HF correlation energy correction |
+| `correlation` | enum | `rmp2`, `ump2`, `casscf`, `rasscf` | none | Post-HF method. `rmp2`/`ump2`: Møller-Plesset second-order correction. `casscf`: Complete Active Space SCF (requires `nactele`, `nactorb`). `rasscf`: Restricted Active Space SCF (requires `nactele`, `nactorb`, `nras1`, `nras2`, `nras3`). |
+| `nactele` | int | ≥ 1 | — | Number of active electrons for CASSCF/RASSCF |
+| `nactorb` | int | ≥ 1 | — | Number of active orbitals for CASSCF/RASSCF |
+| `nroots` | int | ≥ 1 | `1` | Number of CI roots for state-averaged CASSCF (SA-CASSCF). `1` = single-state CASSCF. |
+| `mcscf_max_iter` | int | ≥ 1 | `100` | Maximum CASSCF macro-iterations |
+| `mcscf_micro_per_macro` | int | ≥ 1 | `4` | Micro-iterations (DIIS steps) per macro-iteration |
+| `tol_mcscf_energy` | float | > 0 | `1e-8` | CASSCF energy convergence threshold in Hartree |
+| `tol_mcscf_grad` | float | > 0 | `1e-5` | CASSCF orbital gradient convergence threshold |
 | `use_diis` | bool | `.true.`, `.false.` | `.true.` | Enable DIIS convergence acceleration |
 | `diis_dim` | int | ≥ 2 | `8` | Maximum DIIS subspace size |
 | `diis_restart` | float | ≥ 0 | `2.0` | Clear the DIIS subspace when the Pulay error grows by more than this factor relative to the previous iteration. Set to `0` to disable. |
@@ -541,6 +549,51 @@ Expected output at the HF/STO-3G optimized geometry:
 ```
 
 The step size for finite differences can be changed with `hessian_step` in `%begin_control` (default 5×10⁻³ Bohr). For 2×3N gradient evaluations are required (18 for water). Imaginary frequencies are printed as negative values.
+
+### CASSCF active-space — water, CAS(4,4)/STO-3G
+
+Set `correlation casscf` and specify the active space with `nactele` and `nactorb`. The CASSCF wavefunction is built on top of a converged RHF reference:
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type           rhf
+    correlation        casscf
+    use_diis           .true.
+    diis_dim           8
+    engine             os
+    guess              hcore
+    nactele            4
+    nactorb            4
+    nroots             1
+    mcscf_max_iter     200
+    mcscf_micro_per_macro  4
+    tol_mcscf_energy   1e-8
+    tol_mcscf_grad     1e-4
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O    0.000000    0.000000    0.117176
+H    0.000000    0.757005   -0.468704
+H    0.000000   -0.757005   -0.468704
+%end_coords
+```
+
+Expected energy: `E(CASSCF) ≈ -75.9851 Eh` for H₂O CAS(4,4)/STO-3G.
 
 ### Cross-basis restart — STO-3G → 6-31G
 
