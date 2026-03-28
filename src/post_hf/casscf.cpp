@@ -1244,7 +1244,7 @@ std::expected<void, std::string> run_mcscf_loop(
     build_ci_strings(n_act, n_alpha_act, n_beta_act, ras,
                      irr_act, use_sym, target_irr, a_strs, b_strs);
 
-    const unsigned int nmicro = as.mcscf_micro_per_macro;
+    const unsigned int nmicro = std::max(1u, as.mcscf_micro_per_macro);
 
     logging(LogLevel::Info, tag + " :",
         std::format("Active space: ({:d}e, {:d}o)  n_core={:d}  n_virt={:d}  CI dim ≤ {:d}",

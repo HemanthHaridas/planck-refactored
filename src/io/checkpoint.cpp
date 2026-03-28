@@ -103,7 +103,7 @@ static void read_spin_channel(std::istream& in, HartreeFock::SpinChannel& ch)
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 static constexpr char MAGIC[8] = {'P','L','N','K','C','H','K','\0'};
-static constexpr uint32_t VERSION = 4;
+static constexpr uint32_t VERSION = 6;
 
 std::expected<void, std::string> HartreeFock::Checkpoint::save(
     const HartreeFock::Calculator& calc,
@@ -199,6 +199,37 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
         write_pod<int32_t> (out, bf._cartesian.y());
         write_pod<int32_t> (out, bf._cartesian.z());
         write_pod<double>  (out, bf._component_norm);
+    }
+
+    // ── v5: CASSCF active-space orbital densities / occupations ─────────────
+    const bool has_casscf_active_densities = calc._cas_nat_occ.size() > 0;
+    write_pod<uint8_t>(out, static_cast<uint8_t>(has_casscf_active_densities ? 1 : 0));
+    if (has_casscf_active_densities)
+        write_vector(out, calc._cas_nat_occ);
+
+    // ── v6: CASSCF active-orbital range metadata for cube export ────────────
+    const int n_total_elec =
+        static_cast<int>(calc._molecule.atomic_numbers.cast<int>().sum()) - calc._molecule.charge;
+    const bool has_valid_active_window =
+        has_casscf_mos &&
+        calc._active_space.nactorb > 0 &&
+        calc._active_space.nactele > 0 &&
+        (n_total_elec - calc._active_space.nactele) >= 0 &&
+        ((n_total_elec - calc._active_space.nactele) % 2 == 0);
+    const int active_start =
+        has_valid_active_window ? (n_total_elec - calc._active_space.nactele) / 2 : 0;
+    const int active_count =
+        has_valid_active_window ? calc._active_space.nactorb : 0;
+    const bool has_casscf_active_orbitals =
+        has_valid_active_window &&
+        active_start >= 0 &&
+        active_count > 0 &&
+        active_start + active_count <= static_cast<int>(nb);
+    write_pod<uint8_t>(out, static_cast<uint8_t>(has_casscf_active_orbitals ? 1 : 0));
+    if (has_casscf_active_orbitals)
+    {
+        write_pod<int32_t>(out, static_cast<int32_t>(active_start));
+        write_pod<int32_t>(out, static_cast<int32_t>(active_count));
     }
 
     if (!out)

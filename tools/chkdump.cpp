@@ -5,6 +5,7 @@
 //   chkdump <file.hfchk> [output.fchk]
 //   chkdump <file.hfchk> --density [output.cube]
 //   chkdump <file.hfchk> --mo N   [output.cube]
+//   chkdump <file.hfchk> --casscf-active [output_dir]
 //       [--spin alpha|beta]   UHF spin channel (default: alpha)
 //       [--spacing F]         grid spacing in Bohr (default: 0.2)
 //       [--pad F]             padding around molecule in Bohr (default: 5.0)
@@ -17,7 +18,7 @@
 //   the checkpoint contents.
 // - Symmetric matrices are emitted in packed lower-triangular form, matching
 //   the usual formatted-checkpoint convention.
-// - Cube generation requires a v4 checkpoint (re-run the calculation to produce one).
+// - Cube generation requires a v4+ checkpoint (re-run the calculation to produce one).
 
 #include <algorithm>
 #include <cmath>
@@ -190,6 +191,7 @@ struct CubeOptions
 {
     bool        cube_mode  = false;
     bool        do_density = false;
+    bool        do_casscf_active = false;
     int         mo_index   = 0;     // 1-indexed; 0 = not set
     bool        spin_beta  = false;
     bool        use_casscf = false;
@@ -328,6 +330,33 @@ static void write_cube(std::ostream& out,
     }
 }
 
+template<typename Evaluator>
+static std::vector<double> eval_grid_values(const Grid& g,
+                                            const std::vector<ChkShell>& shells,
+                                            const std::vector<ChkBF>& bfs,
+                                            Evaluator evaluator)
+{
+    const std::size_t nx = static_cast<std::size_t>(g.nx);
+    const std::size_t ny = static_cast<std::size_t>(g.ny);
+    const std::size_t nz = static_cast<std::size_t>(g.nz);
+    std::vector<double> values(nx * ny * nz);
+    for (std::size_t ix = 0; ix < nx; ++ix)
+    {
+        const double px = g.xmin + static_cast<double>(ix) * g.dx;
+        for (std::size_t iy = 0; iy < ny; ++iy)
+        {
+            const double py = g.ymin + static_cast<double>(iy) * g.dy;
+            for (std::size_t iz = 0; iz < nz; ++iz)
+            {
+                const double pz = g.zmin + static_cast<double>(iz) * g.dz;
+                const auto phi  = eval_basis(px, py, pz, shells, bfs);
+                values[ix*ny*nz + iy*nz + iz] = evaluator(phi);
+            }
+        }
+    }
+    return values;
+}
+
 // ─── CLI parsing ─────────────────────────────────────────────────────────────
 
 static std::string stem(const std::string& path)
@@ -361,6 +390,7 @@ int main(int argc, char* argv[])
                      "  chkdump <file.hfchk> [output.fchk]\n"
                      "  chkdump <file.hfchk> --density [output.cube]\n"
                      "  chkdump <file.hfchk> --mo N   [output.cube]\n"
+                     "  chkdump <file.hfchk> --casscf-active [output_dir]\n"
                      "      [--spin alpha|beta] [--spacing F] [--pad F] [--casscf]\n";
         return EXIT_FAILURE;
     }
@@ -411,6 +441,12 @@ int main(int argc, char* argv[])
         {
             opts.use_casscf = true;
         }
+        else if (arg == "--casscf-active")
+        {
+            opts.cube_mode = true;
+            opts.do_casscf_active = true;
+            opts.use_casscf = true;
+        }
         else if (arg[0] == '-' && arg[1] == '-')
         {
             std::cerr << "chkdump: unknown option: " << arg << "\n";
@@ -431,14 +467,30 @@ int main(int argc, char* argv[])
         std::cerr << "chkdump: specify exactly one of --density or --mo N\n";
         return EXIT_FAILURE;
     }
+    if (opts.do_casscf_active && (opts.do_density || opts.mo_index > 0))
+    {
+        std::cerr << "chkdump: --casscf-active cannot be combined with --density or --mo N\n";
+        return EXIT_FAILURE;
+    }
     if (opts.cube_mode && !opts.do_density && opts.mo_index == 0)
     {
-        std::cerr << "chkdump: cube mode requires --density or --mo N\n";
-        return EXIT_FAILURE;
+        if (!opts.do_casscf_active)
+        {
+            std::cerr << "chkdump: cube mode requires --density, --mo N, or --casscf-active\n";
+            return EXIT_FAILURE;
+        }
     }
     if (opts.use_casscf && opts.mo_index == 0)
     {
-        std::cerr << "chkdump: --casscf requires --mo N\n";
+        if (!opts.do_casscf_active)
+        {
+            std::cerr << "chkdump: --casscf requires --mo N\n";
+            return EXIT_FAILURE;
+        }
+    }
+    if (opts.do_casscf_active && opts.spin_beta)
+    {
+        std::cerr << "chkdump: --casscf-active only supports the CASSCF orbital set\n";
         return EXIT_FAILURE;
     }
 
@@ -462,10 +514,10 @@ int main(int argc, char* argv[])
     }
 
     const uint32_t version = read_pod<uint32_t>(in);
-    if (version < 2 || version > 4)
+    if (version < 2 || version > 6)
     {
         std::cerr << "chkdump: unsupported checkpoint version " << version
-                  << " (expected 2–4)\n";
+                  << " (expected 2–6)\n";
         return EXIT_FAILURE;
     }
 
@@ -557,6 +609,28 @@ int main(int argc, char* argv[])
         }
     }
 
+    uint8_t has_casscf_active_densities = 0;
+    Matrix casscf_active_densities;
+    if (version >= 5)
+    {
+        has_casscf_active_densities = read_pod<uint8_t>(in);
+        if (has_casscf_active_densities)
+            casscf_active_densities = read_vector_as_matrix(in);
+    }
+
+    uint8_t has_casscf_active_orbitals = 0;
+    int32_t casscf_active_start = 0;
+    int32_t casscf_active_count = 0;
+    if (version >= 6)
+    {
+        has_casscf_active_orbitals = read_pod<uint8_t>(in);
+        if (has_casscf_active_orbitals)
+        {
+            casscf_active_start = read_pod<int32_t>(in);
+            casscf_active_count = read_pod<int32_t>(in);
+        }
+    }
+
     if (!in)
     {
         std::cerr << "chkdump: I/O error while reading checkpoint\n";
@@ -591,6 +665,100 @@ int main(int argc, char* argv[])
             std::cerr << "chkdump: --casscf: no CASSCF orbitals found in checkpoint\n";
             return EXIT_FAILURE;
         }
+        if (opts.do_casscf_active)
+        {
+            if (!has_casscf_active_orbitals)
+            {
+                std::cerr << "chkdump: --casscf-active: no CASSCF active-orbital metadata found in checkpoint\n";
+                return EXIT_FAILURE;
+            }
+            if (casscf_active_start < 0 || casscf_active_count <= 0 ||
+                static_cast<uint64_t>(casscf_active_start + casscf_active_count) > nbasis)
+            {
+                std::cerr << "chkdump: --casscf-active: invalid active-orbital range in checkpoint\n";
+                return EXIT_FAILURE;
+            }
+        }
+
+        // Build grid
+        const Grid g = make_grid(coords, static_cast<std::size_t>(natoms),
+                                 opts.spacing, opts.pad);
+
+        // Build UHF total density matrix if needed
+        Matrix total_density;
+        if (opts.do_density && is_uhf)
+        {
+            total_density.rows = alpha_density.rows;
+            total_density.cols = alpha_density.cols;
+            total_density.data.resize(alpha_density.data.size());
+            for (std::size_t k = 0; k < alpha_density.data.size(); ++k)
+                total_density.data[k] = alpha_density.data[k] + beta_density.data[k];
+        }
+
+        const Matrix& density_ref = (opts.do_density && is_uhf) ? total_density : alpha_density;
+        const Matrix& mo_c_ref    = opts.use_casscf ? casscf_mo_c :
+                                    (opts.spin_beta  ? beta_mo_c   : alpha_mo_c);
+
+        if (opts.do_casscf_active)
+        {
+            const std::filesystem::path out_dir =
+                has_explicit_out ? std::filesystem::path(explicit_out) : std::filesystem::path(".");
+            if (std::filesystem::exists(out_dir) && !std::filesystem::is_directory(out_dir))
+            {
+                std::cerr << "chkdump: --casscf-active output path must be a directory\n";
+                return EXIT_FAILURE;
+            }
+            if (!std::filesystem::exists(out_dir) &&
+                !std::filesystem::create_directories(out_dir))
+            {
+                std::cerr << "chkdump: cannot create output directory '" << out_dir.string() << "'\n";
+                return EXIT_FAILURE;
+            }
+
+            const std::string base = stem(in_path);
+            for (int a = 0; a < casscf_active_count; ++a)
+            {
+                const int mo_one_based = casscf_active_start + a + 1;
+                const auto values = eval_grid_values(
+                    g, shells, bfs,
+                    [&](const std::vector<double>& phi) {
+                        return eval_mo(phi, mo_c_ref, casscf_active_start + a);
+                    });
+
+                std::ostringstream comment2;
+                comment2 << "Generated by chkdump from " << in_path;
+                if (has_casscf_active_densities &&
+                    casscf_active_densities.rows == casscf_active_count &&
+                    !casscf_active_densities.data.empty())
+                {
+                    comment2 << "  occ="
+                             << std::fixed << std::setprecision(6)
+                             << casscf_active_densities(static_cast<int64_t>(a), 0);
+                }
+
+                const std::filesystem::path out_path =
+                    out_dir / (base + "_casscf_active_" + std::to_string(a + 1)
+                               + "_mo" + std::to_string(mo_one_based) + ".cube");
+                std::ofstream fout(out_path);
+                if (!fout)
+                {
+                    std::cerr << "chkdump: cannot open output file '" << out_path.string() << "'\n";
+                    return EXIT_FAILURE;
+                }
+
+                write_cube(fout,
+                           "Planck cube file - CASSCF active orbital "
+                           + std::to_string(a + 1)
+                           + " (MO " + std::to_string(mo_one_based) + ")",
+                           comment2.str(),
+                           atomic_numbers, coords, static_cast<std::size_t>(natoms),
+                           g, values);
+
+                std::cerr << "chkdump: wrote " << out_path.string()
+                          << "  [" << g.nx << " × " << g.ny << " × " << g.nz << " pts]\n";
+            }
+            return EXIT_SUCCESS;
+        }
 
         // Determine output path
         if (!has_explicit_out)
@@ -610,50 +778,16 @@ int main(int argc, char* argv[])
             opts.out_path = explicit_out;
         }
 
-        // Build grid
-        const Grid g = make_grid(coords, static_cast<std::size_t>(natoms),
-                                 opts.spacing, opts.pad);
+        const auto values = opts.do_density
+            ? eval_grid_values(g, shells, bfs,
+                               [&](const std::vector<double>& phi) {
+                                   return eval_density(phi, density_ref);
+                               })
+            : eval_grid_values(g, shells, bfs,
+                               [&](const std::vector<double>& phi) {
+                                   return eval_mo(phi, mo_c_ref, opts.mo_index - 1);
+                               });
 
-        const std::size_t nx    = static_cast<std::size_t>(g.nx);
-        const std::size_t ny    = static_cast<std::size_t>(g.ny);
-        const std::size_t nz    = static_cast<std::size_t>(g.nz);
-        const std::size_t total = nx * ny * nz;
-
-        // Build UHF total density matrix if needed
-        Matrix total_density;
-        if (opts.do_density && is_uhf)
-        {
-            total_density.rows = alpha_density.rows;
-            total_density.cols = alpha_density.cols;
-            total_density.data.resize(alpha_density.data.size());
-            for (std::size_t k = 0; k < alpha_density.data.size(); ++k)
-                total_density.data[k] = alpha_density.data[k] + beta_density.data[k];
-        }
-
-        const Matrix& density_ref = (opts.do_density && is_uhf) ? total_density : alpha_density;
-        const Matrix& mo_c_ref    = opts.use_casscf ? casscf_mo_c :
-                                    (opts.spin_beta  ? beta_mo_c   : alpha_mo_c);
-
-        // Evaluate grid
-        std::vector<double> values(total);
-        for (std::size_t ix = 0; ix < nx; ++ix)
-        {
-            const double px = g.xmin + static_cast<double>(ix) * g.dx;
-            for (std::size_t iy = 0; iy < ny; ++iy)
-            {
-                const double py = g.ymin + static_cast<double>(iy) * g.dy;
-                for (std::size_t iz = 0; iz < nz; ++iz)
-                {
-                    const double pz = g.zmin + static_cast<double>(iz) * g.dz;
-                    const auto phi  = eval_basis(px, py, pz, shells, bfs);
-                    values[ix*ny*nz + iy*nz + iz] = opts.do_density
-                        ? eval_density(phi, density_ref)
-                        : eval_mo(phi, mo_c_ref, opts.mo_index - 1);
-                }
-            }
-        }
-
-        // Build comment lines
         std::string comment1, comment2;
         if (opts.do_density)
         {
@@ -669,7 +803,6 @@ int main(int argc, char* argv[])
             comment2 = "Generated by chkdump from " + in_path;
         }
 
-        // Open output
         std::ofstream fout(opts.out_path);
         if (!fout)
         {
@@ -744,6 +877,10 @@ int main(int argc, char* argv[])
     write_scalar_int(out, "Has optimized geometry", static_cast<long long>(has_opt_coords));
     write_scalar_int(out, "Checkpoint version", static_cast<long long>(version));
     write_scalar_int(out, "Has CASSCF orbitals", static_cast<long long>(has_casscf_mos));
+    write_scalar_int(out, "Has CASSCF active densities",
+                     static_cast<long long>(has_casscf_active_densities));
+    write_scalar_int(out, "Has CASSCF active orbitals",
+                     static_cast<long long>(has_casscf_active_orbitals));
     write_scalar_real(out, "SCF Energy", tot_energy);
     write_scalar_real(out, "Nuclear repulsion energy", nuc_rep);
 
@@ -766,6 +903,20 @@ int main(int argc, char* argv[])
 
     if (has_casscf_mos)
         write_real_array(out, "CASSCF MO coefficients", flatten_matrix(casscf_mo_c));
+    if (has_casscf_active_densities)
+    {
+        write_scalar_int(out, "Number of CASSCF active densities",
+                         static_cast<long long>(casscf_active_densities.rows));
+        write_real_array(out, "CASSCF optimized active orbital densities",
+                         flatten_matrix(casscf_active_densities));
+    }
+    if (has_casscf_active_orbitals)
+    {
+        write_scalar_int(out, "CASSCF active orbital start",
+                         static_cast<long long>(casscf_active_start + 1));
+        write_scalar_int(out, "Number of CASSCF active orbitals",
+                         static_cast<long long>(casscf_active_count));
+    }
 
     write_real_array(out, "Total SCF Density", total_density_packed);
     write_real_array(out, "Alpha Density Matrix", alpha_density_packed);

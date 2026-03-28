@@ -11,7 +11,7 @@
 // Binary checkpoint format (.hfchk).  Layout (in order, all little-endian):
 //
 //  [8]  magic: "PLNKCHK\0"
-//  [4]  version: uint32 = 3
+//  [4]  version: uint32 = 6
 //  [8]  nbasis: uint64
 //  [1]  is_uhf: uint8
 //  [1]  is_converged: uint8
@@ -53,6 +53,15 @@
 //      [4]            ly: int32
 //      [4]            lz: int32
 //      [8]            component_norm: double (1/sqrt((2lx-1)!!(2ly-1)!!(2lz-1)!!))
+//
+//  Version 5 further appends:
+//    [1]              has_casscf_active_densities: uint8
+//    [vector]         casscf_active_densities (active natural occupations) when flag is 1
+//
+//  Version 6 further appends:
+//    [1]              has_casscf_active_orbitals: uint8
+//    [4]              casscf_active_start: int32 (0-based MO index) when flag is 1
+//    [4]              casscf_active_count: int32 when flag is 1
 //
 // Restart semantics:
 //   guess density — load() fills _overlap, _hcore, _info._scf.{alpha,beta},
