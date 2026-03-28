@@ -335,6 +335,7 @@
 <li class="toc-level-3"><a href="#second-order-perturbation-theory">Second-Order Perturbation Theory</a></li>
 <li class="toc-level-3"><a href="#rmp2-closed-shell">RMP2 (Closed-Shell)</a></li>
 <li class="toc-level-3"><a href="#ump2-open-shell">UMP2 (Open-Shell)</a></li>
+<li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
 <li class="toc-level-2"><a href="#12-analytic-nuclear-gradients">12. Analytic Nuclear Gradients</a></li>
 <li class="toc-level-3"><a href="#hellmann-feynman-theorem-and-pulay-forces">Hellmann-Feynman Theorem and Pulay Forces</a></li>
 <li class="toc-level-3"><a href="#derivative-integrals">Derivative Integrals</a></li>
@@ -378,7 +379,7 @@
 <li>Obara-Saika and Rys-quadrature two-electron integral engines</li>
 <li>Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF</li>
 <li>Point-group detection, symmetry-adapted orbitals, and MO irrep labeling</li>
-<li>RMP2 and UMP2 correlation energies</li>
+<li>RMP2 and UMP2 correlation energies with RMP2 natural orbital analysis</li>
 <li>Analytic RHF and UHF nuclear gradients</li>
 <li>Analytic RMP2 nuclear gradients (Z-vector / CPHF)</li>
 <li>Geometry optimization in Cartesian and internal coordinates</li>
@@ -894,6 +895,20 @@ E_{UMP2}^{OS} = -\sum_{i^\alpha j^\beta a^\alpha b^\beta}
 {\varepsilon_{i^\alpha} + \varepsilon_{j^\beta} - \varepsilon_{a^\alpha} - \varepsilon_{b^\beta}}
 \]</span></p>
 <p>Implemented in <code>run_ump2</code> in <code>src/post_hf/mp2.cpp</code>.</p>
+<h3 id="rmp2-natural-orbitals">RMP2 Natural Orbitals</h3>
+<p>After the correlation energy is computed, Planck diagonalizes the unrelaxed RMP2 one-particle density matrix to produce <strong>natural orbitals</strong> (NOs) and their occupation numbers. The unrelaxed density is block-diagonal in the canonical MO basis:</p>
+<p><span class="math-display">\[
+\gamma^{MP2}_{pq} = \begin{cases}
+2\delta_{ij} + P^{occ}_{ij} + P^{occ}_{ji} & p,q \in \text{occupied} \\
+P^{virt}_{ab} + P^{virt}_{ba} & p,q \in \text{virtual} \\
+0 & \text{otherwise (unrelaxed)}
+\end{cases}
+\]</span></p>
+<p>where <span class="math-inline">\(P^{occ}\)</span> and <span class="math-inline">\(P^{virt}\)</span> are the occupied-occupied and virtual-virtual MP2 density corrections assembled in <code>build_rmp2_unrelaxed_density</code>. The symmetrized matrix is diagonalized by <code>compute_rmp2_natural_orbitals</code> in <code>src/post_hf/mp2.cpp</code> using Eigen&#x27;s <code>SelfAdjointEigenSolver</code>. Eigenvalues are sorted in descending order; eigenvectors give the canonical-MO → natural-orbital rotation. The AO-basis coefficients are obtained by left-multiplying with the HF MO coefficient matrix:</p>
+<p><span class="math-display">\[
+\mathbf C^{NO}_{AO} = \mathbf C^{HF}_{AO} \cdot \mathbf U^{MO \to NO}
+\]</span></p>
+<p>The result struct <code>RMP2NaturalOrbitals</code> carries three fields: <code>occupations</code> (descending eigenvalues), <code>coefficients_mo</code> (the rotation <span class="math-inline">\(\mathbf U\)</span>), and <code>coefficients_ao</code>. Occupation numbers near 2 indicate strongly occupied HF-like NOs; values of 0.01–0.1 indicate correlation-driven virtual occupation. These can guide active-space selection for a subsequent CASSCF calculation.</p>
 <hr>
 <h2 id="12-analytic-nuclear-gradients">12. Analytic Nuclear Gradients</h2>
 <h3 id="hellmann-feynman-theorem-and-pulay-forces">Hellmann-Feynman Theorem and Pulay Forces</h3>
