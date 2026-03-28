@@ -18,7 +18,7 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 - **Analytic nuclear gradients** — RHF and UHF nuclear gradients via the Obara-Saika AM-shift rule; all five terms (1e GTO-centre, nucleus-position V, ERI, Pulay/overlap, nuclear repulsion) assembled exactly
 - **Geometry optimization** — L-BFGS optimizer in Cartesian coordinates or BFGS optimizer in redundant generalized internal coordinates (GIC); Wolfe/Armijo line search; convergence on max Cartesian gradient component; optional constraints (fixed bonds, angles, dihedrals, frozen atoms) via `%begin_constraints`
 - **Vibrational frequency analysis** — semi-numerical Hessian from central finite differences of analytic gradients (2×3N evaluations); mass-weighted normal mode analysis with Eckart T+R projection; outputs vibrational frequencies in cm⁻¹ (imaginary encoded negative), zero-point energy in Ha and kcal/mol; linearity auto-detected
-- **Checkpoint system** — binary `.hfchk` files (version 2); same-basis restart (`guess density`), full geometry+density restart (`guess full`), and cross-basis density projection (Löwdin SVD); checkpoint stores `has_opt_coords` flag set after a converged geometry optimization
+- **Checkpoint system** — binary `.hfchk` files (version 2); same-basis restart (`guess density`), full geometry+density restart (`guess full`), and cross-basis density projection (Löwdin SVD); checkpoint stores `has_opt_coords` flag set after a converged geometry optimization; CASSCF checkpoints additionally store the converged active orbital coefficients, which `chkdump` can export as Gaussian CUBE volumetric files
 - **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*
 
 ### Requirements
@@ -647,7 +647,7 @@ The program prints a structured log to standard output. Key sections:
 | `max_geomopt_iter` | int | `50` | Maximum number of geometry optimization steps |
 | `hessian_step` | float | `5e-3` | Finite-difference step size in Bohr for the semi-numerical Hessian |
 
-## Build Options
+### Build Options
 
 | CMake variable | Default | Description |
 |---|---|---|
@@ -655,7 +655,7 @@ The program prints a structured log to standard output. Key sections:
 | `BUILD_TOOLS` | `ON` | Build utility tools (`chkdump` checkpoint formatter) |
 | `CMAKE_INSTALL_PREFIX` | `./install` | Installation prefix |
 
-## Utility Tools
+### Utility Tools
 
 ### `chkdump`
 
@@ -666,4 +666,12 @@ Converts a binary `.hfchk` checkpoint file to formatted human-readable text:
 ./build/chkdump mol.hfchk mol.txt    # → file
 ```
 
-Output includes: format version, SCF type, convergence status, total energy, nuclear repulsion, geometry (with element symbols), MO energies with HOMO/LUMO labels, overlap matrix, core Hamiltonian, density matrix, Fock matrix, and MO coefficients. Disable with `-DBUILD_TOOLS=OFF`.
+Output includes: format version, SCF type, convergence status, total energy, nuclear repulsion, geometry (with element symbols), MO energies with HOMO/LUMO labels, overlap matrix, core Hamiltonian, density matrix, Fock matrix, and MO coefficients.
+
+For CASSCF checkpoints, `chkdump` additionally writes the converged active orbitals and generates a Gaussian CUBE file for each active orbital, allowing direct visualization of the active-space wavefunctions in external molecular visualization tools (e.g. VESTA, VMD, Avogadro):
+
+```bash
+./build/chkdump mol.hfchk --casscf-active           # writes mol_active_orb_<i>.cube for each active orbital
+```
+
+Disable with `-DBUILD_TOOLS=OFF`.
