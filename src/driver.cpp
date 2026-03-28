@@ -20,7 +20,6 @@
 #include "integrals/base.h"
 #include "scf/scf.h"
 #include "post_hf/mp2.h"
-#include "post_hf/mp2_gradient.h"
 #include "post_hf/casscf.h"
 #include "gradient/gradient.h"
 #include "opt/geomopt.h"
@@ -592,10 +591,11 @@ int main(int argc, const char* argv[])
             {
                 if (calculator._correlation == HartreeFock::PostHF::RMP2)
                 {
-                    auto nat_res = HartreeFock::Correlation::compute_rmp2_natural_occupancies(
+                    auto nat_res = HartreeFock::Correlation::compute_rmp2_natural_orbitals(
                         calculator, shellpairs);
                     if (nat_res)
-                        HartreeFock::Logger::mp2_natural_orbitals(*nat_res);
+                        HartreeFock::Logger::mp2_natural_orbitals(
+                            nat_res->occupations, nat_res->coefficients_mo);
                     else
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
                             "RMP2 :", "Natural orbitals unavailable: " + nat_res.error());

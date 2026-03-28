@@ -258,6 +258,37 @@ namespace HartreeFock
                       << std::string(LW + VW * 3, '-') << "\n";
         }
 
+        inline void mp2_natural_orbitals(const Eigen::VectorXd& occupations,
+                                         const Eigen::MatrixXd& coefficients_mo,
+                                         double coeff_threshold = 1e-2)
+        {
+            std::lock_guard<std::mutex> lock(log_mutex);
+
+            std::cout << "\n  MP2 Natural Orbital Occupancies :\n";
+            for (Eigen::Index i = 0; i < occupations.size(); ++i)
+                std::cout << std::format("    NO {:3d}     {:.6f}\n",
+                                         static_cast<int>(i + 1), occupations(i));
+
+            std::cout << "\n  MP2 Natural Orbitals (canonical MO expansion) :\n";
+            for (Eigen::Index no = 0; no < coefficients_mo.cols(); ++no)
+            {
+                std::cout << std::format("    NO {:3d} =", static_cast<int>(no + 1));
+                bool printed = false;
+                for (Eigen::Index mo = 0; mo < coefficients_mo.rows(); ++mo)
+                {
+                    const double coeff = coefficients_mo(mo, no);
+                    if (std::abs(coeff) < coeff_threshold)
+                        continue;
+
+                    std::cout << std::format(" {:+.6f}*MO{}", coeff, static_cast<int>(mo + 1));
+                    printed = true;
+                }
+                if (!printed)
+                    std::cout << " <all coefficients below threshold>";
+                std::cout << "\n";
+            }
+        }
+
         inline void blank()
         {
             std::cout << '\n';

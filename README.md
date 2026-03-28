@@ -11,7 +11,8 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
 - **MO symmetry** — irreducible representation labels (A1, B2, Ag, Bu, …) assigned to each converged orbital; Cartesian AO coefficients are transformed to the real spherical harmonic basis and decomposed into symmetry species via libmsym's SALC machinery; the Cartesian→spherical block transform covers all shells supported by the integral engine (S through H, L=0–5); for non-Abelian groups (D3d, Td, Oh, …) the largest Abelian subgroup with all one-dimensional irreps is automatically selected (e.g. C2h for D3d) so every MO receives a unique, unambiguous label — the active group or subgroup is printed to the log; linear molecules (C∞v / D∞h) use a dedicated character-based handler
-- **Post-HF** — RMP2 and UMP2 correlation energy corrections; CASSCF and RASSCF multireference active-space calculations
+- **Post-HF** — RMP2 and UMP2 correlation energy corrections with natural orbital analysis; CASSCF and RASSCF multireference active-space calculations
+- **RMP2 natural orbitals** — after a single-point RMP2 run, the unrelaxed MP2 one-particle density matrix (2I + P_occ block, P_virt block) is diagonalized to yield natural orbital occupation numbers (descending) and natural orbital coefficients in both canonical-MO and AO bases; the occupation table and MO expansion are printed automatically
 - **CASSCF** — Complete Active Space SCF with full CI Davidson solver, exact determinant-based 1-RDM/2-RDM construction, generalized Fock orbital gradient, Cayley-transform orbital rotation, energy-aware macro-step backtracking, and DIIS-accelerated macro-iterations; supports state-averaged (SA-CASSCF) with configurable weights; convergence validated for H₂ CAS(2,2) and H₂O CAS(2,2)/CAS(4,4)
 - **RASSCF** — Restricted Active Space SCF extending CASSCF with RAS1/RAS2/RAS3 subspace partitioning and configurable hole/electron occupation restrictions
 - **Analytic nuclear gradients** — RHF and UHF nuclear gradients via the Obara-Saika AM-shift rule; all five terms (1e GTO-centre, nucleus-position V, ERI, Pulay/overlap, nuclear repulsion) assembled exactly
@@ -630,6 +631,7 @@ The program prints a structured log to standard output. Key sections:
 - **MO Energies** — orbital energies in Hartree with HOMO/LUMO labels and irrep labels when symmetry is enabled
 - **⟨S²⟩ / ⟨S⟩** — spin contamination diagnostics (UHF only)
 - **Converged Energy** — total energy in Hartree, eV, and kcal/mol; MP2 correlation and corrected total if post-HF enabled
+- **RMP2 Natural Orbitals** — printed after single-point RMP2: occupation numbers (descending) and MO expansion of each natural orbital (coefficients above 1e-2 threshold); helps identify the dominant occupied/virtual MOs contributing to correlation
 - **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms
 - **IC System** — when `opt_coords internal`, logs the count of stretches, bends, and torsions in the redundant GIC set
 - **Opt Step N** — per-step log line: energy, max Cartesian gradient, and RMS IC gradient (IC mode) or RMS Cartesian gradient (Cartesian mode)

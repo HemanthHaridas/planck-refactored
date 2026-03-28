@@ -13,7 +13,7 @@ self-consistent field theory. It implements:
 - Obara-Saika and Rys-quadrature two-electron integral engines
 - Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF
 - Point-group detection, symmetry-adapted orbitals, and MO irrep labeling
-- RMP2 and UMP2 correlation energies
+- RMP2 and UMP2 correlation energies with RMP2 natural orbital analysis
 - Analytic RHF and UHF nuclear gradients
 - Analytic RMP2 nuclear gradients (Z-vector / CPHF)
 - Geometry optimization in Cartesian and internal coordinates
@@ -913,6 +913,26 @@ E_{UMP2}^{OS} = -\sum_{i^\alpha j^\beta a^\alpha b^\beta}
 \]
 
 Implemented in `run_ump2` in `src/post_hf/mp2.cpp`.
+
+### RMP2 Natural Orbitals
+
+After the correlation energy is computed, Planck diagonalizes the unrelaxed RMP2 one-particle density matrix to produce **natural orbitals** (NOs) and their occupation numbers. The unrelaxed density is block-diagonal in the canonical MO basis:
+
+\[
+\gamma^{MP2}_{pq} = \begin{cases}
+2\delta_{ij} + P^{occ}_{ij} + P^{occ}_{ji} & p,q \in \text{occupied} \\
+P^{virt}_{ab} + P^{virt}_{ba} & p,q \in \text{virtual} \\
+0 & \text{otherwise (unrelaxed)}
+\end{cases}
+\]
+
+where \(P^{occ}\) and \(P^{virt}\) are the occupied-occupied and virtual-virtual MP2 density corrections assembled in `build_rmp2_unrelaxed_density`. The symmetrized matrix is diagonalized by `compute_rmp2_natural_orbitals` in `src/post_hf/mp2.cpp` using Eigen's `SelfAdjointEigenSolver`. Eigenvalues are sorted in descending order; eigenvectors give the canonical-MO → natural-orbital rotation. The AO-basis coefficients are obtained by left-multiplying with the HF MO coefficient matrix:
+
+\[
+\mathbf C^{NO}_{AO} = \mathbf C^{HF}_{AO} \cdot \mathbf U^{MO \to NO}
+\]
+
+The result struct `RMP2NaturalOrbitals` carries three fields: `occupations` (descending eigenvalues), `coefficients_mo` (the rotation \(\mathbf U\)), and `coefficients_ao`. Occupation numbers near 2 indicate strongly occupied HF-like NOs; values of 0.01–0.1 indicate correlation-driven virtual occupation. These can guide active-space selection for a subsequent CASSCF calculation.
 
 ---
 
