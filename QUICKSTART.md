@@ -358,7 +358,40 @@ H  1  0.9572  2  104.52
 Each row after the header gives the element symbol followed by reference atom index, bond length, and (for atom 3+) additional reference indices, angle, and dihedral. Atom indices are 1-based. The converted Cartesian coordinates are passed through the rest of the pipeline, so symmetry detection (`use_symm .true.`) works normally.
 
 
-### 8. CASSCF active-space calculation
+### 8. MP2 correlation energy and natural orbitals
+
+Add `correlation rmp2` (closed-shell) or `correlation ump2` (open-shell) to the `%begin_scf` block to compute the second-order Møller-Plesset correlation energy after the SCF converges:
+
+```
+%begin_scf
+    scf_type    rhf
+    engine      os
+    correlation rmp2
+%end_scf
+```
+
+After a single-point RMP2 run, Planck automatically diagonalizes the unrelaxed MP2 one-particle density matrix and prints the natural orbital occupancies and their expansion in canonical MOs:
+
+```
+  MP2 Natural Orbital Occupancies :
+    NO   1     1.999812
+    NO   2     1.993021
+    NO   3     1.985441
+    NO   4     1.978033
+    NO   5     1.964219
+    NO   6     0.020113
+    NO   7     0.011432
+    ...
+
+  MP2 Natural Orbitals (canonical MO expansion) :
+    NO   1 =  +0.999902*MO1
+    NO   2 =  +0.998731*MO2 +0.012401*MO6
+    ...
+```
+
+Occupancies close to 2 indicate strongly occupied (nearly HF) natural orbitals; small values (0.01–0.1) indicate correlation-driven occupation of virtual space. This output is useful for selecting an appropriate active space before a CASSCF calculation.
+
+### 9. CASSCF active-space calculation
 
 CASSCF (Complete Active Space SCF) provides a multireference wavefunction by performing a full CI expansion within a chosen active space of `nactorb` orbitals containing `nactele` electrons. The RHF orbitals serve as the starting reference; CASSCF then simultaneously optimizes the CI coefficients and orbital rotations until convergence.
 
@@ -416,7 +449,7 @@ Output includes the RHF reference energy, the CASSCF energy at each macro-iterat
 
 **State averaging (SA-CASSCF)**: Set `nroots 2` (or more) to simultaneously optimize orbitals for multiple electronic states with equal weights. Custom weights are not currently exposed as keywords; use equal-weight averaging.
 
-### 9. SCF mode
+### 10. SCF mode
 
 | Mode | Keyword | When to use |
 |---|---|---|
@@ -442,7 +475,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 ```
 
 
-### 10. Basis sets
+### 11. Basis sets
 
 | Keyword | Description |
 |---|---|
@@ -452,7 +485,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | `6-31g*` | 6-31G + d polarization on heavy atoms |
 
 
-### 11. Convergence tips
+### 12. Convergence tips
 
 | Problem | Fix |
 |---|---|
@@ -464,7 +497,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | MO labels are Ag/Bg/Au/Bu instead of Eg/Eu | Expected — for non-Abelian groups (D3d, Oh, …) the program uses the largest Abelian subgroup (e.g. C2h for D3d). The active group is printed to the log. |
 
 
-### 12. All input keywords at a glance
+### 13. All input keywords at a glance
 
 ```
 %begin_control

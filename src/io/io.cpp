@@ -384,6 +384,7 @@ namespace HartreeFock::IO
             {"max_holes",        [&active_space](const std::string &v){ active_space.max_holes        = std::stoi(v); }},
             {"max_elec",         [&active_space](const std::string &v){ active_space.max_elec         = std::stoi(v); }},
             {"mcscf_max_iter",   [&active_space](const std::string &v){ active_space.mcscf_max_iter   = static_cast<unsigned int>(std::stoi(v)); }},
+            {"mcscf_micro_per_macro", [&active_space](const std::string &v){ active_space.mcscf_micro_per_macro = static_cast<unsigned int>(std::stoi(v)); }},
             {"tol_mcscf_energy", [&active_space](const std::string &v){ active_space.tol_mcscf_energy = std::stod(v); }},
             {"tol_mcscf_grad",   [&active_space](const std::string &v){ active_space.tol_mcscf_grad   = std::stod(v); }},
             {"ci_max_dim",       [&active_space](const std::string &v){ active_space.ci_max_dim       = static_cast<unsigned int>(std::stoi(v)); }},

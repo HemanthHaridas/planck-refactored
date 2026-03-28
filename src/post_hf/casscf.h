@@ -20,7 +20,7 @@ namespace HartreeFock::Correlation
 //   nactorb       — number of active orbitals
 //   nroots        — number of CI roots (1 = single-state)
 //   weights       — SA weights (empty → equal weights)
-//   mcscf_max_iter, tol_mcscf_energy, tol_mcscf_grad
+//   mcscf_max_iter, mcscf_micro_per_macro, tol_mcscf_energy, tol_mcscf_grad
 //   ci_max_dim    — abort if CI space exceeds this
 //   target_irrep  — target CI state irrep (empty → totally symmetric)
 //

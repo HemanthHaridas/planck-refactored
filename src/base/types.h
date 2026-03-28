@@ -326,6 +326,7 @@ namespace HartreeFock
 
         // MCSCF convergence
         unsigned int mcscf_max_iter   = 100;
+        unsigned int mcscf_micro_per_macro = 4;
         double       tol_mcscf_energy = 1e-8;
         double       tol_mcscf_grad   = 1e-5;
         unsigned int ci_max_dim       = 10000; // abort if CI space exceeds this

@@ -2,6 +2,9 @@
 #include "integrals.h"
 #include "mp2_gradient.h"
 
+#include <Eigen/Eigenvalues>
+#include <algorithm>
+
 // ─── RMP2 ────────────────────────────────────────────────────────────────────
 
 std::expected<void, std::string>
@@ -134,4 +137,52 @@ HartreeFock::Correlation::run_ump2(
 
     calculator._correlation_energy = E_aa + E_bb + E_ab;
     return {};
+}
+
+std::expected<HartreeFock::Correlation::RMP2NaturalOrbitals, std::string>
+HartreeFock::Correlation::compute_rmp2_natural_orbitals(
+    HartreeFock::Calculator& calculator,
+    const std::vector<HartreeFock::ShellPair>& shell_pairs)
+{
+    if (calculator._info._scf.is_uhf)
+        return std::unexpected("compute_rmp2_natural_orbitals: RHF reference required.");
+    if (!calculator._info._is_converged)
+        return std::unexpected("compute_rmp2_natural_orbitals: SCF not converged.");
+
+    auto dens_res = build_rmp2_unrelaxed_density(calculator, shell_pairs);
+    if (!dens_res)
+        return std::unexpected("compute_rmp2_natural_orbitals: " + dens_res.error());
+    const auto& dens = *dens_res;
+
+    const int n_occ  = dens.P_occ.rows();
+    const int n_virt = dens.P_virt.rows();
+    const int nmo    = n_occ + n_virt;
+
+    Eigen::MatrixXd dm1_mo = Eigen::MatrixXd::Zero(nmo, nmo);
+    dm1_mo.topLeftCorner(n_occ, n_occ) =
+        2.0 * Eigen::MatrixXd::Identity(n_occ, n_occ) + dens.P_occ + dens.P_occ.transpose();
+    dm1_mo.bottomRightCorner(n_virt, n_virt) =
+        dens.P_virt + dens.P_virt.transpose();
+
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(dm1_mo);
+    if (solver.info() != Eigen::Success)
+        return std::unexpected("compute_rmp2_natural_orbitals: density diagonalization failed.");
+
+    const Eigen::VectorXd occ_asc = solver.eigenvalues();
+    const Eigen::MatrixXd coeff_asc = solver.eigenvectors();
+
+    RMP2NaturalOrbitals result;
+    result.occupations = Eigen::VectorXd(nmo);
+    result.coefficients_mo = Eigen::MatrixXd(nmo, nmo);
+
+    for (int i = 0; i < nmo; ++i)
+    {
+        const int src = nmo - 1 - i;
+        result.occupations(i) = occ_asc(src);
+        result.coefficients_mo.col(i) = coeff_asc.col(src);
+    }
+
+    const Eigen::MatrixXd& C_ao_mo = calculator._info._scf.alpha.mo_coefficients;
+    result.coefficients_ao = C_ao_mo * result.coefficients_mo;
+    return result;
 }
