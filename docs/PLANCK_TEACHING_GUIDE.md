@@ -10,6 +10,7 @@ Planck is a compact electronic structure program built around Gaussian-basis
 self-consistent field theory. It implements:
 
 - Restricted and unrestricted Hartree-Fock (RHF/UHF) with DIIS acceleration
+- Kohn-Sham DFT (RKS/UKS) with LDA and GGA exchange-correlation functionals via libxc
 - Obara-Saika and Rys-quadrature two-electron integral engines
 - Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF
 - Point-group detection, symmetry-adapted orbitals, and MO irrep labeling
@@ -21,9 +22,12 @@ self-consistent field theory. It implements:
 - CASSCF and RASSCF active-space multiconfigurational SCF
 - Binary checkpoint save/restart with cross-basis Löwdin projection
 
-The entire calculation is coordinated by `src/driver.cpp`. The central data
-object is `HartreeFock::Calculator` in `src/base/types.h`, which carries all
-options, molecular data, basis data, SCF state, and results.
+The HF/post-HF calculation is coordinated by `src/driver.cpp`. The Kohn-Sham
+DFT calculation uses the separate entry point `src/dft/main.cpp` and the
+`DFT::Driver` pipeline in `src/dft/driver.cpp`. The central data object is
+`HartreeFock::Calculator` in `src/base/types.h`, which is shared by both
+pipelines and carries all options, molecular data, basis data, SCF state, and
+results.
 
 ### 2. Architecture Overview
 
@@ -62,6 +66,8 @@ Input file (.hfinp)
 | `src/gradient` | analytic RHF, UHF, RMP2 gradients |
 | `src/opt` | L-BFGS/BFGS optimizer, internal coordinates, constraints |
 | `src/freq` | finite-difference Hessian, vibrational analysis |
+| `src/dft` | Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, KS driver |
+| `src/dft/base` | grid construction headers: radial (Treutler-Ahlrichs), angular (Lebedev), Becke partition, libxc wrapper |
 
 ### 3. Core Data Structures
 
@@ -108,9 +114,14 @@ quantities once is a large speedup.
 
 The top-level object. Owns everything: options structs
 (`OptionsSCF`, `OptionsBasis`, `OptionsGeometry`, `OptionsIntegral`,
-`OptionsOutput`), `Molecule`, `Basis`, `DataSCF`, all integral matrices
-(`_overlap`, `_hcore`, `_eri`), energies, gradient, Hessian, SAO data, integral
-symmetry ops, and active-space results.
+`OptionsOutput`, `OptionsDFT`), `Molecule`, `Basis`, `DataSCF`, all integral
+matrices (`_overlap`, `_hcore`, `_eri`), energies, gradient, Hessian, SAO data,
+integral symmetry ops, and active-space results.
+
+`OptionsDFT` holds the DFT-specific settings: `_grid` (grid quality enum),
+`_exchange` and `_correlation` (XC functional enums), optional raw libxc integer
+IDs (`_exchange_id`, `_correlation_id`), and boolean flags for SAO blocking,
+grid printing, and checkpoint saving.
 
 ---
 
@@ -1435,10 +1446,184 @@ driver.cpp
 | Vibrational symmetry | `src/symmetry/vibrational_symmetry.cpp` | mode irrep assignment |
 | Checkpoint I/O | `src/io/checkpoint.cpp` | `save_checkpoint`, `load_checkpoint` |
 | Cross-basis projection | `src/io/checkpoint.cpp` | Löwdin SVD projection |
+| Molecular grid | `src/dft/base/grid.h` | `MakeMolecularGrid`, `MakeAtomicGrid` |
+| AO evaluation on grid | `src/dft/ao_grid.h` | `AOGridEvaluation` |
+| Density on grid | `src/dft/xc_grid.cpp` | `evaluate_density_on_grid` |
+| XC evaluation (libxc) | `src/dft/xc_grid.cpp` | `evaluate_xc_on_grid` |
+| XC matrix assembly | `src/dft/ks_matrix.cpp` | `assemble_xc_matrix` |
+| KS potential matrices | `src/dft/ks_matrix.cpp` | `combine_ks_potential` |
+| KS-DFT driver | `src/dft/driver.cpp` | `DFT::Driver::run` |
 
 ---
 
-## 20. Current Implementation Status
+## 20. Kohn-Sham Density Functional Theory
+
+### 20.1 The Kohn-Sham Equations
+
+Kohn-Sham DFT maps the interacting many-electron problem onto a fictitious system of non-interacting electrons moving in an effective potential \(v_s(\mathbf r)\) that yields the same ground-state density as the real system. The total electronic energy is:
+
+\[
+E[P] = T_s[P] + V_{ne}[P] + J[P] + E_{xc}[P] + V_{nn}
+\]
+
+where \(T_s\) is the non-interacting kinetic energy, \(V_{ne}\) is the electron-nuclear attraction, \(J\) is the Coulomb (Hartree) energy, \(E_{xc}\) is the exchange-correlation energy, and \(V_{nn}\) is the nuclear repulsion. Minimising \(E[P]\) under the constraint that the KS orbitals are orthonormal leads to the KS secular equations:
+
+\[
+F^{KS}_{\mu\nu} = h_{\mu\nu} + J_{\mu\nu} + V^{xc}_{\mu\nu}
+\]
+
+This is identical in structure to the HF Fock matrix, with the HF exchange matrix \(K\) replaced by the XC potential matrix \(V^{xc}\). Planck reuses the HF SCF loop for KS-DFT: the only structural difference is how the two-electron contribution to the Fock matrix is assembled (Coulomb only, no exchange, plus \(V^{xc}\) from numerical integration).
+
+### 20.2 Exchange-Correlation Functional Families
+
+#### LDA (Local Density Approximation)
+
+The XC energy depends only on the local electron density \(\rho(\mathbf r)\):
+
+\[
+E_{xc}^{LDA}[\rho] = \int \rho(\mathbf r)\, \varepsilon_{xc}^{LDA}(\rho(\mathbf r))\, d\mathbf r
+\]
+
+Planck's LDA components:
+- **Slater exchange** (`lda_x` in libxc): the Dirac expression \(\varepsilon_x = -\tfrac{3}{4}\left(\tfrac{3}{\pi}\right)^{1/3}\rho^{1/3}\)
+- **VWN5 correlation** (`lda_c_vwn_5`): Vosko-Wilk-Nusair parametrisation of the uniform electron gas correlation energy (the most common LDA correlation functional)
+
+The combination Slater + VWN5 is referred to as SVWN.
+
+#### GGA (Generalized Gradient Approximation)
+
+The XC energy also depends on the density gradient:
+
+\[
+E_{xc}^{GGA}[\rho] = \int f(\rho(\mathbf r),\, |\nabla\rho(\mathbf r)|^2)\, d\mathbf r
+\]
+
+GGA functionals satisfy more exact constraints than LDA and generally give better geometries and energies. Planck's GGA components and their common pairings:
+
+| Exchange | Correlation | Combination name |
+|---|---|---|
+| B88 (`gga_x_b88`) | LYP (`gga_c_lyp`) | BLYP |
+| B88 | P86 (`gga_c_p86`) | BP86 |
+| B88 | PW91 (`gga_c_pw91`) | BPW91 |
+| PW91 (`gga_x_pw91`) | PW91 | PW91 |
+| PBE (`gga_x_pbe`) | PBE (`gga_c_pbe`) | PBE (default) |
+
+### 20.3 Numerical Integration: Molecular Grid
+
+Because \(V^{xc}_{\mu\nu}\) has no analytic closed form, it is evaluated numerically:
+
+\[
+V^{xc}_{\mu\nu} = \int \phi_\mu(\mathbf r)\, v_{xc}(\mathbf r)\, \phi_\nu(\mathbf r)\, d\mathbf r
+\approx \sum_g w_g\, \phi_\mu(\mathbf r_g)\, v_{xc}(\mathbf r_g)\, \phi_\nu(\mathbf r_g)
+\]
+
+The sum runs over quadrature grid points \(\{\mathbf r_g, w_g\}\). Planck builds the molecular grid from three layers:
+
+#### Radial grid — Treutler-Ahlrichs M4
+
+Each atom's radial shells are placed according to the Treutler-Ahlrichs M4 mapping, which concentrates points near the nucleus (where \(\rho\) varies rapidly) and uses element-specific radii (`treutler_radius(Z)` in `src/dft/base/radial.h`). The number of radial shells is an increasing function of both the grid quality preset and the row of the periodic table.
+
+#### Angular grid — Lebedev quadrature
+
+At each radial shell, angular integration is performed using a Lebedev grid of order \(N_\Omega\) (`MakeLebedevGrid(N)` in `src/dft/base/angular.h`). Lebedev grids integrate polynomials in \((x, y, z)\) exactly up to a maximum degree that grows with \(N_\Omega\). Planck uses five angular shell sizes arranged in five radial regions (pruning).
+
+#### Five-region pruning
+
+To reduce cost without sacrificing accuracy, the molecular grid is pruned: regions far from and very close to the nucleus use coarser angular grids, while the valence shell region uses the finest grid. The five regions and their shell sizes are controlled by `angular_shells_for_scheme` in `src/dft/base/grid.h`.
+
+#### Becke partitioning
+
+A single-centre quadrature cannot integrate the full molecular density accurately. The Becke scheme partitions space into atom-centred cells using smooth step functions \(s_{ij}(\mathbf r)\) derived from a confocal elliptic coordinate:
+
+\[
+\mu_{ij} = \frac{|\mathbf r - \mathbf R_i| - |\mathbf r - \mathbf R_j|}{|\mathbf R_i - \mathbf R_j|}
+\]
+
+Three applications of the Hermite switch \(f_k(\mu) = \tfrac{3}{2}\mu - \tfrac{1}{2}\mu^3\) smooth the partition. Planck uses Treutler-Becke size-adjusted partitioning (`treutler_becke_adjustment` in `src/dft/base/grid.h`), which accounts for the different atomic radii of unlike atom pairs. The effective grid weight at point \(\mathbf r\) on atom \(i\) is:
+
+\[
+w_i(\mathbf r) = \frac{P_i(\mathbf r)}{\sum_k P_k(\mathbf r)} \cdot w_i^{radial-angular}
+\]
+
+#### Grid quality presets
+
+| Preset | Angular scheme | Pruned regions (5) |
+|---|---|---|
+| `Coarse` | 3 | 14 / 26 / 50 / 110 / 50 |
+| `Normal` | 4 | 26 / 110 / 194 / 302 / 194 |
+| `Fine` | 5 | 26 / 194 / 302 / 434 / 302 |
+| `UltraFine` | 6 | 50 / 302 / 434 / 590 / 434 |
+
+### 20.4 AO Evaluation on the Grid
+
+`AOGridEvaluation` (declared in `src/dft/ao_grid.h`) stores the AO values and
+gradients at every grid point in a matrix of shape `(N_grid, N_AO)`. These are
+computed once before the KS iteration begins. For each grid point and each AO
+\(\phi_\mu\), the value and Cartesian gradient components are evaluated from the
+contracted shell data in the `Basis` object.
+
+### 20.5 Density and XC Evaluation
+
+Given the density matrix \(P_{\mu\nu}\), the electron density at grid point \(g\) is:
+
+\[
+\rho(\mathbf r_g) = \sum_{\mu\nu} P_{\mu\nu}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\mathbf r_g)
+\]
+
+For GGA functionals, the gradient \(\nabla\rho\) and the reduced gradient invariant \(\sigma = |\nabla\rho|^2\) are also needed. Both are assembled in `evaluate_density_on_grid` (`src/dft/xc_grid.cpp`).
+
+The libxc library (`src/dft/base/wrapper.h`) is then called with the density (and gradient for GGA) arrays to return the XC energy density \(\varepsilon_{xc}(\rho)\) and the potential derivatives \(v_\rho = \partial(\rho\varepsilon_{xc})/\partial\rho\) and \(v_\sigma = \partial(\rho\varepsilon_{xc})/\partial\sigma\). The XC energy is:
+
+\[
+E_{xc} = \sum_g w_g\, \rho(\mathbf r_g)\, \varepsilon_{xc}(\mathbf r_g)
+\]
+
+### 20.6 XC Matrix Assembly
+
+The XC potential matrix element is:
+
+\[
+V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\mathbf r_g)
++ 2\sum_g w_g\, \mathbf v_{\sigma,g} \cdot \nabla\rho_g \cdot \left[\phi_\mu \nabla\phi_\nu + \phi_\nu \nabla\phi_\mu\right]_g
+\]
+
+The second term (present only for GGA) involves the density gradient and the AO gradients on the grid. Both terms are assembled in `assemble_xc_matrix` (`src/dft/ks_matrix.cpp`).
+
+### 20.7 KS-DFT SCF Loop
+
+The KS SCF loop in `DFT::Driver::run` follows the same outer structure as the HF loop:
+
+1. Compute 1e integrals (\(S\), \(T\), \(V_{ne}\)), build orthogonalizer, form initial guess
+2. At each iteration:
+   a. Build the Coulomb matrix \(J[P]\) using the standard ERI or direct path
+   b. Evaluate the density \(\rho\) and gradient \(\nabla\rho\) on the molecular grid
+   c. Call libxc to get \(\varepsilon_{xc}\), \(v_\rho\), \(v_\sigma\) on the grid
+   d. Assemble \(V^{xc}_{\mu\nu}\) by numerical quadrature
+   e. Form the KS Fock matrix \(F^{KS} = h + J + V^{xc}\)
+   f. Solve the KS secular equation, update \(P\), check convergence
+
+The `KSPotentialMatrices` struct holds the Coulomb, XC-alpha, and XC-beta matrices and their sum (the full KS two-electron+XC potential). For RKS the alpha and beta components are identical; for UKS they differ because \(\rho_\alpha \neq \rho_\beta\).
+
+### 20.8 DFT Code Map
+
+| Task | File | Function/struct |
+|---|---|---|
+| Treutler-Ahlrichs radial grid | `src/dft/base/radial.h` | `MakeTreutlerAhlrichsGrid` |
+| Lebedev angular grid | `src/dft/base/angular.h` | `MakeLebedevGrid` |
+| Atomic and molecular grid | `src/dft/base/grid.h` | `MakeAtomicGrid`, `MakeMolecularGrid` |
+| Becke partitioning | `src/dft/base/grid.h` | `becke_partition_weight` |
+| libxc functional wrapper | `src/dft/base/wrapper.h` | `DFT::XC::Functional` |
+| AO evaluation on grid | `src/dft/ao_grid.h` | `AOGridEvaluation` |
+| Density on grid | `src/dft/xc_grid.cpp` | `evaluate_density_on_grid` |
+| XC energy and potential on grid | `src/dft/xc_grid.cpp` | `evaluate_xc_on_grid` |
+| XC matrix \(V^{xc}_{\mu\nu}\) | `src/dft/ks_matrix.cpp` | `assemble_xc_matrix` |
+| Full KS potential | `src/dft/ks_matrix.cpp` | `combine_ks_potential` |
+| KS-DFT main loop | `src/dft/driver.cpp` | `DFT::Driver::run` |
+| DFT entry point | `src/dft/main.cpp` | `main` |
+
+---
+
+## 21. Current Implementation Status
 
 | Feature | Status |
 |---|---|
@@ -1463,13 +1648,20 @@ driver.cpp
 | Harmonic vibrational analysis | Complete |
 | Checkpoint save/restart | Complete |
 | Cross-basis density projection | Complete |
+| Kohn-Sham DFT (RKS/UKS) | Complete |
+| LDA XC functionals (Slater, VWN5) | Complete |
+| GGA XC functionals (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation) | Complete |
+| Arbitrary libxc functionals via integer ID | Complete |
+| Molecular grid (Treutler-Ahlrichs + Lebedev + Becke) | Complete |
+| DFT geometry optimization / gradients | Not implemented |
+| Hybrid XC functionals (e.g. B3LYP) | Not supported (requires HF exchange) |
 | Spherical harmonic basis | Not supported (Cartesian only) |
 
 ---
 
-## 21. How to Study This Codebase
+## 22. How to Study This Codebase
 
-Recommended reading order:
+Recommended reading order for the HF/post-HF pipeline:
 
 1. `src/base/types.h` — understand every struct before reading any algorithm
 2. `src/driver.cpp` — the control flow map for one complete calculation
@@ -1481,6 +1673,16 @@ Recommended reading order:
 8. `src/post_hf/casscf.cpp` — the most complex module: CI, RDMs, orbital update
 9. `src/opt/geomopt.cpp` — L-BFGS and internal coordinate optimization
 10. `src/freq/hessian.cpp` — finite-difference Hessian and normal modes
+
+Recommended reading order for the KS-DFT pipeline (read after items 1–5 above):
+
+11. `src/dft/base/radial.h` — Treutler-Ahlrichs M4 radial grid
+12. `src/dft/base/angular.h` — Lebedev angular quadrature
+13. `src/dft/base/grid.h` — Becke partitioning, pruning, molecular grid assembly
+14. `src/dft/ao_grid.h` — AO and gradient evaluation at grid points
+15. `src/dft/xc_grid.cpp` — density, XC energy and potentials on the grid
+16. `src/dft/ks_matrix.cpp` — \(V^{xc}_{\mu\nu}\) and full KS potential matrices
+17. `src/dft/driver.cpp` — the KS-DFT SCF loop end to end
 
 This order follows the dependency graph: basic state and types first, then
 integral machinery, then the SCF loop that uses those integrals, then the

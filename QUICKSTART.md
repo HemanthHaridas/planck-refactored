@@ -497,7 +497,99 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | MO labels are Ag/Bg/Au/Bu instead of Eg/Eu | Expected — for non-Abelian groups (D3d, Oh, …) the program uses the largest Abelian subgroup (e.g. C2h for D3d). The active group is printed to the log. |
 
 
-### 13. All input keywords at a glance
+### 13. Kohn-Sham DFT calculation
+
+Kohn-Sham DFT uses a separate executable, `planck-dft`. It reads the same `.hfinp` format but requires a `%begin_dft` block that selects the exchange-correlation functional and integration grid. The `scf_type` keyword in `%begin_scf` controls the reference: `rhf` → RKS, `uhf` → UKS.
+
+#### Minimal PBE/STO-3G single point — water
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+%end_scf
+
+%begin_dft
+    exchange    pbe
+    correlation pbe
+    grid        normal
+%end_dft
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords
+```
+
+Run with:
+
+```bash
+./build/planck-dft water.hfinp
+```
+
+Expected output (abbreviated):
+
+```
+[INF]  Theory :            Kohn-Sham DFT
+[INF]  Reference :         RKS
+[INF]  DFT Grid :          Normal
+[INF]  Exchange :          PBE
+[INF]  Correlation :       PBE
+...
+[INF]  DFT Energy :        -74.xxxxxxxxxx Eh
+[INF]  Converged :         true
+```
+
+#### Common functional combinations
+
+| Input keywords | Functional name | Type |
+|---|---|---|
+| `exchange slater` + `correlation vwn5` | SVWN | LDA |
+| `exchange b88` + `correlation lyp` | BLYP | GGA |
+| `exchange b88` + `correlation p86` | BP86 | GGA |
+| `exchange pbe` + `correlation pbe` | PBE (default) | GGA |
+| `exchange pw91` + `correlation pw91` | PW91 | GGA |
+
+#### Grid quality
+
+| Keyword | Angular pts (heavy atom) | Use when |
+|---|---|---|
+| `grid coarse` | ~110 | Quick tests |
+| `grid normal` | ~194 | Default; most production runs |
+| `grid fine` | ~302 | High-accuracy or difficult systems |
+| `grid ultrafine` | ~590 | Benchmark-quality results |
+
+#### Custom libxc functional
+
+To use any libxc functional by its integer ID, replace the enum keywords with numeric IDs:
+
+```
+%begin_dft
+    exchange_id    1     # libxc LDA_X
+    correlation_id 7     # libxc LDA_C_PZ
+    grid           normal
+%end_dft
+```
+
+### 14. All input keywords at a glance
 
 ```
 %begin_control
@@ -535,6 +627,18 @@ For large systems set `scf_mode direct` or lower `threshold`:
     tol_mcscf_energy   1e-8
     tol_mcscf_grad     1e-4
 %end_scf
+
+# planck-dft only: selects XC functional and numerical integration grid
+%begin_dft
+    exchange     slater | b88 | pw91 | pbe      # exchange functional (default: pbe)
+    correlation  vwn5 | lyp | p86 | pw91 | pbe  # correlation functional (default: pbe)
+    exchange_id  <int>                           # custom libxc exchange ID (overrides exchange)
+    correlation_id <int>                         # custom libxc correlation ID (overrides correlation)
+    grid         coarse | normal | fine | ultrafine   # integration grid quality (default: normal)
+    use_sao_blocking    .true. | .false.         # default: .true.
+    print_grid_summary  .true. | .false.         # default: .true.
+    save_checkpoint     .true. | .false.         # default: .false.
+%end_dft
 
 %begin_geom
     coord_type   cartesian | zmatrix
