@@ -96,6 +96,28 @@
       ]
     },
     {
+      "id": "ethylene_rhf_ccpvdz_auto",
+      "input": "tests/inputs/ethylene_rhf_ccpvdz_auto.hfinp",
+      "tags": ["core", "extended"],
+      "expected_exit_code": 0,
+      "contains": ["SCF Converged after", "Total Energy"],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -78.0401905750, "atol": 1e-9},
+        {"type": "metric_eq", "metric": "scf_converged_iterations", "expected": 16}
+      ]
+    },
+    {
+      "id": "ethylene_rhf_ccpvdz_rys",
+      "input": "tests/inputs/ethylene_rhf_ccpvdz_rys.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": ["SCF Converged after", "Total Energy"],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -78.0401905750, "atol": 1e-9},
+        {"type": "metric_eq", "metric": "scf_converged_iterations", "expected": 17}
+      ]
+    },
+    {
       "id": "water_rhf_gradient_smoke",
       "input": "tests/inputs/water_rhf_gradient.hfinp",
       "tags": ["smoke", "extended"],

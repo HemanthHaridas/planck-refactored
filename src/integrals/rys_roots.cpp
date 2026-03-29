@@ -7,14 +7,11 @@
 
 #include <Eigen/Eigenvalues>
 
-// ─── Gauss-Legendre roots/weights on [0,1] for t^2 variable ─────────────────
+// ─── Numerical fallback nodes/weights on [0,1] ───────────────────────────────
 //
-// Used as the T→0 limit: weight exp(-T*t^2) → 1, Rys → Gauss-Legendre on [0,1].
-// gl_roots[n-1][r] = r-th GL root (t^2) for n-point rule, r = 0..n-1.
-// gl_weights[n-1][r] = corresponding weight.
-//
-// Generated from standard n-point GL on [-1,1]: x_r → t_r^2 = (x_r+1)/2,
-// w_r^GL → w_r = w_r^GL / 2.
+// These tables are retained only as a last-resort safety net if the Jacobi
+// build fails. The normal small-T path goes through exact moments in
+// _boys_moment() and should not use these values.
 
 static const double gl_roots[HartreeFock::Rys::RYS_MAX_ROOTS]
                              [HartreeFock::Rys::RYS_MAX_ROOTS] = {
@@ -91,6 +88,26 @@ static long double _boys_moment(int m, long double T) noexcept
 {
     if (T < static_cast<long double>(HartreeFock::Rys::RYS_T_ZERO))
         return 1.0L / static_cast<long double>(2 * m + 1);
+
+    // The upward Boys recursion loses many digits for small-but-nonzero T and
+    // can drive the moment sequence negative enough to break the Jacobi build.
+    // Use the convergent power series there instead:
+    //   F_m(T) = sum_{n>=0} (-T)^n / (n! (2m + 2n + 1)).
+    if (T < 1.0L)
+    {
+        long double sum = 0.0L;
+        long double coeff = 1.0L;
+        for (int n = 0; n < 256; ++n)
+        {
+            const long double term =
+                coeff / static_cast<long double>(2 * m + 2 * n + 1);
+            sum += term;
+            if (std::abs(term) < 1.0e-28L * std::abs(sum))
+                break;
+            coeff *= -T / static_cast<long double>(n + 1);
+        }
+        return sum;
+    }
 
     const long double sqrtT = std::sqrt(T);
     long double F = 0.5L * std::sqrt(static_cast<long double>(M_PI) / T) * std::erfl(sqrtT);
@@ -209,15 +226,6 @@ void HartreeFock::Rys::rys_roots_weights(int n, double T,
     // n=1: always use exact closed form.
     if (n == 1) {
         HartreeFock::Rys::rys_1pt(T, roots[0], weights[0]);
-        return;
-    }
-
-    // T→0: use Gauss-Legendre limit.
-    if (T < RYS_T_ZERO) {
-        for (int r = 0; r < n; ++r) {
-            roots  [r] = gl_roots  [n - 1][r];
-            weights[r] = gl_weights[n - 1][r];
-        }
         return;
     }
 
