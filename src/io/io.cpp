@@ -36,6 +36,13 @@ namespace HartreeFock::IO
         return lowerString;
     }
 
+    static std::string strip_inline_comment(std::string line)
+    {
+        if (const auto pos = line.find('#'); pos != std::string::npos)
+            line.erase(pos);
+        trim(line);
+        return line;
+    }
 
     static bool toBool(const std::string& parsedString)
     {
@@ -64,15 +71,15 @@ namespace HartreeFock::IO
         
         while (std::getline(input, line))
         {
-            trim(line);
+            line = strip_inline_comment(line);
             
-            if (line.empty() || line.front() == '#')
+            if (line.empty())
                 continue;
             
             if (line.front() == '%')
             {
                 // remove leading '%' and trailing whitespace
-                std::string tag = line.substr(1);
+                std::string tag = toLower(line.substr(1));
                 trim(tag);
                 
                 // end tag?
@@ -93,6 +100,9 @@ namespace HartreeFock::IO
                 }
                 
                 // start tag
+                if (tag.rfind("begin_", 0) != 0)
+                    return std::unexpected("Invalid section tag: " + tag + " (expected %begin_<name> or %end_<name>)");
+
                 if (in_section)
                     return std::unexpected("Nested section " + tag + " inside " + current);
                 
@@ -212,6 +222,82 @@ namespace HartreeFock::IO
         throw std::invalid_argument("Invalid OptCoords : " + value);
     }
 
+    template<>
+    HartreeFock::DFTGridQuality map_string_enum<HartreeFock::DFTGridQuality>(const std::string& value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::DFTGridQuality> _table =
+        {
+            {"coarse",    HartreeFock::DFTGridQuality::Coarse},
+            {"normal",    HartreeFock::DFTGridQuality::Normal},
+            {"fine",      HartreeFock::DFTGridQuality::Fine},
+            {"ultrafine", HartreeFock::DFTGridQuality::UltraFine},
+            {"ultra-fine",HartreeFock::DFTGridQuality::UltraFine},
+            {"ultra_fine",HartreeFock::DFTGridQuality::UltraFine}
+        };
+
+        const auto _value = toLower(value);
+        auto it = _table.find(_value);
+        if (it != _table.end())
+            return it->second;
+
+        throw std::invalid_argument("Invalid DFTGridQuality : " + value);
+    }
+
+    template<>
+    HartreeFock::XCExchangeFunctional map_string_enum<HartreeFock::XCExchangeFunctional>(const std::string& value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::XCExchangeFunctional> _table =
+        {
+            {"custom",       HartreeFock::XCExchangeFunctional::Custom},
+            {"slater",       HartreeFock::XCExchangeFunctional::Slater},
+            {"lda",          HartreeFock::XCExchangeFunctional::Slater},
+            {"lda_x",        HartreeFock::XCExchangeFunctional::Slater},
+            {"lda_x_slater", HartreeFock::XCExchangeFunctional::Slater},
+            {"b88",          HartreeFock::XCExchangeFunctional::B88},
+            {"becke88",      HartreeFock::XCExchangeFunctional::B88},
+            {"gga_x_b88",    HartreeFock::XCExchangeFunctional::B88},
+            {"pw91",         HartreeFock::XCExchangeFunctional::PW91},
+            {"gga_x_pw91",   HartreeFock::XCExchangeFunctional::PW91},
+            {"pbe",          HartreeFock::XCExchangeFunctional::PBE},
+            {"gga_x_pbe",    HartreeFock::XCExchangeFunctional::PBE}
+        };
+
+        const auto _value = toLower(value);
+        auto it = _table.find(_value);
+        if (it != _table.end())
+            return it->second;
+
+        throw std::invalid_argument("Invalid XC exchange functional : " + value);
+    }
+
+    template<>
+    HartreeFock::XCCorrelationFunctional map_string_enum<HartreeFock::XCCorrelationFunctional>(const std::string& value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::XCCorrelationFunctional> _table =
+        {
+            {"custom",        HartreeFock::XCCorrelationFunctional::Custom},
+            {"vwn",           HartreeFock::XCCorrelationFunctional::VWN5},
+            {"vwn5",          HartreeFock::XCCorrelationFunctional::VWN5},
+            {"lda_c_vwn",     HartreeFock::XCCorrelationFunctional::VWN5},
+            {"lda_c_vwn_5",   HartreeFock::XCCorrelationFunctional::VWN5},
+            {"lyp",           HartreeFock::XCCorrelationFunctional::LYP},
+            {"gga_c_lyp",     HartreeFock::XCCorrelationFunctional::LYP},
+            {"p86",           HartreeFock::XCCorrelationFunctional::P86},
+            {"gga_c_p86",     HartreeFock::XCCorrelationFunctional::P86},
+            {"pw91",          HartreeFock::XCCorrelationFunctional::PW91},
+            {"gga_c_pw91",    HartreeFock::XCCorrelationFunctional::PW91},
+            {"pbe",           HartreeFock::XCCorrelationFunctional::PBE},
+            {"gga_c_pbe",     HartreeFock::XCCorrelationFunctional::PBE}
+        };
+
+        const auto _value = toLower(value);
+        auto it = _table.find(_value);
+        if (it != _table.end())
+            return it->second;
+
+        throw std::invalid_argument("Invalid XC correlation functional : " + value);
+    }
+
     std::expected <void, std::string> _parse_control(const std::vector <std::string> &lines, HartreeFock::CalculationType &calculation, HartreeFock::OptionsBasis &basis, HartreeFock::OptionsOutput &output)
     {
         // (key, value) pairs
@@ -234,6 +320,8 @@ namespace HartreeFock::IO
             {
                 return std::unexpected("Missing value for control keyword: " + key);
             }
+
+            key = toLower(key);
             
             // Find the (key, value) pair
             if (auto it = _control_map.find(key); it != _control_map.end())
@@ -300,7 +388,9 @@ namespace HartreeFock::IO
         {
             // All possible combinations
             {"rhf", HartreeFock::SCFType::RHF},
-            {"uhf", HartreeFock::SCFType::UHF}
+            {"uhf", HartreeFock::SCFType::UHF},
+            {"rks", HartreeFock::SCFType::RHF},
+            {"uks", HartreeFock::SCFType::UHF}
         };
         
         auto _value = toLower(value);   // First convert to lowercase
@@ -399,6 +489,8 @@ namespace HartreeFock::IO
             if (!(_iss >> key))
                 continue;
 
+            key = toLower(key);
+
             // Special case: weights is a space-separated list of doubles
             if (key == "weights")
             {
@@ -431,6 +523,86 @@ namespace HartreeFock::IO
             else
             {
                 return std::unexpected("Unknown scf keyword: " + key);
+            }
+        }
+
+        return {};
+    }
+
+    std::expected<void, std::string> _parse_dft(
+        const std::vector<std::string>& lines,
+        HartreeFock::OptionsDFT& dft)
+    {
+        const std::unordered_map<std::string, std::function<void(const std::string&)>> _dft_map =
+        {
+            {"grid", [&dft](const std::string& value)
+                {
+                    dft._grid = map_string_enum<HartreeFock::DFTGridQuality>(value);
+                }},
+            {"grid_level", [&dft](const std::string& value)
+                {
+                    dft._grid = map_string_enum<HartreeFock::DFTGridQuality>(value);
+                }},
+            {"exchange", [&dft](const std::string& value)
+                {
+                    dft._exchange = map_string_enum<HartreeFock::XCExchangeFunctional>(value);
+                    if (dft._exchange != HartreeFock::XCExchangeFunctional::Custom)
+                        dft._exchange_id = 0;
+                }},
+            {"correlation", [&dft](const std::string& value)
+                {
+                    dft._correlation = map_string_enum<HartreeFock::XCCorrelationFunctional>(value);
+                    if (dft._correlation != HartreeFock::XCCorrelationFunctional::Custom)
+                        dft._correlation_id = 0;
+                }},
+            {"exchange_id", [&dft](const std::string& value)
+                {
+                    dft._exchange = HartreeFock::XCExchangeFunctional::Custom;
+                    dft._exchange_id = std::stoi(value);
+                }},
+            {"correlation_id", [&dft](const std::string& value)
+                {
+                    dft._correlation = HartreeFock::XCCorrelationFunctional::Custom;
+                    dft._correlation_id = std::stoi(value);
+                }},
+            {"use_sao_blocking", [&dft](const std::string& value)
+                {
+                    dft._use_sao_blocking = toBool(value);
+                }},
+            {"print_grid_summary", [&dft](const std::string& value)
+                {
+                    dft._print_grid_summary = toBool(value);
+                }},
+            {"save_checkpoint", [&dft](const std::string& value)
+                {
+                    dft._save_checkpoint = toBool(value);
+                }}
+        };
+
+        for (const std::string& line : lines)
+        {
+            std::istringstream _iss(line);
+            std::string key, value;
+
+            if (!(_iss >> key >> value))
+                return std::unexpected("Missing value for dft keyword: " + key);
+
+            key = toLower(key);
+
+            if (auto it = _dft_map.find(key); it != _dft_map.end())
+            {
+                try
+                {
+                    it->second(value);
+                }
+                catch (const std::exception& e)
+                {
+                    return std::unexpected(std::string("Error parsing dft '") + key + "': " + e.what());
+                }
+            }
+            else
+            {
+                return std::unexpected("Unknown dft keyword: " + key);
             }
         }
 
@@ -495,6 +667,8 @@ namespace HartreeFock::IO
             {
                 return std::unexpected("Missing value for geom keyword: " + key);
             }
+
+            key = toLower(key);
             
             // Find the (key, value) pair
             if (auto it = _geom_map.find(key); it != _geom_map.end())
@@ -827,6 +1001,13 @@ namespace HartreeFock::IO
         else
         {
             return std::unexpected("Missing scf section");
+        }
+
+        // dft (optional)
+        if (auto it = _sections.find("dft"); it != _sections.end())
+        {
+            if (auto res = _parse_dft(it->second, calculator._dft); !res)
+                return std::unexpected(res.error());
         }
         
         // geom

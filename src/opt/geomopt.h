@@ -1,6 +1,7 @@
 #ifndef HF_GEOMOPT_H
 #define HF_GEOMOPT_H
 
+#include <functional>
 #include <vector>
 #include <string>
 #include <Eigen/Core>
@@ -10,6 +11,8 @@ namespace HartreeFock
 {
     namespace Opt
     {
+        using GradientRunner = std::function<Eigen::VectorXd(HartreeFock::Calculator&)>;
+
         struct GeomOptResult
         {
             bool   converged   = false;
@@ -28,11 +31,15 @@ namespace HartreeFock
         // calc._gradient holds the gradient at the optimized geometry, and
         // calc._total_energy holds the final energy.
         GeomOptResult run_geomopt(HartreeFock::Calculator& calc);
+        GeomOptResult run_geomopt(HartreeFock::Calculator& calc,
+                                  const GradientRunner& gradient_runner);
 
         // Run geometry optimization in generalized internal coordinates (GIC).
         // Uses BFGS Hessian update in redundant IC space with iterative
         // Cartesian back-transform.  Same return semantics as run_geomopt.
         GeomOptResult run_geomopt_ic(HartreeFock::Calculator& calc);
+        GeomOptResult run_geomopt_ic(HartreeFock::Calculator& calc,
+                                     const GradientRunner& gradient_runner);
     }
 }
 

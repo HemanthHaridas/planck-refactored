@@ -37,7 +37,7 @@ static constexpr double CM_INV_TO_HARTREE     = 4.5563352527e-6;
 // calc._molecule._standard; then computes the analytic gradient.
 // Returns the gradient as a natoms×3 matrix (atom-major).
 
-static Eigen::MatrixXd _run_sp_gradient_freq(HartreeFock::Calculator& calc)
+static Eigen::MatrixXd _run_sp_gradient_freq_hf(HartreeFock::Calculator& calc)
 {
     // Sync coordinate frames
     calc._molecule._coordinates = calc._molecule._standard;
@@ -242,6 +242,14 @@ void HartreeFock::Freq::vibrational_analysis(
 HartreeFock::Freq::HessianResult
 HartreeFock::Freq::compute_hessian(HartreeFock::Calculator& calc)
 {
+    return compute_hessian(calc, _run_sp_gradient_freq_hf);
+}
+
+HartreeFock::Freq::HessianResult
+HartreeFock::Freq::compute_hessian(
+    HartreeFock::Calculator& calc,
+    const GradientMatrixRunner& gradient_runner)
+{
     const std::size_t N  = calc._molecule.natoms;
     const int         n3 = static_cast<int>(3 * N);
     const double      h  = calc._hessian_step;
@@ -262,11 +270,11 @@ HartreeFock::Freq::compute_hessian(HartreeFock::Calculator& calc)
 
         // Forward displacement
         calc._molecule._standard(atom, dir) = x_orig + h;
-        Eigen::MatrixXd g_fwd = _run_sp_gradient_freq(calc);
+        Eigen::MatrixXd g_fwd = gradient_runner(calc);
 
         // Backward displacement
         calc._molecule._standard(atom, dir) = x_orig - h;
-        Eigen::MatrixXd g_bck = _run_sp_gradient_freq(calc);
+        Eigen::MatrixXd g_bck = gradient_runner(calc);
 
         // Restore
         calc._molecule._standard(atom, dir) = x_orig;

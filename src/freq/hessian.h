@@ -1,6 +1,7 @@
 #ifndef HF_HESSIAN_H
 #define HF_HESSIAN_H
 
+#include <functional>
 #include "base/types.h"
 #include <Eigen/Dense>
 #include <string>
@@ -10,6 +11,8 @@ namespace HartreeFock
 {
     namespace Freq
     {
+        using GradientMatrixRunner = std::function<Eigen::MatrixXd(HartreeFock::Calculator&)>;
+
         struct HessianResult
         {
             Eigen::MatrixXd hessian;        // 3N×3N Cartesian Hessian, Ha/Bohr²
@@ -26,6 +29,8 @@ namespace HartreeFock
         // analytic gradients:  H[:,j] = (g(x+h·ê_j) - g(x-h·ê_j)) / (2h).
         // Requires a converged SCF in calc.  After building H, calls vibrational_analysis().
         HessianResult compute_hessian(HartreeFock::Calculator& calc);
+        HessianResult compute_hessian(HartreeFock::Calculator& calc,
+                                      const GradientMatrixRunner& gradient_runner);
 
         // Mass-weight H, project out translations and rotations (Eckart conditions),
         // diagonalise, and convert eigenvalues to cm⁻¹.
