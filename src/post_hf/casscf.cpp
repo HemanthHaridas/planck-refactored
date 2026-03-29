@@ -1595,27 +1595,27 @@ std::expected<void, std::string> run_mcscf_loop(
 namespace HartreeFock::Correlation
 {
 
-std::expected<void, std::string> run_casscf(
-    HartreeFock::Calculator&                   calc,
-    const std::vector<HartreeFock::ShellPair>& shell_pairs)
-{
-    RASParams ras;   // active = false → no RAS constraints
-    return run_mcscf_loop(calc, shell_pairs, "CASSCF", ras);
-}
+    std::expected<void, std::string> run_casscf(
+        HartreeFock::Calculator&                   calc,
+        const std::vector<HartreeFock::ShellPair>& shell_pairs)
+    {
+        RASParams ras;   // active = false → no RAS constraints
+        return run_mcscf_loop(calc, shell_pairs, "CASSCF", ras);
+    }
 
-std::expected<void, std::string> run_rasscf(
-    HartreeFock::Calculator&                   calc,
-    const std::vector<HartreeFock::ShellPair>& shell_pairs)
-{
-    const auto& as = calc._active_space;
-    RASParams ras;
-    ras.nras1      = as.nras1;
-    ras.nras2      = as.nras2;
-    ras.nras3      = as.nras3;
-    ras.max_holes  = as.max_holes;
-    ras.max_elec   = as.max_elec;
-    ras.active     = true;
-    return run_mcscf_loop(calc, shell_pairs, "RASSCF", ras);
-}
+    std::expected<void, std::string> run_rasscf(
+        HartreeFock::Calculator&                   calc,
+        const std::vector<HartreeFock::ShellPair>& shell_pairs)
+    {
+        const auto& as = calc._active_space;
+        RASParams ras;
+        ras.nras1      = as.nras1;
+        ras.nras2      = as.nras2;
+        ras.nras3      = as.nras3;
+        ras.max_holes  = as.max_holes;
+        ras.max_elec   = as.max_elec;
+        ras.active     = true;
+        return run_mcscf_loop(calc, shell_pairs, "RASSCF", ras);
+    }
 
 } // namespace HartreeFock::Correlation

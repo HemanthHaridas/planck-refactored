@@ -1,10 +1,11 @@
 ### Planck
 
-A Hartree-Fock quantum chemistry program implementing restricted and unrestricted SCF theory with an Obara-Saika integral engine, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
+A quantum chemistry program implementing restricted and unrestricted Hartree-Fock SCF and Kohn-Sham DFT with an Obara-Saika integral engine, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
 
 ### Features
 
 - **RHF / UHF** — closed-shell and open-shell Hartree-Fock
+- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; numerical integration on a Becke–Treutler-Ahlrichs–Lebedev molecular grid with ORCA-inspired five-region pruning; LDA (Slater/VWN5) and GGA (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation) exchange-correlation functionals through libxc; four grid presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals via integer ID
 - **Two integral engines** — Obara-Saika (OS) recursive VRR/HRR for low angular momentum; Rys quadrature for high angular momentum; automatic engine selection per shell quartet based on an analytic flop-count model (`engine auto`)
 - **Conventional and Direct SCF** — ERI tensor stored once (conventional) or recomputed per iteration (direct); auto-selection based on system size
 - **DIIS** — Pulay extrapolation with optional automatic subspace restart
@@ -29,6 +30,7 @@ A Hartree-Fock quantum chemistry program implementing restricted and unrestricte
 | CMake | ≥ 3.15 | System package manager |
 | Eigen | 3.4.0 | Fetched automatically |
 | libmsym | latest | Fetched automatically |
+| libxc | latest | Fetched automatically (required for `planck-dft`) |
 | basis-set-exchange | any | `pip install basis-set-exchange` (required for basis set fetching) |
 | OpenMP | any | Optional; system package manager |
 
@@ -78,7 +80,8 @@ This installs the `hartree-fock` executable to `<prefix>/bin/` and the basis set
 ### 5. Run
 
 ```bash
-./build/hartree-fock molecule.hfinp
+./build/hartree-fock molecule.hfinp   # HF / post-HF calculation
+./build/planck-dft   molecule.hfinp   # Kohn-Sham DFT calculation
 ```
 
 ### Input File Format
@@ -93,6 +96,10 @@ Input files use an INI-style block format with the extension `.hfinp`. Each sect
 %begin_scf
     ...
 %end_scf
+
+%begin_dft             (required for planck-dft; ignored by hartree-fock)
+    ...
+%end_dft
 
 %begin_geom
     ...
@@ -150,6 +157,43 @@ SCF procedure and convergence settings.
 | `threshold` | int | ≥ 1 | `100` | Basis function count cutoff used by `scf_mode auto` to decide between conventional and direct. |
 | `guess` | enum | `hcore`, `density`, `full` | `hcore` | Initial density guess. `density` loads only the density matrix from the checkpoint (geometry and 1e integrals are recomputed from the input file). `full` restores geometry, charge, multiplicity, and density from the checkpoint — useful to restart from an optimized geometry. Falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.true.` | Write a `.hfchk` checkpoint file after successful convergence |
+
+### Section: `%begin_dft`
+
+Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. The `scf_type` keyword in `%begin_scf` controls the reference: `rhf` → RKS (restricted), `uhf` → UKS (unrestricted).
+
+| Keyword | Type | Values | Default | Description |
+|---|---|---|---|---|
+| `grid` / `grid_level` | enum | `coarse`, `normal`, `fine`, `ultrafine` | `normal` | Molecular integration grid quality. Higher quality uses more radial shells and angular points; see grid preset table below. |
+| `exchange` | enum | `slater`/`lda`, `b88`/`becke88`, `pw91`, `pbe` | `pbe` | Exchange functional. `slater`/`lda`: Slater LDA exchange (LDA_X). `b88`: Becke 1988 GGA exchange. `pw91`: Perdew-Wang 1991 GGA exchange. `pbe`: Perdew-Burke-Ernzerhof GGA exchange (default). |
+| `correlation` | enum | `vwn`/`vwn5`, `lyp`, `p86`, `pw91`, `pbe` | `pbe` | Correlation functional. `vwn`/`vwn5`: Vosko-Wilk-Nusair LDA correlation (VWN5). `lyp`: Lee-Yang-Parr GGA correlation. `p86`: Perdew 1986 GGA correlation. `pw91`: Perdew-Wang 1991 GGA correlation. `pbe`: PBE GGA correlation (default). |
+| `exchange_id` | int | any libxc integer ID | — | Use an arbitrary libxc exchange functional by its integer identifier. Setting this overrides `exchange` and sets it to `custom`. |
+| `correlation_id` | int | any libxc integer ID | — | Use an arbitrary libxc correlation functional by its integer identifier. Setting this overrides `correlation` and sets it to `custom`. |
+| `use_sao_blocking` | bool | `.true.`, `.false.` | `.true.` | Enable symmetry-adapted AO blocking for the Coulomb matrix assembly. |
+| `print_grid_summary` | bool | `.true.`, `.false.` | `.true.` | Print a per-atom grid point count summary before the KS iterations. |
+| `save_checkpoint` | bool | `.true.`, `.false.` | `.false.` | Write a `.dftchk` checkpoint file after successful convergence. |
+
+#### DFT grid presets
+
+Grid quality levels follow ORCA-inspired angular scheme assignments. Each atom's radial shell count depends on its row in the periodic table; hydrogen/helium get one fewer angular shell than heavier atoms when `reduce_light_atoms` is active.
+
+| Preset | Angular scheme | Typical angular pts (heavy atom, mid-grid) | Radial shells (row-1 / row-2) |
+|---|---|---|---|
+| `coarse` | 3 | 110 | ~28 / ~33 |
+| `normal` | 4 | 194 | ~32 / ~37 |
+| `fine` | 5 | 302 | ~36 / ~41 |
+| `ultrafine` | 6 | 590 | ~40 / ~45 |
+
+#### Common functional combinations
+
+| Name | `exchange` | `correlation` | Type |
+|---|---|---|---|
+| SVWN | `slater` | `vwn5` | LDA |
+| BLYP | `b88` | `lyp` | GGA |
+| BP86 | `b88` | `p86` | GGA |
+| BPW91 | `b88` | `pw91` | GGA |
+| PW91 | `pw91` | `pw91` | GGA |
+| PBE | `pbe` | `pbe` | GGA (default) |
 
 ### Section: `%begin_geom`
 
@@ -337,6 +381,56 @@ O     0.000000    0.000000     0.117176
 H     0.000000    0.756950    -0.468703
 H     0.000000   -0.756950    -0.468703
 %end_coords
+```
+
+### RKS single point — water, PBE/STO-3G
+
+Run with `./build/planck-dft water_dft.hfinp`. The `%begin_dft` block selects the functional and grid; `scf_type rhf` in `%begin_scf` selects the RKS (restricted) reference.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+%end_scf
+
+%begin_dft
+    exchange    pbe
+    correlation pbe
+    grid        normal
+%end_dft
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords
+```
+
+### RKS single point — water, SVWN/STO-3G (pure LDA)
+
+```
+%begin_dft
+    exchange    slater
+    correlation vwn5
+    grid        normal
+%end_dft
 ```
 
 ### UHF triplet — open-shell water, 6-31G
@@ -639,6 +733,16 @@ The program prints a structured log to standard output. Key sections:
 - **Vibrational Frequencies** — when `calculation freq`: molecule type (linear/non-linear), number of T+R modes removed, n_vib vibrational frequencies in cm⁻¹ (negative = imaginary), and zero-point energy in Eh and kcal/mol
 - **Wall Time** — total elapsed time
 
+For `planck-dft` runs, the log additionally includes:
+
+- **Theory / Reference** — `Kohn-Sham DFT` and `RKS` or `UKS`
+- **DFT Grid** — selected grid preset name
+- **Exchange / Correlation** — functional names resolved at startup
+- **Grid Summary** — per-atom point count table (when `print_grid_summary .true.`): atom index, element, atomic number, number of grid points
+- **Integrated Electrons** — electron count from numerical density integration (should match the formal count to 4–5 significant figures on a Normal grid)
+- **XC Energy** — exchange-correlation energy contribution in Hartree
+- **DFT Energy** — total Kohn-Sham energy (T + V_ne + J + E_xc + V_nn) in Hartree
+
 ### Section: `%begin_control` (additional keywords)
 
 | Keyword | Type | Default | Description |
@@ -651,9 +755,11 @@ The program prints a structured log to standard output. Key sections:
 
 | CMake variable | Default | Description |
 |---|---|---|
-| `USE_OPENMP` | `ON` | Enable OpenMP parallelism for integral loops |
+| `USE_OPENMP` | `ON` | Enable OpenMP parallelism for integral loops (applies to both `hartree-fock` and `planck-dft`) |
 | `BUILD_TOOLS` | `ON` | Build utility tools (`chkdump` checkpoint formatter) |
 | `CMAKE_INSTALL_PREFIX` | `./install` | Installation prefix |
+
+Both executables (`hartree-fock` and `planck-dft`) are built and installed by default. `planck-dft` requires libxc, which is fetched and compiled automatically as an ExternalProject during the first build.
 
 ### Utility Tools
 

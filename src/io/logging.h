@@ -23,20 +23,43 @@ namespace HartreeFock
 
     namespace Logger
     {
-        namespace
-        {
-            std::mutex log_mutex;
+        inline std::mutex log_mutex;
+        inline thread_local int silence_depth = 0;
 
-            constexpr const char *info_prefix   = "[Planck][INF]    ";
-            constexpr const char *error_prefix  = "[Planck][ERR]    ";
-            constexpr const char *matrix_prefix = "[Planck][MAT]    ";
-            constexpr const char *warn_prefix   = "[Planck][WARN]   ";
-//            constexpr const char *scf_prefix    = "[Planck][SCF]    ";
+        constexpr const char *info_prefix   = "[Planck][INF]    ";
+        constexpr const char *error_prefix  = "[Planck][ERR]    ";
+        constexpr const char *matrix_prefix = "[Planck][MAT]    ";
+        constexpr const char *warn_prefix   = "[Planck][WARN]   ";
+//        constexpr const char *scf_prefix    = "[Planck][SCF]    ";
+
+        inline bool is_silenced() noexcept
+        {
+            return silence_depth > 0;
         }
+
+        class ScopedSilence
+        {
+        public:
+            ScopedSilence() noexcept
+            {
+                ++silence_depth;
+            }
+
+            ~ScopedSilence()
+            {
+                --silence_depth;
+            }
+
+            ScopedSilence(const ScopedSilence&) = delete;
+            ScopedSilence& operator=(const ScopedSilence&) = delete;
+        };
     
         template<typename... Args>
         static void logging(LogLevel level, const std::string& label, Args&&... message)
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
 
             // Prefix selection
@@ -72,7 +95,8 @@ namespace HartreeFock
                        << std::setw(30) << std::left << label;
 
             // Variadic message printing
-            (out_stream << ... << message);
+            if constexpr (sizeof...(Args) > 0)
+                (out_stream << ... << message);
 
             out_stream << '\n';
         }
@@ -80,6 +104,9 @@ namespace HartreeFock
         // SCF Information
         inline void scf_header()
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
 
 //            logging(Cycle, "Self-Consistent Field Iterations","");
@@ -98,6 +125,9 @@ namespace HartreeFock
     
         inline void scf_iteration(std::size_t iter, double energy, double deltaE, double rmsD, double maxD, double diis_error, double damping, double time_sec)
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
 
             std::cout << std::setw(6)  << iter
@@ -113,6 +143,9 @@ namespace HartreeFock
 
         inline void casscf_header()
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
 
             std::cout << std::string(110, '-') << "\n"
@@ -130,6 +163,9 @@ namespace HartreeFock
 
         inline void casscf_iteration(std::size_t iter, double energy, double deltaE, double grad, double max_grad, double step_error, double damping, double time_sec)
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
 
             std::cout << std::setw(6)  << iter
@@ -145,6 +181,9 @@ namespace HartreeFock
     
         inline void mo_header(bool with_symmetry = false)
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
             const int W = with_symmetry ? 43 : 31;
             std::cout << std::string(W, '-') << "\n"
@@ -160,6 +199,9 @@ namespace HartreeFock
                                  const std::size_t n_electrons,
                                  const std::vector<std::string>& symm = {})
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
 
             const std::size_t n_occ = n_electrons / 2;
@@ -185,6 +227,9 @@ namespace HartreeFock
                                      const std::size_t n_occ,
                                      const std::vector<std::string>& symm = {})
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
             const std::size_t homo = (n_occ > 0) ? n_occ - 1 : 0;
             const std::size_t lumo = n_occ;
@@ -203,6 +248,9 @@ namespace HartreeFock
 
         inline void converged_energy(double energy_hartree, double nuclear_repulsion)
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
 
             const double electronic = energy_hartree - nuclear_repulsion;
@@ -239,6 +287,9 @@ namespace HartreeFock
 
         inline void correlation_energy(const double E_scf, const double E_corr)
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
             const double E_total = E_scf + E_corr;
             constexpr int LW = 32;
@@ -262,6 +313,9 @@ namespace HartreeFock
                                          const Eigen::MatrixXd& coefficients_mo,
                                          double coeff_threshold = 1e-2)
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
 
             std::cout << "\n  MP2 Natural Orbital Occupancies :\n";
@@ -291,11 +345,17 @@ namespace HartreeFock
 
         inline void blank()
         {
+            if (is_silenced())
+                return;
+
             std::cout << '\n';
         }
 
         inline void scf_footer()
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
             std::cout << std::string(110, '-') << "\n";
         }
@@ -306,6 +366,9 @@ namespace HartreeFock
                                     const Eigen::VectorXd& nat_occ,
                                     int nroots, int nactorb)
         {
+            if (is_silenced())
+                return;
+
             std::lock_guard<std::mutex> lock(log_mutex);
             constexpr int LW = 32;
             constexpr int VW = 20;
@@ -371,6 +434,10 @@ const inline std::string map_enum<HartreeFock::IntegralMethod>(HartreeFock::Inte
     {
     case HartreeFock::IntegralMethod::ObaraSaika:
         return "Obara-Saika";
+    case HartreeFock::IntegralMethod::RysQuadrature:
+        return "Rys Quadrature";
+    case HartreeFock::IntegralMethod::Auto:
+        return "Auto";
     }
     return "Unknown";
 }
@@ -421,6 +488,65 @@ const inline std::string map_enum<HartreeFock::SCFMode>(HartreeFock::SCFMode s)
             return "Conventional";
         case HartreeFock::SCFMode::Direct:
             return "Direct";
+        case HartreeFock::SCFMode::Auto:
+            return "Auto";
+    }
+    return "Unknown";
+}
+
+template <>
+const inline std::string map_enum<HartreeFock::DFTGridQuality>(HartreeFock::DFTGridQuality g)
+{
+    switch (g)
+    {
+        case HartreeFock::DFTGridQuality::Coarse:
+            return "Coarse";
+        case HartreeFock::DFTGridQuality::Normal:
+            return "Normal";
+        case HartreeFock::DFTGridQuality::Fine:
+            return "Fine";
+        case HartreeFock::DFTGridQuality::UltraFine:
+            return "UltraFine";
+    }
+    return "Unknown";
+}
+
+template <>
+const inline std::string map_enum<HartreeFock::XCExchangeFunctional>(HartreeFock::XCExchangeFunctional x)
+{
+    switch (x)
+    {
+        case HartreeFock::XCExchangeFunctional::Custom:
+            return "Custom";
+        case HartreeFock::XCExchangeFunctional::Slater:
+            return "Slater";
+        case HartreeFock::XCExchangeFunctional::B88:
+            return "B88";
+        case HartreeFock::XCExchangeFunctional::PW91:
+            return "PW91";
+        case HartreeFock::XCExchangeFunctional::PBE:
+            return "PBE";
+    }
+    return "Unknown";
+}
+
+template <>
+const inline std::string map_enum<HartreeFock::XCCorrelationFunctional>(HartreeFock::XCCorrelationFunctional c)
+{
+    switch (c)
+    {
+        case HartreeFock::XCCorrelationFunctional::Custom:
+            return "Custom";
+        case HartreeFock::XCCorrelationFunctional::VWN5:
+            return "VWN5";
+        case HartreeFock::XCCorrelationFunctional::LYP:
+            return "LYP";
+        case HartreeFock::XCCorrelationFunctional::P86:
+            return "P86";
+        case HartreeFock::XCCorrelationFunctional::PW91:
+            return "PW91";
+        case HartreeFock::XCCorrelationFunctional::PBE:
+            return "PBE";
     }
     return "Unknown";
 }

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.5)
 project(planck LANGUAGES CXX)
 
 include(CTest)
@@ -57,6 +57,7 @@ fetchcontent_makeavailable(eigen)
 # External project: libmsym
 set(MSYM_INSTALL_DIR ${SRC_DIR}/external/libmsym/install)
 set(MSYM_BUILD_DIR ${SRC_DIR}/external/libmsym/build)
+set(LIBXC_INSTALL_DIR ${SRC_DIR}/external/libxc/install)
 set(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_SOURCE_DIR}/install)
 
 include(ExternalProject)
@@ -65,7 +66,23 @@ externalproject_add(
     libmsym
     PREFIX ${SRC_DIR}/external/libmsym
     GIT_REPOSITORY https://github.com/mcodev31/libmsym.git
+    UPDATE_DISCONNECTED TRUE
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${MSYM_INSTALL_DIR} -DBUILD_SHARED_LIBS:BOOL=OFF -DMSYM_BUILD_EXAMPLES:BOOL=OFF
+)
+
+externalproject_add(
+    libxc
+    PREFIX ${SRC_DIR}/external/libxc
+    GIT_REPOSITORY https://github.com/ElectronicStructureLibrary/libxc.git
+    UPDATE_DISCONNECTED TRUE
+    CMAKE_ARGS
+        -DCMAKE_INSTALL_PREFIX=${LIBXC_INSTALL_DIR}
+        -DBUILD_SHARED_LIBS:BOOL=OFF
+        -DBUILD_TESTING:BOOL=OFF
+        -DNAMESPACE_INSTALL_INCLUDEDIR:STRING=/
+        -DCMAKE_INSTALL_LIBDIR:STRING=lib
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+    BUILD_BYPRODUCTS ${LIBXC_INSTALL_DIR}/lib/libxc.a
 )
 
 # Collect sources automatically
@@ -90,12 +107,6 @@ file(GLOB LOOKUP_SRC
 file(GLOB SYMM_SRC
     ${SRC_DIR}/symmetry/*.h
     ${SRC_DIR}/symmetry/*.cpp
-)
-
-# Collect sources automatically
-file(GLOB MAIN_SRC
-    ${SRC_DIR}/*.h
-    ${SRC_DIR}/*.cpp
 )
 
 # Collect sources automatically
@@ -137,10 +148,29 @@ file(GLOB FREQ_SRC
     ${SRC_DIR}/freq/*.cpp
 )
 
+set(HF_MAIN_SRC
+    ${SRC_DIR}/driver.cpp
+)
+
+set(DFT_SRC
+    ${SRC_DIR}/dft/main.cpp
+    ${SRC_DIR}/dft/ao_grid.h
+    ${SRC_DIR}/dft/driver.cpp
+    ${SRC_DIR}/dft/driver.h
+    ${SRC_DIR}/dft/ks_matrix.cpp
+    ${SRC_DIR}/dft/ks_matrix.h
+    ${SRC_DIR}/dft/xc_grid.cpp
+    ${SRC_DIR}/dft/xc_grid.h
+    ${SRC_DIR}/dft/base/angular.h
+    ${SRC_DIR}/dft/base/radial.h
+    ${SRC_DIR}/dft/base/grid.h
+    ${SRC_DIR}/dft/base/wrapper.h
+)
+
 # Executable target
 add_executable(hartree-fock
     ${BASE_SRC}
-    ${MAIN_SRC}
+    ${HF_MAIN_SRC}
     ${LOOKUP_SRC}
     ${SYMM_SRC}
     ${BASIS_SRC}
@@ -153,22 +183,57 @@ add_executable(hartree-fock
     ${FREQ_SRC}
 )
 
-# Include directories
 target_include_directories(hartree-fock PUBLIC
     ${SRC_DIR}
     ${MSYM_INSTALL_DIR}/include
     ${eigen_SOURCE_DIR}
 )
 
-# Link external library
 target_link_libraries(hartree-fock
     ${MSYM_INSTALL_DIR}/lib/libmsym.a
 )
+
+add_dependencies(hartree-fock libmsym)
 
 # OpenMP linkage
 if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(hartree-fock OpenMP::OpenMP_CXX)
     target_compile_definitions(hartree-fock PRIVATE USE_OPENMP)
+endif()
+
+add_executable(planck-dft
+    ${BASE_SRC}
+    ${DFT_SRC}
+    ${LOOKUP_SRC}
+    ${SYMM_SRC}
+    ${BASIS_SRC}
+    ${INT_SRC}
+    ${IO_SRC}
+    ${SCF_SRC}
+    ${POSTHF_SRC}
+    ${GRADIENT_SRC}
+    ${OPT_SRC}
+    ${FREQ_SRC}
+)
+
+target_include_directories(planck-dft PUBLIC
+    ${SRC_DIR}
+    ${MSYM_INSTALL_DIR}/include
+    ${LIBXC_INSTALL_DIR}/include
+    ${eigen_SOURCE_DIR}
+)
+
+target_link_libraries(planck-dft
+    ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    ${LIBXC_INSTALL_DIR}/lib/libxc.a
+)
+
+add_dependencies(planck-dft libmsym libxc)
+target_compile_definitions(planck-dft PRIVATE USING_Libxc)
+
+if(USE_OPENMP AND OpenMP_CXX_FOUND)
+    target_link_libraries(planck-dft OpenMP::OpenMP_CXX)
+    target_compile_definitions(planck-dft PRIVATE USE_OPENMP)
 endif()
 
 # ── GPU acceleration (optional) ───────────────────────────────────────────────
@@ -186,6 +251,7 @@ endif()
 
 # Install executable
 install(TARGETS hartree-fock DESTINATION bin)
+install(TARGETS planck-dft DESTINATION bin)
 
 # ── Optional utility tools ────────────────────────────────────────────────────
 option(BUILD_TOOLS "Build utility tools (chkdump checkpoint formatter)" ON)
@@ -213,6 +279,28 @@ else()
 endif()
 
 find_package(Python3 COMPONENTS Interpreter)
+
+if(BUILD_TESTING)
+    add_executable(planck-dft-grid-invariants
+        ${CMAKE_SOURCE_DIR}/tests/dft_grid_invariants.cpp
+    )
+
+    target_include_directories(planck-dft-grid-invariants PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    set_target_properties(planck-dft-grid-invariants PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    add_test(
+        NAME planck-dft-grid-invariants
+        COMMAND planck-dft-grid-invariants
+    )
+endif()
 
 if(BUILD_TESTING AND Python3_Interpreter_FOUND)
     add_test(

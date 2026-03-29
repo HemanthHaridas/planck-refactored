@@ -43,6 +43,90 @@ Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd& H, cons
     return 2.0 * C_occ * C_occ.transpose();
 }
 
+HartreeFock::SCF::IterationMetrics HartreeFock::SCF::restricted_iteration_metrics(
+    const Eigen::MatrixXd& previous_density,
+    const Eigen::MatrixXd& next_density,
+    double previous_total_energy,
+    double total_energy)
+{
+    const Eigen::MatrixXd delta_density = next_density - previous_density;
+    IterationMetrics metrics;
+    metrics.delta_energy = std::abs(total_energy - previous_total_energy);
+    metrics.delta_density_max = delta_density.cwiseAbs().maxCoeff();
+    metrics.delta_density_rms = std::sqrt(
+        delta_density.squaredNorm() /
+        static_cast<double>(delta_density.rows() * delta_density.cols()));
+    return metrics;
+}
+
+HartreeFock::SCF::IterationMetrics HartreeFock::SCF::unrestricted_iteration_metrics(
+    const Eigen::MatrixXd& previous_alpha_density,
+    const Eigen::MatrixXd& previous_beta_density,
+    const Eigen::MatrixXd& next_alpha_density,
+    const Eigen::MatrixXd& next_beta_density,
+    double previous_total_energy,
+    double total_energy)
+{
+    const Eigen::MatrixXd delta_density =
+        (next_alpha_density + next_beta_density) -
+        (previous_alpha_density + previous_beta_density);
+
+    IterationMetrics metrics;
+    metrics.delta_energy = std::abs(total_energy - previous_total_energy);
+    metrics.delta_density_max = delta_density.cwiseAbs().maxCoeff();
+    metrics.delta_density_rms = std::sqrt(
+        delta_density.squaredNorm() /
+        static_cast<double>(delta_density.rows() * delta_density.cols()));
+    return metrics;
+}
+
+bool HartreeFock::SCF::is_converged(
+    const HartreeFock::OptionsSCF& scf_options,
+    const IterationMetrics& metrics,
+    unsigned int iteration) noexcept
+{
+    return iteration > 1 &&
+           metrics.delta_energy < scf_options._tol_energy &&
+           metrics.delta_density_rms < scf_options._tol_density &&
+           metrics.delta_density_max < scf_options._tol_density;
+}
+
+void HartreeFock::SCF::store_restricted_iteration(
+    HartreeFock::Calculator& calculator,
+    const RestrictedIterationData& iteration,
+    const IterationMetrics& metrics)
+{
+    calculator._info._scf.alpha.fock            = iteration.fock;
+    calculator._info._scf.alpha.density         = iteration.density;
+    calculator._info._scf.alpha.mo_energies     = iteration.mo_energies;
+    calculator._info._scf.alpha.mo_coefficients = iteration.mo_coefficients;
+    calculator._info._energy                    = iteration.electronic_energy;
+    calculator._info._delta_energy              = metrics.delta_energy;
+    calculator._info._delta_density_max         = metrics.delta_density_max;
+    calculator._info._delta_density_rms         = metrics.delta_density_rms;
+    calculator._total_energy                    = iteration.total_energy;
+}
+
+void HartreeFock::SCF::store_unrestricted_iteration(
+    HartreeFock::Calculator& calculator,
+    const UnrestrictedIterationData& iteration,
+    const IterationMetrics& metrics)
+{
+    calculator._info._scf.alpha.fock            = iteration.alpha_fock;
+    calculator._info._scf.alpha.density         = iteration.alpha_density;
+    calculator._info._scf.alpha.mo_energies     = iteration.alpha_mo_energies;
+    calculator._info._scf.alpha.mo_coefficients = iteration.alpha_mo_coefficients;
+    calculator._info._scf.beta.fock             = iteration.beta_fock;
+    calculator._info._scf.beta.density          = iteration.beta_density;
+    calculator._info._scf.beta.mo_energies      = iteration.beta_mo_energies;
+    calculator._info._scf.beta.mo_coefficients  = iteration.beta_mo_coefficients;
+    calculator._info._energy                    = iteration.electronic_energy;
+    calculator._info._delta_energy              = metrics.delta_energy;
+    calculator._info._delta_density_max         = metrics.delta_density_max;
+    calculator._info._delta_density_rms         = metrics.delta_density_rms;
+    calculator._total_energy                    = iteration.total_energy;
+}
+
 // ─── SCF iteration ───────────────────────────────────────────────────────────
 
 std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator, const std::vector<HartreeFock::ShellPair>& shell_pairs)
@@ -84,8 +168,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
         : initial_density(H, X, n_occ);
 
     const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
-    const double tol_energy  = calculator._scf._tol_energy;
-    const double tol_density = calculator._scf._tol_density;
 
     // ── Conventional vs Direct ─────────────────────────────────────────────────
     // Conventional: ERI tensor built once; each iteration only contracts.
@@ -225,30 +307,37 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
         const Eigen::MatrixXd P_new = 2.0 * C_occ * C_occ.transpose();
 
         // ── Convergence checks ────────────────────────────────────────────────
-        const double delta_E       = std::abs(E_total - E_prev);
-        const double delta_P_max   = (P_new - P).cwiseAbs().maxCoeff();
-        const double delta_P_rms   = std::sqrt((P_new - P).squaredNorm() / (nbasis * nbasis));
+        const IterationMetrics metrics =
+            restricted_iteration_metrics(P, P_new, E_prev, E_total);
 
         const double iter_time = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - iter_start).count();
-        HartreeFock::Logger::scf_iteration(iter, E_total, delta_E, delta_P_rms, delta_P_max, diis_err, 0.0, iter_time);
+        HartreeFock::Logger::scf_iteration(
+            iter,
+            E_total,
+            metrics.delta_energy,
+            metrics.delta_density_rms,
+            metrics.delta_density_max,
+            diis_err,
+            0.0,
+            iter_time);
 
         P      = P_new;
         E_prev = E_total;
 
-        // Store current SCF state
-        calculator._info._scf.alpha.fock            = F;
-        calculator._info._scf.alpha.density         = P;
-        calculator._info._scf.alpha.mo_energies     = eps;
-        calculator._info._scf.alpha.mo_coefficients = C;
-        calculator._info._energy                    = E_elec;
-        calculator._info._delta_energy              = delta_E;
-        calculator._info._delta_density_max         = delta_P_max;
-        calculator._info._delta_density_rms         = delta_P_rms;
-        
-        calculator._total_energy                    = E_total;
-        
-        if (iter > 1 && delta_E < tol_energy && delta_P_rms < tol_density && delta_P_max < tol_density)
+        store_restricted_iteration(
+            calculator,
+            RestrictedIterationData{
+                .density = P,
+                .fock = F,
+                .mo_energies = eps,
+                .mo_coefficients = C,
+                .electronic_energy = E_elec,
+                .total_energy = E_total
+            },
+            metrics);
+
+        if (is_converged(calculator._scf, metrics, iter))
         {
             calculator._info._scf.alpha.mo_energies     = eps;
             calculator._info._scf.alpha.mo_coefficients = C;
@@ -348,8 +437,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         : make_density_spin(n_beta);
 
     const unsigned int max_iter  = calculator._scf.get_max_cycles(nbasis);
-    const double tol_energy      = calculator._scf._tol_energy;
-    const double tol_density     = calculator._scf._tol_density;
     const double level_shift     = calculator._scf._level_shift;
     const double restart_factor  = calculator._scf._diis_restart_factor;
 
@@ -562,33 +649,40 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         const Eigen::MatrixXd Pb_new = Cb.leftCols(n_beta)  * Cb.leftCols(n_beta).transpose();
 
         // ── Convergence on total density ──────────────────────────────────────
-        const Eigen::MatrixXd dPt   = (Pa_new + Pb_new) - (Pa + Pb);
-        const double delta_E        = std::abs(E_total - E_prev);
-        const double delta_P_max    = dPt.cwiseAbs().maxCoeff();
-        const double delta_P_rms    = std::sqrt(dPt.squaredNorm() / (nbasis * nbasis));
+        const IterationMetrics metrics = unrestricted_iteration_metrics(
+            Pa, Pb, Pa_new, Pb_new, E_prev, E_total);
 
         const double iter_time = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - iter_start).count();
-        HartreeFock::Logger::scf_iteration(iter, E_total, delta_E, delta_P_rms, delta_P_max, diis_err, 0.0, iter_time);
+        HartreeFock::Logger::scf_iteration(
+            iter,
+            E_total,
+            metrics.delta_energy,
+            metrics.delta_density_rms,
+            metrics.delta_density_max,
+            diis_err,
+            0.0,
+            iter_time);
 
         Pa = Pa_new;  Pb = Pb_new;  E_prev = E_total;
 
-        // ── Store current SCF state ───────────────────────────────────────────
-        calculator._info._scf.alpha.fock            = Fa;
-        calculator._info._scf.alpha.density         = Pa;
-        calculator._info._scf.alpha.mo_energies     = epsa;
-        calculator._info._scf.alpha.mo_coefficients = Ca;
-        calculator._info._scf.beta.fock             = Fb;
-        calculator._info._scf.beta.density          = Pb;
-        calculator._info._scf.beta.mo_energies      = epsb;
-        calculator._info._scf.beta.mo_coefficients  = Cb;
-        calculator._info._energy                    = E_elec;
-        calculator._info._delta_energy              = delta_E;
-        calculator._info._delta_density_max         = delta_P_max;
-        calculator._info._delta_density_rms         = delta_P_rms;
-        calculator._total_energy                    = E_total;
+        store_unrestricted_iteration(
+            calculator,
+            UnrestrictedIterationData{
+                .alpha_density = Pa,
+                .beta_density = Pb,
+                .alpha_fock = Fa,
+                .beta_fock = Fb,
+                .alpha_mo_energies = epsa,
+                .beta_mo_energies = epsb,
+                .alpha_mo_coefficients = Ca,
+                .beta_mo_coefficients = Cb,
+                .electronic_energy = E_elec,
+                .total_energy = E_total
+            },
+            metrics);
 
-        if (iter > 1 && delta_E < tol_energy && delta_P_rms < tol_density && delta_P_max < tol_density)
+        if (is_converged(calculator._scf, metrics, iter))
         {
             calculator._info._is_converged = true;
 

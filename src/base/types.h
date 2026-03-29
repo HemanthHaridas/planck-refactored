@@ -87,6 +87,33 @@ namespace HartreeFock
         Auto               // OS for L<4, Rys for L>=4 per quartet
     };
 
+    enum class DFTGridQuality
+    {
+        Coarse,
+        Normal,
+        Fine,
+        UltraFine
+    };
+
+    enum class XCExchangeFunctional
+    {
+        Custom,
+        Slater,
+        B88,
+        PW91,
+        PBE
+    };
+
+    enum class XCCorrelationFunctional
+    {
+        Custom,
+        VWN5,
+        LYP,
+        P86,
+        PW91,
+        PBE
+    };
+
     enum class OptCoords
     {
         Cartesian,  // Optimize in Cartesian coordinates (L-BFGS, default)
@@ -306,6 +333,18 @@ namespace HartreeFock
     {
         IntegralMethod _engine = IntegralMethod::ObaraSaika;    // Integral Engine
         double _tol_eri = 1E-10;                                // ERI tolerance for Shwartz screening;
+    };
+
+    struct OptionsDFT
+    {
+        DFTGridQuality _grid = DFTGridQuality::Normal;
+        XCExchangeFunctional _exchange = XCExchangeFunctional::PBE;
+        XCCorrelationFunctional _correlation = XCCorrelationFunctional::PBE;
+        int _exchange_id = 0;      // 0 => resolve from _exchange through libxc
+        int _correlation_id = 0;   // 0 => resolve from _correlation through libxc
+        bool _use_sao_blocking = true;
+        bool _print_grid_summary = true;
+        bool _save_checkpoint = false;
     };
 
     // ── Active space specification (CASSCF / RASSCF) ─────────────────────────
@@ -655,6 +694,7 @@ namespace HartreeFock
         OptionsBasis    _basis;
         OptionsGeometry _geometry;
         OptionsIntegral _integral;
+        OptionsDFT      _dft;
         OptionsOutput   _output;
         InfoSCF         _info;
         Molecule        _molecule;

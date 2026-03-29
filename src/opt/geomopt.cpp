@@ -23,7 +23,7 @@
 // Updates calc._total_energy, calc._gradient, and calc._nuclear_repulsion.
 // Returns the flat (3*natoms) gradient vector.
 
-static Eigen::VectorXd _run_sp_gradient(HartreeFock::Calculator& calc)
+static Eigen::VectorXd _run_sp_gradient_hf(HartreeFock::Calculator& calc)
 {
     const std::size_t natoms = calc._molecule.natoms;
 
@@ -182,6 +182,13 @@ static Eigen::VectorXd _lbfgs_direction(
 HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
     HartreeFock::Calculator& calc)
 {
+    return run_geomopt(calc, _run_sp_gradient_hf);
+}
+
+HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
+    HartreeFock::Calculator& calc,
+    const GradientRunner& gradient_runner)
+{
     const std::size_t natoms = calc._molecule.natoms;
     const int max_iter       = calc._geomopt_max_iter;
     const double grad_tol    = calc._geomopt_grad_tol;
@@ -199,7 +206,7 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
     }
 
     // Run initial SCF + gradient
-    Eigen::VectorXd g = _run_sp_gradient(calc);
+    Eigen::VectorXd g = gradient_runner(calc);
     double E = calc._total_energy;
     result.energies.push_back(E);
 
@@ -263,7 +270,7 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
                 calc._molecule._standard(aa, 2) = x_try[aa*3 + 2];
             }
             try {
-                Eigen::VectorXd g_try = _run_sp_gradient(calc);
+                Eigen::VectorXd g_try = gradient_runner(calc);
                 return LSState{a, calc._total_energy, g_try.dot(p), g_try, x_try};
             } catch (...) { return std::nullopt; }
         };
@@ -366,7 +373,7 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
                 calc._molecule._standard(a, 1) = x[a*3 + 1];
                 calc._molecule._standard(a, 2) = x[a*3 + 2];
             }
-            _run_sp_gradient(calc);
+            gradient_runner(calc);
             break;
         }
     }
@@ -402,6 +409,13 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
 
 HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
     HartreeFock::Calculator& calc)
+{
+    return run_geomopt_ic(calc, _run_sp_gradient_hf);
+}
+
+HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
+    HartreeFock::Calculator& calc,
+    const GradientRunner& gradient_runner)
 {
     const std::size_t natoms = calc._molecule.natoms;
     const int  max_iter  = calc._geomopt_max_iter;
@@ -472,7 +486,7 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
 
     // ── Initial SCF + gradient ────────────────────────────────────────────────
     Eigen::MatrixXd xyz = calc._molecule._standard;
-    Eigen::VectorXd g_cart = _run_sp_gradient(calc);
+    Eigen::VectorXd g_cart = gradient_runner(calc);
     // Zero frozen-atom gradient contributions
     for (std::size_t a = 0; a < natoms; ++a)
         if (atom_frozen[a]) g_cart.segment(static_cast<int>(a) * 3, 3).setZero();
@@ -560,7 +574,7 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
                 calc._molecule._standard(a, 2) = xyz_new(a, 2);
             }
             try {
-                g_cart_new = _run_sp_gradient(calc);
+                g_cart_new = gradient_runner(calc);
                 // Zero frozen-atom gradient contributions
                 for (std::size_t a = 0; a < natoms; ++a)
                     if (atom_frozen[a]) g_cart_new.segment(static_cast<int>(a) * 3, 3).setZero();
