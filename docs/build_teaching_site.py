@@ -377,7 +377,7 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
     }}
     .hero p {{
       margin: 0;
-      max-width: 65ch;
+      max-width: 100%;
       color: rgba(255,249,242,0.92);
       font-size: 1.05rem;
     }}
