@@ -1352,7 +1352,7 @@ std::expected<void, std::string> run_mcscf_loop(
                                          double lm_shift) {
         const int npairs = static_cast<int>(opt_pairs.size());
         Eigen::MatrixXd zero = Eigen::MatrixXd::Zero(nbasis, nbasis);
-        if (npairs == 0 || npairs > 24) return zero;
+        if (npairs == 0 || npairs > 96) return zero;
 
         const Eigen::VectorXd g0 = pack_pairs(st_cur.g_orb);
         if (g0.cwiseAbs().maxCoeff() < 1e-10) return zero;
@@ -1397,6 +1397,27 @@ std::expected<void, std::string> run_mcscf_loop(
         return kappa;
     };
 
+    auto build_gradient_fallback_step = [&](const Eigen::MatrixXd& G_trial) {
+        Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        for (const auto& pair : opt_pairs)
+        {
+            const double step = -G_trial(pair.p, pair.q);
+            kappa(pair.p, pair.q) = step;
+            kappa(pair.q, pair.p) = -step;
+        }
+
+        const double max_elem = kappa.cwiseAbs().maxCoeff();
+        if (max_elem > 0.20)
+            kappa *= 0.20 / max_elem;
+
+        const double trust_radius = 0.80;
+        const double frob = kappa.norm();
+        if (frob > trust_radius)
+            kappa *= trust_radius / frob;
+
+        return kappa;
+    };
+
     // ── Main MCSCF loop ───────────────────────────────────────────────────────
     double E_prev = 0.0;
     bool converged = false;
@@ -1421,6 +1442,7 @@ std::expected<void, std::string> run_mcscf_loop(
         // ── (3) Microiterations ───────────────────────────────────────────────
         Eigen::MatrixXd G_curr  = st_current.g_orb;     // working gradient (updated by FEP1)
         Eigen::MatrixXd kappa_total = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        Eigen::MatrixXd kappa_first = Eigen::MatrixXd::Zero(nbasis, nbasis);
         const Eigen::MatrixXd kappa_newton = build_numeric_newton_step(st_current, C, level_shift);
 
         for (unsigned int micro = 0; micro < nmicro; ++micro)
@@ -1430,6 +1452,8 @@ std::expected<void, std::string> run_mcscf_loop(
                 G_curr, st_current.F_I_mo, st_current.F_A_mo,
                 n_core, n_act, n_virt,
                 level_shift, max_rot, all_mo_irr, use_sym);
+            if (micro == 0)
+                kappa_first = kappa;
 
             // (b) First-order h_eff change: δh = [κ, F^I]_{act,act}
             Eigen::MatrixXd dh = delta_h_eff(kappa, st_current.F_I_mo, n_core, n_act);
@@ -1486,6 +1510,7 @@ std::expected<void, std::string> run_mcscf_loop(
         // Cap total accumulated rotation
         double max_k = kappa_total.cwiseAbs().maxCoeff();
         if (max_k > max_rot) kappa_total *= max_rot / max_k;
+        const Eigen::MatrixXd kappa_grad = build_gradient_fallback_step(st_current.g_orb);
 
         // ── (4) Apply accumulated rotation with energy-aware backtracking ─────
         bool accepted = false;
@@ -1498,15 +1523,28 @@ std::expected<void, std::string> run_mcscf_loop(
         std::vector<Eigen::MatrixXd> step_candidates;
         if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12)
             step_candidates.push_back(kappa_newton);
+        if (kappa_first.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(kappa_first);
         if (kappa_total.cwiseAbs().maxCoeff() > 1e-12)
             step_candidates.push_back(kappa_total);
+        if (kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(kappa_grad);
         if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12 &&
             kappa_total.cwiseAbs().maxCoeff() > 1e-12)
             step_candidates.push_back(0.5 * (kappa_newton + kappa_total));
+        if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 &&
+            kappa_total.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(0.5 * (kappa_first + kappa_total));
+        if (kappa_total.cwiseAbs().maxCoeff() > 1e-12 &&
+            kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(0.5 * (kappa_total + kappa_grad));
+        if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 &&
+            kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(0.5 * (kappa_first + kappa_grad));
 
         for (const Eigen::MatrixXd& step_base : step_candidates)
         {
-            for (double scale : {1.0, 0.5, 0.25, 0.125, 0.0625})
+            for (double scale : {1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625})
             {
                 Eigen::MatrixXd kappa_try = scale * step_base;
                 if (kappa_try.cwiseAbs().maxCoeff() < 1e-12) continue;
@@ -1516,15 +1554,23 @@ std::expected<void, std::string> run_mcscf_loop(
                 if (!trial_res) continue;
 
                 const auto& trial = *trial_res;
-                const bool energy_improved = trial.E_cas < best_E - 1e-10;
                 const double trial_merit =
                     trial.E_cas + merit_weight * trial.gnorm * trial.gnorm;
                 const bool merit_improved = trial_merit < best_merit - 1e-10;
-                const double flat_energy_window = std::max(10.0 * as.tol_mcscf_energy, 1e-10);
+                const double flat_energy_window =
+                    std::max(1000.0 * as.tol_mcscf_energy, 1e-6);
                 const bool gradient_reduced = trial.gnorm < best_g - 1e-12;
+                const double gradient_worsen_window =
+                    std::max(0.05 * std::max(best_g, 1e-8), 1e-6);
+                const bool energy_improved =
+                    trial.E_cas < best_E - 1e-10;
+                const bool energy_improved_without_hurting_gradient =
+                    energy_improved && trial.gnorm <= best_g + gradient_worsen_window;
                 const bool stationary_but_better_grad =
                     std::abs(trial.E_cas - best_E) <= flat_energy_window && gradient_reduced;
-                if (!energy_improved && !merit_improved && !stationary_but_better_grad) continue;
+                if (!energy_improved_without_hurting_gradient &&
+                    !merit_improved &&
+                    !stationary_but_better_grad) continue;
 
                 accepted = true;
                 best_E = trial.E_cas;
