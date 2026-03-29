@@ -214,6 +214,8 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const double delta    = zeta + eta;
     const double inv_delta = 1.0 / delta;
     const double rho      = zeta * eta * inv_delta;
+    const double rho_over_zeta = rho * ppAB.inv_zeta;
+    const double rho_over_eta  = rho * ppCD.inv_zeta;
 
     // Gaussian product centers P and Q
     const double Px = ppAB.center[0], Py = ppAB.center[1], Pz = ppAB.center[2];
@@ -266,9 +268,9 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
         const double wr = w[r];
 
         // Root-dependent scalars (same for all axes)
-        const double B00 = u * inv_delta * 0.5;
-        const double B10 = 0.5 * ppAB.inv_zeta - B00;
-        const double B01 = 0.5 * ppCD.inv_zeta - B00;
+        const double B00 = 0.5 * inv_delta * u;
+        const double B10 = 0.5 * ppAB.inv_zeta * (1.0 - rho_over_zeta * u);
+        const double B01 = 0.5 * ppCD.inv_zeta * (1.0 - rho_over_eta * u);
 
         // 1D VRR tables for each Cartesian component
         double Ix[VRR_DIM][VRR_DIM];
@@ -392,9 +394,10 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e(
 
             const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
             const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-            const double val = _auto_contracted_eri(spAB, spCD,
-                                                    lAx, lAy, lAz, lBx, lBy, lBz,
-                                                    lCx, lCy, lCz, lDx, lDy, lDz);
+            const double val = HartreeFock::RysQuad::_rys_contracted_eri(
+                spAB, spCD,
+                lAx, lAy, lAz, lBx, lBy, lBz,
+                lCx, lCy, lCz, lDx, lDy, lDz);
 
             eri[i*nb3 + j*nb2 + k*nb + l] = val;
             eri[j*nb3 + i*nb2 + k*nb + l] = val;

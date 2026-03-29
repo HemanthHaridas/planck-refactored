@@ -27,7 +27,7 @@ namespace HartreeFock
     inline void rys_1pt(double T, double& root, double& weight) noexcept
     {
         if (T < RYS_T_ZERO) {
-            root   = 0.5;
+            root   = 1.0 / 3.0;
             weight = 1.0;
         } else {
             const double sqrtT = std::sqrt(T);
