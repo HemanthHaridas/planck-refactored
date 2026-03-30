@@ -356,6 +356,50 @@ int resolve_target_irrep(const std::string& s, const std::vector<std::string>& n
     return 0;
 }
 
+bool point_group_has_only_1d_irreps(const std::string& pg)
+{
+    if (pg == "C1" || pg == "Ci" || pg == "Cs")
+        return true;
+    if (pg.find("inf") != std::string::npos || pg.size() < 2)
+        return false;
+
+    auto parse_order = [&](std::size_t pos, int& n, std::string& suffix) -> bool
+    {
+        std::size_t end = pos;
+        while (end < pg.size() && pg[end] >= '0' && pg[end] <= '9')
+            ++end;
+        if (end == pos)
+            return false;
+        n = std::stoi(pg.substr(pos, end - pos));
+        suffix = pg.substr(end);
+        return true;
+    };
+
+    int n = 0;
+    std::string suffix;
+    switch (pg[0])
+    {
+        case 'C':
+            if (!parse_order(1, n, suffix))
+                return false;
+            return (suffix.empty() || suffix == "h" || suffix == "v") && n <= 2;
+        case 'D':
+            if (!parse_order(1, n, suffix))
+                return false;
+            if (suffix.empty() || suffix == "h")
+                return n <= 2;
+            if (suffix == "d")
+                return n <= 1;
+            return false;
+        case 'S':
+            if (!parse_order(1, n, suffix))
+                return false;
+            return suffix.empty() && n == 2;
+        default:
+            return false;
+    }
+}
+
 // Generate alpha/beta strings with optional RAS and symmetry constraints.
 void build_ci_strings(
     int n_act, int n_alpha, int n_beta,
@@ -1215,6 +1259,8 @@ std::expected<void, std::string> run_mcscf_loop(
     // ── Symmetry ──────────────────────────────────────────────────────────────
     const bool have_sym = !calc._sao_irrep_names.empty()
                        && (int)calc._sao_irrep_names.size() <= 8;
+    const bool point_group_is_abelian_for_labels =
+        point_group_has_only_1d_irreps(calc._molecule._point_group);
     std::vector<int> irr_act, all_mo_irr;
     if (have_sym && !calc._info._scf.alpha.mo_symmetry.empty())
     {
@@ -1224,7 +1270,7 @@ std::expected<void, std::string> run_mcscf_loop(
             irr_act[t] = (n_core + t < (int)all_mo_irr.size()) ? all_mo_irr[n_core + t] : -1;
     }
     const int  target_irr = resolve_target_irrep(as.target_irrep, calc._sao_irrep_names);
-    const bool use_sym    = have_sym && !irr_act.empty();
+    const bool use_sym    = have_sym && point_group_is_abelian_for_labels && !irr_act.empty();
 
     // ── Initial MO coefficients ───────────────────────────────────────────────
     Eigen::MatrixXd C = (calc._cas_mo_coefficients.rows() == nbasis &&
@@ -1251,6 +1297,10 @@ std::expected<void, std::string> run_mcscf_loop(
                     as.nactele, n_act, n_core, n_virt, ci_dim_est));
     logging(LogLevel::Info, tag + " :",
         std::format("Algorithm: macro/micro scaffold  nmicro={:d}", nmicro));
+    if (have_sym && !point_group_is_abelian_for_labels)
+        logging(LogLevel::Warning, tag + " :",
+            std::format("Disabling CI symmetry screening for {} because MO labels come from an Abelian subgroup.",
+                        calc._molecule._point_group));
     if (use_sym)
         logging(LogLevel::Info, tag + " :",
             std::format("Target irrep: {}",

@@ -95,6 +95,6 @@ ctest --test-dir build -R planck-regression-core --output-on-failure
   clear diagnostic because there are no occupied/virtual excitations.
 - Gradient tests are smoke tests rather than high-precision references because
   the current `RMP2` gradient path is still central-difference based.
-- CASSCF and RASSCF inputs remain available for manual experimentation, but are
-  intentionally excluded from the automated regression gate while the active-
-  space implementation is considered experimental.
+- Most CASSCF and RASSCF inputs remain manual-only while the active-space
+  implementation is still evolving, but targeted regressions are welcome for
+  bugs with a clear user-visible signature.
