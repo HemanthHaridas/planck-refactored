@@ -1,8 +1,12 @@
 ### Planck
 
+<p align="justify">
 A quantum chemistry program implementing restricted and unrestricted Hartree-Fock SCF and Kohn-Sham DFT with an Obara-Saika integral engine, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
+</p>
 
 ### Features
+
+<div align="justify">
 
 - **RHF / UHF** — closed-shell and open-shell Hartree-Fock
 - **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; numerical integration on a Becke–Treutler-Ahlrichs–Lebedev molecular grid with ORCA-inspired five-region pruning; LDA (Slater/VWN5) and GGA (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation) exchange-correlation functionals through libxc; four grid presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals via integer ID
@@ -21,6 +25,8 @@ A quantum chemistry program implementing restricted and unrestricted Hartree-Foc
 - **Vibrational frequency analysis** — semi-numerical Hessian from central finite differences of analytic gradients (2×3N evaluations); mass-weighted normal mode analysis with Eckart T+R projection; outputs vibrational frequencies in cm⁻¹ (imaginary encoded negative), zero-point energy in Ha and kcal/mol; linearity auto-detected
 - **Checkpoint system** — binary `.hfchk` files (version 2); same-basis restart (`guess density`), full geometry+density restart (`guess full`), and cross-basis density projection (Löwdin SVD); checkpoint stores `has_opt_coords` flag set after a converged geometry optimization; CASSCF checkpoints additionally store the converged active orbital coefficients, which `chkdump` can export as Gaussian CUBE volumetric files
 - **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*
+
+</div>
 
 ### Requirements
 
@@ -49,13 +55,17 @@ cd planck-refactored
 cmake -B build .
 ```
 
+<p align="justify">
 To disable OpenMP:
+</p>
 
 ```bash
 cmake -B build . -DUSE_OPENMP=OFF
 ```
 
+<p align="justify">
 To set a custom install prefix:
+</p>
 
 ```bash
 cmake -B build . -DCMAKE_INSTALL_PREFIX=/path/to/prefix
@@ -67,7 +77,9 @@ cmake -B build . -DCMAKE_INSTALL_PREFIX=/path/to/prefix
 cmake --build build
 ```
 
+<p align="justify">
 The first build fetches and compiles Eigen and libmsym automatically. Subsequent builds are incremental.
+</p>
 
 ### 4. Install (optional)
 
@@ -75,7 +87,9 @@ The first build fetches and compiles Eigen and libmsym automatically. Subsequent
 cmake --install build
 ```
 
+<p align="justify">
 This installs the `hartree-fock` executable to `<prefix>/bin/` and the basis set files to `<prefix>/share/basis-sets/`.
+</p>
 
 ### 5. Run
 
@@ -86,7 +100,9 @@ This installs the `hartree-fock` executable to `<prefix>/bin/` and the basis set
 
 ### Input File Format
 
+<p align="justify">
 Input files use an INI-style block format with the extension `.hfinp`. Each section is delimited by `%begin_<section>` and `%end_<section>` markers. Keywords are case-insensitive; boolean values accept `.true.` / `.false.`.
+</p>
 
 ```
 %begin_control
@@ -119,7 +135,9 @@ Input files use an INI-style block format with the extension `.hfinp`. Each sect
 
 ### Section: `%begin_control`
 
+<p align="justify">
 General calculation settings.
+</p>
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
@@ -131,7 +149,9 @@ General calculation settings.
 
 ### Section: `%begin_scf`
 
+<p align="justify">
 SCF procedure and convergence settings.
+</p>
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
@@ -160,7 +180,9 @@ SCF procedure and convergence settings.
 
 ### Section: `%begin_dft`
 
+<p align="justify">
 Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. The `scf_type` keyword in `%begin_scf` controls the reference: `rhf` → RKS (restricted), `uhf` → UKS (unrestricted).
+</p>
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
@@ -175,7 +197,9 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 
 #### DFT grid presets
 
+<p align="justify">
 Grid quality levels follow ORCA-inspired angular scheme assignments. Each atom's radial shell count depends on its row in the periodic table; hydrogen/helium get one fewer angular shell than heavier atoms when `reduce_light_atoms` is active.
+</p>
 
 | Preset | Angular scheme | Typical angular pts (heavy atom, mid-grid) | Radial shells (row-1 / row-2) |
 |---|---|---|---|
@@ -197,7 +221,9 @@ Grid quality levels follow ORCA-inspired angular scheme assignments. Each atom's
 
 ### Section: `%begin_geom`
 
+<p align="justify">
 Molecular geometry options.
+</p>
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
@@ -206,7 +232,9 @@ Molecular geometry options.
 | `use_symm` | bool | `.true.`, `.false.` | `.true.` | Detect molecular point group and reorient to standard frame using libmsym |
 | `opt_coords` | enum | `cartesian`, `internal` / `ic` / `gic` | `cartesian` | Coordinate system for geometry optimization. `cartesian`: L-BFGS in 3N Cartesian coordinates. `internal`: BFGS in redundant generalized internal coordinates (bonds, bends, torsions); back-transforms to Cartesian via Schlegel microiterations. Only used when `calculation geomopt`. |
 
+<p align="justify">
 Geometry optimization convergence is controlled by two additional keywords accepted in `%begin_control`:
+</p>
 
 | Keyword | Type | Default | Description |
 |---|---|---|---|
@@ -215,7 +243,9 @@ Geometry optimization convergence is controlled by two additional keywords accep
 
 ### Section: `%begin_constraints` (optional)
 
+<p align="justify">
 Geometry constraints for IC-BFGS optimization. This section is only valid when `opt_coords internal` and `coord_type zmatrix` are set; the program will exit with an error if constraints are present without both of these options. Atom indices are 1-based. Lines starting with `#` are treated as comments and ignored.
+</p>
 
 | Line format | Constraint type | Description |
 |---|---|---|
@@ -224,7 +254,9 @@ Geometry constraints for IC-BFGS optimization. This section is only valid when `
 | `d  i  j  k  l` | Dihedral | Fix the dihedral angle `i`–`j`–`k`–`l` |
 | `f  i` | Frozen atom | Hold all three Cartesian DOFs of atom `i` fixed |
 
+<p align="justify">
 Example — fix the O–H bond length (atoms 1–2) and freeze the oxygen (atom 1):
+</p>
 
 ```
 %begin_constraints
@@ -233,20 +265,28 @@ Example — fix the O–H bond length (atoms 1–2) and freeze the oxygen (atom 
 %end_constraints
 ```
 
+<p align="justify">
 When constraints are active, the optimizer zeros the corresponding IC gradient components and IC step components at each iteration, so the constrained coordinates do not move. The log prints how many IC coordinates and atoms are frozen before the optimization starts.
+</p>
 
 ### Section: `%begin_coords`
 
+<p align="justify">
 Molecular geometry specification. The header lines are the same for both coordinate types:
+</p>
 
 ```
 <natoms>
 <charge>  <multiplicity>
 ```
 
+<div align="justify">
+
 - **natoms** — number of atoms (integer)
 - **charge** — total molecular charge (integer, can be negative)
 - **multiplicity** — spin multiplicity M = 2S+1 (integer ≥ 1; 1 = singlet, 2 = doublet, 3 = triplet)
+
+</div>
 
 #### Cartesian format (`coord_type cartesian`)
 
@@ -255,7 +295,9 @@ Molecular geometry specification. The header lines are the same for both coordin
 ...
 ```
 
+<p align="justify">
 Each subsequent line gives the element symbol and x, y, z coordinates in the units from `coord_units`.
+</p>
 
 #### Z-matrix format (`coord_type zmatrix`)
 
@@ -267,12 +309,18 @@ Each subsequent line gives the element symbol and x, y, z coordinates in the uni
 ...
 ```
 
+<div align="justify">
+
 - `i1`, `i2`, `i3` — 1-based indices of reference atoms
 - `r` — bond length to atom `i1` (units from `coord_units`)
 - `angle` — bond angle at `i1` relative to `i2` (degrees)
 - `dihedral` — dihedral angle about the `i1`–`i2` bond relative to `i3` (degrees)
 
+</div>
+
+<p align="justify">
 Example (water):
+</p>
 
 ```
 3
@@ -284,17 +332,23 @@ H  1  0.9572  2  104.52
 
 ### Basis Sets
 
+<p align="justify">
 Basis set files are in Gaussian94 (`.gbs`) format and are installed to `<prefix>/share/basis-sets/`. The build system fetches missing basis sets automatically from the [Basis Set Exchange](https://www.basissetexchange.org/) before compiling.
+</p>
 
 #### Prerequisite — `basis-set-exchange`
 
+<p align="justify">
 The automatic fetch requires the `bse` command-line tool, which is part of the `basis-set-exchange` Python package. Install it once before building:
+</p>
 
 ```bash
 pip install basis-set-exchange
 ```
 
+<p align="justify">
 Verify the install:
+</p>
 
 ```bash
 bse --version
@@ -302,13 +356,17 @@ bse --version
 
 #### How automatic fetching works
 
+<p align="justify">
 The file `basis-sets/basis` is a plain-text manifest — one basis set name per line. At configure time CMake reads this manifest and, for each name not already present on disk, registers a custom command that runs:
+</p>
 
 ```
 bse get-basis <name> gaussian94 > basis-sets/<name>
 ```
 
+<p align="justify">
 The `fetch-basis-sets` target is added to `ALL` and is a dependency of `hartree-fock`, so missing basis sets are downloaded automatically during the first `cmake --build build`. Already-present files are never re-fetched. You can also trigger the fetch manually:
+</p>
 
 ```bash
 cmake --build build --target fetch-basis-sets
@@ -316,8 +374,12 @@ cmake --build build --target fetch-basis-sets
 
 #### Adding a new basis set
 
+<div align="justify">
+
 1. Add its name (exactly as `bse` recognises it) on a new line in `basis-sets/basis`.
 2. Re-run `cmake --build build` — the missing file is fetched and the build proceeds.
+
+</div>
 
 #### Included basis sets
 
@@ -333,21 +395,33 @@ cmake --build build --target fetch-basis-sets
 
 ### Checkpoint System
 
+<p align="justify">
 After a successful SCF, a binary checkpoint file `<input_stem>.hfchk` is written automatically (when `save_checkpoint .true.`).
+</p>
 
 ### Same-basis restart
 
+<p align="justify">
 Set `guess read` in the next run with the same basis and geometry. The overlap and core Hamiltonian matrices are read directly from the checkpoint, skipping the 1e integral computation.
+</p>
 
 ### Cross-basis projection (density projection)
 
+<p align="justify">
 To warm-start a larger basis from a converged smaller-basis checkpoint:
+</p>
+
+<div align="justify">
 
 1. Converge in the small basis with `save_checkpoint .true.`
 2. Change `basis` to the larger set and add `guess read`
+
+</div>
 3. Run — Planck detects the basis-size mismatch, computes the cross-overlap `S_cross = ⟨χ_μ^large | χ_ν^small⟩`, and applies a Löwdin SVD projection to transfer the occupied density into the new basis
 
+<p align="justify">
 The projected density is used as the SCF starting point, typically reducing the number of required iterations.
+</p>
 
 ### Examples
 
@@ -385,7 +459,9 @@ H     0.000000   -0.756950    -0.468703
 
 ### RKS single point — water, PBE/STO-3G
 
+<p align="justify">
 Run with `./build/planck-dft water_dft.hfinp`. The `%begin_dft` block selects the functional and grid; `scf_type rhf` in `%begin_scf` selects the RKS (restricted) reference.
+</p>
 
 ```
 %begin_control
@@ -501,7 +577,9 @@ H    -0.800000     0.000000    -0.500000
 
 ### Geometry optimization — Cartesian L-BFGS
 
+<p align="justify">
 Set `calculation geomopt`. The optimizer uses L-BFGS with a strong-Wolfe line search and converges when the maximum Cartesian gradient component falls below `grad_tol` (default 3×10⁻⁴ Ha/Bohr):
+</p>
 
 ```
 %begin_control
@@ -536,7 +614,9 @@ H    -0.800000     0.000000    -0.500000
 
 ### Geometry optimization — internal coordinates (BFGS/GIC)
 
+<p align="justify">
 Add `opt_coords internal` in `%begin_geom`. Bonds, valence bends, and proper torsions are detected automatically using Alvarez (2008) covalent radii. The Hessian is initialized diagonally (0.5 Ha/Bohr² for stretches, 0.2 Ha/rad² for bends, 0.1 Ha/rad² for torsions) and updated via BFGS at each step. Steps exceeding 0.3 Bohr or 0.3 rad are scaled down before back-transforming:
+</p>
 
 ```
 %begin_geom
@@ -549,7 +629,9 @@ Add `opt_coords internal` in `%begin_geom`. Bonds, valence bends, and proper tor
 
 ### Constrained geometry optimization — fixed bond
 
+<p align="justify">
 Requires `opt_coords internal` and `coord_type zmatrix`. The `%begin_constraints` block lists one constraint per line using 1-based atom indices. Here the O–H bond (atoms 1–2) is held fixed while the H–O–H angle is allowed to relax:
+</p>
 
 ```
 %begin_control
@@ -588,7 +670,9 @@ H  1  0.9572  2  104.52
 %end_constraints
 ```
 
+<p align="justify">
 Log output at startup:
+</p>
 
 ```
 [INF]  Constraints :   2 constraint(s) active
@@ -598,7 +682,9 @@ Log output at startup:
 
 ### Vibrational frequency analysis — water, STO-3G
 
+<p align="justify">
 Set `calculation freq` to compute a semi-numerical Hessian (central finite differences of analytic gradients) and perform mass-weighted normal mode analysis. For best results run at an optimized geometry (no imaginary frequencies):
+</p>
 
 ```
 %begin_control
@@ -631,7 +717,9 @@ H     0.000000    -0.756951     0.585766
 %end_coords
 ```
 
+<p align="justify">
 Expected output at the HF/STO-3G optimized geometry:
+</p>
 
 ```
 [INF]  Vibrational Frequencies :
@@ -643,11 +731,15 @@ Expected output at the HF/STO-3G optimized geometry:
 [INF]  Zero-point energy :  0.020xxx Eh  (12.xx kcal/mol)
 ```
 
+<p align="justify">
 The step size for finite differences can be changed with `hessian_step` in `%begin_control` (default 5×10⁻³ Bohr). For 2×3N gradient evaluations are required (18 for water). Imaginary frequencies are printed as negative values.
+</p>
 
 ### CASSCF active-space — water, CAS(4,4)/STO-3G
 
+<p align="justify">
 Set `correlation casscf` and specify the active space with `nactele` and `nactorb`. The CASSCF wavefunction is built on top of a converged RHF reference:
+</p>
 
 ```
 %begin_control
@@ -688,11 +780,33 @@ H    0.000000   -0.757005   -0.468704
 %end_coords
 ```
 
+<p align="justify">
 Expected energy: `E(CASSCF) ≈ -75.9851 Eh` for H₂O CAS(4,4)/STO-3G.
+</p>
+
+### CASSCF correlated π-orbitals — twisted ethylene, CAS(2,2)/STO-3G
+
+<p align="justify">
+Twisted ethylene (90° C–C torsion) is a classic multireference system: at the perpendicular geometry the π and π* orbitals become exactly degenerate, making a single-determinant RHF description qualitatively wrong. A CAS(2,2) active space — two electrons in the two frontier π-type orbitals — correctly captures this near-degeneracy correlation.
+</p>
+
+<p align="justify">
+The two active orbitals (MO 8 and MO 9 in STO-3G) are the bonding and antibonding combinations of the carbon p_z functions. At 90° twist they are related by the C₂ rotation of the D₂ point group and therefore **exactly degenerate in energy** by symmetry: neither can be identified as purely "bonding" or "antibonding" at this geometry. The CASSCF wavefunction distributes the two active electrons equally across both orbitals (CI coefficients of equal magnitude but opposite sign), recovering the correct diradical character of the twisted state.
+</p>
+
+| MO 8 (π-type active orbital) | MO 9 (π-type active orbital) |
+|:---:|:---:|
+| ![MO 8](mo8.png) | ![MO 9](mo9.png) |
+
+<p align="justify">
+The two orbitals are degenerate at the 90° twisted geometry and together span the active space of the CAS(2,2) wavefunction. Visualized from a CASSCF/STO-3G checkpoint using `chkdump --casscf-active` and rendered in VMD.
+</p>
 
 ### Cross-basis restart — STO-3G → 6-31G
 
+<p align="justify">
 Run STO-3G first (saves `mol.hfchk`), then change the basis and add `guess read`:
+</p>
 
 ```
 %begin_control
@@ -713,7 +827,11 @@ Run STO-3G first (saves `mol.hfchk`), then change the basis and add `guess read`
 
 ### Output
 
+<p align="justify">
 The program prints a structured log to standard output. Key sections:
+</p>
+
+<div align="justify">
 
 - **Input Parsing** — confirms input was read successfully
 - **Symmetry Detection** — detected point group
@@ -733,7 +851,13 @@ The program prints a structured log to standard output. Key sections:
 - **Vibrational Frequencies** — when `calculation freq`: molecule type (linear/non-linear), number of T+R modes removed, n_vib vibrational frequencies in cm⁻¹ (negative = imaginary), and zero-point energy in Eh and kcal/mol
 - **Wall Time** — total elapsed time
 
+</div>
+
+<p align="justify">
 For `planck-dft` runs, the log additionally includes:
+</p>
+
+<div align="justify">
 
 - **Theory / Reference** — `Kohn-Sham DFT` and `RKS` or `UKS`
 - **DFT Grid** — selected grid preset name
@@ -742,6 +866,8 @@ For `planck-dft` runs, the log additionally includes:
 - **Integrated Electrons** — electron count from numerical density integration (should match the formal count to 4–5 significant figures on a Normal grid)
 - **XC Energy** — exchange-correlation energy contribution in Hartree
 - **DFT Energy** — total Kohn-Sham energy (T + V_ne + J + E_xc + V_nn) in Hartree
+
+</div>
 
 ### Section: `%begin_control` (additional keywords)
 
@@ -759,25 +885,35 @@ For `planck-dft` runs, the log additionally includes:
 | `BUILD_TOOLS` | `ON` | Build utility tools (`chkdump` checkpoint formatter) |
 | `CMAKE_INSTALL_PREFIX` | `./install` | Installation prefix |
 
+<p align="justify">
 Both executables (`hartree-fock` and `planck-dft`) are built and installed by default. `planck-dft` requires libxc, which is fetched and compiled automatically as an ExternalProject during the first build.
+</p>
 
 ### Utility Tools
 
 ### `chkdump`
 
+<p align="justify">
 Converts a binary `.hfchk` checkpoint file to formatted human-readable text:
+</p>
 
 ```bash
 ./build/chkdump mol.hfchk            # → stdout
 ./build/chkdump mol.hfchk mol.txt    # → file
 ```
 
+<p align="justify">
 Output includes: format version, SCF type, convergence status, total energy, nuclear repulsion, geometry (with element symbols), MO energies with HOMO/LUMO labels, overlap matrix, core Hamiltonian, density matrix, Fock matrix, and MO coefficients.
+</p>
 
+<p align="justify">
 For CASSCF checkpoints, `chkdump` additionally writes the converged active orbitals and generates a Gaussian CUBE file for each active orbital, allowing direct visualization of the active-space wavefunctions in external molecular visualization tools (e.g. VESTA, VMD, Avogadro):
+</p>
 
 ```bash
 ./build/chkdump mol.hfchk --casscf-active           # writes mol_active_orb_<i>.cube for each active orbital
 ```
 
+<p align="justify">
 Disable with `-DBUILD_TOOLS=OFF`.
+</p>
