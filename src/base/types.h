@@ -802,8 +802,9 @@ namespace HartreeFock
                 // Set SCF Mode
                 _scf.set_scf_mode_auto(_shells.nbasis());
                 
-                // Set Max SCF cycles
-                _scf.set_max_cycles_auto(_shells.nbasis());
+                // Set Max SCF cycles (only if not explicitly set by the user)
+                if (_scf._max_cycles == 0)
+                    _scf.set_max_cycles_auto(_shells.nbasis());
             }
             
             // prepare_coordinates() must have been called before initialize().

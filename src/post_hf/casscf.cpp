@@ -356,6 +356,50 @@ int resolve_target_irrep(const std::string& s, const std::vector<std::string>& n
     return 0;
 }
 
+bool point_group_has_only_1d_irreps(const std::string& pg)
+{
+    if (pg == "C1" || pg == "Ci" || pg == "Cs")
+        return true;
+    if (pg.find("inf") != std::string::npos || pg.size() < 2)
+        return false;
+
+    auto parse_order = [&](std::size_t pos, int& n, std::string& suffix) -> bool
+    {
+        std::size_t end = pos;
+        while (end < pg.size() && pg[end] >= '0' && pg[end] <= '9')
+            ++end;
+        if (end == pos)
+            return false;
+        n = std::stoi(pg.substr(pos, end - pos));
+        suffix = pg.substr(end);
+        return true;
+    };
+
+    int n = 0;
+    std::string suffix;
+    switch (pg[0])
+    {
+        case 'C':
+            if (!parse_order(1, n, suffix))
+                return false;
+            return (suffix.empty() || suffix == "h" || suffix == "v") && n <= 2;
+        case 'D':
+            if (!parse_order(1, n, suffix))
+                return false;
+            if (suffix.empty() || suffix == "h")
+                return n <= 2;
+            if (suffix == "d")
+                return n <= 1;
+            return false;
+        case 'S':
+            if (!parse_order(1, n, suffix))
+                return false;
+            return suffix.empty() && n == 2;
+        default:
+            return false;
+    }
+}
+
 // Generate alpha/beta strings with optional RAS and symmetry constraints.
 void build_ci_strings(
     int n_act, int n_alpha, int n_beta,
@@ -1215,6 +1259,8 @@ std::expected<void, std::string> run_mcscf_loop(
     // ── Symmetry ──────────────────────────────────────────────────────────────
     const bool have_sym = !calc._sao_irrep_names.empty()
                        && (int)calc._sao_irrep_names.size() <= 8;
+    const bool point_group_is_abelian_for_labels =
+        point_group_has_only_1d_irreps(calc._molecule._point_group);
     std::vector<int> irr_act, all_mo_irr;
     if (have_sym && !calc._info._scf.alpha.mo_symmetry.empty())
     {
@@ -1224,7 +1270,7 @@ std::expected<void, std::string> run_mcscf_loop(
             irr_act[t] = (n_core + t < (int)all_mo_irr.size()) ? all_mo_irr[n_core + t] : -1;
     }
     const int  target_irr = resolve_target_irrep(as.target_irrep, calc._sao_irrep_names);
-    const bool use_sym    = have_sym && !irr_act.empty();
+    const bool use_sym    = have_sym && point_group_is_abelian_for_labels && !irr_act.empty();
 
     // ── Initial MO coefficients ───────────────────────────────────────────────
     Eigen::MatrixXd C = (calc._cas_mo_coefficients.rows() == nbasis &&
@@ -1251,6 +1297,10 @@ std::expected<void, std::string> run_mcscf_loop(
                     as.nactele, n_act, n_core, n_virt, ci_dim_est));
     logging(LogLevel::Info, tag + " :",
         std::format("Algorithm: macro/micro scaffold  nmicro={:d}", nmicro));
+    if (have_sym && !point_group_is_abelian_for_labels)
+        logging(LogLevel::Warning, tag + " :",
+            std::format("Disabling CI symmetry screening for {} because MO labels come from an Abelian subgroup.",
+                        calc._molecule._point_group));
     if (use_sym)
         logging(LogLevel::Info, tag + " :",
             std::format("Target irrep: {}",
@@ -1352,7 +1402,7 @@ std::expected<void, std::string> run_mcscf_loop(
                                          double lm_shift) {
         const int npairs = static_cast<int>(opt_pairs.size());
         Eigen::MatrixXd zero = Eigen::MatrixXd::Zero(nbasis, nbasis);
-        if (npairs == 0 || npairs > 24) return zero;
+        if (npairs == 0 || npairs > 96) return zero;
 
         const Eigen::VectorXd g0 = pack_pairs(st_cur.g_orb);
         if (g0.cwiseAbs().maxCoeff() < 1e-10) return zero;
@@ -1397,6 +1447,27 @@ std::expected<void, std::string> run_mcscf_loop(
         return kappa;
     };
 
+    auto build_gradient_fallback_step = [&](const Eigen::MatrixXd& G_trial) {
+        Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        for (const auto& pair : opt_pairs)
+        {
+            const double step = -G_trial(pair.p, pair.q);
+            kappa(pair.p, pair.q) = step;
+            kappa(pair.q, pair.p) = -step;
+        }
+
+        const double max_elem = kappa.cwiseAbs().maxCoeff();
+        if (max_elem > 0.20)
+            kappa *= 0.20 / max_elem;
+
+        const double trust_radius = 0.80;
+        const double frob = kappa.norm();
+        if (frob > trust_radius)
+            kappa *= trust_radius / frob;
+
+        return kappa;
+    };
+
     // ── Main MCSCF loop ───────────────────────────────────────────────────────
     double E_prev = 0.0;
     bool converged = false;
@@ -1421,6 +1492,7 @@ std::expected<void, std::string> run_mcscf_loop(
         // ── (3) Microiterations ───────────────────────────────────────────────
         Eigen::MatrixXd G_curr  = st_current.g_orb;     // working gradient (updated by FEP1)
         Eigen::MatrixXd kappa_total = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        Eigen::MatrixXd kappa_first = Eigen::MatrixXd::Zero(nbasis, nbasis);
         const Eigen::MatrixXd kappa_newton = build_numeric_newton_step(st_current, C, level_shift);
 
         for (unsigned int micro = 0; micro < nmicro; ++micro)
@@ -1430,6 +1502,8 @@ std::expected<void, std::string> run_mcscf_loop(
                 G_curr, st_current.F_I_mo, st_current.F_A_mo,
                 n_core, n_act, n_virt,
                 level_shift, max_rot, all_mo_irr, use_sym);
+            if (micro == 0)
+                kappa_first = kappa;
 
             // (b) First-order h_eff change: δh = [κ, F^I]_{act,act}
             Eigen::MatrixXd dh = delta_h_eff(kappa, st_current.F_I_mo, n_core, n_act);
@@ -1486,6 +1560,7 @@ std::expected<void, std::string> run_mcscf_loop(
         // Cap total accumulated rotation
         double max_k = kappa_total.cwiseAbs().maxCoeff();
         if (max_k > max_rot) kappa_total *= max_rot / max_k;
+        const Eigen::MatrixXd kappa_grad = build_gradient_fallback_step(st_current.g_orb);
 
         // ── (4) Apply accumulated rotation with energy-aware backtracking ─────
         bool accepted = false;
@@ -1498,15 +1573,28 @@ std::expected<void, std::string> run_mcscf_loop(
         std::vector<Eigen::MatrixXd> step_candidates;
         if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12)
             step_candidates.push_back(kappa_newton);
+        if (kappa_first.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(kappa_first);
         if (kappa_total.cwiseAbs().maxCoeff() > 1e-12)
             step_candidates.push_back(kappa_total);
+        if (kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(kappa_grad);
         if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12 &&
             kappa_total.cwiseAbs().maxCoeff() > 1e-12)
             step_candidates.push_back(0.5 * (kappa_newton + kappa_total));
+        if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 &&
+            kappa_total.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(0.5 * (kappa_first + kappa_total));
+        if (kappa_total.cwiseAbs().maxCoeff() > 1e-12 &&
+            kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(0.5 * (kappa_total + kappa_grad));
+        if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 &&
+            kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(0.5 * (kappa_first + kappa_grad));
 
         for (const Eigen::MatrixXd& step_base : step_candidates)
         {
-            for (double scale : {1.0, 0.5, 0.25, 0.125, 0.0625})
+            for (double scale : {1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625})
             {
                 Eigen::MatrixXd kappa_try = scale * step_base;
                 if (kappa_try.cwiseAbs().maxCoeff() < 1e-12) continue;
@@ -1516,15 +1604,23 @@ std::expected<void, std::string> run_mcscf_loop(
                 if (!trial_res) continue;
 
                 const auto& trial = *trial_res;
-                const bool energy_improved = trial.E_cas < best_E - 1e-10;
                 const double trial_merit =
                     trial.E_cas + merit_weight * trial.gnorm * trial.gnorm;
                 const bool merit_improved = trial_merit < best_merit - 1e-10;
-                const double flat_energy_window = std::max(10.0 * as.tol_mcscf_energy, 1e-10);
+                const double flat_energy_window =
+                    std::max(1000.0 * as.tol_mcscf_energy, 1e-6);
                 const bool gradient_reduced = trial.gnorm < best_g - 1e-12;
+                const double gradient_worsen_window =
+                    std::max(0.05 * std::max(best_g, 1e-8), 1e-6);
+                const bool energy_improved =
+                    trial.E_cas < best_E - 1e-10;
+                const bool energy_improved_without_hurting_gradient =
+                    energy_improved && trial.gnorm <= best_g + gradient_worsen_window;
                 const bool stationary_but_better_grad =
                     std::abs(trial.E_cas - best_E) <= flat_energy_window && gradient_reduced;
-                if (!energy_improved && !merit_improved && !stationary_but_better_grad) continue;
+                if (!energy_improved_without_hurting_gradient &&
+                    !merit_improved &&
+                    !stationary_but_better_grad) continue;
 
                 accepted = true;
                 best_E = trial.E_cas;

@@ -176,6 +176,23 @@
       "checks": [
         {"type": "metric_eq", "metric": "point_group", "expected": "C2v"}
       ]
+    },
+    {
+      "id": "ethylene_casscf_d2d_natural_occupations",
+      "input": "tests/inputs/ethylene_rasscf.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 D2d",
+        "Disabling CI symmetry screening for D2d because MO labels come from an Abelian subgroup.",
+        "CASSCF :                      Converged.",
+        "MO   1     1.000000",
+        "MO   2     1.000000"
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "D2d"},
+        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -77.5145223873, "atol": 1e-9}
+      ]
     }
   ]
 }
