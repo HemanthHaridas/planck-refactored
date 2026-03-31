@@ -4,11 +4,14 @@ parser.py — Planck log file parser.
 Reads a saved stdout log from the hartree-fock binary and returns a
 ParsedRun dataclass containing all visualisable data.
 
-Log line anatomy (INFO level):
-    [YYYY-MM-DD HH:MM:SS] [Planck][INF]       <label:30><message>
-    |←    22 chars      →| |← 20 chars →||←  30 chars →||← rest →|
+Log line anatomy:
+    New format:
+        <label:30><message>
+    Legacy format:
+        [YYYY-MM-DD HH:MM:SS] [Planck][INF]       <label:30><message>
+        |←    22 chars      →| |← 20 chars →||←  30 chars →||← rest →|
 
-SCF iteration rows are raw (no timestamp):
+SCF iteration rows are raw:
     {iter:6}{energy:20.10f}{dE:15}{rmsD:15.3e}{maxD:15.3e}
     {diis:15.3e}{damp:12.3f}{t:12.3f}
 
@@ -127,20 +130,21 @@ class ParsedRun:
 # Compiled regexes
 # ---------------------------------------------------------------------------
 
-# Matches any INFO/WARN log line.
-# Layout after "[Planck][INF]": 7 padding spaces, label (30 chars), message.
+# Matches log lines in either the new bare format or the legacy prefixed one.
 _LOG_RE = re.compile(
-    r'^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] '
+    r'^(?:'
+    r'\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] '
     r'\[Planck\]\[(?:INF|WARN|ERR|MAT)\]'
     r'.{7}'     # 7 spaces (setw(20) padding after the 13-char prefix)
+    r')?'
     r'(.{30})'  # label field — always 30 chars (may overflow into message)
     r'(.*)$'    # message (may be empty)
 )
 
-# 110-dash separator (SCF table header/footer); no timestamp.
+# 110-dash separator (SCF table header/footer).
 _DASH110_RE = re.compile(r'^-{110}\s*$')
 
-# SCF iteration row (no timestamp).
+# SCF iteration row.
 _SCF_ITER_RE = re.compile(
     r'^\s*(\d+)'
     r'\s+([-\d.]+)'
@@ -198,7 +202,7 @@ _GRAD_MSG_RE = re.compile(
     r'^\s*([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s*$'
 )
 
-# Raw energy table lines (no timestamp).
+# Raw energy table lines.
 _ELECTRONIC_ENERGY_RE = re.compile(r'^\s*Electronic Energy\s+([-+\d.eE]+)')
 _NUCLEAR_REPULSION_RE = re.compile(r'^\s*Nuclear Repulsion\s+([-+\d.eE]+)')
 _TOTAL_ENERGY_RE = re.compile(r'^\s*Total Energy\s+([-+\d.eE]+)')
@@ -239,7 +243,7 @@ class _State:
 # ---------------------------------------------------------------------------
 
 def _parse_log_line(raw: str):
-    """Return (label_stripped, message) for an INFO line, or None."""
+    """Return (label_stripped, message) for a structured log line, or None."""
     m = _LOG_RE.match(raw)
     if not m:
         return None

@@ -55,14 +55,14 @@ Run it:
 Expected output (abbreviated):
 
 ```
-[INF]  SCF Mode :          Conventional
-[INF]  2e Integrals :      Building ERI tensor (0.0 MB)
-[INF]  2e Integrals :      ERI tensor ready
+SCF Mode :                    Conventional
+2e Integrals :                Building ERI tensor (0.0 MB)
+2e Integrals :                ERI tensor ready
 
 Iter  Energy              DeltaE         RMS(D)      ...
 1     -73.24098642        73.24098642    ...
 ...
-[INF]  SCF Converged after 18 iterations
+SCF Converged after 18 iterations
 
     MO    Symmetry              Energy (Eh)
      1          A1                  -20.252
@@ -73,10 +73,23 @@ Iter  Energy              DeltaE         RMS(D)      ...
      6          A1                    0.582  <-- LUMO
      7          B2                    0.693
 
-  Total Energy    -74.9659012173    -2039.190    -47012.6
+  Total Energy                        -74.9659012173    -2039.190    -47012.6
+Dipole Moment (origin at 0.000000, 0.000000, 0.000000 bohr)
+Component        Electronic (au)      Nuclear (au)        Total (au)     Debye
+X                       0.000000          0.000000          0.000000  0.000000
+Y                       0.000000          0.000000          0.000000  0.000000
+Z                      -1.23...           1.90...           0.67...   1.71...
+Quadrupole Moment (traceless Cartesian tensor, au)
+Component             Electronic           Nuclear             Total
+XX                     ...
+XY                     ...
+XZ                     ...
+YY                     ...
+YZ                     ...
+ZZ                     ...
 ```
 
-The total energy is printed in Hartree, eV, and kcal/mol.
+The total energy is printed in Hartree, eV, and kcal/mol. After convergence, Planck also prints dipole and quadrupole components automatically from the final AO density matrix. Dipoles are reported in atomic units and Debye; quadrupoles are reported as a traceless Cartesian tensor in atomic units.
 
 ### 3. Open-shell calculation (UHF)
 
@@ -548,15 +561,31 @@ Run with:
 Expected output (abbreviated):
 
 ```
-[INF]  Theory :            Kohn-Sham DFT
-[INF]  Reference :         RKS
-[INF]  DFT Grid :          Normal
-[INF]  Exchange :          PBE
-[INF]  Correlation :       PBE
+Theory :                      Kohn-Sham DFT
+Reference :                   RKS
+DFT Grid :                    Normal
+Exchange :                    PBE
+Correlation :                 PBE
 ...
-[INF]  DFT Energy :        -74.xxxxxxxxxx Eh
-[INF]  Converged :         true
+RKS Converged :               E = -75.xxxxxxxxxx Eh after N iterations
+Dipole Moment (origin at 0.000000, 0.000000, 0.000000 bohr)
+Component        Electronic (au)      Nuclear (au)        Total (au)     Debye
+X                       0.000000          0.000000          0.000000  0.000000
+Y                       0.000000          0.000000          0.000000  0.000000
+Z                      -1.24...           1.90...           0.66...   1.68...
+Quadrupole Moment (traceless Cartesian tensor, au)
+Component             Electronic           Nuclear             Total
+XX                     ...
+XY                     ...
+XZ                     ...
+YY                     ...
+YZ                     ...
+ZZ                     ...
+DFT Energy :                  -75.xxxxxxxxxx Eh
+Converged :                   true
 ```
+
+The same post-SCF multipole analysis is available in `planck-dft`, because the dipole and quadrupole tensors are evaluated from the converged KS density just like in the HF executable.
 
 #### Common functional combinations
 

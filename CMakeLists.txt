@@ -285,7 +285,18 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dft_grid_invariants.cpp
     )
 
+    add_executable(planck-multipole-integrals
+        ${CMAKE_SOURCE_DIR}/tests/multipole_integrals.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     target_include_directories(planck-dft-grid-invariants PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-multipole-integrals PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -296,9 +307,25 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-multipole-integrals PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-multipole-integrals OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-multipole-integrals PRIVATE USE_OPENMP)
+    endif()
+
     add_test(
         NAME planck-dft-grid-invariants
         COMMAND planck-dft-grid-invariants
+    )
+
+    add_test(
+        NAME planck-multipole-integrals
+        COMMAND planck-multipole-integrals
     )
 endif()
 

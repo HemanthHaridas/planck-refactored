@@ -4,7 +4,7 @@
 
 #include "shellpair.h"
 
-std::vector <HartreeFock::ShellPair> build_shellpairs(HartreeFock::Basis &basis)
+std::vector <HartreeFock::ShellPair> build_shellpairs(const HartreeFock::Basis &basis)
 {
     std::size_t n_shells = basis.nbasis();                  // Number of contracted gaussians
     std::vector <HartreeFock::ShellPair> shell_pairs{};     // Shellpair container
