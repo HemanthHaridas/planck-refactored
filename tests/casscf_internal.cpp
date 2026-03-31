@@ -77,6 +77,15 @@ int main()
     }
 
     {
+        const std::vector<double> puvw = {2.0};
+        const std::vector<double> gamma = {3.0};
+        const Eigen::MatrixXd q = contract_q_matrix(puvw, gamma, 1, 1);
+
+        ok &= expect(q.rows() == 1 && q.cols() == 1 && std::abs(q(0, 0) - 6.0) < 1e-12,
+                     "cached Q contraction should reproduce the expected scalar contraction");
+    }
+
+    {
         Eigen::MatrixXd c_old = Eigen::MatrixXd::Zero(3, 2);
         c_old(0, 0) = 1.0;
         c_old(1, 1) = 1.0;
@@ -94,6 +103,56 @@ int main()
                      "root matching should preserve state identity across swapped eigenpairs");
         ok &= expect(std::abs(overlaps(0, 1)) > 0.999 && std::abs(overlaps(1, 0)) > 0.999,
                      "root overlaps should be computed from CI-vector inner products");
+    }
+
+    {
+        Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, 3);
+        H(1, 1) = 2.0;
+        H(1, 2) = 0.2;
+        H(2, 1) = 0.2;
+        H(2, 2) = 4.0;
+
+        Eigen::VectorXd c0 = Eigen::VectorXd::Zero(3);
+        c0(0) = 1.0;
+        const double E0 = 0.0;
+        const Eigen::VectorXd H_diag = H.diagonal();
+        Eigen::VectorXd sigma(3);
+        sigma << 0.7, 0.3, -0.2;
+
+        const CIResponseResult response =
+            solve_ci_response_iterative(H, c0, E0, H_diag, sigma, 1e-12, 16, 1e-6);
+
+        const Eigen::Vector2d rhs = -project_orthogonal(sigma, c0).tail<2>();
+        const Eigen::Matrix2d subblock = H.bottomRightCorner<2, 2>();
+        Eigen::VectorXd exact = Eigen::VectorXd::Zero(3);
+        exact.tail<2>() = subblock.colPivHouseholderQr().solve(rhs);
+
+        ok &= expect(response.converged,
+                     "iterative CI response should converge on a small projected linear problem");
+        ok &= expect(response.iterations > 0,
+                     "iterative CI response should report at least one iteration when solving a nonzero response");
+        ok &= expect(response.residual_norm < 1e-10,
+                     "iterative CI response should drive the projected residual norm small");
+        ok &= expect(std::abs(c0.dot(response.c1)) < 1e-12,
+                     "iterative CI response should preserve the orthogonality gauge");
+        ok &= expect((response.c1 - exact).norm() < 1e-10,
+                     "iterative CI response should match the dense projected solution on a small test problem");
+    }
+
+    {
+        Eigen::MatrixXd gamma(2, 2);
+        gamma << 1.2, 0.3,
+                 0.3, 0.8;
+        const NaturalOrbitalData natural = diagonalize_natural_orbitals(gamma);
+        const Eigen::MatrixXd rebuilt =
+            natural.rotation * natural.occupations.asDiagonal() * natural.rotation.transpose();
+
+        ok &= expect(natural.occupations(0) >= natural.occupations(1),
+                     "natural occupations should be returned in descending order");
+        ok &= expect(std::abs(natural.occupations.sum() - gamma.trace()) < 1e-12,
+                     "natural occupations should preserve the active electron count");
+        ok &= expect((rebuilt - gamma).norm() < 1e-12,
+                     "natural-orbital rotation should diagonalize the 1-RDM without changing it on reconstruction");
     }
 
     return ok ? 0 : 1;

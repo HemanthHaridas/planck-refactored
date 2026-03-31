@@ -2,9 +2,12 @@
 #define HF_POSTHF_CASSCF_INTERNAL_H
 
 #include <Eigen/Core>
+#include <Eigen/Eigenvalues>
+#include <Eigen/QR>
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -73,6 +76,57 @@ struct SymmetryContext
     bool abelian_1d_only = false;
     int totally_symmetric_irrep = 0;
 };
+
+struct ActiveIntegralCache
+{
+    std::vector<double> puvw;
+    int nbasis = 0;
+    int nact = 0;
+    bool valid = false;
+};
+
+inline Eigen::MatrixXd contract_q_matrix(
+    const std::vector<double>& puvw,
+    const std::vector<double>& Gamma,
+    int nbasis,
+    int nact)
+{
+    Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(nbasis, nact);
+    if (nbasis <= 0 || nact <= 0) return Q;
+
+    const std::size_t expected_puvw = static_cast<std::size_t>(nbasis) * nact * nact * nact;
+    const std::size_t expected_gamma = static_cast<std::size_t>(nact) * nact * nact * nact;
+    if (puvw.size() != expected_puvw || Gamma.size() != expected_gamma) return Q;
+
+    for (int p = 0; p < nbasis; ++p)
+    for (int t = 0; t < nact; ++t)
+    {
+        double q_pt = 0.0;
+        for (int u = 0; u < nact; ++u)
+        for (int v = 0; v < nact; ++v)
+        for (int w = 0; w < nact; ++w)
+            q_pt += Gamma[((t * nact + u) * nact + v) * nact + w]
+                 * puvw[((p * nact + u) * nact + v) * nact + w];
+        Q(p, t) = q_pt;
+    }
+
+    return Q;
+}
+
+struct NaturalOrbitalData
+{
+    Eigen::VectorXd occupations;
+    Eigen::MatrixXd rotation;
+};
+
+inline NaturalOrbitalData diagonalize_natural_orbitals(const Eigen::MatrixXd& gamma)
+{
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(gamma);
+    NaturalOrbitalData result;
+    result.occupations = eig.eigenvalues().reverse();
+    result.rotation = eig.eigenvectors().rowwise().reverse().eval();
+    return result;
+}
 
 inline int determinant_symmetry(
     CIString alpha,
@@ -147,6 +201,160 @@ inline std::vector<int> match_roots_by_max_overlap(const Eigen::MatrixXd& overla
     }
 
     return assignment;
+}
+
+inline Eigen::VectorXd project_orthogonal(
+    const Eigen::VectorXd& v,
+    const Eigen::VectorXd& c0)
+{
+    if (v.size() != c0.size() || c0.size() == 0)
+        return v;
+    return v - c0.dot(v) * c0;
+}
+
+inline Eigen::VectorXd apply_response_diag_preconditioner(
+    const Eigen::VectorXd& rhs,
+    const Eigen::VectorXd& H_diag,
+    double E0,
+    double precond_floor,
+    double& max_denominator_regularization)
+{
+    Eigen::VectorXd step = Eigen::VectorXd::Zero(rhs.size());
+    for (int i = 0; i < rhs.size(); ++i)
+    {
+        double denom = H_diag(i) - E0;
+        const double abs_denom = std::abs(denom);
+        if (abs_denom < precond_floor)
+        {
+            max_denominator_regularization = std::max(
+                max_denominator_regularization,
+                precond_floor - abs_denom);
+            denom = (denom >= 0.0) ? precond_floor : -precond_floor;
+        }
+        step(i) = rhs(i) / denom;
+    }
+    return step;
+}
+
+struct CIResponseResult
+{
+    Eigen::VectorXd c1;
+    double residual_norm = std::numeric_limits<double>::infinity();
+    int iterations = 0;
+    double max_denominator_regularization = 0.0;
+    bool converged = false;
+};
+
+inline Eigen::VectorXd compute_ci_response_residual(
+    const Eigen::MatrixXd& H,
+    const Eigen::VectorXd& c1,
+    const Eigen::VectorXd& c0,
+    double E0,
+    const Eigen::VectorXd& sigma)
+{
+    Eigen::VectorXd rhs = -project_orthogonal(sigma, c0);
+    Eigen::VectorXd residual = rhs - (H * c1 - E0 * c1);
+    return project_orthogonal(residual, c0);
+}
+
+inline CIResponseResult ci_response_diag_precond_single_step(
+    const Eigen::MatrixXd& H,
+    const Eigen::VectorXd& c0,
+    double E0,
+    const Eigen::VectorXd& H_diag,
+    const Eigen::VectorXd& sigma,
+    double precond_floor = 1e-4)
+{
+    CIResponseResult result;
+    result.c1 = Eigen::VectorXd::Zero(c0.size());
+
+    const Eigen::VectorXd rhs = -project_orthogonal(sigma, c0);
+    result.c1 = apply_response_diag_preconditioner(
+        rhs, H_diag, E0, precond_floor, result.max_denominator_regularization);
+    result.c1 = project_orthogonal(result.c1, c0);
+    result.residual_norm = compute_ci_response_residual(H, result.c1, c0, E0, sigma).norm();
+    result.iterations = 1;
+    result.converged = std::isfinite(result.residual_norm);
+    return result;
+}
+
+inline CIResponseResult solve_ci_response_iterative(
+    const Eigen::MatrixXd& H,
+    const Eigen::VectorXd& c0,
+    double E0,
+    const Eigen::VectorXd& H_diag,
+    const Eigen::VectorXd& sigma,
+    double tol = 1e-8,
+    int max_iter = 32,
+    double precond_floor = 1e-4)
+{
+    CIResponseResult result;
+    result.c1 = Eigen::VectorXd::Zero(c0.size());
+
+    if (H.rows() != H.cols() || H.rows() != c0.size() || H.rows() != H_diag.size()
+        || H.rows() != sigma.size())
+        return result;
+
+    const Eigen::VectorXd rhs = -project_orthogonal(sigma, c0);
+    result.residual_norm = rhs.norm();
+    if (!std::isfinite(result.residual_norm))
+        return result;
+    if (result.residual_norm < tol)
+    {
+        result.converged = true;
+        return result;
+    }
+
+    Eigen::VectorXd guess = apply_response_diag_preconditioner(
+        rhs, H_diag, E0, precond_floor, result.max_denominator_regularization);
+    guess = project_orthogonal(guess, c0);
+    const double guess_norm = guess.norm();
+    if (!(guess_norm > 1e-14))
+        return result;
+
+    Eigen::MatrixXd V(guess.size(), 1);
+    V.col(0) = guess / guess_norm;
+
+    for (int iter = 1; iter <= max_iter; ++iter)
+    {
+        const Eigen::MatrixXd AV = H * V - E0 * V;
+        const Eigen::MatrixXd M = V.transpose() * AV;
+        const Eigen::VectorXd b = V.transpose() * rhs;
+        const Eigen::VectorXd y = M.colPivHouseholderQr().solve(b);
+        if (!y.allFinite())
+            break;
+
+        result.c1 = project_orthogonal(V * y, c0);
+        Eigen::VectorXd residual = rhs - (H * result.c1 - E0 * result.c1);
+        residual = project_orthogonal(residual, c0);
+        result.residual_norm = residual.norm();
+        result.iterations = iter;
+        if (!std::isfinite(result.residual_norm))
+            break;
+        if (result.residual_norm < tol)
+        {
+            result.converged = true;
+            return result;
+        }
+
+        Eigen::VectorXd correction = apply_response_diag_preconditioner(
+            residual, H_diag, E0, precond_floor, result.max_denominator_regularization);
+        correction = project_orthogonal(correction, c0);
+        for (int k = 0; k < V.cols(); ++k)
+            correction -= V.col(k).dot(correction) * V.col(k);
+        for (int k = 0; k < V.cols(); ++k)
+            correction -= V.col(k).dot(correction) * V.col(k);
+
+        const double corr_norm = correction.norm();
+        if (!(corr_norm > 1e-14))
+            break;
+
+        const int m = static_cast<int>(V.cols());
+        V.conservativeResize(Eigen::NoChange, m + 1);
+        V.col(m) = correction / corr_norm;
+    }
+
+    return result;
 }
 
 } // namespace HartreeFock::Correlation::CASSCFInternal

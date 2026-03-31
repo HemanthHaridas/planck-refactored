@@ -44,9 +44,14 @@ namespace
 
 using HartreeFock::Correlation::CASSCFInternal::CIString;
 using HartreeFock::Correlation::CASSCFInternal::RASParams;
+using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
+using HartreeFock::Correlation::CASSCFInternal::CIResponseResult;
 using HartreeFock::Correlation::CASSCFInternal::SymmetryContext;
 using HartreeFock::Correlation::CASSCFInternal::admissible_ras_pair;
+using HartreeFock::Correlation::CASSCFInternal::ci_response_diag_precond_single_step;
+using HartreeFock::Correlation::CASSCFInternal::contract_q_matrix;
 using HartreeFock::Correlation::CASSCFInternal::compute_root_overlap;
+using HartreeFock::Correlation::CASSCFInternal::diagonalize_natural_orbitals;
 using HartreeFock::Correlation::CASSCFInternal::determinant_symmetry;
 using HartreeFock::Correlation::CASSCFInternal::kCIStringBits;
 using HartreeFock::Correlation::CASSCFInternal::kMaxPackedSpatialOrbitals;
@@ -54,6 +59,7 @@ using HartreeFock::Correlation::CASSCFInternal::kMaxSeparateSpinOrbitals;
 using HartreeFock::Correlation::CASSCFInternal::low_bit_mask;
 using HartreeFock::Correlation::CASSCFInternal::match_roots_by_max_overlap;
 using HartreeFock::Correlation::CASSCFInternal::single_bit_mask;
+using HartreeFock::Correlation::CASSCFInternal::solve_ci_response_iterative;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module 1: Slater determinant strings and matrix elements
@@ -745,28 +751,28 @@ double compute_core_energy(const Eigen::MatrixXd& h_mo,
 // Module 6: Q matrix  Q[p,t] = Σ_{uvw} Γ[t,u,v,w] (p u|v w)
 // ─────────────────────────────────────────────────────────────────────────────
 
-Eigen::MatrixXd compute_Q_matrix(
+ActiveIntegralCache build_active_integral_cache(
     const std::vector<double>& eri,
     const Eigen::MatrixXd& C,
-    const std::vector<double>& Gamma,
     int n_core, int n_act, int nbasis)
 {
-    Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(nbasis, n_act);
-    if (n_act == 0) return Q;
+    ActiveIntegralCache cache;
+    cache.nbasis = nbasis;
+    cache.nact = n_act;
+    if (n_act == 0) return cache;
+
     Eigen::MatrixXd C_act = C.middleCols(n_core, n_act);
-    std::vector<double> T = HartreeFock::Correlation::transform_eri(eri, nbasis, C, C_act, C_act, C_act);
-    const int na = n_act;
-    for (int p = 0; p < nbasis; ++p)
-    for (int t = 0; t < na; ++t)
-    {
-        double q_pt = 0.0;
-        for (int u = 0; u < na; ++u)
-        for (int v = 0; v < na; ++v)
-        for (int w = 0; w < na; ++w)
-            q_pt += Gamma[((t*na+u)*na+v)*na+w] * T[((p*na+u)*na+v)*na+w];
-        Q(p, t) = q_pt;
-    }
-    return Q;
+    cache.puvw = HartreeFock::Correlation::transform_eri(eri, nbasis, C, C_act, C_act, C_act);
+    cache.valid = true;
+    return cache;
+}
+
+Eigen::MatrixXd compute_Q_matrix(
+    const ActiveIntegralCache& cache,
+    const std::vector<double>& Gamma)
+{
+    if (!cache.valid) return Eigen::MatrixXd::Zero(cache.nbasis, cache.nact);
+    return contract_q_matrix(cache.puvw, Gamma, cache.nbasis, cache.nact);
 }
 
 
@@ -865,13 +871,39 @@ Eigen::MatrixXd hessian_action(
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Module 9: CI response  c¹ ≈ −[diag(H_CI − E)]⁻¹ H^R c⁰
+// Module 9: CI response
 //
-// H^R is the first-order change in the CI Hamiltonian due to orbital rotation R.
-// Here we use only the one-body part: δh_eff = [κ^T F^I + F^I κ]_{act,act}
-// and compute the σ-vector H^{δh} c⁰ by explicit matrix-vector product with
-// the one-body CI Hamiltonian evaluated at δh_eff.
+// Implemented modes:
+//   - ApproximateDressedGradient: single diagonal-preconditioned correction
+//   - IterativeResponse: projected Davidson solve of (H - E)c¹ = -Qσ
+//   - TargetFullSecondOrder: reserved for future work once omitted response
+//     terms, especially two-electron orbital-response pieces, are included
 // ─────────────────────────────────────────────────────────────────────────────
+
+enum class ResponseMode
+{
+    ApproximateDressedGradient,
+    IterativeResponse,
+    TargetFullSecondOrder,
+};
+
+const char* response_mode_name(ResponseMode mode)
+{
+    switch (mode)
+    {
+        case ResponseMode::ApproximateDressedGradient:
+            return "approximate dressed-gradient";
+        case ResponseMode::IterativeResponse:
+            return "iterative-response dressed-gradient";
+        case ResponseMode::TargetFullSecondOrder:
+            return "target full second-order";
+    }
+    return "unknown";
+}
+
+// TODO: even in IterativeResponse mode this is not yet a full second-order
+// solver. Missing terms still include explicit two-electron orbital-response
+// contributions beyond the current one-body driven sigma construction.
 
 // Compute the one-body sigma vector using the same one-body index convention as
 // slater_condon_element and build_ci_hamiltonian_with_dets:
@@ -929,30 +961,6 @@ Eigen::MatrixXd delta_h_eff(
     Eigen::MatrixXd comm = kappa * F_I_mo - F_I_mo * kappa;
     return comm.block(n_core, n_core, n_act, n_act);
 }
-
-// Compute CI response c¹ ≈ -[diag(H_CI - E)]⁻¹ H^κ c⁰
-// using a single preconditioning step (approximate Davidson step).
-Eigen::VectorXd ci_response(
-    const Eigen::VectorXd& c0,
-    double E0,
-    const Eigen::VectorXd& H_diag,    // diagonal of H_CI
-    const Eigen::VectorXd& sigma,     // H^κ c⁰ (driving vector)
-    double precond_floor = 1e-4)
-{
-    const int dim = static_cast<int>(c0.size());
-    Eigen::VectorXd c1 = Eigen::VectorXd::Zero(dim);
-    for (int I = 0; I < dim; ++I)
-    {
-        double denom = E0 - H_diag(I);
-        if (std::abs(denom) < precond_floor)
-            denom = (denom >= 0.0) ? precond_floor : -precond_floor;
-        c1(I) = -sigma(I) / denom;
-    }
-    // Project out the ground state to maintain orthogonality
-    c1 -= c0.dot(c1) * c0;
-    return c1;
-}
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module 10: Dressed gradient  G̃ = G + H·R  (approximate dressed-gradient update)
@@ -1334,13 +1342,14 @@ std::expected<void, std::string> run_mcscf_loop(
     build_spin_strings_unfiltered(n_act, n_alpha_act, n_beta_act, a_strs, b_strs);
 
     const unsigned int nmicro = std::max(1u, as.mcscf_micro_per_macro);
+    const ResponseMode response_mode = ResponseMode::IterativeResponse;
 
     logging(LogLevel::Info, tag + " :",
         std::format("Active space: ({:d}e, {:d}o)  n_core={:d}  n_virt={:d}  CI dim ≤ {:d}",
                     as.nactele, n_act, n_core, n_virt, ci_dim_est));
     logging(LogLevel::Info, tag + " :",
-        std::format("Algorithm: macro/micro scaffold with approximate dressed-gradient CI response  nmicro={:d}",
-                    nmicro));
+        std::format("Algorithm: macro/micro scaffold with {} CI response  nmicro={:d}",
+                    response_mode_name(response_mode), nmicro));
     if (have_sym && !point_group_is_abelian_for_labels)
         logging(LogLevel::Warning, tag + " :",
             std::format("Disabling CI symmetry screening for {} because MO labels come from an Abelian subgroup.",
@@ -1348,7 +1357,7 @@ std::expected<void, std::string> run_mcscf_loop(
     if (use_sym)
         logging(LogLevel::Info, tag + " :",
             std::format("Target irrep: {}",
-                as.target_irrep.empty() ? sym_ctx->names[0] : as.target_irrep));
+                as.target_irrep.empty() ? sym_ctx->names[target_irr] : as.target_irrep));
     if (nroots > 1)
         logging(LogLevel::Info, tag + " :",
             std::format("State-averaged over {:d} roots", nroots));
@@ -1360,6 +1369,7 @@ std::expected<void, std::string> run_mcscf_loop(
     {
         Eigen::MatrixXd F_I_mo, F_A_mo, gamma, g_orb;
         std::vector<double> Gamma_vec;
+        ActiveIntegralCache active_integrals;
         Eigen::MatrixXd H_CI;          // kept for CI response in micro loop
         Eigen::VectorXd H_CI_diag;
         Eigen::VectorXd ci_energies;
@@ -1445,6 +1455,7 @@ std::expected<void, std::string> run_mcscf_loop(
         Eigen::MatrixXd h_eff = st.F_I_mo.block(n_core, n_core, n_act, n_act);
         Eigen::MatrixXd C_act = C_trial.middleCols(n_core, n_act);
         std::vector<double> ga = HartreeFock::Correlation::transform_eri_internal(eri, nbasis, C_act);
+        st.active_integrals = build_active_integral_cache(eri, C_trial, n_core, n_act, nbasis);
 
         st.H_CI = build_ci_hamiltonian_with_dets(
             a_strs, b_strs, ras, h_eff, ga, n_act,
@@ -1472,7 +1483,7 @@ std::expected<void, std::string> run_mcscf_loop(
         st.E_cas = calc._nuclear_repulsion + E_core + E_act;
 
         st.F_A_mo = build_active_fock_mo(C_trial, st.gamma, eri, n_core, n_act, nbasis);
-        Eigen::MatrixXd Q = compute_Q_matrix(eri, C_trial, st.Gamma_vec, n_core, n_act, nbasis);
+        Eigen::MatrixXd Q = compute_Q_matrix(st.active_integrals, st.Gamma_vec);
         st.g_orb = compute_orbital_gradient(
             st.F_I_mo, st.F_A_mo, Q, st.gamma, n_core, n_act, n_virt,
             all_mo_irr, use_sym);
@@ -1611,6 +1622,11 @@ std::expected<void, std::string> run_mcscf_loop(
 
         for (unsigned int micro = 0; micro < nmicro; ++micro)
         {
+            double max_response_residual = 0.0;
+            int max_response_iterations = 0;
+            double max_response_regularization = 0.0;
+            bool response_fallback_used = false;
+
             // (a) AH orbital step from current gradient
             Eigen::MatrixXd kappa = augmented_hessian_step(
                 G_curr, st_current.F_I_mo, st_current.F_A_mo,
@@ -1631,8 +1647,45 @@ std::expected<void, std::string> run_mcscf_loop(
                 const Eigen::VectorXd& c0r = st_current.ci_vecs.col(r);
                 Eigen::VectorXd sigma = ci_sigma_1body(
                     dh, c0r, a_strs, b_strs, st_current.dets, n_act);
-                c1_vecs.col(r) = ci_response(
-                    c0r, st_current.ci_energies(r), st_current.H_CI_diag, sigma);
+                CIResponseResult response_result;
+                if (response_mode == ResponseMode::IterativeResponse)
+                {
+                    response_result = solve_ci_response_iterative(
+                        st_current.H_CI, c0r, st_current.ci_energies(r),
+                        st_current.H_CI_diag, sigma, 1e-8, 64, 1e-4);
+                    if (!response_result.converged)
+                    {
+                        response_result = ci_response_diag_precond_single_step(
+                            st_current.H_CI, c0r, st_current.ci_energies(r),
+                            st_current.H_CI_diag, sigma, 1e-4);
+                        response_fallback_used = true;
+                    }
+                }
+                else
+                    response_result = ci_response_diag_precond_single_step(
+                        st_current.H_CI, c0r, st_current.ci_energies(r),
+                        st_current.H_CI_diag, sigma, 1e-4);
+
+                c1_vecs.col(r) = response_result.c1;
+
+                max_response_residual =
+                    std::max(max_response_residual, response_result.residual_norm);
+                max_response_iterations =
+                    std::max(max_response_iterations, response_result.iterations);
+                max_response_regularization =
+                    std::max(max_response_regularization, response_result.max_denominator_regularization);
+            }
+            if (response_mode == ResponseMode::IterativeResponse)
+            {
+                logging(LogLevel::Info, tag + " :",
+                    std::format("CI response: max residual {:.2e}, max iter {:d}, max regularization {:.2e}{}",
+                                max_response_residual,
+                                max_response_iterations,
+                                max_response_regularization,
+                                response_fallback_used ? " (fallback used)" : ""));
+                if (response_fallback_used)
+                    logging(LogLevel::Warning, tag + " :",
+                        "CI response Davidson solve did not fully converge for at least one root; using single-step fallback.");
             }
 
             // (d) First-order 2-RDM: Γ¹ = Σ_r w_r (|c¹_r><c⁰_r| + |c⁰_r><c¹_r|)
@@ -1646,7 +1699,7 @@ std::expected<void, std::string> run_mcscf_loop(
             }
 
             // (e) Q-matrix response: Q¹_{pt} = Σ_{uvw} Γ¹_{tuvw} (pu|vw)
-            Eigen::MatrixXd Q1 = compute_Q_matrix(eri, C, Gamma1, n_core, n_act, nbasis);
+            Eigen::MatrixXd Q1 = compute_Q_matrix(st_current.active_integrals, Gamma1);
 
             // (f) CI gradient contribution: G^CI_{pq} = 2(Q¹_{pq} - Q¹_{qp})
             //     For q = n_core+t ∈ active: G^CI[p,q] = 2*Q¹[p,t], antisymmetric.
@@ -1788,9 +1841,12 @@ std::expected<void, std::string> run_mcscf_loop(
     if (!final_res) return std::unexpected(final_res.error());
     const auto& fst = *final_res;
 
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig_g(fst.gamma);
-    calc._cas_nat_occ         = eig_g.eigenvalues().reverse();
+    const auto natural_orbitals = diagonalize_natural_orbitals(fst.gamma);
+    calc._cas_nat_occ         = natural_orbitals.occupations;
     calc._cas_mo_coefficients = C;
+    if (n_act > 0)
+        calc._cas_mo_coefficients.middleCols(n_core, n_act) =
+            C.middleCols(n_core, n_act) * natural_orbitals.rotation;
     calc._total_energy        = fst.E_cas;
 
     return {};
