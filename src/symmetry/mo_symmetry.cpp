@@ -616,6 +616,107 @@ static bool is_all_1d_irreps(msym_point_group_type_t t, int n)
 
 } // anonymous namespace
 
+HartreeFock::Symmetry::AbelianIrrepProductTable
+HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator& calculator)
+{
+    AbelianIrrepProductTable result;
+
+    if (!calculator._molecule._symmetry)
+        return result;
+
+    const std::string& pg = calculator._molecule._point_group;
+    if (pg == "C1" || pg.find("inf") != std::string::npos)
+        return result;
+
+    HartreeFock::Symmetry::SymmetryContext ctx;
+    HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
+
+    for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)
+    {
+        atoms.data()[i].m    = calculator._molecule.atomic_masses[i];
+        atoms.data()[i].n    = calculator._molecule.atomic_numbers[i];
+        atoms.data()[i].v[0] = calculator._molecule.standard(i, 0);
+        atoms.data()[i].v[1] = calculator._molecule.standard(i, 1);
+        atoms.data()[i].v[2] = calculator._molecule.standard(i, 2);
+    }
+
+    if (MSYM_SUCCESS != msymSetElements(ctx.get(), atoms.size(), atoms.data()))
+        throw std::runtime_error("build_abelian_irrep_product_table: msymSetElements failed");
+    if (MSYM_SUCCESS != msymFindSymmetry(ctx.get()))
+        throw std::runtime_error("build_abelian_irrep_product_table: msymFindSymmetry failed");
+
+    msym_point_group_type_t pg_type;
+    int pg_n = 0;
+    if (MSYM_SUCCESS != msymGetPointGroupType(ctx.get(), &pg_type, &pg_n))
+        throw std::runtime_error("build_abelian_irrep_product_table: msymGetPointGroupType failed");
+    if (!is_all_1d_irreps(pg_type, pg_n))
+        return result;
+
+    int nelems = 0;
+    msym_element_t* melems = nullptr;
+    if (MSYM_SUCCESS != msymGetElements(ctx.get(), &nelems, &melems))
+        throw std::runtime_error("build_abelian_irrep_product_table: msymGetElements failed");
+
+    std::vector<msym_basis_function_t> bfs(nelems);
+    std::memset(bfs.data(), 0, nelems * sizeof(msym_basis_function_t));
+    for (int i = 0; i < nelems; ++i)
+    {
+        bfs[i].element  = &melems[i];
+        bfs[i].f.rsh.n  = 1;
+        bfs[i].f.rsh.l  = 0;
+        bfs[i].f.rsh.m  = 0;
+    }
+    if (MSYM_SUCCESS != msymSetBasisFunctions(ctx.get(), nelems, bfs.data()))
+        throw std::runtime_error("build_abelian_irrep_product_table: msymSetBasisFunctions failed");
+
+    const msym_character_table_t* ct = nullptr;
+    if (MSYM_SUCCESS != msymGetCharacterTable(ctx.get(), &ct) || ct == nullptr)
+        throw std::runtime_error("build_abelian_irrep_product_table: msymGetCharacterTable failed");
+
+    const int h = ct->d;
+    const double* ctable = static_cast<const double*>(ct->table);
+    result.irrep_names.resize(h);
+    for (int g = 0; g < h; ++g)
+        result.irrep_names[g] = ct->s[g].name;
+    normalize_e_labels(ct, result.irrep_names);
+    fix_b1b2_convention(ct, result.irrep_names);
+
+    result.product.assign(h, std::vector<int>(h, -1));
+    constexpr double tol = 1e-8;
+    for (int g1 = 0; g1 < h; ++g1)
+    {
+        for (int g2 = 0; g2 < h; ++g2)
+        {
+            int match = -1;
+            for (int g3 = 0; g3 < h; ++g3)
+            {
+                bool ok = true;
+                for (int c = 0; c < h; ++c)
+                {
+                    const double lhs = ctable[g1 * h + c] * ctable[g2 * h + c];
+                    const double rhs = ctable[g3 * h + c];
+                    if (std::abs(lhs - rhs) > tol)
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok)
+                {
+                    match = g3;
+                    break;
+                }
+            }
+            if (match < 0)
+                return AbelianIrrepProductTable{};
+            result.product[g1][g2] = match;
+        }
+    }
+
+    result.valid = true;
+    return result;
+}
+
 // ─── SAO basis construction ───────────────────────────────────────────────────
 //
 // Builds the unitary transform U whose columns are symmetry-adapted orbitals

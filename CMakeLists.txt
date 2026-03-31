@@ -281,6 +281,10 @@ endif()
 find_package(Python3 COMPONENTS Interpreter)
 
 if(BUILD_TESTING)
+    add_executable(planck-casscf-internal
+        ${CMAKE_SOURCE_DIR}/tests/casscf_internal.cpp
+    )
+
     add_executable(planck-dft-grid-invariants
         ${CMAKE_SOURCE_DIR}/tests/dft_grid_invariants.cpp
     )
@@ -291,6 +295,11 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    target_include_directories(planck-casscf-internal PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-dft-grid-invariants PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -299,6 +308,12 @@ if(BUILD_TESTING)
     target_include_directories(planck-multipole-integrals PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
+    )
+
+    set_target_properties(planck-casscf-internal PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
     )
 
     set_target_properties(planck-dft-grid-invariants PROPERTIES
@@ -317,6 +332,11 @@ if(BUILD_TESTING)
         target_link_libraries(planck-multipole-integrals OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-multipole-integrals PRIVATE USE_OPENMP)
     endif()
+
+    add_test(
+        NAME planck-casscf-internal
+        COMMAND planck-casscf-internal
+    )
 
     add_test(
         NAME planck-dft-grid-invariants

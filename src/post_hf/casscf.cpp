@@ -1,4 +1,4 @@
-// casscf.cpp — Second-order one-step CASSCF (Sun, Yang, Chan 2017)
+// casscf.cpp — Approximate one-step CASSCF / RASSCF scaffold
 //
 // Modules:
 //   1.  String generation & Slater–Condon rules
@@ -9,17 +9,20 @@
 //   6.  Q matrix
 //   7.  Orbital gradient (generalized Fock)
 //   8.  Orbital Hessian action H·R (diagonal approximation)
-//   9.  CI response c¹ (all roots), first-order 2-RDM Γ¹, Q-matrix response Q¹
-//  10.  Dressed gradient G̃ = G + H·κ + G^CI (fully consistent second-order)
+//   9.  CI response c¹ (single-step preconditioned correction), first-order
+//       2-RDM Γ¹, Q-matrix response Q¹
+//  10.  Approximate dressed gradient G̃ = G + H·κ + G^CI
 //  11.  Augmented Hessian orbital step (RFO / AH)
 //  12.  Orbital rotation via Cayley transform + re-orthogonalisation
 //  13.  Macro/micro MCSCF loop
 //  14.  Public API: run_casscf / run_rasscf
 
 #include "post_hf/casscf.h"
+#include "post_hf/casscf_internal.h"
 #include "post_hf/integrals.h"
 #include "integrals/os.h"
 #include "io/logging.h"
+#include "symmetry/mo_symmetry.h"
 
 #include <Eigen/Core>
 #include <Eigen/Eigenvalues>
@@ -32,26 +35,43 @@
 #include <format>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
 namespace
 {
 
+using HartreeFock::Correlation::CASSCFInternal::CIString;
+using HartreeFock::Correlation::CASSCFInternal::RASParams;
+using HartreeFock::Correlation::CASSCFInternal::SymmetryContext;
+using HartreeFock::Correlation::CASSCFInternal::admissible_ras_pair;
+using HartreeFock::Correlation::CASSCFInternal::compute_root_overlap;
+using HartreeFock::Correlation::CASSCFInternal::determinant_symmetry;
+using HartreeFock::Correlation::CASSCFInternal::kCIStringBits;
+using HartreeFock::Correlation::CASSCFInternal::kMaxPackedSpatialOrbitals;
+using HartreeFock::Correlation::CASSCFInternal::kMaxSeparateSpinOrbitals;
+using HartreeFock::Correlation::CASSCFInternal::low_bit_mask;
+using HartreeFock::Correlation::CASSCFInternal::match_roots_by_max_overlap;
+using HartreeFock::Correlation::CASSCFInternal::single_bit_mask;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Module 1: Slater determinant strings and matrix elements
 // ─────────────────────────────────────────────────────────────────────────────
 
-using CIString = uint64_t;
+inline int count_occupied_below(CIString det, int orb)
+{
+    return std::popcount(det & low_bit_mask(orb));
+}
 
 std::vector<CIString> generate_strings(int n_orb, int n_occ)
 {
     std::vector<CIString> result;
     if (n_occ == 0) { result.push_back(0); return result; }
-    if (n_occ > n_orb) return result;
+    if (n_occ > n_orb || n_orb > kMaxSeparateSpinOrbitals) return result;
 
-    CIString v = (CIString(1) << n_occ) - 1;
-    const CIString limit = CIString(1) << n_orb;
+    CIString v = low_bit_mask(n_occ);
+    const CIString limit = single_bit_mask(n_orb);
     while (v < limit)
     {
         result.push_back(v);
@@ -65,7 +85,7 @@ std::vector<CIString> generate_strings(int n_orb, int n_occ)
 inline int parity_between(CIString s, int lo, int hi)
 {
     if (lo + 1 >= hi) return 1;
-    CIString mask = ((CIString(1) << (hi - lo - 1)) - 1) << (lo + 1);
+    CIString mask = low_bit_mask(hi - lo - 1) << (lo + 1);
     return (std::popcount(s & mask) % 2 == 0) ? 1 : -1;
 }
 
@@ -93,7 +113,7 @@ double slater_condon_element(
         while (d)
         {
             int k = std::countr_zero(d);
-            if (bra & (CIString(1) << k)) ann.push_back(k);
+            if (bra & single_bit_mask(k)) ann.push_back(k);
             else                           cre.push_back(k);
             d &= d - 1;
         }
@@ -110,18 +130,18 @@ double slater_condon_element(
         double val = 0.0;
         for (int k = 0; k < n_act; ++k)
         {
-            if (ket_a & (CIString(1) << k)) val += h_eff(k, k);
-            if (ket_b & (CIString(1) << k)) val += h_eff(k, k);
+            if (ket_a & single_bit_mask(k)) val += h_eff(k, k);
+            if (ket_b & single_bit_mask(k)) val += h_eff(k, k);
         }
         for (int p = 0; p < n_act; ++p)
         {
-            const bool pa = ket_a & (CIString(1) << p);
-            const bool pb = ket_b & (CIString(1) << p);
+            const bool pa = ket_a & single_bit_mask(p);
+            const bool pb = ket_b & single_bit_mask(p);
             if (!pa && !pb) continue;
             for (int q = 0; q < n_act; ++q)
             {
-                const bool qa = ket_a & (CIString(1) << q);
-                const bool qb = ket_b & (CIString(1) << q);
+                const bool qa = ket_a & single_bit_mask(q);
+                const bool qb = ket_b & single_bit_mask(q);
                 if (pa && qa && p < q)
                     val += g_act(ga, p, p, q, q, n_act) - g_act(ga, p, q, q, p, n_act);
                 if (pb && qb && p < q)
@@ -142,12 +162,12 @@ double slater_condon_element(
         double val = h_eff(p, q) * sgn;
         for (int r = 0; r < n_act; ++r)
         {
-            if (!(ket_a & (CIString(1) << r)) || r == p) continue;
+            if (!(ket_a & single_bit_mask(r)) || r == p) continue;
             val += sgn * (g_act(ga, p, q, r, r, n_act) - g_act(ga, p, r, r, q, n_act));
         }
         for (int r = 0; r < n_act; ++r)
         {
-            if (!(ket_b & (CIString(1) << r))) continue;
+            if (!(ket_b & single_bit_mask(r))) continue;
             val += sgn * g_act(ga, p, q, r, r, n_act);
         }
         return val;
@@ -162,12 +182,12 @@ double slater_condon_element(
         double val = h_eff(p, q) * sgn;
         for (int r = 0; r < n_act; ++r)
         {
-            if (!(ket_b & (CIString(1) << r)) || r == p) continue;
+            if (!(ket_b & single_bit_mask(r)) || r == p) continue;
             val += sgn * (g_act(ga, p, q, r, r, n_act) - g_act(ga, p, r, r, q, n_act));
         }
         for (int r = 0; r < n_act; ++r)
         {
-            if (!(ket_a & (CIString(1) << r))) continue;
+            if (!(ket_a & single_bit_mask(r))) continue;
             val += sgn * g_act(ga, p, q, r, r, n_act);
         }
         return val;
@@ -179,13 +199,13 @@ double slater_condon_element(
         auto [ann_a, cre_a] = get_excitation(bra_a, ket_a);
         int p1 = ann_a[0], p2 = ann_a[1]; if (p1 > p2) std::swap(p1, p2);
         int q1 = cre_a[0], q2 = cre_a[1]; if (q1 > q2) std::swap(q1, q2);
-        CIString inter   = (ket_a ^ (CIString(1) << p1)) ^ (CIString(1) << p2);
-        CIString after_p1 = ket_a ^ (CIString(1) << p1);
-        int n1 = std::popcount(ket_a    & ((CIString(1) << p1) - 1));
-        int n2 = std::popcount(after_p1 & ((CIString(1) << p2) - 1));
-        int n3 = std::popcount(inter    & ((CIString(1) << q1) - 1));
-        CIString after_q1 = inter | (CIString(1) << q1);
-        int n4 = std::popcount(after_q1 & ((CIString(1) << q2) - 1));
+        CIString inter   = (ket_a ^ single_bit_mask(p1)) ^ single_bit_mask(p2);
+        CIString after_p1 = ket_a ^ single_bit_mask(p1);
+        int n1 = count_occupied_below(ket_a, p1);
+        int n2 = count_occupied_below(after_p1, p2);
+        int n3 = count_occupied_below(inter, q1);
+        CIString after_q1 = inter | single_bit_mask(q1);
+        int n4 = count_occupied_below(after_q1, q2);
         int sgn = ((n1 + n2 + n3 + n4) % 2 == 0) ? 1 : -1;
         return sgn * (g_act(ga, p1, q1, p2, q2, n_act) - g_act(ga, p1, q2, p2, q1, n_act));
     }
@@ -196,13 +216,13 @@ double slater_condon_element(
         auto [ann_b, cre_b] = get_excitation(bra_b, ket_b);
         int p1 = ann_b[0], p2 = ann_b[1]; if (p1 > p2) std::swap(p1, p2);
         int q1 = cre_b[0], q2 = cre_b[1]; if (q1 > q2) std::swap(q1, q2);
-        CIString inter    = (ket_b ^ (CIString(1) << p1)) ^ (CIString(1) << p2);
-        CIString after_p1 = ket_b ^ (CIString(1) << p1);
-        int n1 = std::popcount(ket_b    & ((CIString(1) << p1) - 1));
-        int n2 = std::popcount(after_p1 & ((CIString(1) << p2) - 1));
-        int n3 = std::popcount(inter    & ((CIString(1) << q1) - 1));
-        CIString after_q1 = inter | (CIString(1) << q1);
-        int n4 = std::popcount(after_q1 & ((CIString(1) << q2) - 1));
+        CIString inter    = (ket_b ^ single_bit_mask(p1)) ^ single_bit_mask(p2);
+        CIString after_p1 = ket_b ^ single_bit_mask(p1);
+        int n1 = count_occupied_below(ket_b, p1);
+        int n2 = count_occupied_below(after_p1, p2);
+        int n3 = count_occupied_below(inter, q1);
+        CIString after_q1 = inter | single_bit_mask(q1);
+        int n4 = count_occupied_below(after_q1, q2);
         int sgn = ((n1 + n2 + n3 + n4) % 2 == 0) ? 1 : -1;
         return sgn * (g_act(ga, p1, q1, p2, q2, n_act) - g_act(ga, p1, q2, p2, q1, n_act));
     }
@@ -314,17 +334,9 @@ solve_ci(const Eigen::MatrixXd& H, int nroots, double tol = 1e-10)
     return davidson(H, nroots, tol, 1000);
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Module 3: Symmetry, RAS, CI string / Hamiltonian builder
 // ─────────────────────────────────────────────────────────────────────────────
-
-struct RASParams
-{
-    int nras1 = 0, nras2 = 0, nras3 = 0;
-    int max_holes = 100, max_elec = 100;
-    bool active = false;
-};
 
 std::vector<int> map_mo_irreps(const std::vector<std::string>& mo_sym,
                                const std::vector<std::string>& names)
@@ -336,24 +348,49 @@ std::vector<int> map_mo_irreps(const std::vector<std::string>& mo_sym,
     return idx;
 }
 
-int det_symmetry(CIString alpha, CIString beta, const std::vector<int>& irr_act)
+std::optional<SymmetryContext> build_symmetry_context(HartreeFock::Calculator& calc)
 {
-    int sym = 0;
-    for (int t = 0; t < static_cast<int>(irr_act.size()); ++t)
+    auto product_table = HartreeFock::Symmetry::build_abelian_irrep_product_table(calc);
+    if (!product_table.valid || product_table.irrep_names.empty())
+        return std::nullopt;
+
+    SymmetryContext ctx;
+    ctx.names = std::move(product_table.irrep_names);
+    ctx.product = std::move(product_table.product);
+    ctx.abelian_1d_only = true;
+
+    int totally_symmetric_irrep = -1;
+    for (int g = 0; g < static_cast<int>(ctx.product.size()); ++g)
     {
-        if (irr_act[t] < 0) continue;
-        if (alpha & (CIString(1) << t)) sym ^= irr_act[t];
-        if (beta  & (CIString(1) << t)) sym ^= irr_act[t];
+        bool is_identity = true;
+        for (int h = 0; h < static_cast<int>(ctx.product[g].size()); ++h)
+        {
+            if (ctx.product[g][h] != h || ctx.product[h][g] != h)
+            {
+                is_identity = false;
+                break;
+            }
+        }
+        if (is_identity)
+        {
+            totally_symmetric_irrep = g;
+            break;
+        }
     }
-    return sym;
+    if (totally_symmetric_irrep < 0)
+        return std::nullopt;
+    ctx.totally_symmetric_irrep = totally_symmetric_irrep;
+    return ctx;
 }
 
-int resolve_target_irrep(const std::string& s, const std::vector<std::string>& names)
+std::optional<int> resolve_target_irrep(
+    const std::string& s,
+    const SymmetryContext& sym_ctx)
 {
-    if (s.empty()) return 0;
-    for (std::size_t g = 0; g < names.size(); ++g)
-        if (s == names[g]) return static_cast<int>(g);
-    return 0;
+    if (s.empty()) return sym_ctx.totally_symmetric_irrep;
+    for (std::size_t g = 0; g < sym_ctx.names.size(); ++g)
+        if (s == sym_ctx.names[g]) return static_cast<int>(g);
+    return std::nullopt;
 }
 
 bool point_group_has_only_1d_irreps(const std::string& pg)
@@ -400,55 +437,40 @@ bool point_group_has_only_1d_irreps(const std::string& pg)
     }
 }
 
-// Generate alpha/beta strings with optional RAS and symmetry constraints.
-void build_ci_strings(
+// Generate the raw alpha/beta occupation strings; RAS and symmetry screening
+// happens only after alpha/beta strings are paired into determinants.
+void build_spin_strings_unfiltered(
     int n_act, int n_alpha, int n_beta,
-    const RASParams& ras,
-    const std::vector<int>& irr_act,
-    bool use_sym, int target_irr,
     std::vector<CIString>& a_strs,
     std::vector<CIString>& b_strs)
 {
-    auto filter = [&](int n_occ) {
-        auto all = generate_strings(n_act, n_occ);
-        if (!ras.active) return all;
-        const CIString m1 = (ras.nras1 > 0) ? ((CIString(1) << ras.nras1) - 1) : 0;
-        const CIString m3 = (ras.nras3 > 0) ?
-            (((CIString(1) << ras.nras3) - 1) << (ras.nras1 + ras.nras2)) : 0;
-        std::vector<CIString> r;
-        for (CIString s : all)
-        {
-            int holes = ras.nras1 - std::popcount(s & m1);
-            int elec  = std::popcount(s & m3);
-            if (holes <= ras.max_holes && elec <= ras.max_elec) r.push_back(s);
-        }
-        return r;
-    };
-    a_strs = filter(n_alpha);
-    b_strs = filter(n_beta);
-    // pair-level symmetry screening happens inside build_ci_hamiltonian_with_dets
+    a_strs = generate_strings(n_act, n_alpha);
+    b_strs = generate_strings(n_act, n_beta);
 }
 
 // Build H_CI and return the (ia,ib) determinant list.
 Eigen::MatrixXd build_ci_hamiltonian_with_dets(
     const std::vector<CIString>& a_strs,
     const std::vector<CIString>& b_strs,
+    const RASParams& ras,
     const Eigen::MatrixXd& h_eff,
     const std::vector<double>& ga,
     int n_act,
     const std::vector<int>& irr_act,
-    bool use_sym, int target_irr,
+    const SymmetryContext* sym_ctx,
+    int target_irr,
     std::vector<std::pair<int,int>>& dets_out)
 {
     const int na = static_cast<int>(a_strs.size());
     const int nb_s = static_cast<int>(b_strs.size());
-    const bool do_sym = use_sym && !irr_act.empty();
+    const bool do_sym = sym_ctx != nullptr && !irr_act.empty();
 
     dets_out.clear();
     dets_out.reserve(na * nb_s);
     for (int ia = 0; ia < na; ++ia)
         for (int ib = 0; ib < nb_s; ++ib)
-            if (!do_sym || det_symmetry(a_strs[ia], b_strs[ib], irr_act) == target_irr)
+            if (admissible_ras_pair(a_strs[ia], b_strs[ib], ras)
+             && (!do_sym || determinant_symmetry(a_strs[ia], b_strs[ib], irr_act, *sym_ctx) == target_irr))
                 dets_out.push_back({ia, ib});
 
     const int dim = static_cast<int>(dets_out.size());
@@ -478,16 +500,16 @@ struct FermionOpResult { CIString det = 0; double phase = 0.0; bool valid = fals
 
 inline FermionOpResult apply_annihilation(CIString det, int orb)
 {
-    const CIString bit = CIString(1) << orb;
+    const CIString bit = single_bit_mask(orb);
     if (!(det & bit)) return {};
-    return {det ^ bit, (std::popcount(det & (bit - 1)) % 2 == 0) ? 1.0 : -1.0, true};
+    return {det ^ bit, (count_occupied_below(det, orb) % 2 == 0) ? 1.0 : -1.0, true};
 }
 
 inline FermionOpResult apply_creation(CIString det, int orb)
 {
-    const CIString bit = CIString(1) << orb;
+    const CIString bit = single_bit_mask(orb);
     if (det & bit) return {};
-    return {det | bit, (std::popcount(det & (bit - 1)) % 2 == 0) ? 1.0 : -1.0, true};
+    return {det | bit, (count_occupied_below(det, orb) % 2 == 0) ? 1.0 : -1.0, true};
 }
 
 std::vector<CIString> build_spin_dets(
@@ -498,7 +520,7 @@ std::vector<CIString> build_spin_dets(
 {
     std::vector<CIString> sd; sd.reserve(dets.size());
     for (auto [ia, ib] : dets)
-        sd.push_back(a_strs[ia] | (b_strs[ib] << n_act));
+        sd.push_back(a_strs[ia] | ((n_act >= kCIStringBits) ? 0 : (b_strs[ib] << n_act)));
     return sd;
 }
 
@@ -933,7 +955,7 @@ Eigen::VectorXd ci_response(
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Module 10: Dressed gradient  G̃ = G + H·R  (FEP1 update)
+// Module 10: Dressed gradient  G̃ = G + H·R  (approximate dressed-gradient update)
 //
 // Within each microiteration, after computing orbital step R and CI response:
 //   G̃_{pq} = G_{pq} + (H·R)_{pq} + CI contribution
@@ -1180,7 +1202,7 @@ Eigen::MatrixXd apply_orbital_rotation(
 // ─────────────────────────────────────────────────────────────────────────────
 // Module 13: Macro/micro MCSCF loop
 //
-// Algorithm (Sun, Yang, Chan 2017):
+// Algorithm scaffold for the current approximate one-step implementation:
 //   Repeat macroiteration:
 //     1. Full evaluation: F^I, transform ERIs, H_CI, CI solve, RDMs, gradient G
 //     2. Convergence check
@@ -1226,6 +1248,14 @@ std::expected<void, std::string> run_mcscf_loop(
     const int n_core = (n_total_elec - as.nactele) / 2;
     const int n_act  = as.nactorb;
     const int n_virt = nbasis - n_core - n_act;
+    if (n_act > kMaxSeparateSpinOrbitals)
+        return std::unexpected(
+            std::format("{}: nactorb={} exceeds the 63-orbital limit of the CI bitstring encoding.",
+                        tag, n_act));
+    if (n_act > kMaxPackedSpatialOrbitals)
+        return std::unexpected(
+            std::format("{}: nactorb={} exceeds the packed alpha/beta determinant limit ({}) for the current CI encoding.",
+                        tag, n_act, kMaxPackedSpatialOrbitals));
     if (n_core < 0) return std::unexpected(tag + ": nactele > total electrons.");
     if (n_virt < 0) return std::unexpected(tag + ": n_core + nactorb > nbasis.");
     if (ras.active && ras.nras1 + ras.nras2 + ras.nras3 != n_act)
@@ -1261,16 +1291,30 @@ std::expected<void, std::string> run_mcscf_loop(
                        && (int)calc._sao_irrep_names.size() <= 8;
     const bool point_group_is_abelian_for_labels =
         point_group_has_only_1d_irreps(calc._molecule._point_group);
+    std::optional<SymmetryContext> sym_ctx;
     std::vector<int> irr_act, all_mo_irr;
-    if (have_sym && !calc._info._scf.alpha.mo_symmetry.empty())
+    if (have_sym && point_group_is_abelian_for_labels && !calc._info._scf.alpha.mo_symmetry.empty())
     {
-        all_mo_irr = map_mo_irreps(calc._info._scf.alpha.mo_symmetry, calc._sao_irrep_names);
+        sym_ctx = build_symmetry_context(calc);
+        if (!sym_ctx)
+            return std::unexpected(tag + ": failed to build an Abelian irrep product table for CI screening.");
+
+        all_mo_irr = map_mo_irreps(calc._info._scf.alpha.mo_symmetry, sym_ctx->names);
+        if (std::find(all_mo_irr.begin(), all_mo_irr.end(), -1) != all_mo_irr.end())
+            return std::unexpected(tag + ": encountered an MO irrep label missing from the Abelian product table.");
+
         irr_act.resize(n_act);
         for (int t = 0; t < n_act; ++t)
             irr_act[t] = (n_core + t < (int)all_mo_irr.size()) ? all_mo_irr[n_core + t] : -1;
     }
-    const int  target_irr = resolve_target_irrep(as.target_irrep, calc._sao_irrep_names);
-    const bool use_sym    = have_sym && point_group_is_abelian_for_labels && !irr_act.empty();
+    const bool use_sym = sym_ctx.has_value() && !irr_act.empty();
+    const auto target_irr_opt = use_sym
+        ? resolve_target_irrep(as.target_irrep, *sym_ctx)
+        : std::optional<int>(0);
+    if (!target_irr_opt)
+        return std::unexpected(std::format("{}: target_irrep '{}' is not present in the Abelian symmetry metadata.",
+                                           tag, as.target_irrep));
+    const int target_irr = *target_irr_opt;
 
     // ── Initial MO coefficients ───────────────────────────────────────────────
     Eigen::MatrixXd C = (calc._cas_mo_coefficients.rows() == nbasis &&
@@ -1287,8 +1331,7 @@ std::expected<void, std::string> run_mcscf_loop(
 
     // ── CI strings ────────────────────────────────────────────────────────────
     std::vector<CIString> a_strs, b_strs;
-    build_ci_strings(n_act, n_alpha_act, n_beta_act, ras,
-                     irr_act, use_sym, target_irr, a_strs, b_strs);
+    build_spin_strings_unfiltered(n_act, n_alpha_act, n_beta_act, a_strs, b_strs);
 
     const unsigned int nmicro = std::max(1u, as.mcscf_micro_per_macro);
 
@@ -1296,7 +1339,8 @@ std::expected<void, std::string> run_mcscf_loop(
         std::format("Active space: ({:d}e, {:d}o)  n_core={:d}  n_virt={:d}  CI dim ≤ {:d}",
                     as.nactele, n_act, n_core, n_virt, ci_dim_est));
     logging(LogLevel::Info, tag + " :",
-        std::format("Algorithm: macro/micro scaffold  nmicro={:d}", nmicro));
+        std::format("Algorithm: macro/micro scaffold with approximate dressed-gradient CI response  nmicro={:d}",
+                    nmicro));
     if (have_sym && !point_group_is_abelian_for_labels)
         logging(LogLevel::Warning, tag + " :",
             std::format("Disabling CI symmetry screening for {} because MO labels come from an Abelian subgroup.",
@@ -1304,7 +1348,7 @@ std::expected<void, std::string> run_mcscf_loop(
     if (use_sym)
         logging(LogLevel::Info, tag + " :",
             std::format("Target irrep: {}",
-                as.target_irrep.empty() ? calc._sao_irrep_names[0] : as.target_irrep));
+                as.target_irrep.empty() ? sym_ctx->names[0] : as.target_irrep));
     if (nroots > 1)
         logging(LogLevel::Info, tag + " :",
             std::format("State-averaged over {:d} roots", nroots));
@@ -1324,9 +1368,77 @@ std::expected<void, std::string> run_mcscf_loop(
         double E_cas = 0.0, gnorm = 0.0;
     };
 
+    struct RootReference
+    {
+        Eigen::VectorXd energies;
+        Eigen::MatrixXd vecs;
+        bool valid = false;
+    };
+
     const double max_rot = 0.20;
 
-    auto evaluate = [&](const Eigen::MatrixXd& C_trial) -> std::expected<McscfState, std::string>
+    auto reorder_ci_roots = [&](Eigen::VectorXd& E,
+                                Eigen::MatrixXd& V,
+                                const RootReference* root_ref,
+                                bool log_tracking) {
+        if (root_ref == nullptr || !root_ref->valid)
+            return;
+        if (root_ref->vecs.rows() != V.rows() || root_ref->vecs.cols() == 0 || V.cols() == 0)
+            return;
+
+        const int nmatch = std::min<int>(root_ref->vecs.cols(), V.cols());
+        Eigen::MatrixXd overlaps = compute_root_overlap(root_ref->vecs.leftCols(nmatch), V.leftCols(nmatch));
+        if (overlaps.size() == 0)
+            return;
+
+        const std::vector<int> assignment = match_roots_by_max_overlap(overlaps);
+        Eigen::VectorXd E_reordered = E;
+        Eigen::MatrixXd V_reordered = V;
+        std::vector<bool> used_new(static_cast<std::size_t>(V.cols()), false);
+        int swaps = 0;
+        double min_overlap = 1.0;
+
+        for (int i = 0; i < nmatch; ++i)
+        {
+            const int j = assignment[i];
+            if (j < 0 || j >= V.cols()) continue;
+            E_reordered(i) = E(j);
+            V_reordered.col(i) = V.col(j);
+            used_new[static_cast<std::size_t>(j)] = true;
+            min_overlap = std::min(min_overlap, std::abs(overlaps(i, j)));
+            if (i != j) ++swaps;
+        }
+
+        int next_slot = nmatch;
+        for (int j = 0; j < V.cols() && next_slot < V.cols(); ++j)
+        {
+            if (used_new[static_cast<std::size_t>(j)]) continue;
+            E_reordered(next_slot) = E(j);
+            V_reordered.col(next_slot) = V.col(j);
+            ++next_slot;
+        }
+
+        E = std::move(E_reordered);
+        V = std::move(V_reordered);
+
+        if (log_tracking && nmatch > 0)
+        {
+            if (swaps > 0)
+                logging(LogLevel::Info, tag + " :",
+                        std::format("Root tracking reordered {:d} CI roots (min |overlap| = {:.3f}).",
+                                    swaps, min_overlap));
+            if (min_overlap < 0.7)
+                logging(LogLevel::Warning, tag + " :",
+                        std::format("Root tracking minimum |overlap| dropped to {:.3f}; state identities may be unstable.",
+                                    min_overlap));
+        }
+    };
+
+    RootReference root_reference;
+
+    auto evaluate = [&](const Eigen::MatrixXd& C_trial,
+                        const RootReference* root_ref = nullptr,
+                        bool log_root_tracking = false) -> std::expected<McscfState, std::string>
     {
         McscfState st;
         st.F_I_mo = build_inactive_fock_mo(C_trial, calc._hcore, eri, n_core, nbasis);
@@ -1335,8 +1447,8 @@ std::expected<void, std::string> run_mcscf_loop(
         std::vector<double> ga = HartreeFock::Correlation::transform_eri_internal(eri, nbasis, C_act);
 
         st.H_CI = build_ci_hamiltonian_with_dets(
-            a_strs, b_strs, h_eff, ga, n_act,
-            irr_act, use_sym, target_irr, st.dets);
+            a_strs, b_strs, ras, h_eff, ga, n_act,
+            irr_act, use_sym ? &*sym_ctx : nullptr, target_irr, st.dets);
         const int ci_dim = static_cast<int>(st.H_CI.rows());
         if (ci_dim == 0)
             return std::unexpected(tag + ": no CI determinants of target symmetry.");
@@ -1347,6 +1459,7 @@ std::expected<void, std::string> run_mcscf_loop(
         if (nr_got < nroots)
             return std::unexpected(
                 std::format("{}: CI returned {:d} roots (wanted {:d}).", tag, nr_got, nroots));
+        reorder_ci_roots(E, V, root_ref, log_root_tracking);
         st.ci_energies = E;
         st.ci_vecs     = V;
 
@@ -1415,7 +1528,7 @@ std::expected<void, std::string> run_mcscf_loop(
             ek(k) = fd_step;
             Eigen::MatrixXd kappa_fd = unpack_pairs(ek);
             Eigen::MatrixXd C_fd = apply_orbital_rotation(C_cur, kappa_fd, calc._overlap);
-            auto fd_res = evaluate(C_fd);
+            auto fd_res = evaluate(C_fd, &root_reference, false);
             if (!fd_res) return zero;
             H.col(k) = (pack_pairs(fd_res->g_orb) - g0) / fd_step;
         }
@@ -1476,15 +1589,16 @@ std::expected<void, std::string> run_mcscf_loop(
     for (unsigned int macro = 1; macro <= as.mcscf_max_iter; ++macro)
     {
         // ── (1) Full evaluation ───────────────────────────────────────────────
-        auto res = evaluate(C);
+        auto res = evaluate(C, root_reference.valid ? &root_reference : nullptr, root_reference.valid);
         if (!res) return std::unexpected(res.error());
         auto st_current = std::move(*res);
+        root_reference = {st_current.ci_energies, st_current.ci_vecs, true};
 
         // ── (2) Convergence ───────────────────────────────────────────────────
         const bool e_conv  = macro > 1 && std::abs(st_current.E_cas - E_prev) < as.tol_mcscf_energy;
         const bool g_conv  = st_current.gnorm < as.tol_mcscf_grad;
         // If the orbital gradient is exactly zero (no non-redundant pairs) the
-        // system is already a pure FCI — converge immediately without requiring
+        // system has no nonredundant orbital rotation left — converge immediately without requiring
         // a second macroiteration for the energy-change criterion.
         const bool no_orb_rot = (st_current.gnorm == 0.0);
         if ((e_conv && g_conv) || (g_conv && no_orb_rot)) { converged = true; break; }
@@ -1600,7 +1714,7 @@ std::expected<void, std::string> run_mcscf_loop(
                 if (kappa_try.cwiseAbs().maxCoeff() < 1e-12) continue;
 
                 Eigen::MatrixXd C_trial = apply_orbital_rotation(C, kappa_try, calc._overlap);
-                auto trial_res = evaluate(C_trial);
+                auto trial_res = evaluate(C_trial, &root_reference, false);
                 if (!trial_res) continue;
 
                 const auto& trial = *trial_res;
@@ -1635,6 +1749,7 @@ std::expected<void, std::string> run_mcscf_loop(
         {
             C = C_best;
             st_current = std::move(accepted_state);
+            root_reference = {st_current.ci_energies, st_current.ci_vecs, true};
             level_shift = std::max(1e-3, level_shift * 0.7);
         }
         else
@@ -1669,7 +1784,7 @@ std::expected<void, std::string> run_mcscf_loop(
     logging(LogLevel::Info, tag + " :", "Converged.");
 
     // ── Post-convergence ──────────────────────────────────────────────────────
-    auto final_res = evaluate(C);
+    auto final_res = evaluate(C, root_reference.valid ? &root_reference : nullptr, false);
     if (!final_res) return std::unexpected(final_res.error());
     const auto& fst = *final_res;
 

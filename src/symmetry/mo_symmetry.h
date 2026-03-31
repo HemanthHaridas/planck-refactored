@@ -25,10 +25,22 @@ namespace HartreeFock
             bool valid = false;
         };
 
+        struct AbelianIrrepProductTable {
+            std::vector<std::string>   irrep_names;
+            std::vector<std::vector<int>> product;
+            bool valid = false;
+        };
+
         // Build the SAO basis for symmetry-blocked Fock diagonalization.
         // Returns valid=false for linear molecules (C∞v/D∞h), C1, or symmetry off.
         // Must be called after 1e integrals are computed and basis is built.
         SAOBasis build_sao_basis(HartreeFock::Calculator& calculator);
+
+        // Build an explicit Abelian irrep multiplication table for the current
+        // point group. Returns valid=false when symmetry is unavailable or the
+        // full point group does not have only 1D irreps.
+        AbelianIrrepProductTable build_abelian_irrep_product_table(
+            HartreeFock::Calculator& calculator);
     }
 }
 
