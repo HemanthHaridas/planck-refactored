@@ -416,9 +416,8 @@ To warm-start a larger basis from a converged smaller-basis checkpoint:
 
 1. Converge in the small basis with `save_checkpoint .true.`
 2. Change `basis` to the larger set and add `guess read`
-
-</div>
 3. Run — Planck detects the basis-size mismatch, computes the cross-overlap `S_cross = ⟨χ_μ^large | χ_ν^small⟩`, and applies a Löwdin SVD projection to transfer the occupied density into the new basis
+</div>
 
 <p align="justify">
 The projected density is used as the SCF starting point, typically reducing the number of required iterations.
