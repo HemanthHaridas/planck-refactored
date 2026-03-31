@@ -27,7 +27,8 @@ namespace HartreeFock::Correlation
     // Writes to:
     //   calc._total_energy         — final CASSCF total energy
     //   calc._cas_nat_occ          — active natural occupation numbers (descending)
-    //   calc._cas_mo_coefficients  — final MO coefficients [nb×nb]
+    //   calc._cas_mo_coefficients  — final MO coefficients [nb×nb] with the
+    //                                 active block rotated to natural orbitals
     //
     std::expected<void, std::string> run_casscf(
         HartreeFock::Calculator&                   calc,

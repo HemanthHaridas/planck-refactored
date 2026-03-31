@@ -729,7 +729,7 @@ namespace HartreeFock
         // CASSCF / RASSCF results
         OptionsActiveSpace  _active_space;              // active space specification
         Eigen::VectorXd     _cas_nat_occ;               // active natural occupation numbers
-        Eigen::MatrixXd     _cas_mo_coefficients;       // final CASSCF MO coefficients [nb×nb]
+        Eigen::MatrixXd     _cas_mo_coefficients;       // final CASSCF MO coefficients [nb×nb], active block in natural-orbital gauge
         double              _casscf_rhf_energy = 0.0;  // RHF reference energy (for ΔE printout)
 
         Eigen::MatrixXd         _overlap;   // Overlap matrix S

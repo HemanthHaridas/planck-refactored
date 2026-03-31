@@ -178,6 +178,36 @@
       ]
     },
     {
+      "id": "water_casscf_c2v_b1",
+      "input": "inputs/water_cas44_b1.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "CASSCF :                      Target irrep: B1",
+        "CASSCF :                      Converged."
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
+        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -74.2879452324, "atol": 1e-9}
+      ]
+    },
+    {
+      "id": "water_rasscf_pair_filter",
+      "input": "tests/inputs/water_rasscf_pair_filter.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "RASSCF :                      Converged.",
+        "RASSCF :                      Target irrep: A1"
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
+        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -74.4581360843, "atol": 1e-9}
+      ]
+    },
+    {
       "id": "ethylene_casscf_d2d_natural_occupations",
       "input": "tests/inputs/ethylene_rasscf.hfinp",
       "tags": ["extended"],
