@@ -102,7 +102,7 @@ This installs the `hartree-fock` executable to `<prefix>/bin/` and the basis set
 ### Input File Format
 
 <p align="justify">
-Input files use an INI-style block format with the extension `.hfinp`. Each section is delimited by `%begin_<section>` and `%end_<section>` markers. Keywords are case-insensitive; boolean values accept `.true.` / `.false.`.
+Input files use an INI-style block format with the extension `.hfinp`. Each section is delimited by `%begin_[section]` and `%end_[section]` markers. Keywords are case-insensitive; boolean values accept `.true.` / `.false.`.
 </p>
 
 ```
