@@ -20,6 +20,14 @@ namespace HartreeFock
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const std::size_t nbasis,
             const std::vector<HartreeFock::SignedAOSymOp>* sym_ops = nullptr);
+        HartreeFock::MultipoleMatrices _compute_multipole_matrices(
+            const std::vector<HartreeFock::ShellPair>& shell_pairs,
+            std::size_t nbasis,
+            const Eigen::Vector3d& origin = Eigen::Vector3d::Zero());
+        std::expected<HartreeFock::MultipoleMoments, std::string> _compute_multipole_moments(
+            const HartreeFock::Calculator& calculator,
+            const std::vector<HartreeFock::ShellPair>& shell_pairs,
+            const Eigen::Vector3d& origin = Eigen::Vector3d::Zero());
         Eigen::MatrixXd _compute_nuclear_attraction(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const std::size_t nbasis,

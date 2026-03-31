@@ -4,7 +4,6 @@
 #include <string>
 #include <iostream>
 #include <iomanip>
-#include <chrono>
 #include <mutex>
 
 #include "base/types.h"
@@ -25,12 +24,6 @@ namespace HartreeFock
     {
         inline std::mutex log_mutex;
         inline thread_local int silence_depth = 0;
-
-        constexpr const char *info_prefix   = "[Planck][INF]    ";
-        constexpr const char *error_prefix  = "[Planck][ERR]    ";
-        constexpr const char *matrix_prefix = "[Planck][MAT]    ";
-        constexpr const char *warn_prefix   = "[Planck][WARN]   ";
-//        constexpr const char *scf_prefix    = "[Planck][SCF]    ";
 
         inline bool is_silenced() noexcept
         {
@@ -62,37 +55,10 @@ namespace HartreeFock
 
             std::lock_guard<std::mutex> lock(log_mutex);
 
-            // Prefix selection
-            const char* prefix = nullptr;
-            switch(level)
-            {
-                case Info:      prefix = info_prefix;   break;
-                case Warning:   prefix = warn_prefix;   break;
-                case Error:     prefix = error_prefix;  break;
-                case Matrix:    prefix = matrix_prefix; break;
-//                case Cycle:       prefix = scf_prefix;    break;
-            }
-            
-            // Timestamp
-            auto now = std::chrono::system_clock::now();
-            std::time_t now_time = std::chrono::system_clock::to_time_t(now);
-
-            std::tm local_tm{};
-        #ifdef _WIN32
-            localtime_s(&local_tm, &now_time);
-        #else
-            local_tm = *std::localtime(&now_time);
-        #endif
-
             std::ostream& out_stream =
                 (level == Info || level == Error) ? std::cout : std::cerr;
 
-            // Print header
-            out_stream << "["
-                       << std::put_time(&local_tm, "%Y-%m-%d %H:%M:%S")
-                       << "] "
-                       << std::setw(20) << std::left << prefix
-                       << std::setw(30) << std::left << label;
+            out_stream << std::setw(30) << std::left << label;
 
             // Variadic message printing
             if constexpr (sizeof...(Args) > 0)
@@ -341,6 +307,78 @@ namespace HartreeFock
                     std::cout << " <all coefficients below threshold>";
                 std::cout << "\n";
             }
+        }
+
+        inline void multipole_moments(const HartreeFock::MultipoleMoments& moments)
+        {
+            if (is_silenced())
+                return;
+
+            std::lock_guard<std::mutex> lock(log_mutex);
+
+            const Eigen::Vector3d total_dipole_debye = moments.total_dipole * AU_TO_DEBYE;
+
+            std::cout << "Dipole Moment (origin at "
+                      << std::fixed << std::setprecision(6)
+                      << moments.origin[0] << ", "
+                      << moments.origin[1] << ", "
+                      << moments.origin[2] << " bohr)\n";
+            std::cout << std::string(78, '-') << "\n"
+                      << std::setw(12) << std::left  << "Component"
+                      << std::setw(20) << std::right << "Electronic (au)"
+                      << std::setw(18) << std::right << "Nuclear (au)"
+                      << std::setw(18) << std::right << "Total (au)"
+                      << std::setw(10) << std::right << "Debye"
+                      << "\n"
+                      << std::string(78, '-') << "\n";
+
+            const std::array<const char*, 3> axes = {"X", "Y", "Z"};
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                std::cout << std::setw(12) << std::left  << axes[axis]
+                          << std::setw(20) << std::right << moments.electronic_dipole[axis]
+                          << std::setw(18) << std::right << moments.nuclear_dipole[axis]
+                          << std::setw(18) << std::right << moments.total_dipole[axis]
+                          << std::setw(10) << std::right << total_dipole_debye[axis]
+                          << "\n";
+            }
+
+            std::cout << std::string(78, '-') << "\n"
+                      << std::setw(12) << std::left  << "|mu|"
+                      << std::setw(20) << std::right << moments.electronic_dipole.norm()
+                      << std::setw(18) << std::right << moments.nuclear_dipole.norm()
+                      << std::setw(18) << std::right << moments.total_dipole.norm()
+                      << std::setw(10) << std::right << total_dipole_debye.norm()
+                      << "\n"
+                      << std::string(78, '-') << "\n";
+
+            std::cout << "Quadrupole Moment (traceless Cartesian tensor, au)\n";
+            std::cout << std::string(78, '-') << "\n"
+                      << std::setw(12) << std::left  << "Component"
+                      << std::setw(20) << std::right << "Electronic"
+                      << std::setw(18) << std::right << "Nuclear"
+                      << std::setw(18) << std::right << "Total"
+                      << "\n"
+                      << std::string(78, '-') << "\n";
+
+            const std::array<std::pair<const char*, std::pair<int, int>>, 6> quad_components = {{
+                {"XX", {0, 0}},
+                {"XY", {0, 1}},
+                {"XZ", {0, 2}},
+                {"YY", {1, 1}},
+                {"YZ", {1, 2}},
+                {"ZZ", {2, 2}}
+            }};
+
+            for (const auto& [label, idx] : quad_components)
+            {
+                std::cout << std::setw(12) << std::left  << label
+                          << std::setw(20) << std::right << moments.electronic_quadrupole(idx.first, idx.second)
+                          << std::setw(18) << std::right << moments.nuclear_quadrupole(idx.first, idx.second)
+                          << std::setw(18) << std::right << moments.total_quadrupole(idx.first, idx.second)
+                          << "\n";
+            }
+            std::cout << std::string(78, '-') << "\n";
         }
 
         inline void blank()

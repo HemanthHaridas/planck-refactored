@@ -1,7 +1,7 @@
 ### Planck
 
 <p align="justify">
-A quantum chemistry program implementing restricted and unrestricted Hartree-Fock SCF and Kohn-Sham DFT with an Obara-Saika integral engine, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
+A quantum chemistry program implementing restricted and unrestricted Hartree-Fock SCF and Kohn-Sham DFT with an Obara-Saika integral engine, dipole and quadrupole moment analysis, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
 </p>
 
 ### Features
@@ -11,6 +11,7 @@ A quantum chemistry program implementing restricted and unrestricted Hartree-Foc
 - **RHF / UHF** — closed-shell and open-shell Hartree-Fock
 - **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; numerical integration on a Becke–Treutler-Ahlrichs–Lebedev molecular grid with ORCA-inspired five-region pruning; LDA (Slater/VWN5) and GGA (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation) exchange-correlation functionals through libxc; four grid presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals via integer ID
 - **Two integral engines** — Obara-Saika (OS) recursive VRR/HRR for low angular momentum; Rys quadrature for high angular momentum; automatic engine selection per shell quartet based on an analytic flop-count model (`engine auto`)
+- **Electric multipole moments** — AO dipole and quadrupole matrices are built with Obara-Saika recursion after SCF convergence; the log prints electronic, nuclear, and total dipole components (`X`, `Y`, `Z`) plus the traceless Cartesian quadrupole tensor components (`XX`, `XY`, `XZ`, `YY`, `YZ`, `ZZ`) for both `hartree-fock` and `planck-dft`
 - **Conventional and Direct SCF** — ERI tensor stored once (conventional) or recomputed per iteration (direct); auto-selection based on system size
 - **DIIS** — Pulay extrapolation with optional automatic subspace restart
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
@@ -457,6 +458,10 @@ H     0.000000   -0.756950    -0.468703
 %end_coords
 ```
 
+<p align="justify">
+After the converged energy table, Planck prints a dipole and quadrupole report automatically. The dipole block includes electronic, nuclear, and total components in atomic units and Debye. The quadrupole block reports the traceless Cartesian tensor in atomic units.
+</p>
+
 ### RKS single point — water, PBE/STO-3G
 
 <p align="justify">
@@ -843,6 +848,8 @@ The program prints a structured log to standard output. Key sections:
 - **MO Energies** — orbital energies in Hartree with HOMO/LUMO labels and irrep labels when symmetry is enabled
 - **⟨S²⟩ / ⟨S⟩** — spin contamination diagnostics (UHF only)
 - **Converged Energy** — total energy in Hartree, eV, and kcal/mol; MP2 correlation and corrected total if post-HF enabled
+- **Dipole Moment** — printed automatically after a converged SCF/KS solution; includes the electronic, nuclear, and total `X`, `Y`, `Z` components in atomic units, plus the total vector norm in atomic units and Debye
+- **Quadrupole Moment** — printed automatically after the dipole block; includes electronic, nuclear, and total components of the traceless Cartesian tensor (`XX`, `XY`, `XZ`, `YY`, `YZ`, `ZZ`) in atomic units
 - **RMP2 Natural Orbitals** — printed after single-point RMP2: occupation numbers (descending) and MO expansion of each natural orbital (coefficients above 1e-2 threshold); helps identify the dominant occupied/virtual MOs contributing to correlation
 - **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms
 - **IC System** — when `opt_coords internal`, logs the count of stretches, bends, and torsions in the redundant GIC set
@@ -866,6 +873,7 @@ For `planck-dft` runs, the log additionally includes:
 - **Integrated Electrons** — electron count from numerical density integration (should match the formal count to 4–5 significant figures on a Normal grid)
 - **XC Energy** — exchange-correlation energy contribution in Hartree
 - **DFT Energy** — total Kohn-Sham energy (T + V_ne + J + E_xc + V_nn) in Hartree
+- **Dipole / Quadrupole Moments** — the same post-SCF multipole report is printed for converged RKS/UKS calculations because the property analysis uses the final KS density matrix
 
 </div>
 

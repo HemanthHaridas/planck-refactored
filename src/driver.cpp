@@ -43,6 +43,29 @@ static std::string format_time(SystemClock::time_point tp)
     return os.str();
 }
 
+static void log_multipole_report(
+    const HartreeFock::Calculator& calculator,
+    const std::vector<HartreeFock::ShellPair>& shell_pairs)
+{
+    auto moments = HartreeFock::ObaraSaika::_compute_multipole_moments(
+        calculator,
+        shell_pairs,
+        Eigen::Vector3d::Zero());
+
+    if (!moments)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Multipole Moments :",
+            "Unavailable: " + moments.error());
+        HartreeFock::Logger::blank();
+        return;
+    }
+
+    HartreeFock::Logger::multipole_moments(*moments);
+    HartreeFock::Logger::blank();
+}
+
 int main(int argc, const char* argv[])
 {
     const auto program_start    = SystemClock::now();   // Start time
@@ -535,6 +558,7 @@ int main(int argc, const char* argv[])
     }
 
     HartreeFock::Logger::converged_energy(calculator._total_energy, calculator._nuclear_repulsion);
+    log_multipole_report(calculator, shellpairs);
 
     // ── Post-HF correlation ───────────────────────────────────────────────────
     if (calculator._info._is_converged)
@@ -951,6 +975,7 @@ int main(int argc, const char* argv[])
                 }
 
                 HartreeFock::Logger::converged_energy(calculator._total_energy, calculator._nuclear_repulsion);
+                log_multipole_report(calculator, sp_sym);
                 HartreeFock::Logger::blank();
 
                 // ── Save checkpoint with optimized geometry ───────────────────

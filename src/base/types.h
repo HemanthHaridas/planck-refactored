@@ -688,6 +688,25 @@ namespace HartreeFock
         std::vector<int8_t>   ao_sign;  // phase of the mapped Cartesian AO (+1 / -1)
     };
 
+    struct MultipoleMatrices
+    {
+        std::array<Eigen::MatrixXd, 3> dipole;
+        std::array<Eigen::MatrixXd, 6> quadrupole;
+    };
+
+    struct MultipoleMoments
+    {
+        Eigen::Vector3d origin = Eigen::Vector3d::Zero();
+
+        Eigen::Vector3d electronic_dipole = Eigen::Vector3d::Zero();
+        Eigen::Vector3d nuclear_dipole    = Eigen::Vector3d::Zero();
+        Eigen::Vector3d total_dipole      = Eigen::Vector3d::Zero();
+
+        Eigen::Matrix3d electronic_quadrupole = Eigen::Matrix3d::Zero();
+        Eigen::Matrix3d nuclear_quadrupole    = Eigen::Matrix3d::Zero();
+        Eigen::Matrix3d total_quadrupole      = Eigen::Matrix3d::Zero();
+    };
+
     struct Calculator
     {
         OptionsSCF      _scf;

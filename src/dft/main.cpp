@@ -7,6 +7,7 @@
 #include <string>
 
 #include "driver.h"
+#include "integrals/os.h"
 #include "io/io.h"
 #include "io/logging.h"
 
@@ -42,6 +43,28 @@ std::string dft_reference_label(HartreeFock::SCFType scf_type)
     }
 
     return "Unknown";
+}
+
+void log_multipole_report(const HartreeFock::Calculator& calculator)
+{
+    auto shell_pairs = build_shellpairs(calculator._shells);
+    auto moments = HartreeFock::ObaraSaika::_compute_multipole_moments(
+        calculator,
+        shell_pairs,
+        Eigen::Vector3d::Zero());
+
+    if (!moments)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Multipole Moments :",
+            "Unavailable: " + moments.error());
+        HartreeFock::Logger::blank();
+        return;
+    }
+
+    HartreeFock::Logger::multipole_moments(*moments);
+    HartreeFock::Logger::blank();
 }
 
 } // namespace
@@ -107,6 +130,9 @@ int main(int argc, const char* argv[])
             result.error());
         return EXIT_FAILURE;
     }
+
+    if (result->converged)
+        log_multipole_report(calculator);
 
     HartreeFock::Logger::logging(
         HartreeFock::LogLevel::Info,
