@@ -20,6 +20,21 @@ inline double g_act(const std::vector<double>& ga, int p, int q, int r, int s, i
     return ga[((p * na + q) * na + r) * na + s];
 }
 
+std::vector<int> occupied_orbitals(CIString det, int n_orb)
+{
+    std::vector<int> occ;
+    occ.reserve(n_orb);
+    for (int i = 0; i < n_orb; ++i)
+        if (det & CASSCFInternal::single_bit_mask(i))
+            occ.push_back(i);
+    return occ;
+}
+
+CIString pack_spin_det(CIString alpha, CIString beta, int n_act)
+{
+    return alpha | ((n_act >= CASSCFInternal::kCIStringBits) ? 0 : (beta << n_act));
+}
+
 std::vector<std::pair<int, int>> enumerate_ci_dets(
     const std::vector<CIString>& a_strs,
     const std::vector<CIString>& b_strs,
@@ -362,6 +377,8 @@ CIDeterminantSpace build_ci_space(
     CIDeterminantSpace space;
     space.dets = enumerate_ci_dets(a_strs, b_strs, ras, irr_act, sym_ctx, target_irr);
     space.diagonal = build_ci_diagonal(a_strs, b_strs, space.dets, h_eff, ga, n_act);
+    space.spin_dets = build_spin_dets(a_strs, b_strs, space.dets, n_act);
+    space.det_lookup = build_det_lookup(space.spin_dets);
     if (static_cast<int>(space.dets.size()) <= dense_threshold)
         space.dense_hamiltonian = build_ci_hamiltonian_dense(
             a_strs, b_strs, space.dets, h_eff, ga, n_act);
@@ -389,23 +406,143 @@ void apply_ci_hamiltonian(
         return;
     }
 
+    if (space.det_lookup.empty() || static_cast<int>(space.spin_dets.size()) != dim)
+    {
+        for (int j = 0; j < dim; ++j)
+        {
+            const double cj = c(j);
+            if (std::abs(cj) < 1e-15)
+                continue;
+            const auto [ja, jb] = space.dets[j];
+            for (int i = 0; i < dim; ++i)
+            {
+                const auto [ia, ib] = space.dets[i];
+                const double hij = slater_condon_element(
+                    a_strs[ia], b_strs[ib],
+                    a_strs[ja], b_strs[jb],
+                    h_eff, ga, n_act);
+                if (std::abs(hij) < 1e-15)
+                    continue;
+                sigma(i) += hij * cj;
+            }
+        }
+        return;
+    }
+
+    auto accumulate = [&](CIString bra_a, CIString bra_b, CIString ket_a, CIString ket_b, double coeff)
+    {
+        const auto it = space.det_lookup.find(pack_spin_det(bra_a, bra_b, n_act));
+        if (it == space.det_lookup.end())
+            return;
+
+        const double hij = slater_condon_element(bra_a, bra_b, ket_a, ket_b, h_eff, ga, n_act);
+        if (std::abs(hij) < 1e-15)
+            return;
+        sigma(it->second) += hij * coeff;
+    };
+
     for (int j = 0; j < dim; ++j)
     {
         const double cj = c(j);
         if (std::abs(cj) < 1e-15)
             continue;
-        const auto [ja, jb] = space.dets[j];
-        for (int i = 0; i < dim; ++i)
-        {
-            const auto [ia, ib] = space.dets[i];
-            const double hij = slater_condon_element(
-                a_strs[ia], b_strs[ib],
-                a_strs[ja], b_strs[jb],
-                h_eff, ga, n_act);
-            if (std::abs(hij) < 1e-15)
-                continue;
-            sigma(i) += hij * cj;
-        }
+        const auto [ia, ib] = space.dets[j];
+        const CIString ket_a = a_strs[ia];
+        const CIString ket_b = b_strs[ib];
+        const auto occ_alpha = occupied_orbitals(ket_a, n_act);
+        const auto occ_beta = occupied_orbitals(ket_b, n_act);
+
+        accumulate(ket_a, ket_b, ket_a, ket_b, cj);
+
+        for (int q : occ_alpha)
+            for (int p = 0; p < n_act; ++p)
+            {
+                if (ket_a & CASSCFInternal::single_bit_mask(p))
+                    continue;
+                auto ann = apply_annihilation(ket_a, q);
+                if (!ann.valid) continue;
+                auto cre = apply_creation(ann.det, p);
+                if (!cre.valid) continue;
+                accumulate(cre.det, ket_b, ket_a, ket_b, cj);
+            }
+
+        for (int q : occ_beta)
+            for (int p = 0; p < n_act; ++p)
+            {
+                if (ket_b & CASSCFInternal::single_bit_mask(p))
+                    continue;
+                auto ann = apply_annihilation(ket_b, q);
+                if (!ann.valid) continue;
+                auto cre = apply_creation(ann.det, p);
+                if (!cre.valid) continue;
+                accumulate(ket_a, cre.det, ket_a, ket_b, cj);
+            }
+
+        for (std::size_t q1 = 0; q1 + 1 < occ_alpha.size(); ++q1)
+            for (std::size_t q2 = q1 + 1; q2 < occ_alpha.size(); ++q2)
+                for (int p1 = 0; p1 < n_act; ++p1)
+                {
+                    if (ket_a & CASSCFInternal::single_bit_mask(p1))
+                        continue;
+                    for (int p2 = p1 + 1; p2 < n_act; ++p2)
+                    {
+                        if (ket_a & CASSCFInternal::single_bit_mask(p2))
+                            continue;
+                        auto ann1 = apply_annihilation(ket_a, occ_alpha[q1]);
+                        if (!ann1.valid) continue;
+                        auto ann2 = apply_annihilation(ann1.det, occ_alpha[q2]);
+                        if (!ann2.valid) continue;
+                        auto cre1 = apply_creation(ann2.det, p1);
+                        if (!cre1.valid) continue;
+                        auto cre2 = apply_creation(cre1.det, p2);
+                        if (!cre2.valid) continue;
+                        accumulate(cre2.det, ket_b, ket_a, ket_b, cj);
+                    }
+                }
+
+        for (std::size_t q1 = 0; q1 + 1 < occ_beta.size(); ++q1)
+            for (std::size_t q2 = q1 + 1; q2 < occ_beta.size(); ++q2)
+                for (int p1 = 0; p1 < n_act; ++p1)
+                {
+                    if (ket_b & CASSCFInternal::single_bit_mask(p1))
+                        continue;
+                    for (int p2 = p1 + 1; p2 < n_act; ++p2)
+                    {
+                        if (ket_b & CASSCFInternal::single_bit_mask(p2))
+                            continue;
+                        auto ann1 = apply_annihilation(ket_b, occ_beta[q1]);
+                        if (!ann1.valid) continue;
+                        auto ann2 = apply_annihilation(ann1.det, occ_beta[q2]);
+                        if (!ann2.valid) continue;
+                        auto cre1 = apply_creation(ann2.det, p1);
+                        if (!cre1.valid) continue;
+                        auto cre2 = apply_creation(cre1.det, p2);
+                        if (!cre2.valid) continue;
+                        accumulate(ket_a, cre2.det, ket_a, ket_b, cj);
+                    }
+                }
+
+        for (int qa : occ_alpha)
+            for (int qb : occ_beta)
+                for (int pa = 0; pa < n_act; ++pa)
+                {
+                    if (ket_a & CASSCFInternal::single_bit_mask(pa))
+                        continue;
+                    for (int pb = 0; pb < n_act; ++pb)
+                    {
+                        if (ket_b & CASSCFInternal::single_bit_mask(pb))
+                            continue;
+                        auto ann_a = apply_annihilation(ket_a, qa);
+                        if (!ann_a.valid) continue;
+                        auto ann_b = apply_annihilation(ket_b, qb);
+                        if (!ann_b.valid) continue;
+                        auto cre_a = apply_creation(ann_a.det, pa);
+                        if (!cre_a.valid) continue;
+                        auto cre_b = apply_creation(ann_b.det, pb);
+                        if (!cre_b.valid) continue;
+                        accumulate(cre_a.det, cre_b.det, ket_a, ket_b, cj);
+                    }
+                }
     }
 }
 

@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <optional>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,8 @@ struct CIDeterminantSpace
     std::vector<std::pair<int, int>> dets;
     Eigen::VectorXd diagonal;
     std::optional<Eigen::MatrixXd> dense_hamiltonian;
+    std::vector<CIString> spin_dets;
+    std::unordered_map<CIString, int> det_lookup;
 };
 
 struct CISolveResult

@@ -6,10 +6,12 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace
@@ -23,6 +25,153 @@ bool expect(bool condition, const std::string& message)
     if (condition) return true;
     std::cerr << message << '\n';
     return false;
+}
+
+std::vector<int> occupied_orbitals(CIString det, int n_orb)
+{
+    std::vector<int> occ;
+    for (int i = 0; i < n_orb; ++i)
+        if (det & single_bit_mask(i))
+            occ.push_back(i);
+    return occ;
+}
+
+CIString pack_spin_det(CIString alpha, CIString beta, int n_act)
+{
+    return alpha | ((n_act >= kCIStringBits) ? 0 : (beta << n_act));
+}
+
+Eigen::VectorXd ci_sigma_excitation_class(
+    const CIDeterminantSpace& space,
+    const std::vector<CIString>& a_strs,
+    const std::vector<CIString>& b_strs,
+    const Eigen::MatrixXd& h_eff,
+    const std::vector<double>& ga,
+    int n_act,
+    const Eigen::VectorXd& c)
+{
+    const int dim = static_cast<int>(space.dets.size());
+    const std::vector<CIString> sd = build_spin_dets(a_strs, b_strs, space.dets, n_act);
+    const auto lut = build_det_lookup(sd);
+    Eigen::VectorXd sigma = Eigen::VectorXd::Zero(dim);
+
+    for (int j = 0; j < dim; ++j)
+    {
+        const double cJ = c(j);
+        if (std::abs(cJ) < 1e-15) continue;
+
+        const auto [ia, ib] = space.dets[j];
+        const CIString ket_a = a_strs[ia];
+        const CIString ket_b = b_strs[ib];
+        std::unordered_set<CIString> seen;
+
+        auto accumulate = [&](CIString bra_a, CIString bra_b)
+        {
+            const CIString packed = pack_spin_det(bra_a, bra_b, n_act);
+            if (!seen.insert(packed).second)
+                return;
+            auto it = lut.find(packed);
+            if (it == lut.end())
+                return;
+            sigma(it->second) +=
+                slater_condon_element(bra_a, bra_b, ket_a, ket_b, h_eff, ga, n_act) * cJ;
+        };
+
+        accumulate(ket_a, ket_b);
+
+        const auto occ_alpha = occupied_orbitals(ket_a, n_act);
+        const auto occ_beta  = occupied_orbitals(ket_b, n_act);
+
+        for (int p : occ_alpha)
+            for (int q = 0; q < n_act; ++q)
+            {
+                if (ket_a & single_bit_mask(q))
+                    continue;
+                auto ann = apply_annihilation(ket_a, p);
+                if (!ann.valid) continue;
+                auto cre = apply_creation(ann.det, q);
+                if (!cre.valid) continue;
+                accumulate(cre.det, ket_b);
+            }
+
+        for (int p : occ_beta)
+            for (int q = 0; q < n_act; ++q)
+            {
+                if (ket_b & single_bit_mask(q))
+                    continue;
+                auto ann = apply_annihilation(ket_b, p);
+                if (!ann.valid) continue;
+                auto cre = apply_creation(ann.det, q);
+                if (!cre.valid) continue;
+                accumulate(ket_a, cre.det);
+            }
+
+        for (std::size_t i = 0; i + 1 < occ_alpha.size(); ++i)
+            for (std::size_t k = i + 1; k < occ_alpha.size(); ++k)
+                for (int q = 0; q < n_act; ++q)
+                {
+                    if (ket_a & single_bit_mask(q)) continue;
+                    for (int s = q + 1; s < n_act; ++s)
+                    {
+                        if (ket_a & single_bit_mask(s)) continue;
+                        auto d = ket_a;
+                        auto ann1 = apply_annihilation(d, occ_alpha[i]);
+                        if (!ann1.valid) continue;
+                        auto ann2 = apply_annihilation(ann1.det, occ_alpha[k]);
+                        if (!ann2.valid) continue;
+                        auto cre1 = apply_creation(ann2.det, q);
+                        if (!cre1.valid) continue;
+                        auto cre2 = apply_creation(cre1.det, s);
+                        if (!cre2.valid) continue;
+                        accumulate(cre2.det, ket_b);
+                    }
+                }
+
+        for (std::size_t i = 0; i + 1 < occ_beta.size(); ++i)
+            for (std::size_t k = i + 1; k < occ_beta.size(); ++k)
+                for (int q = 0; q < n_act; ++q)
+                {
+                    if (ket_b & single_bit_mask(q)) continue;
+                    for (int s = q + 1; s < n_act; ++s)
+                    {
+                        if (ket_b & single_bit_mask(s)) continue;
+                        auto d = ket_b;
+                        auto ann1 = apply_annihilation(d, occ_beta[i]);
+                        if (!ann1.valid) continue;
+                        auto ann2 = apply_annihilation(ann1.det, occ_beta[k]);
+                        if (!ann2.valid) continue;
+                        auto cre1 = apply_creation(ann2.det, q);
+                        if (!cre1.valid) continue;
+                        auto cre2 = apply_creation(cre1.det, s);
+                        if (!cre2.valid) continue;
+                        accumulate(ket_a, cre2.det);
+                    }
+                }
+
+        for (int pa : occ_alpha)
+            for (int pb : occ_beta)
+                for (int qa = 0; qa < n_act; ++qa)
+                {
+                    if (ket_a & single_bit_mask(qa)) continue;
+                    for (int qb = 0; qb < n_act; ++qb)
+                    {
+                        if (ket_b & single_bit_mask(qb)) continue;
+                        auto d_a = ket_a;
+                        auto d_b = ket_b;
+                        auto ann_a = apply_annihilation(d_a, pa);
+                        if (!ann_a.valid) continue;
+                        auto ann_b = apply_annihilation(d_b, pb);
+                        if (!ann_b.valid) continue;
+                        auto cre_a = apply_creation(ann_a.det, qa);
+                        if (!cre_a.valid) continue;
+                        auto cre_b = apply_creation(ann_b.det, qb);
+                        if (!cre_b.valid) continue;
+                        accumulate(cre_a.det, cre_b.det);
+                    }
+                }
+    }
+
+    return sigma;
 }
 
 } // namespace
@@ -322,6 +471,54 @@ int main()
                      "direct sigma-vector Davidson should reproduce dense CI eigenvalues on a small problem");
         ok &= expect((direct_proj - dense_proj).norm() < 1e-8,
                      "direct sigma-vector Davidson should recover the same low-root invariant subspace as dense CI");
+    }
+
+    {
+        std::vector<CIString> a_strs;
+        std::vector<CIString> b_strs;
+        build_spin_strings_unfiltered(4, 2, 2, a_strs, b_strs);
+
+        Eigen::MatrixXd h_eff(4, 4);
+        h_eff << -1.40, 0.08, -0.02, 0.01,
+                  0.08, -0.90, 0.05, -0.03,
+                 -0.02, 0.05, -0.45, 0.04,
+                  0.01, -0.03, 0.04, 0.15;
+
+        std::vector<double> ga(256, 0.0);
+        auto idx4 = [](int p, int q, int r, int s) {
+            return ((p * 4 + q) * 4 + r) * 4 + s;
+        };
+        ga[idx4(0, 0, 0, 0)] = 0.72;
+        ga[idx4(1, 1, 1, 1)] = 0.55;
+        ga[idx4(2, 2, 2, 2)] = 0.42;
+        ga[idx4(3, 3, 3, 3)] = 0.31;
+        ga[idx4(0, 0, 1, 1)] = ga[idx4(1, 1, 0, 0)] = 0.20;
+        ga[idx4(0, 0, 2, 2)] = ga[idx4(2, 2, 0, 0)] = 0.11;
+        ga[idx4(1, 1, 3, 3)] = ga[idx4(3, 3, 1, 1)] = 0.09;
+        ga[idx4(0, 1, 1, 0)] = ga[idx4(1, 0, 0, 1)] = 0.04;
+        ga[idx4(0, 2, 2, 0)] = ga[idx4(2, 0, 0, 2)] = 0.03;
+        ga[idx4(1, 3, 3, 1)] = ga[idx4(3, 1, 1, 3)] = 0.05;
+        ga[idx4(0, 3, 3, 0)] = ga[idx4(3, 0, 0, 3)] = 0.02;
+        ga[idx4(1, 2, 2, 1)] = ga[idx4(2, 1, 1, 2)] = 0.06;
+
+        RASParams ras;
+        const CIDeterminantSpace space =
+            build_ci_space(a_strs, b_strs, ras, h_eff, ga, 4, {}, nullptr, 0, 0);
+        const Eigen::MatrixXd dense_h =
+            build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, h_eff, ga, 4);
+
+        Eigen::VectorXd c = Eigen::VectorXd::LinSpaced(static_cast<int>(space.dets.size()), -0.45, 0.35);
+        Eigen::VectorXd sigma_dense = dense_h * c;
+        Eigen::VectorXd sigma_direct = Eigen::VectorXd::Zero(static_cast<int>(space.dets.size()));
+        apply_ci_hamiltonian(space, a_strs, b_strs, h_eff, ga, 4, c, sigma_direct);
+        Eigen::VectorXd sigma_class = ci_sigma_excitation_class(space, a_strs, b_strs, h_eff, ga, 4, c);
+
+        ok &= expect((sigma_direct - sigma_dense).norm() < 1e-12,
+                     "direct CI sigma application should match dense Hamiltonian multiplication on a 4-orbital test space");
+        ok &= expect((sigma_class - sigma_dense).norm() < 1e-12,
+                     "excitation-class CI sigma builder should match dense Hamiltonian multiplication on the same test space");
+        ok &= expect((sigma_class - sigma_direct).norm() < 1e-12,
+                     "excitation-class CI sigma builder should reproduce the current direct CI sigma path exactly");
     }
 
     {
