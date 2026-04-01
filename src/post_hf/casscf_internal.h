@@ -274,7 +274,7 @@ inline CIResponseResult ci_response_diag_precond_single_step(
     result.c1 = project_orthogonal(result.c1, c0);
     result.residual_norm = compute_ci_response_residual(H, result.c1, c0, E0, sigma).norm();
     result.iterations = 1;
-    result.converged = std::isfinite(result.residual_norm);
+    result.converged = false;
     return result;
 }
 

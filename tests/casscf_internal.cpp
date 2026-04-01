@@ -1,6 +1,7 @@
 #include "post_hf/casscf_internal.h"
 #include "post_hf/casscf/ci.h"
 #include "post_hf/casscf/rdm.h"
+#include "post_hf/casscf/response.h"
 #include "post_hf/casscf/strings.h"
 
 #include <Eigen/Core>
@@ -144,6 +145,33 @@ int main()
     }
 
     {
+        Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, 3);
+        H(1, 1) = 1.5;
+        H(1, 2) = 0.25;
+        H(2, 1) = 0.25;
+        H(2, 2) = 3.0;
+
+        Eigen::VectorXd c0 = Eigen::VectorXd::Zero(3);
+        c0(0) = 1.0;
+        const double E0 = 0.0;
+        const Eigen::VectorXd H_diag = H.diagonal();
+        Eigen::VectorXd sigma(3);
+        sigma << 0.4, -0.2, 0.5;
+
+        const CIResponseResult response =
+            ci_response_diag_precond_single_step(H, c0, E0, H_diag, sigma, 1e-6);
+
+        ok &= expect(std::isfinite(response.residual_norm),
+                     "single-step CI response should report a finite residual norm for a well-posed problem");
+        ok &= expect(response.iterations == 1,
+                     "single-step CI response should report exactly one preconditioned step");
+        ok &= expect(!response.converged,
+                     "single-step CI response should not claim convergence just because the residual is finite");
+        ok &= expect(std::abs(c0.dot(response.c1)) < 1e-12,
+                     "single-step CI response should preserve the orthogonality gauge");
+    }
+
+    {
         Eigen::MatrixXd gamma(2, 2);
         gamma << 1.2, 0.3,
                  0.3, 0.8;
@@ -157,6 +185,34 @@ int main()
                      "natural occupations should preserve the active electron count");
         ok &= expect((rebuilt - gamma).norm() < 1e-12,
                      "natural-orbital rotation should diagonalize the 1-RDM without changing it on reconstruction");
+    }
+
+    {
+        std::vector<CIString> a_strs;
+        std::vector<CIString> b_strs;
+        build_spin_strings_unfiltered(3, 1, 1, a_strs, b_strs);
+
+        Eigen::MatrixXd dh(3, 3);
+        dh << 0.30, -0.11, 0.07,
+             -0.11, -0.20, 0.13,
+              0.07, 0.13, 0.50;
+
+        std::vector<double> ga_zero(81, 0.0);
+        RASParams ras;
+        const std::vector<std::pair<int, int>> dets =
+            build_ci_determinant_list(a_strs, b_strs, ras, {}, nullptr, 0);
+        const Eigen::MatrixXd one_body_matrix =
+            build_ci_hamiltonian_dense(a_strs, b_strs, dets, dh, ga_zero, 3);
+
+        Eigen::VectorXd c = Eigen::VectorXd::LinSpaced(static_cast<int>(dets.size()), -0.4, 0.5);
+        const Eigen::VectorXd sigma_dense = one_body_matrix * c;
+        const Eigen::VectorXd sigma_direct =
+            ci_sigma_1body(dh, c, a_strs, b_strs, dets, 3);
+
+        ok &= expect((one_body_matrix - one_body_matrix.transpose()).norm() < 1e-12,
+                     "one-body CI matrix built from Slater-Condon rules should be Hermitian for Hermitian operators");
+        ok &= expect((sigma_direct - sigma_dense).norm() < 1e-12,
+                     "ci_sigma_1body should match explicit one-body CI matrix application under the shared ket-to-bra convention");
     }
 
     {

@@ -15,15 +15,17 @@ using HartreeFock::Correlation::CASSCFInternal::CIString;
 
 enum class ResponseMode
 {
-    ApproximateDressedGradient,
-    IterativeResponse,
-    TargetFullSecondOrder,
+    ApproximatePrototype,
+    DiagonalResponse,
+    CoupledSecondOrderTarget,
 };
 
 const char* response_mode_name(ResponseMode mode);
 
 using CISigmaApplier = std::function<void(const Eigen::VectorXd&, Eigen::VectorXd&)>;
 
+// Applies the same ket->bra convention as slater_condon_element():
+// sum_pq dh(p,q) a_p^dagger a_q.
 Eigen::VectorXd ci_sigma_1body(
     const Eigen::MatrixXd& dh,
     const Eigen::VectorXd& c,

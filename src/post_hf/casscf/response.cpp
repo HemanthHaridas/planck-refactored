@@ -57,12 +57,12 @@ const char* response_mode_name(ResponseMode mode)
 {
     switch (mode)
     {
-        case ResponseMode::ApproximateDressedGradient:
-            return "approximate dressed-gradient";
-        case ResponseMode::IterativeResponse:
-            return "iterative-response dressed-gradient";
-        case ResponseMode::TargetFullSecondOrder:
-            return "target full second-order";
+        case ResponseMode::ApproximatePrototype:
+            return "approximate prototype";
+        case ResponseMode::DiagonalResponse:
+            return "diagonal-orbital-plus-CI-response approximation";
+        case ResponseMode::CoupledSecondOrderTarget:
+            return "coupled second-order target (not implemented)";
     }
     return "unknown";
 }
@@ -85,16 +85,19 @@ Eigen::VectorXd ci_sigma_1body(
         const double cJ = c(j);
         if (std::abs(cJ) < 1e-15) continue;
         const auto ket = sd[j];
-        for (int p_so = 0; p_so < 2 * n_act; ++p_so)
+        // Match slater_condon_element(): use the ket->bra convention
+        // for a_p^\dagger a_q, i.e. annihilate an occupied q in the ket
+        // and create the corresponding bra orbital p with coefficient dh(p, q).
+        for (int q_so = 0; q_so < 2 * n_act; ++q_so)
         {
-            auto ann = apply_annihilation(ket, p_so);
+            auto ann = apply_annihilation(ket, q_so);
             if (!ann.valid) continue;
-            const int spin_offset = (p_so >= n_act) ? n_act : 0;
-            const int p = p_so - spin_offset;
-            for (int q = 0; q < n_act; ++q)
+            const int spin_offset = (q_so >= n_act) ? n_act : 0;
+            const int q = q_so - spin_offset;
+            for (int p = 0; p < n_act; ++p)
             {
                 if (std::abs(dh(p, q)) < 1e-18) continue;
-                auto cre = apply_creation(ann.det, spin_offset + q);
+                auto cre = apply_creation(ann.det, spin_offset + p);
                 if (!cre.valid) continue;
                 auto it = lut.find(cre.det);
                 if (it == lut.end()) continue;
@@ -133,7 +136,7 @@ CIResponseResult solve_ci_response_single_step(
     result.c1 = project_orthogonal(result.c1, c0);
     result.residual_norm = response_residual(apply, result.c1, c0, E0, sigma).norm();
     result.iterations = 1;
-    result.converged = std::isfinite(result.residual_norm);
+    result.converged = false;
     return result;
 }
 

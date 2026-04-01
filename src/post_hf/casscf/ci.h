@@ -29,6 +29,8 @@ struct CISolveResult
     bool used_direct_sigma = false;
 };
 
+// Matrix element of the active-space Hamiltonian using the ket->bra
+// convention for one-body excitations: sum_pq h(p,q) a_p^dagger a_q.
 double slater_condon_element(
     CIString bra_a,
     CIString bra_b,

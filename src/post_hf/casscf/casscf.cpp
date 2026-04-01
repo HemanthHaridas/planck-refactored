@@ -274,7 +274,7 @@ std::expected<void, std::string> run_mcscf_loop(
     build_spin_strings_unfiltered(n_act, n_alpha_act, n_beta_act, a_strs, b_strs);
 
     const unsigned int nmicro = std::max(1u, as.mcscf_micro_per_macro);
-    const ResponseMode configured_response_mode = ResponseMode::IterativeResponse;
+    const ResponseMode configured_response_mode = ResponseMode::DiagonalResponse;
     const int numeric_newton_pair_limit = 48;
     const int ci_dense_threshold = 500;
 
@@ -282,7 +282,7 @@ std::expected<void, std::string> run_mcscf_loop(
             std::format("Active space: ({:d}e, {:d}o)  n_core={:d}  n_virt={:d}  CI dim ≤ {:d}",
                         as.nactele, n_act, n_core, n_virt, ci_dim_est));
     logging(LogLevel::Info, tag + " :",
-            std::format("Algorithm: macro/micro scaffold with {} CI response  nmicro={:d}",
+            std::format("Algorithm: approximate macro/micro scaffold with {}  nmicro={:d}",
                         response_mode_name(configured_response_mode), nmicro));
     if (have_sym && !point_group_is_abelian_for_labels)
         logging(LogLevel::Warning, tag + " :",
