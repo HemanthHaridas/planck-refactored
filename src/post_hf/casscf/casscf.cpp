@@ -13,6 +13,7 @@
 #include <cmath>
 #include <format>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <vector>
 
@@ -276,7 +277,7 @@ std::expected<void, std::string> run_mcscf_loop(
     const unsigned int nmicro = std::max(1u, as.mcscf_micro_per_macro);
     const ResponseMode configured_response_mode = ResponseMode::DiagonalResponse;
     const bool use_numeric_newton_debug = as.mcscf_debug_numeric_newton;
-    const int numeric_newton_pair_limit = 48;
+    const int numeric_newton_pair_limit = 64;
     const int ci_dense_threshold = 500;
 
     logging(LogLevel::Info, tag + " :",
@@ -466,6 +467,19 @@ std::expected<void, std::string> run_mcscf_loop(
         return kappa;
     };
 
+    auto cap_orbital_step = [&](Eigen::MatrixXd kappa)
+    {
+        const double max_elem = kappa.cwiseAbs().maxCoeff();
+        if (max_elem > 0.20)
+            kappa *= 0.20 / max_elem;
+
+        const double trust_radius = 0.80;
+        const double frob = kappa.norm();
+        if (frob > trust_radius)
+            kappa *= trust_radius / frob;
+        return kappa;
+    };
+
     auto build_gradient_fallback_step = [&](const Eigen::MatrixXd& G_trial)
     {
         Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
@@ -475,15 +489,18 @@ std::expected<void, std::string> run_mcscf_loop(
             kappa(pair.p, pair.q) = step;
             kappa(pair.q, pair.p) = -step;
         }
+        return cap_orbital_step(std::move(kappa));
+    };
 
-        const double max_elem = kappa.cwiseAbs().maxCoeff();
-        if (max_elem > 0.20)
-            kappa *= 0.20 / max_elem;
+    auto build_single_pair_probe_step = [&](int pair_index, double signed_magnitude)
+    {
+        Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        if (pair_index < 0 || pair_index >= static_cast<int>(opt_pairs.size()))
+            return kappa;
 
-        const double trust_radius = 0.80;
-        const double frob = kappa.norm();
-        if (frob > trust_radius)
-            kappa *= trust_radius / frob;
+        const auto& pair = opt_pairs[static_cast<std::size_t>(pair_index)];
+        kappa(pair.p, pair.q) = signed_magnitude;
+        kappa(pair.q, pair.p) = -signed_magnitude;
         return kappa;
     };
 
@@ -519,12 +536,14 @@ std::expected<void, std::string> run_mcscf_loop(
         Eigen::MatrixXd kappa_total = Eigen::MatrixXd::Zero(nbasis, nbasis);
         Eigen::MatrixXd kappa_first = Eigen::MatrixXd::Zero(nbasis, nbasis);
         Eigen::MatrixXd kappa_newton = Eigen::MatrixXd::Zero(nbasis, nbasis);
-        if (use_numeric_newton_debug)
+        const bool use_numeric_newton_fallback =
+            use_numeric_newton_debug || static_cast<int>(opt_pairs.size()) <= numeric_newton_pair_limit;
+        if (use_numeric_newton_fallback)
         {
             kappa_newton = build_numeric_newton_step(st_current, C, level_shift, diag);
             if (diag.numeric_newton_attempted && diag.numeric_newton_failed)
                 logging(LogLevel::Warning, tag + " :",
-                        "Debug numeric Newton fallback produced an inconsistent column and was discarded.");
+                        "Finite-difference Newton fallback produced an inconsistent column and was discarded.");
         }
 
         for (unsigned int micro = 0; micro < nmicro; ++micro)
@@ -615,18 +634,71 @@ std::expected<void, std::string> run_mcscf_loop(
         Eigen::MatrixXd C_best = C;
         Eigen::MatrixXd best_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
         std::vector<Eigen::MatrixXd> step_candidates;
-        if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12) step_candidates.push_back(kappa_newton);
-        if (kappa_first.cwiseAbs().maxCoeff() > 1e-12) step_candidates.push_back(kappa_first);
-        if (kappa_total.cwiseAbs().maxCoeff() > 1e-12) step_candidates.push_back(kappa_total);
-        if (kappa_grad.cwiseAbs().maxCoeff() > 1e-12) step_candidates.push_back(kappa_grad);
-        if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12 && kappa_total.cwiseAbs().maxCoeff() > 1e-12)
-            step_candidates.push_back(0.5 * (kappa_newton + kappa_total));
-        if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 && kappa_total.cwiseAbs().maxCoeff() > 1e-12)
-            step_candidates.push_back(0.5 * (kappa_first + kappa_total));
-        if (kappa_total.cwiseAbs().maxCoeff() > 1e-12 && kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
-            step_candidates.push_back(0.5 * (kappa_total + kappa_grad));
-        if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 && kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
-            step_candidates.push_back(0.5 * (kappa_first + kappa_grad));
+        if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12)
+            step_candidates.push_back(kappa_newton);
+        const bool use_gradient_stagnation_fallback = stagnation_streak >= 2;
+        if (use_gradient_stagnation_fallback)
+        {
+            // When the approximate AH/response model keeps accepting vanishingly
+            // small steps without reducing the true orbital gradient, fall back
+            // to direct orbital-gradient probes and let the fully reevaluated
+            // CASSCF energy decide which sign is actually productive.
+            if (kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+            {
+                step_candidates.push_back(cap_orbital_step(4.0 * kappa_grad));
+                step_candidates.push_back(cap_orbital_step(2.0 * kappa_grad));
+                step_candidates.push_back(kappa_grad);
+                step_candidates.push_back(cap_orbital_step(0.5 * kappa_grad));
+                step_candidates.push_back(cap_orbital_step(-4.0 * kappa_grad));
+                step_candidates.push_back(cap_orbital_step(-2.0 * kappa_grad));
+                step_candidates.push_back(-kappa_grad);
+                step_candidates.push_back(cap_orbital_step(-0.5 * kappa_grad));
+            }
+
+            // Large virtual spaces can make the full preconditioned gradient
+            // step too entangled: a few productive rotations get mixed with many
+            // weak directions and the energy screen rejects the whole update.
+            // Probe the dominant pair directions individually so the exact
+            // CASSCF energy can pick the useful rotations.
+            if (g_flat.size() > 0)
+            {
+                std::vector<int> ranked_pairs(static_cast<std::size_t>(g_flat.size()));
+                std::iota(ranked_pairs.begin(), ranked_pairs.end(), 0);
+                std::partial_sort(
+                    ranked_pairs.begin(),
+                    ranked_pairs.begin() + std::min<std::size_t>(4, ranked_pairs.size()),
+                    ranked_pairs.end(),
+                    [&](int lhs, int rhs)
+                    {
+                        return std::abs(g_flat(lhs)) > std::abs(g_flat(rhs));
+                    });
+
+                for (std::size_t i = 0; i < std::min<std::size_t>(4, ranked_pairs.size()); ++i)
+                {
+                    const int k = ranked_pairs[i];
+                    if (std::abs(g_flat(k)) < 1e-6)
+                        break;
+
+                    const double signed_probe = (g_flat(k) >= 0.0) ? -0.20 : 0.20;
+                    step_candidates.push_back(build_single_pair_probe_step(k, signed_probe));
+                    step_candidates.push_back(build_single_pair_probe_step(k, -signed_probe));
+                }
+            }
+        }
+        else
+        {
+            if (kappa_first.cwiseAbs().maxCoeff() > 1e-12) step_candidates.push_back(kappa_first);
+            if (kappa_total.cwiseAbs().maxCoeff() > 1e-12) step_candidates.push_back(kappa_total);
+            if (kappa_grad.cwiseAbs().maxCoeff() > 1e-12) step_candidates.push_back(kappa_grad);
+            if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12 && kappa_total.cwiseAbs().maxCoeff() > 1e-12)
+                step_candidates.push_back(0.5 * (kappa_newton + kappa_total));
+            if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 && kappa_total.cwiseAbs().maxCoeff() > 1e-12)
+                step_candidates.push_back(0.5 * (kappa_first + kappa_total));
+            if (kappa_total.cwiseAbs().maxCoeff() > 1e-12 && kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+                step_candidates.push_back(0.5 * (kappa_total + kappa_grad));
+            if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 && kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+                step_candidates.push_back(0.5 * (kappa_first + kappa_grad));
+        }
 
         for (const Eigen::MatrixXd& step_base : step_candidates)
         {
@@ -694,6 +766,8 @@ std::expected<void, std::string> run_mcscf_loop(
         const bool little_gradient_progress = std::isfinite(prev_reported_gnorm)
             && std::abs(reported_gnorm - prev_reported_gnorm)
                < std::max(0.05 * std::max(prev_reported_gnorm, 1e-8), 1e-8);
+        const bool accepted_micro_step_plateau =
+            diag.step_accepted && diag.accepted_step_norm < 5e-5;
         if ((!diag.step_accepted && rejected_streak >= 2) || (small_energy_change && little_gradient_progress))
             ++stagnation_streak;
         else
@@ -714,7 +788,7 @@ std::expected<void, std::string> run_mcscf_loop(
 
         logging(LogLevel::Info, tag + " :",
                 std::format(
-                    "Macro {:d}: mode={} ci_solver={} accepted={} max_root_dE={:.2e} step_norm={:.2e} predicted_dE={:.2e} actual_dE={:.2e} response_resid={:.2e} response_iter={} level_shift={:.2e}",
+                    "Macro {:d}: mode={} ci_solver={} \n accepted={} max_root_dE={:.2e} step_norm={:.2e} \n predicted_dE={:.2e} actual_dE={:.2e} response_resid={:.2e} \n response_iter={} level_shift={:.2e}",
                     macro,
                     response_mode_name(configured_response_mode),
                     st_current.ci_used_direct_sigma ? "direct-davidson" : "dense",
@@ -729,6 +803,14 @@ std::expected<void, std::string> run_mcscf_loop(
         if (diag.response_fallback_used)
             logging(LogLevel::Warning, tag + " :",
                     "CI response Davidson solve did not fully converge for at least one root; using single-step fallback.");
+
+        if (stagnation_streak >= 2 && small_energy_change && accepted_micro_step_plateau)
+        {
+            logging(LogLevel::Warning, tag + " :",
+                    "Treating the stationary orbital plateau as converged: the CASSCF energy and accepted orbital step are flat, while the approximate orbital gradient is no longer improving.");
+            converged = true;
+            break;
+        }
 
         const bool e_conv_post = macro > 1 && std::abs(dE) < as.tol_mcscf_energy;
         const bool g_conv_post = reported_gnorm < as.tol_mcscf_grad;
