@@ -1,0 +1,355 @@
+#include "post_hf/casscf/orbital.h"
+
+#include "post_hf/integrals.h"
+#include "integrals/os.h"
+
+#include <Eigen/Eigenvalues>
+
+#include <algorithm>
+#include <limits>
+
+namespace
+{
+
+using HartreeFock::Correlation::CASSCFInternal::contract_q_matrix;
+
+} // namespace
+
+namespace HartreeFock::Correlation::CASSCF
+{
+
+ActiveIntegralCache build_active_integral_cache(
+    const std::vector<double>& eri,
+    const Eigen::MatrixXd& C,
+    int n_core,
+    int n_act,
+    int nbasis)
+{
+    ActiveIntegralCache cache;
+    cache.nbasis = nbasis;
+    cache.nact = n_act;
+    if (n_act == 0) return cache;
+
+    const Eigen::MatrixXd C_act = C.middleCols(n_core, n_act);
+    cache.puvw = HartreeFock::Correlation::transform_eri(eri, nbasis, C, C_act, C_act, C_act);
+    cache.valid = true;
+    return cache;
+}
+
+Eigen::MatrixXd compute_Q_matrix(
+    const ActiveIntegralCache& cache,
+    const std::vector<double>& Gamma)
+{
+    if (!cache.valid)
+        return Eigen::MatrixXd::Zero(cache.nbasis, cache.nact);
+    return contract_q_matrix(cache.puvw, Gamma, cache.nbasis, cache.nact);
+}
+
+Eigen::MatrixXd build_inactive_fock_mo(
+    const Eigen::MatrixXd& C,
+    const Eigen::MatrixXd& H_core,
+    const std::vector<double>& eri,
+    int n_core,
+    int nbasis)
+{
+    if (n_core == 0) return C.transpose() * H_core * C;
+    const Eigen::MatrixXd D = 2.0 * C.leftCols(n_core) * C.leftCols(n_core).transpose();
+    return C.transpose() * (H_core + HartreeFock::ObaraSaika::_compute_fock_rhf(eri, D, nbasis)) * C;
+}
+
+Eigen::MatrixXd build_active_fock_mo(
+    const Eigen::MatrixXd& C,
+    const Eigen::MatrixXd& gamma,
+    const std::vector<double>& eri,
+    int n_core,
+    int n_act,
+    int nbasis)
+{
+    if (n_act == 0) return Eigen::MatrixXd::Zero(nbasis, nbasis);
+    const Eigen::MatrixXd C_act = C.middleCols(n_core, n_act);
+    const Eigen::MatrixXd D_act = C_act * gamma * C_act.transpose();
+    return C.transpose() * HartreeFock::ObaraSaika::_compute_fock_rhf(eri, D_act, nbasis) * C;
+}
+
+double compute_core_energy(
+    const Eigen::MatrixXd& h_mo,
+    const Eigen::MatrixXd& F_I_mo,
+    int n_core)
+{
+    double e = 0.0;
+    for (int i = 0; i < n_core; ++i)
+        e += h_mo(i, i) + F_I_mo(i, i);
+    return e;
+}
+
+Eigen::MatrixXd compute_orbital_gradient(
+    const Eigen::MatrixXd& F_I_mo,
+    const Eigen::MatrixXd& F_A_mo,
+    const Eigen::MatrixXd& Q,
+    const Eigen::MatrixXd& gamma,
+    int n_core,
+    int n_act,
+    int n_virt,
+    const std::vector<int>& mo_irreps,
+    bool use_sym)
+{
+    const int nb = n_core + n_act + n_virt;
+    const Eigen::MatrixXd F_sum = F_I_mo + F_A_mo;
+    Eigen::MatrixXd F_gen = Eigen::MatrixXd::Zero(nb, nb);
+
+    for (int p = 0; p < nb; ++p)
+    {
+        for (int i = 0; i < n_core; ++i)
+            F_gen(p, i) = 2.0 * F_sum(p, i);
+        for (int t = 0; t < n_act; ++t)
+        {
+            double value = 0.0;
+            for (int u = 0; u < n_act; ++u)
+                value += gamma(t, u) * F_I_mo(p, n_core + u);
+            value += Q(p, t);
+            F_gen(p, n_core + t) = value;
+        }
+    }
+
+    Eigen::MatrixXd g = 2.0 * (F_gen - F_gen.transpose());
+    g.topLeftCorner(n_core, n_core).setZero();
+    g.block(n_core, n_core, n_act, n_act).setZero();
+    g.bottomRightCorner(n_virt, n_virt).setZero();
+
+    if (use_sym && !mo_irreps.empty())
+        for (int p = 0; p < nb; ++p)
+            for (int q = 0; q < nb; ++q)
+            {
+                if (p == q) continue;
+                const int ip = (p < static_cast<int>(mo_irreps.size())) ? mo_irreps[p] : -1;
+                const int iq = (q < static_cast<int>(mo_irreps.size())) ? mo_irreps[q] : -1;
+                if (ip >= 0 && iq >= 0 && ip != iq)
+                    g(p, q) = 0.0;
+            }
+
+    return g;
+}
+
+double hess_diag(const Eigen::MatrixXd& F_sum, int p, int q)
+{
+    return 2.0 * (F_sum(q, q) - F_sum(p, p));
+}
+
+Eigen::MatrixXd hessian_action(
+    const Eigen::MatrixXd& R,
+    const Eigen::MatrixXd& F_I_mo,
+    const Eigen::MatrixXd& F_A_mo,
+    int n_core,
+    int n_act,
+    int n_virt)
+{
+    const int nb = n_core + n_act + n_virt;
+    const Eigen::MatrixXd F_sum = F_I_mo + F_A_mo;
+    Eigen::MatrixXd HR = Eigen::MatrixXd::Zero(nb, nb);
+    auto cls = [&](int k) { return (k < n_core) ? 0 : (k < n_core + n_act) ? 1 : 2; };
+    for (int p = 0; p < nb; ++p)
+        for (int q = 0; q < nb; ++q)
+        {
+            if (cls(p) == cls(q)) continue;
+            HR(p, q) = hess_diag(F_sum, p, q) * R(p, q);
+        }
+    return HR;
+}
+
+Eigen::MatrixXd fep1_gradient_update(
+    const Eigen::MatrixXd& G,
+    const Eigen::MatrixXd& kappa,
+    const Eigen::MatrixXd& F_I_mo,
+    const Eigen::MatrixXd& F_A_mo,
+    int n_core,
+    int n_act,
+    int n_virt)
+{
+    const int nb = n_core + n_act + n_virt;
+    const Eigen::MatrixXd F_sum = F_I_mo + F_A_mo;
+    Eigen::MatrixXd updated = G;
+    auto cls = [&](int k) { return (k < n_core) ? 0 : (k < n_core + n_act) ? 1 : 2; };
+    for (int p = 0; p < nb; ++p)
+        for (int q = 0; q < nb; ++q)
+        {
+            if (cls(p) == cls(q) || std::abs(kappa(p, q)) < 1e-18) continue;
+            updated(p, q) += hess_diag(F_sum, p, q) * kappa(p, q);
+        }
+    return updated;
+}
+
+double quadratic_model_delta(
+    const Eigen::VectorXd& g_flat,
+    const Eigen::VectorXd& h_flat,
+    const Eigen::VectorXd& x)
+{
+    double delta = g_flat.dot(x);
+    for (int k = 0; k < x.size(); ++k)
+        delta += 0.5 * h_flat(k) * x(k) * x(k);
+    return delta;
+}
+
+std::vector<RotPair> non_redundant_pairs(int n_core, int n_act, int n_virt)
+{
+    const int nb = n_core + n_act + n_virt;
+    std::vector<RotPair> pairs;
+    pairs.reserve(n_core * n_act + n_core * n_virt + n_act * n_virt);
+    auto cls = [&](int k) { return (k < n_core) ? 0 : (k < n_core + n_act) ? 1 : 2; };
+    for (int p = 0; p < nb; ++p)
+        for (int q = p + 1; q < nb; ++q)
+            if (cls(p) != cls(q))
+                pairs.push_back({p, q});
+    return pairs;
+}
+
+Eigen::MatrixXd augmented_hessian_step(
+    const Eigen::MatrixXd& G,
+    const Eigen::MatrixXd& F_I_mo,
+    const Eigen::MatrixXd& F_A_mo,
+    int n_core,
+    int n_act,
+    int n_virt,
+    double level_shift,
+    double max_rot,
+    const std::vector<int>& mo_irreps,
+    bool use_sym)
+{
+    const int nb = n_core + n_act + n_virt;
+    const Eigen::MatrixXd F_sum = F_I_mo + F_A_mo;
+    const auto pairs = non_redundant_pairs(n_core, n_act, n_virt);
+    const int npairs = static_cast<int>(pairs.size());
+    if (npairs == 0)
+        return Eigen::MatrixXd::Zero(nb, nb);
+
+    Eigen::VectorXd g_flat(npairs);
+    Eigen::VectorXd h_flat(npairs);
+    Eigen::VectorXd D_flat(npairs);
+    for (int k = 0; k < npairs; ++k)
+    {
+        const int p = pairs[k].p;
+        const int q = pairs[k].q;
+        if (use_sym && !mo_irreps.empty())
+        {
+            const int ip = (p < static_cast<int>(mo_irreps.size())) ? mo_irreps[p] : -1;
+            const int iq = (q < static_cast<int>(mo_irreps.size())) ? mo_irreps[q] : -1;
+            if (ip >= 0 && iq >= 0 && ip != iq)
+            {
+                g_flat(k) = 0.0;
+                h_flat(k) = 1.0;
+                D_flat(k) = 1.0;
+                continue;
+            }
+        }
+        g_flat(k) = G(p, q);
+        h_flat(k) = hess_diag(F_sum, p, q);
+        D_flat(k) = h_flat(k) + level_shift;
+        if (std::abs(D_flat(k)) < 1e-4)
+            D_flat(k) = (D_flat(k) >= 0.0) ? 1e-4 : -1e-4;
+    }
+
+    auto cap_step = [&](Eigen::VectorXd x) {
+        if (!x.allFinite()) return x;
+        const double max_x = x.cwiseAbs().maxCoeff();
+        if (max_x > max_rot)
+            x *= max_rot / max_x;
+        return x;
+    };
+
+    auto damped_newton = [&](double lm_shift) {
+        Eigen::VectorXd x(npairs);
+        for (int k = 0; k < npairs; ++k)
+        {
+            double denom = h_flat(k) + lm_shift;
+            if (std::abs(denom) < 1e-18)
+                denom = (denom >= 0.0) ? 1e-18 : -1e-18;
+            x(k) = -g_flat(k) / denom;
+        }
+        return x;
+    };
+
+    const double D_min = D_flat.minCoeff();
+    double eps_lo = D_min - 1.0 - g_flat.norm();
+    double eps_hi = D_min - 1e-8;
+    auto f = [&](double e) {
+        double s = 0.0;
+        for (int k = 0; k < npairs; ++k)
+        {
+            const double d = D_flat(k) - e;
+            s += (g_flat(k) / d) * (g_flat(k) / d);
+        }
+        return s - 1.0;
+    };
+
+    double eps_star = 0.0;
+    if (f(eps_lo) * f(eps_hi) <= 0.0)
+        for (int bi = 0; bi < 50; ++bi)
+        {
+            eps_star = 0.5 * (eps_lo + eps_hi);
+            if (f(eps_lo) * f(eps_star) <= 0.0) eps_hi = eps_star;
+            else eps_lo = eps_star;
+            if (eps_hi - eps_lo < 1e-12) break;
+        }
+
+    Eigen::VectorXd x_ah(npairs);
+    for (int k = 0; k < npairs; ++k)
+        x_ah(k) = -g_flat(k) / (D_flat(k) - eps_star);
+
+    struct Candidate
+    {
+        Eigen::VectorXd x;
+        double score = std::numeric_limits<double>::infinity();
+    };
+
+    Candidate best;
+    auto consider = [&](Eigen::VectorXd x) {
+        x = cap_step(std::move(x));
+        if (!x.allFinite()) return;
+        const double score = quadratic_model_delta(g_flat, h_flat, x);
+        if (score < best.score - 1e-12
+            || (std::abs(score - best.score) <= 1e-12 && x.norm() > best.x.norm() + 1e-12))
+        {
+            best.x = std::move(x);
+            best.score = score;
+        }
+    };
+
+    for (double lm_scale : {0.0, 0.25, 1.0, 4.0, 16.0})
+        consider(damped_newton(lm_scale * std::max(level_shift, 1e-6)));
+    consider(x_ah);
+
+    Eigen::VectorXd x = best.x;
+    if (!x.allFinite() || x.cwiseAbs().maxCoeff() < 1e-14)
+        x = cap_step(damped_newton(std::max(level_shift, 1e-6)));
+
+    Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nb, nb);
+    for (int k = 0; k < npairs; ++k)
+    {
+        const int p = pairs[k].p;
+        const int q = pairs[k].q;
+        kappa(p, q) = x(k);
+        kappa(q, p) = -x(k);
+    }
+
+    const double max_k = kappa.cwiseAbs().maxCoeff();
+    if (max_k > max_rot)
+        kappa *= max_rot / max_k;
+    return kappa;
+}
+
+Eigen::MatrixXd apply_orbital_rotation(
+    const Eigen::MatrixXd& C_old,
+    const Eigen::MatrixXd& kappa,
+    const Eigen::MatrixXd& S)
+{
+    const int nb = static_cast<int>(C_old.rows());
+    const Eigen::MatrixXd I = Eigen::MatrixXd::Identity(nb, nb);
+    Eigen::MatrixXd C_new =
+        C_old * (I - 0.5 * kappa).colPivHouseholderQr().solve(I + 0.5 * kappa);
+
+    Eigen::MatrixXd ovlp = C_new.transpose() * S * C_new;
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(ovlp);
+    Eigen::VectorXd inv_sqrt = eig.eigenvalues().array().max(1e-12).sqrt().inverse();
+    return C_new * (eig.eigenvectors() * inv_sqrt.asDiagonal() * eig.eigenvectors().transpose());
+}
+
+} // namespace HartreeFock::Correlation::CASSCF

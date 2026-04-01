@@ -1,0 +1,539 @@
+#include "post_hf/casscf/ci.h"
+
+#include <Eigen/Eigenvalues>
+#include <Eigen/QR>
+
+#include <algorithm>
+#include <bit>
+#include <cmath>
+#include <functional>
+#include <limits>
+
+namespace HartreeFock::Correlation::CASSCF
+{
+
+namespace
+{
+
+inline double g_act(const std::vector<double>& ga, int p, int q, int r, int s, int na)
+{
+    return ga[((p * na + q) * na + r) * na + s];
+}
+
+std::vector<std::pair<int, int>> enumerate_ci_dets(
+    const std::vector<CIString>& a_strs,
+    const std::vector<CIString>& b_strs,
+    const RASParams& ras,
+    const std::vector<int>& irr_act,
+    const SymmetryContext* sym_ctx,
+    int target_irr)
+{
+    const int na = static_cast<int>(a_strs.size());
+    const int nb = static_cast<int>(b_strs.size());
+    const bool do_sym = sym_ctx != nullptr && !irr_act.empty();
+
+    std::vector<std::pair<int, int>> dets;
+    dets.reserve(na * nb);
+    for (int ia = 0; ia < na; ++ia)
+        for (int ib = 0; ib < nb; ++ib)
+            if (CASSCFInternal::admissible_ras_pair(a_strs[ia], b_strs[ib], ras)
+             && (!do_sym || CASSCFInternal::determinant_symmetry(a_strs[ia], b_strs[ib], irr_act, *sym_ctx) == target_irr))
+                dets.push_back({ia, ib});
+    return dets;
+}
+
+std::pair<std::vector<int>, std::vector<int>> get_excitation(CIString bra, CIString ket)
+{
+    std::vector<int> ann, cre;
+    CIString d = bra ^ ket;
+    while (d)
+    {
+        const int k = std::countr_zero(d);
+        if (bra & CASSCFInternal::single_bit_mask(k)) ann.push_back(k);
+        else                                          cre.push_back(k);
+        d &= d - 1;
+    }
+    return {ann, cre};
+}
+
+template <typename Apply>
+std::pair<Eigen::VectorXd, Eigen::MatrixXd> davidson(
+    int dim,
+    int nroots,
+    const Eigen::VectorXd& diag,
+    Apply&& apply,
+    double tol,
+    int max_iter)
+{
+    if (dim <= 0 || nroots <= 0)
+        return {Eigen::VectorXd(), Eigen::MatrixXd()};
+
+    const int nr = std::min(nroots, dim);
+    const int init_cols = std::min(dim, std::max(2 * nr, 4));
+
+    Eigen::MatrixXd V = Eigen::MatrixXd::Zero(dim, init_cols);
+    Eigen::VectorXi order = Eigen::VectorXi::LinSpaced(dim, 0, dim - 1);
+    std::sort(order.data(), order.data() + dim, [&](int a, int b) { return diag(a) < diag(b); });
+    for (int k = 0; k < init_cols; ++k)
+        V(order(k), k) = 1.0;
+
+    {
+        Eigen::HouseholderQR<Eigen::MatrixXd> qr(V);
+        V = qr.householderQ() * Eigen::MatrixXd::Identity(dim, init_cols);
+    }
+
+    Eigen::VectorXd theta = Eigen::VectorXd::Zero(nr);
+    Eigen::MatrixXd ritz   = Eigen::MatrixXd::Zero(dim, nr);
+
+    for (int iter = 0; iter < max_iter; ++iter)
+    {
+        const int m = static_cast<int>(V.cols());
+        Eigen::MatrixXd AV(dim, m);
+        for (int k = 0; k < m; ++k)
+        {
+            Eigen::VectorXd sigma(dim);
+            apply(V.col(k), sigma);
+            AV.col(k) = sigma;
+        }
+
+        Eigen::MatrixXd projected = V.transpose() * AV;
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(projected);
+        theta = eig.eigenvalues().head(nr);
+        const Eigen::MatrixXd subspace = eig.eigenvectors().leftCols(nr);
+        ritz = V * subspace;
+
+        double max_residual = 0.0;
+        std::vector<Eigen::VectorXd> corrections;
+        corrections.reserve(nr);
+
+        for (int root = 0; root < nr; ++root)
+        {
+            Eigen::VectorXd residual = AV * subspace.col(root) - theta(root) * ritz.col(root);
+            const double residual_norm = residual.norm();
+            max_residual = std::max(max_residual, residual_norm);
+            if (residual_norm <= tol)
+                continue;
+
+            for (int i = 0; i < dim; ++i)
+            {
+                double denom = theta(root) - diag(i);
+                if (std::abs(denom) < 1e-12)
+                    denom = (denom >= 0.0) ? 1e-12 : -1e-12;
+                residual(i) /= denom;
+            }
+
+            for (int k = 0; k < m; ++k)
+                residual -= V.col(k).dot(residual) * V.col(k);
+            for (int k = 0; k < static_cast<int>(corrections.size()); ++k)
+                residual -= corrections[k].dot(residual) * corrections[k];
+
+            const double norm = residual.norm();
+            if (norm > 1e-12)
+                corrections.push_back(residual / norm);
+        }
+
+        if (max_residual < tol)
+            break;
+        if (corrections.empty())
+            break;
+
+        const int old_cols = static_cast<int>(V.cols());
+        V.conservativeResize(Eigen::NoChange, old_cols + static_cast<int>(corrections.size()));
+        for (int i = 0; i < static_cast<int>(corrections.size()); ++i)
+            V.col(old_cols + i) = corrections[i];
+
+        for (int k = 0; k < static_cast<int>(V.cols()); ++k)
+        {
+            for (int j = 0; j < k; ++j)
+                V.col(k) -= V.col(j).dot(V.col(k)) * V.col(j);
+            const double norm = V.col(k).norm();
+            if (norm < 1e-14)
+            {
+                if (k + 1 < static_cast<int>(V.cols()))
+                    V.col(k) = V.col(V.cols() - 1);
+                V.conservativeResize(Eigen::NoChange, V.cols() - 1);
+                --k;
+            }
+            else
+                V.col(k) /= norm;
+        }
+    }
+
+    return {theta, ritz};
+}
+
+} // namespace
+
+std::vector<std::pair<int, int>> build_ci_determinant_list(
+    const std::vector<CIString>& a_strs,
+    const std::vector<CIString>& b_strs,
+    const RASParams& ras,
+    const std::vector<int>& irr_act,
+    const SymmetryContext* sym_ctx,
+    int target_irr)
+{
+    return enumerate_ci_dets(a_strs, b_strs, ras, irr_act, sym_ctx, target_irr);
+}
+
+Eigen::MatrixXd build_ci_hamiltonian_dense(
+    const std::vector<CIString>& a_strs,
+    const std::vector<CIString>& b_strs,
+    const std::vector<std::pair<int, int>>& dets,
+    const Eigen::MatrixXd& h_eff,
+    const std::vector<double>& ga,
+    int n_act)
+{
+    const int dim = static_cast<int>(dets.size());
+    Eigen::MatrixXd H = Eigen::MatrixXd::Zero(dim, dim);
+    for (int i = 0; i < dim; ++i)
+    {
+        const auto [ia, ib] = dets[i];
+        for (int j = i; j < dim; ++j)
+        {
+            const auto [ja, jb] = dets[j];
+            const double v = slater_condon_element(
+                a_strs[ia], b_strs[ib],
+                a_strs[ja], b_strs[jb],
+                h_eff, ga, n_act);
+            H(i, j) = H(j, i) = v;
+        }
+    }
+    return H;
+}
+
+double slater_condon_element(
+    CIString bra_a, CIString bra_b,
+    CIString ket_a, CIString ket_b,
+    const Eigen::MatrixXd& h_eff,
+    const std::vector<double>& ga,
+    int n_act)
+{
+    const int n_diff_a = std::popcount(bra_a ^ ket_a) / 2;
+    const int n_diff_b = std::popcount(bra_b ^ ket_b) / 2;
+    const int n_diff   = n_diff_a + n_diff_b;
+
+    if (n_diff > 2) return 0.0;
+
+    auto single_parity = [](CIString s, int p, int q) {
+        return parity_between(s, std::min(p, q), std::max(p, q));
+    };
+
+    if (n_diff == 0)
+    {
+        double val = 0.0;
+        for (int k = 0; k < n_act; ++k)
+        {
+            if (ket_a & CASSCFInternal::single_bit_mask(k)) val += h_eff(k, k);
+            if (ket_b & CASSCFInternal::single_bit_mask(k)) val += h_eff(k, k);
+        }
+        for (int p = 0; p < n_act; ++p)
+        {
+            const bool pa = ket_a & CASSCFInternal::single_bit_mask(p);
+            const bool pb = ket_b & CASSCFInternal::single_bit_mask(p);
+            if (!pa && !pb) continue;
+            for (int q = 0; q < n_act; ++q)
+            {
+                const bool qa = ket_a & CASSCFInternal::single_bit_mask(q);
+                const bool qb = ket_b & CASSCFInternal::single_bit_mask(q);
+                if (pa && qa && p < q)
+                    val += g_act(ga, p, p, q, q, n_act) - g_act(ga, p, q, q, p, n_act);
+                if (pb && qb && p < q)
+                    val += g_act(ga, p, p, q, q, n_act) - g_act(ga, p, q, q, p, n_act);
+                if (pa && qb)
+                    val += g_act(ga, p, p, q, q, n_act);
+            }
+        }
+        return val;
+    }
+
+    if (n_diff_a == 1 && n_diff_b == 0)
+    {
+        auto [ann_a, cre_a] = get_excitation(bra_a, ket_a);
+        const int p = ann_a[0], q = cre_a[0];
+        const int sgn = single_parity(ket_a, p, q);
+        double val = h_eff(p, q) * sgn;
+        for (int r = 0; r < n_act; ++r)
+        {
+            if (!(ket_a & CASSCFInternal::single_bit_mask(r)) || r == p) continue;
+            val += sgn * (g_act(ga, p, q, r, r, n_act) - g_act(ga, p, r, r, q, n_act));
+        }
+        for (int r = 0; r < n_act; ++r)
+        {
+            if (!(ket_b & CASSCFInternal::single_bit_mask(r))) continue;
+            val += sgn * g_act(ga, p, q, r, r, n_act);
+        }
+        return val;
+    }
+
+    if (n_diff_a == 0 && n_diff_b == 1)
+    {
+        auto [ann_b, cre_b] = get_excitation(bra_b, ket_b);
+        const int p = ann_b[0], q = cre_b[0];
+        const int sgn = single_parity(ket_b, p, q);
+        double val = h_eff(p, q) * sgn;
+        for (int r = 0; r < n_act; ++r)
+        {
+            if (!(ket_b & CASSCFInternal::single_bit_mask(r)) || r == p) continue;
+            val += sgn * (g_act(ga, p, q, r, r, n_act) - g_act(ga, p, r, r, q, n_act));
+        }
+        for (int r = 0; r < n_act; ++r)
+        {
+            if (!(ket_a & CASSCFInternal::single_bit_mask(r))) continue;
+            val += sgn * g_act(ga, p, q, r, r, n_act);
+        }
+        return val;
+    }
+
+    if (n_diff_a == 2 && n_diff_b == 0)
+    {
+        auto [ann_a, cre_a] = get_excitation(bra_a, ket_a);
+        int p1 = ann_a[0], p2 = ann_a[1]; if (p1 > p2) std::swap(p1, p2);
+        int q1 = cre_a[0], q2 = cre_a[1]; if (q1 > q2) std::swap(q1, q2);
+        const CIString inter   = (ket_a ^ CASSCFInternal::single_bit_mask(p1)) ^ CASSCFInternal::single_bit_mask(p2);
+        const CIString after_p1 = ket_a ^ CASSCFInternal::single_bit_mask(p1);
+        const int n1 = count_occupied_below(ket_a, p1);
+        const int n2 = count_occupied_below(after_p1, p2);
+        const int n3 = count_occupied_below(inter, q1);
+        const CIString after_q1 = inter | CASSCFInternal::single_bit_mask(q1);
+        const int n4 = count_occupied_below(after_q1, q2);
+        const int sgn = ((n1 + n2 + n3 + n4) % 2 == 0) ? 1 : -1;
+        return sgn * (g_act(ga, p1, q1, p2, q2, n_act) - g_act(ga, p1, q2, p2, q1, n_act));
+    }
+
+    if (n_diff_a == 0 && n_diff_b == 2)
+    {
+        auto [ann_b, cre_b] = get_excitation(bra_b, ket_b);
+        int p1 = ann_b[0], p2 = ann_b[1]; if (p1 > p2) std::swap(p1, p2);
+        int q1 = cre_b[0], q2 = cre_b[1]; if (q1 > q2) std::swap(q1, q2);
+        const CIString inter   = (ket_b ^ CASSCFInternal::single_bit_mask(p1)) ^ CASSCFInternal::single_bit_mask(p2);
+        const CIString after_p1 = ket_b ^ CASSCFInternal::single_bit_mask(p1);
+        const int n1 = count_occupied_below(ket_b, p1);
+        const int n2 = count_occupied_below(after_p1, p2);
+        const int n3 = count_occupied_below(inter, q1);
+        const CIString after_q1 = inter | CASSCFInternal::single_bit_mask(q1);
+        const int n4 = count_occupied_below(after_q1, q2);
+        const int sgn = ((n1 + n2 + n3 + n4) % 2 == 0) ? 1 : -1;
+        return sgn * (g_act(ga, p1, q1, p2, q2, n_act) - g_act(ga, p1, q2, p2, q1, n_act));
+    }
+
+    if (n_diff_a == 1 && n_diff_b == 1)
+    {
+        auto [ann_a, cre_a] = get_excitation(bra_a, ket_a);
+        auto [ann_b, cre_b] = get_excitation(bra_b, ket_b);
+        const int pa = ann_a[0], qa = cre_a[0];
+        const int pb = ann_b[0], qb = cre_b[0];
+        return single_parity(ket_a, pa, qa)
+             * single_parity(ket_b, pb, qb)
+             * g_act(ga, pa, qa, pb, qb, n_act);
+    }
+
+    return 0.0;
+}
+
+Eigen::MatrixXd build_ci_hamiltonian_with_dets(
+    const std::vector<CIString>& a_strs,
+    const std::vector<CIString>& b_strs,
+    const RASParams& ras,
+    const Eigen::MatrixXd& h_eff,
+    const std::vector<double>& ga,
+    int n_act,
+    const std::vector<int>& irr_act,
+    const SymmetryContext* sym_ctx,
+    int target_irr,
+    std::vector<std::pair<int, int>>& dets_out)
+{
+    dets_out = enumerate_ci_dets(a_strs, b_strs, ras, irr_act, sym_ctx, target_irr);
+
+    return build_ci_hamiltonian_dense(a_strs, b_strs, dets_out, h_eff, ga, n_act);
+}
+
+CIDeterminantSpace build_ci_space(
+    const std::vector<CIString>& a_strs,
+    const std::vector<CIString>& b_strs,
+    const RASParams& ras,
+    const Eigen::MatrixXd& h_eff,
+    const std::vector<double>& ga,
+    int n_act,
+    const std::vector<int>& irr_act,
+    const SymmetryContext* sym_ctx,
+    int target_irr,
+    int dense_threshold)
+{
+    CIDeterminantSpace space;
+    space.dets = enumerate_ci_dets(a_strs, b_strs, ras, irr_act, sym_ctx, target_irr);
+    space.diagonal = build_ci_diagonal(a_strs, b_strs, space.dets, h_eff, ga, n_act);
+    if (static_cast<int>(space.dets.size()) <= dense_threshold)
+        space.dense_hamiltonian = build_ci_hamiltonian_dense(
+            a_strs, b_strs, space.dets, h_eff, ga, n_act);
+    return space;
+}
+
+void apply_ci_hamiltonian(
+    const CIDeterminantSpace& space,
+    const std::vector<CIString>& a_strs,
+    const std::vector<CIString>& b_strs,
+    const Eigen::MatrixXd& h_eff,
+    const std::vector<double>& ga,
+    int n_act,
+    const Eigen::VectorXd& c,
+    Eigen::VectorXd& sigma)
+{
+    const int dim = static_cast<int>(space.dets.size());
+    sigma = Eigen::VectorXd::Zero(dim);
+    if (dim == 0 || c.size() != dim)
+        return;
+
+    if (space.dense_hamiltonian.has_value())
+    {
+        sigma = (*space.dense_hamiltonian) * c;
+        return;
+    }
+
+    for (int j = 0; j < dim; ++j)
+    {
+        const double cj = c(j);
+        if (std::abs(cj) < 1e-15)
+            continue;
+        const auto [ja, jb] = space.dets[j];
+        for (int i = 0; i < dim; ++i)
+        {
+            const auto [ia, ib] = space.dets[i];
+            const double hij = slater_condon_element(
+                a_strs[ia], b_strs[ib],
+                a_strs[ja], b_strs[jb],
+                h_eff, ga, n_act);
+            if (std::abs(hij) < 1e-15)
+                continue;
+            sigma(i) += hij * cj;
+        }
+    }
+}
+
+Eigen::VectorXd build_ci_diagonal(
+    const std::vector<CIString>& a_strs,
+    const std::vector<CIString>& b_strs,
+    const std::vector<std::pair<int, int>>& dets,
+    const Eigen::MatrixXd& h_eff,
+    const std::vector<double>& ga,
+    int n_act)
+{
+    Eigen::VectorXd diag(static_cast<int>(dets.size()));
+    for (int I = 0; I < static_cast<int>(dets.size()); ++I)
+    {
+        const auto [ia, ib] = dets[I];
+        diag(I) = slater_condon_element(
+            a_strs[ia], b_strs[ib],
+            a_strs[ia], b_strs[ib],
+            h_eff, ga, n_act);
+    }
+    return diag;
+}
+
+std::pair<Eigen::VectorXd, Eigen::MatrixXd> solve_ci_dense(
+    const Eigen::MatrixXd& H,
+    int nroots,
+    double tol)
+{
+    (void)tol;
+    const int dim = static_cast<int>(H.rows());
+    if (dim == 0 || nroots <= 0)
+        return {Eigen::VectorXd(), Eigen::MatrixXd(dim, 0)};
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(H);
+    const int nr = std::min(nroots, dim);
+    return {eig.eigenvalues().head(nr), eig.eigenvectors().leftCols(nr)};
+}
+
+std::pair<Eigen::VectorXd, Eigen::MatrixXd> solve_ci(
+    const Eigen::MatrixXd& H,
+    int nroots,
+    double tol,
+    int dense_threshold)
+{
+    const int dim = static_cast<int>(H.rows());
+    if (dim == 0 || nroots <= 0)
+        return {Eigen::VectorXd(), Eigen::MatrixXd(dim, 0)};
+    if (dim <= dense_threshold)
+        return solve_ci_dense(H, nroots, tol);
+
+    const Eigen::VectorXd diag = H.diagonal();
+    auto apply = [&H](const Eigen::VectorXd& c, Eigen::VectorXd& sigma)
+    {
+        sigma = H * c;
+    };
+    return davidson(dim, nroots, diag, apply, tol, 1000);
+}
+
+std::pair<Eigen::VectorXd, Eigen::MatrixXd> solve_ci(
+    int dim,
+    int nroots,
+    const Eigen::VectorXd& diag,
+    const std::function<void(const Eigen::VectorXd&, Eigen::VectorXd&)>& sigma_apply,
+    double tol,
+    int max_iter,
+    int dense_threshold)
+{
+    if (dim == 0 || nroots <= 0)
+        return {Eigen::VectorXd(), Eigen::MatrixXd(dim, 0)};
+    if (dim <= dense_threshold)
+    {
+        Eigen::MatrixXd H = Eigen::MatrixXd::Zero(dim, dim);
+        for (int j = 0; j < dim; ++j)
+        {
+            Eigen::VectorXd sigma(dim);
+            sigma_apply(Eigen::VectorXd::Unit(dim, j), sigma);
+            H.col(j) = sigma;
+        }
+        H = 0.5 * (H + H.transpose());
+        return solve_ci_dense(H, nroots, tol);
+    }
+    return davidson(dim, nroots, diag, sigma_apply, tol, max_iter);
+}
+
+CISolveResult solve_ci(
+    const CIDeterminantSpace& space,
+    const std::vector<CIString>& a_strs,
+    const std::vector<CIString>& b_strs,
+    const Eigen::MatrixXd& h_eff,
+    const std::vector<double>& ga,
+    int n_act,
+    int nroots,
+    double tol,
+    int dense_threshold,
+    int max_iter)
+{
+    CISolveResult result;
+    result.diagonal = space.diagonal;
+    result.dense_hamiltonian = space.dense_hamiltonian;
+
+    if (space.dets.empty() || nroots <= 0)
+        return result;
+
+    if (space.dense_hamiltonian.has_value() && static_cast<int>(space.dense_hamiltonian->rows()) <= dense_threshold)
+    {
+        auto [energies, vectors] = solve_ci_dense(*space.dense_hamiltonian, nroots, tol);
+        result.energies = std::move(energies);
+        result.vectors = std::move(vectors);
+        result.used_direct_sigma = false;
+        return result;
+    }
+
+    auto sigma_apply = [&](const Eigen::VectorXd& c, Eigen::VectorXd& sigma)
+    {
+        apply_ci_hamiltonian(space, a_strs, b_strs, h_eff, ga, n_act, c, sigma);
+    };
+    auto [energies, vectors] = solve_ci(
+        static_cast<int>(space.dets.size()),
+        nroots,
+        space.diagonal,
+        sigma_apply,
+        tol,
+        max_iter,
+        dense_threshold);
+
+    result.energies = std::move(energies);
+    result.vectors = std::move(vectors);
+    result.used_direct_sigma = true;
+    return result;
+}
+
+} // namespace HartreeFock::Correlation::CASSCF

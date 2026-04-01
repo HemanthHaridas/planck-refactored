@@ -1,4 +1,7 @@
 #include "post_hf/casscf_internal.h"
+#include "post_hf/casscf/ci.h"
+#include "post_hf/casscf/rdm.h"
+#include "post_hf/casscf/strings.h"
 
 #include <Eigen/Core>
 
@@ -12,6 +15,7 @@ namespace
 {
 
 using namespace HartreeFock::Correlation::CASSCFInternal;
+using namespace HartreeFock::Correlation::CASSCF;
 
 bool expect(bool condition, const std::string& message)
 {
@@ -153,6 +157,105 @@ int main()
                      "natural occupations should preserve the active electron count");
         ok &= expect((rebuilt - gamma).norm() < 1e-12,
                      "natural-orbital rotation should diagonalize the 1-RDM without changing it on reconstruction");
+    }
+
+    {
+        std::vector<CIString> a_strs;
+        std::vector<CIString> b_strs;
+        build_spin_strings_unfiltered(3, 1, 1, a_strs, b_strs);
+
+        Eigen::MatrixXd h_eff = Eigen::MatrixXd::Zero(3, 3);
+        h_eff << -1.2, 0.1, 0.0,
+                  0.1, -0.4, 0.05,
+                  0.0, 0.05, 0.3;
+
+        std::vector<double> ga(81, 0.0);
+        auto idx4 = [](int p, int q, int r, int s) {
+            return ((p * 3 + q) * 3 + r) * 3 + s;
+        };
+        ga[idx4(0, 0, 0, 0)] = 0.70;
+        ga[idx4(1, 1, 1, 1)] = 0.55;
+        ga[idx4(2, 2, 2, 2)] = 0.40;
+        ga[idx4(0, 0, 1, 1)] = ga[idx4(1, 1, 0, 0)] = 0.18;
+        ga[idx4(0, 0, 2, 2)] = ga[idx4(2, 2, 0, 0)] = 0.08;
+        ga[idx4(1, 1, 2, 2)] = ga[idx4(2, 2, 1, 1)] = 0.12;
+        ga[idx4(0, 1, 1, 0)] = ga[idx4(1, 0, 0, 1)] = 0.04;
+        ga[idx4(0, 2, 2, 0)] = ga[idx4(2, 0, 0, 2)] = 0.02;
+        ga[idx4(1, 2, 2, 1)] = ga[idx4(2, 1, 1, 2)] = 0.03;
+
+        RASParams ras;
+        const CIDeterminantSpace space =
+            build_ci_space(a_strs, b_strs, ras, h_eff, ga, 3, {}, nullptr, 0, 0);
+        const Eigen::MatrixXd dense_h =
+            build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, h_eff, ga, 3);
+        const auto dense = solve_ci_dense(dense_h, 2);
+        const CISolveResult direct =
+            solve_ci(space, a_strs, b_strs, h_eff, ga, 3, 2, 1e-10, 0, 128);
+
+        const Eigen::MatrixXd dense_proj =
+            dense.second.leftCols(2) * dense.second.leftCols(2).adjoint();
+        const Eigen::MatrixXd direct_proj =
+            direct.vectors.leftCols(2) * direct.vectors.leftCols(2).adjoint();
+
+        ok &= expect(direct.used_direct_sigma,
+                     "matrix-free CI solve should report that it used the direct sigma-vector path");
+        ok &= expect((direct.energies - dense.first).cwiseAbs().maxCoeff() < 1e-10,
+                     "direct sigma-vector Davidson should reproduce dense CI eigenvalues on a small problem");
+        ok &= expect((direct_proj - dense_proj).norm() < 1e-8,
+                     "direct sigma-vector Davidson should recover the same low-root invariant subspace as dense CI");
+    }
+
+    {
+        std::vector<CIString> a_strs;
+        std::vector<CIString> b_strs;
+        build_spin_strings_unfiltered(2, 1, 1, a_strs, b_strs);
+
+        Eigen::MatrixXd h_eff = Eigen::MatrixXd::Zero(2, 2);
+        h_eff << -0.8, 0.07,
+                  0.07, 0.1;
+        std::vector<double> ga(16, 0.0);
+        auto idx4 = [](int p, int q, int r, int s) {
+            return ((p * 2 + q) * 2 + r) * 2 + s;
+        };
+        ga[idx4(0, 0, 0, 0)] = 0.60;
+        ga[idx4(1, 1, 1, 1)] = 0.45;
+        ga[idx4(0, 0, 1, 1)] = ga[idx4(1, 1, 0, 0)] = 0.16;
+        ga[idx4(0, 1, 1, 0)] = ga[idx4(1, 0, 0, 1)] = 0.05;
+
+        RASParams ras;
+        const CIDeterminantSpace space =
+            build_ci_space(a_strs, b_strs, ras, h_eff, ga, 2, {}, nullptr, 0, 8);
+        const CISolveResult ci = solve_ci(space, a_strs, b_strs, h_eff, ga, 2, 2);
+        Eigen::VectorXd weights(2);
+        weights << 0.7, 0.3;
+
+        const Eigen::MatrixXd gamma_ref =
+            compute_1rdm_reference(ci.vectors, weights, a_strs, b_strs, space.dets, 2);
+        const Eigen::MatrixXd gamma_opt =
+            compute_1rdm(ci.vectors, weights, a_strs, b_strs, space.dets, 2);
+        const std::vector<double> gamma2_ref =
+            compute_2rdm_reference(ci.vectors, weights, a_strs, b_strs, space.dets, 2);
+        const std::vector<double> gamma2_opt =
+            compute_2rdm(ci.vectors, weights, a_strs, b_strs, space.dets, 2);
+        const std::vector<double> bilinear_ref =
+            compute_2rdm_bilinear_reference(ci.vectors, ci.vectors, weights, a_strs, b_strs, space.dets, 2);
+        const std::vector<double> bilinear_opt =
+            compute_2rdm_bilinear(ci.vectors, ci.vectors, weights, a_strs, b_strs, space.dets, 2);
+
+        double gamma2_err = 0.0;
+        for (std::size_t i = 0; i < gamma2_ref.size(); ++i)
+            gamma2_err = std::max(gamma2_err, std::abs(gamma2_ref[i] - gamma2_opt[i]));
+
+        double bilinear_err = 0.0;
+        for (std::size_t i = 0; i < bilinear_ref.size(); ++i)
+            bilinear_err = std::max(bilinear_err, std::abs(bilinear_ref[i] - bilinear_opt[i]));
+
+        ok &= expect((gamma_ref - gamma_opt).norm() < 1e-12,
+                     "optimized 1-RDM accumulation should reproduce the reference operator loop");
+        ok &= expect(gamma2_err < 1e-12,
+                     "optimized 2-RDM accumulation should reproduce the reference operator loop");
+        ok &= expect(bilinear_err < 1e-12,
+                     "optimized bilinear 2-RDM accumulation should reproduce the reference operator loop");
     }
 
     return ok ? 0 : 1;
