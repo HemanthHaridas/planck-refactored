@@ -148,23 +148,42 @@ CIResponseResult solve_ci_response_davidson(
     const Eigen::VectorXd& sigma,
     double tol,
     int max_iter,
-    double precond_floor)
+    double precond_floor,
+    int max_subspace)
 {
     CIResponseResult result;
     result.c1 = Eigen::VectorXd::Zero(c0.size());
 
     if (c0.size() == 0 || H_diag.size() != c0.size() || sigma.size() != c0.size())
         return result;
+    if (max_subspace < 1)
+        max_subspace = 1;
 
     const Eigen::VectorXd rhs = -project_orthogonal(sigma, c0);
-    result.residual_norm = rhs.norm();
-    if (!std::isfinite(result.residual_norm))
+    const double rhs_norm = rhs.norm();
+    result.residual_norm = rhs_norm;
+    if (!std::isfinite(rhs_norm))
         return result;
-    if (result.residual_norm < tol)
+    if (rhs_norm < tol)
     {
         result.converged = true;
         return result;
     }
+
+    Eigen::VectorXd best_c1 = Eigen::VectorXd::Zero(c0.size());
+    double best_residual_norm = rhs_norm;
+
+    auto record_best = [&](const Eigen::VectorXd& c1, const Eigen::VectorXd& residual)
+    {
+        const double residual_norm = residual.norm();
+        if (!std::isfinite(residual_norm))
+            return;
+        if (residual_norm < best_residual_norm)
+        {
+            best_residual_norm = residual_norm;
+            best_c1 = c1;
+        }
+    };
 
     Eigen::VectorXd guess = apply_response_diag_preconditioner(
         rhs, H_diag, E0, precond_floor, result.max_denominator_regularization);
@@ -172,6 +191,8 @@ CIResponseResult solve_ci_response_davidson(
     const double guess_norm = guess.norm();
     if (!(guess_norm > 1e-14))
         return result;
+
+    record_best(guess, response_residual(apply, guess, c0, E0, sigma));
 
     Eigen::MatrixXd V(guess.size(), 1);
     V.col(0) = guess / guess_norm;
@@ -197,6 +218,7 @@ CIResponseResult solve_ci_response_davidson(
         Eigen::VectorXd residual = response_residual(apply, result.c1, c0, E0, sigma);
         result.residual_norm = residual.norm();
         result.iterations = iter;
+        record_best(result.c1, residual);
         if (!std::isfinite(result.residual_norm))
             break;
         if (result.residual_norm < tol)
@@ -210,17 +232,45 @@ CIResponseResult solve_ci_response_davidson(
         correction = project_orthogonal(correction, c0);
         for (int k = 0; k < V.cols(); ++k)
             correction -= V.col(k).dot(correction) * V.col(k);
-        for (int k = 0; k < V.cols(); ++k)
-            correction -= V.col(k).dot(correction) * V.col(k);
 
         const double corr_norm = correction.norm();
         if (!(corr_norm > 1e-14))
             break;
 
+        if (m >= max_subspace)
+        {
+            Eigen::MatrixXd restart(c0.size(), 0);
+
+            auto append_restart_vector = [&](const Eigen::VectorXd& v)
+            {
+                Eigen::VectorXd orth = project_orthogonal(v, c0);
+                for (int k = 0; k < restart.cols(); ++k)
+                    orth -= restart.col(k).dot(orth) * restart.col(k);
+                const double norm = orth.norm();
+                if (norm > 1e-14)
+                {
+                    restart.conservativeResize(Eigen::NoChange, restart.cols() + 1);
+                    restart.col(restart.cols() - 1) = orth / norm;
+                }
+            };
+
+            append_restart_vector(best_c1);
+            append_restart_vector(correction);
+
+            if (restart.cols() == 0)
+                break;
+
+            V = std::move(restart);
+            continue;
+        }
+
         V.conservativeResize(Eigen::NoChange, m + 1);
         V.col(m) = correction / corr_norm;
     }
 
+    result.c1 = std::move(best_c1);
+    result.residual_norm = best_residual_norm;
+    result.converged = false;
     return result;
 }
 

@@ -111,6 +111,24 @@ int main()
     }
 
     {
+        Eigen::MatrixXd overlaps(3, 4);
+        overlaps << 10.0, 9.0, 8.0, 0.0,
+                     9.0, 1.0, 0.0, 0.0,
+                     8.0, 0.0, 7.0, 0.0;
+
+        const std::vector<int> match = match_roots_by_max_overlap(overlaps);
+        const double total =
+            overlaps(0, match[0]) +
+            overlaps(1, match[1]) +
+            overlaps(2, match[2]);
+
+        ok &= expect(match.size() == 3 && match[0] == 1 && match[1] == 0 && match[2] == 2,
+                     "root matching should find the globally optimal overlap assignment instead of a greedy local maximum");
+        ok &= expect(std::abs(total - 25.0) < 1e-12,
+                     "root matching should maximize the total overlap across all tracked roots");
+    }
+
+    {
         Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, 3);
         H(1, 1) = 2.0;
         H(1, 2) = 0.2;
@@ -169,6 +187,51 @@ int main()
                      "single-step CI response should not claim convergence just because the residual is finite");
         ok &= expect(std::abs(c0.dot(response.c1)) < 1e-12,
                      "single-step CI response should preserve the orthogonality gauge");
+    }
+
+    {
+        Eigen::MatrixXd H = Eigen::MatrixXd::Zero(4, 4);
+        H(1, 1) = 1.0;
+        H(1, 2) = 0.18;
+        H(1, 3) = -0.04;
+        H(2, 1) = 0.18;
+        H(2, 2) = 2.1;
+        H(2, 3) = 0.26;
+        H(3, 1) = -0.04;
+        H(3, 2) = 0.26;
+        H(3, 3) = 3.4;
+
+        Eigen::VectorXd c0 = Eigen::VectorXd::Zero(4);
+        c0(0) = 1.0;
+        const double E0 = 0.0;
+        const Eigen::VectorXd H_diag = H.diagonal();
+        Eigen::VectorXd sigma(4);
+        sigma << 0.5, -0.3, 0.4, -0.2;
+
+        const auto apply = [&H](const Eigen::VectorXd& c, Eigen::VectorXd& sigma_vec)
+        {
+            sigma_vec = H * c;
+        };
+
+        const CIResponseResult one_iter = solve_ci_response_davidson(
+            apply, c0, E0, H_diag, sigma, 1e-16, 1, 1e-6, 1);
+        const CIResponseResult two_iter = solve_ci_response_davidson(
+            apply, c0, E0, H_diag, sigma, 1e-16, 2, 1e-6, 1);
+
+        const Eigen::VectorXd rhs = -project_orthogonal(sigma, c0);
+        const double residual_one_iter =
+            (project_orthogonal(rhs - (H * one_iter.c1 - E0 * one_iter.c1), c0)).norm();
+        const double residual_two_iter =
+            (project_orthogonal(rhs - (H * two_iter.c1 - E0 * two_iter.c1), c0)).norm();
+
+        ok &= expect(!one_iter.converged && !two_iter.converged,
+                     "truncated Davidson CI response runs should report converged=false");
+        ok &= expect(two_iter.residual_norm <= one_iter.residual_norm + 1e-12,
+                     "bounded-subspace CI response should report the best residual seen, not a worse later iterate");
+        ok &= expect(std::abs(two_iter.residual_norm - residual_two_iter) < 1e-12,
+                     "reported residual should match the returned CI response vector");
+        ok &= expect(std::abs(one_iter.residual_norm - residual_one_iter) < 1e-12,
+                     "single-iteration CI response should report the residual of its returned vector");
     }
 
     {

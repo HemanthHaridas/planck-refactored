@@ -56,7 +56,8 @@ CIResponseResult solve_ci_response_davidson(
     const Eigen::VectorXd& sigma,
     double tol = 1e-8,
     int max_iter = 32,
-    double precond_floor = 1e-4);
+    double precond_floor = 1e-4,
+    int max_subspace = 16);
 
 } // namespace HartreeFock::Correlation::CASSCF
 

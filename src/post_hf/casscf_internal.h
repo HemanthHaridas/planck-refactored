@@ -153,54 +153,104 @@ inline Eigen::MatrixXd compute_root_overlap(
     return (c_old.adjoint() * c_new).cwiseAbs();
 }
 
-inline std::vector<int> match_roots_by_max_overlap(const Eigen::MatrixXd& overlaps)
+namespace detail
 {
-    const int nold = static_cast<int>(overlaps.rows());
-    const int nnew = static_cast<int>(overlaps.cols());
-    const int nmatch = std::min(nold, nnew);
 
-    std::vector<int> assignment(nmatch, -1);
-    std::vector<bool> old_used(nold, false);
-    std::vector<bool> new_used(nnew, false);
+inline std::vector<int> hungarian_max_assignment(const Eigen::MatrixXd& weights)
+{
+    const int nrows = static_cast<int>(weights.rows());
+    const int ncols = static_cast<int>(weights.cols());
+    std::vector<int> assignment(nrows, -1);
 
-    for (int picked = 0; picked < nmatch; ++picked)
+    if (nrows <= 0)
+        return assignment;
+    if (ncols <= 0)
+        return assignment;
+
+    const int n = std::max(nrows, ncols);
+    Eigen::MatrixXd square = Eigen::MatrixXd::Zero(n, n);
+    square.topLeftCorner(nrows, ncols) = weights.cwiseAbs();
+
+    const double max_weight = square.topLeftCorner(nrows, ncols).maxCoeff();
+    Eigen::MatrixXd cost = Eigen::MatrixXd::Constant(n, n, max_weight);
+    cost.topLeftCorner(nrows, ncols).array() -= square.topLeftCorner(nrows, ncols).array();
+
+    std::vector<double> u(n + 1, 0.0), v(n + 1, 0.0), minv(n + 1, 0.0);
+    std::vector<int> p(n + 1, 0), way(n + 1, 0);
+    std::vector<char> used(n + 1, 0);
+
+    for (int i = 1; i <= n; ++i)
     {
-        double best = -1.0;
-        int best_old = -1;
-        int best_new = -1;
-        for (int i = 0; i < nold; ++i)
+        p[0] = i;
+        int j0 = 0;
+        std::fill(minv.begin(), minv.end(), std::numeric_limits<double>::infinity());
+        std::fill(used.begin(), used.end(), 0);
+
+        do
         {
-            if (old_used[i]) continue;
-            for (int j = 0; j < nnew; ++j)
+            used[j0] = 1;
+            const int i0 = p[j0];
+            double delta = std::numeric_limits<double>::infinity();
+            int j1 = 0;
+
+            for (int j = 1; j <= n; ++j)
             {
-                if (new_used[j]) continue;
-                const double ov = overlaps(i, j);
-                if (ov > best)
+                if (used[j]) continue;
+                const double cur = cost(i0 - 1, j - 1) - u[i0] - v[j];
+                if (cur < minv[j])
                 {
-                    best = ov;
-                    best_old = i;
-                    best_new = j;
+                    minv[j] = cur;
+                    way[j] = j0;
+                }
+                if (minv[j] < delta)
+                {
+                    delta = minv[j];
+                    j1 = j;
                 }
             }
-        }
 
-        if (best_old < 0 || best_new < 0) break;
-        assignment[best_old] = best_new;
-        old_used[best_old] = true;
-        new_used[best_new] = true;
+            for (int j = 0; j <= n; ++j)
+            {
+                if (used[j])
+                {
+                    u[p[j]] += delta;
+                    v[j] -= delta;
+                }
+                else
+                {
+                    minv[j] -= delta;
+                }
+            }
+
+            j0 = j1;
+        }
+        while (p[j0] != 0);
+
+        do
+        {
+            const int j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+        }
+        while (j0 != 0);
     }
 
-    int next_new = 0;
-    for (int i = 0; i < nmatch; ++i)
+    for (int j = 1; j <= n; ++j)
     {
-        if (assignment[i] >= 0) continue;
-        while (next_new < nnew && new_used[next_new]) ++next_new;
-        if (next_new >= nnew) break;
-        assignment[i] = next_new;
-        new_used[next_new] = true;
+        const int i = p[j];
+        if (i <= 0 || i > nrows || j > ncols)
+            continue;
+        assignment[i - 1] = j - 1;
     }
 
     return assignment;
+}
+
+} // namespace detail
+
+inline std::vector<int> match_roots_by_max_overlap(const Eigen::MatrixXd& overlaps)
+{
+    return detail::hungarian_max_assignment(overlaps);
 }
 
 inline Eigen::VectorXd project_orthogonal(

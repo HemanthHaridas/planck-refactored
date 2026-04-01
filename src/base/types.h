@@ -355,6 +355,7 @@ namespace HartreeFock
         int  nactorb   = 0;      // number of active orbitals
         int  nroots    = 1;      // number of CI roots for state averaging (1 = single-state)
         std::vector<double> weights;  // SA weights (length nroots); empty → equal weights
+        bool mcscf_debug_numeric_newton = false;  // debug-only numeric Newton fallback
 
         // RASSCF extensions (ignored for plain CASSCF)
         int  nras1     = 0;      // RAS1 orbital count (high-occ. restricted space)
@@ -729,7 +730,7 @@ namespace HartreeFock
         // CASSCF / RASSCF results
         OptionsActiveSpace  _active_space;              // active space specification
         Eigen::VectorXd     _cas_nat_occ;               // active natural occupation numbers
-        Eigen::MatrixXd     _cas_mo_coefficients;       // final CASSCF MO coefficients [nb×nb], active block in natural-orbital gauge
+        Eigen::MatrixXd     _cas_mo_coefficients;       // converged CASSCF MO coefficients [nb×nb] in the optimization basis
         double              _casscf_rhf_energy = 0.0;  // RHF reference energy (for ΔE printout)
 
         Eigen::MatrixXd         _overlap;   // Overlap matrix S

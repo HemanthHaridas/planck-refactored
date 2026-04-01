@@ -275,6 +275,7 @@ std::expected<void, std::string> run_mcscf_loop(
 
     const unsigned int nmicro = std::max(1u, as.mcscf_micro_per_macro);
     const ResponseMode configured_response_mode = ResponseMode::DiagonalResponse;
+    const bool use_numeric_newton_debug = as.mcscf_debug_numeric_newton;
     const int numeric_newton_pair_limit = 48;
     const int ci_dense_threshold = 500;
 
@@ -295,6 +296,9 @@ std::expected<void, std::string> run_mcscf_loop(
     if (nroots > 1)
         logging(LogLevel::Info, tag + " :",
                 std::format("State-averaged over {:d} roots", nroots));
+    if (use_numeric_newton_debug)
+        logging(LogLevel::Info, tag + " :",
+                "Numeric Newton debug fallback is enabled for small pair spaces.");
     HartreeFock::Logger::blank();
     HartreeFock::Logger::casscf_header();
 
@@ -514,11 +518,14 @@ std::expected<void, std::string> run_mcscf_loop(
         Eigen::MatrixXd G_curr = st_current.g_orb;
         Eigen::MatrixXd kappa_total = Eigen::MatrixXd::Zero(nbasis, nbasis);
         Eigen::MatrixXd kappa_first = Eigen::MatrixXd::Zero(nbasis, nbasis);
-        const Eigen::MatrixXd kappa_newton =
-            build_numeric_newton_step(st_current, C, level_shift, diag);
-        if (diag.numeric_newton_attempted && diag.numeric_newton_failed)
-            logging(LogLevel::Warning, tag + " :",
-                    "Central-difference numerical Newton fallback produced an inconsistent column and was discarded.");
+        Eigen::MatrixXd kappa_newton = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        if (use_numeric_newton_debug)
+        {
+            kappa_newton = build_numeric_newton_step(st_current, C, level_shift, diag);
+            if (diag.numeric_newton_attempted && diag.numeric_newton_failed)
+                logging(LogLevel::Warning, tag + " :",
+                        "Debug numeric Newton fallback produced an inconsistent column and was discarded.");
+        }
 
         for (unsigned int micro = 0; micro < nmicro; ++micro)
         {
@@ -747,9 +754,6 @@ std::expected<void, std::string> run_mcscf_loop(
     const NaturalOrbitalData natural_orbitals = diagonalize_natural_orbitals(fst.gamma);
     calc._cas_nat_occ = natural_orbitals.occupations;
     calc._cas_mo_coefficients = C;
-    if (n_act > 0)
-        calc._cas_mo_coefficients.middleCols(n_core, n_act) =
-            C.middleCols(n_core, n_act) * natural_orbitals.rotation;
     calc._total_energy = fst.E_cas;
 
     return {};
