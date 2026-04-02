@@ -1127,39 +1127,96 @@ F^{gen}_{pq} = \sum_r h_{pr} D_{rq} + \sum_{rst} (pr|st) d_{qrst}
 This is computed via two AO→MO half-transformations of the four-index integral
 tensor contracted with the 2-RDM.
 
-### Orbital Update: Cayley Transform
+### Orbital Update: Augmented-Hessian Step and Cayley Transform
 
-Orbital rotations are parameterized by an anti-symmetric matrix \(\mathbf \kappa\)
-and applied as a unitary transformation. The Cayley transform avoids the
-exponential:
+Orbital rotations are parameterized by an antisymmetric matrix \(\mathbf \kappa\)
+and applied as a unitary transformation via the Cayley map:
 
 \[
-\mathbf U(\boldsymbol\kappa) = \left(\mathbf I + \frac{\boldsymbol\kappa}{2}\right)^{-1}
-\left(\mathbf I - \frac{\boldsymbol\kappa}{2}\right)
+\mathbf C_{\text{new}} = \mathbf C_{\text{old}}
+\left(\mathbf I - \frac{\boldsymbol\kappa}{2}\right)^{-1}
+\left(\mathbf I + \frac{\boldsymbol\kappa}{2}\right)
 \]
 
-This is exact for small rotations and ensures the transformed orbitals remain
-unitary (orthonormal) without computing a matrix exponential.
+This approximates \(\mathbf C_{\text{old}}\,e^{\boldsymbol\kappa}\) to second order without
+computing a matrix exponential. After the Cayley step, a Löwdin symmetric
+re-orthogonalization restores exact S-orthonormality in the AO metric.
+
+The rotation matrix \(\boldsymbol\kappa\) comes from an **augmented-Hessian step**
+(`augmented_hessian_step`): the gradient is preconditioned by the diagonal orbital
+Hessian with a level shift, symmetry-forbidden blocks are zeroed, and the step
+length is capped at \(|\boldsymbol\kappa|_{\max} \le 0.20\) to stay in the
+Cayley-transform validity regime.
 
 ### Macro-Iteration Structure
 
 The full CASSCF macro-iteration (one pass of `run_casscf`):
 
 1. Form one-electron integrals in the current MO basis (transform \(h_{\mu\nu}\))
-2. Form active-active two-electron integrals from AO ERIs
-3. Solve CI eigenproblem to get \(\{c_I\}\) and \(E_{CI}\)
-4. Compute 1-RDM and 2-RDM
-5. Compute generalized Fock matrix and orbital gradient \(\mathbf g\)
-6. Update orbital rotation with DIIS-accelerated Cayley step
-7. Rotate MO coefficients: \(\mathbf C \leftarrow \mathbf C \mathbf U\)
-8. Update AO integrals from new MOs
-9. Check convergence: \(\|\mathbf g\| < \epsilon_{grad}\) and \(|\Delta E| < \epsilon_E\)
+2. Form active-active two-electron integrals from AO ERIs; cache the mixed-basis
+   puvw tensor (`build_active_integral_cache`)
+3. Solve CI eigenproblem to get \(\{c_I^{(r)}\}\) and \(\{E_{CI}^{(r)}\}\) for all roots;
+   reorder roots by maximum CI-vector overlap to prevent state flipping
+4. Compute per-root 1-RDM and 2-RDM; form state-averaged \(\bar{\gamma}\) and
+   \(\bar{\Gamma}\) weighted by the SA weights
+5. Compute inactive Fock \(F^I\), active Fock \(F^A\), Q matrix, and orbital
+   gradient \(\mathbf g\)
+6. Run micro-iterations: for each micro-step,
+   a. Form an augmented-Hessian orbital step \(\boldsymbol\kappa\)
+   b. Compute the first-order CI response per root (`solve_ci_response_davidson`)
+      to account for the change in CI coefficients driven by \(\delta h_{\text{eff}} = [{\boldsymbol\kappa}, F^I]_{\text{act}}\)
+   c. Update the gradient with the response correction (`fep1_gradient_update` + CI contribution)
+   d. Accumulate the total rotation \(\boldsymbol\kappa_{\text{total}}\)
+7. Select the best orbital step from a set of candidates (augmented-Hessian
+   accumulated step, first micro-step only, gradient fallback, numeric Newton,
+   and pairwise averages) using a merit function
+   \(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\)
+8. Apply the accepted \(\boldsymbol\kappa\) via the Cayley transform followed by
+   Löwdin re-orthogonalization: \(\mathbf C \leftarrow \mathbf C\,\mathbf U\)
+9. Check convergence: \(\|\mathbf g\| < \epsilon_{\text{grad}}\) and
+   \(|\Delta E| < \epsilon_E\)
+
+### State-Averaged CASSCF
+
+When `nroots > 1`, the driver performs **state-averaged CASSCF** (SA-CASSCF).
+Per-root CI vectors \(\{c^{(r)}_I\}\), energies \(E^{(r)}\), 1-RDMs \(\gamma^{(r)}\),
+and 2-RDMs \(\Gamma^{(r)}\) are computed independently, then combined as weighted
+averages before building the orbital gradient:
+
+\[
+\bar{\gamma}_{pq} = \sum_r w_r \gamma^{(r)}_{pq},\quad
+\bar{\Gamma}_{pqrs} = \sum_r w_r \Gamma^{(r)}_{pqrs}
+\]
+
+with user-specified weights \(w_r\) (equal weights by default). The reported
+total energy is the SA energy \(E_{\text{SA}} = \sum_r w_r E^{(r)}\). Root
+identities are tracked across macro-iterations using maximum CI-vector overlap
+with a Hungarian maximum-weight assignment so that SA weights remain attached to
+the same physical states even when roots cross in energy.
 
 ### Convergence and Robustness
 
-The orbital macro-step includes energy-aware backtracking: after computing the Cayley-transform rotation, the new CASSCF energy is evaluated and the step is kept only if it does not worsen the energy. If no improving extrapolated (DIIS) step exists, DIIS is reset and a damped gradient step is tried. The macro-iteration terminates cleanly when the energy is stationary and no improving orbital step can be found, rather than cycling indefinitely.
+The orbital macro-step uses **merit-function-based step selection**: multiple
+candidate orbital steps (augmented-Hessian result, first micro-step, gradient
+fallback, numeric Newton, and their pairwise averages) are each evaluated by a
+full CASSCF energy computation, and the step that minimizes
+\(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\) is accepted. This avoids the sign
+ambiguity that plagued earlier Cayley-map implementations and removes any
+dependence on DIIS extrapolation.
 
-The CI density matrices (1-RDM and 2-RDM) are built using exact creation/annihilation operators applied in the spin-orbital determinant basis with a determinant lookup table, rather than case-by-case difference logic. This ensures the CI eigenvalue, density matrices, and reconstructed energy are mutually consistent for all active-space sizes.
+When repeated macro-iterations accept only negligibly small steps without
+reducing the true orbital gradient (stagnation), the driver switches to direct
+orbital-gradient probe steps and single-pair directional probes, letting the
+exact CASSCF energy screen pick the productive rotations.
+
+The CI density matrices (1-RDM and 2-RDM) are built using exact
+creation/annihilation operators in the spin-orbital determinant basis with a
+determinant lookup table, ensuring the CI eigenvalue, density matrices, and
+reconstructed energy are mutually consistent for all active-space sizes.
+
+At convergence, the active-space 1-RDM is diagonalized to yield **natural
+orbitals** with occupation numbers reported in descending order
+(`_cas_nat_occ`).
 
 Validation energies (RHF/STO-3G geometry):
 

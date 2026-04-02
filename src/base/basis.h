@@ -1,8 +1,8 @@
 #ifndef HF_BASIS_DEF_H
 #define HF_BASIS_DEF_H
 
-#include <cstdlib>
 #include <string>
+#include <cstdlib>
 
 inline std::string get_basis_path()
 {
