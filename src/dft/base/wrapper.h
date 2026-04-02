@@ -11,7 +11,8 @@
 #include <utility>
 #include <vector>
 
-extern "C" {
+extern "C"
+{
 #include <xc.h>
 }
 
@@ -22,7 +23,7 @@ namespace DFT
         enum class Spin
         {
             Unpolarized = XC_UNPOLARIZED,
-            Polarized   = XC_POLARIZED
+            Polarized = XC_POLARIZED
         };
 
         class Functional
@@ -44,16 +45,16 @@ namespace DFT
                     xc_func_end(&func_);
             }
 
-            Functional(const Functional&) = delete;
-            Functional& operator=(const Functional&) = delete;
+            Functional(const Functional &) = delete;
+            Functional &operator=(const Functional &) = delete;
 
-            Functional(Functional&& other) noexcept : func_(other.func_), initialized_(other.initialized_)
+            Functional(Functional &&other) noexcept : func_(other.func_), initialized_(other.initialized_)
             {
                 other.initialized_ = false;
                 std::memset(&other.func_, 0, sizeof(other.func_));
             }
 
-            Functional& operator=(Functional&& other) noexcept
+            Functional &operator=(Functional &&other) noexcept
             {
                 if (this != &other)
                 {
@@ -67,12 +68,12 @@ namespace DFT
                 return *this;
             }
 
-            const xc_func_type* get() const noexcept
+            const xc_func_type *get() const noexcept
             {
                 return &func_;
             }
 
-            xc_func_type* get() noexcept
+            xc_func_type *get() noexcept
             {
                 return &func_;
             }
@@ -133,10 +134,10 @@ namespace DFT
             }
 
             std::expected<void, std::string> evaluate_lda_exc_vxc(
-                const std::vector<double>& rho,
+                const std::vector<double> &rho,
                 int npoints,
-                std::vector<double>& exc,
-                std::vector<double>& vrho) const
+                std::vector<double> &exc,
+                std::vector<double> &vrho) const
             {
                 if (!is_lda_like())
                     return std::unexpected("evaluate_lda_exc_vxc requires an LDA functional");
@@ -150,19 +151,19 @@ namespace DFT
                 xc_lda_exc_vxc(
                     &func_,
                     npoints,
-                    const_cast<double*>(rho.data()),
+                    const_cast<double *>(rho.data()),
                     exc.data(),
                     vrho.data());
                 return {};
             }
 
             std::expected<void, std::string> evaluate_gga_exc_vxc(
-                const std::vector<double>& rho,
-                const std::vector<double>& sigma,
+                const std::vector<double> &rho,
+                const std::vector<double> &sigma,
                 int npoints,
-                std::vector<double>& exc,
-                std::vector<double>& vrho,
-                std::vector<double>& vsigma) const
+                std::vector<double> &exc,
+                std::vector<double> &vrho,
+                std::vector<double> &vsigma) const
             {
                 if (!is_gga_like())
                     return std::unexpected("evaluate_gga_exc_vxc requires a GGA-like functional");
@@ -179,8 +180,8 @@ namespace DFT
                 xc_gga_exc_vxc(
                     &func_,
                     npoints,
-                    const_cast<double*>(rho.data()),
-                    const_cast<double*>(sigma.data()),
+                    const_cast<double *>(rho.data()),
+                    const_cast<double *>(sigma.data()),
                     exc.data(),
                     vrho.data(),
                     vsigma.data());
@@ -204,7 +205,8 @@ namespace DFT
                 throw std::invalid_argument("libxc functional name must not be empty");
 
             const bool numeric = std::all_of(name.begin(), name.end(),
-                [](unsigned char c) { return std::isdigit(c) != 0; });
+                                             [](unsigned char c)
+                                             { return std::isdigit(c) != 0; });
             if (numeric)
                 return std::stoi(std::string(name));
 
@@ -216,7 +218,7 @@ namespace DFT
 
         inline std::string functional_name(int functional_id)
         {
-            const char* name = xc_functional_get_name(functional_id);
+            const char *name = xc_functional_get_name(functional_id);
             if (!name)
                 throw std::invalid_argument(
                     "Unknown libxc functional id: " + std::to_string(functional_id));

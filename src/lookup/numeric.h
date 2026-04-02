@@ -4,7 +4,7 @@
 #include <array>
 #include <cstddef>
 
-template<std::size_t N>
+template <std::size_t N>
 constexpr std::array<double, N> generate_factorials()
 {
     std::array<double, N> f{};

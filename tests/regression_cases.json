@@ -193,6 +193,21 @@
       ]
     },
     {
+      "id": "water_casscf_ccpvdz_a1",
+      "input": "tests/inputs/casscf_tests/water_cas44_ccpvdz.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "CASSCF :                      Target irrep: A1",
+        "CASSCF :                      Converged."
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
+        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -75.6045806122, "atol": 1e-9}
+      ]
+    },
+    {
       "id": "water_rasscf_pair_filter",
       "input": "tests/inputs/water_rasscf_pair_filter.hfinp",
       "tags": ["extended"],

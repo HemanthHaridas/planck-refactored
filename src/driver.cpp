@@ -1,29 +1,28 @@
 #include <chrono>
-#include <iostream>
 #include <filesystem>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <string>
-#include <sstream>
 
 #include "base/types.h"
-#include "io/io.h"
-#include "io/checkpoint.h"
-#include "io/logging.h"
-#include "symmetry/symmetry.h"
-#include "symmetry/mo_symmetry.h"
-#include "symmetry/integral_symmetry.h"
 #include "basis/basis.h"
-#include "integrals/shellpair.h"
-#include "integrals/base.h"
-#include "scf/scf.h"
-#include "post_hf/mp2.h"
-#include "post_hf/casscf.h"
-#include "gradient/gradient.h"
-#include "opt/geomopt.h"
 #include "freq/hessian.h"
+#include "gradient/gradient.h"
+#include "integrals/base.h"
+#include "integrals/shellpair.h"
+#include "io/checkpoint.h"
+#include "io/io.h"
+#include "io/logging.h"
+#include "opt/geomopt.h"
+#include "post_hf/casscf.h"
+#include "post_hf/mp2.h"
+#include "scf/scf.h"
+#include "symmetry/integral_symmetry.h"
+#include "symmetry/mo_symmetry.h"
+#include "symmetry/symmetry.h"
 
 using SystemClock = std::chrono::system_clock;
 
@@ -44,8 +43,8 @@ static std::string format_time(SystemClock::time_point tp)
 }
 
 static void log_multipole_report(
-    const HartreeFock::Calculator& calculator,
-    const std::vector<HartreeFock::ShellPair>& shell_pairs)
+    const HartreeFock::Calculator &calculator,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs)
 {
     auto moments = HartreeFock::ObaraSaika::_compute_multipole_moments(
         calculator,
@@ -66,19 +65,19 @@ static void log_multipole_report(
     HartreeFock::Logger::blank();
 }
 
-int main(int argc, const char* argv[])
+int main(int argc, const char *argv[])
 {
-    const auto program_start    = SystemClock::now();   // Start time
-    
+    const auto program_start = SystemClock::now(); // Start time
+
     if (argc != 2)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Usage :", std::format("{} <input file>", argv[0]));
         return EXIT_FAILURE;
     }
-    
+
     const std::string input_file = argv[1];
     std::ifstream input_stream(input_file);
-    
+
     if (!input_stream)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Input Error :", "Failed to open input file");
@@ -122,31 +121,31 @@ int main(int argc, const char* argv[])
             if (geo->natoms != calculator._molecule.natoms)
             {
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Checkpoint :",
-                    std::format("Atom count mismatch: checkpoint has {}, input has {}",
-                                geo->natoms, calculator._molecule.natoms));
+                                             std::format("Atom count mismatch: checkpoint has {}, input has {}",
+                                                         geo->natoms, calculator._molecule.natoms));
                 return EXIT_FAILURE;
             }
 
             // Override geometry, charge, and multiplicity
-            calculator._molecule._standard     = geo->coords_bohr;
-            calculator._molecule._coordinates  = geo->coords_bohr;
-            calculator._molecule.coordinates   = geo->coords_bohr / ANGSTROM_TO_BOHR;
-            calculator._molecule.charge        = geo->charge;
-            calculator._molecule.multiplicity  = geo->multiplicity;
+            calculator._molecule._standard = geo->coords_bohr;
+            calculator._molecule._coordinates = geo->coords_bohr;
+            calculator._molecule.coordinates = geo->coords_bohr / ANGSTROM_TO_BOHR;
+            calculator._molecule.charge = geo->charge;
+            calculator._molecule.multiplicity = geo->multiplicity;
             calculator._molecule.atomic_numbers = geo->atomic_numbers;
             preserve_checkpoint_ao_frame = true;
 
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
-                std::format("Restoring {} geometry from {}{}",
-                            geo->has_opt_coords ? "optimized" : "input",
-                            calculator._checkpoint_path,
-                            geo->has_opt_coords ? " (converged geomopt)" : ""));
+                                         std::format("Restoring {} geometry from {}{}",
+                                                     geo->has_opt_coords ? "optimized" : "input",
+                                                     calculator._checkpoint_path,
+                                                     geo->has_opt_coords ? " (converged geomopt)" : ""));
         }
         else
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
-                std::format("Could not read geometry: {} — falling back to guess density",
-                            geo.error()));
+                                         std::format("Could not read geometry: {} — falling back to guess density",
+                                                     geo.error()));
             // Downgrade to density-only restart
             calculator._scf._guess = HartreeFock::SCFGuess::ReadDensity;
         }
@@ -154,10 +153,10 @@ int main(int argc, const char* argv[])
 
     // Now log all input options
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :",           map_enum(calculator._scf._scf));
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis :",            calculator._basis._basis_name);
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Charge :",           calculator._molecule.charge);
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Multiplicity :",     calculator._molecule.multiplicity);
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :", map_enum(calculator._scf._scf));
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis :", calculator._basis._basis_name);
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Charge :", calculator._molecule.charge);
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Multiplicity :", calculator._molecule.multiplicity);
     HartreeFock::Logger::blank();
 
     // Detect Symmetry
@@ -166,9 +165,9 @@ int main(int argc, const char* argv[])
         calculator._molecule._point_group = "C1";
         calculator._molecule._symmetry = false;
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :",
-            "Skipped for guess full restart to preserve checkpoint AO frame");
+                                     "Skipped for guess full restart to preserve checkpoint AO frame");
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :",
-            "Checkpoint density and 1e matrices are reused in the stored standard orientation");
+                                     "Checkpoint density and 1e matrices are reused in the stored standard orientation");
         HartreeFock::Logger::blank();
     }
 
@@ -254,7 +253,7 @@ int main(int argc, const char* argv[])
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis Construction :", std::format("Generated {} Shells and {} contracted functions", calculator._shells.nshells(), calculator._shells.nbasis()));
 
     // Now generate shell pairs
-    std::vector <HartreeFock::ShellPair> shellpairs = build_shellpairs(calculator._shells);
+    std::vector<HartreeFock::ShellPair> shellpairs = build_shellpairs(calculator._shells);
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Number of Shell pairs :", shellpairs.size());
     HartreeFock::Logger::blank();
 
@@ -276,15 +275,16 @@ int main(int argc, const char* argv[])
         const bool load_1e = (calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
 
         if (auto res = HartreeFock::Checkpoint::load(
-                calculator, calculator._checkpoint_path, load_1e); res)
+                calculator, calculator._checkpoint_path, load_1e);
+            res)
         {
             // For guess full the 1e matrices are valid → skip recompute.
             // For guess density we still need to compute fresh integrals.
             loaded_from_checkpoint = load_1e;
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
-                std::format("Loaded from {} ({})",
-                            calculator._checkpoint_path,
-                            load_1e ? "geometry + density" : "density only"));
+                                         std::format("Loaded from {} ({})",
+                                                     calculator._checkpoint_path,
+                                                     load_1e ? "geometry + density" : "density only"));
             HartreeFock::Logger::blank();
         }
         else
@@ -295,8 +295,8 @@ int main(int argc, const char* argv[])
             if (mos_res && mos_res->nbasis != calculator._shells.nbasis())
             {
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
-                    std::format("Basis change detected ({} → {}); projecting density",
-                                mos_res->basis_name, calculator._basis._basis_name));
+                                             std::format("Basis change detected ({} → {}); projecting density",
+                                                         mos_res->basis_name, calculator._basis._basis_name));
 
                 // 1e integrals must be computed in the large (current) basis
                 const std::size_t large_nb = calculator._shells.nbasis();
@@ -312,8 +312,8 @@ int main(int argc, const char* argv[])
                 HartreeFock::Logger::blank();
 
                 calculator._overlap = S;
-                calculator._hcore   = T + V;
-                loaded_from_checkpoint = true;  // skip the unconditional 1e block below
+                calculator._hcore = T + V;
+                loaded_from_checkpoint = true; // skip the unconditional 1e block below
 
                 // Re-read the small basis for cross-overlap
                 std::filesystem::path small_gbs =
@@ -335,11 +335,12 @@ int main(int argc, const char* argv[])
 
                         // Derive occupations from current molecule
                         int n_elec = 0;
-                        for (auto z : calculator._molecule.atomic_numbers) n_elec += z;
+                        for (auto z : calculator._molecule.atomic_numbers)
+                            n_elec += z;
                         n_elec -= calculator._molecule.charge;
                         const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
-                        const int n_alpha    = (n_elec + n_unpaired) / 2;
-                        const int n_beta     = (n_elec - n_unpaired) / 2;
+                        const int n_alpha = (n_elec + n_unpaired) / 2;
+                        const int n_beta = (n_elec - n_unpaired) / 2;
 
                         const bool cur_uhf = (calculator._scf._scf == HartreeFock::SCFType::UHF);
 
@@ -375,13 +376,13 @@ int main(int argc, const char* argv[])
                     else
                     {
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
-                            std::format("Orthogonalizer failed: {} — using H_core guess", X_res.error()));
+                                                     std::format("Orthogonalizer failed: {} — using H_core guess", X_res.error()));
                     }
                 }
-                catch (const std::exception& e)
+                catch (const std::exception &e)
                 {
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
-                        std::format("Projection failed: {} — using H_core guess", e.what()));
+                                                 std::format("Projection failed: {} — using H_core guess", e.what()));
                 }
 
                 if (!projection_ok)
@@ -392,8 +393,8 @@ int main(int argc, const char* argv[])
                 // Same basis or checkpoint unreadable — full fallback to H_core
                 calculator._scf._guess = HartreeFock::SCFGuess::HCore;
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
-                    std::format("Could not load '{}': {} — computing integrals from scratch",
-                                calculator._checkpoint_path, res.error()));
+                                             std::format("Could not load '{}': {} — computing integrals from scratch",
+                                                         calculator._checkpoint_path, res.error()));
             }
         }
     }
@@ -404,8 +405,8 @@ int main(int argc, const char* argv[])
         if (calculator._use_integral_symmetry)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Integral Symmetry :",
-                std::format("{} signed AO symmetry operations enabled",
-                            calculator._integral_symmetry_ops.size()));
+                                         std::format("{} signed AO symmetry operations enabled",
+                                                     calculator._integral_symmetry_ops.size()));
         }
 
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing overlap and kinetic energy matrices");
@@ -422,7 +423,7 @@ int main(int argc, const char* argv[])
         HartreeFock::Logger::blank();
 
         calculator._overlap = S;
-        calculator._hcore   = T + V;
+        calculator._hcore = T + V;
     }
 
     // ── SAO basis for symmetry-blocked Fock diagonalization ──────────────────
@@ -435,18 +436,19 @@ int main(int argc, const char* argv[])
             auto sao = HartreeFock::Symmetry::build_sao_basis(calculator);
             if (sao.valid)
             {
-                calculator._sao_transform     = std::move(sao.transform);
-                calculator._sao_irrep_index   = std::move(sao.sao_irrep_index);
-                calculator._sao_irrep_names   = std::move(sao.irrep_names);
-                calculator._sao_block_sizes   = std::move(sao.block_sizes);
+                calculator._sao_transform = std::move(sao.transform);
+                calculator._sao_irrep_index = std::move(sao.sao_irrep_index);
+                calculator._sao_irrep_names = std::move(sao.irrep_names);
+                calculator._sao_block_sizes = std::move(sao.block_sizes);
                 calculator._sao_block_offsets = std::move(sao.block_offsets);
-                calculator._use_sao_blocking  = true;
+                calculator._use_sao_blocking = true;
 
                 // Log irrep distribution, e.g. "A1(4)  B1(1)  B2(2)"
                 std::string dist;
                 for (std::size_t g = 0; g < calculator._sao_irrep_names.size(); ++g)
                 {
-                    if (g > 0) dist += "  ";
+                    if (g > 0)
+                        dist += "  ";
                     dist += calculator._sao_irrep_names[g] + "(" +
                             std::to_string(calculator._sao_block_sizes[g]) + ")";
                 }
@@ -454,10 +456,10 @@ int main(int argc, const char* argv[])
                 HartreeFock::Logger::blank();
             }
         }
-        catch (const std::exception& e)
+        catch (const std::exception &e)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                "SAO Basis :", std::format("Skipped: {}", e.what()));
+                                         "SAO Basis :", std::format("Skipped: {}", e.what()));
         }
     }
 
@@ -501,16 +503,17 @@ int main(int argc, const char* argv[])
             {
                 HartreeFock::Symmetry::assign_mo_symmetry(calculator);
             }
-            catch (const std::exception& e)
+            catch (const std::exception &e)
             {
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                    "MO Symmetry :", std::format("Skipped: {}", e.what()));
+                                             "MO Symmetry :", std::format("Skipped: {}", e.what()));
             }
         }
 
         const bool have_symm = !calculator._info._scf.alpha.mo_symmetry.empty();
         int n_elec = 0;
-        for (auto z : calculator._molecule.atomic_numbers) n_elec += z;
+        for (auto z : calculator._molecule.atomic_numbers)
+            n_elec += z;
         n_elec -= calculator._molecule.charge;
 
         if (calculator._scf._scf == HartreeFock::SCFType::RHF)
@@ -526,7 +529,7 @@ int main(int argc, const char* argv[])
         {
             const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
             const std::size_t n_alpha = static_cast<std::size_t>((n_elec + n_unpaired) / 2);
-            const std::size_t n_beta  = static_cast<std::size_t>((n_elec - n_unpaired) / 2);
+            const std::size_t n_beta = static_cast<std::size_t>((n_elec - n_unpaired) / 2);
 
             const bool have_symm_b = !calculator._info._scf.beta.mo_symmetry.empty();
 
@@ -551,10 +554,10 @@ int main(int argc, const char* argv[])
     {
         if (auto res = HartreeFock::Checkpoint::save(calculator, calculator._checkpoint_path); res)
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
-                std::format("Saved to {}", calculator._checkpoint_path));
+                                         std::format("Saved to {}", calculator._checkpoint_path));
         else
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
-                std::format("Save failed: {}", res.error()));
+                                         std::format("Save failed: {}", res.error()));
     }
 
     HartreeFock::Logger::converged_energy(calculator._total_energy, calculator._nuclear_repulsion);
@@ -594,7 +597,7 @@ int main(int argc, const char* argv[])
         if (corr_res.has_value() == false && !corr_tag.empty())
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error,
-                corr_tag + " Failed :", corr_res.error());
+                                         corr_tag + " Failed :", corr_res.error());
             return EXIT_FAILURE;
         }
 
@@ -622,7 +625,7 @@ int main(int argc, const char* argv[])
                             nat_res->occupations, nat_res->coefficients_mo);
                     else
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                            "RMP2 :", "Natural orbitals unavailable: " + nat_res.error());
+                                                     "RMP2 :", "Natural orbitals unavailable: " + nat_res.error());
                 }
                 HartreeFock::Logger::correlation_energy(calculator._total_energy, calculator._correlation_energy);
             }
@@ -633,10 +636,10 @@ int main(int argc, const char* argv[])
             {
                 if (auto res = HartreeFock::Checkpoint::save(calculator, calculator._checkpoint_path); res)
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
-                        std::format("Updated {}", calculator._checkpoint_path));
+                                                 std::format("Updated {}", calculator._checkpoint_path));
                 else
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
-                        std::format("Post-HF save failed: {}", res.error()));
+                                                 std::format("Post-HF save failed: {}", res.error()));
             }
         }
     }
@@ -652,14 +655,14 @@ int main(int argc, const char* argv[])
         if (calculator._correlation == HartreeFock::PostHF::RMP2)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient :",
-                "Using analytic RMP2 gradient (relaxed density + pair density + Z-vector)");
+                                         "Using analytic RMP2 gradient (relaxed density + pair density + Z-vector)");
             calculator._total_energy += calculator._correlation_energy;
             grad = HartreeFock::Gradient::compute_rmp2_gradient(calculator, shellpairs);
         }
         else if (calculator._correlation == HartreeFock::PostHF::UMP2)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
-                "UMP2 gradient is not implemented");
+                                         "UMP2 gradient is not implemented");
             return EXIT_FAILURE;
         }
         else if (calculator._info._scf.is_uhf)
@@ -673,16 +676,16 @@ int main(int argc, const char* argv[])
         for (std::size_t a = 0; a < natoms_g; ++a)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                std::format("  Atom {:3d}: {:14.8f}  {:14.8f}  {:14.8f}",
-                    static_cast<int>(a + 1),
-                    grad(a, 0), grad(a, 1), grad(a, 2)));
+                                         std::format("  Atom {:3d}: {:14.8f}  {:14.8f}  {:14.8f}",
+                                                     static_cast<int>(a + 1),
+                                                     grad(a, 0), grad(a, 1), grad(a, 2)));
         }
         const double gmax = grad.cwiseAbs().maxCoeff();
         const double grms = std::sqrt(grad.squaredNorm() / static_cast<double>(natoms_g * 3));
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient max|g| :",
-            std::format("{:.6e} Ha/Bohr", gmax));
+                                     std::format("{:.6e} Ha/Bohr", gmax));
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient rms|g| :",
-            std::format("{:.6e} Ha/Bohr", grms));
+                                     std::format("{:.6e} Ha/Bohr", grms));
         HartreeFock::Logger::blank();
     }
 
@@ -692,17 +695,17 @@ int main(int argc, const char* argv[])
         if (calculator._opt_coords != HartreeFock::OptCoords::Internal)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Constraints :",
-                "Constrained optimization requires opt_coords internal");
+                                         "Constrained optimization requires opt_coords internal");
             return EXIT_FAILURE;
         }
         if (calculator._geometry._type != HartreeFock::CoordType::ZMatrix)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Constraints :",
-                "Constrained optimization requires coord_type zmatrix");
+                                         "Constrained optimization requires coord_type zmatrix");
             return EXIT_FAILURE;
         }
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Constraints :",
-            std::format("{} constraint(s) active", calculator._constraints.size()));
+                                     std::format("{} constraint(s) active", calculator._constraints.size()));
     }
 
     // ── Imaginary Mode Follow: Hessian → find mode → displace → geomopt ─────
@@ -712,48 +715,53 @@ int main(int argc, const char* argv[])
     {
         HartreeFock::Logger::blank();
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-            "Imaginary Follow :", "Computing semi-numerical Hessian");
+                                     "Imaginary Follow :", "Computing semi-numerical Hessian");
         try
         {
             auto freq_result = HartreeFock::Freq::compute_hessian(calculator);
 
             // Store for completeness
-            calculator._hessian              = freq_result.hessian;
-            calculator._frequencies          = freq_result.frequencies;
-            calculator._normal_modes         = freq_result.normal_modes;
+            calculator._hessian = freq_result.hessian;
+            calculator._frequencies = freq_result.frequencies;
+            calculator._normal_modes = freq_result.normal_modes;
             calculator._vibrational_symmetry = freq_result.mode_symmetry;
-            calculator._zpe                  = freq_result.zpe;
+            calculator._zpe = freq_result.zpe;
 
             if (freq_result.n_imaginary == 0)
             {
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                    "Imaginary Follow :",
-                    "No imaginary frequencies found — structure is a minimum; skipping optimization.");
+                                             "Imaginary Follow :",
+                                             "No imaginary frequencies found — structure is a minimum; skipping optimization.");
             }
             else
             {
                 // frequencies[] is sorted ascending; imaginary modes are negative and first.
                 // Scan to find the one with the largest absolute value.
-                int    imag_idx = 0;
-                double max_abs  = std::abs(freq_result.frequencies[0]);
+                int imag_idx = 0;
+                double max_abs = std::abs(freq_result.frequencies[0]);
                 for (int i = 1; i < freq_result.n_vib; ++i)
                 {
-                    if (freq_result.frequencies[i] >= 0.0) break;
+                    if (freq_result.frequencies[i] >= 0.0)
+                        break;
                     const double a = std::abs(freq_result.frequencies[i]);
-                    if (a > max_abs) { max_abs = a; imag_idx = i; }
+                    if (a > max_abs)
+                    {
+                        max_abs = a;
+                        imag_idx = i;
+                    }
                 }
 
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                    "Imaginary Follow :",
-                    std::format("{} imaginary mode(s); following mode {} ({:.2f}i cm\u207b\u00b9), step {:.4f} Bohr",
-                        freq_result.n_imaginary, imag_idx + 1,
-                        -freq_result.frequencies[imag_idx],
-                        calculator._imag_follow_step));
+                                             "Imaginary Follow :",
+                                             std::format("{} imaginary mode(s); following mode {} ({:.2f}i cm\u207b\u00b9), step {:.4f} Bohr",
+                                                         freq_result.n_imaginary, imag_idx + 1,
+                                                         -freq_result.frequencies[imag_idx],
+                                                         calculator._imag_follow_step));
 
                 // Displace _standard (Bohr) along the chosen mode column.
                 // normal_modes is 3N×n_vib, unit-norm Cartesian columns, mass-unweighted.
                 const std::size_t N_if = calculator._molecule.natoms;
-                const double      stp  = calculator._imag_follow_step;
+                const double stp = calculator._imag_follow_step;
                 for (std::size_t a = 0; a < N_if; ++a)
                     for (int d = 0; d < 3; ++d)
                         calculator._molecule._standard(a, d) +=
@@ -761,28 +769,28 @@ int main(int argc, const char* argv[])
 
                 // Keep all three coordinate frames in sync
                 calculator._molecule._coordinates = calculator._molecule._standard;
-                calculator._molecule.coordinates  = calculator._molecule._standard / ANGSTROM_TO_BOHR;
+                calculator._molecule.coordinates = calculator._molecule._standard / ANGSTROM_TO_BOHR;
 
                 // Log displaced geometry
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                    "Displaced Geometry (Angstrom) :", "");
+                                             "Displaced Geometry (Angstrom) :", "");
                 for (std::size_t a = 0; a < N_if; ++a)
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                        std::format("  Atom {:3d}:  {:14d}  {:14.8f}  {:14.8f}  {:14.8f}",
-                            static_cast<int>(a + 1),
-                            static_cast<int>(calculator._molecule.atomic_numbers[a]),
-                            calculator._molecule.coordinates(a, 0),
-                            calculator._molecule.coordinates(a, 1),
-                            calculator._molecule.coordinates(a, 2)));
+                                                 std::format("  Atom {:3d}:  {:14d}  {:14.8f}  {:14.8f}  {:14.8f}",
+                                                             static_cast<int>(a + 1),
+                                                             static_cast<int>(calculator._molecule.atomic_numbers[a]),
+                                                             calculator._molecule.coordinates(a, 0),
+                                                             calculator._molecule.coordinates(a, 1),
+                                                             calculator._molecule.coordinates(a, 2)));
                 HartreeFock::Logger::blank();
 
                 imag_follow_armed = true;
             }
         }
-        catch (const std::exception& e)
+        catch (const std::exception &e)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error,
-                "Imaginary Follow :", e.what());
+                                         "Imaginary Follow :", e.what());
             return EXIT_FAILURE;
         }
     }
@@ -795,36 +803,35 @@ int main(int argc, const char* argv[])
     {
         const bool use_ic = (calculator._opt_coords == HartreeFock::OptCoords::Internal);
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Geometry Optimization :",
-            use_ic ? "Starting IC-BFGS optimizer" : "Starting L-BFGS optimizer");
+                                     use_ic ? "Starting IC-BFGS optimizer" : "Starting L-BFGS optimizer");
         HartreeFock::Logger::blank();
 
         auto opt_result = use_ic
-            ? HartreeFock::Opt::run_geomopt_ic(calculator)
-            : HartreeFock::Opt::run_geomopt(calculator);
+                              ? HartreeFock::Opt::run_geomopt_ic(calculator)
+                              : HartreeFock::Opt::run_geomopt(calculator);
 
         HartreeFock::Logger::blank();
         if (opt_result.converged)
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Geometry Optimization :",
-                std::format("Converged in {} steps", opt_result.iterations));
+                                         std::format("Converged in {} steps", opt_result.iterations));
         else
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Geometry Optimization :",
-                std::format("Did NOT converge after {} steps", opt_result.iterations));
+                                         std::format("Did NOT converge after {} steps", opt_result.iterations));
 
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Final Energy :",
-            std::format("{:.10f} Eh", opt_result.energy));
+                                     std::format("{:.10f} Eh", opt_result.energy));
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Final max|g| :",
-            std::format("{:.6e} Ha/Bohr", opt_result.grad_max));
+                                     std::format("{:.6e} Ha/Bohr", opt_result.grad_max));
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Optimized Geometry (Angstrom) :", "");
         for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                std::format("  Atom {:3d}:  {:14d}  {:14.8f}  {:14.8f}  {:14.8f}",
-                    static_cast<int>(a + 1),
-                    static_cast<int>(calculator._molecule.atomic_numbers[a]),
-                    opt_result.final_coords(a, 0) * BOHR_TO_ANGSTROM,
-                    opt_result.final_coords(a, 1) * BOHR_TO_ANGSTROM,
-                    opt_result.final_coords(a, 2) * BOHR_TO_ANGSTROM)
-                    );
+                                         std::format("  Atom {:3d}:  {:14d}  {:14.8f}  {:14.8f}  {:14.8f}",
+                                                     static_cast<int>(a + 1),
+                                                     static_cast<int>(calculator._molecule.atomic_numbers[a]),
+                                                     opt_result.final_coords(a, 0) * BOHR_TO_ANGSTROM,
+                                                     opt_result.final_coords(a, 1) * BOHR_TO_ANGSTROM,
+                                                     opt_result.final_coords(a, 2) * BOHR_TO_ANGSTROM));
         }
         HartreeFock::Logger::blank();
 
@@ -833,19 +840,19 @@ int main(int argc, const char* argv[])
         // Run detectSymmetry on the converged structure, then rebuild
         // basis/integrals/SCF and print the point group and MO table.
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-            "Final Symmetry SCF :", "Re-running SCF at optimized geometry with symmetry");
+                                     "Final Symmetry SCF :", "Re-running SCF at optimized geometry with symmetry");
         HartreeFock::Logger::blank();
 
         // Detect point group of the optimized structure
         if (auto res = HartreeFock::Symmetry::detectSymmetry(calculator._molecule); !res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                "Symmetry Detection :", std::format("Failed: {} — skipping symmetry SCF", res.error()));
+                                         "Symmetry Detection :", std::format("Failed: {} — skipping symmetry SCF", res.error()));
         }
         else
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                "Point Group :", calculator._molecule._point_group);
+                                         "Point Group :", calculator._molecule._point_group);
             HartreeFock::Logger::blank();
 
             // Rebuild basis from the symmetry-reoriented standard frame
@@ -860,21 +867,21 @@ int main(int argc, const char* argv[])
             calculator._info._scf.initialize(calculator._shells.nbasis());
             calculator._scf.set_scf_mode_auto(calculator._shells.nbasis());
             calculator._info._is_converged = false;
-            calculator._use_sao_blocking   = false;
+            calculator._use_sao_blocking = false;
 
             calculator._compute_nuclear_repulsion();
 
-            auto sp_sym  = build_shellpairs(calculator._shells);
+            auto sp_sym = build_shellpairs(calculator._shells);
             HartreeFock::Symmetry::update_integral_symmetry(calculator);
             auto [S_sym, T_sym] = _compute_1e(sp_sym, calculator._shells.nbasis(),
-                                               calculator._integral._engine,
-                                               calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                                              calculator._integral._engine,
+                                              calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
             auto V_sym = _compute_nuclear_attraction(sp_sym, calculator._shells.nbasis(),
-                                                      calculator._molecule,
-                                                      calculator._integral._engine,
-                                                      calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                                                     calculator._molecule,
+                                                     calculator._integral._engine,
+                                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
             calculator._overlap = S_sym;
-            calculator._hcore   = T_sym + V_sym;
+            calculator._hcore = T_sym + V_sym;
 
             // Try SAO symmetry blocking
             if (calculator._molecule._point_group != "C1" &&
@@ -885,29 +892,30 @@ int main(int argc, const char* argv[])
                     auto sao = HartreeFock::Symmetry::build_sao_basis(calculator);
                     if (sao.valid)
                     {
-                        calculator._sao_transform     = std::move(sao.transform);
-                        calculator._sao_irrep_index   = std::move(sao.sao_irrep_index);
-                        calculator._sao_irrep_names   = std::move(sao.irrep_names);
-                        calculator._sao_block_sizes   = std::move(sao.block_sizes);
+                        calculator._sao_transform = std::move(sao.transform);
+                        calculator._sao_irrep_index = std::move(sao.sao_irrep_index);
+                        calculator._sao_irrep_names = std::move(sao.irrep_names);
+                        calculator._sao_block_sizes = std::move(sao.block_sizes);
                         calculator._sao_block_offsets = std::move(sao.block_offsets);
-                        calculator._use_sao_blocking  = true;
+                        calculator._use_sao_blocking = true;
 
                         std::string dist;
                         for (std::size_t g = 0; g < calculator._sao_irrep_names.size(); ++g)
                         {
-                            if (g > 0) dist += "  ";
+                            if (g > 0)
+                                dist += "  ";
                             dist += calculator._sao_irrep_names[g] + "(" +
                                     std::to_string(calculator._sao_block_sizes[g]) + ")";
                         }
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                            "SAO Basis :", dist);
+                                                     "SAO Basis :", dist);
                         HartreeFock::Logger::blank();
                     }
                 }
-                catch (const std::exception& e)
+                catch (const std::exception &e)
                 {
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                        "SAO Basis :", std::format("Skipped: {}", e.what()));
+                                                 "SAO Basis :", std::format("Skipped: {}", e.what()));
                 }
             }
 
@@ -921,26 +929,30 @@ int main(int argc, const char* argv[])
             if (!scf_sym_res)
             {
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                    "Final Symmetry SCF :",
-                    std::format("SCF failed: {}", scf_sym_res.error()));
+                                             "Final Symmetry SCF :",
+                                             std::format("SCF failed: {}", scf_sym_res.error()));
             }
             else
             {
                 // Assign MO symmetry labels (if not already set by SAO blocking)
                 if (calculator._molecule._symmetry && !calculator._use_sao_blocking)
                 {
-                    try { HartreeFock::Symmetry::assign_mo_symmetry(calculator); }
-                    catch (const std::exception& e)
+                    try
+                    {
+                        HartreeFock::Symmetry::assign_mo_symmetry(calculator);
+                    }
+                    catch (const std::exception &e)
                     {
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                            "MO Symmetry :", std::format("Skipped: {}", e.what()));
+                                                     "MO Symmetry :", std::format("Skipped: {}", e.what()));
                     }
                 }
 
                 // Print MO table
                 const bool have_symm_f = !calculator._info._scf.alpha.mo_symmetry.empty();
                 int n_elec_f = 0;
-                for (auto z : calculator._molecule.atomic_numbers) n_elec_f += z;
+                for (auto z : calculator._molecule.atomic_numbers)
+                    n_elec_f += z;
                 n_elec_f -= calculator._molecule.charge;
 
                 if (calculator._scf._scf == HartreeFock::SCFType::RHF)
@@ -956,7 +968,7 @@ int main(int argc, const char* argv[])
                 {
                     const int n_unpaired_f = static_cast<int>(calculator._molecule.multiplicity) - 1;
                     const std::size_t n_alpha_f = static_cast<std::size_t>((n_elec_f + n_unpaired_f) / 2);
-                    const std::size_t n_beta_f  = static_cast<std::size_t>((n_elec_f - n_unpaired_f) / 2);
+                    const std::size_t n_beta_f = static_cast<std::size_t>((n_elec_f - n_unpaired_f) / 2);
                     const bool have_symm_b_f = !calculator._info._scf.beta.mo_symmetry.empty();
 
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Alpha MOs :", "");
@@ -985,13 +997,13 @@ int main(int argc, const char* argv[])
                 if (calculator._scf._save_checkpoint)
                 {
                     if (auto cres = HartreeFock::Checkpoint::save(
-                            calculator, calculator._checkpoint_path); cres)
+                            calculator, calculator._checkpoint_path);
+                        cres)
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                            "Checkpoint :", std::format("Updated with optimized geometry: {}",
-                                                         calculator._checkpoint_path));
+                                                     "Checkpoint :", std::format("Updated with optimized geometry: {}", calculator._checkpoint_path));
                     else
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                            "Checkpoint :", std::format("Save failed: {}", cres.error()));
+                                                     "Checkpoint :", std::format("Save failed: {}", cres.error()));
                 }
             }
         }
@@ -1009,111 +1021,111 @@ int main(int argc, const char* argv[])
 
         HartreeFock::Logger::blank();
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-            "Frequency :", "Computing semi-numerical Hessian (analytic gradients)");
+                                     "Frequency :", "Computing semi-numerical Hessian (analytic gradients)");
 
         try
         {
             auto freq_result = HartreeFock::Freq::compute_hessian(calculator);
 
             // Store results on the calculator
-            calculator._hessian      = freq_result.hessian;
-            calculator._frequencies  = freq_result.frequencies;
+            calculator._hessian = freq_result.hessian;
+            calculator._frequencies = freq_result.frequencies;
             calculator._normal_modes = freq_result.normal_modes;
             calculator._vibrational_symmetry = freq_result.mode_symmetry;
-            calculator._zpe          = freq_result.zpe;
+            calculator._zpe = freq_result.zpe;
 
             // ── Print frequency table ─────────────────────────────────────────
             HartreeFock::Logger::blank();
-            const int n_vib   = freq_result.n_vib;
-            const int n_tr    = static_cast<int>(calculator._molecule.natoms * 3) - n_vib;
+            const int n_vib = freq_result.n_vib;
+            const int n_tr = static_cast<int>(calculator._molecule.natoms * 3) - n_vib;
             const std::string geo_label = freq_result.is_linear ? "linear" : "non-linear";
 
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                "Vibrational Frequencies :", "");
+                                         "Vibrational Frequencies :", "");
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                std::format("  Molecule: {} ({} T+R modes removed, {} vibrational modes)",
-                            geo_label, n_tr, n_vib));
+                                         std::format("  Molecule: {} ({} T+R modes removed, {} vibrational modes)",
+                                                     geo_label, n_tr, n_vib));
             const bool have_mode_symmetry =
                 freq_result.mode_symmetry.size() == static_cast<std::size_t>(n_vib) &&
                 !freq_result.mode_symmetry.empty();
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                have_mode_symmetry
-                    ? "  ─────────────────────────────────────────────────────"
-                    : "  ──────────────────────────────────────────");
+                                         have_mode_symmetry
+                                             ? "  ─────────────────────────────────────────────────────"
+                                             : "  ──────────────────────────────────────────");
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                have_mode_symmetry
-                    ? "    Mode    Symmetry    Frequency (cm⁻¹)"
-                    : "    Mode    Frequency (cm⁻¹)");
+                                         have_mode_symmetry
+                                             ? "    Mode    Symmetry    Frequency (cm⁻¹)"
+                                             : "    Mode    Frequency (cm⁻¹)");
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                have_mode_symmetry
-                    ? "  ─────────────────────────────────────────────────────"
-                    : "  ────────────────────────────────────────────");
+                                         have_mode_symmetry
+                                             ? "  ─────────────────────────────────────────────────────"
+                                             : "  ────────────────────────────────────────────");
 
             for (int i = 0; i < n_vib; ++i)
             {
                 const double freq = freq_result.frequencies[i];
                 if (freq < 0.0)
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                        have_mode_symmetry
-                            ? std::format("  {:6d}  {:10s}  {:14.2f}i  (imaginary)",
-                                          i + 1,
-                                          freq_result.mode_symmetry[static_cast<std::size_t>(i)],
-                                          -freq)
-                            : std::format("  {:6d}  {:14.2f}i  (imaginary)", i + 1, -freq));
+                                                 have_mode_symmetry
+                                                     ? std::format("  {:6d}  {:10s}  {:14.2f}i  (imaginary)",
+                                                                   i + 1,
+                                                                   freq_result.mode_symmetry[static_cast<std::size_t>(i)],
+                                                                   -freq)
+                                                     : std::format("  {:6d}  {:14.2f}i  (imaginary)", i + 1, -freq));
                 else
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                        have_mode_symmetry
-                            ? std::format("  {:6d}  {:10s}  {:14.2f}",
-                                          i + 1,
-                                          freq_result.mode_symmetry[static_cast<std::size_t>(i)],
-                                          freq)
-                            : std::format("  {:6d}  {:14.2f}", i + 1, freq));
+                                                 have_mode_symmetry
+                                                     ? std::format("  {:6d}  {:10s}  {:14.2f}",
+                                                                   i + 1,
+                                                                   freq_result.mode_symmetry[static_cast<std::size_t>(i)],
+                                                                   freq)
+                                                     : std::format("  {:6d}  {:14.2f}", i + 1, freq));
             }
 
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                have_mode_symmetry
-                    ? "  ─────────────────────────────────────────────────────"
-                    : "  ────────────────────────────────────────────");
+                                         have_mode_symmetry
+                                             ? "  ─────────────────────────────────────────────────────"
+                                             : "  ────────────────────────────────────────────");
 
             if (freq_result.n_imaginary > 0)
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                    "Frequency :",
-                    std::format("{} imaginary frequency(ies) — structure may be a saddle point",
-                                freq_result.n_imaginary));
+                                             "Frequency :",
+                                             std::format("{} imaginary frequency(ies) — structure may be a saddle point",
+                                                         freq_result.n_imaginary));
 
             const double zpe_kcal = freq_result.zpe * 627.509474;
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                "Zero-point energy :",
-                std::format("{:.6f} Eh  ({:.2f} kcal/mol)",
-                            freq_result.zpe, zpe_kcal));
+                                         "Zero-point energy :",
+                                         std::format("{:.6f} Eh  ({:.2f} kcal/mol)",
+                                                     freq_result.zpe, zpe_kcal));
 
             // ── Normal mode displacements (mass-unweighted, Cartesian-normalised) ──
             HartreeFock::Logger::blank();
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                "Normal Mode Displacements :", "");
+                                         "Normal Mode Displacements :", "");
             for (int i = 0; i < n_vib; ++i)
             {
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                    std::format("Normal Mode {:4d} :", i + 1),
-                    have_mode_symmetry
-                        ? freq_result.mode_symmetry[static_cast<std::size_t>(i)]
-                        : std::string{});
+                                             std::format("Normal Mode {:4d} :", i + 1),
+                                             have_mode_symmetry
+                                                 ? freq_result.mode_symmetry[static_cast<std::size_t>(i)]
+                                                 : std::string{});
                 for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
                 {
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                        std::format("  {:4d}   {:12.8f}   {:12.8f}   {:12.8f}",
-                                    static_cast<int>(a + 1),
-                                    freq_result.normal_modes(static_cast<int>(a) * 3 + 0, i),
-                                    freq_result.normal_modes(static_cast<int>(a) * 3 + 1, i),
-                                    freq_result.normal_modes(static_cast<int>(a) * 3 + 2, i)));
+                                                 std::format("  {:4d}   {:12.8f}   {:12.8f}   {:12.8f}",
+                                                             static_cast<int>(a + 1),
+                                                             freq_result.normal_modes(static_cast<int>(a) * 3 + 0, i),
+                                                             freq_result.normal_modes(static_cast<int>(a) * 3 + 1, i),
+                                                             freq_result.normal_modes(static_cast<int>(a) * 3 + 2, i)));
                 }
             }
             HartreeFock::Logger::blank();
         }
-        catch (const std::exception& e)
+        catch (const std::exception &e)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error,
-                "Frequency Failed :", e.what());
+                                         "Frequency Failed :", e.what());
             return EXIT_FAILURE;
         }
     }

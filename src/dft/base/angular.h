@@ -15,6 +15,7 @@
 // Grid points lie on the unit sphere. Weights sum to 4π.
 // Each row of the returned matrix is [x, y, z, w].
 
+#include <Eigen/Dense>
 #include <array>
 #include <cmath>
 #include <map>
@@ -22,27 +23,28 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <Eigen/Dense>
 
-namespace DFT 
+namespace DFT
 {
 
     namespace detail
     {
 
-        using GridPt  = std::array<double, 4>;   // {x, y, z, weight}
+        using GridPt = std::array<double, 4>; // {x, y, z, weight}
         using GridVec = std::vector<GridPt>;
 
         inline constexpr double FOUR_PI = 4.0 * std::numbers::pi;
 
         // Convert accumulated GridVec to Eigen matrix (N x 4: x, y, z, w)
-        inline Eigen::MatrixXd gridvec_to_matrix(const GridVec& g)
+        inline Eigen::MatrixXd gridvec_to_matrix(const GridVec &g)
         {
             Eigen::MatrixXd M(static_cast<Eigen::Index>(g.size()), 4);
             for (Eigen::Index i = 0; i < static_cast<Eigen::Index>(g.size()); ++i)
             {
-                M(i, 0) = g[i][0]; M(i, 1) = g[i][1];
-                M(i, 2) = g[i][2]; M(i, 3) = g[i][3] * FOUR_PI;
+                M(i, 0) = g[i][0];
+                M(i, 1) = g[i][1];
+                M(i, 2) = g[i][2];
+                M(i, 3) = g[i][3] * FOUR_PI;
             }
             return M;
         }
@@ -57,99 +59,160 @@ namespace DFT
         //   code 5 : (a,b,c) and permutations,  c = sqrt(1-a^2-b^2) 48 points
         //
         // All generated points are appended to g with weight v.
-        inline void SphGenOh(int code, double a, double b, double v, GridVec& g)
+        inline void SphGenOh(int code, double a, double b, double v, GridVec &g)
         {
             switch (code)
             {
             case 0:
             {
                 a = 1.0;
-                g.push_back({ a,  0.,  0., v}); g.push_back({-a,  0.,  0., v});
-                g.push_back({ 0.,  a,  0., v}); g.push_back({ 0., -a,  0., v});
-                g.push_back({ 0.,  0.,  a, v}); g.push_back({ 0.,  0., -a, v});
+                g.push_back({a, 0., 0., v});
+                g.push_back({-a, 0., 0., v});
+                g.push_back({0., a, 0., v});
+                g.push_back({0., -a, 0., v});
+                g.push_back({0., 0., a, v});
+                g.push_back({0., 0., -a, v});
                 break;
             }
             case 1:
             {
                 a = std::sqrt(0.5);
-                g.push_back({ 0.,  a,  a, v}); g.push_back({ 0., -a,  a, v});
-                g.push_back({ 0.,  a, -a, v}); g.push_back({ 0., -a, -a, v});
-                g.push_back({ a,  0.,  a, v}); g.push_back({-a,  0.,  a, v});
-                g.push_back({ a,  0., -a, v}); g.push_back({-a,  0., -a, v});
-                g.push_back({ a,  a,  0., v}); g.push_back({-a,  a,  0., v});
-                g.push_back({ a, -a,  0., v}); g.push_back({-a, -a,  0., v});
+                g.push_back({0., a, a, v});
+                g.push_back({0., -a, a, v});
+                g.push_back({0., a, -a, v});
+                g.push_back({0., -a, -a, v});
+                g.push_back({a, 0., a, v});
+                g.push_back({-a, 0., a, v});
+                g.push_back({a, 0., -a, v});
+                g.push_back({-a, 0., -a, v});
+                g.push_back({a, a, 0., v});
+                g.push_back({-a, a, 0., v});
+                g.push_back({a, -a, 0., v});
+                g.push_back({-a, -a, 0., v});
                 break;
             }
             case 2:
             {
-                a = std::sqrt(1.0/3.0);
-                g.push_back({ a,  a,  a, v}); g.push_back({-a,  a,  a, v});
-                g.push_back({ a, -a,  a, v}); g.push_back({-a, -a,  a, v});
-                g.push_back({ a,  a, -a, v}); g.push_back({-a,  a, -a, v});
-                g.push_back({ a, -a, -a, v}); g.push_back({-a, -a, -a, v});
+                a = std::sqrt(1.0 / 3.0);
+                g.push_back({a, a, a, v});
+                g.push_back({-a, a, a, v});
+                g.push_back({a, -a, a, v});
+                g.push_back({-a, -a, a, v});
+                g.push_back({a, a, -a, v});
+                g.push_back({-a, a, -a, v});
+                g.push_back({a, -a, -a, v});
+                g.push_back({-a, -a, -a, v});
                 break;
             }
             case 3:
             {
-                b = std::sqrt(1.0 - 2.0*a*a);
-                g.push_back({ a,  a,  b, v}); g.push_back({-a,  a,  b, v});
-                g.push_back({ a, -a,  b, v}); g.push_back({-a, -a,  b, v});
-                g.push_back({ a,  a, -b, v}); g.push_back({-a,  a, -b, v});
-                g.push_back({ a, -a, -b, v}); g.push_back({-a, -a, -b, v});
-                g.push_back({ a,  b,  a, v}); g.push_back({-a,  b,  a, v});
-                g.push_back({ a, -b,  a, v}); g.push_back({-a, -b,  a, v});
-                g.push_back({ a,  b, -a, v}); g.push_back({-a,  b, -a, v});
-                g.push_back({ a, -b, -a, v}); g.push_back({-a, -b, -a, v});
-                g.push_back({ b,  a,  a, v}); g.push_back({-b,  a,  a, v});
-                g.push_back({ b, -a,  a, v}); g.push_back({-b, -a,  a, v});
-                g.push_back({ b,  a, -a, v}); g.push_back({-b,  a, -a, v});
-                g.push_back({ b, -a, -a, v}); g.push_back({-b, -a, -a, v});
+                b = std::sqrt(1.0 - 2.0 * a * a);
+                g.push_back({a, a, b, v});
+                g.push_back({-a, a, b, v});
+                g.push_back({a, -a, b, v});
+                g.push_back({-a, -a, b, v});
+                g.push_back({a, a, -b, v});
+                g.push_back({-a, a, -b, v});
+                g.push_back({a, -a, -b, v});
+                g.push_back({-a, -a, -b, v});
+                g.push_back({a, b, a, v});
+                g.push_back({-a, b, a, v});
+                g.push_back({a, -b, a, v});
+                g.push_back({-a, -b, a, v});
+                g.push_back({a, b, -a, v});
+                g.push_back({-a, b, -a, v});
+                g.push_back({a, -b, -a, v});
+                g.push_back({-a, -b, -a, v});
+                g.push_back({b, a, a, v});
+                g.push_back({-b, a, a, v});
+                g.push_back({b, -a, a, v});
+                g.push_back({-b, -a, a, v});
+                g.push_back({b, a, -a, v});
+                g.push_back({-b, a, -a, v});
+                g.push_back({b, -a, -a, v});
+                g.push_back({-b, -a, -a, v});
                 break;
             }
             case 4:
             {
-                b = std::sqrt(1.0 - a*a);
-                g.push_back({ a,  b,  0., v}); g.push_back({-a,  b,  0., v});
-                g.push_back({ a, -b,  0., v}); g.push_back({-a, -b,  0., v});
-                g.push_back({ b,  a,  0., v}); g.push_back({-b,  a,  0., v});
-                g.push_back({ b, -a,  0., v}); g.push_back({-b, -a,  0., v});
-                g.push_back({ a,  0.,  b, v}); g.push_back({-a,  0.,  b, v});
-                g.push_back({ a,  0., -b, v}); g.push_back({-a,  0., -b, v});
-                g.push_back({ b,  0.,  a, v}); g.push_back({-b,  0.,  a, v});
-                g.push_back({ b,  0., -a, v}); g.push_back({-b,  0., -a, v});
-                g.push_back({ 0.,  a,  b, v}); g.push_back({ 0., -a,  b, v});
-                g.push_back({ 0.,  a, -b, v}); g.push_back({ 0., -a, -b, v});
-                g.push_back({ 0.,  b,  a, v}); g.push_back({ 0., -b,  a, v});
-                g.push_back({ 0.,  b, -a, v}); g.push_back({ 0., -b, -a, v});
+                b = std::sqrt(1.0 - a * a);
+                g.push_back({a, b, 0., v});
+                g.push_back({-a, b, 0., v});
+                g.push_back({a, -b, 0., v});
+                g.push_back({-a, -b, 0., v});
+                g.push_back({b, a, 0., v});
+                g.push_back({-b, a, 0., v});
+                g.push_back({b, -a, 0., v});
+                g.push_back({-b, -a, 0., v});
+                g.push_back({a, 0., b, v});
+                g.push_back({-a, 0., b, v});
+                g.push_back({a, 0., -b, v});
+                g.push_back({-a, 0., -b, v});
+                g.push_back({b, 0., a, v});
+                g.push_back({-b, 0., a, v});
+                g.push_back({b, 0., -a, v});
+                g.push_back({-b, 0., -a, v});
+                g.push_back({0., a, b, v});
+                g.push_back({0., -a, b, v});
+                g.push_back({0., a, -b, v});
+                g.push_back({0., -a, -b, v});
+                g.push_back({0., b, a, v});
+                g.push_back({0., -b, a, v});
+                g.push_back({0., b, -a, v});
+                g.push_back({0., -b, -a, v});
                 break;
             }
             case 5:
             {
-                double c = std::sqrt(1.0 - a*a - b*b);
-                g.push_back({ a,  b,  c, v}); g.push_back({-a,  b,  c, v});
-                g.push_back({ a, -b,  c, v}); g.push_back({-a, -b,  c, v});
-                g.push_back({ a,  b, -c, v}); g.push_back({-a,  b, -c, v});
-                g.push_back({ a, -b, -c, v}); g.push_back({-a, -b, -c, v});
-                g.push_back({ a,  c,  b, v}); g.push_back({-a,  c,  b, v});
-                g.push_back({ a, -c,  b, v}); g.push_back({-a, -c,  b, v});
-                g.push_back({ a,  c, -b, v}); g.push_back({-a,  c, -b, v});
-                g.push_back({ a, -c, -b, v}); g.push_back({-a, -c, -b, v});
-                g.push_back({ b,  a,  c, v}); g.push_back({-b,  a,  c, v});
-                g.push_back({ b, -a,  c, v}); g.push_back({-b, -a,  c, v});
-                g.push_back({ b,  a, -c, v}); g.push_back({-b,  a, -c, v});
-                g.push_back({ b, -a, -c, v}); g.push_back({-b, -a, -c, v});
-                g.push_back({ b,  c,  a, v}); g.push_back({-b,  c,  a, v});
-                g.push_back({ b, -c,  a, v}); g.push_back({-b, -c,  a, v});
-                g.push_back({ b,  c, -a, v}); g.push_back({-b,  c, -a, v});
-                g.push_back({ b, -c, -a, v}); g.push_back({-b, -c, -a, v});
-                g.push_back({ c,  a,  b, v}); g.push_back({-c,  a,  b, v});
-                g.push_back({ c, -a,  b, v}); g.push_back({-c, -a,  b, v});
-                g.push_back({ c,  a, -b, v}); g.push_back({-c,  a, -b, v});
-                g.push_back({ c, -a, -b, v}); g.push_back({-c, -a, -b, v});
-                g.push_back({ c,  b,  a, v}); g.push_back({-c,  b,  a, v});
-                g.push_back({ c, -b,  a, v}); g.push_back({-c, -b,  a, v});
-                g.push_back({ c,  b, -a, v}); g.push_back({-c,  b, -a, v});
-                g.push_back({ c, -b, -a, v}); g.push_back({-c, -b, -a, v});
+                double c = std::sqrt(1.0 - a * a - b * b);
+                g.push_back({a, b, c, v});
+                g.push_back({-a, b, c, v});
+                g.push_back({a, -b, c, v});
+                g.push_back({-a, -b, c, v});
+                g.push_back({a, b, -c, v});
+                g.push_back({-a, b, -c, v});
+                g.push_back({a, -b, -c, v});
+                g.push_back({-a, -b, -c, v});
+                g.push_back({a, c, b, v});
+                g.push_back({-a, c, b, v});
+                g.push_back({a, -c, b, v});
+                g.push_back({-a, -c, b, v});
+                g.push_back({a, c, -b, v});
+                g.push_back({-a, c, -b, v});
+                g.push_back({a, -c, -b, v});
+                g.push_back({-a, -c, -b, v});
+                g.push_back({b, a, c, v});
+                g.push_back({-b, a, c, v});
+                g.push_back({b, -a, c, v});
+                g.push_back({-b, -a, c, v});
+                g.push_back({b, a, -c, v});
+                g.push_back({-b, a, -c, v});
+                g.push_back({b, -a, -c, v});
+                g.push_back({-b, -a, -c, v});
+                g.push_back({b, c, a, v});
+                g.push_back({-b, c, a, v});
+                g.push_back({b, -c, a, v});
+                g.push_back({-b, -c, a, v});
+                g.push_back({b, c, -a, v});
+                g.push_back({-b, c, -a, v});
+                g.push_back({b, -c, -a, v});
+                g.push_back({-b, -c, -a, v});
+                g.push_back({c, a, b, v});
+                g.push_back({-c, a, b, v});
+                g.push_back({c, -a, b, v});
+                g.push_back({-c, -a, b, v});
+                g.push_back({c, a, -b, v});
+                g.push_back({-c, a, -b, v});
+                g.push_back({c, -a, -b, v});
+                g.push_back({-c, -a, -b, v});
+                g.push_back({c, b, a, v});
+                g.push_back({-c, b, a, v});
+                g.push_back({c, -b, a, v});
+                g.push_back({-c, -b, a, v});
+                g.push_back({c, b, -a, v});
+                g.push_back({-c, b, -a, v});
+                g.push_back({c, -b, -a, v});
+                g.push_back({-c, -b, -a, v});
                 break;
             }
             default:
@@ -157,14 +220,14 @@ namespace DFT
             }
         }
 
-        inline void MakeAngularGrid_6(detail::GridVec& grids)
+        inline void MakeAngularGrid_6(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.1666666666666667e+0;
             detail::SphGenOh(0, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_14(detail::GridVec& grids)
+        inline void MakeAngularGrid_14(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.6666666666666667e-1;
@@ -173,7 +236,7 @@ namespace DFT
             detail::SphGenOh(2, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_26(detail::GridVec& grids)
+        inline void MakeAngularGrid_26(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.4761904761904762e-1;
@@ -184,7 +247,7 @@ namespace DFT
             detail::SphGenOh(2, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_38(detail::GridVec& grids)
+        inline void MakeAngularGrid_38(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.9523809523809524e-2;
@@ -196,7 +259,7 @@ namespace DFT
             detail::SphGenOh(4, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_50(detail::GridVec& grids)
+        inline void MakeAngularGrid_50(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.1269841269841270e-1;
@@ -210,7 +273,7 @@ namespace DFT
             detail::SphGenOh(3, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_74(detail::GridVec& grids)
+        inline void MakeAngularGrid_74(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.5130671797338464e-3;
@@ -227,7 +290,7 @@ namespace DFT
             detail::SphGenOh(4, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_86(detail::GridVec& grids)
+        inline void MakeAngularGrid_86(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.1154401154401154e-1;
@@ -245,7 +308,7 @@ namespace DFT
             detail::SphGenOh(4, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_110(detail::GridVec& grids)
+        inline void MakeAngularGrid_110(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.3828270494937162e-2;
@@ -266,7 +329,7 @@ namespace DFT
             detail::SphGenOh(4, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_146(detail::GridVec& grids)
+        inline void MakeAngularGrid_146(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.5996313688621381e-3;
@@ -290,7 +353,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_170(detail::GridVec& grids)
+        inline void MakeAngularGrid_170(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.5544842902037365e-2;
@@ -317,7 +380,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_194(detail::GridVec& grids)
+        inline void MakeAngularGrid_194(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.1782340447244611e-2;
@@ -347,7 +410,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_230(detail::GridVec& grids)
+        inline void MakeAngularGrid_230(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = -0.5522639919727325e-1;
@@ -381,7 +444,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_266(detail::GridVec& grids)
+        inline void MakeAngularGrid_266(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = -0.1313769127326952e-2;
@@ -418,7 +481,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_302(detail::GridVec& grids)
+        inline void MakeAngularGrid_302(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.8545911725128148e-3;
@@ -459,7 +522,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_350(detail::GridVec& grids)
+        inline void MakeAngularGrid_350(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.3006796749453936e-2;
@@ -504,7 +567,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_434(detail::GridVec& grids)
+        inline void MakeAngularGrid_434(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.5265897968224436e-3;
@@ -558,7 +621,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_590(detail::GridVec& grids)
+        inline void MakeAngularGrid_590(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.3095121295306187e-3;
@@ -627,7 +690,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_770(detail::GridVec& grids)
+        inline void MakeAngularGrid_770(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.2192942088181184e-3;
@@ -713,7 +776,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_974(detail::GridVec& grids)
+        inline void MakeAngularGrid_974(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.1438294190527431e-3;
@@ -818,7 +881,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_1202(detail::GridVec& grids)
+        inline void MakeAngularGrid_1202(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.1105189233267572e-3;
@@ -944,7 +1007,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_1454(detail::GridVec& grids)
+        inline void MakeAngularGrid_1454(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.7777160743261247e-4;
@@ -1093,7 +1156,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_1730(detail::GridVec& grids)
+        inline void MakeAngularGrid_1730(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.6309049437420976e-4;
@@ -1267,7 +1330,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_2030(detail::GridVec& grids)
+        inline void MakeAngularGrid_2030(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.4656031899197431e-4;
@@ -1468,7 +1531,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_2354(detail::GridVec& grids)
+        inline void MakeAngularGrid_2354(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.3922616270665292e-4;
@@ -1698,7 +1761,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_2702(detail::GridVec& grids)
+        inline void MakeAngularGrid_2702(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.2998675149888161e-4;
@@ -1959,7 +2022,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_3074(detail::GridVec& grids)
+        inline void MakeAngularGrid_3074(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.2599095953754734e-4;
@@ -2253,7 +2316,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_3470(detail::GridVec& grids)
+        inline void MakeAngularGrid_3470(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.2040382730826330e-4;
@@ -2582,7 +2645,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_3890(detail::GridVec& grids)
+        inline void MakeAngularGrid_3890(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.1807395252196920e-4;
@@ -2948,7 +3011,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_4334(detail::GridVec& grids)
+        inline void MakeAngularGrid_4334(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.1449063022537883e-4;
@@ -3353,7 +3416,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_4802(detail::GridVec& grids)
+        inline void MakeAngularGrid_4802(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.9687521879420705e-4;
@@ -3799,7 +3862,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_5294(detail::GridVec& grids)
+        inline void MakeAngularGrid_5294(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.9080510764308163e-4;
@@ -4288,7 +4351,7 @@ namespace DFT
             detail::SphGenOh(5, a, b, v, grids);
         }
 
-        inline void MakeAngularGrid_5810(detail::GridVec& grids)
+        inline void MakeAngularGrid_5810(detail::GridVec &grids)
         {
             double a = 0.0, b = 0.0, v = 0.0;
             v = 0.9735347946175486e-5;
@@ -4825,15 +4888,8 @@ namespace DFT
     } // namespace detail
 
     // Mapping from angular order L to Lebedev grid size (~(L+1)^2/3)
-    inline const std::map<int,int> LEBEDEV_ORDER = {
-        {  0,    1}, {  3,    6}, {  5,   14}, {  7,   26}, {  9,   38},
-        { 11,   50}, { 13,   74}, { 15,   86}, { 17,  110}, { 19,  146},
-        { 21,  170}, { 23,  194}, { 25,  230}, { 27,  266}, { 29,  302},
-        { 31,  350}, { 35,  434}, { 41,  590}, { 47,  770}, { 53,  974},
-        { 59, 1202}, { 65, 1454}, { 71, 1730}, { 77, 2030}, { 83, 2354},
-        { 89, 2702}, { 95, 3074}, {101, 3470}, {107, 3890}, {113, 4334},
-        {119, 4802}, {125, 5294}, {131, 5810}
-    };
+    inline const std::map<int, int> LEBEDEV_ORDER = {
+        {0, 1}, {3, 6}, {5, 14}, {7, 26}, {9, 38}, {11, 50}, {13, 74}, {15, 86}, {17, 110}, {19, 146}, {21, 170}, {23, 194}, {25, 230}, {27, 266}, {29, 302}, {31, 350}, {35, 434}, {41, 590}, {47, 770}, {53, 974}, {59, 1202}, {65, 1454}, {71, 1730}, {77, 2030}, {83, 2354}, {89, 2702}, {95, 3074}, {101, 3470}, {107, 3890}, {113, 4334}, {119, 4802}, {125, 5294}, {131, 5810}};
 
     // Return a Lebedev grid with the given number of points.
     // Returns an (N x 4) matrix with columns [x, y, z, weight].
@@ -4855,38 +4911,102 @@ namespace DFT
         detail::GridVec g;
         switch (n)
         {
-        case    6: detail::MakeAngularGrid_6(g);    break;
-        case   14: detail::MakeAngularGrid_14(g);   break;
-        case   26: detail::MakeAngularGrid_26(g);   break;
-        case   38: detail::MakeAngularGrid_38(g);   break;
-        case   50: detail::MakeAngularGrid_50(g);   break;
-        case   74: detail::MakeAngularGrid_74(g);   break;
-        case   86: detail::MakeAngularGrid_86(g);   break;
-        case  110: detail::MakeAngularGrid_110(g);  break;
-        case  146: detail::MakeAngularGrid_146(g);  break;
-        case  170: detail::MakeAngularGrid_170(g);  break;
-        case  194: detail::MakeAngularGrid_194(g);  break;
-        case  230: detail::MakeAngularGrid_230(g);  break;
-        case  266: detail::MakeAngularGrid_266(g);  break;
-        case  302: detail::MakeAngularGrid_302(g);  break;
-        case  350: detail::MakeAngularGrid_350(g);  break;
-        case  434: detail::MakeAngularGrid_434(g);  break;
-        case  590: detail::MakeAngularGrid_590(g);  break;
-        case  770: detail::MakeAngularGrid_770(g);  break;
-        case  974: detail::MakeAngularGrid_974(g);  break;
-        case 1202: detail::MakeAngularGrid_1202(g); break;
-        case 1454: detail::MakeAngularGrid_1454(g); break;
-        case 1730: detail::MakeAngularGrid_1730(g); break;
-        case 2030: detail::MakeAngularGrid_2030(g); break;
-        case 2354: detail::MakeAngularGrid_2354(g); break;
-        case 2702: detail::MakeAngularGrid_2702(g); break;
-        case 3074: detail::MakeAngularGrid_3074(g); break;
-        case 3470: detail::MakeAngularGrid_3470(g); break;
-        case 3890: detail::MakeAngularGrid_3890(g); break;
-        case 4334: detail::MakeAngularGrid_4334(g); break;
-        case 4802: detail::MakeAngularGrid_4802(g); break;
-        case 5294: detail::MakeAngularGrid_5294(g); break;
-        case 5810: detail::MakeAngularGrid_5810(g); break;
+        case 6:
+            detail::MakeAngularGrid_6(g);
+            break;
+        case 14:
+            detail::MakeAngularGrid_14(g);
+            break;
+        case 26:
+            detail::MakeAngularGrid_26(g);
+            break;
+        case 38:
+            detail::MakeAngularGrid_38(g);
+            break;
+        case 50:
+            detail::MakeAngularGrid_50(g);
+            break;
+        case 74:
+            detail::MakeAngularGrid_74(g);
+            break;
+        case 86:
+            detail::MakeAngularGrid_86(g);
+            break;
+        case 110:
+            detail::MakeAngularGrid_110(g);
+            break;
+        case 146:
+            detail::MakeAngularGrid_146(g);
+            break;
+        case 170:
+            detail::MakeAngularGrid_170(g);
+            break;
+        case 194:
+            detail::MakeAngularGrid_194(g);
+            break;
+        case 230:
+            detail::MakeAngularGrid_230(g);
+            break;
+        case 266:
+            detail::MakeAngularGrid_266(g);
+            break;
+        case 302:
+            detail::MakeAngularGrid_302(g);
+            break;
+        case 350:
+            detail::MakeAngularGrid_350(g);
+            break;
+        case 434:
+            detail::MakeAngularGrid_434(g);
+            break;
+        case 590:
+            detail::MakeAngularGrid_590(g);
+            break;
+        case 770:
+            detail::MakeAngularGrid_770(g);
+            break;
+        case 974:
+            detail::MakeAngularGrid_974(g);
+            break;
+        case 1202:
+            detail::MakeAngularGrid_1202(g);
+            break;
+        case 1454:
+            detail::MakeAngularGrid_1454(g);
+            break;
+        case 1730:
+            detail::MakeAngularGrid_1730(g);
+            break;
+        case 2030:
+            detail::MakeAngularGrid_2030(g);
+            break;
+        case 2354:
+            detail::MakeAngularGrid_2354(g);
+            break;
+        case 2702:
+            detail::MakeAngularGrid_2702(g);
+            break;
+        case 3074:
+            detail::MakeAngularGrid_3074(g);
+            break;
+        case 3470:
+            detail::MakeAngularGrid_3470(g);
+            break;
+        case 3890:
+            detail::MakeAngularGrid_3890(g);
+            break;
+        case 4334:
+            detail::MakeAngularGrid_4334(g);
+            break;
+        case 4802:
+            detail::MakeAngularGrid_4802(g);
+            break;
+        case 5294:
+            detail::MakeAngularGrid_5294(g);
+            break;
+        case 5810:
+            detail::MakeAngularGrid_5810(g);
+            break;
         default:
             throw std::invalid_argument(
                 "MakeLebedevGrid: unsupported grid size " + std::to_string(n));

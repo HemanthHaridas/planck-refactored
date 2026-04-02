@@ -12,8 +12,8 @@
 #include <Eigen/Dense>
 
 #include "angular.h"
-#include "radial.h"
 #include "base/types.h"
+#include "radial.h"
 
 namespace DFT
 {
@@ -43,8 +43,8 @@ namespace DFT
 
     struct MolecularGrid
     {
-        Eigen::MatrixXd points;  // N x 4 -> x, y, z, weight  (Bohr / quadrature weight)
-        Eigen::VectorXi owner;   // Generating atom index for each point
+        Eigen::MatrixXd points; // N x 4 -> x, y, z, weight  (Bohr / quadrature weight)
+        Eigen::VectorXi owner;  // Generating atom index for each point
     };
 
     namespace detail
@@ -54,13 +54,20 @@ namespace DFT
         {
             switch (angular_scheme)
             {
-            case 1: return 4.004;
-            case 2: return 4.004;
-            case 3: return 4.159;
-            case 4: return 4.388;
-            case 5: return 4.629;
-            case 6: return 4.959;
-            case 7: return 4.959;
+            case 1:
+                return 4.004;
+            case 2:
+                return 4.004;
+            case 3:
+                return 4.159;
+            case 4:
+                return 4.388;
+            case 5:
+                return 4.629;
+            case 6:
+                return 4.959;
+            case 7:
+                return 4.959;
             default:
                 throw std::invalid_argument(
                     "xc_intacc_for_scheme: unsupported angular scheme " +
@@ -72,13 +79,20 @@ namespace DFT
         {
             switch (angular_scheme)
             {
-            case 1: return {14, 26,  50,  50,  26};
-            case 2: return {14, 26,  50, 110,  50};
-            case 3: return {26, 50, 110, 194, 110};
-            case 4: return {26,110, 194, 302, 194};
-            case 5: return {26,194, 302, 434, 302};
-            case 6: return {50,302, 434, 590, 434};
-            case 7: return {110,434,590, 770, 590};
+            case 1:
+                return {14, 26, 50, 50, 26};
+            case 2:
+                return {14, 26, 50, 110, 50};
+            case 3:
+                return {26, 50, 110, 194, 110};
+            case 4:
+                return {26, 110, 194, 302, 194};
+            case 5:
+                return {26, 194, 302, 434, 302};
+            case 6:
+                return {50, 302, 434, 590, 434};
+            case 7:
+                return {110, 434, 590, 770, 590};
             default:
                 throw std::invalid_argument(
                     "angular_shells_for_scheme: unsupported angular scheme " +
@@ -91,16 +105,22 @@ namespace DFT
             if (Z <= 0)
                 throw std::invalid_argument(
                     "periodic_row: atomic number must be positive, got " + std::to_string(Z));
-            if (Z <= 2)  return 1;
-            if (Z <= 10) return 2;
-            if (Z <= 18) return 3;
-            if (Z <= 36) return 4;
-            if (Z <= 54) return 5;
-            if (Z <= 86) return 6;
+            if (Z <= 2)
+                return 1;
+            if (Z <= 10)
+                return 2;
+            if (Z <= 18)
+                return 3;
+            if (Z <= 36)
+                return 4;
+            if (Z <= 54)
+                return 5;
+            if (Z <= 86)
+                return 6;
             return 7;
         }
 
-        inline int effective_angular_scheme(int Z, const GridPreset& preset)
+        inline int effective_angular_scheme(int Z, const GridPreset &preset)
         {
             int scheme = preset.angular_scheme;
             if (preset.reduce_light_atoms && Z <= 2 && scheme > 1)
@@ -108,11 +128,10 @@ namespace DFT
             return scheme;
         }
 
-        inline int radial_point_count(int Z, const GridPreset& preset)
+        inline int radial_point_count(int Z, const GridPreset &preset)
         {
             const int scheme = effective_angular_scheme(Z, preset);
-            const double count = (15.0 * xc_intacc_for_scheme(scheme) - 40.0)
-                               + static_cast<double>(preset.radial_row_factor * periodic_row(Z));
+            const double count = (15.0 * xc_intacc_for_scheme(scheme) - 40.0) + static_cast<double>(preset.radial_row_factor * periodic_row(Z));
             return std::max(1, static_cast<int>(std::lround(count)));
         }
 
@@ -123,16 +142,19 @@ namespace DFT
             if (radial_count <= 1)
                 return 2;
 
-            const double t = static_cast<double>(radial_index)
-                           / static_cast<double>(radial_count - 1);
-            if (t < 0.15) return 0;
-            if (t < 0.40) return 1;
-            if (t < 0.70) return 2;
-            if (t < 0.90) return 3;
+            const double t = static_cast<double>(radial_index) / static_cast<double>(radial_count - 1);
+            if (t < 0.15)
+                return 0;
+            if (t < 0.40)
+                return 1;
+            if (t < 0.70)
+                return 2;
+            if (t < 0.90)
+                return 3;
             return 4;
         }
 
-        inline Eigen::MatrixXd coordinates_bohr(const HartreeFock::Molecule& molecule)
+        inline Eigen::MatrixXd coordinates_bohr(const HartreeFock::Molecule &molecule)
         {
             if (static_cast<std::size_t>(molecule._coordinates.rows()) == molecule.natoms)
                 return molecule._coordinates;
@@ -171,9 +193,9 @@ namespace DFT
         }
 
         inline double pair_partition(
-            const Eigen::Vector3d& point,
-            const Eigen::Vector3d& ri,
-            const Eigen::Vector3d& rj,
+            const Eigen::Vector3d &point,
+            const Eigen::Vector3d &ri,
+            const Eigen::Vector3d &rj,
             int Zi,
             int Zj)
         {
@@ -194,9 +216,9 @@ namespace DFT
 
         inline double becke_partition_weight(
             int atom_index,
-            const Eigen::Vector3d& point,
-            const Eigen::VectorXi& atomic_numbers,
-            const Eigen::MatrixXd& coordinates)
+            const Eigen::Vector3d &point,
+            const Eigen::VectorXi &atomic_numbers,
+            const Eigen::MatrixXd &coordinates)
         {
             const Eigen::Index natoms = atomic_numbers.size();
             std::vector<double> weights(static_cast<std::size_t>(natoms), 1.0);
@@ -280,7 +302,7 @@ namespace DFT
 
     inline Eigen::MatrixXd MakeAtomicGrid(
         int Z,
-        const Eigen::Vector3d& center,
+        const Eigen::Vector3d &center,
         GridLevel level)
     {
         if (Z <= 0)
@@ -306,7 +328,7 @@ namespace DFT
         {
             const double radius = radial(ir, 0);
             const double wr = radial(ir, 1);
-            const Eigen::MatrixXd& angular = angular_cache[detail::pruning_region(ir, nr)];
+            const Eigen::MatrixXd &angular = angular_cache[detail::pruning_region(ir, nr)];
 
             for (Eigen::Index ia = 0; ia < angular.rows(); ++ia, ++row)
             {
@@ -324,8 +346,8 @@ namespace DFT
     }
 
     inline MolecularGrid MakeMolecularGrid(
-        const Eigen::VectorXi& atomic_numbers,
-        const Eigen::MatrixXd& coordinates_bohr,
+        const Eigen::VectorXi &atomic_numbers,
+        const Eigen::MatrixXd &coordinates_bohr,
         GridLevel level)
     {
         const Eigen::Index natoms = atomic_numbers.size();
@@ -352,7 +374,7 @@ namespace DFT
         Eigen::Index row = 0;
         for (Eigen::Index atom = 0; atom < natoms; ++atom)
         {
-            const Eigen::MatrixXd& atomic_grid = atomic_grids[static_cast<std::size_t>(atom)];
+            const Eigen::MatrixXd &atomic_grid = atomic_grids[static_cast<std::size_t>(atom)];
             for (Eigen::Index i = 0; i < atomic_grid.rows(); ++i, ++row)
             {
                 const Eigen::Vector3d point = atomic_grid.row(i).head<3>().transpose();
@@ -372,7 +394,7 @@ namespace DFT
     }
 
     inline MolecularGrid MakeMolecularGrid(
-        const HartreeFock::Molecule& molecule,
+        const HartreeFock::Molecule &molecule,
         GridLevel level)
     {
         return MakeMolecularGrid(

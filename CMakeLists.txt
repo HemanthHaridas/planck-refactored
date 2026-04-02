@@ -131,7 +131,10 @@ file(GLOB SCF_SRC
 file(GLOB POSTHF_SRC
     ${SRC_DIR}/post_hf/*.h
     ${SRC_DIR}/post_hf/*.cpp
+    ${SRC_DIR}/post_hf/casscf/*.h
+    ${SRC_DIR}/post_hf/casscf/*.cpp
 )
+list(REMOVE_ITEM POSTHF_SRC ${SRC_DIR}/post_hf/casscf.cpp)
 
 file(GLOB GRADIENT_SRC
     ${SRC_DIR}/gradient/*.h
@@ -283,6 +286,11 @@ find_package(Python3 COMPONENTS Interpreter)
 if(BUILD_TESTING)
     add_executable(planck-casscf-internal
         ${CMAKE_SOURCE_DIR}/tests/casscf_internal.cpp
+        ${SRC_DIR}/post_hf/casscf/ci.cpp
+        ${SRC_DIR}/post_hf/casscf/rdm.cpp
+        ${SRC_DIR}/post_hf/casscf/response.cpp
+        ${SRC_DIR}/post_hf/casscf/strings.cpp
+        ${SYMM_SRC}
     )
 
     add_executable(planck-dft-grid-invariants
@@ -297,6 +305,7 @@ if(BUILD_TESTING)
 
     target_include_directories(planck-casscf-internal PRIVATE
         ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
     )
 
@@ -332,6 +341,11 @@ if(BUILD_TESTING)
         target_link_libraries(planck-multipole-integrals OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-multipole-integrals PRIVATE USE_OPENMP)
     endif()
+
+    target_link_libraries(planck-casscf-internal
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-casscf-internal libmsym)
 
     add_test(
         NAME planck-casscf-internal
