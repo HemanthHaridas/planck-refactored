@@ -33,6 +33,16 @@ ITER_PATTERNS: dict[str, re.Pattern[str]] = {
     "scf_converged_iterations": re.compile(r"SCF Converged after\s+(\d+)\s+iterations"),
 }
 
+HOMO_PATTERN = re.compile(
+    r"^\s*\d+\s+(?:[A-Za-z0-9_+\-]+\s+)?([-+0-9Ee\.]+)\s+<-- HOMO\b",
+    re.MULTILINE,
+)
+
+LUMO_PATTERN = re.compile(
+    r"^\s*\d+\s+(?:[A-Za-z0-9_+\-]+\s+)?([-+0-9Ee\.]+)\s+<-- LUMO\b",
+    re.MULTILINE,
+)
+
 
 @dataclass
 class CaseResult:
@@ -66,6 +76,15 @@ def extract_metrics(output: str) -> dict[str, Any]:
         matches = pattern.findall(output)
         if matches:
             metrics[key] = int(matches[-1])
+
+    homo_matches = HOMO_PATTERN.findall(output)
+    lumo_matches = LUMO_PATTERN.findall(output)
+    if homo_matches:
+        metrics["homo_energy"] = float(homo_matches[-1])
+    if lumo_matches:
+        metrics["lumo_energy"] = float(lumo_matches[-1])
+    if homo_matches and lumo_matches:
+        metrics["homo_lumo_gap"] = float(lumo_matches[-1]) - float(homo_matches[-1])
 
     return metrics
 

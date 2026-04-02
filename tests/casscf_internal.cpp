@@ -11,6 +11,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -960,6 +961,57 @@ int main()
         const Eigen::MatrixXd G_root1 =
             compute_orbital_gradient(F_I, F_A_root1, Q_root1, gamma_root1, 1, 2, 1, {}, false);
 
+        const auto pairs = non_redundant_pairs(1, 2, 1);
+        auto pack_pairs = [&pairs](const Eigen::MatrixXd &M)
+        {
+            Eigen::VectorXd flat(static_cast<int>(pairs.size()));
+            for (int k = 0; k < static_cast<int>(pairs.size()); ++k)
+                flat(k) = M(pairs[static_cast<std::size_t>(k)].p, pairs[static_cast<std::size_t>(k)].q);
+            return flat;
+        };
+        auto pack_hessian = [&pairs](const Eigen::MatrixXd &F_sum)
+        {
+            Eigen::VectorXd flat(static_cast<int>(pairs.size()));
+            for (int k = 0; k < static_cast<int>(pairs.size()); ++k)
+                flat(k) = hess_diag(F_sum, pairs[static_cast<std::size_t>(k)].p, pairs[static_cast<std::size_t>(k)].q);
+            return flat;
+        };
+
+        const Eigen::VectorXd x = (Eigen::VectorXd(5) << 0.08, -0.04, 0.03, -0.05, 0.02).finished();
+        const Eigen::VectorXd g_root0 = pack_pairs(G_root0);
+        const Eigen::VectorXd g_root1 = pack_pairs(G_root1);
+        const Eigen::VectorXd h_root0 = pack_hessian(F_I + F_A_root0);
+        const Eigen::VectorXd h_root1 = pack_hessian(F_I + F_A_root1);
+        const double delta_weighted =
+            0.7 * quadratic_model_delta(g_root0, h_root0, x) +
+            0.3 * quadratic_model_delta(g_root1, h_root1, x);
+        const double delta_from_avg = quadratic_model_delta(
+            0.7 * g_root0 + 0.3 * g_root1,
+            0.7 * h_root0 + 0.3 * h_root1,
+            x);
+        ok &= expect(std::abs(delta_weighted - delta_from_avg) < 1e-12,
+                     "weighted per-root quadratic-model scores should reduce exactly to the weighted model inputs");
+
+        Eigen::VectorXd probe_root0(5);
+        probe_root0 << 0.20, -0.01, 0.03, 0.00, 0.00;
+        Eigen::VectorXd probe_root1(5);
+        probe_root1 << -0.20, 0.02, 0.01, 0.00, 0.00;
+        const Eigen::VectorXd probe_priority =
+            0.7 * probe_root0.cwiseAbs() + 0.3 * probe_root1.cwiseAbs();
+        const Eigen::VectorXd probe_signed = 0.7 * probe_root0 + 0.3 * probe_root1;
+        ok &= expect(probe_priority(0) > std::abs(probe_signed(0)) + 1e-12,
+                     "root-resolved probe ranking should preserve pair importance even when signed SA gradients partially cancel");
+
+        Eigen::VectorXd root_step0(5);
+        root_step0 << 0.18, -0.02, 0.01, 0.00, 0.00;
+        Eigen::VectorXd root_step1(5);
+        root_step1 << -0.16, 0.05, -0.02, 0.00, 0.00;
+        const Eigen::VectorXd sa_step = 0.7 * root_step0 + 0.3 * root_step1;
+        const double strongest_root_step =
+            std::max(root_step0.cwiseAbs().maxCoeff(), root_step1.cwiseAbs().maxCoeff());
+        ok &= expect(strongest_root_step > sa_step.cwiseAbs().maxCoeff() + 1e-12,
+                     "root-resolved candidate sets should preserve strong per-root steps when the weighted SA proposal damps them");
+
         Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(4, 4);
         kappa(0, 1) = 0.10;
         kappa(1, 0) = -0.10;
@@ -981,6 +1033,170 @@ int main()
                      "root-resolved orbital-step reductions should stay linear after the per-root first-order gradient update");
         ok &= expect((updated_avg - G_avg).norm() > 1e-8,
                      "the synthetic orbital-step correction should actually change the gradient");
+    }
+
+    {
+        const auto pairs = non_redundant_pairs(1, 2, 1);
+        int core_active_pair = -1;
+        for (int k = 0; k < static_cast<int>(pairs.size()); ++k)
+        {
+            if (pairs[static_cast<std::size_t>(k)].p == 0 && pairs[static_cast<std::size_t>(k)].q == 1)
+            {
+                core_active_pair = k;
+                break;
+            }
+        }
+
+        ok &= expect(core_active_pair >= 0,
+                     "candidate-screen regression should find the first core-active rotation pair");
+        if (core_active_pair < 0)
+            return 1;
+
+        Eigen::VectorXd g_root0 = Eigen::VectorXd::Zero(static_cast<int>(pairs.size()));
+        Eigen::VectorXd h_root0 = Eigen::VectorXd::Zero(static_cast<int>(pairs.size()));
+        Eigen::VectorXd g_root1 = Eigen::VectorXd::Zero(static_cast<int>(pairs.size()));
+        Eigen::VectorXd h_root1 = Eigen::VectorXd::Zero(static_cast<int>(pairs.size()));
+        g_root0(core_active_pair) = 2.0;
+        h_root0(core_active_pair) = 2.0;
+        g_root1(core_active_pair) = -7.0;
+        h_root1(core_active_pair) = 0.0;
+
+        Eigen::VectorXd probe_a = Eigen::VectorXd::Zero(static_cast<int>(pairs.size()));
+        Eigen::VectorXd probe_b = Eigen::VectorXd::Zero(static_cast<int>(pairs.size()));
+        probe_a(core_active_pair) = -0.20;
+        probe_b(core_active_pair) = 0.10;
+
+        const double delta_root0_a = quadratic_model_delta(g_root0, h_root0, probe_a);
+        const double delta_root0_b = quadratic_model_delta(g_root0, h_root0, probe_b);
+        const double delta_root1_a = quadratic_model_delta(g_root1, h_root1, probe_a);
+        const double delta_root1_b = quadratic_model_delta(g_root1, h_root1, probe_b);
+        const double delta_weighted_a = 0.7 * delta_root0_a + 0.3 * delta_root1_a;
+        const double delta_weighted_b = 0.7 * delta_root0_b + 0.3 * delta_root1_b;
+
+        ok &= expect(delta_root0_a < delta_root0_b,
+                     "the dominant root should still prefer the negative probe sign on its own");
+        ok &= expect(delta_root1_b < delta_root1_a,
+                     "the minority root should prefer the opposite probe sign on its own");
+        ok &= expect(delta_weighted_b < delta_weighted_a,
+                     "root-resolved SA candidate screening should be able to flip to the weighted probe sign");
+        ok &= expect(std::abs(delta_weighted_a - (0.7 * delta_root0_a + 0.3 * delta_root1_a)) < 1e-12,
+                     "weighted candidate-screen scores should reduce from the per-root quadratic models");
+    }
+
+    {
+        const auto pairs = non_redundant_pairs(1, 2, 1);
+        auto pack_pairs = [&pairs](const Eigen::MatrixXd &M)
+        {
+            Eigen::VectorXd flat(static_cast<int>(pairs.size()));
+            for (int k = 0; k < static_cast<int>(pairs.size()); ++k)
+                flat(k) = M(pairs[static_cast<std::size_t>(k)].p, pairs[static_cast<std::size_t>(k)].q);
+            return flat;
+        };
+
+        const Eigen::MatrixXd G_root0 = (Eigen::MatrixXd(4, 4) <<
+            0.0, 0.40, 1.20, 0.0,
+            -0.40, 0.0, 0.0, 0.0,
+            -1.20, 0.0, 0.0, 0.10,
+            0.0, 0.0, -0.10, 0.0).finished();
+        const Eigen::MatrixXd G_root1 = (Eigen::MatrixXd(4, 4) <<
+            0.0, 0.05, 0.20, 0.0,
+            -0.05, 0.0, 0.0, 0.0,
+            -0.20, 0.0, 0.0, 3.00,
+            0.0, 0.0, -3.00, 0.0).finished();
+
+        const Eigen::VectorXd g_root0 = pack_pairs(G_root0);
+        const Eigen::VectorXd g_root1 = pack_pairs(G_root1);
+        const Eigen::VectorXd g_weighted = 0.7 * g_root0 + 0.3 * g_root1;
+        const Eigen::VectorXd g_from_matrix = pack_pairs(0.7 * G_root0 + 0.3 * G_root1);
+
+        ok &= expect((g_weighted - g_from_matrix).norm() < 1e-12,
+                     "weighted per-root pair-priority inputs should come from the weighted root-reduced gradient itself");
+
+        std::vector<int> ranked_weighted(static_cast<std::size_t>(g_weighted.size()));
+        std::iota(ranked_weighted.begin(), ranked_weighted.end(), 0);
+        std::partial_sort(
+            ranked_weighted.begin(),
+            ranked_weighted.begin() + 1,
+            ranked_weighted.end(),
+            [&](int lhs, int rhs)
+            {
+                return std::abs(g_weighted(lhs)) > std::abs(g_weighted(rhs));
+            });
+
+        std::vector<int> ranked_root0(static_cast<std::size_t>(g_root0.size()));
+        std::iota(ranked_root0.begin(), ranked_root0.end(), 0);
+        std::partial_sort(
+            ranked_root0.begin(),
+            ranked_root0.begin() + 1,
+            ranked_root0.end(),
+            [&](int lhs, int rhs)
+            {
+                return std::abs(g_root0(lhs)) > std::abs(g_root0(rhs));
+            });
+
+        ok &= expect(ranked_weighted.front() == 4,
+                     "probe-ranking inputs should prioritize the strongest weighted pair");
+        ok &= expect(ranked_weighted.front() != ranked_root0.front(),
+                     "probe-ranking should not be locked to a single root's dominant pair");
+    }
+
+    {
+        const Eigen::MatrixXd G_root0 = (Eigen::MatrixXd(4, 4) <<
+            0.0, 0.80, 0.10, 0.00,
+            -0.80, 0.0, 0.00, 0.00,
+            -0.10, 0.00, 0.0, 0.00,
+            0.00, 0.00, 0.00, 0.0).finished();
+        const Eigen::MatrixXd G_root1 = (Eigen::MatrixXd(4, 4) <<
+            0.0, -0.70, 0.00, 0.30,
+            0.70, 0.0, 0.00, 0.00,
+            0.00, 0.00, 0.0, 0.00,
+            -0.30, 0.00, 0.00, 0.0).finished();
+
+        const Eigen::MatrixXd G_avg = 0.7 * G_root0 + 0.3 * G_root1;
+        const double sa_g = G_avg.cwiseAbs().maxCoeff();
+        const double weighted_root_screen =
+            0.7 * G_root0.cwiseAbs().maxCoeff() + 0.3 * G_root1.cwiseAbs().maxCoeff();
+        const double max_root_g =
+            std::max(G_root0.cwiseAbs().maxCoeff(), G_root1.cwiseAbs().maxCoeff());
+
+        ok &= expect(weighted_root_screen > sa_g + 1e-12,
+                     "root-resolved acceptance metrics should detect cancellation hidden in the averaged SA gradient");
+        ok &= expect(max_root_g + 1e-12 >= weighted_root_screen,
+                     "max-root acceptance diagnostics should bound the weighted root-screen metric");
+    }
+
+    {
+        auto accept_candidate = [](double best_E, double best_screen_g, double best_max_root_g,
+                                   double trial_E, double trial_screen_g, double trial_max_root_g)
+        {
+            const double merit_weight = 0.10;
+            const double best_merit = best_E + merit_weight * best_screen_g * best_screen_g;
+            const double trial_merit = trial_E + merit_weight * trial_screen_g * trial_screen_g;
+            const bool merit_improved = trial_merit < best_merit - 1e-10;
+            const double flat_energy_window = 1e-6;
+            const bool weighted_root_gradient_reduced = trial_screen_g < best_screen_g - 1e-12;
+            const bool max_root_gradient_reduced = trial_max_root_g < best_max_root_g - 1e-12;
+            const double weighted_root_worsen_window =
+                std::max(0.05 * std::max(best_screen_g, 1e-8), 1e-6);
+            const double max_root_worsen_window =
+                std::max(0.05 * std::max(best_max_root_g, 1e-8), 1e-6);
+            const bool energy_improved = trial_E < best_E - 1e-10;
+            const bool energy_improved_without_hurting_gradient =
+                energy_improved &&
+                trial_screen_g <= best_screen_g + weighted_root_worsen_window &&
+                trial_max_root_g <= best_max_root_g + max_root_worsen_window;
+            const bool stationary_but_better_grad =
+                std::abs(trial_E - best_E) <= flat_energy_window &&
+                (weighted_root_gradient_reduced || max_root_gradient_reduced);
+            return energy_improved_without_hurting_gradient || merit_improved || stationary_but_better_grad;
+        };
+
+        ok &= expect(!accept_candidate(-10.0000, 0.50, 0.70, -10.0002, 0.53, 0.80),
+                     "root-resolved acceptance should reject energy gains that worsen the max-root gradient too much");
+        ok &= expect(accept_candidate(-10.0000, 0.50, 0.70, -10.0002, 0.49, 0.69),
+                     "root-resolved acceptance should allow improvements that respect both weighted and max-root gradient screens");
+        ok &= expect(accept_candidate(-10.0000, 0.50, 0.70, -10.0000, 0.48, 0.69),
+                     "root-resolved acceptance should keep flat-energy candidates when the root-screen gradient genuinely improves");
     }
 
     return ok ? 0 : 1;

@@ -118,6 +118,18 @@
       ]
     },
     {
+      "id": "ethylene_rhf_d2d_frontier_degeneracy",
+      "input": "tests/inputs/rhf_ao_sao_tests/ethylene_rhf_symm_321g.hfinp",
+      "tags": ["core", "extended"],
+      "expected_exit_code": 0,
+      "contains": ["Point Group :                 D2d", "SCF Converged after", "Total Energy"],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "D2d"},
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -77.2656992268, "atol": 1e-9},
+        {"type": "metric_close", "metric": "homo_lumo_gap", "expected": 0.0, "atol": 1e-6}
+      ]
+    },
+    {
       "id": "water_rhf_gradient_smoke",
       "input": "tests/inputs/water_rhf_gradient.hfinp",
       "tags": ["smoke", "extended"],
