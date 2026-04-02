@@ -39,9 +39,12 @@ namespace
         shell._coefficients = Eigen::VectorXd::Ones(1);
         shell._normalizations = Eigen::VectorXd::Constant(1, primitive_s_normalization(exponent));
 
-        basis._basis_functions.emplace_back(&shell, Eigen::Vector3i::Zero());
-        basis._basis_functions.back()._index = 0;
-        basis._basis_functions.back()._component_norm = 1.0;
+        basis._basis_functions.emplace_back();
+        auto &basis_function = basis._basis_functions.back();
+        basis_function._shell = &shell;
+        basis_function._index = 0;
+        basis_function._component_norm = 1.0;
+        basis_function._cartesian = Eigen::Vector3i::Zero();
 
         return basis;
     }
