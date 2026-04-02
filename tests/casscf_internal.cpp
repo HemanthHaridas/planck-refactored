@@ -1199,5 +1199,33 @@ int main()
                      "root-resolved acceptance should keep flat-energy candidates when the root-screen gradient genuinely improves");
     }
 
+    {
+        auto late_loop_plateau = [](double prev_screen_g, double prev_max_root_g,
+                                    double screen_g, double max_root_g)
+        {
+            auto screen_flat = [](double current, double previous)
+            {
+                const double window = std::max(0.05 * std::max(previous, 1e-8), 1e-8);
+                return std::abs(current - previous) < window;
+            };
+            return screen_flat(screen_g, prev_screen_g) &&
+                   screen_flat(max_root_g, prev_max_root_g);
+        };
+
+        auto late_loop_converged = [](double screen_g, double max_root_g, double tol)
+        {
+            return screen_g < tol && max_root_g < tol;
+        };
+
+        ok &= expect(!late_loop_plateau(1.0e-3, 2.0e-3, 9.8e-4, 3.5e-3),
+                     "late SA plateau detection should stay active while the max-root gradient screen is still moving");
+        ok &= expect(late_loop_plateau(1.0e-3, 2.0e-3, 9.8e-4, 2.02e-3),
+                     "late SA plateau detection should only trigger when both weighted and max-root screens flatten");
+        ok &= expect(!late_loop_converged(5.0e-7, 2.0e-6, 1.0e-6),
+                     "late SA convergence should not treat a canceled weighted screen as converged while one root still exceeds tolerance");
+        ok &= expect(late_loop_converged(5.0e-7, 8.0e-7, 1.0e-6),
+                     "late SA convergence should accept the stationary point once both weighted and max-root screens satisfy tolerance");
+    }
+
     return ok ? 0 : 1;
 }
