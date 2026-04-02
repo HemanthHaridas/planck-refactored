@@ -919,5 +919,69 @@ int main()
                      "weighted per-root orbital-gradient-like intermediates should match the averaged reduced-density path when the maps are linear");
     }
 
+    {
+        const Eigen::MatrixXd F_I = (Eigen::MatrixXd(4, 4) <<
+            1.10, 0.02, -0.01, 0.04,
+            0.02, 1.70, 0.03, -0.02,
+            -0.01, 0.03, 2.20, 0.05,
+            0.04, -0.02, 0.05, 2.80).finished();
+
+        const Eigen::MatrixXd gamma_root0 = (Eigen::MatrixXd(2, 2) <<
+            1.00, 0.15,
+            0.15, 0.55).finished();
+        const Eigen::MatrixXd gamma_root1 = (Eigen::MatrixXd(2, 2) <<
+            0.75, -0.10,
+            -0.10, 1.05).finished();
+
+        const Eigen::MatrixXd F_A_root0 = (Eigen::MatrixXd(4, 4) <<
+            0.20, 0.01, -0.04, 0.03,
+            0.01, 0.45, 0.06, -0.02,
+            -0.04, 0.06, 0.90, 0.05,
+            0.03, -0.02, 0.05, 1.20).finished();
+        const Eigen::MatrixXd F_A_root1 = (Eigen::MatrixXd(4, 4) <<
+            0.35, -0.02, 0.07, -0.01,
+            -0.02, 0.40, -0.03, 0.08,
+            0.07, -0.03, 1.05, -0.04,
+            -0.01, 0.08, -0.04, 1.35).finished();
+
+        const Eigen::MatrixXd Q_root0 = (Eigen::MatrixXd(4, 2) <<
+            0.05, -0.03,
+            0.02, 0.04,
+            -0.01, 0.06,
+            0.07, -0.02).finished();
+        const Eigen::MatrixXd Q_root1 = (Eigen::MatrixXd(4, 2) <<
+            -0.04, 0.02,
+            0.03, -0.05,
+            0.08, 0.01,
+            -0.02, 0.09).finished();
+
+        const Eigen::MatrixXd G_root0 =
+            compute_orbital_gradient(F_I, F_A_root0, Q_root0, gamma_root0, 1, 2, 1, {}, false);
+        const Eigen::MatrixXd G_root1 =
+            compute_orbital_gradient(F_I, F_A_root1, Q_root1, gamma_root1, 1, 2, 1, {}, false);
+
+        Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(4, 4);
+        kappa(0, 1) = 0.10;
+        kappa(1, 0) = -0.10;
+        kappa(2, 3) = -0.06;
+        kappa(3, 2) = 0.06;
+
+        const Eigen::MatrixXd updated_root0 =
+            fep1_gradient_update(G_root0, kappa, F_I, F_A_root0, 1, 2, 1);
+        const Eigen::MatrixXd updated_root1 =
+            fep1_gradient_update(G_root1, kappa, F_I, F_A_root1, 1, 2, 1);
+
+        const Eigen::MatrixXd G_avg = 0.7 * G_root0 + 0.3 * G_root1;
+        const Eigen::MatrixXd F_A_avg = 0.7 * F_A_root0 + 0.3 * F_A_root1;
+        const Eigen::MatrixXd updated_avg =
+            fep1_gradient_update(G_avg, kappa, F_I, F_A_avg, 1, 2, 1);
+        const Eigen::MatrixXd updated_weighted = 0.7 * updated_root0 + 0.3 * updated_root1;
+
+        ok &= expect((updated_weighted - updated_avg).norm() < 1e-12,
+                     "root-resolved orbital-step reductions should stay linear after the per-root first-order gradient update");
+        ok &= expect((updated_avg - G_avg).norm() > 1e-8,
+                     "the synthetic orbital-step correction should actually change the gradient");
+    }
+
     return ok ? 0 : 1;
 }
