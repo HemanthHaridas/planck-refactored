@@ -750,16 +750,6 @@ namespace HartreeFock::Correlation::CASSCF
                         st_current.h_eff, st_current.ga, n_act,
                         vec, sigma_vec);
                 };
-                ResponseRHSExactContext exact_rhs_context;
-                if (configured_rhs_mode == ResponseRHSMode::ExactActiveSpaceOrbitalDerivative)
-                {
-                    exact_rhs_context.C = &C;
-                    exact_rhs_context.overlap = &calc._overlap;
-                    exact_rhs_context.H_core = &calc._hcore;
-                    exact_rhs_context.eri = &eri;
-                    exact_rhs_context.nbasis = nbasis;
-                    exact_rhs_context.fd_step = 1e-4;
-                }
 
                 for (int r = 0; r < nr_used; ++r)
                 {
@@ -770,15 +760,14 @@ namespace HartreeFock::Correlation::CASSCF
                         configured_rhs_mode,
                         kappa,
                         st_current.F_I_mo,
+                        st_current.h_eff,
+                        st_current.ga,
                         st_current.ci_space,
                         a_strs,
                         b_strs,
                         c0r,
                         n_core,
-                        n_act,
-                        (configured_rhs_mode == ResponseRHSMode::ExactActiveSpaceOrbitalDerivative)
-                            ? &exact_rhs_context
-                            : nullptr);
+                        n_act);
 
                     CIResponseResult response =
                         solve_ci_response_davidson(ci_apply, c0r, root.ci_energy,
