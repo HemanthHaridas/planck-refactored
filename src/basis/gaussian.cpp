@@ -255,11 +255,13 @@ HartreeFock::Basis HartreeFock::BasisFunctions::read_gbs_basis(const std::string
             for (auto am : HartreeFock::BasisFunctions::_cartesian_shell_order(L))
             {
                 const std::size_t idx = basis._basis_functions.size();
-                basis._basis_functions.emplace_back(shell_ptr, am);
-                basis._basis_functions.back()._index = idx;
-
                 const int df = double_factorial(2 * am[0] - 1) * double_factorial(2 * am[1] - 1) * double_factorial(2 * am[2] - 1);
-                basis._basis_functions.back()._component_norm = 1.0 / std::sqrt(static_cast<double>(df));
+                basis._basis_functions.emplace_back();
+                auto &basis_function = basis._basis_functions.back();
+                basis_function._shell = shell_ptr;
+                basis_function._index = idx;
+                basis_function._component_norm = 1.0 / std::sqrt(static_cast<double>(df));
+                basis_function._cartesian = am;
             }
         }
     }

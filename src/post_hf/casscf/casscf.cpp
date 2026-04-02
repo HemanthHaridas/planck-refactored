@@ -24,6 +24,7 @@ namespace
     using HartreeFock::Correlation::CASSCF::CISigmaApplier;
     using HartreeFock::Correlation::CASSCF::CISolveResult;
     using HartreeFock::Correlation::CASSCF::ResponseMode;
+    using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
     using HartreeFock::Correlation::CASSCF::RotPair;
     using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     using HartreeFock::Correlation::CASSCFInternal::CIResponseResult;
@@ -49,6 +50,8 @@ namespace
         Eigen::MatrixXd F_A_mo;
         Eigen::MatrixXd Q;
         Eigen::MatrixXd g_orb;
+        ResponseRHSMode response_rhs_mode = ResponseRHSMode::CommutatorOnlyApproximate;
+        Eigen::VectorXd response_rhs;
         Eigen::VectorXd c1_response;
         std::vector<double> Gamma1_vec;
         Eigen::MatrixXd Q1;
@@ -241,6 +244,16 @@ namespace
         return energies;
     }
 
+    Eigen::MatrixXd build_weighted_root_orbital_gradient(
+        const std::vector<StateSpecificData> &roots,
+        int nbasis)
+    {
+        Eigen::MatrixXd gradient = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        for (const auto &root : roots)
+            gradient.noalias() += root.weight * root.g_orb;
+        return gradient;
+    }
+
     Eigen::MatrixXd build_ci_orbital_gradient_correction(
         const Eigen::MatrixXd &Q1,
         int nbasis,
@@ -395,6 +408,10 @@ namespace HartreeFock::Correlation::CASSCF
 
         const unsigned int nmicro = std::max(1u, as.mcscf_micro_per_macro);
         const ResponseMode configured_response_mode = ResponseMode::DiagonalResponse;
+        const ResponseRHSMode configured_rhs_mode =
+            (nroots > 1)
+                ? ResponseRHSMode::ExactActiveSpaceOrbitalDerivative
+                : ResponseRHSMode::CommutatorOnlyApproximate;
         const bool use_numeric_newton_debug = as.mcscf_debug_numeric_newton;
         const int numeric_newton_pair_limit = 64;
         const int ci_dense_threshold = 500;
@@ -405,6 +422,9 @@ namespace HartreeFock::Correlation::CASSCF
         logging(LogLevel::Info, tag + " :",
                 std::format("Algorithm: approximate macro/micro scaffold with {}  nmicro={:d}",
                             response_mode_name(configured_response_mode), nmicro));
+        logging(LogLevel::Info, tag + " :",
+                std::format("CI response RHS: {}",
+                            response_rhs_mode_name(configured_rhs_mode)));
         if (have_sym && !point_group_is_abelian_for_labels)
             logging(LogLevel::Warning, tag + " :",
                     std::format("Disabling CI symmetry screening for {} because MO labels come from an Abelian subgroup.",
@@ -489,9 +509,10 @@ namespace HartreeFock::Correlation::CASSCF
                 st.gamma.noalias() += root.weight * root.gamma;
                 accumulate_weighted_tensor(st.Gamma_vec, root.Gamma_vec, root.weight);
                 st.F_A_mo.noalias() += root.weight * root.F_A_mo;
-                st.g_orb.noalias() += root.weight * root.g_orb;
                 st.roots.push_back(std::move(root));
             }
+
+            st.g_orb = build_weighted_root_orbital_gradient(st.roots, nbasis);
 
             const Eigen::MatrixXd h_mo = C_trial.transpose() * calc._hcore * C_trial;
             const double E_core = compute_core_energy(h_mo, st.F_I_mo, n_core);
@@ -718,7 +739,6 @@ namespace HartreeFock::Correlation::CASSCF
 
                 // The orbital trial step perturbs the active-space Hamiltonian,
                 // which in turn drives a first-order CI response for each root.
-                const Eigen::MatrixXd dh = delta_h_eff(kappa, st_current.F_I_mo, n_core, n_act);
                 const int nr_used = static_cast<int>(st_current.roots.size());
                 const CISigmaApplier ci_apply = [&](const Eigen::VectorXd &vec, Eigen::VectorXd &sigma_vec)
                 {
@@ -727,24 +747,43 @@ namespace HartreeFock::Correlation::CASSCF
                         st_current.h_eff, st_current.ga, n_act,
                         vec, sigma_vec);
                 };
+                ResponseRHSExactContext exact_rhs_context;
+                if (configured_rhs_mode == ResponseRHSMode::ExactActiveSpaceOrbitalDerivative)
+                {
+                    exact_rhs_context.C = &C;
+                    exact_rhs_context.overlap = &calc._overlap;
+                    exact_rhs_context.H_core = &calc._hcore;
+                    exact_rhs_context.eri = &eri;
+                    exact_rhs_context.nbasis = nbasis;
+                    exact_rhs_context.fd_step = 1e-4;
+                }
 
                 for (int r = 0; r < nr_used; ++r)
                 {
                     auto &root = st_current.roots[static_cast<std::size_t>(r)];
                     const Eigen::VectorXd &c0r = root.ci_vector;
-                    // The current implementation still uses the 1-body commutator
-                    // model for the CI-response right-hand side, but it now keeps
-                    // the resulting first-order objects separated by root.
-                    const Eigen::VectorXd sigma =
-                        ci_sigma_1body(dh, c0r, a_strs, b_strs, st_current.dets, n_act);
+                    root.response_rhs_mode = configured_rhs_mode;
+                    root.response_rhs = build_ci_response_rhs(
+                        configured_rhs_mode,
+                        kappa,
+                        st_current.F_I_mo,
+                        st_current.ci_space,
+                        a_strs,
+                        b_strs,
+                        c0r,
+                        n_core,
+                        n_act,
+                        (configured_rhs_mode == ResponseRHSMode::ExactActiveSpaceOrbitalDerivative)
+                            ? &exact_rhs_context
+                            : nullptr);
 
                     CIResponseResult response =
                         solve_ci_response_davidson(ci_apply, c0r, root.ci_energy,
-                                                   st_current.H_CI_diag, sigma, 1e-8, 64, 1e-4);
+                                                   st_current.H_CI_diag, root.response_rhs, 1e-8, 64, 1e-4);
                     if (!response.converged)
                     {
                         response = solve_ci_response_single_step(
-                            ci_apply, c0r, root.ci_energy, st_current.H_CI_diag, sigma, 1e-4);
+                            ci_apply, c0r, root.ci_energy, st_current.H_CI_diag, root.response_rhs, 1e-4);
                         diag.response_fallback_used = true;
                     }
 
@@ -765,6 +804,10 @@ namespace HartreeFock::Correlation::CASSCF
                     root.Q1 = compute_Q_matrix(st_current.active_integrals, root.Gamma1_vec);
                     root.g_ci = build_ci_orbital_gradient_correction(
                         root.Q1, nbasis, n_core, n_act, n_virt);
+                    root.g_orb = fep1_gradient_update(
+                        root.g_orb, kappa, st_current.F_I_mo, root.F_A_mo,
+                        n_core, n_act, n_virt);
+                    root.g_orb += root.g_ci;
 
                     diag.max_response_residual =
                         std::max(diag.max_response_residual, response.residual_norm);
@@ -774,19 +817,7 @@ namespace HartreeFock::Correlation::CASSCF
                         std::max(diag.max_response_regularization, response.max_denominator_regularization);
                 }
 
-                Eigen::MatrixXd G_CI = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                for (int r = 0; r < nr_used; ++r)
-                    // Rebuild the state-averaged CI-driven orbital correction from
-                    // the stored per-root response objects instead of collapsing the
-                    // roots earlier in the microiteration.
-                    accumulate_weighted_matrix(
-                        G_CI,
-                        st_current.roots[static_cast<std::size_t>(r)].g_ci,
-                        st_current.roots[static_cast<std::size_t>(r)].weight);
-
-                G_curr = fep1_gradient_update(
-                    G_curr, kappa, st_current.F_I_mo, st_current.F_A_mo, n_core, n_act, n_virt);
-                G_curr += G_CI;
+                G_curr = build_weighted_root_orbital_gradient(st_current.roots, nbasis);
                 kappa_total += kappa;
             }
 
