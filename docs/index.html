@@ -352,6 +352,7 @@
 <li class="toc-level-3"><a href="#macro-iteration-structure">Macro-Iteration Structure</a></li>
 <li class="toc-level-3"><a href="#state-averaged-casscf">State-Averaged CASSCF</a></li>
 <li class="toc-level-3"><a href="#convergence-and-robustness">Convergence and Robustness</a></li>
+<li class="toc-level-3"><a href="#twisted-ethylene-a-canonical-casscf-example">Twisted Ethylene: A Canonical CASSCF Example</a></li>
 <li class="toc-level-3"><a href="#rasscf-extensions">RASSCF Extensions</a></li>
 <li class="toc-level-2"><a href="#15-geometry-optimization">15. Geometry Optimization</a></li>
 <li class="toc-level-3"><a href="#l-bfgs-cartesian-coordinates">L-BFGS (Cartesian Coordinates)</a></li>
@@ -1046,7 +1047,7 @@ F^{gen}_{pq} = \sum_r h_{pr} D_{rq} + \sum_{rst} (pr|st) d_{qrst}
 <li>Compute per-root 1-RDM and 2-RDM; form state-averaged <span class="math-inline">\(\bar{\gamma}\)</span> and <span class="math-inline">\(\bar{\Gamma}\)</span> weighted by the SA weights</li>
 <li>Compute inactive Fock <span class="math-inline">\(F^I\)</span>, active Fock <span class="math-inline">\(F^A\)</span>, Q matrix, and orbital gradient <span class="math-inline">\(\mathbf g\)</span></li>
 <li>Run micro-iterations: for each micro-step, a. Form an augmented-Hessian orbital step <span class="math-inline">\(\boldsymbol\kappa\)</span> b. Compute the first-order CI response per root (<code>solve_ci_response_davidson</code>) to account for the change in CI coefficients driven by <span class="math-inline">\(\delta h_{\text{eff}} = [{\boldsymbol\kappa}, F^I]_{\text{act}}\)</span> c. Update the gradient with the response correction (<code>fep1_gradient_update</code> + CI contribution) d. Accumulate the total rotation <span class="math-inline">\(\boldsymbol\kappa_{\text{total}}\)</span></li>
-<li>Select the best orbital step from a set of candidates (augmented-Hessian accumulated step, first micro-step only, gradient fallback, numeric Newton, and pairwise averages) using a merit function <span class="math-inline">\(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\)</span></li>
+<li>Select the best orbital step from a set of candidates (augmented-Hessian accumulated step, first micro-step only, gradient fallback, and pairwise averages) using a merit function <span class="math-inline">\(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\)</span>. Numeric Newton is available only via the <code>mcscf_debug_numeric_newton</code> flag and is not part of the normal production path.</li>
 <li>Apply the accepted <span class="math-inline">\(\boldsymbol\kappa\)</span> via the Cayley transform followed by Löwdin re-orthogonalization: <span class="math-inline">\(\mathbf C \leftarrow \mathbf C\,\mathbf U\)</span></li>
 <li>Check convergence: <span class="math-inline">\(\|\mathbf g\| < \epsilon_{\text{grad}}\)</span> and <span class="math-inline">\(|\Delta E| < \epsilon_E\)</span></li>
 </ol>
@@ -1057,23 +1058,67 @@ F^{gen}_{pq} = \sum_r h_{pr} D_{rq} + \sum_{rst} (pr|st) d_{qrst}
 \bar{\Gamma}_{pqrs} = \sum_r w_r \Gamma^{(r)}_{pqrs}
 \]</span></p>
 <p>with user-specified weights <span class="math-inline">\(w_r\)</span> (equal weights by default). The reported total energy is the SA energy <span class="math-inline">\(E_{\text{SA}} = \sum_r w_r E^{(r)}\)</span>. Root identities are tracked across macro-iterations using maximum CI-vector overlap with a Hungarian maximum-weight assignment so that SA weights remain attached to the same physical states even when roots cross in energy.</p>
+<p>Each root carries a <code>StateSpecificData</code> record through the macro loop that holds that root&#x27;s CI vector, energy, 1-RDM, 2-RDM, active Fock contribution, Q contribution, orbital gradient, CI-response data, first-order 2-RDM, Q1 contribution, and CI-driven orbital correction. The state-averaged quantities <span class="math-inline">\(\bar{\gamma}\)</span>, <span class="math-inline">\(\bar{\Gamma}\)</span>, <span class="math-inline">\(F^A\)</span>, and <span class="math-inline">\(\mathbf g_{\text{orb}}\)</span> are rebuilt as explicit weighted sums of those per-root records rather than being formed from early-averaged inputs. The CI-response RHS is built analytically from active-space one- and two-electron Hamiltonian derivatives (<code>ResponseRHSMode::ExactOrbitalDerivative</code>); the older commutator-only shortcut is available only via the <code>mcscf_debug_commutator_rhs</code> debug flag.</p>
 <h3 id="convergence-and-robustness">Convergence and Robustness</h3>
-<p>The orbital macro-step uses <strong>merit-function-based step selection</strong>: multiple candidate orbital steps (augmented-Hessian result, first micro-step, gradient fallback, numeric Newton, and their pairwise averages) are each evaluated by a full CASSCF energy computation, and the step that minimizes <span class="math-inline">\(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\)</span> is accepted. This avoids the sign ambiguity that plagued earlier Cayley-map implementations and removes any dependence on DIIS extrapolation.</p>
+<p>The orbital macro-step uses <strong>merit-function-based step selection</strong>: multiple candidate orbital steps (augmented-Hessian result, first micro-step, gradient fallback, and their pairwise averages) are each evaluated by a full CASSCF energy computation, and the step that minimizes <span class="math-inline">\(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\)</span> is accepted. This avoids the sign ambiguity that plagued earlier Cayley-map implementations and removes any dependence on DIIS extrapolation.</p>
 <p>When repeated macro-iterations accept only negligibly small steps without reducing the true orbital gradient (stagnation), the driver switches to direct orbital-gradient probe steps and single-pair directional probes, letting the exact CASSCF energy screen pick the productive rotations.</p>
 <p>The CI density matrices (1-RDM and 2-RDM) are built using exact creation/annihilation operators in the spin-orbital determinant basis with a determinant lookup table, ensuring the CI eigenvalue, density matrices, and reconstructed energy are mutually consistent for all active-space sizes.</p>
 <p>At convergence, the active-space 1-RDM is diagonalized to yield <strong>natural orbitals</strong> with occupation numbers reported in descending order (<code>_cas_nat_occ</code>).</p>
-<p>Validation energies (RHF/STO-3G geometry):</p>
+<p>Validation energies (RHF/STO-3G geometry unless noted):</p>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>System</th>
 <th>Active space</th>
+<th>Basis</th>
 <th>E(CASSCF) / Eh</th>
 </tr></thead>
 <tbody>
-<tr><td>H₂</td><td>CAS(2,2)</td><td>−1.1372744062</td></tr>
-<tr><td>H₂O</td><td>CAS(2,2)</td><td>−74.9641865744</td></tr>
-<tr><td>H₂O</td><td>CAS(4,4)</td><td>−75.9851092026</td></tr>
+<tr><td>H₂</td><td>CAS(2,2)</td><td>STO-3G</td><td>−1.1372744062</td></tr>
+<tr><td>H₂O</td><td>CAS(2,2)</td><td>STO-3G</td><td>−74.9641865744</td></tr>
+<tr><td>H₂O</td><td>CAS(4,4)</td><td>STO-3G</td><td>−75.9851092026</td></tr>
+<tr><td>H₂O</td><td>CAS(4,4)</td><td>6-31G</td><td>−75.5497490402</td></tr>
+<tr><td>H₂O</td><td>CAS(4,4)</td><td>cc-pVDZ</td><td>−75.6045806122</td></tr>
+<tr><td>C₂H₄ (90° twist)</td><td>CAS(2,2)</td><td>3-21G</td><td>−77.5145223871</td></tr>
+<tr><td>C₂H₄ (90° twist)</td><td>CAS(2,2)</td><td>cc-pVDZ</td><td>−77.9524855977</td></tr>
 </tbody></table></div>
+<h3 id="twisted-ethylene-a-canonical-casscf-example">Twisted Ethylene: A Canonical CASSCF Example</h3>
+<p>Twisted ethylene at 90° C–C torsion is the prototypical system for which a single Slater determinant is qualitatively wrong.</p>
+<p><strong>Physical picture.</strong> In planar ethylene the π system is described well by a single HF configuration. When the two CH₂ groups are twisted 90° relative to each other, the p-orbitals on the two carbons become orthogonal, breaking the π overlap entirely. The result is a <strong>biradical</strong>: two electrons that once formed a π bond now occupy one orbital on each carbon with nearly equal probability. Neither a closed-shell configuration (both on one center) nor an open-shell singlet (one on each, wrong spin pairing) captures this correctly alone. The true ground state is a 50/50 mixture:</p>
+<p><span class="math-display">\[
+|\Psi_0\rangle \approx \frac{1}{\sqrt{2}}\bigl(|\pi^2\rangle - |\pi^{*2}\rangle\bigr)
+\]</span></p>
+<p>The first excited singlet <span class="math-inline">\(S_1\)</span> is the complementary combination:</p>
+<p><span class="math-display">\[
+|\Psi_1\rangle \approx \frac{1}{\sqrt{2}}\bigl(|\pi^2\rangle + |\pi^{*2}\rangle\bigr)
+\]</span></p>
+<p>At exactly 90° twist these two states are nearly degenerate (the splitting is small and purely two-electron in origin), making this a strong-correlation problem where the HF reference energy is far from the true energy and the perturbation-theory expansion is unreliable.</p>
+<p><strong>Active space selection.</strong> The minimum correct active space is CAS(2,2): the two electrons that formed the π bond, in the two orbitals that span the π/π\<em> manifold. After optimization the two active natural orbitals have occupation numbers near 1.0 each, confirming the biradical character. For a more complete treatment one can include the σ/σ\</em> C–C bond (CAS(4,4)) or add the CH σ manifold, but CAS(2,2) already recovers the qualitative physics.</p>
+<p><strong>Geometry.</strong> The test inputs use a C–C bond length of 1.339 Å (near the experimental double-bond length) with the left CH₂ plane in the <span class="math-inline">\(xy\)</span> plane and the right CH₂ plane in the <span class="math-inline">\(xz\)</span> plane, giving exactly 90° twist:</p>
+<pre><code>
+C    -0.669500    0.000000    0.000000
+C     0.669500    0.000000    0.000000
+H    -1.233698    0.927942    0.000000   ← left CH₂ in xy plane
+H    -1.233698   -0.927942    0.000000
+H     1.233698    0.000000    0.927942   ← right CH₂ in xz plane
+H     1.233698    0.000000   -0.927942
+</code></pre>
+<p>The point-group symmetry is D₂ (the C₂ rotation about the C–C axis and two perpendicular C₂ axes are the only symmetry elements; the mirror planes of planar ethylene are absent at 90° twist). The two active orbitals transform as different irreps of D₂, which is why the biradical wavefunctions are even and odd combinations rather than simple MO products.</p>
+<p><strong>Input example</strong> (<code>tests/inputs/casscf_tests/ethylene_casscf_321g.hfinp</code>):</p>
+<pre><code>
+%begin_scf
+    scf_type    rhf
+    correlation casscf
+    nactele     2
+    nactorb     2
+    nroots      1
+%end_scf
+</code></pre>
+<p>A two-root SA-CASSCF run (<code>nroots 2</code>) optimizes orbitals for an equal-weight average of S₀ and S₁. Because the two roots are nearly degenerate at 90° twist, the SA orbital optimization is the recommended approach when studying the S₀/S₁ gap or the conical intersection seam.</p>
+<p><strong>Significance as a test case.</strong> Twisted ethylene serves two validation roles:</p>
+<ol>
+<li><em>Single-root correctness</em>: the CAS(2,2) single-point energy should match external codes (PySCF, ORCA) at the same geometry and basis.</li>
+<li><em>SA robustness</em>: a two-root run near degeneracy exercises root tracking, overlap-based Hungarian assignment, and the merit-function step selector under conditions where the state ordering can change between macro-iterations.</li>
+</ol>
 <h3 id="rasscf-extensions">RASSCF Extensions</h3>
 <p>RASSCF (Restricted Active Space SCF) partitions the active space into three subspaces:</p>
 <ul>
