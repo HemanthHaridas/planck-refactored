@@ -382,6 +382,7 @@ namespace HartreeFock
         unsigned int ci_max_dim = 10000; // abort if CI space exceeds this
 
         bool mcscf_debug_numeric_newton = false; // debug-only numeric Newton fallback
+        bool mcscf_debug_commutator_rhs = false; // debug-only approximate commutator-only CI-response RHS
     };
 
     struct OptionsOutput

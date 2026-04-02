@@ -25,10 +25,9 @@ namespace HartreeFock::Correlation::CASSCF
 
     const char *response_mode_name(ResponseMode mode);
 
-    // CI-response RHS policy. The current production path is still approximate
-    // by default for single-root runs, while the SA plumbing can request an
-    // explicit orbital-derivative build that includes the full active
-    // Hamiltonian response to a trial orbital rotation.
+    // CI-response RHS policy. The approximate path keeps the commutator
+    // shortcut, while the exact path differentiates the active-space
+    // Hamiltonian analytically with respect to a trial orbital rotation.
     enum class ResponseRHSMode
     {
         CommutatorOnlyApproximate,
@@ -36,16 +35,6 @@ namespace HartreeFock::Correlation::CASSCF
     };
 
     const char *response_rhs_mode_name(ResponseRHSMode mode);
-
-    struct ResponseRHSExactContext
-    {
-        const Eigen::MatrixXd *C = nullptr;
-        const Eigen::MatrixXd *overlap = nullptr;
-        const Eigen::MatrixXd *H_core = nullptr;
-        const std::vector<double> *eri = nullptr;
-        int nbasis = 0;
-        double fd_step = 1e-4;
-    };
 
     // A sigma application callback hides whether the response operator is coming
     // from a dense matrix or from an iterative Hamiltonian application.
@@ -62,28 +51,28 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<std::pair<int, int>> &dets,
         int n_act);
 
-    // Orbital perturbations enter the approximate CI response through the
-    // active-block commutator with the inactive Fock matrix.
+    // Approximate orbital response: active-block commutator with the inactive
+    // Fock matrix only.
     Eigen::MatrixXd delta_h_eff(
         const Eigen::MatrixXd &kappa,
         const Eigen::MatrixXd &F_I_mo,
         int n_core,
         int n_act);
 
-    // Build the CI-response right-hand side using either the legacy
-    // commutator-only shortcut or an explicit finite-difference orbital
-    // derivative of the active-space Hamiltonian action.
+    // Build the CI-response right-hand side using either the current
+    // commutator-only shortcut or the exact active-space orbital derivative.
     Eigen::VectorXd build_ci_response_rhs(
         ResponseRHSMode mode,
         const Eigen::MatrixXd &kappa,
         const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &h_eff,
+        const std::vector<double> &ga,
         const CIDeterminantSpace &space,
         const std::vector<CIString> &a_strs,
         const std::vector<CIString> &b_strs,
         const Eigen::VectorXd &c0,
         int n_core,
-        int n_act,
-        const ResponseRHSExactContext *exact_context = nullptr);
+        int n_act);
 
     // One preconditioned response step without iterative subspace growth.
     CIResponseResult solve_ci_response_single_step(

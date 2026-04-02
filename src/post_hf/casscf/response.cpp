@@ -1,13 +1,9 @@
 #include "post_hf/casscf/response.h"
 
 #include "post_hf/casscf/ci.h"
-#include "post_hf/casscf/orbital.h"
 #include "post_hf/casscf/strings.h"
-#include "post_hf/integrals.h"
 
 #include <Eigen/QR>
-
-#include <algorithm>
 
 namespace
 {
@@ -44,39 +40,45 @@ namespace
         return {det | bit, (count_occupied_below(det, orb) % 2 == 0) ? 1.0 : -1.0, true};
     }
 
-    Eigen::VectorXd sigma_from_orbital_rotation(
-        const Eigen::MatrixXd &C_base,
-        const Eigen::MatrixXd &kappa,
-        double scale,
-        const Eigen::MatrixXd &overlap,
-        const Eigen::MatrixXd &H_core,
-        const std::vector<double> &eri,
-        const HartreeFock::Correlation::CASSCF::CIDeterminantSpace &space,
-        const std::vector<HartreeFock::Correlation::CASSCFInternal::CIString> &a_strs,
-        const std::vector<HartreeFock::Correlation::CASSCFInternal::CIString> &b_strs,
-        const Eigen::VectorXd &c0,
-        int nbasis,
-        int n_core,
+    std::size_t idx4(int p, int q, int r, int s, int n_act)
+    {
+        return static_cast<std::size_t>(((p * n_act + q) * n_act + r) * n_act + s);
+    }
+
+    Eigen::MatrixXd exact_active_one_body_derivative(
+        const Eigen::MatrixXd &kappa_act,
+        const Eigen::MatrixXd &h_eff)
+    {
+        // Match the same MO-rotation convention used by the orbital update path:
+        // h' = U^T h U, so the first-order derivative is kappa^T h + h kappa.
+        return kappa_act.transpose() * h_eff + h_eff * kappa_act;
+    }
+
+    std::vector<double> exact_active_two_body_derivative(
+        const Eigen::MatrixXd &kappa_act,
+        const std::vector<double> &ga,
         int n_act)
     {
-        const Eigen::MatrixXd C_rot =
-            HartreeFock::Correlation::CASSCF::apply_orbital_rotation(
-                C_base, scale * kappa, overlap);
-        const Eigen::MatrixXd F_I_mo =
-            HartreeFock::Correlation::CASSCF::build_inactive_fock_mo(
-                C_rot, H_core, eri, n_core, nbasis);
-        const Eigen::MatrixXd h_eff = F_I_mo.block(n_core, n_core, n_act, n_act);
-        const Eigen::MatrixXd C_act = C_rot.middleCols(n_core, n_act);
-        const std::vector<double> ga =
-            HartreeFock::Correlation::transform_eri_internal(eri, nbasis, C_act);
+        std::vector<double> dga(ga.size(), 0.0);
+        if (n_act <= 0 || ga.empty())
+            return dga;
 
-        HartreeFock::Correlation::CASSCF::CIDeterminantSpace sigma_space = space;
-        sigma_space.dense_hamiltonian.reset();
-
-        Eigen::VectorXd sigma = Eigen::VectorXd::Zero(c0.size());
-        HartreeFock::Correlation::CASSCF::apply_ci_hamiltonian(
-            sigma_space, a_strs, b_strs, h_eff, ga, n_act, c0, sigma);
-        return sigma;
+        for (int p = 0; p < n_act; ++p)
+            for (int q = 0; q < n_act; ++q)
+                for (int r = 0; r < n_act; ++r)
+                    for (int s = 0; s < n_act; ++s)
+                    {
+                        double value = 0.0;
+                        for (int t = 0; t < n_act; ++t)
+                        {
+                            value += kappa_act(t, p) * ga[idx4(t, q, r, s, n_act)];
+                            value += kappa_act(t, q) * ga[idx4(p, t, r, s, n_act)];
+                            value += kappa_act(t, r) * ga[idx4(p, q, t, s, n_act)];
+                            value += kappa_act(t, s) * ga[idx4(p, q, r, t, n_act)];
+                        }
+                        dga[idx4(p, q, r, s, n_act)] = value;
+                    }
+        return dga;
     }
 
     Eigen::VectorXd response_residual(
@@ -178,8 +180,8 @@ namespace HartreeFock::Correlation::CASSCF
         int n_core,
         int n_act)
     {
-        // The orbital response only needs the active block of the commutator
-        // between the current rotation and the effective Fock matrix.
+        // This is the current approximate shortcut: keep only the active block
+        // of the commutator between the orbital rotation and the inactive Fock.
         Eigen::MatrixXd comm = kappa * F_I_mo - F_I_mo * kappa;
         return comm.block(n_core, n_core, n_act, n_act);
     }
@@ -188,13 +190,14 @@ namespace HartreeFock::Correlation::CASSCF
         ResponseRHSMode mode,
         const Eigen::MatrixXd &kappa,
         const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &h_eff,
+        const std::vector<double> &ga,
         const CIDeterminantSpace &space,
         const std::vector<CIString> &a_strs,
         const std::vector<CIString> &b_strs,
         const Eigen::VectorXd &c0,
         int n_core,
-        int n_act,
-        const ResponseRHSExactContext *exact_context)
+        int n_act)
     {
         if (c0.size() == 0 || space.dets.empty())
             return Eigen::VectorXd::Zero(c0.size());
@@ -205,26 +208,17 @@ namespace HartreeFock::Correlation::CASSCF
             return ci_sigma_1body(dh, c0, a_strs, b_strs, space.dets, n_act);
         }
 
-        if (exact_context == nullptr ||
-            exact_context->C == nullptr ||
-            exact_context->overlap == nullptr ||
-            exact_context->H_core == nullptr ||
-            exact_context->eri == nullptr ||
-            exact_context->nbasis <= 0)
+        if (kappa.rows() < n_core + n_act ||
+            kappa.cols() < n_core + n_act ||
+            h_eff.rows() < n_act ||
+            h_eff.cols() < n_act)
             return Eigen::VectorXd::Zero(c0.size());
 
-        const double fd_step = std::max(1e-6, exact_context->fd_step);
-        const Eigen::VectorXd sigma_plus = sigma_from_orbital_rotation(
-            *exact_context->C, kappa, fd_step,
-            *exact_context->overlap, *exact_context->H_core, *exact_context->eri,
-            space, a_strs, b_strs, c0,
-            exact_context->nbasis, n_core, n_act);
-        const Eigen::VectorXd sigma_minus = sigma_from_orbital_rotation(
-            *exact_context->C, kappa, -fd_step,
-            *exact_context->overlap, *exact_context->H_core, *exact_context->eri,
-            space, a_strs, b_strs, c0,
-            exact_context->nbasis, n_core, n_act);
-        return (sigma_plus - sigma_minus) / (2.0 * fd_step);
+        const Eigen::MatrixXd kappa_act = kappa.block(n_core, n_core, n_act, n_act);
+        const Eigen::MatrixXd dh = exact_active_one_body_derivative(kappa_act, h_eff);
+        const std::vector<double> dga = exact_active_two_body_derivative(kappa_act, ga, n_act);
+        const Eigen::MatrixXd dH = build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, dh, dga, n_act);
+        return dH * c0;
     }
 
     CIResponseResult solve_ci_response_single_step(

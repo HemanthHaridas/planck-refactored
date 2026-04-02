@@ -24,6 +24,7 @@ namespace HartreeFock::Correlation
     //   nroots        — number of CI roots (1 = single-state)
     //   weights       — SA weights (empty → equal weights)
     //   mcscf_debug_numeric_newton — debug-only numeric Newton fallback toggle
+    //   mcscf_debug_commutator_rhs — debug-only approximate commutator-only CI-response RHS
     //   mcscf_max_iter, mcscf_micro_per_macro, tol_mcscf_energy, tol_mcscf_grad
     //   ci_max_dim    — abort if CI space exceeds this
     //   target_irrep  — target CI state irrep (empty → totally symmetric)

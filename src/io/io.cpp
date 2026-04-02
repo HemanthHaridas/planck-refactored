@@ -493,6 +493,8 @@ namespace HartreeFock::IO
                  { active_space.max_elec = std::stoi(v); }},
                 {"mcscf_debug_numeric_newton", [&active_space](const std::string &v)
                  { active_space.mcscf_debug_numeric_newton = toBool(v); }},
+                {"mcscf_debug_commutator_rhs", [&active_space](const std::string &v)
+                 { active_space.mcscf_debug_commutator_rhs = toBool(v); }},
                 {"mcscf_max_iter", [&active_space](const std::string &v)
                  { active_space.mcscf_max_iter = static_cast<unsigned int>(std::stoi(v)); }},
                 {"mcscf_micro_per_macro", [&active_space](const std::string &v)

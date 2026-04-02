@@ -254,6 +254,44 @@ namespace
         return gradient;
     }
 
+    Eigen::MatrixXd build_weighted_root_fock(
+        const std::vector<StateSpecificData> &roots,
+        int nbasis)
+    {
+        Eigen::MatrixXd fock = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        for (const auto &root : roots)
+            fock.noalias() += root.weight * root.F_A_mo;
+        return fock;
+    }
+
+    Eigen::MatrixXd build_weighted_root_orbital_step(
+        const std::vector<StateSpecificData> &roots,
+        const Eigen::MatrixXd &F_I_mo,
+        int nbasis,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym)
+    {
+        // Build each root's preconditioned orbital step from its own gradient
+        // and active Fock contribution before reducing those proposals back to
+        // one state-averaged rotation.
+        Eigen::MatrixXd step = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        for (const auto &root : roots)
+        {
+            if (root.weight == 0.0)
+                continue;
+            step.noalias() += root.weight * HartreeFock::Correlation::CASSCF::augmented_hessian_step(
+                root.g_orb, F_I_mo, root.F_A_mo,
+                n_core, n_act, n_virt,
+                level_shift, max_rot, mo_irreps, use_sym);
+        }
+        return step;
+    }
+
     Eigen::MatrixXd build_ci_orbital_gradient_correction(
         const Eigen::MatrixXd &Q1,
         int nbasis,
@@ -409,9 +447,9 @@ namespace HartreeFock::Correlation::CASSCF
         const unsigned int nmicro = std::max(1u, as.mcscf_micro_per_macro);
         const ResponseMode configured_response_mode = ResponseMode::DiagonalResponse;
         const ResponseRHSMode configured_rhs_mode =
-            (nroots > 1)
-                ? ResponseRHSMode::ExactActiveSpaceOrbitalDerivative
-                : ResponseRHSMode::CommutatorOnlyApproximate;
+            as.mcscf_debug_commutator_rhs
+                ? ResponseRHSMode::CommutatorOnlyApproximate
+                : ResponseRHSMode::ExactActiveSpaceOrbitalDerivative;
         const bool use_numeric_newton_debug = as.mcscf_debug_numeric_newton;
         const int numeric_newton_pair_limit = 64;
         const int ci_dense_threshold = 500;
@@ -425,6 +463,9 @@ namespace HartreeFock::Correlation::CASSCF
         logging(LogLevel::Info, tag + " :",
                 std::format("CI response RHS: {}",
                             response_rhs_mode_name(configured_rhs_mode)));
+        if (configured_rhs_mode == ResponseRHSMode::CommutatorOnlyApproximate)
+            logging(LogLevel::Warning, tag + " :",
+                    "Using debug-only approximate commutator RHS instead of the default exact orbital-derivative response.");
         if (have_sym && !point_group_is_abelian_for_labels)
             logging(LogLevel::Warning, tag + " :",
                     std::format("Disabling CI symmetry screening for {} because MO labels come from an Abelian subgroup.",
@@ -560,7 +601,7 @@ namespace HartreeFock::Correlation::CASSCF
 
         auto pack_hessian_diagonal = [&](const McscfState &st)
         {
-            const Eigen::MatrixXd F_sum = st.F_I_mo + st.F_A_mo;
+            const Eigen::MatrixXd F_sum = st.F_I_mo + build_weighted_root_fock(st.roots, nbasis);
             Eigen::VectorXd diag = Eigen::VectorXd::Zero(static_cast<int>(opt_pairs.size()));
             for (int k = 0; k < static_cast<int>(opt_pairs.size()); ++k)
                 diag(k) = hess_diag(F_sum, opt_pairs[k].p, opt_pairs[k].q);
@@ -655,16 +696,24 @@ namespace HartreeFock::Correlation::CASSCF
             return kappa;
         };
 
-        auto build_gradient_fallback_step = [&](const Eigen::MatrixXd &G_trial)
+        auto build_weighted_root_gradient_fallback_step =
+            [&](const std::vector<StateSpecificData> &roots)
         {
-            // Last-resort preconditioner-free step: follow the raw orbital gradient
-            // direction and let the exact CASSCF reevaluation decide whether it helps.
             Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
-            for (const auto &pair : opt_pairs)
+            // Mirror the root-first AH path for the fallback direction: build a
+            // raw descent proposal per root, then reduce them with the SA weights.
+            for (const auto &root : roots)
             {
-                const double step = -G_trial(pair.p, pair.q);
-                kappa(pair.p, pair.q) = step;
-                kappa(pair.q, pair.p) = -step;
+                if (root.weight == 0.0)
+                    continue;
+                Eigen::MatrixXd root_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                for (const auto &pair : opt_pairs)
+                {
+                    const double step = -root.g_orb(pair.p, pair.q);
+                    root_step(pair.p, pair.q) = step;
+                    root_step(pair.q, pair.p) = -step;
+                }
+                kappa.noalias() += root.weight * root_step;
             }
             return cap_orbital_step(std::move(kappa));
         };
@@ -714,7 +763,6 @@ namespace HartreeFock::Correlation::CASSCF
                 break;
             }
 
-            Eigen::MatrixXd G_curr = st_current.g_orb;
             Eigen::MatrixXd kappa_total = Eigen::MatrixXd::Zero(nbasis, nbasis);
             Eigen::MatrixXd kappa_first = Eigen::MatrixXd::Zero(nbasis, nbasis);
             Eigen::MatrixXd kappa_newton = Eigen::MatrixXd::Zero(nbasis, nbasis);
@@ -730,8 +778,8 @@ namespace HartreeFock::Correlation::CASSCF
 
             for (unsigned int micro = 0; micro < nmicro; ++micro)
             {
-                Eigen::MatrixXd kappa = augmented_hessian_step(
-                    G_curr, st_current.F_I_mo, st_current.F_A_mo,
+                Eigen::MatrixXd kappa = build_weighted_root_orbital_step(
+                    st_current.roots, st_current.F_I_mo, nbasis,
                     n_core, n_act, n_virt,
                     level_shift, 0.20, all_mo_irr, use_sym);
                 if (micro == 0)
@@ -747,16 +795,6 @@ namespace HartreeFock::Correlation::CASSCF
                         st_current.h_eff, st_current.ga, n_act,
                         vec, sigma_vec);
                 };
-                ResponseRHSExactContext exact_rhs_context;
-                if (configured_rhs_mode == ResponseRHSMode::ExactActiveSpaceOrbitalDerivative)
-                {
-                    exact_rhs_context.C = &C;
-                    exact_rhs_context.overlap = &calc._overlap;
-                    exact_rhs_context.H_core = &calc._hcore;
-                    exact_rhs_context.eri = &eri;
-                    exact_rhs_context.nbasis = nbasis;
-                    exact_rhs_context.fd_step = 1e-4;
-                }
 
                 for (int r = 0; r < nr_used; ++r)
                 {
@@ -767,15 +805,14 @@ namespace HartreeFock::Correlation::CASSCF
                         configured_rhs_mode,
                         kappa,
                         st_current.F_I_mo,
+                        st_current.h_eff,
+                        st_current.ga,
                         st_current.ci_space,
                         a_strs,
                         b_strs,
                         c0r,
                         n_core,
-                        n_act,
-                        (configured_rhs_mode == ResponseRHSMode::ExactActiveSpaceOrbitalDerivative)
-                            ? &exact_rhs_context
-                            : nullptr);
+                        n_act);
 
                     CIResponseResult response =
                         solve_ci_response_davidson(ci_apply, c0r, root.ci_energy,
@@ -816,17 +853,16 @@ namespace HartreeFock::Correlation::CASSCF
                     diag.max_response_regularization =
                         std::max(diag.max_response_regularization, response.max_denominator_regularization);
                 }
-
-                G_curr = build_weighted_root_orbital_gradient(st_current.roots, nbasis);
                 kappa_total += kappa;
             }
 
             const double max_k = kappa_total.cwiseAbs().maxCoeff();
             if (max_k > 0.20)
                 kappa_total *= 0.20 / max_k;
-            const Eigen::MatrixXd kappa_grad = build_gradient_fallback_step(st_current.g_orb);
+            const Eigen::MatrixXd G_model = build_weighted_root_orbital_gradient(st_current.roots, nbasis);
+            const Eigen::MatrixXd kappa_grad = build_weighted_root_gradient_fallback_step(st_current.roots);
 
-            const Eigen::VectorXd g_flat = pack_pairs(st_current.g_orb);
+            const Eigen::VectorXd g_flat = pack_pairs(G_model);
             const Eigen::VectorXd h_flat = pack_hessian_diagonal(st_current);
 
             bool accepted = false;

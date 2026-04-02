@@ -4,7 +4,6 @@
 #include "post_hf/casscf/rdm.h"
 #include "post_hf/casscf/response.h"
 #include "post_hf/casscf/strings.h"
-#include "post_hf/integrals.h"
 
 #include <Eigen/Core>
 
@@ -205,31 +204,41 @@ namespace
         return static_cast<std::size_t>(((p * n + q) * n + r) * n + s);
     }
 
-    Eigen::VectorXd sigma_from_rotated_orbitals(
-        const Eigen::MatrixXd &C,
-        const Eigen::MatrixXd &kappa,
-        double step,
-        const Eigen::MatrixXd &overlap,
-        const Eigen::MatrixXd &H_core,
-        const std::vector<double> &eri,
-        const CIDeterminantSpace &space,
-        const std::vector<CIString> &a_strs,
-        const std::vector<CIString> &b_strs,
-        const Eigen::VectorXd &c0,
-        int nbasis,
-        int n_core,
-        int n_act)
+    Eigen::MatrixXd rotate_one_body_tensor(
+        const Eigen::MatrixXd &h,
+        const Eigen::MatrixXd &U)
     {
-        const Eigen::MatrixXd C_rot = apply_orbital_rotation(C, step * kappa, overlap);
-        const Eigen::MatrixXd F_I_mo = build_inactive_fock_mo(C_rot, H_core, eri, n_core, nbasis);
-        const Eigen::MatrixXd h_eff = F_I_mo.block(n_core, n_core, n_act, n_act);
-        const std::vector<double> ga =
-            HartreeFock::Correlation::transform_eri_internal(
-                eri, static_cast<std::size_t>(nbasis), C_rot.middleCols(n_core, n_act));
+        return U.transpose() * h * U;
+    }
 
-        Eigen::VectorXd sigma = Eigen::VectorXd::Zero(c0.size());
-        apply_ci_hamiltonian(space, a_strs, b_strs, h_eff, ga, n_act, c0, sigma);
-        return sigma;
+    std::vector<double> rotate_two_body_tensor(
+        const std::vector<double> &ga,
+        const Eigen::MatrixXd &U)
+    {
+        const int n_act = static_cast<int>(U.rows());
+        std::vector<double> out(ga.size(), 0.0);
+        auto idx4_local = [n_act](int p, int q, int r, int s)
+        {
+            return static_cast<std::size_t>(((p * n_act + q) * n_act + r) * n_act + s);
+        };
+
+        for (int p = 0; p < n_act; ++p)
+            for (int q = 0; q < n_act; ++q)
+                for (int r = 0; r < n_act; ++r)
+                    for (int s = 0; s < n_act; ++s)
+                    {
+                        double value = 0.0;
+                        for (int a = 0; a < n_act; ++a)
+                            for (int b = 0; b < n_act; ++b)
+                                for (int c = 0; c < n_act; ++c)
+                                    for (int d = 0; d < n_act; ++d)
+                                        value +=
+                                            U(a, p) * U(b, q) * U(c, r) * U(d, s) *
+                                            ga[idx4_local(a, b, c, d)];
+                        out[idx4_local(p, q, r, s)] = value;
+                    }
+
+        return out;
     }
 
 } // namespace
@@ -451,81 +460,77 @@ int main()
     }
 
     {
-        constexpr int nbasis = 3;
-        constexpr int n_core = 1;
-        constexpr int n_act = 2;
+        auto default_rhs_mode = [](bool debug_commutator_rhs)
+        {
+            return debug_commutator_rhs
+                ? ResponseRHSMode::CommutatorOnlyApproximate
+                : ResponseRHSMode::ExactActiveSpaceOrbitalDerivative;
+        };
 
-        Eigen::MatrixXd C = Eigen::MatrixXd::Identity(nbasis, nbasis);
-        Eigen::MatrixXd S = Eigen::MatrixXd::Identity(nbasis, nbasis);
-        Eigen::MatrixXd H_core(nbasis, nbasis);
-        H_core << -1.30, 0.12, -0.06,
-            0.12, -0.45, 0.09,
-            -0.06, 0.09, 0.35;
+        ok &= expect(default_rhs_mode(false) == ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+                     "CASSCF should default to the exact orbital-derivative response RHS");
+        ok &= expect(default_rhs_mode(true) == ResponseRHSMode::CommutatorOnlyApproximate,
+                     "the commutator-only response RHS should remain available only through the explicit debug switch");
+    }
 
-        std::vector<double> eri(static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis, 0.0);
-        eri[idx4(0, 0, 0, 0, nbasis)] = 0.80;
-        eri[idx4(1, 1, 1, 1, nbasis)] = 0.55;
-        eri[idx4(2, 2, 2, 2, nbasis)] = 0.30;
-        eri[idx4(0, 0, 1, 1, nbasis)] = eri[idx4(1, 1, 0, 0, nbasis)] = 0.18;
-        eri[idx4(0, 0, 2, 2, nbasis)] = eri[idx4(2, 2, 0, 0, nbasis)] = 0.09;
-        eri[idx4(1, 1, 2, 2, nbasis)] = eri[idx4(2, 2, 1, 1, nbasis)] = 0.13;
-        eri[idx4(0, 1, 1, 0, nbasis)] = eri[idx4(1, 0, 0, 1, nbasis)] = 0.05;
-        eri[idx4(0, 2, 2, 0, nbasis)] = eri[idx4(2, 0, 0, 2, nbasis)] = 0.03;
-        eri[idx4(1, 2, 2, 1, nbasis)] = eri[idx4(2, 1, 1, 2, nbasis)] = 0.04;
-
+    {
         std::vector<CIString> a_strs;
         std::vector<CIString> b_strs;
-        build_spin_strings_unfiltered(n_act, 1, 1, a_strs, b_strs);
+        build_spin_strings_unfiltered(2, 1, 1, a_strs, b_strs);
 
-        const Eigen::MatrixXd F_I_mo = build_inactive_fock_mo(C, H_core, eri, n_core, nbasis);
-        const Eigen::MatrixXd h_eff = F_I_mo.block(n_core, n_core, n_act, n_act);
-        const std::vector<double> ga =
-            HartreeFock::Correlation::transform_eri_internal(
-                eri, static_cast<std::size_t>(nbasis), C.middleCols(n_core, n_act));
+        Eigen::MatrixXd h_eff = Eigen::MatrixXd::Zero(2, 2);
+        std::vector<double> ga(16, 0.0);
+        auto idx4_tiny = [](int p, int q, int r, int s)
+        {
+            return ((p * 2 + q) * 2 + r) * 2 + s;
+        };
+        ga[idx4_tiny(0, 0, 0, 0)] = 0.72;
+        ga[idx4_tiny(1, 1, 1, 1)] = 0.41;
+        ga[idx4_tiny(0, 0, 1, 1)] = ga[idx4_tiny(1, 1, 0, 0)] = 0.19;
+        ga[idx4_tiny(0, 1, 1, 0)] = ga[idx4_tiny(1, 0, 0, 1)] = 0.07;
 
         RASParams ras;
         const CIDeterminantSpace space =
-            build_ci_space(a_strs, b_strs, ras, h_eff, ga, n_act, {}, nullptr, 0, 0);
+            build_ci_space(a_strs, b_strs, ras, h_eff, ga, 2, {}, nullptr, 0, 8);
         ok &= expect(space.dets.size() == 4,
-                     "tiny exact-RHS test should build a 4-determinant CI space");
+                     "tiny active-space test should build a 4-determinant CI space");
 
         Eigen::VectorXd c0(4);
         c0 << 0.50, -0.30, 0.40, -0.20;
 
-        Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
-        kappa(0, 1) = 0.08;
-        kappa(1, 0) = -0.08;
-        kappa(1, 2) = -0.05;
-        kappa(2, 1) = 0.05;
+        Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(2, 2);
+        kappa(0, 1) = 0.11;
+        kappa(1, 0) = -0.11;
 
-        ResponseRHSExactContext exact_context;
-        exact_context.C = &C;
-        exact_context.overlap = &S;
-        exact_context.H_core = &H_core;
-        exact_context.eri = &eri;
-        exact_context.nbasis = nbasis;
-        exact_context.fd_step = 1e-4;
-
+        const Eigen::MatrixXd F_I = Eigen::MatrixXd::Zero(2, 2);
         const Eigen::VectorXd rhs_approx = build_ci_response_rhs(
             ResponseRHSMode::CommutatorOnlyApproximate,
-            kappa, F_I_mo, space, a_strs, b_strs, c0, n_core, n_act);
+            kappa, F_I, h_eff, ga, space, a_strs, b_strs, c0, 0, 2);
         const Eigen::VectorXd rhs_exact = build_ci_response_rhs(
             ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
-            kappa, F_I_mo, space, a_strs, b_strs, c0, n_core, n_act, &exact_context);
+            kappa, F_I, h_eff, ga, space, a_strs, b_strs, c0, 0, 2);
 
-        const Eigen::VectorXd rhs_fd =
-            (sigma_from_rotated_orbitals(
-                 C, kappa, exact_context.fd_step, S, H_core, eri, space, a_strs, b_strs, c0,
-                 nbasis, n_core, n_act) -
-             sigma_from_rotated_orbitals(
-                 C, kappa, -exact_context.fd_step, S, H_core, eri, space, a_strs, b_strs, c0,
-                 nbasis, n_core, n_act)) /
-            (2.0 * exact_context.fd_step);
+        constexpr double eps = 1e-6;
+        const Eigen::Matrix2d I = Eigen::Matrix2d::Identity();
+        const Eigen::MatrixXd U_plus = I + eps * kappa;
+        const Eigen::MatrixXd U_minus = I - eps * kappa;
 
+        const Eigen::MatrixXd h_plus = rotate_one_body_tensor(h_eff, U_plus);
+        const Eigen::MatrixXd h_minus = rotate_one_body_tensor(h_eff, U_minus);
+        const std::vector<double> ga_plus = rotate_two_body_tensor(ga, U_plus);
+        const std::vector<double> ga_minus = rotate_two_body_tensor(ga, U_minus);
+        const Eigen::MatrixXd H_plus =
+            build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, h_plus, ga_plus, 2);
+        const Eigen::MatrixXd H_minus =
+            build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, h_minus, ga_minus, 2);
+        const Eigen::VectorXd rhs_fd = ((H_plus - H_minus) * c0) / (2.0 * eps);
+
+        ok &= expect(rhs_approx.norm() < 1e-12,
+                     "commutator-only RHS should stay zero when the inactive Fock block is zero");
         ok &= expect((rhs_exact - rhs_fd).norm() < 1e-10,
                      "exact orbital-derivative RHS should match a finite-difference orbital rotation");
         ok &= expect((rhs_exact - rhs_approx).norm() > 1e-6,
-                     "exact orbital-derivative RHS should differ from the commutator-only shortcut when the full active Hamiltonian responds");
+                     "exact orbital-derivative RHS should differ from the commutator-only shortcut when two-electron terms respond");
     }
 
     {
@@ -912,6 +917,70 @@ int main()
                      "weighted per-root Q-like intermediates should match the averaged-2-RDM path");
         ok &= expect((g_avg - g_from_avg).norm() < 1e-12,
                      "weighted per-root orbital-gradient-like intermediates should match the averaged reduced-density path when the maps are linear");
+    }
+
+    {
+        const Eigen::MatrixXd F_I = (Eigen::MatrixXd(4, 4) <<
+            1.10, 0.02, -0.01, 0.04,
+            0.02, 1.70, 0.03, -0.02,
+            -0.01, 0.03, 2.20, 0.05,
+            0.04, -0.02, 0.05, 2.80).finished();
+
+        const Eigen::MatrixXd gamma_root0 = (Eigen::MatrixXd(2, 2) <<
+            1.00, 0.15,
+            0.15, 0.55).finished();
+        const Eigen::MatrixXd gamma_root1 = (Eigen::MatrixXd(2, 2) <<
+            0.75, -0.10,
+            -0.10, 1.05).finished();
+
+        const Eigen::MatrixXd F_A_root0 = (Eigen::MatrixXd(4, 4) <<
+            0.20, 0.01, -0.04, 0.03,
+            0.01, 0.45, 0.06, -0.02,
+            -0.04, 0.06, 0.90, 0.05,
+            0.03, -0.02, 0.05, 1.20).finished();
+        const Eigen::MatrixXd F_A_root1 = (Eigen::MatrixXd(4, 4) <<
+            0.35, -0.02, 0.07, -0.01,
+            -0.02, 0.40, -0.03, 0.08,
+            0.07, -0.03, 1.05, -0.04,
+            -0.01, 0.08, -0.04, 1.35).finished();
+
+        const Eigen::MatrixXd Q_root0 = (Eigen::MatrixXd(4, 2) <<
+            0.05, -0.03,
+            0.02, 0.04,
+            -0.01, 0.06,
+            0.07, -0.02).finished();
+        const Eigen::MatrixXd Q_root1 = (Eigen::MatrixXd(4, 2) <<
+            -0.04, 0.02,
+            0.03, -0.05,
+            0.08, 0.01,
+            -0.02, 0.09).finished();
+
+        const Eigen::MatrixXd G_root0 =
+            compute_orbital_gradient(F_I, F_A_root0, Q_root0, gamma_root0, 1, 2, 1, {}, false);
+        const Eigen::MatrixXd G_root1 =
+            compute_orbital_gradient(F_I, F_A_root1, Q_root1, gamma_root1, 1, 2, 1, {}, false);
+
+        Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(4, 4);
+        kappa(0, 1) = 0.10;
+        kappa(1, 0) = -0.10;
+        kappa(2, 3) = -0.06;
+        kappa(3, 2) = 0.06;
+
+        const Eigen::MatrixXd updated_root0 =
+            fep1_gradient_update(G_root0, kappa, F_I, F_A_root0, 1, 2, 1);
+        const Eigen::MatrixXd updated_root1 =
+            fep1_gradient_update(G_root1, kappa, F_I, F_A_root1, 1, 2, 1);
+
+        const Eigen::MatrixXd G_avg = 0.7 * G_root0 + 0.3 * G_root1;
+        const Eigen::MatrixXd F_A_avg = 0.7 * F_A_root0 + 0.3 * F_A_root1;
+        const Eigen::MatrixXd updated_avg =
+            fep1_gradient_update(G_avg, kappa, F_I, F_A_avg, 1, 2, 1);
+        const Eigen::MatrixXd updated_weighted = 0.7 * updated_root0 + 0.3 * updated_root1;
+
+        ok &= expect((updated_weighted - updated_avg).norm() < 1e-12,
+                     "root-resolved orbital-step reductions should stay linear after the per-root first-order gradient update");
+        ok &= expect((updated_avg - G_avg).norm() > 1e-8,
+                     "the synthetic orbital-step correction should actually change the gradient");
     }
 
     return ok ? 0 : 1;
