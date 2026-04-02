@@ -1,8 +1,13 @@
 #include "post_hf/casscf/response.h"
 
+#include "post_hf/casscf/ci.h"
+#include "post_hf/casscf/orbital.h"
 #include "post_hf/casscf/strings.h"
+#include "post_hf/integrals.h"
 
 #include <Eigen/QR>
+
+#include <algorithm>
 
 namespace
 {
@@ -39,6 +44,41 @@ namespace
         return {det | bit, (count_occupied_below(det, orb) % 2 == 0) ? 1.0 : -1.0, true};
     }
 
+    Eigen::VectorXd sigma_from_orbital_rotation(
+        const Eigen::MatrixXd &C_base,
+        const Eigen::MatrixXd &kappa,
+        double scale,
+        const Eigen::MatrixXd &overlap,
+        const Eigen::MatrixXd &H_core,
+        const std::vector<double> &eri,
+        const HartreeFock::Correlation::CASSCF::CIDeterminantSpace &space,
+        const std::vector<HartreeFock::Correlation::CASSCFInternal::CIString> &a_strs,
+        const std::vector<HartreeFock::Correlation::CASSCFInternal::CIString> &b_strs,
+        const Eigen::VectorXd &c0,
+        int nbasis,
+        int n_core,
+        int n_act)
+    {
+        const Eigen::MatrixXd C_rot =
+            HartreeFock::Correlation::CASSCF::apply_orbital_rotation(
+                C_base, scale * kappa, overlap);
+        const Eigen::MatrixXd F_I_mo =
+            HartreeFock::Correlation::CASSCF::build_inactive_fock_mo(
+                C_rot, H_core, eri, n_core, nbasis);
+        const Eigen::MatrixXd h_eff = F_I_mo.block(n_core, n_core, n_act, n_act);
+        const Eigen::MatrixXd C_act = C_rot.middleCols(n_core, n_act);
+        const std::vector<double> ga =
+            HartreeFock::Correlation::transform_eri_internal(eri, nbasis, C_act);
+
+        HartreeFock::Correlation::CASSCF::CIDeterminantSpace sigma_space = space;
+        sigma_space.dense_hamiltonian.reset();
+
+        Eigen::VectorXd sigma = Eigen::VectorXd::Zero(c0.size());
+        HartreeFock::Correlation::CASSCF::apply_ci_hamiltonian(
+            sigma_space, a_strs, b_strs, h_eff, ga, n_act, c0, sigma);
+        return sigma;
+    }
+
     Eigen::VectorXd response_residual(
         const HartreeFock::Correlation::CASSCF::CISigmaApplier &apply,
         const Eigen::VectorXd &c1,
@@ -69,6 +109,18 @@ namespace HartreeFock::Correlation::CASSCF
             return "diagonal-orbital-plus-CI-response approximation";
         case ResponseMode::CoupledSecondOrderTarget:
             return "coupled second-order target (not implemented)";
+        }
+        return "unknown";
+    }
+
+    const char *response_rhs_mode_name(ResponseRHSMode mode)
+    {
+        switch (mode)
+        {
+        case ResponseRHSMode::CommutatorOnlyApproximate:
+            return "commutator-only approximate RHS";
+        case ResponseRHSMode::ExactActiveSpaceOrbitalDerivative:
+            return "exact active-space orbital derivative RHS";
         }
         return "unknown";
     }
@@ -130,6 +182,49 @@ namespace HartreeFock::Correlation::CASSCF
         // between the current rotation and the effective Fock matrix.
         Eigen::MatrixXd comm = kappa * F_I_mo - F_I_mo * kappa;
         return comm.block(n_core, n_core, n_act, n_act);
+    }
+
+    Eigen::VectorXd build_ci_response_rhs(
+        ResponseRHSMode mode,
+        const Eigen::MatrixXd &kappa,
+        const Eigen::MatrixXd &F_I_mo,
+        const CIDeterminantSpace &space,
+        const std::vector<CIString> &a_strs,
+        const std::vector<CIString> &b_strs,
+        const Eigen::VectorXd &c0,
+        int n_core,
+        int n_act,
+        const ResponseRHSExactContext *exact_context)
+    {
+        if (c0.size() == 0 || space.dets.empty())
+            return Eigen::VectorXd::Zero(c0.size());
+
+        if (mode == ResponseRHSMode::CommutatorOnlyApproximate)
+        {
+            const Eigen::MatrixXd dh = delta_h_eff(kappa, F_I_mo, n_core, n_act);
+            return ci_sigma_1body(dh, c0, a_strs, b_strs, space.dets, n_act);
+        }
+
+        if (exact_context == nullptr ||
+            exact_context->C == nullptr ||
+            exact_context->overlap == nullptr ||
+            exact_context->H_core == nullptr ||
+            exact_context->eri == nullptr ||
+            exact_context->nbasis <= 0)
+            return Eigen::VectorXd::Zero(c0.size());
+
+        const double fd_step = std::max(1e-6, exact_context->fd_step);
+        const Eigen::VectorXd sigma_plus = sigma_from_orbital_rotation(
+            *exact_context->C, kappa, fd_step,
+            *exact_context->overlap, *exact_context->H_core, *exact_context->eri,
+            space, a_strs, b_strs, c0,
+            exact_context->nbasis, n_core, n_act);
+        const Eigen::VectorXd sigma_minus = sigma_from_orbital_rotation(
+            *exact_context->C, kappa, -fd_step,
+            *exact_context->overlap, *exact_context->H_core, *exact_context->eri,
+            space, a_strs, b_strs, c0,
+            exact_context->nbasis, n_core, n_act);
+        return (sigma_plus - sigma_minus) / (2.0 * fd_step);
     }
 
     CIResponseResult solve_ci_response_single_step(

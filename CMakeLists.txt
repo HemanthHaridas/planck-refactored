@@ -287,9 +287,13 @@ if(BUILD_TESTING)
     add_executable(planck-casscf-internal
         ${CMAKE_SOURCE_DIR}/tests/casscf_internal.cpp
         ${SRC_DIR}/post_hf/casscf/ci.cpp
+        ${SRC_DIR}/post_hf/casscf/orbital.cpp
         ${SRC_DIR}/post_hf/casscf/rdm.cpp
         ${SRC_DIR}/post_hf/casscf/response.cpp
         ${SRC_DIR}/post_hf/casscf/strings.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
         ${SYMM_SRC}
     )
 
