@@ -66,6 +66,16 @@ What has landed already:
   finite-difference active-space Hamiltonian rotation on a small reference
   problem, and that it differs from the commutator-only shortcut when the
   two-electron Hamiltonian responds.
+- `tests/casscf_internal.cpp` now also checks weighted per-root
+  pair-priority/probe-ranking inputs and weighted quadratic-model diagnostics
+  on small synthetic SA examples.
+- `tests/casscf_internal.cpp` also covers candidate-screen sign flips and
+  weighted pair-ranking edge cases where the state-averaged priority differs
+  from a single root's dominant direction.
+- The shared SA candidate screen now also keeps per-root AH-like and gradient
+  fallback proposals as explicit trial steps, so strong single-root directions
+  can still reach full reevaluation even when the immediate weighted proposal
+  damps them.
 - The `planck-casscf-internal` target now links the orbital/integral
   implementation it exercises, and the internal harness no longer crashes in
   the trailing root-reduction coverage block.
@@ -94,10 +104,12 @@ Today the driver keeps per-root CI/RDM/orbital-intermediate records and then
 rebuilds the current averaged `gamma`, `Gamma`, `F_A`, and `g_orb` from those
 records. The micro-iteration now also keeps the response-side RHS, `c1`,
 `Gamma1`, `Q1`, CI-driven orbital correction, and AH-like/fallback orbital
-step proposals root-resolved before reducing back to one weighted update. That
-is a meaningful improvement, but the overall SA optimizer path still collapses
-to one shared candidate screen and one diagonal-response scaffold too early for
-accurate state-averaged second-order theory.
+step proposals root-resolved before reducing back to one weighted update. The
+candidate screen now also keeps those per-root AH-like/fallback proposals as
+explicit reevaluation candidates instead of screening only the weighted step.
+That is a meaningful improvement, but the overall SA optimizer path still
+collapses to shared acceptance diagnostics and one diagonal-response scaffold
+too early for accurate state-averaged second-order theory.
 
 Needed work:
 
@@ -105,9 +117,9 @@ Needed work:
   remaining response/coupled-step intermediates that are still missing.
 - Move the remaining optimizer pieces to operate on root-resolved data first,
   then perform weighted reduction only where the theory actually permits it.
-- Remove the remaining places where the SA path still falls back to one shared
-  candidate screen or one diagonal preconditioner too early, especially around
-  coupled-step construction and acceptance diagnostics.
+- Remove the remaining places where the SA path still falls back to shared
+  acceptance diagnostics or one diagonal preconditioner too early, especially
+  around coupled-step construction and merit/acceptance logic.
 - Keep the current overlap-based root tracking, but make the later optimizer
   stages consume root-resolved quantities directly instead of only rebuilt
   averaged objects.
@@ -116,7 +128,7 @@ Acceptance target:
 
 - Single-state behavior stays numerically unchanged.
 - Multi-root runs no longer depend on early averaging anywhere in the orbital
-  update or response path.
+  update, first candidate-generation path, or response path.
 
 ### 2. Finish integrating the exact CI-response RHS cleanly through the remaining scaffold
 
@@ -278,8 +290,9 @@ Still needed:
 - response-solver restart and truncation cases at larger dimensions
 - checkpoint/restart consistency tests for stored CASSCF orbitals
 - broader root-resolved unit checks for weighted per-root orbital intermediates
-  (`F_A`, `Q`, `g_orb`) and quadratic-model score inputs beyond the current
-  small internal reduction identity coverage
+  (`F_A`, `Q`, `g_orb`) plus additional quadratic-model, probe-ranking, and
+  candidate-retention edge cases beyond the current small internal reduction
+  identity coverage
 
 ## Mandatory Change Gate
 
