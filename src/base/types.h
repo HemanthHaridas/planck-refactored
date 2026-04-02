@@ -153,11 +153,6 @@ namespace HartreeFock
 
     struct Molecule
     {
-        std::size_t natoms = 0;        // Number of atoms
-        unsigned int multiplicity = 1; // Spin multiplicity
-        unsigned int nelectrons = 0;   // Number of electrons
-        signed int charge = 0;         // Molecular charge
-
         Eigen::VectorXi atomic_numbers = {}; // Atomic numbers
         Eigen::VectorXd atomic_masses = {};  // Atomic masses
 
@@ -168,7 +163,13 @@ namespace HartreeFock
         Eigen::MatrixXd _standard; // reoriented coordinates in Bohr
 
         std::string _point_group = "C1"; // Point group symmetry
-        bool _symmetry = false;          // Symmetry flag
+
+        std::size_t natoms = 0;        // Number of atoms
+        unsigned int multiplicity = 1; // Spin multiplicity
+        unsigned int nelectrons = 0;   // Number of electrons
+        signed int charge = 0;         // Molecular charge
+
+        bool _symmetry = false; // Symmetry flag
         bool _is_bohr = false;
 
         void clear() noexcept
@@ -211,9 +212,9 @@ namespace HartreeFock
     struct ContractedView
     {
         const Shell *_shell = nullptr;
-        Eigen::Vector3i _cartesian = Eigen::Vector3i::Zero();
-        std::size_t _index = 0;       // position in Basis::_basis_functions
-        double _component_norm = 1.0; // 1/sqrt((2lx-1)!! (2ly-1)!! (2lz-1)!!)
+        std::size_t _index = 0;                               // position in Basis::_basis_functions
+        double _component_norm = 1.0;                         // 1/sqrt((2lx-1)!! (2ly-1)!! (2lz-1)!!)
+        Eigen::Vector3i _cartesian = Eigen::Vector3i::Zero(); // 4-byte tail padding follows
 
         std::span<const double> exponents() const noexcept
         {
@@ -267,22 +268,21 @@ namespace HartreeFock
 
     struct OptionsSCF
     {
+        double _tol_energy = 1E-10;        // Energy tolerance
+        double _tol_density = 1E-10;       // Density tolerance
+        double _level_shift = 0.0;         // Virtual orbital level shift in Hartree (0 = off)
+        double _diis_restart_factor = 2.0; // Restart DIIS when error grows by this factor (0 = off)
+
         SCFType _scf = SCFType::RHF;           // SCF Type (Default is RHF)
         SCFMode _mode = SCFMode::Conventional; // SCF Mode (Default is Conventional)
         SCFGuess _guess = SCFGuess::HCore;     // Initial guess
 
         unsigned int _max_cycles = 0;  // Maximum number of SCF Cycles
         unsigned int _threshold = 100; // Threshold before switching to Direct mode (Default is 100)
+        unsigned int _DIIS_dim = 8;    // Dimension of DIIS Error Vector (Default is 8)
 
-        double _tol_energy = 1E-10;  // Energy tolerance
-        double _tol_density = 1E-10; // Density tolerance
-
-        unsigned int _DIIS_dim = 8;   // Dimension of DIIS Error Vector (Default is 8)
         bool _use_DIIS = true;        // Use DIIS (Default is true)
         bool _save_checkpoint = true; // Save checkpoint after convergence
-
-        double _level_shift = 0.0;         // Virtual orbital level shift in Hartree (0 = off)
-        double _diis_restart_factor = 2.0; // Restart DIIS when error grows by this factor (0 = off)
 
         // Automatic setter based on system size
         void set_max_cycles_auto(std::size_t nbasis) noexcept
@@ -334,8 +334,8 @@ namespace HartreeFock
 
     struct OptionsIntegral
     {
+        double _tol_eri = 1E-10;                             // ERI tolerance for Shwartz screening
         IntegralMethod _engine = IntegralMethod::ObaraSaika; // Integral Engine
-        double _tol_eri = 1E-10;                             // ERI tolerance for Shwartz screening;
     };
 
     struct OptionsDFT
@@ -353,12 +353,21 @@ namespace HartreeFock
     // ── Active space specification (CASSCF / RASSCF) ─────────────────────────
     struct OptionsActiveSpace
     {
+        // SA weights and symmetry filtering (24-byte heap types first)
+        std::vector<double> weights; // SA weights (length nroots); empty → equal weights
+
+        // Symmetry filtering: target CI state irrep (e.g. "A1", "B1g").
+        // Empty string → use the totally-symmetric irrep of the detected point group.
+        std::string target_irrep = "";
+
+        // MCSCF convergence tolerances
+        double tol_mcscf_energy = 1e-8;
+        double tol_mcscf_grad = 1e-5;
+
         // CASSCF / SA-CASSCF
-        int nactele = 0;                         // number of active electrons
-        int nactorb = 0;                         // number of active orbitals
-        int nroots = 1;                          // number of CI roots for state averaging (1 = single-state)
-        std::vector<double> weights;             // SA weights (length nroots); empty → equal weights
-        bool mcscf_debug_numeric_newton = false; // debug-only numeric Newton fallback
+        int nactele = 0; // number of active electrons
+        int nactorb = 0; // number of active orbitals
+        int nroots = 1;  // number of CI roots for state averaging (1 = single-state)
 
         // RASSCF extensions (ignored for plain CASSCF)
         int nras1 = 0;     // RAS1 orbital count (high-occ. restricted space)
@@ -367,16 +376,12 @@ namespace HartreeFock
         int max_holes = 2; // max electrons removed from RAS1
         int max_elec = 2;  // max electrons added to RAS3
 
-        // MCSCF convergence
+        // MCSCF iteration limits
         unsigned int mcscf_max_iter = 100;
         unsigned int mcscf_micro_per_macro = 4;
-        double tol_mcscf_energy = 1e-8;
-        double tol_mcscf_grad = 1e-5;
         unsigned int ci_max_dim = 10000; // abort if CI space exceeds this
 
-        // Symmetry filtering: target CI state irrep (e.g. "A1", "B1g").
-        // Empty string → use the totally-symmetric irrep of the detected point group.
-        std::string target_irrep = "";
+        bool mcscf_debug_numeric_newton = false; // debug-only numeric Newton fallback
     };
 
     struct OptionsOutput
