@@ -26,6 +26,8 @@ namespace
     using HartreeFock::Correlation::CASSCF::ResponseMode;
     using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
     using HartreeFock::Correlation::CASSCF::RotPair;
+    using HartreeFock::Correlation::CASSCF::hess_diag;
+    using HartreeFock::Correlation::CASSCF::quadratic_model_delta;
     using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     using HartreeFock::Correlation::CASSCFInternal::CIResponseResult;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
@@ -102,8 +104,15 @@ namespace
         bool step_accepted = false;
         double accepted_step_norm = 0.0;
         double predicted_delta = 0.0;
+        double max_root_predicted_delta_deviation = 0.0;
         double actual_delta = 0.0;
         double max_root_delta = 0.0;
+    };
+
+    struct WeightedQuadraticModelPrediction
+    {
+        double weighted_delta = 0.0;
+        double max_root_deviation = 0.0;
     };
 
     // Reorder the newly solved CI roots to best match the previous macroiteration.
@@ -254,14 +263,54 @@ namespace
         return gradient;
     }
 
-    Eigen::MatrixXd build_weighted_root_fock(
+    WeightedQuadraticModelPrediction build_weighted_root_quadratic_model_prediction(
         const std::vector<StateSpecificData> &roots,
-        int nbasis)
+        const Eigen::MatrixXd &F_I_mo,
+        const std::vector<RotPair> &pairs,
+        const Eigen::MatrixXd &step)
     {
-        Eigen::MatrixXd fock = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        WeightedQuadraticModelPrediction prediction;
+        if (roots.empty() || pairs.empty())
+            return prediction;
+
+        Eigen::VectorXd x(static_cast<int>(pairs.size()));
+        for (int k = 0; k < static_cast<int>(pairs.size()); ++k)
+            x(k) = step(pairs[static_cast<std::size_t>(k)].p, pairs[static_cast<std::size_t>(k)].q);
+
+        std::vector<double> per_root_delta;
+        per_root_delta.reserve(roots.size());
+
+        // Keep the quadratic-model diagnostic root-resolved until the final
+        // reduction so the log can report whether the current SA candidate is
+        // uniformly favorable or is hiding strong per-root disagreement.
         for (const auto &root : roots)
-            fock.noalias() += root.weight * root.F_A_mo;
-        return fock;
+        {
+            if (root.weight == 0.0)
+            {
+                per_root_delta.push_back(0.0);
+                continue;
+            }
+
+            const Eigen::MatrixXd F_sum = F_I_mo + root.F_A_mo;
+            Eigen::VectorXd g_flat(static_cast<int>(pairs.size()));
+            Eigen::VectorXd h_flat(static_cast<int>(pairs.size()));
+            for (int k = 0; k < static_cast<int>(pairs.size()); ++k)
+            {
+                const auto &pair = pairs[static_cast<std::size_t>(k)];
+                g_flat(k) = root.g_orb(pair.p, pair.q);
+                h_flat(k) = hess_diag(F_sum, pair.p, pair.q);
+            }
+
+            const double delta = quadratic_model_delta(g_flat, h_flat, x);
+            per_root_delta.push_back(delta);
+            prediction.weighted_delta += root.weight * delta;
+        }
+
+        for (const double delta : per_root_delta)
+            prediction.max_root_deviation =
+                std::max(prediction.max_root_deviation, std::abs(delta - prediction.weighted_delta));
+
+        return prediction;
     }
 
     Eigen::MatrixXd build_weighted_root_orbital_step(
@@ -599,15 +648,6 @@ namespace HartreeFock::Correlation::CASSCF
             return M;
         };
 
-        auto pack_hessian_diagonal = [&](const McscfState &st)
-        {
-            const Eigen::MatrixXd F_sum = st.F_I_mo + build_weighted_root_fock(st.roots, nbasis);
-            Eigen::VectorXd diag = Eigen::VectorXd::Zero(static_cast<int>(opt_pairs.size()));
-            for (int k = 0; k < static_cast<int>(opt_pairs.size()); ++k)
-                diag(k) = hess_diag(F_sum, opt_pairs[k].p, opt_pairs[k].q);
-            return diag;
-        };
-
         auto build_numeric_newton_step =
             [&](const McscfState &st_cur,
                 const Eigen::MatrixXd &C_cur,
@@ -863,7 +903,6 @@ namespace HartreeFock::Correlation::CASSCF
             const Eigen::MatrixXd kappa_grad = build_weighted_root_gradient_fallback_step(st_current.roots);
 
             const Eigen::VectorXd g_flat = pack_pairs(G_model);
-            const Eigen::VectorXd h_flat = pack_hessian_diagonal(st_current);
 
             bool accepted = false;
             McscfState accepted_state = st_current;
@@ -981,7 +1020,11 @@ namespace HartreeFock::Correlation::CASSCF
                     accepted_state = trial;
                     C_best = apply_orbital_rotation(C, kappa_try, calc._overlap);
                     best_step = kappa_try;
-                    diag.predicted_delta = quadratic_model_delta(g_flat, h_flat, pack_pairs(best_step));
+                    const WeightedQuadraticModelPrediction prediction =
+                        build_weighted_root_quadratic_model_prediction(
+                            st_current.roots, st_current.F_I_mo, opt_pairs, best_step);
+                    diag.predicted_delta = prediction.weighted_delta;
+                    diag.max_root_predicted_delta_deviation = prediction.max_root_deviation;
                 }
             }
 
@@ -1040,7 +1083,7 @@ namespace HartreeFock::Correlation::CASSCF
                     std::format(
                         "Macro {:3d}  mode={:<12}  ci_solver={}\n"
                         "             accepted={:<3}  max_root_dE={:.2e}  step_norm={:.2e}\n"
-                        "             predicted_dE={:.2e}  actual_dE={:.2e}  response_resid={:.2e}\n"
+                        "             predicted_dE={:.2e}  root_model_spread={:.2e}  actual_dE={:.2e}  response_resid={:.2e}\n"
                         "             response_iter={:3d}  level_shift={:.2e}",
                         macro,
                         response_mode_name(configured_response_mode),
@@ -1049,6 +1092,7 @@ namespace HartreeFock::Correlation::CASSCF
                         diag.max_root_delta,
                         diag.accepted_step_norm,
                         diag.predicted_delta,
+                        diag.max_root_predicted_delta_deviation,
                         diag.actual_delta,
                         diag.max_response_residual,
                         diag.max_response_iterations,

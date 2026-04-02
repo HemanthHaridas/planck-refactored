@@ -278,8 +278,8 @@ Still needed:
 - response-solver restart and truncation cases at larger dimensions
 - checkpoint/restart consistency tests for stored CASSCF orbitals
 - broader root-resolved unit checks for weighted per-root orbital intermediates
-  (`F_A`, `Q`, `g_orb`) beyond the current small internal reduction identity
-  coverage
+  (`F_A`, `Q`, `g_orb`) and quadratic-model score inputs beyond the current
+  small internal reduction identity coverage
 
 ## Mandatory Change Gate
 

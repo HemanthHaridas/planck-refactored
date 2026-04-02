@@ -960,6 +960,37 @@ int main()
         const Eigen::MatrixXd G_root1 =
             compute_orbital_gradient(F_I, F_A_root1, Q_root1, gamma_root1, 1, 2, 1, {}, false);
 
+        const auto pairs = non_redundant_pairs(1, 2, 1);
+        auto pack_pairs = [&pairs](const Eigen::MatrixXd &M)
+        {
+            Eigen::VectorXd flat(static_cast<int>(pairs.size()));
+            for (int k = 0; k < static_cast<int>(pairs.size()); ++k)
+                flat(k) = M(pairs[static_cast<std::size_t>(k)].p, pairs[static_cast<std::size_t>(k)].q);
+            return flat;
+        };
+        auto pack_hessian = [&pairs](const Eigen::MatrixXd &F_sum)
+        {
+            Eigen::VectorXd flat(static_cast<int>(pairs.size()));
+            for (int k = 0; k < static_cast<int>(pairs.size()); ++k)
+                flat(k) = hess_diag(F_sum, pairs[static_cast<std::size_t>(k)].p, pairs[static_cast<std::size_t>(k)].q);
+            return flat;
+        };
+
+        const Eigen::VectorXd x = (Eigen::VectorXd(5) << 0.08, -0.04, 0.03, -0.05, 0.02).finished();
+        const Eigen::VectorXd g_root0 = pack_pairs(G_root0);
+        const Eigen::VectorXd g_root1 = pack_pairs(G_root1);
+        const Eigen::VectorXd h_root0 = pack_hessian(F_I + F_A_root0);
+        const Eigen::VectorXd h_root1 = pack_hessian(F_I + F_A_root1);
+        const double delta_weighted =
+            0.7 * quadratic_model_delta(g_root0, h_root0, x) +
+            0.3 * quadratic_model_delta(g_root1, h_root1, x);
+        const double delta_from_avg = quadratic_model_delta(
+            0.7 * g_root0 + 0.3 * g_root1,
+            0.7 * h_root0 + 0.3 * h_root1,
+            x);
+        ok &= expect(std::abs(delta_weighted - delta_from_avg) < 1e-12,
+                     "weighted per-root quadratic-model scores should reduce exactly to the weighted model inputs");
+
         Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(4, 4);
         kappa(0, 1) = 0.10;
         kappa(1, 0) = -0.10;
