@@ -3,9 +3,8 @@
 ## Purpose
 
 This note is the current handoff for the next CASSCF implementation pass. It
-reflects the repository state after commit `09e0be0`
-(`Advance CASSCF SA candidate screening`) and supersedes the older patch-plan
-notes.
+reflects the repository state on 2026-04-02 after the latest root-resolved
+state-averaged optimizer updates and supersedes the older patch-plan notes.
 
 ## Current Status
 
@@ -63,6 +62,14 @@ What has landed already:
 - Macro diagnostics now report both `root_model_spread` and the winning
   `candidate=...` label for the accepted orbital proposal, along with the SA,
   weighted-root-screen, and max-root gradient diagnostics.
+- The late macro-loop plateau and convergence gates now also follow the
+  weighted and max-root orbital-gradient screens instead of collapsing back to
+  the averaged SA gradient when deciding whether a multistate run is truly
+  stationary.
+- The root-resolved SA optimizer path is now complete for the current
+  scaffold: orbital update, candidate generation, response, acceptance, and
+  late plateau/convergence logic all keep the multiroot state-specific data
+  alive instead of dropping back to early averaging.
 - Numeric Newton is no longer part of the normal production path; it is behind
   `mcscf_debug_numeric_newton`.
 - `calc._cas_mo_coefficients` now stays in the converged optimization basis,
@@ -91,8 +98,9 @@ What has landed already:
 What is still true:
 
 - The default optimizer is still an approximate macro/micro scaffold.
-- State-averaged runs now stay root-resolved much later in the loop, but the
-  overall optimizer is still not a true coupled SA second-order method.
+- The state-averaged optimizer is now root-resolved through the full current
+  scaffold, but the overall optimizer is still not a true coupled SA
+  second-order method.
 - The exact RHS is now the default theory path, but it is still used inside the
   current diagonal-response scaffold rather than a genuine coupled orbital/CI
   step.
@@ -102,37 +110,7 @@ What is still true:
 
 ## Remaining Work
 
-### 1. Finish the root-resolved SA optimizer path
-
-The root-resolved scaffolding is now substantially deeper than it was in the
-original handoff, but it is still not complete.
-
-Today the driver keeps per-root CI/RDM/orbital-intermediate records, per-root
-response data, per-root AH/fallback step proposals, per-root trial candidates,
-and a root-resolved acceptance screen alive much later in the macro loop. That
-is a meaningful improvement. The remaining gap is that the solver still stops
-short of a genuinely coupled root-resolved second-order step and still relies
-on the diagonal-response scaffold underneath those improved screens.
-
-Needed work:
-
-- Keep `StateSpecificData` as the source of truth and extend it with any
-  remaining coupled-step intermediates that are still missing.
-- Continue pushing the acceptance/merit logic toward root-resolved quantities
-  wherever the theory permits, instead of re-collapsing to shared diagonal
-  scaffolding once the candidate is chosen.
-- Keep overlap-based root tracking, but make the later optimizer stages consume
-  root-resolved quantities directly wherever the theory permits it.
-- Remove the remaining places where the SA path still falls back to one shared
-  diagonal preconditioner or one shared acceptance diagnostic too early.
-
-Acceptance target:
-
-- Single-state behavior stays numerically unchanged.
-- Multi-root runs no longer depend on early averaging anywhere in the orbital
-  update, candidate-generation path, response path, or acceptance screen.
-
-### 2. Keep the exact CI-response RHS as the real theory path through the remaining scaffold
+### 1. Keep the exact CI-response RHS as the real theory path through the remaining scaffold
 
 The response layer no longer has only the commutator shortcut: it now exposes
 both an explicit approximate mode and an explicit exact orbital-derivative RHS
@@ -162,7 +140,7 @@ Acceptance target:
 - The exact path is the default theory path wherever the current scaffold is
   meant to approximate second-order behavior.
 
-### 3. Build a true coupled orbital/CI step and demote the diagonal Hessian to a preconditioner
+### 2. Build a true coupled orbital/CI step and demote the diagonal Hessian to a preconditioner
 
 This is still the core missing algorithmic step.
 
@@ -189,7 +167,7 @@ Acceptance target:
   - true coupled second-order mode
 - Convergence behavior becomes easier to reason about after small code changes.
 
-### 4. Simplify the default optimizer once the coupled step exists
+### 3. Simplify the default optimizer once the coupled step exists
 
 The current loop still mixes:
 
@@ -214,7 +192,7 @@ Acceptance target:
 
 ## Important Secondary Work
 
-### 5. Add a small trusted external reference suite
+### 4. Add a small trusted external reference suite
 
 This is still one of the most important missing safety nets.
 
@@ -236,7 +214,7 @@ Priority systems:
 - twisted ethylene
 - one near-crossing SA example
 
-### 6. Expand internal invariance and robustness coverage
+### 5. Expand internal invariance and robustness coverage
 
 Still needed:
 
@@ -245,12 +223,14 @@ Still needed:
 - stress cases for root tracking near crossings
 - response-solver restart and truncation cases at larger dimensions
 - checkpoint/restart consistency tests for stored CASSCF orbitals
+- at least one checked-in multiroot end-to-end fixture; the current manual
+  `tests/inputs/casscf_tests` folder is still entirely `nroots 1`
 - broader root-resolved unit checks for weighted per-root orbital intermediates
   (`F_A`, `Q`, `g_orb`) plus additional quadratic-model, probe-ranking,
   candidate-retention, and acceptance-screen edge cases beyond the current
   small synthetic coverage
 
-### 7. Decide whether to export active-space natural orbitals explicitly
+### 6. Decide whether to export active-space natural orbitals explicitly
 
 The dangerous old behavior is fixed: `_cas_mo_coefficients` now stores the
 optimized orbital basis, not a silently rotated natural-orbital basis.
@@ -268,7 +248,7 @@ Recommended shape:
 - Add a separate result field for natural-orbital coefficients only if there is
   a concrete consumer for them.
 
-### 8. Revisit RDM performance only after the theory path is stable
+### 7. Revisit RDM performance only after the theory path is stable
 
 The large CI refactor items from the older plans are mostly done, so the main
 remaining performance hotspot is the exported RDM work.
@@ -283,7 +263,7 @@ Still useful later:
 This is lower priority than the per-root, exact-response, and coupled-step
 work above.
 
-### 9. Profile the direct CI sigma path before doing more CI restructuring
+### 8. Profile the direct CI sigma path before doing more CI restructuring
 
 The direct sigma-vector Davidson path is already in the tree and covered by
 agreement tests. Do not reopen major CI-driver refactors until profiling shows
@@ -297,7 +277,7 @@ If follow-up work is needed, focus on:
 
 ## Mandatory Change Gate
 
-### 10. Treat `tests/inputs/casscf_tests` as a required solver gate
+### 9. Treat `tests/inputs/casscf_tests` as a required solver gate
 
 Every meaningful CASSCF code change should still be validated against the full
 manual fixture folder:

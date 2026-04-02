@@ -301,6 +301,31 @@ namespace
         return screen;
     }
 
+    bool root_resolved_gradient_converged(
+        double weighted_root_gnorm,
+        double max_root_gnorm,
+        double tol)
+    {
+        return weighted_root_gnorm < tol && max_root_gnorm < tol;
+    }
+
+    bool root_resolved_gradient_progress_flat(
+        double weighted_root_gnorm,
+        double prev_weighted_root_gnorm,
+        double max_root_gnorm,
+        double prev_max_root_gnorm)
+    {
+        if (!std::isfinite(prev_weighted_root_gnorm) || !std::isfinite(prev_max_root_gnorm))
+            return false;
+
+        const double weighted_window =
+            std::max(0.05 * std::max(prev_weighted_root_gnorm, 1e-8), 1e-8);
+        const double max_root_window =
+            std::max(0.05 * std::max(prev_max_root_gnorm, 1e-8), 1e-8);
+        return std::abs(weighted_root_gnorm - prev_weighted_root_gnorm) < weighted_window &&
+               std::abs(max_root_gnorm - prev_max_root_gnorm) < max_root_window;
+    }
+
     WeightedQuadraticModelPrediction build_weighted_root_quadratic_model_prediction(
         const std::vector<StateSpecificData> &roots,
         const Eigen::MatrixXd &F_I_mo,
@@ -864,6 +889,7 @@ namespace HartreeFock::Correlation::CASSCF
 
         double E_prev = 0.0;
         double prev_screen_gnorm = std::numeric_limits<double>::infinity();
+        double prev_max_root_gnorm = std::numeric_limits<double>::infinity();
         bool converged = false;
         double level_shift = 0.2;
         int rejected_streak = 0;
@@ -887,16 +913,18 @@ namespace HartreeFock::Correlation::CASSCF
                 true};
 
             const bool e_conv = macro > 1 && std::abs(st_current.E_cas - E_prev) < as.tol_mcscf_energy;
-            const bool g_conv = st_current.gnorm < as.tol_mcscf_grad;
-            const bool no_orb_rot = (st_current.gnorm == 0.0);
+            const bool g_conv =
+                root_resolved_gradient_converged(
+                    st_current.weighted_root_gnorm,
+                    st_current.max_root_gnorm,
+                    as.tol_mcscf_grad);
+            const bool no_orb_rot = (st_current.max_root_gnorm == 0.0);
             if ((e_conv && g_conv) || (g_conv && no_orb_rot))
             {
                 converged = true;
                 break;
             }
 
-            Eigen::MatrixXd kappa_total = Eigen::MatrixXd::Zero(nbasis, nbasis);
-            Eigen::MatrixXd kappa_first = Eigen::MatrixXd::Zero(nbasis, nbasis);
             std::vector<Eigen::MatrixXd> kappa_total_roots(
                 st_current.roots.size(), Eigen::MatrixXd::Zero(nbasis, nbasis));
             std::vector<Eigen::MatrixXd> kappa_first_roots;
@@ -919,10 +947,7 @@ namespace HartreeFock::Correlation::CASSCF
                     level_shift, 0.20, all_mo_irr, use_sym);
                 const Eigen::MatrixXd &kappa = kappa_step_set.weighted;
                 if (micro == 0)
-                {
-                    kappa_first = kappa;
                     kappa_first_roots = kappa_step_set.per_root;
-                }
                 for (int r = 0; r < static_cast<int>(kappa_total_roots.size()); ++r)
                     kappa_total_roots[static_cast<std::size_t>(r)] +=
                         kappa_step_set.per_root[static_cast<std::size_t>(r)];
@@ -995,15 +1020,9 @@ namespace HartreeFock::Correlation::CASSCF
                     diag.max_response_regularization =
                         std::max(diag.max_response_regularization, response.max_denominator_regularization);
                 }
-                kappa_total += kappa;
             }
-
-            const double max_k = kappa_total.cwiseAbs().maxCoeff();
-            if (max_k > 0.20)
-                kappa_total *= 0.20 / max_k;
             const RootResolvedOrbitalStepSet kappa_grad_step_set =
                 build_root_resolved_gradient_fallback_step_set(st_current.roots);
-            const Eigen::MatrixXd &kappa_grad = kappa_grad_step_set.weighted;
 
             const WeightedRootProbeSignal probe_signal =
                 build_weighted_root_probe_signal(st_current.roots, opt_pairs);
@@ -1013,8 +1032,6 @@ namespace HartreeFock::Correlation::CASSCF
             double best_E = st_current.E_cas;
             double best_screen_g = st_current.weighted_root_gnorm;
             double best_max_root_g = st_current.max_root_gnorm;
-            const double merit_weight = 0.10;
-            double best_merit = best_E + merit_weight * best_screen_g * best_screen_g;
             Eigen::MatrixXd C_best = C;
             Eigen::MatrixXd best_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
             struct CandidateStep
@@ -1041,29 +1058,11 @@ namespace HartreeFock::Correlation::CASSCF
                 }
             };
             append_candidate(kappa_newton, "numeric-newton");
-            const bool use_gradient_stagnation_fallback = stagnation_streak >= 2;
-            if (use_gradient_stagnation_fallback)
+            if (stagnation_streak >= 2)
             {
                 append_root_candidates(kappa_first_roots, "ah-first", false);
                 append_root_candidates(kappa_total_roots, "ah-total", true);
                 append_root_candidates(kappa_grad_step_set.per_root, "grad", false);
-
-                // When the approximate AH/response model keeps accepting vanishingly
-                // small steps without reducing the true orbital gradient, fall back
-                // to direct orbital-gradient probes and let the fully reevaluated
-                // CASSCF energy decide which sign is actually productive.
-                if (kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
-                {
-                    append_candidate(cap_orbital_step(4.0 * kappa_grad), "sa-grad-x4");
-                    append_candidate(cap_orbital_step(2.0 * kappa_grad), "sa-grad-x2");
-                    append_candidate(kappa_grad, "sa-grad");
-                    append_candidate(cap_orbital_step(0.5 * kappa_grad), "sa-grad-x0.5");
-                    append_candidate(cap_orbital_step(-4.0 * kappa_grad), "sa-grad-neg-x4");
-                    append_candidate(cap_orbital_step(-2.0 * kappa_grad), "sa-grad-neg-x2");
-                    append_candidate(-kappa_grad, "sa-grad-neg");
-                    append_candidate(cap_orbital_step(-0.5 * kappa_grad), "sa-grad-neg-x0.5");
-                }
-
                 // Large virtual spaces can make the full preconditioned gradient
                 // step too entangled: a few productive rotations get mixed with many
                 // weak directions and the energy screen rejects the whole update.
@@ -1099,20 +1098,9 @@ namespace HartreeFock::Correlation::CASSCF
             }
             else
             {
-                append_candidate(kappa_first, "sa-ah-first");
-                append_candidate(kappa_total, "sa-ah-total");
-                append_candidate(kappa_grad, "sa-grad");
                 append_root_candidates(kappa_first_roots, "ah-first", false);
                 append_root_candidates(kappa_total_roots, "ah-total", true);
                 append_root_candidates(kappa_grad_step_set.per_root, "grad", false);
-                if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12 && kappa_total.cwiseAbs().maxCoeff() > 1e-12)
-                    append_candidate(0.5 * (kappa_newton + kappa_total), "mix-newton-total");
-                if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 && kappa_total.cwiseAbs().maxCoeff() > 1e-12)
-                    append_candidate(0.5 * (kappa_first + kappa_total), "mix-first-total");
-                if (kappa_total.cwiseAbs().maxCoeff() > 1e-12 && kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
-                    append_candidate(0.5 * (kappa_total + kappa_grad), "mix-total-grad");
-                if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 && kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
-                    append_candidate(0.5 * (kappa_first + kappa_grad), "mix-first-grad");
             }
 
             for (const auto &candidate : step_candidates)
@@ -1130,10 +1118,6 @@ namespace HartreeFock::Correlation::CASSCF
                         continue;
 
                     const auto &trial = *trial_res;
-                    const double trial_merit =
-                        trial.E_cas + merit_weight * trial.weighted_root_gnorm * trial.weighted_root_gnorm;
-                    const bool merit_improved = trial_merit < best_merit - 1e-10;
-                    const double flat_energy_window = std::max(1000.0 * as.tol_mcscf_energy, 1e-6);
                     const bool weighted_root_gradient_reduced =
                         trial.weighted_root_gnorm < best_screen_g - 1e-12;
                     const bool max_root_gradient_reduced =
@@ -1147,11 +1131,11 @@ namespace HartreeFock::Correlation::CASSCF
                         energy_improved &&
                         trial.weighted_root_gnorm <= best_screen_g + weighted_root_worsen_window &&
                         trial.max_root_gnorm <= best_max_root_g + max_root_worsen_window;
+                    const double flat_energy_window = std::max(1000.0 * as.tol_mcscf_energy, 1e-6);
                     const bool stationary_but_better_grad =
                         std::abs(trial.E_cas - best_E) <= flat_energy_window &&
                         (weighted_root_gradient_reduced || max_root_gradient_reduced);
                     if (!energy_improved_without_hurting_gradient &&
-                        !merit_improved &&
                         !stationary_but_better_grad)
                         continue;
 
@@ -1159,7 +1143,6 @@ namespace HartreeFock::Correlation::CASSCF
                     best_E = trial.E_cas;
                     best_screen_g = trial.weighted_root_gnorm;
                     best_max_root_g = trial.max_root_gnorm;
-                    best_merit = trial_merit;
                     accepted_state = trial;
                     C_best = apply_orbital_rotation(C, kappa_try, calc._overlap);
                     best_step = kappa_try;
@@ -1208,9 +1191,11 @@ namespace HartreeFock::Correlation::CASSCF
 
             const bool small_energy_change = macro > 1 && std::abs(dE) < std::max(10.0 * as.tol_mcscf_energy, 1e-8);
             const bool little_gradient_progress =
-                std::isfinite(prev_screen_gnorm) &&
-                std::abs(reported_screen_gnorm - prev_screen_gnorm) <
-                    std::max(0.05 * std::max(prev_screen_gnorm, 1e-8), 1e-8);
+                root_resolved_gradient_progress_flat(
+                    reported_screen_gnorm,
+                    prev_screen_gnorm,
+                    reported_max_root_gnorm,
+                    prev_max_root_gnorm);
             const bool accepted_micro_step_plateau =
                 diag.step_accepted && diag.accepted_step_norm < 5e-5;
             // Track repeated "flat" iterations separately from hard rejections so
@@ -1220,6 +1205,7 @@ namespace HartreeFock::Correlation::CASSCF
             else
                 stagnation_streak = 0;
             prev_screen_gnorm = reported_screen_gnorm;
+            prev_max_root_gnorm = reported_max_root_gnorm;
 
             if (stagnation_streak >= 2)
             {
@@ -1230,7 +1216,7 @@ namespace HartreeFock::Correlation::CASSCF
             }
 
             HartreeFock::Logger::casscf_iteration(
-                macro, st_current.E_cas, dE, reported_gnorm, reported_gnorm, diag.accepted_step_norm,
+                macro, st_current.E_cas, dE, reported_screen_gnorm, reported_max_root_gnorm, diag.accepted_step_norm,
                 level_shift, 0.0);
 
             logging(LogLevel::Info, tag + " :",
@@ -1263,14 +1249,18 @@ namespace HartreeFock::Correlation::CASSCF
             if (stagnation_streak >= 2 && small_energy_change && accepted_micro_step_plateau)
             {
                 logging(LogLevel::Warning, tag + " :",
-                        "Treating the stationary orbital plateau as converged: the CASSCF energy and accepted orbital step are flat, while the approximate orbital gradient is no longer improving.");
+                        "Treating the stationary orbital plateau as converged: the CASSCF energy and accepted orbital step are flat, while the weighted and max-root orbital-gradient screens are no longer improving.");
                 converged = true;
                 break;
             }
 
             const bool e_conv_post = macro > 1 && std::abs(dE) < as.tol_mcscf_energy;
-            const bool g_conv_post = reported_gnorm < as.tol_mcscf_grad;
-            const bool no_orb_rot_post = (reported_gnorm == 0.0);
+            const bool g_conv_post =
+                root_resolved_gradient_converged(
+                    reported_screen_gnorm,
+                    reported_max_root_gnorm,
+                    as.tol_mcscf_grad);
+            const bool no_orb_rot_post = (reported_max_root_gnorm == 0.0);
             if ((e_conv_post && g_conv_post) || (g_conv_post && no_orb_rot_post))
             {
                 converged = true;
