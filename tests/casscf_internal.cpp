@@ -451,6 +451,20 @@ int main()
     }
 
     {
+        auto default_rhs_mode = [](bool debug_commutator_rhs)
+        {
+            return debug_commutator_rhs
+                ? ResponseRHSMode::CommutatorOnlyApproximate
+                : ResponseRHSMode::ExactActiveSpaceOrbitalDerivative;
+        };
+
+        ok &= expect(default_rhs_mode(false) == ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+                     "CASSCF should default to the exact orbital-derivative response RHS");
+        ok &= expect(default_rhs_mode(true) == ResponseRHSMode::CommutatorOnlyApproximate,
+                     "the commutator-only response RHS should remain available only through the explicit debug switch");
+    }
+
+    {
         constexpr int nbasis = 3;
         constexpr int n_core = 1;
         constexpr int n_act = 2;

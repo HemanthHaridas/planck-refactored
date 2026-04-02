@@ -409,9 +409,9 @@ namespace HartreeFock::Correlation::CASSCF
         const unsigned int nmicro = std::max(1u, as.mcscf_micro_per_macro);
         const ResponseMode configured_response_mode = ResponseMode::DiagonalResponse;
         const ResponseRHSMode configured_rhs_mode =
-            (nroots > 1)
-                ? ResponseRHSMode::ExactActiveSpaceOrbitalDerivative
-                : ResponseRHSMode::CommutatorOnlyApproximate;
+            as.mcscf_debug_commutator_rhs
+                ? ResponseRHSMode::CommutatorOnlyApproximate
+                : ResponseRHSMode::ExactActiveSpaceOrbitalDerivative;
         const bool use_numeric_newton_debug = as.mcscf_debug_numeric_newton;
         const int numeric_newton_pair_limit = 64;
         const int ci_dense_threshold = 500;
@@ -425,6 +425,9 @@ namespace HartreeFock::Correlation::CASSCF
         logging(LogLevel::Info, tag + " :",
                 std::format("CI response RHS: {}",
                             response_rhs_mode_name(configured_rhs_mode)));
+        if (configured_rhs_mode == ResponseRHSMode::CommutatorOnlyApproximate)
+            logging(LogLevel::Warning, tag + " :",
+                    "Using debug-only approximate commutator RHS instead of the default exact orbital-derivative response.");
         if (have_sym && !point_group_is_abelian_for_labels)
             logging(LogLevel::Warning, tag + " :",
                     std::format("Disabling CI symmetry screening for {} because MO labels come from an Abelian subgroup.",
