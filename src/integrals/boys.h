@@ -16,7 +16,7 @@ namespace HartreeFock
         {
             return HartreeFock::Lookup::boys(n, x);
         }
-    }
-}
+    } // namespace ObaraSaika
+} // namespace HartreeFock
 
 #endif // HF_BOYS_H

@@ -46,56 +46,56 @@ namespace HartreeFock
         // Build the symmetric orthogonalization matrix X = S^{-1/2}.
         // Returns an error string if S is singular (smallest eigenvalue < threshold).
         std::expected<Eigen::MatrixXd, std::string>
-        build_orthogonalizer(const Eigen::MatrixXd& S, double threshold = 1e-8);
+        build_orthogonalizer(const Eigen::MatrixXd &S, double threshold = 1e-8);
 
         // Form the initial density matrix from the core Hamiltonian:
         //   diagonalize X^T * H * X, occupy the lowest n_occ orbitals.
-        Eigen::MatrixXd initial_density(const Eigen::MatrixXd& H,
-                                        const Eigen::MatrixXd& X,
+        Eigen::MatrixXd initial_density(const Eigen::MatrixXd &H,
+                                        const Eigen::MatrixXd &X,
                                         std::size_t n_occ);
 
         IterationMetrics restricted_iteration_metrics(
-            const Eigen::MatrixXd& previous_density,
-            const Eigen::MatrixXd& next_density,
+            const Eigen::MatrixXd &previous_density,
+            const Eigen::MatrixXd &next_density,
             double previous_total_energy,
             double total_energy);
 
         IterationMetrics unrestricted_iteration_metrics(
-            const Eigen::MatrixXd& previous_alpha_density,
-            const Eigen::MatrixXd& previous_beta_density,
-            const Eigen::MatrixXd& next_alpha_density,
-            const Eigen::MatrixXd& next_beta_density,
+            const Eigen::MatrixXd &previous_alpha_density,
+            const Eigen::MatrixXd &previous_beta_density,
+            const Eigen::MatrixXd &next_alpha_density,
+            const Eigen::MatrixXd &next_beta_density,
             double previous_total_energy,
             double total_energy);
 
         bool is_converged(
-            const HartreeFock::OptionsSCF& scf_options,
-            const IterationMetrics& metrics,
+            const HartreeFock::OptionsSCF &scf_options,
+            const IterationMetrics &metrics,
             unsigned int iteration) noexcept;
 
         void store_restricted_iteration(
-            HartreeFock::Calculator& calculator,
-            const RestrictedIterationData& iteration,
-            const IterationMetrics& metrics);
+            HartreeFock::Calculator &calculator,
+            const RestrictedIterationData &iteration,
+            const IterationMetrics &metrics);
 
         void store_unrestricted_iteration(
-            HartreeFock::Calculator& calculator,
-            const UnrestrictedIterationData& iteration,
-            const IterationMetrics& metrics);
+            HartreeFock::Calculator &calculator,
+            const UnrestrictedIterationData &iteration,
+            const IterationMetrics &metrics);
 
         // Run the RHF SCF procedure.
         // Stores converged density, Fock, MO energies/coefficients in calculator._info._scf.
         // Returns an error string if convergence is not achieved.
-        std::expected<void, std::string> run_rhf(HartreeFock::Calculator& calculator,
-                                                  const std::vector<HartreeFock::ShellPair>& shell_pairs);
+        std::expected<void, std::string> run_rhf(HartreeFock::Calculator &calculator,
+                                                 const std::vector<HartreeFock::ShellPair> &shell_pairs);
 
         // Run the UHF SCF procedure.
         // Uses molecule.multiplicity to derive n_alpha and n_beta.
         // Stores converged alpha and beta channels in calculator._info._scf.
         // Returns an error string if convergence is not achieved.
-        std::expected<void, std::string> run_uhf(HartreeFock::Calculator& calculator,
-                                                  const std::vector<HartreeFock::ShellPair>& shell_pairs);
-    }
-}
+        std::expected<void, std::string> run_uhf(HartreeFock::Calculator &calculator,
+                                                 const std::vector<HartreeFock::ShellPair> &shell_pairs);
+    } // namespace SCF
+} // namespace HartreeFock
 
 #endif // !HF_SCF_H

@@ -75,8 +75,8 @@ namespace HartreeFock
     namespace Checkpoint
     {
         // Write all post-convergence SCF data to a binary checkpoint file.
-        std::expected<void, std::string> save(const HartreeFock::Calculator& calc,
-                                              const std::string& path);
+        std::expected<void, std::string> save(const HartreeFock::Calculator &calc,
+                                              const std::string &path);
 
         // Read checkpoint data into an already-parsed Calculator.
         //
@@ -92,8 +92,8 @@ namespace HartreeFock
         // On success, always fills: _info._scf (density/fock/MOs), _total_energy,
         //   _nuclear_repulsion.  Also fills _overlap and _hcore when load_1e_matrices.
         // Returns an error string if the file is missing, corrupt, or nbasis mismatches.
-        std::expected<void, std::string> load(HartreeFock::Calculator& calc,
-                                              const std::string& path,
+        std::expected<void, std::string> load(HartreeFock::Calculator &calc,
+                                              const std::string &path,
                                               bool load_1e_matrices = true);
 
         // Geometry + molecule data extracted from a checkpoint.
@@ -101,12 +101,12 @@ namespace HartreeFock
         // optimized geometry is used for all downstream steps.
         struct GeometryData
         {
-            std::size_t     natoms;
-            int             charge;
-            unsigned int    multiplicity;
+            std::size_t natoms;
+            int charge;
+            unsigned int multiplicity;
             Eigen::VectorXi atomic_numbers;
-            Eigen::MatrixXd coords_bohr;   // natoms × 3, standard frame, Bohr
-            bool            has_opt_coords; // true if from a converged geomopt
+            Eigen::MatrixXd coords_bohr; // natoms × 3, standard frame, Bohr
+            bool has_opt_coords;         // true if from a converged geomopt
         };
 
         // Read only the molecule geometry block from the checkpoint.
@@ -114,23 +114,23 @@ namespace HartreeFock
         // Returns an error if the file is missing, has bad magic/version, or the
         // stored atomic numbers differ from those in calc._molecule.
         std::expected<GeometryData, std::string>
-        load_geometry(const std::string& path);
+        load_geometry(const std::string &path);
 
         // MO data extracted from a checkpoint, without nbasis validation.
         // Used for basis-set projection when the checkpoint was made in a smaller basis.
         struct MOData
         {
-            std::size_t    nbasis;           // nbasis of the checkpoint's basis
-            bool           is_uhf;
-            std::string    basis_name;       // basis name stored in the checkpoint
-            Eigen::MatrixXd C_alpha;         // all alpha MO columns (nbasis × nbasis)
-            Eigen::MatrixXd C_beta;          // beta MOs if is_uhf
-            Eigen::MatrixXd C_casscf;        // converged CASSCF MOs if present
+            std::size_t nbasis; // nbasis of the checkpoint's basis
+            bool is_uhf;
+            std::string basis_name;   // basis name stored in the checkpoint
+            Eigen::MatrixXd C_alpha;  // all alpha MO columns (nbasis × nbasis)
+            Eigen::MatrixXd C_beta;   // beta MOs if is_uhf
+            Eigen::MatrixXd C_casscf; // converged CASSCF MOs if present
         };
 
         // Read MO coefficients from checkpoint without enforcing nbasis match.
         // Returns an error only if the file is missing or has bad magic/version.
-        std::expected<MOData, std::string> load_mos(const std::string& path);
+        std::expected<MOData, std::string> load_mos(const std::string &path);
 
         // Project occupied MOs from a small basis onto the large basis.
         //
@@ -141,11 +141,11 @@ namespace HartreeFock
         //
         // Returns the projected density matrix P (nb_large × nb_large).
         // Uses SVD Löwdin projection to guarantee orthonormality in S_large metric.
-        Eigen::MatrixXd project_density(const Eigen::MatrixXd& X_large,
-                                        const Eigen::MatrixXd& S_cross,
-                                        const Eigen::MatrixXd& C_occ,
+        Eigen::MatrixXd project_density(const Eigen::MatrixXd &X_large,
+                                        const Eigen::MatrixXd &S_cross,
+                                        const Eigen::MatrixXd &C_occ,
                                         double factor);
-    }
-}
+    } // namespace Checkpoint
+} // namespace HartreeFock
 
 #endif // !HF_CHECKPOINT_H

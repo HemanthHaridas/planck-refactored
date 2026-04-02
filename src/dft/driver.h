@@ -8,8 +8,8 @@
 #include <Eigen/Dense>
 
 #include "ao_grid.h"
-#include "base/types.h"
 #include "base/grid.h"
+#include "base/types.h"
 #include "base/wrapper.h"
 #include "integrals/shellpair.h"
 #include "ks_matrix.h"
@@ -44,22 +44,22 @@ namespace DFT::Driver
 
     std::expected<XCGridEvaluation, std::string>
     evaluate_current_density_and_xc(
-        const HartreeFock::Calculator& calculator,
-        const PreparedSystem& prepared,
-        const XC::Functional& exchange_functional,
-        const XC::Functional& correlation_functional);
+        const HartreeFock::Calculator &calculator,
+        const PreparedSystem &prepared,
+        const XC::Functional &exchange_functional,
+        const XC::Functional &correlation_functional);
 
     std::expected<KSPotentialMatrices, std::string>
     assemble_current_ks_potential(
-        HartreeFock::Calculator& calculator,
-        const PreparedSystem& prepared,
-        const XCGridEvaluation& xc_grid);
+        HartreeFock::Calculator &calculator,
+        const PreparedSystem &prepared,
+        const XCGridEvaluation &xc_grid);
 
     std::expected<PreparedSystem, std::string>
-    prepare(HartreeFock::Calculator& calculator, const Options& options = {});
+    prepare(HartreeFock::Calculator &calculator, const Options &options = {});
 
     std::expected<Result, std::string>
-    run(HartreeFock::Calculator& calculator, const Options& options = {});
+    run(HartreeFock::Calculator &calculator, const Options &options = {});
 
 } // namespace DFT::Driver
 

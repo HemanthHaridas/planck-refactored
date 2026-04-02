@@ -13,33 +13,33 @@
 namespace DFT
 {
 
-struct XCMatrixContribution
-{
-    bool polarized = false;
-    Eigen::MatrixXd alpha;
-    Eigen::MatrixXd beta;
-};
+    struct XCMatrixContribution
+    {
+        bool polarized = false;
+        Eigen::MatrixXd alpha;
+        Eigen::MatrixXd beta;
+    };
 
-struct KSPotentialMatrices
-{
-    bool polarized = false;
+    struct KSPotentialMatrices
+    {
+        bool polarized = false;
 
-    Eigen::MatrixXd coulomb;
-    Eigen::MatrixXd xc_alpha;
-    Eigen::MatrixXd xc_beta;
-    Eigen::MatrixXd alpha;
-    Eigen::MatrixXd beta;
-};
+        Eigen::MatrixXd coulomb;
+        Eigen::MatrixXd xc_alpha;
+        Eigen::MatrixXd xc_beta;
+        Eigen::MatrixXd alpha;
+        Eigen::MatrixXd beta;
+    };
 
-std::expected<XCMatrixContribution, std::string>
-assemble_xc_matrix(
-    const MolecularGrid& molecular_grid,
-    const AOGridEvaluation& ao_grid,
-    const XCGridEvaluation& xc_grid);
+    std::expected<XCMatrixContribution, std::string>
+    assemble_xc_matrix(
+        const MolecularGrid &molecular_grid,
+        const AOGridEvaluation &ao_grid,
+        const XCGridEvaluation &xc_grid);
 
-KSPotentialMatrices combine_ks_potential(
-    const Eigen::Ref<const Eigen::MatrixXd>& coulomb,
-    const XCMatrixContribution& xc_matrix);
+    KSPotentialMatrices combine_ks_potential(
+        const Eigen::Ref<const Eigen::MatrixXd> &coulomb,
+        const XCMatrixContribution &xc_matrix);
 
 } // namespace DFT
 

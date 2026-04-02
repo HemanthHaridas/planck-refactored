@@ -1,12 +1,12 @@
 #include <algorithm>
-#include <iostream>
 #include <iomanip>
+#include <iostream>
 #include <set>
 #include <string.h>
 
+#include "base/tables.h"
 #include "symmetry.h"
 #include "wrapper.h"
-#include "base/tables.h"
 
 // Full implementation of detectSymmetry
 std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(HartreeFock::Molecule &molecule)
@@ -46,8 +46,8 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(HartreeFo
         {
             // Symmetry detection failed — fall back to input geometry (already in Bohr).
             molecule._point_group = "C1";
-            molecule._standard    = molecule._coordinates;
-            molecule._symmetry    = false;
+            molecule._standard = molecule._coordinates;
+            molecule._symmetry = false;
             return {};
         }
 
@@ -101,4 +101,3 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(HartreeFo
         return std::unexpected(e.what());
     }
 }
-

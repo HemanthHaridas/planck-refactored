@@ -2,13 +2,12 @@
 
 HartreeFock::ShellType HartreeFock::BasisFunctions::_map_shell_to_L(const std::string &label)
 {
-    return (label == "S") ? HartreeFock::ShellType::S :
-           (label == "P") ? HartreeFock::ShellType::P :
-           (label == "D") ? HartreeFock::ShellType::D :
-           (label == "F") ? HartreeFock::ShellType::F :
-           (label == "G") ? HartreeFock::ShellType::G :
-           (label == "H") ? HartreeFock::ShellType::H :
-           throw std::runtime_error("Unknown shell label: " + label);
+    return (label == "S") ? HartreeFock::ShellType::S : (label == "P") ? HartreeFock::ShellType::P
+                                                    : (label == "D")   ? HartreeFock::ShellType::D
+                                                    : (label == "F")   ? HartreeFock::ShellType::F
+                                                    : (label == "G")   ? HartreeFock::ShellType::G
+                                                    : (label == "H")   ? HartreeFock::ShellType::H
+                                                                       : throw std::runtime_error("Unknown shell label: " + label);
 }
 
 std::vector<Eigen::Vector3i> HartreeFock::BasisFunctions::_cartesian_shell_order(unsigned int L)
@@ -16,7 +15,7 @@ std::vector<Eigen::Vector3i> HartreeFock::BasisFunctions::_cartesian_shell_order
     // Number of Cartesian functions for angular momentum L
     std::size_t nfunc = (L + 1) * (L + 2) / 2;
     std::vector<Eigen::Vector3i> result;
-    result.reserve(nfunc);  // reserve capacity, don't resize
+    result.reserve(nfunc); // reserve capacity, don't resize
 
     for (int lx = L; lx >= 0; --lx)
     {
@@ -32,12 +31,12 @@ std::vector<Eigen::Vector3i> HartreeFock::BasisFunctions::_cartesian_shell_order
 
 Eigen::VectorXd HartreeFock::BasisFunctions::primitive_normalization(unsigned int L, const Eigen::VectorXd &exponents)
 {
-    constexpr double pi = 3.1415926535897932384626433832795;                    // Value of PI
-    const double prefactor = std::pow(2.0, 2.0 * L + 1.5) / std::pow(pi, 1.5);  // Prefactor is constant for L
-    
+    constexpr double pi = 3.1415926535897932384626433832795;                   // Value of PI
+    const double prefactor = std::pow(2.0, 2.0 * L + 1.5) / std::pow(pi, 1.5); // Prefactor is constant for L
+
     // Compute primitive normalization factors in one shot
     Eigen::VectorXd normalizations = (exponents.array().pow(L + 1.5) * prefactor).sqrt().matrix();
-    
+
     return normalizations;
 }
 

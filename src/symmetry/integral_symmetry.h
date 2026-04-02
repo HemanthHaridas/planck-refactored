@@ -14,7 +14,7 @@ namespace HartreeFock::Symmetry
     // On success, calculator._integral_symmetry_ops always contains at least
     // the identity operation. calculator._use_integral_symmetry is true only
     // when one or more non-identity operations were found.
-    std::size_t update_integral_symmetry(HartreeFock::Calculator& calculator);
-}
+    std::size_t update_integral_symmetry(HartreeFock::Calculator &calculator);
+} // namespace HartreeFock::Symmetry
 
 #endif

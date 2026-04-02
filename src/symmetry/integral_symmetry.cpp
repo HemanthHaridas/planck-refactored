@@ -7,55 +7,60 @@
 
 namespace
 {
-using Key = std::tuple<const HartreeFock::Shell*, int, int, int>;
+    using Key = std::tuple<const HartreeFock::Shell *, int, int, int>;
 
-static int parity_sign(int sx, int sy, int sz, const Eigen::Vector3i& cart)
-{
-    int sign = 1;
-    if (sx < 0 && (cart[0] & 1)) sign = -sign;
-    if (sy < 0 && (cart[1] & 1)) sign = -sign;
-    if (sz < 0 && (cart[2] & 1)) sign = -sign;
-    return sign;
-}
-
-static bool build_atom_permutation(const HartreeFock::Molecule& mol,
-                                   int sx, int sy, int sz,
-                                   std::vector<int>& perm)
-{
-    const int n = static_cast<int>(mol.natoms);
-    perm.assign(n, -1);
-    constexpr double tol = 5.0e-4; // Angstrom
-
-    for (int a = 0; a < n; ++a)
+    static int parity_sign(int sx, int sy, int sz, const Eigen::Vector3i &cart)
     {
-        const Eigen::Vector3d src = mol.standard.row(a).transpose();
-        const Eigen::Vector3d img(sx * src[0], sy * src[1], sz * src[2]);
-
-        int match = -1;
-        for (int b = 0; b < n; ++b)
-        {
-            if (perm[b] != -1) continue;
-            if (mol.atomic_numbers[a] != mol.atomic_numbers[b]) continue;
-            const Eigen::Vector3d tgt = mol.standard.row(b).transpose();
-            if ((img - tgt).norm() < tol)
-            {
-                match = b;
-                break;
-            }
-        }
-
-        if (match < 0)
-            return false;
-
-        perm[a] = match;
+        int sign = 1;
+        if (sx < 0 && (cart[0] & 1))
+            sign = -sign;
+        if (sy < 0 && (cart[1] & 1))
+            sign = -sign;
+        if (sz < 0 && (cart[2] & 1))
+            sign = -sign;
+        return sign;
     }
 
-    return true;
-}
+    static bool build_atom_permutation(const HartreeFock::Molecule &mol,
+                                       int sx, int sy, int sz,
+                                       std::vector<int> &perm)
+    {
+        const int n = static_cast<int>(mol.natoms);
+        perm.assign(n, -1);
+        constexpr double tol = 5.0e-4; // Angstrom
+
+        for (int a = 0; a < n; ++a)
+        {
+            const Eigen::Vector3d src = mol.standard.row(a).transpose();
+            const Eigen::Vector3d img(sx * src[0], sy * src[1], sz * src[2]);
+
+            int match = -1;
+            for (int b = 0; b < n; ++b)
+            {
+                if (perm[b] != -1)
+                    continue;
+                if (mol.atomic_numbers[a] != mol.atomic_numbers[b])
+                    continue;
+                const Eigen::Vector3d tgt = mol.standard.row(b).transpose();
+                if ((img - tgt).norm() < tol)
+                {
+                    match = b;
+                    break;
+                }
+            }
+
+            if (match < 0)
+                return false;
+
+            perm[a] = match;
+        }
+
+        return true;
+    }
 } // namespace
 
 std::size_t HartreeFock::Symmetry::update_integral_symmetry(
-    HartreeFock::Calculator& calculator)
+    HartreeFock::Calculator &calculator)
 {
     calculator._integral_symmetry_ops.clear();
     calculator._use_integral_symmetry = false;
@@ -75,20 +80,20 @@ std::size_t HartreeFock::Symmetry::update_integral_symmetry(
         return calculator._integral_symmetry_ops.size();
     }
 
-    const auto& basis  = calculator._shells;
-    const auto& bfs    = basis._basis_functions;
-    const auto& shells = basis._shells;
+    const auto &basis = calculator._shells;
+    const auto &bfs = basis._basis_functions;
+    const auto &shells = basis._shells;
 
-    std::map<std::pair<int, int>, std::vector<const HartreeFock::Shell*>> atom_l_shells;
-    for (const auto& sh : shells)
+    std::map<std::pair<int, int>, std::vector<const HartreeFock::Shell *>> atom_l_shells;
+    for (const auto &sh : shells)
     {
         const int atom = static_cast<int>(sh._atom_index);
-        const int l    = static_cast<int>(sh._shell);
+        const int l = static_cast<int>(sh._shell);
         atom_l_shells[{atom, l}].push_back(&sh);
     }
 
     std::map<Key, int> target_index;
-    for (const auto& bf : bfs)
+    for (const auto &bf : bfs)
     {
         target_index[{bf._shell,
                       bf._cartesian[0],
@@ -97,16 +102,16 @@ std::size_t HartreeFock::Symmetry::update_integral_symmetry(
     }
 
     const std::array<std::array<int, 3>, 7> candidates = {{
-        {{-1,  1,  1}},
-        {{ 1, -1,  1}},
-        {{ 1,  1, -1}},
-        {{-1, -1,  1}},
-        {{-1,  1, -1}},
-        {{ 1, -1, -1}},
+        {{-1, 1, 1}},
+        {{1, -1, 1}},
+        {{1, 1, -1}},
+        {{-1, -1, 1}},
+        {{-1, 1, -1}},
+        {{1, -1, -1}},
         {{-1, -1, -1}},
     }};
 
-    for (const auto& cand : candidates)
+    for (const auto &cand : candidates)
     {
         const int sx = cand[0];
         const int sy = cand[1];
@@ -121,11 +126,11 @@ std::size_t HartreeFock::Symmetry::update_integral_symmetry(
         op.ao_sign.assign(nb, 1);
 
         bool ok = true;
-        for (const auto& bf : bfs)
+        for (const auto &bf : bfs)
         {
             const int atom_a = static_cast<int>(bf._shell->_atom_index);
             const int atom_b = atom_perm[atom_a];
-            const int l      = static_cast<int>(bf._shell->_shell);
+            const int l = static_cast<int>(bf._shell->_shell);
 
             const auto src_it = atom_l_shells.find({atom_a, l});
             const auto tgt_it = atom_l_shells.find({atom_b, l});
@@ -151,7 +156,7 @@ std::size_t HartreeFock::Symmetry::update_integral_symmetry(
                 break;
             }
 
-            const HartreeFock::Shell* tgt_shell = tgt_it->second[shell_k];
+            const HartreeFock::Shell *tgt_shell = tgt_it->second[shell_k];
             const auto idx_it = target_index.find({tgt_shell,
                                                    bf._cartesian[0],
                                                    bf._cartesian[1],

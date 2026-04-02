@@ -35,9 +35,8 @@ namespace HartreeFock::Correlation
     //                                 optimization basis
     //
     std::expected<void, std::string> run_casscf(
-        HartreeFock::Calculator&                   calc,
-        const std::vector<HartreeFock::ShellPair>& shell_pairs);
-
+        HartreeFock::Calculator &calc,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs);
 
     // RASSCF reuses the same optimizer but constrains the determinant space
     // through the RAS bookkeeping stored in the shared internal params.
@@ -51,8 +50,8 @@ namespace HartreeFock::Correlation
     // nactorb must equal nras1 + nras2 + nras3.
     //
     std::expected<void, std::string> run_rasscf(
-        HartreeFock::Calculator&                   calc,
-        const std::vector<HartreeFock::ShellPair>& shell_pairs);
+        HartreeFock::Calculator &calc,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs);
 
 } // namespace HartreeFock::Correlation
 

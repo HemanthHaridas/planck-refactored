@@ -1,11 +1,11 @@
 #ifndef HF_WRAPPER_H
 #define HF_WRAPPER_H
 
+#include <cstdlib>
+#include <expected>
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <expected>
-#include <cstdlib>
 
 #include "external/libmsym/install/include/libmsym/msym.h"
 
@@ -25,7 +25,7 @@ namespace HartreeFock
                     throw std::runtime_error("Failed to create msym_context");
                 }
             }
-            
+
             ~SymmetryContext()
             {
                 if (_ctx)
@@ -37,7 +37,7 @@ namespace HartreeFock
             // Non-copyable
             SymmetryContext(const SymmetryContext &) = delete;
             SymmetryContext &operator=(const SymmetryContext &) = delete;
-            
+
             // Movable
             SymmetryContext(SymmetryContext &&other) noexcept : _ctx(other._ctx)
             {
@@ -54,13 +54,13 @@ namespace HartreeFock
                 }
                 return *this;
             }
-            
+
             // Accessor
             msym_context get() const
             {
                 return _ctx;
             }
-            
+
         private:
             msym_context _ctx;
         };
@@ -70,7 +70,7 @@ namespace HartreeFock
         public:
             explicit SymmetryElements(size_t n_atoms)
             {
-                elems_ = static_cast <msym_element_t *>(malloc(n_atoms * sizeof(msym_element_t)));
+                elems_ = static_cast<msym_element_t *>(malloc(n_atoms * sizeof(msym_element_t)));
                 if (!elems_)
                 {
                     throw std::bad_alloc();
@@ -111,7 +111,8 @@ namespace HartreeFock
             {
                 return elems_;
             }
-            size_t size() const {
+            size_t size() const
+            {
                 return n_atoms_;
             }
 
@@ -119,7 +120,7 @@ namespace HartreeFock
             msym_element_t *elems_;
             size_t n_atoms_;
         };
-    }
-}
+    } // namespace Symmetry
+} // namespace HartreeFock
 
 #endif // !HF_WRAPPER_H

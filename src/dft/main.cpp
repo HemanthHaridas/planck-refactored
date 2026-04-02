@@ -1,7 +1,7 @@
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -16,60 +16,60 @@ using SystemClock = std::chrono::system_clock;
 namespace
 {
 
-std::string format_time(SystemClock::time_point tp)
-{
-    const std::time_t t = SystemClock::to_time_t(tp);
-    std::tm tm{};
+    std::string format_time(SystemClock::time_point tp)
+    {
+        const std::time_t t = SystemClock::to_time_t(tp);
+        std::tm tm{};
 
 #if defined(_WIN32)
-    localtime_s(&tm, &t);
+        localtime_s(&tm, &t);
 #else
-    localtime_r(&t, &tm);
+        localtime_r(&t, &tm);
 #endif
 
-    std::ostringstream os;
-    os << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-    return os.str();
-}
-
-std::string dft_reference_label(HartreeFock::SCFType scf_type)
-{
-    switch (scf_type)
-    {
-    case HartreeFock::SCFType::RHF:
-        return "RKS";
-    case HartreeFock::SCFType::UHF:
-        return "UKS";
+        std::ostringstream os;
+        os << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+        return os.str();
     }
 
-    return "Unknown";
-}
-
-void log_multipole_report(const HartreeFock::Calculator& calculator)
-{
-    auto shell_pairs = build_shellpairs(calculator._shells);
-    auto moments = HartreeFock::ObaraSaika::_compute_multipole_moments(
-        calculator,
-        shell_pairs,
-        Eigen::Vector3d::Zero());
-
-    if (!moments)
+    std::string dft_reference_label(HartreeFock::SCFType scf_type)
     {
-        HartreeFock::Logger::logging(
-            HartreeFock::LogLevel::Warning,
-            "Multipole Moments :",
-            "Unavailable: " + moments.error());
+        switch (scf_type)
+        {
+        case HartreeFock::SCFType::RHF:
+            return "RKS";
+        case HartreeFock::SCFType::UHF:
+            return "UKS";
+        }
+
+        return "Unknown";
+    }
+
+    void log_multipole_report(const HartreeFock::Calculator &calculator)
+    {
+        auto shell_pairs = build_shellpairs(calculator._shells);
+        auto moments = HartreeFock::ObaraSaika::_compute_multipole_moments(
+            calculator,
+            shell_pairs,
+            Eigen::Vector3d::Zero());
+
+        if (!moments)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Warning,
+                "Multipole Moments :",
+                "Unavailable: " + moments.error());
+            HartreeFock::Logger::blank();
+            return;
+        }
+
+        HartreeFock::Logger::multipole_moments(*moments);
         HartreeFock::Logger::blank();
-        return;
     }
-
-    HartreeFock::Logger::multipole_moments(*moments);
-    HartreeFock::Logger::blank();
-}
 
 } // namespace
 
-int main(int argc, const char* argv[])
+int main(int argc, const char *argv[])
 {
     const auto program_start = SystemClock::now();
 

@@ -5,31 +5,31 @@
 #include <limits>
 #include <numeric>
 
-#include "scf.h"
 #include "integrals/base.h"
 #include "io/logging.h"
+#include "scf.h"
 
 // ─── Orthogonalization ────────────────────────────────────────────────────────
 
-std::expected<Eigen::MatrixXd, std::string> HartreeFock::SCF::build_orthogonalizer(const Eigen::MatrixXd& S, double threshold)
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::SCF::build_orthogonalizer(const Eigen::MatrixXd &S, double threshold)
 {
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(S);
     if (solver.info() != Eigen::Success)
         return std::unexpected("Overlap matrix diagonalization failed");
 
-    const Eigen::VectorXd& evals = solver.eigenvalues();
+    const Eigen::VectorXd &evals = solver.eigenvalues();
     if (evals.minCoeff() < threshold)
         return std::unexpected(std::format("Overlap matrix is near-singular (min eigenvalue = {:.3e})", evals.minCoeff()));
 
     // X = U * s^{-1/2} * U^T
-    const Eigen::MatrixXd& U = solver.eigenvectors();
-    const Eigen::VectorXd  s_inv_sqrt = evals.array().rsqrt().matrix();
+    const Eigen::MatrixXd &U = solver.eigenvectors();
+    const Eigen::VectorXd s_inv_sqrt = evals.array().rsqrt().matrix();
     return U * s_inv_sqrt.asDiagonal() * U.transpose();
 }
 
 // ─── Initial density ─────────────────────────────────────────────────────────
 
-Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd& H, const Eigen::MatrixXd& X, std::size_t n_occ)
+Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd &H, const Eigen::MatrixXd &X, std::size_t n_occ)
 {
     // Transform H to orthonormal basis: H' = X^T * H * X
     const Eigen::MatrixXd Hprime = X.transpose() * H * X;
@@ -44,8 +44,8 @@ Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd& H, cons
 }
 
 HartreeFock::SCF::IterationMetrics HartreeFock::SCF::restricted_iteration_metrics(
-    const Eigen::MatrixXd& previous_density,
-    const Eigen::MatrixXd& next_density,
+    const Eigen::MatrixXd &previous_density,
+    const Eigen::MatrixXd &next_density,
     double previous_total_energy,
     double total_energy)
 {
@@ -60,10 +60,10 @@ HartreeFock::SCF::IterationMetrics HartreeFock::SCF::restricted_iteration_metric
 }
 
 HartreeFock::SCF::IterationMetrics HartreeFock::SCF::unrestricted_iteration_metrics(
-    const Eigen::MatrixXd& previous_alpha_density,
-    const Eigen::MatrixXd& previous_beta_density,
-    const Eigen::MatrixXd& next_alpha_density,
-    const Eigen::MatrixXd& next_beta_density,
+    const Eigen::MatrixXd &previous_alpha_density,
+    const Eigen::MatrixXd &previous_beta_density,
+    const Eigen::MatrixXd &next_alpha_density,
+    const Eigen::MatrixXd &next_beta_density,
     double previous_total_energy,
     double total_energy)
 {
@@ -81,8 +81,8 @@ HartreeFock::SCF::IterationMetrics HartreeFock::SCF::unrestricted_iteration_metr
 }
 
 bool HartreeFock::SCF::is_converged(
-    const HartreeFock::OptionsSCF& scf_options,
-    const IterationMetrics& metrics,
+    const HartreeFock::OptionsSCF &scf_options,
+    const IterationMetrics &metrics,
     unsigned int iteration) noexcept
 {
     return iteration > 1 &&
@@ -92,47 +92,47 @@ bool HartreeFock::SCF::is_converged(
 }
 
 void HartreeFock::SCF::store_restricted_iteration(
-    HartreeFock::Calculator& calculator,
-    const RestrictedIterationData& iteration,
-    const IterationMetrics& metrics)
+    HartreeFock::Calculator &calculator,
+    const RestrictedIterationData &iteration,
+    const IterationMetrics &metrics)
 {
-    calculator._info._scf.alpha.fock            = iteration.fock;
-    calculator._info._scf.alpha.density         = iteration.density;
-    calculator._info._scf.alpha.mo_energies     = iteration.mo_energies;
+    calculator._info._scf.alpha.fock = iteration.fock;
+    calculator._info._scf.alpha.density = iteration.density;
+    calculator._info._scf.alpha.mo_energies = iteration.mo_energies;
     calculator._info._scf.alpha.mo_coefficients = iteration.mo_coefficients;
-    calculator._info._energy                    = iteration.electronic_energy;
-    calculator._info._delta_energy              = metrics.delta_energy;
-    calculator._info._delta_density_max         = metrics.delta_density_max;
-    calculator._info._delta_density_rms         = metrics.delta_density_rms;
-    calculator._total_energy                    = iteration.total_energy;
+    calculator._info._energy = iteration.electronic_energy;
+    calculator._info._delta_energy = metrics.delta_energy;
+    calculator._info._delta_density_max = metrics.delta_density_max;
+    calculator._info._delta_density_rms = metrics.delta_density_rms;
+    calculator._total_energy = iteration.total_energy;
 }
 
 void HartreeFock::SCF::store_unrestricted_iteration(
-    HartreeFock::Calculator& calculator,
-    const UnrestrictedIterationData& iteration,
-    const IterationMetrics& metrics)
+    HartreeFock::Calculator &calculator,
+    const UnrestrictedIterationData &iteration,
+    const IterationMetrics &metrics)
 {
-    calculator._info._scf.alpha.fock            = iteration.alpha_fock;
-    calculator._info._scf.alpha.density         = iteration.alpha_density;
-    calculator._info._scf.alpha.mo_energies     = iteration.alpha_mo_energies;
+    calculator._info._scf.alpha.fock = iteration.alpha_fock;
+    calculator._info._scf.alpha.density = iteration.alpha_density;
+    calculator._info._scf.alpha.mo_energies = iteration.alpha_mo_energies;
     calculator._info._scf.alpha.mo_coefficients = iteration.alpha_mo_coefficients;
-    calculator._info._scf.beta.fock             = iteration.beta_fock;
-    calculator._info._scf.beta.density          = iteration.beta_density;
-    calculator._info._scf.beta.mo_energies      = iteration.beta_mo_energies;
-    calculator._info._scf.beta.mo_coefficients  = iteration.beta_mo_coefficients;
-    calculator._info._energy                    = iteration.electronic_energy;
-    calculator._info._delta_energy              = metrics.delta_energy;
-    calculator._info._delta_density_max         = metrics.delta_density_max;
-    calculator._info._delta_density_rms         = metrics.delta_density_rms;
-    calculator._total_energy                    = iteration.total_energy;
+    calculator._info._scf.beta.fock = iteration.beta_fock;
+    calculator._info._scf.beta.density = iteration.beta_density;
+    calculator._info._scf.beta.mo_energies = iteration.beta_mo_energies;
+    calculator._info._scf.beta.mo_coefficients = iteration.beta_mo_coefficients;
+    calculator._info._energy = iteration.electronic_energy;
+    calculator._info._delta_energy = metrics.delta_energy;
+    calculator._info._delta_density_max = metrics.delta_density_max;
+    calculator._info._delta_density_rms = metrics.delta_density_rms;
+    calculator._total_energy = iteration.total_energy;
 }
 
 // ─── SCF iteration ───────────────────────────────────────────────────────────
 
-std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculator& calculator, const std::vector<HartreeFock::ShellPair>& shell_pairs)
+std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculator &calculator, const std::vector<HartreeFock::ShellPair> &shell_pairs)
 {
-    const Eigen::MatrixXd& S = calculator._overlap;
-    const Eigen::MatrixXd& H = calculator._hcore;
+    const Eigen::MatrixXd &S = calculator._overlap;
+    const Eigen::MatrixXd &H = calculator._hcore;
     const std::size_t nbasis = calculator._shells.nbasis();
 
     // Number of occupied orbitals (closed shell singlet assumed)
@@ -155,7 +155,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     // is the identity — each block is diagonalized directly without an X step.
     const bool sao_active = calculator._use_sao_blocking &&
                             (calculator._sao_transform.rows() > 0);
-    const Eigen::MatrixXd& U = calculator._sao_transform;   // ref, no copy
+    const Eigen::MatrixXd &U = calculator._sao_transform; // ref, no copy
 
     // ── Initial density ───────────────────────────────────────────────────────
     // ReadDensity / ReadFull: reuse density loaded from checkpoint.
@@ -164,8 +164,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
         (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
          calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
     Eigen::MatrixXd P = use_chk_density
-        ? calculator._info._scf.alpha.density
-        : initial_density(H, X, n_occ);
+                            ? calculator._info._scf.alpha.density
+                            : initial_density(H, X, n_occ);
 
     const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
 
@@ -182,19 +182,19 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     if (use_conventional)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
-            std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
+                                     std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
         eri = _compute_2e(shell_pairs, nbasis, calculator._integral._engine,
                           calculator._integral._tol_eri,
                           calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-        calculator._eri = eri;  // persist for post-HF use
+        calculator._eri = eri; // persist for post-HF use
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
         HartreeFock::Logger::blank();
     }
 
     // ── DIIS state ────────────────────────────────────────────────────────────
     HartreeFock::DIISState diis;
-    diis.max_vecs         = calculator._scf._DIIS_dim;
-    const bool use_diis   = calculator._scf._use_DIIS;
+    diis.max_vecs = calculator._scf._DIIS_dim;
+    const bool use_diis = calculator._scf._use_DIIS;
 
     const double tol_eri = calculator._integral._tol_eri;
     double E_prev = 0.0;
@@ -207,16 +207,16 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
 
         // ── Build two-electron contribution G = J - 0.5*K ────────────────────
         Eigen::MatrixXd G = use_conventional
-            ? HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis)
-            : _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine, tol_eri,
-                               calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                                ? HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis)
+                                : _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine, tol_eri,
+                                                   calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
         // ── Fock matrix ───────────────────────────────────────────────────────
         const Eigen::MatrixXd F = H + G;
 
         // ── Electronic energy  E = 0.5 * tr(P * (H + F)) ────────────────────
         // Always computed from the raw (non-extrapolated) Fock matrix.
-        const double E_elec  = 0.5 * (P.array() * (H + F).array()).sum();
+        const double E_elec = 0.5 * (P.array() * (H + F).array()).sum();
         const double E_total = E_elec + calculator._nuclear_repulsion;
 
         // ── DIIS: compute Pulay error and push to subspace ────────────────────
@@ -231,7 +231,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
 
         // ── Select Fock matrix for diagonalization ────────────────────────────
         // Once DIIS has ≥2 vectors, use the extrapolated Fock; otherwise plain F.
-        const bool do_diis           = use_diis && diis.ready();
+        const bool do_diis = use_diis && diis.ready();
         const Eigen::MatrixXd F_diag = do_diis ? diis.extrapolate() : F;
 
         // ── Diagonalize Fock matrix ───────────────────────────────────────────
@@ -245,7 +245,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
             Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(Fprime);
             if (solver.info() != Eigen::Success)
                 return std::unexpected(std::format("Fock diagonalization failed at iteration {}", iter));
-            C   = X * solver.eigenvectors();
+            C = X * solver.eigenvectors();
             eps = solver.eigenvalues();
         }
         else
@@ -256,15 +256,16 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
             const Eigen::MatrixXd F_sao = U.transpose() * F_diag * U;
             const int n_blocks = static_cast<int>(calculator._sao_block_sizes.size());
 
-            Eigen::VectorXd  eps_sao(nbasis);
-            Eigen::MatrixXd  C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            Eigen::VectorXd eps_sao(nbasis);
+            Eigen::MatrixXd C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
             std::vector<int> mo_irrep_idx(nbasis);
 
             for (int b = 0; b < n_blocks; ++b)
             {
                 const int off = calculator._sao_block_offsets[b];
-                const int ni  = calculator._sao_block_sizes[b];
-                if (ni == 0) continue;
+                const int ni = calculator._sao_block_sizes[b];
+                if (ni == 0)
+                    continue;
 
                 Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sb(
                     F_sao.block(off, off, ni, ni));
@@ -272,8 +273,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
                     return std::unexpected(std::format(
                         "Block Fock diagonalization failed (block {}) at iteration {}", b, iter));
 
-                eps_sao.segment(off, ni)           = sb.eigenvalues();
-                C_sao.block(off, off, ni, ni)      = sb.eigenvectors();
+                eps_sao.segment(off, ni) = sb.eigenvalues();
+                C_sao.block(off, off, ni, ni) = sb.eigenvectors();
                 for (int k = 0; k < ni; ++k)
                     mo_irrep_idx[off + k] = calculator._sao_irrep_index[off + k];
             }
@@ -282,20 +283,21 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
             std::vector<int> order(nbasis);
             std::iota(order.begin(), order.end(), 0);
             std::stable_sort(order.begin(), order.end(),
-                [&](int a, int b){ return eps_sao[a] < eps_sao[b]; });
+                             [&](int a, int b)
+                             { return eps_sao[a] < eps_sao[b]; });
 
-            Eigen::VectorXd  eps_sorted(nbasis);
-            Eigen::MatrixXd  C_sao_sorted(nbasis, nbasis);
+            Eigen::VectorXd eps_sorted(nbasis);
+            Eigen::MatrixXd C_sao_sorted(nbasis, nbasis);
             std::vector<std::string> mo_sym(nbasis);
             for (int k = 0; k < static_cast<int>(nbasis); ++k)
             {
-                eps_sorted[k]           = eps_sao[order[k]];
-                C_sao_sorted.col(k)     = C_sao.col(order[k]);
-                mo_sym[k]               = calculator._sao_irrep_names[mo_irrep_idx[order[k]]];
+                eps_sorted[k] = eps_sao[order[k]];
+                C_sao_sorted.col(k) = C_sao.col(order[k]);
+                mo_sym[k] = calculator._sao_irrep_names[mo_irrep_idx[order[k]]];
             }
 
             eps = eps_sorted;
-            C   = U * C_sao_sorted;
+            C = U * C_sao_sorted;
             // Write symmetry labels every iteration; the final write at convergence
             // will be the authoritative set.
             calculator._info._scf.alpha.mo_symmetry = std::move(mo_sym);
@@ -311,7 +313,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
             restricted_iteration_metrics(P, P_new, E_prev, E_total);
 
         const double iter_time = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - iter_start).count();
+                                     std::chrono::steady_clock::now() - iter_start)
+                                     .count();
         HartreeFock::Logger::scf_iteration(
             iter,
             E_total,
@@ -322,7 +325,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
             0.0,
             iter_time);
 
-        P      = P_new;
+        P = P_new;
         E_prev = E_total;
 
         store_restricted_iteration(
@@ -333,15 +336,14 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
                 .mo_energies = eps,
                 .mo_coefficients = C,
                 .electronic_energy = E_elec,
-                .total_energy = E_total
-            },
+                .total_energy = E_total},
             metrics);
 
         if (is_converged(calculator._scf, metrics, iter))
         {
-            calculator._info._scf.alpha.mo_energies     = eps;
+            calculator._info._scf.alpha.mo_energies = eps;
             calculator._info._scf.alpha.mo_coefficients = C;
-            calculator._info._is_converged              = true;
+            calculator._info._is_converged = true;
 
             HartreeFock::Logger::scf_footer();
             HartreeFock::Logger::blank();
@@ -357,38 +359,37 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
 // ─── Spin contamination ───────────────────────────────────────────────────────
 
 static void _log_spin_contamination(
-    const Eigen::MatrixXd& Ca,
-    const Eigen::MatrixXd& Cb,
-    const Eigen::MatrixXd& S,
+    const Eigen::MatrixXd &Ca,
+    const Eigen::MatrixXd &Cb,
+    const Eigen::MatrixXd &S,
     int n_alpha, int n_beta,
     unsigned int multiplicity)
 {
     // <S^2> = Sz*(Sz+1) + N_beta - ||C_alpha_occ^T S C_beta_occ||_F^2
     const double Sz = 0.5 * static_cast<double>(n_alpha - n_beta);
     const Eigen::MatrixXd OV = Ca.leftCols(n_alpha).transpose() * S * Cb.leftCols(n_beta);
-    const double S2       = Sz * (Sz + 1.0) + static_cast<double>(n_beta) - OV.squaredNorm();
-    const double S_exact  = 0.5 * static_cast<double>(multiplicity - 1);
+    const double S2 = Sz * (Sz + 1.0) + static_cast<double>(n_beta) - OV.squaredNorm();
+    const double S_exact = 0.5 * static_cast<double>(multiplicity - 1);
     const double S2_exact = S_exact * (S_exact + 1.0);
 
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "<S^2> :",
-        std::format("{:.6f}  (exact: {:.6f})", S2, S2_exact));
+                                 std::format("{:.6f}  (exact: {:.6f})", S2, S2_exact));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "<S>   :",
-        std::format("{:.6f}", std::sqrt(std::max(0.0, S2))));
+                                 std::format("{:.6f}", std::sqrt(std::max(0.0, S2))));
 }
 
 // ─── UHF SCF ─────────────────────────────────────────────────────────────────
 
 std::expected<void, std::string> HartreeFock::SCF::run_uhf(
-    HartreeFock::Calculator& calculator,
-    const std::vector<HartreeFock::ShellPair>& shell_pairs)
+    HartreeFock::Calculator &calculator,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs)
 {
-    const Eigen::MatrixXd& S = calculator._overlap;
-    const Eigen::MatrixXd& H = calculator._hcore;
+    const Eigen::MatrixXd &S = calculator._overlap;
+    const Eigen::MatrixXd &H = calculator._hcore;
     const std::size_t nbasis = calculator._shells.nbasis();
 
     const int n_electrons = static_cast<int>(
-        calculator._molecule.atomic_numbers.cast<int>().sum()
-        - calculator._molecule.charge);
+        calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
 
     const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
 
@@ -398,7 +399,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         return std::unexpected("Multiplicity inconsistent with electron count parity");
 
     const int n_alpha = (n_electrons + n_unpaired) / 2;
-    const int n_beta  = (n_electrons - n_unpaired) / 2;
+    const int n_beta = (n_electrons - n_unpaired) / 2;
 
     // ── Orthogonalization matrix X = S^{-1/2} ────────────────────────────────
     auto X_result = build_orthogonalizer(S);
@@ -412,7 +413,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     // shift_active stays false throughout — level shift is incompatible with SAO.
     const bool sao_active_uhf = calculator._use_sao_blocking &&
                                 (calculator._sao_transform.rows() > 0);
-    const Eigen::MatrixXd& U_uhf = calculator._sao_transform;   // ref, no copy
+    const Eigen::MatrixXd &U_uhf = calculator._sao_transform; // ref, no copy
 
     // ── Initial spin densities from core Hamiltonian ─────────────────────────
     // Factor 1.0 per spin (UHF), vs 2.0 in RHF.
@@ -430,15 +431,15 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
          calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
 
     Eigen::MatrixXd Pa = use_chk_uhf
-        ? calculator._info._scf.alpha.density
-        : make_density_spin(n_alpha);
+                             ? calculator._info._scf.alpha.density
+                             : make_density_spin(n_alpha);
     Eigen::MatrixXd Pb = use_chk_uhf
-        ? calculator._info._scf.beta.density
-        : make_density_spin(n_beta);
+                             ? calculator._info._scf.beta.density
+                             : make_density_spin(n_beta);
 
-    const unsigned int max_iter  = calculator._scf.get_max_cycles(nbasis);
-    const double level_shift     = calculator._scf._level_shift;
-    const double restart_factor  = calculator._scf._diis_restart_factor;
+    const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
+    const double level_shift = calculator._scf._level_shift;
+    const double restart_factor = calculator._scf._diis_restart_factor;
 
     // ── Conventional vs Direct ────────────────────────────────────────────────
     const bool use_conventional =
@@ -450,11 +451,11 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     if (use_conventional)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
-            std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
+                                     std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
         eri = _compute_2e(shell_pairs, nbasis, calculator._integral._engine,
                           calculator._integral._tol_eri,
                           calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-        calculator._eri = eri;  // persist for post-HF use
+        calculator._eri = eri; // persist for post-HF use
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
         HartreeFock::Logger::blank();
     }
@@ -465,7 +466,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     const bool use_diis = calculator._scf._use_DIIS;
 
     const double tol_eri = calculator._integral._tol_eri;
-    double E_prev      = 0.0;
+    double E_prev = 0.0;
     double diis_err_prev = std::numeric_limits<double>::max();
 
     // Level-shift: save orthonormal MO coefficients from the previous iteration
@@ -481,16 +482,15 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
 
         // ── Two-electron Fock contributions ───────────────────────────────────
         auto [Ga, Gb] = use_conventional
-            ? HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis)
-            : _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine, tol_eri,
-                                   calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                            ? HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis)
+                            : _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine, tol_eri,
+                                                   calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
         const Eigen::MatrixXd Fa = H + Ga;
         const Eigen::MatrixXd Fb = H + Gb;
 
         // ── Electronic energy — always from the bare (unshifted) Fock ───────────
-        const double E_elec  = 0.5 * ((Pa.array() * (H + Fa).array()).sum()
-                                    +  (Pb.array() * (H + Fb).array()).sum());
+        const double E_elec = 0.5 * ((Pa.array() * (H + Fa).array()).sum() + (Pb.array() * (H + Fb).array()).sum());
         const double E_total = E_elec + calculator._nuclear_repulsion;
 
         // ── Level shift: build Fa_s/Fb_s before DIIS ─────────────────────────
@@ -503,11 +503,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         if (shift_active)
         {
             const Eigen::MatrixXd shift_a =
-                level_shift * X * (I_nb - Ca_orth_prev.leftCols(n_alpha) *
-                                           Ca_orth_prev.leftCols(n_alpha).transpose()) * X.transpose();
+                level_shift * X * (I_nb - Ca_orth_prev.leftCols(n_alpha) * Ca_orth_prev.leftCols(n_alpha).transpose()) * X.transpose();
             const Eigen::MatrixXd shift_b =
-                level_shift * X * (I_nb - Cb_orth_prev.leftCols(n_beta)  *
-                                           Cb_orth_prev.leftCols(n_beta).transpose())  * X.transpose();
+                level_shift * X * (I_nb - Cb_orth_prev.leftCols(n_beta) * Cb_orth_prev.leftCols(n_beta).transpose()) * X.transpose();
             Fa_s += shift_a;
             Fb_s += shift_b;
         }
@@ -520,7 +518,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             const Eigen::MatrixXd eb = X.transpose() * (Fb_s * Pb * S - S * Pb * Fb_s) * X;
 
             // RMS norm — same normalization as DIISState::error_norm()
-            const auto rms_norm = [](const Eigen::MatrixXd& m) {
+            const auto rms_norm = [](const Eigen::MatrixXd &m)
+            {
                 return std::sqrt(m.squaredNorm() / static_cast<double>(m.size()));
             };
             const double cur_err = std::max(rms_norm(ea), rms_norm(eb));
@@ -531,8 +530,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                 diis_a.clear();
                 diis_b.clear();
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                    "DIIS :", std::format("Subspace restarted at iter {} (error grew {:.1f}×)",
-                                          iter, cur_err / diis_err_prev));
+                                             "DIIS :", std::format("Subspace restarted at iter {} (error grew {:.1f}×)", iter, cur_err / diis_err_prev));
             }
 
             diis_a.push(Fa_s, ea);
@@ -547,7 +545,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
 
         // ── Diagonalize alpha and beta ────────────────────────────────────────
         Eigen::MatrixXd Ca(nbasis, nbasis), Cb(nbasis, nbasis);
-        Eigen::VectorXd epsa(nbasis),       epsb(nbasis);
+        Eigen::VectorXd epsa(nbasis), epsb(nbasis);
 
         if (!sao_active_uhf)
         {
@@ -555,16 +553,18 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sa(X.transpose() * Fa_diag * X);
             if (sa.info() != Eigen::Success)
                 return std::unexpected(std::format("Alpha Fock diagonalization failed at iter {}", iter));
-            Ca   = X * sa.eigenvectors();
+            Ca = X * sa.eigenvectors();
             epsa = sa.eigenvalues();
-            if (shift_active) epsa.tail(nbasis - n_alpha).array() -= level_shift;
+            if (shift_active)
+                epsa.tail(nbasis - n_alpha).array() -= level_shift;
 
             Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sb(X.transpose() * Fb_diag * X);
             if (sb.info() != Eigen::Success)
                 return std::unexpected(std::format("Beta Fock diagonalization failed at iter {}", iter));
-            Cb   = X * sb.eigenvectors();
+            Cb = X * sb.eigenvectors();
             epsb = sb.eigenvalues();
-            if (shift_active) epsb.tail(nbasis - n_beta).array() -= level_shift;
+            if (shift_active)
+                epsb.tail(nbasis - n_beta).array() -= level_shift;
 
             // Save orthonormal eigenvectors for next iteration's virtual projector
             Ca_orth_prev = sa.eigenvectors();
@@ -576,23 +576,24 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             // Helper lambda: block-diagonalize one spin's Fock in SAO basis.
             // Returns {C_AO [nb×nb], eps [nb]}.  Also fills mo_sym_out with
             // sorted irrep labels.
-            auto sao_diag_spin = [&](const Eigen::MatrixXd& F_diag_spin,
-                                     std::vector<std::string>& mo_sym_out,
-                                     const std::string& spin_tag)
+            auto sao_diag_spin = [&](const Eigen::MatrixXd &F_diag_spin,
+                                     std::vector<std::string> &mo_sym_out,
+                                     const std::string &spin_tag)
                 -> std::expected<std::pair<Eigen::MatrixXd, Eigen::VectorXd>, std::string>
             {
                 const Eigen::MatrixXd F_sao = U_uhf.transpose() * F_diag_spin * U_uhf;
                 const int n_blocks = static_cast<int>(calculator._sao_block_sizes.size());
 
-                Eigen::VectorXd  eps_sao(nbasis);
-                Eigen::MatrixXd  C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                Eigen::VectorXd eps_sao(nbasis);
+                Eigen::MatrixXd C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
                 std::vector<int> mo_irrep_idx(nbasis);
 
                 for (int b = 0; b < n_blocks; ++b)
                 {
                     const int off = calculator._sao_block_offsets[b];
-                    const int ni  = calculator._sao_block_sizes[b];
-                    if (ni == 0) continue;
+                    const int ni = calculator._sao_block_sizes[b];
+                    if (ni == 0)
+                        continue;
 
                     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> s(
                         F_sao.block(off, off, ni, ni));
@@ -601,7 +602,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                             "{} block Fock diagonalization failed (block {}) at iter {}",
                             spin_tag, b, iter));
 
-                    eps_sao.segment(off, ni)      = s.eigenvalues();
+                    eps_sao.segment(off, ni) = s.eigenvalues();
                     C_sao.block(off, off, ni, ni) = s.eigenvectors();
                     for (int k = 0; k < ni; ++k)
                         mo_irrep_idx[off + k] = calculator._sao_irrep_index[off + k];
@@ -611,16 +612,17 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                 std::vector<int> order(nbasis);
                 std::iota(order.begin(), order.end(), 0);
                 std::stable_sort(order.begin(), order.end(),
-                    [&](int a, int b){ return eps_sao[a] < eps_sao[b]; });
+                                 [&](int a, int b)
+                                 { return eps_sao[a] < eps_sao[b]; });
 
                 Eigen::VectorXd eps_sorted(nbasis);
                 Eigen::MatrixXd C_sao_sorted(nbasis, nbasis);
                 mo_sym_out.resize(nbasis);
                 for (int k = 0; k < static_cast<int>(nbasis); ++k)
                 {
-                    eps_sorted[k]           = eps_sao[order[k]];
-                    C_sao_sorted.col(k)     = C_sao.col(order[k]);
-                    mo_sym_out[k]           = calculator._sao_irrep_names[mo_irrep_idx[order[k]]];
+                    eps_sorted[k] = eps_sao[order[k]];
+                    C_sao_sorted.col(k) = C_sao.col(order[k]);
+                    mo_sym_out[k] = calculator._sao_irrep_names[mo_irrep_idx[order[k]]];
                 }
 
                 return std::make_pair(U_uhf * C_sao_sorted, eps_sorted);
@@ -629,31 +631,34 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             std::vector<std::string> mo_sym_a, mo_sym_b;
 
             auto res_a = sao_diag_spin(Fa_diag, mo_sym_a, "Alpha");
-            if (!res_a) return std::unexpected(res_a.error());
+            if (!res_a)
+                return std::unexpected(res_a.error());
             Ca = std::move(res_a->first);
             epsa = std::move(res_a->second);
 
             auto res_b = sao_diag_spin(Fb_diag, mo_sym_b, "Beta");
-            if (!res_b) return std::unexpected(res_b.error());
+            if (!res_b)
+                return std::unexpected(res_b.error());
             Cb = std::move(res_b->first);
             epsb = std::move(res_b->second);
 
             calculator._info._scf.alpha.mo_symmetry = std::move(mo_sym_a);
-            calculator._info._scf.beta.mo_symmetry  = std::move(mo_sym_b);
+            calculator._info._scf.beta.mo_symmetry = std::move(mo_sym_b);
             // Ca_orth_prev / Cb_orth_prev intentionally NOT updated →
             // shift_active stays false (level shift incompatible with SAO blocking).
         }
 
         // ── New spin densities ────────────────────────────────────────────────
         const Eigen::MatrixXd Pa_new = Ca.leftCols(n_alpha) * Ca.leftCols(n_alpha).transpose();
-        const Eigen::MatrixXd Pb_new = Cb.leftCols(n_beta)  * Cb.leftCols(n_beta).transpose();
+        const Eigen::MatrixXd Pb_new = Cb.leftCols(n_beta) * Cb.leftCols(n_beta).transpose();
 
         // ── Convergence on total density ──────────────────────────────────────
         const IterationMetrics metrics = unrestricted_iteration_metrics(
             Pa, Pb, Pa_new, Pb_new, E_prev, E_total);
 
         const double iter_time = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - iter_start).count();
+                                     std::chrono::steady_clock::now() - iter_start)
+                                     .count();
         HartreeFock::Logger::scf_iteration(
             iter,
             E_total,
@@ -664,7 +669,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             0.0,
             iter_time);
 
-        Pa = Pa_new;  Pb = Pb_new;  E_prev = E_total;
+        Pa = Pa_new;
+        Pb = Pb_new;
+        E_prev = E_total;
 
         store_unrestricted_iteration(
             calculator,
@@ -678,8 +685,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                 .alpha_mo_coefficients = Ca,
                 .beta_mo_coefficients = Cb,
                 .electronic_energy = E_elec,
-                .total_energy = E_total
-            },
+                .total_energy = E_total},
             metrics);
 
         if (is_converged(calculator._scf, metrics, iter))
@@ -689,7 +695,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             HartreeFock::Logger::scf_footer();
             HartreeFock::Logger::blank();
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "UHF Converged :",
-                std::format("E = {:.10f} Eh  after {} iterations", E_total, iter));
+                                         std::format("E = {:.10f} Eh  after {} iterations", E_total, iter));
             HartreeFock::Logger::blank();
 
             _log_spin_contamination(Ca, Cb, S, n_alpha, n_beta,

@@ -16,3 +16,4 @@ ammonia*
 .github/*/*.yml
 *.hfchk
 *cube
+docs/casscf_remaining_work.md

@@ -10,127 +10,127 @@
 namespace HartreeFock::Correlation::CASSCF
 {
 
-using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
+    using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
 
-// Rotation pairs are stored as an antisymmetric generator index (p,q) for the
-// non-redundant orbital blocks only.
-struct RotPair
-{
-    int p = 0;
-    int q = 0;
-};
+    // Rotation pairs are stored as an antisymmetric generator index (p,q) for the
+    // non-redundant orbital blocks only.
+    struct RotPair
+    {
+        int p = 0;
+        int q = 0;
+    };
 
-// Cache the active-space integral transform and reuse it across all response
-// contractions in a macroiteration.
-ActiveIntegralCache build_active_integral_cache(
-    const std::vector<double>& eri,
-    const Eigen::MatrixXd& C,
-    int n_core,
-    int n_act,
-    int nbasis);
+    // Cache the active-space integral transform and reuse it across all response
+    // contractions in a macroiteration.
+    ActiveIntegralCache build_active_integral_cache(
+        const std::vector<double> &eri,
+        const Eigen::MatrixXd &C,
+        int n_core,
+        int n_act,
+        int nbasis);
 
-// Contract the active 2-RDM against the cached mixed-basis integrals to build
-// the Q matrix that enters the orbital gradient.
-Eigen::MatrixXd compute_Q_matrix(
-    const ActiveIntegralCache& cache,
-    const std::vector<double>& Gamma);
+    // Contract the active 2-RDM against the cached mixed-basis integrals to build
+    // the Q matrix that enters the orbital gradient.
+    Eigen::MatrixXd compute_Q_matrix(
+        const ActiveIntegralCache &cache,
+        const std::vector<double> &Gamma);
 
-// Build the inactive/core contribution to the Fock matrix in the current MO
-// basis. This is the closed-shell part driven entirely by the doubly occupied
-// orbitals.
-Eigen::MatrixXd build_inactive_fock_mo(
-    const Eigen::MatrixXd& C,
-    const Eigen::MatrixXd& H_core,
-    const std::vector<double>& eri,
-    int n_core,
-    int nbasis);
+    // Build the inactive/core contribution to the Fock matrix in the current MO
+    // basis. This is the closed-shell part driven entirely by the doubly occupied
+    // orbitals.
+    Eigen::MatrixXd build_inactive_fock_mo(
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &H_core,
+        const std::vector<double> &eri,
+        int n_core,
+        int nbasis);
 
-// Build the active-space contribution from the 1-RDM so the generalized Fock
-// matrix can include the coupling between core, active, and virtual blocks.
-Eigen::MatrixXd build_active_fock_mo(
-    const Eigen::MatrixXd& C,
-    const Eigen::MatrixXd& gamma,
-    const std::vector<double>& eri,
-    int n_core,
-    int n_act,
-    int nbasis);
+    // Build the active-space contribution from the 1-RDM so the generalized Fock
+    // matrix can include the coupling between core, active, and virtual blocks.
+    Eigen::MatrixXd build_active_fock_mo(
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &gamma,
+        const std::vector<double> &eri,
+        int n_core,
+        int n_act,
+        int nbasis);
 
-// Compute the total electronic energy contribution from the occupied core and
-// inactive Fock blocks.
-double compute_core_energy(
-    const Eigen::MatrixXd& h_mo,
-    const Eigen::MatrixXd& F_I_mo,
-    int n_core);
+    // Compute the total electronic energy contribution from the occupied core and
+    // inactive Fock blocks.
+    double compute_core_energy(
+        const Eigen::MatrixXd &h_mo,
+        const Eigen::MatrixXd &F_I_mo,
+        int n_core);
 
-// Assemble the generalized orbital gradient for non-redundant rotations.
-// `use_sym` lets the caller zero forbidden blocks after the raw gradient is
-// formed.
-Eigen::MatrixXd compute_orbital_gradient(
-    const Eigen::MatrixXd& F_I_mo,
-    const Eigen::MatrixXd& F_A_mo,
-    const Eigen::MatrixXd& Q,
-    const Eigen::MatrixXd& gamma,
-    int n_core,
-    int n_act,
-    int n_virt,
-    const std::vector<int>& mo_irreps,
-    bool use_sym);
+    // Assemble the generalized orbital gradient for non-redundant rotations.
+    // `use_sym` lets the caller zero forbidden blocks after the raw gradient is
+    // formed.
+    Eigen::MatrixXd compute_orbital_gradient(
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        const Eigen::MatrixXd &Q,
+        const Eigen::MatrixXd &gamma,
+        int n_core,
+        int n_act,
+        int n_virt,
+        const std::vector<int> &mo_irreps,
+        bool use_sym);
 
-// Diagonal orbital-Hessian estimate for a pair of orbitals.
-double hess_diag(const Eigen::MatrixXd& F_sum, int p, int q);
+    // Diagonal orbital-Hessian estimate for a pair of orbitals.
+    double hess_diag(const Eigen::MatrixXd &F_sum, int p, int q);
 
-// Apply the diagonal Hessian model to an arbitrary antisymmetric trial
-// direction.
-Eigen::MatrixXd hessian_action(
-    const Eigen::MatrixXd& R,
-    const Eigen::MatrixXd& F_I_mo,
-    const Eigen::MatrixXd& F_A_mo,
-    int n_core,
-    int n_act,
-    int n_virt);
+    // Apply the diagonal Hessian model to an arbitrary antisymmetric trial
+    // direction.
+    Eigen::MatrixXd hessian_action(
+        const Eigen::MatrixXd &R,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt);
 
-// Update the orbital gradient with the first-order response of the diagonal
-// Hessian model to the current rotation step.
-Eigen::MatrixXd fep1_gradient_update(
-    const Eigen::MatrixXd& G,
-    const Eigen::MatrixXd& kappa,
-    const Eigen::MatrixXd& F_I_mo,
-    const Eigen::MatrixXd& F_A_mo,
-    int n_core,
-    int n_act,
-    int n_virt);
+    // Update the orbital gradient with the first-order response of the diagonal
+    // Hessian model to the current rotation step.
+    Eigen::MatrixXd fep1_gradient_update(
+        const Eigen::MatrixXd &G,
+        const Eigen::MatrixXd &kappa,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt);
 
-// Quadratic model used to score competing orbital steps before a full CASSCF
-// reevaluation decides whether to accept them.
-double quadratic_model_delta(
-    const Eigen::VectorXd& g_flat,
-    const Eigen::VectorXd& h_flat,
-    const Eigen::VectorXd& x);
+    // Quadratic model used to score competing orbital steps before a full CASSCF
+    // reevaluation decides whether to accept them.
+    double quadratic_model_delta(
+        const Eigen::VectorXd &g_flat,
+        const Eigen::VectorXd &h_flat,
+        const Eigen::VectorXd &x);
 
-// Enumerate the unique core-active, core-virtual, and active-virtual rotation
-// pairs. Rotations within a block are gauge freedom and omitted.
-std::vector<RotPair> non_redundant_pairs(int n_core, int n_act, int n_virt);
+    // Enumerate the unique core-active, core-virtual, and active-virtual rotation
+    // pairs. Rotations within a block are gauge freedom and omitted.
+    std::vector<RotPair> non_redundant_pairs(int n_core, int n_act, int n_virt);
 
-// Augmented-Hessian style orbital step builder with diagonal preconditioning,
-// symmetry masking, and a step-length cap.
-Eigen::MatrixXd augmented_hessian_step(
-    const Eigen::MatrixXd& G,
-    const Eigen::MatrixXd& F_I_mo,
-    const Eigen::MatrixXd& F_A_mo,
-    int n_core,
-    int n_act,
-    int n_virt,
-    double level_shift,
-    double max_rot,
-    const std::vector<int>& mo_irreps,
-    bool use_sym);
+    // Augmented-Hessian style orbital step builder with diagonal preconditioning,
+    // symmetry masking, and a step-length cap.
+    Eigen::MatrixXd augmented_hessian_step(
+        const Eigen::MatrixXd &G,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym);
 
-// Apply the antisymmetric orbital rotation to the coefficient matrix and then
-// restore orthonormality in the current AO metric.
-Eigen::MatrixXd apply_orbital_rotation(
-    const Eigen::MatrixXd& C_old,
-    const Eigen::MatrixXd& kappa,
-    const Eigen::MatrixXd& S);
+    // Apply the antisymmetric orbital rotation to the coefficient matrix and then
+    // restore orthonormality in the current AO metric.
+    Eigen::MatrixXd apply_orbital_rotation(
+        const Eigen::MatrixXd &C_old,
+        const Eigen::MatrixXd &kappa,
+        const Eigen::MatrixXd &S);
 
 } // namespace HartreeFock::Correlation::CASSCF
 
