@@ -1140,5 +1140,64 @@ int main()
                      "probe-ranking should not be locked to a single root's dominant pair");
     }
 
+    {
+        const Eigen::MatrixXd G_root0 = (Eigen::MatrixXd(4, 4) <<
+            0.0, 0.80, 0.10, 0.00,
+            -0.80, 0.0, 0.00, 0.00,
+            -0.10, 0.00, 0.0, 0.00,
+            0.00, 0.00, 0.00, 0.0).finished();
+        const Eigen::MatrixXd G_root1 = (Eigen::MatrixXd(4, 4) <<
+            0.0, -0.70, 0.00, 0.30,
+            0.70, 0.0, 0.00, 0.00,
+            0.00, 0.00, 0.0, 0.00,
+            -0.30, 0.00, 0.00, 0.0).finished();
+
+        const Eigen::MatrixXd G_avg = 0.7 * G_root0 + 0.3 * G_root1;
+        const double sa_g = G_avg.cwiseAbs().maxCoeff();
+        const double weighted_root_screen =
+            0.7 * G_root0.cwiseAbs().maxCoeff() + 0.3 * G_root1.cwiseAbs().maxCoeff();
+        const double max_root_g =
+            std::max(G_root0.cwiseAbs().maxCoeff(), G_root1.cwiseAbs().maxCoeff());
+
+        ok &= expect(weighted_root_screen > sa_g + 1e-12,
+                     "root-resolved acceptance metrics should detect cancellation hidden in the averaged SA gradient");
+        ok &= expect(max_root_g + 1e-12 >= weighted_root_screen,
+                     "max-root acceptance diagnostics should bound the weighted root-screen metric");
+    }
+
+    {
+        auto accept_candidate = [](double best_E, double best_screen_g, double best_max_root_g,
+                                   double trial_E, double trial_screen_g, double trial_max_root_g)
+        {
+            const double merit_weight = 0.10;
+            const double best_merit = best_E + merit_weight * best_screen_g * best_screen_g;
+            const double trial_merit = trial_E + merit_weight * trial_screen_g * trial_screen_g;
+            const bool merit_improved = trial_merit < best_merit - 1e-10;
+            const double flat_energy_window = 1e-6;
+            const bool weighted_root_gradient_reduced = trial_screen_g < best_screen_g - 1e-12;
+            const bool max_root_gradient_reduced = trial_max_root_g < best_max_root_g - 1e-12;
+            const double weighted_root_worsen_window =
+                std::max(0.05 * std::max(best_screen_g, 1e-8), 1e-6);
+            const double max_root_worsen_window =
+                std::max(0.05 * std::max(best_max_root_g, 1e-8), 1e-6);
+            const bool energy_improved = trial_E < best_E - 1e-10;
+            const bool energy_improved_without_hurting_gradient =
+                energy_improved &&
+                trial_screen_g <= best_screen_g + weighted_root_worsen_window &&
+                trial_max_root_g <= best_max_root_g + max_root_worsen_window;
+            const bool stationary_but_better_grad =
+                std::abs(trial_E - best_E) <= flat_energy_window &&
+                (weighted_root_gradient_reduced || max_root_gradient_reduced);
+            return energy_improved_without_hurting_gradient || merit_improved || stationary_but_better_grad;
+        };
+
+        ok &= expect(!accept_candidate(-10.0000, 0.50, 0.70, -10.0002, 0.53, 0.80),
+                     "root-resolved acceptance should reject energy gains that worsen the max-root gradient too much");
+        ok &= expect(accept_candidate(-10.0000, 0.50, 0.70, -10.0002, 0.49, 0.69),
+                     "root-resolved acceptance should allow improvements that respect both weighted and max-root gradient screens");
+        ok &= expect(accept_candidate(-10.0000, 0.50, 0.70, -10.0000, 0.48, 0.69),
+                     "root-resolved acceptance should keep flat-energy candidates when the root-screen gradient genuinely improves");
+    }
+
     return ok ? 0 : 1;
 }

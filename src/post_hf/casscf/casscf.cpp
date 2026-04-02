@@ -82,6 +82,8 @@ namespace
         bool ci_used_direct_sigma = false;
         double E_cas = 0.0;
         double gnorm = 0.0;
+        double weighted_root_gnorm = 0.0;
+        double max_root_gnorm = 0.0;
     };
 
     // Root identities are tracked across macroiterations by CI overlap so the
@@ -108,6 +110,8 @@ namespace
         double actual_delta = 0.0;
         double max_root_delta = 0.0;
         std::string accepted_candidate_label = "none";
+        double accepted_weighted_root_gnorm = 0.0;
+        double accepted_max_root_gnorm = 0.0;
     };
 
     struct WeightedQuadraticModelPrediction
@@ -126,6 +130,12 @@ namespace
     {
         Eigen::MatrixXd weighted;
         std::vector<Eigen::MatrixXd> per_root;
+    };
+
+    struct RootResolvedGradientScreen
+    {
+        double weighted = 0.0;
+        double max_root = 0.0;
     };
 
     // Reorder the newly solved CI roots to best match the previous macroiteration.
@@ -274,6 +284,21 @@ namespace
         for (const auto &root : roots)
             gradient.noalias() += root.weight * root.g_orb;
         return gradient;
+    }
+
+    RootResolvedGradientScreen build_root_resolved_gradient_screen(
+        const std::vector<StateSpecificData> &roots)
+    {
+        RootResolvedGradientScreen screen;
+        for (const auto &root : roots)
+        {
+            if (root.g_orb.size() == 0)
+                continue;
+            const double root_norm = root.g_orb.cwiseAbs().maxCoeff();
+            screen.weighted += root.weight * root_norm;
+            screen.max_root = std::max(screen.max_root, root_norm);
+        }
+        return screen;
     }
 
     WeightedQuadraticModelPrediction build_weighted_root_quadratic_model_prediction(
@@ -657,6 +682,8 @@ namespace HartreeFock::Correlation::CASSCF
             }
 
             st.g_orb = build_weighted_root_orbital_gradient(st.roots, nbasis);
+            const RootResolvedGradientScreen gradient_screen =
+                build_root_resolved_gradient_screen(st.roots);
 
             const Eigen::MatrixXd h_mo = C_trial.transpose() * calc._hcore * C_trial;
             const double E_core = compute_core_energy(h_mo, st.F_I_mo, n_core);
@@ -665,6 +692,8 @@ namespace HartreeFock::Correlation::CASSCF
                 E_act += root.weight * root.ci_energy;
             st.E_cas = calc._nuclear_repulsion + E_core + E_act;
             st.gnorm = st.g_orb.cwiseAbs().maxCoeff();
+            st.weighted_root_gnorm = gradient_screen.weighted;
+            st.max_root_gnorm = gradient_screen.max_root;
             return st;
         };
 
@@ -834,7 +863,7 @@ namespace HartreeFock::Correlation::CASSCF
         };
 
         double E_prev = 0.0;
-        double prev_reported_gnorm = std::numeric_limits<double>::infinity();
+        double prev_screen_gnorm = std::numeric_limits<double>::infinity();
         bool converged = false;
         double level_shift = 0.2;
         int rejected_streak = 0;
@@ -982,9 +1011,10 @@ namespace HartreeFock::Correlation::CASSCF
             bool accepted = false;
             McscfState accepted_state = st_current;
             double best_E = st_current.E_cas;
-            double best_g = st_current.gnorm;
+            double best_screen_g = st_current.weighted_root_gnorm;
+            double best_max_root_g = st_current.max_root_gnorm;
             const double merit_weight = 0.10;
-            double best_merit = best_E + merit_weight * best_g * best_g;
+            double best_merit = best_E + merit_weight * best_screen_g * best_screen_g;
             Eigen::MatrixXd C_best = C;
             Eigen::MatrixXd best_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
             struct CandidateStep
@@ -1100,17 +1130,26 @@ namespace HartreeFock::Correlation::CASSCF
                         continue;
 
                     const auto &trial = *trial_res;
-                    const double trial_merit = trial.E_cas + merit_weight * trial.gnorm * trial.gnorm;
+                    const double trial_merit =
+                        trial.E_cas + merit_weight * trial.weighted_root_gnorm * trial.weighted_root_gnorm;
                     const bool merit_improved = trial_merit < best_merit - 1e-10;
                     const double flat_energy_window = std::max(1000.0 * as.tol_mcscf_energy, 1e-6);
-                    const bool gradient_reduced = trial.gnorm < best_g - 1e-12;
-                    const double gradient_worsen_window =
-                        std::max(0.05 * std::max(best_g, 1e-8), 1e-6);
+                    const bool weighted_root_gradient_reduced =
+                        trial.weighted_root_gnorm < best_screen_g - 1e-12;
+                    const bool max_root_gradient_reduced =
+                        trial.max_root_gnorm < best_max_root_g - 1e-12;
+                    const double weighted_root_worsen_window =
+                        std::max(0.05 * std::max(best_screen_g, 1e-8), 1e-6);
+                    const double max_root_worsen_window =
+                        std::max(0.05 * std::max(best_max_root_g, 1e-8), 1e-6);
                     const bool energy_improved = trial.E_cas < best_E - 1e-10;
                     const bool energy_improved_without_hurting_gradient =
-                        energy_improved && trial.gnorm <= best_g + gradient_worsen_window;
+                        energy_improved &&
+                        trial.weighted_root_gnorm <= best_screen_g + weighted_root_worsen_window &&
+                        trial.max_root_gnorm <= best_max_root_g + max_root_worsen_window;
                     const bool stationary_but_better_grad =
-                        std::abs(trial.E_cas - best_E) <= flat_energy_window && gradient_reduced;
+                        std::abs(trial.E_cas - best_E) <= flat_energy_window &&
+                        (weighted_root_gradient_reduced || max_root_gradient_reduced);
                     if (!energy_improved_without_hurting_gradient &&
                         !merit_improved &&
                         !stationary_but_better_grad)
@@ -1118,7 +1157,8 @@ namespace HartreeFock::Correlation::CASSCF
 
                     accepted = true;
                     best_E = trial.E_cas;
-                    best_g = trial.gnorm;
+                    best_screen_g = trial.weighted_root_gnorm;
+                    best_max_root_g = trial.max_root_gnorm;
                     best_merit = trial_merit;
                     accepted_state = trial;
                     C_best = apply_orbital_rotation(C, kappa_try, calc._overlap);
@@ -1127,6 +1167,8 @@ namespace HartreeFock::Correlation::CASSCF
                         (std::abs(scale - 1.0) < 1e-12)
                             ? candidate.label
                             : std::format("{}@{:.5f}", candidate.label, scale);
+                    diag.accepted_weighted_root_gnorm = trial.weighted_root_gnorm;
+                    diag.accepted_max_root_gnorm = trial.max_root_gnorm;
                     const WeightedQuadraticModelPrediction prediction =
                         build_weighted_root_quadratic_model_prediction(
                             st_current.roots, st_current.F_I_mo, opt_pairs, best_step);
@@ -1159,11 +1201,16 @@ namespace HartreeFock::Correlation::CASSCF
 
             const double reported_gnorm = st_current.g_orb.cwiseAbs().maxCoeff();
             st_current.gnorm = reported_gnorm;
+            const double reported_screen_gnorm = st_current.weighted_root_gnorm;
+            const double reported_max_root_gnorm = st_current.max_root_gnorm;
             const double dE = st_current.E_cas - E_prev;
             E_prev = st_current.E_cas;
 
             const bool small_energy_change = macro > 1 && std::abs(dE) < std::max(10.0 * as.tol_mcscf_energy, 1e-8);
-            const bool little_gradient_progress = std::isfinite(prev_reported_gnorm) && std::abs(reported_gnorm - prev_reported_gnorm) < std::max(0.05 * std::max(prev_reported_gnorm, 1e-8), 1e-8);
+            const bool little_gradient_progress =
+                std::isfinite(prev_screen_gnorm) &&
+                std::abs(reported_screen_gnorm - prev_screen_gnorm) <
+                    std::max(0.05 * std::max(prev_screen_gnorm, 1e-8), 1e-8);
             const bool accepted_micro_step_plateau =
                 diag.step_accepted && diag.accepted_step_norm < 5e-5;
             // Track repeated "flat" iterations separately from hard rejections so
@@ -1172,7 +1219,7 @@ namespace HartreeFock::Correlation::CASSCF
                 ++stagnation_streak;
             else
                 stagnation_streak = 0;
-            prev_reported_gnorm = reported_gnorm;
+            prev_screen_gnorm = reported_screen_gnorm;
 
             if (stagnation_streak >= 2)
             {
@@ -1190,6 +1237,7 @@ namespace HartreeFock::Correlation::CASSCF
                     std::format(
                         "Macro {:3d}  mode={:<12}  ci_solver={}\n"
                         "             accepted={:<3}  candidate={}  max_root_dE={:.2e}  step_norm={:.2e}\n"
+                        "             sa_g={:.2e}  root_screen_g={:.2e}  max_root_g={:.2e}\n"
                         "             predicted_dE={:.2e}  root_model_spread={:.2e}  actual_dE={:.2e}  response_resid={:.2e}\n"
                         "             response_iter={:3d}  level_shift={:.2e}",
                         macro,
@@ -1199,6 +1247,9 @@ namespace HartreeFock::Correlation::CASSCF
                         diag.accepted_candidate_label,
                         diag.max_root_delta,
                         diag.accepted_step_norm,
+                        reported_gnorm,
+                        diag.step_accepted ? diag.accepted_weighted_root_gnorm : reported_screen_gnorm,
+                        diag.step_accepted ? diag.accepted_max_root_gnorm : reported_max_root_gnorm,
                         diag.predicted_delta,
                         diag.max_root_predicted_delta_deviation,
                         diag.actual_delta,
