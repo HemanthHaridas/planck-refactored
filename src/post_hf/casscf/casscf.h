@@ -15,6 +15,8 @@ namespace HartreeFock
 
 namespace HartreeFock::Correlation::CASSCF
 {
+    // Shared macroiteration driver used by both CASSCF and RASSCF front-ends.
+    // `tag` controls log labeling, while `ras` selects the determinant filter.
     std::expected<void, std::string> run_mcscf_loop(
         HartreeFock::Calculator&                   calc,
         const std::vector<HartreeFock::ShellPair>& shell_pairs,

@@ -37,6 +37,8 @@ using HartreeFock::Correlation::CASSCFInternal::kMaxPackedSpatialOrbitals;
 using HartreeFock::Correlation::CASSCFInternal::kMaxSeparateSpinOrbitals;
 using HartreeFock::Correlation::CASSCFInternal::match_roots_by_max_overlap;
 
+// Keep the state-averaged driver rooted in explicit per-root data so the
+// code can defer averaging until the last possible moment.
 struct StateSpecificData
 {
     double ci_energy = 0.0;
@@ -53,6 +55,9 @@ struct StateSpecificData
     Eigen::MatrixXd g_ci;
 };
 
+// Scratch state returned by each full CASSCF evaluation at a fixed MO basis.
+// This bundles the CI model, active-space intermediates, state-averaged
+// densities, and diagnostics needed by the macro/micro optimizer.
 struct McscfState
 {
     CIDeterminantSpace ci_space;
@@ -74,6 +79,8 @@ struct McscfState
     double gnorm = 0.0;
 };
 
+// Root identities are tracked across macroiterations by CI overlap so the
+// state-averaged weights remain attached to the same physical roots.
 struct RootReference
 {
     Eigen::VectorXd energies;
@@ -96,6 +103,8 @@ struct MacroDiagnostics
     double max_root_delta = 0.0;
 };
 
+// Reorder the newly solved CI roots to best match the previous macroiteration.
+// This avoids state flipping when near-degenerate roots cross in energy.
 void reorder_ci_roots(
     Eigen::VectorXd& E,
     Eigen::MatrixXd& V,
@@ -190,6 +199,8 @@ void accumulate_weighted_tensor(
     const std::vector<double>& source,
     double weight)
 {
+    // The first contributing root fixes the tensor shape; later roots just add
+    // their weighted contribution elementwise.
     if (destination.empty())
         destination.assign(source.size(), 0.0);
     for (std::size_t i = 0; i < source.size(); ++i)
@@ -201,6 +212,8 @@ void accumulate_weighted_matrix(
     const Eigen::MatrixXd& source,
     double weight)
 {
+    // Mirror the tensor helper for matrix-valued intermediates such as F_A,
+    // Q-derived gradients, and other root-resolved orbital data.
     if (destination.size() == 0)
         destination = Eigen::MatrixXd::Zero(source.rows(), source.cols());
     destination.noalias() += weight * source;
@@ -232,6 +245,9 @@ Eigen::MatrixXd build_ci_orbital_gradient_correction(
     int n_act,
     int n_virt)
 {
+    // The CI response feeds back into the orbital stationarity condition only
+    // through inactive/active and active/virtual blocks; within-space rotations
+    // remain redundant and are projected out.
     Eigen::MatrixXd G_CI = Eigen::MatrixXd::Zero(nbasis, nbasis);
     for (int p = 0; p < nbasis; ++p)
     for (int t = 0; t < n_act; ++t)
@@ -319,6 +335,8 @@ std::expected<void, std::string> run_mcscf_loop(
         for (int k = 0; k < nroots; ++k) weights(k) = as.weights[k];
     else
         weights.setConstant(1.0 / nroots);
+    // Normalize even user-provided weights so all downstream root averaging
+    // can assume a convex combination.
     weights /= weights.sum();
 
     const bool have_sym = !calc._sao_irrep_names.empty()
@@ -400,6 +418,9 @@ std::expected<void, std::string> run_mcscf_loop(
             const RootReference* root_ref = nullptr,
             bool log_root_tracking = false) -> std::expected<McscfState, std::string>
     {
+        // This is the single source of truth for "what does the current MO
+        // basis imply?". Every candidate orbital step and every final accepted
+        // macroiteration comes back through this full reevaluation path.
         McscfState st;
         st.F_I_mo = build_inactive_fock_mo(C_trial, calc._hcore, eri, n_core, nbasis);
         st.h_eff = st.F_I_mo.block(n_core, n_core, n_act, n_act);
@@ -438,6 +459,8 @@ std::expected<void, std::string> run_mcscf_loop(
 
         for (int r = 0; r < nr_used; ++r)
         {
+            // Build each root from its own CI vector first, then reconstruct
+            // the state-averaged objects as weighted sums of those root records.
             StateSpecificData root;
             root.ci_energy = st.ci_energies(r);
             root.weight = weights(r);
@@ -485,6 +508,8 @@ std::expected<void, std::string> run_mcscf_loop(
 
     auto pack_pairs = [&](const Eigen::MatrixXd& M)
     {
+        // Compress the antisymmetric orbital gradient/Hessian to just the
+        // symmetry-allowed non-redundant rotation parameters.
         Eigen::VectorXd v = Eigen::VectorXd::Zero(static_cast<int>(opt_pairs.size()));
         for (int k = 0; k < static_cast<int>(opt_pairs.size()); ++k)
             v(k) = M(opt_pairs[k].p, opt_pairs[k].q);
@@ -517,6 +542,9 @@ std::expected<void, std::string> run_mcscf_loop(
             double lm_shift,
             MacroDiagnostics& diag)
     {
+        // For small pair spaces, estimate the orbital Hessian numerically from
+        // fully reevaluated gradients. This is too expensive for production use
+        // in large spaces, but it is invaluable as a debug/trust-region fallback.
         const int npairs = static_cast<int>(opt_pairs.size());
         Eigen::MatrixXd zero = Eigen::MatrixXd::Zero(nbasis, nbasis);
         if (npairs == 0 || npairs > numeric_newton_pair_limit)
@@ -601,6 +629,8 @@ std::expected<void, std::string> run_mcscf_loop(
 
     auto build_gradient_fallback_step = [&](const Eigen::MatrixXd& G_trial)
     {
+        // Last-resort preconditioner-free step: follow the raw orbital gradient
+        // direction and let the exact CASSCF reevaluation decide whether it helps.
         Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
         for (const auto& pair : opt_pairs)
         {
@@ -678,6 +708,8 @@ std::expected<void, std::string> run_mcscf_loop(
             if (micro == 0)
                 kappa_first = kappa;
 
+            // The orbital trial step perturbs the active-space Hamiltonian,
+            // which in turn drives a first-order CI response for each root.
             const Eigen::MatrixXd dh = delta_h_eff(kappa, st_current.F_I_mo, n_core, n_act);
             const int nr_used = static_cast<int>(st_current.roots.size());
             const CISigmaApplier ci_apply = [&](const Eigen::VectorXd& vec, Eigen::VectorXd& sigma_vec)
@@ -692,6 +724,9 @@ std::expected<void, std::string> run_mcscf_loop(
             {
                 auto& root = st_current.roots[static_cast<std::size_t>(r)];
                 const Eigen::VectorXd& c0r = root.ci_vector;
+                // The current implementation still uses the 1-body commutator
+                // model for the CI-response right-hand side, but it now keeps
+                // the resulting first-order objects separated by root.
                 const Eigen::VectorXd sigma =
                     ci_sigma_1body(dh, c0r, a_strs, b_strs, st_current.dets, n_act);
 
@@ -715,6 +750,8 @@ std::expected<void, std::string> run_mcscf_loop(
                     c0_vec, c1_vec, single_weight(1.0),
                     a_strs, b_strs, st_current.dets, n_act);
                 root.Gamma1_vec.clear();
+                // Assemble the Hermitian first-order 2-RDM explicitly from the
+                // c1-c0 and c0-c1 bilinear contractions.
                 accumulate_weighted_tensor(root.Gamma1_vec, Gamma1_r, 1.0);
                 accumulate_weighted_tensor(root.Gamma1_vec, Gamma1_rt, 1.0);
                 root.Q1 = compute_Q_matrix(st_current.active_integrals, root.Gamma1_vec);
@@ -731,6 +768,9 @@ std::expected<void, std::string> run_mcscf_loop(
 
             Eigen::MatrixXd G_CI = Eigen::MatrixXd::Zero(nbasis, nbasis);
             for (int r = 0; r < nr_used; ++r)
+                // Rebuild the state-averaged CI-driven orbital correction from
+                // the stored per-root response objects instead of collapsing the
+                // roots earlier in the microiteration.
                 accumulate_weighted_matrix(
                     G_CI,
                     st_current.roots[static_cast<std::size_t>(r)].g_ci,
@@ -831,6 +871,8 @@ std::expected<void, std::string> run_mcscf_loop(
                 Eigen::MatrixXd kappa_try = scale * step_base;
                 if (kappa_try.cwiseAbs().maxCoeff() < 1e-12) continue;
 
+                // The approximate AH/response model only proposes candidates.
+                // Acceptance is always decided by a fresh full CASSCF evaluation.
                 auto trial_res = evaluate(apply_orbital_rotation(C, kappa_try, calc._overlap), &root_reference, false);
                 if (!trial_res) continue;
 
@@ -895,6 +937,8 @@ std::expected<void, std::string> run_mcscf_loop(
                < std::max(0.05 * std::max(prev_reported_gnorm, 1e-8), 1e-8);
         const bool accepted_micro_step_plateau =
             diag.step_accepted && diag.accepted_step_norm < 5e-5;
+        // Track repeated "flat" iterations separately from hard rejections so
+        // we can switch to more exploratory probes before declaring failure.
         if ((!diag.step_accepted && rejected_streak >= 2) || (small_energy_change && little_gradient_progress))
             ++stagnation_streak;
         else

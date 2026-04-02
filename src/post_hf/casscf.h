@@ -11,6 +11,9 @@
 namespace HartreeFock::Correlation
 {
 
+    // Public entry points for the CASSCF layer. These are thin wrappers around
+    // the shared MCSCF driver with either full CI or restricted-active-space
+    // determinant selection.
     // ── CASSCF ────────────────────────────────────────────────────────────────────
     //
     // State-averaged (or single-state) Complete Active Space SCF.
@@ -36,6 +39,8 @@ namespace HartreeFock::Correlation
         const std::vector<HartreeFock::ShellPair>& shell_pairs);
 
 
+    // RASSCF reuses the same optimizer but constrains the determinant space
+    // through the RAS bookkeeping stored in the shared internal params.
     // ── RASSCF ────────────────────────────────────────────────────────────────────
     //
     // Restricted Active Space SCF.  Active space is partitioned as

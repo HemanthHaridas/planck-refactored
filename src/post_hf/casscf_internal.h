@@ -20,6 +20,8 @@ namespace HartreeFock::Correlation::CASSCFInternal
 
 using CIString = std::uint64_t;
 
+// CI strings are encoded as bit patterns, so the bit-width of the host type
+// directly limits the number of active orbitals we can represent.
 inline constexpr int kCIStringBits = std::numeric_limits<CIString>::digits;
 inline constexpr int kMaxSeparateSpinOrbitals = kCIStringBits - 1;
 inline constexpr int kMaxPackedSpatialOrbitals = (kCIStringBits - 1) / 2;
@@ -37,6 +39,8 @@ inline CIString low_bit_mask(int nbits)
     return (CIString(1) << nbits) - 1;
 }
 
+// RAS parameters are shared between the public driver and the determinant
+// builders, so this struct carries both the partitioning and the screening caps.
 struct RASParams
 {
     int nras1 = 0, nras2 = 0, nras3 = 0;
@@ -69,6 +73,9 @@ inline bool admissible_ras_pair(CIString alpha, CIString beta, const RASParams& 
         && ras3_electrons(alpha, beta, ras) <= ras.max_elec;
 }
 
+// Minimal symmetry metadata needed by the CI determinant selector and root
+// tracking. The product table is assumed to be Abelian and indexed by the
+// order of `names`.
 struct SymmetryContext
 {
     std::vector<std::string> names;
@@ -77,6 +84,8 @@ struct SymmetryContext
     int totally_symmetric_irrep = 0;
 };
 
+// The active-integral cache stores the one expensive mixed-basis transform used
+// repeatedly by Q-matrix contractions across a macroiteration.
 struct ActiveIntegralCache
 {
     std::vector<double> puvw;
@@ -85,6 +94,8 @@ struct ActiveIntegralCache
     bool valid = false;
 };
 
+// Contract the cached mixed-basis two-electron tensor with the active-space
+// 2-RDM. The layout is row-major and the tensor sizes must agree exactly.
 inline Eigen::MatrixXd contract_q_matrix(
     const std::vector<double>& puvw,
     const std::vector<double>& Gamma,
@@ -119,6 +130,8 @@ struct NaturalOrbitalData
     Eigen::MatrixXd rotation;
 };
 
+// The natural-orbital rotation diagonalizes the active-space 1-RDM; the
+// eigenvalues are returned in descending occupation order to match reporting.
 inline NaturalOrbitalData diagonalize_natural_orbitals(const Eigen::MatrixXd& gamma)
 {
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(gamma);
@@ -134,6 +147,8 @@ inline int determinant_symmetry(
     const std::vector<int>& irr_act,
     const SymmetryContext& sym_ctx)
 {
+    // Start from the totally symmetric irrep and fold in each occupied active
+    // orbital's label for both spin sectors.
     int sym = sym_ctx.totally_symmetric_irrep;
     for (int t = 0; t < static_cast<int>(irr_act.size()); ++t)
     {
@@ -250,9 +265,13 @@ inline std::vector<int> hungarian_max_assignment(const Eigen::MatrixXd& weights)
 
 inline std::vector<int> match_roots_by_max_overlap(const Eigen::MatrixXd& overlaps)
 {
+    // Use a maximum-weight assignment so each previous root is paired with the
+    // most similar current root without reusing a new state twice.
     return detail::hungarian_max_assignment(overlaps);
 }
 
+// Project a response vector orthogonally to the reference CI root so the
+// first-order correction stays in the tangent space of the normalized state.
 inline Eigen::VectorXd project_orthogonal(
     const Eigen::VectorXd& v,
     const Eigen::VectorXd& c0)
@@ -269,6 +288,8 @@ inline Eigen::VectorXd apply_response_diag_preconditioner(
     double precond_floor,
     double& max_denominator_regularization)
 {
+    // The diagonal preconditioner is clipped away from zero to avoid exploding
+    // corrections when an orbital or CI denominator becomes nearly singular.
     Eigen::VectorXd step = Eigen::VectorXd::Zero(rhs.size());
     for (int i = 0; i < rhs.size(); ++i)
     {
@@ -295,6 +316,8 @@ struct CIResponseResult
     bool converged = false;
 };
 
+// Residual for the linearized CI response equation after projecting both the
+// right-hand side and the iterate back into the orthogonal complement of c0.
 inline Eigen::VectorXd compute_ci_response_residual(
     const Eigen::MatrixXd& H,
     const Eigen::VectorXd& c1,
@@ -315,6 +338,8 @@ inline CIResponseResult ci_response_diag_precond_single_step(
     const Eigen::VectorXd& sigma,
     double precond_floor = 1e-4)
 {
+    // Single-step fallback: one preconditioned update from the projected
+    // residual, mainly used when the iterative solver cannot converge.
     CIResponseResult result;
     result.c1 = Eigen::VectorXd::Zero(c0.size());
 
@@ -338,6 +363,8 @@ inline CIResponseResult solve_ci_response_iterative(
     int max_iter = 32,
     double precond_floor = 1e-4)
 {
+    // Restartable Davidson-style linear solver for the first-order CI response.
+    // The solver keeps the best finite iterate even if convergence stalls.
     CIResponseResult result;
     result.c1 = Eigen::VectorXd::Zero(c0.size());
 

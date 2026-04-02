@@ -21,6 +21,9 @@ struct FermionOpResult
     bool valid = false;
 };
 
+// These helpers carry the fermionic phase from the number of occupied orbitals
+// below the operator index, matching the determinant ordering used everywhere
+// else in the CASSCF string utilities.
 inline FermionOpResult apply_annihilation(CIString det, int orb)
 {
     const CIString bit = single_bit_mask(orb);
@@ -38,6 +41,7 @@ inline FermionOpResult apply_creation(CIString det, int orb)
 template <typename Fn>
 void for_each_set_bit(CIString bits, Fn&& fn)
 {
+    // Iterate occupied orbitals by repeatedly clearing the lowest set bit.
     while (bits)
     {
         const int bit = std::countr_zero(bits);
@@ -49,6 +53,8 @@ void for_each_set_bit(CIString bits, Fn&& fn)
 template <typename Fn>
 void for_each_clear_bit(CIString bits, int nbits, Fn&& fn)
 {
+    // The mask trims us to the active spin block so "clear" means "unoccupied"
+    // within the selected alpha or beta sector.
     const CIString mask = low_bit_mask(nbits);
     for_each_set_bit((~bits) & mask, fn);
 }
@@ -88,6 +94,9 @@ Eigen::MatrixXd compute_1rdm_impl(
 
             if (reference_mode)
             {
+                // Reference mode walks all spin orbitals explicitly so the
+                // test helper can compare against the same algebra without
+                // assuming the spin-blocked determinant layout.
                 for (int q_so = 0; q_so < 2 * n_act; ++q_so)
                 {
                     auto ann = apply_annihilation(det_j, q_so);
@@ -106,6 +115,8 @@ Eigen::MatrixXd compute_1rdm_impl(
                 continue;
             }
 
+            // In the production path we stay inside the alpha or beta block and
+            // only enumerate occupied -> unoccupied moves that preserve spin.
             for (int spin_off : {0, n_act})
             {
                 const CIString occ = (det_j >> spin_off) & low_bit_mask(n_act);
@@ -156,6 +167,9 @@ std::vector<double> compute_2rdm_impl(
 
             if (reference_mode)
             {
+                // The reference path keeps the operator order completely
+                // explicit: q and s are annihilated first, then r and p are
+                // created back onto the bra determinant.
                 for (int q_so = 0; q_so < 2 * n_act; ++q_so)
                 {
                     auto ann_q = apply_annihilation(det_j, q_so);
@@ -189,6 +203,9 @@ std::vector<double> compute_2rdm_impl(
                 continue;
             }
 
+            // The production path mirrors the spin-adapted determinant layout:
+            // annihilate occupied spin orbitals, then fill the remaining holes
+            // inside the same spin block.
             const CIString occ0 = det_j & low_bit_mask(2 * n_act);
             for_each_set_bit(occ0, [&](int q_so) {
                 auto ann_q = apply_annihilation(det_j, q_so);

@@ -11,6 +11,8 @@ namespace HartreeFock::Correlation
         HartreeFock::Calculator& calculator,
         const std::vector<HartreeFock::ShellPair>& shell_pairs)
     {
+        // Reject anything except a converged closed-shell RHF reference; the
+        // response matrix below is only defined in that setting.
         if (!calculator._info._is_converged)
             return std::unexpected("build_rhf_cphf_matrix: SCF not converged.");
         if (calculator._scf._scf != HartreeFock::SCFType::RHF ||
@@ -48,6 +50,8 @@ namespace HartreeFock::Correlation
         const int nov = n_occ * n_virt;
         Eigen::MatrixXd A = Eigen::MatrixXd::Zero(nov, nov);
 
+        // Flatten the `(a,i)` response space in row-major order so the dense
+        // matrix lines up with the vectorized solver interface.
         auto idx_ai = [n_occ](int a, int i) -> int {
             return a * n_occ + i;
         };
@@ -70,6 +74,8 @@ namespace HartreeFock::Correlation
                 if (a == b && i == j)
                     val += eps(n_occ + a) - eps(i);
 
+                // RHF response is the orbital-energy gap plus the usual three
+                // two-electron couplings from the CPHF/Z-vector equations.
                 const double ai_bj = mo_ai_bj[idx_ai_bj(a, i, b, j)];
                 const double ab_ij = mo_ab_ij[idx_ab_ij(a, b, i, j)];
                 const double aj_bi = mo_ai_bj[idx_ai_bj(a, j, b, i)];
@@ -87,6 +93,8 @@ namespace HartreeFock::Correlation
         const std::vector<HartreeFock::ShellPair>& shell_pairs,
         const Eigen::MatrixXd& rhs)
     {
+        // Build the response matrix once, then solve in the flattened
+        // occupied-virtual space and reshape back into matrix form.
         auto A_res = build_rhf_cphf_matrix(calculator, shell_pairs);
         if (!A_res) return std::unexpected(A_res.error());
 
@@ -106,9 +114,12 @@ namespace HartreeFock::Correlation
                 n_virt, n_occ, rhs.rows(), rhs.cols()));
         }
 
+        // Eigen's dense solver expects a vector, so map the 2-D response field
+        // into the same `(a,i)` ordering used by the matrix builder.
         Eigen::VectorXd rhs_vec(Eigen::Map<const Eigen::VectorXd>(rhs.data(), rhs.size()));
         Eigen::VectorXd z_vec = A.colPivHouseholderQr().solve(rhs_vec);
 
+        // Restore the natural virtual-by-occupied layout for the caller.
         Eigen::MatrixXd z = Eigen::Map<const Eigen::MatrixXd>(z_vec.data(), n_virt, n_occ);
         return z;
     }

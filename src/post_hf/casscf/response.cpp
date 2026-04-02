@@ -21,6 +21,8 @@ struct FermionOpResult
     bool valid = false;
 };
 
+// These mirror the string-layer operators so the response code uses the same
+// determinant phase convention as the sigma and RDM builders.
 inline FermionOpResult apply_annihilation(HartreeFock::Correlation::CASSCFInternal::CIString det, int orb)
 {
     const auto bit = single_bit_mask(orb);
@@ -44,6 +46,8 @@ Eigen::VectorXd response_residual(
 {
     Eigen::VectorXd hc1(c1.size());
     apply(c1, hc1);
+    // The residual is the projected linearized response equation:
+    // (H - E0) c1 + Q sigma = 0, with Q enforcing orthogonality to c0.
     const Eigen::VectorXd rhs = -project_orthogonal(sigma, c0);
     return project_orthogonal(rhs - (hc1 - E0 * c1), c0);
 }
@@ -115,6 +119,8 @@ Eigen::MatrixXd delta_h_eff(
     int n_core,
     int n_act)
 {
+    // The orbital response only needs the active block of the commutator
+    // between the current rotation and the effective Fock matrix.
     Eigen::MatrixXd comm = kappa * F_I_mo - F_I_mo * kappa;
     return comm.block(n_core, n_core, n_act, n_act);
 }
@@ -170,6 +176,8 @@ CIResponseResult solve_ci_response_davidson(
         return result;
     }
 
+    // Keep the best finite iterate even if the subspace has to restart or the
+    // linear solve stalls before the requested tolerance is reached.
     Eigen::VectorXd best_c1 = Eigen::VectorXd::Zero(c0.size());
     double best_residual_norm = rhs_norm;
 
@@ -243,6 +251,9 @@ CIResponseResult solve_ci_response_davidson(
 
             auto append_restart_vector = [&](const Eigen::VectorXd& v)
             {
+                // Rebuild the subspace from the best estimate and the newest
+                // correction, then re-orthogonalize both against c0 and the
+                // restarted basis.
                 Eigen::VectorXd orth = project_orthogonal(v, c0);
                 for (int k = 0; k < restart.cols(); ++k)
                     orth -= restart.col(k).dot(orth) * restart.col(k);

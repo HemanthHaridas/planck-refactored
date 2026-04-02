@@ -15,6 +15,8 @@ const std::vector<double>& ensure_eri(
     std::vector<double>&                       eri_local,
     const std::string&                         tag)
 {
+    // Prefer the cached AO tensor when it is already present on the
+    // calculator; only build into caller-owned storage when needed.
     if (!calc._eri.empty())
         return calc._eri;
 
@@ -42,6 +44,8 @@ std::vector<double> transform_eri(
     const std::size_t n3 = static_cast<std::size_t>(C3.cols());
     const std::size_t n4 = static_cast<std::size_t>(C4.cols());
 
+    // Keep the intermediates as flat buffers so every quarter transform uses
+    // the same row-major indexing convention as the source AO tensor.
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb2;
 
@@ -102,6 +106,8 @@ std::vector<double> transform_eri_internal(
     std::size_t                nb,
     const Eigen::MatrixXd&     C_int)
 {
+    // The internal-space helper is just the generic quarter-transform with the
+    // same matrix on all four legs.
     return transform_eri(eri, nb, C_int, C_int, C_int, C_int);
 }
 

@@ -17,11 +17,13 @@ namespace
 
 inline double g_act(const std::vector<double>& ga, int p, int q, int r, int s, int na)
 {
+    // Active-space two-electron integrals are stored in a flat pqrs layout.
     return ga[((p * na + q) * na + r) * na + s];
 }
 
 std::vector<int> occupied_orbitals(CIString det, int n_orb)
 {
+    // Expand the bitstring into occupied orbitals in ascending index order.
     std::vector<int> occ;
     occ.reserve(n_orb);
     for (int i = 0; i < n_orb; ++i)
@@ -32,6 +34,8 @@ std::vector<int> occupied_orbitals(CIString det, int n_orb)
 
 CIString pack_spin_det(CIString alpha, CIString beta, int n_act)
 {
+    // Pack alpha and beta strings into one key so mixed-spin determinants can
+    // be hashed and looked up without storing a separate pair structure.
     return alpha | ((n_act >= CASSCFInternal::kCIStringBits) ? 0 : (beta << n_act));
 }
 
@@ -43,6 +47,8 @@ std::vector<std::pair<int, int>> enumerate_ci_dets(
     const SymmetryContext* sym_ctx,
     int target_irr)
 {
+    // Enumerate only the RAS-admissible determinants, and optionally keep just
+    // the target irrep when symmetry information is available.
     const int na = static_cast<int>(a_strs.size());
     const int nb = static_cast<int>(b_strs.size());
     const bool do_sym = sym_ctx != nullptr && !irr_act.empty();
@@ -59,6 +65,8 @@ std::vector<std::pair<int, int>> enumerate_ci_dets(
 
 std::pair<std::vector<int>, std::vector<int>> get_excitation(CIString bra, CIString ket)
 {
+    // The symmetric difference identifies orbitals that changed occupation;
+    // bits present in the bra are annihilations, the rest are creations.
     std::vector<int> ann, cre;
     CIString d = bra ^ ket;
     while (d)
@@ -86,6 +94,8 @@ std::pair<Eigen::VectorXd, Eigen::MatrixXd> davidson(
     const int nr = std::min(nroots, dim);
     const int init_cols = std::min(dim, std::max(2 * nr, 4));
 
+    // Start from the lowest diagonal guesses, then orthonormalize the initial
+    // subspace before projecting and expanding it.
     Eigen::MatrixXd V = Eigen::MatrixXd::Zero(dim, init_cols);
     Eigen::VectorXi order = Eigen::VectorXi::LinSpaced(dim, 0, dim - 1);
     std::sort(order.data(), order.data() + dim, [&](int a, int b) { return diag(a) < diag(b); });
@@ -111,6 +121,7 @@ std::pair<Eigen::VectorXd, Eigen::MatrixXd> davidson(
             AV.col(k) = sigma;
         }
 
+        // Solve the small projected problem and form residuals for each root.
         Eigen::MatrixXd projected = V.transpose() * AV;
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(projected);
         theta = eig.eigenvalues().head(nr);
@@ -129,6 +140,8 @@ std::pair<Eigen::VectorXd, Eigen::MatrixXd> davidson(
             if (residual_norm <= tol)
                 continue;
 
+            // Precondition by the diagonal and remove components already in the
+            // current subspace or in previously accepted corrections.
             for (int i = 0; i < dim; ++i)
             {
                 double denom = theta(root) - diag(i);
@@ -157,6 +170,8 @@ std::pair<Eigen::VectorXd, Eigen::MatrixXd> davidson(
         for (int i = 0; i < static_cast<int>(corrections.size()); ++i)
             V.col(old_cols + i) = corrections[i];
 
+        // Reorthogonalize after subspace expansion so the next projection stays
+        // numerically stable.
         for (int k = 0; k < static_cast<int>(V.cols()); ++k)
         {
             for (int j = 0; j < k; ++j)
@@ -235,6 +250,8 @@ double slater_condon_element(
 
     if (n_diff == 0)
     {
+        // Diagonal matrix elements come from one-electron terms plus all active
+        // pair interactions that remain unchanged between bra and ket.
         double val = 0.0;
         for (int k = 0; k < n_act; ++k)
         {
@@ -263,6 +280,8 @@ double slater_condon_element(
 
     if (n_diff_a == 1 && n_diff_b == 0)
     {
+        // One alpha excitation: one-electron term plus Coulomb/exchange with the
+        // untouched alpha and beta occupations.
         auto [ann_a, cre_a] = get_excitation(bra_a, ket_a);
         const int p = ann_a[0], q = cre_a[0];
         const int sgn = single_parity(ket_a, p, q);
@@ -282,6 +301,7 @@ double slater_condon_element(
 
     if (n_diff_a == 0 && n_diff_b == 1)
     {
+        // One beta excitation is the same algebra with the spin channels swapped.
         auto [ann_b, cre_b] = get_excitation(bra_b, ket_b);
         const int p = ann_b[0], q = cre_b[0];
         const int sgn = single_parity(ket_b, p, q);
@@ -301,6 +321,8 @@ double slater_condon_element(
 
     if (n_diff_a == 2 && n_diff_b == 0)
     {
+        // Same-spin double excitations reduce to a pure antisymmetrized two-body
+        // integral with the fermionic phase accumulated along the move.
         auto [ann_a, cre_a] = get_excitation(bra_a, ket_a);
         int p1 = ann_a[0], p2 = ann_a[1]; if (p1 > p2) std::swap(p1, p2);
         int q1 = cre_a[0], q2 = cre_a[1]; if (q1 > q2) std::swap(q1, q2);
@@ -317,6 +339,7 @@ double slater_condon_element(
 
     if (n_diff_a == 0 && n_diff_b == 2)
     {
+        // Beta-beta doubles follow the same pattern as the alpha-alpha branch.
         auto [ann_b, cre_b] = get_excitation(bra_b, ket_b);
         int p1 = ann_b[0], p2 = ann_b[1]; if (p1 > p2) std::swap(p1, p2);
         int q1 = cre_b[0], q2 = cre_b[1]; if (q1 > q2) std::swap(q1, q2);
@@ -333,6 +356,8 @@ double slater_condon_element(
 
     if (n_diff_a == 1 && n_diff_b == 1)
     {
+        // Mixed-spin singles have no exchange term, only the direct two-electron
+        // contribution with one excitation in each spin channel.
         auto [ann_a, cre_a] = get_excitation(bra_a, ket_a);
         auto [ann_b, cre_b] = get_excitation(bra_b, ket_b);
         const int pa = ann_a[0], qa = cre_a[0];
@@ -357,6 +382,8 @@ Eigen::MatrixXd build_ci_hamiltonian_with_dets(
     int target_irr,
     std::vector<std::pair<int, int>>& dets_out)
 {
+    // Build the full determinant list once so later routines can reuse the same
+    // ordering when constructing matrices or packed determinant keys.
     dets_out = enumerate_ci_dets(a_strs, b_strs, ras, irr_act, sym_ctx, target_irr);
 
     return build_ci_hamiltonian_dense(a_strs, b_strs, dets_out, h_eff, ga, n_act);
@@ -374,6 +401,8 @@ CIDeterminantSpace build_ci_space(
     int target_irr,
     int dense_threshold)
 {
+    // Keep the determinant list, diagonal, packed keys, and optional dense
+    // Hamiltonian together so CI solvers can choose the cheapest path later.
     CIDeterminantSpace space;
     space.dets = enumerate_ci_dets(a_strs, b_strs, ras, irr_act, sym_ctx, target_irr);
     space.diagonal = build_ci_diagonal(a_strs, b_strs, space.dets, h_eff, ga, n_act);
@@ -402,12 +431,15 @@ void apply_ci_hamiltonian(
 
     if (space.dense_hamiltonian.has_value())
     {
+        // Small spaces can use the stored dense Hamiltonian directly.
         sigma = (*space.dense_hamiltonian) * c;
         return;
     }
 
     if (space.det_lookup.empty() || static_cast<int>(space.spin_dets.size()) != dim)
     {
+        // Fallback path: rebuild each matrix element on demand when we do not
+        // have a reliable packed-determinant lookup table.
         for (int j = 0; j < dim; ++j)
         {
             const double cj = c(j);
@@ -452,8 +484,12 @@ void apply_ci_hamiltonian(
         const auto occ_alpha = occupied_orbitals(ket_a, n_act);
         const auto occ_beta = occupied_orbitals(ket_b, n_act);
 
+        // Enumerate all determinants reachable by at most two annihilations and
+        // two creations in the same active-space occupation pattern.
         accumulate(ket_a, ket_b, ket_a, ket_b, cj);
 
+        // Alpha and beta excitations are handled separately so the spin labels
+        // stay aligned with the Slater-Condon branch logic above.
         for (int q : occ_alpha)
             for (int p = 0; p < n_act; ++p)
             {
@@ -478,6 +514,8 @@ void apply_ci_hamiltonian(
                 accumulate(ket_a, cre.det, ket_a, ket_b, cj);
             }
 
+        // Same-spin doubles must preserve spin channel and ordering within each
+        // pair of removed orbitals.
         for (std::size_t q1 = 0; q1 + 1 < occ_alpha.size(); ++q1)
             for (std::size_t q2 = q1 + 1; q2 < occ_alpha.size(); ++q2)
                 for (int p1 = 0; p1 < n_act; ++p1)
@@ -522,6 +560,7 @@ void apply_ci_hamiltonian(
                     }
                 }
 
+        // Mixed alpha-beta doubles are the remaining nonzero two-body couplings.
         for (int qa : occ_alpha)
             for (int qb : occ_beta)
                 for (int pa = 0; pa < n_act; ++pa)
@@ -554,6 +593,8 @@ Eigen::VectorXd build_ci_diagonal(
     const std::vector<double>& ga,
     int n_act)
 {
+    // The diagonal is just the Hamiltonian expectation value of each determinant
+    // with itself, so reuse the same Slater-Condon routine for consistency.
     Eigen::VectorXd diag(static_cast<int>(dets.size()));
     for (int I = 0; I < static_cast<int>(dets.size()); ++I)
     {
@@ -575,6 +616,7 @@ std::pair<Eigen::VectorXd, Eigen::MatrixXd> solve_ci_dense(
     const int dim = static_cast<int>(H.rows());
     if (dim == 0 || nroots <= 0)
         return {Eigen::VectorXd(), Eigen::MatrixXd(dim, 0)};
+    // Dense problems are solved exactly; `tol` is kept only for API symmetry.
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(H);
     const int nr = std::min(nroots, dim);
     return {eig.eigenvalues().head(nr), eig.eigenvectors().leftCols(nr)};
@@ -590,6 +632,7 @@ std::pair<Eigen::VectorXd, Eigen::MatrixXd> solve_ci(
     if (dim == 0 || nroots <= 0)
         return {Eigen::VectorXd(), Eigen::MatrixXd(dim, 0)};
     if (dim <= dense_threshold)
+        // If the matrix is small enough, materialize it explicitly and diagonalize.
         return solve_ci_dense(H, nroots, tol);
 
     const Eigen::VectorXd diag = H.diagonal();
@@ -609,6 +652,8 @@ std::pair<Eigen::VectorXd, Eigen::MatrixXd> solve_ci(
     int max_iter,
     int dense_threshold)
 {
+    // Reconstruct a dense matrix from the sigma operator when the dimension is
+    // still small, otherwise keep the iterative Davidson path.
     if (dim == 0 || nroots <= 0)
         return {Eigen::VectorXd(), Eigen::MatrixXd(dim, 0)};
     if (dim <= dense_threshold)
@@ -647,6 +692,8 @@ CISolveResult solve_ci(
 
     if (space.dense_hamiltonian.has_value() && static_cast<int>(space.dense_hamiltonian->rows()) <= dense_threshold)
     {
+        // Preserve the exact dense solution when the determinant space is small
+        // enough to diagonalize outright.
         auto [energies, vectors] = solve_ci_dense(*space.dense_hamiltonian, nroots, tol);
         result.energies = std::move(energies);
         result.vectors = std::move(vectors);
@@ -656,6 +703,8 @@ CISolveResult solve_ci(
 
     auto sigma_apply = [&](const Eigen::VectorXd& c, Eigen::VectorXd& sigma)
     {
+        // For larger spaces, apply the Hamiltonian through the packed lookup or
+        // direct Slater-Condon expansion instead of forming H explicitly.
         apply_ci_hamiltonian(space, a_strs, b_strs, h_eff, ga, n_act, c, sigma);
     };
     auto [energies, vectors] = solve_ci(
