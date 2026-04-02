@@ -557,10 +557,28 @@ int main()
             compute_2rdm_bilinear_reference(ci.vectors, ci.vectors, weights, a_strs, b_strs, space.dets, 2);
         const std::vector<double> bilinear_opt =
             compute_2rdm_bilinear(ci.vectors, ci.vectors, weights, a_strs, b_strs, space.dets, 2);
+        std::vector<double> gamma2_split(gamma2_opt.size(), 0.0);
+
+        for (int root = 0; root < 2; ++root)
+        {
+            Eigen::MatrixXd ket_root(ci.vectors.rows(), 1);
+            ket_root.col(0) = ci.vectors.col(root);
+            Eigen::VectorXd unit_weight(1);
+            unit_weight(0) = 1.0;
+
+            const std::vector<double> gamma2_root =
+                compute_2rdm(ket_root, unit_weight, a_strs, b_strs, space.dets, 2);
+            for (std::size_t i = 0; i < gamma2_split.size(); ++i)
+                gamma2_split[i] += weights(root) * gamma2_root[i];
+        }
 
         double gamma2_err = 0.0;
         for (std::size_t i = 0; i < gamma2_ref.size(); ++i)
             gamma2_err = std::max(gamma2_err, std::abs(gamma2_ref[i] - gamma2_opt[i]));
+
+        double gamma2_split_err = 0.0;
+        for (std::size_t i = 0; i < gamma2_split.size(); ++i)
+            gamma2_split_err = std::max(gamma2_split_err, std::abs(gamma2_split[i] - gamma2_opt[i]));
 
         double bilinear_err = 0.0;
         for (std::size_t i = 0; i < bilinear_ref.size(); ++i)
@@ -570,8 +588,145 @@ int main()
                      "optimized 1-RDM accumulation should reproduce the reference operator loop");
         ok &= expect(gamma2_err < 1e-12,
                      "optimized 2-RDM accumulation should reproduce the reference operator loop");
+        ok &= expect(gamma2_split_err < 1e-12,
+                     "weighted multi-root 2-RDMs should equal an explicit weighted sum of per-root 2-RDMs");
         ok &= expect(bilinear_err < 1e-12,
                      "optimized bilinear 2-RDM accumulation should reproduce the reference operator loop");
+    }
+
+    {
+        std::vector<CIString> a_strs;
+        std::vector<CIString> b_strs;
+        build_spin_strings_unfiltered(2, 1, 1, a_strs, b_strs);
+
+        Eigen::MatrixXd h_eff = Eigen::MatrixXd::Zero(2, 2);
+        h_eff << -0.8, 0.07,
+                  0.07, 0.1;
+        std::vector<double> ga(16, 0.0);
+        auto idx4 = [](int p, int q, int r, int s) {
+            return ((p * 2 + q) * 2 + r) * 2 + s;
+        };
+        ga[idx4(0, 0, 0, 0)] = 0.60;
+        ga[idx4(1, 1, 1, 1)] = 0.45;
+        ga[idx4(0, 0, 1, 1)] = ga[idx4(1, 1, 0, 0)] = 0.16;
+        ga[idx4(0, 1, 1, 0)] = ga[idx4(1, 0, 0, 1)] = 0.05;
+
+        RASParams ras;
+        const CIDeterminantSpace space =
+            build_ci_space(a_strs, b_strs, ras, h_eff, ga, 2, {}, nullptr, 0, 8);
+        const CISolveResult ci = solve_ci(space, a_strs, b_strs, h_eff, ga, 2, 2);
+
+        Eigen::VectorXd weights(2);
+        weights << 0.7, 0.3;
+
+        Eigen::MatrixXd bra_vecs = ci.vectors;
+        bra_vecs.col(0) = 0.8 * ci.vectors.col(0) + 0.2 * ci.vectors.col(1);
+        bra_vecs.col(1) = -0.3 * ci.vectors.col(0) + 0.7 * ci.vectors.col(1);
+
+        const Eigen::MatrixXd gamma_weighted =
+            compute_1rdm(ci.vectors, weights, a_strs, b_strs, space.dets, 2);
+        const std::vector<double> bilinear_weighted =
+            compute_2rdm_bilinear(bra_vecs, ci.vectors, weights, a_strs, b_strs, space.dets, 2);
+
+        Eigen::MatrixXd gamma_sum = Eigen::MatrixXd::Zero(2, 2);
+        std::vector<double> bilinear_sum(bilinear_weighted.size(), 0.0);
+        for (int root = 0; root < 2; ++root)
+        {
+            Eigen::MatrixXd ket_root(ci.vectors.rows(), 1);
+            ket_root.col(0) = ci.vectors.col(root);
+            Eigen::MatrixXd bra_root(bra_vecs.rows(), 1);
+            bra_root.col(0) = bra_vecs.col(root);
+            Eigen::VectorXd unit_weight(1);
+            unit_weight(0) = 1.0;
+
+            gamma_sum += weights(root) *
+                compute_1rdm(ket_root, unit_weight, a_strs, b_strs, space.dets, 2);
+
+            const std::vector<double> bilinear_root =
+                compute_2rdm_bilinear(bra_root, ket_root, unit_weight, a_strs, b_strs, space.dets, 2);
+            for (std::size_t i = 0; i < bilinear_sum.size(); ++i)
+                bilinear_sum[i] += weights(root) * bilinear_root[i];
+        }
+
+        double bilinear_split_err = 0.0;
+        for (std::size_t i = 0; i < bilinear_sum.size(); ++i)
+            bilinear_split_err = std::max(bilinear_split_err, std::abs(bilinear_sum[i] - bilinear_weighted[i]));
+
+        ok &= expect((gamma_sum - gamma_weighted).norm() < 1e-12,
+                     "weighted multi-root 1-RDMs should equal an explicit weighted sum of per-root 1-RDMs");
+        ok &= expect(bilinear_split_err < 1e-12,
+                     "weighted multi-root bilinear 2-RDMs should equal an explicit weighted sum of per-root bilinear contributions");
+    }
+
+    {
+        const Eigen::MatrixXd C = Eigen::MatrixXd::Identity(2, 2);
+        std::vector<double> eri(16, 0.0);
+        auto idx4 = [](int p, int q, int r, int s) {
+            return ((p * 2 + q) * 2 + r) * 2 + s;
+        };
+        eri[idx4(0, 0, 0, 0)] = 0.50;
+        eri[idx4(0, 0, 1, 1)] = eri[idx4(1, 1, 0, 0)] = 0.14;
+        eri[idx4(0, 1, 1, 0)] = eri[idx4(1, 0, 0, 1)] = 0.06;
+
+        Eigen::MatrixXd gamma1(2, 2);
+        gamma1 << 1.2, 0.1,
+                  0.1, 0.5;
+        Eigen::MatrixXd gamma2(2, 2);
+        gamma2 << 0.8, -0.2,
+                 -0.2, 0.3;
+        Eigen::MatrixXd gamma_avg = 0.7 * gamma1 + 0.3 * gamma2;
+
+        const Eigen::MatrixXd F_A1 = build_active_fock_mo(C, gamma1, eri, 0, 2, 2);
+        const Eigen::MatrixXd F_A2 = build_active_fock_mo(C, gamma2, eri, 0, 2, 2);
+        const Eigen::MatrixXd F_A_avg = build_active_fock_mo(C, gamma_avg, eri, 0, 2, 2);
+
+        ActiveIntegralCache cache;
+        cache.nbasis = 2;
+        cache.nact = 2;
+        cache.valid = true;
+        cache.puvw.resize(16, 0.0);
+        auto idx_puvw = [](int p, int u, int v, int w) {
+            return ((p * 2 + u) * 2 + v) * 2 + w;
+        };
+        cache.puvw[idx_puvw(0, 0, 0, 0)] = 0.30;
+        cache.puvw[idx_puvw(0, 1, 0, 1)] = -0.10;
+        cache.puvw[idx_puvw(1, 0, 1, 1)] = 0.22;
+        cache.puvw[idx_puvw(1, 1, 1, 0)] = -0.18;
+
+        std::vector<double> Gamma1(16, 0.0);
+        std::vector<double> Gamma2(16, 0.0);
+        Gamma1[idx4(0, 0, 0, 0)] = 1.0;
+        Gamma1[idx4(0, 1, 1, 0)] = 0.4;
+        Gamma1[idx4(1, 0, 0, 1)] = 0.2;
+        Gamma2[idx4(0, 0, 1, 1)] = 0.7;
+        Gamma2[idx4(1, 1, 0, 0)] = -0.3;
+        Gamma2[idx4(1, 0, 1, 0)] = 0.5;
+
+        std::vector<double> Gamma_avg(16, 0.0);
+        for (std::size_t i = 0; i < Gamma_avg.size(); ++i)
+            Gamma_avg[i] = 0.7 * Gamma1[i] + 0.3 * Gamma2[i];
+
+        const Eigen::MatrixXd Q1 = compute_Q_matrix(cache, Gamma1);
+        const Eigen::MatrixXd Q2 = compute_Q_matrix(cache, Gamma2);
+        const Eigen::MatrixXd Q_avg = compute_Q_matrix(cache, Gamma_avg);
+
+        Eigen::MatrixXd F_I = Eigen::MatrixXd::Zero(2, 2);
+        F_I << -1.4, 0.10,
+                0.10, -0.8;
+
+        const Eigen::MatrixXd g1 =
+            compute_orbital_gradient(F_I, F_A1, Q1, gamma1, 0, 2, 0, {}, false);
+        const Eigen::MatrixXd g2 =
+            compute_orbital_gradient(F_I, F_A2, Q2, gamma2, 0, 2, 0, {}, false);
+        const Eigen::MatrixXd g_avg =
+            compute_orbital_gradient(F_I, F_A_avg, Q_avg, gamma_avg, 0, 2, 0, {}, false);
+
+        ok &= expect((F_A_avg - (0.7 * F_A1 + 0.3 * F_A2)).norm() < 1e-12,
+                     "active-space Fock builds should preserve weighted linear reduction over per-root 1-RDMs");
+        ok &= expect((Q_avg - (0.7 * Q1 + 0.3 * Q2)).norm() < 1e-12,
+                     "Q-matrix builds should preserve weighted linear reduction over per-root 2-RDMs");
+        ok &= expect((g_avg - (0.7 * g1 + 0.3 * g2)).norm() < 1e-12,
+                     "orbital gradients should preserve weighted linear reduction over per-root intermediates");
     }
 
     return ok ? 0 : 1;

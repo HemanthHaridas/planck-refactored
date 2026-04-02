@@ -37,6 +37,18 @@ using HartreeFock::Correlation::CASSCFInternal::kMaxPackedSpatialOrbitals;
 using HartreeFock::Correlation::CASSCFInternal::kMaxSeparateSpinOrbitals;
 using HartreeFock::Correlation::CASSCFInternal::match_roots_by_max_overlap;
 
+struct StateSpecificData
+{
+    double ci_energy = 0.0;
+    double weight = 0.0;
+    Eigen::VectorXd ci_vector;
+    Eigen::MatrixXd gamma;
+    std::vector<double> Gamma_vec;
+    Eigen::MatrixXd F_A_mo;
+    Eigen::MatrixXd Q;
+    Eigen::MatrixXd g_orb;
+};
+
 struct McscfState
 {
     CIDeterminantSpace ci_space;
@@ -51,6 +63,7 @@ struct McscfState
     Eigen::VectorXd H_CI_diag;
     Eigen::VectorXd ci_energies;
     Eigen::MatrixXd ci_vecs;
+    std::vector<StateSpecificData> roots;
     std::vector<std::pair<int, int>> dets;
     bool ci_used_direct_sigma = false;
     double E_cas = 0.0;
@@ -152,6 +165,50 @@ double compute_max_root_delta(const RootReference& previous, const Eigen::Vector
     for (int i = 0; i < n; ++i)
         delta = std::max(delta, std::abs(current(i) - previous.energies(i)));
     return delta;
+}
+
+Eigen::MatrixXd as_single_column_matrix(const Eigen::VectorXd& vec)
+{
+    Eigen::MatrixXd mat(vec.size(), 1);
+    mat.col(0) = vec;
+    return mat;
+}
+
+Eigen::VectorXd single_weight(double weight)
+{
+    Eigen::VectorXd weights(1);
+    weights(0) = weight;
+    return weights;
+}
+
+void accumulate_weighted_tensor(
+    std::vector<double>& destination,
+    const std::vector<double>& source,
+    double weight)
+{
+    if (destination.empty())
+        destination.assign(source.size(), 0.0);
+    for (std::size_t i = 0; i < source.size(); ++i)
+        destination[i] += weight * source[i];
+}
+
+Eigen::MatrixXd build_root_ci_matrix(const std::vector<StateSpecificData>& roots)
+{
+    if (roots.empty() || roots.front().ci_vector.size() == 0)
+        return Eigen::MatrixXd();
+
+    Eigen::MatrixXd matrix(roots.front().ci_vector.size(), static_cast<int>(roots.size()));
+    for (int r = 0; r < static_cast<int>(roots.size()); ++r)
+        matrix.col(r) = roots[static_cast<std::size_t>(r)].ci_vector;
+    return matrix;
+}
+
+Eigen::VectorXd build_root_energy_vector(const std::vector<StateSpecificData>& roots)
+{
+    Eigen::VectorXd energies(static_cast<int>(roots.size()));
+    for (int r = 0; r < static_cast<int>(roots.size()); ++r)
+        energies(r) = roots[static_cast<std::size_t>(r)].ci_energy;
+    return energies;
 }
 
 } // namespace
@@ -336,18 +393,45 @@ std::expected<void, std::string> run_mcscf_loop(
         st.ci_energies = std::move(ci_result.energies);
         st.ci_vecs = std::move(ci_result.vectors);
 
-        st.gamma = compute_1rdm(st.ci_vecs, weights, a_strs, b_strs, st.dets, n_act);
-        st.Gamma_vec = compute_2rdm(st.ci_vecs, weights, a_strs, b_strs, st.dets, n_act);
+        const int nr_used = std::min(nroots, static_cast<int>(st.ci_vecs.cols()));
+        st.roots.clear();
+        st.roots.reserve(static_cast<std::size_t>(nr_used));
+        st.F_A_mo = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        st.gamma = Eigen::MatrixXd::Zero(n_act, n_act);
+        st.Gamma_vec.clear();
+        st.g_orb = Eigen::MatrixXd::Zero(nbasis, nbasis);
+
+        for (int r = 0; r < nr_used; ++r)
+        {
+            StateSpecificData root;
+            root.ci_energy = st.ci_energies(r);
+            root.weight = weights(r);
+            root.ci_vector = st.ci_vecs.col(r);
+
+            const Eigen::MatrixXd ci_vec = as_single_column_matrix(root.ci_vector);
+            root.gamma = compute_1rdm(
+                ci_vec, single_weight(1.0), a_strs, b_strs, st.dets, n_act);
+            root.Gamma_vec = compute_2rdm(
+                ci_vec, single_weight(1.0), a_strs, b_strs, st.dets, n_act);
+            root.F_A_mo = build_active_fock_mo(C_trial, root.gamma, eri, n_core, n_act, nbasis);
+            root.Q = compute_Q_matrix(st.active_integrals, root.Gamma_vec);
+            root.g_orb = compute_orbital_gradient(
+                st.F_I_mo, root.F_A_mo, root.Q, root.gamma,
+                n_core, n_act, n_virt, all_mo_irr, use_sym);
+
+            st.gamma.noalias() += root.weight * root.gamma;
+            accumulate_weighted_tensor(st.Gamma_vec, root.Gamma_vec, root.weight);
+            st.F_A_mo.noalias() += root.weight * root.F_A_mo;
+            st.g_orb.noalias() += root.weight * root.g_orb;
+            st.roots.push_back(std::move(root));
+        }
 
         const Eigen::MatrixXd h_mo = C_trial.transpose() * calc._hcore * C_trial;
         const double E_core = compute_core_energy(h_mo, st.F_I_mo, n_core);
-        const double E_act = weights.head(nroots).dot(st.ci_energies.head(nroots));
+        double E_act = 0.0;
+        for (const auto& root : st.roots)
+            E_act += root.weight * root.ci_energy;
         st.E_cas = calc._nuclear_repulsion + E_core + E_act;
-
-        st.F_A_mo = build_active_fock_mo(C_trial, st.gamma, eri, n_core, n_act, nbasis);
-        const Eigen::MatrixXd Q = compute_Q_matrix(st.active_integrals, st.Gamma_vec);
-        st.g_orb = compute_orbital_gradient(
-            st.F_I_mo, st.F_A_mo, Q, st.gamma, n_core, n_act, n_virt, all_mo_irr, use_sym);
         st.gnorm = st.g_orb.cwiseAbs().maxCoeff();
         return st;
     };
@@ -520,8 +604,12 @@ std::expected<void, std::string> run_mcscf_loop(
         auto st_current = std::move(*res);
 
         MacroDiagnostics diag;
-        diag.max_root_delta = compute_max_root_delta(previous_root_reference, st_current.ci_energies);
-        root_reference = {st_current.ci_energies, st_current.ci_vecs, true};
+        diag.max_root_delta = compute_max_root_delta(
+            previous_root_reference, build_root_energy_vector(st_current.roots));
+        root_reference = {
+            build_root_energy_vector(st_current.roots),
+            build_root_ci_matrix(st_current.roots),
+            true};
 
         const bool e_conv = macro > 1 && std::abs(st_current.E_cas - E_prev) < as.tol_mcscf_energy;
         const bool g_conv = st_current.gnorm < as.tol_mcscf_grad;
@@ -556,9 +644,8 @@ std::expected<void, std::string> run_mcscf_loop(
                 kappa_first = kappa;
 
             const Eigen::MatrixXd dh = delta_h_eff(kappa, st_current.F_I_mo, n_core, n_act);
-            const int ci_dim = static_cast<int>(st_current.ci_vecs.rows());
-            const int nr_used = static_cast<int>(st_current.ci_vecs.cols());
-            Eigen::MatrixXd c1_vecs = Eigen::MatrixXd::Zero(ci_dim, nr_used);
+            const int nr_used = static_cast<int>(st_current.roots.size());
+            std::vector<double> Gamma1;
             const CISigmaApplier ci_apply = [&](const Eigen::VectorXd& vec, Eigen::VectorXd& sigma_vec)
             {
                 apply_ci_hamiltonian(
@@ -569,21 +656,32 @@ std::expected<void, std::string> run_mcscf_loop(
 
             for (int r = 0; r < nr_used; ++r)
             {
-                const Eigen::VectorXd& c0r = st_current.ci_vecs.col(r);
+                const auto& root = st_current.roots[static_cast<std::size_t>(r)];
+                const Eigen::VectorXd& c0r = root.ci_vector;
                 const Eigen::VectorXd sigma =
                     ci_sigma_1body(dh, c0r, a_strs, b_strs, st_current.dets, n_act);
 
                 CIResponseResult response =
-                    solve_ci_response_davidson(ci_apply, c0r, st_current.ci_energies(r),
+                    solve_ci_response_davidson(ci_apply, c0r, root.ci_energy,
                                                st_current.H_CI_diag, sigma, 1e-8, 64, 1e-4);
                 if (!response.converged)
                 {
                     response = solve_ci_response_single_step(
-                        ci_apply, c0r, st_current.ci_energies(r), st_current.H_CI_diag, sigma, 1e-4);
+                        ci_apply, c0r, root.ci_energy, st_current.H_CI_diag, sigma, 1e-4);
                     diag.response_fallback_used = true;
                 }
 
-                c1_vecs.col(r) = response.c1;
+                const Eigen::MatrixXd c1_vec = as_single_column_matrix(response.c1);
+                const Eigen::MatrixXd c0_vec = as_single_column_matrix(c0r);
+                const auto Gamma1_r = compute_2rdm_bilinear(
+                    c1_vec, c0_vec, single_weight(root.weight),
+                    a_strs, b_strs, st_current.dets, n_act);
+                const auto Gamma1_rt = compute_2rdm_bilinear(
+                    c0_vec, c1_vec, single_weight(root.weight),
+                    a_strs, b_strs, st_current.dets, n_act);
+                accumulate_weighted_tensor(Gamma1, Gamma1_r, 1.0);
+                accumulate_weighted_tensor(Gamma1, Gamma1_rt, 1.0);
+
                 diag.max_response_residual =
                     std::max(diag.max_response_residual, response.residual_norm);
                 diag.max_response_iterations =
@@ -591,13 +689,6 @@ std::expected<void, std::string> run_mcscf_loop(
                 diag.max_response_regularization =
                     std::max(diag.max_response_regularization, response.max_denominator_regularization);
             }
-
-            std::vector<double> Gamma1 = compute_2rdm_bilinear(
-                c1_vecs, st_current.ci_vecs, weights, a_strs, b_strs, st_current.dets, n_act);
-            const auto Gamma1_T = compute_2rdm_bilinear(
-                st_current.ci_vecs, c1_vecs, weights, a_strs, b_strs, st_current.dets, n_act);
-            for (std::size_t i = 0; i < Gamma1.size(); ++i)
-                Gamma1[i] += Gamma1_T[i];
 
             const Eigen::MatrixXd Q1 = compute_Q_matrix(st_current.active_integrals, Gamma1);
             Eigen::MatrixXd G_CI = Eigen::MatrixXd::Zero(nbasis, nbasis);
@@ -744,7 +835,10 @@ std::expected<void, std::string> run_mcscf_loop(
             diag.actual_delta = best_E - st_current.E_cas;
             C = C_best;
             st_current = std::move(accepted_state);
-            root_reference = {st_current.ci_energies, st_current.ci_vecs, true};
+            root_reference = {
+                build_root_energy_vector(st_current.roots),
+                build_root_ci_matrix(st_current.roots),
+                true};
             level_shift = std::max(1e-3, level_shift * 0.7);
             rejected_streak = 0;
         }
@@ -788,7 +882,10 @@ std::expected<void, std::string> run_mcscf_loop(
 
         logging(LogLevel::Info, tag + " :",
                 std::format(
-                    "Macro {:d}: mode={} ci_solver={} \n accepted={} max_root_dE={:.2e} step_norm={:.2e} \n predicted_dE={:.2e} actual_dE={:.2e} response_resid={:.2e} \n response_iter={} level_shift={:.2e}",
+                    "Macro {:3d}  mode={:<12}  ci_solver={}\n"
+                    "             accepted={:<3}  max_root_dE={:.2e}  step_norm={:.2e}\n"
+                    "             predicted_dE={:.2e}  actual_dE={:.2e}  response_resid={:.2e}\n"
+                    "             response_iter={:3d}  level_shift={:.2e}",
                     macro,
                     response_mode_name(configured_response_mode),
                     st_current.ci_used_direct_sigma ? "direct-davidson" : "dense",
