@@ -20,6 +20,16 @@ namespace HartreeFock::Correlation::CASSCF
         int q = 0;
     };
 
+    // Explicit coupled-step correction with separate orbital and CI blocks.
+    // The current implementation still uses block-diagonal preconditioning, but
+    // packaging the two pieces together gives the driver a real coupled-step
+    // object instead of loose scalar/vector scratch variables.
+    struct CoupledStepDirection
+    {
+        Eigen::MatrixXd orbital_step;
+        Eigen::VectorXd ci_step;
+    };
+
     // Cache the active-space integral transform and reuse it across all response
     // contractions in a macroiteration.
     ActiveIntegralCache build_active_integral_cache(
@@ -76,6 +86,16 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<int> &mo_irreps,
         bool use_sym);
 
+    // Feed the first-order CI response back into the orbital stationarity
+    // equations. Only inactive/active and active/virtual blocks survive; within
+    // a subspace the rotation remains gauge redundant.
+    Eigen::MatrixXd build_ci_orbital_gradient_correction(
+        const Eigen::MatrixXd &Q1,
+        int nbasis,
+        int n_core,
+        int n_act,
+        int n_virt);
+
     // Diagonal orbital-Hessian estimate for a pair of orbitals.
     double hess_diag(const Eigen::MatrixXd &F_sum, int p, int q);
 
@@ -124,6 +144,44 @@ namespace HartreeFock::Correlation::CASSCF
         double max_rot,
         const std::vector<int> &mo_irreps,
         bool use_sym);
+
+    // Apply only the diagonal orbital-Hessian preconditioner to the current
+    // orbital residual. This is the lightweight building block used by the
+    // coupled-step scaffold after the explicit CI response has already updated
+    // the residual, so the diagonal model acts as a preconditioner rather than
+    // as the full step model.
+    Eigen::MatrixXd diagonal_preconditioned_orbital_step(
+        const Eigen::MatrixXd &G,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym);
+
+    // Apply the block-diagonal orbital/CI preconditioner to the current coupled
+    // residual. This is the first concrete step object that carries both the
+    // orbital and CI corrections together, even though the production solver
+    // still treats it as an experimental fallback rather than the default path.
+    CoupledStepDirection diagonal_preconditioned_coupled_step(
+        const Eigen::MatrixXd &orbital_residual,
+        const Eigen::VectorXd &ci_residual,
+        const Eigen::VectorXd &c0,
+        double E0,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        const Eigen::VectorXd &H_diag,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym,
+        double response_precond_floor = 1e-4);
 
     // Apply the antisymmetric orbital rotation to the coefficient matrix and then
     // restore orthonormality in the current AO metric.

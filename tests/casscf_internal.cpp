@@ -1227,5 +1227,77 @@ int main()
                      "late SA convergence should accept the stationary point once both weighted and max-root screens satisfy tolerance");
     }
 
+    {
+        Eigen::MatrixXd G = Eigen::MatrixXd::Zero(3, 3);
+        G(0, 1) = 0.64;
+        G(1, 0) = -0.64;
+        G(1, 2) = -0.32;
+        G(2, 1) = 0.32;
+
+        Eigen::MatrixXd F_I = Eigen::MatrixXd::Zero(3, 3);
+        Eigen::MatrixXd F_A = Eigen::MatrixXd::Zero(3, 3);
+        F_A(0, 0) = -1.0;
+        F_A(1, 1) = 0.6;
+        F_A(2, 2) = 2.2;
+
+        const Eigen::MatrixXd step = diagonal_preconditioned_orbital_step(
+            G, F_I, F_A,
+            1, 1, 1,
+            0.2, 0.5, {}, false);
+
+        ok &= expect((step + step.transpose()).norm() < 1e-12,
+                     "diagonal preconditioned coupled-step correction should stay antisymmetric");
+        ok &= expect(std::abs(step(0, 1) + 0.1882352941) < 1e-9,
+                     "diagonal preconditioned coupled-step correction should apply the orbital denominator to the core-active pair");
+        ok &= expect(std::abs(step(1, 2) - 0.0941176471) < 1e-9,
+                     "diagonal preconditioned coupled-step correction should apply the orbital denominator to the active-virtual pair");
+        ok &= expect(std::abs(step(0, 2)) < 1e-12,
+                     "diagonal preconditioned coupled-step correction should leave inactive zero-gradient pairs untouched");
+    }
+
+    {
+        Eigen::MatrixXd G = Eigen::MatrixXd::Zero(3, 3);
+        G(0, 1) = 0.40;
+        G(1, 0) = -0.40;
+        G(1, 2) = -0.24;
+        G(2, 1) = 0.24;
+
+        Eigen::VectorXd ci_residual(4);
+        ci_residual << 0.5, -0.3, 0.4, -0.2;
+        Eigen::VectorXd c0 = Eigen::VectorXd::Zero(4);
+        c0(0) = 1.0;
+        Eigen::VectorXd H_diag(4);
+        H_diag << 0.0, 1.2, 2.0, 3.1;
+
+        Eigen::MatrixXd F_I = Eigen::MatrixXd::Zero(3, 3);
+        Eigen::MatrixXd F_A = Eigen::MatrixXd::Zero(3, 3);
+        F_A(0, 0) = -0.8;
+        F_A(1, 1) = 0.5;
+        F_A(2, 2) = 2.0;
+
+        const CoupledStepDirection step = diagonal_preconditioned_coupled_step(
+            G, ci_residual, c0, 0.0,
+            F_I, F_A, H_diag,
+            1, 1, 1,
+            0.2, 0.5, {}, false, 1e-4);
+
+        const Eigen::MatrixXd orbital_only = diagonal_preconditioned_orbital_step(
+            G, F_I, F_A,
+            1, 1, 1,
+            0.2, 0.5, {}, false);
+        double max_regularization = 0.0;
+        const Eigen::VectorXd ci_only = project_orthogonal(
+            apply_response_diag_preconditioner(
+                -ci_residual, H_diag, 0.0, 1e-4, max_regularization),
+            c0);
+
+        ok &= expect((step.orbital_step - orbital_only).norm() < 1e-12,
+                     "diagonal preconditioned coupled step should reuse the orbital block preconditioner unchanged");
+        ok &= expect((step.ci_step - ci_only).norm() < 1e-12,
+                     "diagonal preconditioned coupled step should apply the CI block preconditioner to the response residual");
+        ok &= expect(std::abs(c0.dot(step.ci_step)) < 1e-12,
+                     "diagonal preconditioned coupled step should preserve the CI orthogonality gauge");
+    }
+
     return ok ? 0 : 1;
 }
