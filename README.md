@@ -19,7 +19,7 @@ A quantum chemistry program implementing restricted and unrestricted Hartree-Foc
 - **MO symmetry** — irreducible representation labels (A1, B2, Ag, Bu, …) assigned to each converged orbital; Cartesian AO coefficients are transformed to the real spherical harmonic basis and decomposed into symmetry species via libmsym's SALC machinery; the Cartesian→spherical block transform covers all shells supported by the integral engine (S through H, L=0–5); for non-Abelian groups (D3d, Td, Oh, …) the largest Abelian subgroup with all one-dimensional irreps is automatically selected (e.g. C2h for D3d) so every MO receives a unique, unambiguous label — the active group or subgroup is printed to the log; linear molecules (C∞v / D∞h) use a dedicated character-based handler
 - **Post-HF** — RMP2 and UMP2 correlation energy corrections with natural orbital analysis; CASSCF and RASSCF multireference active-space calculations
 - **RMP2 natural orbitals** — after a single-point RMP2 run, the unrelaxed MP2 one-particle density matrix (2I + P_occ block, P_virt block) is diagonalized to yield natural orbital occupation numbers (descending) and natural orbital coefficients in both canonical-MO and AO bases; the occupation table and MO expansion are printed automatically
-- **CASSCF** — Complete Active Space SCF with full CI Davidson solver, exact determinant-based 1-RDM/2-RDM construction, generalized Fock orbital gradient, Cayley-transform orbital rotation, energy-aware macro-step backtracking, and DIIS-accelerated macro-iterations; supports state-averaged (SA-CASSCF) with configurable weights; convergence validated for H₂ CAS(2,2) and H₂O CAS(2,2)/CAS(4,4)
+- **CASSCF** — Complete Active Space SCF with full-CI / direct-sigma Davidson support, exact determinant-based 1-RDM/2-RDM construction, overlap-tracked state-averaged (SA-CASSCF) roots, root-resolved macro/micro optimizer scaffolding, analytic active-space orbital-derivative CI-response RHS by default, and explicit coupled orbital/CI response blocks plus block-diagonal coupled-step preconditioning; the current production optimizer is still an approximate diagonal-response scaffold rather than a final fully coupled second-order solver
 - **RASSCF** — Restricted Active Space SCF extending CASSCF with RAS1/RAS2/RAS3 subspace partitioning and configurable hole/electron occupation restrictions
 - **Analytic nuclear gradients** — RHF and UHF nuclear gradients via the Obara-Saika AM-shift rule; all five terms (1e GTO-centre, nucleus-position V, ERI, Pulay/overlap, nuclear repulsion) assembled exactly
 - **Geometry optimization** — L-BFGS optimizer in Cartesian coordinates or BFGS optimizer in redundant generalized internal coordinates (GIC); Wolfe/Armijo line search; convergence on max Cartesian gradient component; optional constraints (fixed bonds, angles, dihedrals, frozen atoms) via `%begin_constraints`
@@ -166,6 +166,8 @@ SCF procedure and convergence settings.
 | `mcscf_micro_per_macro` | int | ≥ 1 | `4` | Micro-iterations (DIIS steps) per macro-iteration |
 | `tol_mcscf_energy` | float | > 0 | `1e-8` | CASSCF energy convergence threshold in Hartree |
 | `tol_mcscf_grad` | float | > 0 | `1e-5` | CASSCF orbital gradient convergence threshold |
+| `mcscf_debug_numeric_newton` | bool | `.true.`, `.false.` | `.false.` | Debug-only finite-difference Newton fallback for small orbital-pair spaces. The normal production CASSCF path does not rely on this. |
+| `mcscf_debug_commutator_rhs` | bool | `.true.`, `.false.` | `.false.` | Debug-only switch that forces the older commutator-only approximate CI-response RHS instead of the default exact active-space orbital-derivative RHS. |
 | `use_diis` | bool | `.true.`, `.false.` | `.true.` | Enable DIIS convergence acceleration |
 | `diis_dim` | int | ≥ 2 | `8` | Maximum DIIS subspace size |
 | `diis_restart` | float | ≥ 0 | `2.0` | Clear the DIIS subspace when the Pulay error grows by more than this factor relative to the previous iteration. Set to `0` to disable. |
@@ -783,6 +785,15 @@ H    0.000000    0.757005   -0.468704
 H    0.000000   -0.757005   -0.468704
 %end_coords
 ```
+
+<p align="justify">
+Current algorithm note: the production CASSCF path uses a root-resolved
+macro/micro scaffold with the exact active-space orbital-derivative CI-response
+RHS enabled by default. The code already contains explicit coupled orbital/CI
+response blocks and a block-diagonal coupled-step preconditioner, but the
+default optimizer should still be read as an approximate diagonal-response
+method rather than a final fully coupled second-order solver.
+</p>
 
 <p align="justify">
 Expected energy: `E(CASSCF) ≈ -75.9851 Eh` for H₂O CAS(4,4)/STO-3G.
