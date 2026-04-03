@@ -6,13 +6,31 @@
 #include <Eigen/Core>
 
 #include <functional>
+#include <utility>
+#include <vector>
 
 namespace HartreeFock::Correlation::CASSCF
 {
 
     using HartreeFock::Correlation::CASSCFInternal::CIResponseResult;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
+    using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     struct CIDeterminantSpace;
+
+    // Collect the explicit coupled response blocks for a single root after an
+    // orbital trial step has been chosen. These are the building blocks for a
+    // true coupled orbital/CI correction:
+    // OO is still handled elsewhere, CO is `ci_rhs`, CC is `ci_response`, and
+    // OC is the orbital correction reconstructed from the first-order CI state.
+    struct CoupledResponseBlocks
+    {
+        Eigen::VectorXd ci_rhs;
+        CIResponseResult ci_response;
+        Eigen::VectorXd ci_residual;
+        std::vector<double> Gamma1_vec;
+        Eigen::MatrixXd Q1;
+        Eigen::MatrixXd orbital_correction;
+    };
 
     // The response mode flag is a small policy switch used by the CASSCF driver to
     // describe which CI-response approximation is currently in play.
@@ -73,6 +91,33 @@ namespace HartreeFock::Correlation::CASSCF
         const Eigen::VectorXd &c0,
         int n_core,
         int n_act);
+
+    // Solve the first-order CI block induced by an orbital trial step and
+    // return the explicit CO/CC/OC pieces needed by later coupled-step
+    // builders. This packages the currently inline driver logic into one
+    // reusable block object.
+    CoupledResponseBlocks build_coupled_response_blocks(
+        ResponseRHSMode mode,
+        const Eigen::MatrixXd &kappa,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &h_eff,
+        const std::vector<double> &ga,
+        const CIDeterminantSpace &space,
+        const std::vector<CIString> &a_strs,
+        const std::vector<CIString> &b_strs,
+        const std::vector<std::pair<int, int>> &dets,
+        const ActiveIntegralCache &active_integrals,
+        const CISigmaApplier &apply,
+        const Eigen::VectorXd &c0,
+        double E0,
+        const Eigen::VectorXd &H_diag,
+        int nbasis,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double tol = 1e-8,
+        int max_iter = 64,
+        double precond_floor = 1e-4);
 
     // One preconditioned response step without iterative subspace growth.
     CIResponseResult solve_ci_response_single_step(

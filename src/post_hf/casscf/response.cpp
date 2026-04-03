@@ -1,6 +1,8 @@
 #include "post_hf/casscf/response.h"
 
 #include "post_hf/casscf/ci.h"
+#include "post_hf/casscf/orbital.h"
+#include "post_hf/casscf/rdm.h"
 #include "post_hf/casscf/strings.h"
 
 #include <Eigen/QR>
@@ -94,6 +96,20 @@ namespace
         // (H - E0) c1 + Q sigma = 0, with Q enforcing orthogonality to c0.
         const Eigen::VectorXd rhs = -project_orthogonal(sigma, c0);
         return project_orthogonal(rhs - (hc1 - E0 * c1), c0);
+    }
+
+    Eigen::MatrixXd as_single_column_matrix(const Eigen::VectorXd &vec)
+    {
+        Eigen::MatrixXd mat(vec.size(), 1);
+        mat.col(0) = vec;
+        return mat;
+    }
+
+    Eigen::VectorXd single_weight(double weight)
+    {
+        Eigen::VectorXd weights(1);
+        weights(0) = weight;
+        return weights;
     }
 
 } // namespace
@@ -219,6 +235,68 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<double> dga = exact_active_two_body_derivative(kappa_act, ga, n_act);
         const Eigen::MatrixXd dH = build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, dh, dga, n_act);
         return dH * c0;
+    }
+
+    CoupledResponseBlocks build_coupled_response_blocks(
+        ResponseRHSMode mode,
+        const Eigen::MatrixXd &kappa,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &h_eff,
+        const std::vector<double> &ga,
+        const CIDeterminantSpace &space,
+        const std::vector<CIString> &a_strs,
+        const std::vector<CIString> &b_strs,
+        const std::vector<std::pair<int, int>> &dets,
+        const ActiveIntegralCache &active_integrals,
+        const CISigmaApplier &apply,
+        const Eigen::VectorXd &c0,
+        double E0,
+        const Eigen::VectorXd &H_diag,
+        int nbasis,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double tol,
+        int max_iter,
+        double precond_floor)
+    {
+        CoupledResponseBlocks blocks;
+        blocks.ci_rhs = build_ci_response_rhs(
+            mode,
+            kappa,
+            F_I_mo,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            c0,
+            n_core,
+            n_act);
+
+        blocks.ci_response =
+            solve_ci_response_davidson(apply, c0, E0, H_diag, blocks.ci_rhs, tol, max_iter, precond_floor);
+        if (!blocks.ci_response.converged)
+            blocks.ci_response = solve_ci_response_single_step(
+                apply, c0, E0, H_diag, blocks.ci_rhs, precond_floor);
+
+        const Eigen::MatrixXd c1_vec = as_single_column_matrix(blocks.ci_response.c1);
+        const Eigen::MatrixXd c0_vec = as_single_column_matrix(c0);
+        const auto Gamma1_r = compute_2rdm_bilinear(
+            c1_vec, c0_vec, single_weight(1.0),
+            a_strs, b_strs, dets, n_act);
+        const auto Gamma1_rt = compute_2rdm_bilinear(
+            c0_vec, c1_vec, single_weight(1.0),
+            a_strs, b_strs, dets, n_act);
+        blocks.Gamma1_vec.resize(Gamma1_r.size(), 0.0);
+        for (std::size_t i = 0; i < Gamma1_r.size(); ++i)
+            blocks.Gamma1_vec[i] = Gamma1_r[i] + Gamma1_rt[i];
+        blocks.Q1 = compute_Q_matrix(active_integrals, blocks.Gamma1_vec);
+        blocks.orbital_correction =
+            build_ci_orbital_gradient_correction(blocks.Q1, nbasis, n_core, n_act, n_virt);
+        blocks.ci_residual = response_residual(
+            apply, blocks.ci_response.c1, c0, E0, blocks.ci_rhs);
+        return blocks;
     }
 
     CIResponseResult solve_ci_response_single_step(

@@ -55,6 +55,7 @@ namespace
         ResponseRHSMode response_rhs_mode = ResponseRHSMode::CommutatorOnlyApproximate;
         Eigen::VectorXd response_rhs;
         Eigen::VectorXd c1_response;
+        Eigen::VectorXd response_residual;
         std::vector<double> Gamma1_vec;
         Eigen::MatrixXd Q1;
         Eigen::MatrixXd g_ci;
@@ -443,30 +444,6 @@ namespace
             steps.per_root.push_back(std::move(step));
         }
         return steps;
-    }
-
-    Eigen::MatrixXd build_ci_orbital_gradient_correction(
-        const Eigen::MatrixXd &Q1,
-        int nbasis,
-        int n_core,
-        int n_act,
-        int n_virt)
-    {
-        // The CI response feeds back into the orbital stationarity condition only
-        // through inactive/active and active/virtual blocks; within-space rotations
-        // remain redundant and are projected out.
-        Eigen::MatrixXd G_CI = Eigen::MatrixXd::Zero(nbasis, nbasis);
-        for (int p = 0; p < nbasis; ++p)
-            for (int t = 0; t < n_act; ++t)
-            {
-                const int q = n_core + t;
-                G_CI(p, q) += 2.0 * Q1(p, t);
-                G_CI(q, p) -= 2.0 * Q1(p, t);
-            }
-        G_CI.topLeftCorner(n_core, n_core).setZero();
-        G_CI.block(n_core, n_core, n_act, n_act).setZero();
-        G_CI.bottomRightCorner(n_virt, n_virt).setZero();
-        return G_CI;
     }
 
 } // namespace
@@ -884,9 +861,9 @@ namespace HartreeFock::Correlation::CASSCF
             steps.weighted = Eigen::MatrixXd::Zero(nbasis, nbasis);
             steps.per_root.reserve(roots.size());
             // Once the explicit CI response has updated each root's orbital
-            // residual, the old diagonal orbital model should only act as a
-            // preconditioner for that coupled residual, not as the coupled
-            // model itself.
+            // and CI residuals, apply the current block-diagonal preconditioner
+            // to both pieces together. This is still only the first coupled-step
+            // increment, but it makes the orbital/CI block structure explicit.
             for (const auto &root : roots)
             {
                 Eigen::MatrixXd root_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
@@ -895,11 +872,13 @@ namespace HartreeFock::Correlation::CASSCF
                     steps.per_root.push_back(std::move(root_step));
                     continue;
                 }
-                root_step = diagonal_preconditioned_orbital_step(
-                    root.g_orb, st_base.F_I_mo, root.F_A_mo,
+                const CoupledStepDirection coupled_step =
+                    diagonal_preconditioned_coupled_step(
+                    root.g_orb, root.response_residual, root.ci_vector, root.ci_energy,
+                    st_base.F_I_mo, root.F_A_mo, st_base.H_CI_diag,
                     n_core, n_act, n_virt,
                     level_shift_local, 0.20, all_mo_irr, use_sym);
-                root_step = cap_orbital_step(std::move(root_step));
+                root_step = cap_orbital_step(coupled_step.orbital_step);
                 steps.weighted.noalias() += root.weight * root_step;
                 steps.per_root.push_back(std::move(root_step));
             }
@@ -1008,57 +987,46 @@ namespace HartreeFock::Correlation::CASSCF
                     auto &root = st_current.roots[static_cast<std::size_t>(r)];
                     const Eigen::VectorXd &c0r = root.ci_vector;
                     root.response_rhs_mode = configured_rhs_mode;
-                    root.response_rhs = build_ci_response_rhs(
-                        configured_rhs_mode,
-                        kappa,
-                        st_current.F_I_mo,
-                        st_current.h_eff,
-                        st_current.ga,
-                        st_current.ci_space,
-                        a_strs,
-                        b_strs,
-                        c0r,
-                        n_core,
-                        n_act);
-
-                    CIResponseResult response =
-                        solve_ci_response_davidson(ci_apply, c0r, root.ci_energy,
-                                                   st_current.H_CI_diag, root.response_rhs, 1e-8, 64, 1e-4);
-                    if (!response.converged)
-                    {
-                        response = solve_ci_response_single_step(
-                            ci_apply, c0r, root.ci_energy, st_current.H_CI_diag, root.response_rhs, 1e-4);
+                    const CoupledResponseBlocks blocks =
+                        build_coupled_response_blocks(
+                            configured_rhs_mode,
+                            kappa,
+                            st_current.F_I_mo,
+                            st_current.h_eff,
+                            st_current.ga,
+                            st_current.ci_space,
+                            a_strs,
+                            b_strs,
+                            st_current.dets,
+                            st_current.active_integrals,
+                            ci_apply,
+                            c0r,
+                            root.ci_energy,
+                            st_current.H_CI_diag,
+                            nbasis,
+                            n_core,
+                            n_act,
+                            n_virt);
+                    if (!blocks.ci_response.converged)
                         diag.response_fallback_used = true;
-                    }
 
-                    root.c1_response = response.c1;
-                    const Eigen::MatrixXd c1_vec = as_single_column_matrix(root.c1_response);
-                    const Eigen::MatrixXd c0_vec = as_single_column_matrix(c0r);
-                    const auto Gamma1_r = compute_2rdm_bilinear(
-                        c1_vec, c0_vec, single_weight(1.0),
-                        a_strs, b_strs, st_current.dets, n_act);
-                    const auto Gamma1_rt = compute_2rdm_bilinear(
-                        c0_vec, c1_vec, single_weight(1.0),
-                        a_strs, b_strs, st_current.dets, n_act);
-                    root.Gamma1_vec.clear();
-                    // Assemble the Hermitian first-order 2-RDM explicitly from the
-                    // c1-c0 and c0-c1 bilinear contractions.
-                    accumulate_weighted_tensor(root.Gamma1_vec, Gamma1_r, 1.0);
-                    accumulate_weighted_tensor(root.Gamma1_vec, Gamma1_rt, 1.0);
-                    root.Q1 = compute_Q_matrix(st_current.active_integrals, root.Gamma1_vec);
-                    root.g_ci = build_ci_orbital_gradient_correction(
-                        root.Q1, nbasis, n_core, n_act, n_virt);
+                    root.response_rhs = blocks.ci_rhs;
+                    root.c1_response = blocks.ci_response.c1;
+                    root.response_residual = blocks.ci_residual;
+                    root.Gamma1_vec = blocks.Gamma1_vec;
+                    root.Q1 = blocks.Q1;
+                    root.g_ci = blocks.orbital_correction;
                     root.g_orb = fep1_gradient_update(
                         root.g_orb, kappa, st_current.F_I_mo, root.F_A_mo,
                         n_core, n_act, n_virt);
                     root.g_orb += root.g_ci;
 
                     diag.max_response_residual =
-                        std::max(diag.max_response_residual, response.residual_norm);
+                        std::max(diag.max_response_residual, blocks.ci_response.residual_norm);
                     diag.max_response_iterations =
-                        std::max(diag.max_response_iterations, response.iterations);
+                        std::max(diag.max_response_iterations, blocks.ci_response.iterations);
                     diag.max_response_regularization =
-                        std::max(diag.max_response_regularization, response.max_denominator_regularization);
+                        std::max(diag.max_response_regularization, blocks.ci_response.max_denominator_regularization);
                 }
             }
             const double max_k = kappa_total.cwiseAbs().maxCoeff();

@@ -87,6 +87,12 @@ What has landed already:
   coverage for it, so the first building block for a coupled orbital/CI step is
   in tree even though the production candidate screen does not enable a
   `sa-coupled-total` rescue yet.
+- The response path now also packages the explicit coupled blocks per root:
+  orbital-to-CI RHS, CI solve result, CI residual, first-order `Gamma1/Q1`,
+  and the resulting CI-driven orbital correction. The driver now carries an
+  explicit block-diagonal coupled orbital/CI correction object built from those
+  residuals, even though that step is still parked behind the disabled coupled
+  rescue gate rather than enabled as a production candidate.
 - The stabilization pass after the recent convergence regression restored the
   richer SA candidate family plus the lightweight orbital-gradient merit screen,
   which brings the checked-in single-root manual fixture gate back to the
@@ -157,10 +163,11 @@ The production path still uses a diagonal orbital Hessian model plus response
 corrections and heuristic candidate screening. That is acceptable as
 scaffolding, but not as the final solver architecture.
 
-The newest increment only starts this transition: the code now has a
-diagonal-preconditioned orbital-step helper that can act on a coupled residual.
-That is the right direction, but it is not yet enabled as a production
-candidate and it is still not a fully fledged coupled solver.
+The newest increment only starts this transition: the code now has explicit
+coupled response blocks plus a block-diagonal orbital/CI preconditioned
+correction object that can act on the coupled residual. That is the right
+direction, but it is not yet enabled as a production candidate and it is still
+not a fully fledged coupled solver.
 
 Needed work:
 

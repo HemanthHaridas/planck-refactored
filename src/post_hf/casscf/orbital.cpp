@@ -12,6 +12,8 @@ namespace
 {
 
     using HartreeFock::Correlation::CASSCFInternal::contract_q_matrix;
+    using HartreeFock::Correlation::CASSCFInternal::apply_response_diag_preconditioner;
+    using HartreeFock::Correlation::CASSCFInternal::project_orthogonal;
 
 } // namespace
 
@@ -147,6 +149,27 @@ namespace HartreeFock::Correlation::CASSCF
         return g;
     }
 
+    Eigen::MatrixXd build_ci_orbital_gradient_correction(
+        const Eigen::MatrixXd &Q1,
+        int nbasis,
+        int n_core,
+        int n_act,
+        int n_virt)
+    {
+        Eigen::MatrixXd G_CI = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        for (int p = 0; p < nbasis; ++p)
+            for (int t = 0; t < n_act; ++t)
+            {
+                const int q = n_core + t;
+                G_CI(p, q) += 2.0 * Q1(p, t);
+                G_CI(q, p) -= 2.0 * Q1(p, t);
+            }
+        G_CI.topLeftCorner(n_core, n_core).setZero();
+        G_CI.block(n_core, n_core, n_act, n_act).setZero();
+        G_CI.bottomRightCorner(n_virt, n_virt).setZero();
+        return G_CI;
+    }
+
     double hess_diag(const Eigen::MatrixXd &F_sum, int p, int q)
     {
         return 2.0 * (F_sum(q, q) - F_sum(p, p));
@@ -279,6 +302,49 @@ namespace HartreeFock::Correlation::CASSCF
         if (max_elem > max_rot)
             kappa *= max_rot / max_elem;
         return kappa;
+    }
+
+    CoupledStepDirection diagonal_preconditioned_coupled_step(
+        const Eigen::MatrixXd &orbital_residual,
+        const Eigen::VectorXd &ci_residual,
+        const Eigen::VectorXd &c0,
+        double E0,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        const Eigen::VectorXd &H_diag,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym,
+        double response_precond_floor)
+    {
+        CoupledStepDirection step;
+        step.orbital_step = diagonal_preconditioned_orbital_step(
+            orbital_residual,
+            F_I_mo,
+            F_A_mo,
+            n_core,
+            n_act,
+            n_virt,
+            level_shift,
+            max_rot,
+            mo_irreps,
+            use_sym);
+
+        if (ci_residual.size() == 0 || H_diag.size() != ci_residual.size() || c0.size() != ci_residual.size())
+        {
+            step.ci_step = Eigen::VectorXd::Zero(ci_residual.size());
+            return step;
+        }
+
+        double max_regularization = 0.0;
+        step.ci_step = apply_response_diag_preconditioner(
+            -ci_residual, H_diag, E0, response_precond_floor, max_regularization);
+        step.ci_step = project_orthogonal(step.ci_step, c0);
+        return step;
     }
 
     Eigen::MatrixXd augmented_hessian_step(
