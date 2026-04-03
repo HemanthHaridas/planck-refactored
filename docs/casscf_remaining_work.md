@@ -3,8 +3,9 @@
 ## Purpose
 
 This note is the current handoff for the next CASSCF implementation pass. It
-reflects the repository state on 2026-04-02 after the latest root-resolved
-state-averaged optimizer updates and supersedes the older patch-plan notes.
+reflects the repository state on 2026-04-03 after the first production-enabled
+coupled orbital/CI solve landed on top of the root-resolved SA optimizer work,
+and it supersedes the older patch-plan notes.
 
 ## Current Status
 
@@ -84,15 +85,17 @@ What has landed already:
   keeps the commutator-only shortcut only behind the explicit
   `mcscf_debug_commutator_rhs` debug option.
 - The codebase now has a diagonal-preconditioned orbital-step helper plus unit
-  coverage for it, so the first building block for a coupled orbital/CI step is
-  in tree even though the production candidate screen does not enable a
-  `sa-coupled-total` rescue yet.
+  coverage for it, so the diagonal orbital model is no longer only a step
+  model; it is now also used explicitly as a preconditioner inside the coupled
+  orbital/CI solve.
 - The response path now also packages the explicit coupled blocks per root:
   orbital-to-CI RHS, CI solve result, CI residual, first-order `Gamma1/Q1`,
-  and the resulting CI-driven orbital correction. The driver now carries an
-  explicit block-diagonal coupled orbital/CI correction object built from those
-  residuals, even though that step is still parked behind the disabled coupled
-  rescue gate rather than enabled as a production candidate.
+  and the resulting CI-driven orbital correction.
+- The driver now uses those coupled blocks in a matrix-free block iteration per
+  root: it seeds from an orbital-preconditioned plus CI-response Schur step,
+  refines the coupled residual with explicit OO/OC/CO/CC block actions, and
+  promotes the weighted `sa-coupled` direction into the normal candidate screen
+  instead of keeping it behind a disabled rescue gate.
 - The stabilization pass after the recent convergence regression restored the
   richer SA candidate family plus the lightweight orbital-gradient merit screen,
   which brings the checked-in single-root manual fixture gate back to the
@@ -109,17 +112,33 @@ What has landed already:
 - The `planck-casscf-internal` target now links the orbital/integral
   implementation it exercises, and the internal harness no longer crashes in
   the trailing root-reduction coverage block.
+- `tests/casscf_internal.cpp` now also checks coupled-block invariants for
+  `build_coupled_response_blocks(...)` and verifies that the new coupled
+  orbital/CI solve does not worsen the seeded coupled residual on a synthetic
+  small-space problem.
+- The full checked-in single-root manual CASSCF gate still converges after the
+  coupled-step change:
+  - `ethylene_casscf_321g` -> `-77.5145223872 Eh`
+  - `ethylene_casscf_ccpvdz` -> `-77.9524855977 Eh`
+  - `water_cas44_631g` -> `-75.5497490402 Eh`
+  - `water_cas44_b1` -> `-74.2879452324 Eh`
+  - `water_cas44_ccpvdz` -> `-75.6045806122 Eh`
+  - `water_cas44_sto3g` -> `-74.4700757755 Eh`
 
 What is still true:
 
-- The default optimizer is still an approximate macro/micro scaffold.
-- The state-averaged optimizer is now root-resolved through the full current
-  scaffold, but the overall optimizer is still not a true coupled SA
-  second-order method.
-- The exact RHS is now the default theory path, but it is still used inside the
-  current diagonal-response scaffold rather than a genuine coupled orbital/CI
-  step.
-- The orbital Hessian used in production is still only a diagonal model.
+- The default optimizer is no longer purely diagonal-response: it now includes
+  a production matrix-free coupled orbital/CI candidate built from explicit
+  coupled residual blocks, but it still lives inside the older macro candidate
+  screen rather than a single clean solver path.
+- The state-averaged optimizer is root-resolved through the full current
+  scaffold, and it now has a real coupled step, but the overall optimizer is
+  still not a polished final SA second-order method.
+- The exact RHS is now the default theory path and is threaded through the new
+  coupled solve, but the fallback heuristics around that solve are still richer
+  than they should be in the final architecture.
+- The orbital Hessian used in production is still only a diagonal
+  preconditioner, not a full OO block model.
 - The default orbital-step logic still mixes several heuristics instead of one
   clean coupled solver and one explicit globalization strategy.
 
@@ -155,37 +174,39 @@ Acceptance target:
 - The exact path is the default theory path wherever the current scaffold is
   meant to approximate second-order behavior.
 
-### 2. Build a true coupled orbital/CI step and demote the diagonal Hessian to a preconditioner
+### 2. Complete and harden the new coupled orbital/CI step
 
-This is still the core missing algorithmic step.
+The core solver milestone has moved forward: the code now has a production
+matrix-free coupled orbital/CI step instead of only parked scaffolding.
 
-The production path still uses a diagonal orbital Hessian model plus response
-corrections and heuristic candidate screening. That is acceptable as
-scaffolding, but not as the final solver architecture.
+The current implementation:
 
-The newest increment only starts this transition: the code now has explicit
-coupled response blocks plus a block-diagonal orbital/CI preconditioned
-correction object that can act on the coupled residual. That is the right
-direction, but it is not yet enabled as a production candidate and it is still
-not a fully fledged coupled solver.
+- seeds from an orbital-preconditioned plus CI-response Schur-like step
+- evaluates explicit OO, OC, CO, and CC residual pieces
+- refines them by block iteration with diagonal orbital/CI preconditioners
+- contributes the weighted `sa-coupled` direction directly to the normal
+  candidate screen
+
+That is a real coupled step, but it is still an early coupled implementation
+rather than the final solver architecture.
 
 Needed work:
 
-- Recast the current diagonal orbital Hessian as a preconditioner only.
-- Implement one real coupled step:
-  - matrix-free coupled Newton, or
-  - genuine augmented-Hessian / norm-extended step
-- Introduce explicit orbital-orbital, orbital-CI, CI-orbital, and CI-CI blocks
-  in the step construction.
+- Keep the diagonal orbital Hessian only as a preconditioner.
+- Strengthen the matrix-free coupled solve itself:
+  - better residual scaling and stopping criteria
+  - cleaner globalization/trust-region behavior
+  - less dependence on the surrounding legacy candidate family
+- Decide whether the end state should stay matrix-free block-iterative or move
+  to a more explicit augmented-Hessian / norm-extended coupled solve.
 - Reduce the default optimizer to one main step builder plus one explicit
   globalization/fallback path.
 
 Acceptance target:
 
 - The driver can honestly distinguish:
-  - approximate prototype mode
-  - diagonal-response approximation
-  - true coupled second-order mode
+  - debug approximate mode
+  - production coupled mode
 - Convergence behavior becomes easier to reason about after small code changes.
 
 ### 3. Simplify the default optimizer once the coupled step exists
@@ -336,8 +357,7 @@ Completion gate for any solver-facing CASSCF change:
 
 ## Recommended Implementation Order
 
-1. Build the coupled orbital/CI step and simplify the default optimizer around
-   that step instead of the current diagonal scaffold.
+1. Simplify the default optimizer around the new coupled orbital/CI step.
 2. Add PySCF-backed reference tests for a small, trusted system set.
 3. Expand the internal invariance/root-robustness coverage once the coupled
    step starts landing.

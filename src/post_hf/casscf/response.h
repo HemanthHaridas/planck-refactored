@@ -32,6 +32,23 @@ namespace HartreeFock::Correlation::CASSCF
         Eigen::MatrixXd orbital_correction;
     };
 
+    // Result of the block-iterative coupled orbital/CI linear solve used to
+    // build a production trial direction. The current implementation keeps the
+    // orbital and CI blocks explicit while using the diagonal orbital Hessian
+    // and response diagonal only as preconditioners for the coupled residual.
+    struct CoupledStepSolveResult
+    {
+        Eigen::MatrixXd orbital_step;
+        Eigen::VectorXd ci_step;
+        Eigen::MatrixXd orbital_residual;
+        Eigen::VectorXd ci_residual;
+        Eigen::MatrixXd orbital_correction;
+        int iterations = 0;
+        double orbital_residual_max = 0.0;
+        double ci_residual_norm = 0.0;
+        bool converged = false;
+    };
+
     // The response mode flag is a small policy switch used by the CASSCF driver to
     // describe which CI-response approximation is currently in play.
     enum class ResponseMode
@@ -118,6 +135,38 @@ namespace HartreeFock::Correlation::CASSCF
         double tol = 1e-8,
         int max_iter = 64,
         double precond_floor = 1e-4);
+
+    // Solve the linearized coupled orbital/CI stationarity system with a
+    // matrix-free block iteration. The OO and CC blocks use diagonal
+    // preconditioners, while the OC/CO couplings are applied explicitly through
+    // the CI-response RHS and the orbital correction reconstructed from c1.
+    CoupledStepSolveResult solve_coupled_orbital_ci_step(
+        ResponseRHSMode mode,
+        const Eigen::MatrixXd &orbital_gradient,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        const Eigen::MatrixXd &h_eff,
+        const std::vector<double> &ga,
+        const CIDeterminantSpace &space,
+        const std::vector<CIString> &a_strs,
+        const std::vector<CIString> &b_strs,
+        const std::vector<std::pair<int, int>> &dets,
+        const ActiveIntegralCache &active_integrals,
+        const CISigmaApplier &apply,
+        const Eigen::VectorXd &c0,
+        double E0,
+        const Eigen::VectorXd &H_diag,
+        int nbasis,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym,
+        double tol = 1e-6,
+        int max_iter = 8,
+        double response_precond_floor = 1e-4);
 
     // One preconditioned response step without iterative subspace growth.
     CIResponseResult solve_ci_response_single_step(
