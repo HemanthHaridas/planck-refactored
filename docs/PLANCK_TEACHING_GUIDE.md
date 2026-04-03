@@ -1292,11 +1292,11 @@ H     1.233698    0.000000    0.927942   ← right CH₂ in xz plane
 H     1.233698    0.000000   -0.927942
 ```
 
-The point-group symmetry is D₂ (the C₂ rotation about the C–C axis and two
-perpendicular C₂ axes are the only symmetry elements; the mirror planes of
-planar ethylene are absent at 90° twist). The two active orbitals transform
-as different irreps of D₂, which is why the biradical wavefunctions are even
-and odd combinations rather than simple MO products.
+The point-group symmetry is D₂d. At 90° twist the molecule gains an S₄
+improper rotation axis along C–C and two σd mirror planes that bisect the
+H–C–H angles, in addition to the three C₂ axes. The two active orbitals
+transform as different irreps of D₂d, which is why the biradical wavefunctions
+are even and odd combinations rather than simple MO products.
 
 **Input example** (`tests/inputs/casscf_tests/ethylene_casscf_321g.hfinp`):
 
