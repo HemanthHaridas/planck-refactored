@@ -125,6 +125,23 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<int> &mo_irreps,
         bool use_sym);
 
+    // Apply only the diagonal orbital-Hessian preconditioner to the current
+    // orbital residual. This is the lightweight building block used by the
+    // coupled-step scaffold after the explicit CI response has already updated
+    // the residual, so the diagonal model acts as a preconditioner rather than
+    // as the full step model.
+    Eigen::MatrixXd diagonal_preconditioned_orbital_step(
+        const Eigen::MatrixXd &G,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym);
+
     // Apply the antisymmetric orbital rotation to the coefficient matrix and then
     // restore orthonormality in the current AO metric.
     Eigen::MatrixXd apply_orbital_rotation(

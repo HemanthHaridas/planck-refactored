@@ -233,6 +233,54 @@ namespace HartreeFock::Correlation::CASSCF
         return pairs;
     }
 
+    Eigen::MatrixXd diagonal_preconditioned_orbital_step(
+        const Eigen::MatrixXd &G,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym)
+    {
+        const int nb = n_core + n_act + n_virt;
+        const Eigen::MatrixXd F_sum = F_I_mo + F_A_mo;
+        Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nb, nb);
+
+        auto cls = [&](int k)
+        { return (k < n_core) ? 0 : (k < n_core + n_act) ? 1
+                                                         : 2; };
+
+        for (int p = 0; p < nb; ++p)
+            for (int q = p + 1; q < nb; ++q)
+            {
+                if (cls(p) == cls(q))
+                    continue;
+                if (use_sym && !mo_irreps.empty())
+                {
+                    const int ip = (p < static_cast<int>(mo_irreps.size())) ? mo_irreps[p] : -1;
+                    const int iq = (q < static_cast<int>(mo_irreps.size())) ? mo_irreps[q] : -1;
+                    if (ip >= 0 && iq >= 0 && ip != iq)
+                        continue;
+                }
+
+                double denom = hess_diag(F_sum, p, q) + level_shift;
+                if (std::abs(denom) < 1e-4)
+                    denom = (denom >= 0.0) ? 1e-4 : -1e-4;
+
+                const double step = -G(p, q) / denom;
+                kappa(p, q) = step;
+                kappa(q, p) = -step;
+            }
+
+        const double max_elem = kappa.cwiseAbs().maxCoeff();
+        if (max_elem > max_rot)
+            kappa *= max_rot / max_elem;
+        return kappa;
+    }
+
     Eigen::MatrixXd augmented_hessian_step(
         const Eigen::MatrixXd &G,
         const Eigen::MatrixXd &F_I_mo,

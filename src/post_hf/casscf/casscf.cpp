@@ -875,6 +875,38 @@ namespace HartreeFock::Correlation::CASSCF
             return steps;
         };
 
+        auto build_root_resolved_coupled_correction_step_set =
+            [&](const McscfState &st_base,
+                const std::vector<StateSpecificData> &roots,
+                double level_shift_local)
+        {
+            RootResolvedOrbitalStepSet steps;
+            steps.weighted = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            steps.per_root.reserve(roots.size());
+            // Once the explicit CI response has updated each root's orbital
+            // residual, the old diagonal orbital model should only act as a
+            // preconditioner for that coupled residual, not as the coupled
+            // model itself.
+            for (const auto &root : roots)
+            {
+                Eigen::MatrixXd root_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                if (root.weight == 0.0)
+                {
+                    steps.per_root.push_back(std::move(root_step));
+                    continue;
+                }
+                root_step = diagonal_preconditioned_orbital_step(
+                    root.g_orb, st_base.F_I_mo, root.F_A_mo,
+                    n_core, n_act, n_virt,
+                    level_shift_local, 0.20, all_mo_irr, use_sym);
+                root_step = cap_orbital_step(std::move(root_step));
+                steps.weighted.noalias() += root.weight * root_step;
+                steps.per_root.push_back(std::move(root_step));
+            }
+            steps.weighted = cap_orbital_step(std::move(steps.weighted));
+            return steps;
+        };
+
         auto build_single_pair_probe_step = [&](int pair_index, double signed_magnitude)
         {
             Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
@@ -925,6 +957,9 @@ namespace HartreeFock::Correlation::CASSCF
                 break;
             }
 
+            Eigen::MatrixXd kappa_total_weighted = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            Eigen::MatrixXd kappa_total = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            Eigen::MatrixXd kappa_first = Eigen::MatrixXd::Zero(nbasis, nbasis);
             std::vector<Eigen::MatrixXd> kappa_total_roots(
                 st_current.roots.size(), Eigen::MatrixXd::Zero(nbasis, nbasis));
             std::vector<Eigen::MatrixXd> kappa_first_roots;
@@ -947,7 +982,12 @@ namespace HartreeFock::Correlation::CASSCF
                     level_shift, 0.20, all_mo_irr, use_sym);
                 const Eigen::MatrixXd &kappa = kappa_step_set.weighted;
                 if (micro == 0)
+                {
+                    kappa_first = kappa;
                     kappa_first_roots = kappa_step_set.per_root;
+                }
+                kappa_total_weighted += kappa;
+                kappa_total += kappa;
                 for (int r = 0; r < static_cast<int>(kappa_total_roots.size()); ++r)
                     kappa_total_roots[static_cast<std::size_t>(r)] +=
                         kappa_step_set.per_root[static_cast<std::size_t>(r)];
@@ -1021,8 +1061,34 @@ namespace HartreeFock::Correlation::CASSCF
                         std::max(diag.max_response_regularization, response.max_denominator_regularization);
                 }
             }
+            const double max_k = kappa_total.cwiseAbs().maxCoeff();
+            if (max_k > 0.20)
+                kappa_total *= 0.20 / max_k;
             const RootResolvedOrbitalStepSet kappa_grad_step_set =
                 build_root_resolved_gradient_fallback_step_set(st_current.roots);
+            const Eigen::MatrixXd &kappa_grad = kappa_grad_step_set.weighted;
+            // The diagonal-preconditioned coupled-step scaffold is kept parked
+            // until the candidate screen stops being order-sensitive. Enabling
+            // it too early perturbs the stagnation rescue path enough to hide
+            // whether a trial truly beats the existing AH/gradient candidates.
+            const bool use_coupled_stagnation_rescue = false;
+            Eigen::MatrixXd kappa_coupled_total = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            std::vector<Eigen::MatrixXd> kappa_coupled_total_roots;
+            if (use_coupled_stagnation_rescue && stagnation_streak >= 2)
+            {
+                const RootResolvedOrbitalStepSet kappa_coupled_correction_set =
+                    build_root_resolved_coupled_correction_step_set(st_current, st_current.roots, level_shift);
+                kappa_coupled_total =
+                    cap_orbital_step(kappa_total_weighted + kappa_coupled_correction_set.weighted);
+                kappa_coupled_total_roots.reserve(st_current.roots.size());
+                for (int r = 0; r < static_cast<int>(st_current.roots.size()); ++r)
+                {
+                    Eigen::MatrixXd root_step =
+                        kappa_total_roots[static_cast<std::size_t>(r)] +
+                        kappa_coupled_correction_set.per_root[static_cast<std::size_t>(r)];
+                    kappa_coupled_total_roots.push_back(cap_orbital_step(std::move(root_step)));
+                }
+            }
 
             const WeightedRootProbeSignal probe_signal =
                 build_weighted_root_probe_signal(st_current.roots, opt_pairs);
@@ -1032,6 +1098,8 @@ namespace HartreeFock::Correlation::CASSCF
             double best_E = st_current.E_cas;
             double best_screen_g = st_current.weighted_root_gnorm;
             double best_max_root_g = st_current.max_root_gnorm;
+            const double merit_weight = 0.10;
+            double best_merit = best_E + merit_weight * best_screen_g * best_screen_g;
             Eigen::MatrixXd C_best = C;
             Eigen::MatrixXd best_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
             struct CandidateStep
@@ -1060,9 +1128,27 @@ namespace HartreeFock::Correlation::CASSCF
             append_candidate(kappa_newton, "numeric-newton");
             if (stagnation_streak >= 2)
             {
+                append_candidate(kappa_first, "sa-ah-first");
+                append_candidate(kappa_total, "sa-ah-total");
+                append_candidate(kappa_grad, "sa-grad");
+                if (use_coupled_stagnation_rescue)
+                    append_candidate(kappa_coupled_total, "sa-coupled-total");
                 append_root_candidates(kappa_first_roots, "ah-first", false);
                 append_root_candidates(kappa_total_roots, "ah-total", true);
+                if (use_coupled_stagnation_rescue)
+                    append_root_candidates(kappa_coupled_total_roots, "coupled-total", false);
                 append_root_candidates(kappa_grad_step_set.per_root, "grad", false);
+                if (kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+                {
+                    append_candidate(cap_orbital_step(4.0 * kappa_grad), "sa-grad-x4");
+                    append_candidate(cap_orbital_step(2.0 * kappa_grad), "sa-grad-x2");
+                    append_candidate(kappa_grad, "sa-grad");
+                    append_candidate(cap_orbital_step(0.5 * kappa_grad), "sa-grad-x0.5");
+                    append_candidate(cap_orbital_step(-4.0 * kappa_grad), "sa-grad-neg-x4");
+                    append_candidate(cap_orbital_step(-2.0 * kappa_grad), "sa-grad-neg-x2");
+                    append_candidate(-kappa_grad, "sa-grad-neg");
+                    append_candidate(cap_orbital_step(-0.5 * kappa_grad), "sa-grad-neg-x0.5");
+                }
                 // Large virtual spaces can make the full preconditioned gradient
                 // step too entangled: a few productive rotations get mixed with many
                 // weak directions and the energy screen rejects the whole update.
@@ -1098,9 +1184,31 @@ namespace HartreeFock::Correlation::CASSCF
             }
             else
             {
+                append_candidate(kappa_first, "sa-ah-first");
+                append_candidate(kappa_total, "sa-ah-total");
+                append_candidate(kappa_grad, "sa-grad");
                 append_root_candidates(kappa_first_roots, "ah-first", false);
                 append_root_candidates(kappa_total_roots, "ah-total", true);
                 append_root_candidates(kappa_grad_step_set.per_root, "grad", false);
+                if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12 && kappa_total.cwiseAbs().maxCoeff() > 1e-12)
+                    append_candidate(0.5 * (kappa_newton + kappa_total), "mix-newton-total");
+                if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 && kappa_total.cwiseAbs().maxCoeff() > 1e-12)
+                    append_candidate(0.5 * (kappa_first + kappa_total), "mix-first-total");
+                if (kappa_total.cwiseAbs().maxCoeff() > 1e-12 && kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+                    append_candidate(0.5 * (kappa_total + kappa_grad), "mix-total-grad");
+                if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 && kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+                    append_candidate(0.5 * (kappa_first + kappa_grad), "mix-first-grad");
+                if (kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+                {
+                    append_candidate(cap_orbital_step(4.0 * kappa_grad), "sa-grad-x4");
+                    append_candidate(cap_orbital_step(2.0 * kappa_grad), "sa-grad-x2");
+                    append_candidate(kappa_grad, "sa-grad");
+                    append_candidate(cap_orbital_step(0.5 * kappa_grad), "sa-grad-x0.5");
+                    append_candidate(cap_orbital_step(-4.0 * kappa_grad), "sa-grad-neg-x4");
+                    append_candidate(cap_orbital_step(-2.0 * kappa_grad), "sa-grad-neg-x2");
+                    append_candidate(-kappa_grad, "sa-grad-neg");
+                    append_candidate(cap_orbital_step(-0.5 * kappa_grad), "sa-grad-neg-x0.5");
+                }
             }
 
             for (const auto &candidate : step_candidates)
@@ -1118,6 +1226,9 @@ namespace HartreeFock::Correlation::CASSCF
                         continue;
 
                     const auto &trial = *trial_res;
+                    const double trial_merit =
+                        trial.E_cas + merit_weight * trial.weighted_root_gnorm * trial.weighted_root_gnorm;
+                    const bool merit_improved = trial_merit < best_merit - 1e-10;
                     const bool weighted_root_gradient_reduced =
                         trial.weighted_root_gnorm < best_screen_g - 1e-12;
                     const bool max_root_gradient_reduced =
@@ -1136,6 +1247,7 @@ namespace HartreeFock::Correlation::CASSCF
                         std::abs(trial.E_cas - best_E) <= flat_energy_window &&
                         (weighted_root_gradient_reduced || max_root_gradient_reduced);
                     if (!energy_improved_without_hurting_gradient &&
+                        !merit_improved &&
                         !stationary_but_better_grad)
                         continue;
 
@@ -1143,6 +1255,7 @@ namespace HartreeFock::Correlation::CASSCF
                     best_E = trial.E_cas;
                     best_screen_g = trial.weighted_root_gnorm;
                     best_max_root_g = trial.max_root_gnorm;
+                    best_merit = trial_merit;
                     accepted_state = trial;
                     C_best = apply_orbital_rotation(C, kappa_try, calc._overlap);
                     best_step = kappa_try;
@@ -1157,7 +1270,10 @@ namespace HartreeFock::Correlation::CASSCF
                             st_current.roots, st_current.F_I_mo, opt_pairs, best_step);
                     diag.predicted_delta = prediction.weighted_delta;
                     diag.max_root_predicted_delta_deviation = prediction.max_root_deviation;
+                    break;
                 }
+                if (accepted)
+                    break;
             }
 
             if (accepted)

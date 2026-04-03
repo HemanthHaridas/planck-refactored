@@ -1227,5 +1227,33 @@ int main()
                      "late SA convergence should accept the stationary point once both weighted and max-root screens satisfy tolerance");
     }
 
+    {
+        Eigen::MatrixXd G = Eigen::MatrixXd::Zero(3, 3);
+        G(0, 1) = 0.64;
+        G(1, 0) = -0.64;
+        G(1, 2) = -0.32;
+        G(2, 1) = 0.32;
+
+        Eigen::MatrixXd F_I = Eigen::MatrixXd::Zero(3, 3);
+        Eigen::MatrixXd F_A = Eigen::MatrixXd::Zero(3, 3);
+        F_A(0, 0) = -1.0;
+        F_A(1, 1) = 0.6;
+        F_A(2, 2) = 2.2;
+
+        const Eigen::MatrixXd step = diagonal_preconditioned_orbital_step(
+            G, F_I, F_A,
+            1, 1, 1,
+            0.2, 0.5, {}, false);
+
+        ok &= expect((step + step.transpose()).norm() < 1e-12,
+                     "diagonal preconditioned coupled-step correction should stay antisymmetric");
+        ok &= expect(std::abs(step(0, 1) + 0.1882352941) < 1e-9,
+                     "diagonal preconditioned coupled-step correction should apply the orbital denominator to the core-active pair");
+        ok &= expect(std::abs(step(1, 2) - 0.0941176471) < 1e-9,
+                     "diagonal preconditioned coupled-step correction should apply the orbital denominator to the active-virtual pair");
+        ok &= expect(std::abs(step(0, 2)) < 1e-12,
+                     "diagonal preconditioned coupled-step correction should leave inactive zero-gradient pairs untouched");
+    }
+
     return ok ? 0 : 1;
 }
