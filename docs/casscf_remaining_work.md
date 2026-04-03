@@ -71,8 +71,10 @@ What has landed already:
   scaffold: orbital update, candidate generation, response, acceptance, and
   late plateau/convergence logic all keep the multiroot state-specific data
   alive instead of dropping back to early averaging.
-- Numeric Newton is no longer part of the normal production path; it is behind
-  `mcscf_debug_numeric_newton`.
+- Numeric Newton is no longer a peer in the large default candidate family,
+  but the production optimizer still keeps it as a small-space escape hatch
+  (and as an explicit debug path via `mcscf_debug_numeric_newton`) while the
+  new coupled solve is being hardened.
 - `calc._cas_mo_coefficients` now stays in the converged optimization basis,
   avoiding the old mismatch between stored orbitals and the solved CI gauge.
 - The response layer now has an explicit `ResponseRHSMode` split between:
@@ -96,11 +98,12 @@ What has landed already:
   refines the coupled residual with explicit OO/OC/CO/CC block actions, and
   promotes the weighted `sa-coupled` direction into the normal candidate screen
   instead of keeping it behind a disabled rescue gate.
-- The stabilization pass after the recent convergence regression restored the
-  richer SA candidate family plus the lightweight orbital-gradient merit screen,
-  which brings the checked-in single-root manual fixture gate back to the
-  converged energies for `water_cas44_631g`, `water_cas44_sto3g`, and the rest
-  of `tests/inputs/casscf_tests/*.hfinp`.
+- The first optimizer-simplification pass is now in place: the production
+  candidate family has been cut down to the coupled step, gradient fallback,
+  a small-space numeric-Newton escape hatch, and stagnation-only diagonal /
+  probe / per-root rescue candidates. The larger always-on AH/mix/gradient
+  variant family is no longer part of the normal path, and the full checked-in
+  single-root manual fixture gate still converges at the expected energies.
 - `tests/casscf_internal.cpp` now checks that the analytic exact RHS matches a
   finite-difference active-space Hamiltonian rotation on a small reference
   problem, and that it differs from the commutator-only shortcut when the
@@ -139,8 +142,10 @@ What is still true:
   than they should be in the final architecture.
 - The orbital Hessian used in production is still only a diagonal
   preconditioner, not a full OO block model.
-- The default orbital-step logic still mixes several heuristics instead of one
-  clean coupled solver and one explicit globalization strategy.
+- The default orbital-step logic is much smaller than before, but it still has
+  more than one production escape hatch: the coupled step is primary, yet
+  small-space numeric Newton and stagnation-only rescue candidates are still
+  present while the coupled solve is being hardened.
 
 ## Remaining Work
 
@@ -209,19 +214,22 @@ Acceptance target:
   - production coupled mode
 - Convergence behavior becomes easier to reason about after small code changes.
 
-### 3. Simplify the default optimizer once the coupled step exists
+### 3. Finish simplifying the default optimizer around the coupled step
 
 The current loop still mixes:
 
-- AH-like orbital steps
-- gradient fallback steps
-- per-root and shared candidate screening
-- multi-candidate merit comparison
-- damping/backtracking logic
-- optional numeric Newton debug validation
+- the main coupled orbital/CI candidate
+- a gradient fallback
+- a small-space numeric-Newton escape hatch
+- stagnation-only diagonal/per-root/probe rescue candidates
+- merit comparison plus damping/backtracking logic
 
 Needed work:
 
+- Decide whether small-space numeric Newton should remain a production rescue
+  path or become debug-only once the coupled solve is robust enough.
+- Reduce or eliminate the stagnation-only rescue family once the coupled step
+  has a cleaner globalization / trust-region story.
 - Separate theory/intermediate construction from step construction.
 - Choose one default globalization strategy and make it explicit.
 - Move any remaining experiment-only heuristics behind debug flags.
@@ -331,7 +339,7 @@ manual fixture folder:
 - `tests/inputs/casscf_tests/ethylene_casscf_321g.hfinp`
 - `tests/inputs/casscf_tests/ethylene_casscf_ccpvdz.hfinp`
 
-Observed rerun status on 2026-04-02 after commit `09e0be0`:
+Observed rerun status on 2026-04-03 after the optimizer-simplification pass:
 
 - `ethylene_casscf_321g.rerun.log` converges to `-77.5145223871 Eh`
 - `ethylene_casscf_ccpvdz.rerun.log` converges to `-77.9524855977 Eh`

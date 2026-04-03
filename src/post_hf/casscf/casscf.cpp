@@ -912,14 +912,10 @@ namespace HartreeFock::Correlation::CASSCF
             }
 
             Eigen::MatrixXd kappa_total = Eigen::MatrixXd::Zero(nbasis, nbasis);
-            Eigen::MatrixXd kappa_first = Eigen::MatrixXd::Zero(nbasis, nbasis);
-            std::vector<Eigen::MatrixXd> kappa_total_roots(
-                st_current.roots.size(), Eigen::MatrixXd::Zero(nbasis, nbasis));
-            std::vector<Eigen::MatrixXd> kappa_first_roots;
             Eigen::MatrixXd kappa_newton = Eigen::MatrixXd::Zero(nbasis, nbasis);
-            const bool use_numeric_newton_fallback =
+            const bool build_numeric_newton_candidate =
                 use_numeric_newton_debug || static_cast<int>(opt_pairs.size()) <= numeric_newton_pair_limit;
-            if (use_numeric_newton_fallback)
+            if (build_numeric_newton_candidate)
             {
                 kappa_newton = build_numeric_newton_step(st_current, C, level_shift, diag);
                 if (diag.numeric_newton_attempted && diag.numeric_newton_failed)
@@ -1011,15 +1007,7 @@ namespace HartreeFock::Correlation::CASSCF
                     n_core, n_act, n_virt,
                     level_shift, 0.20, all_mo_irr, use_sym);
                 const Eigen::MatrixXd &kappa = kappa_step_set.weighted;
-                if (micro == 0)
-                {
-                    kappa_first = kappa;
-                    kappa_first_roots = kappa_step_set.per_root;
-                }
                 kappa_total += kappa;
-                for (int r = 0; r < static_cast<int>(kappa_total_roots.size()); ++r)
-                    kappa_total_roots[static_cast<std::size_t>(r)] +=
-                        kappa_step_set.per_root[static_cast<std::size_t>(r)];
 
                 const int nr_used = static_cast<int>(st_current.roots.size());
                 for (int r = 0; r < nr_used; ++r)
@@ -1112,89 +1100,54 @@ namespace HartreeFock::Correlation::CASSCF
                     append_candidate(std::move(step), std::format("root{:d}-{}", r, base_label));
                 }
             };
-            append_candidate(kappa_newton, "numeric-newton");
-            if (stagnation_streak >= 2)
-            {
-                append_candidate(kappa_coupled, "sa-coupled");
-                append_candidate(kappa_first, "sa-ah-first");
-                append_candidate(kappa_total, "sa-ah-total");
-                append_candidate(kappa_grad, "sa-grad");
-                append_root_candidates(kappa_coupled_step_set.orbital_steps.per_root, "coupled", false);
-                append_root_candidates(kappa_first_roots, "ah-first", false);
-                append_root_candidates(kappa_total_roots, "ah-total", true);
-                append_root_candidates(kappa_grad_step_set.per_root, "grad", false);
-                if (kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
-                {
-                    append_candidate(cap_orbital_step(4.0 * kappa_grad), "sa-grad-x4");
-                    append_candidate(cap_orbital_step(2.0 * kappa_grad), "sa-grad-x2");
-                    append_candidate(kappa_grad, "sa-grad");
-                    append_candidate(cap_orbital_step(0.5 * kappa_grad), "sa-grad-x0.5");
-                    append_candidate(cap_orbital_step(-4.0 * kappa_grad), "sa-grad-neg-x4");
-                    append_candidate(cap_orbital_step(-2.0 * kappa_grad), "sa-grad-neg-x2");
-                    append_candidate(-kappa_grad, "sa-grad-neg");
-                    append_candidate(cap_orbital_step(-0.5 * kappa_grad), "sa-grad-neg-x0.5");
-                }
-                // Large virtual spaces can make the full preconditioned gradient
-                // step too entangled: a few productive rotations get mixed with many
-                // weak directions and the energy screen rejects the whole update.
-                // Probe the dominant pair directions individually so the exact
-                // CASSCF energy can pick the useful rotations.
-                if (probe_signal.weighted_abs.size() > 0)
-                {
-                    std::vector<int> ranked_pairs(static_cast<std::size_t>(probe_signal.weighted_abs.size()));
-                    std::iota(ranked_pairs.begin(), ranked_pairs.end(), 0);
-                    std::partial_sort(
-                        ranked_pairs.begin(),
-                        ranked_pairs.begin() + std::min<std::size_t>(4, ranked_pairs.size()),
-                        ranked_pairs.end(),
-                        [&](int lhs, int rhs)
-                        {
-                            return probe_signal.weighted_abs(lhs) > probe_signal.weighted_abs(rhs);
-                        });
+            const bool coupled_step_reliable =
+                kappa_coupled_step_set.converged &&
+                std::isfinite(kappa_coupled_step_set.max_ci_residual) &&
+                std::isfinite(kappa_coupled_step_set.max_orbital_residual);
+            const bool use_numeric_newton_fallback =
+                use_numeric_newton_debug ||
+                (static_cast<int>(opt_pairs.size()) <= numeric_newton_pair_limit &&
+                 (!coupled_step_reliable || stagnation_streak >= 2));
+            const bool use_diagonal_fallback = stagnation_streak >= 2;
 
-                    for (std::size_t i = 0; i < std::min<std::size_t>(4, ranked_pairs.size()); ++i)
+            append_candidate(kappa_coupled, "sa-coupled");
+            if (use_numeric_newton_fallback)
+                append_candidate(kappa_newton, "numeric-newton");
+            if (use_diagonal_fallback)
+                append_candidate(kappa_total, "sa-diag-fallback");
+            append_candidate(kappa_grad, "sa-grad-fallback");
+
+            if (stagnation_streak >= 2 && probe_signal.weighted_abs.size() > 0)
+            {
+                if (nroots > 1)
+                {
+                    append_root_candidates(kappa_coupled_step_set.orbital_steps.per_root, "coupled", false);
+                    append_root_candidates(kappa_grad_step_set.per_root, "grad-fallback", false);
+                }
+
+                std::vector<int> ranked_pairs(static_cast<std::size_t>(probe_signal.weighted_abs.size()));
+                std::iota(ranked_pairs.begin(), ranked_pairs.end(), 0);
+                std::partial_sort(
+                    ranked_pairs.begin(),
+                    ranked_pairs.begin() + std::min<std::size_t>(2, ranked_pairs.size()),
+                    ranked_pairs.end(),
+                    [&](int lhs, int rhs)
                     {
-                        const int k = ranked_pairs[i];
-                        if (probe_signal.weighted_abs(k) < 1e-6)
-                            break;
+                        return probe_signal.weighted_abs(lhs) > probe_signal.weighted_abs(rhs);
+                    });
 
-                        const double signed_probe =
-                            (probe_signal.weighted_signed(k) >= 0.0) ? -0.20 : 0.20;
-                        append_candidate(build_single_pair_probe_step(k, signed_probe),
-                                         std::format("probe-pair{:d}-favored", k));
-                        append_candidate(build_single_pair_probe_step(k, -signed_probe),
-                                         std::format("probe-pair{:d}-opposite", k));
-                    }
-                }
-            }
-            else
-            {
-                append_candidate(kappa_coupled, "sa-coupled");
-                append_root_candidates(kappa_coupled_step_set.orbital_steps.per_root, "coupled", false);
-                append_candidate(kappa_first, "sa-ah-first");
-                append_candidate(kappa_total, "sa-ah-total");
-                append_candidate(kappa_grad, "sa-grad");
-                append_root_candidates(kappa_first_roots, "ah-first", false);
-                append_root_candidates(kappa_total_roots, "ah-total", true);
-                append_root_candidates(kappa_grad_step_set.per_root, "grad", false);
-                if (kappa_newton.cwiseAbs().maxCoeff() > 1e-12 && kappa_total.cwiseAbs().maxCoeff() > 1e-12)
-                    append_candidate(0.5 * (kappa_newton + kappa_total), "mix-newton-total");
-                if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 && kappa_total.cwiseAbs().maxCoeff() > 1e-12)
-                    append_candidate(0.5 * (kappa_first + kappa_total), "mix-first-total");
-                if (kappa_total.cwiseAbs().maxCoeff() > 1e-12 && kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
-                    append_candidate(0.5 * (kappa_total + kappa_grad), "mix-total-grad");
-                if (kappa_first.cwiseAbs().maxCoeff() > 1e-12 && kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
-                    append_candidate(0.5 * (kappa_first + kappa_grad), "mix-first-grad");
-                if (kappa_grad.cwiseAbs().maxCoeff() > 1e-12)
+                for (std::size_t i = 0; i < std::min<std::size_t>(2, ranked_pairs.size()); ++i)
                 {
-                    append_candidate(cap_orbital_step(4.0 * kappa_grad), "sa-grad-x4");
-                    append_candidate(cap_orbital_step(2.0 * kappa_grad), "sa-grad-x2");
-                    append_candidate(kappa_grad, "sa-grad");
-                    append_candidate(cap_orbital_step(0.5 * kappa_grad), "sa-grad-x0.5");
-                    append_candidate(cap_orbital_step(-4.0 * kappa_grad), "sa-grad-neg-x4");
-                    append_candidate(cap_orbital_step(-2.0 * kappa_grad), "sa-grad-neg-x2");
-                    append_candidate(-kappa_grad, "sa-grad-neg");
-                    append_candidate(cap_orbital_step(-0.5 * kappa_grad), "sa-grad-neg-x0.5");
+                    const int k = ranked_pairs[i];
+                    if (probe_signal.weighted_abs(k) < 1e-6)
+                        break;
+
+                    const double signed_probe =
+                        (probe_signal.weighted_signed(k) >= 0.0) ? -0.20 : 0.20;
+                    append_candidate(build_single_pair_probe_step(k, signed_probe),
+                                     std::format("probe-pair{:d}-favored", k));
+                    append_candidate(build_single_pair_probe_step(k, -signed_probe),
+                                     std::format("probe-pair{:d}-opposite", k));
                 }
             }
 
