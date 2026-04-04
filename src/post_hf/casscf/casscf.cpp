@@ -10,6 +10,7 @@
 #include "post_hf/integrals.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -111,6 +112,7 @@ namespace
         double actual_delta = 0.0;
         double max_root_delta = 0.0;
         std::string accepted_candidate_label = "none";
+        double accepted_sa_gnorm = 0.0;
         double accepted_weighted_root_gnorm = 0.0;
         double accepted_max_root_gnorm = 0.0;
     };
@@ -311,29 +313,30 @@ namespace
         return screen;
     }
 
-    bool root_resolved_gradient_converged(
-        double weighted_root_gnorm,
-        double max_root_gnorm,
+    // SA stationarity check: the correct convergence criterion for the
+    // state-averaged objective E_SA = Σ_I w_I E_I is ||g_SA||_inf < tol,
+    // where g_SA = Σ_I w_I g_I is the state-averaged orbital gradient.
+    // This does NOT require each individual root gradient to vanish.
+    // For nroots=1, g_SA == g_1 so this is equivalent to the old check.
+    bool sa_gradient_converged(
+        double sa_gnorm,
         double tol)
     {
-        return weighted_root_gnorm < tol && max_root_gnorm < tol;
+        return sa_gnorm < tol;
     }
 
-    bool root_resolved_gradient_progress_flat(
-        double weighted_root_gnorm,
-        double prev_weighted_root_gnorm,
-        double max_root_gnorm,
-        double prev_max_root_gnorm)
+    // Track whether the SA gradient norm is making progress between
+    // macroiterations. Used for stagnation detection.
+    bool sa_gradient_progress_flat(
+        double sa_gnorm,
+        double prev_sa_gnorm)
     {
-        if (!std::isfinite(prev_weighted_root_gnorm) || !std::isfinite(prev_max_root_gnorm))
+        if (!std::isfinite(prev_sa_gnorm))
             return false;
 
-        const double weighted_window =
-            std::max(0.05 * std::max(prev_weighted_root_gnorm, 1e-8), 1e-8);
-        const double max_root_window =
-            std::max(0.05 * std::max(prev_max_root_gnorm, 1e-8), 1e-8);
-        return std::abs(weighted_root_gnorm - prev_weighted_root_gnorm) < weighted_window &&
-               std::abs(max_root_gnorm - prev_max_root_gnorm) < max_root_window;
+        const double window =
+            std::max(0.05 * std::max(prev_sa_gnorm, 1e-8), 1e-8);
+        return std::abs(sa_gnorm - prev_sa_gnorm) < window;
     }
 
     WeightedQuadraticModelPrediction build_weighted_root_quadratic_model_prediction(
@@ -874,8 +877,7 @@ namespace HartreeFock::Correlation::CASSCF
         };
 
         double E_prev = 0.0;
-        double prev_screen_gnorm = std::numeric_limits<double>::infinity();
-        double prev_max_root_gnorm = std::numeric_limits<double>::infinity();
+        double prev_sa_gnorm = std::numeric_limits<double>::infinity();
         bool converged = false;
         double level_shift = 0.2;
         int rejected_streak = 0;
@@ -884,6 +886,7 @@ namespace HartreeFock::Correlation::CASSCF
 
         for (unsigned int macro = 1; macro <= as.mcscf_max_iter; ++macro)
         {
+            const auto macro_start = std::chrono::steady_clock::now();
             const RootReference previous_root_reference = root_reference;
             auto res = evaluate(C, root_reference.valid ? &root_reference : nullptr, root_reference.valid);
             if (!res)
@@ -899,12 +902,8 @@ namespace HartreeFock::Correlation::CASSCF
                 true};
 
             const bool e_conv = macro > 1 && std::abs(st_current.E_cas - E_prev) < as.tol_mcscf_energy;
-            const bool g_conv =
-                root_resolved_gradient_converged(
-                    st_current.weighted_root_gnorm,
-                    st_current.max_root_gnorm,
-                    as.tol_mcscf_grad);
-            const bool no_orb_rot = (st_current.max_root_gnorm == 0.0);
+            const bool g_conv = sa_gradient_converged(st_current.gnorm, as.tol_mcscf_grad);
+            const bool no_orb_rot = (st_current.gnorm == 0.0);
             if ((e_conv && g_conv) || (g_conv && no_orb_rot))
             {
                 converged = true;
@@ -1244,11 +1243,7 @@ namespace HartreeFock::Correlation::CASSCF
 
             const bool small_energy_change = macro > 1 && std::abs(dE) < std::max(10.0 * as.tol_mcscf_energy, 1e-8);
             const bool little_gradient_progress =
-                root_resolved_gradient_progress_flat(
-                    reported_screen_gnorm,
-                    prev_screen_gnorm,
-                    reported_max_root_gnorm,
-                    prev_max_root_gnorm);
+                sa_gradient_progress_flat(reported_gnorm, prev_sa_gnorm);
             const bool accepted_micro_step_plateau =
                 diag.step_accepted && diag.accepted_step_norm < 5e-5;
             // Track repeated "flat" iterations separately from hard rejections so
@@ -1257,8 +1252,7 @@ namespace HartreeFock::Correlation::CASSCF
                 ++stagnation_streak;
             else
                 stagnation_streak = 0;
-            prev_screen_gnorm = reported_screen_gnorm;
-            prev_max_root_gnorm = reported_max_root_gnorm;
+            prev_sa_gnorm = reported_gnorm;
 
             if (stagnation_streak >= 2)
             {
@@ -1268,9 +1262,11 @@ namespace HartreeFock::Correlation::CASSCF
                                     stagnation_streak, level_shift));
             }
 
+            const double macro_time_sec =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - macro_start).count();
             HartreeFock::Logger::casscf_iteration(
-                macro, st_current.E_cas, dE, reported_screen_gnorm, reported_max_root_gnorm, diag.accepted_step_norm,
-                level_shift, 0.0);
+                macro, st_current.E_cas, dE, reported_gnorm, reported_max_root_gnorm, diag.accepted_step_norm,
+                level_shift, macro_time_sec);
 
             logging(LogLevel::Info, tag + " :",
                     std::format(
@@ -1308,12 +1304,8 @@ namespace HartreeFock::Correlation::CASSCF
             }
 
             const bool e_conv_post = macro > 1 && std::abs(dE) < as.tol_mcscf_energy;
-            const bool g_conv_post =
-                root_resolved_gradient_converged(
-                    reported_screen_gnorm,
-                    reported_max_root_gnorm,
-                    as.tol_mcscf_grad);
-            const bool no_orb_rot_post = (reported_max_root_gnorm == 0.0);
+            const bool g_conv_post = sa_gradient_converged(reported_gnorm, as.tol_mcscf_grad);
+            const bool no_orb_rot_post = (reported_gnorm == 0.0);
             if ((e_conv_post && g_conv_post) || (g_conv_post && no_orb_rot_post))
             {
                 converged = true;
