@@ -49,11 +49,10 @@ namespace HartreeFock
         build_orthogonalizer(const Eigen::MatrixXd &S, double threshold = 1e-8);
 
         // Form the initial density matrix from the core Hamiltonian:
-        //   diagonalize X^T * H * X, then distribute the RHF electrons across
-        //   any degenerate frontier manifold before building the AO density.
+        //   diagonalize X^T * H * X, occupy the lowest n_occ orbitals.
         Eigen::MatrixXd initial_density(const Eigen::MatrixXd &H,
                                         const Eigen::MatrixXd &X,
-                                        int n_electrons);
+                                        std::size_t n_occ);
 
         IterationMetrics restricted_iteration_metrics(
             const Eigen::MatrixXd &previous_density,

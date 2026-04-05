@@ -1812,9 +1812,12 @@ static Eigen::MatrixXd _compute_schwarz_table(
         if (use_sym)
         {
             auto [orb, forced_zero] = build_pair_orbit(i, j, *sym_ops);
-            if (forced_zero)
-                continue;
             orbit = std::move(orb);
+            // Q(i,j) = sqrt((ij|ij)) is a two-electron diagonal bound, so any
+            // AO phase picked up by the pair cancels between the bra and ket.
+            // A pair orbit that looks "odd" for one-electron matrices is still
+            // valid here and must not be screened away.
+            (void)forced_zero;
             if (orbit.front().i != i || orbit.front().j != j)
                 continue;
         }

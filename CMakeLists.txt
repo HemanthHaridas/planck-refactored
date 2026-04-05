@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 message(STATUS "Building on : ${CMAKE_SYSTEM_NAME} using following compiler flags : ${CMAKE_CXX_FLAGS}")
+message(STATUS "CMAKE_INSTALL_PREFIX : ${CMAKE_INSTALL_PREFIX}")
 
 # GPU / CUDA acceleration (disabled by default; enable with -DUSE_CUDA=ON)
 option(USE_CUDA "Enable CUDA GPU acceleration (requires CUDA toolkit)" OFF)
