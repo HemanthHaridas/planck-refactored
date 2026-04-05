@@ -1578,5 +1578,229 @@ int main()
                      "coupled orbital/CI solve should keep the virtual-virtual block gauge redundant");
     }
 
+    {
+        std::vector<CIString> a_strs;
+        std::vector<CIString> b_strs;
+        build_spin_strings_unfiltered(2, 1, 1, a_strs, b_strs);
+
+        Eigen::MatrixXd h_eff = Eigen::MatrixXd::Zero(2, 2);
+        h_eff << -0.9, 0.12,
+            0.12, -0.2;
+        std::vector<double> ga(16, 0.0);
+        auto idx4_act = [](int p, int q, int r, int s)
+        {
+            return ((p * 2 + q) * 2 + r) * 2 + s;
+        };
+        ga[idx4_act(0, 0, 0, 0)] = 0.70;
+        ga[idx4_act(1, 1, 1, 1)] = 0.48;
+        ga[idx4_act(0, 0, 1, 1)] = ga[idx4_act(1, 1, 0, 0)] = 0.16;
+        ga[idx4_act(0, 1, 1, 0)] = ga[idx4_act(1, 0, 0, 1)] = 0.05;
+
+        RASParams ras;
+        const CIDeterminantSpace space =
+            build_ci_space(a_strs, b_strs, ras, h_eff, ga, 2, {}, nullptr, 0, 8);
+        const Eigen::MatrixXd dense_h =
+            build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, h_eff, ga, 2);
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(dense_h);
+        const Eigen::VectorXd c0 = eig.eigenvectors().col(0);
+        const Eigen::VectorXd c1 = eig.eigenvectors().col(1);
+        const double E0 = eig.eigenvalues()(0);
+        const double E1 = eig.eigenvalues()(1);
+        const Eigen::VectorXd H_diag = dense_h.diagonal();
+
+        Eigen::MatrixXd orbital_gradient = Eigen::MatrixXd::Zero(4, 4);
+        orbital_gradient(0, 1) = 0.24;
+        orbital_gradient(1, 0) = -0.24;
+        orbital_gradient(0, 2) = -0.08;
+        orbital_gradient(2, 0) = 0.08;
+        orbital_gradient(2, 3) = -0.18;
+        orbital_gradient(3, 2) = 0.18;
+
+        Eigen::MatrixXd F_I = Eigen::MatrixXd::Zero(4, 4);
+        Eigen::MatrixXd F_A = Eigen::MatrixXd::Zero(4, 4);
+        F_A(0, 0) = -1.1;
+        F_A(1, 1) = -0.3;
+        F_A(2, 2) = 0.4;
+        F_A(3, 3) = 1.8;
+
+        Eigen::MatrixXd C = Eigen::MatrixXd::Identity(4, 4);
+        std::vector<double> eri_ao(256, 0.0);
+        auto idx4_ao = [](int p, int q, int r, int s)
+        {
+            return ((p * 4 + q) * 4 + r) * 4 + s;
+        };
+        eri_ao[idx4_ao(1, 1, 1, 1)] = ga[idx4_act(0, 0, 0, 0)];
+        eri_ao[idx4_ao(2, 2, 2, 2)] = ga[idx4_act(1, 1, 1, 1)];
+        eri_ao[idx4_ao(1, 1, 2, 2)] = eri_ao[idx4_ao(2, 2, 1, 1)] = ga[idx4_act(0, 0, 1, 1)];
+        eri_ao[idx4_ao(1, 2, 2, 1)] = eri_ao[idx4_ao(2, 1, 1, 2)] = ga[idx4_act(0, 1, 1, 0)];
+
+        const ActiveIntegralCache cache = build_active_integral_cache(eri_ao, C, 1, 2, 4);
+        const auto apply = [&dense_h](const Eigen::VectorXd &c, Eigen::VectorXd &sigma_vec)
+        {
+            sigma_vec = dense_h * c;
+        };
+
+        std::vector<StateAveragedCoupledRoot> sa_roots = {
+            {0.6, c0, E0},
+            {0.4, c1, E1},
+        };
+
+        const Eigen::MatrixXd seed_orbital_step = diagonal_preconditioned_orbital_step(
+            orbital_gradient,
+            F_I,
+            F_A,
+            1,
+            2,
+            1,
+            0.2,
+            0.20,
+            {},
+            false);
+        Eigen::MatrixXd seeded_orbital_correction = Eigen::MatrixXd::Zero(4, 4);
+        std::vector<Eigen::VectorXd> seeded_ci_residuals;
+        seeded_ci_residuals.reserve(sa_roots.size());
+        for (const auto &root : sa_roots)
+        {
+            const CoupledResponseBlocks blocks = build_coupled_response_blocks(
+                ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+                seed_orbital_step,
+                F_I,
+                h_eff,
+                ga,
+                space,
+                a_strs,
+                b_strs,
+                space.dets,
+                cache,
+                apply,
+                root.ci_vector,
+                root.ci_energy,
+                H_diag,
+                4,
+                1,
+                2,
+                1);
+            seeded_orbital_correction.noalias() += root.weight * blocks.orbital_correction;
+            seeded_ci_residuals.push_back(blocks.ci_residual);
+        }
+        const Eigen::MatrixXd seed_orbital_residual =
+            orbital_gradient +
+            hessian_action(seed_orbital_step, F_I, F_A, 1, 2, 1) +
+            seeded_orbital_correction;
+        double seeded_metric = seed_orbital_residual.cwiseAbs().maxCoeff();
+        for (const auto &residual : seeded_ci_residuals)
+            seeded_metric = std::max(seeded_metric, residual.norm());
+
+        const SACoupledStepSolveResult sa_result = solve_sa_coupled_orbital_ci_step(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            orbital_gradient,
+            F_I,
+            F_A,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            space.dets,
+            cache,
+            apply,
+            sa_roots,
+            H_diag,
+            4,
+            1,
+            2,
+            1,
+            0.2,
+            0.20,
+            {},
+            false,
+            1e-8,
+            8,
+            1e-4);
+
+        const double final_metric =
+            std::max(sa_result.orbital_residual_max, sa_result.max_ci_residual_norm);
+
+        ok &= expect(sa_result.orbital_step.size() > 0,
+                     "shared SA coupled solve should return an orbital step");
+        ok &= expect((sa_result.orbital_step + sa_result.orbital_step.transpose()).norm() < 1e-12,
+                     "shared SA coupled solve should preserve the antisymmetric orbital gauge");
+        ok &= expect(sa_result.ci_steps.size() == sa_roots.size(),
+                     "shared SA coupled solve should return one CI correction per root");
+        for (std::size_t i = 0; i < sa_roots.size(); ++i)
+        {
+            ok &= expect(std::abs(sa_roots[i].ci_vector.dot(sa_result.ci_steps[i])) < 1e-12,
+                         "shared SA coupled solve should preserve CI orthogonality to each reference vector");
+        }
+        ok &= expect(final_metric <= seeded_metric + 1e-10,
+                     "shared SA coupled solve should not worsen the seeded coupled residual");
+
+        const std::vector<StateAveragedCoupledRoot> single_root = {
+            {1.0, c0, E0},
+        };
+        const SACoupledStepSolveResult sa_single = solve_sa_coupled_orbital_ci_step(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            orbital_gradient,
+            F_I,
+            F_A,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            space.dets,
+            cache,
+            apply,
+            single_root,
+            H_diag,
+            4,
+            1,
+            2,
+            1,
+            0.2,
+            0.20,
+            {},
+            false,
+            1e-8,
+            8,
+            1e-4);
+        const CoupledStepSolveResult legacy_single = solve_coupled_orbital_ci_step(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            orbital_gradient,
+            F_I,
+            F_A,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            space.dets,
+            cache,
+            apply,
+            c0,
+            E0,
+            H_diag,
+            4,
+            1,
+            2,
+            1,
+            0.2,
+            0.20,
+            {},
+            false,
+            1e-8,
+            8,
+            1e-4);
+
+        ok &= expect(sa_single.ci_steps.size() == 1,
+                     "single-root shared SA solve should return exactly one CI step");
+        ok &= expect((sa_single.orbital_step - legacy_single.orbital_step).norm() < 1e-12,
+                     "single-root shared SA solve should match the existing single-root orbital step");
+        ok &= expect((sa_single.ci_steps.front() - legacy_single.ci_step).norm() < 1e-12,
+                     "single-root shared SA solve should match the existing single-root CI step");
+        ok &= expect(std::abs(single_root.front().ci_vector.dot(sa_single.ci_steps.front())) < 1e-12,
+                     "single-root shared SA solve should keep the CI step orthogonal to the reference vector");
+    }
+
     return ok ? 0 : 1;
 }

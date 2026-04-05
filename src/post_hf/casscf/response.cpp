@@ -7,6 +7,7 @@
 
 #include <Eigen/QR>
 
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -20,6 +21,7 @@ namespace
     using HartreeFock::Correlation::CASSCF::count_occupied_below;
     using HartreeFock::Correlation::CASSCF::hessian_action;
     using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
+    using HartreeFock::Correlation::CASSCF::StateAveragedCoupledRoot;
     using HartreeFock::Correlation::CASSCF::CIDeterminantSpace;
     using HartreeFock::Correlation::CASSCF::CISigmaApplier;
     using HartreeFock::Correlation::CASSCFInternal::apply_response_diag_preconditioner;
@@ -130,6 +132,13 @@ namespace
         Eigen::MatrixXd orbital_correction;
     };
 
+    struct SACoupledResidualEvaluation
+    {
+        Eigen::MatrixXd orbital_residual;
+        std::vector<Eigen::VectorXd> ci_residuals;
+        Eigen::MatrixXd orbital_correction;
+    };
+
     Eigen::MatrixXd orbital_correction_from_ci_step(
         const Eigen::VectorXd &c1,
         const Eigen::VectorXd &c0,
@@ -195,6 +204,75 @@ namespace
             mode, kappa, F_I_mo, h_eff, ga,
             space, a_strs, b_strs, c0, n_core, n_act);
         evaluation.ci_residual = response_residual(apply, c1, c0, E0, rhs);
+        return evaluation;
+    }
+
+    double max_ci_residual_norm(
+        const std::vector<Eigen::VectorXd> &residuals,
+        const std::vector<StateAveragedCoupledRoot> &roots)
+    {
+        double max_norm = 0.0;
+        const int n = std::min<int>(residuals.size(), roots.size());
+        for (int i = 0; i < n; ++i)
+        {
+            if (roots[static_cast<std::size_t>(i)].weight == 0.0)
+                continue;
+            max_norm = std::max(max_norm, residuals[static_cast<std::size_t>(i)].norm());
+        }
+        return max_norm;
+    }
+
+    SACoupledResidualEvaluation evaluate_sa_coupled_residual(
+        ResponseRHSMode mode,
+        const Eigen::MatrixXd &orbital_gradient,
+        const Eigen::MatrixXd &kappa,
+        const std::vector<Eigen::VectorXd> &ci_steps,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        const Eigen::MatrixXd &h_eff,
+        const std::vector<double> &ga,
+        const CIDeterminantSpace &space,
+        const std::vector<CIString> &a_strs,
+        const std::vector<CIString> &b_strs,
+        const std::vector<std::pair<int, int>> &dets,
+        const ActiveIntegralCache &active_integrals,
+        const CISigmaApplier &apply,
+        const std::vector<StateAveragedCoupledRoot> &roots,
+        int nbasis,
+        int n_core,
+        int n_act,
+        int n_virt)
+    {
+        SACoupledResidualEvaluation evaluation;
+        evaluation.orbital_correction = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        evaluation.orbital_residual =
+            orbital_gradient + hessian_action(kappa, F_I_mo, F_A_mo, n_core, n_act, n_virt);
+        evaluation.ci_residuals.reserve(roots.size());
+
+        for (int i = 0; i < static_cast<int>(roots.size()); ++i)
+        {
+            const auto &root = roots[static_cast<std::size_t>(i)];
+            const Eigen::VectorXd empty = Eigen::VectorXd::Zero(root.ci_vector.size());
+            if (root.weight == 0.0 || root.ci_vector.size() == 0)
+            {
+                evaluation.ci_residuals.push_back(empty);
+                continue;
+            }
+
+            const Eigen::VectorXd &c1 =
+                (i < static_cast<int>(ci_steps.size())) ? ci_steps[static_cast<std::size_t>(i)] : empty;
+            const Eigen::MatrixXd root_orbital_correction = orbital_correction_from_ci_step(
+                c1, root.ci_vector, a_strs, b_strs, dets, active_integrals, nbasis, n_core, n_act, n_virt);
+            evaluation.orbital_correction.noalias() += root.weight * root_orbital_correction;
+
+            const Eigen::VectorXd rhs = build_ci_response_rhs(
+                mode, kappa, F_I_mo, h_eff, ga,
+                space, a_strs, b_strs, root.ci_vector, n_core, n_act);
+            evaluation.ci_residuals.push_back(
+                response_residual(apply, c1, root.ci_vector, root.ci_energy, rhs));
+        }
+
+        evaluation.orbital_residual += evaluation.orbital_correction;
         return evaluation;
     }
 
@@ -487,6 +565,212 @@ namespace HartreeFock::Correlation::CASSCF
         result.orbital_correction = std::move(current.orbital_correction);
         result.orbital_residual_max = result.orbital_residual.cwiseAbs().maxCoeff();
         result.ci_residual_norm = result.ci_residual.norm();
+        return result;
+    }
+
+    SACoupledStepSolveResult solve_sa_coupled_orbital_ci_step(
+        ResponseRHSMode mode,
+        const Eigen::MatrixXd &orbital_gradient,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        const Eigen::MatrixXd &h_eff,
+        const std::vector<double> &ga,
+        const CIDeterminantSpace &space,
+        const std::vector<CIString> &a_strs,
+        const std::vector<CIString> &b_strs,
+        const std::vector<std::pair<int, int>> &dets,
+        const ActiveIntegralCache &active_integrals,
+        const CISigmaApplier &apply,
+        const std::vector<StateAveragedCoupledRoot> &roots,
+        const Eigen::VectorXd &H_diag,
+        int nbasis,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym,
+        double tol,
+        int max_iter,
+        double response_precond_floor)
+    {
+        SACoupledStepSolveResult result;
+        result.orbital_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        result.ci_steps.reserve(roots.size());
+        result.ci_residuals.reserve(roots.size());
+        for (const auto &root : roots)
+        {
+            result.ci_steps.push_back(Eigen::VectorXd::Zero(root.ci_vector.size()));
+            result.ci_residuals.push_back(Eigen::VectorXd::Zero(root.ci_vector.size()));
+        }
+        result.orbital_residual = orbital_gradient;
+        result.orbital_correction = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        result.orbital_residual_max = orbital_gradient.cwiseAbs().maxCoeff();
+
+        if (roots.empty())
+            return result;
+
+        auto residual_metric =
+            [&](const SACoupledResidualEvaluation &evaluation)
+        {
+            return std::max(
+                evaluation.orbital_residual.cwiseAbs().maxCoeff(),
+                max_ci_residual_norm(evaluation.ci_residuals, roots));
+        };
+
+        result.orbital_step = diagonal_preconditioned_orbital_step(
+            orbital_gradient,
+            F_I_mo,
+            F_A_mo,
+            n_core,
+            n_act,
+            n_virt,
+            level_shift,
+            max_rot,
+            mo_irreps,
+            use_sym);
+        for (int i = 0; i < static_cast<int>(roots.size()); ++i)
+        {
+            const auto &root = roots[static_cast<std::size_t>(i)];
+            if (root.weight == 0.0 || root.ci_vector.size() == 0 || H_diag.size() != root.ci_vector.size())
+                continue;
+
+            const CoupledResponseBlocks seed_blocks = build_coupled_response_blocks(
+                mode,
+                result.orbital_step,
+                F_I_mo,
+                h_eff,
+                ga,
+                space,
+                a_strs,
+                b_strs,
+                dets,
+                active_integrals,
+                apply,
+                root.ci_vector,
+                root.ci_energy,
+                H_diag,
+                nbasis,
+                n_core,
+                n_act,
+                n_virt);
+            result.ci_steps[static_cast<std::size_t>(i)] = seed_blocks.ci_response.c1;
+        }
+
+        SACoupledResidualEvaluation current = evaluate_sa_coupled_residual(
+            mode, orbital_gradient, result.orbital_step, result.ci_steps,
+            F_I_mo, F_A_mo, h_eff, ga, space, a_strs, b_strs, dets,
+            active_integrals, apply, roots, nbasis, n_core, n_act, n_virt);
+        double current_metric = residual_metric(current);
+
+        for (int iter = 1; iter <= max_iter; ++iter)
+        {
+            result.iterations = iter;
+            if (!std::isfinite(current_metric))
+                break;
+            if (current_metric < tol)
+            {
+                result.converged = true;
+                break;
+            }
+
+            Eigen::MatrixXd orbital_correction = diagonal_preconditioned_orbital_step(
+                current.orbital_residual,
+                F_I_mo,
+                F_A_mo,
+                n_core,
+                n_act,
+                n_virt,
+                level_shift,
+                max_rot,
+                mo_irreps,
+                use_sym);
+            std::vector<Eigen::VectorXd> ci_corrections;
+            ci_corrections.reserve(roots.size());
+            for (int i = 0; i < static_cast<int>(roots.size()); ++i)
+            {
+                const auto &root = roots[static_cast<std::size_t>(i)];
+                if (root.weight == 0.0 || root.ci_vector.size() == 0 ||
+                    H_diag.size() != root.ci_vector.size() ||
+                    i >= static_cast<int>(current.ci_residuals.size()))
+                {
+                    ci_corrections.push_back(Eigen::VectorXd::Zero(root.ci_vector.size()));
+                    continue;
+                }
+
+                double max_regularization = 0.0;
+                Eigen::VectorXd correction = apply_response_diag_preconditioner(
+                    -current.ci_residuals[static_cast<std::size_t>(i)],
+                    H_diag,
+                    root.ci_energy,
+                    response_precond_floor,
+                    max_regularization);
+                ci_corrections.push_back(project_orthogonal(correction, root.ci_vector));
+            }
+
+            bool accepted_update = false;
+            SACoupledResidualEvaluation best_evaluation = current;
+            Eigen::MatrixXd best_orbital_step = result.orbital_step;
+            std::vector<Eigen::VectorXd> best_ci_steps = result.ci_steps;
+            double best_metric = current_metric;
+
+            for (double scale : {1.0, 0.5, 0.25, 0.125})
+            {
+                Eigen::MatrixXd trial_orbital_step =
+                    result.orbital_step + scale * orbital_correction;
+                const double max_elem = trial_orbital_step.cwiseAbs().maxCoeff();
+                if (max_elem > max_rot)
+                    trial_orbital_step *= max_rot / max_elem;
+
+                std::vector<Eigen::VectorXd> trial_ci_steps;
+                trial_ci_steps.reserve(roots.size());
+                for (int i = 0; i < static_cast<int>(roots.size()); ++i)
+                {
+                    const auto &root = roots[static_cast<std::size_t>(i)];
+                    if (root.weight == 0.0 || root.ci_vector.size() == 0)
+                    {
+                        trial_ci_steps.push_back(Eigen::VectorXd::Zero(root.ci_vector.size()));
+                        continue;
+                    }
+
+                    trial_ci_steps.push_back(project_orthogonal(
+                        result.ci_steps[static_cast<std::size_t>(i)] +
+                            scale * ci_corrections[static_cast<std::size_t>(i)],
+                        root.ci_vector));
+                }
+
+                SACoupledResidualEvaluation trial = evaluate_sa_coupled_residual(
+                    mode, orbital_gradient, trial_orbital_step, trial_ci_steps,
+                    F_I_mo, F_A_mo, h_eff, ga, space, a_strs, b_strs, dets,
+                    active_integrals, apply, roots, nbasis, n_core, n_act, n_virt);
+                const double trial_metric = residual_metric(trial);
+                if (!std::isfinite(trial_metric))
+                    continue;
+                if (trial_metric < best_metric - 1e-12)
+                {
+                    accepted_update = true;
+                    best_metric = trial_metric;
+                    best_evaluation = std::move(trial);
+                    best_orbital_step = std::move(trial_orbital_step);
+                    best_ci_steps = std::move(trial_ci_steps);
+                }
+            }
+
+            if (!accepted_update)
+                break;
+
+            result.orbital_step = std::move(best_orbital_step);
+            result.ci_steps = std::move(best_ci_steps);
+            current = std::move(best_evaluation);
+            current_metric = best_metric;
+        }
+
+        result.orbital_residual = std::move(current.orbital_residual);
+        result.ci_residuals = std::move(current.ci_residuals);
+        result.orbital_correction = std::move(current.orbital_correction);
+        result.orbital_residual_max = result.orbital_residual.cwiseAbs().maxCoeff();
+        result.max_ci_residual_norm = max_ci_residual_norm(result.ci_residuals, roots);
         return result;
     }
 
