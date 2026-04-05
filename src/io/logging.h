@@ -58,7 +58,11 @@ namespace HartreeFock
             std::ostream &out_stream =
                 (level == Info || level == Error) ? std::cout : std::cerr;
 
-            out_stream << std::setw(30) << std::left << label;
+            const char *prefix = (level == Info)    ? "[INF] "
+                                 : (level == Warning) ? "[WARN] "
+                                                      : "[ERR] ";
+
+            out_stream << prefix << std::setw(30) << std::left << label;
 
             // Variadic message printing
             if constexpr (sizeof...(Args) > 0)
@@ -118,8 +122,8 @@ namespace HartreeFock
                       << std::setw(6) << "Iter"
                       << std::setw(20) << "Energy"
                       << std::setw(15) << "DeltaE"
-                      << std::setw(15) << "Grad"
-                      << std::setw(15) << "MaxGrad"
+                      << std::setw(15) << "SA Grad"
+                      << std::setw(15) << "MaxRootG"
                       << std::setw(15) << "Step Err"
                       << std::setw(12) << "Damp"
                       << std::setw(12) << "Time(s)"

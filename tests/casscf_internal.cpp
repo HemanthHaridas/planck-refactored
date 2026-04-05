@@ -1463,6 +1463,60 @@ int main()
             1e-8,
             8,
             1e-4);
+        const CoupledStepSolveResult result_one_iter = solve_coupled_orbital_ci_step(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            orbital_gradient,
+            F_I,
+            F_A,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            space.dets,
+            cache,
+            apply,
+            c0,
+            E0,
+            H_diag,
+            4,
+            1,
+            2,
+            1,
+            0.2,
+            0.20,
+            {},
+            false,
+            1e-8,
+            1,
+            1e-4);
+        const CoupledStepSolveResult capped_result = solve_coupled_orbital_ci_step(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            orbital_gradient,
+            F_I,
+            F_A,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            space.dets,
+            cache,
+            apply,
+            c0,
+            E0,
+            H_diag,
+            4,
+            1,
+            2,
+            1,
+            0.2,
+            1.0e-3,
+            {},
+            false,
+            1e-8,
+            8,
+            1e-4);
 
         const Eigen::MatrixXd seed_orbital_step = diagonal_preconditioned_orbital_step(
             orbital_gradient,
@@ -1501,6 +1555,8 @@ int main()
         const double seeded_metric =
             std::max(seed_orbital_residual.cwiseAbs().maxCoeff(), seed_blocks.ci_residual.norm());
         const double final_metric = std::max(result.orbital_residual_max, result.ci_residual_norm);
+        const double one_iter_metric =
+            std::max(result_one_iter.orbital_residual_max, result_one_iter.ci_residual_norm);
 
         ok &= expect(result.iterations > 0,
                      "coupled orbital/CI solve should perform at least one block iteration on a nonzero residual");
@@ -1510,6 +1566,16 @@ int main()
                      "coupled orbital/CI solve should preserve CI orthogonality");
         ok &= expect(final_metric <= seeded_metric + 1e-10,
                      "coupled orbital/CI solve should not worsen the seeded coupled residual");
+        ok &= expect(final_metric <= one_iter_metric + 1e-12,
+                     "coupled orbital/CI solve should not worsen the coupled residual when allowed more block iterations");
+        ok &= expect(capped_result.orbital_step.cwiseAbs().maxCoeff() <= 1.0e-3 + 1e-12,
+                     "coupled orbital/CI solve should respect the orbital max_rot cap");
+        ok &= expect(capped_result.orbital_step.topLeftCorner(1, 1).norm() < 1e-12,
+                     "coupled orbital/CI solve should keep the core-core block gauge redundant");
+        ok &= expect(capped_result.orbital_step.block(1, 1, 2, 2).norm() < 1e-12,
+                     "coupled orbital/CI solve should keep the active-active block gauge redundant");
+        ok &= expect(capped_result.orbital_step.bottomRightCorner(1, 1).norm() < 1e-12,
+                     "coupled orbital/CI solve should keep the virtual-virtual block gauge redundant");
     }
 
     return ok ? 0 : 1;
