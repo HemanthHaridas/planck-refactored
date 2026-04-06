@@ -43,6 +43,48 @@ Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd &H, cons
     return 2.0 * C_occ * C_occ.transpose();
 }
 
+Eigen::MatrixXd HartreeFock::SCF::initial_density_sao(
+    const Eigen::MatrixXd &H,
+    const Eigen::MatrixXd &U,
+    const std::vector<int> &block_sizes,
+    const std::vector<int> &block_offsets,
+    std::size_t n_occ)
+{
+    const Eigen::Index nbasis = H.rows();
+    if (U.rows() != nbasis || U.cols() != nbasis)
+        return Eigen::MatrixXd::Zero(nbasis, nbasis);
+
+    const Eigen::MatrixXd H_sao = U.transpose() * H * U;
+    Eigen::VectorXd eps_sao(nbasis);
+    Eigen::MatrixXd C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
+
+    for (int b = 0; b < static_cast<int>(block_sizes.size()); ++b)
+    {
+        const int off = block_offsets[static_cast<std::size_t>(b)];
+        const int ni = block_sizes[static_cast<std::size_t>(b)];
+        if (ni == 0)
+            continue;
+
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(H_sao.block(off, off, ni, ni));
+        eps_sao.segment(off, ni) = solver.eigenvalues();
+        C_sao.block(off, off, ni, ni) = solver.eigenvectors();
+    }
+
+    std::vector<int> order(static_cast<std::size_t>(nbasis));
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(),
+                     [&](int a, int b)
+                     { return eps_sao[a] < eps_sao[b]; });
+
+    Eigen::MatrixXd C_sao_sorted(nbasis, nbasis);
+    for (int k = 0; k < static_cast<int>(nbasis); ++k)
+        C_sao_sorted.col(k) = C_sao.col(order[static_cast<std::size_t>(k)]);
+
+    const Eigen::MatrixXd C = U * C_sao_sorted;
+    const Eigen::MatrixXd C_occ = C.leftCols(static_cast<Eigen::Index>(n_occ));
+    return 2.0 * C_occ * C_occ.transpose();
+}
+
 HartreeFock::SCF::IterationMetrics HartreeFock::SCF::restricted_iteration_metrics(
     const Eigen::MatrixXd &previous_density,
     const Eigen::MatrixXd &next_density,
@@ -163,9 +205,28 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     const bool use_chk_density =
         (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
          calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
-    Eigen::MatrixXd P = use_chk_density
-                            ? calculator._info._scf.alpha.density
-                            : initial_density(H, X, n_occ);
+    Eigen::MatrixXd P;
+    if (use_chk_density)
+    {
+        P = calculator._info._scf.alpha.density;
+    }
+    else if (sao_active)
+    {
+        // When symmetry-blocked SCF is active, build the hcore guess in the
+        // same SAO basis used for the production Fock diagonalization so the
+        // initial density does not pick an arbitrary full-AO mixture from a
+        // near-degenerate symmetry subspace.
+        P = initial_density_sao(
+            H,
+            U,
+            calculator._sao_block_sizes,
+            calculator._sao_block_offsets,
+            n_occ);
+    }
+    else
+    {
+        P = initial_density(H, X, n_occ);
+    }
 
     const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
 

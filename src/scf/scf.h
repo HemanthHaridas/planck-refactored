@@ -54,6 +54,15 @@ namespace HartreeFock
                                         const Eigen::MatrixXd &X,
                                         std::size_t n_occ);
 
+        // Symmetry-adapted initial RHF density for the SAO-blocked path:
+        // diagonalize the core Hamiltonian in each orthonormal SAO irrep block,
+        // then occupy the globally lowest-energy symmetry-adapted orbitals.
+        Eigen::MatrixXd initial_density_sao(const Eigen::MatrixXd &H,
+                                            const Eigen::MatrixXd &U,
+                                            const std::vector<int> &block_sizes,
+                                            const std::vector<int> &block_offsets,
+                                            std::size_t n_occ);
+
         IterationMetrics restricted_iteration_metrics(
             const Eigen::MatrixXd &previous_density,
             const Eigen::MatrixXd &next_density,
