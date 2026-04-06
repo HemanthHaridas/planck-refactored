@@ -1,7 +1,6 @@
 #include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <format>
 #include <limits>
 #include <numeric>
@@ -9,70 +8,6 @@
 #include "integrals/base.h"
 #include "io/logging.h"
 #include "scf.h"
-
-namespace
-{
-    constexpr double RHF_DEGENERACY_TOL = 1e-6;
-
-    struct RestrictedOccupations
-    {
-        Eigen::VectorXd values;
-        int frontier_start = -1; // inclusive, 0-based
-        int frontier_end = -1;   // exclusive, 0-based
-
-        [[nodiscard]] bool has_fractional_frontier() const noexcept
-        {
-            return frontier_start >= 0 && frontier_end > frontier_start;
-        }
-    };
-
-    RestrictedOccupations build_restricted_occupations(const Eigen::VectorXd &eps, int n_electrons)
-    {
-        const int nmo = static_cast<int>(eps.size());
-
-        RestrictedOccupations result;
-        result.values = Eigen::VectorXd::Zero(nmo);
-
-        int electrons_left = n_electrons;
-        int first = 0;
-        while (first < nmo && electrons_left > 0)
-        {
-            int last = first + 1;
-            while (last < nmo &&
-                   std::abs(eps(last) - eps(first)) <= RHF_DEGENERACY_TOL)
-                ++last;
-
-            const int block_size = last - first;
-            const int block_capacity = 2 * block_size;
-            if (electrons_left >= block_capacity)
-            {
-                result.values.segment(first, block_size).setConstant(2.0);
-                electrons_left -= block_capacity;
-            }
-            else
-            {
-                result.values.segment(first, block_size)
-                    .setConstant(static_cast<double>(electrons_left) / block_size);
-                if (electrons_left > 0 && electrons_left < block_capacity)
-                {
-                    result.frontier_start = first;
-                    result.frontier_end = last;
-                }
-                electrons_left = 0;
-            }
-
-            first = last;
-        }
-
-        return result;
-    }
-
-    Eigen::MatrixXd density_from_restricted_orbitals(const Eigen::MatrixXd &C,
-                                                     const Eigen::VectorXd &occupations)
-    {
-        return C * occupations.asDiagonal() * C.transpose();
-    }
-} // namespace
 
 // ─── Orthogonalization ────────────────────────────────────────────────────────
 
@@ -94,7 +29,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::SCF::build_orthogonaliz
 
 // ─── Initial density ─────────────────────────────────────────────────────────
 
-Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd &H, const Eigen::MatrixXd &X, int n_electrons)
+Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd &H, const Eigen::MatrixXd &X, std::size_t n_occ)
 {
     // Transform H to orthonormal basis: H' = X^T * H * X
     const Eigen::MatrixXd Hprime = X.transpose() * H * X;
@@ -102,9 +37,52 @@ Eigen::MatrixXd HartreeFock::SCF::initial_density(const Eigen::MatrixXd &H, cons
     // Diagonalize H'
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(Hprime);
     const Eigen::MatrixXd C = X * solver.eigenvectors();
-    const RestrictedOccupations occupations =
-        build_restricted_occupations(solver.eigenvalues(), n_electrons);
-    return density_from_restricted_orbitals(C, occupations.values);
+
+    // P_μν = 2 * sum_{i=1}^{n_occ} C_{μi} * C_{νi}  (RHF: factor of 2 for closed shell)
+    const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
+    return 2.0 * C_occ * C_occ.transpose();
+}
+
+Eigen::MatrixXd HartreeFock::SCF::initial_density_sao(
+    const Eigen::MatrixXd &H,
+    const Eigen::MatrixXd &U,
+    const std::vector<int> &block_sizes,
+    const std::vector<int> &block_offsets,
+    std::size_t n_occ)
+{
+    const Eigen::Index nbasis = H.rows();
+    if (U.rows() != nbasis || U.cols() != nbasis)
+        return Eigen::MatrixXd::Zero(nbasis, nbasis);
+
+    const Eigen::MatrixXd H_sao = U.transpose() * H * U;
+    Eigen::VectorXd eps_sao(nbasis);
+    Eigen::MatrixXd C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
+
+    for (int b = 0; b < static_cast<int>(block_sizes.size()); ++b)
+    {
+        const int off = block_offsets[static_cast<std::size_t>(b)];
+        const int ni = block_sizes[static_cast<std::size_t>(b)];
+        if (ni == 0)
+            continue;
+
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(H_sao.block(off, off, ni, ni));
+        eps_sao.segment(off, ni) = solver.eigenvalues();
+        C_sao.block(off, off, ni, ni) = solver.eigenvectors();
+    }
+
+    std::vector<int> order(static_cast<std::size_t>(nbasis));
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(),
+                     [&](int a, int b)
+                     { return eps_sao[a] < eps_sao[b]; });
+
+    Eigen::MatrixXd C_sao_sorted(nbasis, nbasis);
+    for (int k = 0; k < static_cast<int>(nbasis); ++k)
+        C_sao_sorted.col(k) = C_sao.col(order[static_cast<std::size_t>(k)]);
+
+    const Eigen::MatrixXd C = U * C_sao_sorted;
+    const Eigen::MatrixXd C_occ = C.leftCols(static_cast<Eigen::Index>(n_occ));
+    return 2.0 * C_occ * C_occ.transpose();
 }
 
 HartreeFock::SCF::IterationMetrics HartreeFock::SCF::restricted_iteration_metrics(
@@ -206,6 +184,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     if (n_electrons % 2 != 0)
         return std::unexpected("RHF requires an even number of electrons (closed shell)");
 
+    const std::size_t n_occ = static_cast<std::size_t>(n_electrons / 2);
+
     // ── Orthogonalization matrix X = S^{-1/2} ────────────────────────────────
     auto X_result = build_orthogonalizer(S);
     if (!X_result)
@@ -225,9 +205,28 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     const bool use_chk_density =
         (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
          calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
-    Eigen::MatrixXd P = use_chk_density
-                            ? calculator._info._scf.alpha.density
-                            : initial_density(H, X, n_electrons);
+    Eigen::MatrixXd P;
+    if (use_chk_density)
+    {
+        P = calculator._info._scf.alpha.density;
+    }
+    else if (sao_active)
+    {
+        // When symmetry-blocked SCF is active, build the hcore guess in the
+        // same SAO basis used for the production Fock diagonalization so the
+        // initial density does not pick an arbitrary full-AO mixture from a
+        // near-degenerate symmetry subspace.
+        P = initial_density_sao(
+            H,
+            U,
+            calculator._sao_block_sizes,
+            calculator._sao_block_offsets,
+            n_occ);
+    }
+    else
+    {
+        P = initial_density(H, X, n_occ);
+    }
 
     const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
 
@@ -260,7 +259,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
 
     const double tol_eri = calculator._integral._tol_eri;
     double E_prev = 0.0;
-    bool logged_fractional_frontier = false;
 
     HartreeFock::Logger::scf_header();
 
@@ -366,28 +364,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
             calculator._info._scf.alpha.mo_symmetry = std::move(mo_sym);
         }
 
-        const RestrictedOccupations occupations =
-            build_restricted_occupations(eps, n_electrons);
-        if (occupations.has_fractional_frontier() && !logged_fractional_frontier)
-        {
-            const double frontier_electrons =
-                occupations.values.segment(
-                    occupations.frontier_start,
-                    occupations.frontier_end - occupations.frontier_start)
-                    .sum();
-            HartreeFock::Logger::logging(
-                HartreeFock::LogLevel::Info,
-                "RHF Occupations :",
-                std::format("Averaging {:.1f} electrons over degenerate frontier orbitals {}-{}",
-                            frontier_electrons,
-                            occupations.frontier_start + 1,
-                            occupations.frontier_end));
-            logged_fractional_frontier = true;
-        }
+        const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
 
         // ── New density P_new ─────────────────────────────────────────────────
-        const Eigen::MatrixXd P_new =
-            density_from_restricted_orbitals(C, occupations.values);
+        const Eigen::MatrixXd P_new = 2.0 * C_occ * C_occ.transpose();
 
         // ── Convergence checks ────────────────────────────────────────────────
         const IterationMetrics metrics =

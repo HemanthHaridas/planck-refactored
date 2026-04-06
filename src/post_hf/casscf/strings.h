@@ -19,6 +19,15 @@ namespace HartreeFock::Correlation::CASSCF
     using HartreeFock::Correlation::CASSCFInternal::RASParams;
     using HartreeFock::Correlation::CASSCFInternal::SymmetryContext;
 
+    // A symmetry-aware active-space picker returns a full MO permutation so the
+    // chosen active block can be made contiguous before the CI/gradient code runs.
+    struct ActiveOrbitalSelection
+    {
+        std::vector<int> permutation;
+        std::vector<int> active_orbitals;
+        bool used_symmetry = false;
+    };
+
     // Fermionic operators return both the updated determinant and the accumulated
     // sign so the string-level algebra can stay explicit.
     struct FermionOpResult
@@ -41,6 +50,23 @@ namespace HartreeFock::Correlation::CASSCF
     std::vector<int> map_mo_irreps(
         const std::vector<std::string> &mo_sym,
         const std::vector<std::string> &names);
+
+    // Pick a reordered MO basis that keeps the requested active orbitals
+    // contiguous. If explicit symmetry/permutation metadata is unavailable, the
+    // selector falls back to the identity permutation.
+    std::expected<ActiveOrbitalSelection, std::string> select_active_orbitals(
+        const Eigen::VectorXd &mo_energies,
+        const std::vector<std::string> &mo_symmetry,
+        int n_core,
+        int n_act,
+        const std::vector<HartreeFock::IrrepCount> &core_irrep_counts = {},
+        const std::vector<HartreeFock::IrrepCount> &active_irrep_counts = {},
+        const std::vector<int> &mo_permutation = {});
+
+    // Apply a column permutation to the MO coefficient matrix.
+    Eigen::MatrixXd reorder_mo_coefficients(
+        const Eigen::MatrixXd &mo_coefficients,
+        const std::vector<int> &permutation);
 
     // Build a minimal symmetry context only when the current point group can be
     // represented by a one-dimensional Abelian product table.

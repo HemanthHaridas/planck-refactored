@@ -299,6 +299,83 @@ int main()
     }
 
     {
+        Eigen::VectorXd mo_energies(8);
+        mo_energies << -21.0, -1.5, -1.2, -0.8, 0.2, 0.3, 0.7, 1.0;
+        const std::vector<std::string> mo_symmetry = {"A1", "A1", "B1", "A1", "B2", "B1", "A1", "A2"};
+        std::vector<HartreeFock::IrrepCount> active_counts = {{"A1", 1}, {"B1", 1}, {"B2", 1}};
+
+        const auto selection = select_active_orbitals(
+            mo_energies, mo_symmetry, 2, 3, {}, active_counts, {});
+
+        ok &= expect(static_cast<bool>(selection),
+                     "irrep-based active-space picker should accept valid active irrep counts");
+        if (selection)
+        {
+            ok &= expect(selection->permutation == std::vector<int>({0, 1, 2, 3, 4, 5, 6, 7}),
+                         "irrep-based active-space picker should preserve an already contiguous active window");
+            ok &= expect(selection->active_orbitals == std::vector<int>({2, 3, 4}),
+                         "irrep-based active-space picker should choose the requested per-irrep active block after the inferred closed shells");
+            ok &= expect(selection->used_symmetry,
+                         "irrep-based active-space picker should report symmetry use when irrep quotas are supplied");
+        }
+    }
+
+    {
+        Eigen::VectorXd mo_energies(5);
+        mo_energies << -20.0, 0.5, -0.8, 0.2, 0.3;
+        const std::vector<std::string> mo_symmetry = {"A1", "A1", "B1", "A1", "B2"};
+
+        const auto selection = select_active_orbitals(
+            mo_energies, mo_symmetry, 1, 2, {}, {}, {});
+
+        ok &= expect(static_cast<bool>(selection),
+                     "automatic symmetry-aware picker should infer the active-space irrep pattern from the current RHF ordering");
+        if (selection)
+        {
+            ok &= expect(selection->permutation == std::vector<int>({0, 2, 3, 1, 4}),
+                         "automatic symmetry-aware picker should reorder a scrambled RHF MO list into contiguous symmetry-consistent core and active blocks");
+            ok &= expect(selection->active_orbitals == std::vector<int>({2, 3}),
+                         "automatic symmetry-aware picker should choose the energy-ordered representatives of the inferred active-space irreps");
+            ok &= expect(selection->used_symmetry,
+                         "automatic symmetry-aware picker should mark inferred irrep-based selections as symmetry-driven");
+        }
+    }
+
+    {
+        Eigen::VectorXd mo_energies(7);
+        mo_energies << -20.0, -2.0, -1.5, -1.2, -0.4, 0.1, 0.8;
+        const std::vector<std::string> mo_symmetry = {"A1", "A1", "B1", "A1", "B2", "B1", "A2"};
+        std::vector<HartreeFock::IrrepCount> core_counts = {{"A1", 1}};
+        std::vector<HartreeFock::IrrepCount> active_counts = {{"A1", 1}, {"B2", 1}};
+
+        const auto selection = select_active_orbitals(
+            mo_energies, mo_symmetry, 2, 2, core_counts, active_counts, {});
+
+        ok &= expect(static_cast<bool>(selection),
+                     "irrep-based active-space picker should accept explicit core irrep counts");
+        if (selection)
+        {
+            ok &= expect(selection->permutation == std::vector<int>({0, 2, 1, 4, 3, 5, 6}),
+                         "irrep-based active-space picker should permute the full MO basis into contiguous core-active-virtual order");
+            ok &= expect(selection->active_orbitals == std::vector<int>({1, 4}),
+                         "irrep-based active-space picker should report the original MO indices chosen for the active block");
+        }
+    }
+
+    {
+        Eigen::VectorXd mo_energies(4);
+        mo_energies << -2.0, -1.0, 0.2, 0.5;
+        const std::vector<std::string> mo_symmetry = {"A1", "A1", "B1", "B1"};
+        std::vector<HartreeFock::IrrepCount> core_counts = {{"A1", 3}};
+
+        const auto selection = select_active_orbitals(
+            mo_energies, mo_symmetry, 2, 1, core_counts, {}, {});
+
+        ok &= expect(!selection && selection.error().find("core_irrep_counts exceed n_core") != std::string::npos,
+                     "irrep-based active-space picker should reject core irrep quotas that exceed n_core");
+    }
+
+    {
         const std::vector<double> puvw = {2.0};
         const std::vector<double> gamma = {3.0};
         const Eigen::MatrixXd q = contract_q_matrix(puvw, gamma, 1, 1);
@@ -377,6 +454,32 @@ int main()
                      "iterative CI response should preserve the orthogonality gauge");
         ok &= expect((response.c1 - exact).norm() < 1e-10,
                      "iterative CI response should match the dense projected solution on a small test problem");
+    }
+
+    {
+        Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, 3);
+        H(1, 1) = 2.0;
+        H(2, 2) = 4.0;
+
+        Eigen::VectorXd c0 = Eigen::VectorXd::Zero(3);
+        c0(0) = 1.0;
+        const double E0 = 0.0;
+        const Eigen::VectorXd H_diag = H.diagonal();
+        Eigen::VectorXd sigma(3);
+        sigma << 0.0, -0.6, 0.8;
+
+        const auto apply = [&](const Eigen::VectorXd &c, Eigen::VectorXd &sigma_out)
+        {
+            sigma_out = H * c;
+        };
+
+        const CIResponseResult response =
+            solve_ci_response_single_step(apply, c0, E0, H_diag, sigma, 1e-8, 1e-8);
+
+        ok &= expect(response.converged,
+                     "single-step CI response should report convergence when the diagonal preconditioner solves the response equation exactly");
+        ok &= expect(response.residual_norm < 1e-12,
+                     "single-step CI response should report a near-zero residual for an exactly diagonal response problem");
     }
 
     {
@@ -1576,6 +1679,230 @@ int main()
                      "coupled orbital/CI solve should keep the active-active block gauge redundant");
         ok &= expect(capped_result.orbital_step.bottomRightCorner(1, 1).norm() < 1e-12,
                      "coupled orbital/CI solve should keep the virtual-virtual block gauge redundant");
+    }
+
+    {
+        std::vector<CIString> a_strs;
+        std::vector<CIString> b_strs;
+        build_spin_strings_unfiltered(2, 1, 1, a_strs, b_strs);
+
+        Eigen::MatrixXd h_eff = Eigen::MatrixXd::Zero(2, 2);
+        h_eff << -0.9, 0.12,
+            0.12, -0.2;
+        std::vector<double> ga(16, 0.0);
+        auto idx4_act = [](int p, int q, int r, int s)
+        {
+            return ((p * 2 + q) * 2 + r) * 2 + s;
+        };
+        ga[idx4_act(0, 0, 0, 0)] = 0.70;
+        ga[idx4_act(1, 1, 1, 1)] = 0.48;
+        ga[idx4_act(0, 0, 1, 1)] = ga[idx4_act(1, 1, 0, 0)] = 0.16;
+        ga[idx4_act(0, 1, 1, 0)] = ga[idx4_act(1, 0, 0, 1)] = 0.05;
+
+        RASParams ras;
+        const CIDeterminantSpace space =
+            build_ci_space(a_strs, b_strs, ras, h_eff, ga, 2, {}, nullptr, 0, 8);
+        const Eigen::MatrixXd dense_h =
+            build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, h_eff, ga, 2);
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(dense_h);
+        const Eigen::VectorXd c0 = eig.eigenvectors().col(0);
+        const Eigen::VectorXd c1 = eig.eigenvectors().col(1);
+        const double E0 = eig.eigenvalues()(0);
+        const double E1 = eig.eigenvalues()(1);
+        const Eigen::VectorXd H_diag = dense_h.diagonal();
+
+        Eigen::MatrixXd orbital_gradient = Eigen::MatrixXd::Zero(4, 4);
+        orbital_gradient(0, 1) = 0.24;
+        orbital_gradient(1, 0) = -0.24;
+        orbital_gradient(0, 2) = -0.08;
+        orbital_gradient(2, 0) = 0.08;
+        orbital_gradient(2, 3) = -0.18;
+        orbital_gradient(3, 2) = 0.18;
+
+        Eigen::MatrixXd F_I = Eigen::MatrixXd::Zero(4, 4);
+        Eigen::MatrixXd F_A = Eigen::MatrixXd::Zero(4, 4);
+        F_A(0, 0) = -1.1;
+        F_A(1, 1) = -0.3;
+        F_A(2, 2) = 0.4;
+        F_A(3, 3) = 1.8;
+
+        Eigen::MatrixXd C = Eigen::MatrixXd::Identity(4, 4);
+        std::vector<double> eri_ao(256, 0.0);
+        auto idx4_ao = [](int p, int q, int r, int s)
+        {
+            return ((p * 4 + q) * 4 + r) * 4 + s;
+        };
+        eri_ao[idx4_ao(1, 1, 1, 1)] = ga[idx4_act(0, 0, 0, 0)];
+        eri_ao[idx4_ao(2, 2, 2, 2)] = ga[idx4_act(1, 1, 1, 1)];
+        eri_ao[idx4_ao(1, 1, 2, 2)] = eri_ao[idx4_ao(2, 2, 1, 1)] = ga[idx4_act(0, 0, 1, 1)];
+        eri_ao[idx4_ao(1, 2, 2, 1)] = eri_ao[idx4_ao(2, 1, 1, 2)] = ga[idx4_act(0, 1, 1, 0)];
+
+        const ActiveIntegralCache cache = build_active_integral_cache(eri_ao, C, 1, 2, 4);
+        const auto apply = [&dense_h](const Eigen::VectorXd &c, Eigen::VectorXd &sigma_vec)
+        {
+            sigma_vec = dense_h * c;
+        };
+
+        std::vector<StateAveragedCoupledRoot> sa_roots = {
+            {0.6, c0, E0},
+            {0.4, c1, E1},
+        };
+
+        const Eigen::MatrixXd seed_orbital_step = diagonal_preconditioned_orbital_step(
+            orbital_gradient,
+            F_I,
+            F_A,
+            1,
+            2,
+            1,
+            0.2,
+            0.20,
+            {},
+            false);
+        Eigen::MatrixXd seeded_orbital_correction = Eigen::MatrixXd::Zero(4, 4);
+        std::vector<Eigen::VectorXd> seeded_ci_residuals;
+        seeded_ci_residuals.reserve(sa_roots.size());
+        for (const auto &root : sa_roots)
+        {
+            const CoupledResponseBlocks blocks = build_coupled_response_blocks(
+                ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+                seed_orbital_step,
+                F_I,
+                h_eff,
+                ga,
+                space,
+                a_strs,
+                b_strs,
+                space.dets,
+                cache,
+                apply,
+                root.ci_vector,
+                root.ci_energy,
+                H_diag,
+                4,
+                1,
+                2,
+                1);
+            seeded_orbital_correction.noalias() += root.weight * blocks.orbital_correction;
+            seeded_ci_residuals.push_back(blocks.ci_residual);
+        }
+        const Eigen::MatrixXd seed_orbital_residual =
+            orbital_gradient +
+            hessian_action(seed_orbital_step, F_I, F_A, 1, 2, 1) +
+            seeded_orbital_correction;
+        double seeded_metric = seed_orbital_residual.cwiseAbs().maxCoeff();
+        for (const auto &residual : seeded_ci_residuals)
+            seeded_metric = std::max(seeded_metric, residual.norm());
+
+        const SACoupledStepSolveResult sa_result = solve_sa_coupled_orbital_ci_step(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            orbital_gradient,
+            F_I,
+            F_A,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            space.dets,
+            cache,
+            apply,
+            sa_roots,
+            H_diag,
+            4,
+            1,
+            2,
+            1,
+            0.2,
+            0.20,
+            {},
+            false,
+            1e-8,
+            8,
+            1e-4);
+
+        const double final_metric =
+            std::max(sa_result.orbital_residual_max, sa_result.max_ci_residual_norm);
+
+        ok &= expect(sa_result.orbital_step.size() > 0,
+                     "shared SA coupled solve should return an orbital step");
+        ok &= expect((sa_result.orbital_step + sa_result.orbital_step.transpose()).norm() < 1e-12,
+                     "shared SA coupled solve should preserve the antisymmetric orbital gauge");
+        ok &= expect(sa_result.ci_steps.size() == sa_roots.size(),
+                     "shared SA coupled solve should return one CI correction per root");
+        for (std::size_t i = 0; i < sa_roots.size(); ++i)
+        {
+            ok &= expect(std::abs(sa_roots[i].ci_vector.dot(sa_result.ci_steps[i])) < 1e-12,
+                         "shared SA coupled solve should preserve CI orthogonality to each reference vector");
+        }
+        ok &= expect(final_metric <= seeded_metric + 1e-10,
+                     "shared SA coupled solve should not worsen the seeded coupled residual");
+
+        const std::vector<StateAveragedCoupledRoot> single_root = {
+            {1.0, c0, E0},
+        };
+        const SACoupledStepSolveResult sa_single = solve_sa_coupled_orbital_ci_step(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            orbital_gradient,
+            F_I,
+            F_A,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            space.dets,
+            cache,
+            apply,
+            single_root,
+            H_diag,
+            4,
+            1,
+            2,
+            1,
+            0.2,
+            0.20,
+            {},
+            false,
+            1e-8,
+            8,
+            1e-4);
+        const CoupledStepSolveResult legacy_single = solve_coupled_orbital_ci_step(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            orbital_gradient,
+            F_I,
+            F_A,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            space.dets,
+            cache,
+            apply,
+            c0,
+            E0,
+            H_diag,
+            4,
+            1,
+            2,
+            1,
+            0.2,
+            0.20,
+            {},
+            false,
+            1e-8,
+            8,
+            1e-4);
+
+        ok &= expect(sa_single.ci_steps.size() == 1,
+                     "single-root shared SA solve should return exactly one CI step");
+        ok &= expect((sa_single.orbital_step - legacy_single.orbital_step).norm() < 1e-12,
+                     "single-root shared SA solve should match the existing single-root orbital step");
+        ok &= expect((sa_single.ci_steps.front() - legacy_single.ci_step).norm() < 1e-12,
+                     "single-root shared SA solve should match the existing single-root CI step");
+        ok &= expect(std::abs(single_root.front().ci_vector.dot(sa_single.ci_steps.front())) < 1e-12,
+                     "single-root shared SA solve should keep the CI step orthogonal to the reference vector");
     }
 
     return ok ? 0 : 1;

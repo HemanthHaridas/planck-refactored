@@ -27,8 +27,12 @@ namespace
     using HartreeFock::Correlation::CASSCF::ResponseMode;
     using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
     using HartreeFock::Correlation::CASSCF::RotPair;
+    using HartreeFock::Correlation::CASSCF::SACoupledStepSolveResult;
+    using HartreeFock::Correlation::CASSCF::StateAveragedCoupledRoot;
     using HartreeFock::Correlation::CASSCF::hess_diag;
     using HartreeFock::Correlation::CASSCF::quadratic_model_delta;
+    using HartreeFock::Correlation::CASSCF::reorder_mo_coefficients;
+    using HartreeFock::Correlation::CASSCF::select_active_orbitals;
     using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     using HartreeFock::Correlation::CASSCFInternal::CIResponseResult;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
@@ -102,7 +106,8 @@ namespace
         double max_response_residual = 0.0;
         int max_response_iterations = 0;
         double max_response_regularization = 0.0;
-        bool response_fallback_used = false;
+        bool ci_response_fallback_used = false;
+        bool sa_coupled_step_inexact = false;
         bool numeric_newton_attempted = false;
         bool numeric_newton_failed = false;
         bool step_accepted = false;
@@ -542,11 +547,17 @@ namespace HartreeFock::Correlation::CASSCF
         // can assume a convex combination.
         weights /= weights.sum();
 
+        Eigen::MatrixXd C = (calc._cas_mo_coefficients.rows() == nbasis &&
+                             calc._cas_mo_coefficients.cols() == nbasis)
+                                ? calc._cas_mo_coefficients
+                                : calc._info._scf.alpha.mo_coefficients;
+        if (C.rows() != nbasis || C.cols() != nbasis)
+            return std::unexpected(tag + ": MO coefficient matrix has wrong size.");
+
         const bool have_sym = !calc._sao_irrep_names.empty() && static_cast<int>(calc._sao_irrep_names.size()) <= 8;
         const bool point_group_is_abelian_for_labels =
             point_group_has_only_1d_irreps(calc._molecule._point_group);
         std::optional<SymmetryContext> sym_ctx;
-        std::vector<int> irr_act;
         std::vector<int> all_mo_irr;
         if (have_sym && point_group_is_abelian_for_labels && !calc._info._scf.alpha.mo_symmetry.empty())
         {
@@ -557,11 +568,61 @@ namespace HartreeFock::Correlation::CASSCF
             all_mo_irr = map_mo_irreps(calc._info._scf.alpha.mo_symmetry, sym_ctx->names);
             if (std::find(all_mo_irr.begin(), all_mo_irr.end(), -1) != all_mo_irr.end())
                 return std::unexpected(tag + ": encountered an MO irrep label missing from the Abelian product table.");
+        }
 
+        std::vector<int> irr_act;
+        const bool have_symmetry_selection =
+            !as.core_irrep_counts.empty() ||
+            !as.active_irrep_counts.empty() ||
+            !as.mo_permutation.empty();
+        const Eigen::VectorXd &mo_energies = calc._info._scf.alpha.mo_energies;
+        const std::vector<std::string> &mo_symmetry = calc._info._scf.alpha.mo_symmetry;
+        const bool have_explicit_casscf_guess = calc._cas_mo_coefficients.rows() == nbasis &&
+                                                calc._cas_mo_coefficients.cols() == nbasis;
+        const bool allow_automatic_symmetry_selection =
+            !have_explicit_casscf_guess &&
+            (!mo_symmetry.empty() || have_symmetry_selection);
+        if (allow_automatic_symmetry_selection)
+        {
+            auto selection = select_active_orbitals(
+                mo_energies,
+                mo_symmetry,
+                n_core,
+                n_act,
+                as.core_irrep_counts,
+                as.active_irrep_counts,
+                as.mo_permutation);
+            if (!selection)
+                return std::unexpected(std::format("{}: {}", tag, selection.error()));
+
+            bool permutation_changed = false;
+            for (int i = 0; i < static_cast<int>(selection->permutation.size()); ++i)
+                if (selection->permutation[static_cast<std::size_t>(i)] != i)
+                {
+                    permutation_changed = true;
+                    break;
+                }
+
+            C = reorder_mo_coefficients(C, selection->permutation);
+            if (!all_mo_irr.empty())
+            {
+                std::vector<int> permuted_irr(all_mo_irr.size());
+                for (int i = 0; i < static_cast<int>(selection->permutation.size()); ++i)
+                    permuted_irr[static_cast<std::size_t>(i)] = all_mo_irr[static_cast<std::size_t>(selection->permutation[static_cast<std::size_t>(i)])];
+                all_mo_irr = std::move(permuted_irr);
+            }
+            if (selection->used_symmetry && permutation_changed)
+                logging(LogLevel::Info, tag + " :",
+                        "Applied automatic symmetry-aware MO permutation to make the selected active block contiguous.");
+        }
+
+        if (!all_mo_irr.empty())
+        {
             irr_act.resize(n_act);
             for (int t = 0; t < n_act; ++t)
                 irr_act[t] = (n_core + t < static_cast<int>(all_mo_irr.size())) ? all_mo_irr[n_core + t] : -1;
         }
+
         const bool use_sym = sym_ctx.has_value() && !irr_act.empty();
         const auto target_irr_opt = use_sym
                                         ? resolve_target_irrep(as.target_irrep, *sym_ctx)
@@ -570,13 +631,6 @@ namespace HartreeFock::Correlation::CASSCF
             return std::unexpected(std::format("{}: target_irrep '{}' is not present in the Abelian symmetry metadata.",
                                                tag, as.target_irrep));
         const int target_irr = *target_irr_opt;
-
-        Eigen::MatrixXd C = (calc._cas_mo_coefficients.rows() == nbasis &&
-                             calc._cas_mo_coefficients.cols() == nbasis)
-                                ? calc._cas_mo_coefficients
-                                : calc._info._scf.alpha.mo_coefficients;
-        if (C.rows() != nbasis || C.cols() != nbasis)
-            return std::unexpected(tag + ": MO coefficient matrix has wrong size.");
 
         std::vector<double> eri_local;
         const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
@@ -990,14 +1044,45 @@ namespace HartreeFock::Correlation::CASSCF
                 return steps;
             };
 
-            const RootResolvedCoupledStepSet kappa_coupled_step_set =
-                build_root_resolved_coupled_step_set(st_current.roots, level_shift);
-            if (!kappa_coupled_step_set.converged)
-                diag.response_fallback_used = true;
+            std::vector<StateAveragedCoupledRoot> sa_coupled_roots;
+            sa_coupled_roots.reserve(st_current.roots.size());
+            for (const auto &root : st_current.roots)
+                sa_coupled_roots.push_back({root.weight, root.ci_vector, root.ci_energy});
+
+            const SACoupledStepSolveResult sa_coupled_result =
+                solve_sa_coupled_orbital_ci_step(
+                    configured_rhs_mode,
+                    st_current.g_orb,
+                    st_current.F_I_mo,
+                    st_current.F_A_mo,
+                    st_current.h_eff,
+                    st_current.ga,
+                    st_current.ci_space,
+                    a_strs,
+                    b_strs,
+                    st_current.dets,
+                    st_current.active_integrals,
+                    ci_apply,
+                    sa_coupled_roots,
+                    st_current.H_CI_diag,
+                    nbasis,
+                    n_core,
+                    n_act,
+                    n_virt,
+                    level_shift,
+                    0.20,
+                    all_mo_irr,
+                    use_sym,
+                    1e-6,
+                    24,
+                    1e-4);
+
+            if (!sa_coupled_result.converged)
+                diag.sa_coupled_step_inexact = true;
             diag.max_response_residual =
-                std::max(diag.max_response_residual, kappa_coupled_step_set.max_ci_residual);
+                std::max(diag.max_response_residual, sa_coupled_result.max_ci_residual_norm);
             diag.max_response_iterations =
-                std::max(diag.max_response_iterations, kappa_coupled_step_set.max_iterations);
+                std::max(diag.max_response_iterations, sa_coupled_result.iterations);
 
             for (unsigned int micro = 0; micro < nmicro; ++micro)
             {
@@ -1035,7 +1120,7 @@ namespace HartreeFock::Correlation::CASSCF
                             n_act,
                             n_virt);
                     if (!blocks.ci_response.converged)
-                        diag.response_fallback_used = true;
+                        diag.ci_response_fallback_used = true;
 
                     root.response_rhs = blocks.ci_rhs;
                     root.c1_response = blocks.ci_response.c1;
@@ -1059,7 +1144,7 @@ namespace HartreeFock::Correlation::CASSCF
             const double max_k = kappa_total.cwiseAbs().maxCoeff();
             if (max_k > 0.20)
                 kappa_total *= 0.20 / max_k;
-            const Eigen::MatrixXd &kappa_coupled = kappa_coupled_step_set.orbital_steps.weighted;
+            const Eigen::MatrixXd &kappa_coupled = sa_coupled_result.orbital_step;
             const RootResolvedOrbitalStepSet kappa_grad_step_set =
                 build_root_resolved_gradient_fallback_step_set(st_current.roots);
             const Eigen::MatrixXd &kappa_grad = kappa_grad_step_set.weighted;
@@ -1070,10 +1155,9 @@ namespace HartreeFock::Correlation::CASSCF
             bool accepted = false;
             McscfState accepted_state = st_current;
             double best_E = st_current.E_cas;
-            double best_screen_g = st_current.weighted_root_gnorm;
-            double best_max_root_g = st_current.max_root_gnorm;
+            double best_sa_g = st_current.gnorm;
             const double merit_weight = 0.10;
-            double best_merit = best_E + merit_weight * best_screen_g * best_screen_g;
+            double best_merit = best_E + merit_weight * best_sa_g * best_sa_g;
             Eigen::MatrixXd C_best = C;
             Eigen::MatrixXd best_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
             struct CandidateStep
@@ -1100,9 +1184,9 @@ namespace HartreeFock::Correlation::CASSCF
                 }
             };
             const bool coupled_step_reliable =
-                kappa_coupled_step_set.converged &&
-                std::isfinite(kappa_coupled_step_set.max_ci_residual) &&
-                std::isfinite(kappa_coupled_step_set.max_orbital_residual);
+                sa_coupled_result.converged &&
+                std::isfinite(sa_coupled_result.max_ci_residual_norm) &&
+                std::isfinite(sa_coupled_result.orbital_residual_max);
             const bool use_numeric_newton_fallback =
                 use_numeric_newton_debug ||
                 (static_cast<int>(opt_pairs.size()) <= numeric_newton_pair_limit &&
@@ -1120,7 +1204,9 @@ namespace HartreeFock::Correlation::CASSCF
             {
                 if (nroots > 1)
                 {
-                    append_root_candidates(kappa_coupled_step_set.orbital_steps.per_root, "coupled", false);
+                    const RootResolvedCoupledStepSet root_resolved_coupled_step_set =
+                        build_root_resolved_coupled_step_set(st_current.roots, level_shift);
+                    append_root_candidates(root_resolved_coupled_step_set.orbital_steps.per_root, "coupled", false);
                     append_root_candidates(kappa_grad_step_set.per_root, "grad-fallback", false);
                 }
 
@@ -1166,25 +1252,20 @@ namespace HartreeFock::Correlation::CASSCF
 
                     const auto &trial = *trial_res;
                     const double trial_merit =
-                        trial.E_cas + merit_weight * trial.weighted_root_gnorm * trial.weighted_root_gnorm;
+                        trial.E_cas + merit_weight * trial.gnorm * trial.gnorm;
                     const bool merit_improved = trial_merit < best_merit - 1e-10;
-                    const bool weighted_root_gradient_reduced =
-                        trial.weighted_root_gnorm < best_screen_g - 1e-12;
-                    const bool max_root_gradient_reduced =
-                        trial.max_root_gnorm < best_max_root_g - 1e-12;
-                    const double weighted_root_worsen_window =
-                        std::max(0.05 * std::max(best_screen_g, 1e-8), 1e-6);
-                    const double max_root_worsen_window =
-                        std::max(0.05 * std::max(best_max_root_g, 1e-8), 1e-6);
+                    const bool sa_gradient_reduced =
+                        trial.gnorm < best_sa_g - 1e-12;
+                    const double sa_worsen_window =
+                        std::max(0.05 * std::max(best_sa_g, 1e-8), 1e-6);
                     const bool energy_improved = trial.E_cas < best_E - 1e-10;
                     const bool energy_improved_without_hurting_gradient =
                         energy_improved &&
-                        trial.weighted_root_gnorm <= best_screen_g + weighted_root_worsen_window &&
-                        trial.max_root_gnorm <= best_max_root_g + max_root_worsen_window;
+                        trial.gnorm <= best_sa_g + sa_worsen_window;
                     const double flat_energy_window = std::max(1000.0 * as.tol_mcscf_energy, 1e-6);
                     const bool stationary_but_better_grad =
                         std::abs(trial.E_cas - best_E) <= flat_energy_window &&
-                        (weighted_root_gradient_reduced || max_root_gradient_reduced);
+                        sa_gradient_reduced;
                     if (!energy_improved_without_hurting_gradient &&
                         !merit_improved &&
                         !stationary_but_better_grad)
@@ -1192,8 +1273,7 @@ namespace HartreeFock::Correlation::CASSCF
 
                     accepted = true;
                     best_E = trial.E_cas;
-                    best_screen_g = trial.weighted_root_gnorm;
-                    best_max_root_g = trial.max_root_gnorm;
+                    best_sa_g = trial.gnorm;
                     best_merit = trial_merit;
                     accepted_state = trial;
                     C_best = apply_orbital_rotation(C, kappa_try, calc._overlap);
@@ -1202,6 +1282,7 @@ namespace HartreeFock::Correlation::CASSCF
                         (std::abs(scale - 1.0) < 1e-12)
                             ? candidate.label
                             : std::format("{}@{:.5f}", candidate.label, scale);
+                    diag.accepted_sa_gnorm = trial.gnorm;
                     diag.accepted_weighted_root_gnorm = trial.weighted_root_gnorm;
                     diag.accepted_max_root_gnorm = trial.max_root_gnorm;
                     const WeightedQuadraticModelPrediction prediction =
@@ -1291,7 +1372,7 @@ namespace HartreeFock::Correlation::CASSCF
                         diag.max_response_residual,
                         diag.max_response_iterations,
                         level_shift));
-            if (diag.response_fallback_used)
+            if (diag.ci_response_fallback_used)
                 logging(LogLevel::Warning, tag + " :",
                         "CI response Davidson solve did not fully converge for at least one root; using single-step fallback.");
 
@@ -1329,6 +1410,13 @@ namespace HartreeFock::Correlation::CASSCF
         calc._cas_nat_occ = natural_orbitals.occupations;
         calc._cas_mo_coefficients = C;
         calc._total_energy = fst.E_cas;
+
+        if (nroots > 1)
+        {
+            calc._cas_root_energies.resize(nroots);
+            for (int r = 0; r < nroots; ++r)
+                calc._cas_root_energies(r) = fst.roots[r].ci_energy;
+        }
 
         return {};
     }

@@ -350,6 +350,15 @@ namespace HartreeFock
         bool _save_checkpoint = false;
     };
 
+    // Optional symmetry-aware orbital selection metadata for active-space setup.
+    // The parser accepts repeated "irrep count" pairs and stores them in the
+    // order written by the input file.
+    struct IrrepCount
+    {
+        std::string irrep;
+        int count = 0;
+    };
+
     // ── Active space specification (CASSCF / RASSCF) ─────────────────────────
     struct OptionsActiveSpace
     {
@@ -359,6 +368,13 @@ namespace HartreeFock
         // Symmetry filtering: target CI state irrep (e.g. "A1", "B1g").
         // Empty string → use the totally-symmetric irrep of the detected point group.
         std::string target_irrep = "";
+
+        // Optional symmetry-aware MO selection. If present, the parser records
+        // explicit irrep quotas for the core and active blocks, and an optional
+        // full MO permutation can override the automatic picker.
+        std::vector<IrrepCount> core_irrep_counts;
+        std::vector<IrrepCount> active_irrep_counts;
+        std::vector<int> mo_permutation; // Full MO permutation as entered; selector normalizes 0- or 1-based input
 
         // MCSCF convergence tolerances
         double tol_mcscf_energy = 1e-8;
@@ -746,6 +762,7 @@ namespace HartreeFock
         Eigen::VectorXd _cas_nat_occ;         // active natural occupation numbers
         Eigen::MatrixXd _cas_mo_coefficients; // converged CASSCF MO coefficients [nb×nb] in the optimization basis
         double _casscf_rhf_energy = 0.0;      // RHF reference energy (for ΔE printout)
+        Eigen::VectorXd _cas_root_energies;   // per-root CI energies (length nroots; empty for SS-CASSCF)
 
         Eigen::MatrixXd _overlap; // Overlap matrix S
         Eigen::MatrixXd _hcore;   // Core Hamiltonian H = T + V

@@ -49,6 +49,31 @@ namespace HartreeFock::Correlation::CASSCF
         bool converged = false;
     };
 
+    // Root-specific data for the shared-kappa state-averaged coupled solve.
+    // All roots see the same orbital step, but each carries its own CI vector,
+    // energy, and SA weight inside the coupled residual.
+    struct StateAveragedCoupledRoot
+    {
+        double weight = 0.0;
+        Eigen::VectorXd ci_vector;
+        double ci_energy = 0.0;
+    };
+
+    // Result of the shared-kappa SA coupled solve. The orbital block is one
+    // common step, while the CI corrections/residuals remain root-resolved.
+    struct SACoupledStepSolveResult
+    {
+        Eigen::MatrixXd orbital_step;
+        std::vector<Eigen::VectorXd> ci_steps;
+        Eigen::MatrixXd orbital_residual;
+        std::vector<Eigen::VectorXd> ci_residuals;
+        Eigen::MatrixXd orbital_correction;
+        int iterations = 0;
+        double orbital_residual_max = 0.0;
+        double max_ci_residual_norm = 0.0;
+        bool converged = false;
+    };
+
     // The response mode flag is a small policy switch used by the CASSCF driver to
     // describe which CI-response approximation is currently in play.
     enum class ResponseMode
@@ -168,6 +193,35 @@ namespace HartreeFock::Correlation::CASSCF
         int max_iter = 8,
         double response_precond_floor = 1e-4);
 
+    // Solve the SA stationarity system with one shared orbital rotation kappa
+    // and one CI-response vector per root.
+    SACoupledStepSolveResult solve_sa_coupled_orbital_ci_step(
+        ResponseRHSMode mode,
+        const Eigen::MatrixXd &orbital_gradient,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        const Eigen::MatrixXd &h_eff,
+        const std::vector<double> &ga,
+        const CIDeterminantSpace &space,
+        const std::vector<CIString> &a_strs,
+        const std::vector<CIString> &b_strs,
+        const std::vector<std::pair<int, int>> &dets,
+        const ActiveIntegralCache &active_integrals,
+        const CISigmaApplier &apply,
+        const std::vector<StateAveragedCoupledRoot> &roots,
+        const Eigen::VectorXd &H_diag,
+        int nbasis,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym,
+        double tol = 1e-6,
+        int max_iter = 8,
+        double response_precond_floor = 1e-4);
+
     // One preconditioned response step without iterative subspace growth.
     CIResponseResult solve_ci_response_single_step(
         const CISigmaApplier &apply,
@@ -175,7 +229,8 @@ namespace HartreeFock::Correlation::CASSCF
         double E0,
         const Eigen::VectorXd &H_diag,
         const Eigen::VectorXd &sigma,
-        double precond_floor = 1e-4);
+        double precond_floor = 1e-4,
+        double tol = 1e-8);
 
     // Davidson-style solver for the first-order CI response. It balances restart
     // stability against the need to preserve the best finite iterate.

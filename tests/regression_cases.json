@@ -130,6 +130,17 @@
       ]
     },
     {
+      "id": "water_rhf_os_c2v_symmetry_matches_ao_reference",
+      "input": "tests/inputs/rhf_ao_sao_tests/water_rhf_os_symm.hfinp",
+      "tags": ["core", "extended"],
+      "expected_exit_code": 0,
+      "contains": ["Point Group :                 C2v", "Integral Symmetry :", "SCF Converged after", "Total Energy"],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.9629329919, "atol": 1e-9}
+      ]
+    },
+    {
       "id": "water_rhf_gradient_smoke",
       "input": "tests/inputs/water_rhf_gradient.hfinp",
       "tags": ["smoke", "extended"],

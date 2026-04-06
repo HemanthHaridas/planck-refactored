@@ -3,352 +3,246 @@
 ## Purpose
 
 This note is the current handoff for the next CASSCF implementation pass. It
-reflects the repository state on 2026-04-03 after the first production-enabled
-coupled orbital/CI solve landed on top of the root-resolved SA optimizer work,
-and it supersedes the older patch-plan notes.
+reflects the repository state on 2026-04-05 (branch `codex/casscf-correctness-pass2`)
+after the SA convergence criterion fix and the first optimizer simplification pass.
+
+---
 
 ## Current Status
 
-The code is substantially better than the original monolithic prototype, but it
-is still not a true coupled second-order CASSCF implementation.
+The code has correct SA convergence semantics and a production coupled orbital/CI
+step, but it is still not a true SA second-order CASSCF implementation.
 
-What has landed already:
+**Three bugs confirmed by PySCF reference run (2026-04-05) — fix before other work:**
 
-- The old monolith has been split into dedicated `strings`, `ci`, `rdm`,
-  `response`, `orbital`, and driver modules.
-- RASSCF determinant screening is now enforced on the combined alpha+beta
-  determinant, not independently on the spin strings.
-- CI symmetry screening now uses an explicit Abelian irrep product table rather
-  than the old XOR shortcut.
-- Root tracking uses overlap-based reassignment with a global Hungarian-style
-  maximum-overlap match instead of greedy local swaps.
-- CI bitstring helpers now guard full-width shifts and the driver rejects
-  active spaces beyond the supported `uint64_t` encoding limits.
-- The one-body CI sigma build and the Slater-Condon Hamiltonian path now share
-  the same ket-to-bra operator convention, with internal agreement coverage.
-- The public CI-response Davidson solve now has projection, restart/collapse,
-  bounded-subspace handling, and best-residual reporting on truncated exits.
-- The single-step CI-response fallback no longer reports false convergence.
-- Active-space `Q` construction now reuses a cached transformed-integral
-  container instead of retransformation inside the micro-iterations.
-- The CI solver can now use a direct sigma-vector Davidson path, and this has
-  agreement tests against dense CI on small spaces.
-- The driver now carries a per-root `StateSpecificData` record through the
-  macro loop, including per-root CI vectors/energies, 1-RDMs, 2-RDMs, active
-  Fock contributions, `Q` contributions, orbital gradients, CI-response data,
-  first-order 2-RDMs, `Q1`, and CI-driven orbital corrections.
-- The state-averaged `gamma`, `Gamma`, `F_A`, and `g_orb` objects are now
-  rebuilt as explicit weighted sums of those per-root records instead of being
-  formed only from early averaged inputs.
-- Response-side bilinear `Gamma1` accumulation is now expressed as an explicit
-  weighted sum of per-root contributions.
-- The SA micro-iteration now keeps the response RHS, `c1`, `Gamma1`, `Q1`,
-  CI-driven orbital correction, and updated orbital-gradient contribution
-  root-resolved before reducing back to one weighted update.
-- The AH-like orbital step proposal is now built root-first: each root forms
-  its own preconditioned orbital step from its own `g_orb` and `F_A` data, and
-  the driver reduces those proposals to one SA step only after that per-root
-  solve. The fallback gradient step follows the same root-first reduction
-  pattern.
-- The shared SA candidate screen now keeps explicit per-root AH-like and
-  gradient-fallback proposals as trial steps, so strong single-root directions
-  can still reach full reevaluation even when the immediate weighted proposal
-  damps them.
-- The SA acceptance/merit screen now also uses a root-resolved orbital-gradient
-  screen: a weighted sum of per-root `||g_orb||_inf` values for merit ranking,
-  plus an explicit max-root guard so one lagging root cannot hide behind the
-  averaged SA gradient.
-- Probe-ranking now uses a weighted per-root priority/signed signal rather than
-  ranking only from one already-averaged gradient vector.
-- Macro diagnostics now report both `root_model_spread` and the winning
-  `candidate=...` label for the accepted orbital proposal, along with the SA,
-  weighted-root-screen, and max-root gradient diagnostics.
-- The late macro-loop plateau and convergence gates now also follow the
-  weighted and max-root orbital-gradient screens instead of collapsing back to
-  the averaged SA gradient when deciding whether a multistate run is truly
-  stationary.
-- The root-resolved SA optimizer path is now complete for the current
-  scaffold: orbital update, candidate generation, response, acceptance, and
-  late plateau/convergence logic all keep the multiroot state-specific data
-  alive instead of dropping back to early averaging.
-- Numeric Newton is no longer a peer in the large default candidate family,
-  but the production optimizer still keeps it as a small-space escape hatch
-  (and as an explicit debug path via `mcscf_debug_numeric_newton`) while the
-  new coupled solve is being hardened.
-- `calc._cas_mo_coefficients` now stays in the converged optimization basis,
-  avoiding the old mismatch between stored orbitals and the solved CI gauge.
-- The response layer now has an explicit `ResponseRHSMode` split between:
-  - approximate commutator-only response
-  - exact active-space orbital-derivative response
-- The exact response RHS is now built analytically in `response.cpp` from the
-  active-space one- and two-electron Hamiltonian derivatives, and the response
-  API no longer carries the older finite-difference context bundle.
-- The driver now defaults to the exact orbital-derivative response RHS and
-  keeps the commutator-only shortcut only behind the explicit
-  `mcscf_debug_commutator_rhs` debug option.
-- The codebase now has a diagonal-preconditioned orbital-step helper plus unit
-  coverage for it, so the diagonal orbital model is no longer only a step
-  model; it is now also used explicitly as a preconditioner inside the coupled
-  orbital/CI solve.
-- The response path now also packages the explicit coupled blocks per root:
-  orbital-to-CI RHS, CI solve result, CI residual, first-order `Gamma1/Q1`,
-  and the resulting CI-driven orbital correction.
-- The driver now uses those coupled blocks in a matrix-free block iteration per
-  root: it seeds from an orbital-preconditioned plus CI-response Schur step,
-  refines the coupled residual with explicit OO/OC/CO/CC block actions, and
-  promotes the weighted `sa-coupled` direction into the normal candidate screen
-  instead of keeping it behind a disabled rescue gate.
-- The first optimizer-simplification pass is now in place: the production
-  candidate family has been cut down to the coupled step, gradient fallback,
-  a small-space numeric-Newton escape hatch, and stagnation-only diagonal /
-  probe / per-root rescue candidates. The larger always-on AH/mix/gradient
-  variant family is no longer part of the normal path, and the full checked-in
-  single-root manual fixture gate still converges at the expected energies.
-- `tests/casscf_internal.cpp` now checks that the analytic exact RHS matches a
-  finite-difference active-space Hamiltonian rotation on a small reference
-  problem, and that it differs from the commutator-only shortcut when the
-  two-electron Hamiltonian responds.
-- `tests/casscf_internal.cpp` now also covers weighted per-root
-  pair-priority/probe-ranking inputs, weighted quadratic-model diagnostics,
-  candidate-screen sign flips, and edge cases where the state-averaged pair
-  priority differs from a single root's dominant direction.
-- The `planck-casscf-internal` target now links the orbital/integral
-  implementation it exercises, and the internal harness no longer crashes in
-  the trailing root-reduction coverage block.
-- `tests/casscf_internal.cpp` now also checks coupled-block invariants for
-  `build_coupled_response_blocks(...)` and verifies that the new coupled
-  orbital/CI solve does not worsen the seeded coupled residual on a synthetic
-  small-space problem.
-- The full checked-in single-root manual CASSCF gate still converges after the
-  coupled-step change:
-  - `ethylene_casscf_321g` -> `-77.5145223872 Eh`
-  - `ethylene_casscf_ccpvdz` -> `-77.9524855977 Eh`
-  - `water_cas44_631g` -> `-75.5497490402 Eh`
-  - `water_cas44_b1` -> `-74.2879452324 Eh`
-  - `water_cas44_ccpvdz` -> `-75.6045806122 Eh`
-  - `water_cas44_sto3g` -> `-74.4700757755 Eh`
+1. **`guess hcore` + `use_symm true` gives wrong HF for water CAS(4,4)** — the SCF
+   converges to E(HF) = −74.4581 Eh instead of the correct −74.9629 Eh. This
+   propagates ~0.5 Eh into CASSCF. The benchmark gate values for
+   `water_cas44_sto3g`, `water_cas44_631g`, and `water_cas44_ccpvdz` are wrong.
+   PySCF confirms the correct energies: −75.0084, −76.0370, −76.0781 Eh respectively.
 
-What is still true:
+2. **SA optimizer converges to wrong local minimum for water SA-2** — both Planck
+   and PySCF start from the correct RHF (E ≈ −74.9629 Eh), same active space, but
+   PySCF finds E_SA = −74.7877 Eh while Planck finds −74.7751 Eh (0.013 Eh higher).
+   Consistent with the per-root averaged κ issue (Milestone 2 below).
 
-- The default optimizer is no longer purely diagonal-response: it now includes
-  a production matrix-free coupled orbital/CI candidate built from explicit
-  coupled residual blocks, but it still lives inside the older macro candidate
-  screen rather than a single clean solver path.
-- The state-averaged optimizer is root-resolved through the full current
-  scaffold, and it now has a real coupled step, but the overall optimizer is
-  still not a polished final SA second-order method.
-- The exact RHS is now the default theory path and is threaded through the new
-  coupled solve, but the fallback heuristics around that solve are still richer
-  than they should be in the final architecture.
-- The orbital Hessian used in production is still only a diagonal
-  preconditioner, not a full OO block model.
-- The default orbital-step logic is much smaller than before, but it still has
-  more than one production escape hatch: the coupled step is primary, yet
-  small-space numeric Newton and stagnation-only rescue candidates are still
-  present while the coupled solve is being hardened.
+3. **Twisted ethylene SA-2 active space unclear** — Planck uses `guess hcore` giving
+   wrong HF by 0.112 Eh, yet finds E_SA = −77.0034 Eh vs PySCF −76.9930 Eh (0.010
+   Eh lower). The lower energy may reflect a different active-orbital basis from the
+   wrong HF starting point rather than a better CASSCF minimum. Needs re-run without
+   `guess hcore` to confirm.
 
-## Remaining Work
+**Two structural correctness issues (not yet bugs, but known limitations):**
 
-### 1. Keep the exact CI-response RHS as the real theory path through the remaining scaffold
+4. **Step construction**: the `sa-coupled` direction is built by averaging per-root
+   coupled steps, not by solving the SA stationarity system with one shared `κ`.
+5. **Orbital Hessian**: the OO block model is a diagonal energy-denominator
+   preconditioner, not a faithful `δg_SA[R]` action.
 
-The response layer no longer has only the commutator shortcut: it now exposes
-both an explicit approximate mode and an explicit exact orbital-derivative RHS
-builder, and the driver defaults to the exact path.
+---
 
-The remaining work here is no longer “decide analytic vs finite-difference”.
-That choice is done. The remaining work is to keep the exact path threaded
-cleanly through the rest of the SA scaffold instead of blurring it back into
-the approximate diagonal-response machinery.
+## What Has Landed
 
-Needed work:
+- The old monolith split into dedicated `strings`, `ci`, `rdm`, `response`,
+  `orbital`, and driver modules.
+- RASSCF determinant screening enforced on combined alpha+beta determinant.
+- CI symmetry screening uses explicit Abelian irrep product table.
+- Root tracking uses overlap-based Hungarian maximum-overlap match.
+- CI bitstring helpers guard full-width shifts; active space limit enforced.
+- One-body CI sigma and Slater-Condon Hamiltonian share the same ket-to-bra
+  operator convention, with internal agreement coverage.
+- CI-response Davidson solve has projection, restart/collapse, bounded-subspace
+  handling, and best-residual reporting on truncated exits.
+- Single-step CI-response fallback no longer reports false convergence.
+- Active-space `Q` construction reuses a cached transformed-integral container.
+- Direct sigma-vector Davidson CI path with dense fallback, plus agreement tests.
+- Per-root `StateSpecificData` carried through the macro loop (CI vectors/energies,
+  1-RDMs, 2-RDMs, active Fock, Q, orbital gradient, CI-response data, first-order
+  2-RDMs, Q1, CI-driven orbital corrections).
+- SA `gamma`, `Gamma`, `F_A`, `g_orb` rebuilt as explicit weighted sums of per-root
+  records.
+- Response-side bilinear `Gamma1` accumulation expressed as explicit weighted sum.
+- Exact orbital-derivative CI response RHS is the default
+  (`ResponseRHSMode::ExactOrbitalDerivative`). Commutator-only shortcut is behind
+  `mcscf_debug_commutator_rhs` flag.
+- Exact RHS tested vs finite-difference active-space Hamiltonian rotation in
+  `tests/casscf_internal.cpp`.
+- Production matrix-free coupled orbital/CI step via `solve_coupled_orbital_ci_step`:
+  seeds from diagonal-preconditioned + CI-response Schur step, refines with explicit
+  OO/OC/CO/CC block residuals.
+- `sa-coupled` direction promoted to the normal candidate screen.
+- First optimizer simplification pass (2c5038a): large always-on AH/mix/gradient-
+  variant family removed. Normal candidate screen contains `sa-coupled`,
+  `sa-grad-fallback`, small-space `numeric-newton` escape hatch, and stagnation-only
+  rescue candidates.
+- **SA convergence criterion fixed (c97a754)**: convergence gate now uses
+  `||g_SA||_inf < tol` where `g_SA = Σ_I w_I g_I`. Per-root gradient norms
+  retained as diagnostics only. Iteration table column renamed "SA Grad"/"MaxRootG".
+- Per-macroiteration wall-clock timing in the iteration table.
+- SA end-to-end fixtures `water_cas44_sto3g_sa2` and `ethylene_cas44_sto3g_sa2`
+  added and passing.
+- `calc._cas_mo_coefficients` stores the optimized orbital basis, not natural
+  orbitals.
+- `tests/casscf_internal.cpp` covers: direct-sigma vs dense CI agreement, exported
+  vs reference RDM agreement, exact RHS vs finite-difference agreement, coupled block
+  invariants, coupled residual seeding.
 
-- Continue threading the exact RHS through the now-root-resolved SA plumbing
-  instead of dropping back immediately to one averaged perturbation.
-- Keep logs and control flow clear about the distinction between:
-  - approximate commutator-only response
-  - exact orbital-derivative response
-- Keep the exact-RHS path as the production theory path while making sure
-  response fallbacks and diagnostics do not silently relabel the approximate
-  path as if it were the full second-order method.
+---
 
-Acceptance target:
+## What Is Still True
 
-- Approximate response remains an explicitly requested debug path only.
-- Small reference problems continue to compare the analytic exact-response RHS
-  against a finite-difference active-space Hamiltonian rotation.
-- The exact path is the default theory path wherever the current scaffold is
-  meant to approximate second-order behavior.
+- The `sa-coupled` step is built by per-root coupled solves averaged by weight, not
+  by a shared-κ SA coupled solve (the correct SA second-order structure).
+- The acceptance merit function uses `weighted_root_gnorm` (a per-root gradient
+  screen) instead of the SA gradient `gnorm`. This should be fixed with the shared-κ
+  solve (they are part of the same correctness gap).
+- The orbital Hessian OO block is a diagonal preconditioner only; no `δg_SA[R]`
+  action.
+- The optimizer still has more than one production escape hatch: `numeric-newton` for
+  small spaces and stagnation-only rescue candidates while the coupled solve hardens.
+- PySCF reference values for SA cases are all TBD in `pyscf_reference_energies.md`.
+- The regression runner (`run_regressions.py`) does not parse SA gradient diagnostics.
 
-### 2. Complete and harden the new coupled orbital/CI step
+---
 
-The core solver milestone has moved forward: the code now has a production
-matrix-free coupled orbital/CI step instead of only parked scaffolding.
+## Remaining Work (Priority Order)
 
-The current implementation:
+### 0. Fix `guess hcore` + `use_symm true` HF convergence bug (BLOCKER)
 
-- seeds from an orbital-preconditioned plus CI-response Schur-like step
-- evaluates explicit OO, OC, CO, and CC residual pieces
-- refines them by block iteration with diagonal orbital/CI preconditioners
-- contributes the weighted `sa-coupled` direction directly to the normal
-  candidate screen
+**Symptoms:** `water_cas44_sto3g`, `water_cas44_631g`, `water_cas44_ccpvdz` all give
+E(HF) ≈ −74.4581 Eh instead of the correct ≈ −74.9629 Eh. The CASSCF energies are
+wrong by ~0.5 Eh. The SA-2 water input (which uses `use_symm false`, no guess) gives
+the correct HF energy, confirming the bug is in the `hcore + symm` combination.
 
-That is a real coupled step, but it is still an early coupled implementation
-rather than the final solver architecture.
+**Investigation targets in the driver / SCF path:**
+- `src/driver.cpp` or `src/dft/driver.cpp`: how is `guess hcore` implemented under
+  symmetry? Is the initial density matrix built in the symmetry-adapted AO frame?
+- Does `detectSymmetry()` reorder or transform basis functions in a way that breaks
+  the hcore diagonal guess?
 
-Needed work:
+**Immediate actions:**
+- Update `water_cas44_sto3g.hfinp`, `water_cas44_631g.hfinp`,
+  `water_cas44_ccpvdz.hfinp`: remove `guess hcore` (or switch to `guess sad` if
+  supported) and re-run.
+- Update the gate energies in `casscf_benchmark_results.txt` to match the corrected
+  runs.
+- Update `pyscf_reference_energies.md` once Planck values are corrected.
 
-- Keep the diagonal orbital Hessian only as a preconditioner.
-- Strengthen the matrix-free coupled solve itself:
-  - better residual scaling and stopping criteria
-  - cleaner globalization/trust-region behavior
-  - less dependence on the surrounding legacy candidate family
-- Decide whether the end state should stay matrix-free block-iterative or move
-  to a more explicit augmented-Hessian / norm-extended coupled solve.
-- Reduce the default optimizer to one main step builder plus one explicit
-  globalization/fallback path.
+**Reference PySCF values (Cartesian basis, correct RHF starting point):**
+- `water_cas44_sto3g`: −75.0084054420 Eh
+- `water_cas44_631g`: −76.0370099226 Eh
+- `water_cas44_ccpvdz`: −76.0781256226 Eh
 
-Acceptance target:
+### 0b. Investigate twisted ethylene SA-2 without `guess hcore`
 
-- The driver can honestly distinguish:
-  - debug approximate mode
-  - production coupled mode
-- Convergence behavior becomes easier to reason about after small code changes.
+The ethylene_cas44_sto3g_sa2 input also uses `guess hcore`. Planck gives E_SA =
+−77.0034 Eh while PySCF (correct HF) gives −76.9930 Eh. The lower Planck energy is
+suspicious — it likely reflects a different (wrong) orbital basis from the hcore
+start rather than a genuinely better SA minimum.
 
-### 3. Finish simplifying the default optimizer around the coupled step
+**Immediate actions:**
+- Re-run `ethylene_cas44_sto3g_sa2.hfinp` without `guess hcore`.
+- Compare resulting E(HF) and E_SA against PySCF.
+- If the energies still differ by > 1e-3 Eh after fixing the HF starting point,
+  investigate active orbital selection.
 
-The current loop still mixes:
+**PySCF reference:**
+- E_SA = −76.9930595776 Eh (root 0: −76.9940, root 1: −76.9921)
 
-- the main coupled orbital/CI candidate
-- a gradient fallback
-- a small-space numeric-Newton escape hatch
-- stagnation-only diagonal/per-root/probe rescue candidates
-- merit comparison plus damping/backtracking logic
+### 1. Implement shared-κ SA coupled solve (Phase 2)
 
-Needed work:
+The most important remaining correctness item.
 
-- Decide whether small-space numeric Newton should remain a production rescue
-  path or become debug-only once the coupled solve is robust enough.
-- Reduce or eliminate the stagnation-only rescue family once the coupled step
-  has a cleaner globalization / trust-region story.
-- Separate theory/intermediate construction from step construction.
-- Choose one default globalization strategy and make it explicit.
+**What to do:**
+- Add a `solve_sa_coupled_orbital_ci_step` function that holds one shared `κ`,
+  simultaneously solves all roots' CI response equations `(H - E_I) c1_I = -Q sigma_I(κ)`,
+  forms the SA orbital residual `g_SA + H_oo κ + Σ_I w_I G_oc c1_I`, and iterates on κ.
+- Replace `build_root_resolved_coupled_step_set` with this shared-κ path as the
+  production `sa-coupled` direction.
+- Fix the acceptance merit function to use `trial.gnorm` (SA gradient) instead of
+  `trial.weighted_root_gnorm`.
+
+**Acceptance:**
+- 2-root SA ethylene converges via SA stationarity, not the plateau escape.
+- `nroots=1` results unchanged.
+- All 11 manual fixture inputs continue to pass.
+
+### 2. Fix the acceptance merit function (needed independently of M2)
+
+The merit at `casscf.cpp:1169` is:
+```cpp
+trial.E_cas + merit_weight * trial.weighted_root_gnorm * trial.weighted_root_gnorm
+```
+This should be:
+```cpp
+trial.E_cas + merit_weight * trial.gnorm * trial.gnorm
+```
+where `trial.gnorm` is `||g_SA||_inf`. The acceptance conditions at lines 1170–1187
+use per-root gradient screens that are inconsistent with the SA stationarity condition
+fixed in M1.
+
+### 3. Add PySCF-backed reference suite
+
+The most important missing safety net.
+
+**Systems to cover:**
+- H₂ CAS(2,2)/STO-3G (SS and SA-2)
+- LiH CAS(2,2)/STO-3G (SS)
+- H₂O CAS(4,4)/STO-3G (SS and SA-2)
+- Twisted ethylene CAS(4,4)/STO-3G (SA-2)
+
+**Script template is in** `tests/inputs/casscf_tests/pyscf_reference_energies.md`.
+
+### 4. Make regression runner SA-aware
+
+Add to `METRIC_PATTERNS` in `tests/run_regressions.py`:
+```python
+"casscf_sa_gnorm": re.compile(r"sa_g=([-+0-9Ee\.]+)", re.MULTILINE),
+"casscf_root_screen_gnorm": re.compile(r"root_screen_g=([-+0-9Ee\.]+)", re.MULTILINE),
+"casscf_max_root_gnorm": re.compile(r"max_root_g=([-+0-9Ee\.]+)", re.MULTILINE),
+```
+Assert `sa_g <= tol_mcscf_grad`; keep root metrics as diagnostics only.
+
+### 5. Add Hessian action upgrade (Phase 3)
+
+After M2 is stable. Add `delta_g_SA_action(R, ...)` with full OO response terms.
+Validate with finite-difference check in `tests/casscf_internal.cpp`.
+Use inside the shared-κ SA coupled solve.
+
+### 6. Simplify optimizer further (Phase 5 second pass)
+
+After M2+M3:
+- Decide if `numeric-newton` can become debug-only for small spaces.
+- Remove or narrow the stagnation-only rescue family.
 - Move any remaining experiment-only heuristics behind debug flags.
 
-Acceptance target:
+### 7. Expand invariance and robustness coverage
 
-- The transcript makes it obvious which algorithmic path was used.
-- Regressions become attributable to one optimizer path instead of several
-  interacting heuristics.
+Still missing:
+- Active-active rotation invariance checks after convergence.
+- Anti-symmetry checks for `g_orb` and `kappa`.
+- Root-crossing stress tests (geometry distortion near avoided crossing).
+- Response-solver restart and truncation cases at larger CI dimensions.
+- Checkpoint/restart consistency for stored CASSCF orbitals.
 
-## Important Secondary Work
+### 8. Revisit RDM performance (lower priority)
 
-### 4. Add a small trusted external reference suite
+The RDM module is isolated and cross-checked. Optimized 1-RDM, 2-RDM, and
+bilinear 2-RDM accumulation kernels are still on the backlog but are lower
+priority than theory and validation work.
 
-This is still one of the most important missing safety nets.
+### 9. Profile direct CI sigma before more CI restructuring
 
-Needed work:
+The direct Davidson path is correct and tested. Do not reopen major CI-driver
+refactors until profiling identifies actual hot spots in
+`apply_ci_hamiltonian`.
 
-- Add PySCF-backed reference comparisons for:
-  - CASCI energies
-  - CASSCF energies
-  - state-averaged energies
-  - orbital gradients or finite-difference checks
-  - natural occupations
-  - root tracking across distorted geometries
-
-Priority systems:
-
-- H2 CAS(2,2)
-- LiH CAS(2,2)
-- H2O CAS(4,4) or CAS(6,4)
-- twisted ethylene
-- one near-crossing SA example
-
-### 5. Expand internal invariance and robustness coverage
-
-Still needed:
-
-- invariance checks under active-active rotations after convergence
-- anti-symmetry checks for orbital gradients and `kappa`
-- stress cases for root tracking near crossings
-- response-solver restart and truncation cases at larger dimensions
-- checkpoint/restart consistency tests for stored CASSCF orbitals
-- at least one checked-in multiroot end-to-end fixture; the current manual
-  `tests/inputs/casscf_tests` folder is still entirely `nroots 1`
-- broader root-resolved unit checks for weighted per-root orbital intermediates
-  (`F_A`, `Q`, `g_orb`) plus additional quadratic-model, probe-ranking,
-  candidate-retention, and acceptance-screen edge cases beyond the current
-  small synthetic coverage
-
-### 6. Decide whether to export active-space natural orbitals explicitly
-
-The dangerous old behavior is fixed: `_cas_mo_coefficients` now stores the
-optimized orbital basis, not a silently rotated natural-orbital basis.
-
-What is still missing:
-
-- separate storage for active-space natural-orbital coefficients if downstream
-  tools want them explicitly
-- checkpoint/version support for those coefficients
-- clearer exporter/UI behavior around “optimized orbitals” vs “active NOs”
-
-Recommended shape:
-
-- Keep `_cas_mo_coefficients` as the optimization basis.
-- Add a separate result field for natural-orbital coefficients only if there is
-  a concrete consumer for them.
-
-### 7. Revisit RDM performance only after the theory path is stable
-
-The large CI refactor items from the older plans are mostly done, so the main
-remaining performance hotspot is the exported RDM work.
-
-Still useful later:
-
-- optimized 1-RDM accumulation
-- optimized 2-RDM accumulation
-- optimized bilinear 2-RDM accumulation
-- cross-checks against the current reference kernels on small spaces
-
-This is lower priority than the per-root, exact-response, and coupled-step
-work above.
-
-### 8. Profile the direct CI sigma path before doing more CI restructuring
-
-The direct sigma-vector Davidson path is already in the tree and covered by
-agreement tests. Do not reopen major CI-driver refactors until profiling shows
-where the remaining cost actually is.
-
-If follow-up work is needed, focus on:
-
-- determinant-connectivity hot spots in `apply_ci_hamiltonian`
-- convergence diagnostics for large direct-Davidson runs
-- dense-vs-direct crossover tuning
+---
 
 ## Mandatory Change Gate
 
-### 9. Treat `tests/inputs/casscf_tests` as a required solver gate
-
-Every meaningful CASSCF code change should still be validated against the full
-manual fixture folder:
-
-- `tests/inputs/casscf_tests/water_cas44_sto3g.hfinp`
-- `tests/inputs/casscf_tests/water_cas44_b1.hfinp`
-- `tests/inputs/casscf_tests/water_cas44_631g.hfinp`
-- `tests/inputs/casscf_tests/water_cas44_ccpvdz.hfinp`
-- `tests/inputs/casscf_tests/ethylene_casscf_321g.hfinp`
-- `tests/inputs/casscf_tests/ethylene_casscf_ccpvdz.hfinp`
-
-Observed rerun status on 2026-04-03 after the optimizer-simplification pass:
-
-- `ethylene_casscf_321g.rerun.log` converges to `-77.5145223871 Eh`
-- `ethylene_casscf_ccpvdz.rerun.log` converges to `-77.9524855977 Eh`
-- `water_cas44_631g.rerun.log` converges to `-75.5497490402 Eh`
-- `water_cas44_b1.rerun.log` converges to `-74.2879452324 Eh`
-- `water_cas44_ccpvdz.rerun.log` converges to `-75.6045806122 Eh`
-- `water_cas44_sto3g.rerun.log` converges to `-74.4700757755 Eh`
-
-Required verification loop after each solver change:
+Every CASSCF solver-facing change must be validated against the full manual fixture
+folder. Run:
 
 ```bash
 cmake --build build --target hartree-fock -j4
@@ -357,35 +251,49 @@ for input in tests/inputs/casscf_tests/*.hfinp; do
 done
 ```
 
-Completion gate for any solver-facing CASSCF change:
+Current gate energies (2026-04-04). Entries marked ⚠ are known wrong and must be
+updated after the hcore+symm bug is fixed (see item 0 above):
 
-- Run all inputs in `tests/inputs/casscf_tests`.
-- Review every case, not just the one that motivated the edit.
-- Do not call the work done if one case improves while another regresses.
+| Input | E(CASSCF) / Eh | PySCF ref / Eh | Status |
+|---|---|---|---|
+| ethylene_cas44_sto3g_sa2 (SA-2) | −77.0034974301 | −76.9930595776 | ⚠ hcore bug + local-min gap |
+| ethylene_casscf_321g | −77.5145223872 | −77.5145223959 | OK (Δ = 8.7e-9) |
+| ethylene_casscf_321g_nroot2 | −77.5145223872 | — | OK |
+| ethylene_casscf_ccpvdz | −77.9524855976 | −77.9524856210 | OK (Δ = 2.3e-8) |
+| h2_cas22_sto3g | −1.1372838351 | −1.1372838345 | OK (Δ = 6.0e-10) |
+| lih_cas22_sto3g | −7.8811184797 | −7.8811184639 | OK (Δ = 1.6e-8) |
+| water_cas44_631g | −75.5497490402 | −76.0370099226 | ⚠ wrong (hcore+symm, Δ = 0.49) |
+| water_cas44_b1 | −74.2879452324 | — | not yet cross-checked |
+| water_cas44_ccpvdz | −75.6045806122 | −76.0781256226 | ⚠ wrong (hcore+symm, Δ = 0.47) |
+| water_cas44_sto3g | −74.4700757755 | −75.0084054420 | ⚠ wrong (hcore+symm, Δ = 0.54) |
+| water_cas44_sto3g_sa2 (SA-2) | −74.7751279351 | −74.7877865139 | ⚠ SA local-min gap (Δ = 0.013) |
 
-## Recommended Implementation Order
+Do not call work done if one case improves while another regresses.
+The ⚠ entries must not be used as convergence targets until re-run with correct inputs.
 
-1. Simplify the default optimizer around the new coupled orbital/CI step.
-2. Add PySCF-backed reference tests for a small, trusted system set.
-3. Expand the internal invariance/root-robustness coverage once the coupled
-   step starts landing.
-4. Revisit separate natural-orbital export only if a real downstream consumer
-   needs it.
-5. Profile remaining performance hot spots before reopening major CI/RDM work.
+---
 
 ## What Not To Do Next
 
-- Do not relabel the current default solver as full second-order.
+- Do not relabel the current `sa-coupled` direction as full SA second-order; it is
+  per-root averaged, not shared-κ.
 - Do not add more heuristic step mixing to the production path.
-- Do not reopen old P0 items such as RAS filtering, symmetry-table wiring,
-  root tracking, or bitstring guards unless a new regression appears.
+- Do not reopen P0 items (RAS filtering, symmetry-table wiring, root tracking,
+  bitstring guards) unless a new regression appears.
 - Do not overload `_cas_mo_coefficients` with another orbital representation.
-- Do not prioritize more file splitting for its own sake; the important next
-  work is theory and validation, not more mechanical refactoring.
+- Do not prioritize more file splitting; the important work is theory and validation.
+
+---
 
 ## Relevant Files For The Next Pass
 
-- `src/post_hf/casscf/casscf.cpp`
-- `src/post_hf/casscf/response.cpp`
-- `src/post_hf/casscf/orbital.cpp`
-- `tests/casscf_internal.cpp`
+- `src/post_hf/casscf/casscf.cpp` — driver, convergence gate, candidate screen,
+  acceptance merit function
+- `src/post_hf/casscf/response.cpp` — `solve_coupled_orbital_ci_step`,
+  `build_coupled_response_blocks`
+- `src/post_hf/casscf/orbital.cpp` — `hessian_action`, `hess_diag`,
+  `diagonal_preconditioned_orbital_step`
+- `tests/casscf_internal.cpp` — internal unit and invariance coverage
+- `tests/run_regressions.py` — regression runner (add SA metrics)
+- `tests/inputs/casscf_tests/pyscf_reference_energies.md` — PySCF reference values
+  (fill TBD entries)

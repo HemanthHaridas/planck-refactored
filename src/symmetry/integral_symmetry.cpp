@@ -27,6 +27,7 @@ namespace
     {
         const int n = static_cast<int>(mol.natoms);
         perm.assign(n, -1);
+        std::vector<bool> target_used(n, false);
         constexpr double tol = 5.0e-4; // Angstrom
 
         for (int a = 0; a < n; ++a)
@@ -37,7 +38,7 @@ namespace
             int match = -1;
             for (int b = 0; b < n; ++b)
             {
-                if (perm[b] != -1)
+                if (target_used[b])
                     continue;
                 if (mol.atomic_numbers[a] != mol.atomic_numbers[b])
                     continue;
@@ -53,6 +54,7 @@ namespace
                 return false;
 
             perm[a] = match;
+            target_used[match] = true;
         }
 
         return true;

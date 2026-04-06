@@ -13,7 +13,7 @@ inline std::string get_basis_path()
         return std::string(env_path);
     }
     // Fallback to compiled-in install path
-    return "/Users/hemanthharidas/Desktop/codes/planck-refactored/install/share/basis-sets";
+    return "/usr/local/install/share/basis-sets";
 }
 
 #endif // !HF_BASIS_DEF_H

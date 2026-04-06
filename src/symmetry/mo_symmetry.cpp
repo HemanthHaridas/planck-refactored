@@ -705,6 +705,50 @@ namespace
         }
     }
 
+    static int subgroup_family_preference(msym_point_group_type_t t) noexcept
+    {
+        switch (static_cast<int>(t))
+        {
+        case 7: // Dn
+        case 8: // Dnh
+            return 3;
+        case 4: // Cn
+        case 5: // Cnh
+        case 6: // Cnv
+            return 2;
+        case 2: // Ci
+        case 3: // Cs
+            return 1;
+        default:
+            return 0;
+        }
+    }
+
+    static const msym_subgroup_t *select_preferred_abelian_subgroup(int nsg,
+                                                                    const msym_subgroup_t *sgs) noexcept
+    {
+        const msym_subgroup_t *best = nullptr;
+        int best_order = -1;
+        int best_family = -1;
+
+        for (int k = 0; k < nsg; ++k)
+        {
+            if (!is_all_1d_irreps(sgs[k].type, sgs[k].n))
+                continue;
+
+            const int family = subgroup_family_preference(sgs[k].type);
+            if (sgs[k].order > best_order ||
+                (sgs[k].order == best_order && family > best_family))
+            {
+                best = &sgs[k];
+                best_order = sgs[k].order;
+                best_family = family;
+            }
+        }
+
+        return best;
+    }
+
 } // anonymous namespace
 
 HartreeFock::Symmetry::AbelianIrrepProductTable
@@ -880,16 +924,7 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
             if (MSYM_SUCCESS != msymGetSubgroups(ctx.get(), &nsg, &sgs))
                 throw std::runtime_error("build_sao_basis: msymGetSubgroups failed");
 
-            const msym_subgroup_t *best = nullptr;
-            int best_order = 0;
-            for (int k = 0; k < nsg; ++k)
-            {
-                if (is_all_1d_irreps(sgs[k].type, sgs[k].n) && sgs[k].order > best_order)
-                {
-                    best_order = sgs[k].order;
-                    best = &sgs[k];
-                }
-            }
+            const msym_subgroup_t *best = select_preferred_abelian_subgroup(nsg, sgs);
             if (best == nullptr)
             {
                 // No Abelian all-1D subgroup found — SAO blocking is not possible.
@@ -1138,16 +1173,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
             if (MSYM_SUCCESS != msymGetSubgroups(ctx.get(), &nsg, &sgs))
                 throw std::runtime_error("assign_mo_symmetry: msymGetSubgroups failed");
 
-            const msym_subgroup_t *best = nullptr;
-            int best_order = 0;
-            for (int k = 0; k < nsg; ++k)
-            {
-                if (is_all_1d_irreps(sgs[k].type, sgs[k].n) && sgs[k].order > best_order)
-                {
-                    best_order = sgs[k].order;
-                    best = &sgs[k];
-                }
-            }
+            const msym_subgroup_t *best = select_preferred_abelian_subgroup(nsg, sgs);
 
             if (best != nullptr)
             {
