@@ -815,7 +815,7 @@ namespace HartreeFock::Correlation::CASSCF
             solve_ci_response_davidson(apply, c0, E0, H_diag, blocks.ci_rhs, tol, max_iter, precond_floor);
         if (!blocks.ci_response.converged)
             blocks.ci_response = solve_ci_response_single_step(
-                apply, c0, E0, H_diag, blocks.ci_rhs, precond_floor);
+                apply, c0, E0, H_diag, blocks.ci_rhs, precond_floor, tol);
 
         const Eigen::MatrixXd c1_vec = as_single_column_matrix(blocks.ci_response.c1);
         const Eigen::MatrixXd c0_vec = as_single_column_matrix(c0);
@@ -842,7 +842,8 @@ namespace HartreeFock::Correlation::CASSCF
         double E0,
         const Eigen::VectorXd &H_diag,
         const Eigen::VectorXd &sigma,
-        double precond_floor)
+        double precond_floor,
+        double tol)
     {
         CIResponseResult result;
         result.c1 = Eigen::VectorXd::Zero(c0.size());
@@ -853,7 +854,7 @@ namespace HartreeFock::Correlation::CASSCF
         result.c1 = project_orthogonal(result.c1, c0);
         result.residual_norm = response_residual(apply, result.c1, c0, E0, sigma).norm();
         result.iterations = 1;
-        result.converged = false;
+        result.converged = std::isfinite(result.residual_norm) && result.residual_norm < tol;
         return result;
     }
 

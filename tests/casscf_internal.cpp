@@ -299,6 +299,83 @@ int main()
     }
 
     {
+        Eigen::VectorXd mo_energies(8);
+        mo_energies << -21.0, -1.5, -1.2, -0.8, 0.2, 0.3, 0.7, 1.0;
+        const std::vector<std::string> mo_symmetry = {"A1", "A1", "B1", "A1", "B2", "B1", "A1", "A2"};
+        std::vector<HartreeFock::IrrepCount> active_counts = {{"A1", 1}, {"B1", 1}, {"B2", 1}};
+
+        const auto selection = select_active_orbitals(
+            mo_energies, mo_symmetry, 2, 3, {}, active_counts, {});
+
+        ok &= expect(static_cast<bool>(selection),
+                     "irrep-based active-space picker should accept valid active irrep counts");
+        if (selection)
+        {
+            ok &= expect(selection->permutation == std::vector<int>({0, 1, 2, 3, 4, 5, 6, 7}),
+                         "irrep-based active-space picker should preserve an already contiguous active window");
+            ok &= expect(selection->active_orbitals == std::vector<int>({2, 3, 4}),
+                         "irrep-based active-space picker should choose the requested per-irrep active block after the inferred closed shells");
+            ok &= expect(selection->used_symmetry,
+                         "irrep-based active-space picker should report symmetry use when irrep quotas are supplied");
+        }
+    }
+
+    {
+        Eigen::VectorXd mo_energies(5);
+        mo_energies << -20.0, 0.5, -0.8, 0.2, 0.3;
+        const std::vector<std::string> mo_symmetry = {"A1", "A1", "B1", "A1", "B2"};
+
+        const auto selection = select_active_orbitals(
+            mo_energies, mo_symmetry, 1, 2, {}, {}, {});
+
+        ok &= expect(static_cast<bool>(selection),
+                     "automatic symmetry-aware picker should infer the active-space irrep pattern from the current RHF ordering");
+        if (selection)
+        {
+            ok &= expect(selection->permutation == std::vector<int>({0, 2, 3, 1, 4}),
+                         "automatic symmetry-aware picker should reorder a scrambled RHF MO list into contiguous symmetry-consistent core and active blocks");
+            ok &= expect(selection->active_orbitals == std::vector<int>({2, 3}),
+                         "automatic symmetry-aware picker should choose the energy-ordered representatives of the inferred active-space irreps");
+            ok &= expect(selection->used_symmetry,
+                         "automatic symmetry-aware picker should mark inferred irrep-based selections as symmetry-driven");
+        }
+    }
+
+    {
+        Eigen::VectorXd mo_energies(7);
+        mo_energies << -20.0, -2.0, -1.5, -1.2, -0.4, 0.1, 0.8;
+        const std::vector<std::string> mo_symmetry = {"A1", "A1", "B1", "A1", "B2", "B1", "A2"};
+        std::vector<HartreeFock::IrrepCount> core_counts = {{"A1", 1}};
+        std::vector<HartreeFock::IrrepCount> active_counts = {{"A1", 1}, {"B2", 1}};
+
+        const auto selection = select_active_orbitals(
+            mo_energies, mo_symmetry, 2, 2, core_counts, active_counts, {});
+
+        ok &= expect(static_cast<bool>(selection),
+                     "irrep-based active-space picker should accept explicit core irrep counts");
+        if (selection)
+        {
+            ok &= expect(selection->permutation == std::vector<int>({0, 2, 1, 4, 3, 5, 6}),
+                         "irrep-based active-space picker should permute the full MO basis into contiguous core-active-virtual order");
+            ok &= expect(selection->active_orbitals == std::vector<int>({1, 4}),
+                         "irrep-based active-space picker should report the original MO indices chosen for the active block");
+        }
+    }
+
+    {
+        Eigen::VectorXd mo_energies(4);
+        mo_energies << -2.0, -1.0, 0.2, 0.5;
+        const std::vector<std::string> mo_symmetry = {"A1", "A1", "B1", "B1"};
+        std::vector<HartreeFock::IrrepCount> core_counts = {{"A1", 3}};
+
+        const auto selection = select_active_orbitals(
+            mo_energies, mo_symmetry, 2, 1, core_counts, {}, {});
+
+        ok &= expect(!selection && selection.error().find("core_irrep_counts exceed n_core") != std::string::npos,
+                     "irrep-based active-space picker should reject core irrep quotas that exceed n_core");
+    }
+
+    {
         const std::vector<double> puvw = {2.0};
         const std::vector<double> gamma = {3.0};
         const Eigen::MatrixXd q = contract_q_matrix(puvw, gamma, 1, 1);
@@ -377,6 +454,32 @@ int main()
                      "iterative CI response should preserve the orthogonality gauge");
         ok &= expect((response.c1 - exact).norm() < 1e-10,
                      "iterative CI response should match the dense projected solution on a small test problem");
+    }
+
+    {
+        Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, 3);
+        H(1, 1) = 2.0;
+        H(2, 2) = 4.0;
+
+        Eigen::VectorXd c0 = Eigen::VectorXd::Zero(3);
+        c0(0) = 1.0;
+        const double E0 = 0.0;
+        const Eigen::VectorXd H_diag = H.diagonal();
+        Eigen::VectorXd sigma(3);
+        sigma << 0.0, -0.6, 0.8;
+
+        const auto apply = [&](const Eigen::VectorXd &c, Eigen::VectorXd &sigma_out)
+        {
+            sigma_out = H * c;
+        };
+
+        const CIResponseResult response =
+            solve_ci_response_single_step(apply, c0, E0, H_diag, sigma, 1e-8, 1e-8);
+
+        ok &= expect(response.converged,
+                     "single-step CI response should report convergence when the diagonal preconditioner solves the response equation exactly");
+        ok &= expect(response.residual_norm < 1e-12,
+                     "single-step CI response should report a near-zero residual for an exactly diagonal response problem");
     }
 
     {

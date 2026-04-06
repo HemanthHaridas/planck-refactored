@@ -62,6 +62,63 @@ namespace HartreeFock::IO
         throw std::invalid_argument("Invalid boolean value: " + parsedString);
     }
 
+    static std::vector<HartreeFock::IrrepCount> parse_irrep_count_list(
+        std::istringstream &iss,
+        const std::string &keyword)
+    {
+        std::vector<HartreeFock::IrrepCount> counts;
+        std::string token;
+        while (iss >> token)
+        {
+            std::string irrep;
+            std::string count_text;
+
+            const std::size_t sep = token.find_first_of("=:");
+            if (sep != std::string::npos)
+            {
+                irrep = token.substr(0, sep);
+                count_text = token.substr(sep + 1);
+                if (irrep.empty() || count_text.empty())
+                    throw std::invalid_argument(keyword + " expects irrep/count pairs");
+            }
+            else
+            {
+                irrep = token;
+                if (!(iss >> count_text))
+                    throw std::invalid_argument(keyword + " expects irrep/count pairs");
+            }
+
+            trim(irrep);
+            trim(count_text);
+            if (irrep.empty() || count_text.empty())
+                throw std::invalid_argument(keyword + " expects irrep/count pairs");
+
+            const int count = std::stoi(count_text);
+            if (count < 0)
+                throw std::invalid_argument(keyword + " counts must be non-negative");
+
+            counts.push_back({irrep, count});
+        }
+
+        if (counts.empty())
+            throw std::invalid_argument(keyword + " requires at least one irrep/count pair");
+        return counts;
+    }
+
+    static std::vector<int> parse_int_list(
+        std::istringstream &iss,
+        const std::string &keyword)
+    {
+        std::vector<int> values;
+        int value = 0;
+        while (iss >> value)
+            values.push_back(value);
+
+        if (values.empty())
+            throw std::invalid_argument(keyword + " requires at least one integer");
+        return values;
+    }
+
     // split the input file into sections
     std::expected<SectionMap, std::string> _split_into_sections(std::istream &input)
     {
@@ -527,6 +584,53 @@ namespace HartreeFock::IO
                     active_space.weights.push_back(w);
                 if (active_space.weights.empty())
                     return std::unexpected("weights keyword requires at least one value");
+                continue;
+            }
+
+            if (key == "core_irrep_counts")
+            {
+                try
+                {
+                    auto parsed = parse_irrep_count_list(_iss, key);
+                    active_space.core_irrep_counts.insert(
+                        active_space.core_irrep_counts.end(),
+                        parsed.begin(),
+                        parsed.end());
+                }
+                catch (const std::exception &e)
+                {
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + e.what());
+                }
+                continue;
+            }
+
+            if (key == "active_irrep_counts")
+            {
+                try
+                {
+                    auto parsed = parse_irrep_count_list(_iss, key);
+                    active_space.active_irrep_counts.insert(
+                        active_space.active_irrep_counts.end(),
+                        parsed.begin(),
+                        parsed.end());
+                }
+                catch (const std::exception &e)
+                {
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + e.what());
+                }
+                continue;
+            }
+
+            if (key == "mo_permutation")
+            {
+                try
+                {
+                    active_space.mo_permutation = parse_int_list(_iss, key);
+                }
+                catch (const std::exception &e)
+                {
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + e.what());
+                }
                 continue;
             }
 

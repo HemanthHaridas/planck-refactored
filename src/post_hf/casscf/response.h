@@ -229,7 +229,8 @@ namespace HartreeFock::Correlation::CASSCF
         double E0,
         const Eigen::VectorXd &H_diag,
         const Eigen::VectorXd &sigma,
-        double precond_floor = 1e-4);
+        double precond_floor = 1e-4,
+        double tol = 1e-8);
 
     // Davidson-style solver for the first-order CI response. It balances restart
     // stability against the need to preserve the best finite iterate.

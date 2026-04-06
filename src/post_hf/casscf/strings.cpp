@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
+#include <format>
+#include <numeric>
 #include <string>
 
 namespace HartreeFock::Correlation::CASSCF
@@ -14,6 +17,152 @@ namespace HartreeFock::Correlation::CASSCF
     using CASSCFInternal::kMaxSeparateSpinOrbitals;
     using CASSCFInternal::low_bit_mask;
     using CASSCFInternal::single_bit_mask;
+
+    namespace
+    {
+        std::optional<std::vector<int>> normalize_permutation(
+            const std::vector<int> &raw,
+            int nbasis)
+        {
+            if (raw.empty())
+                return std::vector<int>{};
+
+            if (static_cast<int>(raw.size()) != nbasis)
+                return std::nullopt;
+
+            const bool has_zero = std::find(raw.begin(), raw.end(), 0) != raw.end();
+            const int offset = has_zero ? 0 : 1;
+            std::vector<bool> seen(static_cast<std::size_t>(nbasis), false);
+            std::vector<int> permutation;
+            permutation.reserve(raw.size());
+
+            for (const int value : raw)
+            {
+                const int idx = value - offset;
+                if (idx < 0 || idx >= nbasis || seen[static_cast<std::size_t>(idx)])
+                    return std::nullopt;
+                seen[static_cast<std::size_t>(idx)] = true;
+                permutation.push_back(idx);
+            }
+            return permutation;
+        }
+
+        std::unordered_map<std::string, int> combine_irrep_counts(
+            const std::vector<HartreeFock::IrrepCount> &counts)
+        {
+            std::unordered_map<std::string, int> result;
+            for (const auto &entry : counts)
+            {
+                if (entry.irrep.empty() || entry.count < 0)
+                    continue;
+                result[entry.irrep] += entry.count;
+            }
+            return result;
+        }
+
+        std::vector<int> energy_sorted_indices(
+            const Eigen::VectorXd &mo_energies,
+            int begin,
+            int end)
+        {
+            std::vector<int> order;
+            order.reserve(static_cast<std::size_t>(std::max(0, end - begin)));
+            for (int i = begin; i < end; ++i)
+                order.push_back(i);
+            std::sort(order.begin(), order.end(), [&](int a, int b)
+            {
+                const double ea = mo_energies(a);
+                const double eb = mo_energies(b);
+                if (ea != eb)
+                    return ea < eb;
+                return a < b;
+            });
+            return order;
+        }
+
+        std::unordered_map<std::string, std::vector<int>> group_indices_by_irrep(
+            const Eigen::VectorXd &mo_energies,
+            const std::vector<std::string> &mo_symmetry)
+        {
+            std::unordered_map<std::string, std::vector<int>> grouped;
+            const std::vector<int> order = energy_sorted_indices(mo_energies, 0, static_cast<int>(mo_energies.size()));
+            for (int idx : order)
+                grouped[mo_symmetry[static_cast<std::size_t>(idx)]].push_back(idx);
+            return grouped;
+        }
+
+        std::vector<int> take_first_unmasked(
+            const std::vector<int> &order,
+            const std::vector<bool> &mask,
+            int count)
+        {
+            std::vector<int> result;
+            result.reserve(static_cast<std::size_t>(std::max(0, count)));
+            for (int idx : order)
+            {
+                if (!mask[static_cast<std::size_t>(idx)])
+                    continue;
+                result.push_back(idx);
+                if (static_cast<int>(result.size()) == count)
+                    break;
+            }
+            return result;
+        }
+
+        std::unordered_map<std::string, int> count_labels(
+            const std::vector<int> &indices,
+            const std::vector<std::string> &mo_symmetry)
+        {
+            std::unordered_map<std::string, int> counts;
+            for (int idx : indices)
+                ++counts[mo_symmetry[static_cast<std::size_t>(idx)]];
+            return counts;
+        }
+
+        std::string format_irrep_count_map(const std::unordered_map<std::string, int> &counts)
+        {
+            std::vector<std::pair<std::string, int>> items(counts.begin(), counts.end());
+            std::sort(items.begin(), items.end(), [](const auto &lhs, const auto &rhs)
+            {
+                return lhs.first < rhs.first;
+            });
+
+            std::string out;
+            for (const auto &[label, count] : items)
+            {
+                if (!out.empty())
+                    out += " ";
+                out += std::format("{}={}", label, count);
+            }
+            return out.empty() ? std::string("none") : out;
+        }
+
+        std::vector<int> contiguous_range(int begin, int count)
+        {
+            std::vector<int> indices;
+            indices.reserve(static_cast<std::size_t>(std::max(0, count)));
+            for (int i = 0; i < count; ++i)
+                indices.push_back(begin + i);
+            return indices;
+        }
+
+        std::expected<ActiveOrbitalSelection, std::string> make_identity_selection(
+            int nbasis,
+            int n_core,
+            int n_act)
+        {
+            if (n_core < 0 || n_act < 0 || n_core + n_act > nbasis)
+                return std::unexpected(std::string("invalid active-space dimensions for orbital permutation"));
+
+            ActiveOrbitalSelection selection;
+            selection.permutation.resize(static_cast<std::size_t>(nbasis));
+            std::iota(selection.permutation.begin(), selection.permutation.end(), 0);
+            selection.active_orbitals.resize(static_cast<std::size_t>(n_act));
+            for (int i = 0; i < n_act; ++i)
+                selection.active_orbitals[static_cast<std::size_t>(i)] = n_core + i;
+            return selection;
+        }
+    } // namespace
 
     int count_occupied_below(CIString det, int orb)
     {
@@ -90,6 +239,201 @@ namespace HartreeFock::Correlation::CASSCF
                     break;
                 }
         return idx;
+    }
+
+    std::expected<ActiveOrbitalSelection, std::string> select_active_orbitals(
+        const Eigen::VectorXd &mo_energies,
+        const std::vector<std::string> &mo_symmetry,
+        int n_core,
+        int n_act,
+        const std::vector<HartreeFock::IrrepCount> &core_irrep_counts,
+        const std::vector<HartreeFock::IrrepCount> &active_irrep_counts,
+        const std::vector<int> &mo_permutation)
+    {
+        const int nbasis = static_cast<int>(mo_energies.size());
+        if (nbasis == 0)
+            return std::unexpected(std::string("empty MO energy vector"));
+        if (n_core < 0 || n_act < 0 || n_core + n_act > nbasis)
+            return std::unexpected(std::string("invalid active-space dimensions for orbital permutation"));
+
+        if (!mo_permutation.empty())
+        {
+            auto normalized = normalize_permutation(mo_permutation, nbasis);
+            if (!normalized)
+                return std::unexpected(std::string("mo_permutation must be a full permutation of the MO basis"));
+
+            ActiveOrbitalSelection selection;
+            selection.permutation = std::move(*normalized);
+            selection.active_orbitals.reserve(static_cast<std::size_t>(n_act));
+            for (int i = 0; i < n_act; ++i)
+                selection.active_orbitals.push_back(selection.permutation[static_cast<std::size_t>(n_core + i)]);
+            selection.used_symmetry =
+                (!core_irrep_counts.empty() || !active_irrep_counts.empty()) && !mo_symmetry.empty();
+            return selection;
+        }
+
+        if (static_cast<int>(mo_symmetry.size()) != nbasis)
+        {
+            if (core_irrep_counts.empty() && active_irrep_counts.empty())
+                return make_identity_selection(nbasis, n_core, n_act);
+            return std::unexpected(std::string("symmetry labels are required for irrep-based active-space selection"));
+        }
+
+        auto core_required = combine_irrep_counts(core_irrep_counts);
+        auto active_required = combine_irrep_counts(active_irrep_counts);
+        const bool inferred_from_current_order =
+            core_irrep_counts.empty() && active_irrep_counts.empty();
+
+        const std::vector<int> full_order = energy_sorted_indices(mo_energies, 0, nbasis);
+        const auto irrep_indices = group_indices_by_irrep(mo_energies, mo_symmetry);
+
+        if (inferred_from_current_order)
+        {
+            core_required = count_labels(contiguous_range(0, n_core), mo_symmetry);
+            active_required = count_labels(contiguous_range(n_core, n_act), mo_symmetry);
+        }
+
+        const int core_requested =
+            std::accumulate(core_required.begin(), core_required.end(), 0,
+                            [](int sum, const auto &item)
+                            { return sum + item.second; });
+        const int active_requested =
+            std::accumulate(active_required.begin(), active_required.end(), 0,
+                            [](int sum, const auto &item)
+                            { return sum + item.second; });
+        if (core_requested > n_core)
+            return std::unexpected(std::string("core_irrep_counts exceed n_core"));
+        if (active_requested > n_act)
+            return std::unexpected(std::string("active_irrep_counts exceed n_act"));
+
+        if (!inferred_from_current_order && core_required.empty())
+            core_required = count_labels(
+                energy_sorted_indices(mo_energies, 0, n_core), mo_symmetry);
+        else if (!inferred_from_current_order && core_requested < n_core)
+        {
+            std::vector<bool> mask(static_cast<std::size_t>(nbasis), true);
+            for (const auto &[irrep, _] : core_required)
+                for (int idx : irrep_indices.contains(irrep) ? irrep_indices.at(irrep) : std::vector<int>{})
+                    mask[static_cast<std::size_t>(idx)] = false;
+
+            const std::vector<int> rest = take_first_unmasked(full_order, mask, n_core - core_requested);
+            if (static_cast<int>(rest.size()) != n_core - core_requested)
+                return std::unexpected(std::string("unable to satisfy core_irrep_counts with the occupied orbitals"));
+            const auto rest_counts = count_labels(rest, mo_symmetry);
+            for (const auto &[irrep, count] : rest_counts)
+                core_required[irrep] += count;
+        }
+
+        if (active_requested < n_act)
+        {
+            std::vector<bool> mask(static_cast<std::size_t>(nbasis), true);
+            for (const auto &[irrep, _] : active_required)
+                for (int idx : irrep_indices.contains(irrep) ? irrep_indices.at(irrep) : std::vector<int>{})
+                    mask[static_cast<std::size_t>(idx)] = false;
+
+            for (const auto &[irrep, core_count] : core_required)
+            {
+                const auto it = irrep_indices.find(irrep);
+                if (it == irrep_indices.end() || static_cast<int>(it->second.size()) < core_count)
+                    return std::unexpected(std::string("unable to satisfy core_irrep_counts with the occupied orbitals"));
+                for (int k = 0; k < core_count; ++k)
+                    mask[static_cast<std::size_t>(it->second[static_cast<std::size_t>(k)])] = false;
+            }
+
+            const std::vector<int> rest = take_first_unmasked(full_order, mask, n_act - active_requested);
+            if (static_cast<int>(rest.size()) != n_act - active_requested)
+                return std::unexpected(std::string("unable to satisfy active_irrep_counts with the available MO symmetry labels"));
+            const auto rest_counts = count_labels(rest, mo_symmetry);
+            for (const auto &[irrep, count] : rest_counts)
+                active_required[irrep] += count;
+        }
+
+        std::vector<int> selected_core;
+        std::vector<int> selected_active;
+        std::vector<bool> used(static_cast<std::size_t>(nbasis), false);
+        selected_core.reserve(static_cast<std::size_t>(n_core));
+        selected_active.reserve(static_cast<std::size_t>(n_act));
+
+        for (const auto &[irrep, core_count] : core_required)
+        {
+            if (core_count == 0)
+                continue;
+            const auto it = irrep_indices.find(irrep);
+            if (it == irrep_indices.end() || static_cast<int>(it->second.size()) < core_count)
+                return std::unexpected(std::string("unable to satisfy core_irrep_counts with the occupied orbitals"));
+            for (int k = 0; k < core_count; ++k)
+            {
+                const int idx = it->second[static_cast<std::size_t>(k)];
+                used[static_cast<std::size_t>(idx)] = true;
+                selected_core.push_back(idx);
+            }
+        }
+
+        for (const auto &[irrep, active_count] : active_required)
+        {
+            if (active_count == 0)
+                continue;
+            const int core_count = core_required.contains(irrep) ? core_required[irrep] : 0;
+            const auto it = irrep_indices.find(irrep);
+            if (it == irrep_indices.end() || static_cast<int>(it->second.size()) < core_count + active_count)
+                return std::unexpected(std::string("unable to satisfy active_irrep_counts with the available MO symmetry labels"));
+            for (int k = 0; k < active_count; ++k)
+            {
+                const int idx = it->second[static_cast<std::size_t>(core_count + k)];
+                if (used[static_cast<std::size_t>(idx)])
+                    return std::unexpected(std::string("core_irrep_counts and active_irrep_counts overlap"));
+                used[static_cast<std::size_t>(idx)] = true;
+                selected_active.push_back(idx);
+            }
+        }
+
+        if (static_cast<int>(selected_core.size()) != n_core)
+            return std::unexpected(std::format(
+                "unable to assemble a full core block from the requested symmetry counts (picked {} of {}, core counts: {}).",
+                static_cast<int>(selected_core.size()), n_core, format_irrep_count_map(core_required)));
+        if (static_cast<int>(selected_active.size()) != n_act)
+            return std::unexpected(std::format(
+                "unable to assemble a full active block from the requested symmetry counts (picked {} of {}, core counts: {}, active counts: {}).",
+                static_cast<int>(selected_active.size()), n_act,
+                format_irrep_count_map(core_required),
+                format_irrep_count_map(active_required)));
+
+        std::sort(selected_core.begin(), selected_core.end());
+        std::sort(selected_active.begin(), selected_active.end());
+
+        ActiveOrbitalSelection selection;
+        selection.permutation.reserve(static_cast<std::size_t>(nbasis));
+        selection.permutation.insert(selection.permutation.end(), selected_core.begin(), selected_core.end());
+        selection.permutation.insert(selection.permutation.end(), selected_active.begin(), selected_active.end());
+        for (int idx = 0; idx < nbasis; ++idx)
+        {
+            if (used[static_cast<std::size_t>(idx)])
+                continue;
+            selection.permutation.push_back(idx);
+        }
+        selection.active_orbitals = std::move(selected_active);
+        selection.used_symmetry = true;
+        return selection;
+    }
+
+    Eigen::MatrixXd reorder_mo_coefficients(
+        const Eigen::MatrixXd &mo_coefficients,
+        const std::vector<int> &permutation)
+    {
+        if (mo_coefficients.cols() == 0 || permutation.empty())
+            return mo_coefficients;
+        if (static_cast<int>(permutation.size()) != mo_coefficients.cols())
+            throw std::invalid_argument("MO permutation size does not match the coefficient matrix");
+
+        Eigen::MatrixXd reordered(mo_coefficients.rows(), mo_coefficients.cols());
+        for (int i = 0; i < static_cast<int>(permutation.size()); ++i)
+        {
+            const int src = permutation[static_cast<std::size_t>(i)];
+            if (src < 0 || src >= mo_coefficients.cols())
+                throw std::invalid_argument("MO permutation contains an out-of-range index");
+            reordered.col(i) = mo_coefficients.col(src);
+        }
+        return reordered;
     }
 
     std::optional<SymmetryContext> build_symmetry_context(HartreeFock::Calculator &calc)

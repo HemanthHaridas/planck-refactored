@@ -4,13 +4,13 @@ Matches Planck input: tests/inputs/casscf_tests/water_cas44_631g.hfinp
 
 Geometry: C2v water (Planck input geometry, Angstrom)
 Active space: CAS(4e, 4o)
-Planck reference energy: -75.5497490402 Eh
+Planck reference energy: -75.9998609785 Eh
 """
 
 from pyscf import gto, scf, mcscf
 
 CASE = "water_cas44_631g"
-PLANCK_ENERGY = -75.5497490402
+PLANCK_ENERGY = -75.9998609785
 TOLERANCE = 1e-5
 
 mol = gto.Mole()

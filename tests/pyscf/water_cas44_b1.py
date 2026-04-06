@@ -1,16 +1,21 @@
 """
-PySCF reference: H2O CAS(4,4)/STO-3G
-Matches Planck input: tests/inputs/casscf_tests/water_cas44_sto3g.hfinp
+PySCF reference: H2O CAS(4,4)/STO-3G targeting B1 symmetry
+Matches Planck input: tests/inputs/casscf_tests/water_cas44_b1.hfinp
 
 Geometry: C2v water (Planck input geometry, Angstrom)
-Active space: CAS(4e, 4o) — two lone pairs + two OH bonding/antibonding MOs
-Planck reference energy: -74.9760171760 Eh
+Active space: CAS(4e, 4o)
+Target irrep: B1 (lowest B1 state, an excited state of water)
+Planck reference energy: -74.5856163677 Eh
+
+Note: The B1 target gives a CASSCF energy above the RHF energy because
+the ground state of water has A1 symmetry; this constrains the CI
+wavefunction to the B1 sector.
 """
 
 from pyscf import gto, scf, mcscf
 
-CASE = "water_cas44_sto3g"
-PLANCK_ENERGY = -74.9760171760
+CASE = "water_cas44_b1"
+PLANCK_ENERGY = -74.5856163677
 TOLERANCE = 1e-5
 
 mol = gto.Mole()
@@ -22,7 +27,8 @@ H   0.000000  -0.757005  -0.468704
 mol.basis = "sto-3g"
 mol.charge = 0
 mol.spin = 0
-mol.cart = True  # match Planck 'basis_type cartesian'
+mol.cart = True   # match Planck 'basis_type cartesian'
+mol.symmetry = True  # C2v — needed to target B1 irrep
 mol.verbose = 0
 mol.build()
 
@@ -31,6 +37,7 @@ mf.conv_tol = 1e-12
 mf.kernel()
 
 mc = mcscf.CASSCF(mf, 4, 4)
+mc.fcisolver.wfnsym = "B1"
 mc.conv_tol = 1e-9
 mc.conv_tol_grad = 1e-6
 mc.kernel()

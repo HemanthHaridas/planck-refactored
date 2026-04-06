@@ -28,22 +28,26 @@ ALL_CASES = [
     "water_cas44_sto3g",
     "water_cas44_631g",
     "water_cas44_ccpvdz",
+    "water_cas44_b1",
     "ethylene_casscf_321g",
+    "ethylene_casscf_321g_nroot2",
     "ethylene_casscf_ccpvdz",
     "water_cas44_sto3g_sa2",
     "ethylene_cas44_sto3g_sa2",
 ]
 
 PLANCK_ENERGIES: dict[str, float] = {
-    "h2_cas22_sto3g":           -1.1372838351,
-    "lih_cas22_sto3g":          -7.8811184797,
-    "water_cas44_sto3g":       -74.4700757755,
-    "water_cas44_631g":        -75.5497490402,
-    "water_cas44_ccpvdz":      -75.6045806122,
-    "ethylene_casscf_321g":    -77.5145223872,
-    "ethylene_casscf_ccpvdz":  -77.9524855976,
-    "water_cas44_sto3g_sa2":   -74.7751279351,
-    "ethylene_cas44_sto3g_sa2":-77.0034974301,
+    "h2_cas22_sto3g": -1.1372838351,
+    "lih_cas22_sto3g": -7.8811184797,
+    "water_cas44_sto3g": -74.9760171760,
+    "water_cas44_631g": -75.9998609785,
+    "water_cas44_ccpvdz": -76.0440109052,
+    "water_cas44_b1": -74.5856163677,
+    "ethylene_casscf_321g": -77.5145223872,
+    "ethylene_casscf_321g_nroot2": -77.5145223872,
+    "ethylene_casscf_ccpvdz": -77.9524855977,
+    "water_cas44_sto3g_sa2": -74.7751377977,
+    "ethylene_cas44_sto3g_sa2": -77.0034974301,
 }
 
 SA_CASES = {"water_cas44_sto3g_sa2", "ethylene_cas44_sto3g_sa2"}

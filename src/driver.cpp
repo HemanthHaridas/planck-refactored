@@ -612,7 +612,9 @@ int main(int argc, const char *argv[])
                     calculator._total_energy,
                     calculator._cas_nat_occ,
                     calculator._active_space.nroots,
-                    calculator._active_space.nactorb);
+                    calculator._active_space.nactorb,
+                    calculator._cas_root_energies,
+                    calculator._active_space.weights);
             }
             else
             {

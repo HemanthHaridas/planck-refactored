@@ -5,7 +5,7 @@ Matches Planck input: tests/inputs/casscf_tests/water_cas44_sto3g_sa2.hfinp
 Geometry: C2v water (Planck input geometry, Angstrom)
 Active space: CAS(4e, 4o)
 Roots: 2, weights: [0.5, 0.5]
-Planck SA-weighted energy: -74.7751279351 Eh
+Planck SA-weighted energy: -74.7751377977 Eh
 
 The SA-weighted energy is E_SA = 0.5*E_0 + 0.5*E_1.
 Planck prints and converges to this quantity.
@@ -14,7 +14,7 @@ Planck prints and converges to this quantity.
 from pyscf import gto, scf, mcscf
 
 CASE = "water_cas44_sto3g_sa2"
-PLANCK_SA_ENERGY = -74.7751279351
+PLANCK_SA_ENERGY = -74.7751377977
 TOLERANCE = 1e-5
 
 mol = gto.Mole()

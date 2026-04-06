@@ -9,14 +9,12 @@ nearly degenerate — a root-tracking stress test.
 
 Active space: CAS(4e, 4o)
 Roots: 2, weights: [0.5, 0.5]
+Planck RHF energy:        -76.8522465545 Eh  (hcore guess, from .log)
 Planck SA-weighted energy: -77.0034974301 Eh
 
-Note on orbital selection: at the 90-degree twisted geometry the pi system is
-broken. PySCF selects ncas active orbitals centered on the HOMO/LUMO gap. For
-CAS(4,4) this should include the two C 2p orbitals that become degenerate at 90
-degrees plus the adjacent sigma/sigma* pair. If PySCF converges to a different
-local minimum or picks different orbitals, use sort_mo to specify the correct
-active space before calling kernel.
+Uses init_guess='hcore' to match Planck's SCF starting point. PySCF with the
+default SAD guess converges to a different RHF (-76.7930 Eh), which leads to
+a different SA-CASSCF local minimum (-76.9931 Eh vs Planck's -77.0035 Eh).
 """
 
 from pyscf import gto, scf, mcscf

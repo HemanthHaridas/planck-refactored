@@ -31,6 +31,8 @@ namespace
     using HartreeFock::Correlation::CASSCF::StateAveragedCoupledRoot;
     using HartreeFock::Correlation::CASSCF::hess_diag;
     using HartreeFock::Correlation::CASSCF::quadratic_model_delta;
+    using HartreeFock::Correlation::CASSCF::reorder_mo_coefficients;
+    using HartreeFock::Correlation::CASSCF::select_active_orbitals;
     using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     using HartreeFock::Correlation::CASSCFInternal::CIResponseResult;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
@@ -104,7 +106,8 @@ namespace
         double max_response_residual = 0.0;
         int max_response_iterations = 0;
         double max_response_regularization = 0.0;
-        bool response_fallback_used = false;
+        bool ci_response_fallback_used = false;
+        bool sa_coupled_step_inexact = false;
         bool numeric_newton_attempted = false;
         bool numeric_newton_failed = false;
         bool step_accepted = false;
@@ -544,11 +547,17 @@ namespace HartreeFock::Correlation::CASSCF
         // can assume a convex combination.
         weights /= weights.sum();
 
+        Eigen::MatrixXd C = (calc._cas_mo_coefficients.rows() == nbasis &&
+                             calc._cas_mo_coefficients.cols() == nbasis)
+                                ? calc._cas_mo_coefficients
+                                : calc._info._scf.alpha.mo_coefficients;
+        if (C.rows() != nbasis || C.cols() != nbasis)
+            return std::unexpected(tag + ": MO coefficient matrix has wrong size.");
+
         const bool have_sym = !calc._sao_irrep_names.empty() && static_cast<int>(calc._sao_irrep_names.size()) <= 8;
         const bool point_group_is_abelian_for_labels =
             point_group_has_only_1d_irreps(calc._molecule._point_group);
         std::optional<SymmetryContext> sym_ctx;
-        std::vector<int> irr_act;
         std::vector<int> all_mo_irr;
         if (have_sym && point_group_is_abelian_for_labels && !calc._info._scf.alpha.mo_symmetry.empty())
         {
@@ -559,11 +568,61 @@ namespace HartreeFock::Correlation::CASSCF
             all_mo_irr = map_mo_irreps(calc._info._scf.alpha.mo_symmetry, sym_ctx->names);
             if (std::find(all_mo_irr.begin(), all_mo_irr.end(), -1) != all_mo_irr.end())
                 return std::unexpected(tag + ": encountered an MO irrep label missing from the Abelian product table.");
+        }
 
+        std::vector<int> irr_act;
+        const bool have_symmetry_selection =
+            !as.core_irrep_counts.empty() ||
+            !as.active_irrep_counts.empty() ||
+            !as.mo_permutation.empty();
+        const Eigen::VectorXd &mo_energies = calc._info._scf.alpha.mo_energies;
+        const std::vector<std::string> &mo_symmetry = calc._info._scf.alpha.mo_symmetry;
+        const bool have_explicit_casscf_guess = calc._cas_mo_coefficients.rows() == nbasis &&
+                                                calc._cas_mo_coefficients.cols() == nbasis;
+        const bool allow_automatic_symmetry_selection =
+            !have_explicit_casscf_guess &&
+            (!mo_symmetry.empty() || have_symmetry_selection);
+        if (allow_automatic_symmetry_selection)
+        {
+            auto selection = select_active_orbitals(
+                mo_energies,
+                mo_symmetry,
+                n_core,
+                n_act,
+                as.core_irrep_counts,
+                as.active_irrep_counts,
+                as.mo_permutation);
+            if (!selection)
+                return std::unexpected(std::format("{}: {}", tag, selection.error()));
+
+            bool permutation_changed = false;
+            for (int i = 0; i < static_cast<int>(selection->permutation.size()); ++i)
+                if (selection->permutation[static_cast<std::size_t>(i)] != i)
+                {
+                    permutation_changed = true;
+                    break;
+                }
+
+            C = reorder_mo_coefficients(C, selection->permutation);
+            if (!all_mo_irr.empty())
+            {
+                std::vector<int> permuted_irr(all_mo_irr.size());
+                for (int i = 0; i < static_cast<int>(selection->permutation.size()); ++i)
+                    permuted_irr[static_cast<std::size_t>(i)] = all_mo_irr[static_cast<std::size_t>(selection->permutation[static_cast<std::size_t>(i)])];
+                all_mo_irr = std::move(permuted_irr);
+            }
+            if (selection->used_symmetry && permutation_changed)
+                logging(LogLevel::Info, tag + " :",
+                        "Applied automatic symmetry-aware MO permutation to make the selected active block contiguous.");
+        }
+
+        if (!all_mo_irr.empty())
+        {
             irr_act.resize(n_act);
             for (int t = 0; t < n_act; ++t)
                 irr_act[t] = (n_core + t < static_cast<int>(all_mo_irr.size())) ? all_mo_irr[n_core + t] : -1;
         }
+
         const bool use_sym = sym_ctx.has_value() && !irr_act.empty();
         const auto target_irr_opt = use_sym
                                         ? resolve_target_irrep(as.target_irrep, *sym_ctx)
@@ -572,13 +631,6 @@ namespace HartreeFock::Correlation::CASSCF
             return std::unexpected(std::format("{}: target_irrep '{}' is not present in the Abelian symmetry metadata.",
                                                tag, as.target_irrep));
         const int target_irr = *target_irr_opt;
-
-        Eigen::MatrixXd C = (calc._cas_mo_coefficients.rows() == nbasis &&
-                             calc._cas_mo_coefficients.cols() == nbasis)
-                                ? calc._cas_mo_coefficients
-                                : calc._info._scf.alpha.mo_coefficients;
-        if (C.rows() != nbasis || C.cols() != nbasis)
-            return std::unexpected(tag + ": MO coefficient matrix has wrong size.");
 
         std::vector<double> eri_local;
         const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
@@ -1026,7 +1078,7 @@ namespace HartreeFock::Correlation::CASSCF
                     1e-4);
 
             if (!sa_coupled_result.converged)
-                diag.response_fallback_used = true;
+                diag.sa_coupled_step_inexact = true;
             diag.max_response_residual =
                 std::max(diag.max_response_residual, sa_coupled_result.max_ci_residual_norm);
             diag.max_response_iterations =
@@ -1068,7 +1120,7 @@ namespace HartreeFock::Correlation::CASSCF
                             n_act,
                             n_virt);
                     if (!blocks.ci_response.converged)
-                        diag.response_fallback_used = true;
+                        diag.ci_response_fallback_used = true;
 
                     root.response_rhs = blocks.ci_rhs;
                     root.c1_response = blocks.ci_response.c1;
@@ -1320,7 +1372,7 @@ namespace HartreeFock::Correlation::CASSCF
                         diag.max_response_residual,
                         diag.max_response_iterations,
                         level_shift));
-            if (diag.response_fallback_used)
+            if (diag.ci_response_fallback_used)
                 logging(LogLevel::Warning, tag + " :",
                         "CI response Davidson solve did not fully converge for at least one root; using single-step fallback.");
 
@@ -1358,6 +1410,13 @@ namespace HartreeFock::Correlation::CASSCF
         calc._cas_nat_occ = natural_orbitals.occupations;
         calc._cas_mo_coefficients = C;
         calc._total_energy = fst.E_cas;
+
+        if (nroots > 1)
+        {
+            calc._cas_root_energies.resize(nroots);
+            for (int r = 0; r < nroots; ++r)
+                calc._cas_root_energies(r) = fst.roots[r].ci_energy;
+        }
 
         return {};
     }

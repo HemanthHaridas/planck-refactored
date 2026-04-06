@@ -59,7 +59,7 @@ namespace HartreeFock
                 (level == Info || level == Error) ? std::cout : std::cerr;
 
             const char *prefix = (level == Info)    ? "[INF] "
-                                 : (level == Warning) ? "[WARN] "
+                                 : (level == Warning) ? "[WRN] "
                                                       : "[ERR] ";
 
             out_stream << prefix << std::setw(30) << std::left << label;
@@ -408,7 +408,9 @@ namespace HartreeFock
 
         inline void casscf_summary(double E_rhf, double E_cas,
                                    const Eigen::VectorXd &nat_occ,
-                                   int nroots, int nactorb)
+                                   int nroots, int nactorb,
+                                   const Eigen::VectorXd &root_energies = {},
+                                   const std::vector<double> &weights = {})
         {
             if (is_silenced())
                 return;
@@ -440,8 +442,19 @@ namespace HartreeFock
                       << "\n"
                       << std::string(LW + VW * 3, '-') << "\n";
 
-            if (nroots > 1)
-                std::cout << "  (State-averaged over " << nroots << " roots)\n";
+            if (root_energies.size() > 1)
+            {
+                std::cout << "  State-averaged over " << nroots << " roots :\n";
+                for (int r = 0; r < static_cast<int>(root_energies.size()); ++r)
+                {
+                    const double w = (r < static_cast<int>(weights.size()))
+                                         ? weights[r]
+                                         : 1.0 / nroots;
+                    std::cout << std::format("    Root {:3d}   {:>20.10f} Eh   (weight {:.3f})\n",
+                                             r, root_energies(r), w);
+                }
+                std::cout << std::string(LW + VW * 3, '-') << "\n";
+            }
         }
     } // namespace Logger
 } // namespace HartreeFock
