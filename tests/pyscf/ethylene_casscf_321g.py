@@ -6,18 +6,11 @@ Geometry: planar ethylene (Planck input geometry, Angstrom)
 Active space: CAS(2e, 2o) — pi, pi* (HOMO, LUMO)
 Planck reference energy: -77.5145223872 Eh
 
-Planck preserves the D2d RHF symmetry for this case, while symmetry-free
-PySCF collapses to a lower-symmetry RHF stationary point. This script reports
-the symmetry-enabled PySCF RHF energy directly, but keeps the historical
-symmetry-free CASSCF path because it already matches the checked-in Planck
-CAS(2,2) benchmark.
-
-PySCF selects active orbitals as the ncas orbitals centered on the HOMO/LUMO
-gap by default. For planar ethylene with nactele=2, nactorb=2, this naturally
-selects the pi and pi* orbitals. If PySCF picks different orbitals and the
-energy is wrong, sort_mo can be used to fix the selection:
-    mo = mc.sort_mo([homo_idx, lumo_idx])
-    mc.kernel(mo)
+Symmetry is enabled for RHF to match Planck's D2h-aware HF reference.
+CASSCF runs without symmetry because PySCF's default active-orbital
+selection changes under symmetry for this system (D2h pi/pi* irreps
+cause a different orbital pairing than the symmetry-free HOMO/LUMO gap
+selection that matches Planck's CAS(2,2) benchmark).
 """
 
 from pyscf import gto, scf, mcscf
@@ -49,20 +42,20 @@ def build_molecule(*, symmetry: bool) -> gto.Mole:
     return mol
 
 
-rhf_mol = build_molecule(symmetry=True)
-rhf = scf.RHF(rhf_mol)
-rhf.init_guess = "hcore"
-rhf.conv_tol = 1e-12
-rhf.max_cycle = 200
-rhf.kernel()
-
-casscf_mol = build_molecule(symmetry=False)
-mf = scf.RHF(casscf_mol)
+mf = scf.RHF(build_molecule(symmetry=True))
+mf.init_guess = "hcore"
 mf.conv_tol = 1e-12
 mf.max_cycle = 200
 mf.kernel()
 
-mc = mcscf.CASSCF(mf, 2, 2)
+casscf_mol = build_molecule(symmetry=False)
+mf_nosym = scf.RHF(casscf_mol)
+mf_nosym.conv_tol = 1e-12
+mf_nosym.max_cycle = 200
+mf_nosym.kernel()
+
+mc = mcscf.CASSCF(mf_nosym, 2, 2)
+mc = mc.newton()
 mc.conv_tol = 1e-9
 mc.conv_tol_grad = 1e-6
 mc.kernel()
@@ -72,7 +65,7 @@ delta = abs(e_casscf - PLANCK_ENERGY)
 status = "PASS" if delta < TOLERANCE else "FAIL"
 
 print(f"CASE: {CASE}")
-print(f"HF_ENERGY:     {rhf.e_tot:.10f} Eh")
+print(f"HF_ENERGY:     {mf.e_tot:.10f} Eh")
 print(f"CASSCF_ENERGY: {e_casscf:.10f} Eh")
 print(f"PLANCK_ENERGY: {PLANCK_ENERGY:.10f} Eh")
 print(f"DELTA:         {delta:.2e} Eh")

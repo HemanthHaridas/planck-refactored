@@ -37,6 +37,7 @@ mf.conv_tol = 1e-12
 mf.kernel()
 
 mc = mcscf.CASSCF(mf, 4, 4)
+mc = mc.newton()
 mc.fcisolver.wfnsym = "B1"
 mc.conv_tol = 1e-9
 mc.conv_tol_grad = 1e-6

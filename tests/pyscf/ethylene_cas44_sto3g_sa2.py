@@ -1,6 +1,7 @@
 """
 PySCF reference: twisted ethylene SA-CASSCF(4,4)/STO-3G, 2 roots equal weights
-Matches Planck input: tests/inputs/casscf_tests/ethylene_cas44_sto3g_sa2.hfinp
+Matches Planck input:
+tests/inputs/casscf_tests/ethylene_cas44_sto3g_sa2.hfinp
 
 Geometry: 90-degree twisted ethylene (Planck input geometry, Angstrom).
 One CH2 group lies in the XZ plane; the other lies in the YZ plane.
@@ -12,11 +13,12 @@ Roots: 2, weights: [0.5, 0.5]
 Planck RHF energy:        -76.8522465545 Eh  (symmetry-enabled RHF, from .log)
 Planck SA-weighted energy: -77.0034974301 Eh
 
-This script reports the symmetry-enabled PySCF RHF energy directly so the HF
-reference matches Planck. The SA-CASSCF benchmark remains on the historical
-symmetry-free path, where PySCF converges to a different RHF stationary point
-(-76.7930 Eh) and then to a different SA-CASSCF local minimum
-(-76.9931 Eh vs Planck's -77.0035 Eh).
+The D2-symmetry RHF MOs are used as the initial orbital guess for the SA-CASSCF
+to match Planck's starting point. The FCI solver runs without symmetry constraints
+(mol.symmetry = False for CASSCF) so that both SA roots can mix freely across D2
+irreps — necessary because the two near-degenerate states at 90° twist have
+different spatial symmetries and constraining to any single D2 irrep causes the
+SA optimizer to produce a badly non-degenerate root pair (~0.22 Eh apart).
 """
 
 from pyscf import gto, scf, mcscf
@@ -48,24 +50,25 @@ def build_molecule(*, symmetry: bool) -> gto.Mole:
     return mol
 
 
-rhf_mol = build_molecule(symmetry=True)
-rhf = scf.RHF(rhf_mol)
-rhf.conv_tol = 1e-12
-rhf.max_cycle = 200
-rhf.kernel()
+# D2-symmetry RHF — matches Planck's starting point; MOs used as init guess
+mf_sym = scf.RHF(build_molecule(symmetry=True))
+mf_sym.conv_tol = 1e-12
+mf_sym.max_cycle = 200
+mf_sym.kernel()
 
-casscf_mol = build_molecule(symmetry=False)
-mf = scf.RHF(casscf_mol)
-mf.conv_tol = 1e-12
-mf.max_cycle = 200
-mf.kernel()
+# SA-CASSCF: symmetry-free mol so all D2 irreps can mix freely across both roots
+mf_c1 = scf.RHF(build_molecule(symmetry=False))
+mf_c1.conv_tol = 1e-12
+mf_c1.max_cycle = 200
+mf_c1.kernel()
 
 weights = [0.5, 0.5]
-mc = mcscf.CASSCF(mf, 4, 4)
+mc = mcscf.CASSCF(mf_c1, 4, 4)
 mc = mc.state_average_(weights)
+mc = mc.newton()
 mc.conv_tol = 1e-9
 mc.conv_tol_grad = 1e-6
-mc.kernel()
+mc.kernel(mf_sym.mo_coeff)  # seed from D2 RHF to match Planck's orbital basin
 
 e_states = mc.e_states
 e_sa = sum(w * e for w, e in zip(weights, e_states))
@@ -73,7 +76,7 @@ delta = abs(e_sa - PLANCK_SA_ENERGY)
 status = "PASS" if delta < TOLERANCE else "FAIL"
 
 print(f"CASE: {CASE}")
-print(f"HF_ENERGY:       {rhf.e_tot:.10f} Eh")
+print(f"HF_ENERGY:       {mf_sym.e_tot:.10f} Eh")
 print(f"ROOT_0_ENERGY:   {e_states[0]:.10f} Eh")
 print(f"ROOT_1_ENERGY:   {e_states[1]:.10f} Eh")
 print(f"SA_ENERGY:       {e_sa:.10f} Eh")
