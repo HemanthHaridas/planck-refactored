@@ -30,6 +30,21 @@ namespace HartreeFock::Correlation::CASSCF
         Eigen::VectorXd ci_step;
     };
 
+    // Matrix-free OO Hessian actions need the fixed-CI orbital-gradient model:
+    // current MO coefficients, AO overlap, one-/two-electron integrals, and the
+    // state-specific (or state-averaged) active-space densities held fixed while
+    // differentiating the orbital gradient.
+    struct OrbitalHessianContext
+    {
+        const Eigen::MatrixXd *C = nullptr;
+        const Eigen::MatrixXd *S = nullptr;
+        const Eigen::MatrixXd *H_core = nullptr;
+        const std::vector<double> *eri = nullptr;
+        const Eigen::MatrixXd *gamma = nullptr;
+        const std::vector<double> *Gamma_vec = nullptr;
+        double fd_step = 5e-4;
+    };
+
     // Cache the active-space integral transform and reuse it across all response
     // contractions in a macroiteration.
     ActiveIntegralCache build_active_integral_cache(
@@ -86,6 +101,21 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<int> &mo_irreps,
         bool use_sym);
 
+    // Rebuild the fixed-CI orbital gradient at a given MO basis, keeping the
+    // supplied active 1-/2-RDMs frozen while recomputing the MO-basis integral
+    // intermediates.
+    Eigen::MatrixXd fixed_ci_orbital_gradient(
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &H_core,
+        const std::vector<double> &eri,
+        const Eigen::MatrixXd &gamma,
+        const std::vector<double> &Gamma_vec,
+        int n_core,
+        int n_act,
+        int n_virt,
+        const std::vector<int> &mo_irreps,
+        bool use_sym);
+
     // Feed the first-order CI response back into the orbital stationarity
     // equations. Only inactive/active and active/virtual blocks survive; within
     // a subspace the rotation remains gauge redundant.
@@ -108,6 +138,20 @@ namespace HartreeFock::Correlation::CASSCF
         int n_core,
         int n_act,
         int n_virt);
+
+    // Matrix-free fixed-CI orbital Hessian-vector product obtained by finite
+    // differencing the true orbital gradient under a small orbital rotation.
+    // Falls back to the diagonal model if the context is incomplete.
+    Eigen::MatrixXd matrix_free_hessian_action(
+        const Eigen::MatrixXd &R,
+        const OrbitalHessianContext *context,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt,
+        const std::vector<int> &mo_irreps,
+        bool use_sym);
 
     // Update the orbital gradient with the first-order response of the diagonal
     // Hessian model to the current rotation step.

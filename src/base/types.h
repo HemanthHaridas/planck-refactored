@@ -262,6 +262,7 @@ namespace HartreeFock
     enum class SCFGuess
     {
         HCore,       // Diagonalize core Hamiltonian (default)
+        SAD,         // Superposition of Atomic Densities
         ReadDensity, // Load only the density matrix from checkpoint (geometry from input)
         ReadFull,    // Load geometry + charge + multiplicity + density from checkpoint
     };

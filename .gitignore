@@ -1,6 +1,7 @@
 .vscode
 build
 src/external
+src/base/basis.h
 inputs
 install
 .DS*

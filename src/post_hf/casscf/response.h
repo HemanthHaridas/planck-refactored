@@ -15,6 +15,7 @@ namespace HartreeFock::Correlation::CASSCF
     using HartreeFock::Correlation::CASSCFInternal::CIResponseResult;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
     using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
+    struct OrbitalHessianContext;
     struct CIDeterminantSpace;
 
     // Collect the explicit coupled response blocks for a single root after an
@@ -127,6 +128,7 @@ namespace HartreeFock::Correlation::CASSCF
         const Eigen::MatrixXd &F_I_mo,
         const Eigen::MatrixXd &h_eff,
         const std::vector<double> &ga,
+        const ActiveIntegralCache &active_integrals,
         const CIDeterminantSpace &space,
         const std::vector<CIString> &a_strs,
         const std::vector<CIString> &b_strs,
@@ -189,6 +191,7 @@ namespace HartreeFock::Correlation::CASSCF
         double max_rot,
         const std::vector<int> &mo_irreps,
         bool use_sym,
+        const OrbitalHessianContext *orbital_hessian_ctx = nullptr,
         double tol = 1e-6,
         int max_iter = 8,
         double response_precond_floor = 1e-4);
@@ -218,6 +221,7 @@ namespace HartreeFock::Correlation::CASSCF
         double max_rot,
         const std::vector<int> &mo_irreps,
         bool use_sym,
+        const OrbitalHessianContext *orbital_hessian_ctx = nullptr,
         double tol = 1e-6,
         int max_iter = 8,
         double response_precond_floor = 1e-4);

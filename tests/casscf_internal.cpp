@@ -242,6 +242,82 @@ namespace
         return out;
     }
 
+    std::vector<double> rotate_full_two_body_tensor(
+        const std::vector<double> &eri,
+        const Eigen::MatrixXd &U)
+    {
+        const int nbasis = static_cast<int>(U.rows());
+        std::vector<double> out(eri.size(), 0.0);
+        auto idx4_full = [nbasis](int p, int q, int r, int s)
+        {
+            return static_cast<std::size_t>(((p * nbasis + q) * nbasis + r) * nbasis + s);
+        };
+
+        for (int p = 0; p < nbasis; ++p)
+            for (int q = 0; q < nbasis; ++q)
+                for (int r = 0; r < nbasis; ++r)
+                    for (int s = 0; s < nbasis; ++s)
+                    {
+                        double value = 0.0;
+                        for (int a = 0; a < nbasis; ++a)
+                            for (int b = 0; b < nbasis; ++b)
+                                for (int c = 0; c < nbasis; ++c)
+                                    for (int d = 0; d < nbasis; ++d)
+                                        value +=
+                                            U(a, p) * U(b, q) * U(c, r) * U(d, s) *
+                                            eri[idx4_full(a, b, c, d)];
+                        out[idx4_full(p, q, r, s)] = value;
+                    }
+
+        return out;
+    }
+
+    std::vector<double> extract_active_two_body_block(
+        const std::vector<double> &eri,
+        int nbasis,
+        int n_core,
+        int n_act)
+    {
+        std::vector<double> ga(static_cast<std::size_t>(n_act) * n_act * n_act * n_act, 0.0);
+        auto idx4_full = [nbasis](int p, int q, int r, int s)
+        {
+            return static_cast<std::size_t>(((p * nbasis + q) * nbasis + r) * nbasis + s);
+        };
+
+        for (int p = 0; p < n_act; ++p)
+            for (int q = 0; q < n_act; ++q)
+                for (int r = 0; r < n_act; ++r)
+                    for (int s = 0; s < n_act; ++s)
+                        ga[idx4(p, q, r, s, n_act)] =
+                            eri[idx4_full(n_core + p, n_core + q, n_core + r, n_core + s)];
+        return ga;
+    }
+
+    ActiveIntegralCache build_active_integral_cache_from_full_tensor(
+        const std::vector<double> &eri,
+        int nbasis,
+        int n_core,
+        int n_act)
+    {
+        ActiveIntegralCache cache;
+        cache.nbasis = nbasis;
+        cache.nact = n_act;
+        cache.valid = true;
+        cache.puvw.resize(static_cast<std::size_t>(nbasis) * n_act * n_act * n_act, 0.0);
+        auto idx4_full = [nbasis](int p, int q, int r, int s)
+        {
+            return static_cast<std::size_t>(((p * nbasis + q) * nbasis + r) * nbasis + s);
+        };
+
+        for (int p = 0; p < nbasis; ++p)
+            for (int u = 0; u < n_act; ++u)
+                for (int v = 0; v < n_act; ++v)
+                    for (int w = 0; w < n_act; ++w)
+                        cache.puvw[((p * n_act + u) * n_act + v) * n_act + w] =
+                            eri[idx4_full(p, n_core + u, n_core + v, n_core + w)];
+        return cache;
+    }
+
 } // namespace
 
 int main()
@@ -598,6 +674,8 @@ int main()
             build_ci_space(a_strs, b_strs, ras, h_eff, ga, 2, {}, nullptr, 0, 8);
         ok &= expect(space.dets.size() == 4,
                      "tiny active-space test should build a 4-determinant CI space");
+        const ActiveIntegralCache active_integrals =
+            build_active_integral_cache_from_full_tensor(ga, 2, 0, 2);
 
         Eigen::VectorXd c0(4);
         c0 << 0.50, -0.30, 0.40, -0.20;
@@ -609,10 +687,10 @@ int main()
         const Eigen::MatrixXd F_I = Eigen::MatrixXd::Zero(2, 2);
         const Eigen::VectorXd rhs_approx = build_ci_response_rhs(
             ResponseRHSMode::CommutatorOnlyApproximate,
-            kappa, F_I, h_eff, ga, space, a_strs, b_strs, c0, 0, 2);
+            kappa, F_I, h_eff, ga, active_integrals, space, a_strs, b_strs, c0, 0, 2);
         const Eigen::VectorXd rhs_exact = build_ci_response_rhs(
             ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
-            kappa, F_I, h_eff, ga, space, a_strs, b_strs, c0, 0, 2);
+            kappa, F_I, h_eff, ga, active_integrals, space, a_strs, b_strs, c0, 0, 2);
 
         constexpr double eps = 1e-6;
         const Eigen::Matrix2d I = Eigen::Matrix2d::Identity();
@@ -635,6 +713,204 @@ int main()
                      "exact orbital-derivative RHS should match a finite-difference orbital rotation");
         ok &= expect((rhs_exact - rhs_approx).norm() > 1e-6,
                      "exact orbital-derivative RHS should differ from the commutator-only shortcut when two-electron terms respond");
+    }
+
+    {
+        constexpr int nbasis = 4;
+        constexpr int n_core = 1;
+        constexpr int n_act = 2;
+        [[maybe_unused]] constexpr int n_virt = 1;
+
+        auto idx4_full = [](int p, int q, int r, int s)
+        {
+            return static_cast<std::size_t>(((p * nbasis + q) * nbasis + r) * nbasis + s);
+        };
+
+        Eigen::MatrixXd F_I = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        F_I << -1.20, 0.17, -0.04, 0.02,
+            0.17, -0.63, 0.11, -0.06,
+            -0.04, 0.11, -0.27, 0.08,
+            0.02, -0.06, 0.08, 0.31;
+        F_I = 0.5 * (F_I + F_I.transpose());
+
+        std::vector<double> eri(static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis, 0.0);
+        auto raw_eri = [](int p, int q, int r, int s)
+        {
+            return 0.13 + 0.07 * (p + 1) + 0.03 * (q + 1) + 0.05 * (r + 1) + 0.02 * (s + 1) +
+                   0.01 * ((p == r) ? 1.0 : 0.0) + 0.015 * ((q == s) ? 1.0 : 0.0);
+        };
+        for (int p = 0; p < nbasis; ++p)
+            for (int q = 0; q < nbasis; ++q)
+                for (int r = 0; r < nbasis; ++r)
+                    for (int s = 0; s < nbasis; ++s)
+                    {
+                        const double value =
+                            (raw_eri(p, q, r, s) +
+                             raw_eri(q, p, r, s) +
+                             raw_eri(p, q, s, r) +
+                             raw_eri(q, p, s, r) +
+                             raw_eri(r, s, p, q) +
+                             raw_eri(s, r, p, q) +
+                             raw_eri(r, s, q, p) +
+                             raw_eri(s, r, q, p)) /
+                            8.0;
+                        eri[idx4_full(p, q, r, s)] = value;
+                    }
+
+        const Eigen::MatrixXd h_eff = F_I.block(n_core, n_core, n_act, n_act);
+        const std::vector<double> ga = extract_active_two_body_block(eri, nbasis, n_core, n_act);
+        const ActiveIntegralCache active_integrals =
+            build_active_integral_cache_from_full_tensor(eri, nbasis, n_core, n_act);
+
+        std::vector<CIString> a_strs;
+        std::vector<CIString> b_strs;
+        build_spin_strings_unfiltered(n_act, 1, 1, a_strs, b_strs);
+        RASParams ras;
+        const CIDeterminantSpace space =
+            build_ci_space(a_strs, b_strs, ras, h_eff, ga, n_act, {}, nullptr, 0, 8);
+        const CISolveResult ci_result =
+            solve_ci(space, a_strs, b_strs, h_eff, ga, n_act, 1);
+        ok &= expect(ci_result.vectors.cols() == 1,
+                     "synthetic inter-subspace response test should produce one CI root");
+        const Eigen::VectorXd c0 = ci_result.vectors.col(0);
+
+        Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        kappa(0, 1) = 0.14;
+        kappa(1, 0) = -0.14;
+        kappa(2, 3) = -0.09;
+        kappa(3, 2) = 0.09;
+
+        const Eigen::VectorXd rhs_exact = build_ci_response_rhs(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            kappa, F_I, h_eff, ga, active_integrals, space, a_strs, b_strs, c0, n_core, n_act);
+
+        constexpr double eps = 1e-6;
+        const Eigen::MatrixXd U_plus = Eigen::MatrixXd::Identity(nbasis, nbasis) + eps * kappa;
+        const Eigen::MatrixXd U_minus = Eigen::MatrixXd::Identity(nbasis, nbasis) - eps * kappa;
+        const Eigen::MatrixXd h_plus =
+            rotate_one_body_tensor(F_I, U_plus).block(n_core, n_core, n_act, n_act);
+        const Eigen::MatrixXd h_minus =
+            rotate_one_body_tensor(F_I, U_minus).block(n_core, n_core, n_act, n_act);
+        const std::vector<double> eri_plus = rotate_full_two_body_tensor(eri, U_plus);
+        const std::vector<double> eri_minus = rotate_full_two_body_tensor(eri, U_minus);
+        const std::vector<double> ga_plus =
+            extract_active_two_body_block(eri_plus, nbasis, n_core, n_act);
+        const std::vector<double> ga_minus =
+            extract_active_two_body_block(eri_minus, nbasis, n_core, n_act);
+
+        const Eigen::MatrixXd H_plus =
+            build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, h_plus, ga_plus, n_act);
+        const Eigen::MatrixXd H_minus =
+            build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, h_minus, ga_minus, n_act);
+        const Eigen::VectorXd rhs_fd = ((H_plus - H_minus) * c0) / (2.0 * eps);
+
+        ok &= expect(rhs_exact.norm() > 1e-6,
+                     "exact orbital-derivative RHS should respond to core-active and active-virtual rotations");
+        ok &= expect((rhs_exact - rhs_fd).norm() / std::max(rhs_fd.norm(), 1.0) < 1e-7,
+                     "exact orbital-derivative RHS should match finite differences for inter-subspace rotations");
+    }
+
+    {
+        constexpr int nbasis = 3;
+        constexpr int n_core = 0;
+        constexpr int n_act = 2;
+        constexpr int n_virt = 1;
+
+        auto idx4_full = [](int p, int q, int r, int s)
+        {
+            return static_cast<std::size_t>(((p * nbasis + q) * nbasis + r) * nbasis + s);
+        };
+
+        Eigen::MatrixXd H_core = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        H_core << -1.10, 0.13, -0.07,
+            0.13, -0.42, 0.09,
+            -0.07, 0.09, 0.34;
+        H_core = 0.5 * (H_core + H_core.transpose());
+
+        std::vector<double> eri(static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis, 0.0);
+        auto raw_eri = [](int p, int q, int r, int s)
+        {
+            return 0.11 + 0.06 * (p + 1) + 0.04 * (q + 1) + 0.03 * (r + 1) + 0.02 * (s + 1) +
+                   0.01 * ((p == r) ? 1.0 : 0.0) + 0.008 * ((q == s) ? 1.0 : 0.0);
+        };
+        for (int p = 0; p < nbasis; ++p)
+            for (int q = 0; q < nbasis; ++q)
+                for (int r = 0; r < nbasis; ++r)
+                    for (int s = 0; s < nbasis; ++s)
+                    {
+                        const double value =
+                            (raw_eri(p, q, r, s) +
+                             raw_eri(q, p, r, s) +
+                             raw_eri(p, q, s, r) +
+                             raw_eri(q, p, s, r) +
+                             raw_eri(r, s, p, q) +
+                             raw_eri(s, r, p, q) +
+                             raw_eri(r, s, q, p) +
+                             raw_eri(s, r, q, p)) /
+                            8.0;
+                        eri[idx4_full(p, q, r, s)] = value;
+                    }
+
+        const Eigen::MatrixXd C = Eigen::MatrixXd::Identity(nbasis, nbasis);
+        const Eigen::MatrixXd S = Eigen::MatrixXd::Identity(nbasis, nbasis);
+        const Eigen::MatrixXd h_eff = H_core.block(n_core, n_core, n_act, n_act);
+        const std::vector<double> ga = extract_active_two_body_block(eri, nbasis, n_core, n_act);
+
+        std::vector<CIString> a_strs;
+        std::vector<CIString> b_strs;
+        build_spin_strings_unfiltered(n_act, 1, 1, a_strs, b_strs);
+        RASParams ras;
+        const CIDeterminantSpace space =
+            build_ci_space(a_strs, b_strs, ras, h_eff, ga, n_act, {}, nullptr, 0, 8);
+        const CISolveResult ci_result =
+            solve_ci(space, a_strs, b_strs, h_eff, ga, n_act, 1);
+        const Eigen::VectorXd c0 = ci_result.vectors.col(0);
+        Eigen::MatrixXd c0_mat(c0.size(), 1);
+        c0_mat.col(0) = c0;
+        Eigen::VectorXd w(1);
+        w(0) = 1.0;
+        const Eigen::MatrixXd gamma =
+            compute_1rdm(c0_mat, w, a_strs, b_strs, space.dets, n_act);
+        const std::vector<double> Gamma_vec =
+            compute_2rdm(c0_mat, w, a_strs, b_strs, space.dets, n_act);
+
+        OrbitalHessianContext ctx{
+            .C = &C,
+            .S = &S,
+            .H_core = &H_core,
+            .eri = &eri,
+            .gamma = &gamma,
+            .Gamma_vec = &Gamma_vec,
+            .fd_step = 2e-4,
+        };
+
+        Eigen::MatrixXd R = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        R(0, 2) = 0.17;
+        R(2, 0) = -0.17;
+        R(1, 2) = -0.11;
+        R(2, 1) = 0.11;
+
+        const Eigen::MatrixXd action = matrix_free_hessian_action(
+            R,
+            &ctx,
+            Eigen::MatrixXd::Zero(nbasis, nbasis),
+            Eigen::MatrixXd::Zero(nbasis, nbasis),
+            n_core,
+            n_act,
+            n_virt,
+            {},
+            false);
+
+        const Eigen::MatrixXd C_plus = apply_orbital_rotation(C, ctx.fd_step * R, S);
+        const Eigen::MatrixXd C_minus = apply_orbital_rotation(C, -ctx.fd_step * R, S);
+        const Eigen::MatrixXd g_plus = fixed_ci_orbital_gradient(
+            C_plus, H_core, eri, gamma, Gamma_vec, n_core, n_act, n_virt, {}, false);
+        const Eigen::MatrixXd g_minus = fixed_ci_orbital_gradient(
+            C_minus, H_core, eri, gamma, Gamma_vec, n_core, n_act, n_virt, {}, false);
+        const Eigen::MatrixXd action_fd = (g_plus - g_minus) / (2.0 * ctx.fd_step);
+
+        ok &= expect((action - action_fd).norm() / std::max(action_fd.norm(), 1.0) < 1e-9,
+                     "matrix-free orbital Hessian action should match a fixed-CI finite-difference gradient derivative");
     }
 
     {
@@ -1563,6 +1839,7 @@ int main()
             0.20,
             {},
             false,
+            nullptr,
             1e-8,
             8,
             1e-4);
@@ -1590,6 +1867,7 @@ int main()
             0.20,
             {},
             false,
+            nullptr,
             1e-8,
             1,
             1e-4);
@@ -1617,6 +1895,7 @@ int main()
             1.0e-3,
             {},
             false,
+            nullptr,
             1e-8,
             8,
             1e-4);
@@ -1817,6 +2096,7 @@ int main()
             0.20,
             {},
             false,
+            nullptr,
             1e-8,
             8,
             1e-4);
@@ -1864,6 +2144,7 @@ int main()
             0.20,
             {},
             false,
+            nullptr,
             1e-8,
             8,
             1e-4);
@@ -1891,6 +2172,7 @@ int main()
             0.20,
             {},
             false,
+            nullptr,
             1e-8,
             8,
             1e-4);

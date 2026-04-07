@@ -1001,6 +1001,14 @@ namespace HartreeFock::Correlation::CASSCF
                         continue;
                     }
 
+                    const OrbitalHessianContext root_hessian_ctx{
+                        .C = &C,
+                        .S = &calc._overlap,
+                        .H_core = &calc._hcore,
+                        .eri = &eri,
+                        .gamma = &root.gamma,
+                        .Gamma_vec = &root.Gamma_vec,
+                    };
                     const CoupledStepSolveResult result =
                         solve_coupled_orbital_ci_step(
                             configured_rhs_mode,
@@ -1025,7 +1033,8 @@ namespace HartreeFock::Correlation::CASSCF
                             level_shift_local,
                             0.20,
                             all_mo_irr,
-                            use_sym);
+                            use_sym,
+                            &root_hessian_ctx);
 
                     steps.converged = steps.converged && result.converged;
                     steps.max_orbital_residual =
@@ -1048,6 +1057,15 @@ namespace HartreeFock::Correlation::CASSCF
             sa_coupled_roots.reserve(st_current.roots.size());
             for (const auto &root : st_current.roots)
                 sa_coupled_roots.push_back({root.weight, root.ci_vector, root.ci_energy});
+
+            const OrbitalHessianContext sa_hessian_ctx{
+                .C = &C,
+                .S = &calc._overlap,
+                .H_core = &calc._hcore,
+                .eri = &eri,
+                .gamma = &st_current.gamma,
+                .Gamma_vec = &st_current.Gamma_vec,
+            };
 
             const SACoupledStepSolveResult sa_coupled_result =
                 solve_sa_coupled_orbital_ci_step(
@@ -1073,6 +1091,7 @@ namespace HartreeFock::Correlation::CASSCF
                     0.20,
                     all_mo_irr,
                     use_sym,
+                    &sa_hessian_ctx,
                     1e-6,
                     24,
                     1e-4);

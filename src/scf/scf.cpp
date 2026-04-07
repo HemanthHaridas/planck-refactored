@@ -7,6 +7,7 @@
 
 #include "integrals/base.h"
 #include "io/logging.h"
+#include "sad.h"
 #include "scf.h"
 
 // ─── Orthogonalization ────────────────────────────────────────────────────────
@@ -209,6 +210,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     if (use_chk_density)
     {
         P = calculator._info._scf.alpha.density;
+    }
+    else if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
+    {
+        P = HartreeFock::SCF::compute_sad_guess_rhf(calculator);
     }
     else if (sao_active)
     {
@@ -490,6 +495,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     const bool use_chk_uhf =
         (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
          calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
+
+    if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
+        return std::unexpected("SAD guess is currently implemented only for RHF");
 
     Eigen::MatrixXd Pa = use_chk_uhf
                              ? calculator._info._scf.alpha.density

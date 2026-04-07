@@ -149,6 +149,31 @@ namespace HartreeFock::Correlation::CASSCF
         return g;
     }
 
+    Eigen::MatrixXd fixed_ci_orbital_gradient(
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &H_core,
+        const std::vector<double> &eri,
+        const Eigen::MatrixXd &gamma,
+        const std::vector<double> &Gamma_vec,
+        int n_core,
+        int n_act,
+        int n_virt,
+        const std::vector<int> &mo_irreps,
+        bool use_sym)
+    {
+        const int nbasis = static_cast<int>(C.rows());
+        const Eigen::MatrixXd F_I_mo =
+            build_inactive_fock_mo(C, H_core, eri, n_core, nbasis);
+        const Eigen::MatrixXd F_A_mo =
+            build_active_fock_mo(C, gamma, eri, n_core, n_act, nbasis);
+        const ActiveIntegralCache active_integrals =
+            build_active_integral_cache(eri, C, n_core, n_act, nbasis);
+        const Eigen::MatrixXd Q = compute_Q_matrix(active_integrals, Gamma_vec);
+        return compute_orbital_gradient(
+            F_I_mo, F_A_mo, Q, gamma,
+            n_core, n_act, n_virt, mo_irreps, use_sym);
+    }
+
     Eigen::MatrixXd build_ci_orbital_gradient_correction(
         const Eigen::MatrixXd &Q1,
         int nbasis,
@@ -199,6 +224,61 @@ namespace HartreeFock::Correlation::CASSCF
                 HR(p, q) = hess_diag(F_sum, p, q) * R(p, q);
             }
         return HR;
+    }
+
+    Eigen::MatrixXd matrix_free_hessian_action(
+        const Eigen::MatrixXd &R,
+        const OrbitalHessianContext *context,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt,
+        const std::vector<int> &mo_irreps,
+        bool use_sym)
+    {
+        if (context == nullptr ||
+            context->C == nullptr ||
+            context->S == nullptr ||
+            context->H_core == nullptr ||
+            context->eri == nullptr ||
+            context->gamma == nullptr ||
+            context->Gamma_vec == nullptr)
+            return hessian_action(R, F_I_mo, F_A_mo, n_core, n_act, n_virt);
+
+        const double max_elem = (R.size() > 0) ? R.cwiseAbs().maxCoeff() : 0.0;
+        const double fd_step = std::max(context->fd_step, 1e-6);
+        if (max_elem < 1e-14)
+            return Eigen::MatrixXd::Zero(R.rows(), R.cols());
+
+        const Eigen::MatrixXd C_plus =
+            apply_orbital_rotation(*context->C, fd_step * R, *context->S);
+        const Eigen::MatrixXd C_minus =
+            apply_orbital_rotation(*context->C, -fd_step * R, *context->S);
+
+        const Eigen::MatrixXd g_plus = fixed_ci_orbital_gradient(
+            C_plus,
+            *context->H_core,
+            *context->eri,
+            *context->gamma,
+            *context->Gamma_vec,
+            n_core,
+            n_act,
+            n_virt,
+            mo_irreps,
+            use_sym);
+        const Eigen::MatrixXd g_minus = fixed_ci_orbital_gradient(
+            C_minus,
+            *context->H_core,
+            *context->eri,
+            *context->gamma,
+            *context->Gamma_vec,
+            n_core,
+            n_act,
+            n_virt,
+            mo_irreps,
+            use_sym);
+        return (g_plus - g_minus) / (2.0 * fd_step);
     }
 
     Eigen::MatrixXd fep1_gradient_update(
