@@ -22,6 +22,7 @@ namespace HartreeFock
 
         // Read Gaussian94 basis sets
         HartreeFock::Basis read_gbs_basis(const std::string file_name, const HartreeFock::Molecule &molecule, const HartreeFock::BasisType &basis_type);
+    
     } // namespace BasisFunctions
 } // namespace HartreeFock
 #endif // !HF_BASIS_H

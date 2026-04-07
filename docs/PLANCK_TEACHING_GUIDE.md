@@ -1142,11 +1142,30 @@ This approximates \(\mathbf C_{\text{old}}\,e^{\boldsymbol\kappa}\) to second or
 computing a matrix exponential. After the Cayley step, a Löwdin symmetric
 re-orthogonalization restores exact S-orthonormality in the AO metric.
 
-The rotation matrix \(\boldsymbol\kappa\) comes from an **augmented-Hessian step**
-(`augmented_hessian_step`): the gradient is preconditioned by the diagonal orbital
-Hessian with a level shift, symmetry-forbidden blocks are zeroed, and the step
-length is capped at \(|\boldsymbol\kappa|_{\max} \le 0.20\) to stay in the
-Cayley-transform validity regime.
+The rotation matrix \(\boldsymbol\kappa\) comes from an orbital Newton step that
+uses the **matrix-free finite-difference orbital Hessian** when the full MO context
+is available. Given the current MO coefficients \(\mathbf C\), the frozen 1-RDM
+\(\boldsymbol\gamma\), and the frozen 2-RDM \(\boldsymbol\Gamma\), a Hessian-vector
+product \(\mathbf A \mathbf R\) is obtained by central finite differences of the
+orbital gradient:
+
+\[
+(\mathbf A \mathbf R)_{pq} \approx \frac{g_{pq}(\mathbf C_+) - g_{pq}(\mathbf C_-)}{2\delta}
+\]
+
+where \(\mathbf C_{\pm} = \text{Cayley}(\mathbf C, \pm\delta\mathbf R)\) and
+\(\delta = 5 \times 10^{-4}\) by default (`OrbitalHessianContext::fd_step`). This
+is implemented in `matrix_free_hessian_action` (`orbital.cpp`) and falls back to
+the diagonal approximation (`hessian_action`) when the context is incomplete.
+
+For small active spaces where the number of non-redundant orbital pairs is
+\(\le 128\), the response solver probes `matrix_free_hessian_action` column-by-column
+to assemble a dense Hessian matrix, symmetrizes it, and solves the Newton equation
+by `SelfAdjointEigenSolver` exact diagonalization (`build_orbital_linear_operator` +
+`solve_orbital_action_system` in `response.cpp`). Eigenvalues below \(10^{-4}\) are
+floored before inversion. When the dense Hessian is unavailable (too many pairs or
+null context), the solver falls back to the diagonal-preconditioned step with a
+level shift. In all paths the step is capped at \(|\boldsymbol\kappa|_{\max} \le 0.20\).
 
 ### Macro-Iteration Structure
 
@@ -1162,17 +1181,21 @@ The full CASSCF macro-iteration (one pass of `run_casscf`):
 5. Compute inactive Fock \(F^I\), active Fock \(F^A\), Q matrix, and orbital
    gradient \(\mathbf g\)
 6. Run micro-iterations: for each micro-step,
-   a. Form an augmented-Hessian orbital step \(\boldsymbol\kappa\)
+   a. Form an orbital step \(\boldsymbol\kappa\): for ≤ 128 non-redundant pairs the
+      matrix-free Hessian path builds a dense Hessian and solves by exact
+      diagonalization; otherwise a diagonal-preconditioned augmented-Hessian step is
+      used. Both paths receive an `OrbitalHessianContext` struct carrying pointers to
+      the current \(\mathbf C\), overlap, core Hamiltonian, AO ERIs, and the frozen
+      active-space RDMs.
    b. Compute the first-order CI response per root (`solve_ci_response_davidson`)
-      to account for the change in CI coefficients driven by \(\delta h_{\text{eff}} = [{\boldsymbol\kappa}, F^I]_{\text{act}}\)
+      to account for the change in CI coefficients driven by the full
+      \(\delta h_{\text{eff}} = [F^I, \boldsymbol\kappa]_{\text{act}}\) and the
+      inter-subspace two-electron derivative
    c. Update the gradient with the response correction (`fep1_gradient_update` + CI contribution)
    d. Accumulate the total rotation \(\boldsymbol\kappa_{\text{total}}\)
-7. Select the best orbital step from a set of candidates (augmented-Hessian
-   accumulated step, first micro-step only, gradient fallback, and pairwise
-   averages) using a merit function
-   \(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\).
-   Numeric Newton is available only via the `mcscf_debug_numeric_newton` flag
-   and is not part of the normal production path.
+7. Select the best orbital step from a set of candidates (full-Hessian Newton step,
+   first micro-step only, gradient fallback, and pairwise averages) using a merit
+   function \(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\).
 8. Apply the accepted \(\boldsymbol\kappa\) via the Cayley transform followed by
    Löwdin re-orthogonalization: \(\mathbf C \leftarrow \mathbf C\,\mathbf U\)
 9. Check convergence: \(\|\mathbf g\| < \epsilon_{\text{grad}}\) and
@@ -1202,10 +1225,16 @@ contribution, orbital gradient, CI-response data, first-order 2-RDM, Q1
 contribution, and CI-driven orbital correction. The state-averaged quantities
 \(\bar{\gamma}\), \(\bar{\Gamma}\), \(F^A\), and \(\mathbf g_{\text{orb}}\) are
 rebuilt as explicit weighted sums of those per-root records rather than being
-formed from early-averaged inputs. The CI-response RHS is built analytically
-from active-space one- and two-electron Hamiltonian derivatives
-(`ResponseRHSMode::ExactOrbitalDerivative`); the older commutator-only shortcut
-is available only via the `mcscf_debug_commutator_rhs` debug flag.
+formed from early-averaged inputs. The CI-response RHS is built analytically from active-space Hamiltonian derivatives
+(`ResponseRHSMode::ExactActiveSpaceOrbitalDerivative`). The one-body derivative is
+the active-active block of the full MO-basis commutator \([F^I, \boldsymbol\kappa]\)
+(corrected from an earlier active-only formula that missed core↔active and
+active↔virtual coupling). The two-body derivative includes both the active-active
+sub-block rotation and the inter-subspace contributions — rotations that mix
+non-active orbitals into or out of the active space — accumulated via the cached
+\(p\mu\nu\lambda\) integrals (`ActiveIntegralCache::puvw`). The older
+commutator-only shortcut is available only via the `mcscf_debug_commutator_rhs`
+debug flag.
 
 ### Convergence and Robustness
 

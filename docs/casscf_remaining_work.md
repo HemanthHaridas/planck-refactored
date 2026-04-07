@@ -2,298 +2,291 @@
 
 ## Purpose
 
-This note is the current handoff for the next CASSCF implementation pass. It
-reflects the repository state on 2026-04-05 (branch `codex/casscf-correctness-pass2`)
-after the SA convergence criterion fix and the first optimizer simplification pass.
+This is the live handoff document for CASSCF implementation. It reflects the
+repository state on 2026-04-06 (branch `codex/casscf-correctness-pass2`) after
+the shared-κ SA coupled solve landed and the symmetry-aware MO selection pass.
 
 ---
 
-## Current Status
+## What Has Landed (Complete)
 
-The code has correct SA convergence semantics and a production coupled orbital/CI
-step, but it is still not a true SA second-order CASSCF implementation.
+### Theory and convergence
+- SA convergence gated on `||g_SA||_inf < tol` where `g_SA = Σ_I w_I g_I`.
+- Stagnation detection uses the SA gradient via `sa_gradient_progress_flat`.
+- Iteration table prints "SA Grad" and "MaxRootG" as separate columns.
+- Exact CI response RHS (`ResponseRHSMode::ExactOrbitalDerivative`) as default.
+  Commutator-only shortcut behind `mcscf_debug_commutator_rhs` flag.
+- **Shared-κ SA coupled solve** (`solve_sa_coupled_orbital_ci_step`): holds one
+  orbital step κ, solves all roots' CI responses to that shared κ, iterates on
+  the SA orbital residual `g_SA + H_oo κ + Σ_I w_I G_oc c1_I(κ)`. This replaced
+  the per-root averaged κ approach as the production `sa-coupled` candidate.
+- Acceptance merit uses `trial.gnorm` (SA gradient), not `weighted_root_gnorm`.
 
-**Three bugs confirmed by PySCF reference run (2026-04-05) — fix before other work:**
+### Active space and orbital setup
+- Symmetry-aware active orbital picker (`select_active_orbitals` in `strings.cpp`):
+  supports explicit `core_irrep_counts`/`active_irrep_counts`/`mo_permutation`
+  input keywords; falls back to energy-sorted inference when no quotas are given.
+- `reorder_mo_coefficients` applies the picker's column permutation before the
+  MCSCF loop, ensuring the active block is always contiguous.
+- `IrrepCount` struct and three new `[scf]` keywords added to the parser.
 
-1. **`guess hcore` + `use_symm true` gives wrong HF for water CAS(4,4)** — the SCF
-   converges to E(HF) = −74.4581 Eh instead of the correct −74.9629 Eh. This
-   propagates ~0.5 Eh into CASSCF. The benchmark gate values for
-   `water_cas44_sto3g`, `water_cas44_631g`, and `water_cas44_ccpvdz` are wrong.
-   PySCF confirms the correct energies: −75.0084, −76.0370, −76.0781 Eh respectively.
+### Bugs fixed
+- **`guess hcore` + `use_symm true` → wrong HF**: water CAS(4,4) inputs now
+  converge to the correct RHF (−74.9629 Eh). All three water SS gate values
+  updated. Root cause: d2d RHF branch preservation fix (commit 46aa199).
+- **Twisted ethylene SA-2 active space**: input still uses `guess hcore`; the
+  correct comparison is now hcore-vs-hcore with PySCF. Energies agree at the
+  same starting point. Both codes find −77.0034974301 Eh from the hcore start.
 
-2. **SA optimizer converges to wrong local minimum for water SA-2** — both Planck
-   and PySCF start from the correct RHF (E ≈ −74.9629 Eh), same active space, but
-   PySCF finds E_SA = −74.7877 Eh while Planck finds −74.7751 Eh (0.013 Eh higher).
-   Consistent with the per-root averaged κ issue (Milestone 2 below).
+### Validation
+- Per-root CI energies stored in `calc._cas_root_energies` and printed in the
+  CASSCF summary. NOTE: this field stores CI eigenvalues, not total energies
+  — **the displayed per-root numbers are wrong** (see Known Bugs below).
+- PySCF reference suite fully operational: `tests/pyscf/` has individual scripts
+  plus `run_all.py`. Current status: **6/11 pass**. The 5 failing cases are
+  documented in Known Bugs 2 and 3 below.
+- Regression runner (`run_regressions.py`) parses `sa_g`, `root_screen_g`,
+  `max_root_g` SA diagnostics.
+- CI-response single-step fallback now correctly reports `converged = true` when
+  the diagonal preconditioner solves the equation exactly.
+- `casscf_internal` unit harness covers: direct-sigma vs dense CI, RDM
+  agreement, exact RHS vs finite-difference, coupled block invariants, coupled
+  residual seeding, `select_active_orbitals` (4 cases), single-step CI
+  response convergence.
 
-3. **Twisted ethylene SA-2 active space unclear** — Planck uses `guess hcore` giving
-   wrong HF by 0.112 Eh, yet finds E_SA = −77.0034 Eh vs PySCF −76.9930 Eh (0.010
-   Eh lower). The lower energy may reflect a different active-orbital basis from the
-   wrong HF starting point rather than a better CASSCF minimum. Needs re-run without
-   `guess hcore` to confirm.
-
-**Two structural correctness issues (not yet bugs, but known limitations):**
-
-4. **Step construction**: the `sa-coupled` direction is built by averaging per-root
-   coupled steps, not by solving the SA stationarity system with one shared `κ`.
-5. **Orbital Hessian**: the OO block model is a diagonal energy-denominator
-   preconditioner, not a faithful `δg_SA[R]` action.
-
----
-
-## What Has Landed
-
-- The old monolith split into dedicated `strings`, `ci`, `rdm`, `response`,
-  `orbital`, and driver modules.
-- RASSCF determinant screening enforced on combined alpha+beta determinant.
-- CI symmetry screening uses explicit Abelian irrep product table.
-- Root tracking uses overlap-based Hungarian maximum-overlap match.
-- CI bitstring helpers guard full-width shifts; active space limit enforced.
-- One-body CI sigma and Slater-Condon Hamiltonian share the same ket-to-bra
-  operator convention, with internal agreement coverage.
-- CI-response Davidson solve has projection, restart/collapse, bounded-subspace
-  handling, and best-residual reporting on truncated exits.
-- Single-step CI-response fallback no longer reports false convergence.
-- Active-space `Q` construction reuses a cached transformed-integral container.
-- Direct sigma-vector Davidson CI path with dense fallback, plus agreement tests.
-- Per-root `StateSpecificData` carried through the macro loop (CI vectors/energies,
-  1-RDMs, 2-RDMs, active Fock, Q, orbital gradient, CI-response data, first-order
-  2-RDMs, Q1, CI-driven orbital corrections).
-- SA `gamma`, `Gamma`, `F_A`, `g_orb` rebuilt as explicit weighted sums of per-root
-  records.
-- Response-side bilinear `Gamma1` accumulation expressed as explicit weighted sum.
-- Exact orbital-derivative CI response RHS is the default
-  (`ResponseRHSMode::ExactOrbitalDerivative`). Commutator-only shortcut is behind
-  `mcscf_debug_commutator_rhs` flag.
-- Exact RHS tested vs finite-difference active-space Hamiltonian rotation in
-  `tests/casscf_internal.cpp`.
-- Production matrix-free coupled orbital/CI step via `solve_coupled_orbital_ci_step`:
-  seeds from diagonal-preconditioned + CI-response Schur step, refines with explicit
-  OO/OC/CO/CC block residuals.
-- `sa-coupled` direction promoted to the normal candidate screen.
-- First optimizer simplification pass (2c5038a): large always-on AH/mix/gradient-
-  variant family removed. Normal candidate screen contains `sa-coupled`,
-  `sa-grad-fallback`, small-space `numeric-newton` escape hatch, and stagnation-only
-  rescue candidates.
-- **SA convergence criterion fixed (c97a754)**: convergence gate now uses
-  `||g_SA||_inf < tol` where `g_SA = Σ_I w_I g_I`. Per-root gradient norms
-  retained as diagnostics only. Iteration table column renamed "SA Grad"/"MaxRootG".
-- Per-macroiteration wall-clock timing in the iteration table.
-- SA end-to-end fixtures `water_cas44_sto3g_sa2` and `ethylene_cas44_sto3g_sa2`
-  added and passing.
-- `calc._cas_mo_coefficients` stores the optimized orbital basis, not natural
-  orbitals.
-- `tests/casscf_internal.cpp` covers: direct-sigma vs dense CI agreement, exported
-  vs reference RDM agreement, exact RHS vs finite-difference agreement, coupled block
-  invariants, coupled residual seeding.
+### Optimizer
+- First simplification pass: large always-on AH/mix/gradient-variant family
+  removed. Production candidate screen: `sa-coupled` (primary), `sa-grad-fallback`,
+  `numeric-newton` (small-space, ≤64 pairs), stagnation-only rescue family.
+- `build_root_resolved_coupled_step_set` remains as a stagnation-only fallback
+  candidate (not the production path).
 
 ---
 
-## What Is Still True
+## Known Bugs
 
-- The `sa-coupled` step is built by per-root coupled solves averaged by weight, not
-  by a shared-κ SA coupled solve (the correct SA second-order structure).
-- The acceptance merit function uses `weighted_root_gnorm` (a per-root gradient
-  screen) instead of the SA gradient `gnorm`. This should be fixed with the shared-κ
-  solve (they are part of the same correctness gap).
-- The orbital Hessian OO block is a diagonal preconditioner only; no `δg_SA[R]`
-  action.
-- The optimizer still has more than one production escape hatch: `numeric-newton` for
-  small spaces and stagnation-only rescue candidates while the coupled solve hardens.
-- PySCF reference values for SA cases are all TBD in `pyscf_reference_energies.md`.
-- The regression runner (`run_regressions.py`) does not parse SA gradient diagnostics.
+### 2. Water CAS(4,4) SS: orbital optimizer stalls (3 cases failing)
+
+Water_cas44_sto3g, water_cas44_631g, water_cas44_ccpvdz all start from the
+correct RHF (Bug 1 fixed; RHF matches PySCF to < 2e-8 Eh). Despite this,
+Planck's CASSCF recovers only ~3× less correlation energy than PySCF:
+
+| Case | PySCF CASSCF / Eh | Planck CASSCF / Eh | Delta |
+|---|---|---|---|
+| STO-3G | −75.0084054420 | −74.9760171760 | 3.2e-02 |
+| 6-31G | −76.0370099226 | −75.9998609785 | 3.7e-02 |
+| cc-pVDZ | −76.0781256226 | −76.0440109052 | 3.4e-02 |
+
+The basis-independent ratio (~3–3.5×) rules out geometry/basis mismatch. Planck's
+orbital optimizer is stalling at a higher-energy stationary point of the CAS energy.
+
+**Fix:** investigate whether the `sa-coupled` candidate is correctly driving
+orbital rotations in the core-active and active-virtual blocks for this system.
+Compare active orbital characters at convergence (Planck vs PySCF).
+
+### 3. Water SA-2 and ethylene SA-2: SA optimizer at suboptimal minimum
+
+- Water SA-2: from hcore start Planck agrees with PySCF. PySCF from SAD start finds
+  −74.7877865139 Eh (0.013 Eh lower). Planck has not been tested from a SAD start.
+- Ethylene SA-2: Planck and PySCF converge to different RHF stationary points
+  (5.9e-2 Eh apart); comparison is blocked.
+
+### 1. Per-root energy display is wrong (NEW, introduced 2026-04-06)
+
+`calc._cas_root_energies(r)` stores `fst.roots[r].ci_energy` — the CI
+eigenvalue of the active-space Hamiltonian. This does NOT include the core
+Fock energy or nuclear repulsion. The correct per-root total energy is:
+
+```
+E_total(r) = E_nuc + E_core + ci_energy(r)
+```
+
+where `E_core = compute_core_energy(h_mo, F_I_mo, n_core)`.
+
+Currently the log shows nonsense values (−5.27, −5.27 Eh for ethylene SA-2;
+−6.07, −5.68 Eh for water SA-2) instead of the expected ~−77.00/~−74.77 Eh.
+
+**Fix:** store `E_nuc + E_core + root.ci_energy` at `casscf.cpp:1418`, or pass
+`E_nuc + E_core` to `casscf_summary` and add it there.
+
+### 2. Water SA-2: not validated against best-known SA minimum
+
+Planck and PySCF (both from hcore start) agree on −74.7751377977 Eh. The
+original PySCF SAD run found −74.7877865139 Eh. The SAD minimum may be the true
+global SA minimum. This is not a regression, but it means the SA optimizer has
+not been validated against the lowest-energy SA solution from a neutral start.
 
 ---
 
 ## Remaining Work (Priority Order)
 
-### 0. Fix `guess hcore` + `use_symm true` HF convergence bug (BLOCKER)
+### 0. Fix water CAS(4,4) SS orbital stalling (BLOCKER — 3 cases fail)
 
-**Symptoms:** `water_cas44_sto3g`, `water_cas44_631g`, `water_cas44_ccpvdz` all give
-E(HF) ≈ −74.4581 Eh instead of the correct ≈ −74.9629 Eh. The CASSCF energies are
-wrong by ~0.5 Eh. The SA-2 water input (which uses `use_symm false`, no guess) gives
-the correct HF energy, confirming the bug is in the `hcore + symm` combination.
+See Known Bug 2. Despite correct RHF, Planck's orbital optimizer stalls at a
+higher-energy CASSCF solution (3–3.5× less correlation energy than PySCF).
 
-**Investigation targets in the driver / SCF path:**
-- `src/driver.cpp` or `src/dft/driver.cpp`: how is `guess hcore` implemented under
-  symmetry? Is the initial density matrix built in the symmetry-adapted AO frame?
-- Does `detectSymmetry()` reorder or transform basis functions in a way that breaks
-  the hcore diagonal guess?
+Suggested investigation steps:
+- Compare active orbital characters at Planck's converged solution against PySCF.
+- Check whether the `sa-coupled` primary candidate is producing non-zero orbital
+  steps in the core-active and active-virtual blocks for this system.
+- Verify that the stagnation rescue does not prematurely freeze the optimization.
 
-**Immediate actions:**
-- Update `water_cas44_sto3g.hfinp`, `water_cas44_631g.hfinp`,
-  `water_cas44_ccpvdz.hfinp`: remove `guess hcore` (or switch to `guess sad` if
-  supported) and re-run.
-- Update the gate energies in `casscf_benchmark_results.txt` to match the corrected
-  runs.
-- Update `pyscf_reference_energies.md` once Planck values are corrected.
+**File:** `src/post_hf/casscf/casscf.cpp`, `src/post_hf/casscf/response.cpp`
 
-**Reference PySCF values (Cartesian basis, correct RHF starting point):**
-- `water_cas44_sto3g`: −75.0084054420 Eh
-- `water_cas44_631g`: −76.0370099226 Eh
-- `water_cas44_ccpvdz`: −76.0781256226 Eh
+### 1. Fix per-root total energy display (BLOCKER for next release)
 
-### 0b. Investigate twisted ethylene SA-2 without `guess hcore`
+See Known Bug 1 above. The fix is simple: before storing `_cas_root_energies`,
+add the inactive energy (`E_nuc + E_core`). All downstream consumers of this
+field (logging) will then display correct total energies.
 
-The ethylene_cas44_sto3g_sa2 input also uses `guess hcore`. Planck gives E_SA =
-−77.0034 Eh while PySCF (correct HF) gives −76.9930 Eh. The lower Planck energy is
-suspicious — it likely reflects a different (wrong) orbital basis from the hcore
-start rather than a genuinely better SA minimum.
+**File:** `src/post_hf/casscf/casscf.cpp:1415–1419`
 
-**Immediate actions:**
-- Re-run `ethylene_cas44_sto3g_sa2.hfinp` without `guess hcore`.
-- Compare resulting E(HF) and E_SA against PySCF.
-- If the energies still differ by > 1e-3 Eh after fixing the HF starting point,
-  investigate active orbital selection.
+### 2. Orbital Hessian action upgrade
 
-**PySCF reference:**
-- E_SA = −76.9930595776 Eh (root 0: −76.9940, root 1: −76.9921)
+`hessian_action()` in `orbital.cpp:178` is a diagonal energy-denominator
+preconditioner. It is used inside the shared-κ coupled solve as the OO block
+model. A faithful `δg_SA[R]` action would include core/active density response,
+Q-matrix derivative, and commutator terms.
 
-### 1. Implement shared-κ SA coupled solve (Phase 2)
+**Why it matters:** the shared-κ solve converges with the diagonal model, but
+a better Hessian would improve convergence rate and reduce reliance on the
+stagnation rescue candidates.
 
-The most important remaining correctness item.
+**Deliverables:**
+- Implement `delta_g_SA_action(R, ...)` in `orbital.cpp`.
+- Add a finite-difference check in `tests/casscf_internal.cpp`.
+- Wire into `solve_sa_coupled_orbital_ci_step` as the OO block action.
 
-**What to do:**
-- Add a `solve_sa_coupled_orbital_ci_step` function that holds one shared `κ`,
-  simultaneously solves all roots' CI response equations `(H - E_I) c1_I = -Q sigma_I(κ)`,
-  forms the SA orbital residual `g_SA + H_oo κ + Σ_I w_I G_oc c1_I`, and iterates on κ.
-- Replace `build_root_resolved_coupled_step_set` with this shared-κ path as the
-  production `sa-coupled` direction.
-- Fix the acceptance merit function to use `trial.gnorm` (SA gradient) instead of
-  `trial.weighted_root_gnorm`.
+**Acceptance:** finite-difference check passes; convergence rate for the SA
+coupled solve is at least as good as the diagonal baseline.
 
-**Acceptance:**
-- 2-root SA ethylene converges via SA stationarity, not the plateau escape.
-- `nroots=1` results unchanged.
-- All 11 manual fixture inputs continue to pass.
+### 3. SA stationarity assertion in the regression runner
 
-### 2. Fix the acceptance merit function (needed independently of M2)
+Currently `run_regressions.py` parses `sa_g` but does not assert that
+convergence was declared via `||g_SA||_inf < tol` rather than the stagnation
+plateau escape. This should be a hard assertion for SA cases.
 
-The merit at `casscf.cpp:1169` is:
-```cpp
-trial.E_cas + merit_weight * trial.weighted_root_gnorm * trial.weighted_root_gnorm
-```
-This should be:
-```cpp
-trial.E_cas + merit_weight * trial.gnorm * trial.gnorm
-```
-where `trial.gnorm` is `||g_SA||_inf`. The acceptance conditions at lines 1170–1187
-use per-root gradient screens that are inconsistent with the SA stationarity condition
-fixed in M1.
+**Deliverables:**
+- In `run_regressions.py`, after parsing `casscf_sa_gnorm`, assert it is
+  `< tol_mcscf_grad` (default 1e-5) for all SA test cases.
+- Also verify the final macro iteration did not fire the plateau escape path
+  (check that no `[WRN]` line about plateau appears in the last pass).
 
-### 3. Add PySCF-backed reference suite
+### 4. Optimizer second simplification pass
 
-The most important missing safety net.
+`numeric-newton` is still a production escape hatch for spaces with ≤64 pairs.
+The stagnation rescue family (`sa-diag-fallback`, per-root candidates, pair
+probes) is still active. With the shared-κ solve stable, these can be narrowed.
 
-**Systems to cover:**
-- H₂ CAS(2,2)/STO-3G (SS and SA-2)
-- LiH CAS(2,2)/STO-3G (SS)
-- H₂O CAS(4,4)/STO-3G (SS and SA-2)
-- Twisted ethylene CAS(4,4)/STO-3G (SA-2)
+**Deliverables (after verifying the shared-κ solve is robust):**
+- Demote `numeric-newton` to a debug-only option (behind `mcscf_debug_numeric_newton`).
+- Narrow the stagnation rescue family: keep one clear diagnostic escape hatch,
+  remove the redundant `per-root candidates` and pair-probe paths.
+- Ensure the macro-iteration transcript clearly shows which path was taken.
 
-**Script template is in** `tests/inputs/casscf_tests/pyscf_reference_energies.md`.
+**Gate:** all 11 fixture cases continue to pass.
 
-### 4. Make regression runner SA-aware
+### 5. Validate water SA-2 from SAD starting point
 
-Add to `METRIC_PATTERNS` in `tests/run_regressions.py`:
-```python
-"casscf_sa_gnorm": re.compile(r"sa_g=([-+0-9Ee\.]+)", re.MULTILINE),
-"casscf_root_screen_gnorm": re.compile(r"root_screen_g=([-+0-9Ee\.]+)", re.MULTILINE),
-"casscf_max_root_gnorm": re.compile(r"max_root_g=([-+0-9Ee\.]+)", re.MULTILINE),
-```
-Assert `sa_g <= tol_mcscf_grad`; keep root metrics as diagnostics only.
+The Planck SA optimizer has not been validated against the lowest known SA
+minimum for water SA-2. The SAD-start PySCF result (−74.7877865139 Eh) is
+0.013 Eh lower than the hcore-start result both codes currently agree on.
 
-### 5. Add Hessian action upgrade (Phase 3)
+**Deliverables:**
+- Add a water SA-2 input that uses the default guess (no `guess hcore`).
+- Run Planck and compare to the SAD-start PySCF value −74.7877865139 Eh.
+- If Planck finds the lower minimum, update the gate value and document.
+- If Planck still finds the higher minimum, record it as a known optimizer
+  limitation and track as a future correctness item.
 
-After M2 is stable. Add `delta_g_SA_action(R, ...)` with full OO response terms.
-Validate with finite-difference check in `tests/casscf_internal.cpp`.
-Use inside the shared-κ SA coupled solve.
+### 6. Invariance and robustness coverage
 
-### 6. Simplify optimizer further (Phase 5 second pass)
+Still missing from the unit harness:
+- Active-active rotation invariance after convergence (rotate within the active
+  block, verify energy is unchanged and `g_orb` block is zero).
+- Anti-symmetry checks for `g_orb[p,q]` and `kappa[p,q]`.
+- Root-crossing stress test (geometry distortion near avoided crossing; verify
+  root tracking does not swap roots mid-optimization).
+- Checkpoint/restart consistency: store CASSCF MO coefficients, reload them,
+  verify the energy and gradient reproduce within 1e-10 Eh.
+- CI-response restart and truncation cases at larger CI dimension (≥100 dets).
 
-After M2+M3:
-- Decide if `numeric-newton` can become debug-only for small spaces.
-- Remove or narrow the stagnation-only rescue family.
-- Move any remaining experiment-only heuristics behind debug flags.
+### 7. RDM performance (lower priority)
 
-### 7. Expand invariance and robustness coverage
-
-Still missing:
-- Active-active rotation invariance checks after convergence.
-- Anti-symmetry checks for `g_orb` and `kappa`.
-- Root-crossing stress tests (geometry distortion near avoided crossing).
-- Response-solver restart and truncation cases at larger CI dimensions.
-- Checkpoint/restart consistency for stored CASSCF orbitals.
-
-### 8. Revisit RDM performance (lower priority)
-
-The RDM module is isolated and cross-checked. Optimized 1-RDM, 2-RDM, and
+The RDM module is correct and cross-checked. Optimized 1-RDM, 2-RDM, and
 bilinear 2-RDM accumulation kernels are still on the backlog but are lower
 priority than theory and validation work.
 
-### 9. Profile direct CI sigma before more CI restructuring
+### 8. Profile direct CI sigma before restructuring (lower priority)
 
 The direct Davidson path is correct and tested. Do not reopen major CI-driver
-refactors until profiling identifies actual hot spots in
-`apply_ci_hamiltonian`.
+refactors until profiling of `apply_ci_hamiltonian` identifies actual hot spots.
 
 ---
 
-## Mandatory Change Gate
+## Current Gate Energies (2026-04-06) — 6/11 passing
 
-Every CASSCF solver-facing change must be validated against the full manual fixture
-folder. Run:
+Water CAS(4,4) SS RHF is now correct (Bug 1 fixed), but CASSCF stalls (see Known Bug 2).
+SA cases agree with PySCF from the hcore start, but fail against the SAD-start reference.
+
+| Input | Planck / Eh | PySCF ref / Eh | Delta | Status |
+|---|---|---|---|---|
+| h2_cas22_sto3g | −1.1372838351 | −1.1372838345 | 6.0e-10 | OK |
+| lih_cas22_sto3g | −7.8811184797 | −7.8811184639 | 1.6e-08 | OK |
+| water_cas44_sto3g | −74.9760171760 | −75.0084054420 | 3.2e-02 | **FAIL** |
+| water_cas44_631g | −75.9998609785 | −76.0370099226 | 3.7e-02 | **FAIL** |
+| water_cas44_ccpvdz | −76.0440109052 | −76.0781256226 | 3.4e-02 | **FAIL** |
+| water_cas44_b1 | −74.5856163677 | −74.5856164512 | 8.4e-08 | OK |
+| water_cas44_sto3g_sa2 (SA-2) | −74.7751377977 | −74.7877865139 | 1.3e-02 | **FAIL** |
+| ethylene_cas44_sto3g_sa2 (SA-2) | −77.0034974301 | −76.9930595776 | 1.0e-02 | **FAIL** (blocked) |
+| ethylene_casscf_321g | −77.5145223872 | −77.5145223959 | 8.7e-09 | OK |
+| ethylene_casscf_321g_nroot2 | −77.5145223872 | −77.5145223959 | 8.7e-09 | OK |
+| ethylene_casscf_ccpvdz | −77.9524855977 | −77.9524856210 | 2.3e-08 | OK |
+
+PySCF references for water SA-2 use the SAD-start value (−74.7877865139 Eh).
+From the hcore start, Planck and PySCF agree to < 1e-10 Eh. The ethylene SA-2
+comparison is blocked by different HF stationary points (see Known Bug 3).
+
+Do not call work done if one case improves while another regresses.
+
+---
+
+## Mandatory Verification Loop
+
+Run after every solver-facing change:
 
 ```bash
-cmake --build build --target hartree-fock -j4
+cmake --build build --target hartree-fock planck-casscf-internal -j4
+./build/planck-casscf-internal
 for input in tests/inputs/casscf_tests/*.hfinp; do
     ./build/hartree-fock "$input" | tee "${input%.hfinp}.rerun.log"
 done
 ```
 
-Current gate energies (2026-04-04). Entries marked ⚠ are known wrong and must be
-updated after the hcore+symm bug is fixed (see item 0 above):
-
-| Input | E(CASSCF) / Eh | PySCF ref / Eh | Status |
-|---|---|---|---|
-| ethylene_cas44_sto3g_sa2 (SA-2) | −77.0034974301 | −76.9930595776 | ⚠ hcore bug + local-min gap |
-| ethylene_casscf_321g | −77.5145223872 | −77.5145223959 | OK (Δ = 8.7e-9) |
-| ethylene_casscf_321g_nroot2 | −77.5145223872 | — | OK |
-| ethylene_casscf_ccpvdz | −77.9524855976 | −77.9524856210 | OK (Δ = 2.3e-8) |
-| h2_cas22_sto3g | −1.1372838351 | −1.1372838345 | OK (Δ = 6.0e-10) |
-| lih_cas22_sto3g | −7.8811184797 | −7.8811184639 | OK (Δ = 1.6e-8) |
-| water_cas44_631g | −75.5497490402 | −76.0370099226 | ⚠ wrong (hcore+symm, Δ = 0.49) |
-| water_cas44_b1 | −74.2879452324 | — | not yet cross-checked |
-| water_cas44_ccpvdz | −75.6045806122 | −76.0781256226 | ⚠ wrong (hcore+symm, Δ = 0.47) |
-| water_cas44_sto3g | −74.4700757755 | −75.0084054420 | ⚠ wrong (hcore+symm, Δ = 0.54) |
-| water_cas44_sto3g_sa2 (SA-2) | −74.7751279351 | −74.7877865139 | ⚠ SA local-min gap (Δ = 0.013) |
-
-Do not call work done if one case improves while another regresses.
-The ⚠ entries must not be used as convergence targets until re-run with correct inputs.
-
 ---
 
 ## What Not To Do Next
 
-- Do not relabel the current `sa-coupled` direction as full SA second-order; it is
-  per-root averaged, not shared-κ.
 - Do not add more heuristic step mixing to the production path.
 - Do not reopen P0 items (RAS filtering, symmetry-table wiring, root tracking,
   bitstring guards) unless a new regression appears.
 - Do not overload `_cas_mo_coefficients` with another orbital representation.
-- Do not prioritize more file splitting; the important work is theory and validation.
+- Do not prioritize more file splitting or abstraction; the important work is
+  theory, validation, and the Hessian upgrade.
+- Do not change the PySCF reference energies without re-running the PySCF
+  scripts and documenting why the reference changed.
 
 ---
 
-## Relevant Files For The Next Pass
+## Key Files
 
-- `src/post_hf/casscf/casscf.cpp` — driver, convergence gate, candidate screen,
-  acceptance merit function
-- `src/post_hf/casscf/response.cpp` — `solve_coupled_orbital_ci_step`,
-  `build_coupled_response_blocks`
-- `src/post_hf/casscf/orbital.cpp` — `hessian_action`, `hess_diag`,
-  `diagonal_preconditioned_orbital_step`
-- `tests/casscf_internal.cpp` — internal unit and invariance coverage
-- `tests/run_regressions.py` — regression runner (add SA metrics)
-- `tests/inputs/casscf_tests/pyscf_reference_energies.md` — PySCF reference values
-  (fill TBD entries)
+| File | Purpose |
+|---|---|
+| `src/post_hf/casscf/casscf.cpp` | Driver, convergence gate, candidate screen, acceptance merit |
+| `src/post_hf/casscf/response.cpp` | `solve_sa_coupled_orbital_ci_step`, `build_coupled_response_blocks` |
+| `src/post_hf/casscf/orbital.cpp` | `hessian_action`, `hess_diag`, `diagonal_preconditioned_orbital_step` |
+| `src/post_hf/casscf/strings.cpp` | `select_active_orbitals`, `reorder_mo_coefficients`, CI string algebra |
+| `tests/casscf_internal.cpp` | Internal unit and invariance coverage |
+| `tests/pyscf/run_all.py` | PySCF-backed energy validation suite |
+| `tests/run_regressions.py` | Binary output regression runner (parses SA metrics) |
+| `tests/inputs/casscf_tests/pyscf_reference_energies.md` | Reference energy table with notes |
