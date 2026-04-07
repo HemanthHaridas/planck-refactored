@@ -22,6 +22,7 @@ mol.basis = "sto-3g"
 mol.charge = 0
 mol.spin = 0
 mol.cart = True  # match Planck 'basis_type cartesian'
+mol.symmetry = True
 mol.verbose = 0
 mol.build()
 
@@ -30,6 +31,7 @@ mf.conv_tol = 1e-12
 mf.kernel()
 
 mc = mcscf.CASSCF(mf, 2, 2)
+mc = mc.newton()
 mc.conv_tol = 1e-9
 mc.conv_tol_grad = 1e-6
 mc.kernel()
