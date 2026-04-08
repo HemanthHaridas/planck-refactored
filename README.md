@@ -19,7 +19,7 @@ A quantum chemistry program implementing restricted and unrestricted Hartree-Foc
 - **MO symmetry** — irreducible representation labels assigned to each converged orbital; non-Abelian groups automatically use the largest Abelian subgroup; linear molecules handled separately
 - **Post-HF** — RMP2 and UMP2 correlation energy corrections with natural orbital analysis; CASSCF and RASSCF multireference active-space calculations
 - **RMP2 natural orbitals** — natural orbital occupation numbers and coefficients printed after a single-point RMP2 run
-- **CASSCF** — Complete Active Space SCF with full-CI, state-averaged (SA-CASSCF) roots, and second-order orbital optimization
+- **CASSCF** — Complete Active Space SCF with full-CI, state-averaged (SA-CASSCF) roots, matrix-free second-order orbital optimization, and a dedicated active-integral-cache transform for the orbital-gradient/response hot path
 - **RASSCF** — Restricted Active Space SCF extending CASSCF with RAS1/RAS2/RAS3 subspace partitioning and configurable hole/electron occupation restrictions
 - **Analytic nuclear gradients** — RHF and UHF analytic nuclear gradients
 - **Geometry optimization** — optimizer in Cartesian coordinates or redundant generalized internal coordinates (GIC); optional constraints (fixed bonds, angles, dihedrals, frozen atoms) via `%begin_constraints`
@@ -28,6 +28,12 @@ A quantum chemistry program implementing restricted and unrestricted Hartree-Foc
 - **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*
 
 </div>
+
+### Documentation
+
+- `docs/PLANCK_TEACHING_GUIDE.md` — high-level implementation and usage guide
+- `docs/CASSCF_ACTIVE_CACHE_PATCH_SERIES.md` — reviewable patch plan for the CASSCF active-integral-cache optimization work
+- `docs/README.md` — lightweight static-site export instructions for the documentation set
 
 ### Requirements
 

@@ -130,7 +130,7 @@ Implements Pulay's Direct Inversion in the Iterative Subspace inline in `types.h
 
 <div align="justify">
 
-The root aggregate. Every module receives a `Calculator &` and reads/writes its fields. The public fields include all `Options*` structs, the `Molecule`, the `Basis`, the SCF data (`_info._scf`), the stored ERI tensor (`_eri`), the overlap and core Hamiltonian matrices, CASSCF results, gradient, Hessian, frequencies, and SAO blocking data. `_compute_nuclear_repulsion()` uses `_molecule._standard` — it must be called after `_standard` is populated in Bohr.
+The root aggregate. Every module receives a `Calculator &` and reads/writes its fields. The public fields include all `Options*` structs, the `Molecule`, the `Basis`, the SCF data (`_info._scf`), the stored ERI tensor (`_eri`), the overlap and core Hamiltonian matrices, CASSCF results, gradient, Hessian, frequencies, and SAO blocking data. For SA-CASSCF runs, `_cas_root_energies` stores per-root total CASSCF energies (not bare CI eigenvalues), so the final root table can be averaged directly with the configured SA weights. `_compute_nuclear_repulsion()` uses `_molecule._standard` — it must be called after `_standard` is populated in Bohr.
 
 </div>
 
@@ -345,7 +345,7 @@ E_MP2 = Σ_{i<j, a<b} |(ia|jb) - (ib|ja)|² / (ε_i + ε_j - ε_a - ε_b)
 
 <div align="justify">
 
-The AO→MO transformation uses a quarter-transform strategy. If `_eri` is populated from a conventional SCF, it is reused directly; otherwise the ERI tensor is rebuilt from shell pairs. RMP2 natural orbitals are available through `compute_rmp2_natural_orbitals()`, which diagonalizes the MP2 one-particle density matrix.
+The AO→MO transformation uses a quarter-transform strategy. If `_eri` is populated from a conventional SCF, it is reused directly; otherwise the ERI tensor is rebuilt from shell pairs. The generic transform entry points in `src/post_hf/integrals.cpp` remain the shared path for MP2 and for the fully internal CASSCF integral builds. RMP2 natural orbitals are available through `compute_rmp2_natural_orbitals()`, which diagonalizes the MP2 one-particle density matrix.
 
 </div>
 
@@ -393,7 +393,11 @@ Determinants are represented as `uint64_t` bitmasks (`CIString`). Each bit posit
 
 <div align="justify">
 
-The macro/micro iteration structure alternates: (1) CI solve to get CI vectors and state-averaged energy, (2) 1-RDM and 2-RDM construction, (3) orbital gradient and approximate Hessian computation, (4) exponential orbital rotation `C → C exp(κ)` where `κ` is an antisymmetric rotation matrix. The micro iterations apply a matrix-free orbital Hessian action to the orbital gradient via the Lagrangian formulation, with a diagonal preconditioner. Convergence is assessed on both ΔE and the RMS orbital gradient norm. Hungarian root tracking ensures consistent state labeling across macro iterations when multiple roots are computed.
+The macro/micro iteration structure alternates: (1) CI solve to get CI vectors and state-averaged energy, (2) 1-RDM and 2-RDM construction, (3) orbital gradient and approximate Hessian computation, (4) orbital rotation by a Cayley-transformed antisymmetric matrix `κ`. The micro iterations apply a matrix-free orbital Hessian action to the orbital gradient via the Lagrangian formulation, with a diagonal preconditioner fallback and a small-space finite-difference Newton escape hatch. Convergence is assessed on both ΔE and the state-averaged orbital-gradient screen. Hungarian root tracking ensures consistent state labeling across macro iterations when multiple roots are computed.
+
+The orbital-gradient and CI-response path relies on a mixed-basis active-integral cache built by `build_active_integral_cache(...)` in `casscf/orbital.cpp`. That cache is produced by the dedicated `transform_eri_active_cache(...)` kernel in `src/post_hf/integrals.cpp`, not by the fully generic four-leg AO→MO transform. The cached tensor is stored row-major as `(p,u,v,w)`, with one full-space MO index `p` and three active-space indices `u,v,w`. Each fixed-`p` slab is contiguous, so the builder can parallelize safely over `p` with OpenMP and reuse thread-local scratch buffers across repeated macro-iteration rebuilds.
+
+On the consumer side, `compute_Q_matrix(...)` contracts the cached `(p,u,v,w)` slabs with the active-space 2-RDM to form the Q matrix used in the orbital gradient and response equations. Because both the `puvw` cache and `Γ[t,u,v,w]` are traversed as contiguous `n_act^3` slabs, the hot contraction path reduces to repeated dot products rather than repeated four-index address arithmetic.
 
 </div>
 
@@ -588,6 +592,8 @@ run_rhf() / run_uhf()      → DataSCF (density, Fock, MOs, energies)
                          ├─ CASSCF::build_ci_space()
                          ├─ CASSCF::solve_ci()
                          ├─ CASSCF::compute_1rdm() / compute_2rdm()
+                         ├─ CASSCF::build_active_integral_cache()
+                         ├─ CASSCF::compute_Q_matrix()
                          └─ orbital rotation loop
 ```
 
@@ -608,3 +614,5 @@ The following invariants are not enforced by the type system and must be maintai
 - **`Calculator::initialize()`** must be called after the basis is loaded and before any integral or SCF code runs. It allocates all matrix storage.
 - **SAO blocking** is valid only after `build_sao_basis()` sets `_sao_transform` and related arrays. The SCF code checks `_use_sao_blocking` before attempting block-diagonal diagonalization.
 - **DIIS restart**: `DIISState::clear()` is called automatically when the error grows by more than `_diis_restart_factor`. Callers should not manually clear the DIIS state unless explicitly restarting from scratch.
+- **`ActiveIntegralCache::puvw` layout** is row-major `(p,u,v,w)`. Every producer and consumer must agree on that exact ordering; `compute_Q_matrix()` assumes each fixed-`p` slab is one contiguous block of length `n_act^3`.
+- **Per-root SA energies** stored in `Calculator::_cas_root_energies` are full CASSCF total energies. Do not replace them with raw CI eigenvalues unless the logging and checkpoint consumers are updated accordingly.

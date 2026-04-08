@@ -1,6 +1,6 @@
 # CASSCF / SA-CASSCF Implementation Status
 
-Last updated: 2026-04-08 (branch `codex/casscf-correctness-pass2`)
+Last updated: 2026-04-08 (branch `codex/casscf-active-cache-patch1`)
 
 ---
 
@@ -9,9 +9,10 @@ Last updated: 2026-04-08 (branch `codex/casscf-correctness-pass2`)
 Full CASSCF and SA-CASSCF are implemented and validated. The macro-optimizer
 uses a shared-κ SA coupled orbital/CI solve as the primary step, with a
 finite-difference Newton escape hatch for small active spaces (≤64 non-redundant
-pairs). All theory milestones are complete. The PySCF reference suite passes
-11/11. Open work is polish only (one display bug, one missing test assertion,
-one Hessian upgrade).
+pairs). The dedicated active-integral-cache transform for the orbital-gradient
+and response hot path is now landed, and the per-root SA energy display bug is
+fixed. The PySCF reference suite passes 11/11. Open work is now limited to
+regression tightening, Hessian upgrades, and optimizer simplification.
 
 ---
 
@@ -55,6 +56,22 @@ Under stagnation (`stagnation_streak ≥ 2`):
 Step scales tried: `{1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625}`;
 lowest merit `E_cas + 0.1·‖g_orb‖²` wins.
 
+### Active-integral-cache path
+- `transform_eri_active_cache(...)` (`src/post_hf/integrals.cpp`) is the
+  dedicated builder for the mixed-basis active cache used by CASSCF orbital
+  gradients and CI response.
+- Cache layout is row-major `(p,u,v,w)` with one contiguous `n_act^3` slab per
+  fixed `p`.
+- OpenMP parallelism is over disjoint `p` slabs with static scheduling; scratch
+  buffers are thread-local and reused across repeated cache rebuilds.
+- `contract_q_matrix` / `compute_Q_matrix` consume the cache as contiguous slab
+  dot products against `Γ[t,u,v,w]`, matching the producer layout exactly.
+
+### Reporting and bookkeeping
+- `Calculator::_cas_root_energies` now stores per-root **total** CASSCF
+  energies (`E_nuc + E_core + E_CI(root)`), so the printed SA root table is
+  numerically consistent with the final SA total energy.
+
 ### Validation
 - `planck-casscf-internal` unit harness covers: direct-sigma vs dense CI,
   RDM agreement, exact RHS vs finite-difference, coupled block invariants,
@@ -63,6 +80,16 @@ lowest merit `E_cas + 0.1·‖g_orb‖²` wins.
 - PySCF reference suite (`tests/pyscf/run_all.py`): **11/11 passing**.
 - Regression runner (`run_regressions.py`) parses `sa_g`, `root_screen_g`,
   `max_root_g` SA diagnostics.
+- Fresh regression after the active-cache work:
+  - `water_cas44_sto3g` matches the checked-in convergence trace after
+    normalizing away timing-only lines.
+  - `water_cas44_sto3g_sa2` prints physically meaningful per-root total
+    energies whose weighted average exactly matches the reported SA total.
+- Fresh benchmark after the active-cache work:
+  - `ethylene_cas44_sto3g_sa2`, `OMP_NUM_THREADS=4`
+  - preserved baseline wall time: `165.791 s`
+  - optimized rebuilt wall time: `46.974 s`
+  - speedup: `3.53x` (~`71.7%` reduction)
 
 ### Historical bugs fixed
 - **Reversed Cayley sign** (`apply_orbital_rotation`): was applying `exp(-κ)`
@@ -71,6 +98,9 @@ lowest merit `E_cas + 0.1·‖g_orb‖²` wins.
 - **`guess hcore` + `use_symm true` → wrong RHF**: d2d RHF branch preservation
   fix (commit 46aa199). All three water SS gate values pass from the correct
   RHF starting point.
+- **Per-root SA energy display**: the summary was printing raw CI eigenvalues
+  instead of full per-root CASSCF total energies. Fixed by storing
+  `E_nuc + E_core + E_CI(root)` in `Calculator::_cas_root_energies`.
 
 ---
 
@@ -97,45 +127,13 @@ Tolerance: 1e-5 Eh (all pass well within this).
 Note: PySCF references for water and ethylene were updated to use the
 hcore-start converged values (both codes agree from this starting point).
 The water SA-2 SAD-start minimum (−74.7877865139 Eh, 13 mEh lower) has not
-been validated in Planck — see P4.
-
----
-
-## Known Bugs
-
-### B0: Per-root total energy display is wrong
-
-**File:** `src/post_hf/casscf/casscf.cpp:1442`
-
-`calc._cas_root_energies(r)` stores `fst.roots[r].ci_energy` — the CI
-eigenvalue of the active-space Hamiltonian only. This does not include the core
-Fock energy or nuclear repulsion. The correct per-root total energy is:
-
-```
-E_total(r) = E_nuc + E_core + ci_energy(r)
-```
-
-Current logs show nonsense values (~−5 to −6 Eh for SA cases instead of
-~−74 to −77 Eh). The fix is one line: store
-`fst.E_core_offset + fst.roots[r].ci_energy` or compute `E_nuc + E_core` and
-add it at storage time.
+been validated in Planck — see P3.
 
 ---
 
 ## Remaining Work (Priority Order)
 
-### P0: Fix per-root total energy display (simple, do first)
-
-See B0. One-line fix at `casscf.cpp:1442`. Pass `E_nuc + E_core` to the
-storage site and store `E_nuc + E_core + root.ci_energy` instead of
-`root.ci_energy`.
-
-**Gate:** per-root energies displayed for ethylene SA-2 should be ~−77.00 Eh,
-not ~−5 Eh.
-
----
-
-### P1: SA stationarity assertion in the regression runner
+### P0: SA stationarity assertion in the regression runner
 
 `run_regressions.py` parses `casscf_sa_gnorm` (`sa_g=...` in the log) but
 never asserts it is below `tol_mcscf_grad` (default 1e-5). SA convergence
@@ -152,7 +150,7 @@ should be a hard test criterion, not just a scraped metric.
 
 ---
 
-### P2: True SA orbital Hessian action
+### P1: True SA orbital Hessian action
 
 `hessian_action()` in `orbital.cpp:212` is a diagonal energy-denominator model:
 ```
@@ -185,10 +183,10 @@ convergence rate ≥ diagonal baseline for all 11 gate cases.
 
 ---
 
-### P3: Optimizer second simplification pass
+### P2: Optimizer second simplification pass
 
 `numeric-newton` is still a production escape hatch for spaces with ≤64 pairs.
-After P2 is stable, the shared-κ solve should handle these without a separate
+After P1 is stable, the shared-κ solve should handle these without a separate
 FD-Newton path.
 
 **Deliverables:**
@@ -201,7 +199,7 @@ FD-Newton path.
 
 ---
 
-### P4: Water SA-2 SAD-start validation
+### P3: Water SA-2 SAD-start validation
 
 From the hcore start, Planck and PySCF agree at −74.7751378 Eh. The PySCF
 SAD-start minimum (−74.7877865 Eh, 13 mEh lower) has not been tested in
@@ -217,7 +215,7 @@ Planck. The SAD minimum may be the global SA minimum.
 
 ---
 
-### P5: Invariance and robustness test coverage
+### P4: Invariance and robustness test coverage
 
 Still missing from the unit harness:
 - Active-active rotation invariance: rotate within the active block after
@@ -240,7 +238,7 @@ Still missing from the unit harness:
 - Do not overload `_cas_mo_coefficients` with another orbital representation.
 - Do not change PySCF reference energies without re-running the PySCF scripts
   and documenting why the reference changed.
-- Do not start P3 (optimizer simplification) before P2 (Hessian upgrade) is
+- Do not start P2 (optimizer simplification) before P1 (Hessian upgrade) is
   stable; the simplification depends on the shared-κ solve being robust without
   the FD-Newton fallback.
 
@@ -259,7 +257,7 @@ Still missing from the unit harness:
 | `tests/casscf_internal.cpp` | Internal unit and invariance coverage |
 | `tests/pyscf/run_all.py` | PySCF-backed energy validation suite |
 | `tests/run_regressions.py` | Binary output regression runner (parses SA metrics) |
-| `tests/regression_cases.json` | Regression case specs (needs SA gnorm assertions — see P1) |
+| `tests/regression_cases.json` | Regression case specs (needs SA gnorm assertions — see P0) |
 | `tests/inputs/casscf_tests/pyscf_reference_energies.md` | Reference energy table with diagnostic notes |
 
 ---

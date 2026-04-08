@@ -763,7 +763,7 @@ namespace HartreeFock
         Eigen::VectorXd _cas_nat_occ;         // active natural occupation numbers
         Eigen::MatrixXd _cas_mo_coefficients; // converged CASSCF MO coefficients [nb×nb] in the optimization basis
         double _casscf_rhf_energy = 0.0;      // RHF reference energy (for ΔE printout)
-        Eigen::VectorXd _cas_root_energies;   // per-root CI energies (length nroots; empty for SS-CASSCF)
+        Eigen::VectorXd _cas_root_energies;   // per-root total CASSCF energies (length nroots; empty for SS-CASSCF)
 
         Eigen::MatrixXd _overlap; // Overlap matrix S
         Eigen::MatrixXd _hcore;   // Core Hamiltonian H = T + V

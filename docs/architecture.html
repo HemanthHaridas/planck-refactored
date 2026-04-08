@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Planck — Architecture Reference</title>
+
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath:  [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']],
+        packages:    {'[+]': ['ams']},
+        tags:        'none'
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+      },
+      startup: { typeset: true }
+    };
+  </script>
+  <script async
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js">
+  </script>
+
+  <style>
+    :root {
+      --bg:      #f6f1e8;
+      --panel:   #fffdf8;
+      --ink:     #1d2b36;
+      --muted:   #566472;
+      --accent:  #9a3d22;
+      --rule:    #dbcdb9;
+      --code-bg: #f2ece2;
+      --shadow:  0 18px 60px rgba(42, 33, 20, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(
+          circle at top left, rgba(154,61,34,0.08), transparent 22rem
+        ),
+        linear-gradient(180deg, #fbf7f0 0%, var(--bg) 100%);
+      line-height: 1.7;
+    }
+    .page {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+    .hero {
+      background: linear-gradient(
+        135deg, rgba(154,61,34,0.95), rgba(123,53,31,0.92)
+      );
+      color: #fff9f2;
+      border-radius: 24px;
+      padding: 28px 34px;
+      box-shadow: var(--shadow);
+      margin-bottom: 24px;
+    }
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: clamp(2rem, 3vw, 3.2rem);
+      line-height: 1.1;
+    }
+    .hero p {
+      margin: 0;
+      max-width: 100%;
+      color: rgba(255,249,242,0.92);
+      font-size: 1.05rem;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+      gap: 24px;
+      align-items: start;
+    }
+    .sidebar, .content {
+      background: var(--panel);
+      border: 1px solid var(--rule);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+    }
+    .sidebar {
+      position: sticky;
+      top: 20px;
+      max-height: calc(100vh - 40px);
+      overflow-y: auto;
+      padding: 22px 20px;
+    }
+    .sidebar h2 {
+      margin: 0 0 12px;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      color: var(--accent);
+    }
+    .sidebar ul { list-style: none; padding: 0; margin: 0; }
+    .sidebar li { margin: 0; padding: 0; }
+    .sidebar a {
+      display: block;
+      padding: 4px 0;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      line-height: 1.4;
+    }
+    .sidebar a:hover { color: var(--accent); }
+    .toc-level-1 a {
+      font-weight: 600;
+      padding-top: 7px;
+      color: var(--ink);
+      font-size: 0.93rem;
+    }
+    .toc-level-2 a { padding-left: 12px; }
+    .toc-level-3 a { padding-left: 24px; font-size: 0.85rem; }
+    .toc-level-4 a { padding-left: 36px; font-size: 0.82rem; }
+    .content { padding: 36px 40px; }
+    .content h1, .content h2, .content h3, .content h4 {
+      line-height: 1.2;
+      color: #13202b;
+      scroll-margin-top: 24px;
+    }
+    .content h1 {
+      font-size: 2.1rem;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--rule);
+      margin-top: 0;
+    }
+    .content h2 {
+      font-size: 1.55rem;
+      margin-top: 2.8rem;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .content h3 {
+      font-size: 1.18rem;
+      margin-top: 2rem;
+      color: var(--accent);
+    }
+    .content h4 {
+      font-size: 1rem;
+      margin-top: 1.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .content hr {
+      border: none;
+      border-top: 1px solid var(--rule);
+      margin: 2.5rem 0;
+    }
+    .content p, .content li {
+      font-size: 1.02rem;
+      text-align: justify;
+      hyphens: auto;
+    }
+    .content ul, .content ol { padding-left: 1.6rem; }
+    .content li { margin-bottom: 0.25rem; }
+    .content code {
+      background: var(--code-bg);
+      border: 1px solid #e0d7c9;
+      border-radius: 6px;
+      padding: 0.08rem 0.38rem;
+      font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+      font-size: 0.91em;
+    }
+    .content pre {
+      background: #201a17;
+      color: #f8efe5;
+      border-radius: 14px;
+      padding: 20px 22px;
+      overflow-x: auto;
+      line-height: 1.5;
+    }
+    .content pre code {
+      background: transparent;
+      border: 0;
+      padding: 0;
+      color: inherit;
+      font-size: 0.93rem;
+    }
+    .content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.4rem 0;
+      font-size: 0.95rem;
+    }
+    .content th {
+      border: 1px solid var(--rule);
+      padding: 10px 14px;
+      text-align: left;
+      background: rgba(154,61,34,0.08);
+      font-weight: 600;
+      font-size: 0.93rem;
+      white-space: nowrap;
+    }
+    .content td {
+      border: 1px solid var(--rule);
+      padding: 10px 14px;
+      vertical-align: top;
+    }
+    .content tr:nth-child(even) td {
+      background: rgba(219,205,185,0.18);
+    }
+    .content a { color: var(--accent); }
+    .math-display {
+      display: block;
+      overflow-x: auto;
+      padding: 0.5rem 0;
+      text-align: center;
+    }
+    .math-inline { white-space: nowrap; }
+    .table-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin: 1.4rem 0;
+    }
+    .table-wrap table { margin: 0; min-width: 480px; }
+    .toc-toggle {
+      display: none;
+      width: 100%;
+      background: var(--accent);
+      color: #fff9f2;
+      border: none;
+      border-radius: 12px;
+      padding: 10px 16px;
+      font-family: inherit;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: left;
+      margin-bottom: 12px;
+    }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { position: static; max-height: none; }
+      .content { padding: 24px 18px; }
+      .toc-toggle { display: block; }
+      .sidebar-nav { display: none; }
+      .sidebar-nav.open { display: block; }
+      .sidebar h2 { display: none; }
+    }
+    @media (max-width: 600px) {
+      .page { padding: 12px 10px 40px; }
+      .hero { padding: 18px 18px; border-radius: 16px; }
+      .hero h1 { font-size: clamp(1.6rem, 7vw, 2.4rem); }
+      .hero p { font-size: 0.95rem; }
+      .content { padding: 18px 14px; border-radius: 16px; }
+      .sidebar { border-radius: 16px; padding: 16px 14px; }
+      .content p, .content li {
+        text-align: left;
+        -webkit-hyphens: none;
+        hyphens: none;
+      }
+      .content h1 { font-size: 1.7rem; }
+      .content h2 { font-size: 1.3rem; margin-top: 2rem; }
+      .content h3 { font-size: 1.1rem; }
+      .content pre { padding: 14px 14px; border-radius: 10px; }
+      .sidebar a { padding: 7px 0; font-size: 0.97rem; }
+      .toc-level-2 a { padding-left: 14px; }
+      .toc-level-3 a { padding-left: 26px; font-size: 0.9rem; }
+      .toc-level-4 a { padding-left: 38px; font-size: 0.87rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <h1>Planck — Architecture Reference</h1>
+      <p>A detailed reference of every module in the Planck codebase —
+         design decisions, data-flow, trade-offs, and key invariants for
+         RHF/UHF SCF, MP2, CASSCF/RASSCF, analytic gradients, geometry
+         optimisation, vibrational analysis, and KS-DFT.</p>
+    </section>
+    <div class="layout">
+      <aside class="sidebar">
+        <button class="toc-toggle" aria-expanded="false"
+                aria-controls="toc-nav">
+          Contents &#9662;
+        </button>
+        <h2>Contents</h2>
+        <nav id="toc-nav" class="sidebar-nav">
+          <ul>
+<li class="toc-level-1"><a href="#planck-architecture-reference">Planck — Architecture Reference</a></li>
+<li class="toc-level-2"><a href="#build-system-cmakelists-txt">Build System (`CMakeLists.txt`)</a></li>
+<li class="toc-level-2"><a href="#central-type-system-src-base">Central Type System (`src/base/`)</a></li>
+<li class="toc-level-3"><a href="#enumerations">Enumerations</a></li>
+<li class="toc-level-3"><a href="#molecule">`Molecule`</a></li>
+<li class="toc-level-3"><a href="#shell-and-contractedview">`Shell` and `ContractedView`</a></li>
+<li class="toc-level-3"><a href="#basis">`Basis`</a></li>
+<li class="toc-level-3"><a href="#shellpair-and-primitivepair">`ShellPair` and `PrimitivePair`</a></li>
+<li class="toc-level-3"><a href="#diisstate">`DIISState`</a></li>
+<li class="toc-level-3"><a href="#datascf-and-spinchannel">`DataSCF` and `SpinChannel`</a></li>
+<li class="toc-level-3"><a href="#calculator">`Calculator`</a></li>
+<li class="toc-level-2"><a href="#input-output-src-io">Input/Output (`src/io/`)</a></li>
+<li class="toc-level-3"><a href="#parser-io-h-io-cpp">Parser — `io.h` / `io.cpp`</a></li>
+<li class="toc-level-3"><a href="#logger-logging-h">Logger — `logging.h`</a></li>
+<li class="toc-level-3"><a href="#checkpoint-checkpoint-h-checkpoint-cpp">Checkpoint — `checkpoint.h` / `checkpoint.cpp`</a></li>
+<li class="toc-level-2"><a href="#element-data-src-lookup">Element Data (`src/lookup/`)</a></li>
+<li class="toc-level-2"><a href="#basis-set-src-basis">Basis Set (`src/basis/`)</a></li>
+<li class="toc-level-3"><a href="#normalization-basis-cpp">Normalization — `basis.cpp`</a></li>
+<li class="toc-level-3"><a href="#gbs-reader-gaussian-cpp">GBS Reader — `gaussian.cpp`</a></li>
+<li class="toc-level-2"><a href="#symmetry-src-symmetry">Symmetry (`src/symmetry/`)</a></li>
+<li class="toc-level-3"><a href="#point-group-detection-symmetry-h-symmetry-cpp">Point-group detection — `symmetry.h` / `symmetry.cpp`</a></li>
+<li class="toc-level-3"><a href="#sao-blocking-mo-symmetry-h">SAO blocking — `mo_symmetry.h`</a></li>
+<li class="toc-level-3"><a href="#integral-symmetry-integral-symmetry-h">Integral symmetry — `integral_symmetry.h`</a></li>
+<li class="toc-level-2"><a href="#integrals-src-integrals">Integrals (`src/integrals/`)</a></li>
+<li class="toc-level-3"><a href="#shell-pairs-shellpair-h">Shell pairs — `shellpair.h`</a></li>
+<li class="toc-level-3"><a href="#obara-saika-engine-os-h-os-cpp">Obara-Saika engine — `os.h` / `os.cpp`</a></li>
+<li class="toc-level-3"><a href="#engine-dispatch-base-h">Engine dispatch — `base.h`</a></li>
+<li class="toc-level-2"><a href="#scf-src-scf">SCF (`src/scf/`)</a></li>
+<li class="toc-level-3"><a href="#scf-loop-conceptual">SCF loop (conceptual)</a></li>
+<li class="toc-level-3"><a href="#conventional-vs-direct-scf">Conventional vs. direct SCF</a></li>
+<li class="toc-level-3"><a href="#sad-guess">SAD guess</a></li>
+<li class="toc-level-2"><a href="#post-hf-correlation-src-post-hf">Post-HF Correlation (`src/post_hf/`)</a></li>
+<li class="toc-level-3"><a href="#mp2-mp2-h-mp2-cpp">MP2 — `mp2.h` / `mp2.cpp`</a></li>
+<li class="toc-level-4"><a href="#rmp2-run-rmp2">RMP2 (`run_rmp2`)</a></li>
+<li class="toc-level-4"><a href="#ump2-run-ump2">UMP2 (`run_ump2`)</a></li>
+<li class="toc-level-3"><a href="#casscf-rasscf-casscf-h-and-casscf">CASSCF / RASSCF — `casscf.h` and `casscf/`</a></li>
+<li class="toc-level-4"><a href="#ci-strings-casscf-internal-h-casscf-strings-h">CI strings — `casscf_internal.h` / `casscf/strings.h`</a></li>
+<li class="toc-level-4"><a href="#ci-hamiltonian-casscf-ci-h-ci-cpp">CI Hamiltonian — `casscf/ci.h` / `ci.cpp`</a></li>
+<li class="toc-level-4"><a href="#reduced-density-matrices-casscf-rdm-h-rdm-cpp">Reduced density matrices — `casscf/rdm.h` / `rdm.cpp`</a></li>
+<li class="toc-level-4"><a href="#orbital-optimization-mcscf-loop-casscf-casscf-h">Orbital optimization — MCSCF loop (`casscf/casscf.h`)</a></li>
+<li class="toc-level-2"><a href="#analytic-gradients-src-gradient">Analytic Gradients (`src/gradient/`)</a></li>
+<li class="toc-level-2"><a href="#geometry-optimization-src-opt">Geometry Optimization (`src/opt/`)</a></li>
+<li class="toc-level-3"><a href="#cartesian-l-bfgs-geomopt-h-geomopt-cpp">Cartesian L-BFGS — `geomopt.h` / `geomopt.cpp`</a></li>
+<li class="toc-level-3"><a href="#internal-coordinate-bfgs-intcoords-h-geomopt-cpp">Internal-coordinate BFGS — `intcoords.h` / `geomopt.cpp`</a></li>
+<li class="toc-level-2"><a href="#vibrational-frequencies-src-freq">Vibrational Frequencies (`src/freq/`)</a></li>
+<li class="toc-level-2"><a href="#ks-dft-src-dft">KS-DFT (`src/dft/`)</a></li>
+<li class="toc-level-3"><a href="#driver-dft-driver-h-driver-cpp">Driver — `dft/driver.h` / `driver.cpp`</a></li>
+<li class="toc-level-3"><a href="#grid-dft-base-grid-h-radial-h-angular-h">Grid — `dft/base/grid.h`, `radial.h`, `angular.h`</a></li>
+<li class="toc-level-3"><a href="#libxc-wrapper-dft-base-wrapper-h">libxc wrapper — `dft/base/wrapper.h`</a></li>
+<li class="toc-level-3"><a href="#ao-evaluation-on-grid-dft-ao-grid-h">AO evaluation on grid — `dft/ao_grid.h`</a></li>
+<li class="toc-level-3"><a href="#xc-on-grid-dft-xc-grid-h-xc-grid-cpp">XC on grid — `dft/xc_grid.h` / `xc_grid.cpp`</a></li>
+<li class="toc-level-3"><a href="#ks-potential-matrix-dft-ks-matrix-h-ks-matrix-cpp">KS potential matrix — `dft/ks_matrix.h` / `ks_matrix.cpp`</a></li>
+<li class="toc-level-2"><a href="#entry-points-src-driver-cpp-src-dft-main-cpp">Entry Points (`src/driver.cpp`, `src/dft/main.cpp`)</a></li>
+<li class="toc-level-3"><a href="#hf-driver-src-driver-cpp">HF driver — `src/driver.cpp`</a></li>
+<li class="toc-level-3"><a href="#dft-driver-src-dft-main-cpp">DFT driver — `src/dft/main.cpp`</a></li>
+<li class="toc-level-2"><a href="#data-flow-summary">Data Flow Summary</a></li>
+<li class="toc-level-2"><a href="#key-invariants-and-pitfalls">Key Invariants and Pitfalls</a></li>
+</ul>
+        </nav>
+      </aside>
+      <main class="content">
+        <h1 id="planck-architecture-reference">Planck — Architecture Reference</h1>
+<p>Planck is a C++23 quantum chemistry engine implementing Hartree-Fock SCF, post-HF correlation, and Kohn-Sham DFT from first principles. The codebase is organized around two standalone binaries — <code>hartree-fock</code> and <code>planck-dft</code> — that share a common library of integrals, basis-set handling, symmetry, I/O, and geometry optimization. Every public interface propagates errors through <code>std::expected&lt;T, std::string&gt;</code> rather than exceptions, making failure paths explicit and composable throughout the call graph.</p>
+<hr>
+<h2 id="build-system-cmakelists-txt">Build System (<code>CMakeLists.txt</code>)</h2>
+<p>The project uses CMake 3.5+ with C++23 required and extensions disabled. Two primary executables are defined alongside an optional utility binary:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Binary</th>
+<th>Purpose</th>
+</tr></thead>
+<tbody>
+<tr><td><code>hartree-fock</code></td><td>RHF/UHF SCF, MP2, CASSCF/RASSCF, analytic gradients, geometry optimization, frequencies</td></tr>
+<tr><td><code>planck-dft</code></td><td>Kohn-Sham DFT (RKS/UKS) using the same SCF infrastructure plus libxc and a numerical grid</td></tr>
+<tr><td><code>chkdump</code></td><td>Checkpoint file inspector (optional, <code>BUILD_TOOLS=ON</code> by default)</td></tr>
+</tbody></table></div>
+<p>Dependencies are acquired at configure time through two mechanisms. <strong>Eigen 3.4.0</strong> is fetched via <code>FetchContent</code> and is header-only — it is never compiled separately. <strong>libmsym</strong> (point-group detection) and <strong>libxc</strong> (exchange-correlation functionals) are built as static archives via <code>ExternalProject_Add</code> and linked directly. This keeps all three dependencies hermetic: no system-level installs are needed, and the build is fully reproducible across machines.</p>
+<p>Source files are collected with <code>file(GLOB ...)</code> per module directory (<code>BASE_SRC</code>, <code>IO_SRC</code>, <code>LOOKUP_SRC</code>, <code>SYMM_SRC</code>, <code>BASIS_SRC</code>, <code>INT_SRC</code>, <code>SCF_SRC</code>, <code>POSTHF_SRC</code>, <code>GRADIENT_SRC</code>, <code>OPT_SRC</code>, <code>FREQ_SRC</code>). <code>planck-dft</code> adds <code>DFT_SRC</code> and links <code>libxc.a</code>; <code>hartree-fock</code> does not. Both binaries compile with <code>USE_OPENMP</code> enabled by default — if <code>find_package(OpenMP)</code> succeeds, <code>OpenMP::OpenMP_CXX</code> is linked and <code>USE_OPENMP</code> is defined, which activates <code>#pragma omp parallel</code> regions in the ERI inner loops and in the finite-difference Hessian. CUDA acceleration is opt-in (<code>-DUSE_CUDA=ON</code>) and routes through a separate <code>gpu/</code> subdirectory that is not documented here. Basis sets are installed under <code>share/basis-sets/</code>; the configure step writes <code>src/base/basis.h</code> from <code>basis.h.in</code> so that <code>get_basis_path()</code> resolves at runtime without hard-coded paths.</p>
+<p><strong>Trade-off:</strong> <code>file(GLOB ...)</code> does not automatically detect new files added after <code>cmake ..</code> without re-running CMake. This is a deliberate ergonomic choice — the glob strategy avoids maintaining explicit file lists and is acceptable because source-file additions are comparatively rare and always require a reconfigure anyway.</p>
+<hr>
+<h2 id="central-type-system-src-base">Central Type System (<code>src/base/</code>)</h2>
+<p><code>types.h</code> is the single header that every other module includes. It defines all data-carrying structs and enums in the <code>HartreeFock</code> namespace. No business logic lives here — only data layout and a handful of trivial invariant-maintaining methods.</p>
+<h3 id="enumerations">Enumerations</h3>
+<p>All user-visible options are encoded as scoped enums, preventing accidental integer misuse and making <code>switch</code> exhaustiveness errors visible at compile time.</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Enum</th>
+<th>Values</th>
+</tr></thead>
+<tbody>
+<tr><td><code>ShellType</code></td><td><code>S(0)</code>, <code>P(1)</code>, <code>D(2)</code>, <code>F(3)</code>, <code>G(4)</code>, <code>H(5)</code></td></tr>
+<tr><td><code>SCFType</code></td><td><code>RHF</code>, <code>UHF</code></td></tr>
+<tr><td><code>PostHF</code></td><td><code>None</code>, <code>RMP2</code>, <code>UMP2</code>, <code>CASSCF</code>, <code>RASSCF</code></td></tr>
+<tr><td><code>CalculationType</code></td><td><code>SinglePoint</code>, <code>Gradient</code>, <code>GeomOpt</code>, <code>Frequency</code>, <code>GeomOptFrequency</code>, <code>ImaginaryFollow</code></td></tr>
+<tr><td><code>SCFMode</code></td><td><code>Conventional</code>, <code>Direct</code>, <code>Auto</code></td></tr>
+<tr><td><code>IntegralMethod</code></td><td><code>ObaraSaika</code>, <code>RysQuadrature</code>, <code>Auto</code></td></tr>
+<tr><td><code>SCFGuess</code></td><td><code>HCore</code>, <code>SAD</code>, <code>ReadDensity</code>, <code>ReadFull</code></td></tr>
+<tr><td><code>OptCoords</code></td><td><code>Cartesian</code>, <code>Internal</code></td></tr>
+<tr><td><code>DFTGridQuality</code></td><td><code>Coarse</code>, <code>Normal</code>, <code>Fine</code>, <code>UltraFine</code></td></tr>
+<tr><td><code>XCExchangeFunctional</code></td><td><code>Custom</code>, <code>Slater</code>, <code>B88</code>, <code>PW91</code>, <code>PBE</code></td></tr>
+<tr><td><code>XCCorrelationFunctional</code></td><td><code>Custom</code>, <code>VWN5</code>, <code>LYP</code>, <code>P86</code>, <code>PW91</code>, <code>PBE</code></td></tr>
+</tbody></table></div>
+<h3 id="molecule"><code>Molecule</code></h3>
+<p>Holds all per-molecule data. The coordinate layout follows a strict three-frame convention:</p>
+<ul>
+<li><code>coordinates</code> — raw input geometry, in Angstrom as given by the user</li>
+<li><code>_coordinates</code> — same geometry converted to Bohr by <code>prepare_coordinates()</code></li>
+<li><code>_standard</code> — symmetry-reoriented geometry in Bohr, set by <code>detectSymmetry()</code> (or equal to <code>_coordinates</code> when symmetry is disabled)</li>
+</ul>
+<p><strong>Critical invariant:</strong> All downstream code — basis set construction, nuclear repulsion, integral evaluation, and gradients — consumes <code>_standard</code>. The <code>_angstrom_to_bohr()</code> helper only converts <code>coordinates → _coordinates</code>; it does not touch <code>_standard</code>. This separation means symmetry reorientation is transparent to all downstream modules.</p>
+<h3 id="shell-and-contractedview"><code>Shell</code> and <code>ContractedView</code></h3>
+<p><code>Shell</code> stores the raw data for one contracted Gaussian shell: center (Bohr), shell type, primitive exponents <code>_primitives</code>, contracted coefficients <code>_coefficients</code>, and per-primitive normalizations <code>_normalizations</code>. The contracted norm <code>Nc</code> is folded into <code>_coefficients</code> during GBS file parsing — there is no separate <code>Nc</code> factor anywhere in the integral code.</p>
+<p><code>ContractedView</code> is a lightweight span-based reference into a shell. It adds a Cartesian angular-momentum tuple <code>_cartesian = (lx, ly, lz)</code>, a component norm <code>_component_norm = 1/sqrt((2lx-1)!! (2ly-1)!! (2lz-1)!!)</code>, and crucially <code>_index</code> — the position of this basis function in <code>Basis::_basis_functions</code>. This index is what the integral engine uses to place each computed integral into the correct matrix element.</p>
+<p><strong>Key invariant:</strong> <code>ContractedView._index</code> must be set correctly for every basis function. The OS integral engine uses it directly to index into output matrices; an incorrect or default-zero index silently misplaces all integrals for that function.</p>
+<h3 id="basis"><code>Basis</code></h3>
+<p>Holds <code>_shells</code> (one entry per contracted shell) and <code>_basis_functions</code> (one <code>ContractedView</code> per Cartesian basis function — multiple entries per shell for angular momentum L≥1). <code>nbasis()</code> returns the number of Cartesian basis functions; <code>nshells()</code> returns the number of shells.</p>
+<h3 id="shellpair-and-primitivepair"><code>ShellPair</code> and <code>PrimitivePair</code></h3>
+<p><code>ShellPair</code> is computed once before SCF and cached. Its constructor evaluates all <code>nA × nB</code> primitive-pair Gaussian products: the product center <code>P</code>, displacement vectors <code>pA = P − A</code> and <code>pB = P − B</code>, the exponential prefactor, and the product of contracted coefficients and normalizations. The Schwarz screening value is also pre-computed. <code>build_shellpairs</code> in <code>shellpair.h</code> generates all unique <code>(i, j)</code> pairs with <code>i ≥ j</code> in row-major order. To recover the shell indices from a <code>ShellPair</code>, use <code>sp.A._index</code> and <code>sp.B._index</code> directly — do not call <code>invert_pair_index</code> on a shell-pair position.</p>
+<h3 id="diisstate"><code>DIISState</code></h3>
+<p>Implements Pulay&#x27;s Direct Inversion in the Iterative Subspace inline in <code>types.h</code>. Each iteration <code>push(F, e)</code> appends the current Fock matrix and DIIS error <code>e = X^T (FPS − SPF) X</code> to a <code>std::deque</code> capped at <code>max_vecs</code> (default 8). <code>extrapolate()</code> solves the augmented linear system <code>B c = [0…0, −1]^T</code> where <code>B_{ij} = Tr(e_i^T e_j)</code> and returns the linear combination of Fock matrices minimizing the error norm subject to <code>Σ c_i = 1</code>. The DIIS restart factor in <code>OptionsSCF</code> causes the subspace to be cleared when the error grows by more than a threshold, preventing stagnation.</p>
+<h3 id="datascf-and-spinchannel"><code>DataSCF</code> and <code>SpinChannel</code></h3>
+<p><code>SpinChannel</code> holds the density matrix, Fock matrix, MO energies, MO coefficients, and MO symmetry labels for one spin. <code>DataSCF</code> aggregates an alpha and a beta channel; for RHF the beta channel is allocated but unused. <code>Calculator::initialize()</code> allocates all matrices to <code>nbasis × nbasis</code> zero matrices after the basis is loaded.</p>
+<h3 id="calculator"><code>Calculator</code></h3>
+<p>The root aggregate. Every module receives a <code>Calculator &amp;</code> and reads/writes its fields. The public fields include all <code>Options*</code> structs, the <code>Molecule</code>, the <code>Basis</code>, the SCF data (<code>_info._scf</code>), the stored ERI tensor (<code>_eri</code>), the overlap and core Hamiltonian matrices, CASSCF results, gradient, Hessian, frequencies, and SAO blocking data. For SA-CASSCF runs, <code>_cas_root_energies</code> stores per-root total CASSCF energies (not bare CI eigenvalues), so the final root table can be averaged directly with the configured SA weights. <code>_compute_nuclear_repulsion()</code> uses <code>_molecule._standard</code> — it must be called after <code>_standard</code> is populated in Bohr.</p>
+<hr>
+<h2 id="input-output-src-io">Input/Output (<code>src/io/</code>)</h2>
+<h3 id="parser-io-h-io-cpp">Parser — <code>io.h</code> / <code>io.cpp</code></h3>
+<p>The input format is section-based. <code>_split_into_sections()</code> reads the file and builds a <code>SectionMap</code> (<code>unordered_map&lt;string, vector&lt;string&gt;&gt;</code>) keyed on section headers (<code>%begin_control</code>, <code>%begin_scf</code>, etc.). Each section parser receives its corresponding line vector and writes into the appropriate <code>Options*</code> struct. All section parsers return <code>std::expected&lt;void, std::string&gt;</code>, propagating errors to <code>parse_input()</code> which assembles the complete <code>Calculator</code>. Constraints are parsed from an optional <code>%begin_constraints</code> block into <code>vector&lt;GeomConstraint&gt;</code>.</p>
+<p><strong>Design trade-off:</strong> A single flat section map is simpler than a recursive grammar but requires every section name to be globally unique. This is acceptable for the modest vocabulary of a quantum chemistry input file.</p>
+<h3 id="logger-logging-h">Logger — <code>logging.h</code></h3>
+<p>A header-only namespace with a global <code>std::mutex log_mutex</code> and <code>thread_local int silence_depth</code>. The <code>ScopedSilence</code> RAII guard increments <code>silence_depth</code> on construction and decrements on destruction; all logging functions return immediately when <code>silence_depth &gt; 0</code>. This mechanism is used during gradient finite-difference steps (the inner SCF runs silently) and during the SAD guess (atomic SCF runs are silenced). <code>map_enum&lt;T&gt;</code> specializations for all enum types live here, converting enum values to human-readable strings for log output.</p>
+<h3 id="checkpoint-checkpoint-h-checkpoint-cpp">Checkpoint — <code>checkpoint.h</code> / <code>checkpoint.cpp</code></h3>
+<p>Binary checkpoint files use the magic bytes <code>&quot;PLNKCHK\0&quot;</code> and a versioned layout (currently v6). The format stores everything needed to restart or continue a calculation: geometry in the standard frame (Bohr), basis shell data, SCF matrices, CASSCF MOs, and active natural occupations. Three restart modes exist:</p>
+<ol>
+<li><strong><code>ReadDensity</code></strong> — loads density/Fock/MOs only; geometry comes from the input file. Use when re-running the same system in a different basis or with different options.</li>
+<li><strong><code>ReadFull</code></strong> — <code>load_geometry()</code> is called first (before basis/symmetry setup) to restore the optimized geometry, charge, and multiplicity; then <code>load()</code> supplies the density. Use to restart from a converged geometry optimization.</li>
+<li><strong>Basis projection</strong> — <code>load_mos()</code> reads MO coefficients without enforcing <code>nbasis</code> agreement; <code>project_density()</code> then uses SVD Löwdin projection via the cross-overlap matrix to produce a starting density in the larger basis. Use to bootstrap a larger-basis calculation from a smaller-basis checkpoint.</li>
+</ol>
+<p><strong>Trade-off:</strong> The versioned binary format is compact and fast but not human-readable. The <code>chkdump</code> utility provides inspection. Each version increment is additive (old files remain loadable), but the reader must handle <code>has_*</code> flags that indicate whether optional blocks are present.</p>
+<hr>
+<h2 id="element-data-src-lookup">Element Data (<code>src/lookup/</code>)</h2>
+<p><code>elements.h</code> / <code>elements.cpp</code> provide lookup tables for atomic numbers, symbols, masses, and covalent radii. Used by the input parser to map element symbols to atomic numbers, by the SAD guess to identify atomic occupations, and by the geometry optimizer to infer connectivity for internal coordinate generation.</p>
+<hr>
+<h2 id="basis-set-src-basis">Basis Set (<code>src/basis/</code>)</h2>
+<h3 id="normalization-basis-cpp">Normalization — <code>basis.cpp</code></h3>
+<p><code>primitive_normalization(L, exponents)</code> computes the per-primitive normalization <code>N_i = (2α/π)^{3/4} (4α)^{L/2} / sqrt((2L-1)!!)</code> for each primitive in the shell. <code>contracted_normalization(L, exponents, coefficients, prim_norms)</code> computes the contracted-shell norm <code>Nc</code> such that <code>⟨χ|χ⟩ = 1</code>. The norm <code>Nc</code> is immediately multiplied into <code>Shell._coefficients</code>; downstream code never applies a separate <code>Nc</code> factor. <code>_cartesian_shell_order(L)</code> generates the canonical ordering of Cartesian angular-momentum tuples <code>(lx, ly, lz)</code> with <code>lx + ly + lz = L</code>, matching the convention used by Gaussian94 GBS files.</p>
+<h3 id="gbs-reader-gaussian-cpp">GBS Reader — <code>gaussian.cpp</code></h3>
+<p><code>read_gbs_basis()</code> parses Gaussian94 <code>.gbs</code> format files. For each atom in the molecule it locates the matching element block, reads all shells, computes primitive and contracted normalizations, and populates <code>Shell._center</code> from <code>molecule._standard</code> (Bohr). After reading, it builds <code>Basis._basis_functions</code> by calling <code>_cartesian_shell_order</code> and stamping <code>ContractedView._index</code> with the running basis-function counter.</p>
+<hr>
+<h2 id="symmetry-src-symmetry">Symmetry (<code>src/symmetry/</code>)</h2>
+<h3 id="point-group-detection-symmetry-h-symmetry-cpp">Point-group detection — <code>symmetry.h</code> / <code>symmetry.cpp</code></h3>
+<p><code>detectSymmetry(molecule)</code> wraps libmsym via RAII <code>SymmetryContext</code> and <code>SymmetryElements</code> classes. libmsym identifies the molecular point group, returns the symmetry-adapted coordinates in the standard frame (<code>_standard</code>), and provides symmetry operations expressed as permutations of atoms. The detected point group string is stored in <code>molecule._point_group</code>. When symmetry is disabled, <code>_standard</code> is set to <code>_coordinates</code> unchanged.</p>
+<h3 id="sao-blocking-mo-symmetry-h">SAO blocking — <code>mo_symmetry.h</code></h3>
+<p><code>build_sao_basis()</code> assembles the symmetry-adapted AO basis. The SAO transform matrix <code>_sao_transform</code> is a unitary matrix <code>U</code> that block-diagonalizes the overlap and Fock matrices by irrep. During SCF, <code>run_rhf</code> / <code>run_uhf</code> use per-irrep diagonalization instead of a global eigensolve, ensuring that the resulting MOs carry clean irrep labels (<code>SpinChannel.mo_symmetry</code>). The irrep-per-column arrays <code>_sao_irrep_index</code> and <code>_sao_irrep_names</code> allow the CASSCF active-orbital picker to filter MOs by symmetry.</p>
+<h3 id="integral-symmetry-integral-symmetry-h">Integral symmetry — <code>integral_symmetry.h</code></h3>
+<p><code>build_integral_symmetry_ops()</code> generates <code>SignedAOSymOp</code> records — permutation/phase tables on AO indices — for each symmetry operation of the molecular point group. When <code>_use_integral_symmetry</code> is active, the OS integral engine uses these to skip symmetry-equivalent shell quartets, reducing the ERI cost by approximately the order of the point group.</p>
+<hr>
+<h2 id="integrals-src-integrals">Integrals (<code>src/integrals/</code>)</h2>
+<h3 id="shell-pairs-shellpair-h">Shell pairs — <code>shellpair.h</code></h3>
+<p><code>build_shellpairs(basis)</code> iterates over all unique <code>(i, j)</code> basis-function pairs with <code>i ≥ j</code> and constructs a <code>ShellPair</code> for each. The shell-pair index is <code>pair_index(i, j) = i(i+1)/2 + j</code>. <code>invert_pair_index(k)</code> inverts this mapping arithmetically, but to recover shell indices from a <code>ShellPair</code> in the ERI loop it is always better to read <code>sp.A._index</code> and <code>sp.B._index</code> directly from the stored references.</p>
+<h3 id="obara-saika-engine-os-h-os-cpp">Obara-Saika engine — <code>os.h</code> / <code>os.cpp</code></h3>
+<p>The primary integral engine implements the Obara-Saika vertical and horizontal recurrence relations (VRR+HRR). It provides:</p>
+<ul>
+<li><code>_compute_1e(shell_pairs, nbasis, sym_ops)</code> — overlap <code>S</code> and kinetic <code>T</code> matrices in one pass</li>
+<li><code>_compute_nuclear_attraction(shell_pairs, nbasis, molecule, sym_ops)</code> — nuclear attraction <code>V</code> using the Boys function</li>
+<li><code>_compute_2e(shell_pairs, nbasis, tol_eri, sym_ops)</code> — full AO ERI tensor with Schwarz screening; returns a flat <code>vector&lt;double&gt;</code> in chemist&#x27;s notation <code>(μν|λσ)</code></li>
+<li><code>_compute_2e_fock(shell_pairs, density, nbasis, tol_eri, sym_ops)</code> — direct-SCF Fock build without storing the full ERI tensor</li>
+<li><code>_compute_eri_deriv_elem(spAB, spCD)</code> — 12-element gradient of a contracted ERI quartet used by analytic gradient code</li>
+<li><code>_compute_1e_deriv_A(sp)</code>, <code>_compute_nuclear_deriv_A_elem(sp, mol)</code>, <code>_compute_nuclear_deriv_C_elem(sp, C, Z, dir)</code> — 1e gradient derivatives</li>
+<li><code>_compute_multipole_matrices(shell_pairs, nbasis, origin)</code> — dipole and quadrupole integral matrices</li>
+<li><code>_compute_cross_overlap(large_basis, small_basis)</code> — cross-basis overlap for Löwdin basis-set projection</li>
+</ul>
+<p>The Schwarz screening criterion discards quartets where <code>Q(AB) × Q(CD) &lt; tol_eri</code>. <code>Q(AB) = sqrt((AB|AB))</code> is pre-computed per shell pair during ERI construction. This reduces the formal O(N^4) scaling to near-linear for large, diffuse systems.</p>
+<h3 id="engine-dispatch-base-h">Engine dispatch — <code>base.h</code></h3>
+<p><code>Auto</code> mode selects the Obara-Saika engine for shell quartets with total angular momentum <code>L &lt; 4</code> and Rys quadrature for higher L. In practice, <code>ObaraSaika</code> is the default and covers all common basis sets (STO-3G through 6-31G*) without crossing the Rys threshold.</p>
+<hr>
+<h2 id="scf-src-scf">SCF (<code>src/scf/</code>)</h2>
+<p>The SCF module implements <code>run_rhf()</code> and <code>run_uhf()</code>. Both functions share the same structural loop but differ in how the Fock matrix is built — RHF uses a single total density; UHF maintains separate alpha and beta densities and builds <code>G_alpha</code> and <code>G_beta</code> independently.</p>
+<h3 id="scf-loop-conceptual">SCF loop (conceptual)</h3>
+<p>The SCF loop (implemented in <code>src/scf/</code>) follows the standard algorithm:</p>
+<ol>
+<li>Form initial density from core Hamiltonian diagonalization (H-core guess) or SAD guess</li>
+<li>Each iteration: 1. Form the two-electron Fock contribution G (conventional: from stored ERI; direct: recompute) 2. Build F = H_core + G 3. Compute DIIS error <code>e = X^T (F P S - S P F) X</code> and push to <code>DIISState</code> 4. If DIIS is ready, replace F with the extrapolated Fock 5. Transform to orthogonal basis: F&#x27; = X^T F X 6. Diagonalize F&#x27; → C&#x27;, ε 7. Back-transform: C = X C&#x27; 8. Form new density P = 2 C_occ C_occ^T 9. Check convergence on ΔE and ΔP; if converged, break</li>
+</ol>
+<p>For SAO-blocked SCF, step 2.6 is replaced by block-diagonal diagonalization in the symmetry-adapted basis, guaranteeing MOs with clean irrep labels.</p>
+<h3 id="conventional-vs-direct-scf">Conventional vs. direct SCF</h3>
+<p>In <code>Conventional</code> mode, <code>_compute_2e()</code> builds the full ERI tensor once before the SCF loop. Every iteration reads from the stored tensor in O(N^4) memory. In <code>Direct</code> mode, <code>_compute_2e_fock()</code> recomputes the two-electron contribution from shell pairs on every iteration, using O(N^2) memory at the cost of repeated integral evaluation. <code>Auto</code> mode selects <code>Conventional</code> when <code>nbasis ≤ threshold</code> (default 100) and <code>Direct</code> otherwise. This threshold is tunable via <code>OptionsSCF._threshold</code>.</p>
+<p><strong>Trade-off:</strong> Conventional SCF is faster for small systems (cache-friendly reads of the ERI array dominate) but becomes memory-prohibitive at ~250+ basis functions. Direct SCF has a higher per-iteration cost but constant memory.</p>
+<h3 id="sad-guess">SAD guess</h3>
+<p>The Superposition of Atomic Densities guess runs a minimal-basis atomic SCF for each unique element in the molecule (with all output silenced via <code>ScopedSilence</code>). The resulting atomic densities are superimposed to form the initial molecular density. This provides a substantially better starting point than the H-core guess for transition metals and multi-reference systems.</p>
+<hr>
+<h2 id="post-hf-correlation-src-post-hf">Post-HF Correlation (<code>src/post_hf/</code>)</h2>
+<h3 id="mp2-mp2-h-mp2-cpp">MP2 — <code>mp2.h</code> / <code>mp2.cpp</code></h3>
+<h4 id="rmp2-run-rmp2">RMP2 (<code>run_rmp2</code>)</h4>
+<p>The restricted MP2 energy is evaluated as:</p>
+<pre><code>
+E_MP2 = Σ_{i&lt;j, a&lt;b} |(ia|jb) - (ib|ja)|² / (ε_i + ε_j - ε_a - ε_b)
+</code></pre>
+<p>The AO→MO transformation uses a quarter-transform strategy. If <code>_eri</code> is populated from a conventional SCF, it is reused directly; otherwise the ERI tensor is rebuilt from shell pairs. The generic transform entry points in <code>src/post_hf/integrals.cpp</code> remain the shared path for MP2 and for the fully internal CASSCF integral builds. RMP2 natural orbitals are available through <code>compute_rmp2_natural_orbitals()</code>, which diagonalizes the MP2 one-particle density matrix.</p>
+<h4 id="ump2-run-ump2">UMP2 (<code>run_ump2</code>)</h4>
+<p>Unrestricted MP2 maintains separate α-α, β-β, and α-β orbital-pair contributions. The quarter-transform operates independently on the alpha and beta MO spaces.</p>
+<h3 id="casscf-rasscf-casscf-h-and-casscf">CASSCF / RASSCF — <code>casscf.h</code> and <code>casscf/</code></h3>
+<p><code>run_casscf()</code> and <code>run_rasscf()</code> are thin wrappers around a shared MCSCF driver that alternates CI diagonalization and orbital optimization until both the energy and orbital gradient converge. The active-space specification in <code>OptionsActiveSpace</code> controls the number of active electrons, active orbitals, number of CI roots (state averaging), SA weights, RAS partitioning, and convergence thresholds.</p>
+<h4 id="ci-strings-casscf-internal-h-casscf-strings-h">CI strings — <code>casscf_internal.h</code> / <code>casscf/strings.h</code></h4>
+<p>Determinants are represented as <code>uint64_t</code> bitmasks (<code>CIString</code>). Each bit position corresponds to one active spatial orbital. Separate alpha and beta strings are enumerated by <code>generate_strings(n_orb, n_occ)</code> using fixed-popcount bitstring enumeration in ascending order. The <code>kMaxSeparateSpinOrbitals = 63</code> limit on the active space (64-bit type minus the sign bit) sets the hard ceiling on the active-orbital count. For RASSCF, <code>RASParams</code> encodes the three-space partition (RAS1/RAS2/RAS3) and screening caps (<code>max_holes</code>, <code>max_elec</code>); <code>ras1_holes()</code> and <code>ras3_elec()</code> enforce these constraints during determinant filtering.</p>
+<h4 id="ci-hamiltonian-casscf-ci-h-ci-cpp">CI Hamiltonian — <code>casscf/ci.h</code> / <code>ci.cpp</code></h4>
+<p><code>CIDeterminantSpace</code> bundles the filtered determinant list, the diagonal, a packed key array, a lookup table, and optionally the full dense Hamiltonian matrix. Matrix elements are computed by <code>slater_condon_element()</code> using the Slater-Condon rules applied to the bitmask strings. <code>build_ci_space()</code> assembles the space and applies the density threshold <code>dense_threshold</code> (default 500) to decide whether to materialize the full matrix or use iterative sigma application via <code>apply_ci_hamiltonian()</code>. <code>solve_ci()</code> is overloaded for the dense path (direct <code>SelfAdjointEigenSolver</code>) and the iterative path (Davidson method with a diagonal preconditioner).</p>
+<h4 id="reduced-density-matrices-casscf-rdm-h-rdm-cpp">Reduced density matrices — <code>casscf/rdm.h</code> / <code>rdm.cpp</code></h4>
+<p><code>compute_1rdm()</code> and <code>compute_2rdm()</code> build the state-averaged active-space 1-RDM and 2-RDM by traversing all determinant pairs and accumulating contributions weighted by the SA weights. <code>compute_2rdm_bilinear()</code> computes the bilinear form <code>Γ_{pq,rs} = Σ_I w_I ⟨Ψ^bra_I | â_p† â_r â_s â_q | Ψ^ket_I ⟩</code> needed by the CI response solver. Reference implementations (<code>_reference</code> suffix) use explicit spin-orbital traversal and serve as validation targets.</p>
+<h4 id="orbital-optimization-mcscf-loop-casscf-casscf-h">Orbital optimization — MCSCF loop (<code>casscf/casscf.h</code>)</h4>
+<p>The macro/micro iteration structure alternates: (1) CI solve to get CI vectors and state-averaged energy, (2) 1-RDM and 2-RDM construction, (3) orbital gradient and approximate Hessian computation, (4) orbital rotation by a Cayley-transformed antisymmetric matrix <code>κ</code>. The micro iterations apply a matrix-free orbital Hessian action to the orbital gradient via the Lagrangian formulation, with a diagonal preconditioner fallback and a small-space finite-difference Newton escape hatch. Convergence is assessed on both ΔE and the state-averaged orbital-gradient screen. Hungarian root tracking ensures consistent state labeling across macro iterations when multiple roots are computed.</p>
+<p>The orbital-gradient and CI-response path relies on a mixed-basis active-integral cache built by <code>build_active_integral_cache(...)</code> in <code>casscf/orbital.cpp</code>. That cache is produced by the dedicated <code>transform_eri_active_cache(...)</code> kernel in <code>src/post_hf/integrals.cpp</code>, not by the fully generic four-leg AO→MO transform. The cached tensor is stored row-major as <code>(p,u,v,w)</code>, with one full-space MO index <code>p</code> and three active-space indices <code>u,v,w</code>. Each fixed-<code>p</code> slab is contiguous, so the builder can parallelize safely over <code>p</code> with OpenMP and reuse thread-local scratch buffers across repeated macro-iteration rebuilds.</p>
+<p>On the consumer side, <code>compute_Q_matrix(...)</code> contracts the cached <code>(p,u,v,w)</code> slabs with the active-space 2-RDM to form the Q matrix used in the orbital gradient and response equations. Because both the <code>puvw</code> cache and <code>Γ[t,u,v,w]</code> are traversed as contiguous <code>n_act^3</code> slabs, the hot contraction path reduces to repeated dot products rather than repeated four-index address arithmetic.</p>
+<p><strong>Trade-off:</strong> The matrix-free Hessian avoids explicitly forming the O(N^4) orbital Hessian tensor but requires a CI response solve at each micro step. This is the correct asymptotic choice for large active spaces. For small active spaces (≤10 orbitals), the dense path may be faster in practice.</p>
+<hr>
+<h2 id="analytic-gradients-src-gradient">Analytic Gradients (<code>src/gradient/</code>)</h2>
+<p><code>compute_rhf_gradient()</code> and <code>compute_uhf_gradient()</code> return the natoms×3 nuclear gradient in Ha/Bohr via the Hellmann-Feynman and Pulay contributions. The Hellmann-Feynman term includes dV/dR (nuclear-attraction derivative with respect to nucleus coordinates). The Pulay term accounts for the basis-function center dependence and requires the energy-weighted density matrix. All derivative integrals are computed analytically via <code>_compute_1e_deriv_A</code>, <code>_compute_nuclear_deriv_A_elem</code>, and <code>_compute_eri_deriv_elem</code>.</p>
+<p><code>compute_rmp2_gradient()</code> implements the relaxed MP2 density and Z-vector (coupled-perturbed HF / CPHF) response. The Z-vector equation is solved iteratively to avoid storing the full CPHF response matrices. The relaxed density then enters the same Hellmann-Feynman + Pulay gradient evaluation as the HF case.</p>
+<hr>
+<h2 id="geometry-optimization-src-opt">Geometry Optimization (<code>src/opt/</code>)</h2>
+<h3 id="cartesian-l-bfgs-geomopt-h-geomopt-cpp">Cartesian L-BFGS — <code>geomopt.h</code> / <code>geomopt.cpp</code></h3>
+<p><code>run_geomopt()</code> implements the two-loop L-BFGS recursion with Armijo backtracking line search. The gradient runner is a <code>std::function&lt;Eigen::VectorXd(Calculator &amp;)&gt;</code> callback, allowing the optimizer to drive any level of theory without knowing the details of the energy and gradient computation. Convergence is assessed on the maximum absolute gradient element (<code>_geomopt_grad_tol</code>, default 3×10⁻⁴ Ha/Bohr). The L-BFGS history size <code>_geomopt_lbfgs_m</code> (default 10) controls the memory-precision trade-off. On convergence, <code>calc._molecule._standard</code> holds the optimized geometry in Bohr and the result struct contains the per-step energy trajectory.</p>
+<h3 id="internal-coordinate-bfgs-intcoords-h-geomopt-cpp">Internal-coordinate BFGS — <code>intcoords.h</code> / <code>geomopt.cpp</code></h3>
+<p><code>run_geomopt_ic()</code> optimizes in redundant generalized internal coordinates (GIC). <code>IntCoordSystem::build()</code> automatically generates all bonds (using covalent radii from the element lookup), all valence bends, and all proper torsions. The Wilson B-matrix <code>B_{qi,a} = ∂q_i/∂x_a</code> is evaluated analytically for each IC type. The BFGS Hessian update operates in the redundant IC space; the Cartesian back-transform uses the iterative Schlegel procedure (Newton steps in the pseudo-inverse of B until the IC values converge). Geometry constraints from <code>%begin_constraints</code> are enforced by projecting the gradient and Hessian step into the constraint-compliant subspace. <code>GeomConstraint::Type</code> supports <code>Bond</code>, <code>Angle</code>, <code>Dihedral</code>, and <code>FrozenAtom</code>.</p>
+<p><strong>Trade-off:</strong> IC-BFGS typically converges in fewer steps than Cartesian L-BFGS for systems with strained internal coordinates (rings, transition states), but the Schlegel back-transform adds iteration overhead per step.</p>
+<hr>
+<h2 id="vibrational-frequencies-src-freq">Vibrational Frequencies (<code>src/freq/</code>)</h2>
+<p><code>compute_hessian()</code> builds the 3N×3N Cartesian Hessian by central finite differences of analytic gradients: <code>H_{ij} = (g_i(x + h ê_j) − g_i(x − h ê_j)) / (2h)</code> where <code>h = _hessian_step</code> (default 5×10⁻³ Bohr). The 6N gradient evaluations are parallelized with OpenMP when available. <code>vibrational_analysis()</code> mass-weights the Hessian, projects out translations and rotations using Eckart conditions, diagonalizes the resulting 3N−6 (or 3N−5 for linear molecules) subspace, converts eigenvalues to cm⁻¹, and computes the zero-point energy. When symmetry is active, normal modes are assigned Mulliken labels by projecting onto the SAO basis. Imaginary frequencies are reported as negative values in cm⁻¹.</p>
+<p><code>ImaginaryFollow</code> mode runs a frequency calculation, displaces the geometry along the largest imaginary normal mode by <code>_imag_follow_step</code> (default 0.2 Bohr), then runs a geometry optimization to locate the adjacent minimum.</p>
+<hr>
+<h2 id="ks-dft-src-dft">KS-DFT (<code>src/dft/</code>)</h2>
+<p>The <code>planck-dft</code> binary provides Kohn-Sham DFT by augmenting the shared SCF infrastructure with a numerical integration grid and an XC functional evaluator. The DFT pipeline is cleanly separated from the HF pipeline: <code>DFT::Driver::run()</code> calls <code>DFT::Driver::prepare()</code> to build the grid and AO-on-grid evaluations, then enters the KS-SCF loop.</p>
+<h3 id="driver-dft-driver-h-driver-cpp">Driver — <code>dft/driver.h</code> / <code>driver.cpp</code></h3>
+<p><code>DFT::Driver::prepare()</code> constructs the <code>PreparedSystem</code> containing the shell pairs, the molecular grid, and the pre-evaluated AO basis functions on every grid point. <code>DFT::Driver::run()</code> then enters the KS-SCF loop, which follows the standard SCF structure but replaces the HF exchange contribution with the XC potential assembled from the grid. <code>evaluate_current_density_and_xc()</code> and <code>assemble_current_ks_potential()</code> are exposed as public functions so that external tools can evaluate XC contributions without running a full SCF loop — useful for testing grid integration quality independently.</p>
+<h3 id="grid-dft-base-grid-h-radial-h-angular-h">Grid — <code>dft/base/grid.h</code>, <code>radial.h</code>, <code>angular.h</code></h3>
+<p>The molecular integration grid uses the Becke partitioning scheme to assign multi-center weights to a superposition of atom-centered grids. Each atom-centered grid combines a <strong>Treutler-Ahlrichs M4</strong> radial grid (which maps the semi-infinite radial interval onto [−1, 1] with a logarithmic transformation optimized for exponentially decaying functions) with a <strong>Lebedev</strong> angular grid. The <code>GridPreset</code> struct encodes the angular scheme (1–7) and radial accuracy factor for each of the four quality levels:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Level</th>
+<th>Angular scheme</th>
+<th>Approx. points/atom</th>
+</tr></thead>
+<tbody>
+<tr><td>Coarse</td><td>1</td><td>~3 000</td></tr>
+<tr><td>Normal</td><td>3</td><td>~12 000</td></tr>
+<tr><td>Fine</td><td>5</td><td>~30 000</td></tr>
+<tr><td>UltraFine</td><td>7</td><td>~75 000</td></tr>
+</tbody></table></div>
+<p>Five-region pruning reduces the angular order near the nucleus (where the density is nearly spherical) and far from the nucleus (where it is negligible), substantially reducing the total grid point count without affecting accuracy.</p>
+<h3 id="libxc-wrapper-dft-base-wrapper-h">libxc wrapper — <code>dft/base/wrapper.h</code></h3>
+<p><code>XC::Functional</code> is an RAII wrapper around a libxc <code>xc_func_type</code>. The <code>evaluate()</code> method takes a density array (and gradient array for GGA functionals) and fills the XC energy density and potential arrays. The libxc functional ID is resolved from the <code>XCExchangeFunctional</code> / <code>XCCorrelationFunctional</code> enums; <code>Custom</code> mode accepts a raw libxc integer ID for any functional in the libxc library. The <code>USING_Libxc</code> preprocessor guard ensures that this header (and its libxc dependency) is only compiled into <code>planck-dft</code> and not <code>hartree-fock</code>.</p>
+<h3 id="ao-evaluation-on-grid-dft-ao-grid-h">AO evaluation on grid — <code>dft/ao_grid.h</code></h3>
+<p><code>evaluate_ao_basis_on_grid()</code> evaluates all <code>nbasis</code> contracted Cartesian Gaussian basis functions at every grid point and returns an <code>AOGridEvaluation</code> struct (<code>npoints × nbasis</code> matrix). This evaluation is done once before the SCF loop and reused every iteration. For GGA functionals, the gradient of the AO basis (<code>npoints × nbasis × 3</code>) is also evaluated and stored.</p>
+<h3 id="xc-on-grid-dft-xc-grid-h-xc-grid-cpp">XC on grid — <code>dft/xc_grid.h</code> / <code>xc_grid.cpp</code></h3>
+<p><code>evaluate_density_on_grid()</code> contracts the density matrix with the AO values to produce the electron density at each grid point: <code>ρ(r) = Σ_{μν} P_{μν} χ_μ(r) χ_ν(r)</code>. <code>evaluate_xc_on_grid()</code> passes ρ (and ∇ρ for GGA) to the libxc wrapper and returns the XC energy density and potential at each point. The integrated electron count <code>∫ρ dV</code> is checked as a grid quality diagnostic.</p>
+<h3 id="ks-potential-matrix-dft-ks-matrix-h-ks-matrix-cpp">KS potential matrix — <code>dft/ks_matrix.h</code> / <code>ks_matrix.cpp</code></h3>
+<p><code>assemble_xc_matrix()</code> integrates <code>V_{XC,μν} = ∫ v_xc(r) χ_μ(r) χ_ν(r) dV</code> using the pre-evaluated AO grid values and quadrature weights. <code>combine_ks_potential()</code> assembles the full KS Fock matrix <code>F_KS = H_core + J + V_XC</code> where J is the Coulomb contribution from the SCF infrastructure. The resulting <code>KSPotentialMatrices</code> are passed back to the SCF loop, which diagonalizes <code>F_KS</code> exactly as it would diagonalize a HF Fock matrix.</p>
+<hr>
+<h2 id="entry-points-src-driver-cpp-src-dft-main-cpp">Entry Points (<code>src/driver.cpp</code>, <code>src/dft/main.cpp</code>)</h2>
+<h3 id="hf-driver-src-driver-cpp">HF driver — <code>src/driver.cpp</code></h3>
+<p><code>main()</code> orchestrates the full HF calculation pipeline:</p>
+<ol>
+<li>Parse input → <code>Calculator</code></li>
+<li>Derive checkpoint path from input filename stem</li>
+<li>Detect symmetry, build SAO basis and integral symmetry ops</li>
+<li>Read GBS basis</li>
+<li>If <code>ReadFull</code> guess: <code>load_geometry()</code> then repopulate basis and symmetry</li>
+<li>If <code>ReadDensity</code> or <code>ReadFull</code>: <code>load()</code> checkpoint</li>
+<li><code>Calculator::initialize()</code> — allocate SCF matrices, set auto SCF mode</li>
+<li>Build shell pairs</li>
+<li>Compute 1e integrals (S, T, V → H_core); optionally compute ERI tensor</li>
+<li>If <code>Conventional</code> mode: store ERI</li>
+<li>Optionally build SAO blocking data</li>
+<li>Run SCF via <code>run_rhf()</code> or <code>run_uhf()</code></li>
+<li>Save checkpoint</li>
+<li>Dispatch to gradient, geomopt, frequency, or post-HF based on <code>CalculationType</code> and <code>PostHF</code></li>
+<li>Report multipole moments and timing</li>
+</ol>
+<h3 id="dft-driver-src-dft-main-cpp">DFT driver — <code>src/dft/main.cpp</code></h3>
+<p>The DFT entry point follows the same setup sequence as the HF driver (parse → symmetry → basis → shell pairs → 1e integrals) but then calls <code>DFT::Driver::run()</code> instead of <code>run_rhf()</code>. Gradient, geometry optimization, and frequency analysis route through the same <code>src/gradient/</code>, <code>src/opt/</code>, and <code>src/freq/</code> modules, using the DFT energy and gradient as the callback.</p>
+<hr>
+<h2 id="data-flow-summary">Data Flow Summary</h2>
+<pre><code>
+Input file
+    │
+    ▼
+IO::parse_input()          → Calculator (options, molecule)
+    │
+    ▼
+Symmetry::detectSymmetry() → molecule._standard (Bohr, reoriented)
+    │
+    ▼
+BasisFunctions::read_gbs_basis() → Basis (_shells, _basis_functions)
+    │
+    ▼
+build_shellpairs()         → vector&lt;ShellPair&gt;
+    │
+    ▼
+ObaraSaika::_compute_1e()  → overlap S, core Hamiltonian H
+ObaraSaika::_compute_2e()  → ERI tensor (conventional mode)
+    │
+    ▼
+run_rhf() / run_uhf()      → DataSCF (density, Fock, MOs, energies)
+    │
+    ├─ SinglePoint → energies + properties
+    ├─ Gradient    → Gradient::compute_*_gradient()
+    ├─ GeomOpt     → Opt::run_geomopt() / run_geomopt_ic()
+    ├─ Frequency   → Freq::compute_hessian() → vibrational_analysis()
+    ├─ RMP2/UMP2   → Correlation::run_rmp2() / run_ump2()
+    └─ CASSCF      → Correlation::run_casscf()
+                         │
+                         ├─ CASSCF::build_ci_space()
+                         ├─ CASSCF::solve_ci()
+                         ├─ CASSCF::compute_1rdm() / compute_2rdm()
+                         ├─ CASSCF::build_active_integral_cache()
+                         ├─ CASSCF::compute_Q_matrix()
+                         └─ orbital rotation loop
+</code></pre>
+<hr>
+<h2 id="key-invariants-and-pitfalls">Key Invariants and Pitfalls</h2>
+<p>The following invariants are not enforced by the type system and must be maintained by callers:</p>
+<ul>
+<li><strong><code>_standard</code> must be in Bohr</strong> before <code>read_gbs_basis()</code>, <code>_compute_nuclear_repulsion()</code>, and any integral evaluation. <code>detectSymmetry()</code> sets it in Bohr automatically. When symmetry is disabled, <code>prepare_coordinates()</code> must have been called first.</li>
+<li><strong><code>ContractedView._index</code></strong> must equal the position of the basis function in <code>Basis._basis_functions</code>. A missing or zero-initialized index silently misplaces all integrals for that function.</li>
+<li><strong><code>Nc</code> is folded into <code>Shell._coefficients</code></strong> during GBS parsing. No external <code>Nc</code> factor should ever be applied in integral code.</li>
+<li><strong>Shell-pair index recovery</strong>: Use <code>sp.A._index</code> and <code>sp.B._index</code> from the stored <code>ContractedView</code> references. Do not use <code>invert_pair_index</code> on a shell-pair vector position to recover shell indices — it operates on triangular pair indices, not vector positions.</li>
+<li><strong><code>Calculator::initialize()</code></strong> must be called after the basis is loaded and before any integral or SCF code runs. It allocates all matrix storage.</li>
+<li><strong>SAO blocking</strong> is valid only after <code>build_sao_basis()</code> sets <code>_sao_transform</code> and related arrays. The SCF code checks <code>_use_sao_blocking</code> before attempting block-diagonal diagonalization.</li>
+<li><strong>DIIS restart</strong>: <code>DIISState::clear()</code> is called automatically when the error grows by more than <code>_diis_restart_factor</code>. Callers should not manually clear the DIIS state unless explicitly restarting from scratch.</li>
+<li><strong><code>ActiveIntegralCache::puvw</code> layout</strong> is row-major <code>(p,u,v,w)</code>. Every producer and consumer must agree on that exact ordering; <code>compute_Q_matrix()</code> assumes each fixed-<code>p</code> slab is one contiguous block of length <code>n_act^3</code>.</li>
+<li><strong>Per-root SA energies</strong> stored in <code>Calculator::_cas_root_energies</code> are full CASSCF total energies. Do not replace them with raw CI eigenvalues unless the logging and checkpoint consumers are updated accordingly.</li>
+</ul>
+      </main>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var btn = document.querySelector('.toc-toggle');
+      var nav = document.getElementById('toc-nav');
+      if (!btn || !nav) return;
+      btn.addEventListener('click', function () {
+        var open = nav.classList.toggle('open');
+        btn.setAttribute('aria-expanded', String(open));
+        btn.innerHTML = open ? 'Contents &#9652;' : 'Contents &#9662;';
+      });
+    })();
+  </script>
+</body>
+</html>

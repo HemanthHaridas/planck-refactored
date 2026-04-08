@@ -1127,6 +1127,21 @@ F^{gen}_{pq} = \sum_r h_{pr} D_{rq} + \sum_{rst} (pr|st) d_{qrst}
 This is computed via two AO→MO half-transformations of the four-index integral
 tensor contracted with the 2-RDM.
 
+For the CASSCF orbital-gradient and response path, Planck also builds and caches
+a mixed-basis four-index tensor with one full-space MO leg and three active-space
+legs:
+
+\[
+\text{puvw}[p,u,v,w] = (p\,u|v\,w)
+\]
+
+This cache is built by `build_active_integral_cache(...)` in `orbital.cpp` via
+the dedicated `transform_eri_active_cache(...)` entry point in
+`src/post_hf/integrals.cpp`. The tensor is stored row-major as `(p,u,v,w)`, so
+each fixed-`p` slab is one contiguous block of length \(n_{\text{act}}^3\). That
+layout is chosen specifically to match the Q-matrix contraction used throughout
+the orbital-response code.
+
 ### Orbital Update: Augmented-Hessian Step and Cayley Transform
 
 Orbital rotations are parameterized by an antisymmetric matrix \(\mathbf \kappa\)
@@ -1173,7 +1188,9 @@ The full CASSCF macro-iteration (one pass of `run_casscf`):
 
 1. Form one-electron integrals in the current MO basis (transform \(h_{\mu\nu}\))
 2. Form active-active two-electron integrals from AO ERIs; cache the mixed-basis
-   puvw tensor (`build_active_integral_cache`)
+   `puvw` tensor (`build_active_integral_cache`). This uses the dedicated
+   `transform_eri_active_cache(...)` kernel rather than the fully generic
+   four-leg AO→MO transform.
 3. Solve CI eigenproblem to get \(\{c_I^{(r)}\}\) and \(\{E_{CI}^{(r)}\}\) for all roots;
    reorder roots by maximum CI-vector overlap to prevent state flipping
 4. Compute per-root 1-RDM and 2-RDM; form state-averaged \(\bar{\gamma}\) and
@@ -1200,6 +1217,12 @@ The full CASSCF macro-iteration (one pass of `run_casscf`):
    Löwdin re-orthogonalization: \(\mathbf C \leftarrow \mathbf C\,\mathbf U\)
 9. Check convergence: \(\|\mathbf g\| < \epsilon_{\text{grad}}\) and
    \(|\Delta E| < \epsilon_E\)
+
+The dedicated active-cache builder is organized around fixed-`p` output slabs.
+Each slab owns one contiguous `(u,v,w)` block, so the OpenMP implementation can
+parallelize safely over `p` with static scheduling and no reductions. Thread-local
+scratch buffers are reused across cache rebuilds to avoid repeated allocation of
+the temporary intermediates needed for the \(\lambda\) and \(\sigma\) contractions.
 
 ### State-Averaged CASSCF
 
@@ -1232,7 +1255,11 @@ the active-active block of the full MO-basis commutator \([F^I, \boldsymbol\kapp
 active↔virtual coupling). The two-body derivative includes both the active-active
 sub-block rotation and the inter-subspace contributions — rotations that mix
 non-active orbitals into or out of the active space — accumulated via the cached
-\(p\mu\nu\lambda\) integrals (`ActiveIntegralCache::puvw`). The older
+row-major `(p,u,v,w)` tensor (`ActiveIntegralCache::puvw`). The corresponding
+Q-matrix contraction is implemented as a dot product between contiguous
+\(n_{\text{act}}^3\) slabs from `puvw` and the state-specific
+\(\Gamma[t,u,v,w]\) block, which keeps the hot contraction path simple and
+cache-friendly. The older
 commutator-only shortcut is available only via the `mcscf_debug_commutator_rhs`
 debug flag.
 
