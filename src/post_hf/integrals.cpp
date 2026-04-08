@@ -1,8 +1,39 @@
+#include <algorithm>
+#include <cstdint>
 #include <format>
 
 #include "integrals.h"
 #include "integrals/base.h"
 #include "io/logging.h"
+
+namespace
+{
+
+    struct ActiveCacheScratch
+    {
+        std::vector<double> work_u_lam_sig;
+        std::vector<double> work_u_v_sig;
+
+        void ensure_capacity(std::size_t work_u_lam_sig_size,
+                             std::size_t work_u_v_sig_size)
+        {
+            if (work_u_lam_sig.size() != work_u_lam_sig_size)
+                work_u_lam_sig.resize(work_u_lam_sig_size);
+            if (work_u_v_sig.size() != work_u_v_sig_size)
+                work_u_v_sig.resize(work_u_v_sig_size);
+        }
+    };
+
+    ActiveCacheScratch &active_cache_scratch(
+        std::size_t work_u_lam_sig_size,
+        std::size_t work_u_v_sig_size)
+    {
+        thread_local ActiveCacheScratch scratch;
+        scratch.ensure_capacity(work_u_lam_sig_size, work_u_v_sig_size);
+        return scratch;
+    }
+
+} // namespace
 
 namespace HartreeFock::Correlation
 {
@@ -93,6 +124,118 @@ namespace HartreeFock::Correlation
                         for (std::size_t sig = 0; sig < nb; ++sig)
                             out[i * n2 * n3 * n4 + a * n3 * n4 + j * n4 + b] +=
                                 C4(sig, b) * T3[i * n2 * n3 * nb + a * n3 * nb + j * nb + sig];
+
+        return out;
+    }
+
+    // ── transform_eri_active_cache ──────────────────────────────────────────────
+
+    std::vector<double> transform_eri_active_cache(
+        const std::vector<double> &eri,
+        std::size_t nb,
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &C_act)
+    {
+        const std::size_t n_act = static_cast<std::size_t>(C_act.cols());
+        if (n_act == 0)
+            return {};
+
+        const std::size_t nb2 = nb * nb;
+        const std::size_t nb3 = nb * nb2;
+        const std::size_t act3 = n_act * n_act * n_act;
+        const std::size_t work_u_lam_sig_size = n_act * nb * nb;
+        const std::size_t work_u_v_sig_size = n_act * n_act * nb;
+
+        std::vector<double> out(nb * act3, 0.0);
+
+        auto build_p_block = [&](std::size_t p,
+                                 std::vector<double> &work_u_lam_sig,
+                                 std::vector<double> &work_u_v_sig)
+        {
+            std::fill(work_u_lam_sig.begin(), work_u_lam_sig.end(), 0.0);
+            std::fill(work_u_v_sig.begin(), work_u_v_sig.end(), 0.0);
+            double *out_p = out.data() + p * act3;
+
+            // Contract the first two legs into a `u x λ x σ` slab for this `p`.
+            for (std::size_t mu = 0; mu < nb; ++mu)
+            {
+                const double c_mu_p = C(mu, p);
+                const std::size_t mu_offset = mu * nb3;
+                for (std::size_t nu = 0; nu < nb; ++nu)
+                {
+                    const std::size_t nu_offset = mu_offset + nu * nb2;
+                    for (std::size_t u = 0; u < n_act; ++u)
+                    {
+                        const double scale = c_mu_p * C_act(nu, u);
+                        double *u_block = work_u_lam_sig.data() + u * nb2;
+                        for (std::size_t lam = 0; lam < nb; ++lam)
+                        {
+                            const double *eri_row = eri.data() + nu_offset + lam * nb;
+                            double *u_lam = u_block + lam * nb;
+                            for (std::size_t sig = 0; sig < nb; ++sig)
+                                u_lam[sig] += scale * eri_row[sig];
+                        }
+                    }
+                }
+            }
+
+            // Contract λ -> v while keeping σ contiguous inside each `(u,v)` slab.
+            for (std::size_t u = 0; u < n_act; ++u)
+            {
+                const double *u_block = work_u_lam_sig.data() + u * nb2;
+                double *uv_block = work_u_v_sig.data() + u * n_act * nb;
+                for (std::size_t lam = 0; lam < nb; ++lam)
+                {
+                    const double *u_lam = u_block + lam * nb;
+                    for (std::size_t v = 0; v < n_act; ++v)
+                    {
+                        const double scale = C_act(lam, v);
+                        double *uv = uv_block + v * nb;
+                        for (std::size_t sig = 0; sig < nb; ++sig)
+                            uv[sig] += scale * u_lam[sig];
+                    }
+                }
+            }
+
+            // Final σ -> w contraction produces the row-major `(p,u,v,w)` block.
+            for (std::size_t u = 0; u < n_act; ++u)
+            {
+                const double *uv_block = work_u_v_sig.data() + u * n_act * nb;
+                double *uvw_block = out_p + u * n_act * n_act;
+                for (std::size_t v = 0; v < n_act; ++v)
+                {
+                    const double *uv = uv_block + v * nb;
+                    double *uvw = uvw_block + v * n_act;
+                    for (std::size_t sig = 0; sig < nb; ++sig)
+                    {
+                        const double value = uv[sig];
+                        for (std::size_t w = 0; w < n_act; ++w)
+                            uvw[w] += value * C_act(sig, w);
+                    }
+                }
+            }
+        };
+
+#ifdef USE_OPENMP
+#pragma omp parallel
+        {
+            // Each thread owns whole `p` slabs of the `(p,u,v,w)` tensor, so no
+            // reductions or shared scratch are needed; thread-local buffers are
+            // reused across repeated active-cache builds to avoid allocator churn.
+            ActiveCacheScratch &scratch =
+                active_cache_scratch(work_u_lam_sig_size, work_u_v_sig_size);
+#pragma omp for schedule(static)
+            for (std::int64_t p_i = 0; p_i < static_cast<std::int64_t>(nb); ++p_i)
+                build_p_block(static_cast<std::size_t>(p_i),
+                              scratch.work_u_lam_sig,
+                              scratch.work_u_v_sig);
+        }
+#else
+        ActiveCacheScratch &scratch =
+            active_cache_scratch(work_u_lam_sig_size, work_u_v_sig_size);
+        for (std::size_t p = 0; p < nb; ++p)
+            build_p_block(p, scratch.work_u_lam_sig, scratch.work_u_v_sig);
+#endif
 
         return out;
     }

@@ -54,6 +54,18 @@ namespace HartreeFock::Correlation
         const Eigen::MatrixXd &C3,  // nb × n3
         const Eigen::MatrixXd &C4); // nb × n4
 
+    // ── Mixed-basis active-cache transform (CASSCF) ────────────────────────────
+    //
+    // Dedicated entry point for the cache used by the orbital-gradient and
+    // response code. The output layout is row-major `(p,u,v,w)`:
+    //   out[((p * n_act + u) * n_act + v) * n_act + w]
+    // where `p` spans the full MO basis and `u,v,w` span the active-space block.
+    std::vector<double> transform_eri_active_cache(
+        const std::vector<double> &eri,
+        std::size_t nb,
+        const Eigen::MatrixXd &C,      // nb × nb
+        const Eigen::MatrixXd &C_act); // nb × n_act
+
     // ── Full internal-space transform (CASSCF) ────────────────────────────────
     //
     // Convenience wrapper: all four legs use C_int.

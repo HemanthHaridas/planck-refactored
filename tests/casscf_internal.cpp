@@ -4,6 +4,7 @@
 #include "post_hf/casscf/rdm.h"
 #include "post_hf/casscf/response.h"
 #include "post_hf/casscf/strings.h"
+#include "post_hf/integrals.h"
 
 #include <Eigen/Core>
 
@@ -461,6 +462,98 @@ int main()
     }
 
     {
+        constexpr int nbasis = 3;
+        constexpr int n_act = 2;
+        ActiveIntegralCache cache;
+        cache.nbasis = nbasis;
+        cache.nact = n_act;
+        cache.valid = true;
+        cache.puvw.resize(static_cast<std::size_t>(nbasis) * n_act * n_act * n_act, 0.0);
+
+        for (int p = 0; p < nbasis; ++p)
+            for (int u = 0; u < n_act; ++u)
+                for (int v = 0; v < n_act; ++v)
+                    for (int w = 0; w < n_act; ++w)
+                        cache.puvw[((p * n_act + u) * n_act + v) * n_act + w] =
+                            0.2 * static_cast<double>(p + 1) -
+                            0.1 * static_cast<double>(u + 1) +
+                            0.05 * static_cast<double>(v + 1) -
+                            0.03 * static_cast<double>(w + 1);
+
+        std::vector<double> Gamma(static_cast<std::size_t>(n_act) * n_act * n_act * n_act, 0.0);
+        for (int t = 0; t < n_act; ++t)
+            for (int u = 0; u < n_act; ++u)
+                for (int v = 0; v < n_act; ++v)
+                    for (int w = 0; w < n_act; ++w)
+                        Gamma[((t * n_act + u) * n_act + v) * n_act + w] =
+                            -0.4 * static_cast<double>(t + 1) +
+                            0.07 * static_cast<double>(u + 1) -
+                            0.02 * static_cast<double>(v + 1) +
+                            0.09 * static_cast<double>(w + 1);
+
+        Eigen::MatrixXd q_expected = Eigen::MatrixXd::Zero(nbasis, n_act);
+        for (int p = 0; p < nbasis; ++p)
+            for (int t = 0; t < n_act; ++t)
+                for (int u = 0; u < n_act; ++u)
+                    for (int v = 0; v < n_act; ++v)
+                        for (int w = 0; w < n_act; ++w)
+                            q_expected(p, t) +=
+                                Gamma[((t * n_act + u) * n_act + v) * n_act + w] *
+                                cache.puvw[((p * n_act + u) * n_act + v) * n_act + w];
+
+        const Eigen::MatrixXd q_actual = compute_Q_matrix(cache, Gamma);
+        ok &= expect((q_actual - q_expected).cwiseAbs().maxCoeff() < 1e-12,
+                     "cached Q contraction should preserve the documented row-major (p,u,v,w) slab layout");
+    }
+
+    {
+        constexpr int nbasis = 4;
+        constexpr int n_core = 1;
+        constexpr int n_act = 2;
+        std::vector<double> eri_ao(static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis, 0.0);
+        auto idx4_ao = [nbasis](int p, int q, int r, int s)
+        {
+            return static_cast<std::size_t>(((p * nbasis + q) * nbasis + r) * nbasis + s);
+        };
+        for (int p = 0; p < nbasis; ++p)
+            for (int q = 0; q < nbasis; ++q)
+                for (int r = 0; r < nbasis; ++r)
+                    for (int s = 0; s < nbasis; ++s)
+                        eri_ao[idx4_ao(p, q, r, s)] =
+                            0.1 * static_cast<double>(p + 1) -
+                            0.05 * static_cast<double>(q + 2) +
+                            0.03 * static_cast<double>(r + 3) -
+                            0.02 * static_cast<double>(s + 4);
+
+        Eigen::MatrixXd C = Eigen::MatrixXd::Identity(nbasis, nbasis);
+        const double theta01 = 0.31;
+        const double theta23 = -0.27;
+        C(0, 0) = std::cos(theta01);
+        C(0, 1) = -std::sin(theta01);
+        C(1, 0) = std::sin(theta01);
+        C(1, 1) = std::cos(theta01);
+        C(2, 2) = std::cos(theta23);
+        C(2, 3) = -std::sin(theta23);
+        C(3, 2) = std::sin(theta23);
+        C(3, 3) = std::cos(theta23);
+
+        const Eigen::MatrixXd C_act = C.middleCols(n_core, n_act);
+        const std::vector<double> generic =
+            HartreeFock::Correlation::transform_eri(eri_ao, nbasis, C, C_act, C_act, C_act);
+        const std::vector<double> dedicated =
+            HartreeFock::Correlation::transform_eri_active_cache(eri_ao, nbasis, C, C_act);
+
+        double max_abs_diff = 0.0;
+        for (std::size_t i = 0; i < generic.size(); ++i)
+            max_abs_diff = std::max(max_abs_diff, std::abs(generic[i] - dedicated[i]));
+
+        ok &= expect(generic.size() == dedicated.size(),
+                     "dedicated active-cache transform should preserve the generic output size");
+        ok &= expect(max_abs_diff < 1e-12,
+                     "dedicated active-cache transform should match the generic AO->MO transform elementwise");
+    }
+
+    {
         Eigen::MatrixXd c_old = Eigen::MatrixXd::Zero(3, 2);
         c_old(0, 0) = 1.0;
         c_old(1, 1) = 1.0;
@@ -890,7 +983,7 @@ int main()
         R(1, 2) = -0.11;
         R(2, 1) = 0.11;
 
-        const Eigen::MatrixXd action = matrix_free_hessian_action(
+        const Eigen::MatrixXd action = delta_g_sa_action(
             R,
             &ctx,
             Eigen::MatrixXd::Zero(nbasis, nbasis),
@@ -910,7 +1003,7 @@ int main()
         const Eigen::MatrixXd action_fd = (g_plus - g_minus) / (2.0 * ctx.fd_step);
 
         ok &= expect((action - action_fd).norm() / std::max(action_fd.norm(), 1.0) < 1e-9,
-                     "matrix-free orbital Hessian action should match a fixed-CI finite-difference gradient derivative");
+                     "delta_g_sa_action should match a fixed-CI finite-difference gradient derivative");
     }
 
     {
@@ -1958,6 +2051,179 @@ int main()
                      "coupled orbital/CI solve should keep the active-active block gauge redundant");
         ok &= expect(capped_result.orbital_step.bottomRightCorner(1, 1).norm() < 1e-12,
                      "coupled orbital/CI solve should keep the virtual-virtual block gauge redundant");
+    }
+
+    {
+        constexpr int n_core = 10;
+        constexpr int n_act = 2;
+        constexpr int n_virt = 10;
+        constexpr int nbasis = n_core + n_act + n_virt;
+
+        std::vector<CIString> a_strs;
+        std::vector<CIString> b_strs;
+        build_spin_strings_unfiltered(n_act, 1, 1, a_strs, b_strs);
+
+        Eigen::MatrixXd h_eff = Eigen::MatrixXd::Zero(n_act, n_act);
+        h_eff << -0.85, 0.09,
+            0.09, -0.18;
+        std::vector<double> ga(16, 0.0);
+        auto idx4_act = [](int p, int q, int r, int s)
+        {
+            return ((p * 2 + q) * 2 + r) * 2 + s;
+        };
+        ga[idx4_act(0, 0, 0, 0)] = 0.66;
+        ga[idx4_act(1, 1, 1, 1)] = 0.43;
+        ga[idx4_act(0, 0, 1, 1)] = ga[idx4_act(1, 1, 0, 0)] = 0.15;
+        ga[idx4_act(0, 1, 1, 0)] = ga[idx4_act(1, 0, 0, 1)] = 0.04;
+
+        RASParams ras;
+        const CIDeterminantSpace space =
+            build_ci_space(a_strs, b_strs, ras, h_eff, ga, n_act, {}, nullptr, 0, 8);
+        const Eigen::MatrixXd dense_h =
+            build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, h_eff, ga, n_act);
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(dense_h);
+        const Eigen::VectorXd c0 = eig.eigenvectors().col(0);
+        const double E0 = eig.eigenvalues()(0);
+        const Eigen::VectorXd H_diag = dense_h.diagonal();
+
+        Eigen::MatrixXd orbital_gradient = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        orbital_gradient(0, n_core + 0) = 0.18;
+        orbital_gradient(n_core + 0, 0) = -0.18;
+        orbital_gradient(4, n_core + 1) = -0.09;
+        orbital_gradient(n_core + 1, 4) = 0.09;
+        orbital_gradient(n_core + 1, nbasis - 1) = 0.14;
+        orbital_gradient(nbasis - 1, n_core + 1) = -0.14;
+        orbital_gradient(8, nbasis - 2) = -0.06;
+        orbital_gradient(nbasis - 2, 8) = 0.06;
+
+        Eigen::MatrixXd F_I = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        Eigen::MatrixXd F_A = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        Eigen::MatrixXd H_core = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        for (int p = 0; p < nbasis; ++p)
+        {
+            const double diag = -1.6 + 0.11 * static_cast<double>(p);
+            F_A(p, p) = diag;
+            H_core(p, p) = diag;
+        }
+
+        const Eigen::MatrixXd C = Eigen::MatrixXd::Identity(nbasis, nbasis);
+        const Eigen::MatrixXd S = Eigen::MatrixXd::Identity(nbasis, nbasis);
+        std::vector<double> eri_ao(static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis, 0.0);
+        auto idx4_ao = [nbasis](int p, int q, int r, int s)
+        {
+            return ((p * nbasis + q) * nbasis + r) * nbasis + s;
+        };
+        const int a0 = n_core + 0;
+        const int a1 = n_core + 1;
+        eri_ao[idx4_ao(a0, a0, a0, a0)] = ga[idx4_act(0, 0, 0, 0)];
+        eri_ao[idx4_ao(a1, a1, a1, a1)] = ga[idx4_act(1, 1, 1, 1)];
+        eri_ao[idx4_ao(a0, a0, a1, a1)] = eri_ao[idx4_ao(a1, a1, a0, a0)] = ga[idx4_act(0, 0, 1, 1)];
+        eri_ao[idx4_ao(a0, a1, a1, a0)] = eri_ao[idx4_ao(a1, a0, a0, a1)] = ga[idx4_act(0, 1, 1, 0)];
+
+        Eigen::MatrixXd c0_mat(c0.size(), 1);
+        c0_mat.col(0) = c0;
+        Eigen::VectorXd w(1);
+        w(0) = 1.0;
+        const Eigen::MatrixXd gamma =
+            compute_1rdm(c0_mat, w, a_strs, b_strs, space.dets, n_act);
+        const std::vector<double> Gamma_vec =
+            compute_2rdm(c0_mat, w, a_strs, b_strs, space.dets, n_act);
+
+        const ActiveIntegralCache cache = build_active_integral_cache(eri_ao, C, n_core, n_act, nbasis);
+        const auto apply = [&dense_h](const Eigen::VectorXd &c, Eigen::VectorXd &sigma_vec)
+        {
+            sigma_vec = dense_h * c;
+        };
+        const OrbitalHessianContext ctx{
+            .C = &C,
+            .S = &S,
+            .H_core = &H_core,
+            .eri = &eri_ao,
+            .gamma = &gamma,
+            .Gamma_vec = &Gamma_vec,
+            .fd_step = 2e-4,
+        };
+
+        ok &= expect(non_redundant_pairs(n_core, n_act, n_virt).size() > 128,
+                     "large-pair orbital test should exceed the dense Hessian-build cutoff");
+
+        const CoupledStepSolveResult result = solve_coupled_orbital_ci_step(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            orbital_gradient,
+            F_I,
+            F_A,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            space.dets,
+            cache,
+            apply,
+            c0,
+            E0,
+            H_diag,
+            nbasis,
+            n_core,
+            n_act,
+            n_virt,
+            0.2,
+            0.20,
+            {},
+            false,
+            &ctx,
+            1e-7,
+            6,
+            1e-4);
+
+        const Eigen::MatrixXd seed_orbital_step = diagonal_preconditioned_orbital_step(
+            orbital_gradient,
+            F_I,
+            F_A,
+            n_core,
+            n_act,
+            n_virt,
+            0.2,
+            0.20,
+            {},
+            false);
+        const CoupledResponseBlocks seed_blocks = build_coupled_response_blocks(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
+            seed_orbital_step,
+            F_I,
+            h_eff,
+            ga,
+            space,
+            a_strs,
+            b_strs,
+            space.dets,
+            cache,
+            apply,
+            c0,
+            E0,
+            H_diag,
+            nbasis,
+            n_core,
+            n_act,
+            n_virt);
+        const Eigen::MatrixXd seed_orbital_residual =
+            orbital_gradient +
+            delta_g_sa_action(seed_orbital_step, &ctx, F_I, F_A, n_core, n_act, n_virt, {}, false) +
+            seed_blocks.orbital_correction;
+        const double seeded_metric =
+            std::max(seed_orbital_residual.cwiseAbs().maxCoeff(), seed_blocks.ci_residual.norm());
+        const double final_metric = std::max(result.orbital_residual_max, result.ci_residual_norm);
+
+        ok &= expect(result.iterations > 0,
+                     "large-pair coupled orbital/CI solve should perform at least one block iteration");
+        ok &= expect((result.orbital_step + result.orbital_step.transpose()).norm() < 1e-12,
+                     "large-pair coupled orbital/CI solve should preserve the antisymmetric orbital gauge");
+        ok &= expect(result.orbital_step.allFinite(),
+                     "large-pair coupled orbital/CI solve should return a finite orbital step");
+        ok &= expect(std::isfinite(result.orbital_residual_max) && std::isfinite(result.ci_residual_norm),
+                     "large-pair coupled orbital/CI solve should report finite residual diagnostics");
+        ok &= expect(final_metric <= seeded_metric + 1e-8,
+                     "large-pair coupled orbital/CI solve should not worsen the seeded coupled residual when using the matrix-free Hessian action");
     }
 
     {

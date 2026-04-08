@@ -217,6 +217,9 @@ namespace HartreeFock::Correlation::CASSCF
     {
         const int dim = static_cast<int>(dets.size());
         Eigen::MatrixXd H = Eigen::MatrixXd::Zero(dim, dim);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
         for (int i = 0; i < dim; ++i)
         {
             const auto [ia, ib] = dets[i];

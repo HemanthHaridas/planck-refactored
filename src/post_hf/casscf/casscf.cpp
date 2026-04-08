@@ -716,13 +716,15 @@ namespace HartreeFock::Correlation::CASSCF
             st.ci_vecs = std::move(ci_result.vectors);
 
             const int nr_used = std::min(nroots, static_cast<int>(st.ci_vecs.cols()));
-            st.roots.clear();
-            st.roots.reserve(static_cast<std::size_t>(nr_used));
+            st.roots.assign(static_cast<std::size_t>(nr_used), StateSpecificData{});
             st.F_A_mo = Eigen::MatrixXd::Zero(nbasis, nbasis);
             st.gamma = Eigen::MatrixXd::Zero(n_act, n_act);
             st.Gamma_vec.clear();
             st.g_orb = Eigen::MatrixXd::Zero(nbasis, nbasis);
 
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(dynamic) if(nr_used > 1)
+#endif
             for (int r = 0; r < nr_used; ++r)
             {
                 // Build each root from its own CI vector first, then reconstruct
@@ -742,11 +744,14 @@ namespace HartreeFock::Correlation::CASSCF
                 root.g_orb = compute_orbital_gradient(
                     st.F_I_mo, root.F_A_mo, root.Q, root.gamma,
                     n_core, n_act, n_virt, all_mo_irr, use_sym);
+                st.roots[static_cast<std::size_t>(r)] = std::move(root);
+            }
 
+            for (const auto &root : st.roots)
+            {
                 st.gamma.noalias() += root.weight * root.gamma;
                 accumulate_weighted_tensor(st.Gamma_vec, root.Gamma_vec, root.weight);
                 st.F_A_mo.noalias() += root.weight * root.F_A_mo;
-                st.roots.push_back(std::move(root));
             }
 
             st.g_orb = build_weighted_root_orbital_gradient(st.roots, nbasis);
