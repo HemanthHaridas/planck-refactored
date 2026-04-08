@@ -1,0 +1,29 @@
+.vscode
+build
+src/external
+src/base/basis.h
+inputs
+install
+.DS*
+bin
+.claude
+CLAUDE*
+gpu
+*/__pycache__
+ammonia*
+*.log
+*tga
+.pytest*
+.github/*/*.yml
+*.hfchk
+*cube
+docs/casscf_remaining_work.md
+# Obsidian vault — track notes but not workspace state
+notes/.obsidian/workspace.json
+notes/.obsidian/workspace-mobile.json
+notes/.obsidian/cache
+notes/.obsidian/plugins/
+# Claude memory sync target (auto-generated)
+notes/claude-memory/*.md
+scripts
+notes
