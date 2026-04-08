@@ -1437,9 +1437,12 @@ namespace HartreeFock::Correlation::CASSCF
 
         if (nroots > 1)
         {
+            const Eigen::MatrixXd h_mo = C.transpose() * calc._hcore * C;
+            const double E_core = compute_core_energy(h_mo, fst.F_I_mo, n_core);
+            const double shared_energy = calc._nuclear_repulsion + E_core;
             calc._cas_root_energies.resize(nroots);
             for (int r = 0; r < nroots; ++r)
-                calc._cas_root_energies(r) = fst.roots[r].ci_energy;
+                calc._cas_root_energies(r) = shared_energy + fst.roots[r].ci_energy;
         }
 
         return {};
