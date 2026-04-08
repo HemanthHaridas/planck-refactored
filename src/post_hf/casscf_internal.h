@@ -88,7 +88,10 @@ namespace HartreeFock::Correlation::CASSCFInternal
     };
 
     // The active-integral cache stores the one expensive mixed-basis transform used
-    // repeatedly by Q-matrix contractions across a macroiteration.
+    // repeatedly by Q-matrix contractions across a macroiteration. The tensor is
+    // laid out row-major as `(p,u,v,w)`, so each fixed-`p` slab of length
+    // `nact^3` is contiguous. That matches the Q contraction, which consumes one
+    // `(u,v,w)` slab at a time against `Gamma[t,u,v,w]`.
     struct ActiveIntegralCache
     {
         std::vector<double> puvw;
@@ -98,7 +101,9 @@ namespace HartreeFock::Correlation::CASSCFInternal
     };
 
     // Contract the cached mixed-basis two-electron tensor with the active-space
-    // 2-RDM. The layout is row-major and the tensor sizes must agree exactly.
+    // 2-RDM. The shared row-major `(u,v,w)` slab layout lets each `Q(p,t)` entry
+    // reduce to a dot product over one contiguous `nact^3` block from `Gamma`
+    // and one contiguous block from `puvw`.
     inline Eigen::MatrixXd contract_q_matrix(
         const std::vector<double> &puvw,
         const std::vector<double> &Gamma,
@@ -114,16 +119,19 @@ namespace HartreeFock::Correlation::CASSCFInternal
         if (puvw.size() != expected_puvw || Gamma.size() != expected_gamma)
             return Q;
 
+        const std::size_t act3 = static_cast<std::size_t>(nact) * nact * nact;
         for (int p = 0; p < nbasis; ++p)
+        {
+            const double *puvw_p = puvw.data() + static_cast<std::size_t>(p) * act3;
             for (int t = 0; t < nact; ++t)
             {
+                const double *gamma_t = Gamma.data() + static_cast<std::size_t>(t) * act3;
                 double q_pt = 0.0;
-                for (int u = 0; u < nact; ++u)
-                    for (int v = 0; v < nact; ++v)
-                        for (int w = 0; w < nact; ++w)
-                            q_pt += Gamma[((t * nact + u) * nact + v) * nact + w] * puvw[((p * nact + u) * nact + v) * nact + w];
+                for (std::size_t uvw = 0; uvw < act3; ++uvw)
+                    q_pt += gamma_t[uvw] * puvw_p[uvw];
                 Q(p, t) = q_pt;
             }
+        }
 
         return Q;
     }
