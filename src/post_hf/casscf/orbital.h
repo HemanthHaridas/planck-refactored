@@ -139,9 +139,21 @@ namespace HartreeFock::Correlation::CASSCF
         int n_act,
         int n_virt);
 
-    // Matrix-free fixed-CI orbital Hessian-vector product obtained by finite
-    // differencing the true orbital gradient under a small orbital rotation.
-    // Falls back to the diagonal model if the context is incomplete.
+    // State-averaged orbital Hessian action δg_SA[R] evaluated at fixed CI by
+    // finite-differencing the true orbital gradient under a small orbital
+    // rotation. Falls back to the diagonal model if the context is incomplete.
+    Eigen::MatrixXd delta_g_sa_action(
+        const Eigen::MatrixXd &R,
+        const OrbitalHessianContext *context,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt,
+        const std::vector<int> &mo_irreps,
+        bool use_sym);
+
+    // Backward-compatible alias for the milestone-3 orbital Hessian action.
     Eigen::MatrixXd matrix_free_hessian_action(
         const Eigen::MatrixXd &R,
         const OrbitalHessianContext *context,
