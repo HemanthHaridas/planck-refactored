@@ -82,15 +82,25 @@ namespace
         const auto lut = build_det_lookup(sd);
         Eigen::MatrixXd gamma = Eigen::MatrixXd::Zero(n_act, n_act);
 
-        for (int root = 0; root < nr; ++root)
+        const int total_tasks = nr * dim;
+#ifdef USE_OPENMP
+#pragma omp parallel
+#endif
         {
-            const double w = weights(root);
-            if (w == 0.0)
-                continue;
-            const auto bra = bra_vecs.col(root);
-            const auto ket = ket_vecs.col(root);
-            for (int j = 0; j < dim; ++j)
+            Eigen::MatrixXd gamma_local = Eigen::MatrixXd::Zero(n_act, n_act);
+#ifdef USE_OPENMP
+#pragma omp for nowait schedule(dynamic)
+#endif
+            for (int task = 0; task < total_tasks; ++task)
             {
+                const int root = task / dim;
+                const int j = task % dim;
+                const double w = weights(root);
+                if (w == 0.0)
+                    continue;
+
+                const auto bra = bra_vecs.col(root);
+                const auto ket = ket_vecs.col(root);
                 const double ket_j = ket(j);
                 if (std::abs(ket_j) < 1e-15)
                     continue;
@@ -116,7 +126,7 @@ namespace
                             auto it = lut.find(cre.det);
                             if (it == lut.end())
                                 continue;
-                            gamma(p, q) += w * ann.phase * cre.phase * bra(it->second) * ket_j;
+                            gamma_local(p, q) += w * ann.phase * cre.phase * bra(it->second) * ket_j;
                         }
                     }
                     continue;
@@ -135,10 +145,15 @@ namespace
                         auto cre = apply_creation(ann.det, spin_off + p);
                         auto it = lut.find(cre.det);
                         if (it == lut.end()) return;
-                        gamma(p, q) += w * ann.phase * cre.phase * bra(it->second) * ket_j;
+                        gamma_local(p, q) += w * ann.phase * cre.phase * bra(it->second) * ket_j;
                     }); });
                 }
             }
+
+#ifdef USE_OPENMP
+#pragma omp critical
+#endif
+            gamma.noalias() += gamma_local;
         }
 
         return gamma;
@@ -160,15 +175,25 @@ namespace
         const auto lut = build_det_lookup(sd);
         std::vector<double> Gamma(static_cast<std::size_t>(n_act) * n_act * n_act * n_act, 0.0);
 
-        for (int root = 0; root < nr; ++root)
+        const int total_tasks = nr * dim;
+#ifdef USE_OPENMP
+#pragma omp parallel
+#endif
         {
-            const double w = weights(root);
-            if (w == 0.0)
-                continue;
-            const auto bra = bra_vecs.col(root);
-            const auto ket = ket_vecs.col(root);
-            for (int j = 0; j < dim; ++j)
+            std::vector<double> gamma_local(Gamma.size(), 0.0);
+#ifdef USE_OPENMP
+#pragma omp for nowait schedule(dynamic)
+#endif
+            for (int task = 0; task < total_tasks; ++task)
             {
+                const int root = task / dim;
+                const int j = task % dim;
+                const double w = weights(root);
+                if (w == 0.0)
+                    continue;
+
+                const auto bra = bra_vecs.col(root);
+                const auto ket = ket_vecs.col(root);
                 const double ket_j = ket(j);
                 if (std::abs(ket_j) < 1e-15)
                     continue;
@@ -208,7 +233,7 @@ namespace
                                         continue;
                                     const double phase =
                                         ann_q.phase * ann_s.phase * cre_r.phase * cre_p.phase;
-                                    Gamma[idx4(p, q, r, s, n_act)] +=
+                                    gamma_local[idx4(p, q, r, s, n_act)] +=
                                         w * phase * bra(it->second) * ket_j;
                                 }
                             }
@@ -243,12 +268,18 @@ namespace
                             if (it == lut.end()) return;
                             const double phase =
                                 ann_q.phase * ann_s.phase * cre_r.phase * cre_p.phase;
-                            Gamma[idx4(p, q, r, s, n_act)] +=
+                            gamma_local[idx4(p, q, r, s, n_act)] +=
                                 w * phase * bra(it->second) * ket_j;
                         });
                     });
                 }); });
             }
+
+#ifdef USE_OPENMP
+#pragma omp critical
+#endif
+            for (std::size_t i = 0; i < Gamma.size(); ++i)
+                Gamma[i] += gamma_local[i];
         }
 
         return Gamma;

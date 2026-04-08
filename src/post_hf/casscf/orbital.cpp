@@ -113,6 +113,9 @@ namespace HartreeFock::Correlation::CASSCF
         // Assemble the generalized Fock matrix for the non-redundant rotations:
         // inactive columns come from the total Fock matrix, while active columns
         // mix the inactive-driven term gamma * F_I with the explicit Q contraction.
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int p = 0; p < nb; ++p)
         {
             for (int i = 0; i < n_core; ++i)
@@ -135,6 +138,9 @@ namespace HartreeFock::Correlation::CASSCF
         // Symmetry-forbidden rotations are projected out explicitly so all later
         // optimizers can work on the full matrix layout without revisiting labels.
         if (use_sym && !mo_irreps.empty())
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
             for (int p = 0; p < nb; ++p)
                 for (int q = 0; q < nb; ++q)
                 {
@@ -182,6 +188,9 @@ namespace HartreeFock::Correlation::CASSCF
         int n_virt)
     {
         Eigen::MatrixXd G_CI = Eigen::MatrixXd::Zero(nbasis, nbasis);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int p = 0; p < nbasis; ++p)
             for (int t = 0; t < n_act; ++t)
             {
@@ -216,6 +225,9 @@ namespace HartreeFock::Correlation::CASSCF
                                                          : 2; };
         // The current orbital model keeps only the diagonal AH blocks, so the
         // Hessian action reduces to a per-pair energy denominator.
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int p = 0; p < nb; ++p)
             for (int q = 0; q < nb; ++q)
             {

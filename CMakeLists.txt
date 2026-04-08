@@ -79,6 +79,7 @@ externalproject_add(
     PREFIX ${SRC_DIR}/external/libxc
     GIT_REPOSITORY https://github.com/ElectronicStructureLibrary/libxc.git
     UPDATE_DISCONNECTED TRUE
+    GIT_PROGRESS TRUE
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=${LIBXC_INSTALL_DIR}
         -DBUILD_SHARED_LIBS:BOOL=OFF

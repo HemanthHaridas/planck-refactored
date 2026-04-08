@@ -10,20 +10,17 @@ bin
 CLAUDE*
 gpu
 */__pycache__
-ammonia*
-*.log
 *tga
 .pytest*
 .github/*/*.yml
-*.hfchk
-*cube
 docs/casscf_remaining_work.md
 # Obsidian vault — track notes but not workspace state
-notes/.obsidian/workspace.json
-notes/.obsidian/workspace-mobile.json
-notes/.obsidian/cache
-notes/.obsidian/plugins/
-# Claude memory sync target (auto-generated)
-notes/claude-memory/*.md
-scripts
+vault/.obsidian/workspace.json
+vault/.obsidian/workspace-mobile.json
+vault/.obsidian/cache
+vault/.obsidian/plugins/
+scripts/*
+# Vault aggregation script — explicitly tracked
+!scripts/vault_to_claude.py
 notes
+src/base/basis.h
