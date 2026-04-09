@@ -51,7 +51,7 @@ static Eigen::MatrixXd _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
 
     // Reset SCF state (no SAO blocking during finite-difference steps)
     calc._info._scf = HartreeFock::DataSCF(
-        calc._scf._scf == HartreeFock::SCFType::UHF);
+        calc._scf._scf != HartreeFock::SCFType::RHF);
     calc._info._scf.initialize(calc._shells.nbasis());
     calc._scf.set_scf_mode_auto(calc._shells.nbasis());
     calc._info._is_converged = false;
@@ -74,6 +74,8 @@ static Eigen::MatrixXd _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
     std::expected<void, std::string> scf_res;
     if (calc._scf._scf == HartreeFock::SCFType::UHF)
         scf_res = HartreeFock::SCF::run_uhf(calc, shell_pairs);
+    else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
+        scf_res = HartreeFock::SCF::run_rohf(calc, shell_pairs);
     else
         scf_res = HartreeFock::SCF::run_rhf(calc, shell_pairs);
 
@@ -87,6 +89,10 @@ static Eigen::MatrixXd _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
         if (!grad_res)
             throw std::runtime_error("Hessian UHF gradient failed: " + grad_res.error());
         grad = std::move(*grad_res);
+    }
+    else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
+    {
+        throw std::runtime_error("Hessian ROHF gradient is not implemented");
     }
     else
     {

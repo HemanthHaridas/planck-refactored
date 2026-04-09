@@ -379,6 +379,13 @@ namespace HartreeFock::IO
                  { calculation = map_string_enum<HartreeFock::CalculationType>(value); }},
                 {"verbosity", [&output](const std::string &value)
                  { output._verbosity = map_string_enum<HartreeFock::Verbosity>(value); }},
+                {"print_populations", [&output](const std::string &value)
+                 {
+                     auto parsed = toBool(value);
+                     if (!parsed)
+                         throw std::invalid_argument(parsed.error());
+                     output._print_populations = *parsed;
+                 }},
                 {"basis_path", [&basis](const std::string &value)
                  { basis._basis_path = value; }}};
 
@@ -460,6 +467,7 @@ namespace HartreeFock::IO
             {
                 // All possible combinations
                 {"rhf", HartreeFock::SCFType::RHF},
+                {"rohf", HartreeFock::SCFType::ROHF},
                 {"uhf", HartreeFock::SCFType::UHF},
                 {"rks", HartreeFock::SCFType::RHF},
                 {"uks", HartreeFock::SCFType::UHF}};

@@ -529,6 +529,8 @@ const inline std::string map_enum<HartreeFock::SCFType>(HartreeFock::SCFType s)
     {
     case HartreeFock::SCFType::RHF:
         return "RHF";
+    case HartreeFock::SCFType::ROHF:
+        return "ROHF";
     case HartreeFock::SCFType::UHF:
         return "UHF";
     }

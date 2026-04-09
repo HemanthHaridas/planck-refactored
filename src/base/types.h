@@ -52,6 +52,7 @@ namespace HartreeFock
     enum class SCFType
     {
         RHF, // Restricted Hartree-Fock
+        ROHF, // Restricted open-shell Hartree-Fock
         UHF  // Unrestricted Hartree-Fock
     };
 
@@ -851,7 +852,7 @@ namespace HartreeFock
             if (!_info._scf.is_init)
             {
                 // First set the spin channel information
-                _info._scf = DataSCF(_scf._scf == SCFType::UHF);
+                _info._scf = DataSCF(_scf._scf != SCFType::RHF);
 
                 // Now initialize the matrices
                 _info._scf.initialize(_shells.nbasis());

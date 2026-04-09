@@ -38,6 +38,8 @@ namespace
         {
         case HartreeFock::SCFType::RHF:
             return "RKS";
+        case HartreeFock::SCFType::ROHF:
+            return "ROKS";
         case HartreeFock::SCFType::UHF:
             return "UKS";
         }

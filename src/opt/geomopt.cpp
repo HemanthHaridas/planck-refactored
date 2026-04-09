@@ -43,7 +43,7 @@ static Eigen::VectorXd _run_sp_gradient_hf(HartreeFock::Calculator &calc)
     const bool have_prev_density = (prev_alpha.size() > 0);
 
     // Reset SCF data structures
-    calc._info._scf = HartreeFock::DataSCF(calc._scf._scf == HartreeFock::SCFType::UHF);
+    calc._info._scf = HartreeFock::DataSCF(calc._scf._scf != HartreeFock::SCFType::RHF);
     calc._info._scf.initialize(calc._shells.nbasis());
     calc._scf.set_scf_mode_auto(calc._shells.nbasis());
     calc._info._is_converged = false;
@@ -56,7 +56,7 @@ static Eigen::VectorXd _run_sp_gradient_hf(HartreeFock::Calculator &calc)
     if (have_prev_density)
     {
         calc._info._scf.alpha.density = prev_alpha;
-        if (calc._scf._scf == HartreeFock::SCFType::UHF && prev_beta.size() > 0)
+        if (calc._scf._scf != HartreeFock::SCFType::RHF && prev_beta.size() > 0)
             calc._info._scf.beta.density = prev_beta;
         calc._scf._guess = HartreeFock::SCFGuess::ReadDensity;
     }
@@ -81,6 +81,8 @@ static Eigen::VectorXd _run_sp_gradient_hf(HartreeFock::Calculator &calc)
     std::expected<void, std::string> scf_res;
     if (calc._scf._scf == HartreeFock::SCFType::UHF)
         scf_res = HartreeFock::SCF::run_uhf(calc, shell_pairs);
+    else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
+        scf_res = HartreeFock::SCF::run_rohf(calc, shell_pairs);
     else
         scf_res = HartreeFock::SCF::run_rhf(calc, shell_pairs);
 
@@ -105,6 +107,10 @@ static Eigen::VectorXd _run_sp_gradient_hf(HartreeFock::Calculator &calc)
     else if (calc._correlation == HartreeFock::PostHF::UMP2)
     {
         throw std::runtime_error("GeomOpt UMP2 gradient is not implemented");
+    }
+    else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
+    {
+        throw std::runtime_error("GeomOpt ROHF gradient is not implemented");
     }
     else if (calc._scf._scf == HartreeFock::SCFType::UHF)
     {

@@ -1652,6 +1652,9 @@ namespace DFT::Driver
     std::expected<Result, std::string>
     run(HartreeFock::Calculator &calculator, const Options &options)
     {
+        if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+            return std::unexpected("ROKS/ROHF DFT references are not implemented; use UKS for open-shell DFT");
+
         auto functionals = initialize_functionals(calculator);
         if (!functionals)
             return std::unexpected(functionals.error());

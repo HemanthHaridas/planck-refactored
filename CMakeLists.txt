@@ -312,6 +312,11 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    add_executable(planck-population-analysis
+        ${CMAKE_SOURCE_DIR}/tests/population_analysis.cpp
+        ${SRC_DIR}/scf/population.cpp
+    )
+
     target_include_directories(planck-casscf-internal PRIVATE
         ${SRC_DIR}
         ${MSYM_INSTALL_DIR}/include
@@ -324,6 +329,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-multipole-integrals PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-population-analysis PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -341,6 +351,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-multipole-integrals PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-population-analysis PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -369,6 +385,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-multipole-integrals
         COMMAND planck-multipole-integrals
+    )
+
+    add_test(
+        NAME planck-population-analysis
+        COMMAND planck-population-analysis
     )
 endif()
 
