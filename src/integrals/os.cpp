@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace
 {
@@ -132,15 +133,105 @@ namespace
                                        std::size_t k, std::size_t l,
                                        double val)
     {
-        eri[i * nb3 + j * nb2 + k * nb + l] = val;
-        eri[j * nb3 + i * nb2 + k * nb + l] = val;
-        eri[i * nb3 + j * nb2 + l * nb + k] = val;
-        eri[j * nb3 + i * nb2 + l * nb + k] = val;
-        eri[k * nb3 + l * nb2 + i * nb + j] = val;
-        eri[l * nb3 + k * nb2 + i * nb + j] = val;
-        eri[k * nb3 + l * nb2 + j * nb + i] = val;
-        eri[l * nb3 + k * nb2 + j * nb + i] = val;
+        auto write_slot = [&](std::size_t idx)
+        {
+#ifdef USE_OPENMP
+#pragma omp atomic write
+#endif
+            eri[idx] = val;
+        };
+
+        write_slot(i * nb3 + j * nb2 + k * nb + l);
+        write_slot(j * nb3 + i * nb2 + k * nb + l);
+        write_slot(i * nb3 + j * nb2 + l * nb + k);
+        write_slot(j * nb3 + i * nb2 + l * nb + k);
+        write_slot(k * nb3 + l * nb2 + i * nb + j);
+        write_slot(l * nb3 + k * nb2 + i * nb + j);
+        write_slot(k * nb3 + l * nb2 + j * nb + i);
+        write_slot(l * nb3 + k * nb2 + j * nb + i);
     }
+
+    struct EriScratch
+    {
+        int ax_dim = 0;
+        int ay_dim = 0;
+        int az_dim = 0;
+        int cx_dim = 0;
+        int cy_dim = 0;
+        int cz_dim = 0;
+        int m_dim = 0;
+        std::vector<double> vrr;
+        std::vector<double> hrr;
+
+        void resize_for_quartet(
+            int lABx, int lABy, int lABz,
+            int lCDx, int lCDy, int lCDz,
+            int mmax)
+        {
+            ax_dim = lABx + 1;
+            ay_dim = lABy + 1;
+            az_dim = lABz + 1;
+            cx_dim = lCDx + 1;
+            cy_dim = lCDy + 1;
+            cz_dim = lCDz + 1;
+            m_dim = mmax + 1;
+
+            const std::size_t spatial =
+                static_cast<std::size_t>(ax_dim) * ay_dim * az_dim *
+                cx_dim * cy_dim * cz_dim;
+            vrr.assign(spatial * static_cast<std::size_t>(m_dim), 0.0);
+            hrr.resize(spatial);
+        }
+
+        std::size_t spatial_index(
+            int ax, int ay, int az,
+            int cx, int cy, int cz) const
+        {
+            std::size_t idx = static_cast<std::size_t>(ax);
+            idx = idx * static_cast<std::size_t>(ay_dim) + static_cast<std::size_t>(ay);
+            idx = idx * static_cast<std::size_t>(az_dim) + static_cast<std::size_t>(az);
+            idx = idx * static_cast<std::size_t>(cx_dim) + static_cast<std::size_t>(cx);
+            idx = idx * static_cast<std::size_t>(cy_dim) + static_cast<std::size_t>(cy);
+            idx = idx * static_cast<std::size_t>(cz_dim) + static_cast<std::size_t>(cz);
+            return idx;
+        }
+
+        double &v(
+            int ax, int ay, int az,
+            int cx, int cy, int cz,
+            int m)
+        {
+            return vrr[spatial_index(ax, ay, az, cx, cy, cz) *
+                           static_cast<std::size_t>(m_dim) +
+                       static_cast<std::size_t>(m)];
+        }
+
+        const double &v(
+            int ax, int ay, int az,
+            int cx, int cy, int cz,
+            int m) const
+        {
+            return vrr[spatial_index(ax, ay, az, cx, cy, cz) *
+                           static_cast<std::size_t>(m_dim) +
+                       static_cast<std::size_t>(m)];
+        }
+
+        double &h(
+            int ax, int ay, int az,
+            int cx, int cy, int cz)
+        {
+            return hrr[spatial_index(ax, ay, az, cx, cy, cz)];
+        }
+
+        const double &h(
+            int ax, int ay, int az,
+            int cx, int cy, int cz) const
+        {
+            return hrr[spatial_index(ax, ay, az, cx, cy, cz)];
+        }
+    };
+
+    static thread_local EriScratch _eri_scratch;
 } // namespace
 
 inline double HartreeFock::ObaraSaika::_os_1d(const double gamma, const double distPA, const double distPB, const int lA, const int lB)
@@ -535,18 +626,10 @@ std::tuple<double, double> HartreeFock::ObaraSaika::_compute_3d_overlap_kinetic(
 // Complexity: O(L^3 * (bx+by+bz))  vs  O(2^(bx+by+bz)) for the
 // recursive version.
 // VRR spatial dimension: each axis of the VRR table runs from 0 to
-// lAx+lBx (or y,z equivalents).  lAx can be MAX_L and lBx can be
-// MAX_L independently, so the table needs 2*MAX_L+1 entries per axis.
-static constexpr int VRR_DIM = 2 * MAX_L + 1; // = 13; per-axis bound for 1-pair VRR
-static constexpr int MMAX_4C = 4 * MAX_L + 2; // = 26; Boys m upper bound for 4-center ERI
-
-// Thread-local scratch buffers for 4-center ERI (too large for the stack).
-// VRR buffer: V[ax][ay][az][cx][cy][cz][m]
-// HRR buffer: W[ax][ay][az][cx][cy][cz]  (m=0 slice used during HRR)
-static thread_local double _vrr_buf[VRR_DIM][VRR_DIM][VRR_DIM]
-                                   [VRR_DIM][VRR_DIM][VRR_DIM][MMAX_4C];
-static thread_local double _hrr_buf[VRR_DIM][VRR_DIM][VRR_DIM]
-                                   [VRR_DIM][VRR_DIM][VRR_DIM];
+// lAx+lBx (or y,z equivalents). The fixed-size helpers below still use
+// VRR_DIM-sized stack buffers where the footprint is modest, but the 4-center
+// ERI scratch itself is allocated dynamically per quartet in `_eri_scratch`.
+static constexpr int VRR_DIM = 2 * MAX_L + 1; // = 13; per-axis bound for compact stack helpers
 
 static double _nuclear_hrr(
     const double V0[VRR_DIM][VRR_DIM][VRR_DIM],
@@ -794,7 +877,7 @@ static void _eri_vrr(
     const HartreeFock::PrimitivePair &ppCD,
     const int lABx, const int lABy, const int lABz,
     const int lCDx, const int lCDy, const int lCDz,
-    double V[VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][MMAX_4C])
+    EriScratch &scratch)
 {
     const double zetaAB = ppAB.zeta;
     const double zetaCD = ppCD.zeta;
@@ -832,7 +915,7 @@ static void _eri_vrr(
 
     // ── Seed ─────────────────────────────────────────────────────────────────
     for (int m = 0; m <= MMAX; ++m)
-        V[0][0][0][0][0][0][m] = prefac * HartreeFock::Lookup::boys(m, T);
+        scratch.v(0, 0, 0, 0, 0, 0, m) = prefac * HartreeFock::Lookup::boys(m, T);
 
     // ── A-VRR: x-axis ─────────────────────────────────────────────────────
     for (int ax = 1; ax <= lABx; ++ax)
@@ -840,12 +923,14 @@ static void _eri_vrr(
         const int mlim = MMAX - ax;
         for (int m = 0; m <= mlim; ++m)
         {
-            V[ax][0][0][0][0][0][m] =
-                PAx * V[ax - 1][0][0][0][0][0][m] + WPx * V[ax - 1][0][0][0][0][0][m + 1];
+            scratch.v(ax, 0, 0, 0, 0, 0, m) =
+                PAx * scratch.v(ax - 1, 0, 0, 0, 0, 0, m) +
+                WPx * scratch.v(ax - 1, 0, 0, 0, 0, 0, m + 1);
             if (ax > 1)
-                V[ax][0][0][0][0][0][m] +=
+                scratch.v(ax, 0, 0, 0, 0, 0, m) +=
                     (ax - 1) * inv_2_zetaAB *
-                    (V[ax - 2][0][0][0][0][0][m] - rho_over_zetaAB * V[ax - 2][0][0][0][0][0][m + 1]);
+                    (scratch.v(ax - 2, 0, 0, 0, 0, 0, m) -
+                     rho_over_zetaAB * scratch.v(ax - 2, 0, 0, 0, 0, 0, m + 1));
         }
     }
 
@@ -859,12 +944,14 @@ static void _eri_vrr(
                 continue;
             for (int m = 0; m <= mlim; ++m)
             {
-                V[ax][ay][0][0][0][0][m] =
-                    PAy * V[ax][ay - 1][0][0][0][0][m] + WPy * V[ax][ay - 1][0][0][0][0][m + 1];
+                scratch.v(ax, ay, 0, 0, 0, 0, m) =
+                    PAy * scratch.v(ax, ay - 1, 0, 0, 0, 0, m) +
+                    WPy * scratch.v(ax, ay - 1, 0, 0, 0, 0, m + 1);
                 if (ay > 1)
-                    V[ax][ay][0][0][0][0][m] +=
+                    scratch.v(ax, ay, 0, 0, 0, 0, m) +=
                         (ay - 1) * inv_2_zetaAB *
-                        (V[ax][ay - 2][0][0][0][0][m] - rho_over_zetaAB * V[ax][ay - 2][0][0][0][0][m + 1]);
+                        (scratch.v(ax, ay - 2, 0, 0, 0, 0, m) -
+                         rho_over_zetaAB * scratch.v(ax, ay - 2, 0, 0, 0, 0, m + 1));
             }
         }
     }
@@ -881,12 +968,14 @@ static void _eri_vrr(
                     continue;
                 for (int m = 0; m <= mlim; ++m)
                 {
-                    V[ax][ay][az][0][0][0][m] =
-                        PAz * V[ax][ay][az - 1][0][0][0][m] + WPz * V[ax][ay][az - 1][0][0][0][m + 1];
+                    scratch.v(ax, ay, az, 0, 0, 0, m) =
+                        PAz * scratch.v(ax, ay, az - 1, 0, 0, 0, m) +
+                        WPz * scratch.v(ax, ay, az - 1, 0, 0, 0, m + 1);
                     if (az > 1)
-                        V[ax][ay][az][0][0][0][m] +=
+                        scratch.v(ax, ay, az, 0, 0, 0, m) +=
                             (az - 1) * inv_2_zetaAB *
-                            (V[ax][ay][az - 2][0][0][0][m] - rho_over_zetaAB * V[ax][ay][az - 2][0][0][0][m + 1]);
+                            (scratch.v(ax, ay, az - 2, 0, 0, 0, m) -
+                             rho_over_zetaAB * scratch.v(ax, ay, az - 2, 0, 0, 0, m + 1));
                 }
             }
         }
@@ -906,15 +995,17 @@ static void _eri_vrr(
                         continue;
                     for (int m = 0; m <= mlim; ++m)
                     {
-                        V[ax][ay][az][cx][0][0][m] =
-                            QCx * V[ax][ay][az][cx - 1][0][0][m] + WQx * V[ax][ay][az][cx - 1][0][0][m + 1];
+                        scratch.v(ax, ay, az, cx, 0, 0, m) =
+                            QCx * scratch.v(ax, ay, az, cx - 1, 0, 0, m) +
+                            WQx * scratch.v(ax, ay, az, cx - 1, 0, 0, m + 1);
                         if (cx > 1)
-                            V[ax][ay][az][cx][0][0][m] +=
+                            scratch.v(ax, ay, az, cx, 0, 0, m) +=
                                 (cx - 1) * inv_2_zetaCD *
-                                (V[ax][ay][az][cx - 2][0][0][m] - rho_over_zetaCD * V[ax][ay][az][cx - 2][0][0][m + 1]);
+                                (scratch.v(ax, ay, az, cx - 2, 0, 0, m) -
+                                 rho_over_zetaCD * scratch.v(ax, ay, az, cx - 2, 0, 0, m + 1));
                         if (ax > 0)
-                            V[ax][ay][az][cx][0][0][m] +=
-                                ax * inv_2_delta * V[ax - 1][ay][az][cx - 1][0][0][m + 1];
+                            scratch.v(ax, ay, az, cx, 0, 0, m) +=
+                                ax * inv_2_delta * scratch.v(ax - 1, ay, az, cx - 1, 0, 0, m + 1);
                     }
                 }
             }
@@ -937,15 +1028,17 @@ static void _eri_vrr(
                             continue;
                         for (int m = 0; m <= mlim; ++m)
                         {
-                            V[ax][ay][az][cx][cy][0][m] =
-                                QCy * V[ax][ay][az][cx][cy - 1][0][m] + WQy * V[ax][ay][az][cx][cy - 1][0][m + 1];
+                            scratch.v(ax, ay, az, cx, cy, 0, m) =
+                                QCy * scratch.v(ax, ay, az, cx, cy - 1, 0, m) +
+                                WQy * scratch.v(ax, ay, az, cx, cy - 1, 0, m + 1);
                             if (cy > 1)
-                                V[ax][ay][az][cx][cy][0][m] +=
+                                scratch.v(ax, ay, az, cx, cy, 0, m) +=
                                     (cy - 1) * inv_2_zetaCD *
-                                    (V[ax][ay][az][cx][cy - 2][0][m] - rho_over_zetaCD * V[ax][ay][az][cx][cy - 2][0][m + 1]);
+                                    (scratch.v(ax, ay, az, cx, cy - 2, 0, m) -
+                                     rho_over_zetaCD * scratch.v(ax, ay, az, cx, cy - 2, 0, m + 1));
                             if (ay > 0)
-                                V[ax][ay][az][cx][cy][0][m] +=
-                                    ay * inv_2_delta * V[ax][ay - 1][az][cx][cy - 1][0][m + 1];
+                                scratch.v(ax, ay, az, cx, cy, 0, m) +=
+                                    ay * inv_2_delta * scratch.v(ax, ay - 1, az, cx, cy - 1, 0, m + 1);
                         }
                     }
                 }
@@ -971,15 +1064,17 @@ static void _eri_vrr(
                                 continue;
                             for (int m = 0; m <= mlim; ++m)
                             {
-                                V[ax][ay][az][cx][cy][cz][m] =
-                                    QCz * V[ax][ay][az][cx][cy][cz - 1][m] + WQz * V[ax][ay][az][cx][cy][cz - 1][m + 1];
+                                scratch.v(ax, ay, az, cx, cy, cz, m) =
+                                    QCz * scratch.v(ax, ay, az, cx, cy, cz - 1, m) +
+                                    WQz * scratch.v(ax, ay, az, cx, cy, cz - 1, m + 1);
                                 if (cz > 1)
-                                    V[ax][ay][az][cx][cy][cz][m] +=
+                                    scratch.v(ax, ay, az, cx, cy, cz, m) +=
                                         (cz - 1) * inv_2_zetaCD *
-                                        (V[ax][ay][az][cx][cy][cz - 2][m] - rho_over_zetaCD * V[ax][ay][az][cx][cy][cz - 2][m + 1]);
+                                        (scratch.v(ax, ay, az, cx, cy, cz - 2, m) -
+                                         rho_over_zetaCD * scratch.v(ax, ay, az, cx, cy, cz - 2, m + 1));
                                 if (az > 0)
-                                    V[ax][ay][az][cx][cy][cz][m] +=
-                                        az * inv_2_delta * V[ax][ay][az - 1][cx][cy][cz - 1][m + 1];
+                                    scratch.v(ax, ay, az, cx, cy, cz, m) +=
+                                        az * inv_2_delta * scratch.v(ax, ay, az - 1, cx, cy, cz - 1, m + 1);
                             }
                         }
                     }
@@ -997,7 +1092,7 @@ static void _eri_vrr(
 //
 // After this call, W[lAx][lAy][lAz][cx][cy][cz] = (lA lB | cx cy cz 0).
 static void _eri_hrr_ab(
-    double W[VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM],
+    EriScratch &scratch,
     const int lAx, const int lAy, const int lAz,
     const int lBx, const int lBy, const int lBz,
     const int lCDx, const int lCDy, const int lCDz,
@@ -1011,8 +1106,9 @@ static void _eri_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax][ay][az + 1][cx][cy][cz] + ABz * W[ax][ay][az][cx][cy][cz];
+                                scratch.h(ax, ay, az, cx, cy, cz) =
+                                    scratch.h(ax, ay, az + 1, cx, cy, cz) +
+                                    ABz * scratch.h(ax, ay, az, cx, cy, cz);
 
     // Phase 2: transfer lBy quanta (az range now [0, lAz])
     for (int ky = 0; ky < lBy; ++ky)
@@ -1022,8 +1118,9 @@ static void _eri_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax][ay + 1][az][cx][cy][cz] + ABy * W[ax][ay][az][cx][cy][cz];
+                                scratch.h(ax, ay, az, cx, cy, cz) =
+                                    scratch.h(ax, ay + 1, az, cx, cy, cz) +
+                                    ABy * scratch.h(ax, ay, az, cx, cy, cz);
 
     // Phase 3: transfer lBx quanta (ay range now [0, lAy])
     for (int kx = 0; kx < lBx; ++kx)
@@ -1033,8 +1130,9 @@ static void _eri_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax + 1][ay][az][cx][cy][cz] + ABx * W[ax][ay][az][cx][cy][cz];
+                                scratch.h(ax, ay, az, cx, cy, cz) =
+                                    scratch.h(ax + 1, ay, az, cx, cy, cz) +
+                                    ABx * scratch.h(ax, ay, az, cx, cy, cz);
 }
 
 // ─── 4-center ERI: single primitive quartet ──────────────────────────────────
@@ -1050,19 +1148,13 @@ static double _os_eri_primitive(
 {
     const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
     const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+    const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
 
-    // Zero the needed sub-region of the thread-local VRR buffer
-    for (int ax = 0; ax <= lABx; ++ax)
-        for (int ay = 0; ay <= lABy; ++ay)
-            for (int az = 0; az <= lABz; ++az)
-                for (int cx = 0; cx <= lCDx; ++cx)
-                    for (int cy = 0; cy <= lCDy; ++cy)
-                        for (int cz = 0; cz <= lCDz; ++cz)
-                            for (int m = 0; m < MMAX_4C; ++m)
-                                _vrr_buf[ax][ay][az][cx][cy][cz][m] = 0.0;
+    EriScratch &scratch = _eri_scratch;
+    scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
 
-    // Build VRR table
-    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, _vrr_buf);
+    // Build the quartet-sized VRR table in thread-local dynamic scratch.
+    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch);
 
     // Extract m=0 slice into HRR buffer and zero unused entries
     for (int ax = 0; ax <= lABx; ++ax)
@@ -1071,17 +1163,18 @@ static double _os_eri_primitive(
                 for (int cx = 0; cx <= lCDx; ++cx)
                     for (int cy = 0; cy <= lCDy; ++cy)
                         for (int cz = 0; cz <= lCDz; ++cz)
-                            _hrr_buf[ax][ay][az][cx][cy][cz] = _vrr_buf[ax][ay][az][cx][cy][cz][0];
+                            scratch.h(ax, ay, az, cx, cy, cz) =
+                                scratch.v(ax, ay, az, cx, cy, cz, 0);
 
-    // A→B HRR: modifies _hrr_buf in-place
-    _eri_hrr_ab(_hrr_buf, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
+    // A→B HRR: modifies the quartet-sized HRR scratch in-place.
+    _eri_hrr_ab(scratch, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
 
     // Extract C-side slice at (lAx, lAy, lAz) for C→D HRR
     double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM] = {};
     for (int cx = 0; cx <= lCDx; ++cx)
         for (int cy = 0; cy <= lCDy; ++cy)
             for (int cz = 0; cz <= lCDz; ++cz)
-                V0_CD[cx][cy][cz] = _hrr_buf[lAx][lAy][lAz][cx][cy][cz];
+                V0_CD[cx][cy][cz] = scratch.h(lAx, lAy, lAz, cx, cy, cz);
 
     // C→D HRR reusing the existing _nuclear_hrr (same 3-phase sweep)
     return _nuclear_hrr(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
@@ -1548,8 +1641,8 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
 
     const std::size_t npairs = shell_pairs.size();
 
-    // Disjoint writes per (p,q) pair → lock-free parallelism.
-    // thread_local _vrr_buf / _hrr_buf give each thread private scratch space.
+    // The contracted ERI kernel uses thread-local quartet-sized scratch, while
+    // permutation scattering uses atomic stores to keep the shared tensor race-free.
 #pragma omp parallel for schedule(dynamic)
     for (std::size_t p = 0; p < npairs; ++p)
     {
@@ -1865,8 +1958,8 @@ std::vector<double> HartreeFock::ObaraSaika::_compute_2e(
 
     const std::size_t npairs = shell_pairs.size();
 
-    // Disjoint writes per (p,q) pair → lock-free parallelism.
-    // thread_local _vrr_buf / _hrr_buf give each thread private scratch space.
+    // The contracted ERI kernel uses thread-local quartet-sized scratch, while
+    // permutation scattering uses atomic stores to keep the shared tensor race-free.
 #pragma omp parallel for schedule(dynamic)
     for (std::size_t p = 0; p < npairs; ++p)
     {

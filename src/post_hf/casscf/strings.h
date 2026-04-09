@@ -64,7 +64,7 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<int> &mo_permutation = {});
 
     // Apply a column permutation to the MO coefficient matrix.
-    Eigen::MatrixXd reorder_mo_coefficients(
+    std::expected<Eigen::MatrixXd, std::string> reorder_mo_coefficients(
         const Eigen::MatrixXd &mo_coefficients,
         const std::vector<int> &permutation);
 

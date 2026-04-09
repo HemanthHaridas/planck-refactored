@@ -1,6 +1,7 @@
 #include "post_hf/casscf/response.h"
 
 #include "post_hf/casscf/ci.h"
+#include "post_hf/casscf/casscf_utils.h"
 #include "post_hf/casscf/orbital.h"
 #include "post_hf/casscf/rdm.h"
 #include "post_hf/casscf/strings.h"
@@ -17,6 +18,7 @@ namespace
     using HartreeFock::Correlation::CASSCF::build_det_lookup;
     using HartreeFock::Correlation::CASSCF::build_spin_dets;
     using HartreeFock::Correlation::CASSCF::build_ci_orbital_gradient_correction;
+    using HartreeFock::Correlation::CASSCF::as_single_column_matrix;
     using HartreeFock::Correlation::CASSCF::compute_2rdm_bilinear;
     using HartreeFock::Correlation::CASSCF::compute_Q_matrix;
     using HartreeFock::Correlation::CASSCF::count_occupied_below;
@@ -27,6 +29,7 @@ namespace
     using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
     using HartreeFock::Correlation::CASSCF::RotPair;
     using HartreeFock::Correlation::CASSCF::StateAveragedCoupledRoot;
+    using HartreeFock::Correlation::CASSCF::single_weight;
     using HartreeFock::Correlation::CASSCF::CIDeterminantSpace;
     using HartreeFock::Correlation::CASSCF::CISigmaApplier;
     using HartreeFock::Correlation::CASSCF::OrbitalHessianContext;
@@ -35,31 +38,6 @@ namespace
     using HartreeFock::Correlation::CASSCFInternal::single_bit_mask;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
     using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
-
-    struct FermionOpResult
-    {
-        HartreeFock::Correlation::CASSCFInternal::CIString det = 0;
-        double phase = 0.0;
-        bool valid = false;
-    };
-
-    // These mirror the string-layer operators so the response code uses the same
-    // determinant phase convention as the sigma and RDM builders.
-    inline FermionOpResult apply_annihilation(HartreeFock::Correlation::CASSCFInternal::CIString det, int orb)
-    {
-        const auto bit = single_bit_mask(orb);
-        if (!(det & bit))
-            return {};
-        return {det ^ bit, (count_occupied_below(det, orb) % 2 == 0) ? 1.0 : -1.0, true};
-    }
-
-    inline FermionOpResult apply_creation(HartreeFock::Correlation::CASSCFInternal::CIString det, int orb)
-    {
-        const auto bit = single_bit_mask(orb);
-        if (det & bit)
-            return {};
-        return {det | bit, (count_occupied_below(det, orb) % 2 == 0) ? 1.0 : -1.0, true};
-    }
 
     std::size_t idx4(int p, int q, int r, int s, int n_act)
     {
@@ -207,20 +185,6 @@ namespace
         // (H - E0) c1 + Q sigma = 0, with Q enforcing orthogonality to c0.
         const Eigen::VectorXd rhs = -project_orthogonal(sigma, c0);
         return project_orthogonal(rhs - (hc1 - E0 * c1), c0);
-    }
-
-    Eigen::MatrixXd as_single_column_matrix(const Eigen::VectorXd &vec)
-    {
-        Eigen::MatrixXd mat(vec.size(), 1);
-        mat.col(0) = vec;
-        return mat;
-    }
-
-    Eigen::VectorXd single_weight(double weight)
-    {
-        Eigen::VectorXd weights(1);
-        weights(0) = weight;
-        return weights;
     }
 
     struct CoupledResidualEvaluation

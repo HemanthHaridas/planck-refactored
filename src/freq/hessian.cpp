@@ -82,9 +82,19 @@ static Eigen::MatrixXd _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
 
     Eigen::MatrixXd grad;
     if (calc._scf._scf == HartreeFock::SCFType::UHF)
-        grad = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
+    {
+        auto grad_res = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
+        if (!grad_res)
+            throw std::runtime_error("Hessian UHF gradient failed: " + grad_res.error());
+        grad = std::move(*grad_res);
+    }
     else
-        grad = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
+    {
+        auto grad_res = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
+        if (!grad_res)
+            throw std::runtime_error("Hessian RHF gradient failed: " + grad_res.error());
+        grad = std::move(*grad_res);
+    }
 
     calc._gradient = grad;
     return grad;

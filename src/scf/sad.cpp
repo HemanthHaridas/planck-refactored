@@ -300,8 +300,6 @@ namespace
         atom._molecule._is_bohr     = true;
         atom._molecule.charge       = 0;
         atom._molecule.multiplicity = mult;
-        atom._molecule.nelectrons   = static_cast<unsigned int>(Z);
-
         // Basis
         atom._shells = atomic_basis;
 

@@ -659,7 +659,13 @@ int main(int argc, const char *argv[])
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient :",
                                          "Using analytic RMP2 gradient (relaxed density + pair density + Z-vector)");
             calculator._total_energy += calculator._correlation_energy;
-            grad = HartreeFock::Gradient::compute_rmp2_gradient(calculator, shellpairs);
+            auto grad_res = HartreeFock::Gradient::compute_rmp2_gradient(calculator, shellpairs);
+            if (!grad_res)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :", grad_res.error());
+                return EXIT_FAILURE;
+            }
+            grad = std::move(*grad_res);
         }
         else if (calculator._correlation == HartreeFock::PostHF::UMP2)
         {
@@ -668,9 +674,25 @@ int main(int argc, const char *argv[])
             return EXIT_FAILURE;
         }
         else if (calculator._info._scf.is_uhf)
-            grad = HartreeFock::Gradient::compute_uhf_gradient(calculator, shellpairs);
+        {
+            auto grad_res = HartreeFock::Gradient::compute_uhf_gradient(calculator, shellpairs);
+            if (!grad_res)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :", grad_res.error());
+                return EXIT_FAILURE;
+            }
+            grad = std::move(*grad_res);
+        }
         else
-            grad = HartreeFock::Gradient::compute_rhf_gradient(calculator, shellpairs);
+        {
+            auto grad_res = HartreeFock::Gradient::compute_rhf_gradient(calculator, shellpairs);
+            if (!grad_res)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :", grad_res.error());
+                return EXIT_FAILURE;
+            }
+            grad = std::move(*grad_res);
+        }
         calculator._gradient = grad;
 
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Nuclear Gradient (Ha/Bohr) :", "");

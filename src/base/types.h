@@ -4,6 +4,7 @@
 #include <Eigen/Core>
 #include <Eigen/QR>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <deque>
@@ -50,7 +51,7 @@ namespace HartreeFock
 
     enum class SCFType
     {
-        RHF, // Restricted Hartee-Fock
+        RHF, // Restricted Hartree-Fock
         UHF  // Unrestricted Hartree-Fock
     };
 
@@ -166,7 +167,6 @@ namespace HartreeFock
 
         std::size_t natoms = 0;        // Number of atoms
         unsigned int multiplicity = 1; // Spin multiplicity
-        unsigned int nelectrons = 0;   // Number of electrons
         signed int charge = 0;         // Molecular charge
 
         bool _symmetry = false; // Symmetry flag
@@ -239,8 +239,8 @@ namespace HartreeFock
 
     struct Basis
     {
-        std::vector<Shell> _shells;                   // Shells
-        std::vector<ContractedView> _basis_functions; // Basis functions
+        std::vector<Shell> _shells;                  // Shells
+        std::deque<ContractedView> _basis_functions; // Basis functions; deque keeps references stable across push_back
 
         std::size_t nshells() const noexcept
         {
@@ -285,13 +285,17 @@ namespace HartreeFock
         bool _use_DIIS = true;        // Use DIIS (Default is true)
         bool _save_checkpoint = true; // Save checkpoint after convergence
 
+        static unsigned int max_cycles_for_nbasis(std::size_t nbasis) noexcept
+        {
+            return (nbasis > 1000) ? 300 : (nbasis > 500) ? 200
+                                       : (nbasis > 250)   ? 100
+                                                          : 50;
+        }
+
         // Automatic setter based on system size
         void set_max_cycles_auto(std::size_t nbasis) noexcept
         {
-            _max_cycles =
-                (nbasis > 1000) ? 300 : (nbasis > 500) ? 200
-                                    : (nbasis > 250)   ? 100
-                                                       : 50;
+            _max_cycles = max_cycles_for_nbasis(nbasis);
         }
 
         // Getter (auto fallback if still 0)
@@ -300,9 +304,7 @@ namespace HartreeFock
             if (_max_cycles != 0)
                 return _max_cycles;
 
-            return (nbasis > 1000) ? 300 : (nbasis > 500) ? 200
-                                       : (nbasis > 250)   ? 150
-                                                          : 50;
+            return max_cycles_for_nbasis(nbasis);
         }
 
         // Resolve Auto mode based on system size; explicit Conventional/Direct are left unchanged.
@@ -335,7 +337,7 @@ namespace HartreeFock
 
     struct OptionsIntegral
     {
-        double _tol_eri = 1E-10;                             // ERI tolerance for Shwartz screening
+        double _tol_eri = 1E-10;                             // ERI tolerance for Schwarz screening
         IntegralMethod _engine = IntegralMethod::ObaraSaika; // Integral Engine
     };
 
@@ -475,8 +477,6 @@ namespace HartreeFock
                 _write_cube = false;
                 break;
             }
-            default:
-                throw std::runtime_error("Unknown verbosity level");
             }
         }
     };
@@ -801,6 +801,9 @@ namespace HartreeFock
 
         void _compute_nuclear_repulsion() noexcept
         {
+            assert(_molecule._standard.rows() == static_cast<Eigen::Index>(_molecule.natoms) &&
+                   _molecule._standard.cols() == 3 &&
+                   "_compute_nuclear_repulsion requires molecule._standard to be initialized in Bohr");
             const std::size_t N = _molecule.natoms;
             double E_nuc = 0.0;
             for (std::size_t a = 0; a < N; a++)
@@ -837,7 +840,7 @@ namespace HartreeFock
         }
 
         // Getter
-        const Eigen::VectorXd _bohr_to_angstrom() const noexcept
+        Eigen::MatrixXd _bohr_to_angstrom() const noexcept
         {
             return _molecule._standard * 0.529177210903;
         }

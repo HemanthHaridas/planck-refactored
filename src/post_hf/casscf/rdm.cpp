@@ -9,36 +9,10 @@ namespace
 
     using HartreeFock::Correlation::CASSCF::build_det_lookup;
     using HartreeFock::Correlation::CASSCF::build_spin_dets;
-    using HartreeFock::Correlation::CASSCF::count_occupied_below;
+    using HartreeFock::Correlation::CASSCF::apply_annihilation;
+    using HartreeFock::Correlation::CASSCF::apply_creation;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
     using HartreeFock::Correlation::CASSCFInternal::low_bit_mask;
-    using HartreeFock::Correlation::CASSCFInternal::single_bit_mask;
-
-    struct FermionOpResult
-    {
-        CIString det = 0;
-        double phase = 0.0;
-        bool valid = false;
-    };
-
-    // These helpers carry the fermionic phase from the number of occupied orbitals
-    // below the operator index, matching the determinant ordering used everywhere
-    // else in the CASSCF string utilities.
-    inline FermionOpResult apply_annihilation(CIString det, int orb)
-    {
-        const CIString bit = single_bit_mask(orb);
-        if (!(det & bit))
-            return {};
-        return {det ^ bit, (count_occupied_below(det, orb) % 2 == 0) ? 1.0 : -1.0, true};
-    }
-
-    inline FermionOpResult apply_creation(CIString det, int orb)
-    {
-        const CIString bit = single_bit_mask(orb);
-        if (det & bit)
-            return {};
-        return {det | bit, (count_occupied_below(det, orb) % 2 == 0) ? 1.0 : -1.0, true};
-    }
 
     template <typename Fn>
     void for_each_set_bit(CIString bits, Fn &&fn)

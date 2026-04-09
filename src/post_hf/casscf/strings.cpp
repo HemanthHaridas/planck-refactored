@@ -65,6 +65,7 @@ namespace HartreeFock::Correlation::CASSCF
             int begin,
             int end)
         {
+            constexpr double energy_tie_tol = 1e-10;
             std::vector<int> order;
             order.reserve(static_cast<std::size_t>(std::max(0, end - begin)));
             for (int i = begin; i < end; ++i)
@@ -73,7 +74,7 @@ namespace HartreeFock::Correlation::CASSCF
             {
                 const double ea = mo_energies(a);
                 const double eb = mo_energies(b);
-                if (ea != eb)
+                if (std::abs(ea - eb) >= energy_tie_tol)
                     return ea < eb;
                 return a < b;
             });
@@ -416,21 +417,21 @@ namespace HartreeFock::Correlation::CASSCF
         return selection;
     }
 
-    Eigen::MatrixXd reorder_mo_coefficients(
+    std::expected<Eigen::MatrixXd, std::string> reorder_mo_coefficients(
         const Eigen::MatrixXd &mo_coefficients,
         const std::vector<int> &permutation)
     {
         if (mo_coefficients.cols() == 0 || permutation.empty())
             return mo_coefficients;
         if (static_cast<int>(permutation.size()) != mo_coefficients.cols())
-            throw std::invalid_argument("MO permutation size does not match the coefficient matrix");
+            return std::unexpected(std::string("MO permutation size does not match the coefficient matrix"));
 
         Eigen::MatrixXd reordered(mo_coefficients.rows(), mo_coefficients.cols());
         for (int i = 0; i < static_cast<int>(permutation.size()); ++i)
         {
             const int src = permutation[static_cast<std::size_t>(i)];
             if (src < 0 || src >= mo_coefficients.cols())
-                throw std::invalid_argument("MO permutation contains an out-of-range index");
+                return std::unexpected(std::string("MO permutation contains an out-of-range index"));
             reordered.col(i) = mo_coefficients.col(src);
         }
         return reordered;
