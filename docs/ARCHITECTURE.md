@@ -255,7 +255,8 @@ The primary integral engine implements the Obara-Saika vertical and horizontal r
 - `_compute_1e(shell_pairs, nbasis, sym_ops)` — overlap `S` and kinetic `T` matrices in one pass
 - `_compute_nuclear_attraction(shell_pairs, nbasis, molecule, sym_ops)` — nuclear attraction `V` using the Boys function
 - `_compute_2e(shell_pairs, nbasis, tol_eri, sym_ops)` — full AO ERI tensor with Schwarz screening; returns a flat `vector<double>` in chemist's notation `(μν|λσ)`
-- `_compute_2e_fock(shell_pairs, density, nbasis, tol_eri, sym_ops)` — direct-SCF Fock build without storing the full ERI tensor
+- `_compute_2e_fock(shell_pairs, density, nbasis, tol_eri, sym_ops)` — direct-SCF Fock contribution builder; it avoids storing the tensor on `Calculator`, but currently builds a local screened ERI tensor before the density contraction
+- `_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, tol_eri, sym_ops)` — UHF direct-SCF variant that builds one local spin-independent ERI tensor and contracts alpha/beta Fock contributions together
 - `_compute_eri_deriv_elem(spAB, spCD)` — 12-element gradient of a contracted ERI quartet used by analytic gradient code
 - `_compute_1e_deriv_A(sp)`, `_compute_nuclear_deriv_A_elem(sp, mol)`, `_compute_nuclear_deriv_C_elem(sp, C, Z, dir)` — 1e gradient derivatives
 - `_compute_multipole_matrices(shell_pairs, nbasis, origin)` — dipole and quadrupole integral matrices
@@ -263,7 +264,21 @@ The primary integral engine implements the Obara-Saika vertical and horizontal r
 
 <div align="justify">
 
-The Schwarz screening criterion discards quartets where `Q(AB) × Q(CD) < tol_eri`. `Q(AB) = sqrt((AB|AB))` is pre-computed per shell pair during ERI construction. This reduces the formal O(N^4) scaling to near-linear for large, diffuse systems.
+The four-center OS kernel uses a thread-local `EriScratch` object. Its `vrr` and `hrr` vectors are resized to the actual angular momentum extents of each primitive quartet, replacing the previous fixed worst-case per-thread VRR/HRR arrays. This keeps OpenMP scratch private without paying the memory cost of gigabyte-scale scratch buffers on every thread.
+
+The Schwarz screening criterion discards quartets where `Q(AB) × Q(CD) < tol_eri`. `Q(AB) = sqrt((AB|AB))` is pre-computed per shell pair during ERI construction. The OS Schwarz table also respects AO integral symmetry operations by evaluating a canonical pair and assigning the same bound across its symmetry orbit. The stored-ERI and local-ERI Fock builders iterate only canonical pair quartets, scatter all eight ERI permutation slots, and use OpenMP atomic writes in `write_eri_permutations(...)` so overlapping permutation fills are race-free.
+
+</div>
+
+### Rys quadrature engine — `rys.h` / `rys.cpp`
+
+<div align="justify">
+
+The Rys backend provides the same public ERI and Fock-building surface as the OS engine: `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf`, plus `_auto` variants. At the primitive level, `_rys_eri_primitive(...)` converts the Boys-function dependence into Rys roots and weights, builds three 1D VRR tables per root, accumulates the root-summed six-dimensional spatial buffer `_rys_sum_buf`, and then applies AB/CD HRR to obtain the requested Cartesian quartet. `_rys_contracted_eri(...)` sums the primitive-pair products.
+
+Root generation lives in `rys_roots.cpp`. The one-root case uses an exact closed form; multi-root cases build a Stieltjes-Jacobi recurrence from long-double Boys moments and diagonalize the Jacobi matrix with Eigen. The Gauss-Legendre tables are retained as a numerical fallback if the recurrence or diagonalization degenerates.
+
+The Rys stored-ERI builders mirror the OS loop shape: build a Schwarz table, iterate pair quartets with `p <= q`, screen on `Q(AB) × Q(CD)`, compute the contracted ERI, and scatter the eight permutation-equivalent tensor slots. The Rys API accepts `sym_ops` for signature parity with OS, but quartet-orbit pruning from AO integral symmetry is currently only applied in the OS backend.
 
 </div>
 
@@ -271,7 +286,7 @@ The Schwarz screening criterion discards quartets where `Q(AB) × Q(CD) < tol_er
 
 <div align="justify">
 
-`Auto` mode selects the Obara-Saika engine for shell quartets with total angular momentum `L < 4` and Rys quadrature for higher L. In practice, `ObaraSaika` is the default and covers all common basis sets (STO-3G through 6-31G*) without crossing the Rys threshold.
+`IntegralMethod` selects `ObaraSaika`, `RysQuadrature`, or `Auto` in `integrals/base.h`. `Auto` dispatches at the contracted quartet level through `_auto_contracted_eri(...)`: it estimates OS and Rys work in `_auto_prefers_rys(...)` and chooses Rys only when the Rys estimate is cheaper. The public `RYS_CROSSOVER_L = 4` constant documents the intended high-angular-momentum crossover, but the actual `Auto` branch is cost-model based rather than a hard `L >= 4` rule. In practice, `ObaraSaika` remains the default engine and reference path.
 
 </div>
 

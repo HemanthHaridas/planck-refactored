@@ -499,7 +499,7 @@ N_p = \left(\frac{2\alpha}{\pi}\right)^{3/4}
 <p>The contracted norm <span class="math-inline">\(N_c\)</span> is determined so that the <span class="math-inline">\(s\)</span>-component of the shell integrates to 1. Each <code>ContractedView</code> stores a <code>_component_norm</code> factor equal to <span class="math-inline">\(1/\sqrt{(2l_x-1)!!(2l_y-1)!!(2l_z-1)!!}\)</span> which handles the <span class="math-inline">\((l_x,l_y,l_z)\)</span>-dependent part of <span class="math-inline">\(N_p\)</span> at the AO level.</p>
 <hr>
 <h2 id="5-the-obara-saika-integral-engine">5. The Obara-Saika Integral Engine</h2>
-<p>All one- and two-electron integrals in Planck are evaluated using the Obara-Saika (OS) recursion. The key idea is to express integrals over high-angular-momentum Gaussians in terms of simpler integrals via horizontal and vertical recursion relations.</p>
+<p>The default integral engine in Planck is the Obara-Saika (OS) recursion. One-electron overlap, kinetic, nuclear-attraction, multipole, and derivative integrals are all built through the OS path. Two-electron integrals can also use the Rys quadrature backend or the <code>Auto</code> hybrid mode, but the OS engine remains the reference implementation and supplies the low-angular-momentum path used by <code>Auto</code>.</p>
 <h3 id="overlap-integral">Overlap Integral</h3>
 <p>The one-dimensional OS overlap table <span class="math-inline">\(S(l_A, l_B)\)</span> is seeded at <span class="math-inline">\(S(0,0) = 1\)</span> (the Gaussian prefactor is applied by the caller), where <span class="math-inline">\(\zeta = \alpha + \beta\)</span> and <span class="math-inline">\(\mu = \alpha\beta/\zeta\)</span>. The full <span class="math-inline">\(l_A \times l_B\)</span> table is built in three phases.</p>
 <p><em>Phase 1 — A-column</em> <span class="math-inline">\((l_B = 0)\)</span>: increment angular momentum on center A with <span class="math-inline">\(l_B\)</span> fixed at zero:</p>
@@ -599,7 +599,12 @@ F_m\!\left(\frac{\zeta\eta}{\zeta+\eta} R_{PQ}^2\right)
 (ab\,|\,c\,d) = (ab\,|\,c+1_i\,d-1_i) + (C_i - D_i)\,(ab\,|\,c\,d-1_i)
 \]</span></p>
 <p>In the implementation the same three-phase sweeping routine (<code>_nuclear_hrr</code>) is reused for both transfers; the C→D pass operates on the fixed A-side slice extracted after the A→B pass completes.</p>
-<p><strong>Thread-local scratch buffers</strong>. The VRR and HRR accumulators are large temporary arrays. Planck uses <code>thread_local</code> static arrays (<code>_vrr_buf</code>, <code>_hrr_buf</code>) so that each OpenMP thread has its own workspace without heap allocation per quartet.</p>
+<p><strong>Thread-local dynamic scratch</strong>. The VRR and HRR accumulators are large temporary tensors, but the current OS implementation no longer preallocates the worst-case arrays for every OpenMP thread. Instead, <code>_os_eri_primitive</code> uses a thread-local <code>EriScratch</code> object whose <code>vrr</code> and <code>hrr</code> vectors are resized to the actual angular-momentum extents of the current quartet:</p>
+<pre><code class="language-text">
+vrr size = (lABx+1)(lABy+1)(lABz+1)(lCDx+1)(lCDy+1)(lCDz+1)(mmax+1)
+hrr size = (lABx+1)(lABy+1)(lABz+1)(lCDx+1)(lCDy+1)(lCDz+1)
+</code></pre>
+<p>This preserves per-thread scratch ownership under OpenMP while avoiding the former fixed, worst-case gigabyte-scale VRR buffer for ordinary quartets.</p>
 <h3 id="schwarz-screening">Schwarz Screening</h3>
 <p>Before evaluating a quartet, the Schwarz inequality provides an upper bound:</p>
 <p><span class="math-display">\[
@@ -609,14 +614,15 @@ F_m\!\left(\frac{\zeta\eta}{\zeta+\eta} R_{PQ}^2\right)
 <p><span class="math-display">\[
 Q(i,j) \cdot Q(k,l) < \epsilon_{ERI}
 \]</span></p>
-<p>This screening is applied in <code>_compute_2e</code> and <code>_compute_2e_fock</code> in <code>os.cpp</code> and analogously in <code>rys.cpp</code>.</p>
+<p>This screening is applied in <code>_compute_2e</code>, <code>_compute_2e_fock</code>, and <code>_compute_2e_fock_uhf</code> in <code>os.cpp</code>. The Schwarz table itself also honors integral symmetry operations: a representative pair is evaluated once and then the same bound is assigned across its AO symmetry orbit. The gradient code uses the same Schwarz criterion for ERI derivative contractions.</p>
 <h3 id="permutation-symmetry-of-the-eri-tensor">Permutation Symmetry of the ERI Tensor</h3>
 <p>The ERI tensor has 8-fold permutation symmetry:</p>
 <p><span class="math-display">\[
 (\mu\nu|\lambda\sigma) = (\nu\mu|\lambda\sigma) = (\mu\nu|\sigma\lambda)
 = (\nu\mu|\sigma\lambda) = (\lambda\sigma|\mu\nu) = \cdots
 \]</span></p>
-<p>Planck iterates only over pairs <span class="math-inline">\(p \le q\)</span> in the AO-pair index and fills all 8 equivalent slots after each computation, reducing work by a factor of 8.</p>
+<p>Planck iterates only over AO pair quartets with pair index <span class="math-inline">\(p \le q\)</span> and fills all 8 equivalent tensor slots after each computation. In the OpenMP stored-ERI builders (<code>_compute_2e</code>, <code>_compute_2e_fock</code>, and the UHF variant), the fill step goes through <code>write_eri_permutations(...)</code>, which uses OpenMP atomic writes for each tensor slot. The atomics are intentionally conservative: different canonical quartets can scatter the same mathematically identical permutation slot, so the shared tensor stores must still be race-free.</p>
+<p>When integral symmetry operations are active, the OS loop first builds the AO symmetry orbit of a pair or quartet and computes only its canonical representative. Forced-zero or non-representative quartets are skipped; accepted representatives are written back to every orbit element with the appropriate AO-sign factor.</p>
 <hr>
 <h2 id="6-rys-quadrature">6. Rys Quadrature</h2>
 <h3 id="the-basic-idea">The Basic Idea</h3>
@@ -650,13 +656,13 @@ n = \left\lfloor \frac{L}{2} \right\rfloor + 1
 </tbody></table></div>
 <h3 id="root-finding">Root Finding</h3>
 <p>Computing the roots and weights for a given <span class="math-inline">\(T\)</span> is the central numerical challenge. Planck uses two strategies, selected by <code>rys_roots_weights</code> in <code>src/integrals/rys_roots.cpp</code>:</p>
-<p><strong>T ≈ 0 (Gauss-Legendre limit)</strong>: As <span class="math-inline">\(T \to 0\)</span> the weight function <span class="math-inline">\(e^{-Tt^2} \to 1\)</span>, so the Rys quadrature degenerates to the standard Gauss-Legendre rule on <span class="math-inline">\([0,1]\)</span>. Pre-tabulated GL roots and weights for <span class="math-inline">\(n = 1, \ldots, 11\)</span> are stored in <code>gl_roots</code> and <code>gl_weights</code> and used directly when <span class="math-inline">\(T < 10^{-14}\)</span>.</p>
-<p><strong>T &gt; 0 (Stieltjes–Jacobi procedure)</strong>: For non-zero <span class="math-inline">\(T\)</span> the Rys measure is <span class="math-inline">\(e^{-Tt^2} dt\)</span> on <span class="math-inline">\([0,1]\)</span>. The roots and weights are obtained by building the three-term recurrence (Jacobi) matrix of the orthogonal polynomial family with respect to this measure. The algorithm:</p>
+<p><strong>One-root case</strong>: For <span class="math-inline">\(n = 1\)</span>, <code>rys_roots_weights(...)</code> uses the exact closed-form <code>rys_1pt(...)</code> path.</p>
+<p><strong>General case (Stieltjes-Jacobi procedure)</strong>: For <span class="math-inline">\(n > 1\)</span>, the Rys measure is <span class="math-inline">\(e^{-Tt^2} dt\)</span> on <span class="math-inline">\([0,1]\)</span>. The roots and weights are obtained by building the three-term recurrence (Jacobi) matrix of the orthogonal polynomial family with respect to this measure. The algorithm:</p>
 <ol>
-<li>Compute <span class="math-inline">\(2n+1\)</span> Boys moments <span class="math-inline">\(F_m(T) = \int_0^1 t^{2m} e^{-Tt^2} dt\)</span> in long double precision.</li>
+<li>Compute <span class="math-inline">\(2n+1\)</span> Boys moments <span class="math-inline">\(F_m(T) = \int_0^1 t^{2m} e^{-Tt^2} dt\)</span> in long double precision. <code>_boys_moment(...)</code> returns the exact Gauss-Legendre-limit moment <span class="math-inline">\(1/(2m+1)\)</span> when <span class="math-inline">\(T\)</span> is effectively zero, uses a convergent power series for small nonzero <span class="math-inline">\(T < 1\)</span>, and uses upward Boys recursion for larger <span class="math-inline">\(T\)</span>.</li>
 <li>Construct orthonormal polynomials via the Gram-Schmidt Stieltjes procedure, recording the diagonal (<span class="math-inline">\(\alpha_k\)</span>) and sub-diagonal (<span class="math-inline">\(\beta_k\)</span>) entries of the symmetric <span class="math-inline">\(n \times n\)</span> Jacobi matrix <span class="math-inline">\(\mathbf J\)</span>.</li>
 <li>Diagonalize <span class="math-inline">\(\mathbf J\)</span> using Eigen&#x27;s <code>SelfAdjointEigenSolver</code>. The eigenvalues are the Rys roots <span class="math-inline">\(t_r^2\)</span>; the weight for root <span class="math-inline">\(r\)</span> is <span class="math-inline">\(w_r = F_0(T) \cdot V_{0r}^2\)</span> where <span class="math-inline">\(V_{0r}\)</span> is the first component of the <span class="math-inline">\(r\)</span>-th eigenvector. This is the Golub–Welsch formula.</li>
-<li>If the Gram-Schmidt procedure encounters a degenerate norm, the algorithm falls back to the Gauss-Legendre table.</li>
+<li>If the Gram-Schmidt procedure encounters a degenerate norm or the Jacobi matrix diagonalization fails, the algorithm falls back to pre-tabulated Gauss-Legendre roots and weights on <span class="math-inline">\([0,1]\)</span>. These tables are a safety net, not the normal small-<span class="math-inline">\(T\)</span> path.</li>
 </ol>
 <h3 id="the-rys-1d-vrr">The Rys 1D VRR</h3>
 <p>For each Rys root <span class="math-inline">\(u = t_r^2\)</span>, the ERI factorizes into three independent 1D integrals. Each 1D table <span class="math-inline">\(I[a][c]\)</span> is filled by its own three-term recursion:</p>
@@ -688,7 +694,7 @@ D_{00} = (Q_q - C_q) + u\,(W_q - Q_q)
 W[a_x][a_y][a_z][c_x][c_y][c_z]
   \mathrel{+}= w_r \cdot I_x[a_x][c_x] \cdot I_y[a_y][c_y] \cdot I_z[a_z][c_z]
 \]</span></p>
-<p>This sum runs over all <span class="math-inline">\(n\)</span> roots. After the root loop the buffer holds <span class="math-inline">\((a\,0\,|\,c\,0)\)</span> intermediates analogous to those produced by the OS VRR. The thread-local six-index array <code>_rys_sum_buf[13][13][13][13][13][13]</code> is the Rys counterpart of <code>_vrr_buf</code> in <code>os.cpp</code>.</p>
+<p>This sum runs over all <span class="math-inline">\(n\)</span> roots. After the root loop the buffer holds <span class="math-inline">\((a\,0\,|\,c\,0)\)</span> intermediates analogous to those produced by the OS VRR. The thread-local six-index array <code>_rys_sum_buf[13][13][13][13][13][13]</code> stores this accumulated Rys intermediate. Unlike the current OS kernel, the Rys implementation still uses this fixed-size per-thread buffer because it only needs the 6D root-summed spatial slice, not the extra auxiliary-order <span class="math-inline">\(m\)</span> dimension that made the old OS VRR scratch so large.</p>
 <p>Angular momentum is then transferred to the second center of each shell pair using the same HRR as the OS path:</p>
 <ul>
 <li><strong>AB-HRR</strong> (<code>_rys_hrr_ab</code>): <span class="math-inline">\((a+1_i\,b-1_i\,|\,c\,d) + (A_i - B_i)(a\,b-1_i\,|\,c\,d)\)</span></li>
@@ -696,7 +702,7 @@ W[a_x][a_y][a_z][c_x][c_y][c_z]
 </ul>
 <p>The contracted ERI is obtained by summing the primitive results over all <span class="math-inline">\((\alpha, \beta)\)</span> and <span class="math-inline">\((\gamma, \delta)\)</span> primitive pairs inside <code>_rys_contracted_eri</code>.</p>
 <h3 id="auto-dispatch-os-vs-rys-cost-model">Auto-Dispatch: OS vs. Rys Cost Model</h3>
-<p>Planck&#x27;s <code>auto</code> engine mode selects OS or Rys per contracted shell quartet using an analytic operation-count estimate (<code>_auto_prefers_rys</code> in <code>rys.cpp</code>).</p>
+<p>Planck&#x27;s <code>auto</code> engine mode selects OS or Rys per contracted shell quartet using an analytic operation-count estimate (<code>_auto_prefers_rys</code> in <code>rys.cpp</code>). The dispatch happens inside <code>_auto_contracted_eri(...)</code>, which calls <code>RysQuad::_rys_contracted_eri(...)</code> when the estimate favors Rys and <code>ObaraSaika::_contracted_eri_elem(...)</code> otherwise.</p>
 <p>Define:</p>
 <p><span class="math-display">\[
 \text{six\_d} = (l_{AB,x}+1)(l_{AB,y}+1)(l_{AB,z}+1)
@@ -713,7 +719,8 @@ W_{\text{Rys}} = \text{six\_d}\cdot n
                + 24\cdot n
 \]</span></p>
 <p>where <span class="math-inline">\(n = \lfloor L/2 \rfloor + 1\)</span> is the number of Rys roots and the constant 24 accounts for the per-root overhead of root finding and 1D coefficient computation. Rys is preferred when <span class="math-inline">\(W_{\text{Rys}} < W_{\text{OS}}\)</span>.</p>
-<p>For a (dd|dd) quartet: <span class="math-inline">\(L = 8\)</span>, <span class="math-inline">\(n = 5\)</span>, <span class="math-inline">\(\text{six\_d} = 3^4 \cdot 3^4 = \ldots\)</span>, and the Rys path wins because the OS stack grows as <span class="math-inline">\(L+1 = 9\)</span> deep while Rys only needs 5 root evaluations. For (ss|ss) through (sp|sp) the OS path is cheaper. The empirical crossover is around <span class="math-inline">\(L = 4\)</span> (constant <code>RYS_CROSSOVER_L</code>). The <code>_auto_contracted_eri</code> wrapper dispatches to <code>_rys_contracted_eri</code> or <code>ObaraSaika::_contracted_eri_elem</code> at this level.</p>
+<p>For a (dd|dd) quartet: <span class="math-inline">\(L = 8\)</span>, <span class="math-inline">\(n = 5\)</span>, <span class="math-inline">\(\text{six\_d} = 3^4 \cdot 3^4 = \ldots\)</span>, and the Rys path wins because the OS stack grows as <span class="math-inline">\(L+1 = 9\)</span> deep while Rys only needs 5 root evaluations. For (ss|ss) through (sp|sp) the OS path is cheaper. The public constant <code>RYS_CROSSOVER_L = 4</code> documents the intended high-angular-momentum crossover, but the current <code>Auto</code> decision is the cost model above rather than a hard threshold-only branch.</p>
+<p>The Rys stored-ERI builders mirror the OS loop shape: build a Schwarz table, iterate pair quartets with <span class="math-inline">\(p \le q\)</span>, skip screened quartets, compute a contracted ERI, and scatter the eight permutation-equivalent tensor slots. The Rys Fock builders then contract the stored tensor in the same row-owned OpenMP loops used by the OS path. A current implementation difference is that the <code>sym_ops</code> argument is accepted by the Rys public API for signature parity but is not applied inside the Rys quartet loops; symmetry-aware quartet-orbit pruning is currently an OS-only optimization.</p>
 <h3 id="implementation-files">Implementation Files</h3>
 <div class="table-wrap"><table>
 <thead><tr>

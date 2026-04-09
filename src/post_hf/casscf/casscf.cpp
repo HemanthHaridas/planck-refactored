@@ -955,6 +955,43 @@ namespace HartreeFock::Correlation::CASSCF
             const bool no_orb_rot = (st_current.gnorm == 0.0);
             if ((e_conv && g_conv) || (g_conv && no_orb_rot))
             {
+                if (macro == 1)
+                {
+                    const double macro_time_sec =
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - macro_start).count();
+                    HartreeFock::Logger::casscf_iteration(
+                        0,
+                        st_current.E_cas,
+                        0.0,
+                        st_current.gnorm,
+                        st_current.max_root_gnorm,
+                        0.0,
+                        level_shift,
+                        macro_time_sec);
+                    logging(LogLevel::Info, tag + " :",
+                            std::format(
+                                "Macro {:3d}  mode={:<12}  ci_solver={}\n"
+                                "             accepted={:<3}  candidate={}  max_root_dE={:.2e}  step_norm={:.2e}\n"
+                                "             sa_g={:.2e}  root_screen_g={:.2e}  max_root_g={:.2e}\n"
+                                "             predicted_dE={:.2e}  root_model_spread={:.2e}  actual_dE={:.2e}  response_resid={:.2e}\n"
+                                "             response_iter={:3d}  level_shift={:.2e}",
+                                0,
+                                "initial",
+                                st_current.ci_used_direct_sigma ? "direct-davidson" : "dense",
+                                "no",
+                                "already-converged",
+                                diag.max_root_delta,
+                                0.0,
+                                st_current.gnorm,
+                                st_current.weighted_root_gnorm,
+                                st_current.max_root_gnorm,
+                                0.0,
+                                0.0,
+                                0.0,
+                                0.0,
+                                0,
+                                level_shift));
+                }
                 converged = true;
                 break;
             }
