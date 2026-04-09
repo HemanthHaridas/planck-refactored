@@ -45,7 +45,7 @@ namespace HartreeFock::IO
         return line;
     }
 
-    static bool toBool(const std::string &parsedString)
+    static std::expected<bool, std::string> toBool(const std::string &parsedString)
     {
         std::string key = toLower(parsedString);
 
@@ -59,10 +59,10 @@ namespace HartreeFock::IO
             return false;
         }
 
-        throw std::invalid_argument("Invalid boolean value: " + parsedString);
+        return std::unexpected("Invalid boolean value: " + parsedString);
     }
 
-    static std::vector<HartreeFock::IrrepCount> parse_irrep_count_list(
+    static std::expected<std::vector<HartreeFock::IrrepCount>, std::string> parse_irrep_count_list(
         std::istringstream &iss,
         const std::string &keyword)
     {
@@ -79,43 +79,60 @@ namespace HartreeFock::IO
                 irrep = token.substr(0, sep);
                 count_text = token.substr(sep + 1);
                 if (irrep.empty() || count_text.empty())
-                    throw std::invalid_argument(keyword + " expects irrep/count pairs");
+                    return std::unexpected(keyword + " expects irrep/count pairs");
             }
             else
             {
                 irrep = token;
                 if (!(iss >> count_text))
-                    throw std::invalid_argument(keyword + " expects irrep/count pairs");
+                    return std::unexpected(keyword + " expects irrep/count pairs");
             }
 
             trim(irrep);
             trim(count_text);
             if (irrep.empty() || count_text.empty())
-                throw std::invalid_argument(keyword + " expects irrep/count pairs");
+                return std::unexpected(keyword + " expects irrep/count pairs");
 
-            const int count = std::stoi(count_text);
+            int count = 0;
+            try
+            {
+                count = std::stoi(count_text);
+            }
+            catch (const std::exception &)
+            {
+                return std::unexpected(keyword + " counts must be integers");
+            }
             if (count < 0)
-                throw std::invalid_argument(keyword + " counts must be non-negative");
+                return std::unexpected(keyword + " counts must be non-negative");
 
             counts.push_back({irrep, count});
         }
 
         if (counts.empty())
-            throw std::invalid_argument(keyword + " requires at least one irrep/count pair");
+            return std::unexpected(keyword + " requires at least one irrep/count pair");
         return counts;
     }
 
-    static std::vector<int> parse_int_list(
+    static std::expected<std::vector<int>, std::string> parse_int_list(
         std::istringstream &iss,
         const std::string &keyword)
     {
         std::vector<int> values;
-        int value = 0;
-        while (iss >> value)
-            values.push_back(value);
+        std::string token;
+        while (iss >> token)
+        {
+            try
+            {
+                values.push_back(std::stoi(token));
+            }
+            catch (const std::exception &)
+            {
+                return std::unexpected(keyword + " requires integer values");
+            }
+        }
 
         if (values.empty())
-            throw std::invalid_argument(keyword + " requires at least one integer");
+            return std::unexpected(keyword + " requires at least one integer");
         return values;
     }
 
@@ -502,8 +519,6 @@ namespace HartreeFock::IO
             {
                 {"scf_type", [&scf](const std::string &value)
                  { scf._scf = map_string_enum<HartreeFock::SCFType>(value); }},
-                {"use_diis", [&scf](const std::string &value)
-                 { scf._use_DIIS = toBool(value); }},
                 {"diis_dim", [&scf](const std::string &value)
                  { scf._DIIS_dim = std::stoi(value); }},
                 {"max_cycles", [&scf](const std::string &value)
@@ -523,8 +538,6 @@ namespace HartreeFock::IO
                  { integral._tol_eri = std::stod(value); }},
                 {"guess", [&scf](const std::string &value)
                  { scf._guess = map_string_enum<HartreeFock::SCFGuess>(value); }},
-                {"save_checkpoint", [&scf](const std::string &value)
-                 { scf._save_checkpoint = toBool(value); }},
                 {"level_shift", [&scf](const std::string &value)
                  { scf._level_shift = std::stod(value); }},
                 {"diis_restart", [&scf](const std::string &value)
@@ -549,10 +562,6 @@ namespace HartreeFock::IO
                  { active_space.max_holes = std::stoi(v); }},
                 {"max_elec", [&active_space](const std::string &v)
                  { active_space.max_elec = std::stoi(v); }},
-                {"mcscf_debug_numeric_newton", [&active_space](const std::string &v)
-                 { active_space.mcscf_debug_numeric_newton = toBool(v); }},
-                {"mcscf_debug_commutator_rhs", [&active_space](const std::string &v)
-                 { active_space.mcscf_debug_commutator_rhs = toBool(v); }},
                 {"mcscf_max_iter", [&active_space](const std::string &v)
                  { active_space.mcscf_max_iter = static_cast<unsigned int>(std::stoi(v)); }},
                 {"mcscf_micro_per_macro", [&active_space](const std::string &v)
@@ -590,48 +599,55 @@ namespace HartreeFock::IO
 
             if (key == "core_irrep_counts")
             {
-                try
-                {
-                    auto parsed = parse_irrep_count_list(_iss, key);
-                    active_space.core_irrep_counts.insert(
-                        active_space.core_irrep_counts.end(),
-                        parsed.begin(),
-                        parsed.end());
-                }
-                catch (const std::exception &e)
-                {
-                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + e.what());
-                }
+                auto parsed = parse_irrep_count_list(_iss, key);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
+                active_space.core_irrep_counts.insert(
+                    active_space.core_irrep_counts.end(),
+                    parsed->begin(),
+                    parsed->end());
                 continue;
             }
 
             if (key == "active_irrep_counts")
             {
-                try
-                {
-                    auto parsed = parse_irrep_count_list(_iss, key);
-                    active_space.active_irrep_counts.insert(
-                        active_space.active_irrep_counts.end(),
-                        parsed.begin(),
-                        parsed.end());
-                }
-                catch (const std::exception &e)
-                {
-                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + e.what());
-                }
+                auto parsed = parse_irrep_count_list(_iss, key);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
+                active_space.active_irrep_counts.insert(
+                    active_space.active_irrep_counts.end(),
+                    parsed->begin(),
+                    parsed->end());
                 continue;
             }
 
             if (key == "mo_permutation")
             {
-                try
-                {
-                    active_space.mo_permutation = parse_int_list(_iss, key);
-                }
-                catch (const std::exception &e)
-                {
-                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + e.what());
-                }
+                auto parsed = parse_int_list(_iss, key);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
+                active_space.mo_permutation = std::move(*parsed);
+                continue;
+            }
+
+            if (key == "use_diis" || key == "save_checkpoint" ||
+                key == "mcscf_debug_numeric_newton" || key == "mcscf_debug_commutator_rhs")
+            {
+                if (!(_iss >> value))
+                    return std::unexpected("Missing value for scf keyword: " + key);
+
+                auto parsed = toBool(value);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
+
+                if (key == "use_diis")
+                    scf._use_DIIS = *parsed;
+                else if (key == "save_checkpoint")
+                    scf._save_checkpoint = *parsed;
+                else if (key == "mcscf_debug_numeric_newton")
+                    active_space.mcscf_debug_numeric_newton = *parsed;
+                else
+                    active_space.mcscf_debug_commutator_rhs = *parsed;
                 continue;
             }
 
@@ -696,18 +712,6 @@ namespace HartreeFock::IO
                  {
                      dft._correlation = HartreeFock::XCCorrelationFunctional::Custom;
                      dft._correlation_id = std::stoi(value);
-                 }},
-                {"use_sao_blocking", [&dft](const std::string &value)
-                 {
-                     dft._use_sao_blocking = toBool(value);
-                 }},
-                {"print_grid_summary", [&dft](const std::string &value)
-                 {
-                     dft._print_grid_summary = toBool(value);
-                 }},
-                {"save_checkpoint", [&dft](const std::string &value)
-                 {
-                     dft._save_checkpoint = toBool(value);
                  }}};
 
         for (const std::string &line : lines)
@@ -719,6 +723,21 @@ namespace HartreeFock::IO
                 return std::unexpected("Missing value for dft keyword: " + key);
 
             key = toLower(key);
+
+            if (key == "use_sao_blocking" || key == "print_grid_summary" || key == "save_checkpoint")
+            {
+                auto parsed = toBool(value);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing dft '") + key + "': " + parsed.error());
+
+                if (key == "use_sao_blocking")
+                    dft._use_sao_blocking = *parsed;
+                else if (key == "print_grid_summary")
+                    dft._print_grid_summary = *parsed;
+                else
+                    dft._save_checkpoint = *parsed;
+                continue;
+            }
 
             if (auto it = _dft_map.find(key); it != _dft_map.end())
             {
@@ -784,8 +803,6 @@ namespace HartreeFock::IO
                  { geom._type = map_string_enum<HartreeFock::CoordType>(value); }},
                 {"coord_units", [&geom](const std::string &value)
                  { geom._units = map_string_enum<HartreeFock::Units>(value); }},
-                {"use_symm", [&geom](const std::string &value)
-                 { geom._use_symm = toBool(value); }},
                 {"opt_coords", [&opt_coords](const std::string &value)
                  { opt_coords = map_string_enum<HartreeFock::OptCoords>(value); }},
                 {"imag_follow_step", [&imag_follow_step](const std::string &value)
@@ -802,6 +819,15 @@ namespace HartreeFock::IO
             }
 
             key = toLower(key);
+
+            if (key == "use_symm")
+            {
+                auto parsed = toBool(value);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing geom '") + key + "': " + parsed.error());
+                geom._use_symm = *parsed;
+                continue;
+            }
 
             // Find the (key, value) pair
             if (auto it = _geom_map.find(key); it != _geom_map.end())
@@ -1029,9 +1055,6 @@ namespace HartreeFock::IO
             }
         }
 
-        molecule.nelectrons = std::accumulate(molecule.atomic_numbers.begin(),
-                                              molecule.atomic_numbers.end(), 0) -
-                              molecule.charge;
         return {};
     }
 
@@ -1099,9 +1122,6 @@ namespace HartreeFock::IO
             molecule.coordinates(i, 1) = _y;
             molecule.coordinates(i, 2) = _z;
         }
-
-        // Now set other variables
-        molecule.nelectrons = std::accumulate(molecule.atomic_numbers.begin(), molecule.atomic_numbers.end(), 0) - molecule.charge;
 
         return {};
     }

@@ -3,6 +3,7 @@
 #include "io/logging.h"
 #include "post_hf/casscf.h"
 #include "post_hf/casscf/ci.h"
+#include "post_hf/casscf/casscf_utils.h"
 #include "post_hf/casscf/orbital.h"
 #include "post_hf/casscf/rdm.h"
 #include "post_hf/casscf/response.h"
@@ -233,20 +234,6 @@ namespace
         for (int i = 0; i < n; ++i)
             delta = std::max(delta, std::abs(current(i) - previous.energies(i)));
         return delta;
-    }
-
-    Eigen::MatrixXd as_single_column_matrix(const Eigen::VectorXd &vec)
-    {
-        Eigen::MatrixXd mat(vec.size(), 1);
-        mat.col(0) = vec;
-        return mat;
-    }
-
-    Eigen::VectorXd single_weight(double weight)
-    {
-        Eigen::VectorXd weights(1);
-        weights(0) = weight;
-        return weights;
     }
 
     void accumulate_weighted_tensor(
@@ -603,7 +590,10 @@ namespace HartreeFock::Correlation::CASSCF
                     break;
                 }
 
-            C = reorder_mo_coefficients(C, selection->permutation);
+            auto reordered = reorder_mo_coefficients(C, selection->permutation);
+            if (!reordered)
+                return std::unexpected(reordered.error());
+            C = std::move(*reordered);
             if (!all_mo_irr.empty())
             {
                 std::vector<int> permuted_irr(all_mo_irr.size());

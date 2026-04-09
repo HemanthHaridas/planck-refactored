@@ -97,16 +97,29 @@ static Eigen::VectorXd _run_sp_gradient_hf(HartreeFock::Calculator &calc)
         if (auto corr_res = HartreeFock::Correlation::run_rmp2(calc, shell_pairs); !corr_res)
             throw std::runtime_error("GeomOpt RMP2 failed: " + corr_res.error());
         calc._total_energy += calc._correlation_energy;
-        grad_mat = HartreeFock::Gradient::compute_rmp2_gradient(calc, shell_pairs);
+        auto grad_res = HartreeFock::Gradient::compute_rmp2_gradient(calc, shell_pairs);
+        if (!grad_res)
+            throw std::runtime_error("GeomOpt RMP2 gradient failed: " + grad_res.error());
+        grad_mat = std::move(*grad_res);
     }
     else if (calc._correlation == HartreeFock::PostHF::UMP2)
     {
         throw std::runtime_error("GeomOpt UMP2 gradient is not implemented");
     }
     else if (calc._scf._scf == HartreeFock::SCFType::UHF)
-        grad_mat = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
+    {
+        auto grad_res = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
+        if (!grad_res)
+            throw std::runtime_error("GeomOpt UHF gradient failed: " + grad_res.error());
+        grad_mat = std::move(*grad_res);
+    }
     else
-        grad_mat = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
+    {
+        auto grad_res = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
+        if (!grad_res)
+            throw std::runtime_error("GeomOpt RHF gradient failed: " + grad_res.error());
+        grad_mat = std::move(*grad_res);
+    }
 
     calc._gradient = grad_mat;
 
