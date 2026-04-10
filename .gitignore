@@ -24,7 +24,8 @@ vault/.obsidian/workspace-mobile.json
 vault/.obsidian/cache
 vault/.obsidian/plugins/
 scripts/*
-# Vault aggregation script — explicitly tracked
+# Explicitly tracked scripts
 !scripts/vault_to_claude.py
+!scripts/sync-memory.sh
 notes
 src/base/basis.h

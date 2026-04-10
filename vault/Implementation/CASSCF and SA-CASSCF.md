@@ -59,7 +59,7 @@ Default mode: `ResponseRHSMode::ExactOrbitalDerivative` — exact CI-response RH
 
 ## Orbital Hessian
 
-`matrix_free_hessian_action` in `orbital.cpp`: finite-difference fixed-CI Hessian-vector product. Falls back to diagonal energy-denominator model (M3) when context is incomplete. **Known gap**: only diagonal preconditioner, no full Hessian-action upgrade yet.
+`matrix_free_hessian_action` in `orbital.cpp` delegates to `delta_g_sa_action`: full finite-difference fixed-CI Hessian-vector product (rotates MOs by ±ε·R, central-difference of `fixed_ci_orbital_gradient`). Falls back to diagonal energy-denominator model (M3) only when `OrbitalHessianContext` is incomplete.
 
 ## Active Space Setup
 
@@ -76,9 +76,7 @@ Default mode: `ResponseRHSMode::ExactOrbitalDerivative` — exact CI-response RH
 
 ## Open Work
 
-- Per-root total energy display bug: `casscf.cpp:1418` stores CI eigenvalue, not total energy (E_cas + E_nuc + E_core)
-- Orbital Hessian upgrade: move from M3 diagonal to full matrix-free Hessian action
-- SA stationarity assertion in `run_regressions.py` (not yet wired)
+- SA stationarity assertion: `tests/regression_cases.json` has no `lte` check on `casscf_sa_gnorm` for any SA case — add `{ "metric": "casscf_sa_gnorm", "type": "lte", "value": 1e-5 }` to all SA entries
 
 ## RASSCF
 
