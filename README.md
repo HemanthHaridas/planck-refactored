@@ -152,9 +152,10 @@ General calculation settings.
 |---|---|---|---|---|
 | `basis` | string | `sto-3g`, `3-21g`, `6-31g`, `6-31g*` | — | Basis set name |
 | `basis_type` | enum | `cartesian`, `spherical` | `cartesian` | Angular function type. Only Cartesian is fully supported. |
-| `calculation` | enum | `energy` / `sp`, `gradient` / `grad`, `geomopt` / `opt`, `freq` / `frequency` | — | Calculation type. `gradient` computes the analytic nuclear gradient at the input geometry and stops. `geomopt` optimizes the geometry. `freq` computes the semi-numerical Hessian and vibrational frequencies. |
+| `calculation` | enum | `energy`/`sp`, `gradient`/`grad`, `geomopt`/`opt`, `freq`/`frequency`, `optfreq`/`geomoptfreq`/`geomopt+freq`, `imagfollow`/`imag_follow`/`irc_follow` | — | Calculation type. `gradient` computes the analytic nuclear gradient and stops. `geomopt` optimizes the geometry. `freq` computes the semi-numerical Hessian and vibrational frequencies. `optfreq` performs geometry optimization followed by frequency analysis. `imagfollow` follows the lowest imaginary frequency mode downhill. |
 | `verbosity` | enum | `silent`, `minimal`, `normal`, `verbose`, `debug` | `minimal` | Output level |
 | `basis_path` | string | filesystem path | compiled-in | Override the basis set search directory |
+| `print_populations` | bool | `.true.`, `.false.` | `.false.` | Print Mulliken population analysis after SCF convergence. Enabled automatically when `verbosity verbose` or `verbosity debug`. |
 
 ### Section: `%begin_scf`
 
@@ -164,12 +165,20 @@ SCF procedure and convergence settings.
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
-| `scf_type` | enum | `rhf`, `rohf`, `uhf` | `rhf` | Wavefunction type. `rohf`: restricted open-shell HF; post-HF and analytic gradients are not yet supported for ROHF. |
+| `scf_type` | enum | `rhf`/`rks`, `rohf`, `uhf`/`uks` | `rhf` | Wavefunction type. `rks`/`uks` are aliases for `rhf`/`uhf` when using `planck-dft`. `rohf`: restricted open-shell HF; post-HF and analytic gradients are not yet supported for ROHF. |
 | `engine` | enum | `os` / `obara-saika`, `rys`, `auto` | `os` | Two-electron integral engine. `os`: Obara-Saika algorithm. `rys`: Rys quadrature. `auto`: selects the engine per shell quartet based on angular momentum. |
 | `correlation` | enum | `rmp2`, `ump2`, `casscf`, `rasscf` | none | Post-HF method. `rmp2`/`ump2`: Møller-Plesset second-order correction. `casscf`: Complete Active Space SCF (requires `nactele`, `nactorb`). `rasscf`: Restricted Active Space SCF (requires `nactele`, `nactorb`, `nras1`, `nras2`, `nras3`). |
 | `nactele` | int | ≥ 1 | — | Number of active electrons for CASSCF/RASSCF |
 | `nactorb` | int | ≥ 1 | — | Number of active orbitals for CASSCF/RASSCF |
 | `nroots` | int | ≥ 1 | `1` | Number of CI roots for state-averaged CASSCF (SA-CASSCF). `1` = single-state CASSCF. |
+| `weights` | float list | space-separated | equal | SA-CASSCF state-averaging weights, one per root. Automatically normalized to sum to 1. Defaults to equal weights if omitted or if the count does not match `nroots`. |
+| `core_irrep_counts` | irrep list | `irrep=N ...` | — | Explicit per-irrep counts of doubly occupied (core) orbitals, e.g. `A1=3 B1=1`. Overrides energy-sorted inference. |
+| `active_irrep_counts` | irrep list | `irrep=N ...` | — | Explicit per-irrep counts of active orbitals, e.g. `A1=2 B1=2`. Overrides energy-sorted inference. |
+| `mo_permutation` | int list | space-separated | — | Zero-based MO indices specifying the reordering applied before the MCSCF loop. |
+| `ci_max_dim` | int | ≥ 1 | auto | Maximum Davidson CI subspace dimension. |
+| `target_irrep` | string | irrep label | — | Target irrep for CI diagonalization (e.g. `A1`). |
+| `max_holes` | int | ≥ 0 | — | RASSCF: maximum number of holes allowed in the RAS1 subspace. |
+| `max_elec` | int | ≥ 0 | — | RASSCF: maximum number of electrons allowed in the RAS3 subspace. |
 | `mcscf_max_iter` | int | ≥ 1 | `100` | Maximum CASSCF macro-iterations |
 | `mcscf_micro_per_macro` | int | ≥ 1 | `4` | Micro-iterations per macro-iteration |
 | `tol_mcscf_energy` | float | > 0 | `1e-8` | CASSCF energy convergence threshold in Hartree |
@@ -186,7 +195,6 @@ SCF procedure and convergence settings.
 | `threshold` | int | ≥ 1 | `100` | Basis function count cutoff used by `scf_mode auto` to decide between conventional and direct. |
 | `guess` | enum | `hcore`, `sad`, `density`, `full` | `hcore` | Initial density guess. `sad`: Superposition of Atomic Densities. `density`: load density matrix from checkpoint. `full`: restore geometry and density from checkpoint. Falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.true.` | Write a `.hfchk` checkpoint file after successful convergence |
-| `print_populations` | bool | `.true.`, `.false.` | `.false.` | Print Mulliken population analysis after SCF convergence. Enabled automatically when `verbosity verbose` or `verbosity debug`. |
 
 ### Section: `%begin_dft`
 
@@ -237,15 +245,7 @@ Molecular geometry options.
 | `coord_units` | enum | `angstrom`, `bohr` | `angstrom` | Units for input coordinates |
 | `use_symm` | bool | `.true.`, `.false.` | `.true.` | Detect molecular point group and reorient to standard frame |
 | `opt_coords` | enum | `cartesian`, `internal` / `ic` / `gic` | `cartesian` | Coordinate system for geometry optimization. `cartesian`: Cartesian coordinates. `internal`: redundant generalized internal coordinates (bonds, bends, torsions). Only used when `calculation geomopt`. |
-
-<p align="justify">
-Geometry optimization convergence is controlled by two additional keywords accepted in `%begin_control`:
-</p>
-
-| Keyword | Type | Default | Description |
-|---|---|---|---|
-| `grad_tol` | float | `3e-4` | Convergence threshold: maximum Cartesian gradient component in Ha/Bohr |
-| `max_geomopt_iter` | int | `50` | Maximum number of geometry optimization steps |
+| `imag_follow_step` | float | > 0 | `0.1` | Step size along the imaginary frequency mode for `calculation imagfollow`. |
 
 ### Section: `%begin_constraints` (optional)
 
