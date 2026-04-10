@@ -142,6 +142,38 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
             ),
         }
 
+    # CASSCF / SA-CASSCF
+    casscf_data = None
+    if run.casscf_iters or run.casscf_total_energy is not None:
+        casscf_data = {
+            "active_space": run.casscf_active_space,
+            "n_active_electrons": run.casscf_n_active_electrons,
+            "n_active_orbitals": run.casscf_n_active_orbitals,
+            "n_core": run.casscf_n_core,
+            "n_roots": run.casscf_n_roots,
+            "converged": run.casscf_converged,
+            "iterations": len(run.casscf_iters),
+            "energy": (
+                float(run.casscf_total_energy)
+                if run.casscf_total_energy is not None else None
+            ),
+            "e_corr": (
+                float(run.casscf_corr_energy)
+                if run.casscf_corr_energy is not None else None
+            ),
+            "natural_occs": run.casscf_natural_occs,
+            "sa_roots": [
+                {
+                    "root": r.root,
+                    "energy": float(r.energy),
+                    "weight": float(r.weight),
+                }
+                for r in run.casscf_sa_roots
+            ],
+            "energy_history": [it.energy for it in run.casscf_iters],
+            "sa_grad_history": [it.sa_grad for it in run.casscf_iters],
+        }
+
     # Freq
     freq_data = None
     if run.freq_modes:
@@ -167,6 +199,7 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
         "molecule": mol_data,
         "scf": scf_data,
         "mp2": mp2_data,
+        "casscf": casscf_data,
         "geopt": geopt_data,
         "freq": freq_data,
     }

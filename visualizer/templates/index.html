@@ -54,7 +54,12 @@
 
     #workspace {
       display:grid;
-      grid-template-columns: 240px 1fr 276px;
+      grid-template-columns:
+        var(--left-panel-width, 240px)
+        var(--resize-handle-width, 10px)
+        minmax(0, 1fr)
+        var(--resize-handle-width, 10px)
+        var(--right-panel-width, 276px);
       flex:1; overflow:hidden;
     }
 
@@ -64,6 +69,46 @@
       scrollbar-width:thin; scrollbar-color:var(--border) transparent;
     }
     #panel-results { border-right:none; border-left:1px solid var(--border); }
+    #panel-setup { border-right:none; }
+    #panel-results { border-left:none; }
+
+    .resize-handle {
+      position:relative;
+      background:var(--bg);
+      cursor:col-resize;
+      border-left:1px solid var(--border);
+      border-right:1px solid var(--border);
+      transition:background .12s, border-color .12s;
+      touch-action:none;
+      user-select:none;
+    }
+    .resize-handle::before {
+      content:'';
+      position:absolute; top:50%; left:50%;
+      width:3px; height:38px; transform:translate(-50%, -50%);
+      border-radius:999px;
+      background:
+        linear-gradient(
+          to right,
+          var(--text3) 0,
+          var(--text3) 1px,
+          transparent 1px,
+          transparent 2px,
+          var(--text3) 2px,
+          var(--text3) 3px
+        );
+      opacity:0.5;
+    }
+    .resize-handle:hover,
+    .resize-handle.active,
+    .resize-handle:focus-visible {
+      background:var(--teal-dim);
+      border-color:var(--teal);
+      outline:none;
+    }
+    .resize-handle:hover::before,
+    .resize-handle.active::before,
+    .resize-handle:focus-visible::before { opacity:1; }
 
     .ps { padding:14px 16px; border-bottom:1px solid var(--border); }
     .ps-title {
@@ -116,7 +161,7 @@
     .btn-ghost.active { background:var(--teal-dim); color:var(--teal); border-color:var(--teal); }
     .btn-sm  { padding:3px 8px; font-size:10.5px; }
 
-    #panel-center { display:flex; flex-direction:column; overflow:hidden; }
+    #panel-center { display:flex; flex-direction:column; overflow:hidden; min-width:0; }
 
     #viewer-wrap {
       position:relative; flex:1; min-height:280px;
@@ -295,6 +340,15 @@
       </div>
     </aside>
 
+    <div
+      class="resize-handle"
+      id="resize-left"
+      role="separator"
+      aria-label="Resize left panel"
+      aria-orientation="vertical"
+      tabindex="0"
+    ></div>
+
     <!-- Center: Viewer + Plots -->
     <main id="panel-center">
 
@@ -317,14 +371,16 @@
       <div id="plots-wrap">
         <div id="tab-bar">
           <button class="tab-btn active" data-tab="scf"   onclick="showTab('scf',   this)">SCF Convergence</button>
-          <button class="tab-btn" id="btn-tab-orb"  data-tab="orb"   onclick="showTab('orb',   this)" style="display:none">Orbital Energies</button>
-          <button class="tab-btn" id="btn-tab-geopt" data-tab="geopt" onclick="showTab('geopt', this)" style="display:none">Geopt Trajectory</button>
-          <button class="tab-btn" id="btn-tab-vib"  data-tab="vib"   onclick="showTab('vib',   this)" style="display:none">Vibrations</button>
+          <button class="tab-btn" id="btn-tab-orb"    data-tab="orb"    onclick="showTab('orb',    this)" style="display:none">Orbital Energies</button>
+          <button class="tab-btn" id="btn-tab-casscf" data-tab="casscf" onclick="showTab('casscf', this)" style="display:none">CASSCF</button>
+          <button class="tab-btn" id="btn-tab-geopt"  data-tab="geopt"  onclick="showTab('geopt',  this)" style="display:none">Geopt Trajectory</button>
+          <button class="tab-btn" id="btn-tab-vib"    data-tab="vib"    onclick="showTab('vib',    this)" style="display:none">Vibrations</button>
         </div>
         <div id="plots-panels">
-          <div class="tab-panel active" id="tab-scf">   <canvas id="c-scf"></canvas></div>
-          <div class="tab-panel"        id="tab-orb">   <canvas id="c-orb"></canvas></div>
-          <div class="tab-panel"        id="tab-geopt"> <canvas id="c-geopt"></canvas></div>
+          <div class="tab-panel active" id="tab-scf">    <canvas id="c-scf"></canvas></div>
+          <div class="tab-panel"        id="tab-orb">    <canvas id="c-orb"></canvas></div>
+          <div class="tab-panel"        id="tab-casscf"> <canvas id="c-casscf"></canvas></div>
+          <div class="tab-panel"        id="tab-geopt">  <canvas id="c-geopt"></canvas></div>
           <div class="tab-panel"        id="tab-vib">
             <div id="vib-panel">
               <div class="vib-controls">
@@ -345,6 +401,15 @@
       </div>
 
     </main>
+
+    <div
+      class="resize-handle"
+      id="resize-right"
+      role="separator"
+      aria-label="Resize right panel"
+      aria-orientation="vertical"
+      tabindex="0"
+    ></div>
 
     <!-- Right: Results -->
     <aside id="panel-results">
@@ -442,6 +507,169 @@ function updateMolInfo(atoms) {
 function escHtml(s) {
   return String(s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PANEL RESIZE
+═══════════════════════════════════════════════════════════════════════════ */
+const PANEL_STORAGE_KEY = 'planck_visualizer_panel_widths_v1';
+const PANEL_CONSTRAINTS = {
+  left:  {min: 180, max: 460, defaultWidth: 240},
+  right: {min: 220, max: 520, defaultWidth: 276},
+  centerMin: 420,
+  keyboardStep: 16,
+};
+
+function getWorkspaceEl() {
+  return document.getElementById('workspace');
+}
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function getHandleWidthPx() {
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue('--resize-handle-width')
+    .trim();
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? parsed : 10;
+}
+
+function getPanelVarName(side) {
+  return side === 'left' ? '--left-panel-width' : '--right-panel-width';
+}
+
+function getPanelWidth(side) {
+  const varName = getPanelVarName(side);
+  const width = Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue(varName)
+  );
+  return Number.isFinite(width) ? width : PANEL_CONSTRAINTS[side].defaultWidth;
+}
+
+function setPanelWidth(side, width) {
+  document.documentElement.style.setProperty(
+    getPanelVarName(side),
+    `${Math.round(width)}px`
+  );
+}
+
+function constrainPanelWidth(side, proposed) {
+  const workspace = getWorkspaceEl();
+  const rect = workspace.getBoundingClientRect();
+  const handleWidth = getHandleWidthPx();
+  const otherSide = side === 'left' ? 'right' : 'left';
+  const otherWidth = getPanelWidth(otherSide);
+  const own = PANEL_CONSTRAINTS[side];
+  const maxAllowed = Math.max(
+    own.min,
+    rect.width - otherWidth - (2 * handleWidth) - PANEL_CONSTRAINTS.centerMin
+  );
+  return clamp(proposed, own.min, Math.min(own.max, maxAllowed));
+}
+
+function savePanelWidths() {
+  const payload = {
+    left: getPanelWidth('left'),
+    right: getPanelWidth('right'),
+  };
+  try { localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(payload)); }
+  catch (_) {}
+}
+
+function loadPanelWidths() {
+  try {
+    const raw = localStorage.getItem(PANEL_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Number.isFinite(parsed.left) || !Number.isFinite(parsed.right)) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+function resizePanelByKeyboard(side, delta) {
+  setPanelWidth(side, constrainPanelWidth(side, getPanelWidth(side) + delta));
+  savePanelWidths();
+}
+
+function applyStoredPanelWidths() {
+  const stored = loadPanelWidths();
+  if (!stored) return;
+  setPanelWidth('left', constrainPanelWidth('left', stored.left));
+  setPanelWidth('right', constrainPanelWidth('right', stored.right));
+}
+
+function setupPanelResize() {
+  const workspace = getWorkspaceEl();
+  const handles = [
+    {el: document.getElementById('resize-left'), side: 'left'},
+    {el: document.getElementById('resize-right'), side: 'right'},
+  ];
+
+  applyStoredPanelWidths();
+
+  window.addEventListener('resize', () => {
+    setPanelWidth('left', constrainPanelWidth('left', getPanelWidth('left')));
+    setPanelWidth('right', constrainPanelWidth('right', getPanelWidth('right')));
+    savePanelWidths();
+  });
+
+  handles.forEach(({el, side}) => {
+    el.addEventListener('dblclick', () => {
+      setPanelWidth(side, PANEL_CONSTRAINTS[side].defaultWidth);
+      savePanelWidths();
+    });
+
+    el.addEventListener('keydown', e => {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        resizePanelByKeyboard(side, -PANEL_CONSTRAINTS.keyboardStep);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        resizePanelByKeyboard(side, PANEL_CONSTRAINTS.keyboardStep);
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        setPanelWidth(side, PANEL_CONSTRAINTS[side].min);
+        savePanelWidths();
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        setPanelWidth(side, constrainPanelWidth(side, PANEL_CONSTRAINTS[side].max));
+        savePanelWidths();
+      }
+    });
+
+    el.addEventListener('pointerdown', e => {
+      el.classList.add('active');
+      el.setPointerCapture(e.pointerId);
+
+      const onMove = evt => {
+        const rect = workspace.getBoundingClientRect();
+        if (side === 'left') {
+          setPanelWidth('left', constrainPanelWidth('left', evt.clientX - rect.left));
+        } else {
+          setPanelWidth('right', constrainPanelWidth('right', rect.right - evt.clientX));
+        }
+      };
+
+      const stop = evt => {
+        el.classList.remove('active');
+        if (el.hasPointerCapture(evt.pointerId)) {
+          el.releasePointerCapture(evt.pointerId);
+        }
+        el.removeEventListener('pointermove', onMove);
+        el.removeEventListener('pointerup', stop);
+        el.removeEventListener('pointercancel', stop);
+        savePanelWidths();
+      };
+
+      el.addEventListener('pointermove', onMove);
+      el.addEventListener('pointerup', stop);
+      el.addEventListener('pointercancel', stop);
+    });
+  });
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -828,6 +1056,52 @@ function renderSCFChart(scf) {
   });
 }
 
+function renderCASChart(casscf) {
+  destroyChart('casscf');
+  const ctx     = document.getElementById('c-casscf').getContext('2d');
+  const iters   = casscf.energy_history.map((_, i) => i + 1);
+  const energies = casscf.energy_history;
+  const grads   = casscf.sa_grad_history;
+  const hasGrad = grads && grads.length > 0;
+  const datasets = [
+    {
+      label: 'SA Energy (Ha)', data: energies,
+      borderColor: '#39d0c8', borderWidth: 2,
+      pointRadius: 3, pointBackgroundColor: '#39d0c8', pointBorderColor: '#0d1117',
+      yAxisID: 'yE', tension: 0.1,
+    },
+  ];
+  const scales = {
+    x: {...BASE_OPTS.scales.x, title: {display: true, text: 'CASSCF macro iteration', font: MF, color: TICK_COLOR}},
+    yE: {...BASE_OPTS.scales.y, position: 'left',
+         title: {display: true, text: 'Energy (Ha)', font: MF, color: TICK_COLOR}},
+  };
+  if (hasGrad) {
+    datasets.push({
+      label: '‖g_SA‖∞', data: grads,
+      borderColor: '#f0883e', borderWidth: 1.8, borderDash: [5, 3],
+      pointRadius: 3, pointBackgroundColor: '#f0883e', pointBorderColor: '#0d1117',
+      yAxisID: 'yG', tension: 0.1,
+    });
+    scales.yG = {
+      position: 'right', type: 'logarithmic',
+      ticks: {font: MF, color: TICK_COLOR},
+      grid: {drawOnChartArea: false},
+      title: {display: true, text: '‖g_SA‖∞ (log)', font: MF, color: TICK_COLOR},
+    };
+  }
+  charts['casscf'] = new Chart(ctx, {
+    type: 'line',
+    data: {labels: iters, datasets},
+    options: {
+      ...BASE_OPTS,
+      plugins: {...BASE_OPTS.plugins,
+        legend: {labels: {font: MF, color: TICK_COLOR, boxWidth: 8, padding: 8}}},
+      scales,
+    },
+  });
+}
+
 function renderOrbChart(scf, level) {
   destroyChart('orb');
   const es   = scf.orbital_energies || [];
@@ -913,7 +1187,7 @@ function renderGeoptChart(geopt) {
 function fmt(v, d=8) { return (v == null) ? '—' : v.toFixed(d); }
 
 function renderResults(data) {
-  const {level, basis, scf, mp2, geopt, molecule} = data;
+  const {level, basis, scf, mp2, casscf, geopt, molecule} = data;
   const isMP2 = level==='RMP2' || level==='UMP2';
   if (!scf && !geopt && !molecule) return;
 
@@ -988,6 +1262,50 @@ function renderResults(data) {
   </div>`;
   }
 
+  if (casscf) {
+    const saLabel = casscf.n_roots ? `SA(${casscf.n_roots})` : 'SS';
+    html += `<div class="r-card">
+      <div class="r-title">CASSCF</div>`;
+    if (casscf.energy != null) {
+      html += `<div class="r-big">${fmt(casscf.energy)} Ha</div>
+      <div class="r-sub">${saLabel}-CASSCF${casscf.active_space ? ' ' + casscf.active_space : ''} / ${(basis||'').toUpperCase()}</div>`;
+    }
+    html += `
+      <div class="r-divider"></div>
+      <div class="r-row"><span class="r-lbl">Converged</span>
+        <span class="r-val ${casscf.converged?'green':'orange'}">${casscf.converged?'yes':'no'}</span></div>
+      <div class="r-row"><span class="r-lbl">Macro iter</span>
+        <span class="r-val">${casscf.iterations}</span></div>`;
+    if (casscf.e_corr != null) {
+      html += `<div class="r-row"><span class="r-lbl">E(HF)</span>
+        <span class="r-val">${fmt(scf ? scf.energy : null)}</span></div>
+      <div class="r-row"><span class="r-lbl">E(corr)</span>
+        <span class="r-val teal">${fmt(casscf.e_corr)}</span></div>`;
+    }
+    if (casscf.n_core != null) {
+      html += `<div class="r-row"><span class="r-lbl">n_core</span>
+        <span class="r-val">${casscf.n_core}</span></div>`;
+    }
+    if (casscf.natural_occs && casscf.natural_occs.length) {
+      html += `<div class="r-divider"></div>
+      <div class="r-row" style="margin-bottom:3px"><span class="r-lbl" style="color:var(--text2)">Nat. occ.</span></div>`;
+      casscf.natural_occs.forEach((n, i) => {
+        html += `<div class="r-row"><span class="r-lbl" style="padding-left:8px">MO ${i+1}</span>
+          <span class="r-val">${n.toFixed(6)}</span></div>`;
+      });
+    }
+    if (casscf.sa_roots && casscf.sa_roots.length) {
+      html += `<div class="r-divider"></div>
+      <div class="r-row" style="margin-bottom:3px"><span class="r-lbl" style="color:var(--text2)">SA roots</span></div>`;
+      casscf.sa_roots.forEach(r => {
+        html += `<div class="r-row">
+          <span class="r-lbl" style="padding-left:8px">Root ${r.root} (w=${r.weight.toFixed(3)})</span>
+          <span class="r-val">${fmt(r.energy, 6)} Ha</span></div>`;
+      });
+    }
+    html += `</div>`;
+  }
+
   if (geopt) {
     html += `<div class="r-card">
       <div class="r-title">Geometry Optimisation</div>
@@ -1042,7 +1360,7 @@ async function loadFromAPI() {
 }
 
 function applyData(data) {
-  const {level, basis, molecule, scf, mp2, geopt, freq,
+  const {level, basis, molecule, scf, mp2, casscf, geopt, freq,
          point_group, calculation_type, log_file} = data;
 
   // Populate info panel
@@ -1076,6 +1394,14 @@ function applyData(data) {
   document.getElementById('btn-tab-orb').style.display = hasOrb ? '' : 'none';
   if (hasOrb) renderOrbChart(scf, level);
 
+  // CASSCF chart
+  const hasCAS = casscf && casscf.energy_history && casscf.energy_history.length > 0;
+  document.getElementById('btn-tab-casscf').style.display = hasCAS ? '' : 'none';
+  if (hasCAS) {
+    renderCASChart(casscf);
+    showTab('casscf', document.querySelector('[data-tab="casscf"]'));
+  }
+
   // Geopt chart
   document.getElementById('btn-tab-geopt').style.display = geopt ? '' : 'none';
   if (geopt) renderGeoptChart(geopt);
@@ -1093,6 +1419,7 @@ function applyData(data) {
 /* ═══════════════════════════════════════════════════════════════════════════
    INIT
 ═══════════════════════════════════════════════════════════════════════════ */
+setupPanelResize();
 initViewer();
 loadFromAPI();
 </script>

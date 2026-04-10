@@ -370,24 +370,23 @@ namespace HartreeFock::IO
     {
         // (key, value) pairs
         const std::unordered_map<std::string, std::function<void(const std::string &)>> _control_map =
-            {
-                {"basis", [&basis](const std::string &value)
-                 { basis._basis_name = toLower(value); }},
-                {"basis_type", [&basis](const std::string &value)
-                 { basis._basis = map_string_enum<HartreeFock::BasisType>(value); }},
-                {"calculation", [&calculation](const std::string &value)
-                 { calculation = map_string_enum<HartreeFock::CalculationType>(value); }},
-                {"verbosity", [&output](const std::string &value)
-                 { output._verbosity = map_string_enum<HartreeFock::Verbosity>(value); }},
-                {"print_populations", [&output](const std::string &value)
-                 {
-                     auto parsed = toBool(value);
-                     if (!parsed)
-                         throw std::invalid_argument(parsed.error());
-                     output._print_populations = *parsed;
-                 }},
-                {"basis_path", [&basis](const std::string &value)
-                 { basis._basis_path = value; }}};
+        {
+            {"basis",       [&basis](const std::string &value)          { basis._basis_name = toLower(value); }},
+            {"basis_type",  [&basis](const std::string &value)          { basis._basis      = map_string_enum<HartreeFock::BasisType>(value); }},
+            {"calculation", [&calculation](const std::string &value)    { calculation       = map_string_enum<HartreeFock::CalculationType>(value); }},
+            {"verbosity",   [&output](const std::string &value)         { output._verbosity = map_string_enum<HartreeFock::Verbosity>(value); }},
+            {"basis_path",  [&basis](const std::string &value)          { basis._basis_path = value; }},
+            
+            {"print_populations", [&output](const std::string &value)
+                {
+                    auto parsed = toBool(value);
+                    if (!parsed)
+                        throw std::invalid_argument(parsed.error());
+                    output._print_populations = *parsed;
+                }
+            }
+        };
+
 
         for (const std::string line : lines)
         {
@@ -525,63 +524,41 @@ namespace HartreeFock::IO
         // (key, value) pairs
         const std::unordered_map<std::string, std::function<void(const std::string &)>> _scf_map =
             {
-                {"scf_type", [&scf](const std::string &value)
-                 { scf._scf = map_string_enum<HartreeFock::SCFType>(value); }},
-                {"diis_dim", [&scf](const std::string &value)
-                 { scf._DIIS_dim = std::stoi(value); }},
-                {"max_cycles", [&scf](const std::string &value)
-                 { scf._max_cycles = std::stoi(value); }},
-                {"tol_energy", [&scf](const std::string &value)
-                 { scf._tol_energy = std::stod(value); }},
-                {"tol_density", [&scf](const std::string &value)
-                 { scf._tol_density = std::stod(value); }},
-                {"threshold", [&scf](const std::string &value)
-                 { scf._threshold = std::stoi(value); }},
+                {"scf_type",    [&scf](const std::string &value)    { scf._scf          = map_string_enum<HartreeFock::SCFType>(value); }},
+                {"diis_dim",    [&scf](const std::string &value)    { scf._DIIS_dim     = std::stoi(value); }},
+                {"max_cycles",  [&scf](const std::string &value)    { scf._max_cycles   = std::stoi(value); }},
+                {"tol_energy",  [&scf](const std::string &value)    { scf._tol_energy   = std::stod(value); }},
+                {"tol_density", [&scf](const std::string &value)    { scf._tol_density  = std::stod(value); }},
+                {"threshold",   [&scf](const std::string &value)    { scf._threshold    = std::stoi(value); }},
 
-                {"correlation", [&correlation](const std::string &value)
-                 { correlation = map_string_enum<HartreeFock::PostHF>(value); }},
-                {"engine", [&integral](const std::string &value)
-                 { integral._engine = map_string_enum<HartreeFock::IntegralMethod>(value); }},
-                {"tol_eri", [&integral](const std::string &value)
-                 { integral._tol_eri = std::stod(value); }},
-                {"guess", [&scf](const std::string &value)
-                 { scf._guess = map_string_enum<HartreeFock::SCFGuess>(value); }},
-                {"level_shift", [&scf](const std::string &value)
-                 { scf._level_shift = std::stod(value); }},
-                {"diis_restart", [&scf](const std::string &value)
-                 { scf._diis_restart_factor = std::stod(value); }},
-                {"scf_mode", [&scf](const std::string &value)
-                 { scf._mode = map_string_enum<HartreeFock::SCFMode>(value); }},
+                {"correlation",     [&correlation](const std::string &value)    { correlation       = map_string_enum<HartreeFock::PostHF>(value); }},
+                {"engine",          [&integral](const std::string &value)       { integral._engine  = map_string_enum<HartreeFock::IntegralMethod>(value); }},
+                {"tol_eri",         [&integral](const std::string &value)       { integral._tol_eri = std::stod(value); }},
+                
+                {"guess",           [&scf](const std::string &value)            { scf._guess                = map_string_enum<HartreeFock::SCFGuess>(value); }},
+                {"level_shift",     [&scf](const std::string &value)            { scf._level_shift          = std::stod(value); }},
+                {"diis_restart",    [&scf](const std::string &value)            { scf._diis_restart_factor  = std::stod(value); }},
+                {"scf_mode",        [&scf](const std::string &value)            { scf._mode                 = map_string_enum<HartreeFock::SCFMode>(value); }},
 
                 // Active space (CASSCF / RASSCF)
-                {"nactele", [&active_space](const std::string &v)
-                 { active_space.nactele = std::stoi(v); }},
-                {"nactorb", [&active_space](const std::string &v)
-                 { active_space.nactorb = std::stoi(v); }},
-                {"nroots", [&active_space](const std::string &v)
-                 { active_space.nroots = std::stoi(v); }},
-                {"nras1", [&active_space](const std::string &v)
-                 { active_space.nras1 = std::stoi(v); }},
-                {"nras2", [&active_space](const std::string &v)
-                 { active_space.nras2 = std::stoi(v); }},
-                {"nras3", [&active_space](const std::string &v)
-                 { active_space.nras3 = std::stoi(v); }},
-                {"max_holes", [&active_space](const std::string &v)
-                 { active_space.max_holes = std::stoi(v); }},
-                {"max_elec", [&active_space](const std::string &v)
-                 { active_space.max_elec = std::stoi(v); }},
-                {"mcscf_max_iter", [&active_space](const std::string &v)
-                 { active_space.mcscf_max_iter = static_cast<unsigned int>(std::stoi(v)); }},
-                {"mcscf_micro_per_macro", [&active_space](const std::string &v)
-                 { active_space.mcscf_micro_per_macro = static_cast<unsigned int>(std::stoi(v)); }},
-                {"tol_mcscf_energy", [&active_space](const std::string &v)
-                 { active_space.tol_mcscf_energy = std::stod(v); }},
-                {"tol_mcscf_grad", [&active_space](const std::string &v)
-                 { active_space.tol_mcscf_grad = std::stod(v); }},
-                {"ci_max_dim", [&active_space](const std::string &v)
-                 { active_space.ci_max_dim = static_cast<unsigned int>(std::stoi(v)); }},
-                {"target_irrep", [&active_space](const std::string &v)
-                 { active_space.target_irrep = v; }}};
+                {"nactele", [&active_space](const std::string &v)   { active_space.nactele  = std::stoi(v); }},
+                {"nactorb", [&active_space](const std::string &v)   { active_space.nactorb  = std::stoi(v); }},
+                {"nroots",  [&active_space](const std::string &v)   { active_space.nroots   = std::stoi(v); }},
+                {"nras1",   [&active_space](const std::string &v)   { active_space.nras1    = std::stoi(v); }},
+                {"nras2",   [&active_space](const std::string &v)   { active_space.nras2    = std::stoi(v); }},
+                {"nras3",   [&active_space](const std::string &v)   { active_space.nras3    = std::stoi(v); }},
+                
+                {"max_holes",   [&active_space](const std::string &v)   { active_space.max_holes = std::stoi(v); }},
+                {"max_elec",    [&active_space](const std::string &v)   { active_space.max_elec = std::stoi(v); }},
+                
+                {"mcscf_max_iter",          [&active_space](const std::string &v)   { active_space.mcscf_max_iter           = static_cast<unsigned int>(std::stoi(v)); }},
+                {"mcscf_micro_per_macro",   [&active_space](const std::string &v)   { active_space.mcscf_micro_per_macro    = static_cast<unsigned int>(std::stoi(v)); }},
+                
+                {"tol_mcscf_energy",        [&active_space](const std::string &v)   { active_space.tol_mcscf_energy = std::stod(v); }},
+                {"tol_mcscf_grad",          [&active_space](const std::string &v)   { active_space.tol_mcscf_grad   = std::stod(v); }},
+                
+                {"ci_max_dim",              [&active_space](const std::string &v)   { active_space.ci_max_dim   = static_cast<unsigned int>(std::stoi(v)); }},
+                {"target_irrep",            [&active_space](const std::string &v)   { active_space.target_irrep = v; }}};
 
         for (const std::string line : lines)
         {
@@ -690,37 +667,34 @@ namespace HartreeFock::IO
         HartreeFock::OptionsDFT &dft)
     {
         const std::unordered_map<std::string, std::function<void(const std::string &)>> _dft_map =
-            {
-                {"grid", [&dft](const std::string &value)
-                 {
-                     dft._grid = map_string_enum<HartreeFock::DFTGridQuality>(value);
-                 }},
-                {"grid_level", [&dft](const std::string &value)
-                 {
-                     dft._grid = map_string_enum<HartreeFock::DFTGridQuality>(value);
-                 }},
-                {"exchange", [&dft](const std::string &value)
-                 {
-                     dft._exchange = map_string_enum<HartreeFock::XCExchangeFunctional>(value);
-                     if (dft._exchange != HartreeFock::XCExchangeFunctional::Custom)
-                         dft._exchange_id = 0;
-                 }},
-                {"correlation", [&dft](const std::string &value)
-                 {
-                     dft._correlation = map_string_enum<HartreeFock::XCCorrelationFunctional>(value);
-                     if (dft._correlation != HartreeFock::XCCorrelationFunctional::Custom)
-                         dft._correlation_id = 0;
-                 }},
-                {"exchange_id", [&dft](const std::string &value)
-                 {
-                     dft._exchange = HartreeFock::XCExchangeFunctional::Custom;
-                     dft._exchange_id = std::stoi(value);
-                 }},
-                {"correlation_id", [&dft](const std::string &value)
-                 {
-                     dft._correlation = HartreeFock::XCCorrelationFunctional::Custom;
-                     dft._correlation_id = std::stoi(value);
-                 }}};
+        {
+            {"grid",        [&dft](const std::string &value)    { dft._grid = map_string_enum<HartreeFock::DFTGridQuality>(value);}},
+            {"grid_level",  [&dft](const std::string &value)    { dft._grid = map_string_enum<HartreeFock::DFTGridQuality>(value);}},
+            
+            {"exchange", [&dft](const std::string &value)
+                {
+                    dft._exchange = map_string_enum<HartreeFock::XCExchangeFunctional>(value);
+                    if (dft._exchange != HartreeFock::XCExchangeFunctional::Custom)
+                        dft._exchange_id = 0;
+                }},
+            {"correlation", [&dft](const std::string &value)
+                {
+                    dft._correlation = map_string_enum<HartreeFock::XCCorrelationFunctional>(value);
+                    if (dft._correlation != HartreeFock::XCCorrelationFunctional::Custom)
+                        dft._correlation_id = 0;
+                }},
+            {"exchange_id", [&dft](const std::string &value)
+                {
+                    dft._exchange = HartreeFock::XCExchangeFunctional::Custom;
+                    dft._exchange_id = std::stoi(value);
+                }},
+            {"correlation_id", [&dft](const std::string &value)
+                {
+                    dft._correlation = HartreeFock::XCCorrelationFunctional::Custom;
+                    dft._correlation_id = std::stoi(value);
+                }
+            }
+        };
 
         for (const std::string &line : lines)
         {
@@ -806,15 +780,12 @@ namespace HartreeFock::IO
     {
         // (key, value) pairs
         const std::unordered_map<std::string, std::function<void(const std::string &)>> _geom_map =
-            {
-                {"coord_type", [&geom](const std::string &value)
-                 { geom._type = map_string_enum<HartreeFock::CoordType>(value); }},
-                {"coord_units", [&geom](const std::string &value)
-                 { geom._units = map_string_enum<HartreeFock::Units>(value); }},
-                {"opt_coords", [&opt_coords](const std::string &value)
-                 { opt_coords = map_string_enum<HartreeFock::OptCoords>(value); }},
-                {"imag_follow_step", [&imag_follow_step](const std::string &value)
-                 { imag_follow_step = std::stod(value); }}};
+        {
+            {"coord_type",  [&geom](const std::string &value){ geom._type   = map_string_enum<HartreeFock::CoordType>(value); }},
+            {"coord_units", [&geom](const std::string &value){ geom._units  = map_string_enum<HartreeFock::Units>(value); }},
+            {"opt_coords",  [&opt_coords](const std::string &value){ opt_coords = map_string_enum<HartreeFock::OptCoords>(value); }},
+            {"imag_follow_step", [&imag_follow_step](const std::string &value){ imag_follow_step = std::stod(value); }}
+        };
 
         for (const std::string line : lines)
         {
