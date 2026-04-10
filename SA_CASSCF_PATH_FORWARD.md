@@ -205,7 +205,7 @@ E_core` through the `SolverState` and accumulate it there.
 ```bash
 cmake --build build --target hartree-fock planck-casscf-internal -j4
 ./build/planck-casscf-internal
-for input in tests/inputs/casscf_tests/*.hfinp; do
+for input in tests/benchmarks/casscf/pyscf_reference/*.hfinp; do
     ./build/hartree-fock "$input" | tee "${input%.hfinp}.rerun.log"
 done
 ```

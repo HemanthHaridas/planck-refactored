@@ -1,0 +1,242 @@
+[INF] Input Parsing :               Successful
+[INF] Calculation Type :            Single Point Calculation
+[INF] Theory :                      RHF
+[INF] Basis :                       cc-pvdz
+[INF] Charge :                      0
+[INF] Multiplicity :                1
+
+[INF] Symmetry Detection :          We use libmsym library to detect point groups
+[INF] Symmetry Detection :          Successful
+[INF] Point Group :                 C2v
+
+[INF] Input Coordinates :           
+[INF]                                   8     0.000     0.000     0.117
+[INF]                                   1     0.000     0.757    -0.469
+[INF]                                   1     0.000    -0.757    -0.469
+[INF] Standard Coordinates :        
+[INF]                                   8     0.000     0.000     0.066
+[INF]                                   1     0.000     0.757    -0.520
+[INF]                                   1    -0.000    -0.757    -0.520
+
+[INF] Reading Basis Set :           /Users/hemanthharidas/Desktop/codes/planck-refactored/install/share/basis-sets/cc-pvdz
+[INF] Basis Construction :          Generated 12 Shells and 25 contracted functions
+[INF] Number of Shell pairs :       325
+
+[INF] SCF Mode :                    Conventional
+[INF] Nuclear Repulsion :           9.1945536272 Eh
+
+[INF] Integral Symmetry :           4 signed AO symmetry operations enabled
+[INF] 1e Integrals :                Computing overlap and kinetic energy matrices
+[INF] 1e Integrals :                Overlap and kinetic done
+[INF] 1e Integrals :                Computing nuclear attraction matrix
+[INF] 1e Integrals :                Nuclear attraction done
+
+[INF] SAO Basis :                   A1(12)  A2(2)  B2(7)  B1(4)
+
+[INF] Begin SCF Cycles :            
+[INF] 2e Integrals :                Building ERI tensor (3.1 MB)
+[INF] 2e Integrals :                ERI tensor ready
+
+--------------------------------------------------------------------------------------------------------------
+Iter  Energy              DeltaE         RMS(D)         Max(D)         DIIS Err       Damp        Time(s)     
+--------------------------------------------------------------------------------------------------------------
+1     -67.78637442        67.78637442    1.151e+00      1.412e+01      3.390e-01      0.000       0.007       
+2     -69.5653436280      1.7789692098   7.990e-01      9.198e+00      2.112e-01      0.000       0.007       
+3     -75.3218004828      5.7564568547   8.298e-02      9.687e-01      1.099e-01      0.000       0.007       
+4     -75.9569645811      0.6351640984   3.033e-02      2.976e-01      3.249e-02      0.000       0.007       
+5     -76.0262104544      0.0692458733   4.174e-03      5.288e-02      3.975e-03      0.000       0.007       
+6     -76.0270604032      0.0008499488   1.487e-03      1.686e-02      9.590e-04      0.000       0.007       
+7     -76.0271331760      0.0000727728   2.581e-04      2.198e-03      1.601e-04      0.000       0.007       
+8     -76.0271369220      0.0000037460   5.042e-05      6.795e-04      3.289e-05      0.000       0.008       
+9     -76.0271370533      0.0000001313   8.792e-06      1.108e-04      4.664e-06      0.000       0.007       
+10    -76.0271370567      0.0000000034   1.510e-06      2.245e-05      1.210e-06      0.000       0.007       
+11    -76.0271370568      0.0000000002   1.850e-07      1.649e-06      9.650e-08      0.000       0.007       
+12    -76.0271370568      0.0000000000   2.828e-08      1.787e-07      1.282e-08      0.000       0.007       
+13    -76.0271370568      0.0000000000   4.358e-09      2.668e-08      1.848e-09      0.000       0.007       
+14    -76.0271370568      0.0000000000   5.504e-10      6.228e-09      2.843e-10      0.000       0.007       
+15    -76.0271370568      0.0000000000   5.581e-11      5.874e-10      3.297e-11      0.000       0.007       
+16    -76.0271370568      0.0000000000   6.830e-12      6.415e-11      4.932e-12      0.000       0.007       
+--------------------------------------------------------------------------------------------------------------
+
+[INF] SCF Converged after 16 iterations
+
+-------------------------------------------
+    MO    Symmetry              Energy (Eh)
+-------------------------------------------
+     1          A1               -20.551809
+     2          A1                -1.336952
+     3          B2                -0.699623
+     4          A1                -0.566858
+     5          B1                -0.493510  <-- HOMO
+     6          A1                 0.183376  <-- LUMO
+     7          B2                 0.256115
+     8          B2                 0.789181
+     9          A1                 0.854214
+    10          A1                 1.158993
+    11          B1                 1.200046
+    12          B2                 1.253024
+    13          A1                 1.423611
+    14          A2                 1.476083
+    15          B1                 1.674561
+    16          A1                 1.745948
+    17          B2                 1.934680
+    18          B2                 2.452763
+    19          A1                 2.467183
+    20          B1                 3.285317
+    21          A2                 3.338679
+    22          A1                 3.509966
+    23          A1                 3.861482
+    24          B2                 4.147227
+    25          A1                 5.965428
+
+[INF] Checkpoint :                  Saved to water_cas44_ccpvdz.hfchk
+--------------------------------------------------------------------------------------------
+  Quantity                                   Hartree                  eV            kcal/mol
+--------------------------------------------------------------------------------------------
+  Electronic Energy                   -85.2216906840    -2319.0003417387   -53477.4182998907
+  Nuclear Repulsion                     9.1945536272      250.1965501091     5769.6695108475
+--------------------------------------------------------------------------------------------
+  Total Energy                        -76.0271370568    -2068.8037916296   -47707.7487890432
+--------------------------------------------------------------------------------------------
+Dipole Moment (origin at 0.000000, 0.000000, 0.000000 bohr)
+------------------------------------------------------------------------------
+Component        Electronic (au)      Nuclear (au)        Total (au)     Debye
+------------------------------------------------------------------------------
+X                      -0.000000          0.000000         -0.000000 -0.000000
+Y                      -0.000000          0.000000         -0.000000 -0.000000
+Z                       0.166237         -0.975327         -0.809090 -2.056502
+------------------------------------------------------------------------------
+|mu|                    0.166237          0.975327          0.809090  2.056502
+------------------------------------------------------------------------------
+Quadrupole Moment (traceless Cartesian tensor, au)
+------------------------------------------------------------------------------
+Component             Electronic           Nuclear             Total
+------------------------------------------------------------------------------
+XX                      2.986689         -6.149229         -3.162540
+XY                     -0.000000          0.000000          0.000000
+XZ                     -0.000000          0.000000         -0.000000
+YY                     -2.817840          6.129302          3.311462
+YZ                     -0.000000          0.000000         -0.000000
+ZZ                     -0.168849          0.019927         -0.148922
+------------------------------------------------------------------------------
+
+[INF] CASSCF :                      Active space: (4e, 4o)  n_core=3  n_virt=18  CI dim ≤ 36
+[INF] CASSCF :                      Algorithm: root-resolved matrix-free coupled orbital/CI solve with fallback candidate screening  nmicro=4
+[INF] CASSCF :                      CI response RHS: exact active-space orbital derivative RHS
+[INF] CASSCF :                      Target irrep: A1
+
+--------------------------------------------------------------------------------------------------------------
+Iter  Energy              DeltaE         SA Grad        MaxRootG       Step Err       Damp        Time(s)     
+--------------------------------------------------------------------------------------------------------------
+1     -76.0277385636      -76.0277385636 2.082e-03      2.082e-03      2.308e-02      0.140       14.625      
+[INF] CASSCF :                      Macro   1  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=2.31e-02
+             sa_g=2.08e-03  root_screen_g=2.08e-03  max_root_g=2.08e-03
+             predicted_dE=2.91e-04  root_model_spread=0.00e+00  actual_dE=-5.63e-05  response_resid=5.86e-09
+             response_iter=  5  level_shift=1.40e-01
+2     -76.0278501291      -0.0001115656  2.445e-03      2.445e-03      4.117e-02      0.098       15.163      
+[INF] CASSCF :                      Macro   2  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=4.12e-02
+             sa_g=2.44e-03  root_screen_g=2.44e-03  max_root_g=2.44e-03
+             predicted_dE=9.77e-04  root_model_spread=0.00e+00  actual_dE=-1.12e-04  response_resid=2.64e-04
+             response_iter=  5  level_shift=9.80e-02
+3     -76.0280582761      -0.0002081470  3.074e-03      3.074e-03      6.469e-02      0.069       15.011      
+[INF] CASSCF :                      Macro   3  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=6.47e-02
+             sa_g=3.07e-03  root_screen_g=3.07e-03  max_root_g=3.07e-03
+             predicted_dE=2.47e-03  root_model_spread=0.00e+00  actual_dE=-2.08e-04  response_resid=7.63e-04
+             response_iter=  5  level_shift=6.86e-02
+4     -76.0285510401      -0.0004927640  4.466e-03      4.466e-03      1.085e-01      0.048       14.541      
+[INF] CASSCF :                      Macro   4  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=1.09e-01
+             sa_g=4.47e-03  root_screen_g=4.47e-03  max_root_g=4.47e-03
+             predicted_dE=6.11e-03  root_model_spread=0.00e+00  actual_dE=-4.93e-04  response_resid=1.90e-03
+             response_iter=  5  level_shift=4.80e-02
+5     -76.0302792131      -0.0017281731  7.808e-03      7.808e-03      2.315e-01      0.034       14.996      
+[INF] CASSCF :                      Macro   5  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=2.31e-01
+             sa_g=7.81e-03  root_screen_g=7.81e-03  max_root_g=7.81e-03
+             predicted_dE=2.69e-02  root_model_spread=0.00e+00  actual_dE=-1.73e-03  response_resid=6.89e-03
+             response_iter=  5  level_shift=3.36e-02
+6     -76.0366584946      -0.0063792815  1.067e-02      1.067e-02      5.007e-01      0.024       15.176      
+[INF] CASSCF :                      Macro   6  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=5.01e-01
+             sa_g=1.07e-02  root_screen_g=1.07e-02  max_root_g=1.07e-02
+             predicted_dE=1.08e-01  root_model_spread=0.00e+00  actual_dE=-6.38e-03  response_resid=3.37e-02
+             response_iter=  6  level_shift=2.35e-02
+7     -76.0411269873      -0.0044684926  5.922e-03      5.922e-03      4.874e-01      0.016       15.290      
+[INF] CASSCF :                      Macro   7  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=4.87e-01
+             sa_g=5.92e-03  root_screen_g=5.92e-03  max_root_g=5.92e-03
+             predicted_dE=8.62e-02  root_model_spread=0.00e+00  actual_dE=-4.47e-03  response_resid=1.55e-02
+             response_iter=  6  level_shift=1.65e-02
+8     -76.0419295263      -0.0008025391  3.805e-03      3.805e-03      2.974e-01      0.012       15.696      
+[INF] CASSCF :                      Macro   8  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=2.97e-01
+             sa_g=3.80e-03  root_screen_g=3.80e-03  max_root_g=3.80e-03
+             predicted_dE=2.43e-02  root_model_spread=0.00e+00  actual_dE=-8.03e-04  response_resid=2.65e-03
+             response_iter=  6  level_shift=1.15e-02
+9     -76.0420552891      -0.0001257628  1.445e-03      1.445e-03      1.269e-01      0.008       15.148      
+[INF] CASSCF :                      Macro   9  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=1.27e-01
+             sa_g=1.45e-03  root_screen_g=1.45e-03  max_root_g=1.45e-03
+             predicted_dE=5.23e-03  root_model_spread=0.00e+00  actual_dE=-1.26e-04  response_resid=4.99e-04
+             response_iter=  6  level_shift=8.07e-03
+10    -76.0422341954      -0.0001789063  1.240e-03      1.240e-03      1.963e-01      0.006       14.727      
+[INF] CASSCF :                      Macro  10  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=1.96e-01
+             sa_g=1.24e-03  root_screen_g=1.24e-03  max_root_g=1.24e-03
+             predicted_dE=1.69e-02  root_model_spread=0.00e+00  actual_dE=-1.79e-04  response_resid=4.97e-09
+             response_iter=  6  level_shift=5.65e-03
+11    -76.0426085797      -0.0003743843  1.583e-03      1.583e-03      3.313e-01      0.004       14.678      
+[INF] CASSCF :                      Macro  11  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=3.31e-01
+             sa_g=1.58e-03  root_screen_g=1.58e-03  max_root_g=1.58e-03
+             predicted_dE=4.32e-02  root_model_spread=0.00e+00  actual_dE=-3.74e-04  response_resid=2.39e-09
+             response_iter=  6  level_shift=3.95e-03
+12    -76.0430077875      -0.0003992078  1.800e-03      1.800e-03      3.290e-01      0.003       14.833      
+[INF] CASSCF :                      Macro  12  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=3.29e-01
+             sa_g=1.80e-03  root_screen_g=1.80e-03  max_root_g=1.80e-03
+             predicted_dE=2.98e-02  root_model_spread=0.00e+00  actual_dE=-3.99e-04  response_resid=9.53e-10
+             response_iter=  6  level_shift=2.77e-03
+13    -76.0434752396      -0.0004674521  1.691e-03      1.691e-03      3.616e-01      0.002       15.003      
+[INF] CASSCF :                      Macro  13  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=3.62e-01
+             sa_g=1.69e-03  root_screen_g=1.69e-03  max_root_g=1.69e-03
+             predicted_dE=3.52e-02  root_model_spread=0.00e+00  actual_dE=-4.67e-04  response_resid=6.79e-09
+             response_iter=  5  level_shift=1.94e-03
+14    -76.0438697209      -0.0003944813  1.028e-03      1.028e-03      3.730e-01      0.001       15.767      
+[INF] CASSCF :                      Macro  14  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=3.73e-01
+             sa_g=1.03e-03  root_screen_g=1.03e-03  max_root_g=1.03e-03
+             predicted_dE=-7.86e-02  root_model_spread=0.00e+00  actual_dE=-3.94e-04  response_resid=1.23e-03
+             response_iter=  6  level_shift=1.36e-03
+15    -76.0440087688      -0.0001390479  5.157e-04      5.157e-04      3.636e-01      0.001       15.010      
+[INF] CASSCF :                      Macro  15  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=3.64e-01
+             sa_g=5.16e-04  root_screen_g=5.16e-04  max_root_g=5.16e-04
+             predicted_dE=-1.64e-01  root_model_spread=0.00e+00  actual_dE=-1.39e-04  response_resid=1.28e-04
+             response_iter=  6  level_shift=1.00e-03
+16    -76.0440109050      -0.0000021362  5.992e-06      5.992e-06      1.995e-02      0.001       14.894      
+[INF] CASSCF :                      Macro  16  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=2.00e-02
+             sa_g=5.99e-06  root_screen_g=5.99e-06  max_root_g=5.99e-06
+             predicted_dE=1.10e-03  root_model_spread=0.00e+00  actual_dE=-2.14e-06  response_resid=4.19e-05
+             response_iter=  6  level_shift=1.00e-03
+
+[INF] CASSCF :                      Converged.
+
+--------------------------------------------------------------------------------------------
+  CASSCF Natural Occupations :
+    MO   1     1.999556
+    MO   2     1.986127
+    MO   3     0.012835
+    MO   4     0.001482
+--------------------------------------------------------------------------------------------
+  CASSCF Correlation Energy            -0.0168738482       -0.4591608006      -10.5884996035
+--------------------------------------------------------------------------------------------
+  CASSCF Total Energy                 -76.0440109050    -2069.2629524301   -47718.3372886467
+--------------------------------------------------------------------------------------------
+[INF] Checkpoint :                  Updated water_cas44_ccpvdz.hfchk
+[INF] Wall Time :                   241.115 s

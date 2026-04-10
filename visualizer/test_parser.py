@@ -21,13 +21,13 @@ LOG = Path(__file__).parent.parent / "visualizer_test.log"
 # Single-root CASSCF (H2, CAS(2,2)/STO-3G, immediate convergence)
 LOG_H2_CAS = (
     Path(__file__).parent.parent
-    / "tests/inputs/casscf_tests/h2_cas22_sto3g.log"
+    / "tests/benchmarks/casscf/pyscf_reference/h2_cas22_sto3g.log"
 )
 
 # SA-CASSCF over 2 roots (water, CAS(4,4)/STO-3G)
 LOG_WATER_SA = (
     Path(__file__).parent.parent
-    / "tests/inputs/casscf_tests/water_cas44_sto3g_sa2.log"
+    / "tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2.log"
 )
 
 

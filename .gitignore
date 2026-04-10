@@ -3,6 +3,10 @@ build
 src/external
 src/base/basis.h
 inputs
+!tests/inputs/
+!tests/inputs/**
+!tests/benchmarks/
+!tests/benchmarks/**
 install
 .DS*
 bin

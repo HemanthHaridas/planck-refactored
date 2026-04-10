@@ -258,7 +258,7 @@ Still missing from the unit harness:
 | `tests/pyscf/run_all.py` | PySCF-backed energy validation suite |
 | `tests/run_regressions.py` | Binary output regression runner (parses SA metrics) |
 | `tests/regression_cases.json` | Regression case specs (needs SA gnorm assertions — see P0) |
-| `tests/inputs/casscf_tests/pyscf_reference_energies.md` | Reference energy table with diagnostic notes |
+| `tests/benchmarks/casscf/pyscf_reference/pyscf_reference_energies.md` | Reference energy table with diagnostic notes |
 
 ---
 

@@ -1,7 +1,7 @@
 """
 PySCF reference: twisted ethylene SA-CASSCF(4,4)/STO-3G, 2 roots equal weights
 Matches Planck input:
-tests/inputs/casscf_tests/ethylene_cas44_sto3g_sa2.hfinp
+tests/benchmarks/casscf/pyscf_reference/ethylene_cas44_sto3g_sa2.hfinp
 
 Geometry: 90-degree twisted ethylene (Planck input geometry, Angstrom).
 One CH2 group lies in the XZ plane; the other lies in the YZ plane.

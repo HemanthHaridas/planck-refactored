@@ -50,7 +50,7 @@ python3 tests/pyscf/run_all.py --tolerance 1e-4
 | `water_cas44_sto3g_sa2.py` | H₂O | STO-3G | CAS(4e,4o) | SA-CASSCF (2 roots) |
 | `ethylene_cas44_sto3g_sa2.py` | C₂H₄ (90° twisted) | STO-3G | CAS(4e,4o) | SA-CASSCF (2 roots) |
 
-All geometries match the Planck `.hfinp` inputs in `tests/inputs/casscf_tests/`.
+All geometries match the Planck `.hfinp` inputs in `tests/benchmarks/casscf/pyscf_reference/`.
 
 ## Planck reference energies
 

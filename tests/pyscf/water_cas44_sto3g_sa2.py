@@ -1,6 +1,6 @@
 """
 PySCF reference: H2O SA-CASSCF(4,4)/STO-3G, 2 roots equal weights
-Matches Planck input: tests/inputs/casscf_tests/water_cas44_sto3g_sa2.hfinp
+Matches Planck input: tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2.hfinp
 
 Geometry: C2v water (Planck input geometry, Angstrom)
 Active space: CAS(4e, 4o)

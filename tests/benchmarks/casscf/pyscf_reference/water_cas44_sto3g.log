@@ -1,0 +1,162 @@
+[INF] Input Parsing :               Successful
+[INF] Calculation Type :            Single Point Calculation
+[INF] Theory :                      RHF
+[INF] Basis :                       sto-3g
+[INF] Charge :                      0
+[INF] Multiplicity :                1
+
+[INF] Symmetry Detection :          We use libmsym library to detect point groups
+[INF] Symmetry Detection :          Successful
+[INF] Point Group :                 C2v
+
+[INF] Input Coordinates :           
+[INF]                                   8     0.000     0.000     0.117
+[INF]                                   1     0.000     0.757    -0.469
+[INF]                                   1     0.000    -0.757    -0.469
+[INF] Standard Coordinates :        
+[INF]                                   8     0.000     0.000     0.066
+[INF]                                   1     0.000     0.757    -0.520
+[INF]                                   1    -0.000    -0.757    -0.520
+
+[INF] Reading Basis Set :           /Users/hemanthharidas/Desktop/codes/planck-refactored/install/share/basis-sets/sto-3g
+[INF] Basis Construction :          Generated 5 Shells and 7 contracted functions
+[INF] Number of Shell pairs :       28
+
+[INF] SCF Mode :                    Conventional
+[INF] Nuclear Repulsion :           9.1945536272 Eh
+
+[INF] Integral Symmetry :           4 signed AO symmetry operations enabled
+[INF] 1e Integrals :                Computing overlap and kinetic energy matrices
+[INF] 1e Integrals :                Overlap and kinetic done
+[INF] 1e Integrals :                Computing nuclear attraction matrix
+[INF] 1e Integrals :                Nuclear attraction done
+
+[INF] SAO Basis :                   A1(4)  A2(0)  B2(2)  B1(1)
+
+[INF] Begin SCF Cycles :            
+[INF] 2e Integrals :                Building ERI tensor (0.0 MB)
+[INF] 2e Integrals :                ERI tensor ready
+
+--------------------------------------------------------------------------------------------------------------
+Iter  Energy              DeltaE         RMS(D)         Max(D)         DIIS Err       Damp        Time(s)     
+--------------------------------------------------------------------------------------------------------------
+1     -73.23250765        73.23250765    5.275e-01      1.752e+00      2.980e-01      0.000       0.000       
+2     -74.9458946777      1.7133870290   5.004e-02      1.398e-01      4.069e-02      0.000       0.000       
+3     -74.9620327826      0.0161381049   1.515e-02      6.259e-02      8.189e-03      0.000       0.000       
+4     -74.9628950784      0.0008622958   2.902e-03      8.896e-03      1.448e-03      0.000       0.000       
+5     -74.9629310873      0.0000360090   7.072e-04      2.142e-03      3.326e-04      0.000       0.000       
+6     -74.9629329730      0.0000018857   6.979e-05      2.285e-04      3.464e-05      0.000       0.000       
+7     -74.9629329919      0.0000000189   8.944e-08      2.641e-07      8.297e-08      0.000       0.000       
+8     -74.9629329919      0.0000000000   1.204e-11      3.554e-11      1.400e-09      0.000       0.000       
+--------------------------------------------------------------------------------------------------------------
+
+[INF] SCF Converged after 8 iterations
+
+-------------------------------------------
+    MO    Symmetry              Energy (Eh)
+-------------------------------------------
+     1          A1               -20.241738
+     2          A1                -1.268382
+     3          B2                -0.617919
+     4          A1                -0.452979
+     5          B1                -0.391239  <-- HOMO
+     6          A1                 0.605624  <-- LUMO
+     7          B2                 0.742362
+
+[INF] Checkpoint :                  Saved to water_cas44_sto3g.hfchk
+--------------------------------------------------------------------------------------------
+  Quantity                                   Hartree                  eV            kcal/mol
+--------------------------------------------------------------------------------------------
+  Electronic Energy                   -84.1574866191    -2290.0418738844   -52809.6201668344
+  Nuclear Repulsion                     9.1945536272      250.1965501091     5769.6695108475
+--------------------------------------------------------------------------------------------
+  Total Energy                        -74.9629329919    -2039.8453237752   -47039.9506559869
+--------------------------------------------------------------------------------------------
+Dipole Moment (origin at 0.000000, 0.000000, 0.000000 bohr)
+------------------------------------------------------------------------------
+Component        Electronic (au)      Nuclear (au)        Total (au)     Debye
+------------------------------------------------------------------------------
+X                      -0.000000          0.000000          0.000000  0.000000
+Y                      -0.000000          0.000000          0.000000  0.000000
+Z                       0.296378         -0.975327         -0.678948 -1.725715
+------------------------------------------------------------------------------
+|mu|                    0.296378          0.975327          0.678948  1.725715
+------------------------------------------------------------------------------
+Quadrupole Moment (traceless Cartesian tensor, au)
+------------------------------------------------------------------------------
+Component             Electronic           Nuclear             Total
+------------------------------------------------------------------------------
+XX                      4.204532         -6.149229         -1.944697
+XY                     -0.000000          0.000000          0.000000
+XZ                     -0.000000          0.000000         -0.000000
+YY                     -4.199811          6.129302          1.929491
+YZ                     -0.000000          0.000000         -0.000000
+ZZ                     -0.004721          0.019927          0.015206
+------------------------------------------------------------------------------
+
+[INF] CASSCF :                      Active space: (4e, 4o)  n_core=3  n_virt=0  CI dim ≤ 36
+[INF] CASSCF :                      Algorithm: root-resolved matrix-free coupled orbital/CI solve with fallback candidate screening  nmicro=4
+[INF] CASSCF :                      CI response RHS: exact active-space orbital derivative RHS
+[INF] CASSCF :                      Target irrep: A1
+
+--------------------------------------------------------------------------------------------------------------
+Iter  Energy              DeltaE         SA Grad        MaxRootG       Step Err       Damp        Time(s)     
+--------------------------------------------------------------------------------------------------------------
+1     -74.9708953099      -74.9708953099 1.118e-02      1.118e-02      7.184e-02      0.140       0.072       
+[INF] CASSCF :                      Macro   1  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=7.18e-02
+             sa_g=1.12e-02  root_screen_g=1.12e-02  max_root_g=1.12e-02
+             predicted_dE=2.56e-03  root_model_spread=0.00e+00  actual_dE=-5.49e-04  response_resid=4.61e-03
+             response_iter=  6  level_shift=1.40e-01
+2     -74.9718442904      -0.0009489805  1.242e-02      1.242e-02      1.131e-01      0.098       0.071       
+[INF] CASSCF :                      Macro   2  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=1.13e-01
+             sa_g=1.24e-02  root_screen_g=1.24e-02  max_root_g=1.24e-02
+             predicted_dE=5.31e-03  root_model_spread=0.00e+00  actual_dE=-9.49e-04  response_resid=6.37e-03
+             response_iter=  6  level_shift=9.80e-02
+3     -74.9734354442      -0.0015911538  1.225e-02      1.225e-02      1.792e-01      0.069       0.070       
+[INF] CASSCF :                      Macro   3  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=1.79e-01
+             sa_g=1.22e-02  root_screen_g=1.22e-02  max_root_g=1.22e-02
+             predicted_dE=1.28e-02  root_model_spread=0.00e+00  actual_dE=-1.59e-03  response_resid=1.10e-02
+             response_iter=  6  level_shift=6.86e-02
+4     -74.9752581788      -0.0018227345  7.548e-03      7.548e-03      2.524e-01      0.048       0.070       
+[INF] CASSCF :                      Macro   4  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=2.52e-01
+             sa_g=7.55e-03  root_screen_g=7.55e-03  max_root_g=7.55e-03
+             predicted_dE=2.29e-02  root_model_spread=0.00e+00  actual_dE=-1.82e-03  response_resid=8.53e-03
+             response_iter=  6  level_shift=4.80e-02
+5     -74.9759809470      -0.0007227683  1.613e-03      1.613e-03      2.225e-01      0.034       0.070       
+[INF] CASSCF :                      Macro   5  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=2.22e-01
+             sa_g=1.61e-03  root_screen_g=1.61e-03  max_root_g=1.61e-03
+             predicted_dE=1.32e-02  root_model_spread=0.00e+00  actual_dE=-7.23e-04  response_resid=1.64e-03
+             response_iter=  6  level_shift=3.36e-02
+6     -74.9760171517      -0.0000362047  5.128e-05      5.128e-05      6.183e-02      0.024       0.071       
+[INF] CASSCF :                      Macro   6  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=6.18e-02
+             sa_g=5.13e-05  root_screen_g=5.13e-05  max_root_g=5.13e-05
+             predicted_dE=5.99e-04  root_model_spread=0.00e+00  actual_dE=-3.62e-05  response_resid=6.19e-05
+             response_iter=  5  level_shift=2.35e-02
+7     -74.9760171760      -0.0000000242  4.595e-08      4.595e-08      1.648e-03      0.016       0.059       
+[INF] CASSCF :                      Macro   7  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=numeric-newton  max_root_dE=0.00e+00  step_norm=1.65e-03
+             sa_g=4.59e-08  root_screen_g=4.59e-08  max_root_g=4.59e-08
+             predicted_dE=3.35e-07  root_model_spread=0.00e+00  actual_dE=-2.42e-08  response_resid=2.71e-06
+             response_iter=  4  level_shift=1.65e-02
+
+[INF] CASSCF :                      Converged.
+
+--------------------------------------------------------------------------------------------
+  CASSCF Natural Occupations :
+    MO   1     1.997937
+    MO   2     1.987596
+    MO   3     0.013130
+    MO   4     0.001338
+--------------------------------------------------------------------------------------------
+  CASSCF Correlation Energy            -0.0130841840       -0.3560387855       -8.2104494427
+--------------------------------------------------------------------------------------------
+  CASSCF Total Energy                 -74.9760171760    -2040.2013625607   -47048.1611054296
+--------------------------------------------------------------------------------------------
+[INF] Checkpoint :                  Updated water_cas44_sto3g.hfchk
+[INF] Wall Time :                   0.560 s
