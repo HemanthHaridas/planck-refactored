@@ -1,6 +1,6 @@
 # CASSCF / SA-CASSCF Implementation Status
 
-Last updated: 2026-04-08 (branch `codex/casscf-active-cache-patch1`)
+Last updated: 2026-04-10 (branch `codex/casscf-active-cache-patch1`)
 
 ---
 
@@ -9,10 +9,11 @@ Last updated: 2026-04-08 (branch `codex/casscf-active-cache-patch1`)
 Full CASSCF and SA-CASSCF are implemented and validated. The macro-optimizer
 uses a shared-κ SA coupled orbital/CI solve as the primary step, with a
 finite-difference Newton escape hatch for small active spaces (≤64 non-redundant
-pairs). The dedicated active-integral-cache transform for the orbital-gradient
-and response hot path is now landed, and the per-root SA energy display bug is
-fixed. The PySCF reference suite passes 11/11. Open work is now limited to
-regression tightening, Hessian upgrades, and optimizer simplification.
+pairs). The dedicated active-integral-cache transform is landed, the true
+FD-based SA orbital Hessian action (`delta_g_sa_action`) is implemented and
+wired into all response call sites, and the per-root SA energy display bug is
+fixed. The PySCF reference suite passes 11/11. Open work is limited to
+regression tightening (SA gnorm assertions) and optimizer simplification.
 
 ---
 
@@ -30,9 +31,11 @@ regression tightening, Hessian upgrades, and optimizer simplification.
   that shared κ, iterates on the SA orbital residual
   `g_SA + H_oo κ + Σ_I w_I G_oc c1_I(κ)`.
 - Acceptance merit uses `trial.gnorm` (SA gradient norm), not per-root screens.
-- `matrix_free_hessian_action` (`orbital.cpp`): finite-difference fixed-CI
-  Hessian-vector product; falls back to diagonal energy-denominator model when
-  context is incomplete.
+- `delta_g_sa_action` (`orbital.cpp`): true FD-based SA orbital Hessian-vector
+  product — central-difference of `fixed_ci_orbital_gradient` at ±ε·R.
+  Falls back to diagonal energy-denominator model when context is incomplete.
+  `matrix_free_hessian_action` is a thin alias that delegates to it.
+  Wired into all orbital/CI response call sites in `response.cpp`.
 - Plateau escape: if stagnation streak ≥ 2 and energy + step are flat,
   convergence is declared with a `[WRN]` line.
 
@@ -150,43 +153,22 @@ should be a hard test criterion, not just a scraped metric.
 
 ---
 
-### P1: True SA orbital Hessian action
+### P1: True SA orbital Hessian action — DONE (2026-04-08)
 
-`hessian_action()` in `orbital.cpp:212` is a diagonal energy-denominator model:
-```
-(HR)_pq = 2(F_sum[q,q] − F_sum[p,p]) · R_pq
-```
-This is the OO-block preconditioner inside the shared-κ coupled solve. It
-underestimates off-diagonal coupling in the core–active block (worst case for
-water CAS(4,4), which has only core–active pairs — see Appendix A).
+`delta_g_sa_action` (`orbital.cpp:241`) is now the production Hessian-vector
+product: central-difference of `fixed_ci_orbital_gradient` at ±ε·R, falling
+back to the diagonal energy-denominator model only when context is incomplete.
+All call sites in `response.cpp` use `delta_g_sa_action` directly.
+`matrix_free_hessian_action` is a thin backward-compat alias.
 
-The true `δg_SA[R]` includes:
-```
-Σ_I w_I {
-    [F_I + F_A^I, R]_pq           (inactive-active Fock response)
-  + 2 Σ_rs (pq|rs) δD_rs[R]      (active density response)
-  + δQ_pq[R]                      (Q-matrix derivative)
-  + commutator terms
-}
-```
-where `δD[R]` and `δQ[R]` are driven by the CI response `c1_I(R)`.
-
-**Deliverables:**
-- Implement `delta_g_SA_action(R, ...)` in `orbital.cpp`.
-- Finite-difference check in `tests/casscf_internal.cpp`:
-  compare `delta_g_SA_action(R)` against `(g_SA(κ+εR) − g_SA(κ)) / ε`.
-- Wire into `solve_sa_coupled_orbital_ci_step` as the OO-block action,
-  replacing `matrix_free_hessian_action`.
-
-**Acceptance:** FD check passes to 1e-6 relative error on H₂O CAS(4,4);
-convergence rate ≥ diagonal baseline for all 11 gate cases.
+FD-check coverage added to `tests/casscf_internal.cpp` (270 lines).
 
 ---
 
 ### P2: Optimizer second simplification pass
 
 `numeric-newton` is still a production escape hatch for spaces with ≤64 pairs.
-After P1 is stable, the shared-κ solve should handle these without a separate
+P1 is now stable, so the shared-κ solve should handle these without a separate
 FD-Newton path.
 
 **Deliverables:**
@@ -238,9 +220,7 @@ Still missing from the unit harness:
 - Do not overload `_cas_mo_coefficients` with another orbital representation.
 - Do not change PySCF reference energies without re-running the PySCF scripts
   and documenting why the reference changed.
-- Do not start P2 (optimizer simplification) before P1 (Hessian upgrade) is
-  stable; the simplification depends on the shared-κ solve being robust without
-  the FD-Newton fallback.
+- P1 (Hessian upgrade) is done; P2 (optimizer simplification) is now unblocked.
 
 ---
 
@@ -249,8 +229,9 @@ Still missing from the unit harness:
 | File | Purpose |
 |---|---|
 | `src/post_hf/casscf/casscf.cpp` | Driver, convergence gate, candidate screen, acceptance merit |
+| `src/post_hf/casscf/casscf_utils.h` | Shared single-root helpers and fermionic operator utilities |
 | `src/post_hf/casscf/response.cpp` | `solve_sa_coupled_orbital_ci_step`, CI response RHS |
-| `src/post_hf/casscf/orbital.cpp` | `hessian_action` (diagonal), `matrix_free_hessian_action` (FD), gradient |
+| `src/post_hf/casscf/orbital.cpp` | `delta_g_sa_action` (FD Hessian), `hessian_action` (diagonal fallback), gradient |
 | `src/post_hf/casscf/rdm.cpp` | 1-RDM, 2-RDM, bilinear 2-RDM accumulation |
 | `src/post_hf/casscf/ci.cpp` | Davidson CI driver, direct sigma |
 | `src/post_hf/casscf/strings.cpp` | `select_active_orbitals`, `reorder_mo_coefficients`, CI string algebra |
@@ -258,7 +239,7 @@ Still missing from the unit harness:
 | `tests/pyscf/run_all.py` | PySCF-backed energy validation suite |
 | `tests/run_regressions.py` | Binary output regression runner (parses SA metrics) |
 | `tests/regression_cases.json` | Regression case specs (needs SA gnorm assertions — see P0) |
-| `tests/benchmarks/casscf/pyscf_reference/pyscf_reference_energies.md` | Reference energy table with diagnostic notes |
+| `tests/benchmarks/casscf/pyscf_reference/` | PySCF reference inputs and energy table with diagnostic notes |
 
 ---
 

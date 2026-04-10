@@ -259,7 +259,8 @@ namespace HartreeFock
                       << std::string(LW + VW * 3, '-') << "\n";
         }
 
-        inline void correlation_energy(const double E_scf, const double E_corr)
+        inline void correlation_energy(const double E_scf, const double E_corr,
+                                       const std::string &method_label = "Correlated")
         {
             if (is_silenced())
                 return;
@@ -275,7 +276,7 @@ namespace HartreeFock
                       << std::setw(VW) << std::right << E_corr * HARTREE_TO_KCALMOL
                       << "\n"
                       << std::string(LW + VW * 3, '-') << "\n"
-                      << std::setw(LW) << std::left << "  Total MP2 Energy"
+                      << std::setw(LW) << std::left << ("  Total " + method_label + " Energy")
                       << std::setw(VW) << std::right << E_total
                       << std::setw(VW) << std::right << E_total * HARTREE_TO_EV
                       << std::setw(VW) << std::right << E_total * HARTREE_TO_KCALMOL
