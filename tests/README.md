@@ -50,6 +50,8 @@ Extracted metrics currently include:
 - `rhf_total_energy`
 - `mp2_corr_energy`
 - `mp2_total_energy`
+- `rccsd_total_energy`
+- `rccsdt_total_energy`
 - `casscf_corr_energy`
 - `casscf_total_energy`
 - `dft_total_energy`

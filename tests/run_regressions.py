@@ -18,6 +18,8 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "rhf_total_energy": re.compile(r"^\s*Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "mp2_corr_energy": re.compile(r"^\s*Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "mp2_total_energy": re.compile(r"^\s*Total MP2 Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "rccsd_total_energy": re.compile(r"^\s*Total RCCSD Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "rccsdt_total_energy": re.compile(r"^\s*Total RCCSDT Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_corr_energy": re.compile(r"^\s*CASSCF Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_total_energy": re.compile(r"^\s*CASSCF Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),

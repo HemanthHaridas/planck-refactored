@@ -169,6 +169,36 @@
       ]
     },
     {
+      "id": "h2_rccsdt_sto3g",
+      "input": "tests/inputs/regression/post_hf/h2_rccsdt_sto3g.hfinp",
+      "tags": ["smoke", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "RCCSDT :                      Determinant-space prototype",
+        "Total RCCSDT Energy"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -1.1167061402, "atol": 1e-9},
+        {"type": "metric_close", "metric": "rccsdt_total_energy", "expected": -1.1372744062, "atol": 1e-9},
+        {"type": "metric_lt_metric", "left": "rccsdt_total_energy", "right": "rhf_total_energy"}
+      ]
+    },
+    {
+      "id": "lih_rccsdt_sto3g",
+      "input": "tests/inputs/regression/post_hf/lih_rccsdt_sto3g.hfinp",
+      "tags": ["smoke", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "RCCSDT :                      Determinant-space prototype",
+        "Total RCCSDT Energy"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -7.8620238776, "atol": 1e-9},
+        {"type": "metric_close", "metric": "rccsdt_total_energy", "expected": -7.8824018134, "atol": 1e-9},
+        {"type": "metric_lt_metric", "left": "rccsdt_total_energy", "right": "rhf_total_energy"}
+      ]
+    },
+    {
       "id": "water_triplet_uhf_sto3g",
       "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfinp",
       "tags": ["extended"],

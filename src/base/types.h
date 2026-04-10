@@ -61,6 +61,8 @@ namespace HartreeFock
         None,   // No Post-HF corrections
         RMP2,   // Restricted MP2
         UMP2,   // Unrestricted MP2
+        RCCSD,  // Restricted CCSD
+        RCCSDT, // Restricted CCSDT
         CASSCF, // Complete active space SCF
         RASSCF  // Restricted active space SCF
     };

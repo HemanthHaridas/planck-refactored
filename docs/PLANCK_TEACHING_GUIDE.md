@@ -15,6 +15,8 @@ self-consistent field theory. It implements:
 - Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF
 - Point-group detection, symmetry-adapted orbitals, and MO irrep labeling
 - RMP2 and UMP2 correlation energies with RMP2 natural orbital analysis
+- RCCSD for canonical closed-shell RHF references
+- A small-system RCCSDT teaching prototype for canonical closed-shell RHF references
 - Analytic RHF and UHF nuclear gradients
 - Analytic RMP2 nuclear gradients (Z-vector / CPHF)
 - Geometry optimization in Cartesian and internal coordinates
@@ -45,7 +47,7 @@ Input file (.hfinp)
   → SCF loop (src/scf/scf.cpp)
        ├── conventional:  build ERI tensor once, reuse
        └── direct:        rebuild G(P) from scratch each iteration
-  → post-HF: MP2 or CASSCF (src/post_hf/)
+  → post-HF: MP2, coupled cluster, or CASSCF (src/post_hf/)
   → gradient (src/gradient/)
   → geometry optimization (src/opt/)
   → frequency analysis (src/freq/)
@@ -62,7 +64,7 @@ Input file (.hfinp)
 | `src/integrals` | shell pairs, Obara-Saika OS engine, Rys quadrature engine |
 | `src/scf` | orthogonalizer, initial guess, RHF/UHF SCF loops |
 | `src/symmetry` | libmsym wrapper, SAO basis, MO labeling, integral sym ops |
-| `src/post_hf` | MP2 energy/gradient, CASSCF/RASSCF, AO→MO transforms, CPHF |
+| `src/post_hf` | MP2 energy/gradient, RCCSD/RCCSDT, CASSCF/RASSCF, AO→MO transforms, CPHF |
 | `src/gradient` | analytic RHF, UHF, RMP2 gradients |
 | `src/opt` | L-BFGS/BFGS optimizer, internal coordinates, constraints |
 | `src/freq` | finite-difference Hessian, vibrational analysis |
@@ -1084,6 +1086,92 @@ assembled from the relaxed density and the appropriate derivative integrals.
 
 ---
 
+## 13A. Coupled Cluster in Planck
+
+Planck currently contains two restricted coupled-cluster paths for canonical
+closed-shell RHF references:
+
+- **RCCSD** — a conventional iterative amplitude solver in the spin-orbital
+  basis
+- **RCCSDT** — a teaching-oriented small-system prototype that evaluates the
+  similarity-transformed Hamiltonian in a determinant basis
+
+Both live under `src/post_hf/cc/`. The shared setup pieces are intentionally
+kept separate from the actual solver loops:
+
+- `common.*` builds a validated canonical RHF occupied/virtual partition
+- `mo_blocks.*` transforms AO ERIs into the MO blocks reused by the CC code
+- `amplitudes.*` owns the explicit tensor containers and orbital-energy
+  denominators
+- `diis.*` mirrors the SCF DIIS helper, but for flattened CC amplitude vectors
+
+### RCCSD
+
+The RCCSD implementation is pedagogical but still fairly conventional. The code
+starts from the RHF reference, expands the spatial-orbital integrals into
+antisymmetrized spin-orbital blocks, forms the standard \(\tau\) and
+\(\tilde\tau\) combinations, then iterates the \(T_1\) and \(T_2\) amplitudes
+through named intermediates:
+
+\[
+F_{ae}, \; F_{mi}, \; F_{me}, \; W_{mnij}, \; W_{abef}, \; W_{mbej}
+\]
+
+The update pattern is:
+
+1. build disconnected \(\tau\)-type tensors
+2. build one- and two-body intermediates
+3. form the singles and doubles residuals
+4. apply diagonal Jacobi updates using canonical orbital denominators
+5. accelerate convergence with amplitude DIIS
+
+This keeps the mapping between textbook equations and source code visible in
+`src/post_hf/cc/ccsd.cpp`.
+
+### RCCSDT Prototype
+
+The present RCCSDT path makes a different tradeoff. A full tensor-contraction
+CCSDT implementation is much harder to explain, test, and maintain in a
+teaching codebase, so Planck currently uses a **determinant-space prototype**
+for small systems:
+
+1. build the spin-orbital one-body Hamiltonian \(h_{pq}\) and antisymmetrized
+   two-body tensor \(\langle pq || rs \rangle\)
+2. enumerate the RHF determinant space with the bitstring/string helpers also
+   used by the CASSCF code
+3. build the dense electronic Hamiltonian matrix in that determinant basis by
+   explicit second-quantized operator application
+4. enumerate all unique single, double, and triple excitations out of the RHF
+   determinant
+5. assemble the cluster operator matrix \(T\), evaluate
+   \(e^{-T} H e^{T} | \Phi_0 \rangle\) by the finite exponential series, and
+   project the result onto the S/D/T manifolds
+6. iterate the amplitudes with diagonal updates and DIIS until the projected
+   residuals vanish
+
+Because the excitation operator is nilpotent on a finite determinant space, the
+matrix exponential terminates after finitely many terms. That makes this route
+surprisingly compact and mathematically transparent for tiny systems.
+
+The drawback is scaling: the current prototype is intentionally capped at small
+teaching cases (`<= 12` spin orbitals and `<= 1200` determinants). It is meant
+for correctness studies and classroom-scale examples such as `H2/STO-3G` and
+`LiH/STO-3G`, not for production coupled-cluster calculations on larger
+molecules.
+
+### A Good Teaching Test: LiH/STO-3G
+
+`LiH/STO-3G` is the smallest practical RCCSDT regression case in the current
+tree with a **measurable** triples contribution. It has 4 electrons and 6
+spatial orbitals, which gives a non-empty triples manifold while still fitting
+the determinant-space prototype limit comfortably.
+
+The accompanying PySCF comparison script
+`tests/pyscf/lih_rccsdt_sto3g.py` prints both the CCSD and CCSDT correlation
+energies so students can see the triples correction directly. In that case the
+PySCF triples contribution is about \(10^{-5}\) Hartree, large enough to verify
+that the calculation is not merely collapsing back to CCSD.
+
 ## 14. CASSCF and RASSCF
 
 ### Motivation
@@ -1635,6 +1723,12 @@ driver.cpp
   if post_hf == RMP2:
       AO→MO transform → (ia|jb) MO integrals
       run_rmp2()               → E_MP2
+  elif post_hf == RCCSD:
+      prepare_rccsd()          → reference, MO blocks, denominators
+      run_rccsd()              → E_RCCSD
+  elif post_hf == RCCSDT:
+      prepare_rccsdt()         → reference, MO blocks
+      run_rccsdt()             → E_RCCSDT (small-system prototype)
   elif post_hf == CASSCF:
       run_casscf()             → E_CASSCF, natural orbitals
 
@@ -1681,6 +1775,9 @@ driver.cpp
 | RMP2 energy | `src/post_hf/mp2.cpp` | `run_rmp2` |
 | UMP2 energy | `src/post_hf/mp2.cpp` | `run_ump2` |
 | MP2 amplitudes | `src/post_hf/mp2.cpp` | `build_rmp2_amplitudes` |
+| RCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_rccsd`, `run_rccsd` |
+| RCCSDT prototype | `src/post_hf/cc/ccsdt.cpp` | `prepare_rccsdt`, `run_rccsdt` |
+| CC denominators/DIIS | `src/post_hf/cc/amplitudes.cpp`, `src/post_hf/cc/diis.cpp` | `build_denominator_cache`, `AmplitudeDIIS` |
 | CPHF Z-vector | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix` |
 | RMP2 gradient | `src/post_hf/mp2_gradient.cpp` | `compute_rmp2_gradient` |
 | CI string generation | `src/post_hf/casscf.cpp` | Gosper enumeration |
@@ -1889,6 +1986,8 @@ The `KSPotentialMatrices` struct holds the Coulomb, XC-alpha, and XC-beta matric
 | Point group detection and SAO blocking | Complete |
 | MO irrep labeling | Complete |
 | RMP2 and UMP2 energy | Complete |
+| RCCSD single-point energy | Complete |
+| RCCSDT single-point energy | Teaching-oriented small-system prototype |
 | Analytic RHF gradient | Complete |
 | Analytic UHF gradient | Complete |
 | Analytic RMP2 gradient (Z-vector) | Complete |
@@ -1922,17 +2021,18 @@ Recommended reading order for the HF/post-HF pipeline:
 5. `src/scf/scf.cpp` — the SCF iteration in detail
 6. `src/gradient/gradient.cpp` — how analytic gradients are assembled
 7. `src/post_hf/mp2.cpp` and `src/post_hf/integrals.cpp` — MP2 energy
-8. `src/post_hf/casscf.cpp` — the most complex module: CI, RDMs, orbital update
-9. `src/opt/geomopt.cpp` — L-BFGS and internal coordinate optimization
-10. `src/freq/hessian.cpp` — finite-difference Hessian and normal modes
+8. `src/post_hf/cc/` — RCCSD and the determinant-space RCCSDT prototype
+9. `src/post_hf/casscf.cpp` — the most complex module: CI, RDMs, orbital update
+10. `src/opt/geomopt.cpp` — L-BFGS and internal coordinate optimization
+11. `src/freq/hessian.cpp` — finite-difference Hessian and normal modes
 
 Recommended reading order for the KS-DFT pipeline (read after items 1–5 above):
 
-11. `src/dft/base/radial.h` — Treutler-Ahlrichs M4 radial grid
-12. `src/dft/base/angular.h` — Lebedev angular quadrature
-13. `src/dft/base/grid.h` — Becke partitioning, pruning, molecular grid assembly
-14. `src/dft/ao_grid.h` — AO and gradient evaluation at grid points
-15. `src/dft/xc_grid.cpp` — density, XC energy and potentials on the grid
+12. `src/dft/base/radial.h` — Treutler-Ahlrichs M4 radial grid
+13. `src/dft/base/angular.h` — Lebedev angular quadrature
+14. `src/dft/base/grid.h` — Becke partitioning, pruning, molecular grid assembly
+15. `src/dft/ao_grid.h` — AO and gradient evaluation at grid points
+16. `src/dft/xc_grid.cpp` — density, XC energy and potentials on the grid
 16. `src/dft/ks_matrix.cpp` — \(V^{xc}_{\mu\nu}\) and full KS potential matrices
 17. `src/dft/driver.cpp` — the KS-DFT SCF loop end to end
 

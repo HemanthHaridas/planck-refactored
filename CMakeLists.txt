@@ -136,6 +136,8 @@ file(GLOB SCF_SRC
 file(GLOB POSTHF_SRC
     ${SRC_DIR}/post_hf/*.h
     ${SRC_DIR}/post_hf/*.cpp
+    ${SRC_DIR}/post_hf/cc/*.h
+    ${SRC_DIR}/post_hf/cc/*.cpp
     ${SRC_DIR}/post_hf/casscf/*.h
     ${SRC_DIR}/post_hf/casscf/*.cpp
 )

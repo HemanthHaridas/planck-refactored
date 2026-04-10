@@ -19,6 +19,7 @@
 #include "lookup/elements.h"
 #include "opt/geomopt.h"
 #include "post_hf/casscf.h"
+#include "post_hf/cc.h"
 #include "post_hf/mp2.h"
 #include "scf/population.h"
 #include "scf/scf.h"
@@ -686,6 +687,18 @@ int main(int argc, const char *argv[])
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Computing MP2 correlation energy");
             corr_res = HartreeFock::Correlation::run_ump2(calculator, shellpairs);
         }
+        else if (calculator._correlation == HartreeFock::PostHF::RCCSD)
+        {
+            corr_tag = "RCCSD :";
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Preparing restricted CCSD infrastructure");
+            corr_res = HartreeFock::Correlation::CC::run_rccsd(calculator, shellpairs);
+        }
+        else if (calculator._correlation == HartreeFock::PostHF::RCCSDT)
+        {
+            corr_tag = "RCCSDT :";
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Preparing restricted CCSDT infrastructure");
+            corr_res = HartreeFock::Correlation::CC::run_rccsdt(calculator, shellpairs);
+        }
         else if (calculator._correlation == HartreeFock::PostHF::CASSCF)
         {
             corr_tag = "CASSCF :";
@@ -734,7 +747,14 @@ int main(int argc, const char *argv[])
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
                                                      "RMP2 :", "Natural orbitals unavailable: " + nat_res.error());
                 }
-                HartreeFock::Logger::correlation_energy(calculator._total_energy, calculator._correlation_energy);
+                const std::string method_label =
+                    (calculator._correlation == HartreeFock::PostHF::RMP2)  ? "MP2"
+                    : (calculator._correlation == HartreeFock::PostHF::UMP2) ? "MP2"
+                    : (calculator._correlation == HartreeFock::PostHF::RCCSD) ? "RCCSD"
+                    : (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "RCCSDT"
+                                                                            : "Correlated";
+                HartreeFock::Logger::correlation_energy(
+                    calculator._total_energy, calculator._correlation_energy, method_label);
             }
 
             // Re-save after converged post-HF runs so restartable correlated
@@ -776,6 +796,13 @@ int main(int argc, const char *argv[])
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
                                          "UMP2 gradient is not implemented");
+            return EXIT_FAILURE;
+        }
+        else if (calculator._correlation == HartreeFock::PostHF::RCCSD ||
+                 calculator._correlation == HartreeFock::PostHF::RCCSDT)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
+                                         "Coupled-cluster gradients are not implemented");
             return EXIT_FAILURE;
         }
         else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
