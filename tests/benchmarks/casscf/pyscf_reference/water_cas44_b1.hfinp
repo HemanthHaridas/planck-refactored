@@ -1,0 +1,35 @@
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation casscf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    nactele     4
+    nactorb     4
+    nroots      1
+    mcscf_max_iter  50
+    tol_mcscf_energy  1e-8
+    tol_mcscf_grad    1e-5
+    target_irrep    B1
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O    0.000000    0.000000    0.117176
+H    0.000000    0.757005   -0.468704
+H    0.000000   -0.757005   -0.468704
+%end_coords

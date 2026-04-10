@@ -18,9 +18,29 @@ from visualizer.parser import parse_log, ParsedRun
 
 LOG = Path(__file__).parent.parent / "visualizer_test.log"
 
+# Single-root CASSCF (H2, CAS(2,2)/STO-3G, immediate convergence)
+LOG_H2_CAS = (
+    Path(__file__).parent.parent
+    / "tests/benchmarks/casscf/pyscf_reference/h2_cas22_sto3g.log"
+)
+
+# SA-CASSCF over 2 roots (water, CAS(4,4)/STO-3G)
+LOG_WATER_SA = (
+    Path(__file__).parent.parent
+    / "tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2.log"
+)
+
 
 def get_run() -> ParsedRun:
     return parse_log(LOG)
+
+
+def get_h2_cas() -> ParsedRun:
+    return parse_log(LOG_H2_CAS)
+
+
+def get_water_sa() -> ParsedRun:
+    return parse_log(LOG_WATER_SA)
 
 
 # ── Metadata ────────────────────────────────────────────────────────────────
@@ -213,6 +233,141 @@ def test_zpe_kcal():
     run = get_run()
     assert run.zpe_kcal is not None
     assert abs(run.zpe_kcal - 13.25) < 0.01
+
+
+# ── CASSCF: single-root H2 CAS(2,2)/STO-3G ──────────────────────────────────
+
+def test_casscf_active_space():
+    run = get_h2_cas()
+    assert run.casscf_active_space == "(2e, 2o)"
+    assert run.casscf_n_active_electrons == 2
+    assert run.casscf_n_active_orbitals == 2
+    assert run.casscf_n_core == 0
+    assert run.casscf_n_virt == 0
+
+
+def test_casscf_single_root_no_sa():
+    run = get_h2_cas()
+    assert run.casscf_n_roots is None
+
+
+def test_casscf_converged_flag():
+    run = get_h2_cas()
+    assert run.casscf_converged
+
+
+def test_casscf_iter_collected():
+    run = get_h2_cas()
+    assert len(run.casscf_iters) == 1
+
+
+def test_casscf_iter_energy():
+    run = get_h2_cas()
+    it = run.casscf_iters[0]
+    assert it.iteration == 0
+    assert abs(it.energy - -1.1372838351) < 1e-7
+
+
+def test_casscf_iter_sa_grad_zero():
+    # Already converged at iter 0, sa_grad should be 0
+    run = get_h2_cas()
+    assert run.casscf_iters[0].sa_grad == 0.0
+
+
+def test_casscf_natural_occs():
+    run = get_h2_cas()
+    assert len(run.casscf_natural_occs) == 2
+    assert abs(run.casscf_natural_occs[0] - 1.974668) < 1e-5
+    assert abs(run.casscf_natural_occs[1] - 0.025332) < 1e-5
+
+
+def test_casscf_corr_energy():
+    run = get_h2_cas()
+    assert run.casscf_corr_energy is not None
+    assert abs(run.casscf_corr_energy - -0.0205245248) < 1e-7
+
+
+def test_casscf_total_energy():
+    run = get_h2_cas()
+    assert run.casscf_total_energy is not None
+    assert abs(run.casscf_total_energy - -1.1372838351) < 1e-7
+
+
+def test_casscf_no_sa_roots():
+    run = get_h2_cas()
+    assert run.casscf_sa_roots == []
+
+
+# ── SA-CASSCF: water CAS(4,4)/STO-3G, 2 roots ───────────────────────────────
+
+def test_sa_casscf_active_space():
+    run = get_water_sa()
+    assert run.casscf_active_space == "(4e, 4o)"
+    assert run.casscf_n_active_electrons == 4
+    assert run.casscf_n_active_orbitals == 4
+    assert run.casscf_n_core == 3
+
+
+def test_sa_casscf_n_roots():
+    run = get_water_sa()
+    assert run.casscf_n_roots == 2
+
+
+def test_sa_casscf_converged():
+    run = get_water_sa()
+    assert run.casscf_converged
+
+
+def test_sa_casscf_iter_count():
+    run = get_water_sa()
+    assert len(run.casscf_iters) == 8
+
+
+def test_sa_casscf_first_iter():
+    run = get_water_sa()
+    it = run.casscf_iters[0]
+    assert it.iteration == 1
+    assert abs(it.energy - -74.7738521125) < 1e-7
+    assert abs(it.sa_grad - 7.262e-3) < 1e-5
+
+
+def test_sa_casscf_last_iter_grad():
+    run = get_water_sa()
+    last = run.casscf_iters[-1]
+    assert last.sa_grad < 1e-6
+
+
+def test_sa_casscf_natural_occs():
+    run = get_water_sa()
+    assert len(run.casscf_natural_occs) == 4
+    assert abs(run.casscf_natural_occs[0] - 1.987846) < 1e-5
+
+
+def test_sa_casscf_total_energy():
+    run = get_water_sa()
+    assert run.casscf_total_energy is not None
+    assert abs(run.casscf_total_energy - -74.7751377977) < 1e-7
+
+
+def test_sa_casscf_corr_energy():
+    run = get_water_sa()
+    assert run.casscf_corr_energy is not None
+    assert abs(run.casscf_corr_energy - 0.1877951942) < 1e-7
+
+
+def test_sa_casscf_root_count():
+    run = get_water_sa()
+    assert len(run.casscf_sa_roots) == 2
+
+
+def test_sa_casscf_root_energies():
+    run = get_water_sa()
+    roots = run.casscf_sa_roots
+    assert roots[0].root == 0
+    assert abs(roots[0].energy - -74.9701867945) < 1e-7
+    assert abs(roots[0].weight - 0.500) < 1e-3
+    assert roots[1].root == 1
+    assert abs(roots[1].energy - -74.5800888009) < 1e-7
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────

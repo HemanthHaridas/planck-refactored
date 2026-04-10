@@ -1,6 +1,6 @@
 """
 PySCF reference: ethylene CAS(2,2)/cc-pVDZ
-Matches Planck input: tests/inputs/casscf_tests/ethylene_casscf_ccpvdz.hfinp
+Matches Planck input: tests/benchmarks/casscf/pyscf_reference/ethylene_casscf_ccpvdz.hfinp
 
 Geometry: planar ethylene (Planck input geometry, Angstrom)
 Active space: CAS(2e, 2o) — pi, pi* (HOMO, LUMO)

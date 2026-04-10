@@ -20,12 +20,13 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "mp2_total_energy": re.compile(r"^\s*Total MP2 Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_corr_energy": re.compile(r"^\s*CASSCF Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_total_energy": re.compile(r"^\s*CASSCF Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),
     "casscf_sa_gnorm": re.compile(r"sa_g=([-+0-9Ee\.]+)"),
     "casscf_root_screen_gnorm": re.compile(r"root_screen_g=([-+0-9Ee\.]+)"),
     "casscf_max_root_gnorm": re.compile(r"max_root_g=([-+0-9Ee\.]+)"),
     "gradient_max": re.compile(r"Gradient max\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
     "gradient_rms": re.compile(r"Gradient rms\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
-    "point_group": re.compile(r"Point Group\s*:\s*([A-Za-z0-9_+\-]+)"),
+    "point_group": re.compile(r"(?:Point Group\s*:\s*|Detected point group\s+)([A-Za-z0-9_+\-]+)"),
 }
 
 COUNT_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -96,10 +97,26 @@ def approx_equal(a: float, b: float, atol: float) -> bool:
     return math.isfinite(a) and math.isfinite(b) and abs(a - b) <= atol
 
 
-def run_case(case: dict[str, Any], repo_root: Path, executable: Path) -> CaseResult:
+def resolve_executable(case: dict[str, Any], repo_root: Path, build_dir: str, default_executable: Path) -> Path:
+    executable_value = case.get("executable")
+    if executable_value is None:
+        return default_executable
+
+    executable_path = Path(str(executable_value))
+    if executable_path.is_absolute():
+        return executable_path
+
+    if executable_path.parent == Path("."):
+        return repo_root / build_dir / executable_path.name
+
+    return repo_root / executable_path
+
+
+def run_case(case: dict[str, Any], repo_root: Path, build_dir: str, default_executable: Path) -> CaseResult:
     case_id = case["id"]
     input_path = repo_root / case["input"]
     timeout_s = int(case.get("timeout_s", 120))
+    executable = resolve_executable(case, repo_root, build_dir, default_executable)
 
     start = time.perf_counter()
     proc = subprocess.run(
@@ -251,7 +268,7 @@ def main() -> int:
     total_start = time.perf_counter()
 
     for case in chosen:
-        result = run_case(case, repo_root, executable)
+        result = run_case(case, repo_root, args.build_dir, executable)
         status = "PASS" if result.passed else "FAIL"
         print(f"[{status}] {result.case_id} ({result.duration_s:.2f}s)")
         for line in result.details:

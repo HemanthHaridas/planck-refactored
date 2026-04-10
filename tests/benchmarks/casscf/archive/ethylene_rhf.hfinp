@@ -1,0 +1,38 @@
+%begin_control
+    basis       cc-pvdz
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type            rhf
+    use_diis            .true.
+    diis_dim            8
+    engine              os
+    guess	        density
+    nactele             4
+    nactorb             4
+    max_cycles		100
+    mcscf_max_iter      200
+    mcscf_micro_per_macro  4
+    tol_mcscf_energy    1e-8
+    tol_mcscf_grad      1e-5
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+6
+0   1
+C     -3.438338    0.906062   -0.000000
+C     -3.438338    2.230667   -0.000001
+H     -2.836048    0.343683   -0.709301
+H     -4.040627    0.343684    0.709301
+H     -2.836049    2.793045   -0.709302
+H     -4.040627    2.793046    0.709300
+%end_coords

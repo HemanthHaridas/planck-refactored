@@ -3,17 +3,18 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19478938.svg)](https://doi.org/10.5281/zenodo.19478938)
 
 <p align="justify">
-A quantum chemistry program implementing restricted and unrestricted Hartree-Fock SCF and Kohn-Sham DFT with dipole and quadrupole moment analysis, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
+A quantum chemistry program implementing restricted, unrestricted, and restricted open-shell Hartree-Fock SCF and Kohn-Sham DFT with dipole and quadrupole moment analysis, Mulliken population analysis, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
 </p>
 
 ### Features
 
 <div align="justify">
 
-- **RHF / UHF** — closed-shell and open-shell Hartree-Fock
+- **RHF / ROHF / UHF** — closed-shell, restricted open-shell, and unrestricted Hartree-Fock; ROHF uses a Roothaan-type effective Fock construction with aufbau orbital reordering and DIIS convergence
 - **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA and GGA exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals via integer ID
 - **Two integral engines** — Obara-Saika for low angular momentum; Rys quadrature for high angular momentum; automatic engine selection per shell quartet (`engine auto`)
 - **Electric multipole moments** — dipole and quadrupole moment analysis after SCF convergence for both `hartree-fock` and `planck-dft`
+- **Mulliken population analysis** — atomic gross populations, net charges, and (for UHF/ROHF) spin populations; printed when `print_populations true` or verbosity is `verbose`/`debug`
 - **Conventional and Direct SCF** — ERI tensor stored once (conventional) or recomputed per iteration (direct); auto-selection based on system size
 - **DIIS** — convergence acceleration with optional automatic subspace restart
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
@@ -34,7 +35,6 @@ A quantum chemistry program implementing restricted and unrestricted Hartree-Foc
 ### Documentation
 
 - `docs/PLANCK_TEACHING_GUIDE.md` — high-level implementation and usage guide
-- `docs/CASSCF_ACTIVE_CACHE_PATCH_SERIES.md` — reviewable patch plan for the CASSCF active-integral-cache optimization work
 - `docs/README.md` — lightweight static-site export instructions for the documentation set
 
 ### Requirements
@@ -164,7 +164,7 @@ SCF procedure and convergence settings.
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
-| `scf_type` | enum | `rhf`, `uhf` | `rhf` | Wavefunction type |
+| `scf_type` | enum | `rhf`, `rohf`, `uhf` | `rhf` | Wavefunction type. `rohf`: restricted open-shell HF; post-HF and analytic gradients are not yet supported for ROHF. |
 | `engine` | enum | `os` / `obara-saika`, `rys`, `auto` | `os` | Two-electron integral engine. `os`: Obara-Saika algorithm. `rys`: Rys quadrature. `auto`: selects the engine per shell quartet based on angular momentum. |
 | `correlation` | enum | `rmp2`, `ump2`, `casscf`, `rasscf` | none | Post-HF method. `rmp2`/`ump2`: Møller-Plesset second-order correction. `casscf`: Complete Active Space SCF (requires `nactele`, `nactorb`). `rasscf`: Restricted Active Space SCF (requires `nactele`, `nactorb`, `nras1`, `nras2`, `nras3`). |
 | `nactele` | int | ≥ 1 | — | Number of active electrons for CASSCF/RASSCF |
@@ -186,6 +186,7 @@ SCF procedure and convergence settings.
 | `threshold` | int | ≥ 1 | `100` | Basis function count cutoff used by `scf_mode auto` to decide between conventional and direct. |
 | `guess` | enum | `hcore`, `sad`, `density`, `full` | `hcore` | Initial density guess. `sad`: Superposition of Atomic Densities. `density`: load density matrix from checkpoint. `full`: restore geometry and density from checkpoint. Falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.true.` | Write a `.hfchk` checkpoint file after successful convergence |
+| `print_populations` | bool | `.true.`, `.false.` | `.false.` | Print Mulliken population analysis after SCF convergence. Enabled automatically when `verbosity verbose` or `verbosity debug`. |
 
 ### Section: `%begin_dft`
 
@@ -535,6 +536,39 @@ H     0.000000   -0.756950    -0.468703
 %end_coords
 ```
 
+### ROHF doublet — water radical cation, STO-3G
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type         rohf
+    use_diis         .true.
+    diis_dim         8
+    engine           os
+    print_populations .true.
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+1   2
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords
+```
+
 ### Analytic gradient — water, STO-3G
 
 ```
@@ -826,6 +860,7 @@ The program prints a structured log to standard output. Key sections:
 - **Converged Energy** — total energy in Hartree, eV, and kcal/mol; MP2 correlation and corrected total if post-HF enabled
 - **Dipole Moment** — printed automatically after a converged SCF/KS solution; includes the electronic, nuclear, and total `X`, `Y`, `Z` components in atomic units, plus the total vector norm in atomic units and Debye
 - **Quadrupole Moment** — printed automatically after the dipole block; includes electronic, nuclear, and total components of the traceless Cartesian tensor (`XX`, `XY`, `XZ`, `YY`, `YZ`, `ZZ`) in atomic units
+- **Mulliken Population Analysis** — printed when `print_populations true` or verbosity is `verbose`/`debug`; shows AO gross populations, net atomic charges, and spin populations (UHF/ROHF)
 - **RMP2 Natural Orbitals** — occupation numbers and natural orbital coefficients printed after single-point RMP2
 - **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms
 - **IC System** — when `opt_coords internal`, logs the count of stretches, bends, and torsions in the redundant GIC set

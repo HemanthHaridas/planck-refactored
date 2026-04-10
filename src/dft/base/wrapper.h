@@ -48,9 +48,11 @@ namespace DFT
             Functional(const Functional &) = delete;
             Functional &operator=(const Functional &) = delete;
 
-            Functional(Functional &&other) noexcept : func_(other.func_), initialized_(other.initialized_)
+            Functional(Functional &&other) noexcept
+                : func_(other.func_), initialized_(other.initialized_), spin_(other.spin_)
             {
                 other.initialized_ = false;
+                other.spin_ = Spin::Unpolarized;
                 std::memset(&other.func_, 0, sizeof(other.func_));
             }
 
@@ -62,7 +64,9 @@ namespace DFT
                         xc_func_end(&func_);
                     func_ = other.func_;
                     initialized_ = other.initialized_;
+                    spin_ = other.spin_;
                     other.initialized_ = false;
+                    other.spin_ = Spin::Unpolarized;
                     std::memset(&other.func_, 0, sizeof(other.func_));
                 }
                 return *this;

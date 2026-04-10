@@ -1,29 +1,41 @@
-# Regression Test Infrastructure
+# Test Infrastructure
 
-This directory contains a manifest-driven regression suite for the current
-Planck executable. The goal is to test user-visible chemistry workflows at the
-program boundary, not just individual helper functions.
+This directory now separates lightweight regression inputs from heavier benchmark/reference corpora.
 
-## What it covers
+## Layout
 
-- RHF + RMP2 single-point validation cases
-- expected-failure behavior for unsupported edge cases
-- gradient smoke tests for the current RHF and RMP2 gradient paths
-
-## Files
-
+- `inputs/regression/`
+  - Executable-facing regression inputs grouped by capability:
+  - `hf/` for closed-shell HF symmetry/engine cases
+  - `open_shell/` for UHF, ROHF, UMP2, and UHF-gradient coverage
+  - `post_hf/` for RMP2, CASSCF, and RASSCF cases
+  - `geometry/` for RHF/RMP2 gradient, optimization, and frequency workflows
+  - `dft/` for RKS and UKS DFT workflows
+  - `checkpoint/` for restart/full-guess fixtures
+- `benchmarks/`
+  - `casscf/archive/` for older exploratory CASSCF inputs and logs
+  - `casscf/pyscf_reference/` for the PySCF-backed CASSCF reference corpus
+  - `scf/engine_symmetry/` for engine/symmetry/SAD benchmark matrices
+- `pyscf/`
+  - External PySCF references for validating selected CASSCF energies
 - `run_regressions.py`
-  - Python runner that executes `hartree-fock`, parses the textual output, and
-    enforces manifest-defined checks.
+  - Manifest-driven binary runner for `hartree-fock` and `planck-dft`
 - `regression_cases.json`
-  - Source of truth for test cases, tolerances, tags, and expected failures.
-- `inputs/`
-  - Dedicated test-only inputs that exercise workflows not already present in
-    the project input corpus.
+  - Source of truth for regression cases, tolerances, and executable selection
 
-## Supported checks
+## What The Regression Suite Covers
 
-The runner currently supports:
+- RHF + RMP2 validation and expected-failure behavior
+- SCF engine and symmetry smoke cases
+- UHF, ROHF, UMP2, and UHF analytic-gradient smoke coverage
+- RHF and RMP2 gradient / optfreq workflows
+- checkpoint restart via `guess full`
+- selected CASSCF / RASSCF user-visible workflows
+- RKS and UKS DFT single-point coverage through `planck-dft`
+
+## Supported Checks
+
+The runner supports:
 
 - required / forbidden output substrings
 - expected process exit code
@@ -31,70 +43,44 @@ The runner currently supports:
 - inequality checks between extracted metrics
 - expected string metrics such as point group
 - expected counts such as the number of printed gradient atom lines
+- per-case executable selection via the `executable` field
 
 Extracted metrics currently include:
 
 - `rhf_total_energy`
 - `mp2_corr_energy`
 - `mp2_total_energy`
+- `casscf_corr_energy`
+- `casscf_total_energy`
+- `dft_total_energy`
 - `gradient_max`
 - `gradient_rms`
 - `point_group`
 - `gradient_atom_lines`
 - `scf_converged_iterations`
 
-## Running the suite
+## Running
 
 From the repository root:
 
 ```bash
 cmake -S . -B build
-cmake --build build --target hartree-fock -j4
+cmake --build build --target hartree-fock planck-dft -j4
 python3 tests/run_regressions.py --build-dir build --suite smoke
 python3 tests/run_regressions.py --build-dir build --suite core
 python3 tests/run_regressions.py --build-dir build --suite extended
 ```
 
-You can also use the CMake targets:
+Or via CMake / CTest:
 
 ```bash
 cmake --build build --target regression-smoke
 cmake --build build --target regression-core
 cmake --build build --target regression-extended
-```
-
-Or via CTest:
-
-```bash
 ctest --test-dir build --output-on-failure
-ctest --test-dir build -R planck-regression-core --output-on-failure
 ```
 
-## Adding a new regression case
+## Notes
 
-1. Add or reuse an input file.
-2. Run the executable manually and capture the stable quantities worth checking.
-3. Add a new object to `regression_cases.json` with:
-   - a unique `id`
-   - an `input`
-   - one or more `tags`
-   - the expected exit code
-   - required strings and numerical checks
-4. Prefer checking physically meaningful invariants in addition to exact totals.
-   Examples:
-   - `mp2_total_energy < rhf_total_energy`
-   - expected gradient lines count matches atom count
-
-## Design notes
-
-- This suite intentionally tests the compiled binary end-to-end, including
-  parsing, symmetry handling, SCF, post-HF drivers, logging, and checkpoint
-  interactions.
-- The `he_rmp2_no_virtual_expected_failure` case is intentionally kept as a
-  regression test for current behavior: RHF succeeds, then RMP2 exits with a
-  clear diagnostic because there are no occupied/virtual excitations.
-- Gradient tests are smoke tests rather than high-precision references because
-  the current `RMP2` gradient path is still central-difference based.
-- Most CASSCF and RASSCF inputs remain manual-only while the active-space
-  implementation is still evolving, but targeted regressions are welcome for
-  bugs with a clear user-visible signature.
+- `tests/benchmarks/` is intentionally broader than the manifest. It stores slower or more exploratory inputs, reference logs, and timing fixtures.
+- The checkpoint restart fixture is a true same-stem restart case: the `.hfinp`, `.hfchk`, and `.log` files are kept together under `tests/inputs/regression/checkpoint/`.

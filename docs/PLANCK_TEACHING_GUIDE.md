@@ -1396,7 +1396,7 @@ H–C–H angles, in addition to the three C₂ axes. The two active orbitals
 transform as different irreps of D₂d, which is why the biradical wavefunctions
 are even and odd combinations rather than simple MO products.
 
-**Input example** (`tests/inputs/casscf_tests/ethylene_casscf_321g.hfinp`):
+**Input example** (`tests/benchmarks/casscf/pyscf_reference/ethylene_casscf_321g.hfinp`):
 
 ```
 %begin_scf

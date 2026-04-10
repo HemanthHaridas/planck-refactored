@@ -1,0 +1,11 @@
+FILENAME                                      ELECTRONIC_ENERGY   TOTAL_ENERGY       ERI_ENGINE  SYMMETRY  PYSCF_ENERGY
+ethylene_cas44_sto3g_sa2_os.hfinp             -110.387 719 017 8  -76.852 246 554 5  os          .true.    -76.852 246 554 5
+ethylene_cas44_sto3g_sa2_os_nosymm.hfinp      -110.387 719 017 8  -76.852 246 554 5  os          .false.   -76.852 246 554 5
+ethylene_cas44_sto3g_sa2_os_nosymm_sad.hfinp  -110.387 719 017 8  -76.852 246 554 5  os          .false.   -76.852 246 554 5
+ethylene_cas44_sto3g_sa2_os_sad.hfinp         -110.387 719 017 8  -76.852 246 554 5  os          .true.    -76.852 246 554 5
+ethylene_cas44_sto3g_sa2_rys.hfinp            -110.387 719 017 8  -76.852 246 554 5  rys         .true.    -76.852 246 554 5
+ethylene_cas44_sto3g_sa2_rys_sad.hfinp        -110.387 719 017 8  -76.852 246 554 5  rys         .true.    -76.852 246 554 5
+ethylene_casscf_321g_os.hfinp                 -110.667 232 693 2  -77.419 570 553 6  os          .true.    -77.419 570 553 6
+ethylene_casscf_321g_os_sad.hfinp             -110.667 232 693 2  -77.419 570 553 6  os          .true.    -77.419 570 553 6
+ethylene_casscf_321g_rys.hfinp                -110.667 232 693 2  -77.419 570 553 6  rys         .true.    -77.419 570 553 6
+ethylene_casscf_321g_rys_sad.hfinp            -110.667 232 693 2  -77.419 570 553 6  rys         .true.    -77.419 570 553 6

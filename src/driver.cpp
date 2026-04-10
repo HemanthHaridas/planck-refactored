@@ -16,9 +16,11 @@
 #include "io/checkpoint.h"
 #include "io/io.h"
 #include "io/logging.h"
+#include "lookup/elements.h"
 #include "opt/geomopt.h"
 #include "post_hf/casscf.h"
 #include "post_hf/mp2.h"
+#include "scf/population.h"
 #include "scf/scf.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/mo_symmetry.h"
@@ -62,6 +64,79 @@ static void log_multipole_report(
     }
 
     HartreeFock::Logger::multipole_moments(*moments);
+    HartreeFock::Logger::blank();
+}
+
+static void log_population_report(const HartreeFock::Calculator &calculator)
+{
+    const bool wants_population =
+        calculator._output._print_populations ||
+        calculator._output._verbosity == HartreeFock::Verbosity::Verbose ||
+        calculator._output._verbosity == HartreeFock::Verbosity::Debug;
+    if (!wants_population)
+        return;
+
+    Eigen::MatrixXd total_density = calculator._info._scf.alpha.density;
+    Eigen::MatrixXd spin_density;
+    const Eigen::MatrixXd *spin_density_ptr = nullptr;
+    if (calculator._info._scf.is_uhf)
+    {
+        total_density += calculator._info._scf.beta.density;
+        spin_density = calculator._info._scf.alpha.density - calculator._info._scf.beta.density;
+        spin_density_ptr = &spin_density;
+    }
+
+    auto analysis = HartreeFock::SCF::mulliken_population_analysis(
+        calculator._molecule,
+        calculator._shells,
+        calculator._overlap,
+        total_density,
+        spin_density_ptr);
+
+    if (!analysis)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Population Analysis :",
+            "Unavailable: " + analysis.error());
+        HartreeFock::Logger::blank();
+        return;
+    }
+
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Mulliken Population Analysis :", "");
+    const int line_width = analysis->has_spin_population ? 94 : 78;
+    std::cout << std::string(line_width, '-') << "\n"
+              << std::setw(6) << std::right << "Atom"
+              << std::setw(8) << std::right << "Elem"
+              << std::setw(8) << std::right << "Z"
+              << std::setw(20) << std::right << "Population"
+              << std::setw(20) << std::right << "Charge";
+    if (analysis->has_spin_population)
+        std::cout << std::setw(16) << std::right << "Spin";
+    std::cout << "\n"
+              << std::string(line_width, '-') << "\n";
+
+    for (const auto &atom : analysis->atoms)
+    {
+        const std::string symbol = std::string(element_from_z(static_cast<std::uint64_t>(atom.atomic_number)).symbol);
+        std::cout << std::setw(6) << std::right << (atom.atom_index + 1)
+                  << std::setw(8) << std::right << symbol
+                  << std::setw(8) << std::right << atom.atomic_number
+                  << std::setw(20) << std::right << std::fixed << std::setprecision(8) << atom.electron_population
+                  << std::setw(20) << std::right << std::fixed << std::setprecision(8) << atom.net_charge;
+        if (analysis->has_spin_population)
+            std::cout << std::setw(16) << std::right << std::fixed << std::setprecision(8) << atom.spin_population;
+        std::cout << "\n";
+    }
+
+    std::cout << std::string(line_width, '-') << "\n"
+              << std::setw(22) << std::left << "  Total"
+              << std::setw(20) << std::right << std::fixed << std::setprecision(8) << analysis->total_electrons
+              << std::setw(20) << std::right << std::fixed << std::setprecision(8) << analysis->total_charge;
+    if (analysis->has_spin_population)
+        std::cout << std::setw(16) << std::right << std::fixed << std::setprecision(8) << analysis->total_spin_population;
+    std::cout << "\n"
+              << std::string(line_width, '-') << "\n";
     HartreeFock::Logger::blank();
 }
 
@@ -342,7 +417,7 @@ int main(int argc, const char *argv[])
                         const int n_alpha = (n_elec + n_unpaired) / 2;
                         const int n_beta = (n_elec - n_unpaired) / 2;
 
-                        const bool cur_uhf = (calculator._scf._scf == HartreeFock::SCFType::UHF);
+                        const bool cur_spin_resolved = (calculator._scf._scf != HartreeFock::SCFType::RHF);
 
                         if (mos_res->is_uhf)
                         {
@@ -356,11 +431,11 @@ int main(int argc, const char *argv[])
                         else
                         {
                             // RHF checkpoint
-                            const double factor = cur_uhf ? 1.0 : 2.0;
+                            const double factor = cur_spin_resolved ? 1.0 : 2.0;
                             calculator._info._scf.alpha.density =
                                 HartreeFock::Checkpoint::project_density(
                                     *X_res, S_cross, mos_res->C_alpha.leftCols(n_alpha), factor);
-                            if (cur_uhf)
+                            if (cur_spin_resolved)
                             {
                                 // Use the same RHF MOs as the beta-spin initial guess
                                 calculator._info._scf.beta.density =
@@ -482,6 +557,15 @@ int main(int argc, const char *argv[])
             return EXIT_FAILURE;
         }
     }
+    else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin ROHF SCF Cycles :", "");
+        if (auto res = HartreeFock::SCF::run_rohf(calculator, shellpairs); !res)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
+            return EXIT_FAILURE;
+        }
+    }
     else
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin UHF SCF Cycles :", "");
@@ -525,6 +609,18 @@ int main(int argc, const char *argv[])
                 calculator._info._scf.alpha.mo_symmetry);
             HartreeFock::Logger::blank();
         }
+        else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+        {
+            const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+            const std::size_t n_alpha = static_cast<std::size_t>((n_elec + n_unpaired) / 2);
+
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "ROHF MOs :", "");
+            HartreeFock::Logger::mo_header(have_symm);
+            HartreeFock::Logger::mo_energies_uhf(
+                calculator._info._scf.alpha.mo_energies, n_alpha,
+                calculator._info._scf.alpha.mo_symmetry);
+            HartreeFock::Logger::blank();
+        }
         else
         {
             const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
@@ -561,6 +657,7 @@ int main(int argc, const char *argv[])
     }
 
     HartreeFock::Logger::converged_energy(calculator._total_energy, calculator._nuclear_repulsion);
+    log_population_report(calculator);
     log_multipole_report(calculator, shellpairs);
 
     // ── Post-HF correlation ───────────────────────────────────────────────────
@@ -568,6 +665,14 @@ int main(int argc, const char *argv[])
     {
         std::expected<void, std::string> corr_res;
         std::string corr_tag;
+
+        if (calculator._scf._scf == HartreeFock::SCFType::ROHF &&
+            calculator._correlation != HartreeFock::PostHF::None)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error,
+                                         "Post-HF :", "ROHF post-HF references are not implemented");
+            return EXIT_FAILURE;
+        }
 
         if (calculator._correlation == HartreeFock::PostHF::RMP2)
         {
@@ -671,6 +776,12 @@ int main(int argc, const char *argv[])
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
                                          "UMP2 gradient is not implemented");
+            return EXIT_FAILURE;
+        }
+        else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
+                                         "ROHF analytic gradients are not implemented");
             return EXIT_FAILURE;
         }
         else if (calculator._info._scf.is_uhf)
@@ -887,7 +998,7 @@ int main(int argc, const char *argv[])
 
             // Reset SCF state
             calculator._info._scf = HartreeFock::DataSCF(
-                calculator._scf._scf == HartreeFock::SCFType::UHF);
+                calculator._scf._scf != HartreeFock::SCFType::RHF);
             calculator._info._scf.initialize(calculator._shells.nbasis());
             calculator._scf.set_scf_mode_auto(calculator._shells.nbasis());
             calculator._info._is_converged = false;
@@ -947,6 +1058,8 @@ int main(int argc, const char *argv[])
             std::expected<void, std::string> scf_sym_res;
             if (calculator._scf._scf == HartreeFock::SCFType::UHF)
                 scf_sym_res = HartreeFock::SCF::run_uhf(calculator, sp_sym);
+            else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+                scf_sym_res = HartreeFock::SCF::run_rohf(calculator, sp_sym);
             else
                 scf_sym_res = HartreeFock::SCF::run_rhf(calculator, sp_sym);
 
@@ -985,6 +1098,18 @@ int main(int argc, const char *argv[])
                     HartreeFock::Logger::mo_energies(
                         calculator._info._scf.alpha.mo_energies,
                         static_cast<std::size_t>(n_elec_f),
+                        calculator._info._scf.alpha.mo_symmetry);
+                    HartreeFock::Logger::blank();
+                }
+                else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+                {
+                    const int n_unpaired_f = static_cast<int>(calculator._molecule.multiplicity) - 1;
+                    const std::size_t n_alpha_f = static_cast<std::size_t>((n_elec_f + n_unpaired_f) / 2);
+
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "ROHF MOs :", "");
+                    HartreeFock::Logger::mo_header(have_symm_f);
+                    HartreeFock::Logger::mo_energies_uhf(
+                        calculator._info._scf.alpha.mo_energies, n_alpha_f,
                         calculator._info._scf.alpha.mo_symmetry);
                     HartreeFock::Logger::blank();
                 }

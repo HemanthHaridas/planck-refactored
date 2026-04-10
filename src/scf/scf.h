@@ -104,6 +104,13 @@ namespace HartreeFock
         // Returns an error string if convergence is not achieved.
         std::expected<void, std::string> run_uhf(HartreeFock::Calculator &calculator,
                                                  const std::vector<HartreeFock::ShellPair> &shell_pairs);
+
+        // Run the ROHF SCF procedure.
+        // Uses molecule.multiplicity to derive the closed/open-shell occupations.
+        // Stores alpha/beta densities and one shared MO coefficient set in both channels.
+        // Returns an error string if convergence is not achieved.
+        std::expected<void, std::string> run_rohf(HartreeFock::Calculator &calculator,
+                                                  const std::vector<HartreeFock::ShellPair> &shell_pairs);
     } // namespace SCF
 } // namespace HartreeFock
 

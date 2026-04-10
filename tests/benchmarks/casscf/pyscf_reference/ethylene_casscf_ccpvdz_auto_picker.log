@@ -1,0 +1,195 @@
+[INF] Input Parsing :               Successful
+[INF] Calculation Type :            Single Point Calculation
+[INF] Theory :                      RHF
+[INF] Basis :                       cc-pvdz
+[INF] Charge :                      0
+[INF] Multiplicity :                1
+
+[INF] Symmetry Detection :          We use libmsym library to detect point groups
+[INF] Symmetry Detection :          Successful
+[INF] Point Group :                 D2d
+
+[INF] Input Coordinates :           
+[INF]                                   6    -0.669     0.000     0.000
+[INF]                                   6     0.669     0.000     0.000
+[INF]                                   1    -1.234     0.928     0.000
+[INF]                                   1    -1.234    -0.928     0.000
+[INF]                                   1     1.234     0.000     0.928
+[INF]                                   1     1.234     0.000    -0.928
+[INF] Standard Coordinates :        
+[INF]                                   6     0.000    -0.000    -0.670
+[INF]                                   6    -0.000     0.000     0.670
+[INF]                                   1     0.656     0.656    -1.234
+[INF]                                   1    -0.656    -0.656    -1.234
+[INF]                                   1    -0.656     0.656     1.234
+[INF]                                   1     0.656    -0.656     1.234
+
+[INF] Reading Basis Set :           /Users/hemanthharidas/Desktop/codes/planck-refactored/install/share/basis-sets/cc-pvdz
+[INF] Basis Construction :          Generated 24 Shells and 50 contracted functions
+[INF] Number of Shell pairs :       1275
+
+[INF] SCF Mode :                    Conventional
+[INF] Nuclear Repulsion :           33.2476621395 Eh
+
+[INF] Integral Symmetry :           4 signed AO symmetry operations enabled
+[INF] 1e Integrals :                Computing overlap and kinetic energy matrices
+[INF] 1e Integrals :                Overlap and kinetic done
+[INF] 1e Integrals :                Computing nuclear attraction matrix
+[INF] 1e Integrals :                Nuclear attraction done
+
+[INF] SAO Basis :                   A1(14)  B1(14)  B3(11)  B2(11)
+
+[INF] Begin SCF Cycles :            
+[INF] 2e Integrals :                Building ERI tensor (50.0 MB)
+[INF] 2e Integrals :                ERI tensor ready
+
+--------------------------------------------------------------------------------------------------------------
+Iter  Energy              DeltaE         RMS(D)         Max(D)         DIIS Err       Damp        Time(s)     
+--------------------------------------------------------------------------------------------------------------
+1     -64.55977171        64.55977171    1.097e+00      1.325e+01      1.524e-01      0.000       0.099       
+2     -69.6685626729      5.1087909678   9.153e-01      1.374e+01      9.913e-02      0.000       0.100       
+3     -77.3418810377      7.6733183648   4.846e-02      7.133e-01      3.763e-02      0.000       0.106       
+4     -77.8164496015      0.4745685638   1.704e-02      2.661e-01      1.103e-02      0.000       0.100       
+5     -77.8638320882      0.0473824867   1.698e-03      2.318e-02      9.323e-04      0.000       0.100       
+6     -77.8641655691      0.0003334808   6.144e-04      6.763e-03      2.710e-04      0.000       0.099       
+7     -77.8642100014      0.0000444324   1.180e-04      1.708e-03      3.996e-05      0.000       0.100       
+8     -77.8642122215      0.0000022201   3.427e-05      5.563e-04      1.157e-05      0.000       0.100       
+9     -77.8642124024      0.0000001809   7.028e-06      7.303e-05      1.915e-06      0.000       0.162       
+10    -77.8642124071      0.0000000046   7.655e-07      6.070e-06      2.133e-07      0.000       0.102       
+11    -77.8642124071      0.0000000000   1.842e-07      1.746e-06      4.709e-08      0.000       0.101       
+12    -77.8642124071      0.0000000000   3.136e-08      3.006e-07      8.074e-09      0.000       0.103       
+13    -77.8642124071      0.0000000000   6.824e-09      4.869e-08      1.620e-09      0.000       0.104       
+14    -77.8642124071      0.0000000000   1.483e-09      1.231e-08      3.054e-10      0.000       0.101       
+15    -77.8642124071      0.0000000000   7.900e-11      8.463e-10      2.844e-11      0.000       0.105       
+16    -77.8642124071      0.0000000000   1.382e-11      1.700e-10      6.595e-12      0.000       0.113       
+17    -77.8642124071      0.0000000000   1.816e-11      1.475e-10      7.624e-12      0.000       0.111       
+18    -77.8642124071      0.0000000000   5.733e-12      7.282e-11      2.373e-12      0.000       0.110       
+--------------------------------------------------------------------------------------------------------------
+
+[INF] SCF Converged after 18 iterations
+
+-------------------------------------------
+    MO    Symmetry              Energy (Eh)
+-------------------------------------------
+     1          A1               -11.243011
+     2          B1               -11.241489
+     3          A1                -1.034327
+     4          B1                -0.791391
+     5          B3                -0.597979
+     6          A1                -0.585805
+     7          B2                -0.585224
+     8          B2                -0.253855  <-- HOMO
+     9          B3                 0.052510  <-- LUMO
+    10          A1                 0.209636
+    11          B1                 0.224964
+    12          B3                 0.266211
+    13          B2                 0.266911
+    14          B1                 0.434762
+    15          A1                 0.574221
+    16          A1                 0.722046
+    17          B2                 0.723823
+    18          B3                 0.746111
+    19          B1                 0.756144
+    20          B3                 0.778375
+    21          B2                 0.798367
+    22          B2                 0.899773
+    23          B3                 0.900940
+    24          B1                 0.935194
+    25          A1                 1.006474
+    26          A1                 1.127377
+    27          B1                 1.160923
+    28          B1                 1.284834
+    29          B2                 1.597327
+    30          B3                 1.605042
+    31          B1                 1.645109
+    32          B3                 1.731181
+    33          B2                 1.731249
+    34          A1                 1.807835
+    35          A1                 1.932483
+    36          B3                 1.948187
+    37          B2                 1.948869
+    38          A1                 1.968495
+    39          B1                 2.128264
+    40          B1                 2.357042
+    41          B3                 2.387945
+    42          B2                 2.389443
+    43          A1                 2.457611
+    44          B1                 2.630650
+    45          B1                 2.762867
+    46          A1                 2.904970
+    47          B3                 2.942720
+    48          B2                 2.946005
+    49          A1                 3.060837
+    50          B1                 3.465958
+
+[INF] Checkpoint :                  Saved to ethylene_casscf_ccpvdz_auto_picker.hfchk
+--------------------------------------------------------------------------------------------
+  Quantity                                   Hartree                  eV            kcal/mol
+--------------------------------------------------------------------------------------------
+  Electronic Energy                  -111.1118745467    -3023.5081348051   -69723.7539589442
+  Nuclear Repulsion                    33.2476621395      904.7149762549    20863.2229830051
+--------------------------------------------------------------------------------------------
+  Total Energy                        -77.8642124071    -2118.7931585502   -48860.5309759391
+--------------------------------------------------------------------------------------------
+Dipole Moment (origin at 0.000000, 0.000000, 0.000000 bohr)
+------------------------------------------------------------------------------
+Component        Electronic (au)      Nuclear (au)        Total (au)     Debye
+------------------------------------------------------------------------------
+X                       0.000000          0.000000          0.000000  0.000000
+Y                       0.000000          0.000000          0.000000  0.000000
+Z                      -0.000000          0.000000         -0.000000 -0.000000
+------------------------------------------------------------------------------
+|mu|                    0.000000          0.000000          0.000000  0.000000
+------------------------------------------------------------------------------
+Quadrupole Moment (traceless Cartesian tensor, au)
+------------------------------------------------------------------------------
+Component             Electronic           Nuclear             Total
+------------------------------------------------------------------------------
+XX                     32.542109        -34.798784         -2.256674
+XY                      0.000000          0.000000          0.000000
+XZ                     -0.000000         -0.000000         -0.000000
+YY                     35.811058        -34.798784          1.012275
+YZ                      0.000000          0.000000          0.000000
+ZZ                    -68.353168         69.597567          1.244400
+------------------------------------------------------------------------------
+
+[INF] CASSCF :                      Active space: (2e, 2o)  n_core=7  n_virt=41  CI dim ≤ 4
+[INF] CASSCF :                      Algorithm: root-resolved matrix-free coupled orbital/CI solve with fallback candidate screening  nmicro=4
+[INF] CASSCF :                      CI response RHS: exact active-space orbital derivative RHS
+[WRN] CASSCF :                      Disabling CI symmetry screening for D2d because MO labels come from an Abelian subgroup.
+
+--------------------------------------------------------------------------------------------------------------
+Iter  Energy              DeltaE         SA Grad        MaxRootG       Step Err       Damp        Time(s)     
+--------------------------------------------------------------------------------------------------------------
+1     -77.9523880175      -77.9523880175 1.111e-02      1.111e-02      2.941e-01      0.140       212.292     
+[INF] CASSCF :                      Macro   1  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=2.94e-01
+             sa_g=1.11e-02  root_screen_g=1.11e-02  max_root_g=1.11e-02
+             predicted_dE=3.01e-02  root_model_spread=0.00e+00  actual_dE=-2.06e-02  response_resid=5.07e-13
+             response_iter=  8  level_shift=1.40e-01
+2     -77.9524855943      -0.0000975768  5.745e-05      5.745e-05      1.886e-02      0.098       134.312     
+[INF] CASSCF :                      Macro   2  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=1.89e-02
+             sa_g=5.75e-05  root_screen_g=5.75e-05  max_root_g=5.75e-05
+             predicted_dE=1.01e-04  root_model_spread=0.00e+00  actual_dE=-9.76e-05  response_resid=2.74e-17
+             response_iter=  5  level_shift=9.80e-02
+3     -77.9524855978      -0.0000000035  7.442e-07      7.442e-07      1.244e-04      0.069       56.224      
+[INF] CASSCF :                      Macro   3  mode=matrix-free coupled orbital/CI solve  ci_solver=dense
+             accepted=yes  candidate=sa-coupled  max_root_dE=0.00e+00  step_norm=1.24e-04
+             sa_g=7.44e-07  root_screen_g=7.44e-07  max_root_g=7.44e-07
+             predicted_dE=3.92e-09  root_model_spread=0.00e+00  actual_dE=-3.50e-09  response_resid=7.21e-20
+             response_iter=  2  level_shift=6.86e-02
+
+[INF] CASSCF :                      Converged.
+
+--------------------------------------------------------------------------------------------
+  CASSCF Natural Occupations :
+    MO   1     1.000000
+    MO   2     1.000000
+--------------------------------------------------------------------------------------------
+  CASSCF Correlation Energy            -0.0882731906       -2.4020358853      -55.3922634241
+--------------------------------------------------------------------------------------------
+  CASSCF Total Energy                 -77.9524855978    -2121.1951944355   -48915.9232393632
+--------------------------------------------------------------------------------------------
+[INF] Checkpoint :                  Updated ethylene_casscf_ccpvdz_auto_picker.hfchk
+[INF] Wall Time :                   408.256 s

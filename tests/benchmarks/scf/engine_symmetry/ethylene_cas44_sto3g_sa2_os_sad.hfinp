@@ -1,0 +1,32 @@
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    max_cycles	100
+    diis_dim    8
+    engine      os
+    guess       sad
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+6
+0   1
+C    0.000000    0.000000    0.000000
+C    0.000000    0.000000    1.340000
+H    0.920000    0.000000   -0.540000
+H   -0.920000    0.000000   -0.540000
+H    0.000000    0.920000    1.880000
+H    0.000000   -0.920000    1.880000
+%end_coords
