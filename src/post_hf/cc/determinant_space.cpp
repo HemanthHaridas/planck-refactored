@@ -39,7 +39,7 @@ namespace
     // Keep the cap comfortably below "real production" territory so we do not
     // accidentally route very large jobs into an exponential algorithm.
     constexpr int kMaxSpinOrbitals = 16;
-    constexpr int kMaxDeterminants = 5000;
+    constexpr int kMaxDeterminants = 10000;
 
     enum class SpinLabel
     {

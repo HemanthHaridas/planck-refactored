@@ -155,6 +155,8 @@ namespace
     struct TensorTriplesStageMetrics
     {
         unsigned int iterations = 0;
+        unsigned int best_iteration = 0;
+        bool converged = false;
         double sd_residual_rms = 0.0;
         double r3_rms = 0.0;
         double t3_step_rms = 0.0;
@@ -162,8 +164,33 @@ namespace
         double t1_step_rms = 0.0;
         double r2_feedback_rms = 0.0;
         double t2_step_rms = 0.0;
+        double quality_score = 0.0;
         double estimated_correlation_energy = 0.0;
     };
+
+    [[nodiscard]] RCCSDTAmplitudes clone_rccsdt_amplitudes(
+        const RCCSDTAmplitudes &src)
+    {
+        RCCSDTAmplitudes out{
+            .t1 = Tensor2D(src.t1.dim1, src.t1.dim2, 0.0),
+            .t2 = Tensor4D(src.t2.dim1, src.t2.dim2, src.t2.dim3, src.t2.dim4, 0.0),
+            .t3 = Tensor6D(
+                src.t3.dim1, src.t3.dim2, src.t3.dim3,
+                src.t3.dim4, src.t3.dim5, src.t3.dim6, 0.0),
+        };
+        out.t1.data = src.t1.data;
+        out.t2.data = src.t2.data;
+        out.t3.data = src.t3.data;
+        return out;
+    }
+
+    [[nodiscard]] double stage_quality_score(
+        const TensorTriplesStageMetrics &metrics)
+    {
+        return std::max(
+            std::max(metrics.sd_residual_rms, metrics.r3_rms),
+            std::max(metrics.r1_feedback_rms, metrics.r2_feedback_rms));
+    }
 
     struct DeterminantBackstopDecision
     {
@@ -191,7 +218,11 @@ namespace
         const CanonicalRHFCCReference &reference) noexcept
     {
         constexpr int kMaxBackstopSpinOrbitals = 16;
-        constexpr std::size_t kMaxBackstopDeterminants = 5000;
+        // NH3/STO-3G already lands at 8008 determinants, which is still
+        // perfectly reasonable for the exact teaching backstop. Keep the cap
+        // modest, but high enough to cover these small "real molecule"
+        // examples while the pure tensor RCCSDT engine is still maturing.
+        constexpr std::size_t kMaxBackstopDeterminants = 10000;
 
         const int n_spin_orb = 2 * reference.orbital_partition.n_mo;
         const int n_electrons = 2 * reference.orbital_partition.n_occ;
@@ -620,6 +651,24 @@ namespace
         return energy;
     }
 
+    double compute_rccsdt_stage_correlation_energy(
+        const ProductionSpinOrbitalReference &reference,
+        const ProductionSpinOrbitalBlocks &blocks,
+        const RCCSDTAmplitudes &amps)
+    {
+        double energy = 0.0;
+        for (int i = 0; i < reference.n_occ; ++i)
+            for (int j = 0; j < reference.n_occ; ++j)
+                for (int a = 0; a < reference.n_virt; ++a)
+                    for (int b = 0; b < reference.n_virt; ++b)
+                    {
+                        const double gijab = blocks.oovv(i, j, a, b);
+                        energy += 0.25 * gijab * amps.t2(i, j, a, b);
+                        energy += 0.5 * gijab * amps.t1(i, a) * amps.t1(j, b);
+                    }
+        return energy;
+    }
+
     Eigen::VectorXd pack_amplitudes(const RCCSDAmplitudes &amps)
     {
         Eigen::VectorXd packed(static_cast<Eigen::Index>(amps.t1.size() + amps.t2.size()));
@@ -647,6 +696,49 @@ namespace
         for (const double value : residuals.r1.data)
             packed(offset++) = value;
         for (const double value : residuals.r2.data)
+            packed(offset++) = value;
+        return packed;
+    }
+
+    Eigen::VectorXd pack_rccsdt_amplitudes(const RCCSDTAmplitudes &amps)
+    {
+        Eigen::VectorXd packed(static_cast<Eigen::Index>(
+            amps.t1.size() + amps.t2.size() + amps.t3.size()));
+        Eigen::Index offset = 0;
+        for (const double value : amps.t1.data)
+            packed(offset++) = value;
+        for (const double value : amps.t2.data)
+            packed(offset++) = value;
+        for (const double value : amps.t3.data)
+            packed(offset++) = value;
+        return packed;
+    }
+
+    void unpack_rccsdt_amplitudes(
+        const Eigen::VectorXd &packed,
+        RCCSDTAmplitudes &amps)
+    {
+        Eigen::Index offset = 0;
+        for (double &value : amps.t1.data)
+            value = packed(offset++);
+        for (double &value : amps.t2.data)
+            value = packed(offset++);
+        for (double &value : amps.t3.data)
+            value = packed(offset++);
+    }
+
+    Eigen::VectorXd pack_rccsdt_stage_residuals(
+        const RCCSDResiduals &sd_residuals,
+        const Tensor6D &r3)
+    {
+        Eigen::VectorXd packed(static_cast<Eigen::Index>(
+            sd_residuals.r1.size() + sd_residuals.r2.size() + r3.size()));
+        Eigen::Index offset = 0;
+        for (const double value : sd_residuals.r1.data)
+            packed(offset++) = value;
+        for (const double value : sd_residuals.r2.data)
+            packed(offset++) = value;
+        for (const double value : r3.data)
             packed(offset++) = value;
         return packed;
     }
@@ -833,42 +925,147 @@ namespace
                                     triples.amplitudes.t3(i, j, k, a, b, c);
     }
 
-    [[nodiscard]] double raw_particle_scattering_source(
-        const RCCSDTAmplitudes &amps,
+    [[nodiscard]] double bare_vooo(
         const ProductionSpinOrbitalBlocks &blocks,
-        int i, int j, int k,
-        int a, int b, int c)
+        int a, int l, int i, int j) noexcept
     {
-        double value = 0.0;
-        for (int e = 0; e < amps.t2.dim4; ++e)
-            value += amps.t2(i, j, a, e) * blocks.ovvv(k, e, b, c);
-        return value;
+        // PySCF's RHF code starts from the T1-dressed tensor element
+        // `t1_eris[a,l,i,j]`. In our spin-orbital storage we do not keep a
+        // dedicated `vooo` block, so we reconstruct the bare antisymmetrized
+        // piece from `ooov` using `<al||ij> = -<ij||la>`.
+        return -blocks.ooov(i, j, l, a);
     }
 
-    [[nodiscard]] double raw_hole_scattering_source(
+    [[nodiscard]] double bare_vvvo(
+        const ProductionSpinOrbitalBlocks &blocks,
+        int a, int b, int d, int j) noexcept
+    {
+        // Likewise, `vvvo` is reconstructed from `ovvv` via
+        // `<ab||dj> = <dj||ab> = -<jd||ab>`.
+        return -blocks.ovvv(j, d, a, b);
+    }
+
+    struct PySCFT3SourceIntermediates
+    {
+        Tensor4D w_vooo; // (a,l,i,j)
+        Tensor4D w_vvvo; // (a,b,d,j)
+    };
+
+    PySCFT3SourceIntermediates build_pyscf_t3_source_intermediates(
         const RCCSDTAmplitudes &amps,
         const ProductionSpinOrbitalBlocks &blocks,
-        int i, int j, int k,
-        int a, int b, int c)
+        const RCCSDIntermediates &ints)
     {
-        double value = 0.0;
-        for (int m = 0; m < amps.t2.dim1; ++m)
-            value += amps.t2(i, m, a, b) * blocks.ooov(j, k, m, c);
-        return value;
+        PySCFT3SourceIntermediates out{
+            .w_vooo = Tensor4D(
+                amps.t2.dim3, amps.t2.dim1, amps.t2.dim1, amps.t2.dim2, 0.0),
+            .w_vvvo = Tensor4D(
+                amps.t2.dim3, amps.t2.dim4, amps.t2.dim4, amps.t2.dim2, 0.0),
+        };
+
+        auto c_t2 = [&](int i, int j, int a, int b) noexcept -> double
+        {
+            return 2.0 * amps.t2(i, j, a, b) - amps.t2(i, j, b, a);
+        };
+
+        // This follows the local PySCF `pyscf.cc.rccsdt.intermediates_t3`
+        // structure directly: first form dressed `W_vooo` and `W_vvvo`, then
+        // contract those into the triples residual. Because our backend keeps
+        // bare spin-orbital ERIs instead of PySCF's T1-dressed spatial ERIs,
+        // we make the T1 dressing explicit through the CCSD intermediates.
+        for (int a = 0; a < out.w_vooo.dim1; ++a)
+            for (int l = 0; l < out.w_vooo.dim2; ++l)
+                for (int i = 0; i < out.w_vooo.dim3; ++i)
+                    for (int j = 0; j < out.w_vooo.dim4; ++j)
+                    {
+                        double value = bare_vooo(blocks, a, l, i, j);
+
+                        for (int d = 0; d < amps.t2.dim4; ++d)
+                            value += ints.fme(l, d) * amps.t2(i, j, a, d);
+
+                        for (int m = 0; m < amps.t2.dim1; ++m)
+                            for (int d = 0; d < amps.t2.dim4; ++d)
+                            {
+                                value += (-blocks.ooov(m, l, j, d)) * c_t2(m, i, d, a);
+                                value -= 0.5 * blocks.ooov(m, l, j, d) * c_t2(m, i, d, a);
+                                value -= 0.5 * blocks.ooov(m, l, j, d) * amps.t2(i, m, d, a);
+                                value -= blocks.ooov(m, l, i, d) * amps.t2(j, m, d, a);
+                            }
+
+                        for (int d = 0; d < amps.t2.dim3; ++d)
+                            for (int e = 0; e < amps.t2.dim4; ++e)
+                                value += (-blocks.ovvv(l, a, d, e)) * amps.t2(i, j, d, e);
+
+                        for (int e = 0; e < amps.t1.dim2; ++e)
+                        {
+                            value += amps.t1(i, e) * ints.wmbej(l, a, e, j);
+                            value -= amps.t1(j, e) * ints.wmbej(l, a, e, i);
+                        }
+                        for (int m = 0; m < amps.t1.dim1; ++m)
+                            value -= amps.t1(m, a) * ints.wmnij(m, l, i, j);
+
+                        for (int m = 0; m < amps.t3.dim1; ++m)
+                            for (int e = 0; e < amps.t3.dim4; ++e)
+                                for (int d = 0; d < amps.t3.dim6; ++d)
+                                    value += blocks.oovv(i, m, d, e) *
+                                             amps.t3(m, j, l, e, a, d);
+
+                        out.w_vooo(a, l, i, j) = value;
+                    }
+
+        for (int a = 0; a < out.w_vvvo.dim1; ++a)
+            for (int b = 0; b < out.w_vvvo.dim2; ++b)
+                for (int d = 0; d < out.w_vvvo.dim3; ++d)
+                    for (int j = 0; j < out.w_vvvo.dim4; ++j)
+                    {
+                        double value = bare_vvvo(blocks, a, b, d, j);
+
+                        for (int l = 0; l < amps.t2.dim1; ++l)
+                            for (int e = 0; e < amps.t2.dim4; ++e)
+                            {
+                                value += blocks.ovvv(l, a, e, d) * c_t2(l, j, e, b);
+                                value -= 0.5 * blocks.ovvv(l, a, d, e) * c_t2(l, j, e, b);
+                                value -= 0.5 * blocks.ovvv(l, a, d, e) * amps.t2(j, l, e, b);
+                                value -= blocks.ovvv(l, b, d, e) * amps.t2(j, l, e, a);
+                            }
+
+                        for (int l = 0; l < amps.t2.dim1; ++l)
+                            for (int m = 0; m < amps.t2.dim2; ++m)
+                                value -= blocks.ooov(l, m, j, d) * amps.t2(l, m, a, b);
+
+                        for (int e = 0; e < amps.t1.dim2; ++e)
+                            value += amps.t1(j, e) * ints.wabef(a, b, d, e);
+                        for (int m = 0; m < amps.t1.dim1; ++m)
+                        {
+                            value -= amps.t1(m, a) * ints.wmbej(m, b, d, j);
+                            value += amps.t1(m, b) * ints.wmbej(m, a, d, j);
+                        }
+
+                        for (int l = 0; l < amps.t3.dim1; ++l)
+                            for (int m = 0; m < amps.t3.dim2; ++m)
+                                for (int e = 0; e < amps.t3.dim4; ++e)
+                                    value -= blocks.oovv(l, m, d, e) *
+                                             amps.t3(m, j, l, e, b, a);
+
+                        out.w_vvvo(a, b, d, j) = value;
+                    }
+
+        return out;
     }
 
     void build_r3_connected_t2_source_families(
         const RCCSDTAmplitudes &amps,
-        const ProductionSpinOrbitalBlocks &blocks,
+        const PySCFT3SourceIntermediates &source_ints,
         TensorTriplesWorkspace &triples)
     {
         if (!triples.allocated)
             return;
 
-        // This is the first connected source layer for the production triples
-        // path. The formulas are written in deliberately explicit spin-orbital
-        // form so later optimized kernels can be checked term by term against
-        // the same algebra.
+        // This is the exact family layout used by the local PySCF RCCSDT
+        // implementation: build `W_vvvo` and `W_vooo`, then add the six
+        // permutation-completed contractions with T2. Keeping the contractions
+        // explicit here makes the mapping to `pyscf/cc/rccsdt.py:compute_r3_tri`
+        // straightforward for students and future optimizations.
         for (int i = 0; i < triples.r3.dim1; ++i)
             for (int j = 0; j < triples.r3.dim2; ++j)
                 for (int k = 0; k < triples.r3.dim3; ++k)
@@ -878,27 +1075,120 @@ namespace
                             {
                                 double connected = 0.0;
 
-                                for (const auto &occ_perm : kPermutations3)
+                                for (int d = 0; d < amps.t2.dim4; ++d)
                                 {
-                                    const int io = occ_perm.perm[0] == 0 ? i : (occ_perm.perm[0] == 1 ? j : k);
-                                    const int jo = occ_perm.perm[1] == 0 ? i : (occ_perm.perm[1] == 1 ? j : k);
-                                    const int ko = occ_perm.perm[2] == 0 ? i : (occ_perm.perm[2] == 1 ? j : k);
+                                    connected += source_ints.w_vvvo(a, b, d, j) *
+                                                 amps.t2(i, k, d, c);
+                                    connected += source_ints.w_vvvo(a, c, d, k) *
+                                                 amps.t2(i, j, d, b);
+                                    connected += source_ints.w_vvvo(b, a, d, i) *
+                                                 amps.t2(j, k, d, c);
+                                    connected += source_ints.w_vvvo(b, c, d, k) *
+                                                 amps.t2(j, i, d, a);
+                                    connected += source_ints.w_vvvo(c, a, d, i) *
+                                                 amps.t2(k, j, d, b);
+                                    connected += source_ints.w_vvvo(c, b, d, j) *
+                                                 amps.t2(k, i, d, a);
+                                }
 
-                                    for (const auto &virt_perm : kPermutations3)
-                                    {
-                                        const int av = virt_perm.perm[0] == 0 ? a : (virt_perm.perm[0] == 1 ? b : c);
-                                        const int bv = virt_perm.perm[1] == 0 ? a : (virt_perm.perm[1] == 1 ? b : c);
-                                        const int cv = virt_perm.perm[2] == 0 ? a : (virt_perm.perm[2] == 1 ? b : c);
-                                        const int sign = occ_perm.sign * virt_perm.sign;
-
-                                        connected += sign * raw_particle_scattering_source(
-                                            amps, blocks, io, jo, ko, av, bv, cv);
-                                        connected -= sign * raw_hole_scattering_source(
-                                            amps, blocks, io, jo, ko, av, bv, cv);
-                                    }
+                                for (int l = 0; l < amps.t2.dim1; ++l)
+                                {
+                                    connected -= source_ints.w_vooo(a, l, i, j) *
+                                                 amps.t2(l, k, b, c);
+                                    connected -= source_ints.w_vooo(a, l, i, k) *
+                                                 amps.t2(l, j, c, b);
+                                    connected -= source_ints.w_vooo(b, l, j, i) *
+                                                 amps.t2(l, k, a, c);
+                                    connected -= source_ints.w_vooo(b, l, j, k) *
+                                                 amps.t2(l, i, c, a);
+                                    connected -= source_ints.w_vooo(c, l, k, i) *
+                                                 amps.t2(l, j, a, b);
+                                    connected -= source_ints.w_vooo(c, l, k, j) *
+                                                 amps.t2(l, i, b, a);
                                 }
 
                                 triples.r3(i, j, k, a, b, c) += connected;
+                            }
+    }
+
+    Tensor4D build_pyscf_wovov_intermediate(
+        const RCCSDTAmplitudes &amps,
+        const ProductionSpinOrbitalBlocks &blocks)
+    {
+        Tensor4D out(
+            amps.t2.dim1, amps.t2.dim3, amps.t2.dim1, amps.t2.dim4, 0.0);
+
+        for (int l = 0; l < out.dim1; ++l)
+            for (int a = 0; a < out.dim2; ++a)
+                for (int i = 0; i < out.dim3; ++i)
+                    for (int d = 0; d < out.dim4; ++d)
+                    {
+                        double value = blocks.ovov(l, a, i, d);
+                        for (int m = 0; m < amps.t2.dim1; ++m)
+                            for (int e = 0; e < amps.t2.dim4; ++e)
+                                value -= blocks.oovv(m, l, d, e) *
+                                         amps.t2(i, m, e, a);
+                        out(l, a, i, d) = value;
+                    }
+
+        return out;
+    }
+
+    void build_r3_pyscf_mixed_dressing_families(
+        const RCCSDTAmplitudes &amps,
+        const RCCSDIntermediates &ints,
+        const Tensor4D &w_ovov,
+        TensorTriplesWorkspace &triples)
+    {
+        if (!triples.allocated)
+            return;
+
+        // This mirrors the mixed `W_ovvo/W_ovov * T3` grouping in the local
+        // PySCF `compute_r3_tri` implementation. The terms are written in the
+        // same family order as the source code there, but on our full
+        // spin-orbital tensors instead of PySCF's triangular RHF storage.
+        for (int i = 0; i < triples.r3.dim1; ++i)
+            for (int j = 0; j < triples.r3.dim2; ++j)
+                for (int k = 0; k < triples.r3.dim3; ++k)
+                    for (int a = 0; a < triples.r3.dim4; ++a)
+                        for (int b = 0; b < triples.r3.dim5; ++b)
+                            for (int c = 0; c < triples.r3.dim6; ++c)
+                            {
+                                double dressed = 0.0;
+
+                                for (int l = 0; l < amps.t3.dim1; ++l)
+                                    for (int d = 0; d < amps.t3.dim4; ++d)
+                                    {
+                                        dressed += 0.5 * ints.wmbej(l, a, d, i) *
+                                                   amps.t3(l, j, k, d, b, c);
+                                        dressed += 0.5 * ints.wmbej(l, b, d, j) *
+                                                   amps.t3(l, i, k, d, a, c);
+                                        dressed += 0.5 * ints.wmbej(l, c, d, k) *
+                                                   amps.t3(l, j, i, d, b, a);
+
+                                        dressed -= w_ovov(l, b, i, d) *
+                                                   amps.t3(j, l, k, d, a, c);
+                                        dressed -= w_ovov(l, c, i, d) *
+                                                   amps.t3(k, l, j, d, a, b);
+                                        dressed -= 0.5 * w_ovov(l, a, i, d) *
+                                                   amps.t3(j, l, k, d, b, c);
+
+                                        dressed -= w_ovov(l, a, j, d) *
+                                                   amps.t3(i, l, k, d, b, c);
+                                        dressed -= w_ovov(l, c, j, d) *
+                                                   amps.t3(k, l, i, d, b, a);
+                                        dressed -= 0.5 * w_ovov(l, b, j, d) *
+                                                   amps.t3(i, l, k, d, a, c);
+
+                                        dressed -= w_ovov(l, a, k, d) *
+                                                   amps.t3(i, l, j, d, c, b);
+                                        dressed -= w_ovov(l, b, k, d) *
+                                                   amps.t3(j, l, i, d, c, a);
+                                        dressed -= 0.5 * w_ovov(l, c, k, d) *
+                                                   amps.t3(i, l, j, d, a, b);
+                                    }
+
+                                triples.r3(i, j, k, a, b, c) += dressed;
                             }
     }
 
@@ -1045,6 +1335,101 @@ namespace
                             }
     }
 
+    void build_r3_ovov_family(
+        const RCCSDTAmplitudes &amps,
+        const ProductionSpinOrbitalBlocks &blocks,
+        TensorTriplesWorkspace &triples)
+    {
+        if (!triples.allocated)
+            return;
+
+        // This is the explicit W_ovov * T3 family from the connected triples
+        // residual. In diagram language, one occupied and one virtual index of
+        // T3 are tied together by the antisymmetrized ovov interaction block.
+        // We write it as a signed permutation sum so students can still see the
+        // P(ij)P(ab)-style structure directly.
+        for (int i = 0; i < triples.r3.dim1; ++i)
+            for (int j = 0; j < triples.r3.dim2; ++j)
+                for (int k = 0; k < triples.r3.dim3; ++k)
+                    for (int a = 0; a < triples.r3.dim4; ++a)
+                        for (int b = 0; b < triples.r3.dim5; ++b)
+                            for (int c = 0; c < triples.r3.dim6; ++c)
+                            {
+                                double dressed = 0.0;
+
+                                for (const auto &occ_perm : kPermutations3)
+                                {
+                                    const int io = occ_perm.perm[0] == 0 ? i : (occ_perm.perm[0] == 1 ? j : k);
+                                    const int jo = occ_perm.perm[1] == 0 ? i : (occ_perm.perm[1] == 1 ? j : k);
+                                    const int ko = occ_perm.perm[2] == 0 ? i : (occ_perm.perm[2] == 1 ? j : k);
+
+                                    for (const auto &virt_perm : kPermutations3)
+                                    {
+                                        const int av = virt_perm.perm[0] == 0 ? a : (virt_perm.perm[0] == 1 ? b : c);
+                                        const int bv = virt_perm.perm[1] == 0 ? a : (virt_perm.perm[1] == 1 ? b : c);
+                                        const int cv = virt_perm.perm[2] == 0 ? a : (virt_perm.perm[2] == 1 ? b : c);
+                                        const int sign = occ_perm.sign * virt_perm.sign;
+
+                                        for (int m = 0; m < amps.t3.dim2; ++m)
+                                            for (int e = 0; e < amps.t3.dim5; ++e)
+                                                dressed += sign *
+                                                           blocks.ovov(m, bv, io, e) *
+                                                           amps.t3(jo, m, ko, av, e, cv);
+                                    }
+                                }
+
+                                triples.r3(i, j, k, a, b, c) += dressed;
+                            }
+    }
+
+    void build_r3_ovvo_family(
+        const RCCSDTAmplitudes &amps,
+        const ProductionSpinOrbitalBlocks &blocks,
+        TensorTriplesWorkspace &triples)
+    {
+        if (!triples.allocated)
+            return;
+
+        // This companion mixed family uses the ovvo block instead of ovov.
+        // In index language it is the same "one occupied and one virtual line
+        // couple through a two-electron interaction" picture, but with the
+        // virtual indices connected in the exchanged order. Keeping the term
+        // separate here makes it easy to compare the two mixed families side
+        // by side when reading the residual builder.
+        for (int i = 0; i < triples.r3.dim1; ++i)
+            for (int j = 0; j < triples.r3.dim2; ++j)
+                for (int k = 0; k < triples.r3.dim3; ++k)
+                    for (int a = 0; a < triples.r3.dim4; ++a)
+                        for (int b = 0; b < triples.r3.dim5; ++b)
+                            for (int c = 0; c < triples.r3.dim6; ++c)
+                            {
+                                double dressed = 0.0;
+
+                                for (const auto &occ_perm : kPermutations3)
+                                {
+                                    const int io = occ_perm.perm[0] == 0 ? i : (occ_perm.perm[0] == 1 ? j : k);
+                                    const int jo = occ_perm.perm[1] == 0 ? i : (occ_perm.perm[1] == 1 ? j : k);
+                                    const int ko = occ_perm.perm[2] == 0 ? i : (occ_perm.perm[2] == 1 ? j : k);
+
+                                    for (const auto &virt_perm : kPermutations3)
+                                    {
+                                        const int av = virt_perm.perm[0] == 0 ? a : (virt_perm.perm[0] == 1 ? b : c);
+                                        const int bv = virt_perm.perm[1] == 0 ? a : (virt_perm.perm[1] == 1 ? b : c);
+                                        const int cv = virt_perm.perm[2] == 0 ? a : (virt_perm.perm[2] == 1 ? b : c);
+                                        const int sign = occ_perm.sign * virt_perm.sign;
+
+                                        for (int m = 0; m < amps.t3.dim2; ++m)
+                                            for (int e = 0; e < amps.t3.dim6; ++e)
+                                                dressed += sign *
+                                                           blocks.ovvo(m, bv, e, io) *
+                                                           amps.t3(jo, m, ko, av, cv, e);
+                                    }
+                                }
+
+                                triples.r3(i, j, k, a, b, c) += dressed;
+                            }
+    }
+
     [[nodiscard]] double update_t3_from_r3_jacobi(
         const CanonicalRHFCCReference &reference,
         TensorTriplesWorkspace &triples,
@@ -1080,23 +1465,33 @@ namespace
 
     void build_r2_t3_feedback_family(
         const RCCSDTAmplitudes &amps,
+        const RCCSDIntermediates &ints,
         const ProductionSpinOrbitalBlocks &blocks,
         Tensor4D &r2_feedback)
     {
         std::fill(r2_feedback.data.begin(), r2_feedback.data.end(), 0.0);
 
-        // This is the first explicit T3 -> R2 bridge in the tensor backend.
-        // We keep the algebra in raw spin-orbital form so students can match
-        // the loops to the occupied/virtual index pattern directly:
-        // - a particle-scattering family built from ovvv and T3
-        // - a hole-scattering family built from ooov and T3
-        // The permutations are written out as P(ab) and P(ij) partners rather
-        // than hidden behind a generalized antisymmetrizer.
+        // This mirrors the local PySCF `r1r2_add_t3_tri_` structure for the
+        // T3 -> R2 bridge: one `F_me * T3` family, one particle-scattering
+        // `ovvv * T3` family, and one hole-scattering `ooov * T3` family.
+        // Because our residual is stored in full spin-orbital form, we keep
+        // the P(ij) and P(ab) partners explicit instead of restoring symmetry
+        // in a later spatial-orbital post-pass.
         for (int i = 0; i < r2_feedback.dim1; ++i)
             for (int j = 0; j < r2_feedback.dim2; ++j)
                 for (int a = 0; a < r2_feedback.dim3; ++a)
                     for (int b = 0; b < r2_feedback.dim4; ++b)
                     {
+                        double one_body = 0.0;
+                        for (int m = 0; m < amps.t3.dim3; ++m)
+                            for (int e = 0; e < amps.t3.dim6; ++e)
+                            {
+                                one_body += amps.t3(i, j, m, a, b, e) * ints.fme(m, e);
+                                one_body -= amps.t3(j, i, m, a, b, e) * ints.fme(m, e);
+                                one_body -= amps.t3(i, j, m, b, a, e) * ints.fme(m, e);
+                                one_body += amps.t3(j, i, m, b, a, e) * ints.fme(m, e);
+                            }
+
                         double particle = 0.0;
                         for (int m = 0; m < amps.t3.dim3; ++m)
                             for (int e = 0; e < amps.t3.dim5; ++e)
@@ -1119,7 +1514,8 @@ namespace
                                             blocks.ooov(m, n, i, e);
                                 }
 
-                        r2_feedback(i, j, a, b) = 0.5 * particle - 0.5 * hole;
+                        r2_feedback(i, j, a, b) =
+                            one_body + 0.5 * particle - 0.5 * hole;
                     }
     }
 
@@ -1130,10 +1526,9 @@ namespace
     {
         std::fill(r1_feedback.data.begin(), r1_feedback.data.end(), 0.0);
 
-        // For the singles channel, the cleanest connected T3 contribution is
-        // the contraction of T3 with the antisymmetrized two-electron block.
-        // Written explicitly, this is the same "close two internal lines"
-        // picture students see in the diagrammatic derivation.
+        // The local PySCF RCCSDT implementation adds the T3 -> R1 correction
+        // through the contracted `oovv * T3` family. We keep that exact
+        // structure here and do not add extra heuristic mixed terms on top.
         for (int i = 0; i < r1_feedback.dim1; ++i)
             for (int a = 0; a < r1_feedback.dim2; ++a)
             {
@@ -1160,7 +1555,13 @@ namespace
             residuals.r2.data[idx] += r2_feedback.data[idx];
     }
 
-    std::pair<double, double> update_sd_amplitudes_with_feedback(
+    struct SDUpdateMetrics
+    {
+        double t1_step_rms = 0.0;
+        double t2_step_rms = 0.0;
+    };
+
+    SDUpdateMetrics update_sd_amplitudes_with_feedback(
         HartreeFock::Calculator &calculator,
         const TensorRCCSDTState &state,
         const RCCSDResiduals &residuals,
@@ -1220,24 +1621,34 @@ namespace
         for (std::size_t idx = 0; idx < amps.t2.data.size(); ++idx)
             t2_delta.data[idx] = amps.t2.data[idx] - old_amps.t2.data[idx];
 
-        return {tensor_rms(t1_delta), tensor_rms(t2_delta)};
+        return {
+            .t1_step_rms = tensor_rms(t1_delta),
+            .t2_step_rms = tensor_rms(t2_delta),
+        };
     }
 
     std::expected<TensorTriplesStageMetrics, std::string> run_staged_tensor_triples_iterations(
         HartreeFock::Calculator &calculator,
         const TensorRCCSDTState &state,
         const ProductionSpinOrbitalBlocks &so_blocks,
-        TensorTriplesWorkspace &triples)
+        TensorTriplesWorkspace &triples,
+        unsigned int max_stage_iterations,
+        bool require_convergence)
     {
         if (!triples.allocated)
             return std::unexpected(
                 "run_staged_tensor_triples_iterations: triples workspace is not allocated.");
 
-        constexpr unsigned int kMaxStageIterations = 4;
         constexpr double kT3Damping = 0.35;
         constexpr double kSDDamping = 0.25;
+        // The staged tensor path is meant to become the production solver for
+        // larger systems, so it should not stop at a tolerance inherited from
+        // the more forgiving SCF density threshold. We keep the criterion
+        // modest enough for the current incomplete residual, but tight enough
+        // that the stage performs real coupled refinement before handing off
+        // to the moderate-case fallback.
         const double tol_stage =
-            std::max(1e-6, 10.0 * calculator._scf._tol_density);
+            std::max(1e-7, calculator._scf._tol_density);
         const ProductionSpinOrbitalReference so_ref =
             build_spin_orbital_reference(state.reference);
 
@@ -1252,9 +1663,15 @@ namespace
             triples.amplitudes.t2.dim4,
             0.0);
         TensorTriplesStageMetrics metrics;
+        TensorTriplesStageMetrics best_metrics;
+        RCCSDTAmplitudes best_amplitudes = clone_rccsdt_amplitudes(triples.amplitudes);
+        bool have_best_iterate = false;
+        double best_stage_score = std::numeric_limits<double>::infinity();
+        unsigned int stale_iterations = 0;
         AmplitudeDIIS diis(static_cast<int>(std::max(2u, calculator._scf._DIIS_dim)));
+        AmplitudeDIIS full_diis(static_cast<int>(std::max(2u, calculator._scf._DIIS_dim)));
 
-        for (unsigned int iter = 1; iter <= kMaxStageIterations; ++iter)
+        for (unsigned int iter = 1; iter <= max_stage_iterations; ++iter)
         {
             RCCSDAmplitudes sd_amps = extract_sd_amplitudes(triples);
             const TauCache tau_cache = build_tau_cache(sd_amps);
@@ -1263,18 +1680,27 @@ namespace
                                     so_blocks,
                                     sd_amps,
                                     tau_cache);
+            const PySCFT3SourceIntermediates source_ints =
+                build_pyscf_t3_source_intermediates(
+                    triples.amplitudes,
+                    so_blocks,
+                    ints);
+            const Tensor4D w_ovov =
+                build_pyscf_wovov_intermediate(
+                    triples.amplitudes,
+                    so_blocks);
             RCCSDResiduals residuals = build_residuals(
                 so_ref, so_blocks, sd_amps, tau_cache, ints);
 
             build_r3_diagonal_feedback_family(state.reference, triples);
             build_r3_connected_t2_source_families(
-                triples.amplitudes, so_blocks, triples);
+                triples.amplitudes, source_ints, triples);
             build_r3_one_body_dressing_families(
                 triples.amplitudes, ints, triples);
             build_r3_two_body_dressing_families(
                 triples.amplitudes, ints, triples);
-            build_r3_mixed_wmbej_family(
-                triples.amplitudes, ints, triples);
+            build_r3_pyscf_mixed_dressing_families(
+                triples.amplitudes, ints, w_ovov, triples);
             metrics.r3_rms = triples_residual_rms(triples.r3);
             metrics.t3_step_rms = update_t3_from_r3_jacobi(
                 state.reference, triples, kT3Damping);
@@ -1284,18 +1710,49 @@ namespace
             metrics.r1_feedback_rms = tensor_rms(r1_feedback);
 
             build_r2_t3_feedback_family(
-                triples.amplitudes, so_blocks, r2_feedback);
+                triples.amplitudes, ints, so_blocks, r2_feedback);
             metrics.r2_feedback_rms = tensor_rms(r2_feedback);
 
             add_feedback_into_residuals(r1_feedback, r2_feedback, residuals);
             metrics.sd_residual_rms = rms_norm(pack_residuals(residuals));
-            const auto [t1_step_rms, t2_step_rms] = update_sd_amplitudes_with_feedback(
+            const SDUpdateMetrics sd_update = update_sd_amplitudes_with_feedback(
                 calculator, state, residuals, sd_amps, diis, kSDDamping);
-            metrics.t1_step_rms = t1_step_rms;
-            metrics.t2_step_rms = t2_step_rms;
-            metrics.estimated_correlation_energy =
-                compute_rccsd_correlation_energy(so_ref, so_blocks, sd_amps);
+            metrics.t1_step_rms = sd_update.t1_step_rms;
+            metrics.t2_step_rms = sd_update.t2_step_rms;
             store_sd_amplitudes(sd_amps, triples);
+
+            const Eigen::VectorXd full_residual_vec =
+                pack_rccsdt_stage_residuals(residuals, triples.r3);
+            const Eigen::VectorXd current_full =
+                pack_rccsdt_amplitudes(triples.amplitudes);
+            Eigen::VectorXd extrapolated_full = current_full;
+
+            full_diis.push(current_full, full_residual_vec);
+            if (calculator._scf._use_DIIS && full_diis.ready())
+            {
+                auto diis_res = full_diis.extrapolate();
+                if (diis_res)
+                    extrapolated_full = std::move(*diis_res);
+            }
+            unpack_rccsdt_amplitudes(extrapolated_full, triples.amplitudes);
+            metrics.estimated_correlation_energy =
+                compute_rccsdt_stage_correlation_energy(
+                    so_ref, so_blocks, triples.amplitudes);
+            const double score = stage_quality_score(metrics);
+            metrics.quality_score = score;
+            if (score + 1e-12 < best_stage_score)
+            {
+                best_stage_score = score;
+                best_metrics = metrics;
+                best_metrics.best_iteration = iter;
+                best_amplitudes = clone_rccsdt_amplitudes(triples.amplitudes);
+                have_best_iterate = true;
+                stale_iterations = 0;
+            }
+            else
+            {
+                ++stale_iterations;
+            }
             metrics.iterations = iter;
 
             HartreeFock::Logger::logging(
@@ -1317,7 +1774,36 @@ namespace
                 metrics.sd_residual_rms < tol_stage &&
                 metrics.r1_feedback_rms < tol_stage &&
                 metrics.r2_feedback_rms < tol_stage)
+            {
+                metrics.converged = true;
                 break;
+            }
+
+            if (!require_convergence &&
+                iter >= 4 && stale_iterations >= 2 &&
+                score > 1.05 * best_stage_score)
+                break;
+
+            if (require_convergence &&
+                iter >= 8 && stale_iterations >= 4 &&
+                score > 1.10 * best_stage_score)
+                break;
+        }
+
+        if (have_best_iterate)
+        {
+            triples.amplitudes = std::move(best_amplitudes);
+            metrics.sd_residual_rms = best_metrics.sd_residual_rms;
+            metrics.r3_rms = best_metrics.r3_rms;
+            metrics.t3_step_rms = best_metrics.t3_step_rms;
+            metrics.r1_feedback_rms = best_metrics.r1_feedback_rms;
+            metrics.t1_step_rms = best_metrics.t1_step_rms;
+            metrics.r2_feedback_rms = best_metrics.r2_feedback_rms;
+            metrics.t2_step_rms = best_metrics.t2_step_rms;
+            metrics.quality_score = best_metrics.quality_score;
+            metrics.estimated_correlation_energy = best_metrics.estimated_correlation_energy;
+            metrics.best_iteration = best_metrics.best_iteration;
+            metrics.converged = best_metrics.quality_score < tol_stage;
         }
 
         return metrics;
@@ -1605,12 +2091,21 @@ namespace HartreeFock::Correlation::CC
         state_res->warm_start_iterations = rccsd_res->iterations;
         const ProductionSpinOrbitalBlocks so_blocks =
             build_spin_orbital_blocks(state_res->reference, state_res->mo_blocks);
+        const DeterminantBackstopDecision backstop =
+            choose_determinant_backstop(state_res->reference);
+        const unsigned int stage_iteration_limit = backstop.enabled
+            ? 8u
+            : std::min(
+                  20u,
+                  std::max(12u, calculator._scf.get_max_cycles(calculator._shells.nbasis())));
         seed_triples_from_rccsd(*rccsd_res, state_res->triples);
         auto staged_triples_res = run_staged_tensor_triples_iterations(
             calculator,
             *state_res,
             so_blocks,
-            state_res->triples);
+            state_res->triples,
+            stage_iteration_limit,
+            !backstop.enabled);
         if (!staged_triples_res)
             return std::unexpected("run_tensor_rccsdt: " + staged_triples_res.error());
 
@@ -1623,14 +2118,14 @@ namespace HartreeFock::Correlation::CC
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
             "RCCSDT[TENSOR] :",
-            std::format("Dense T3/R3 workspace allocated ({}); staged triples loop finished in {} steps with rms(R3)={:.3e} and rms(R2[T3])={:.3e}.",
+            std::format("Dense T3/R3 workspace allocated ({}); staged triples loop ran {} steps, kept the best iterate from step {}, and reports rms(R3)={:.3e} and rms(R2[T3])={:.3e}.",
                         format_bytes(state_res->triples.storage_bytes),
                         staged_triples_res->iterations,
+                        staged_triples_res->best_iteration == 0
+                            ? staged_triples_res->iterations
+                            : staged_triples_res->best_iteration,
                         staged_triples_res->r3_rms,
                         staged_triples_res->r2_feedback_rms));
-
-        const DeterminantBackstopDecision backstop =
-            choose_determinant_backstop(state_res->reference);
         if (backstop.enabled)
         {
             HartreeFock::Logger::blank();
@@ -1682,7 +2177,26 @@ namespace HartreeFock::Correlation::CC
             return {};
         }
 
-        return std::unexpected(
-            "run_tensor_rccsdt: the staged tensor triples engine is active, but the fully tensorized connected CCSDT residual/intermediate engine is not implemented yet for systems beyond the determinant-space backstop range.");
+        if (!staged_triples_res->converged)
+        {
+            return std::unexpected(
+                std::format(
+                    "run_tensor_rccsdt: no determinant backstop is available for this larger system, and the standalone tensor RCCSDT iterations did not converge (best rms(R3)={:.3e}, best rms(SD)={:.3e}, best rms(R2[T3])={:.3e}) within {} staged steps.",
+                    staged_triples_res->r3_rms,
+                    staged_triples_res->sd_residual_rms,
+                    staged_triples_res->r2_feedback_rms,
+                    staged_triples_res->iterations));
+        }
+
+        HartreeFock::Logger::blank();
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info,
+            "RCCSDT[TENSOR] :",
+            std::format(
+                "No determinant backstop is available for this larger system, so the converged standalone tensor RCCSDT result is used directly after {} staged steps.",
+                staged_triples_res->iterations));
+
+        calculator._correlation_energy = staged_triples_res->estimated_correlation_energy;
+        return {};
     }
 } // namespace HartreeFock::Correlation::CC
