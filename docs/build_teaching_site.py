@@ -119,6 +119,9 @@ def render_markdown(
     paragraph: list[str] = []
 
     def slugify(t: str) -> str:
+        # Strip math placeholder tokens before building the URL anchor so that
+        # headings containing inline math don't produce XMATHX…XMATHX fragments.
+        t = re.sub(r"XMATHX\d+XMATHX", "", t)
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", t.strip().lower()).strip("-")
         return slug or "section"
 
@@ -662,13 +665,15 @@ def main() -> int:
     # 2. Render the rest of the markdown to HTML
     content_html, toc = render_markdown(markdown_no_math)
 
-    # 3. Restore math tokens as MathJax-ready LaTeX
-    content_html = _restore_math(content_html, math_store)
-
-    # 4. Build TOC and assemble page
+    # 3. Build TOC and assemble the full page (math tokens still present)
     toc_html = build_toc(toc)
     title = "Planck"
     page = page_template(title, toc_html, content_html)
+
+    # 4. Restore math tokens across the entire page in one pass so that
+    #    tokens appearing in heading text (and therefore in TOC sidebar links)
+    #    are also replaced — not just tokens in the main content body.
+    page = _restore_math(page, math_store)
 
     output_path.write_text(page, encoding="utf-8")
     print(f"Wrote {output_path}")

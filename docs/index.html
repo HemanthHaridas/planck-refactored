@@ -356,7 +356,7 @@
 <li class="toc-level-2"><a href="#13a-coupled-cluster-in-planck">13A. Coupled Cluster in Planck</a></li>
 <li class="toc-level-3"><a href="#rccsd">RCCSD</a></li>
 <li class="toc-level-3"><a href="#worked-example-a-singles-residual-term">Worked Example: a Singles-Residual Term</a></li>
-<li class="toc-level-3"><a href="#worked-example-a-doubles-residual-term-with-xmathx322xmathx">Worked Example: a Doubles-Residual Term with XMATHX322XMATHX</a></li>
+<li class="toc-level-3"><a href="#worked-example-a-doubles-residual-term-with">Worked Example: a Doubles-Residual Term with <span class="math-inline">\(W_{mbej}\)</span></a></li>
 <li class="toc-level-3"><a href="#rccsdt-backend-selection">RCCSDT Backend Selection</a></li>
 <li class="toc-level-3"><a href="#tensor-production-backend-tensor-backend">Tensor Production Backend (`tensor_backend.*`)</a></li>
 <li class="toc-level-3"><a href="#warm-start-from-tensor-amplitudes">Warm-Start from Tensor Amplitudes</a></li>
@@ -1054,7 +1054,7 @@ t(i,e)   ×   F(a,e)   -- sum over e --&gt;   R(i,a)
  occupied i   virtual a survives
 </code></pre>
 <p>The point of the intermediate is visible here. Without <code>ints.fae(a,e)</code>, this line would have to expand back into several nested sums over occupied and virtual indices every time the singles residual is formed. By hiding that work inside <code>build_intermediates</code>, the residual code reads like the compact equations shown in a CCSD derivation.</p>
-<h3 id="worked-example-a-doubles-residual-term-with-xmathx322xmathx">Worked Example: a Doubles-Residual Term with <span class="math-inline">\(W_{mbej}\)</span></h3>
+<h3 id="worked-example-a-doubles-residual-term-with">Worked Example: a Doubles-Residual Term with <span class="math-inline">\(W_{mbej}\)</span></h3>
 <p>One common family of doubles-residual contributions is built from the mixed intermediate <span class="math-inline">\(W_{mbej}\)</span>. A representative term is</p>
 <p><span class="math-display">\[
 \sum_{me} t_{im}^{ae} W_{mbej}
