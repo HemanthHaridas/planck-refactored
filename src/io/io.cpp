@@ -488,7 +488,9 @@ namespace HartreeFock::IO
                 {"rmp2", HartreeFock::PostHF::RMP2},
                 {"ump2", HartreeFock::PostHF::UMP2},
                 {"ccsd", HartreeFock::PostHF::RCCSD},
+                {"uccsd", HartreeFock::PostHF::UCCSD},
                 {"ccsdt", HartreeFock::PostHF::RCCSDT},
+                {"uccsdt", HartreeFock::PostHF::UCCSDT},
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
             };

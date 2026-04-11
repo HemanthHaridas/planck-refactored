@@ -30,6 +30,18 @@ namespace
 
 namespace HartreeFock::Correlation::CC
 {
+    namespace
+    {
+        [[nodiscard]] int count_electrons(const HartreeFock::Calculator &calculator)
+        {
+            int n_electrons = 0;
+            for (const auto Z : calculator._molecule.atomic_numbers)
+                n_electrons += static_cast<int>(Z);
+            n_electrons -= calculator._molecule.charge;
+            return n_electrons;
+        }
+    } // namespace
+
     Tensor2D::Tensor2D(int d1, int d2, double value)
         : dim1(d1), dim2(d2), data(checked_product({d1, d2}, "Tensor2D"), value)
     {
@@ -166,11 +178,7 @@ namespace HartreeFock::Correlation::CC
         const int n_ao = static_cast<int>(calculator._shells.nbasis());
         const Eigen::MatrixXd &C = calculator._info._scf.alpha.mo_coefficients;
         const Eigen::VectorXd &eps = calculator._info._scf.alpha.mo_energies;
-
-        int n_electrons = 0;
-        for (const auto Z : calculator._molecule.atomic_numbers)
-            n_electrons += static_cast<int>(Z);
-        n_electrons -= calculator._molecule.charge;
+        const int n_electrons = count_electrons(calculator);
 
         if (n_electrons % 2 != 0)
             return std::unexpected("build_rhf_reference: closed-shell RHF reference required.");
@@ -194,6 +202,53 @@ namespace HartreeFock::Correlation::CC
         ref.C_virt = C.middleCols(ref.n_occ, ref.n_virt);
         ref.eps_occ = eps.head(ref.n_occ);
         ref.eps_virt = eps.tail(ref.n_virt);
+        return ref;
+    }
+
+    std::expected<UHFReference, std::string> build_uhf_reference(
+        HartreeFock::Calculator &calculator)
+    {
+        if (!calculator._info._is_converged)
+            return std::unexpected("build_uhf_reference: SCF not converged.");
+        if (calculator._scf._scf != HartreeFock::SCFType::UHF ||
+            !calculator._info._scf.is_uhf)
+            return std::unexpected("build_uhf_reference: canonical UHF reference required.");
+
+        const int n_ao = static_cast<int>(calculator._shells.nbasis());
+        const Eigen::MatrixXd &Ca = calculator._info._scf.alpha.mo_coefficients;
+        const Eigen::VectorXd &epsa = calculator._info._scf.alpha.mo_energies;
+        const Eigen::MatrixXd &Cb = calculator._info._scf.beta.mo_coefficients;
+        const Eigen::VectorXd &epsb = calculator._info._scf.beta.mo_energies;
+
+        const int n_electrons = count_electrons(calculator);
+        const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+        const int n_alpha = (n_electrons + n_unpaired) / 2;
+        const int n_beta = (n_electrons - n_unpaired) / 2;
+
+        if (n_alpha < 0 || n_beta < 0)
+            return std::unexpected("build_uhf_reference: invalid alpha/beta occupation counts.");
+        if (n_alpha > n_ao || n_beta > n_ao)
+            return std::unexpected("build_uhf_reference: occupied orbitals exceed MO dimension.");
+        if (n_alpha == 0 || n_beta == 0)
+            return std::unexpected("build_uhf_reference: both spin channels need at least one occupied orbital.");
+        if (n_alpha == n_ao || n_beta == n_ao)
+            return std::unexpected("build_uhf_reference: both spin channels need at least one virtual orbital.");
+        if (Ca.rows() != n_ao || Ca.cols() != n_ao || Cb.rows() != n_ao || Cb.cols() != n_ao)
+            return std::unexpected("build_uhf_reference: MO coefficient matrices have wrong dimensions.");
+        if (epsa.size() != n_ao || epsb.size() != n_ao)
+            return std::unexpected("build_uhf_reference: MO energy vectors have wrong length.");
+
+        UHFReference ref;
+        ref.n_ao = n_ao;
+        ref.n_mo = n_ao;
+        ref.n_occ_alpha = n_alpha;
+        ref.n_occ_beta = n_beta;
+        ref.n_virt_alpha = n_ao - n_alpha;
+        ref.n_virt_beta = n_ao - n_beta;
+        ref.C_alpha = Ca;
+        ref.C_beta = Cb;
+        ref.eps_alpha = epsa;
+        ref.eps_beta = epsb;
         return ref;
     }
 } // namespace HartreeFock::Correlation::CC

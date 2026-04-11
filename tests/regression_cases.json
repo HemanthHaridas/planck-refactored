@@ -199,6 +199,55 @@
       ]
     },
     {
+      "id": "water_rccsdt_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_rccsdt_sto3g.hfinp",
+      "tags": ["extended"],
+      "timeout_s": 180,
+      "expected_exit_code": 0,
+      "contains": [
+        "RCCSDT[TENSOR] :              Using the determinant-space CCSDT backstop",
+        "RCCSDT[DET-BACKSTOP] :        Converged in",
+        "Total RCCSDT Energy"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.9629916293, "atol": 1e-9},
+        {"type": "metric_close", "metric": "rccsdt_total_energy", "expected": -75.0124975812, "atol": 2e-8},
+        {"type": "metric_lt_metric", "left": "rccsdt_total_energy", "right": "rhf_total_energy"}
+      ]
+    },
+    {
+      "id": "b_uccsd_sto3g",
+      "input": "tests/inputs/regression/post_hf/b_uccsd_sto3g.hfinp",
+      "tags": ["smoke", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "UCCSD :",
+        "Determinant-space prototype",
+        "Total UCCSD Energy"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -24.1489886649, "atol": 1e-9},
+        {"type": "metric_close", "metric": "uccsd_total_energy", "expected": -24.1892581442, "atol": 1e-9},
+        {"type": "metric_lt_metric", "left": "uccsd_total_energy", "right": "rhf_total_energy"}
+      ]
+    },
+    {
+      "id": "b_uccsdt_sto3g",
+      "input": "tests/inputs/regression/post_hf/b_uccsdt_sto3g.hfinp",
+      "tags": ["smoke", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "UCCSDT :",
+        "Determinant-space prototype",
+        "Total UCCSDT Energy"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -24.1489886649, "atol": 1e-9},
+        {"type": "metric_close", "metric": "uccsdt_total_energy", "expected": -24.1892636164, "atol": 1e-9},
+        {"type": "metric_lt_metric", "left": "uccsdt_total_energy", "right": "rhf_total_energy"}
+      ]
+    },
+    {
       "id": "water_triplet_uhf_sto3g",
       "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfinp",
       "tags": ["extended"],

@@ -109,7 +109,9 @@ static Eigen::VectorXd _run_sp_gradient_hf(HartreeFock::Calculator &calc)
         throw std::runtime_error("GeomOpt UMP2 gradient is not implemented");
     }
     else if (calc._correlation == HartreeFock::PostHF::RCCSD ||
-             calc._correlation == HartreeFock::PostHF::RCCSDT)
+             calc._correlation == HartreeFock::PostHF::UCCSD ||
+             calc._correlation == HartreeFock::PostHF::RCCSDT ||
+             calc._correlation == HartreeFock::PostHF::UCCSDT)
     {
         throw std::runtime_error("GeomOpt coupled-cluster gradients are not implemented");
     }
