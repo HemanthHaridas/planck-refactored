@@ -78,6 +78,14 @@ def _restore_math(html_text: str, store: dict[str, str]) -> str:
 def inline_format(text: str) -> str:
     """Apply inline markdown (code, bold, italic, links)."""
     text = html.escape(text)
+    text = re.sub(
+        r"!\[([^\]]*)\]\(([^)]+)\)",
+        lambda m: (
+            f'<img src="{html.escape(m.group(2), quote=True)}" '
+            f'alt="{html.escape(m.group(1), quote=True)}">'
+        ),
+        text,
+    )
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", text)
@@ -515,6 +523,17 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
       background: rgba(219,205,185,0.18);
     }}
     .content a {{ color: var(--accent); }}
+    .content img {{
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: 1.2rem auto;
+      border: 1px solid var(--rule);
+      border-radius: 16px;
+      background: #fffdf8;
+      box-shadow: 0 10px 28px rgba(42, 33, 20, 0.06);
+      padding: 10px;
+    }}
     .math-display {{
       display: block;
       overflow-x: auto;

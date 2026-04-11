@@ -22,11 +22,24 @@ namespace HartreeFock::Correlation::CC
         RCCSDTAmplitudes amplitudes;
     };
 
+    struct UCCSDTState
+    {
+        UHFReference reference;
+    };
+
     std::expected<RCCSDTState, std::string> prepare_rccsdt(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs);
 
     std::expected<void, std::string> run_rccsdt(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs);
+
+    std::expected<UCCSDTState, std::string> prepare_uccsdt(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs);
+
+    std::expected<void, std::string> run_uccsdt(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs);
 } // namespace HartreeFock::Correlation::CC

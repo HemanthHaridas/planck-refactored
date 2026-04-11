@@ -404,9 +404,177 @@ After a single-point RMP2 run, Planck automatically diagonalizes the unrelaxed M
 
 Occupancies close to 2 indicate strongly occupied (nearly HF) natural orbitals; small values (0.01–0.1) indicate correlation-driven occupation of virtual space. This output is useful for selecting an appropriate active space before a CASSCF calculation.
 
-### 9. CASSCF active-space calculation
+### 9. Coupled cluster
 
-CASSCF (Complete Active Space SCF) provides a multireference wavefunction by performing a full CI expansion within a chosen active space of `nactorb` orbitals containing `nactele` electrons. The RHF orbitals serve as the starting reference; CASSCF then simultaneously optimizes the CI coefficients and orbital rotations until convergence.
+#### RCCSD
+
+`correlation ccsd` runs the conventional iterative RCCSD solver for canonical
+closed-shell RHF references. It expands spatial orbitals into a spin-orbital
+basis, forms the standard τ/τ̃ tensors and CCSD intermediates
+(F_ae, F_mi, F_me, W_mnij, W_abef, W_mbej), then iterates T1/T2 amplitudes
+with DIIS. Scales O(N⁶); no system-size cap.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation ccsd
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+    save_checkpoint .false.
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+H     0.000000     0.000000    -0.370500
+H     0.000000     0.000000     0.370500
+%end_coords
+```
+
+#### UCCSD (determinant prototype)
+
+`correlation uccsd` uses a determinant-space teaching prototype for open-shell
+UHF references. Intended for small classroom-scale systems (≤ 12 spin orbitals
+/ ≤ 1200 determinants). Boron atom is the canonical test case.
+
+```
+%begin_scf
+    scf_type    uhf
+    correlation uccsd
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+%end_scf
+
+%begin_coords
+1
+0   2
+B     0.000000    0.000000    0.000000
+%end_coords
+```
+
+#### RCCSDT — small system (determinant prototype)
+
+`correlation ccsdt` on a small RHF system automatically uses the
+determinant-space prototype: it builds the spin-orbital Hamiltonian, enumerates
+all S/D/T excitations, evaluates `exp(−T) H exp(T) |Φ₀⟩` in the determinant
+basis, and projects residuals onto S/D/T. LiH/STO-3G is the canonical test
+(4 electrons, 6 spatial orbitals); triples contribution ≈ 10⁻⁵ Hartree.
+
+```
+%begin_scf
+    scf_type    rhf
+    correlation ccsdt
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+    save_checkpoint .false.
+%end_scf
+
+%begin_coords
+2
+0   1
+Li    0.000000     0.000000     0.000000
+H     0.000000     0.000000     1.595000
+%end_coords
+```
+
+#### RCCSDT — moderate system (tensor warm-start + determinant backstop)
+
+The same `correlation ccsdt` keyword routes to the tensor production backend
+automatically when the system exceeds the direct determinant-prototype limit
+(nso > 12 or ndet > 1200). `choose_rccsdt_backend` makes this decision; no
+keyword change is needed.
+
+For moderate-size systems the tensor backend does not run alone — it is a
+three-stage pipeline:
+
+1. **Tensor RCCSD warm-start** — converges T1/T2 using the spin-orbital
+   intermediate solver. Prints a per-block memory summary up front.
+2. **Staged tensor T3 loop** — begins iterating the triples workspace for a
+   fixed number of steps to build T3 amplitude quality.
+3. **Determinant backstop** — if the system fits within nso ≤ 16 and the full
+   Fock-space determinant count `C(nso, nelec)` ≤ 5000, the determinant solver
+   takes over, warm-started from the T1/T2/T3 produced in stages 1–2, and runs
+   to full convergence. Systems beyond nso=16 / ndet=5000 will error until the
+   fully tensorized T3 residual engine is complete.
+
+Water/STO-3G (nso=14, ndet=C(14,10)=1001) goes through all three stages —
+the final convergence is through the determinant backstop with 1001 determinants.
+
+```
+%begin_scf
+    scf_type    rhf
+    correlation ccsdt
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+    save_checkpoint .false.
+%end_scf
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.000000
+H     0.000000    -0.757160     0.586260
+H     0.000000     0.757160     0.586260
+%end_coords
+```
+
+Log markers to watch for: `RCCSDT[TENSOR]` (tensor stages), `RCCSDT[DET-BACKSTOP]`
+(determinant backstop iterations).
+
+#### UCCSDT (determinant prototype)
+
+`correlation uccsdt` extends the UCCSD determinant prototype to include triple
+excitations (`max_rank = 3`). Same size limit as UCCSD; Boron/STO-3G is the
+canonical test.
+
+```
+%begin_scf
+    scf_type    uhf
+    correlation uccsdt
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+%end_scf
+
+%begin_coords
+1
+0   2
+B     0.000000    0.000000    0.000000
+%end_coords
+```
+
+The `UCCSDT − UCCSD` triples correction for B/STO-3G is nonzero and
+verifiable against `tests/pyscf/b_uccsdt_sto3g.py`.
+
+---
+
+### 10. CASSCF active-space calculation
+
+CASSCF (Complete Active Space SCF) provides a multireference wavefunction by
+performing a full CI expansion within a chosen active space of `nactorb`
+orbitals containing `nactele` electrons. The RHF orbitals serve as the starting
+reference; CASSCF then simultaneously optimizes the CI coefficients and orbital
+rotations until convergence.
 
 ```
 %begin_control
@@ -447,7 +615,8 @@ H    0.000000   -0.757005   -0.468704
 %end_coords
 ```
 
-Output includes the RHF reference energy, the CASSCF energy at each macro-iteration, orbital gradient norm, and natural orbital occupation numbers:
+Output includes the RHF reference energy, the CASSCF energy at each
+macro-iteration, orbital gradient norm, and natural orbital occupation numbers:
 
 ```
 [INF]  CASSCF  macro  0:  E = -75.9849xxxx Eh   |g| = x.xxxe-xx
@@ -458,11 +627,99 @@ Output includes the RHF reference energy, the CASSCF energy at each macro-iterat
 [INF]  Natural occupation numbers (active): 1.9xxx  1.9xxx  0.0xxx  0.0xxx
 ```
 
-**Choosing the active space**: A good starting point is to include all strongly correlated orbitals — bonding/antibonding pairs, lone pairs involved in bond breaking, frontier orbitals. For H₂O with STO-3G, CAS(4,4) includes the four valence-like orbitals. Start small and check the natural occupation numbers: values near 0 or 2 indicate weakly correlated orbitals that may not need to be active.
+**Choosing the active space**: A good starting point is to include all strongly
+correlated orbitals — bonding/antibonding pairs, lone pairs involved in bond
+breaking, frontier orbitals. For H₂O with STO-3G, CAS(4,4) includes the four
+valence-like orbitals. Start small and check the natural occupation numbers:
+values near 0 or 2 indicate weakly correlated orbitals that may not need to be
+active.
 
-**State averaging (SA-CASSCF)**: Set `nroots 2` (or more) to simultaneously optimize orbitals for multiple electronic states with equal weights. Custom weights are not currently exposed as keywords; use equal-weight averaging.
+#### State-averaged CASSCF (SA-CASSCF)
 
-### 10. SCF mode
+Set `nroots N` to simultaneously optimize orbitals for N electronic states.
+Provide `weights` (space-separated, automatically normalized) to use unequal
+state averaging. Default is equal weights when `weights` is omitted.
+
+```
+%begin_scf
+    scf_type           rhf
+    correlation        casscf
+    use_diis           .true.
+    diis_dim           8
+    engine             os
+    guess              hcore
+    nactele            2
+    nactorb            2
+    nroots             3
+    weights            0.5 0.25 0.25   # S0 weighted 2×, S1 and S2 equal
+    mcscf_max_iter     200
+    tol_mcscf_energy   1e-8
+    tol_mcscf_grad     1e-5
+%end_scf
+```
+
+The iteration table prints `SA Grad` (convergence quantity,
+`‖Σ_I w_I g_I‖∞`) and `MaxRootG` (diagnostic, max over roots).
+
+To pin active orbitals by irrep when `use_symm .true.`:
+
+```
+    core_irrep_counts   A1=3 B1=1
+    active_irrep_counts A1=1 B1=1
+```
+
+---
+
+### 11. RASSCF active-space calculation
+
+RASSCF extends CASSCF by partitioning the active space into three subspaces:
+RAS1 (hole excitations limited by `max_holes`), RAS2 (full CI, like a small
+CAS), and RAS3 (particle excitations limited by `max_elec`). Total active
+orbitals must equal `nras1 + nras2 + nras3 = nactorb`.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation rasscf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    nactele     4
+    nactorb     4
+    nroots      1
+    nras1       1        # 1 orbital in RAS1; at most max_holes holes allowed
+    nras2       2        # 2 orbitals in RAS2 (full CI)
+    nras3       1        # 1 orbital in RAS3; at most max_elec electrons allowed
+    max_holes   1
+    max_elec    1
+    mcscf_max_iter  50
+    tol_mcscf_energy  1e-8
+    tol_mcscf_grad    1e-5
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O    0.000000    0.000000    0.117176
+H    0.000000    0.757005   -0.468704
+H    0.000000   -0.757005   -0.468704
+%end_coords
+```
+
+### 12. SCF mode
 
 | Mode | Keyword | When to use |
 |---|---|---|
@@ -488,7 +745,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 ```
 
 
-### 11. Basis sets
+### 13. Basis sets
 
 | Keyword | Description |
 |---|---|
@@ -498,7 +755,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | `6-31g*` | 6-31G + d polarization on heavy atoms |
 
 
-### 12. Convergence tips
+### 14. Convergence tips
 
 | Problem | Fix |
 |---|---|
@@ -510,11 +767,11 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | MO labels are Ag/Bg/Au/Bu instead of Eg/Eu | Expected — for non-Abelian groups (D3d, Oh, …) the program uses the largest Abelian subgroup (e.g. C2h for D3d). The active group is printed to the log. |
 
 
-### 13. Kohn-Sham DFT calculation
+### 15. Kohn-Sham DFT calculation
 
 Kohn-Sham DFT uses a separate executable, `planck-dft`. It reads the same `.hfinp` format but requires a `%begin_dft` block that selects the exchange-correlation functional and integration grid. The `scf_type` keyword in `%begin_scf` controls the reference: `rhf` → RKS, `uhf` → UKS.
 
-#### Minimal PBE/STO-3G single point — water
+#### Minimal PBE/STO-3G single point — water (RKS)
 
 ```
 %begin_control
@@ -606,6 +863,120 @@ The same post-SCF multipole analysis is available in `planck-dft`, because the d
 | `grid fine` | ~302 | High-accuracy or difficult systems |
 | `grid ultrafine` | ~590 | Benchmark-quality results |
 
+#### Open-shell KS-DFT (UKS)
+
+Set `scf_type uhf` for unrestricted Kohn-Sham. Multiplicity goes in `%begin_coords` as usual.
+
+```
+%begin_scf
+    scf_type    uhf
+    use_diis    .true.
+    diis_dim    6
+    engine      os
+    level_shift 0.3
+%end_scf
+
+%begin_dft
+    exchange    pbe
+    correlation pbe
+    grid        normal
+%end_dft
+
+%begin_coords
+3
+0   3
+O     0.000000     0.000000     0.000000
+H     0.758077     0.000000    -0.602602
+H    -0.758077     0.000000    -0.602602
+%end_coords
+```
+
+#### DFT geometry optimization
+
+`calculation geomopt` works the same as for HF; the KS gradient drives each
+step. Use `opt_coords internal` for IC-BFGS (recommended for non-linear molecules).
+
+```
+%begin_control
+    basis       sto-3g
+    calculation geomopt
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    6
+    engine      os
+    guess       hcore
+    max_cycles  50
+    tol_energy  1.0e-8
+    tol_density 1.0e-8
+%end_scf
+
+%begin_dft
+    exchange    pbe
+    correlation pbe
+    grid        coarse
+%end_dft
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+H     0.000000     0.000000    -0.450000
+H     0.000000     0.000000     0.450000
+%end_coords
+```
+
+#### DFT frequency analysis
+
+`calculation freq` (or `calculation optfreq`) computes the semi-numerical
+Hessian from finite differences of KS gradients. Run at an optimized geometry
+to get physically meaningful frequencies.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation freq
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    6
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_dft
+    exchange    pbe
+    correlation pbe
+    grid        normal
+%end_dft
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+H     0.000000     0.000000    -0.370000
+H     0.000000     0.000000     0.370000
+%end_coords
+```
+
 #### Custom libxc functional
 
 To use any libxc functional by its integer ID, replace the enum keywords with numeric IDs:
@@ -618,25 +989,26 @@ To use any libxc functional by its integer ID, replace the enum keywords with nu
 %end_dft
 ```
 
-### 14. All input keywords at a glance
+### 16. All input keywords at a glance
 
 ```
 %begin_control
     basis        sto-3g | 3-21g | 6-31g | 6-31g*
     basis_type   cartesian | spherical
-    calculation  energy | gradient | geomopt | freq   # freq = frequency analysis
+    calculation  energy | gradient | geomopt | freq | optfreq | imagfollow
     verbosity    silent | minimal | normal | verbose | debug
     basis_path   /path/to/basis-sets          # optional override
     grad_tol     3e-4                         # geomopt convergence threshold (Ha/Bohr)
     max_geomopt_iter  50                      # maximum geometry optimization steps
     hessian_step 5e-3                         # finite-difference step (Bohr) for freq
+    print_populations .true. | .false.        # Mulliken population analysis
 %end_control
 
 %begin_scf
-    scf_type       rhf | uhf
+    scf_type       rhf | rohf | uhf
     scf_mode       conventional | direct | auto
-    engine         os
-    guess          hcore | density | full
+    engine         os | rys | auto
+    guess          hcore | sad | density | full
     save_checkpoint .true. | .false.
     use_diis       .true. | .false.
     diis_dim       8
@@ -647,14 +1019,30 @@ To use any libxc functional by its integer ID, replace the enum keywords with nu
     tol_density    1e-10
     tol_eri        1e-10
     threshold      100                        # auto-mode nbasis cutoff
-    correlation    rmp2 | ump2 | casscf | rasscf
-    nactele        4                        # active electrons (casscf/rasscf)
-    nactorb        4                        # active orbitals  (casscf/rasscf)
-    nroots         1                        # CI roots; >1 = state-averaged
+    correlation    rmp2 | ump2               # MP2
+                 | ccsd                      # RCCSD (iterative tensor, any size)
+                 | uccsd                     # UCCSD (determinant prototype, small systems)
+                 | ccsdt                     # RCCSDT (auto-selects determinant or tensor backend)
+                 | uccsdt                    # UCCSDT (determinant prototype, small systems)
+                 | casscf | rasscf           # multireference active-space SCF
+    # CASSCF / RASSCF shared
+    nactele        4                          # active electrons
+    nactorb        4                          # active orbitals
+    nroots         1                          # CI roots; >1 = state-averaged
+    weights        0.5 0.25 0.25             # SA weights (one per root, auto-normalized)
+    core_irrep_counts   A1=3 B1=1            # pin core orbitals by irrep
+    active_irrep_counts A1=2 B1=2            # pin active orbitals by irrep
+    mo_permutation      0 1 2 ...            # reorder MOs before MCSCF loop (0-based)
     mcscf_max_iter     200
     mcscf_micro_per_macro  4
     tol_mcscf_energy   1e-8
     tol_mcscf_grad     1e-4
+    # RASSCF only
+    nras1          1                          # orbitals in RAS1 (hole excitations)
+    nras2          2                          # orbitals in RAS2 (full CI)
+    nras3          1                          # orbitals in RAS3 (particle excitations)
+    max_holes      1                          # max holes in RAS1
+    max_elec       1                          # max electrons in RAS3
 %end_scf
 
 # planck-dft only: selects XC functional and numerical integration grid

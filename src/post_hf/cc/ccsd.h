@@ -23,11 +23,27 @@ namespace HartreeFock::Correlation::CC
         RCCSDAmplitudes amplitudes;
     };
 
+    // The unrestricted teaching implementation currently uses the same
+    // determinant-space solver engine as the prototype CCSDT path. Preparation
+    // therefore only needs to snapshot the validated UHF reference.
+    struct UCCSDState
+    {
+        UHFReference reference;
+    };
+
     std::expected<RCCSDState, std::string> prepare_rccsd(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs);
 
     std::expected<void, std::string> run_rccsd(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs);
+
+    std::expected<UCCSDState, std::string> prepare_uccsd(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs);
+
+    std::expected<void, std::string> run_uccsd(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs);
 } // namespace HartreeFock::Correlation::CC

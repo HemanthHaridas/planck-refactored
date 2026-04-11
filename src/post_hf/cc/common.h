@@ -83,9 +83,34 @@ namespace HartreeFock::Correlation::CC
         Eigen::VectorXd eps_virt;
     };
 
+    struct UHFReference
+    {
+        int n_ao = 0;
+        int n_mo = 0;
+        int n_occ_alpha = 0;
+        int n_occ_beta = 0;
+        int n_virt_alpha = 0;
+        int n_virt_beta = 0;
+
+        // The unrestricted determinant-space teaching solvers need access to the
+        // full alpha and beta canonical MO spaces because occupied and virtual
+        // spin orbitals are interleaved manually into a single reference state.
+        Eigen::MatrixXd C_alpha;
+        Eigen::MatrixXd C_beta;
+        Eigen::VectorXd eps_alpha;
+        Eigen::VectorXd eps_beta;
+    };
+
     // Build the canonical RHF occupied/virtual partition once so all CC methods
     // share the same validation and indexing conventions.
     std::expected<RHFReference, std::string> build_rhf_reference(
+        HartreeFock::Calculator &calculator);
+
+    // The unrestricted CC prototypes start from the canonical UHF alpha/beta
+    // orbitals exactly as they come out of the SCF code. The reference builder
+    // centralizes the occupation counting and dimension checks so the solvers
+    // themselves can stay focused on the coupled-cluster algebra.
+    std::expected<UHFReference, std::string> build_uhf_reference(
         HartreeFock::Calculator &calculator);
 } // namespace HartreeFock::Correlation::CC
 

@@ -207,6 +207,17 @@
       background: rgba(219,205,185,0.18);
     }
     .content a { color: var(--accent); }
+    .content img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: 1.2rem auto;
+      border: 1px solid var(--rule);
+      border-radius: 16px;
+      background: #fffdf8;
+      box-shadow: 0 10px 28px rgba(42, 33, 20, 0.06);
+      padding: 10px;
+    }
     .math-display {
       display: block;
       overflow-x: auto;
@@ -344,8 +355,14 @@
 <li class="toc-level-3"><a href="#the-z-vector-method">The Z-Vector Method</a></li>
 <li class="toc-level-2"><a href="#13a-coupled-cluster-in-planck">13A. Coupled Cluster in Planck</a></li>
 <li class="toc-level-3"><a href="#rccsd">RCCSD</a></li>
-<li class="toc-level-3"><a href="#rccsdt-prototype">RCCSDT Prototype</a></li>
+<li class="toc-level-3"><a href="#worked-example-a-singles-residual-term">Worked Example: a Singles-Residual Term</a></li>
+<li class="toc-level-3"><a href="#worked-example-a-doubles-residual-term-with-xmathx322xmathx">Worked Example: a Doubles-Residual Term with XMATHX322XMATHX</a></li>
+<li class="toc-level-3"><a href="#rccsdt-backend-selection">RCCSDT Backend Selection</a></li>
+<li class="toc-level-3"><a href="#tensor-production-backend-tensor-backend">Tensor Production Backend (`tensor_backend.*`)</a></li>
+<li class="toc-level-3"><a href="#warm-start-from-tensor-amplitudes">Warm-Start from Tensor Amplitudes</a></li>
+<li class="toc-level-3"><a href="#determinant-space-cc-prototypes">Determinant-Space CC Prototypes</a></li>
 <li class="toc-level-3"><a href="#a-good-teaching-test-lih-sto-3g">A Good Teaching Test: LiH/STO-3G</a></li>
+<li class="toc-level-3"><a href="#a-good-open-shell-teaching-test-b-sto-3g">A Good Open-Shell Teaching Test: B/STO-3G</a></li>
 <li class="toc-level-2"><a href="#14-casscf-and-rasscf">14. CASSCF and RASSCF</a></li>
 <li class="toc-level-3"><a href="#motivation">Motivation</a></li>
 <li class="toc-level-3"><a href="#determinant-representation">Determinant Representation</a></li>
@@ -404,7 +421,7 @@
 <li>Point-group detection, symmetry-adapted orbitals, and MO irrep labeling</li>
 <li>RMP2 and UMP2 correlation energies with RMP2 natural orbital analysis</li>
 <li>RCCSD for canonical closed-shell RHF references</li>
-<li>A small-system RCCSDT teaching prototype for canonical closed-shell RHF references</li>
+<li>Small-system determinant-space teaching prototypes for RCCSDT, UCCSD, and UCCSDT</li>
 <li>Analytic RHF and UHF nuclear gradients</li>
 <li>Analytic RMP2 nuclear gradients (Z-vector / CPHF)</li>
 <li>Geometry optimization in Cartesian and internal coordinates</li>
@@ -446,7 +463,7 @@ Input file (.hfinp)
 <tr><td><code>src/integrals</code></td><td>shell pairs, Obara-Saika OS engine, Rys quadrature engine</td></tr>
 <tr><td><code>src/scf</code></td><td>orthogonalizer, initial guess, RHF/UHF SCF loops</td></tr>
 <tr><td><code>src/symmetry</code></td><td>libmsym wrapper, SAO basis, MO labeling, integral sym ops</td></tr>
-<tr><td><code>src/post_hf</code></td><td>MP2 energy/gradient, RCCSD/RCCSDT, CASSCF/RASSCF, AO→MO transforms, CPHF</td></tr>
+<tr><td><code>src/post_hf</code></td><td>MP2 energy/gradient, RCCSD/UCCSD/RCCSDT/UCCSDT, CASSCF/RASSCF, AO→MO transforms, CPHF</td></tr>
 <tr><td><code>src/gradient</code></td><td>analytic RHF, UHF, RMP2 gradients</td></tr>
 <tr><td><code>src/opt</code></td><td>L-BFGS/BFGS optimizer, internal coordinates, constraints</td></tr>
 <tr><td><code>src/freq</code></td><td>finite-difference Hessian, vibrational analysis</td></tr>
@@ -996,23 +1013,78 @@ t_{ij}^{ab} = \frac{(ia|jb)}{\varepsilon_i + \varepsilon_j - \varepsilon_a - \va
 <p>where <span class="math-inline">\(\mathbf A\)</span> is the orbital Hessian (also the CPHF matrix) and <span class="math-inline">\(\mathbf L\)</span> is the MP2 Lagrangian source term. <code>build_rhf_cphf_matrix</code> in <code>src/post_hf/rhf_response.cpp</code> builds <span class="math-inline">\(\mathbf A\)</span>. The final gradient is then assembled from the relaxed density and the appropriate derivative integrals.</p>
 <hr>
 <h2 id="13a-coupled-cluster-in-planck">13A. Coupled Cluster in Planck</h2>
-<p>Planck currently contains two restricted coupled-cluster paths for canonical closed-shell RHF references:</p>
+<p>Planck currently contains four coupled-cluster paths:</p>
 <ul>
-<li><strong>RCCSD</strong> — a conventional iterative amplitude solver in the spin-orbital basis</li>
-<li><strong>RCCSDT</strong> — a teaching-oriented small-system prototype that evaluates the similarity-transformed Hamiltonian in a determinant basis</li>
+<li><strong>RCCSD</strong> — a conventional iterative amplitude solver in the spin-orbital basis for canonical closed-shell RHF references</li>
+<li><strong>RCCSDT</strong> — dual-backend: a determinant-space teaching prototype for small systems and a staged tensor production solver for larger systems; the backend is chosen automatically by <code>choose_rccsdt_backend</code></li>
+<li><strong>UCCSD</strong> — a teaching-oriented small-system determinant-space solver for canonical UHF references</li>
+<li><strong>UCCSDT</strong> — the corresponding determinant-space triples extension for canonical UHF references</li>
 </ul>
-<p>Both live under <code>src/post_hf/cc/</code>. The shared setup pieces are intentionally kept separate from the actual solver loops:</p>
+<p>All paths live under <code>src/post_hf/cc/</code>. The shared setup pieces are intentionally kept separate from the actual solver loops:</p>
 <ul>
 <li><code>common.*</code> builds a validated canonical RHF occupied/virtual partition</li>
+<li><code>common.*</code> also builds the canonical UHF alpha/beta reference used by the unrestricted determinant-space solvers</li>
 <li><code>mo_blocks.*</code> transforms AO ERIs into the MO blocks reused by the CC code</li>
 <li><code>amplitudes.*</code> owns the explicit tensor containers and orbital-energy denominators</li>
 <li><code>diis.*</code> mirrors the SCF DIIS helper, but for flattened CC amplitude vectors</li>
+<li><code>determinant_space.*</code> contains the shared small-system backend used by <code>RCCSDT</code> (determinant path), <code>UCCSD</code>, and <code>UCCSDT</code></li>
+<li><code>tensor_backend.*</code> contains the production tensor solver for RCCSDT that handles systems beyond the determinant-space prototype limit</li>
 </ul>
 <h3 id="rccsd">RCCSD</h3>
 <p>The RCCSD implementation is pedagogical but still fairly conventional. The code starts from the RHF reference, expands the spatial-orbital integrals into antisymmetrized spin-orbital blocks, forms the standard <span class="math-inline">\(\tau\)</span> and <span class="math-inline">\(\tilde\tau\)</span> combinations, then iterates the <span class="math-inline">\(T_1\)</span> and <span class="math-inline">\(T_2\)</span> amplitudes through named intermediates:</p>
 <p><span class="math-display">\[
 F_{ae}, \; F_{mi}, \; F_{me}, \; W_{mnij}, \; W_{abef}, \; W_{mbej}
 \]</span></p>
+<p>These are the usual <strong>CCSD intermediates</strong>: compact tensors that collect many repeated contraction patterns so the residual equations can be written in a cleaner and faster form. The <span class="math-inline">\(F\)</span>-type objects behave like effective one-body Fock blocks in the occupied/virtual partition: <span class="math-inline">\(F_{ae}\)</span> is a dressed virtual-virtual block, <span class="math-inline">\(F_{mi}\)</span> is a dressed occupied-occupied block, and <span class="math-inline">\(F_{me}\)</span> is the occupied-virtual coupling block that feeds terms mixing singles and doubles. The <span class="math-inline">\(W\)</span>-type objects are effective two-body interaction blocks: <span class="math-inline">\(W_{mnij}\)</span> is the dressed occupied-occupied-occupied-occupied interaction, <span class="math-inline">\(W_{abef}\)</span> is the dressed virtual-virtual-virtual-virtual interaction, and <span class="math-inline">\(W_{mbej}\)</span> is the mixed occupied-virtual-virtual-occupied block. In the code, building these intermediates once per iteration makes the later residual loops look much closer to the textbook equations while also avoiding recomputation of the same sums in many different terms.</p>
+<h3 id="worked-example-a-singles-residual-term">Worked Example: a Singles-Residual Term</h3>
+<p>For the singles residual <span class="math-inline">\(R_i^a\)</span>, one standard contribution is</p>
+<p><span class="math-display">\[
+\sum_e t_i^e F_{ae}
+\]</span></p>
+<p>This term says: take the current single excitation from occupied orbital <span class="math-inline">\(i\)</span> into every intermediate virtual orbital <span class="math-inline">\(e\)</span>, then couple it through the dressed virtual-virtual block <span class="math-inline">\(F_{ae}\)</span> to update the target residual component <span class="math-inline">\(R_i^a\)</span>. In other words, <span class="math-inline">\(F_{ae}\)</span> plays the role of an effective virtual-space Fock matrix after the interaction with the current cluster amplitudes has been folded in.</p>
+<p>In Planck&#x27;s <code>RCCSD</code> implementation this appears almost verbatim in the residual builder:</p>
+<pre><code class="language-cpp">
+for (int e = 0; e &lt; reference.n_virt; ++e)
+    value += amps.t1(i, e) * ints.fae(a, e);
+</code></pre>
+<p>Viewed as a contraction, this term is simpler than the mixed doubles example: the singles amplitude and the dressed virtual-space block meet on the shared virtual index <span class="math-inline">\(e\)</span>, leaving the external occupied/virtual labels <span class="math-inline">\(i,a\)</span> of the target residual <span class="math-inline">\(R_i^a\)</span>. In text form:</p>
+<pre><code class="language-text">
+t(i,e)   ×   F(a,e)   -- sum over e --&gt;   R(i,a)
+  |              |
+ occupied i   virtual a survives
+</code></pre>
+<p>The point of the intermediate is visible here. Without <code>ints.fae(a,e)</code>, this line would have to expand back into several nested sums over occupied and virtual indices every time the singles residual is formed. By hiding that work inside <code>build_intermediates</code>, the residual code reads like the compact equations shown in a CCSD derivation.</p>
+<h3 id="worked-example-a-doubles-residual-term-with-xmathx322xmathx">Worked Example: a Doubles-Residual Term with <span class="math-inline">\(W_{mbej}\)</span></h3>
+<p>One common family of doubles-residual contributions is built from the mixed intermediate <span class="math-inline">\(W_{mbej}\)</span>. A representative term is</p>
+<p><span class="math-display">\[
+\sum_{me} t_{im}^{ae} W_{mbej}
+\]</span></p>
+<p>Here the current doubles amplitude <span class="math-inline">\(t_{im}^{ae}\)</span> says “excite electrons from <span class="math-inline">\(i,m\)</span> into <span class="math-inline">\(a,e\)</span>,” while <span class="math-inline">\(W_{mbej}\)</span> supplies the dressed interaction that couples that intermediate excitation into the target residual component <span class="math-inline">\(R_{ij}^{ab}\)</span>. The mixed index pattern is the key idea:</p>
+<ul>
+<li><span class="math-inline">\(m,j\)</span> are occupied indices</li>
+<li><span class="math-inline">\(b,e\)</span> are virtual indices</li>
+<li>so <span class="math-inline">\(W_{mbej}\)</span> mediates an interaction that simultaneously touches one occupied line and one virtual line on each side of the contraction</li>
+</ul>
+<p>In Planck this appears in the doubles residual builder as:</p>
+<pre><code class="language-cpp">
+value += amps.t2(i, m, a, e) * ints.wmbej(m, b, e, j);
+</code></pre>
+<p>An easy way to read this contraction is as a “shared-index handshake” between the doubles amplitude and the dressed interaction block:</p>
+<pre><code class="language-text">
+t(i,m,a,e)   ×   W(m,b,e,j)   -- sum over m,e --&gt;   R(i,j,a,b)
+    |   |          |   |
+    m   e are contracted indices
+    i,a,j,b survive as the external residual labels
+</code></pre>
+<p>The two tensors meet on the contracted indices <span class="math-inline">\(m\)</span> and <span class="math-inline">\(e\)</span>. What survives after summing over those shared indices are the external labels <span class="math-inline">\(i,j,a,b\)</span>, which are exactly the indices of the target doubles residual element <span class="math-inline">\(R_{ij}^{ab}\)</span>.</p>
+<p>The surrounding code then adds the three related permutation partners with signs chosen so the final residual has the proper antisymmetry under <span class="math-inline">\(i \leftrightarrow j\)</span> and <span class="math-inline">\(a \leftrightarrow b\)</span>:</p>
+<pre><code class="language-cpp">
+value += amps.t2(i, m, a, e) * ints.wmbej(m, b, e, j);
+value -= amps.t2(i, m, b, e) * ints.wmbej(m, a, e, j);
+value -= amps.t2(j, m, a, e) * ints.wmbej(m, b, e, i);
+value += amps.t2(j, m, b, e) * ints.wmbej(m, a, e, i);
+</code></pre>
+<p>This is exactly the sort of place where an intermediate pays off: without <code>W_{mbej}</code>, each of these lines would expand into a much larger expression with bare ERIs, singles amplitudes, and doubles amplitudes nested inside the same loop. By naming that dressed interaction once, the residual code stays close to the structure of the CCSD equations rather than collapsing into unreadable index algebra.</p>
 <p>The update pattern is:</p>
 <ol>
 <li>build disconnected <span class="math-inline">\(\tau\)</span>-type tensors</li>
@@ -1022,21 +1094,89 @@ F_{ae}, \; F_{mi}, \; F_{me}, \; W_{mnij}, \; W_{abef}, \; W_{mbej}
 <li>accelerate convergence with amplitude DIIS</li>
 </ol>
 <p>This keeps the mapping between textbook equations and source code visible in <code>src/post_hf/cc/ccsd.cpp</code>.</p>
-<h3 id="rccsdt-prototype">RCCSDT Prototype</h3>
-<p>The present RCCSDT path makes a different tradeoff. A full tensor-contraction CCSDT implementation is much harder to explain, test, and maintain in a teaching codebase, so Planck currently uses a <strong>determinant-space prototype</strong> for small systems:</p>
+<h3 id="rccsdt-backend-selection">RCCSDT Backend Selection</h3>
+<p><code>run_rccsdt</code> in <code>src/post_hf/cc/ccsdt.cpp</code> does not commit to a single solver strategy. Instead it calls <code>choose_rccsdt_backend(reference)</code> which inspects the system size and returns one of two values from the <code>RCCSDTBackend</code> enum:</p>
+<pre><code class="language-cpp">
+enum class RCCSDTBackend
+{
+    DeterminantPrototype, // small systems: determinant-space teaching solver
+    TensorProduction,     // larger systems: staged tensor contractions
+};
+</code></pre>
+<p>If the backend is <code>TensorProduction</code>, <code>run_rccsdt</code> delegates to <code>run_tensor_rccsdt</code> in <code>tensor_backend.*</code>. Otherwise it falls through to the determinant-space prototype described below.</p>
+<p><code>run_tensor_rccsdt</code> is itself a three-stage pipeline, not a single solver:</p>
+<ol>
+<li><strong>Tensor RCCSD warm-start</strong> — converges T1/T2 in the spin-orbital basis.</li>
+<li><strong>Staged tensor T3 loop</strong> — iterates the triples workspace for a fixed number of steps to build T3 amplitude quality.</li>
+<li><strong>Determinant backstop</strong> — a second size check runs after stages 1–2 via <code>choose_determinant_backstop</code> (limits: nso ≤ 16, <code>C(nso, nelec)</code> ≤ 5000). If the system fits, <code>solve_determinant_cc</code> is called with <code>max_rank=3</code> and warm-started from the T1/T2/T3 produced above. Systems beyond the backstop limits return an error until the fully tensorized T3 residual engine is complete.</li>
+</ol>
+<p>Water/STO-3G (nso=14, ndet=C(14,10)=1001) illustrates this: it exceeds the routing threshold (nso=14 &gt; 12) so <code>choose_rccsdt_backend</code> selects <code>TensorProduction</code>, but it fits the backstop window (14 ≤ 16, 1001 ≤ 5000), so the final convergence is through the determinant solver, warm-started from the tensor stages.</p>
+<h3 id="tensor-production-backend-tensor-backend">Tensor Production Backend (<code>tensor_backend.*</code>)</h3>
+<p><code>tensor_backend.*</code> is the production-quality RCCSDT path. Its key types are:</p>
+<p><strong><code>CanonicalRHFCCReference</code></strong> — extends <code>RHFReference</code> with explicit MO-basis Fock diagonal blocks <code>f_oo</code>, <code>f_ov</code>, <code>f_vv</code>. These avoid re-extracting Fock matrix elements inside tight contraction loops.</p>
+<p><strong><code>TensorCCBlockCache</code></strong> — unlike the teaching <code>MOBlockCache</code> (which stores the full <code>(pq|rs)</code> spatial tensor), this cache stores only the seven integral blocks that tensor CCSDT actually needs: <code>oooo</code>, <code>ooov</code>, <code>oovv</code>, <code>ovov</code>, <code>ovvo</code>, <code>ovvv</code>, <code>vvvv</code>. Each block is a <code>Tensor4D</code> with the same chemists&#x27; notation as the teaching cache. The struct also carries a <code>memory_report</code> vector and a <code>total_bytes</code> field so the driver can print a pre-flight allocation summary via <code>format_tensor_memory_summary</code>.</p>
+<p><strong><code>TensorTriplesWorkspace</code></strong> — holds the <code>RCCSDTAmplitudes</code> (<code>t1</code>, <code>t2</code>, <code>t3</code>) and the triples residual tensor <code>r3</code> (<code>Tensor6D</code>). Allocated lazily via <code>allocate_dense_triples_workspace</code> so systems that never reach the triples update never pay the <span class="math-inline">\(O(o^3 v^3)\)</span> memory.</p>
+<p><strong><code>TensorRCCSDTState</code></strong> — top-level state object that bundles the reference, block cache, denominators, and the triples workspace. Also records <code>warm_start_correlation_energy</code> and <code>warm_start_iterations</code> so the driver can report how much of the iteration was seeded from a previous CCSD run.</p>
+<p>The overall tensor backend workflow is:</p>
+<pre><code class="language-text">
+build_canonical_rhf_cc_reference()   -&gt; CanonicalRHFCCReference
+build_tensor_cc_block_cache()        -&gt; TensorCCBlockCache (prints memory report)
+allocate_dense_triples_workspace()   -&gt; TensorTriplesWorkspace
+iterate CCSD T1/T2 (warm-start)
+  -&gt; t1, t2 amplitudes
+iterate CCSDT triples update
+  -&gt; t3 residuals via r3 (Tensor6D)
+  -&gt; converged E_RCCSDT
+</code></pre>
+<h3 id="warm-start-from-tensor-amplitudes">Warm-Start from Tensor Amplitudes</h3>
+<p>The determinant-space backend (see below) accepts an optional <code>DeterminantCCSpinOrbitalSeed</code> pointer:</p>
+<pre><code class="language-cpp">
+struct DeterminantCCSpinOrbitalSeed
+{
+    const Tensor2D *t1 = nullptr;
+    const Tensor4D *t2 = nullptr;
+    const Tensor6D *t3 = nullptr;
+};
+</code></pre>
+<p>When the tensor backend has converged <code>t1</code>/<code>t2</code> amplitudes and wants to cross-check a result with the determinant solver, it can pass those amplitudes as the initial guess rather than starting from zero. This is the mechanism that lets the hybrid moderate-size path warm-start the determinant solver.</p>
+<h3 id="determinant-space-cc-prototypes">Determinant-Space CC Prototypes</h3>
+<p>The present <code>UCCSD</code> and <code>UCCSDT</code> paths, and the small-system <code>RCCSDT</code> determinant path, make a different tradeoff from tensor-based solvers. A full tensor-contraction implementation for all of these methods would be much harder to explain, test, and maintain in a teaching codebase, so Planck uses a shared <strong>determinant-space prototype</strong> backend for these cases.</p>
+<p>For the restricted path the reference determinant is the canonical RHF one. For the unrestricted paths the reference determinant is built from the separate alpha and beta UHF occupied spaces, but the subsequent solver logic is the same: once the code has assembled a spin-orbital Hamiltonian, the projection onto the CC excitation manifold no longer cares whether those spin orbitals came from one shared RHF MO set or from separate UHF alpha/beta MO sets.</p>
+<p>The common workflow is:</p>
 <ol>
 <li>build the spin-orbital one-body Hamiltonian <span class="math-inline">\(h_{pq}\)</span> and antisymmetrized two-body tensor <span class="math-inline">\(\langle pq || rs \rangle\)</span></li>
-<li>enumerate the RHF determinant space with the bitstring/string helpers also used by the CASSCF code</li>
+<li>enumerate the determinant space with the bitstring/string helpers also used by the CASSCF code</li>
 <li>build the dense electronic Hamiltonian matrix in that determinant basis by explicit second-quantized operator application</li>
-<li>enumerate all unique single, double, and triple excitations out of the RHF determinant</li>
+<li>enumerate all unique single, double, and, when requested, triple excitations out of the reference determinant</li>
 <li>assemble the cluster operator matrix <span class="math-inline">\(T\)</span>, evaluate <span class="math-inline">\(e^{-T} H e^{T} | \Phi_0 \rangle\)</span> by the finite exponential series, and project the result onto the S/D/T manifolds</li>
 <li>iterate the amplitudes with diagonal updates and DIIS until the projected residuals vanish</li>
 </ol>
+<p>The overall data flow is:</p>
+<pre><code class="language-text">
+reference determinant
+  -&gt; spin-orbital h1 and g2
+  -&gt; determinant list
+  -&gt; dense Hamiltonian H
+  -&gt; excitation list (S/D or S/D/T)
+  -&gt; cluster operator T
+  -&gt; exp(-T) H exp(T) |Phi0&gt;
+  -&gt; projected residuals
+  -&gt; diagonal update + DIIS
+</code></pre>
 <p>Because the excitation operator is nilpotent on a finite determinant space, the matrix exponential terminates after finitely many terms. That makes this route surprisingly compact and mathematically transparent for tiny systems.</p>
-<p>The drawback is scaling: the current prototype is intentionally capped at small teaching cases (<code>&lt;= 12</code> spin orbitals and <code>&lt;= 1200</code> determinants). It is meant for correctness studies and classroom-scale examples such as <code>H2/STO-3G</code> and <code>LiH/STO-3G</code>, not for production coupled-cluster calculations on larger molecules.</p>
+<p>The projection step is the key bridge back to ordinary coupled-cluster language. The prototype still solves for amplitudes <span class="math-inline">\(t_1\)</span>, <span class="math-inline">\(t_2\)</span>, and <span class="math-inline">\(t_3\)</span>; it just obtains their residuals from a determinant-space object:</p>
+<pre><code class="language-text">
+exp(-T) H exp(T) |Phi0&gt;
+   -&gt; project onto singles  =&gt; R1
+   -&gt; project onto doubles  =&gt; R2
+   -&gt; project onto triples  =&gt; R3   (for CCSDT variants only)
+</code></pre>
+<p>The drawback is scaling: the current prototype is intentionally capped at small teaching cases (<code>&lt;= 12</code> spin orbitals and <code>&lt;= 1200</code> determinants). It is meant for correctness studies and classroom-scale examples such as <code>H2/STO-3G</code>, <code>LiH/STO-3G</code>, and <code>B/STO-3G</code>, not for production coupled-cluster calculations on larger molecules.</p>
 <h3 id="a-good-teaching-test-lih-sto-3g">A Good Teaching Test: LiH/STO-3G</h3>
 <p><code>LiH/STO-3G</code> is the smallest practical RCCSDT regression case in the current tree with a <strong>measurable</strong> triples contribution. It has 4 electrons and 6 spatial orbitals, which gives a non-empty triples manifold while still fitting the determinant-space prototype limit comfortably.</p>
 <p>The accompanying PySCF comparison script <code>tests/pyscf/lih_rccsdt_sto3g.py</code> prints both the CCSD and CCSDT correlation energies so students can see the triples correction directly. In that case the PySCF triples contribution is about <span class="math-inline">\(10^{-5}\)</span> Hartree, large enough to verify that the calculation is not merely collapsing back to CCSD.</p>
+<h3 id="a-good-open-shell-teaching-test-b-sto-3g">A Good Open-Shell Teaching Test: B/STO-3G</h3>
+<p><code>B/STO-3G</code> plays the same role for the unrestricted prototypes. It is small enough to fit comfortably inside the determinant-space limit, but it still has a nonzero <code>UCCSDT - UCCSD</code> triples correction. The comparison script <code>tests/pyscf/b_uccsdt_sto3g.py</code> prints both unrestricted correlation energies so students can see that the unrestricted triples path is doing real work rather than just reproducing <code>UCCSD</code>.</p>
 <h2 id="14-casscf-and-rasscf">14. CASSCF and RASSCF</h2>
 <h3 id="motivation">Motivation</h3>
 <p>Hartree-Fock fails near bond breaking, in transition metal chemistry, and wherever a single Slater determinant is qualitatively wrong. CASSCF (Complete Active Space SCF) partitions orbitals into:</p>
@@ -1314,12 +1454,21 @@ driver.cpp
   if post_hf == RMP2:
       AO→MO transform → (ia|jb) MO integrals
       run_rmp2()               → E_MP2
+  elif post_hf == UMP2:
+      AO→MO transform in α/β blocks
+      run_ump2()               → E_UMP2
   elif post_hf == RCCSD:
       prepare_rccsd()          → reference, MO blocks, denominators
       run_rccsd()              → E_RCCSD
+  elif post_hf == UCCSD:
+      prepare_uccsd()          → UHF reference
+      run_uccsd()              → E_UCCSD (small-system prototype)
   elif post_hf == RCCSDT:
       prepare_rccsdt()         → reference, MO blocks
       run_rccsdt()             → E_RCCSDT (small-system prototype)
+  elif post_hf == UCCSDT:
+      prepare_uccsdt()         → UHF reference
+      run_uccsdt()             → E_UCCSDT (small-system prototype)
   elif post_hf == CASSCF:
       run_casscf()             → E_CASSCF, natural orbitals
 
@@ -1369,7 +1518,12 @@ driver.cpp
 <tr><td>UMP2 energy</td><td><code>src/post_hf/mp2.cpp</code></td><td><code>run_ump2</code></td></tr>
 <tr><td>MP2 amplitudes</td><td><code>src/post_hf/mp2.cpp</code></td><td><code>build_rmp2_amplitudes</code></td></tr>
 <tr><td>RCCSD setup/solve</td><td><code>src/post_hf/cc/ccsd.cpp</code></td><td><code>prepare_rccsd</code>, <code>run_rccsd</code></td></tr>
-<tr><td>RCCSDT prototype</td><td><code>src/post_hf/cc/ccsdt.cpp</code></td><td><code>prepare_rccsdt</code>, <code>run_rccsdt</code></td></tr>
+<tr><td>UCCSD setup/solve</td><td><code>src/post_hf/cc/ccsd.cpp</code></td><td><code>prepare_uccsd</code>, <code>run_uccsd</code></td></tr>
+<tr><td>Determinant-space CC backend</td><td><code>src/post_hf/cc/determinant_space.cpp</code></td><td><code>build_rhf_spin_orbital_system</code>, <code>build_uhf_spin_orbital_system</code>, <code>solve_determinant_cc</code></td></tr>
+<tr><td>RCCSDT dispatch + prototype</td><td><code>src/post_hf/cc/ccsdt.cpp</code></td><td><code>prepare_rccsdt</code>, <code>run_rccsdt</code>, <code>choose_rccsdt_backend</code></td></tr>
+<tr><td>RCCSDT tensor production</td><td><code>src/post_hf/cc/tensor_backend.cpp</code></td><td><code>prepare_tensor_rccsdt</code>, <code>run_tensor_rccsdt</code>, <code>build_tensor_cc_block_cache</code>, <code>allocate_dense_triples_workspace</code></td></tr>
+<tr><td>Tensor CC block cache</td><td><code>src/post_hf/cc/tensor_backend.cpp</code></td><td><code>build_canonical_rhf_cc_reference</code>, <code>format_tensor_memory_summary</code></td></tr>
+<tr><td>UCCSDT prototype</td><td><code>src/post_hf/cc/ccsdt.cpp</code></td><td><code>prepare_uccsdt</code>, <code>run_uccsdt</code></td></tr>
 <tr><td>CC denominators/DIIS</td><td><code>src/post_hf/cc/amplitudes.cpp</code>, <code>src/post_hf/cc/diis.cpp</code></td><td><code>build_denominator_cache</code>, <code>AmplitudeDIIS</code></td></tr>
 <tr><td>CPHF Z-vector</td><td><code>src/post_hf/rhf_response.cpp</code></td><td><code>build_rhf_cphf_matrix</code></td></tr>
 <tr><td>RMP2 gradient</td><td><code>src/post_hf/mp2_gradient.cpp</code></td><td><code>compute_rmp2_gradient</code></td></tr>
@@ -1540,7 +1694,9 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 <tr><td>MO irrep labeling</td><td>Complete</td></tr>
 <tr><td>RMP2 and UMP2 energy</td><td>Complete</td></tr>
 <tr><td>RCCSD single-point energy</td><td>Complete</td></tr>
-<tr><td>RCCSDT single-point energy</td><td>Teaching-oriented small-system prototype</td></tr>
+<tr><td>UCCSD single-point energy</td><td>Teaching-oriented small-system determinant-space prototype</td></tr>
+<tr><td>RCCSDT single-point energy</td><td>Dual-backend: determinant-space prototype (small systems) + tensor production solver (larger systems); backend auto-selected by <code>choose_rccsdt_backend</code></td></tr>
+<tr><td>UCCSDT single-point energy</td><td>Teaching-oriented small-system determinant-space prototype</td></tr>
 <tr><td>Analytic RHF gradient</td><td>Complete</td></tr>
 <tr><td>Analytic UHF gradient</td><td>Complete</td></tr>
 <tr><td>Analytic RMP2 gradient (Z-vector)</td><td>Complete</td></tr>
@@ -1572,7 +1728,7 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 <li><code>src/scf/scf.cpp</code> — the SCF iteration in detail</li>
 <li><code>src/gradient/gradient.cpp</code> — how analytic gradients are assembled</li>
 <li><code>src/post_hf/mp2.cpp</code> and <code>src/post_hf/integrals.cpp</code> — MP2 energy</li>
-<li><code>src/post_hf/cc/</code> — RCCSD and the determinant-space RCCSDT prototype</li>
+<li><code>src/post_hf/cc/</code> — RCCSD plus the determinant-space restricted/unrestricted CC prototypes</li>
 <li><code>src/post_hf/casscf.cpp</code> — the most complex module: CI, RDMs, orbital update</li>
 <li><code>src/opt/geomopt.cpp</code> — L-BFGS and internal coordinate optimization</li>
 <li><code>src/freq/hessian.cpp</code> — finite-difference Hessian and normal modes</li>

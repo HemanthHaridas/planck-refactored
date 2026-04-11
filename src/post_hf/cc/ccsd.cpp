@@ -9,6 +9,7 @@
 #include <limits>
 
 #include "io/logging.h"
+#include "post_hf/cc/determinant_space.h"
 
 namespace
 {
@@ -632,5 +633,44 @@ namespace HartreeFock::Correlation::CC
 
         return std::unexpected(
             std::format("run_rccsd: failed to converge in {} iterations.", max_iter));
+    }
+
+    std::expected<UCCSDState, std::string> prepare_uccsd(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+    {
+        (void)shell_pairs;
+        if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+            return std::unexpected("prepare_uccsd: UCCSD is currently available only for single-point calculations.");
+
+        auto reference_res = build_uhf_reference(calculator);
+        if (!reference_res)
+            return std::unexpected(reference_res.error());
+
+        return UCCSDState{
+            .reference = std::move(*reference_res),
+        };
+    }
+
+    std::expected<void, std::string> run_uccsd(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+    {
+        auto state_res = prepare_uccsd(calculator, shell_pairs);
+        if (!state_res)
+            return std::unexpected(state_res.error());
+
+        auto system_res = build_uhf_spin_orbital_system(
+            calculator, shell_pairs, state_res->reference, "UCCSD :");
+        if (!system_res)
+            return std::unexpected(system_res.error());
+
+        auto corr_res = solve_determinant_cc(
+            calculator, *system_res, 2, "UCCSD :");
+        if (!corr_res)
+            return std::unexpected("run_uccsd: " + corr_res.error());
+
+        calculator._correlation_energy = *corr_res;
+        return {};
     }
 } // namespace HartreeFock::Correlation::CC
