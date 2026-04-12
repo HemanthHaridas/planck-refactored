@@ -1,0 +1,110 @@
+[INF] Input Parsing :               Successful
+[INF] Calculation Type :            Single Point Calculation
+[INF] Theory :                      RHF
+[INF] Basis :                       sto-3g
+[INF] Charge :                      0
+[INF] Multiplicity :                1
+
+[INF] Symmetry Detection :          Symmetry detection is turned off by request
+
+[INF] Input Coordinates :           
+[INF]                                   5     0.000     0.000     0.000
+[INF]                                   1     1.190     0.000     0.000
+[INF]                                   1    -0.595     1.031     0.000
+[INF]                                   1    -0.595    -1.031     0.000
+
+[INF] Reading Basis Set :           /Users/hemanthharidas/Desktop/codes/planck-refactored/install/share/basis-sets/sto-3g
+[INF] Basis Construction :          Generated 6 Shells and 8 contracted functions
+[INF] Number of Shell pairs :       36
+
+[INF] SCF Mode :                    Conventional
+[INF] Nuclear Repulsion :           7.4405223585 Eh
+
+[INF] 1e Integrals :                Computing overlap and kinetic energy matrices
+[INF] 1e Integrals :                Overlap and kinetic done
+[INF] 1e Integrals :                Computing nuclear attraction matrix
+[INF] 1e Integrals :                Nuclear attraction done
+
+[INF] Begin SCF Cycles :            
+[INF] 2e Integrals :                Building ERI tensor (0.0 MB)
+[INF] 2e Integrals :                ERI tensor ready
+
+--------------------------------------------------------------------------------------------------------------
+Iter  Energy              DeltaE         RMS(D)         Max(D)         DIIS Err       Damp        Time(s)     
+--------------------------------------------------------------------------------------------------------------
+1     -23.93399263        23.93399263    5.838e-01      2.184e+00      2.940e-01      0.000       0.000       
+2     -26.0646547075      2.1306620738   1.895e-02      5.997e-02      2.940e-02      0.000       0.000       
+3     -26.0689830176      0.0043283100   9.341e-04      3.218e-03      2.160e-03      0.000       0.000       
+4     -26.0689957216      0.0000127040   6.901e-05      2.269e-04      5.839e-05      0.000       0.000       
+5     -26.0689957620      0.0000000404   1.010e-05      5.406e-05      1.048e-05      0.000       0.000       
+6     -26.0689957629      0.0000000009   1.353e-07      4.289e-07      1.637e-07      0.000       0.000       
+7     -26.0689957629      0.0000000000   2.137e-15      7.883e-15      1.648e-09      0.000       0.000       
+--------------------------------------------------------------------------------------------------------------
+
+[INF] SCF Converged after 7 iterations
+
+-------------------------------
+    MO              Energy (Eh)
+-------------------------------
+     1                -7.416178
+     2                -0.665818
+     3                -0.462498
+     4                -0.462498  <-- HOMO
+     5                 0.239521  <-- LUMO
+     6                 0.689241
+     7                 0.751330
+     8                 0.751330
+
+--------------------------------------------------------------------------------------------
+  Quantity                                   Hartree                  eV            kcal/mol
+--------------------------------------------------------------------------------------------
+  Electronic Energy                   -33.5095181213     -911.8404405167   -21027.5400924288
+  Nuclear Repulsion                     7.4405223585      202.4669277681     4668.9982719148
+--------------------------------------------------------------------------------------------
+  Total Energy                        -26.0689957629     -709.3735127486   -16358.5418205140
+--------------------------------------------------------------------------------------------
+Dipole Moment (origin at 0.000000, 0.000000, 0.000000 bohr)
+------------------------------------------------------------------------------
+Component        Electronic (au)      Nuclear (au)        Total (au)     Debye
+------------------------------------------------------------------------------
+X                       0.000000          0.000000          0.000000  0.000000
+Y                       0.000000          0.000000          0.000000  0.000000
+Z                       0.000000          0.000000          0.000000  0.000000
+------------------------------------------------------------------------------
+|mu|                    0.000000          0.000000          0.000000  0.000000
+------------------------------------------------------------------------------
+Quadrupole Moment (traceless Cartesian tensor, au)
+------------------------------------------------------------------------------
+Component             Electronic           Nuclear             Total
+------------------------------------------------------------------------------
+XX                     -9.144658          7.585480         -1.559178
+XY                     -0.000000          0.000000          0.000000
+XZ                      0.000000          0.000000          0.000000
+YY                     -9.144648          7.585469         -1.559179
+YZ                      0.000000          0.000000          0.000000
+ZZ                     18.289306        -15.170949          3.118357
+------------------------------------------------------------------------------
+
+[INF] RCCSD :                       Preparing restricted CCSD infrastructure
+[INF] RCCSD :                       Spin-orbital solver dimensions: nocc=8 nvirt=8
+[INF] RCCSD :                       Convergence targets: |dE|<1.0e-10  rms(res)<1.0e-10
+
+[INF] RCCSD Iter :                    1  E_corr=-0.0453394836  dE=-8.728e-03  rms(res)=2.923e-03  rms(step)=9.586e-04  diis=1  t=0.037s
+[INF] RCCSD Iter :                    2  E_corr=-0.0529019150  dE=-7.562e-03  rms(res)=1.396e-03  rms(step)=4.612e-04  diis=2  t=0.038s
+[INF] RCCSD Iter :                    3  E_corr=-0.0529734139  dE=-7.150e-05  rms(res)=1.385e-04  rms(step)=5.608e-05  diis=3  t=0.038s
+[INF] RCCSD Iter :                    4  E_corr=-0.0530022085  dE=-2.879e-05  rms(res)=2.917e-05  rms(step)=1.264e-05  diis=4  t=0.038s
+[INF] RCCSD Iter :                    5  E_corr=-0.0529932636  dE=+8.945e-06  rms(res)=6.982e-06  rms(step)=2.811e-06  diis=5  t=0.038s
+[INF] RCCSD Iter :                    6  E_corr=-0.0529983855  dE=-5.122e-06  rms(res)=1.149e-06  rms(step)=4.759e-07  diis=6  t=0.039s
+[INF] RCCSD Iter :                    7  E_corr=-0.0529967337  dE=+1.652e-06  rms(res)=3.787e-07  rms(step)=1.298e-07  diis=7  t=0.039s
+[INF] RCCSD Iter :                    8  E_corr=-0.0529972332  dE=-4.995e-07  rms(res)=1.181e-07  rms(step)=4.649e-08  diis=8  t=0.039s
+[INF] RCCSD Iter :                    9  E_corr=-0.0529972015  dE=+3.171e-08  rms(res)=1.498e-08  rms(step)=5.883e-09  diis=8  t=0.037s
+[INF] RCCSD Iter :                   10  E_corr=-0.0529972048  dE=-3.316e-09  rms(res)=1.593e-09  rms(step)=5.444e-10  diis=8  t=0.037s
+[INF] RCCSD Iter :                   11  E_corr=-0.0529972049  dE=-3.922e-11  rms(res)=5.368e-10  rms(step)=1.855e-10  diis=8  t=0.038s
+[INF] RCCSD Iter :                   12  E_corr=-0.0529972048  dE=+4.590e-11  rms(res)=8.422e-11  rms(step)=2.967e-11  diis=8  t=0.039s
+[INF] RCCSD :                       Converged in 12 iterations.
+
+  Correlation Energy                   -0.0529972048       -1.4421274107      -33.2562481328
+--------------------------------------------------------------------------------------------
+  Total RCCSD Energy                  -26.1219929677     -710.8156401593   -16391.7980686468
+--------------------------------------------------------------------------------------------
+[INF] Wall Time :                   0.496 s

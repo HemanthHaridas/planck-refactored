@@ -1,0 +1,117 @@
+[INF] Input Parsing :               Successful
+[INF] Calculation Type :            Single Point Calculation
+[INF] Theory :                      UHF
+[INF] Basis :                       sto-3g
+[INF] Charge :                      0
+[INF] Multiplicity :                2
+
+[INF] Symmetry Detection :          Symmetry detection is turned off by request
+
+[INF] Input Coordinates :           
+[INF]                                   5     0.000     0.000     0.000
+
+[INF] Reading Basis Set :           /Users/hemanthharidas/Desktop/codes/planck-refactored/install/share/basis-sets/sto-3g
+[INF] Basis Construction :          Generated 3 Shells and 5 contracted functions
+[INF] Number of Shell pairs :       15
+
+[INF] SCF Mode :                    Conventional
+[INF] Nuclear Repulsion :           0.0000000000 Eh
+
+[INF] 1e Integrals :                Computing overlap and kinetic energy matrices
+[INF] 1e Integrals :                Overlap and kinetic done
+[INF] 1e Integrals :                Computing nuclear attraction matrix
+[INF] 1e Integrals :                Nuclear attraction done
+
+[INF] Begin UHF SCF Cycles :        
+[INF] 2e Integrals :                Building ERI tensor (0.0 MB)
+[INF] 2e Integrals :                ERI tensor ready
+
+--------------------------------------------------------------------------------------------------------------
+Iter  Energy              DeltaE         RMS(D)         Max(D)         DIIS Err       Damp        Time(s)     
+--------------------------------------------------------------------------------------------------------------
+1     -24.14898866        24.14898866    1.844e-16      8.882e-16      2.275e-16      0.000       0.000       
+2     -24.1489886649      0.0000000000   2.220e-17      1.110e-16      1.881e-16      0.000       0.000       
+--------------------------------------------------------------------------------------------------------------
+
+[INF] UHF Converged :               E = -24.1489886649 Eh  after 2 iterations
+
+[INF] <S^2> :                       0.750000  (exact: 0.750000)
+[INF] <S>   :                       0.866025
+
+[INF] Alpha MOs :                   
+-------------------------------
+    MO              Energy (Eh)
+-------------------------------
+     1                -7.265834
+     2                -0.428277
+     3                -0.200518  <-- HOMO
+     4                 0.291366  <-- LUMO
+     5                 0.291366
+
+[INF] Beta MOs :                    
+-------------------------------
+    MO              Energy (Eh)
+-------------------------------
+     1                -7.244217
+     2                -0.315709  <-- HOMO
+     3                 0.322995  <-- LUMO
+     4                 0.322995
+     5                 0.386254
+
+[INF] Checkpoint :                  Saved to b_uccsdt_sto3g.hfchk
+--------------------------------------------------------------------------------------------
+  Quantity                                   Hartree                  eV            kcal/mol
+--------------------------------------------------------------------------------------------
+  Electronic Energy                   -24.1489886649     -657.1274580111   -15153.7191762794
+  Nuclear Repulsion                     0.0000000000        0.0000000000        0.0000000000
+--------------------------------------------------------------------------------------------
+  Total Energy                        -24.1489886649     -657.1274580111   -15153.7191762794
+--------------------------------------------------------------------------------------------
+Dipole Moment (origin at 0.000000, 0.000000, 0.000000 bohr)
+------------------------------------------------------------------------------
+Component        Electronic (au)      Nuclear (au)        Total (au)     Debye
+------------------------------------------------------------------------------
+X                      -0.000000          0.000000          0.000000  0.000000
+Y                      -0.000000          0.000000          0.000000  0.000000
+Z                      -0.000000          0.000000          0.000000  0.000000
+------------------------------------------------------------------------------
+|mu|                    0.000000          0.000000          0.000000  0.000000
+------------------------------------------------------------------------------
+Quadrupole Moment (traceless Cartesian tensor, au)
+------------------------------------------------------------------------------
+Component             Electronic           Nuclear             Total
+------------------------------------------------------------------------------
+XX                     -2.673816          0.000000         -2.673816
+XY                     -0.000000          0.000000          0.000000
+XZ                     -0.000000          0.000000          0.000000
+YY                      1.336908          0.000000          1.336908
+YZ                     -0.000000          0.000000          0.000000
+ZZ                      1.336908          0.000000          1.336908
+------------------------------------------------------------------------------
+
+[INF] UCCSDT :                      Preparing unrestricted CCSDT infrastructure
+[INF] UCCSDT :                      Determinant-space prototype: nso=10 nelec=5 ndet=252 nexc=225 rank<=3
+
+[INF] UCCSDT : Iter :                 1  E_corr=-0.0190946435  dE=+0.000e+00  rms(res)=5.814e-03  rms(step)=2.561e-03  diis=1  t=0.002s
+[INF] UCCSDT : Iter :                 2  E_corr=-0.0252106915  dE=-6.116e-03  rms(res)=4.180e-03  rms(step)=1.840e-03  diis=2  t=0.002s
+[INF] UCCSDT : Iter :                 3  E_corr=-0.0406239937  dE=-1.541e-02  rms(res)=2.931e-04  rms(step)=4.535e-05  diis=3  t=0.002s
+[INF] UCCSDT : Iter :                 4  E_corr=-0.0398263142  dE=+7.977e-04  rms(res)=1.276e-04  rms(step)=5.598e-05  diis=4  t=0.002s
+[INF] UCCSDT : Iter :                 5  E_corr=-0.0403685643  dE=-5.423e-04  rms(res)=2.654e-05  rms(step)=1.170e-05  diis=5  t=0.002s
+[INF] UCCSDT : Iter :                 6  E_corr=-0.0402443969  dE=+1.242e-04  rms(res)=8.639e-06  rms(step)=3.816e-06  diis=6  t=0.002s
+[INF] UCCSDT : Iter :                 7  E_corr=-0.0402471759  dE=-2.779e-06  rms(res)=7.853e-06  rms(step)=3.469e-06  diis=7  t=0.002s
+[INF] UCCSDT : Iter :                 8  E_corr=-0.0402471837  dE=-7.833e-09  rms(res)=7.851e-06  rms(step)=3.468e-06  diis=8  t=0.002s
+[INF] UCCSDT : Iter :                 9  E_corr=-0.0402471717  dE=+1.204e-08  rms(res)=7.854e-06  rms(step)=3.469e-06  diis=8  t=0.002s
+[INF] UCCSDT : Iter :                10  E_corr=-0.0402892433  dE=-4.207e-05  rms(res)=4.042e-06  rms(step)=1.785e-06  diis=8  t=0.002s
+[INF] UCCSDT : Iter :                11  E_corr=-0.0402749508  dE=+1.429e-05  rms(res)=1.793e-09  rms(step)=1.508e-10  diis=8  t=0.002s
+[INF] UCCSDT : Iter :                12  E_corr=-0.0402749515  dE=-6.219e-10  rms(res)=8.454e-10  rms(step)=6.133e-11  diis=8  t=0.002s
+[INF] UCCSDT : Iter :                13  E_corr=-0.0402749515  dE=+7.581e-12  rms(res)=4.024e-10  rms(step)=2.919e-11  diis=8  t=0.002s
+[INF] UCCSDT : Iter :                14  E_corr=-0.0402749514  dE=+2.238e-12  rms(res)=1.917e-10  rms(step)=1.391e-11  diis=8  t=0.002s
+[INF] UCCSDT : Iter :                15  E_corr=-0.0402749514  dE=+1.059e-12  rms(res)=9.135e-11  rms(step)=6.628e-12  diis=8  t=0.002s
+[INF] UCCSDT :                      Converged in 15 iterations.
+
+  Correlation Energy                   -0.0402749514       -1.0959372599      -25.2729136015
+--------------------------------------------------------------------------------------------
+  Total UCCSDT Energy                 -24.1892636164     -658.2233952710   -15178.9920898810
+--------------------------------------------------------------------------------------------
+[INF] Checkpoint :                  Updated b_uccsdt_sto3g.hfchk
+[INF] Wall Time :                   0.059 s

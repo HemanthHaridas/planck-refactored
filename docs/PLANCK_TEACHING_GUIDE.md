@@ -180,7 +180,401 @@ to \(1/\sqrt{(2l_x-1)!!(2l_y-1)!!(2l_z-1)!!}\) which handles the
 
 ---
 
-## 5. The Obara-Saika Integral Engine
+## 5. Hartree-Fock Theory
+
+### The Variational Principle
+
+HF approximates the ground state \(|\Psi\rangle\) as a single Slater
+determinant built from \(N\) molecular spin-orbitals:
+
+\[
+|\Psi_{HF}\rangle = |\phi_1 \phi_2 \cdots \phi_N\rangle
+\]
+
+The HF energy is:
+
+\[
+E_{HF} = \langle \Psi_{HF} | \hat H | \Psi_{HF} \rangle
+= \sum_i h_{ii} + \frac{1}{2}\sum_{ij}(J_{ij} - K_{ij})
+\]
+
+where \(h_{ii}\) are core one-electron energies, \(J_{ij}\) are Coulomb
+integrals, and \(K_{ij}\) are exchange integrals.
+
+### Roothaan Equations (RHF)
+
+Expanding spatial MOs in the AO basis \(\chi_\mu\):
+
+\[
+\phi_i(\mathbf r) = \sum_\mu C_{\mu i}\, \chi_\mu(\mathbf r)
+\]
+
+and applying the variational condition yields the Roothaan matrix eigenvalue problem:
+
+\[
+\mathbf F \mathbf C = \mathbf S \mathbf C \boldsymbol\varepsilon
+\]
+
+where \(\mathbf S\) is the AO overlap matrix, \(\mathbf C\) contains MO
+coefficients (columns = MOs), and \(\boldsymbol\varepsilon\) contains orbital
+energies.
+
+The **Fock matrix** is:
+
+\[
+F_{\mu\nu} = H_{\mu\nu}^{core} + G_{\mu\nu}
+\]
+
+The core Hamiltonian is:
+
+\[
+H_{\mu\nu}^{core} = T_{\mu\nu} + V_{\mu\nu}
+\]
+
+The two-electron contribution for closed-shell RHF is:
+
+\[
+G_{\mu\nu} = \sum_{\lambda\sigma} P_{\lambda\sigma}
+\left[(\mu\nu|\lambda\sigma) - \frac{1}{2}(\mu\lambda|\nu\sigma)\right]
+\]
+
+The **density matrix** for \(n_{occ}\) doubly-occupied orbitals is:
+
+\[
+P_{\mu\nu} = 2\sum_{i=1}^{n_{occ}} C_{\mu i}\, C_{\nu i}
+\]
+
+The total RHF energy is:
+
+\[
+E_{RHF} = \frac{1}{2}\sum_{\mu\nu} P_{\mu\nu}\left(H_{\mu\nu}^{core} + F_{\mu\nu}\right)
++ E_{nuc}
+\]
+
+### Pople-Nesbet Equations (UHF)
+
+For open-shell systems, separate spin-orbital sets are maintained. Defining
+\(P^\alpha_{\mu\nu} = \sum_{i \in \alpha} C^\alpha_{\mu i} C^\alpha_{\nu i}\)
+and similarly for \(\beta\), the total density is
+\(P^T = P^\alpha + P^\beta\). The UHF Fock matrices are:
+
+\[
+F^\alpha_{\mu\nu} = H^{core}_{\mu\nu}
++ \sum_{\lambda\sigma}\left[P^T_{\lambda\sigma}(\mu\nu|\lambda\sigma)
+- P^\alpha_{\lambda\sigma}(\mu\lambda|\nu\sigma)\right]
+\]
+
+\[
+F^\beta_{\mu\nu} = H^{core}_{\mu\nu}
++ \sum_{\lambda\sigma}\left[P^T_{\lambda\sigma}(\mu\nu|\lambda\sigma)
+- P^\beta_{\lambda\sigma}(\mu\lambda|\nu\sigma)\right]
+\]
+
+The UHF energy is:
+
+\[
+E_{UHF} = \frac{1}{2}\sum_{\mu\nu}
+\left[P^T_{\mu\nu} H^{core}_{\mu\nu}
++ P^\alpha_{\mu\nu} F^\alpha_{\mu\nu}
++ P^\beta_{\mu\nu} F^\beta_{\mu\nu}\right]
++ E_{nuc}
+\]
+
+### Restricted Open-Shell Hartree-Fock (ROHF)
+
+ROHF describes open-shell systems (radicals, ground-state triplets, etc.) using a **single set of spatial orbitals** shared by both spin channels.  This is in contrast to UHF, which allows the alpha and beta MO sets to differ.  ROHF is invoked when `scf_type rohf` is set in the input file; it is implemented in `run_rohf` in `src/scf/scf.cpp`.
+
+#### Orbital Space Partition
+
+Given \(N_e\) electrons and multiplicity \(2S+1\), the numbers of alpha and beta electrons are
+
+\[
+N_\alpha = \frac{N_e + (2S)}{2}, \qquad N_\beta = \frac{N_e - (2S)}{2}
+\]
+
+from which three disjoint orbital subspaces are defined:
+
+| Subspace | Occupation | Count |
+|---|---|---|
+| Closed (core) \(c\) | 2 (alpha + beta) | \(N_c = N_\beta\) |
+| Open (singly occupied) \(o\) | 1 (alpha only) | \(N_o = N_\alpha - N_\beta\) |
+| Virtual \(v\) | 0 | \(N_{mo} - N_\alpha\) |
+
+The density matrices for the two spin channels share the same MO coefficients \(C\):
+
+\[
+P^\alpha_{\mu\nu} = \sum_{i=1}^{N_\alpha} C_{\mu i} C_{\nu i}, \qquad
+P^\beta_{\mu\nu} = \sum_{i=1}^{N_\beta} C_{\mu i} C_{\nu i}
+\]
+
+#### Alpha and Beta Fock Matrices
+
+Individual spin-Fock matrices are built exactly as in UHF:
+
+\[
+F^\alpha_{\mu\nu} = H_{\mu\nu} + G^\alpha_{\mu\nu}[P^\alpha, P^\beta], \qquad
+F^\beta_{\mu\nu}  = H_{\mu\nu} + G^\beta_{\mu\nu}[P^\alpha, P^\beta]
+\]
+
+The electronic energy uses the same two-component formula as UHF:
+
+\[
+E_{elec} = \tfrac{1}{2}\left[P^\alpha_{\mu\nu}(H_{\mu\nu} + F^\alpha_{\mu\nu}) + P^\beta_{\mu\nu}(H_{\mu\nu} + F^\beta_{\mu\nu})\right]
+\]
+
+#### Effective (Canonical) Fock Matrix
+
+A key challenge in ROHF is that the closed, open, and virtual blocks couple differently to \(F^\alpha\) and \(F^\beta\).  The coupling conditions for a stationary ROHF solution are:
+
+\[
+\langle c | F^\alpha + F^\beta | o \rangle = 0, \quad
+\langle c | F^\beta | v \rangle = 0, \quad
+\langle o | F^\alpha | v \rangle = 0
+\]
+
+These three conditions cannot in general be satisfied simultaneously by either \(F^\alpha\) or \(F^\beta\) alone.  Planck uses the **Guest–Saunders effective Fock matrix** `_rohf_effective_fock`, which constructs a single pseudo-Fock matrix that, when diagonalized, satisfies all three coupling conditions.
+
+Defining the projectors onto the three subspaces via the density matrices and overlap:
+
+\[
+\mathbf P_c = P^\beta S, \qquad
+\mathbf P_o = (P^\alpha - P^\beta) S, \qquad
+\mathbf P_v = I - P^\alpha S
+\]
+
+and the averaged Fock \(F_c = \tfrac{1}{2}(F^\alpha + F^\beta)\), the effective Fock is:
+
+\[
+F^{eff} = \mathbf P_c^T F_c \mathbf P_c
+         + \mathbf P_o^T F_c \mathbf P_o
+         + \mathbf P_v^T F_c \mathbf P_v
+         + \mathbf P_o^T F^\beta \mathbf P_c
+         + \mathbf P_o^T F^\alpha \mathbf P_v
+         + \mathbf P_v^T F_c \mathbf P_c
+         + \text{transpose}
+\]
+
+This is symmetrised as `F + F.transpose()` in the code.  Diagonalizing \(F^{eff}\) yields a common MO set that simultaneously satisfies all three inter-block coupling conditions.
+
+#### DIIS Error Vector
+
+DIIS is applied to \(F^{eff}\) using the total density \(P^{tot} = P^\alpha + P^\beta\):
+
+\[
+\mathbf e = X^T(F^{eff} P^{tot} S - S P^{tot} F^{eff}) X
+\]
+
+This is the same Pulay commutator as in RHF but with \(F^{eff}\) replacing the closed-shell Fock and the total (not twice the alpha) density.
+
+#### Open-Shell Orbital Identification
+
+After diagonalizing \(F^{eff}\), the resulting MO energies are those of the pseudo-Fock and may not correctly order the open-shell orbitals relative to closed-shell and virtual ones.  The helper `_reorder_rohf_orbitals` corrects this:
+
+1. Keep the first \(N_c\) eigenvectors (lowest \(F^{eff}\) eigenvalues) as closed orbitals.
+2. From the remaining candidates, select the \(N_o\) with the lowest **alpha** Fock diagonal energies \(\langle p | F^\alpha | p \rangle\) — these are the singly-occupied MOs.
+3. Sort the remaining virtuals by \(F^{eff}\) eigenvalue.
+
+This ensures that the "open-shell" label follows the physics (alpha spin binding energy) rather than the artificial \(F^{eff}\) pseudo-spectrum.
+
+#### Convergence and Output
+
+Convergence is tested on \(|\Delta E|\) and \(\|\Delta P\|\) identically to UHF.  Upon convergence, both `alpha.mo_coefficients` and `beta.mo_coefficients` are stored as the **same** \(C\) matrix, and `alpha.mo_energies` carries the \(F^{eff}\) eigenvalues while `beta.mo_energies` carries \(\langle p | F^\beta | p \rangle\).
+
+The spin-contamination diagnostic \(\langle S^2 \rangle\) is printed after convergence.  For a pure spin state ROHF always gives exactly \(\langle S^2\rangle = S(S+1)\) — unlike UHF, which can mix higher spin states.
+
+#### Limitations
+
+- SAD guess is not available for ROHF (`SCFGuess::SAD` returns an error at runtime); use `hcore` (default) or checkpoint restart.
+- Post-HF methods (MP2, CC, CASSCF) currently require RHF or UHF reference; ROHF converged orbitals can be used as a warm-start checkpoint for a subsequent UHF calculation.
+
+---
+
+## 6. SCF Algorithm
+
+### Symmetric Orthogonalization
+
+The AO basis is non-orthogonal (\(\mathbf S \ne \mathbf I\)). To diagonalize
+the Fock matrix, it is transformed to an orthonormal basis using:
+
+\[
+\mathbf X = \mathbf S^{-1/2}
+\]
+
+computed via the eigendecomposition \(\mathbf S = \mathbf U \boldsymbol\sigma \mathbf U^T\):
+
+\[
+\mathbf X = \mathbf U\,\mathrm{diag}(\sigma_i^{-1/2})\,\mathbf U^T
+\]
+
+The transformed Fock matrix is then:
+
+\[
+\mathbf F' = \mathbf X^T \mathbf F \mathbf X
+\]
+
+which is a standard symmetric eigenvalue problem \(\mathbf F' \mathbf C' = \mathbf C' \boldsymbol\varepsilon\).
+The AO-basis MO coefficients are recovered by:
+
+\[
+\mathbf C = \mathbf X \mathbf C'
+\]
+
+Implemented in `build_orthogonalizer` in `src/scf/scf.cpp`.
+
+### Initial Density Guess
+
+The default initial guess (`SCFGuess::HCore`) diagonalizes the core
+Hamiltonian \(\mathbf H^{core} = \mathbf T + \mathbf V\) to produce an initial
+set of MO coefficients and a starting density matrix. This corresponds to
+completely neglecting electron-electron repulsion in the initial guess.
+
+### SCF Iteration Loop
+
+Each RHF iteration in `run_rhf`:
+
+1. Compute \(G_{\mu\nu}[P]\) from the current density (either from the stored ERI
+   tensor via `_compute_fock_rhf`, or on-the-fly via `_compute_2e_fock`)
+2. Form \(\mathbf F = \mathbf H^{core} + \mathbf G\)
+3. Compute the current energy
+4. Form the DIIS error vector and call `diis.push(F, e)`; if DIIS is ready,
+   replace \(\mathbf F\) with the extrapolated Fock
+5. Transform to orthonormal basis: \(\mathbf F' = \mathbf X^T \mathbf F \mathbf X\)
+6. Diagonalize \(\mathbf F' \mathbf C' = \mathbf C' \boldsymbol\varepsilon\)
+7. Back-transform: \(\mathbf C = \mathbf X \mathbf C'\)
+8. Build new density \(P_{\mu\nu} = 2\sum_i^{occ} C_{\mu i} C_{\nu i}\)
+9. Test convergence: \(|\Delta E| < \epsilon_E\) and \(\|\Delta P\|_{max} < \epsilon_P\)
+
+Convergence is declared when both criteria are simultaneously satisfied.
+
+### Level Shifting
+
+If `_level_shift > 0`, the virtual orbital energies are shifted upward by
+\(\Delta\) before each diagonalization:
+
+\[
+F'_{ab} \leftarrow F'_{ab} + \Delta
+\quad \text{(virtual-virtual block in the MO basis)}
+\]
+
+This increases the HOMO-LUMO gap and prevents the SCF from alternating between
+states with different orbital occupations, at the cost of slower convergence
+near the solution. Level shift is applied in `run_rhf` and `run_uhf`.
+
+---
+
+## 7. DIIS Convergence Acceleration
+
+Pulay's Direct Inversion in the Iterative Subspace (DIIS) accelerates SCF
+convergence by extrapolating a Fock matrix from a stored subspace of recent
+Fock matrices that minimizes the residual.
+
+### Error Metric
+
+The Pulay error vector at iteration \(k\) is the FPS-SPF commutator in the
+orthonormal basis:
+
+\[
+\mathbf e_k = \mathbf X^T(\mathbf F_k \mathbf P_k \mathbf S - \mathbf S \mathbf P_k \mathbf F_k)\mathbf X
+\]
+
+When the SCF is converged, \(\mathbf F\) and \(\mathbf P\) commute and
+\(\mathbf e = \mathbf 0\). The norm \(\|\mathbf e\|_{RMS}\) is the primary
+convergence diagnostic.
+
+### DIIS Linear System
+
+Given \(m\) stored pairs \(\{(\mathbf F_k, \mathbf e_k)\}\), find coefficients
+\(\{c_k\}\) such that:
+
+\[
+\mathbf F^{extrap} = \sum_{k=1}^m c_k \mathbf F_k
+\quad \text{subject to} \quad \sum_k c_k = 1
+\]
+
+minimizes \(\|\sum_k c_k \mathbf e_k\|^2\). Using a Lagrange multiplier
+\(\lambda\) for the constraint, this becomes the augmented linear system:
+
+\[
+\begin{pmatrix} \mathbf B & -\mathbf 1 \\ -\mathbf 1^T & 0 \end{pmatrix}
+\begin{pmatrix} \mathbf c \\ \lambda \end{pmatrix}
+=
+\begin{pmatrix} \mathbf 0 \\ -1 \end{pmatrix}
+\]
+
+where \(B_{ij} = \mathrm{Tr}(\mathbf e_i^T \mathbf e_j)\).
+
+Solved via column-pivoted QR decomposition in Eigen. Implemented in the
+`DIISState::extrapolate()` method in `src/base/types.h`. Subspace is capped at
+`_DIIS_dim` (default 8) vectors, evicting the oldest on overflow.
+
+---
+
+## 8. Symmetry
+
+### Point Group Detection
+
+The `detectSymmetry` function in `src/symmetry/symmetry.cpp` wraps the
+`libmsym` library to:
+
+1. Identify the molecular point group
+2. Reorient the molecule into the standard frame (principal axis along \(z\), etc.)
+3. Store the standard-orientation geometry in `molecule._standard` (Angstrom)
+   and `molecule._standard * ANGSTROM_TO_BOHR` (Bohr)
+
+### Symmetry-Adapted Orbitals (SAO Basis)
+
+For non-trivial point groups, the Fock matrix is block-diagonal in the
+symmetry-adapted orbital (SAO) basis. `build_sao_basis` in
+`src/symmetry/mo_symmetry.cpp`:
+
+1. Re-enters libmsym to obtain the character table and group operations
+2. For groups with multi-dimensional irreps, selects the **largest Abelian
+   subgroup** with all-1D irreducible representations (at most D\(_{2h}\))
+3. Builds projection operators for each irrep \(\Gamma_g\):
+   \[
+   \hat P^{(\Gamma)} = \frac{d_\Gamma}{h} \sum_{R} \chi^{(\Gamma)}(R)^* \hat R
+   \]
+4. Applies these to each AO to generate SAO trial vectors; orthonormalizes via
+   modified Gram-Schmidt
+
+The resulting unitary transformation \(\mathbf U\) (columns = SAOs) is stored
+in `calculator._sao_transform`. In the SAO basis, the Fock and overlap matrices
+block-diagonalize, and each block is diagonalized independently. This reduces
+the \(O(n_b^3)\) diagonalization cost to \(\sum_g O(n_g^3)\) where \(n_g\) is
+the number of SAOs in irrep \(g\).
+
+### MO Irrep Assignment
+
+After convergence, each MO is labeled by its irreducible representation.
+`assign_mo_symmetry` in `mo_symmetry.cpp` builds the AO representation matrix
+\(D_R\) for each group operation \(R\) — for the all-1D Abelian subgroups used,
+each Cartesian Gaussian transforms with a sign \(\pm 1\) under each operation,
+so \(D_R\) is diagonal. The irrep label of MO \(i\) is determined by finding
+the character pattern \(\chi_i(R) = \sum_\mu |C_{\mu i}|^2 D_R(\mu,\mu)\) and
+matching it against the character table.
+
+### Integral Symmetry Reduction
+
+The `update_integral_symmetry` function in `src/symmetry/integral_symmetry.cpp`
+finds which of the seven axis-sign-flip candidates
+\(\{(-1,1,1),(1,-1,1),(1,1,-1),(-1,-1,1),(-1,1,-1),(1,-1,-1),(-1,-1,-1)\}\)
+are true symmetry operations of the molecule. Each valid operation is stored as
+a `SignedAOSymOp` — a permutation `ao_map[mu] = nu` and sign `ao_sign[mu] = ±1`
+that maps each AO to its symmetry-equivalent partner.
+
+Since the Abelian subgroups used are subgroups of D\(_{2h}\), all operations
+are products of coordinate-axis reflections. Under any such reflection, a
+Cartesian Gaussian \(x^{l_x} y^{l_y} z^{l_z} e^{-\alpha r^2}\) maps to
+\(\pm 1\) times a Gaussian on the equivalent atom — no mixing of Cartesian
+components occurs. This means `ao_sign ∈ {+1, -1}` is always exact for all
+angular momenta.
+
+These operations are used to reduce integral work in the ERI loops (described
+further in the implementation plan).
+
+---
+
+## 9. The Obara-Saika Integral Engine
 
 The default integral engine in Planck is the Obara-Saika (OS) recursion.
 One-electron overlap, kinetic, nuclear-attraction, multipole, and derivative
@@ -421,7 +815,7 @@ AO-sign factor.
 
 ---
 
-## 6. Rys Quadrature
+## 10. Rys Quadrature
 
 ### The Basic Idea
 
@@ -625,293 +1019,6 @@ pruning is currently an OS-only optimization.
 
 ---
 
-## 7. Hartree-Fock Theory
-
-### The Variational Principle
-
-HF approximates the ground state \(|\Psi\rangle\) as a single Slater
-determinant built from \(N\) molecular spin-orbitals:
-
-\[
-|\Psi_{HF}\rangle = |\phi_1 \phi_2 \cdots \phi_N\rangle
-\]
-
-The HF energy is:
-
-\[
-E_{HF} = \langle \Psi_{HF} | \hat H | \Psi_{HF} \rangle
-= \sum_i h_{ii} + \frac{1}{2}\sum_{ij}(J_{ij} - K_{ij})
-\]
-
-where \(h_{ii}\) are core one-electron energies, \(J_{ij}\) are Coulomb
-integrals, and \(K_{ij}\) are exchange integrals.
-
-### Roothaan Equations (RHF)
-
-Expanding spatial MOs in the AO basis \(\chi_\mu\):
-
-\[
-\phi_i(\mathbf r) = \sum_\mu C_{\mu i}\, \chi_\mu(\mathbf r)
-\]
-
-and applying the variational condition yields the Roothaan matrix eigenvalue problem:
-
-\[
-\mathbf F \mathbf C = \mathbf S \mathbf C \boldsymbol\varepsilon
-\]
-
-where \(\mathbf S\) is the AO overlap matrix, \(\mathbf C\) contains MO
-coefficients (columns = MOs), and \(\boldsymbol\varepsilon\) contains orbital
-energies.
-
-The **Fock matrix** is:
-
-\[
-F_{\mu\nu} = H_{\mu\nu}^{core} + G_{\mu\nu}
-\]
-
-The core Hamiltonian is:
-
-\[
-H_{\mu\nu}^{core} = T_{\mu\nu} + V_{\mu\nu}
-\]
-
-The two-electron contribution for closed-shell RHF is:
-
-\[
-G_{\mu\nu} = \sum_{\lambda\sigma} P_{\lambda\sigma}
-\left[(\mu\nu|\lambda\sigma) - \frac{1}{2}(\mu\lambda|\nu\sigma)\right]
-\]
-
-The **density matrix** for \(n_{occ}\) doubly-occupied orbitals is:
-
-\[
-P_{\mu\nu} = 2\sum_{i=1}^{n_{occ}} C_{\mu i}\, C_{\nu i}
-\]
-
-The total RHF energy is:
-
-\[
-E_{RHF} = \frac{1}{2}\sum_{\mu\nu} P_{\mu\nu}\left(H_{\mu\nu}^{core} + F_{\mu\nu}\right)
-+ E_{nuc}
-\]
-
-### Pople-Nesbet Equations (UHF)
-
-For open-shell systems, separate spin-orbital sets are maintained. Defining
-\(P^\alpha_{\mu\nu} = \sum_{i \in \alpha} C^\alpha_{\mu i} C^\alpha_{\nu i}\)
-and similarly for \(\beta\), the total density is
-\(P^T = P^\alpha + P^\beta\). The UHF Fock matrices are:
-
-\[
-F^\alpha_{\mu\nu} = H^{core}_{\mu\nu}
-+ \sum_{\lambda\sigma}\left[P^T_{\lambda\sigma}(\mu\nu|\lambda\sigma)
-- P^\alpha_{\lambda\sigma}(\mu\lambda|\nu\sigma)\right]
-\]
-
-\[
-F^\beta_{\mu\nu} = H^{core}_{\mu\nu}
-+ \sum_{\lambda\sigma}\left[P^T_{\lambda\sigma}(\mu\nu|\lambda\sigma)
-- P^\beta_{\lambda\sigma}(\mu\lambda|\nu\sigma)\right]
-\]
-
-The UHF energy is:
-
-\[
-E_{UHF} = \frac{1}{2}\sum_{\mu\nu}
-\left[P^T_{\mu\nu} H^{core}_{\mu\nu}
-+ P^\alpha_{\mu\nu} F^\alpha_{\mu\nu}
-+ P^\beta_{\mu\nu} F^\beta_{\mu\nu}\right]
-+ E_{nuc}
-\]
-
----
-
-## 8. SCF Algorithm
-
-### Symmetric Orthogonalization
-
-The AO basis is non-orthogonal (\(\mathbf S \ne \mathbf I\)). To diagonalize
-the Fock matrix, it is transformed to an orthonormal basis using:
-
-\[
-\mathbf X = \mathbf S^{-1/2}
-\]
-
-computed via the eigendecomposition \(\mathbf S = \mathbf U \boldsymbol\sigma \mathbf U^T\):
-
-\[
-\mathbf X = \mathbf U\,\mathrm{diag}(\sigma_i^{-1/2})\,\mathbf U^T
-\]
-
-The transformed Fock matrix is then:
-
-\[
-\mathbf F' = \mathbf X^T \mathbf F \mathbf X
-\]
-
-which is a standard symmetric eigenvalue problem \(\mathbf F' \mathbf C' = \mathbf C' \boldsymbol\varepsilon\).
-The AO-basis MO coefficients are recovered by:
-
-\[
-\mathbf C = \mathbf X \mathbf C'
-\]
-
-Implemented in `build_orthogonalizer` in `src/scf/scf.cpp`.
-
-### Initial Density Guess
-
-The default initial guess (`SCFGuess::HCore`) diagonalizes the core
-Hamiltonian \(\mathbf H^{core} = \mathbf T + \mathbf V\) to produce an initial
-set of MO coefficients and a starting density matrix. This corresponds to
-completely neglecting electron-electron repulsion in the initial guess.
-
-### SCF Iteration Loop
-
-Each RHF iteration in `run_rhf`:
-
-1. Compute \(G_{\mu\nu}[P]\) from the current density (either from the stored ERI
-   tensor via `_compute_fock_rhf`, or on-the-fly via `_compute_2e_fock`)
-2. Form \(\mathbf F = \mathbf H^{core} + \mathbf G\)
-3. Compute the current energy
-4. Form the DIIS error vector and call `diis.push(F, e)`; if DIIS is ready,
-   replace \(\mathbf F\) with the extrapolated Fock
-5. Transform to orthonormal basis: \(\mathbf F' = \mathbf X^T \mathbf F \mathbf X\)
-6. Diagonalize \(\mathbf F' \mathbf C' = \mathbf C' \boldsymbol\varepsilon\)
-7. Back-transform: \(\mathbf C = \mathbf X \mathbf C'\)
-8. Build new density \(P_{\mu\nu} = 2\sum_i^{occ} C_{\mu i} C_{\nu i}\)
-9. Test convergence: \(|\Delta E| < \epsilon_E\) and \(\|\Delta P\|_{max} < \epsilon_P\)
-
-Convergence is declared when both criteria are simultaneously satisfied.
-
-### Level Shifting
-
-If `_level_shift > 0`, the virtual orbital energies are shifted upward by
-\(\Delta\) before each diagonalization:
-
-\[
-F'_{ab} \leftarrow F'_{ab} + \Delta
-\quad \text{(virtual-virtual block in the MO basis)}
-\]
-
-This increases the HOMO-LUMO gap and prevents the SCF from alternating between
-states with different orbital occupations, at the cost of slower convergence
-near the solution. Level shift is applied in `run_rhf` and `run_uhf`.
-
----
-
-## 9. DIIS Convergence Acceleration
-
-Pulay's Direct Inversion in the Iterative Subspace (DIIS) accelerates SCF
-convergence by extrapolating a Fock matrix from a stored subspace of recent
-Fock matrices that minimizes the residual.
-
-### Error Metric
-
-The Pulay error vector at iteration \(k\) is the FPS-SPF commutator in the
-orthonormal basis:
-
-\[
-\mathbf e_k = \mathbf X^T(\mathbf F_k \mathbf P_k \mathbf S - \mathbf S \mathbf P_k \mathbf F_k)\mathbf X
-\]
-
-When the SCF is converged, \(\mathbf F\) and \(\mathbf P\) commute and
-\(\mathbf e = \mathbf 0\). The norm \(\|\mathbf e\|_{RMS}\) is the primary
-convergence diagnostic.
-
-### DIIS Linear System
-
-Given \(m\) stored pairs \(\{(\mathbf F_k, \mathbf e_k)\}\), find coefficients
-\(\{c_k\}\) such that:
-
-\[
-\mathbf F^{extrap} = \sum_{k=1}^m c_k \mathbf F_k
-\quad \text{subject to} \quad \sum_k c_k = 1
-\]
-
-minimizes \(\|\sum_k c_k \mathbf e_k\|^2\). Using a Lagrange multiplier
-\(\lambda\) for the constraint, this becomes the augmented linear system:
-
-\[
-\begin{pmatrix} \mathbf B & -\mathbf 1 \\ -\mathbf 1^T & 0 \end{pmatrix}
-\begin{pmatrix} \mathbf c \\ \lambda \end{pmatrix}
-=
-\begin{pmatrix} \mathbf 0 \\ -1 \end{pmatrix}
-\]
-
-where \(B_{ij} = \mathrm{Tr}(\mathbf e_i^T \mathbf e_j)\).
-
-Solved via column-pivoted QR decomposition in Eigen. Implemented in the
-`DIISState::extrapolate()` method in `src/base/types.h`. Subspace is capped at
-`_DIIS_dim` (default 8) vectors, evicting the oldest on overflow.
-
----
-
-## 10. Symmetry
-
-### Point Group Detection
-
-The `detectSymmetry` function in `src/symmetry/symmetry.cpp` wraps the
-`libmsym` library to:
-
-1. Identify the molecular point group
-2. Reorient the molecule into the standard frame (principal axis along \(z\), etc.)
-3. Store the standard-orientation geometry in `molecule._standard` (Angstrom)
-   and `molecule._standard * ANGSTROM_TO_BOHR` (Bohr)
-
-### Symmetry-Adapted Orbitals (SAO Basis)
-
-For non-trivial point groups, the Fock matrix is block-diagonal in the
-symmetry-adapted orbital (SAO) basis. `build_sao_basis` in
-`src/symmetry/mo_symmetry.cpp`:
-
-1. Re-enters libmsym to obtain the character table and group operations
-2. For groups with multi-dimensional irreps, selects the **largest Abelian
-   subgroup** with all-1D irreducible representations (at most D\(_{2h}\))
-3. Builds projection operators for each irrep \(\Gamma_g\):
-   \[
-   \hat P^{(\Gamma)} = \frac{d_\Gamma}{h} \sum_{R} \chi^{(\Gamma)}(R)^* \hat R
-   \]
-4. Applies these to each AO to generate SAO trial vectors; orthonormalizes via
-   modified Gram-Schmidt
-
-The resulting unitary transformation \(\mathbf U\) (columns = SAOs) is stored
-in `calculator._sao_transform`. In the SAO basis, the Fock and overlap matrices
-block-diagonalize, and each block is diagonalized independently. This reduces
-the \(O(n_b^3)\) diagonalization cost to \(\sum_g O(n_g^3)\) where \(n_g\) is
-the number of SAOs in irrep \(g\).
-
-### MO Irrep Assignment
-
-After convergence, each MO is labeled by its irreducible representation.
-`assign_mo_symmetry` in `mo_symmetry.cpp` builds the AO representation matrix
-\(D_R\) for each group operation \(R\) — for the all-1D Abelian subgroups used,
-each Cartesian Gaussian transforms with a sign \(\pm 1\) under each operation,
-so \(D_R\) is diagonal. The irrep label of MO \(i\) is determined by finding
-the character pattern \(\chi_i(R) = \sum_\mu |C_{\mu i}|^2 D_R(\mu,\mu)\) and
-matching it against the character table.
-
-### Integral Symmetry Reduction
-
-The `update_integral_symmetry` function in `src/symmetry/integral_symmetry.cpp`
-finds which of the seven axis-sign-flip candidates
-\(\{(-1,1,1),(1,-1,1),(1,1,-1),(-1,-1,1),(-1,1,-1),(1,-1,-1),(-1,-1,-1)\}\)
-are true symmetry operations of the molecule. Each valid operation is stored as
-a `SignedAOSymOp` — a permutation `ao_map[mu] = nu` and sign `ao_sign[mu] = ±1`
-that maps each AO to its symmetry-equivalent partner.
-
-Since the Abelian subgroups used are subgroups of D\(_{2h}\), all operations
-are products of coordinate-axis reflections. Under any such reflection, a
-Cartesian Gaussian \(x^{l_x} y^{l_y} z^{l_z} e^{-\alpha r^2}\) maps to
-\(\pm 1\) times a Gaussian on the equivalent atom — no mixing of Cartesian
-components occurs. This means `ao_sign ∈ {+1, -1}` is always exact for all
-angular momenta.
-
-These operations are used to reduce integral work in the ERI loops (described
-further in the implementation plan).
-
----
-
 ## 11. MP2 Correlation Energy
 
 ### Second-Order Perturbation Theory
@@ -1086,7 +1193,7 @@ assembled from the relaxed density and the appropriate derivative integrals.
 
 ---
 
-## 13A. Coupled Cluster in Planck
+## 14. Coupled Cluster in Planck
 
 Planck currently contains four coupled-cluster paths:
 
@@ -1117,11 +1224,134 @@ intentionally kept separate from the actual solver loops:
 
 ### RCCSD
 
-The RCCSD implementation is pedagogical but still fairly conventional. The code
-starts from the RHF reference, expands the spatial-orbital integrals into
-antisymmetrized spin-orbital blocks, forms the standard \(\tau\) and
-\(\tilde\tau\) combinations, then iterates the \(T_1\) and \(T_2\) amplitudes
-through named intermediates:
+Planck's original `RCCSD` solver in `src/post_hf/cc/ccsd.cpp` uses the
+standard coupled-cluster ansatz
+
+\[
+|\Psi\rangle = e^{T} |\Phi_0\rangle,
+\qquad
+T = T_1 + T_2
+\]
+
+with a canonical RHF determinant \(|\Phi_0\rangle\) as the reference. In the
+spin-orbital implementation used here,
+
+\[
+T_1 = \sum_{ia} t_i^a a_a^\dagger a_i,
+\qquad
+T_2 = \frac{1}{4}\sum_{ijab} t_{ij}^{ab}
+a_a^\dagger a_b^\dagger a_j a_i
+\]
+
+and the working equations come from the similarity-transformed Schrödinger
+equation
+
+\[
+\bar H |\Phi_0\rangle = E |\Phi_0\rangle,
+\qquad
+\bar H = e^{-T} H e^T .
+\]
+
+#### The BCH Expansion
+
+The operator \(\bar H = e^{-T} H e^T\) is the central object in all
+coupled-cluster theory. Computing it directly from the matrix exponentials
+is impractical, but the **Baker-Campbell-Hausdorff (BCH)** identity reduces
+it to a finite commutator series:
+
+\[
+e^{-T} H e^T
+= H
++ [H, T]
++ \frac{1}{2!}[[H, T], T]
++ \frac{1}{3!}[[[H, T], T], T]
++ \frac{1}{4!}[[[[H, T], T], T], T]
++ \cdots
+\]
+
+For the electronic Hamiltonian — which contains at most two-body operators —
+this series **terminates exactly at the fourth commutator**. The reason is that
+each commutator \([H, T_n]\) raises the particle rank of the resulting operator
+by at most \(n-1\), and a four-body operator commuted with any excitation
+operator yields zero on a finite determinant space. This is the key property
+that makes coupled-cluster theory computationally tractable: no approximation
+is needed to truncate the BCH expansion.
+
+In practice the BCH series is not evaluated commutator by commutator. Instead,
+one collects all terms at each excitation rank and organizes them into
+**effective intermediates** — dressed one- and two-body operators that absorb
+the contributions from lower-rank cluster amplitudes. The familiar CCSD
+intermediates \(F_{ae}\), \(F_{mi}\), \(W_{mnij}\), \(W_{abef}\), \(W_{mbej}\)
+are exactly these: each one represents a specific subset of BCH commutator
+terms, grouped so that the residual equations look like a small number of
+tensor contractions rather than dozens of individual diagrams.
+
+A concrete example is the dressed virtual-virtual block \(F_{ae}\):
+
+\[
+F_{ae} = f_{ae}(1 - \delta_{ae})
++ \sum_f t_i^f \langle ai || fe \rangle f_{ie}
+- \frac{1}{2} \sum_{mn\bar f} t_{mn}^{a\bar f} \langle mn || e\bar f \rangle + \ldots
+\]
+
+The first term is the bare Fock element, and the remaining terms are
+contributions from \([H, T_1]\), \([H, T_2]\), and \([[H, T_1], T_1]\) that
+project onto the virtual-virtual sector. By computing \(F_{ae}\) once per
+iteration, all subsequent contractions involving the virtual-virtual block see
+the already-dressed result.
+
+The **truncation of T** — keeping only \(T_1 + T_2\) (CCSD) or
+\(T_1 + T_2 + T_3\) (CCSDT) — is a separate approximation from the BCH
+truncation. Within the chosen excitation rank, the BCH series is still
+evaluated exactly to fourth order. The quality of the result depends on how
+many excitation levels are included in T, not on any truncation of the BCH
+expansion itself.
+
+Projecting onto the reference, singles, and doubles spaces gives the energy
+equation and the amplitude residual equations:
+
+\[
+E_{\mathrm{corr}} = \langle \Phi_0 | \bar H | \Phi_0 \rangle
+\]
+
+\[
+R_i^a = \langle \Phi_i^a | \bar H | \Phi_0 \rangle = 0
+\]
+
+\[
+R_{ij}^{ab} =
+\langle \Phi_{ij}^{ab} | \bar H | \Phi_0 \rangle = 0 .
+\]
+
+For the spin-orbital `RCCSD` code, the correlation energy is evaluated in the
+usual antisymmetrized form
+
+\[
+E_{\mathrm{corr}} =
+\sum_{ia} f_i^a t_i^a +
+\frac{1}{4}\sum_{ijab} \langle ij || ab \rangle t_{ij}^{ab} +
+\frac{1}{2}\sum_{ijab} \langle ij || ab \rangle t_i^a t_j^b .
+\]
+
+The code first expands the RHF spatial-orbital integrals into explicit
+antisymmetrized spin-orbital blocks and then forms the standard disconnected
+combinations
+
+\[
+\tau_{ij}^{ab} = t_{ij}^{ab} + t_i^a t_j^b - t_i^b t_j^a
+\]
+
+\[
+\tilde\tau_{ij}^{ab} =
+t_{ij}^{ab} + \frac{1}{2}\left(t_i^a t_j^b - t_i^b t_j^a\right).
+\]
+
+These two tensors appear everywhere in CCSD because they are the cleanest way
+to package disconnected singles-singles pieces together with the genuine
+doubles amplitudes.
+
+The residual equations are then organized around the usual effective
+one- and two-body intermediates:
 
 \[
 F_{ae}, \; F_{mi}, \; F_{me}, \; W_{mnij}, \; W_{abef}, \; W_{mbej}
@@ -1129,19 +1359,119 @@ F_{ae}, \; F_{mi}, \; F_{me}, \; W_{mnij}, \; W_{abef}, \; W_{mbej}
 
 These are the usual **CCSD intermediates**: compact tensors that collect many
 repeated contraction patterns so the residual equations can be written in a
-cleaner and faster form. The \(F\)-type objects behave like effective one-body
+cleaner and faster form. The \(F\)-type objects behave like dressed one-body
 Fock blocks in the occupied/virtual partition:
 \(F_{ae}\) is a dressed virtual-virtual block,
 \(F_{mi}\) is a dressed occupied-occupied block, and
 \(F_{me}\) is the occupied-virtual coupling block that feeds terms mixing
-singles and doubles. The \(W\)-type objects are effective two-body interaction
+singles and doubles. The \(W\)-type objects are dressed two-body interaction
 blocks:
-\(W_{mnij}\) is the dressed occupied-occupied-occupied-occupied interaction,
-\(W_{abef}\) is the dressed virtual-virtual-virtual-virtual interaction, and
-\(W_{mbej}\) is the mixed occupied-virtual-virtual-occupied block. In the code,
-building these intermediates once per iteration makes the later residual loops
-look much closer to the textbook equations while also avoiding recomputation of
-the same sums in many different terms.
+\(W_{mnij}\) is the occupied-occupied-occupied-occupied interaction,
+\(W_{abef}\) is the virtual-virtual-virtual-virtual interaction, and
+\(W_{mbej}\) is the mixed occupied-virtual-virtual-occupied block.
+
+In compact spin-orbital notation, the main intermediate definitions are
+
+\[
+F_{me} = f_{me} + \sum_{nf} t_n^f \langle mn || ef \rangle
+\]
+
+\[
+F_{ae} = (1-\delta_{ae}) f_{ae}
+- \frac{1}{2}\sum_m f_{me} t_m^a
++ \sum_{mf} t_m^f \langle ma || ef \rangle
+- \frac{1}{2}\sum_{mnf} \tilde\tau_{mn}^{af} \langle mn || ef \rangle
+\]
+
+\[
+F_{mi} = (1-\delta_{mi}) f_{mi}
++ \frac{1}{2}\sum_e f_{me} t_i^e
++ \sum_{ne} t_n^e \langle mn || ie \rangle
++ \frac{1}{2}\sum_{nef} \tilde\tau_{in}^{ef} \langle mn || ef \rangle
+\]
+
+\[
+W_{mnij} =
+\langle mn || ij \rangle
++ P(ij)\sum_e t_j^e \langle mn || ie \rangle
++ \frac{1}{4}\sum_{ef} \tau_{ij}^{ef} \langle mn || ef \rangle
+\]
+
+\[
+W_{abef} =
+\langle ab || ef \rangle
+- P(ab)\sum_m t_m^b \langle am || ef \rangle
++ \frac{1}{4}\sum_{mn} \tau_{mn}^{ab} \langle mn || ef \rangle
+\]
+
+\[
+W_{mbej} =
+\langle mb || ej \rangle
++ \sum_f t_j^f \langle mb || ef \rangle
+- \sum_n t_n^b \langle mn || ej \rangle
+- \sum_{nf}\left(\frac{1}{2}t_{jn}^{fb} + t_j^f t_n^b\right)
+\langle mn || ef \rangle .
+\]
+
+The singles residual can then be read as a sum of physically meaningful
+families:
+
+\[
+R_i^a =
+f_{ia}
++ \sum_e t_i^e F_{ae}
+- \sum_m t_m^a F_{mi}
++ \sum_{me} t_{im}^{ae} F_{me}
+- \sum_{nf} t_n^a f_i^f
+- \frac{1}{2}\sum_{mne} t_{mn}^{ae} \langle mn || ei \rangle
++ \frac{1}{2}\sum_{mef} t_{im}^{ef} \langle ma || ef \rangle .
+\]
+
+The doubles residual is longer, so the code builds it as a sum of blocks
+rather than writing one giant formula inline. Its grouped form is
+
+\[
+R_{ij}^{ab} =
+\langle ij || ab \rangle
++ P(ab)\sum_e t_{ij}^{ae} F_{be}
+- P(ij)\sum_m t_{im}^{ab} F_{mj}
++ \frac{1}{2}\sum_{mn}\tau_{mn}^{ab} W_{mnij}
++ \frac{1}{2}\sum_{ef}\tau_{ij}^{ef} W_{abef}
++ P(ij)P(ab)\sum_{me} t_{im}^{ae} W_{mbej}
+\]
+
+plus the explicit mixed one-body terms that are easy to lose if the derivation
+is translated carelessly:
+
+\[
+- P(ab)\sum_{m} t_i^a t_m^b f_{mj}
++ P(ij)\sum_{e} t_i^a t_j^e f_{be}
+\]
+
+\[
++ P(ij)P(ab)\sum_{me} t_i^e \langle ma || bj \rangle t_m^b
+\]
+
+together with the explicit singles-doubles contractions built from the
+`ovvv` and `ooov` blocks.
+
+These appear in practice in the code as the explicit `t1 * ovvv`,
+`t1 * ooov`, and antisymmetrized `t1 * t1 * ovov` corrections in the doubles
+residual. These were important enough to show up in regression testing: if
+they are omitted or indexed with the wrong antisymmetry, the solver can still
+look stable while converging to the wrong CCSD energy.
+
+So the `RCCSD` update pattern is:
+
+1. build \(\tau\) and \(\tilde\tau\)
+2. build `Fae`, `Fmi`, `Fme`, `Wmnij`, `Wabef`, `Wmbej`
+3. form \(R_1\) and \(R_2\)
+4. divide by the diagonal denominators
+5. accelerate with DIIS
+
+That is exactly the organization used in `src/post_hf/cc/ccsd.cpp`: the code
+looks like the textbook derivation because almost all of the algebra has been
+pushed into named intermediates.
 
 ### Worked Example: a Singles-Residual Term
 
@@ -1270,27 +1600,310 @@ If the backend is `TensorProduction`, `run_rccsdt` delegates to
 `run_tensor_rccsdt` in `tensor_backend.*`. Otherwise it falls through to the
 determinant-space prototype described below.
 
-`run_tensor_rccsdt` is itself a three-stage pipeline, not a single solver:
+`run_tensor_rccsdt` is itself a staged pipeline:
 
 1. **Tensor RCCSD warm-start** — converges T1/T2 in the spin-orbital basis.
-2. **Staged tensor T3 loop** — iterates the triples workspace for a fixed
-   number of steps to build T3 amplitude quality.
-3. **Determinant backstop** — a second size check runs after stages 1–2 via
-   `choose_determinant_backstop` (limits: nso ≤ 16, `C(nso, nelec)` ≤ 5000).
-   If the system fits, `solve_determinant_cc` is called with `max_rank=3` and
-   warm-started from the T1/T2/T3 produced above. Systems beyond the backstop
-   limits return an error until the fully tensorized T3 residual engine is
-   complete.
+2. **Restricted tensor RCCSDT solve** — rewrites the larger-system branch in
+   restricted spatial-orbital form and follows the standard dressed-intermediate
+   layout for restricted CCSDT.
+3. **Determinant backstop for moderate cases** — a second size check runs via
+   `choose_determinant_backstop` (current limits: nso ≤ 16,
+   `C(nso, nelec)` ≤ 10000). If the system fits, `solve_determinant_cc` is
+   called with `max_rank=3` and warm-started from the tensor amplitudes above.
+   This gives a hybrid path for medium teaching-sized systems while still
+   keeping a pure tensor path available for larger systems beyond the
+   determinant limit.
 
 Water/STO-3G (nso=14, ndet=C(14,10)=1001) illustrates this: it exceeds the
 routing threshold (nso=14 > 12) so `choose_rccsdt_backend` selects
-`TensorProduction`, but it fits the backstop window (14 ≤ 16, 1001 ≤ 5000),
-so the final convergence is through the determinant solver, warm-started from
-the tensor stages.
+`TensorProduction`, but it fits the backstop window (14 ≤ 16, 1001 ≤ 10000),
+so the final convergence can be cross-checked through the determinant solver,
+warm-started from the tensor stages. `BH3/STO-3G`, on the other hand, is the
+smallest current regression that lies beyond the determinant backstop and must
+therefore converge on the pure restricted tensor `RCCSDT` path.
+
+### RCCSDT Equations
+
+For triples, the cluster operator is extended to
+
+\[
+T = T_1 + T_2 + T_3
+\]
+
+with
+
+\[
+T_3 = \frac{1}{36}\sum_{ijkabc} t_{ijk}^{abc}
+a_a^\dagger a_b^\dagger a_c^\dagger a_k a_j a_i .
+\]
+
+The equations are still the projected similarity-transformed Schrödinger
+equation,
+
+\[
+\bar H |\Phi_0\rangle = E |\Phi_0\rangle,
+\qquad
+\bar H = e^{-T}He^T,
+\]
+
+but the projection space now includes triples:
+
+\[
+R_i^a = \langle \Phi_i^a | \bar H | \Phi_0 \rangle = 0,
+\quad
+R_{ij}^{ab} = \langle \Phi_{ij}^{ab} | \bar H | \Phi_0 \rangle = 0,
+\quad
+R_{ijk}^{abc} = \langle \Phi_{ijk}^{abc} | \bar H | \Phi_0 \rangle = 0.
+\]
+
+For large systems, Planck's tensor `RCCSDT` path does **not** continue in the
+spin-orbital language of the original `RCCSD` solver. Instead it switches to a
+restricted spatial-orbital formulation. The reason is that a spin-orbital CCSDT
+implementation with \(O(N^8)\) triples contractions carries a large prefactor
+from explicit spin-index loops. In the restricted formulation the spin summations
+are carried out analytically once, reducing the effective prefactor while
+preserving the full correlation content. The price is a more complex permutation
+algebra — the spatial triples amplitudes satisfy a permutation symmetry that is
+richer than simple antisymmetry — but that extra bookkeeping is handled once
+in the residual equations rather than in every loop.
+
+The tensor `RCCSDT` equations are easiest to understand in four layers.
+
+#### 1. T1-dressed Fock and ERIs
+
+The BCH expansion \(e^{-T}He^T\) mixes all cluster operators together. When T1
+is non-zero it rotates the occupied and virtual spaces, so every T2 or T3
+contraction effectively sees a different one-body field. Rather than carrying
+T1-dependent correction terms through every T2 and T3 residual separately,
+the restricted solver absorbs T1 once into **T1-dressed** one- and two-body
+tensors:
+
+\[
+F \;\longrightarrow\; F[t_1],
+\qquad
+(pq|rs) \;\longrightarrow\; (pq|rs)[t_1].
+\]
+
+Concretely, the dressing contracts the current singles amplitudes into the
+occupied and virtual lines of the Fock matrix and the four-index ERI tensor.
+The dressed virtual-virtual block, for instance, acquires corrections of the form
+
+\[
+F_{ae}[t_1] = F_{ae}
+- \sum_m t_m^a F_{me}
++ \sum_{mf} t_m^f (am||ef)
++ \ldots
+\]
+
+while the occupied-occupied and mixed blocks are dressed analogously. After this
+step the T2 and T3 residuals can be written entirely in terms of \(F[t_1]\) and
+\((pq|rs)[t_1]\) without carrying explicit T1 prefactors inside every
+contraction loop. In `tensor_backend.cpp` the dressing is rebuilt at the start
+of each iteration before any higher-rank residuals are evaluated.
+
+#### 2. Singles and doubles residuals with triples feedback
+
+Moving from CCSD to CCSDT introduces new commutator terms in the BCH expansion:
+\([[H,T_3]]\) and \([[[H,T_2],T_3]]\) each project non-trivially onto the
+singles and doubles excitation spaces. The result is a clean additive structure:
+
+\[
+R_1 = R_1^{\mathrm{CCSD}} + R_1[T_3],
+\qquad
+R_2 = R_2^{\mathrm{CCSD}} + R_2[T_3].
+\]
+
+The CCSD-like pieces are exactly the same dressed restricted intermediates
+\(F_{oo}\), \(F_{vv}\), \(W_{oooo}\), \(W_{ovvo}\), \(W_{ovov}\) built in the
+RCCSD solver — nothing changes there. Only the additive triples corrections are
+new.
+
+The singles correction \(R_1[T_3]\) arises by contracting three of the six
+T3 indices against a dressed two-body block, leaving the two external
+singles residual indices:
+
+\[
+R_1[T_3] \sim
+\sum_{jkbc} \bar g_{jk}^{bc}\, P_3^{422}\!\left(t_{kij}^{cab}\right).
+\]
+
+Here \(\bar g_{jk}^{bc}\) is the dressed antisymmetrized two-electron integral
+in the mixed occupied-virtual block, and the permutation operator
+\(P_3^{422}\) encodes the specific symmetrization required to maintain
+the correct antisymmetry of the residual.
+
+The doubles correction \(R_2[T_3]\) has three families, each corresponding
+to a different way the triples amplitude can feed into the doubly-excited
+projection space:
+
+\[
+R_2[T_3] \sim
+\sum_{kc} \bar f_k^c\, P_3^{201}\!\left(t_{kij}^{cab}\right)
++ \sum_{kcd} \bar g_{bk}^{cd}\, P_3^{201}\!\left(t_{kij}^{dac}\right)
+- \sum_{klc} \bar g_{kl}^{jc}\, P_3^{201}\!\left(t_{lik}^{cab}\right).
+\]
+
+The first term contracts T3 against a dressed one-body (Fock) element,
+the second against the dressed virtual-virtual-virtual-occupied block, and
+the third against the dressed occupied-occupied-occupied-virtual block.
+Each represents a different mechanism by which a triple excitation dresses
+down into the doubles space.
+
+The key structural point is that `R1` and `R2` are never rebuilt from scratch
+once T3 is introduced: the CCSD residuals remain identical, and T3 enters
+only through well-defined additive terms that can be computed and added
+independently.
+
+#### 3. Triples intermediates and the raw R3 equation
+
+The triples residual \(R_3 = \langle \Phi_{ijk}^{abc} | \bar H | \Phi_0 \rangle\)
+is the projection of the similarity-transformed Hamiltonian onto the
+triply-excited space. Expanding \(\bar H\) via BCH and collecting terms by
+how many cluster operators they involve, one arrives at a residual built from
+eight types of dressed intermediate:
+
+\[
+W_{vooo},\;
+W_{vvvo},\;
+W_{ovvo},\;
+W_{ovov},\;
+W_{oooo},\;
+W_{vvvv},\;
+F_{oo},\;
+F_{vv}.
+\]
+
+Each intermediate absorbs a specific family of T1- and T2-dressed contractions
+from the full BCH expansion, so that the raw triples residual reduces to:
+
+\[
+R_3 =
+W_{vvvo} T_2
+- W_{vooo} T_2
++ \frac{1}{2} F_{vv} T_3
+- \frac{1}{2} F_{oo} T_3
++ \frac{1}{4} W_{ovvo} T_3
+- \frac{1}{2} W_{ovov} T_3
++ \frac{1}{2} W_{oooo} T_3
++ \frac{1}{2} W_{vvvv} T_3 .
+\]
+
+Each block family has a distinct physical role:
+
+- **\(W_{vvvo}\) and \(W_{vooo}\)** are the *source terms*. They couple T2 into
+  R3, meaning they convert a double excitation into a triple excitation via
+  the dressed two-electron interaction. Without these terms T3 would have no
+  source and would remain zero; these are what "drive" the triples amplitudes
+  to become non-zero.
+
+- **\(F_{vv}\) and \(F_{oo}\)** are the dressed one-body blocks — the
+  virtual-virtual and occupied-occupied parts of the T1-dressed Fock matrix.
+  They propagate T3 through single-index contractions, playing the same role
+  here that \(F_{ae}\) and \(F_{mi}\) play in the CCSD singles and doubles
+  residuals.
+
+- **\(W_{ovvo}\) and \(W_{ovov}\)** are mixed occupied-virtual two-body
+  blocks. They mediate interactions that exchange one occupied and one virtual
+  line simultaneously — the analogue of \(W_{mbej}\) in CCSD, now applied to
+  the triples amplitude.
+
+- **\(W_{oooo}\) and \(W_{vvvv}\)** are the pure occupied-occupied and
+  virtual-virtual two-body blocks. They propagate T3 by coupling pairs of
+  occupied or virtual lines, accounting for the ladder-diagram contributions
+  to the triples.
+
+The structure mirrors the CCSD residual pattern: source terms generate the
+new excitation rank from the rank below, and the remaining terms dress and
+couple the amplitude self-consistently. This is the core CCSDT equation.
+
+#### 4. Restricted triples restoration and update
+
+The raw `R3` computed in the previous step is **not** applied directly as an
+amplitude update. The reason is a subtle point about permutation symmetry in
+the restricted (spatial-orbital) formalism.
+
+In a spin-orbital basis the triples amplitude \(t_{ijk}^{abc}\) is a component
+of a fully antisymmetric tensor: swapping any two occupied indices changes the
+sign, and swapping any two virtual indices changes the sign. These are the
+only symmetries, and they come for free from the antisymmetry of the
+excitation operator.
+
+In the restricted spatial-orbital formalism the spin degrees of freedom are
+analytically integrated out. The spin summation mixes permutations of occupied
+and virtual indices in a specific way that produces a more complex permutation
+structure. Concretely, the spatial triples amplitude satisfies relations of the
+form
+
+\[
+t_{ijk}^{abc} = t_{jik}^{bac} = t_{kji}^{cba} = \ldots
+\]
+
+where the symmetry simultaneously permutes occupied *and* virtual indices. This
+is not the same as independent antisymmetry in each sector. If the amplitude
+tensor is forced into a simple antisymmetric manifold — treating each sector
+independently — the result violates the spin-summation constraint and the
+correlation energy is wrong.
+
+The restoration procedure enforces the correct restricted permutation structure
+after each residual update:
+
+1. Build the raw full-form residual from the dressed contractions.
+2. Apply the simultaneous occupied/virtual permutation operator \(P_3\) to
+   symmetrize the residual: for each triple \((i,j,k)\) and \((a,b,c)\) add
+   the five remaining permutations of occupied indices paired with the
+   corresponding permutations of virtual indices, with appropriate signs.
+3. Apply the **spin-summation correction**: analytically summing over the two
+   spin states of each electron introduces additional cross-sector terms.
+   Specifically, in the restricted formalism the spin-free residual element
+   \(R_{ijk}^{abc}\) receives contributions not only from the diagonal spin
+   channel \((\alpha\alpha\alpha)\) but also from the mixed
+   \((\alpha\alpha\beta)\) and permuted channels. After spin integration,
+   these sum to a correction of the form
+   \[
+   R_{ijk}^{abc} \;\leftarrow\; R_{ijk}^{abc}
+   + R_{ikj}^{acb} + R_{jik}^{bac} + R_{jki}^{bca}
+   + R_{kij}^{cab} + R_{kji}^{cba},
+   \]
+   which symmetrizes the residual over all joint permutations of occupied and
+   virtual indices simultaneously. This is the operation that converts the raw
+   spatial residual into a tensor that is consistent with the restricted
+   spin-summed amplitude.
+4. Zero out components with two identical occupied or virtual indices (these
+   vanish in the antisymmetric spin-orbital basis but may appear as numerical
+   noise in the spatial formulation).
+5. Divide by the diagonal triples denominator and apply the Jacobi update.
+
+The diagonal denominator is
+
+\[
+D_{ijk}^{abc} =
+\varepsilon_i + \varepsilon_j + \varepsilon_k
+- \varepsilon_a - \varepsilon_b - \varepsilon_c ,
+\]
+
+and the Jacobi-style update is
+
+\[
+t_{ijk}^{abc} \leftarrow
+t_{ijk}^{abc} + \omega \frac{R_{ijk}^{abc}}{D_{ijk}^{abc}}
+\]
+
+with damping factor \(\omega\), followed by full-vector DIIS acceleration.
+
+This restoration step is not optional. The spin-summed spatial amplitudes live
+in a specific subspace of all sixth-rank tensors, and the residual contractions
+alone do not guarantee that the updated amplitudes stay in that subspace.
+Skipping the restoration — for instance, by projecting T3 onto a simpler
+fully-antisymmetric manifold — introduces a systematic error into every
+subsequent iteration. The error compounds because the next residual is
+computed from an amplitude that already violates the symmetry constraint, which
+produces a new residual that violates it further. The result is convergence to
+an energy that is not the restricted CCSDT answer, even though the iterations
+may appear numerically stable.
 
 ### Tensor Production Backend (`tensor_backend.*`)
 
-`tensor_backend.*` is the production-quality RCCSDT path. Its key types are:
+`tensor_backend.*` is the production-quality `RCCSDT` path. Its key types are:
 
 **`CanonicalRHFCCReference`** — extends `RHFReference` with explicit MO-basis
 Fock diagonal blocks `f_oo`, `f_ov`, `f_vv`. These avoid re-extracting Fock
@@ -1322,8 +1935,12 @@ build_tensor_cc_block_cache()        -> TensorCCBlockCache (prints memory report
 allocate_dense_triples_workspace()   -> TensorTriplesWorkspace
 iterate CCSD T1/T2 (warm-start)
   -> t1, t2 amplitudes
-iterate CCSDT triples update
-  -> t3 residuals via r3 (Tensor6D)
+build restricted dressed system
+  -> F[t1], ERIs[t1]
+build R1/R2 with T3 feedback
+build R3 from dressed triples intermediates
+restore restricted T3 structure
+update T1/T2/T3 + DIIS
   -> converged E_RCCSDT
 ```
 
@@ -1416,25 +2033,101 @@ on larger molecules.
 
 `LiH/STO-3G` is the smallest practical RCCSDT regression case in the current
 tree with a **measurable** triples contribution. It has 4 electrons and 6
-spatial orbitals, which gives a non-empty triples manifold while still fitting
-the determinant-space prototype limit comfortably.
+spatial orbitals (12 spin orbitals), giving a non-empty triples excitation
+manifold while still fitting the determinant-space prototype limit comfortably.
 
-The accompanying PySCF comparison script
-`tests/pyscf/lih_rccsdt_sto3g.py` prints both the CCSD and CCSDT correlation
-energies so students can see the triples correction directly. In that case the
-PySCF triples contribution is about \(10^{-5}\) Hartree, large enough to verify
-that the calculation is not merely collapsing back to CCSD.
+The expected triples correction is
+
+\[
+\Delta E_T = E_{\mathrm{CCSDT}} - E_{\mathrm{CCSD}} \approx -10^{-5}\;\mathrm{Hartree}.
+\]
+
+This is small enough that it would be invisible in a Hartree-Fock energy, but
+large enough to verify definitively that the triples path is doing real work
+and not merely reproducing the CCSD result. The Planck output prints both
+correlation energies; students can subtract them directly to confirm the triples
+correction has the expected sign and order of magnitude. Because this system
+fits within the determinant-space backstop limit, the tensor and determinant
+solvers can also be cross-checked against each other — both should agree to
+near machine precision.
 
 ### A Good Open-Shell Teaching Test: B/STO-3G
 
-`B/STO-3G` plays the same role for the unrestricted prototypes. It is small
-enough to fit comfortably inside the determinant-space limit, but it still has
-a nonzero `UCCSDT - UCCSD` triples correction. The comparison script
-`tests/pyscf/b_uccsdt_sto3g.py` prints both unrestricted correlation energies
-so students can see that the unrestricted triples path is doing real work
-rather than just reproducing `UCCSD`.
+Boron atom in STO-3G is the smallest non-trivial open-shell test case for the
+unrestricted prototypes. It has 5 electrons with a half-filled \(2p\) shell,
+producing a UHF reference with non-zero spin contamination. The cluster
+amplitudes carry separate alpha and beta contributions, and both channels
+couple into the triples residual.
 
-## 14. CASSCF and RASSCF
+`B/STO-3G` plays for `UCCSDT` the same role that `LiH/STO-3G` plays for
+`RCCSDT`: it is small enough to fit inside the determinant-space limit but
+still has a non-zero triples correction
+
+\[
+\Delta E_T = E_{\mathrm{UCCSDT}} - E_{\mathrm{UCCSD}} \neq 0.
+\]
+
+Students can inspect the Planck output to confirm that the unrestricted triples
+path lowers the correlation energy relative to UCCSD, and that both alpha and
+beta spin channels contribute to the triples amplitude tensor.
+
+### The Tensor-Only Benchmark: BH3/STO-3G
+
+`BH3/STO-3G` is qualitatively different from the two cases above. Boron
+trihydride in STO-3G has 8 electrons and 7 spatial orbitals (14 spin orbitals).
+That system size puts it beyond both the determinant-space prototype limit
+(capped at 12 spin orbitals) and the determinant backstop window used by the
+tensor backend. It can only be solved by the pure restricted tensor `RCCSDT`
+path, with no determinant cross-check available.
+
+This makes it the first test that exercises the tensor machinery end-to-end
+without a fallback. The molecule is planar with \(D_{3h}\) symmetry, which
+constrains the molecular orbitals into irreducible representations of that
+point group. In STO-3G the occupied space consists of three bonding orbitals
+(one B–H bond per hydrogen arm) plus the boron 1s core, and the virtual space
+is dominated by the empty boron \(2p_z\) perpendicular to the molecular plane.
+
+BH3 is also significant from a correlation standpoint. The boron atom has
+an incomplete valence shell, and in the planar geometry all three B–H bonds
+involve the same central atom at roughly the same bond length. The T2
+amplitudes are therefore not dominated by a single large pair but spread more
+evenly across the occupied-virtual pairs, making this a moderately
+multi-configurational system where triples corrections are non-negligible.
+
+The expected triples correction is larger than in `LiH/STO-3G`:
+
+\[
+\Delta E_T = E_{\mathrm{RCCSDT}} - E_{\mathrm{RCCSD}}
+\approx -10^{-4}\;\mathrm{Hartree},
+\]
+
+about an order of magnitude larger, reflecting the richer correlation structure
+relative to the two-electron LiH case.
+
+From a pedagogical standpoint, `BH3/STO-3G` illustrates three things that the
+smaller systems cannot:
+
+1. **Pure tensor path**: the calculation must use the staged tensor pipeline —
+   T1-dressing, restricted dressed intermediates, and the full spin-summation
+   restoration — with no determinant solver as a safety net. Any error in the
+   restricted CCSDT algebra shows up directly in the energy.
+
+2. **Symmetry in the MO basis**: the \(D_{3h}\) symmetry of BH3 causes
+   several MO pairs to be exactly degenerate, which means the triples residual
+   has exact zeros for certain index combinations that would be non-zero in a
+   lower-symmetry system. The code must handle these without division-by-zero
+   in the denominator update.
+
+3. **Scaling crossover**: with \(o = 4\) occupied and \(v = 10\) virtual spatial
+   orbitals, the triples amplitude tensor has \(o^3 v^3 / \text{symmetry} \sim
+   4000\) independent elements. This is small enough to store densely but large
+   enough that the \(O(o^3 v^4)\) and \(O(o^4 v^3)\) contractions in R3 are
+   non-trivial, making it a useful check that the contraction order and
+   intermediate reuse in `tensor_backend.cpp` are correct.
+
+---
+
+## 15. CASSCF and RASSCF
 
 ### Motivation
 
@@ -1785,7 +2478,7 @@ occupation restrictions via bitcount masks on the RAS1 and RAS3 blocks.
 
 ---
 
-## 15. Geometry Optimization
+## 16. Geometry Optimization
 
 ### L-BFGS (Cartesian Coordinates)
 
@@ -1849,7 +2542,7 @@ Ha/Bohr).
 
 ---
 
-## 16. Vibrational Analysis
+## 17. Vibrational Analysis
 
 ### Semi-Numerical Hessian
 
@@ -1911,179 +2604,9 @@ by projecting each normal mode onto the SAO blocks and determining its irrep.
 
 ---
 
-## 17. Checkpoint and Restart
+## 18. Kohn-Sham Density Functional Theory
 
-### Binary Checkpoint Format
-
-The checkpoint file (`*.hfchk`) stores:
-
-- A 4-byte magic number and format version (v2)
-- Molecular geometry (standard-orientation, Bohr)
-- Basis set name
-- Density matrices (alpha and optionally beta)
-- Total SCF energy
-- Optional geometry optimization metadata
-
-### Cross-Basis Löwdin Projection
-
-When restarting from a checkpoint computed with a smaller basis
-(e.g., STO-3G) to a larger basis (e.g., 6-31G*), the stored density matrix
-cannot be used directly. Planck projects the old density into the new basis
-using the cross-overlap matrix:
-
-\[
-S^{cross}_{\mu\nu} = \langle \chi^{large}_\mu | \chi^{small}_\nu \rangle
-\]
-
-computed by `_compute_cross_overlap` in `os.cpp`. The projection is then:
-
-\[
-P^{large}_{\mu\nu} = \sum_{\lambda\sigma}
-(S^{LL})^{-1}_{\mu\lambda}\, S^{cross}_{\lambda\lambda'}\,
-P^{small}_{\lambda'\sigma'}\, (S^{cross})^T_{\sigma'\mu}\,
-(S^{LL})^{-1}_{\mu\nu}
-\]
-
-implemented via a singular value decomposition (Löwdin SVD) of the
-cross-overlap in `src/io/checkpoint.cpp`. This provides a physically motivated
-initial density for the new basis, significantly reducing the number of SCF
-iterations required.
-
----
-
-## 18. Execution Flow of a Typical Run
-
-```
-driver.cpp
-  parse_input()                → Calculator._scf, _basis, _geometry, etc.
-  prepare_coordinates()        → molecule._coordinates (Bohr)
-  checkpoint restore (if any)  → geometry / density
-  detectSymmetry()             → molecule._standard (Bohr), _point_group
-  read_gbs_basis()             → shells, basis functions, normalization
-  build_shellpairs()           → shell_pairs[0..nb*(nb+1)/2-1]
-  _compute_1e()                → S, T  (os.cpp)
-  _compute_nuclear_attraction()→ V     (os.cpp)
-  H_core = T + V
-  build_sao_basis()            → U, block sizes, irrep names
-  update_integral_symmetry()   → _integral_symmetry_ops
-  build_canonical_pairs()      → _canonical_ao_pair[]
-
-  if Conventional SCF:
-      _compute_2e()            → _eri[nb^4]  (os.cpp)
-
-  run_rhf() or run_uhf()       → C, ε, P, E_SCF  (scf.cpp)
-      each iteration:
-          G = _compute_fock_rhf(eri, P) or _compute_2e_fock(shell_pairs, P)
-          F = H_core + G
-          DIIS.push(F, e)
-          F' = X^T F X
-          diagonalize F' → C', ε
-          C = X C'
-          rebuild P
-          check convergence
-
-  if post_hf == RMP2:
-      AO→MO transform → (ia|jb) MO integrals
-      run_rmp2()               → E_MP2
-  elif post_hf == UMP2:
-      AO→MO transform in α/β blocks
-      run_ump2()               → E_UMP2
-  elif post_hf == RCCSD:
-      prepare_rccsd()          → reference, MO blocks, denominators
-      run_rccsd()              → E_RCCSD
-  elif post_hf == UCCSD:
-      prepare_uccsd()          → UHF reference
-      run_uccsd()              → E_UCCSD (small-system prototype)
-  elif post_hf == RCCSDT:
-      prepare_rccsdt()         → reference, MO blocks
-      run_rccsdt()             → E_RCCSDT (small-system prototype)
-  elif post_hf == UCCSDT:
-      prepare_uccsdt()         → UHF reference
-      run_uccsdt()             → E_UCCSDT (small-system prototype)
-  elif post_hf == CASSCF:
-      run_casscf()             → E_CASSCF, natural orbitals
-
-  if gradient or geomopt or frequency:
-      compute_rhf_gradient()   → _gradient (gradient.cpp)
-
-  if geomopt:
-      run_geomopt()            → optimized geometry (geomopt.cpp)
-          each step: SCF → gradient → L-BFGS or BFGS update
-
-  if frequency:
-      compute_hessian()        → _hessian (hessian.cpp)
-          for each displacement: SCF → gradient (2×3N calculations)
-      vibrational_analysis()   → _frequencies, _normal_modes, _zpe
-
-  save_checkpoint()
-```
-
----
-
-## 19. Theory-to-Code Map
-
-| Theory concept | Primary file(s) | Key function(s) |
-|---|---|---|
-| Data structures | `src/base/types.h` | `Calculator`, `Shell`, `Basis`, `ShellPair` |
-| Input parsing | `src/io/io.cpp` | `parse_input` |
-| Basis reading | `src/basis/gaussian.cpp` | `read_gbs_basis` |
-| Shell pairs | `src/integrals/shellpair.cpp` | `build_shellpairs` |
-| Overlap and kinetic | `src/integrals/os.cpp` | `_compute_1e`, `_compute_3d_overlap_kinetic` |
-| Boys function | `src/lookup/` | table lookup and asymptotic expansion |
-| Nuclear attraction | `src/integrals/os.cpp` | `_compute_nuclear_attraction` |
-| ERI tensor | `src/integrals/os.cpp` | `_compute_2e`, `_contracted_eri` |
-| Direct Fock build | `src/integrals/os.cpp` | `_compute_2e_fock`, `_compute_2e_fock_uhf` |
-| Rys quadrature | `src/integrals/rys.cpp` | `_rys_eri_primitive`, `_rys_contracted_eri` |
-| Orthogonalizer | `src/scf/scf.cpp` | `build_orthogonalizer` |
-| RHF SCF | `src/scf/scf.cpp` | `run_rhf` |
-| UHF SCF | `src/scf/scf.cpp` | `run_uhf` |
-| DIIS | `src/base/types.h` | `DIISState::push`, `DIISState::extrapolate` |
-| Symmetry detection | `src/symmetry/symmetry.cpp` | `detectSymmetry` |
-| SAO basis | `src/symmetry/mo_symmetry.cpp` | `build_sao_basis` |
-| MO irrep labels | `src/symmetry/mo_symmetry.cpp` | `assign_mo_symmetry` |
-| Integral symmetry ops | `src/symmetry/integral_symmetry.cpp` | `update_integral_symmetry` |
-| AO→MO transform | `src/post_hf/integrals.cpp` | half-transformation functions |
-| RMP2 energy | `src/post_hf/mp2.cpp` | `run_rmp2` |
-| UMP2 energy | `src/post_hf/mp2.cpp` | `run_ump2` |
-| MP2 amplitudes | `src/post_hf/mp2.cpp` | `build_rmp2_amplitudes` |
-| RCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_rccsd`, `run_rccsd` |
-| UCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_uccsd`, `run_uccsd` |
-| Determinant-space CC backend | `src/post_hf/cc/determinant_space.cpp` | `build_rhf_spin_orbital_system`, `build_uhf_spin_orbital_system`, `solve_determinant_cc` |
-| RCCSDT dispatch + prototype | `src/post_hf/cc/ccsdt.cpp` | `prepare_rccsdt`, `run_rccsdt`, `choose_rccsdt_backend` |
-| RCCSDT tensor production | `src/post_hf/cc/tensor_backend.cpp` | `prepare_tensor_rccsdt`, `run_tensor_rccsdt`, `build_tensor_cc_block_cache`, `allocate_dense_triples_workspace` |
-| Tensor CC block cache | `src/post_hf/cc/tensor_backend.cpp` | `build_canonical_rhf_cc_reference`, `format_tensor_memory_summary` |
-| UCCSDT prototype | `src/post_hf/cc/ccsdt.cpp` | `prepare_uccsdt`, `run_uccsdt` |
-| CC denominators/DIIS | `src/post_hf/cc/amplitudes.cpp`, `src/post_hf/cc/diis.cpp` | `build_denominator_cache`, `AmplitudeDIIS` |
-| CPHF Z-vector | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix` |
-| RMP2 gradient | `src/post_hf/mp2_gradient.cpp` | `compute_rmp2_gradient` |
-| CI string generation | `src/post_hf/casscf.cpp` | Gosper enumeration |
-| CI solve (Davidson) | `src/post_hf/casscf.cpp` | Davidson solver |
-| 1-RDM, 2-RDM | `src/post_hf/casscf.cpp` | `compute_1rdm`, `compute_2rdm` |
-| Orbital gradient | `src/post_hf/casscf.cpp` | generalized Fock matrix |
-| Orbital update | `src/post_hf/casscf.cpp` | Cayley transform |
-| RHF gradient | `src/gradient/gradient.cpp` | `compute_rhf_gradient` |
-| UHF gradient | `src/gradient/gradient.cpp` | `compute_uhf_gradient` |
-| Derivative integrals | `src/integrals/os.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem` |
-| L-BFGS optimizer | `src/opt/geomopt.cpp` | `run_geomopt` |
-| Internal coordinates | `src/opt/intcoords.cpp` | Wilson B matrix |
-| Semi-numerical Hessian | `src/freq/hessian.cpp` | `compute_hessian` |
-| Vibrational analysis | `src/freq/hessian.cpp` | `vibrational_analysis` |
-| Vibrational symmetry | `src/symmetry/vibrational_symmetry.cpp` | mode irrep assignment |
-| Checkpoint I/O | `src/io/checkpoint.cpp` | `save_checkpoint`, `load_checkpoint` |
-| Cross-basis projection | `src/io/checkpoint.cpp` | Löwdin SVD projection |
-| Molecular grid | `src/dft/base/grid.h` | `MakeMolecularGrid`, `MakeAtomicGrid` |
-| AO evaluation on grid | `src/dft/ao_grid.h` | `AOGridEvaluation` |
-| Density on grid | `src/dft/xc_grid.cpp` | `evaluate_density_on_grid` |
-| XC evaluation (libxc) | `src/dft/xc_grid.cpp` | `evaluate_xc_on_grid` |
-| XC matrix assembly | `src/dft/ks_matrix.cpp` | `assemble_xc_matrix` |
-| KS potential matrices | `src/dft/ks_matrix.cpp` | `combine_ks_potential` |
-| KS-DFT driver | `src/dft/driver.cpp` | `DFT::Driver::run` |
-
----
-
-## 20. Kohn-Sham Density Functional Theory
-
-### 20.1 The Kohn-Sham Equations
+### 18.1 The Kohn-Sham Equations
 
 Kohn-Sham DFT maps the interacting many-electron problem onto a fictitious system of non-interacting electrons moving in an effective potential \(v_s(\mathbf r)\) that yields the same ground-state density as the real system. The total electronic energy is:
 
@@ -2099,7 +2622,7 @@ F^{KS}_{\mu\nu} = h_{\mu\nu} + J_{\mu\nu} + V^{xc}_{\mu\nu}
 
 This is identical in structure to the HF Fock matrix, with the HF exchange matrix \(K\) replaced by the XC potential matrix \(V^{xc}\). Planck reuses the HF SCF loop for KS-DFT: the only structural difference is how the two-electron contribution to the Fock matrix is assembled (Coulomb only, no exchange, plus \(V^{xc}\) from numerical integration).
 
-### 20.2 Exchange-Correlation Functional Families
+### 18.2 Exchange-Correlation Functional Families
 
 #### LDA (Local Density Approximation)
 
@@ -2133,7 +2656,7 @@ GGA functionals satisfy more exact constraints than LDA and generally give bette
 | PW91 (`gga_x_pw91`) | PW91 | PW91 |
 | PBE (`gga_x_pbe`) | PBE (`gga_c_pbe`) | PBE (default) |
 
-### 20.3 Numerical Integration: Molecular Grid
+### 18.3 Numerical Integration: Molecular Grid
 
 Because \(V^{xc}_{\mu\nu}\) has no analytic closed form, it is evaluated numerically:
 
@@ -2179,7 +2702,7 @@ w_i(\mathbf r) = \frac{P_i(\mathbf r)}{\sum_k P_k(\mathbf r)} \cdot w_i^{radial-
 | `Fine` | 5 | 26 / 194 / 302 / 434 / 302 |
 | `UltraFine` | 6 | 50 / 302 / 434 / 590 / 434 |
 
-### 20.4 AO Evaluation on the Grid
+### 18.4 AO Evaluation on the Grid
 
 `AOGridEvaluation` (declared in `src/dft/ao_grid.h`) stores the AO values and
 gradients at every grid point in a matrix of shape `(N_grid, N_AO)`. These are
@@ -2187,7 +2710,7 @@ computed once before the KS iteration begins. For each grid point and each AO
 \(\phi_\mu\), the value and Cartesian gradient components are evaluated from the
 contracted shell data in the `Basis` object.
 
-### 20.5 Density and XC Evaluation
+### 18.5 Density and XC Evaluation
 
 Given the density matrix \(P_{\mu\nu}\), the electron density at grid point \(g\) is:
 
@@ -2203,7 +2726,7 @@ The libxc library (`src/dft/base/wrapper.h`) is then called with the density (an
 E_{xc} = \sum_g w_g\, \rho(\mathbf r_g)\, \varepsilon_{xc}(\mathbf r_g)
 \]
 
-### 20.6 XC Matrix Assembly
+### 18.6 XC Matrix Assembly
 
 The XC potential matrix element is:
 
@@ -2214,7 +2737,7 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 
 The second term (present only for GGA) involves the density gradient and the AO gradients on the grid. Both terms are assembled in `assemble_xc_matrix` (`src/dft/ks_matrix.cpp`).
 
-### 20.7 KS-DFT SCF Loop
+### 18.7 KS-DFT SCF Loop
 
 The KS SCF loop in `DFT::Driver::run` follows the same outer structure as the HF loop:
 
@@ -2229,7 +2752,7 @@ The KS SCF loop in `DFT::Driver::run` follows the same outer structure as the HF
 
 The `KSPotentialMatrices` struct holds the Coulomb, XC-alpha, and XC-beta matrices and their sum (the full KS two-electron+XC potential). For RKS the alpha and beta components are identical; for UKS they differ because \(\rho_\alpha \neq \rho_\beta\).
 
-### 20.8 DFT Code Map
+### 18.8 DFT Code Map
 
 | Task | File | Function/struct |
 |---|---|---|
@@ -2248,11 +2771,374 @@ The `KSPotentialMatrices` struct holds the Coulomb, XC-alpha, and XC-beta matric
 
 ---
 
-## 21. Current Implementation Status
+## 19. Molecular Properties
+
+After SCF convergence Planck computes several molecular properties from the converged density matrix.  All are printed automatically (or under `verbosity verbose`) without additional input; no extra keywords are needed.  This section covers the theory behind each property and the code path that evaluates it.
+
+### 19.1 Mulliken Population Analysis
+
+**Theory**
+
+The Mulliken gross population of AO \(\mu\) is
+
+\[
+q_\mu = \sum_\nu P_{\mu\nu} S_{\mu\nu}
+\]
+
+where \(P\) is the total AO density matrix (for UHF, \(P = P^\alpha + P^\beta\)) and \(S\) is the overlap matrix.  Summing over all AOs centred on atom \(A\) gives the electron population of that atom:
+
+\[
+N_A = \sum_{\mu \in A} q_\mu
+\]
+
+and the net atomic charge follows by subtracting from the nuclear charge:
+
+\[
+Q_A = Z_A - N_A
+\]
+
+For an open-shell (UHF) wavefunction, the spin-density matrix \(\Delta P = P^\alpha - P^\beta\) yields the net spin population per atom:
+
+\[
+S_A = \sum_{\mu \in A} \sum_\nu \Delta P_{\mu\nu} S_{\mu\nu}
+\]
+
+**Code path**
+
+`src/scf/population.cpp` — `mulliken_population_analysis()`
+
+The gross AO population vector is computed as a row-sum of the Hadamard product \(P \circ S\):
+
+```cpp
+Eigen::VectorXd gross = (density.array() * overlap.array()).rowwise().sum();
+```
+
+The function then iterates over `basis._basis_functions`, accumulates `gross[μ]` into the correct atom bucket via `cv._shell->_atom_index`, and fills an `AtomicPopulation` struct.  When a `spin_density_ptr` is provided the same loop runs a second time over \(\Delta P\).
+
+Population analysis is triggered when `_output._print_populations` is set or `verbosity` is `verbose` / `debug` (see `log_population_report` in `src/driver.cpp:71`).
+
+### 19.2 Electric Dipole Moment
+
+**Theory**
+
+The electronic contribution to the electric dipole moment is
+
+\[
+\boldsymbol{\mu}^{(e)} = -\sum_{\mu\nu} P_{\mu\nu}\, \langle \mu | \hat{\mathbf{r}} | \nu \rangle
+\]
+
+The nuclear contribution is
+
+\[
+\boldsymbol{\mu}^{(n)} = \sum_A Z_A \mathbf{R}_A
+\]
+
+and the total dipole is \(\boldsymbol{\mu} = \boldsymbol{\mu}^{(e)} + \boldsymbol{\mu}^{(n)}\), reported in Debye (\(1\,\mathrm{a.u.} = 2.5418\,\mathrm{D}\)).
+
+**AO integrals via Obara-Saika moment recurrence**
+
+The one-electron AO integral \(\langle \mu | r_\alpha | \nu \rangle\) is evaluated using a 1-D three-component recurrence `_os_1d_moments` in `src/integrals/os.cpp`.  For functions centred at \(A\) and \(B\) with angular momenta \(i\) and \(j\) and origin at \(P = (\alpha_a A + \alpha_b B)/(\alpha_a+\alpha_b)\), the recurrence simultaneously computes the overlap \(S_{ij}\), dipole moment \(M^{(1)}_{ij}\), and quadrupole moment \(M^{(2)}_{ij}\) integrals:
+
+\[
+M^{(n)}_{i,j} = (P_\alpha - A_\alpha)\,M^{(n)}_{i-1,j} + \frac{j}{2\zeta}\,M^{(n)}_{i-1,j-1} + \frac{i-1}{2\zeta}\,M^{(n)}_{i-2,j} + \frac{n}{2\zeta}\,M^{(n-1)}_{i-1,j}
+\]
+
+where \(\zeta = \alpha_a + \alpha_b\) and \(n=0,1,2\) index the overlap, dipole, and quadrupole cases respectively.  The base cases are
+
+\[
+M^{(0)}_{0,0} = S_{00} = \sqrt{\frac{\pi}{\zeta}}\,e^{-\alpha_a\alpha_b|A-B|^2/\zeta}, \qquad M^{(n\ge1)}_{0,0} = \frac{n}{2\zeta}\,M^{(n-1)}_{0,0}
+\]
+
+The function `_compute_multipole_matrices` in `os.cpp` assembles the three \(N_b \times N_b\) dipole matrices (one per Cartesian component \(x,y,z\)) and the six independent upper-triangle elements of the raw quadrupole matrix, parallelised over shell pairs with OpenMP.
+
+### 19.3 Traceless Quadrupole Moment
+
+**Theory**
+
+The raw second-moment tensor is
+
+\[
+\Theta_{\alpha\beta}^{(e)} = -\sum_{\mu\nu} P_{\mu\nu}\, \langle \mu | r_\alpha r_\beta | \nu \rangle, \qquad \Theta_{\alpha\beta}^{(n)} = \sum_A Z_A R_{A,\alpha} R_{A,\beta}
+\]
+
+The total raw tensor is \(\Theta = \Theta^{(e)} + \Theta^{(n)}\).  Planck reports the traceless form
+
+\[
+Q_{\alpha\beta} = \frac{1}{2}\bigl(3\Theta_{\alpha\beta} - \delta_{\alpha\beta}\,\mathrm{Tr}(\Theta)\bigr)
+\]
+
+in atomic units (\(\mathrm{a.u.} = e\,a_0^2\)).  The traceless tensor has five independent components (\(Q_{xx}\), \(Q_{yy}\), \(Q_{xy}\), \(Q_{xz}\), \(Q_{yz}\); \(Q_{zz} = -Q_{xx}-Q_{yy}\)) and transforms as a rank-2 spherical tensor under rotations.
+
+**Code path**
+
+`_compute_multipole_moments` in `src/integrals/os.cpp` contracts the six AO quadrupole matrices with the total density matrix to obtain \(\Theta^{(e)}\), then adds the nuclear contribution in a loop over atoms.  The traceless transform is applied element-by-element:
+
+```cpp
+const double trace = raw_xx + raw_yy + raw_zz;
+Q_xx = 0.5 * (3 * raw_xx - trace);
+Q_xy = 1.5 * raw_xy;          // off-diagonal scaled by 3/2
+// ... (analogously for all components)
+```
+
+Both the dipole and quadrupole moments use the nuclear frame origin \(\mathbf{o} = \mathbf{0}\) (atomic units) as passed by `log_multipole_report` in `src/driver.cpp:52`.
+
+### 19.4 RMP2 Natural Orbitals
+
+**Theory**
+
+Natural orbitals (NOs) diagonalise the one-particle density matrix (1-PDM).  For RMP2, the unrelaxed 1-PDM in the MO basis has two non-trivial blocks.
+
+*Occupied–occupied block* (correlation-induced depopulation of occupied MOs):
+
+\[
+\Gamma_{ij}^{oo} = -\frac{1}{2}\sum_{kab} t_{ik}^{ab}\,t_{jk}^{ab}
+\]
+
+where \(t_{ij}^{ab} = \langle ij \| ab \rangle / (\varepsilon_i + \varepsilon_j - \varepsilon_a - \varepsilon_b)\) are the MP2 doubles amplitudes in antisymmetrised form.
+
+*Virtual–virtual block* (correlation-induced population of virtual MOs):
+
+\[
+\Gamma_{ab}^{vv} = \frac{1}{2}\sum_{ijc} t_{ij}^{ac}\,t_{ij}^{bc}
+\]
+
+The full unrelaxed 1-PDM (including the reference) is assembled as
+
+\[
+\gamma_{ij} = 2\delta_{ij} + \Gamma_{ij}^{oo} + (\Gamma^{oo})_{ji}, \qquad \gamma_{ab} = \Gamma_{ab}^{vv} + (\Gamma^{vv})_{ba}
+\]
+
+(the factor of 2 accounts for the closed-shell occupation; off-diagonal terms symmetrise the matrix).  Diagonalising \(\gamma\) yields eigenvalues \(n_p\) (natural occupation numbers) and eigenvectors \(U\).  The natural orbitals in the AO basis are \(\tilde{C} = C U\), where \(C\) is the RHF MO coefficient matrix.
+
+For the reference wavefunction alone, \(\gamma_{ii} = 2\) for occupied and \(\gamma_{aa} = 0\) for virtual MOs; the MP2 correction shifts occupation numbers away from 0 and 2.
+
+**Code path**
+
+`compute_rmp2_natural_orbitals` in `src/post_hf/mp2.cpp`:
+
+1. Calls `run_rmp2` to obtain doubles amplitudes \(T_2\) (shape `[nocc,nocc,nvirt,nvirt]`).
+2. Builds \(\Gamma^{oo}\) and \(\Gamma^{vv}\) with two nested loops over the amplitude tensor.
+3. Assembles the full \((n_{mo} \times n_{mo})\) density matrix block-diagonally and symmetrises it.
+4. Diagonalises via `Eigen::SelfAdjointEigenSolver`; sorts eigenvalues in descending order.
+5. Returns a `NaturalOrbitalResult` containing `occupations` and `coefficients_mo` (the transformation \(U\)) which the logger formats and prints.
+
+### 19.5 MO Symmetry Labels
+
+**Theory**
+
+When point-group symmetry is active, each MO is labelled with an irreducible representation (irrep) of the molecule's point group.  The assignment exploits the fact that an MO \(\phi_p = \sum_\mu C_{\mu p}\chi_\mu\) belongs to irrep \(\Gamma\) if and only if
+
+\[
+\hat{R}\,\phi_p = \chi_\Gamma(R)\,\phi_p \quad \forall\, R \in G
+\]
+
+where \(\chi_\Gamma(R)\) is the character of \(R\) in irrep \(\Gamma\).  In practice, the algorithm:
+
+1. For each symmetry operation \(R\), builds the \(N_b \times N_b\) AO representation matrix \(D^R\) that expresses how the Cartesian AO basis transforms under \(R\) (atom permutation composed with Cartesian angular momentum rotation).
+2. Forms the MO representation matrix \(D^R_{MO} = C^\dagger D^R C\).
+3. The diagonal element \((D^R_{MO})_{pp}\) is the character of \(R\) in the "reducible representation" spanned by MO \(p\).
+4. Projects this set of characters onto each irrep using the character orthogonality theorem:
+
+\[
+c_\Gamma^{(p)} = \frac{1}{|G|}\sum_R \chi_\Gamma(R)^*\,(D^R_{MO})_{pp}
+\]
+
+The irrep with the largest projection coefficient (closest to 1.0) is assigned.
+
+**AO transformation matrix construction**
+
+`build_ao_transform` in `src/symmetry/mo_symmetry.cpp` constructs \(D^R\) from:
+- **Atom permutation**: `build_permutation` finds, for each atom \(a\), the image atom \(b = \pi(a)\) under the operation matrix \(M_R\) (obtained from `sop_to_matrix`).
+- **Angular-momentum rotation**: `angular_coeff(M_R, lx, ly, lz, ax, ay, az)` computes the coefficient of the target Cartesian function \((a_x,a_y,a_z)\) in the image of source function \((l_x,l_y,l_z)\) under \(M_R\), via a multinomial expansion of \((M_R^{-1}\mathbf{v})^{l_x}_x (M_R^{-1}\mathbf{v})^{l_y}_y (M_R^{-1}\mathbf{v})^{l_z}_z\).
+- **Component-norm ratio**: because different Cartesian functions within the same shell (e.g. \(d_{xx}\) vs \(d_{xy}\)) carry different normalisation constants, each matrix element is corrected by \(\mathtt{norm\_target}/\mathtt{norm\_source}\).
+
+The full assign pipeline (`assign_mo_symmetry` in `mo_symmetry.cpp`) loops over all symmetry operations from libmsym, accumulates the projection coefficients, and returns a `std::vector<std::string>` of irrep labels (one per MO per spin channel).
+
+---
+
+## 20. Checkpoint and Restart
+
+### Binary Checkpoint Format
+
+The checkpoint file (`*.hfchk`) stores:
+
+- A 4-byte magic number and format version (v2)
+- Molecular geometry (standard-orientation, Bohr)
+- Basis set name
+- Density matrices (alpha and optionally beta)
+- Total SCF energy
+- Optional geometry optimization metadata
+
+### Cross-Basis Löwdin Projection
+
+When restarting from a checkpoint computed with a smaller basis
+(e.g., STO-3G) to a larger basis (e.g., 6-31G*), the stored density matrix
+cannot be used directly. Planck projects the old density into the new basis
+using the cross-overlap matrix:
+
+\[
+S^{cross}_{\mu\nu} = \langle \chi^{large}_\mu | \chi^{small}_\nu \rangle
+\]
+
+computed by `_compute_cross_overlap` in `os.cpp`. The projection is then:
+
+\[
+P^{large}_{\mu\nu} = \sum_{\lambda\sigma}
+(S^{LL})^{-1}_{\mu\lambda}\, S^{cross}_{\lambda\lambda'}\,
+P^{small}_{\lambda'\sigma'}\, (S^{cross})^T_{\sigma'\mu}\,
+(S^{LL})^{-1}_{\mu\nu}
+\]
+
+implemented via a singular value decomposition (Löwdin SVD) of the
+cross-overlap in `src/io/checkpoint.cpp`. This provides a physically motivated
+initial density for the new basis, significantly reducing the number of SCF
+iterations required.
+
+---
+
+## 21. Execution Flow of a Typical Run
+
+```
+driver.cpp
+  parse_input()                → Calculator._scf, _basis, _geometry, etc.
+  prepare_coordinates()        → molecule._coordinates (Bohr)
+  checkpoint restore (if any)  → geometry / density
+  detectSymmetry()             → molecule._standard (Bohr), _point_group
+  read_gbs_basis()             → shells, basis functions, normalization
+  build_shellpairs()           → shell_pairs[0..nb*(nb+1)/2-1]
+  _compute_1e()                → S, T  (os.cpp)
+  _compute_nuclear_attraction()→ V     (os.cpp)
+  H_core = T + V
+  build_sao_basis()            → U, block sizes, irrep names
+  update_integral_symmetry()   → _integral_symmetry_ops
+  build_canonical_pairs()      → _canonical_ao_pair[]
+
+  if Conventional SCF:
+      _compute_2e()            → _eri[nb^4]  (os.cpp)
+
+  run_rhf() or run_uhf()       → C, ε, P, E_SCF  (scf.cpp)
+      each iteration:
+          G = _compute_fock_rhf(eri, P) or _compute_2e_fock(shell_pairs, P)
+          F = H_core + G
+          DIIS.push(F, e)
+          F' = X^T F X
+          diagonalize F' → C', ε
+          C = X C'
+          rebuild P
+          check convergence
+
+  if post_hf == RMP2:
+      AO→MO transform → (ia|jb) MO integrals
+      run_rmp2()               → E_MP2
+  elif post_hf == UMP2:
+      AO→MO transform in α/β blocks
+      run_ump2()               → E_UMP2
+  elif post_hf == RCCSD:
+      prepare_rccsd()          → reference, MO blocks, denominators
+      run_rccsd()              → E_RCCSD
+  elif post_hf == UCCSD:
+      prepare_uccsd()          → UHF reference
+      run_uccsd()              → E_UCCSD (small-system prototype)
+  elif post_hf == RCCSDT:
+      prepare_rccsdt()         → reference, MO blocks
+      run_rccsdt()             → E_RCCSDT (backend-selected determinant or tensor solver)
+  elif post_hf == UCCSDT:
+      prepare_uccsdt()         → UHF reference
+      run_uccsdt()             → E_UCCSDT (small-system prototype)
+  elif post_hf == CASSCF:
+      run_casscf()             → E_CASSCF, natural orbitals
+
+  if gradient or geomopt or frequency:
+      compute_rhf_gradient()   → _gradient (gradient.cpp)
+
+  if geomopt:
+      run_geomopt()            → optimized geometry (geomopt.cpp)
+          each step: SCF → gradient → L-BFGS or BFGS update
+
+  if frequency:
+      compute_hessian()        → _hessian (hessian.cpp)
+          for each displacement: SCF → gradient (2×3N calculations)
+      vibrational_analysis()   → _frequencies, _normal_modes, _zpe
+
+  save_checkpoint()
+```
+
+---
+
+## 22. Theory-to-Code Map
+
+| Theory concept | Primary file(s) | Key function(s) |
+|---|---|---|
+| Data structures | `src/base/types.h` | `Calculator`, `Shell`, `Basis`, `ShellPair` |
+| Input parsing | `src/io/io.cpp` | `parse_input` |
+| Basis reading | `src/basis/gaussian.cpp` | `read_gbs_basis` |
+| Shell pairs | `src/integrals/shellpair.cpp` | `build_shellpairs` |
+| Overlap and kinetic | `src/integrals/os.cpp` | `_compute_1e`, `_compute_3d_overlap_kinetic` |
+| Boys function | `src/lookup/` | table lookup and asymptotic expansion |
+| Nuclear attraction | `src/integrals/os.cpp` | `_compute_nuclear_attraction` |
+| ERI tensor | `src/integrals/os.cpp` | `_compute_2e`, `_contracted_eri` |
+| Direct Fock build | `src/integrals/os.cpp` | `_compute_2e_fock`, `_compute_2e_fock_uhf` |
+| Rys quadrature | `src/integrals/rys.cpp` | `_rys_eri_primitive`, `_rys_contracted_eri` |
+| Orthogonalizer | `src/scf/scf.cpp` | `build_orthogonalizer` |
+| RHF SCF | `src/scf/scf.cpp` | `run_rhf` |
+| UHF SCF | `src/scf/scf.cpp` | `run_uhf` |
+| ROHF SCF | `src/scf/scf.cpp` | `run_rohf`, `_rohf_effective_fock`, `_reorder_rohf_orbitals` |
+| DIIS | `src/base/types.h` | `DIISState::push`, `DIISState::extrapolate` |
+| Symmetry detection | `src/symmetry/symmetry.cpp` | `detectSymmetry` |
+| SAO basis | `src/symmetry/mo_symmetry.cpp` | `build_sao_basis` |
+| MO irrep labels | `src/symmetry/mo_symmetry.cpp` | `assign_mo_symmetry` |
+| Integral symmetry ops | `src/symmetry/integral_symmetry.cpp` | `update_integral_symmetry` |
+| AO→MO transform | `src/post_hf/integrals.cpp` | half-transformation functions |
+| RMP2 energy | `src/post_hf/mp2.cpp` | `run_rmp2` |
+| UMP2 energy | `src/post_hf/mp2.cpp` | `run_ump2` |
+| MP2 amplitudes | `src/post_hf/mp2.cpp` | `build_rmp2_amplitudes` |
+| RCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_rccsd`, `run_rccsd` |
+| UCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_uccsd`, `run_uccsd` |
+| Determinant-space CC backend | `src/post_hf/cc/determinant_space.cpp` | `build_rhf_spin_orbital_system`, `build_uhf_spin_orbital_system`, `solve_determinant_cc` |
+| RCCSDT dispatch + backend selection | `src/post_hf/cc/ccsdt.cpp` | `prepare_rccsdt`, `run_rccsdt`, `choose_rccsdt_backend` |
+| RCCSDT tensor production | `src/post_hf/cc/tensor_backend.cpp` | `prepare_tensor_rccsdt`, `run_tensor_rccsdt`, `build_tensor_cc_block_cache`, `allocate_dense_triples_workspace` |
+| Tensor CC block cache | `src/post_hf/cc/tensor_backend.cpp` | `build_canonical_rhf_cc_reference`, `format_tensor_memory_summary` |
+| UCCSDT prototype | `src/post_hf/cc/ccsdt.cpp` | `prepare_uccsdt`, `run_uccsdt` |
+| CC denominators/DIIS | `src/post_hf/cc/amplitudes.cpp`, `src/post_hf/cc/diis.cpp` | `build_denominator_cache`, `AmplitudeDIIS` |
+| CPHF Z-vector | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix` |
+| RMP2 gradient | `src/post_hf/mp2_gradient.cpp` | `compute_rmp2_gradient` |
+| CI string generation | `src/post_hf/casscf.cpp` | Gosper enumeration |
+| CI solve (Davidson) | `src/post_hf/casscf.cpp` | Davidson solver |
+| 1-RDM, 2-RDM | `src/post_hf/casscf.cpp` | `compute_1rdm`, `compute_2rdm` |
+| Orbital gradient | `src/post_hf/casscf.cpp` | generalized Fock matrix |
+| Orbital update | `src/post_hf/casscf.cpp` | Cayley transform |
+| RHF gradient | `src/gradient/gradient.cpp` | `compute_rhf_gradient` |
+| UHF gradient | `src/gradient/gradient.cpp` | `compute_uhf_gradient` |
+| Derivative integrals | `src/integrals/os.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem` |
+| L-BFGS optimizer | `src/opt/geomopt.cpp` | `run_geomopt` |
+| Internal coordinates | `src/opt/intcoords.cpp` | Wilson B matrix |
+| Semi-numerical Hessian | `src/freq/hessian.cpp` | `compute_hessian` |
+| Vibrational analysis | `src/freq/hessian.cpp` | `vibrational_analysis` |
+| Vibrational symmetry | `src/symmetry/vibrational_symmetry.cpp` | mode irrep assignment |
+| Checkpoint I/O | `src/io/checkpoint.cpp` | `save_checkpoint`, `load_checkpoint` |
+| Cross-basis projection | `src/io/checkpoint.cpp` | Löwdin SVD projection |
+| Molecular grid | `src/dft/base/grid.h` | `MakeMolecularGrid`, `MakeAtomicGrid` |
+| AO evaluation on grid | `src/dft/ao_grid.h` | `AOGridEvaluation` |
+| Density on grid | `src/dft/xc_grid.cpp` | `evaluate_density_on_grid` |
+| XC evaluation (libxc) | `src/dft/xc_grid.cpp` | `evaluate_xc_on_grid` |
+| XC matrix assembly | `src/dft/ks_matrix.cpp` | `assemble_xc_matrix` |
+| KS potential matrices | `src/dft/ks_matrix.cpp` | `combine_ks_potential` |
+| KS-DFT driver | `src/dft/driver.cpp` | `DFT::Driver::run` |
+| Mulliken population analysis | `src/scf/population.cpp` | `mulliken_population_analysis`, `gross_ao_population` |
+| Dipole / quadrupole AO integrals | `src/integrals/os.cpp` | `_os_1d_moments`, `_compute_multipole_matrices` |
+| Multipole moments (traceless) | `src/integrals/os.cpp` | `_compute_multipole_moments` |
+| RMP2 natural orbitals | `src/post_hf/mp2.cpp` | `compute_rmp2_natural_orbitals` |
+| AO symmetry representation | `src/symmetry/mo_symmetry.cpp` | `build_ao_transform`, `sop_to_matrix`, `angular_coeff` |
+| MO irrep labels | `src/symmetry/mo_symmetry.cpp` | `assign_mo_symmetry` |
+
+---
+
+## 23. Current Implementation Status
 
 | Feature | Status |
 |---|---|
 | RHF and UHF SCF | Complete |
+| ROHF SCF | Complete (Guest–Saunders effective Fock; no SAD guess; post-HF not yet supported from ROHF reference) |
 | Obara-Saika 1e and 2e integrals | Complete |
 | Rys quadrature ERIs | Complete |
 | Conventional and direct SCF | Complete |
@@ -2288,7 +3174,7 @@ The `KSPotentialMatrices` struct holds the Coulomb, XC-alpha, and XC-beta matric
 
 ---
 
-## 22. How to Study This Codebase
+## 24. How to Study This Codebase
 
 Recommended reading order for the HF/post-HF pipeline:
 
@@ -2299,7 +3185,7 @@ Recommended reading order for the HF/post-HF pipeline:
 5. `src/scf/scf.cpp` — the SCF iteration in detail
 6. `src/gradient/gradient.cpp` — how analytic gradients are assembled
 7. `src/post_hf/mp2.cpp` and `src/post_hf/integrals.cpp` — MP2 energy
-8. `src/post_hf/cc/` — RCCSD plus the determinant-space restricted/unrestricted CC prototypes
+8. `src/post_hf/cc/` — RCCSD, the tensor RCCSDT backend, and the determinant-space restricted/unrestricted CC teaching prototypes
 9. `src/post_hf/casscf.cpp` — the most complex module: CI, RDMs, orbital update
 10. `src/opt/geomopt.cpp` — L-BFGS and internal coordinate optimization
 11. `src/freq/hessian.cpp` — finite-difference Hessian and normal modes
