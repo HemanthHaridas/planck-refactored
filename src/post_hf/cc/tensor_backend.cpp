@@ -134,12 +134,10 @@ namespace
         Tensor4D vvvv;
     };
 
-    // The no-fallback tensor RCCSDT path now follows the local PySCF
-    // `rccsdt_highm.py` organization more closely: start from the full
-    // spin-orbital MO-basis Fock matrix and chemists-notation ERIs, dress them
-    // with T1, and then derive the SD/T3 intermediates from that dressed
-    // system.  Keeping these as explicit structs preserves Planck's teaching
-    // style while giving the staged solver a single, coherent source of truth.
+    // These full-MO chemists-notation containers mirror the local PySCF
+    // RCCSDT data flow closely enough that we can rebuild the larger-system
+    // tensor solver around the same dressed-intermediate sequence later,
+    // while still keeping the storage explicit and teachable in Planck.
     struct ProductionSpinOrbitalChemistsSystem
     {
         int n_mo = 0;
@@ -1809,7 +1807,7 @@ namespace
                             }
     }
 
-    void enforce_restricted_t3_structure(Tensor6D &tensor)
+    void apply_restricted_t3_permutation_symmetry(Tensor6D &tensor)
     {
         Tensor6D original(
             tensor.dim1, tensor.dim2, tensor.dim3,
@@ -1823,46 +1821,68 @@ namespace
                         for (int b = 0; b < tensor.dim5; ++b)
                             for (int c = 0; c < tensor.dim6; ++c)
                             {
-                                // Match the PySCF full-form RCCSDT restore:
-                                // 1. Sum the simultaneous occupied/virtual
-                                //    permutations.
-                                // 2. Apply the P3_full spin-summation as
-                                //    out = sim - (1/6) * total, where
-                                //    total includes all occupied-permuted and
-                                //    virtual-permuted combinations.
-                                // 3. Purify the unphysical triple-equal
-                                //    occupied or virtual cases.
                                 const int occ[3] = {i, j, k};
                                 const int virt[3] = {a, b, c};
 
                                 double simultaneous_sum = 0.0;
-                                double total_sum = 0.0;
                                 for (const auto &occ_perm : kPermutations3)
                                 {
-                                    const int oi = occ[occ_perm[0]];
-                                    const int oj = occ[occ_perm[1]];
-                                    const int ok = occ[occ_perm[2]];
-
                                     simultaneous_sum += original(
-                                        oi, oj, ok,
+                                        occ[occ_perm[0]],
+                                        occ[occ_perm[1]],
+                                        occ[occ_perm[2]],
                                         virt[occ_perm[0]],
                                         virt[occ_perm[1]],
                                         virt[occ_perm[2]]);
-
-                                    for (const auto &virt_perm : kPermutations3)
-                                        total_sum += original(
-                                            oi, oj, ok,
-                                            virt[virt_perm[0]],
-                                            virt[virt_perm[1]],
-                                            virt[virt_perm[2]]);
                                 }
+                                tensor(i, j, k, a, b, c) = simultaneous_sum;
+                            }
+    }
 
+    void apply_restricted_t3_p3_full(Tensor6D &tensor)
+    {
+        Tensor6D permuted(
+            tensor.dim1, tensor.dim2, tensor.dim3,
+            tensor.dim4, tensor.dim5, tensor.dim6, 0.0);
+        permuted.data = tensor.data;
+
+        for (int i = 0; i < tensor.dim1; ++i)
+            for (int j = 0; j < tensor.dim2; ++j)
+                for (int k = 0; k < tensor.dim3; ++k)
+                    for (int a = 0; a < tensor.dim4; ++a)
+                        for (int b = 0; b < tensor.dim5; ++b)
+                            for (int c = 0; c < tensor.dim6; ++c)
+                            {
+                                const int virt[3] = {a, b, c};
+                                double total_sum = 0.0;
+                                for (const auto &virt_perm : kPermutations3)
+                                    total_sum += permuted(
+                                        i, j, k,
+                                        virt[virt_perm[0]],
+                                        virt[virt_perm[1]],
+                                        virt[virt_perm[2]]);
                                 tensor(i, j, k, a, b, c) =
-                                    simultaneous_sum - total_sum / 6.0;
+                                    permuted(i, j, k, a, b, c) - total_sum / 6.0;
+                            }
+    }
 
+    void purify_restricted_t3(Tensor6D &tensor)
+    {
+        for (int i = 0; i < tensor.dim1; ++i)
+            for (int j = 0; j < tensor.dim2; ++j)
+                for (int k = 0; k < tensor.dim3; ++k)
+                    for (int a = 0; a < tensor.dim4; ++a)
+                        for (int b = 0; b < tensor.dim5; ++b)
+                            for (int c = 0; c < tensor.dim6; ++c)
                                 if ((i == j && j == k) || (a == b && b == c))
                                     tensor(i, j, k, a, b, c) = 0.0;
-                            }
+    }
+
+    void restore_restricted_t3_structure(Tensor6D &tensor)
+    {
+        apply_restricted_t3_permutation_symmetry(tensor);
+        apply_restricted_t3_p3_full(tensor);
+        purify_restricted_t3(tensor);
     }
 
 
@@ -2027,235 +2047,216 @@ namespace
         return std::sqrt(sum_sq / static_cast<double>(count));
     }
 
+    struct RestrictedRCCSDTUpdateMetrics
+    {
+        double sd_residual_rms = 0.0;
+        double r3_residual_rms = 0.0;
+        double r1_feedback_rms = 0.0;
+        double r2_feedback_rms = 0.0;
+        double t1_step_rms = 0.0;
+        double t2_step_rms = 0.0;
+        double t3_step_rms = 0.0;
+        double norm_dtamps = 0.0;
+    };
+
+    [[nodiscard]] RestrictedRCCSDTUpdateMetrics update_restricted_rccsdt_amplitudes_once(
+        const ProductionSpinOrbitalChemistsSystem &system,
+        const RHFReference &reference,
+        RCCSDTAmplitudes &amps)
+    {
+        RestrictedRCCSDTUpdateMetrics metrics;
+
+        const DressedSpinOrbitalSystem dressed =
+            build_dressed_spin_orbital_system(system, amps);
+
+        RCCSDAmplitudes sd_amps{
+            .t1 = Tensor2D(amps.t1.dim1, amps.t1.dim2, 0.0),
+            .t2 = Tensor4D(amps.t2.dim1, amps.t2.dim2, amps.t2.dim3, amps.t2.dim4, 0.0),
+        };
+        sd_amps.t1.data = amps.t1.data;
+        sd_amps.t2.data = amps.t2.data;
+
+        const DressedSinglesDoublesIntermediates sd_ints =
+            build_dressed_sd_intermediates(system, dressed, amps.t2);
+        RCCSDResiduals residuals =
+            build_dressed_sd_residuals(system, dressed, sd_ints, sd_amps);
+        const RCCSDResiduals residuals_before_t3 = residuals;
+        add_dressed_triples_feedback_into_sd_residuals(
+            system, dressed, amps, residuals);
+
+        Tensor2D r1_feedback(residuals.r1.dim1, residuals.r1.dim2, 0.0);
+        for (std::size_t idx = 0; idx < residuals.r1.data.size(); ++idx)
+            r1_feedback.data[idx] =
+                residuals.r1.data[idx] - residuals_before_t3.r1.data[idx];
+
+        Tensor4D r2_feedback(
+            residuals.r2.dim1, residuals.r2.dim2,
+            residuals.r2.dim3, residuals.r2.dim4, 0.0);
+        for (std::size_t idx = 0; idx < residuals.r2.data.size(); ++idx)
+            r2_feedback.data[idx] =
+                residuals.r2.data[idx] - residuals_before_t3.r2.data[idx];
+
+        Tensor4D full_r2_before_sym = residuals.r2;
+        for (int i = 0; i < residuals.r2.dim1; ++i)
+            for (int j = 0; j < residuals.r2.dim2; ++j)
+                for (int a = 0; a < residuals.r2.dim3; ++a)
+                    for (int b = 0; b < residuals.r2.dim4; ++b)
+                        residuals.r2(i, j, a, b) += full_r2_before_sym(j, i, b, a);
+
+        Tensor4D sym_r2_feedback = r2_feedback;
+        for (int i = 0; i < sym_r2_feedback.dim1; ++i)
+            for (int j = 0; j < sym_r2_feedback.dim2; ++j)
+                for (int a = 0; a < sym_r2_feedback.dim3; ++a)
+                    for (int b = 0; b < sym_r2_feedback.dim4; ++b)
+                        sym_r2_feedback(i, j, a, b) +=
+                            r2_feedback(j, i, b, a);
+
+        metrics.r1_feedback_rms = tensor_rms(r1_feedback);
+        metrics.r2_feedback_rms = tensor_rms(sym_r2_feedback);
+        metrics.sd_residual_rms = rms_norm(pack_residuals(residuals));
+
+        double t1_sum_sq = 0.0;
+        std::size_t t1_count = 0;
+        for (int i = 0; i < amps.t1.dim1; ++i)
+            for (int a = 0; a < amps.t1.dim2; ++a)
+            {
+                const double denom = restricted_d1(reference, i, a);
+                if (std::abs(denom) < 1e-12)
+                    continue;
+                const double delta = residuals.r1(i, a) / denom;
+                amps.t1(i, a) += delta;
+                t1_sum_sq += delta * delta;
+                ++t1_count;
+            }
+
+        double t2_sum_sq = 0.0;
+        std::size_t t2_count = 0;
+        for (int i = 0; i < amps.t2.dim1; ++i)
+            for (int j = 0; j < amps.t2.dim2; ++j)
+                for (int a = 0; a < amps.t2.dim3; ++a)
+                    for (int b = 0; b < amps.t2.dim4; ++b)
+                    {
+                        const double denom = restricted_d2(reference, i, j, a, b);
+                        if (std::abs(denom) < 1e-12)
+                            continue;
+                        const double delta = residuals.r2(i, j, a, b) / denom;
+                        amps.t2(i, j, a, b) += delta;
+                        t2_sum_sq += delta * delta;
+                        ++t2_count;
+                    }
+
+        metrics.t1_step_rms = t1_count == 0
+                                  ? 0.0
+                                  : std::sqrt(t1_sum_sq / static_cast<double>(t1_count));
+        metrics.t2_step_rms = t2_count == 0
+                                  ? 0.0
+                                  : std::sqrt(t2_sum_sq / static_cast<double>(t2_count));
+
+        const DressedSinglesDoublesIntermediates sd_ints_t3 =
+            build_dressed_sd_intermediates(system, dressed, amps.t2);
+        DressedTriplesIntermediates triples_ints =
+            build_dressed_triples_intermediates(
+                system, dressed, sd_ints_t3, amps.t2);
+        add_dressed_triples_feedback_into_triples_intermediates(
+            system, dressed, amps.t3, triples_ints);
+
+        TensorTriplesWorkspace triples{
+            .amplitudes = clone_rccsdt_amplitudes(amps),
+            .r3 = Tensor6D(
+                amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
+                amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0),
+            .allocated = true,
+        };
+        build_dressed_triples_residual(system, triples_ints, amps, triples);
+        restore_restricted_t3_structure(triples.r3);
+        metrics.r3_residual_rms = triples_residual_rms(triples.r3);
+        metrics.t3_step_rms =
+            update_restricted_t3_from_r3_jacobi(reference, amps, triples.r3, 1.0);
+
+        metrics.norm_dtamps = std::sqrt(
+            metrics.t1_step_rms * metrics.t1_step_rms +
+            metrics.t2_step_rms * metrics.t2_step_rms +
+            metrics.t3_step_rms * metrics.t3_step_rms);
+
+        return metrics;
+    }
+
     std::expected<TensorTriplesStageMetrics, std::string> run_restricted_tensor_rccsdt_no_fallback(
         HartreeFock::Calculator &calculator,
         const TensorRCCSDTState &state,
         const ProductionSpinOrbitalChemistsSystem &system,
         const TensorRCCSDResult &rccsd)
     {
-        constexpr double kT3Damping = 0.35;
-        constexpr double kSDDamping = 0.35;
         const RHFReference &reference = state.reference.orbital_partition;
         const unsigned int max_iter =
             std::min(64u, std::max(24u, 2u * calculator._scf.get_max_cycles(calculator._shells.nbasis())));
-        const double tol_stage = std::max(1e-8, calculator._scf._tol_density);
         const double tol_energy = std::max(1e-10, calculator._scf._tol_energy);
+        const double tol_normt = 1e-6;
 
         RCCSDTAmplitudes amps =
             project_rccsd_warm_start_to_restricted(rccsd, reference);
+
         TensorTriplesStageMetrics metrics;
         TensorTriplesStageMetrics best_metrics;
-        RCCSDTAmplitudes best_amps = clone_rccsdt_amplitudes(amps);
         bool have_best = false;
         double best_score = std::numeric_limits<double>::infinity();
-        unsigned int stale_iterations = 0;
 
-        AmplitudeDIIS full_diis(static_cast<int>(std::max(2u, calculator._scf._DIIS_dim)));
         double previous_energy =
             compute_restricted_rccsdt_correlation_energy(system, amps);
 
         for (unsigned int iter = 1; iter <= max_iter; ++iter)
         {
-            RCCSDAmplitudes sd_amps{
-                .t1 = Tensor2D(amps.t1.dim1, amps.t1.dim2, 0.0),
-                .t2 = Tensor4D(amps.t2.dim1, amps.t2.dim2, amps.t2.dim3, amps.t2.dim4, 0.0),
-            };
-            sd_amps.t1.data = amps.t1.data;
-            sd_amps.t2.data = amps.t2.data;
+            const RestrictedRCCSDTUpdateMetrics update_metrics =
+                update_restricted_rccsdt_amplitudes_once(system, reference, amps);
 
-            const DressedSpinOrbitalSystem dressed =
-                build_dressed_spin_orbital_system(system, amps);
-            const DressedSinglesDoublesIntermediates sd_ints =
-                build_dressed_sd_intermediates(system, dressed, amps.t2);
-            RCCSDResiduals residuals =
-                build_dressed_sd_residuals(system, dressed, sd_ints, sd_amps);
-            const RCCSDResiduals residuals_before_t3 = residuals;
-            add_dressed_triples_feedback_into_sd_residuals(
-                system, dressed, amps, residuals);
-            Tensor4D r2_feedback(
-                residuals.r2.dim1, residuals.r2.dim2,
-                residuals.r2.dim3, residuals.r2.dim4, 0.0);
-            for (std::size_t idx = 0; idx < residuals.r2.data.size(); ++idx)
-                r2_feedback.data[idx] =
-                    residuals.r2.data[idx] - residuals_before_t3.r2.data[idx];
-            Tensor4D full_r2_before_sym = residuals.r2;
-            for (int i = 0; i < residuals.r2.dim1; ++i)
-                for (int j = 0; j < residuals.r2.dim2; ++j)
-                    for (int a = 0; a < residuals.r2.dim3; ++a)
-                        for (int b = 0; b < residuals.r2.dim4; ++b)
-                            residuals.r2(i, j, a, b) += full_r2_before_sym(j, i, b, a);
-
-            Tensor2D r1_feedback(residuals.r1.dim1, residuals.r1.dim2, 0.0);
-            for (std::size_t idx = 0; idx < residuals.r1.data.size(); ++idx)
-                r1_feedback.data[idx] =
-                    residuals.r1.data[idx] - residuals_before_t3.r1.data[idx];
-            Tensor4D sym_r2_feedback = r2_feedback;
-            for (int i = 0; i < sym_r2_feedback.dim1; ++i)
-                for (int j = 0; j < sym_r2_feedback.dim2; ++j)
-                    for (int a = 0; a < sym_r2_feedback.dim3; ++a)
-                        for (int b = 0; b < sym_r2_feedback.dim4; ++b)
-                            sym_r2_feedback(i, j, a, b) +=
-                                r2_feedback(j, i, b, a);
-
-            metrics.r1_feedback_rms = tensor_rms(r1_feedback);
-            metrics.r2_feedback_rms = tensor_rms(sym_r2_feedback);
-            metrics.sd_residual_rms = rms_norm(pack_residuals(residuals));
-
-            Eigen::VectorXd current = pack_amplitudes(RCCSDAmplitudes{amps.t1, amps.t2});
-            Eigen::VectorXd updated = current;
-            Eigen::Index offset = 0;
-            for (int i = 0; i < amps.t1.dim1; ++i)
-                for (int a = 0; a < amps.t1.dim2; ++a)
-                {
-                    const double denom = restricted_d1(reference, i, a);
-                    if (std::abs(denom) >= 1e-12)
-                        updated(offset) += kSDDamping * residuals.r1(i, a) / denom;
-                    ++offset;
-                }
-            for (int i = 0; i < amps.t2.dim1; ++i)
-                for (int j = 0; j < amps.t2.dim2; ++j)
-                    for (int a = 0; a < amps.t2.dim3; ++a)
-                        for (int b = 0; b < amps.t2.dim4; ++b)
-                        {
-                            const double denom = restricted_d2(reference, i, j, a, b);
-                            if (std::abs(denom) >= 1e-12)
-                                updated(offset) += kSDDamping * residuals.r2(i, j, a, b) / denom;
-                            ++offset;
-                        }
-            const Eigen::VectorXd sd_delta = updated - current;
-            {
-                RCCSDAmplitudes sd_old{amps.t1, amps.t2};
-                RCCSDAmplitudes sd_new{
-                    .t1 = Tensor2D(amps.t1.dim1, amps.t1.dim2, 0.0),
-                    .t2 = Tensor4D(amps.t2.dim1, amps.t2.dim2, amps.t2.dim3, amps.t2.dim4, 0.0),
-                };
-                unpack_amplitudes(updated, sd_new);
-                for (std::size_t idx = 0; idx < sd_new.t1.data.size(); ++idx)
-                    sd_new.t1.data[idx] -= sd_old.t1.data[idx];
-                for (std::size_t idx = 0; idx < sd_new.t2.data.size(); ++idx)
-                    sd_new.t2.data[idx] -= sd_old.t2.data[idx];
-                metrics.t1_step_rms = tensor_rms(sd_new.t1);
-                metrics.t2_step_rms = tensor_rms(sd_new.t2);
-            }
-            {
-                RCCSDAmplitudes sd_store{
-                    .t1 = Tensor2D(amps.t1.dim1, amps.t1.dim2, 0.0),
-                    .t2 = Tensor4D(amps.t2.dim1, amps.t2.dim2, amps.t2.dim3, amps.t2.dim4, 0.0),
-                };
-                unpack_amplitudes(updated, sd_store);
-                amps.t1 = std::move(sd_store.t1);
-                amps.t2 = std::move(sd_store.t2);
-            }
-
-            const DressedSpinOrbitalSystem refreshed_dressed =
-                build_dressed_spin_orbital_system(system, amps);
-            const DressedSinglesDoublesIntermediates refreshed_sd_ints =
-                build_dressed_sd_intermediates(system, refreshed_dressed, amps.t2);
-            DressedTriplesIntermediates triples_ints =
-                build_dressed_triples_intermediates(
-                    system, refreshed_dressed, refreshed_sd_ints, amps.t2);
-            add_dressed_triples_feedback_into_triples_intermediates(
-                system, refreshed_dressed, amps.t3, triples_ints);
-
-            Tensor6D r3(
-                amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
-                amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0);
-            TensorTriplesWorkspace tmp{
-                .amplitudes = clone_rccsdt_amplitudes(amps),
-                .r3 = r3,
-                .allocated = true,
-            };
-            build_dressed_triples_residual(system, triples_ints, amps, tmp);
-            enforce_restricted_t3_structure(tmp.r3);
-            metrics.r3_rms = triples_residual_rms(tmp.r3);
-            metrics.t3_step_rms =
-                update_restricted_t3_from_r3_jacobi(reference, amps, tmp.r3, kT3Damping);
-
-            // Project T3 onto restricted subspace BEFORE pushing to DIIS so the
-            // subspace vectors are consistent with what the next iteration will see.
-            enforce_restricted_t3_structure(amps.t3);
-
-            const Eigen::VectorXd full_residual =
-                pack_rccsdt_stage_residuals(residuals, tmp.r3);
-            Eigen::VectorXd full_current = pack_rccsdt_amplitudes(amps);
-            full_diis.push(full_current, full_residual);
-            if (calculator._scf._use_DIIS && full_diis.ready())
-            {
-                auto diis_res = full_diis.extrapolate();
-                if (diis_res)
-                {
-                    full_current = std::move(*diis_res);
-                    unpack_rccsdt_amplitudes(full_current, amps);
-                    // Re-project after DIIS extrapolation to restore restricted structure.
-                    enforce_restricted_t3_structure(amps.t3);
-                }
-            }
+            metrics.iterations = iter;
+            metrics.sd_residual_rms = update_metrics.sd_residual_rms;
+            metrics.r3_rms = update_metrics.r3_residual_rms;
+            metrics.r1_feedback_rms = update_metrics.r1_feedback_rms;
+            metrics.r2_feedback_rms = update_metrics.r2_feedback_rms;
+            metrics.t1_step_rms = update_metrics.t1_step_rms;
+            metrics.t2_step_rms = update_metrics.t2_step_rms;
+            metrics.t3_step_rms = update_metrics.t3_step_rms;
             metrics.estimated_correlation_energy =
                 compute_restricted_rccsdt_correlation_energy(system, amps);
             metrics.energy_change =
                 metrics.estimated_correlation_energy - previous_energy;
             previous_energy = metrics.estimated_correlation_energy;
             metrics.quality_score = stage_quality_score(metrics);
-            metrics.iterations = iter;
 
             if (metrics.quality_score + 1e-12 < best_score)
             {
                 best_score = metrics.quality_score;
                 best_metrics = metrics;
                 best_metrics.best_iteration = iter;
-                best_amps = clone_rccsdt_amplitudes(amps);
                 have_best = true;
-                stale_iterations = 0;
-            }
-            else
-            {
-                ++stale_iterations;
             }
 
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "RCCSDT[TENSOR-R] :",
                 std::format(
-                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  rms(SD)={:.3e}  rms(R3)={:.3e}  rms(dT3)={:.3e}  rms(R1[T3])={:.3e}  rms(dT1)={:.3e}  rms(R2[T3])={:.3e}  rms(dT2)={:.3e}",
+                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  norm(d tamps)={:.3e}  rms(SD)={:.3e}  rms(R3)={:.3e}  rms(R1[T3])={:.3e}  rms(R2[T3])={:.3e}",
                     iter,
                     metrics.estimated_correlation_energy,
                     metrics.energy_change,
+                    update_metrics.norm_dtamps,
                     metrics.sd_residual_rms,
                     metrics.r3_rms,
-                    metrics.t3_step_rms,
                     metrics.r1_feedback_rms,
-                    metrics.t1_step_rms,
-                    metrics.r2_feedback_rms,
-                    metrics.t2_step_rms));
+                    metrics.r2_feedback_rms));
 
-            if (metrics.r3_rms < tol_stage &&
-                metrics.sd_residual_rms < tol_stage &&
-                std::abs(metrics.energy_change) < tol_energy &&
-                metrics.t3_step_rms < 10.0 * tol_stage &&
-                metrics.t2_step_rms < 10.0 * tol_stage &&
-                metrics.t1_step_rms < 10.0 * tol_stage)
+            if (std::abs(metrics.energy_change) < tol_energy &&
+                update_metrics.norm_dtamps < tol_normt)
             {
                 metrics.converged = true;
-                break;
+                metrics.best_iteration = iter;
+                return metrics;
             }
-
-            if (iter >= 12u && stale_iterations >= 8u &&
-                metrics.quality_score > 1.20 * best_score)
-                break;
         }
 
         if (have_best)
-        {
-            amps = std::move(best_amps);
-            metrics = best_metrics;
-            metrics.converged =
-                best_metrics.quality_score < tol_stage &&
-                std::abs(best_metrics.energy_change) < tol_energy &&
-                best_metrics.t3_step_rms < 10.0 * tol_stage &&
-                best_metrics.t2_step_rms < 10.0 * tol_stage &&
-                best_metrics.t1_step_rms < 10.0 * tol_stage;
-        }
-
+            return best_metrics;
         return metrics;
     }
 
@@ -2388,14 +2389,14 @@ namespace
                 triples_ints,
                 triples.amplitudes,
                 triples);
-            enforce_restricted_t3_structure(triples.r3);
+            restore_restricted_t3_structure(triples.r3);
             metrics.r3_rms = triples_residual_rms(triples.r3);
             metrics.t3_step_rms = update_t3_from_r3_jacobi(
                 state.reference, triples, kT3Damping);
 
             // Project T3 onto restricted subspace BEFORE pushing to DIIS so the
             // subspace vectors are consistent with what the next iteration will see.
-            enforce_restricted_t3_structure(triples.amplitudes.t3);
+            restore_restricted_t3_structure(triples.amplitudes.t3);
 
             const Eigen::VectorXd full_residual_vec =
                 pack_rccsdt_stage_residuals(residuals, triples.r3);
@@ -2412,7 +2413,7 @@ namespace
             }
             unpack_rccsdt_amplitudes(extrapolated_full, triples.amplitudes);
             // Re-project after DIIS extrapolation to restore restricted structure.
-            enforce_restricted_t3_structure(triples.amplitudes.t3);
+            restore_restricted_t3_structure(triples.amplitudes.t3);
             metrics.estimated_correlation_energy =
                 compute_rccsdt_stage_correlation_energy(
                     so_ref, so_blocks, triples.amplitudes);
