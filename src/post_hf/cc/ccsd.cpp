@@ -401,11 +401,25 @@ namespace
                                 value -= amps.t2(j, m, a, e) * ints.wmbej(m, b, e, i);
                                 value += amps.t2(j, m, b, e) * ints.wmbej(m, a, e, i);
 
-                                value -= amps.t1(i, e) * amps.t1(m, a) * blocks.ovvo(m, b, e, j);
-                                value += amps.t1(i, e) * amps.t1(m, b) * blocks.ovvo(m, a, e, j);
-                                value += amps.t1(j, e) * amps.t1(m, a) * blocks.ovvo(m, b, e, i);
-                                value -= amps.t1(j, e) * amps.t1(m, b) * blocks.ovvo(m, a, e, i);
+                                // Match PySCF GCCSD's P(ij)P(ab)-antisymmetrized
+                                // T1*T1*ovov correction exactly.
+                                value += amps.t1(i, e) * amps.t1(m, a) * blocks.ovov(m, b, j, e);
+                                value -= amps.t1(i, e) * amps.t1(m, b) * blocks.ovov(m, a, j, e);
+                                value -= amps.t1(j, e) * amps.t1(m, a) * blocks.ovov(m, b, i, e);
+                                value += amps.t1(j, e) * amps.t1(m, b) * blocks.ovov(m, a, i, e);
                             }
+                        // GCCSD keeps the singles-driven ovvv and ooov pieces
+                        // explicit in the doubles residual.
+                        for (int e = 0; e < reference.n_virt; ++e)
+                        {
+                            value += amps.t1(i, e) * blocks.ovvv(j, e, b, a);
+                            value -= amps.t1(j, e) * blocks.ovvv(i, e, b, a);
+                        }
+                        for (int m = 0; m < reference.n_occ; ++m)
+                        {
+                            value -= amps.t1(m, a) * blocks.ooov(i, j, m, b);
+                            value += amps.t1(m, b) * blocks.ooov(i, j, m, a);
+                        }
                         out.r2(i, j, a, b) = value;
                     }
 

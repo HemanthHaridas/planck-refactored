@@ -123,6 +123,59 @@ namespace
         Tensor4D vvvv;
     };
 
+    struct ProductionSpinOrbitalChemistsBlocks
+    {
+        Tensor4D oooo;
+        Tensor4D ooov;
+        Tensor4D oovv;
+        Tensor4D ovov;
+        Tensor4D ovvo;
+        Tensor4D ovvv;
+        Tensor4D vvvv;
+    };
+
+    // The no-fallback tensor RCCSDT path now follows the local PySCF
+    // `rccsdt_highm.py` organization more closely: start from the full
+    // spin-orbital MO-basis Fock matrix and chemists-notation ERIs, dress them
+    // with T1, and then derive the SD/T3 intermediates from that dressed
+    // system.  Keeping these as explicit structs preserves Planck's teaching
+    // style while giving the staged solver a single, coherent source of truth.
+    struct ProductionSpinOrbitalChemistsSystem
+    {
+        int n_mo = 0;
+        int n_occ = 0;
+        int n_virt = 0;
+        Tensor2D fock;  // [p,q] chemists/MO ordering
+        Tensor4D eri;   // [p,r,q,s] to match PySCF eris.pppp storage
+    };
+
+    struct DressedSpinOrbitalSystem
+    {
+        Tensor2D fock;  // [p,q]
+        Tensor4D eri;   // [p,r,q,s] to match PySCF's t1_eris storage
+    };
+
+    struct DressedSinglesDoublesIntermediates
+    {
+        Tensor2D f_oo;
+        Tensor2D f_vv;
+        Tensor4D w_oooo;
+        Tensor4D w_ovvo;
+        Tensor4D w_ovov;
+    };
+
+    struct DressedTriplesIntermediates
+    {
+        Tensor2D f_oo;
+        Tensor2D f_vv;
+        Tensor4D w_oooo;
+        Tensor4D w_ovvo;
+        Tensor4D w_ovov;
+        Tensor4D w_vooo;
+        Tensor4D w_vvvo;
+        Tensor4D w_vvvv;
+    };
+
     struct TauCache
     {
         Tensor4D tau;
@@ -166,6 +219,7 @@ namespace
         double t2_step_rms = 0.0;
         double quality_score = 0.0;
         double estimated_correlation_energy = 0.0;
+        double energy_change = 0.0;
     };
 
     [[nodiscard]] RCCSDTAmplitudes clone_rccsdt_amplitudes(
@@ -187,9 +241,16 @@ namespace
     [[nodiscard]] double stage_quality_score(
         const TensorTriplesStageMetrics &metrics)
     {
+        // The raw T3 -> R1/R2 correction norms are useful diagnostics, but
+        // they are not standalone convergence criteria: in the full CCSDT
+        // equations those terms are just one part of the SD residual. Use the
+        // actual SD and T3 residual magnitudes, together with the step norms,
+        // to rank staged iterates.
         return std::max(
             std::max(metrics.sd_residual_rms, metrics.r3_rms),
-            std::max(metrics.r1_feedback_rms, metrics.r2_feedback_rms));
+            std::max(
+                std::max(metrics.t1_step_rms, metrics.t2_step_rms),
+                metrics.t3_step_rms));
     }
 
     struct DeterminantBackstopDecision
@@ -292,20 +353,37 @@ namespace
                base.eps_virt(spatial_index(c));
     }
 
-    struct SignedPermutation3
-    {
-        std::array<int, 3> perm{};
-        int sign = 0;
-    };
-
-    constexpr std::array<SignedPermutation3, 6> kPermutations3 = {{
-        {{{0, 1, 2}}, +1},
-        {{{0, 2, 1}}, -1},
-        {{{1, 0, 2}}, -1},
-        {{{1, 2, 0}}, +1},
-        {{{2, 0, 1}}, +1},
-        {{{2, 1, 0}}, -1},
+    constexpr std::array<std::array<int, 3>, 6> kPermutations3 = {{
+        {{0, 1, 2}},
+        {{0, 2, 1}},
+        {{1, 0, 2}},
+        {{1, 2, 0}},
+        {{2, 0, 1}},
+        {{2, 1, 0}},
     }};
+
+    [[nodiscard]] double t3_p201(
+        const Tensor6D &t3,
+        int i, int j, int k,
+        int a, int b, int c) noexcept
+    {
+        return 2.0 * t3(i, j, k, a, b, c) -
+               t3(i, j, k, b, a, c) -
+               t3(i, j, k, c, b, a);
+    }
+
+    [[nodiscard]] double t3_p422(
+        const Tensor6D &t3,
+        int i, int j, int k,
+        int a, int b, int c) noexcept
+    {
+        return 4.0 * t3(i, j, k, a, b, c) -
+               2.0 * t3(i, j, k, a, c, b) -
+               2.0 * t3(i, j, k, b, a, c) +
+               t3(i, j, k, b, c, a) +
+               t3(i, j, k, c, a, b) -
+               2.0 * t3(i, j, k, c, b, a);
+    }
 
     ProductionSpinOrbitalReference build_spin_orbital_reference(
         const CanonicalRHFCCReference &reference)
@@ -435,6 +513,325 @@ namespace
                                  : 0.0);
 
         return blocks;
+    }
+
+    ProductionSpinOrbitalChemistsBlocks build_spin_orbital_chemists_blocks(
+        const CanonicalRHFCCReference &reference,
+        const TensorCCBlockCache &spatial)
+    {
+        const auto so = build_spin_orbital_reference(reference);
+
+        const auto occ = [](int i) noexcept -> int
+        {
+            return spatial_index(i);
+        };
+        const auto virt = [](int a) noexcept -> int
+        {
+            return spatial_index(a);
+        };
+
+        ProductionSpinOrbitalChemistsBlocks blocks{
+            .oooo = Tensor4D(so.n_occ, so.n_occ, so.n_occ, so.n_occ, 0.0),
+            .ooov = Tensor4D(so.n_occ, so.n_occ, so.n_occ, so.n_virt, 0.0),
+            .oovv = Tensor4D(so.n_occ, so.n_occ, so.n_virt, so.n_virt, 0.0),
+            .ovov = Tensor4D(so.n_occ, so.n_virt, so.n_occ, so.n_virt, 0.0),
+            .ovvo = Tensor4D(so.n_occ, so.n_virt, so.n_virt, so.n_occ, 0.0),
+            .ovvv = Tensor4D(so.n_occ, so.n_virt, so.n_virt, so.n_virt, 0.0),
+            .vvvv = Tensor4D(so.n_virt, so.n_virt, so.n_virt, so.n_virt, 0.0),
+        };
+
+        for (int i = 0; i < so.n_occ; ++i)
+            for (int j = 0; j < so.n_occ; ++j)
+                for (int k = 0; k < so.n_occ; ++k)
+                    for (int l = 0; l < so.n_occ; ++l)
+                        blocks.oooo(i, j, k, l) =
+                            (same_spin(i, k) && same_spin(j, l)
+                                 ? spatial.oooo(occ(i), occ(k), occ(j), occ(l))
+                                 : 0.0);
+
+        for (int i = 0; i < so.n_occ; ++i)
+            for (int j = 0; j < so.n_occ; ++j)
+                for (int k = 0; k < so.n_occ; ++k)
+                    for (int a = 0; a < so.n_virt; ++a)
+                        blocks.ooov(i, j, k, a) =
+                            (same_spin(i, k) && same_spin(j, a)
+                                 ? spatial.ooov(occ(i), occ(k), occ(j), virt(a))
+                                 : 0.0);
+
+        for (int i = 0; i < so.n_occ; ++i)
+            for (int j = 0; j < so.n_occ; ++j)
+                for (int a = 0; a < so.n_virt; ++a)
+                    for (int b = 0; b < so.n_virt; ++b)
+                        blocks.oovv(i, j, a, b) =
+                            (same_spin(i, a) && same_spin(j, b)
+                                 ? spatial.ovov(occ(i), virt(a), occ(j), virt(b))
+                                 : 0.0);
+
+        for (int i = 0; i < so.n_occ; ++i)
+            for (int a = 0; a < so.n_virt; ++a)
+                for (int j = 0; j < so.n_occ; ++j)
+                    for (int b = 0; b < so.n_virt; ++b)
+                        blocks.ovov(i, a, j, b) =
+                            (same_spin(i, j) && same_spin(a, b)
+                                 ? spatial.oovv(occ(i), occ(j), virt(a), virt(b))
+                                 : 0.0);
+
+        for (int i = 0; i < so.n_occ; ++i)
+            for (int a = 0; a < so.n_virt; ++a)
+                for (int b = 0; b < so.n_virt; ++b)
+                    for (int j = 0; j < so.n_occ; ++j)
+                        blocks.ovvo(i, a, b, j) =
+                            (same_spin(i, b) && same_spin(a, j)
+                                 ? spatial.ovvo(occ(i), virt(b), virt(a), occ(j))
+                                 : 0.0);
+
+        for (int i = 0; i < so.n_occ; ++i)
+            for (int a = 0; a < so.n_virt; ++a)
+                for (int b = 0; b < so.n_virt; ++b)
+                    for (int c = 0; c < so.n_virt; ++c)
+                        blocks.ovvv(i, a, b, c) =
+                            (same_spin(i, b) && same_spin(a, c)
+                                 ? spatial.ovvv(occ(i), virt(b), virt(a), virt(c))
+                                 : 0.0);
+
+        for (int a = 0; a < so.n_virt; ++a)
+            for (int b = 0; b < so.n_virt; ++b)
+                for (int c = 0; c < so.n_virt; ++c)
+                    for (int d = 0; d < so.n_virt; ++d)
+                        blocks.vvvv(a, b, c, d) =
+                            (same_spin(a, c) && same_spin(b, d)
+                                 ? spatial.vvvv(virt(a), virt(c), virt(b), virt(d))
+                                 : 0.0);
+
+        return blocks;
+    }
+
+    std::expected<ProductionSpinOrbitalChemistsSystem, std::string>
+    build_spin_orbital_chemists_system(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const CanonicalRHFCCReference &reference)
+    {
+        std::vector<double> eri_local;
+        const std::vector<double> &eri_ao =
+            HartreeFock::Correlation::ensure_eri(
+                calculator, shell_pairs, eri_local, "RCCSDT[TENSOR] :");
+
+        const RHFReference &partition = reference.orbital_partition;
+        const int nmo_spatial = partition.n_mo;
+        const int nmo_so = 2 * nmo_spatial;
+        const int nocc_so = 2 * partition.n_occ;
+        const int nvirt_so = 2 * partition.n_virt;
+
+        Eigen::MatrixXd c_full(partition.n_ao, partition.n_mo);
+        c_full.leftCols(partition.n_occ) = partition.C_occ;
+        c_full.rightCols(partition.n_virt) = partition.C_virt;
+        const Eigen::MatrixXd fock_mo =
+            c_full.transpose() * calculator._info._scf.alpha.fock * c_full;
+
+        try
+        {
+            const std::vector<double> spatial_mo_eri =
+                HartreeFock::Correlation::transform_eri(
+                    eri_ao,
+                    static_cast<std::size_t>(partition.n_ao),
+                    c_full, c_full, c_full, c_full);
+            Tensor4D spatial_pppp(
+                nmo_spatial, nmo_spatial, nmo_spatial, nmo_spatial,
+                spatial_mo_eri);
+
+            ProductionSpinOrbitalChemistsSystem system{
+                .n_mo = nmo_so,
+                .n_occ = nocc_so,
+                .n_virt = nvirt_so,
+                .fock = Tensor2D(nmo_so, nmo_so, 0.0),
+                .eri = Tensor4D(nmo_so, nmo_so, nmo_so, nmo_so, 0.0),
+            };
+
+            for (int p = 0; p < nmo_so; ++p)
+                for (int q = 0; q < nmo_so; ++q)
+                    system.fock(p, q) =
+                        same_spin(p, q)
+                            ? fock_mo(spatial_index(p), spatial_index(q))
+                            : 0.0;
+
+            // PySCF stores `eris.pppp` as `(p r | q s)`, i.e. the full
+            // chemists tensor transposed to `[p,r,q,s]`.  Keeping that layout
+            // here lets the later dressed-system builders follow the PySCF
+            // equations directly without hidden index swaps.
+            for (int p = 0; p < nmo_so; ++p)
+                for (int r = 0; r < nmo_so; ++r)
+                    for (int q = 0; q < nmo_so; ++q)
+                        for (int s = 0; s < nmo_so; ++s)
+                            system.eri(p, r, q, s) =
+                                (same_spin(p, q) && same_spin(r, s))
+                                    ? spatial_pppp(
+                                          spatial_index(p),
+                                          spatial_index(q),
+                                          spatial_index(r),
+                                          spatial_index(s))
+                                    : 0.0;
+
+            return system;
+        }
+        catch (const std::exception &ex)
+        {
+            return std::unexpected(
+                "build_spin_orbital_chemists_system: " + std::string(ex.what()));
+        }
+    }
+
+    std::expected<ProductionSpinOrbitalChemistsSystem, std::string>
+    build_restricted_spatial_system(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const CanonicalRHFCCReference &reference)
+    {
+        std::vector<double> eri_local;
+        const std::vector<double> &eri_ao =
+            HartreeFock::Correlation::ensure_eri(
+                calculator, shell_pairs, eri_local, "RCCSDT[TENSOR] :");
+
+        const RHFReference &partition = reference.orbital_partition;
+        Eigen::MatrixXd c_full(partition.n_ao, partition.n_mo);
+        c_full.leftCols(partition.n_occ) = partition.C_occ;
+        c_full.rightCols(partition.n_virt) = partition.C_virt;
+        const Eigen::MatrixXd fock_mo =
+            c_full.transpose() * calculator._info._scf.alpha.fock * c_full;
+
+        try
+        {
+            const std::vector<double> spatial_mo_eri =
+                HartreeFock::Correlation::transform_eri(
+                    eri_ao,
+                    static_cast<std::size_t>(partition.n_ao),
+                    c_full, c_full, c_full, c_full);
+            Tensor4D chemists(
+                partition.n_mo, partition.n_mo, partition.n_mo, partition.n_mo,
+                spatial_mo_eri);
+
+            ProductionSpinOrbitalChemistsSystem system{
+                .n_mo = partition.n_mo,
+                .n_occ = partition.n_occ,
+                .n_virt = partition.n_virt,
+                .fock = Tensor2D(partition.n_mo, partition.n_mo, 0.0),
+                .eri = Tensor4D(partition.n_mo, partition.n_mo, partition.n_mo, partition.n_mo, 0.0),
+            };
+
+            for (int p = 0; p < partition.n_mo; ++p)
+                for (int q = 0; q < partition.n_mo; ++q)
+                    system.fock(p, q) = fock_mo(p, q);
+
+            // Store the restricted MO ERIs in the same `[p,r,q,s]` layout that
+            // PySCF uses for `eris.pppp`, so the later dressed builders can
+            // follow the local RCCSDT equations directly.
+            for (int p = 0; p < partition.n_mo; ++p)
+                for (int r = 0; r < partition.n_mo; ++r)
+                    for (int q = 0; q < partition.n_mo; ++q)
+                        for (int s = 0; s < partition.n_mo; ++s)
+                            system.eri(p, r, q, s) = chemists(p, q, r, s);
+
+            return system;
+        }
+        catch (const std::exception &ex)
+        {
+            return std::unexpected(
+                "build_restricted_spatial_system: " + std::string(ex.what()));
+        }
+    }
+
+    [[nodiscard]] DressedSpinOrbitalSystem build_dressed_spin_orbital_system(
+        const ProductionSpinOrbitalChemistsSystem &system,
+        const RCCSDTAmplitudes &amps)
+    {
+        Eigen::MatrixXd x = Eigen::MatrixXd::Identity(system.n_mo, system.n_mo);
+        Eigen::MatrixXd y = Eigen::MatrixXd::Identity(system.n_mo, system.n_mo);
+        for (int i = 0; i < system.n_occ; ++i)
+            for (int a = 0; a < system.n_virt; ++a)
+            {
+                x(system.n_occ + a, i) -= amps.t1(i, a);
+                y(i, system.n_occ + a) += amps.t1(i, a);
+            }
+
+        Tensor2D undressed_fock(system.n_mo, system.n_mo, 0.0);
+        for (int r = 0; r < system.n_mo; ++r)
+            for (int s = 0; s < system.n_mo; ++s)
+            {
+                double value = system.fock(r, s);
+                for (int i = 0; i < system.n_occ; ++i)
+                    for (int a = 0; a < system.n_virt; ++a)
+                    {
+                        const int va = system.n_occ + a;
+                        value += 2.0 * system.eri(r, i, s, va) * amps.t1(i, a);
+                        value -= system.eri(r, i, va, s) * amps.t1(i, a);
+                    }
+                undressed_fock(r, s) = value;
+            }
+
+        DressedSpinOrbitalSystem dressed{
+            .fock = Tensor2D(system.n_mo, system.n_mo, 0.0),
+            .eri = Tensor4D(system.n_mo, system.n_mo, system.n_mo, system.n_mo, 0.0),
+        };
+
+        for (int p = 0; p < system.n_mo; ++p)
+            for (int q = 0; q < system.n_mo; ++q)
+            {
+                double value = 0.0;
+                for (int r = 0; r < system.n_mo; ++r)
+                    for (int s = 0; s < system.n_mo; ++s)
+                        value += x(p, r) * undressed_fock(r, s) * y(q, s);
+                dressed.fock(p, q) = value;
+            }
+
+        Tensor4D stage1(system.n_mo, system.n_mo, system.n_mo, system.n_mo, 0.0);
+        Tensor4D stage2(system.n_mo, system.n_mo, system.n_mo, system.n_mo, 0.0);
+        Tensor4D stage3(system.n_mo, system.n_mo, system.n_mo, system.n_mo, 0.0);
+
+        for (int p = 0; p < system.n_mo; ++p)
+            for (int v = 0; v < system.n_mo; ++v)
+                for (int u = 0; u < system.n_mo; ++u)
+                    for (int w = 0; w < system.n_mo; ++w)
+                    {
+                        double value = 0.0;
+                        for (int t = 0; t < system.n_mo; ++t)
+                            value += x(p, t) * system.eri(t, v, u, w);
+                        stage1(p, v, u, w) = value;
+                    }
+
+        for (int p = 0; p < system.n_mo; ++p)
+            for (int r = 0; r < system.n_mo; ++r)
+                for (int u = 0; u < system.n_mo; ++u)
+                    for (int w = 0; w < system.n_mo; ++w)
+                    {
+                        double value = 0.0;
+                        for (int v = 0; v < system.n_mo; ++v)
+                            value += x(r, v) * stage1(p, v, u, w);
+                        stage2(p, r, u, w) = value;
+                    }
+
+        for (int p = 0; p < system.n_mo; ++p)
+            for (int r = 0; r < system.n_mo; ++r)
+                for (int q = 0; q < system.n_mo; ++q)
+                    for (int w = 0; w < system.n_mo; ++w)
+                    {
+                        double value = 0.0;
+                        for (int u = 0; u < system.n_mo; ++u)
+                            value += y(q, u) * stage2(p, r, u, w);
+                        stage3(p, r, q, w) = value;
+                    }
+
+        for (int p = 0; p < system.n_mo; ++p)
+            for (int r = 0; r < system.n_mo; ++r)
+                for (int q = 0; q < system.n_mo; ++q)
+                    for (int s = 0; s < system.n_mo; ++s)
+                    {
+                        double value = 0.0;
+                        for (int w = 0; w < system.n_mo; ++w)
+                            value += y(s, w) * stage3(p, r, q, w);
+                        dressed.eri(p, r, q, s) = value;
+                    }
+
+        return dressed;
     }
 
     TauCache build_tau_cache(const RCCSDAmplitudes &amps)
@@ -622,15 +1019,191 @@ namespace
                                 value -= amps.t2(j, m, a, e) * ints.wmbej(m, b, e, i);
                                 value += amps.t2(j, m, b, e) * ints.wmbej(m, a, e, i);
 
-                                value -= amps.t1(i, e) * amps.t1(m, a) * blocks.ovvo(m, b, e, j);
-                                value += amps.t1(i, e) * amps.t1(m, b) * blocks.ovvo(m, a, e, j);
-                                value += amps.t1(j, e) * amps.t1(m, a) * blocks.ovvo(m, b, e, i);
-                                value -= amps.t1(j, e) * amps.t1(m, b) * blocks.ovvo(m, a, e, i);
+                                // Match PySCF GCCSD's P(ij)P(ab) antisymmetrized
+                                // T1*T1*ovov correction exactly in the spin-orbital
+                                // warm-start residual.
+                                value += amps.t1(i, e) * amps.t1(m, a) * blocks.ovov(m, b, j, e);
+                                value -= amps.t1(i, e) * amps.t1(m, b) * blocks.ovov(m, a, j, e);
+                                value -= amps.t1(j, e) * amps.t1(m, a) * blocks.ovov(m, b, i, e);
+                                value += amps.t1(j, e) * amps.t1(m, b) * blocks.ovov(m, a, i, e);
                             }
+                        // GCCSD keeps the singles-driven ovvv and ooov pieces
+                        // explicit in R2 rather than absorbing them into Wmbej.
+                        for (int e = 0; e < reference.n_virt; ++e)
+                        {
+                            value += amps.t1(i, e) * blocks.ovvv(j, e, b, a);
+                            value -= amps.t1(j, e) * blocks.ovvv(i, e, b, a);
+                        }
+                        for (int m = 0; m < reference.n_occ; ++m)
+                        {
+                            value -= amps.t1(m, a) * blocks.ooov(i, j, m, b);
+                            value += amps.t1(m, b) * blocks.ooov(i, j, m, a);
+                        }
                         out.r2(i, j, a, b) = value;
                     }
 
         return out;
+    }
+
+    [[nodiscard]] DressedSinglesDoublesIntermediates
+    build_dressed_sd_intermediates(
+        const ProductionSpinOrbitalChemistsSystem &system,
+        const DressedSpinOrbitalSystem &dressed,
+        const Tensor4D &t2)
+    {
+        DressedSinglesDoublesIntermediates ints{
+            .f_oo = Tensor2D(system.n_occ, system.n_occ, 0.0),
+            .f_vv = Tensor2D(system.n_virt, system.n_virt, 0.0),
+            .w_oooo = Tensor4D(system.n_occ, system.n_occ, system.n_occ, system.n_occ, 0.0),
+            .w_ovvo = Tensor4D(system.n_occ, system.n_virt, system.n_virt, system.n_occ, 0.0),
+            .w_ovov = Tensor4D(system.n_occ, system.n_virt, system.n_occ, system.n_virt, 0.0),
+        };
+        const auto virt = [&system](int a) noexcept
+        {
+            return system.n_occ + a;
+        };
+
+        for (int b = 0; b < system.n_virt; ++b)
+            for (int c = 0; c < system.n_virt; ++c)
+            {
+                double value = dressed.fock(virt(b), virt(c));
+                for (int k = 0; k < system.n_occ; ++k)
+                    for (int l = 0; l < system.n_occ; ++l)
+                        for (int d = 0; d < system.n_virt; ++d)
+                        {
+                            value -= 2.0 * dressed.eri(k, l, virt(d), virt(c)) * t2(k, l, d, b);
+                            value += dressed.eri(k, l, virt(c), virt(d)) * t2(k, l, d, b);
+                        }
+                ints.f_vv(b, c) = value;
+            }
+
+        for (int k = 0; k < system.n_occ; ++k)
+            for (int j = 0; j < system.n_occ; ++j)
+            {
+                double value = dressed.fock(k, j);
+                for (int l = 0; l < system.n_occ; ++l)
+                    for (int c = 0; c < system.n_virt; ++c)
+                        for (int d = 0; d < system.n_virt; ++d)
+                        {
+                            value += 2.0 * dressed.eri(l, k, virt(c), virt(d)) * t2(l, j, c, d);
+                            value -= dressed.eri(l, k, virt(d), virt(c)) * t2(l, j, c, d);
+                        }
+                ints.f_oo(k, j) = value;
+            }
+
+        for (int k = 0; k < system.n_occ; ++k)
+            for (int l = 0; l < system.n_occ; ++l)
+                for (int i = 0; i < system.n_occ; ++i)
+                    for (int j = 0; j < system.n_occ; ++j)
+                    {
+                        double value = dressed.eri(k, l, i, j);
+                        for (int c = 0; c < system.n_virt; ++c)
+                            for (int d = 0; d < system.n_virt; ++d)
+                                value += dressed.eri(k, l, virt(c), virt(d)) * t2(i, j, c, d);
+                        ints.w_oooo(k, l, i, j) = value;
+                    }
+
+        for (int k = 0; k < system.n_occ; ++k)
+            for (int a = 0; a < system.n_virt; ++a)
+                for (int c = 0; c < system.n_virt; ++c)
+                    for (int i = 0; i < system.n_occ; ++i)
+                    {
+                        double value = -dressed.eri(k, virt(a), virt(c), i);
+                        for (int l = 0; l < system.n_occ; ++l)
+                            for (int d = 0; d < system.n_virt; ++d)
+                            {
+                                value -= dressed.eri(k, l, virt(c), virt(d)) * t2(i, l, a, d);
+                                value += 0.5 * dressed.eri(k, l, virt(d), virt(c)) * t2(i, l, a, d);
+                                value += 0.5 * dressed.eri(k, l, virt(c), virt(d)) * t2(i, l, d, a);
+                            }
+                        ints.w_ovvo(k, a, c, i) = value;
+                    }
+
+        for (int k = 0; k < system.n_occ; ++k)
+            for (int a = 0; a < system.n_virt; ++a)
+                for (int i = 0; i < system.n_occ; ++i)
+                    for (int c = 0; c < system.n_virt; ++c)
+                    {
+                        double value = -dressed.eri(k, virt(a), i, virt(c));
+                        for (int l = 0; l < system.n_occ; ++l)
+                            for (int d = 0; d < system.n_virt; ++d)
+                                value += 0.5 * dressed.eri(k, l, virt(d), virt(c)) * t2(l, i, a, d);
+                        ints.w_ovov(k, a, i, c) = value;
+                    }
+
+        return ints;
+    }
+
+    [[nodiscard]] RCCSDResiduals build_dressed_sd_residuals(
+        const ProductionSpinOrbitalChemistsSystem &system,
+        const DressedSpinOrbitalSystem &dressed,
+        const DressedSinglesDoublesIntermediates &ints,
+        const RCCSDAmplitudes &amps)
+    {
+        RCCSDResiduals residuals{
+            .r1 = Tensor2D(system.n_occ, system.n_virt, 0.0),
+            .r2 = Tensor4D(system.n_occ, system.n_occ, system.n_virt, system.n_virt, 0.0),
+        };
+        const auto virt = [&system](int a) noexcept
+        {
+            return system.n_occ + a;
+        };
+
+        Tensor4D c_t2(amps.t2.dim1, amps.t2.dim2, amps.t2.dim3, amps.t2.dim4, 0.0);
+        for (int i = 0; i < amps.t2.dim1; ++i)
+            for (int j = 0; j < amps.t2.dim2; ++j)
+                for (int a = 0; a < amps.t2.dim3; ++a)
+                    for (int b = 0; b < amps.t2.dim4; ++b)
+                        c_t2(i, j, a, b) = 2.0 * amps.t2(i, j, a, b) - amps.t2(i, j, b, a);
+
+        for (int i = 0; i < system.n_occ; ++i)
+            for (int a = 0; a < system.n_virt; ++a)
+            {
+                double value = dressed.fock(virt(a), i);
+                for (int k = 0; k < system.n_occ; ++k)
+                    for (int c = 0; c < system.n_virt; ++c)
+                        value += dressed.fock(k, virt(c)) * c_t2(i, k, a, c);
+                for (int k = 0; k < system.n_occ; ++k)
+                    for (int c = 0; c < system.n_virt; ++c)
+                        for (int d = 0; d < system.n_virt; ++d)
+                            value += dressed.eri(virt(a), k, virt(c), virt(d)) *
+                                     c_t2(i, k, c, d);
+                for (int k = 0; k < system.n_occ; ++k)
+                    for (int l = 0; l < system.n_occ; ++l)
+                        for (int c = 0; c < system.n_virt; ++c)
+                            value -= dressed.eri(k, l, i, virt(c)) * c_t2(k, l, a, c);
+                residuals.r1(i, a) = value;
+            }
+
+        for (int i = 0; i < system.n_occ; ++i)
+            for (int j = 0; j < system.n_occ; ++j)
+                for (int a = 0; a < system.n_virt; ++a)
+                    for (int b = 0; b < system.n_virt; ++b)
+                    {
+                        double value = 0.5 * dressed.eri(virt(a), virt(b), i, j);
+                        for (int c = 0; c < system.n_virt; ++c)
+                            value += ints.f_vv(b, c) * amps.t2(i, j, a, c);
+                        for (int k = 0; k < system.n_occ; ++k)
+                            value -= ints.f_oo(k, j) * amps.t2(i, k, a, b);
+                        for (int c = 0; c < system.n_virt; ++c)
+                            for (int d = 0; d < system.n_virt; ++d)
+                                value += 0.5 * dressed.eri(virt(a), virt(b), virt(c), virt(d)) *
+                                         amps.t2(i, j, c, d);
+                        for (int k = 0; k < system.n_occ; ++k)
+                            for (int l = 0; l < system.n_occ; ++l)
+                                value += 0.5 * ints.w_oooo(k, l, i, j) * amps.t2(k, l, a, b);
+                        for (int k = 0; k < system.n_occ; ++k)
+                            for (int c = 0; c < system.n_virt; ++c)
+                            {
+                                value += ints.w_ovov(k, a, j, c) * amps.t2(i, k, c, b);
+                                value -= 2.0 * ints.w_ovvo(k, a, c, i) * amps.t2(k, j, c, b);
+                                value += ints.w_ovov(k, a, i, c) * amps.t2(k, j, c, b);
+                                value += ints.w_ovvo(k, a, c, i) * amps.t2(j, k, c, b);
+                            }
+                        residuals.r2(i, j, a, b) = value;
+                    }
+
+        return residuals;
     }
 
     double compute_rccsd_correlation_energy(
@@ -871,6 +1444,66 @@ namespace
             triples.amplitudes.t2.data[idx] = rccsd.amplitudes.t2.data[idx];
     }
 
+    [[nodiscard]] RCCSDTAmplitudes project_rccsd_warm_start_to_restricted(
+        const TensorRCCSDResult &rccsd,
+        const RHFReference &reference)
+    {
+        RCCSDTAmplitudes amps{
+            .t1 = Tensor2D(reference.n_occ, reference.n_virt, 0.0),
+            .t2 = Tensor4D(reference.n_occ, reference.n_occ, reference.n_virt, reference.n_virt, 0.0),
+            .t3 = Tensor6D(
+                reference.n_occ, reference.n_occ, reference.n_occ,
+                reference.n_virt, reference.n_virt, reference.n_virt, 0.0),
+        };
+
+        for (int i = 0; i < reference.n_occ; ++i)
+            for (int a = 0; a < reference.n_virt; ++a)
+            {
+                const double alpha = rccsd.amplitudes.t1(2 * i, 2 * a);
+                const double beta = rccsd.amplitudes.t1(2 * i + 1, 2 * a + 1);
+                amps.t1(i, a) = 0.5 * (alpha + beta);
+            }
+
+        for (int i = 0; i < reference.n_occ; ++i)
+            for (int j = 0; j < reference.n_occ; ++j)
+                for (int a = 0; a < reference.n_virt; ++a)
+                    for (int b = 0; b < reference.n_virt; ++b)
+                    {
+                        const double ab =
+                            rccsd.amplitudes.t2(2 * i, 2 * j + 1, 2 * a, 2 * b + 1);
+                        const double ba =
+                            rccsd.amplitudes.t2(2 * i + 1, 2 * j, 2 * a + 1, 2 * b);
+                        amps.t2(i, j, a, b) = 0.5 * (ab + ba);
+                    }
+
+        return amps;
+    }
+
+    [[nodiscard]] double restricted_d1(
+        const RHFReference &reference,
+        int i, int a) noexcept
+    {
+        return reference.eps_occ(i) - reference.eps_virt(a);
+    }
+
+    [[nodiscard]] double restricted_d2(
+        const RHFReference &reference,
+        int i, int j,
+        int a, int b) noexcept
+    {
+        return reference.eps_occ(i) + reference.eps_occ(j) -
+               reference.eps_virt(a) - reference.eps_virt(b);
+    }
+
+    [[nodiscard]] double restricted_d3(
+        const RHFReference &reference,
+        int i, int j, int k,
+        int a, int b, int c) noexcept
+    {
+        return reference.eps_occ(i) + reference.eps_occ(j) + reference.eps_occ(k) -
+               reference.eps_virt(a) - reference.eps_virt(b) - reference.eps_virt(c);
+    }
+
     [[nodiscard]] RCCSDAmplitudes extract_sd_amplitudes(
         const TensorTriplesWorkspace &triples)
     {
@@ -900,8 +1533,235 @@ namespace
         triples.amplitudes.t2.data = amps.t2.data;
     }
 
-    void build_r3_diagonal_feedback_family(
-        const CanonicalRHFCCReference &reference,
+    void add_dressed_triples_feedback_into_sd_residuals(
+        const ProductionSpinOrbitalChemistsSystem &system,
+        const DressedSpinOrbitalSystem &dressed,
+        const RCCSDTAmplitudes &amps,
+        RCCSDResiduals &residuals)
+    {
+        const auto virt = [&system](int a) noexcept
+        {
+            return system.n_occ + a;
+        };
+
+        for (int i = 0; i < system.n_occ; ++i)
+            for (int a = 0; a < system.n_virt; ++a)
+            {
+                double corr = 0.0;
+                for (int j = 0; j < system.n_occ; ++j)
+                    for (int k = 0; k < system.n_occ; ++k)
+                        for (int b = 0; b < system.n_virt; ++b)
+                            for (int c = 0; c < system.n_virt; ++c)
+                                corr += 0.5 *
+                                        dressed.eri(j, k, virt(b), virt(c)) *
+                                        t3_p422(amps.t3, k, i, j, c, a, b);
+                residuals.r1(i, a) += corr;
+            }
+
+        for (int i = 0; i < system.n_occ; ++i)
+            for (int j = 0; j < system.n_occ; ++j)
+                for (int a = 0; a < system.n_virt; ++a)
+                    for (int b = 0; b < system.n_virt; ++b)
+                    {
+                        double corr = 0.0;
+                        for (int k = 0; k < system.n_occ; ++k)
+                            for (int c = 0; c < system.n_virt; ++c)
+                                corr += 0.5 * dressed.fock(k, virt(c)) *
+                                        t3_p201(amps.t3, k, i, j, c, a, b);
+                        for (int k = 0; k < system.n_occ; ++k)
+                            for (int c = 0; c < system.n_virt; ++c)
+                                for (int d = 0; d < system.n_virt; ++d)
+                                    corr += dressed.eri(virt(b), k, virt(c), virt(d)) *
+                                            t3_p201(amps.t3, k, i, j, d, a, c);
+                        for (int k = 0; k < system.n_occ; ++k)
+                            for (int l = 0; l < system.n_occ; ++l)
+                                for (int c = 0; c < system.n_virt; ++c)
+                                    corr -= dressed.eri(k, l, j, virt(c)) *
+                                            t3_p201(amps.t3, l, i, k, c, a, b);
+                        residuals.r2(i, j, a, b) += corr;
+                    }
+    }
+
+    [[nodiscard]] DressedTriplesIntermediates build_dressed_triples_intermediates(
+        const ProductionSpinOrbitalChemistsSystem &system,
+        const DressedSpinOrbitalSystem &dressed,
+        const DressedSinglesDoublesIntermediates &sd_ints,
+        const Tensor4D &t2)
+    {
+        DressedTriplesIntermediates ints{
+            .f_oo = Tensor2D(sd_ints.f_oo.dim1, sd_ints.f_oo.dim2, 0.0),
+            .f_vv = Tensor2D(sd_ints.f_vv.dim1, sd_ints.f_vv.dim2, 0.0),
+            .w_oooo = Tensor4D(
+                sd_ints.w_oooo.dim1, sd_ints.w_oooo.dim2,
+                sd_ints.w_oooo.dim3, sd_ints.w_oooo.dim4, 0.0),
+            .w_ovvo = Tensor4D(system.n_occ, system.n_virt, system.n_virt, system.n_occ, 0.0),
+            .w_ovov = Tensor4D(system.n_occ, system.n_virt, system.n_occ, system.n_virt, 0.0),
+            .w_vooo = Tensor4D(system.n_virt, system.n_occ, system.n_occ, system.n_occ, 0.0),
+            .w_vvvo = Tensor4D(system.n_virt, system.n_virt, system.n_virt, system.n_occ, 0.0),
+            .w_vvvv = Tensor4D(system.n_virt, system.n_virt, system.n_virt, system.n_virt, 0.0),
+        };
+        ints.f_oo.data = sd_ints.f_oo.data;
+        ints.f_vv.data = sd_ints.f_vv.data;
+        ints.w_oooo.data = sd_ints.w_oooo.data;
+
+        const auto virt = [&system](int a) noexcept
+        {
+            return system.n_occ + a;
+        };
+
+        Tensor4D c_t2(t2.dim1, t2.dim2, t2.dim3, t2.dim4, 0.0);
+        for (int i = 0; i < t2.dim1; ++i)
+            for (int j = 0; j < t2.dim2; ++j)
+                for (int a = 0; a < t2.dim3; ++a)
+                    for (int b = 0; b < t2.dim4; ++b)
+                        c_t2(i, j, a, b) = 2.0 * t2(i, j, a, b) - t2(i, j, b, a);
+
+        for (int a = 0; a < system.n_virt; ++a)
+            for (int b = 0; b < system.n_virt; ++b)
+                for (int d = 0; d < system.n_virt; ++d)
+                    for (int e = 0; e < system.n_virt; ++e)
+                    {
+                        double value = dressed.eri(virt(a), virt(b), virt(d), virt(e));
+                        for (int l = 0; l < system.n_occ; ++l)
+                            for (int m = 0; m < system.n_occ; ++m)
+                                value += dressed.eri(l, m, virt(d), virt(e)) * t2(l, m, a, b);
+                        ints.w_vvvv(a, b, d, e) = value;
+                    }
+
+        for (int a = 0; a < system.n_virt; ++a)
+            for (int l = 0; l < system.n_occ; ++l)
+                for (int i = 0; i < system.n_occ; ++i)
+                    for (int j = 0; j < system.n_occ; ++j)
+                    {
+                        double value = dressed.eri(virt(a), l, i, j);
+                        for (int d = 0; d < system.n_virt; ++d)
+                            value += dressed.fock(l, virt(d)) * t2(i, j, a, d);
+                        for (int m = 0; m < system.n_occ; ++m)
+                            for (int d = 0; d < system.n_virt; ++d)
+                            {
+                                value += dressed.eri(m, l, virt(d), j) * c_t2(m, i, d, a);
+                                value -= 0.5 * dressed.eri(m, l, j, virt(d)) * c_t2(m, i, d, a);
+                                value -= 0.5 * dressed.eri(m, l, j, virt(d)) * t2(i, m, d, a);
+                                value -= dressed.eri(m, l, i, virt(d)) * t2(j, m, d, a);
+                            }
+                        for (int d = 0; d < system.n_virt; ++d)
+                            for (int e = 0; e < system.n_virt; ++e)
+                                value += dressed.eri(virt(a), l, virt(d), virt(e)) * t2(i, j, d, e);
+                        ints.w_vooo(a, l, i, j) = value;
+                    }
+
+        for (int a = 0; a < system.n_virt; ++a)
+            for (int b = 0; b < system.n_virt; ++b)
+                for (int d = 0; d < system.n_virt; ++d)
+                    for (int j = 0; j < system.n_occ; ++j)
+                    {
+                        double value = dressed.eri(virt(a), virt(b), virt(d), j);
+                        for (int l = 0; l < system.n_occ; ++l)
+                            for (int e = 0; e < system.n_virt; ++e)
+                            {
+                                value += dressed.eri(l, virt(a), virt(e), virt(d)) * c_t2(l, j, e, b);
+                                value -= 0.5 * dressed.eri(l, virt(a), virt(d), virt(e)) * c_t2(l, j, e, b);
+                                value -= 0.5 * dressed.eri(l, virt(a), virt(d), virt(e)) * t2(j, l, e, b);
+                                value -= dressed.eri(l, virt(b), virt(d), virt(e)) * t2(j, l, e, a);
+                            }
+                        for (int l = 0; l < system.n_occ; ++l)
+                            for (int m = 0; m < system.n_occ; ++m)
+                                value += dressed.eri(l, m, virt(d), j) * t2(l, m, a, b);
+                        ints.w_vvvo(a, b, d, j) = value;
+                    }
+
+        for (int l = 0; l < system.n_occ; ++l)
+            for (int a = 0; a < system.n_virt; ++a)
+                for (int d = 0; d < system.n_virt; ++d)
+                    for (int i = 0; i < system.n_occ; ++i)
+                    {
+                        // Match PySCF RCCSDT `intermediates_t3` exactly.  The
+                        // triples path uses a different dressed W_ovvo than the
+                        // SD equations:
+                        // W_ovvo = 2 * t1_eris[o,v,v,o]
+                        //        -     t1_eris[o,v,o,v]^T_{id}
+                        //        + 2 * t1_eris[o,o,v,v] * t2
+                        //        -     t1_eris[o,o,v,v]^T_{de} * t2
+                        double value =
+                            2.0 * dressed.eri(l, virt(a), virt(d), i) -
+                            dressed.eri(l, virt(a), i, virt(d));
+                        for (int m = 0; m < system.n_occ; ++m)
+                            for (int e = 0; e < system.n_virt; ++e)
+                            {
+                                const double c_t2 = 2.0 * t2(m, i, e, a) -
+                                                    t2(m, i, a, e);
+                                value +=
+                                    2.0 * dressed.eri(m, l, virt(e), virt(d)) *
+                                    c_t2;
+                                value -=
+                                    dressed.eri(m, l, virt(d), virt(e)) *
+                                    c_t2;
+                            }
+                        ints.w_ovvo(l, a, d, i) = value;
+                    }
+
+        for (int l = 0; l < system.n_occ; ++l)
+            for (int a = 0; a < system.n_virt; ++a)
+                for (int i = 0; i < system.n_occ; ++i)
+                    for (int d = 0; d < system.n_virt; ++d)
+                    {
+                        // Match PySCF RCCSDT `intermediates_t3` exactly:
+                        // W_ovov = t1_eris[o,v,o,v] - t1_eris[o,o,v,v]^T_{de} * t2
+                        double value = dressed.eri(l, virt(a), i, virt(d));
+                        for (int m = 0; m < system.n_occ; ++m)
+                            for (int e = 0; e < system.n_virt; ++e)
+                                value -= dressed.eri(m, l, virt(d), virt(e)) *
+                                         t2(i, m, e, a);
+                        ints.w_ovov(l, a, i, d) = value;
+                    }
+
+        return ints;
+    }
+
+    void add_dressed_triples_feedback_into_triples_intermediates(
+        const ProductionSpinOrbitalChemistsSystem &system,
+        const DressedSpinOrbitalSystem &dressed,
+        const Tensor6D &t3,
+        DressedTriplesIntermediates &ints)
+    {
+        const auto virt = [&system](int a) noexcept
+        {
+            return system.n_occ + a;
+        };
+
+        for (int a = 0; a < system.n_virt; ++a)
+            for (int l = 0; l < system.n_occ; ++l)
+                for (int i = 0; i < system.n_occ; ++i)
+                    for (int j = 0; j < system.n_occ; ++j)
+                    {
+                        double corr = 0.0;
+                        for (int m = 0; m < system.n_occ; ++m)
+                            for (int d = 0; d < system.n_virt; ++d)
+                                for (int e = 0; e < system.n_virt; ++e)
+                                    corr += dressed.eri(l, m, virt(d), virt(e)) *
+                                            t3_p201(t3, m, i, j, e, a, d);
+                        ints.w_vooo(a, l, i, j) += corr;
+                    }
+
+        for (int a = 0; a < system.n_virt; ++a)
+            for (int b = 0; b < system.n_virt; ++b)
+                for (int d = 0; d < system.n_virt; ++d)
+                    for (int j = 0; j < system.n_occ; ++j)
+                    {
+                        double corr = 0.0;
+                        for (int l = 0; l < system.n_occ; ++l)
+                            for (int m = 0; m < system.n_occ; ++m)
+                                for (int e = 0; e < system.n_virt; ++e)
+                                    corr -= dressed.eri(l, m, virt(d), virt(e)) *
+                                            t3_p201(t3, m, j, l, e, b, a);
+                        ints.w_vvvo(a, b, d, j) += corr;
+                    }
+    }
+
+    void build_dressed_triples_residual(
+        const ProductionSpinOrbitalChemistsSystem &system,
+        const DressedTriplesIntermediates &ints,
+        const RCCSDTAmplitudes &amps,
         TensorTriplesWorkspace &triples)
     {
         if (!triples.allocated)
@@ -909,526 +1769,102 @@ namespace
 
         std::fill(triples.r3.data.begin(), triples.r3.data.end(), 0.0);
 
-        // This is the first production-side R3 contribution wired into the
-        // staged tensor backend: the diagonal/preconditioner family. On its own
-        // it is not a complete CCSDT residual, but it establishes the storage,
-        // indexing, and denominator path that later connected triples terms will
-        // accumulate into.
-        for (int i = 0; i < triples.amplitudes.t3.dim1; ++i)
-            for (int j = 0; j < triples.amplitudes.t3.dim2; ++j)
-                for (int k = 0; k < triples.amplitudes.t3.dim3; ++k)
-                    for (int a = 0; a < triples.amplitudes.t3.dim4; ++a)
-                        for (int b = 0; b < triples.amplitudes.t3.dim5; ++b)
-                            for (int c = 0; c < triples.amplitudes.t3.dim6; ++c)
-                                triples.r3(i, j, k, a, b, c) -=
-                                    d3_on_demand(reference, i, j, k, a, b, c) *
-                                    triples.amplitudes.t3(i, j, k, a, b, c);
-    }
-
-    [[nodiscard]] double bare_vooo(
-        const ProductionSpinOrbitalBlocks &blocks,
-        int a, int l, int i, int j) noexcept
-    {
-        // PySCF's RHF code starts from the T1-dressed tensor element
-        // `t1_eris[a,l,i,j]`. In our spin-orbital storage we do not keep a
-        // dedicated `vooo` block, so we reconstruct the bare antisymmetrized
-        // piece from `ooov` using `<al||ij> = -<ij||la>`.
-        return -blocks.ooov(i, j, l, a);
-    }
-
-    [[nodiscard]] double bare_vvvo(
-        const ProductionSpinOrbitalBlocks &blocks,
-        int a, int b, int d, int j) noexcept
-    {
-        // Likewise, `vvvo` is reconstructed from `ovvv` via
-        // `<ab||dj> = <dj||ab> = -<jd||ab>`.
-        return -blocks.ovvv(j, d, a, b);
-    }
-
-    struct PySCFT3SourceIntermediates
-    {
-        Tensor4D w_vooo; // (a,l,i,j)
-        Tensor4D w_vvvo; // (a,b,d,j)
-    };
-
-    PySCFT3SourceIntermediates build_pyscf_t3_source_intermediates(
-        const RCCSDTAmplitudes &amps,
-        const ProductionSpinOrbitalBlocks &blocks,
-        const RCCSDIntermediates &ints)
-    {
-        PySCFT3SourceIntermediates out{
-            .w_vooo = Tensor4D(
-                amps.t2.dim3, amps.t2.dim1, amps.t2.dim1, amps.t2.dim2, 0.0),
-            .w_vvvo = Tensor4D(
-                amps.t2.dim3, amps.t2.dim4, amps.t2.dim4, amps.t2.dim2, 0.0),
-        };
-
-        auto c_t2 = [&](int i, int j, int a, int b) noexcept -> double
-        {
-            return 2.0 * amps.t2(i, j, a, b) - amps.t2(i, j, b, a);
-        };
-
-        // This follows the local PySCF `pyscf.cc.rccsdt.intermediates_t3`
-        // structure directly: first form dressed `W_vooo` and `W_vvvo`, then
-        // contract those into the triples residual. Because our backend keeps
-        // bare spin-orbital ERIs instead of PySCF's T1-dressed spatial ERIs,
-        // we make the T1 dressing explicit through the CCSD intermediates.
-        for (int a = 0; a < out.w_vooo.dim1; ++a)
-            for (int l = 0; l < out.w_vooo.dim2; ++l)
-                for (int i = 0; i < out.w_vooo.dim3; ++i)
-                    for (int j = 0; j < out.w_vooo.dim4; ++j)
-                    {
-                        double value = bare_vooo(blocks, a, l, i, j);
-
-                        for (int d = 0; d < amps.t2.dim4; ++d)
-                            value += ints.fme(l, d) * amps.t2(i, j, a, d);
-
-                        for (int m = 0; m < amps.t2.dim1; ++m)
-                            for (int d = 0; d < amps.t2.dim4; ++d)
+        for (int i = 0; i < system.n_occ; ++i)
+            for (int j = 0; j < system.n_occ; ++j)
+                for (int k = 0; k < system.n_occ; ++k)
+                    for (int a = 0; a < system.n_virt; ++a)
+                        for (int b = 0; b < system.n_virt; ++b)
+                            for (int c = 0; c < system.n_virt; ++c)
                             {
-                                value += (-blocks.ooov(m, l, j, d)) * c_t2(m, i, d, a);
-                                value -= 0.5 * blocks.ooov(m, l, j, d) * c_t2(m, i, d, a);
-                                value -= 0.5 * blocks.ooov(m, l, j, d) * amps.t2(i, m, d, a);
-                                value -= blocks.ooov(m, l, i, d) * amps.t2(j, m, d, a);
-                            }
-
-                        for (int d = 0; d < amps.t2.dim3; ++d)
-                            for (int e = 0; e < amps.t2.dim4; ++e)
-                                value += (-blocks.ovvv(l, a, d, e)) * amps.t2(i, j, d, e);
-
-                        for (int e = 0; e < amps.t1.dim2; ++e)
-                        {
-                            value += amps.t1(i, e) * ints.wmbej(l, a, e, j);
-                            value -= amps.t1(j, e) * ints.wmbej(l, a, e, i);
-                        }
-                        for (int m = 0; m < amps.t1.dim1; ++m)
-                            value -= amps.t1(m, a) * ints.wmnij(m, l, i, j);
-
-                        for (int m = 0; m < amps.t3.dim1; ++m)
-                            for (int e = 0; e < amps.t3.dim4; ++e)
-                                for (int d = 0; d < amps.t3.dim6; ++d)
-                                    value += blocks.oovv(i, m, d, e) *
-                                             amps.t3(m, j, l, e, a, d);
-
-                        out.w_vooo(a, l, i, j) = value;
-                    }
-
-        for (int a = 0; a < out.w_vvvo.dim1; ++a)
-            for (int b = 0; b < out.w_vvvo.dim2; ++b)
-                for (int d = 0; d < out.w_vvvo.dim3; ++d)
-                    for (int j = 0; j < out.w_vvvo.dim4; ++j)
-                    {
-                        double value = bare_vvvo(blocks, a, b, d, j);
-
-                        for (int l = 0; l < amps.t2.dim1; ++l)
-                            for (int e = 0; e < amps.t2.dim4; ++e)
-                            {
-                                value += blocks.ovvv(l, a, e, d) * c_t2(l, j, e, b);
-                                value -= 0.5 * blocks.ovvv(l, a, d, e) * c_t2(l, j, e, b);
-                                value -= 0.5 * blocks.ovvv(l, a, d, e) * amps.t2(j, l, e, b);
-                                value -= blocks.ovvv(l, b, d, e) * amps.t2(j, l, e, a);
-                            }
-
-                        for (int l = 0; l < amps.t2.dim1; ++l)
-                            for (int m = 0; m < amps.t2.dim2; ++m)
-                                value -= blocks.ooov(l, m, j, d) * amps.t2(l, m, a, b);
-
-                        for (int e = 0; e < amps.t1.dim2; ++e)
-                            value += amps.t1(j, e) * ints.wabef(a, b, d, e);
-                        for (int m = 0; m < amps.t1.dim1; ++m)
-                        {
-                            value -= amps.t1(m, a) * ints.wmbej(m, b, d, j);
-                            value += amps.t1(m, b) * ints.wmbej(m, a, d, j);
-                        }
-
-                        for (int l = 0; l < amps.t3.dim1; ++l)
-                            for (int m = 0; m < amps.t3.dim2; ++m)
-                                for (int e = 0; e < amps.t3.dim4; ++e)
-                                    value -= blocks.oovv(l, m, d, e) *
-                                             amps.t3(m, j, l, e, b, a);
-
-                        out.w_vvvo(a, b, d, j) = value;
-                    }
-
-        return out;
-    }
-
-    void build_r3_connected_t2_source_families(
-        const RCCSDTAmplitudes &amps,
-        const PySCFT3SourceIntermediates &source_ints,
-        TensorTriplesWorkspace &triples)
-    {
-        if (!triples.allocated)
-            return;
-
-        // This is the exact family layout used by the local PySCF RCCSDT
-        // implementation: build `W_vvvo` and `W_vooo`, then add the six
-        // permutation-completed contractions with T2. Keeping the contractions
-        // explicit here makes the mapping to `pyscf/cc/rccsdt.py:compute_r3_tri`
-        // straightforward for students and future optimizations.
-        for (int i = 0; i < triples.r3.dim1; ++i)
-            for (int j = 0; j < triples.r3.dim2; ++j)
-                for (int k = 0; k < triples.r3.dim3; ++k)
-                    for (int a = 0; a < triples.r3.dim4; ++a)
-                        for (int b = 0; b < triples.r3.dim5; ++b)
-                            for (int c = 0; c < triples.r3.dim6; ++c)
-                            {
-                                double connected = 0.0;
-
-                                for (int d = 0; d < amps.t2.dim4; ++d)
+                                double value = 0.0;
+                                for (int d = 0; d < system.n_virt; ++d)
                                 {
-                                    connected += source_ints.w_vvvo(a, b, d, j) *
-                                                 amps.t2(i, k, d, c);
-                                    connected += source_ints.w_vvvo(a, c, d, k) *
-                                                 amps.t2(i, j, d, b);
-                                    connected += source_ints.w_vvvo(b, a, d, i) *
-                                                 amps.t2(j, k, d, c);
-                                    connected += source_ints.w_vvvo(b, c, d, k) *
-                                                 amps.t2(j, i, d, a);
-                                    connected += source_ints.w_vvvo(c, a, d, i) *
-                                                 amps.t2(k, j, d, b);
-                                    connected += source_ints.w_vvvo(c, b, d, j) *
-                                                 amps.t2(k, i, d, a);
+                                    value += ints.w_vvvo(a, b, d, j) * amps.t2(i, k, d, c);
+                                    value += 0.5 * ints.f_vv(a, d) * amps.t3(i, j, k, d, b, c);
                                 }
-
-                                for (int l = 0; l < amps.t2.dim1; ++l)
+                                for (int l = 0; l < system.n_occ; ++l)
                                 {
-                                    connected -= source_ints.w_vooo(a, l, i, j) *
-                                                 amps.t2(l, k, b, c);
-                                    connected -= source_ints.w_vooo(a, l, i, k) *
-                                                 amps.t2(l, j, c, b);
-                                    connected -= source_ints.w_vooo(b, l, j, i) *
-                                                 amps.t2(l, k, a, c);
-                                    connected -= source_ints.w_vooo(b, l, j, k) *
-                                                 amps.t2(l, i, c, a);
-                                    connected -= source_ints.w_vooo(c, l, k, i) *
-                                                 amps.t2(l, j, a, b);
-                                    connected -= source_ints.w_vooo(c, l, k, j) *
-                                                 amps.t2(l, i, b, a);
+                                    value -= ints.w_vooo(a, l, i, j) * amps.t2(l, k, b, c);
+                                    value -= 0.5 * ints.f_oo(l, i) * amps.t3(l, j, k, a, b, c);
                                 }
-
-                                triples.r3(i, j, k, a, b, c) += connected;
-                            }
-    }
-
-    Tensor4D build_pyscf_wovov_intermediate(
-        const RCCSDTAmplitudes &amps,
-        const ProductionSpinOrbitalBlocks &blocks)
-    {
-        Tensor4D out(
-            amps.t2.dim1, amps.t2.dim3, amps.t2.dim1, amps.t2.dim4, 0.0);
-
-        for (int l = 0; l < out.dim1; ++l)
-            for (int a = 0; a < out.dim2; ++a)
-                for (int i = 0; i < out.dim3; ++i)
-                    for (int d = 0; d < out.dim4; ++d)
-                    {
-                        double value = blocks.ovov(l, a, i, d);
-                        for (int m = 0; m < amps.t2.dim1; ++m)
-                            for (int e = 0; e < amps.t2.dim4; ++e)
-                                value -= blocks.oovv(m, l, d, e) *
-                                         amps.t2(i, m, e, a);
-                        out(l, a, i, d) = value;
-                    }
-
-        return out;
-    }
-
-    void build_r3_pyscf_mixed_dressing_families(
-        const RCCSDTAmplitudes &amps,
-        const RCCSDIntermediates &ints,
-        const Tensor4D &w_ovov,
-        TensorTriplesWorkspace &triples)
-    {
-        if (!triples.allocated)
-            return;
-
-        // This mirrors the mixed `W_ovvo/W_ovov * T3` grouping in the local
-        // PySCF `compute_r3_tri` implementation. The terms are written in the
-        // same family order as the source code there, but on our full
-        // spin-orbital tensors instead of PySCF's triangular RHF storage.
-        for (int i = 0; i < triples.r3.dim1; ++i)
-            for (int j = 0; j < triples.r3.dim2; ++j)
-                for (int k = 0; k < triples.r3.dim3; ++k)
-                    for (int a = 0; a < triples.r3.dim4; ++a)
-                        for (int b = 0; b < triples.r3.dim5; ++b)
-                            for (int c = 0; c < triples.r3.dim6; ++c)
-                            {
-                                double dressed = 0.0;
-
-                                for (int l = 0; l < amps.t3.dim1; ++l)
-                                    for (int d = 0; d < amps.t3.dim4; ++d)
+                                for (int l = 0; l < system.n_occ; ++l)
+                                    for (int d = 0; d < system.n_virt; ++d)
                                     {
-                                        dressed += 0.5 * ints.wmbej(l, a, d, i) *
-                                                   amps.t3(l, j, k, d, b, c);
-                                        dressed += 0.5 * ints.wmbej(l, b, d, j) *
-                                                   amps.t3(l, i, k, d, a, c);
-                                        dressed += 0.5 * ints.wmbej(l, c, d, k) *
-                                                   amps.t3(l, j, i, d, b, a);
-
-                                        dressed -= w_ovov(l, b, i, d) *
-                                                   amps.t3(j, l, k, d, a, c);
-                                        dressed -= w_ovov(l, c, i, d) *
-                                                   amps.t3(k, l, j, d, a, b);
-                                        dressed -= 0.5 * w_ovov(l, a, i, d) *
-                                                   amps.t3(j, l, k, d, b, c);
-
-                                        dressed -= w_ovov(l, a, j, d) *
-                                                   amps.t3(i, l, k, d, b, c);
-                                        dressed -= w_ovov(l, c, j, d) *
-                                                   amps.t3(k, l, i, d, b, a);
-                                        dressed -= 0.5 * w_ovov(l, b, j, d) *
-                                                   amps.t3(i, l, k, d, a, c);
-
-                                        dressed -= w_ovov(l, a, k, d) *
-                                                   amps.t3(i, l, j, d, c, b);
-                                        dressed -= w_ovov(l, b, k, d) *
-                                                   amps.t3(j, l, i, d, c, a);
-                                        dressed -= 0.5 * w_ovov(l, c, k, d) *
-                                                   amps.t3(i, l, j, d, a, b);
+                                        value += 0.25 * ints.w_ovvo(l, a, d, i) *
+                                                 t3_p201(amps.t3, l, j, k, d, b, c);
+                                        value -= 0.5 * ints.w_ovov(l, a, i, d) *
+                                                 amps.t3(j, l, k, d, b, c);
+                                        value -= ints.w_ovov(l, b, i, d) *
+                                                 amps.t3(j, l, k, d, a, c);
                                     }
-
-                                triples.r3(i, j, k, a, b, c) += dressed;
+                                for (int l = 0; l < system.n_occ; ++l)
+                                    for (int m = 0; m < system.n_occ; ++m)
+                                        value += 0.5 * ints.w_oooo(l, m, i, j) *
+                                                 amps.t3(l, m, k, a, b, c);
+                                for (int d = 0; d < system.n_virt; ++d)
+                                    for (int e = 0; e < system.n_virt; ++e)
+                                        value += 0.5 * ints.w_vvvv(a, b, d, e) *
+                                                 amps.t3(i, j, k, d, e, c);
+                                triples.r3(i, j, k, a, b, c) = value;
                             }
     }
 
-    void build_r3_one_body_dressing_families(
-        const RCCSDTAmplitudes &amps,
-        const RCCSDIntermediates &ints,
-        TensorTriplesWorkspace &triples)
+    void enforce_restricted_t3_structure(Tensor6D &tensor)
     {
-        if (!triples.allocated)
-            return;
+        Tensor6D original(
+            tensor.dim1, tensor.dim2, tensor.dim3,
+            tensor.dim4, tensor.dim5, tensor.dim6, 0.0);
+        original.data = tensor.data;
 
-        // These are the triples analogues of the familiar Fae/Fmi dressing
-        // terms from CCSD. They keep the current T3 iterate coupled to the
-        // dressed one-body intermediates built from the latest T1/T2 amplitudes.
-        for (int i = 0; i < triples.r3.dim1; ++i)
-            for (int j = 0; j < triples.r3.dim2; ++j)
-                for (int k = 0; k < triples.r3.dim3; ++k)
-                    for (int a = 0; a < triples.r3.dim4; ++a)
-                        for (int b = 0; b < triples.r3.dim5; ++b)
-                            for (int c = 0; c < triples.r3.dim6; ++c)
+        for (int i = 0; i < tensor.dim1; ++i)
+            for (int j = 0; j < tensor.dim2; ++j)
+                for (int k = 0; k < tensor.dim3; ++k)
+                    for (int a = 0; a < tensor.dim4; ++a)
+                        for (int b = 0; b < tensor.dim5; ++b)
+                            for (int c = 0; c < tensor.dim6; ++c)
                             {
-                                double dressed = 0.0;
+                                // Match the PySCF full-form RCCSDT restore:
+                                // 1. Sum the simultaneous occupied/virtual
+                                //    permutations.
+                                // 2. Apply the P3_full spin-summation as
+                                //    out = sim - (1/6) * total, where
+                                //    total includes all occupied-permuted and
+                                //    virtual-permuted combinations.
+                                // 3. Purify the unphysical triple-equal
+                                //    occupied or virtual cases.
+                                const int occ[3] = {i, j, k};
+                                const int virt[3] = {a, b, c};
 
-                                for (const auto &virt_perm : kPermutations3)
-                                {
-                                    const int av = virt_perm.perm[0] == 0 ? a : (virt_perm.perm[0] == 1 ? b : c);
-                                    const int bv = virt_perm.perm[1] == 0 ? a : (virt_perm.perm[1] == 1 ? b : c);
-                                    const int cv = virt_perm.perm[2] == 0 ? a : (virt_perm.perm[2] == 1 ? b : c);
-                                    for (int e = 0; e < amps.t3.dim6; ++e)
-                                        dressed += virt_perm.sign *
-                                                   amps.t3(i, j, k, av, bv, e) *
-                                                   ints.fae(cv, e);
-                                }
-
+                                double simultaneous_sum = 0.0;
+                                double total_sum = 0.0;
                                 for (const auto &occ_perm : kPermutations3)
                                 {
-                                    const int io = occ_perm.perm[0] == 0 ? i : (occ_perm.perm[0] == 1 ? j : k);
-                                    const int jo = occ_perm.perm[1] == 0 ? i : (occ_perm.perm[1] == 1 ? j : k);
-                                    const int ko = occ_perm.perm[2] == 0 ? i : (occ_perm.perm[2] == 1 ? j : k);
-                                    for (int m = 0; m < amps.t3.dim3; ++m)
-                                        dressed -= occ_perm.sign *
-                                                   amps.t3(io, jo, m, a, b, c) *
-                                                   ints.fmi(m, ko);
-                                }
+                                    const int oi = occ[occ_perm[0]];
+                                    const int oj = occ[occ_perm[1]];
+                                    const int ok = occ[occ_perm[2]];
 
-                                triples.r3(i, j, k, a, b, c) += dressed;
-                            }
-    }
-
-    void build_r3_two_body_dressing_families(
-        const RCCSDTAmplitudes &amps,
-        const RCCSDIntermediates &ints,
-        TensorTriplesWorkspace &triples)
-    {
-        if (!triples.allocated)
-            return;
-
-        // The first T3 self-dressing layer keeps only the cleanest Wmnij and
-        // Wabef contractions. These are the highest-value "same-rank" terms:
-        // they are easy to map back to the algebra and materially improve the
-        // iterative triples problem beyond the bare T2 source terms.
-        for (int i = 0; i < triples.r3.dim1; ++i)
-            for (int j = 0; j < triples.r3.dim2; ++j)
-                for (int k = 0; k < triples.r3.dim3; ++k)
-                    for (int a = 0; a < triples.r3.dim4; ++a)
-                        for (int b = 0; b < triples.r3.dim5; ++b)
-                            for (int c = 0; c < triples.r3.dim6; ++c)
-                            {
-                                double dressed = 0.0;
-
-                                for (const auto &virt_perm : kPermutations3)
-                                {
-                                    const int av = virt_perm.perm[0] == 0 ? a : (virt_perm.perm[0] == 1 ? b : c);
-                                    const int bv = virt_perm.perm[1] == 0 ? a : (virt_perm.perm[1] == 1 ? b : c);
-                                    const int cv = virt_perm.perm[2] == 0 ? a : (virt_perm.perm[2] == 1 ? b : c);
-                                    for (int e = 0; e < amps.t3.dim5; ++e)
-                                        for (int f = 0; f < amps.t3.dim6; ++f)
-                                            dressed += 0.5 * virt_perm.sign *
-                                                       amps.t3(i, j, k, av, e, f) *
-                                                       ints.wabef(bv, cv, e, f);
-                                }
-
-                                for (const auto &occ_perm : kPermutations3)
-                                {
-                                    const int io = occ_perm.perm[0] == 0 ? i : (occ_perm.perm[0] == 1 ? j : k);
-                                    const int jo = occ_perm.perm[1] == 0 ? i : (occ_perm.perm[1] == 1 ? j : k);
-                                    const int ko = occ_perm.perm[2] == 0 ? i : (occ_perm.perm[2] == 1 ? j : k);
-                                    for (int m = 0; m < amps.t3.dim2; ++m)
-                                        for (int n = 0; n < amps.t3.dim3; ++n)
-                                            dressed += 0.5 * occ_perm.sign *
-                                                       amps.t3(io, m, n, a, b, c) *
-                                                       ints.wmnij(m, n, jo, ko);
-                                }
-
-                                triples.r3(i, j, k, a, b, c) += dressed;
-                            }
-    }
-
-    void build_r3_mixed_wmbej_family(
-        const RCCSDTAmplitudes &amps,
-        const RCCSDIntermediates &ints,
-        TensorTriplesWorkspace &triples)
-    {
-        if (!triples.allocated)
-            return;
-
-        // W_mbej is the mixed occupied/virtual interaction block that already
-        // drives a large fraction of the CCSD doubles residual. This is the
-        // natural next self-dressing family for T3 because it couples one
-        // occupied and one virtual index of the current triples tensor through
-        // a dressed two-body interaction. Written with explicit permutations,
-        // the algebra stays close to the textbook P(ij)P(ab)-style structure.
-        for (int i = 0; i < triples.r3.dim1; ++i)
-            for (int j = 0; j < triples.r3.dim2; ++j)
-                for (int k = 0; k < triples.r3.dim3; ++k)
-                    for (int a = 0; a < triples.r3.dim4; ++a)
-                        for (int b = 0; b < triples.r3.dim5; ++b)
-                            for (int c = 0; c < triples.r3.dim6; ++c)
-                            {
-                                double dressed = 0.0;
-
-                                for (const auto &occ_perm : kPermutations3)
-                                {
-                                    const int io = occ_perm.perm[0] == 0 ? i : (occ_perm.perm[0] == 1 ? j : k);
-                                    const int jo = occ_perm.perm[1] == 0 ? i : (occ_perm.perm[1] == 1 ? j : k);
-                                    const int ko = occ_perm.perm[2] == 0 ? i : (occ_perm.perm[2] == 1 ? j : k);
+                                    simultaneous_sum += original(
+                                        oi, oj, ok,
+                                        virt[occ_perm[0]],
+                                        virt[occ_perm[1]],
+                                        virt[occ_perm[2]]);
 
                                     for (const auto &virt_perm : kPermutations3)
-                                    {
-                                        const int av = virt_perm.perm[0] == 0 ? a : (virt_perm.perm[0] == 1 ? b : c);
-                                        const int bv = virt_perm.perm[1] == 0 ? a : (virt_perm.perm[1] == 1 ? b : c);
-                                        const int cv = virt_perm.perm[2] == 0 ? a : (virt_perm.perm[2] == 1 ? b : c);
-                                        const int sign = occ_perm.sign * virt_perm.sign;
-
-                                        for (int m = 0; m < amps.t3.dim3; ++m)
-                                            for (int e = 0; e < amps.t3.dim6; ++e)
-                                                dressed += sign *
-                                                           amps.t3(io, jo, m, av, bv, e) *
-                                                           ints.wmbej(m, cv, e, ko);
-                                    }
+                                        total_sum += original(
+                                            oi, oj, ok,
+                                            virt[virt_perm[0]],
+                                            virt[virt_perm[1]],
+                                            virt[virt_perm[2]]);
                                 }
 
-                                triples.r3(i, j, k, a, b, c) += dressed;
+                                tensor(i, j, k, a, b, c) =
+                                    simultaneous_sum - total_sum / 6.0;
+
+                                if ((i == j && j == k) || (a == b && b == c))
+                                    tensor(i, j, k, a, b, c) = 0.0;
                             }
     }
 
-    void build_r3_ovov_family(
-        const RCCSDTAmplitudes &amps,
-        const ProductionSpinOrbitalBlocks &blocks,
-        TensorTriplesWorkspace &triples)
-    {
-        if (!triples.allocated)
-            return;
-
-        // This is the explicit W_ovov * T3 family from the connected triples
-        // residual. In diagram language, one occupied and one virtual index of
-        // T3 are tied together by the antisymmetrized ovov interaction block.
-        // We write it as a signed permutation sum so students can still see the
-        // P(ij)P(ab)-style structure directly.
-        for (int i = 0; i < triples.r3.dim1; ++i)
-            for (int j = 0; j < triples.r3.dim2; ++j)
-                for (int k = 0; k < triples.r3.dim3; ++k)
-                    for (int a = 0; a < triples.r3.dim4; ++a)
-                        for (int b = 0; b < triples.r3.dim5; ++b)
-                            for (int c = 0; c < triples.r3.dim6; ++c)
-                            {
-                                double dressed = 0.0;
-
-                                for (const auto &occ_perm : kPermutations3)
-                                {
-                                    const int io = occ_perm.perm[0] == 0 ? i : (occ_perm.perm[0] == 1 ? j : k);
-                                    const int jo = occ_perm.perm[1] == 0 ? i : (occ_perm.perm[1] == 1 ? j : k);
-                                    const int ko = occ_perm.perm[2] == 0 ? i : (occ_perm.perm[2] == 1 ? j : k);
-
-                                    for (const auto &virt_perm : kPermutations3)
-                                    {
-                                        const int av = virt_perm.perm[0] == 0 ? a : (virt_perm.perm[0] == 1 ? b : c);
-                                        const int bv = virt_perm.perm[1] == 0 ? a : (virt_perm.perm[1] == 1 ? b : c);
-                                        const int cv = virt_perm.perm[2] == 0 ? a : (virt_perm.perm[2] == 1 ? b : c);
-                                        const int sign = occ_perm.sign * virt_perm.sign;
-
-                                        for (int m = 0; m < amps.t3.dim2; ++m)
-                                            for (int e = 0; e < amps.t3.dim5; ++e)
-                                                dressed += sign *
-                                                           blocks.ovov(m, bv, io, e) *
-                                                           amps.t3(jo, m, ko, av, e, cv);
-                                    }
-                                }
-
-                                triples.r3(i, j, k, a, b, c) += dressed;
-                            }
-    }
-
-    void build_r3_ovvo_family(
-        const RCCSDTAmplitudes &amps,
-        const ProductionSpinOrbitalBlocks &blocks,
-        TensorTriplesWorkspace &triples)
-    {
-        if (!triples.allocated)
-            return;
-
-        // This companion mixed family uses the ovvo block instead of ovov.
-        // In index language it is the same "one occupied and one virtual line
-        // couple through a two-electron interaction" picture, but with the
-        // virtual indices connected in the exchanged order. Keeping the term
-        // separate here makes it easy to compare the two mixed families side
-        // by side when reading the residual builder.
-        for (int i = 0; i < triples.r3.dim1; ++i)
-            for (int j = 0; j < triples.r3.dim2; ++j)
-                for (int k = 0; k < triples.r3.dim3; ++k)
-                    for (int a = 0; a < triples.r3.dim4; ++a)
-                        for (int b = 0; b < triples.r3.dim5; ++b)
-                            for (int c = 0; c < triples.r3.dim6; ++c)
-                            {
-                                double dressed = 0.0;
-
-                                for (const auto &occ_perm : kPermutations3)
-                                {
-                                    const int io = occ_perm.perm[0] == 0 ? i : (occ_perm.perm[0] == 1 ? j : k);
-                                    const int jo = occ_perm.perm[1] == 0 ? i : (occ_perm.perm[1] == 1 ? j : k);
-                                    const int ko = occ_perm.perm[2] == 0 ? i : (occ_perm.perm[2] == 1 ? j : k);
-
-                                    for (const auto &virt_perm : kPermutations3)
-                                    {
-                                        const int av = virt_perm.perm[0] == 0 ? a : (virt_perm.perm[0] == 1 ? b : c);
-                                        const int bv = virt_perm.perm[1] == 0 ? a : (virt_perm.perm[1] == 1 ? b : c);
-                                        const int cv = virt_perm.perm[2] == 0 ? a : (virt_perm.perm[2] == 1 ? b : c);
-                                        const int sign = occ_perm.sign * virt_perm.sign;
-
-                                        for (int m = 0; m < amps.t3.dim2; ++m)
-                                            for (int e = 0; e < amps.t3.dim6; ++e)
-                                                dressed += sign *
-                                                           blocks.ovvo(m, bv, e, io) *
-                                                           amps.t3(jo, m, ko, av, cv, e);
-                                    }
-                                }
-
-                                triples.r3(i, j, k, a, b, c) += dressed;
-                            }
-    }
 
     [[nodiscard]] double update_t3_from_r3_jacobi(
         const CanonicalRHFCCReference &reference,
@@ -1463,98 +1899,6 @@ namespace
         return std::sqrt(sum_sq / static_cast<double>(count));
     }
 
-    void build_r2_t3_feedback_family(
-        const RCCSDTAmplitudes &amps,
-        const RCCSDIntermediates &ints,
-        const ProductionSpinOrbitalBlocks &blocks,
-        Tensor4D &r2_feedback)
-    {
-        std::fill(r2_feedback.data.begin(), r2_feedback.data.end(), 0.0);
-
-        // This mirrors the local PySCF `r1r2_add_t3_tri_` structure for the
-        // T3 -> R2 bridge: one `F_me * T3` family, one particle-scattering
-        // `ovvv * T3` family, and one hole-scattering `ooov * T3` family.
-        // Because our residual is stored in full spin-orbital form, we keep
-        // the P(ij) and P(ab) partners explicit instead of restoring symmetry
-        // in a later spatial-orbital post-pass.
-        for (int i = 0; i < r2_feedback.dim1; ++i)
-            for (int j = 0; j < r2_feedback.dim2; ++j)
-                for (int a = 0; a < r2_feedback.dim3; ++a)
-                    for (int b = 0; b < r2_feedback.dim4; ++b)
-                    {
-                        double one_body = 0.0;
-                        for (int m = 0; m < amps.t3.dim3; ++m)
-                            for (int e = 0; e < amps.t3.dim6; ++e)
-                            {
-                                one_body += amps.t3(i, j, m, a, b, e) * ints.fme(m, e);
-                                one_body -= amps.t3(j, i, m, a, b, e) * ints.fme(m, e);
-                                one_body -= amps.t3(i, j, m, b, a, e) * ints.fme(m, e);
-                                one_body += amps.t3(j, i, m, b, a, e) * ints.fme(m, e);
-                            }
-
-                        double particle = 0.0;
-                        for (int m = 0; m < amps.t3.dim3; ++m)
-                            for (int e = 0; e < amps.t3.dim5; ++e)
-                                for (int c = 0; c < amps.t3.dim6; ++c)
-                                {
-                                    particle += amps.t3(i, j, m, a, e, c) *
-                                                blocks.ovvv(m, b, e, c);
-                                    particle -= amps.t3(i, j, m, b, e, c) *
-                                                blocks.ovvv(m, a, e, c);
-                                }
-
-                        double hole = 0.0;
-                        for (int m = 0; m < amps.t3.dim2; ++m)
-                            for (int n = 0; n < amps.t3.dim3; ++n)
-                                for (int e = 0; e < amps.t3.dim6; ++e)
-                                {
-                                    hole += amps.t3(i, m, n, a, b, e) *
-                                            blocks.ooov(m, n, j, e);
-                                    hole -= amps.t3(j, m, n, a, b, e) *
-                                            blocks.ooov(m, n, i, e);
-                                }
-
-                        r2_feedback(i, j, a, b) =
-                            one_body + 0.5 * particle - 0.5 * hole;
-                    }
-    }
-
-    void build_r1_t3_feedback_family(
-        const RCCSDTAmplitudes &amps,
-        const ProductionSpinOrbitalBlocks &blocks,
-        Tensor2D &r1_feedback)
-    {
-        std::fill(r1_feedback.data.begin(), r1_feedback.data.end(), 0.0);
-
-        // The local PySCF RCCSDT implementation adds the T3 -> R1 correction
-        // through the contracted `oovv * T3` family. We keep that exact
-        // structure here and do not add extra heuristic mixed terms on top.
-        for (int i = 0; i < r1_feedback.dim1; ++i)
-            for (int a = 0; a < r1_feedback.dim2; ++a)
-            {
-                double value = 0.0;
-                for (int m = 0; m < amps.t3.dim2; ++m)
-                    for (int n = 0; n < amps.t3.dim3; ++n)
-                        for (int e = 0; e < amps.t3.dim5; ++e)
-                            for (int f = 0; f < amps.t3.dim6; ++f)
-                                value += 0.25 *
-                                         blocks.oovv(m, n, e, f) *
-                                         amps.t3(i, m, n, a, e, f);
-                r1_feedback(i, a) = value;
-            }
-    }
-
-    void add_feedback_into_residuals(
-        const Tensor2D &r1_feedback,
-        const Tensor4D &r2_feedback,
-        RCCSDResiduals &residuals)
-    {
-        for (std::size_t idx = 0; idx < residuals.r1.data.size(); ++idx)
-            residuals.r1.data[idx] += r1_feedback.data[idx];
-        for (std::size_t idx = 0; idx < residuals.r2.data.size(); ++idx)
-            residuals.r2.data[idx] += r2_feedback.data[idx];
-    }
-
     struct SDUpdateMetrics
     {
         double t1_step_rms = 0.0;
@@ -1567,7 +1911,8 @@ namespace
         const RCCSDResiduals &residuals,
         RCCSDAmplitudes &amps,
         AmplitudeDIIS &diis,
-        double damping)
+        double damping,
+        bool use_diis)
     {
         Eigen::VectorXd current = pack_amplitudes(amps);
         Eigen::VectorXd updated = current;
@@ -1598,7 +1943,7 @@ namespace
 
         const Eigen::VectorXd residual_vec = pack_residuals(residuals);
         diis.push(updated, residual_vec);
-        if (calculator._scf._use_DIIS && diis.ready())
+        if (use_diis && calculator._scf._use_DIIS && diis.ready())
         {
             auto diis_res = diis.extrapolate();
             if (diis_res)
@@ -1627,10 +1972,298 @@ namespace
         };
     }
 
+    [[nodiscard]] double compute_restricted_rccsdt_correlation_energy(
+        const ProductionSpinOrbitalChemistsSystem &system,
+        const RCCSDTAmplitudes &amps)
+    {
+        double ed = 0.0;
+        double ex = 0.0;
+        double singles = 0.0;
+        for (int i = 0; i < system.n_occ; ++i)
+            for (int j = 0; j < system.n_occ; ++j)
+                for (int a = 0; a < system.n_virt; ++a)
+                    for (int b = 0; b < system.n_virt; ++b)
+                    {
+                        const int va = system.n_occ + a;
+                        const int vb = system.n_occ + b;
+                        const double tau =
+                            amps.t2(i, j, a, b) + amps.t1(i, a) * amps.t1(j, b);
+                        ed += 2.0 * tau * system.eri(i, j, va, vb);
+                        ex -= tau * system.eri(i, j, vb, va);
+                    }
+
+        for (int i = 0; i < system.n_occ; ++i)
+            for (int a = 0; a < system.n_virt; ++a)
+                singles += system.fock(system.n_occ + a, i) * amps.t1(i, a);
+
+        return ed + ex + 2.0 * singles;
+    }
+
+    [[nodiscard]] double update_restricted_t3_from_r3_jacobi(
+        const RHFReference &reference,
+        RCCSDTAmplitudes &amps,
+        Tensor6D &r3,
+        double damping)
+    {
+        double sum_sq = 0.0;
+        std::size_t count = 0;
+        for (int i = 0; i < amps.t3.dim1; ++i)
+            for (int j = 0; j < amps.t3.dim2; ++j)
+                for (int k = 0; k < amps.t3.dim3; ++k)
+                    for (int a = 0; a < amps.t3.dim4; ++a)
+                        for (int b = 0; b < amps.t3.dim5; ++b)
+                            for (int c = 0; c < amps.t3.dim6; ++c)
+                            {
+                                const double denom = restricted_d3(reference, i, j, k, a, b, c);
+                                if (std::abs(denom) < 1e-12)
+                                    continue;
+                                const double delta = damping * r3(i, j, k, a, b, c) / denom;
+                                amps.t3(i, j, k, a, b, c) += delta;
+                                sum_sq += delta * delta;
+                                ++count;
+                            }
+        if (count == 0)
+            return 0.0;
+        return std::sqrt(sum_sq / static_cast<double>(count));
+    }
+
+    std::expected<TensorTriplesStageMetrics, std::string> run_restricted_tensor_rccsdt_no_fallback(
+        HartreeFock::Calculator &calculator,
+        const TensorRCCSDTState &state,
+        const ProductionSpinOrbitalChemistsSystem &system,
+        const TensorRCCSDResult &rccsd)
+    {
+        constexpr double kT3Damping = 0.35;
+        constexpr double kSDDamping = 0.35;
+        const RHFReference &reference = state.reference.orbital_partition;
+        const unsigned int max_iter =
+            std::min(64u, std::max(24u, 2u * calculator._scf.get_max_cycles(calculator._shells.nbasis())));
+        const double tol_stage = std::max(1e-8, calculator._scf._tol_density);
+        const double tol_energy = std::max(1e-10, calculator._scf._tol_energy);
+
+        RCCSDTAmplitudes amps =
+            project_rccsd_warm_start_to_restricted(rccsd, reference);
+        TensorTriplesStageMetrics metrics;
+        TensorTriplesStageMetrics best_metrics;
+        RCCSDTAmplitudes best_amps = clone_rccsdt_amplitudes(amps);
+        bool have_best = false;
+        double best_score = std::numeric_limits<double>::infinity();
+        unsigned int stale_iterations = 0;
+
+        AmplitudeDIIS full_diis(static_cast<int>(std::max(2u, calculator._scf._DIIS_dim)));
+        double previous_energy =
+            compute_restricted_rccsdt_correlation_energy(system, amps);
+
+        for (unsigned int iter = 1; iter <= max_iter; ++iter)
+        {
+            RCCSDAmplitudes sd_amps{
+                .t1 = Tensor2D(amps.t1.dim1, amps.t1.dim2, 0.0),
+                .t2 = Tensor4D(amps.t2.dim1, amps.t2.dim2, amps.t2.dim3, amps.t2.dim4, 0.0),
+            };
+            sd_amps.t1.data = amps.t1.data;
+            sd_amps.t2.data = amps.t2.data;
+
+            const DressedSpinOrbitalSystem dressed =
+                build_dressed_spin_orbital_system(system, amps);
+            const DressedSinglesDoublesIntermediates sd_ints =
+                build_dressed_sd_intermediates(system, dressed, amps.t2);
+            RCCSDResiduals residuals =
+                build_dressed_sd_residuals(system, dressed, sd_ints, sd_amps);
+            const RCCSDResiduals residuals_before_t3 = residuals;
+            add_dressed_triples_feedback_into_sd_residuals(
+                system, dressed, amps, residuals);
+            Tensor4D r2_feedback(
+                residuals.r2.dim1, residuals.r2.dim2,
+                residuals.r2.dim3, residuals.r2.dim4, 0.0);
+            for (std::size_t idx = 0; idx < residuals.r2.data.size(); ++idx)
+                r2_feedback.data[idx] =
+                    residuals.r2.data[idx] - residuals_before_t3.r2.data[idx];
+            Tensor4D full_r2_before_sym = residuals.r2;
+            for (int i = 0; i < residuals.r2.dim1; ++i)
+                for (int j = 0; j < residuals.r2.dim2; ++j)
+                    for (int a = 0; a < residuals.r2.dim3; ++a)
+                        for (int b = 0; b < residuals.r2.dim4; ++b)
+                            residuals.r2(i, j, a, b) += full_r2_before_sym(j, i, b, a);
+
+            Tensor2D r1_feedback(residuals.r1.dim1, residuals.r1.dim2, 0.0);
+            for (std::size_t idx = 0; idx < residuals.r1.data.size(); ++idx)
+                r1_feedback.data[idx] =
+                    residuals.r1.data[idx] - residuals_before_t3.r1.data[idx];
+            Tensor4D sym_r2_feedback = r2_feedback;
+            for (int i = 0; i < sym_r2_feedback.dim1; ++i)
+                for (int j = 0; j < sym_r2_feedback.dim2; ++j)
+                    for (int a = 0; a < sym_r2_feedback.dim3; ++a)
+                        for (int b = 0; b < sym_r2_feedback.dim4; ++b)
+                            sym_r2_feedback(i, j, a, b) +=
+                                r2_feedback(j, i, b, a);
+
+            metrics.r1_feedback_rms = tensor_rms(r1_feedback);
+            metrics.r2_feedback_rms = tensor_rms(sym_r2_feedback);
+            metrics.sd_residual_rms = rms_norm(pack_residuals(residuals));
+
+            Eigen::VectorXd current = pack_amplitudes(RCCSDAmplitudes{amps.t1, amps.t2});
+            Eigen::VectorXd updated = current;
+            Eigen::Index offset = 0;
+            for (int i = 0; i < amps.t1.dim1; ++i)
+                for (int a = 0; a < amps.t1.dim2; ++a)
+                {
+                    const double denom = restricted_d1(reference, i, a);
+                    if (std::abs(denom) >= 1e-12)
+                        updated(offset) += kSDDamping * residuals.r1(i, a) / denom;
+                    ++offset;
+                }
+            for (int i = 0; i < amps.t2.dim1; ++i)
+                for (int j = 0; j < amps.t2.dim2; ++j)
+                    for (int a = 0; a < amps.t2.dim3; ++a)
+                        for (int b = 0; b < amps.t2.dim4; ++b)
+                        {
+                            const double denom = restricted_d2(reference, i, j, a, b);
+                            if (std::abs(denom) >= 1e-12)
+                                updated(offset) += kSDDamping * residuals.r2(i, j, a, b) / denom;
+                            ++offset;
+                        }
+            const Eigen::VectorXd sd_delta = updated - current;
+            {
+                RCCSDAmplitudes sd_old{amps.t1, amps.t2};
+                RCCSDAmplitudes sd_new{
+                    .t1 = Tensor2D(amps.t1.dim1, amps.t1.dim2, 0.0),
+                    .t2 = Tensor4D(amps.t2.dim1, amps.t2.dim2, amps.t2.dim3, amps.t2.dim4, 0.0),
+                };
+                unpack_amplitudes(updated, sd_new);
+                for (std::size_t idx = 0; idx < sd_new.t1.data.size(); ++idx)
+                    sd_new.t1.data[idx] -= sd_old.t1.data[idx];
+                for (std::size_t idx = 0; idx < sd_new.t2.data.size(); ++idx)
+                    sd_new.t2.data[idx] -= sd_old.t2.data[idx];
+                metrics.t1_step_rms = tensor_rms(sd_new.t1);
+                metrics.t2_step_rms = tensor_rms(sd_new.t2);
+            }
+            {
+                RCCSDAmplitudes sd_store{
+                    .t1 = Tensor2D(amps.t1.dim1, amps.t1.dim2, 0.0),
+                    .t2 = Tensor4D(amps.t2.dim1, amps.t2.dim2, amps.t2.dim3, amps.t2.dim4, 0.0),
+                };
+                unpack_amplitudes(updated, sd_store);
+                amps.t1 = std::move(sd_store.t1);
+                amps.t2 = std::move(sd_store.t2);
+            }
+
+            const DressedSpinOrbitalSystem refreshed_dressed =
+                build_dressed_spin_orbital_system(system, amps);
+            const DressedSinglesDoublesIntermediates refreshed_sd_ints =
+                build_dressed_sd_intermediates(system, refreshed_dressed, amps.t2);
+            DressedTriplesIntermediates triples_ints =
+                build_dressed_triples_intermediates(
+                    system, refreshed_dressed, refreshed_sd_ints, amps.t2);
+            add_dressed_triples_feedback_into_triples_intermediates(
+                system, refreshed_dressed, amps.t3, triples_ints);
+
+            Tensor6D r3(
+                amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
+                amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0);
+            TensorTriplesWorkspace tmp{
+                .amplitudes = clone_rccsdt_amplitudes(amps),
+                .r3 = r3,
+                .allocated = true,
+            };
+            build_dressed_triples_residual(system, triples_ints, amps, tmp);
+            enforce_restricted_t3_structure(tmp.r3);
+            metrics.r3_rms = triples_residual_rms(tmp.r3);
+            metrics.t3_step_rms =
+                update_restricted_t3_from_r3_jacobi(reference, amps, tmp.r3, kT3Damping);
+
+            // Project T3 onto restricted subspace BEFORE pushing to DIIS so the
+            // subspace vectors are consistent with what the next iteration will see.
+            enforce_restricted_t3_structure(amps.t3);
+
+            const Eigen::VectorXd full_residual =
+                pack_rccsdt_stage_residuals(residuals, tmp.r3);
+            Eigen::VectorXd full_current = pack_rccsdt_amplitudes(amps);
+            full_diis.push(full_current, full_residual);
+            if (calculator._scf._use_DIIS && full_diis.ready())
+            {
+                auto diis_res = full_diis.extrapolate();
+                if (diis_res)
+                {
+                    full_current = std::move(*diis_res);
+                    unpack_rccsdt_amplitudes(full_current, amps);
+                    // Re-project after DIIS extrapolation to restore restricted structure.
+                    enforce_restricted_t3_structure(amps.t3);
+                }
+            }
+            metrics.estimated_correlation_energy =
+                compute_restricted_rccsdt_correlation_energy(system, amps);
+            metrics.energy_change =
+                metrics.estimated_correlation_energy - previous_energy;
+            previous_energy = metrics.estimated_correlation_energy;
+            metrics.quality_score = stage_quality_score(metrics);
+            metrics.iterations = iter;
+
+            if (metrics.quality_score + 1e-12 < best_score)
+            {
+                best_score = metrics.quality_score;
+                best_metrics = metrics;
+                best_metrics.best_iteration = iter;
+                best_amps = clone_rccsdt_amplitudes(amps);
+                have_best = true;
+                stale_iterations = 0;
+            }
+            else
+            {
+                ++stale_iterations;
+            }
+
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "RCCSDT[TENSOR-R] :",
+                std::format(
+                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  rms(SD)={:.3e}  rms(R3)={:.3e}  rms(dT3)={:.3e}  rms(R1[T3])={:.3e}  rms(dT1)={:.3e}  rms(R2[T3])={:.3e}  rms(dT2)={:.3e}",
+                    iter,
+                    metrics.estimated_correlation_energy,
+                    metrics.energy_change,
+                    metrics.sd_residual_rms,
+                    metrics.r3_rms,
+                    metrics.t3_step_rms,
+                    metrics.r1_feedback_rms,
+                    metrics.t1_step_rms,
+                    metrics.r2_feedback_rms,
+                    metrics.t2_step_rms));
+
+            if (metrics.r3_rms < tol_stage &&
+                metrics.sd_residual_rms < tol_stage &&
+                std::abs(metrics.energy_change) < tol_energy &&
+                metrics.t3_step_rms < 10.0 * tol_stage &&
+                metrics.t2_step_rms < 10.0 * tol_stage &&
+                metrics.t1_step_rms < 10.0 * tol_stage)
+            {
+                metrics.converged = true;
+                break;
+            }
+
+            if (iter >= 12u && stale_iterations >= 8u &&
+                metrics.quality_score > 1.20 * best_score)
+                break;
+        }
+
+        if (have_best)
+        {
+            amps = std::move(best_amps);
+            metrics = best_metrics;
+            metrics.converged =
+                best_metrics.quality_score < tol_stage &&
+                std::abs(best_metrics.energy_change) < tol_energy &&
+                best_metrics.t3_step_rms < 10.0 * tol_stage &&
+                best_metrics.t2_step_rms < 10.0 * tol_stage &&
+                best_metrics.t1_step_rms < 10.0 * tol_stage;
+        }
+
+        return metrics;
+    }
+
     std::expected<TensorTriplesStageMetrics, std::string> run_staged_tensor_triples_iterations(
         HartreeFock::Calculator &calculator,
         const TensorRCCSDTState &state,
         const ProductionSpinOrbitalBlocks &so_blocks,
+        const ProductionSpinOrbitalChemistsSystem &full_system,
         TensorTriplesWorkspace &triples,
         unsigned int max_stage_iterations,
         bool require_convergence)
@@ -1640,7 +2273,7 @@ namespace
                 "run_staged_tensor_triples_iterations: triples workspace is not allocated.");
 
         constexpr double kT3Damping = 0.35;
-        constexpr double kSDDamping = 0.25;
+        constexpr double kSDDamping = 0.35;
         // The staged tensor path is meant to become the production solver for
         // larger systems, so it should not stop at a tolerance inherited from
         // the more forgiving SCF density threshold. We keep the criterion
@@ -1649,19 +2282,10 @@ namespace
         // to the moderate-case fallback.
         const double tol_stage =
             std::max(1e-7, calculator._scf._tol_density);
+        const double tol_energy =
+            std::max(1e-10, calculator._scf._tol_energy);
         const ProductionSpinOrbitalReference so_ref =
             build_spin_orbital_reference(state.reference);
-
-        Tensor2D r1_feedback(
-            triples.amplitudes.t1.dim1,
-            triples.amplitudes.t1.dim2,
-            0.0);
-        Tensor4D r2_feedback(
-            triples.amplitudes.t2.dim1,
-            triples.amplitudes.t2.dim2,
-            triples.amplitudes.t2.dim3,
-            triples.amplitudes.t2.dim4,
-            0.0);
         TensorTriplesStageMetrics metrics;
         TensorTriplesStageMetrics best_metrics;
         RCCSDTAmplitudes best_amplitudes = clone_rccsdt_amplitudes(triples.amplitudes);
@@ -1670,56 +2294,108 @@ namespace
         unsigned int stale_iterations = 0;
         AmplitudeDIIS diis(static_cast<int>(std::max(2u, calculator._scf._DIIS_dim)));
         AmplitudeDIIS full_diis(static_cast<int>(std::max(2u, calculator._scf._DIIS_dim)));
+        double previous_energy = state.warm_start_correlation_energy;
+        const unsigned int min_iterations_before_break =
+            require_convergence ? 12u : 4u;
+        const unsigned int stall_patience =
+            require_convergence ? 8u : 2u;
+        const double deterioration_factor =
+            require_convergence ? 1.25 : 1.05;
 
         for (unsigned int iter = 1; iter <= max_stage_iterations; ++iter)
         {
             RCCSDAmplitudes sd_amps = extract_sd_amplitudes(triples);
-            const TauCache tau_cache = build_tau_cache(sd_amps);
-            const RCCSDIntermediates ints =
-                build_intermediates(so_ref,
-                                    so_blocks,
-                                    sd_amps,
-                                    tau_cache);
-            const PySCFT3SourceIntermediates source_ints =
-                build_pyscf_t3_source_intermediates(
-                    triples.amplitudes,
-                    so_blocks,
-                    ints);
-            const Tensor4D w_ovov =
-                build_pyscf_wovov_intermediate(
-                    triples.amplitudes,
-                    so_blocks);
-            RCCSDResiduals residuals = build_residuals(
-                so_ref, so_blocks, sd_amps, tau_cache, ints);
+            const DressedSpinOrbitalSystem dressed =
+                build_dressed_spin_orbital_system(
+                    full_system,
+                    triples.amplitudes);
+            const DressedSinglesDoublesIntermediates sd_ints =
+                build_dressed_sd_intermediates(
+                    full_system,
+                    dressed,
+                    sd_amps.t2);
+            RCCSDResiduals residuals =
+                build_dressed_sd_residuals(
+                    full_system,
+                    dressed,
+                    sd_ints,
+                    sd_amps);
 
-            build_r3_diagonal_feedback_family(state.reference, triples);
-            build_r3_connected_t2_source_families(
-                triples.amplitudes, source_ints, triples);
-            build_r3_one_body_dressing_families(
-                triples.amplitudes, ints, triples);
-            build_r3_two_body_dressing_families(
-                triples.amplitudes, ints, triples);
-            build_r3_pyscf_mixed_dressing_families(
-                triples.amplitudes, ints, w_ovov, triples);
+            // Match the PySCF RCCSDT update ordering: form the SD residual
+            // first with the current T3 correction, update T1/T2, and only
+            // then build the T3 residual from the refreshed SD amplitudes.
+            const RCCSDResiduals residuals_before_t3 = residuals;
+            add_dressed_triples_feedback_into_sd_residuals(
+                full_system,
+                dressed,
+                triples.amplitudes,
+                residuals);
+            Tensor4D r2_feedback(
+                residuals.r2.dim1, residuals.r2.dim2,
+                residuals.r2.dim3, residuals.r2.dim4, 0.0);
+            for (std::size_t idx = 0; idx < residuals.r2.data.size(); ++idx)
+                r2_feedback.data[idx] =
+                    residuals.r2.data[idx] - residuals_before_t3.r2.data[idx];
+            Tensor4D unsym_r2 = residuals.r2;
+            for (int i = 0; i < residuals.r2.dim1; ++i)
+                for (int j = 0; j < residuals.r2.dim2; ++j)
+                    for (int a = 0; a < residuals.r2.dim3; ++a)
+                        for (int b = 0; b < residuals.r2.dim4; ++b)
+                            residuals.r2(i, j, a, b) += unsym_r2(j, i, b, a);
+            Tensor2D r1_feedback(
+                residuals.r1.dim1, residuals.r1.dim2, 0.0);
+            for (std::size_t idx = 0; idx < residuals.r1.data.size(); ++idx)
+                r1_feedback.data[idx] =
+                    residuals.r1.data[idx] - residuals_before_t3.r1.data[idx];
+            Tensor4D sym_r2_feedback = r2_feedback;
+            for (int i = 0; i < sym_r2_feedback.dim1; ++i)
+                for (int j = 0; j < sym_r2_feedback.dim2; ++j)
+                    for (int a = 0; a < sym_r2_feedback.dim3; ++a)
+                        for (int b = 0; b < sym_r2_feedback.dim4; ++b)
+                            sym_r2_feedback(i, j, a, b) +=
+                                r2_feedback(j, i, b, a);
+            metrics.r1_feedback_rms = tensor_rms(r1_feedback);
+            metrics.r2_feedback_rms = tensor_rms(sym_r2_feedback);
+            metrics.sd_residual_rms = rms_norm(pack_residuals(residuals));
+            const SDUpdateMetrics sd_update = update_sd_amplitudes_with_feedback(
+                calculator, state, residuals, sd_amps, diis, kSDDamping, false);
+            metrics.t1_step_rms = sd_update.t1_step_rms;
+            metrics.t2_step_rms = sd_update.t2_step_rms;
+            store_sd_amplitudes(sd_amps, triples);
+
+            const DressedSpinOrbitalSystem refreshed_dressed =
+                build_dressed_spin_orbital_system(
+                    full_system,
+                    triples.amplitudes);
+            const DressedSinglesDoublesIntermediates refreshed_sd_ints =
+                build_dressed_sd_intermediates(
+                    full_system,
+                    refreshed_dressed,
+                    sd_amps.t2);
+            DressedTriplesIntermediates triples_ints =
+                build_dressed_triples_intermediates(
+                    full_system,
+                    refreshed_dressed,
+                    refreshed_sd_ints,
+                    sd_amps.t2);
+            add_dressed_triples_feedback_into_triples_intermediates(
+                full_system,
+                refreshed_dressed,
+                triples.amplitudes.t3,
+                triples_ints);
+            build_dressed_triples_residual(
+                full_system,
+                triples_ints,
+                triples.amplitudes,
+                triples);
+            enforce_restricted_t3_structure(triples.r3);
             metrics.r3_rms = triples_residual_rms(triples.r3);
             metrics.t3_step_rms = update_t3_from_r3_jacobi(
                 state.reference, triples, kT3Damping);
 
-            build_r1_t3_feedback_family(
-                triples.amplitudes, so_blocks, r1_feedback);
-            metrics.r1_feedback_rms = tensor_rms(r1_feedback);
-
-            build_r2_t3_feedback_family(
-                triples.amplitudes, ints, so_blocks, r2_feedback);
-            metrics.r2_feedback_rms = tensor_rms(r2_feedback);
-
-            add_feedback_into_residuals(r1_feedback, r2_feedback, residuals);
-            metrics.sd_residual_rms = rms_norm(pack_residuals(residuals));
-            const SDUpdateMetrics sd_update = update_sd_amplitudes_with_feedback(
-                calculator, state, residuals, sd_amps, diis, kSDDamping);
-            metrics.t1_step_rms = sd_update.t1_step_rms;
-            metrics.t2_step_rms = sd_update.t2_step_rms;
-            store_sd_amplitudes(sd_amps, triples);
+            // Project T3 onto restricted subspace BEFORE pushing to DIIS so the
+            // subspace vectors are consistent with what the next iteration will see.
+            enforce_restricted_t3_structure(triples.amplitudes.t3);
 
             const Eigen::VectorXd full_residual_vec =
                 pack_rccsdt_stage_residuals(residuals, triples.r3);
@@ -1735,9 +2411,14 @@ namespace
                     extrapolated_full = std::move(*diis_res);
             }
             unpack_rccsdt_amplitudes(extrapolated_full, triples.amplitudes);
+            // Re-project after DIIS extrapolation to restore restricted structure.
+            enforce_restricted_t3_structure(triples.amplitudes.t3);
             metrics.estimated_correlation_energy =
                 compute_rccsdt_stage_correlation_energy(
                     so_ref, so_blocks, triples.amplitudes);
+            metrics.energy_change =
+                metrics.estimated_correlation_energy - previous_energy;
+            previous_energy = metrics.estimated_correlation_energy;
             const double score = stage_quality_score(metrics);
             metrics.quality_score = score;
             if (score + 1e-12 < best_stage_score)
@@ -1759,9 +2440,10 @@ namespace
                 HartreeFock::LogLevel::Info,
                 "RCCSDT[TENSOR-T3] :",
                 std::format(
-                    "{:3d}  E_est={:.10f}  rms(SD)={:.3e}  rms(R3)={:.3e}  rms(dT3)={:.3e}  rms(R1[T3])={:.3e}  rms(dT1)={:.3e}  rms(R2[T3])={:.3e}  rms(dT2)={:.3e}",
+                    "{:3d}  E_est={:.10f}  dE={:+.3e}  rms(SD)={:.3e}  rms(R3)={:.3e}  rms(dT3)={:.3e}  rms(R1[T3])={:.3e}  rms(dT1)={:.3e}  rms(R2[T3])={:.3e}  rms(dT2)={:.3e}",
                     iter,
                     metrics.estimated_correlation_energy,
+                    metrics.energy_change,
                     metrics.sd_residual_rms,
                     metrics.r3_rms,
                     metrics.t3_step_rms,
@@ -1772,21 +2454,18 @@ namespace
 
             if (metrics.r3_rms < tol_stage &&
                 metrics.sd_residual_rms < tol_stage &&
-                metrics.r1_feedback_rms < tol_stage &&
-                metrics.r2_feedback_rms < tol_stage)
+                std::abs(metrics.energy_change) < tol_energy &&
+                metrics.t3_step_rms < 10.0 * tol_stage &&
+                metrics.t2_step_rms < 10.0 * tol_stage &&
+                metrics.t1_step_rms < 10.0 * tol_stage)
             {
                 metrics.converged = true;
                 break;
             }
 
-            if (!require_convergence &&
-                iter >= 4 && stale_iterations >= 2 &&
-                score > 1.05 * best_stage_score)
-                break;
-
-            if (require_convergence &&
-                iter >= 8 && stale_iterations >= 4 &&
-                score > 1.10 * best_stage_score)
+            if (iter >= min_iterations_before_break &&
+                stale_iterations >= stall_patience &&
+                score > deterioration_factor * best_stage_score)
                 break;
         }
 
@@ -1802,8 +2481,14 @@ namespace
             metrics.t2_step_rms = best_metrics.t2_step_rms;
             metrics.quality_score = best_metrics.quality_score;
             metrics.estimated_correlation_energy = best_metrics.estimated_correlation_energy;
+            metrics.energy_change = best_metrics.energy_change;
             metrics.best_iteration = best_metrics.best_iteration;
-            metrics.converged = best_metrics.quality_score < tol_stage;
+            metrics.converged =
+                best_metrics.quality_score < tol_stage &&
+                std::abs(best_metrics.energy_change) < tol_energy &&
+                best_metrics.t3_step_rms < 10.0 * tol_stage &&
+                best_metrics.t2_step_rms < 10.0 * tol_stage &&
+                best_metrics.t1_step_rms < 10.0 * tol_stage;
         }
 
         return metrics;
@@ -2091,18 +2776,65 @@ namespace HartreeFock::Correlation::CC
         state_res->warm_start_iterations = rccsd_res->iterations;
         const ProductionSpinOrbitalBlocks so_blocks =
             build_spin_orbital_blocks(state_res->reference, state_res->mo_blocks);
+        auto full_system_res = build_spin_orbital_chemists_system(
+            calculator,
+            shell_pairs,
+            state_res->reference);
+        if (!full_system_res)
+            return std::unexpected("run_tensor_rccsdt: " + full_system_res.error());
         const DeterminantBackstopDecision backstop =
             choose_determinant_backstop(state_res->reference);
         const unsigned int stage_iteration_limit = backstop.enabled
             ? 8u
             : std::min(
-                  20u,
-                  std::max(12u, calculator._scf.get_max_cycles(calculator._shells.nbasis())));
+                  48u,
+                  std::max(20u, 2u * calculator._scf.get_max_cycles(calculator._shells.nbasis())));
         seed_triples_from_rccsd(*rccsd_res, state_res->triples);
+
+        if (!backstop.enabled)
+        {
+            auto restricted_system_res = build_restricted_spatial_system(
+                calculator,
+                shell_pairs,
+                state_res->reference);
+            if (!restricted_system_res)
+                return std::unexpected("run_tensor_rccsdt: " + restricted_system_res.error());
+
+            auto restricted_res = run_restricted_tensor_rccsdt_no_fallback(
+                calculator,
+                *state_res,
+                *restricted_system_res,
+                *rccsd_res);
+            if (!restricted_res)
+                return std::unexpected("run_tensor_rccsdt: " + restricted_res.error());
+
+            if (!restricted_res->converged)
+            {
+                return std::unexpected(
+                    std::format(
+                        "run_tensor_rccsdt: no determinant backstop is available for this larger system, and the standalone restricted tensor RCCSDT iterations did not converge (best rms(R3)={:.3e}, best rms(SD)={:.3e}, best rms(R2[T3])={:.3e}) within {} steps.",
+                        restricted_res->r3_rms,
+                        restricted_res->sd_residual_rms,
+                        restricted_res->r2_feedback_rms,
+                        restricted_res->iterations));
+            }
+
+            HartreeFock::Logger::blank();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "RCCSDT[TENSOR] :",
+                std::format(
+                    "No determinant backstop is available for this larger system, so the converged standalone restricted tensor RCCSDT result is used directly after {} steps.",
+                    restricted_res->iterations));
+            calculator._correlation_energy = restricted_res->estimated_correlation_energy;
+            return {};
+        }
+
         auto staged_triples_res = run_staged_tensor_triples_iterations(
             calculator,
             *state_res,
             so_blocks,
+            *full_system_res,
             state_res->triples,
             stage_iteration_limit,
             !backstop.enabled);
@@ -2177,26 +2909,7 @@ namespace HartreeFock::Correlation::CC
             return {};
         }
 
-        if (!staged_triples_res->converged)
-        {
-            return std::unexpected(
-                std::format(
-                    "run_tensor_rccsdt: no determinant backstop is available for this larger system, and the standalone tensor RCCSDT iterations did not converge (best rms(R3)={:.3e}, best rms(SD)={:.3e}, best rms(R2[T3])={:.3e}) within {} staged steps.",
-                    staged_triples_res->r3_rms,
-                    staged_triples_res->sd_residual_rms,
-                    staged_triples_res->r2_feedback_rms,
-                    staged_triples_res->iterations));
-        }
-
-        HartreeFock::Logger::blank();
-        HartreeFock::Logger::logging(
-            HartreeFock::LogLevel::Info,
-            "RCCSDT[TENSOR] :",
-            std::format(
-                "No determinant backstop is available for this larger system, so the converged standalone tensor RCCSDT result is used directly after {} staged steps.",
-                staged_triples_res->iterations));
-
-        calculator._correlation_energy = staged_triples_res->estimated_correlation_energy;
-        return {};
+        return std::unexpected(
+            "run_tensor_rccsdt: unexpected control flow after determinant-backstop path.");
     }
 } // namespace HartreeFock::Correlation::CC

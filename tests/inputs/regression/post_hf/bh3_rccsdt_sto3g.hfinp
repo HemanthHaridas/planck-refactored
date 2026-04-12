@@ -1,0 +1,31 @@
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation ccsdt
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+4
+0   1
+B     0.000000     0.000000     0.000000
+H     1.190000     0.000000     0.000000
+H    -0.595000     1.030570     0.000000
+H    -0.595000    -1.030570     0.000000
+%end_coords
