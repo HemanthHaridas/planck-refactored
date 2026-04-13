@@ -762,6 +762,8 @@ namespace HartreeFock
         double _total_energy = 0;         // Total Energy (SCF + Nuclear Repulsion)
         double _nuclear_repulsion = 0;    // Nuclear Repulsion Energy (Bohr)
         double _correlation_energy = 0.0; // Post-HF correlation energy (0 if not computed)
+        double _ccsd_reference_correlation_energy = 0.0; // CCSD correlation energy cached during CCSDT runs
+        bool _have_ccsd_reference_energy = false;        // Whether the cached CCSD correlation energy is valid
 
         // CASSCF / RASSCF results
         OptionsActiveSpace _active_space;     // active space specification
