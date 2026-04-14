@@ -29,6 +29,8 @@ jobs:
       - name: Push mirror to GitLab
         run: |
           git remote add gitlab git@gitlab.com:hemanth_hari/planck-refactored.git
+          git config --global user.email "hemanth.haridas@utah.edu"
+          git config --global user.name "hemanth_hari"
           git config pull.rebase false  # merge
           git pull gitlab devel
           git push gitlab --all
