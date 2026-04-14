@@ -29,5 +29,6 @@ jobs:
       - name: Push mirror to GitLab
         run: |
           git remote add gitlab git@gitlab.com:hemanth_hari/planck-refactored.git
+          git pull gitlab
           git push gitlab --all
           git push gitlab --tags
