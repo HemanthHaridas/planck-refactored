@@ -371,7 +371,7 @@ namespace HartreeFock::IO
         // (key, value) pairs
         const std::unordered_map<std::string, std::function<void(const std::string &)>> _control_map =
         {
-            {"basis",       [&basis](const std::string &value)          { basis._basis_name = toLower(value); }},
+            {"basis",       [&basis](const std::string &value)          { basis._basis_name = value; }},
             {"basis_type",  [&basis](const std::string &value)          { basis._basis      = map_string_enum<HartreeFock::BasisType>(value); }},
             {"calculation", [&calculation](const std::string &value)    { calculation       = map_string_enum<HartreeFock::CalculationType>(value); }},
             {"verbosity",   [&output](const std::string &value)         { output._verbosity = map_string_enum<HartreeFock::Verbosity>(value); }},

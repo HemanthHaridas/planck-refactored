@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 
@@ -179,8 +180,31 @@ HartreeFock::Basis HartreeFock::BasisFunctions::read_gbs_basis(const std::string
         throw std::runtime_error("Spherical Harmonics are not supported. Only Cartesian basis functions are currently supported");
     }
 
-    // Create input file stream
+    // Try the path as given first; if that fails, retry with the filename
+    // component lowercased (supports both case-preserving names like
+    // "cc-pVDZ" and the all-lowercase convention used by built-in bases).
+    auto make_lowercase_path = [](const std::string &path) -> std::string {
+        const auto sep = path.rfind('/');
+        if (sep == std::string::npos)
+        {
+            std::string lower = path;
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            return lower;
+        }
+        std::string name = path.substr(sep + 1);
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return path.substr(0, sep + 1) + name;
+    };
+
     std::ifstream file(file_name);
+    if (!file)
+    {
+        const std::string lower_path = make_lowercase_path(file_name);
+        if (lower_path != file_name)
+            file.open(lower_path);
+    }
     if (!file)
     {
         throw std::runtime_error("Cannot open basis file: " + file_name);
