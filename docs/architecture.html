@@ -326,6 +326,17 @@
 <li class="toc-level-4"><a href="#ci-hamiltonian-casscf-ci-h-ci-cpp">CI Hamiltonian — `casscf/ci.h` / `ci.cpp`</a></li>
 <li class="toc-level-4"><a href="#reduced-density-matrices-casscf-rdm-h-rdm-cpp">Reduced density matrices — `casscf/rdm.h` / `rdm.cpp`</a></li>
 <li class="toc-level-4"><a href="#orbital-optimization-mcscf-loop-casscf-casscf-h">Orbital optimization — MCSCF loop (`casscf/casscf.h`)</a></li>
+<li class="toc-level-2"><a href="#coupled-cluster-src-post-hf-cc">Coupled Cluster (`src/post_hf/cc/`)</a></li>
+<li class="toc-level-3"><a href="#file-map">File map</a></li>
+<li class="toc-level-3"><a href="#tensor-types-common-h">Tensor types (`common.h`)</a></li>
+<li class="toc-level-3"><a href="#reference-types-common-h">Reference types (`common.h`)</a></li>
+<li class="toc-level-3"><a href="#amplitude-and-denominator-storage-amplitudes-h">Amplitude and denominator storage (`amplitudes.h`)</a></li>
+<li class="toc-level-3"><a href="#mo-integral-blocks-mo-blocks-h">MO integral blocks (`mo_blocks.h`)</a></li>
+<li class="toc-level-3"><a href="#diis-for-amplitudes-diis-h">DIIS for amplitudes (`diis.h`)</a></li>
+<li class="toc-level-3"><a href="#rccsd-solver-ccsd-cpp">RCCSD solver (`ccsd.cpp`)</a></li>
+<li class="toc-level-3"><a href="#rccsdt-backend-dispatch-ccsdt-cpp-tensor-backend">RCCSDT backend dispatch (`ccsdt.cpp`, `tensor_backend.*`)</a></li>
+<li class="toc-level-3"><a href="#determinant-space-backend-determinant-space">Determinant-space backend (`determinant_space.*`)</a></li>
+<li class="toc-level-3"><a href="#uccsd-and-uccsdt-ccsd-cpp-ccsdt-cpp">UCCSD and UCCSDT (`ccsd.cpp`, `ccsdt.cpp`)</a></li>
 <li class="toc-level-2"><a href="#analytic-gradients-src-gradient">Analytic Gradients (`src/gradient/`)</a></li>
 <li class="toc-level-2"><a href="#geometry-optimization-src-opt">Geometry Optimization (`src/opt/`)</a></li>
 <li class="toc-level-3"><a href="#cartesian-l-bfgs-geomopt-h-geomopt-cpp">Cartesian L-BFGS — `geomopt.h` / `geomopt.cpp`</a></li>
@@ -506,6 +517,47 @@ E_MP2 = Σ_{i&lt;j, a&lt;b} |(ia|jb) - (ib|ja)|² / (ε_i + ε_j - ε_a - ε_b)
 <p>The orbital-gradient and CI-response path relies on a mixed-basis active-integral cache built by <code>build_active_integral_cache(...)</code> in <code>casscf/orbital.cpp</code>. That cache is produced by the dedicated <code>transform_eri_active_cache(...)</code> kernel in <code>src/post_hf/integrals.cpp</code>, not by the fully generic four-leg AO→MO transform. The cached tensor is stored row-major as <code>(p,u,v,w)</code>, with one full-space MO index <code>p</code> and three active-space indices <code>u,v,w</code>. Each fixed-<code>p</code> slab is contiguous, so the builder can parallelize safely over <code>p</code> with OpenMP and reuse thread-local scratch buffers across repeated macro-iteration rebuilds.</p>
 <p>On the consumer side, <code>compute_Q_matrix(...)</code> contracts the cached <code>(p,u,v,w)</code> slabs with the active-space 2-RDM to form the Q matrix used in the orbital gradient and response equations. Because both the <code>puvw</code> cache and <code>Γ[t,u,v,w]</code> are traversed as contiguous <code>n_act^3</code> slabs, the hot contraction path reduces to repeated dot products rather than repeated four-index address arithmetic.</p>
 <p><strong>Trade-off:</strong> The matrix-free Hessian avoids explicitly forming the O(N^4) orbital Hessian tensor but requires a CI response solve at each micro step. This is the correct asymptotic choice for large active spaces. For small active spaces (≤10 orbitals), the dense path may be faster in practice.</p>
+<hr>
+<h2 id="coupled-cluster-src-post-hf-cc">Coupled Cluster (<code>src/post_hf/cc/</code>)</h2>
+<p>All coupled-cluster code lives under <code>src/post_hf/cc/</code> in namespace <code>HartreeFock::Correlation::CC</code>. Four solver paths are available: <code>run_rccsd</code>, <code>run_uccsd</code>, <code>run_rccsdt</code>, and <code>run_uccsdt</code>. Every path follows the same two-phase <code>prepare</code> / <code>run</code> API: <code>prepare_X</code> validates the SCF result, transforms integrals, and allocates amplitude tensors; <code>run_X</code> calls <code>prepare_X</code> internally and then drives the iterative loop to convergence.</p>
+<h3 id="file-map">File map</h3>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>File</th>
+<th>Owns</th>
+</tr></thead>
+<tbody>
+<tr><td><code>common.h</code> / <code>common.cpp</code></td><td>Tensor types (<code>Tensor2D/4D/6D</code>), <code>RHFReference</code>, <code>UHFReference</code>, reference builders</td></tr>
+<tr><td><code>amplitudes.h</code> / <code>amplitudes.cpp</code></td><td><code>DenominatorCache</code>, <code>RCCSDAmplitudes</code>, <code>RCCSDTAmplitudes</code>, zero-amplitude factories</td></tr>
+<tr><td><code>mo_blocks.h</code> / <code>mo_blocks.cpp</code></td><td><code>MOBlockCache</code>, AO→MO four-index transform for the teaching solver</td></tr>
+<tr><td><code>diis.h</code> / <code>diis.cpp</code></td><td><code>AmplitudeDIIS</code> — DIIS on flattened amplitude vectors</td></tr>
+<tr><td><code>ccsd.h</code> / <code>ccsd.cpp</code></td><td><code>RCCSDState</code>, <code>UCCSDState</code>, <code>prepare_rccsd</code>, <code>run_rccsd</code>, <code>prepare_uccsd</code>, <code>run_uccsd</code></td></tr>
+<tr><td><code>ccsdt.h</code> / <code>ccsdt.cpp</code></td><td><code>RCCSDTState</code>, <code>UCCSDTState</code>, <code>prepare_rccsdt</code>, <code>run_rccsdt</code>, <code>prepare_uccsdt</code>, <code>run_uccsdt</code></td></tr>
+<tr><td><code>determinant_space.h</code> / <code>determinant_space.cpp</code></td><td><code>SpinOrbitalSystem</code>, <code>DeterminantCCSpinOrbitalSeed</code>, <code>build_rhf/uhf_spin_orbital_system</code>, <code>solve_determinant_cc</code></td></tr>
+<tr><td><code>tensor_backend.h</code> / <code>tensor_backend.cpp</code></td><td><code>CanonicalRHFCCReference</code>, <code>TensorCCBlockCache</code>, <code>TensorTriplesWorkspace</code>, <code>TensorRCCSDTState</code>, <code>run_tensor_rccsdt</code>, <code>choose_rccsdt_backend</code></td></tr>
+</tbody></table></div>
+<h3 id="tensor-types-common-h">Tensor types (<code>common.h</code>)</h3>
+<p><code>Tensor2D</code>, <code>Tensor4D</code>, and <code>Tensor6D</code> store flat <code>std::vector&lt;double&gt;</code> with row-major layout and expose a call-operator for multi-index access. Indexing follows chemists&#x27; notation throughout: <code>Tensor4D(i,j,k,l)</code> stores <code>(ij|kl)</code>, not the physicist antisymmetrized bracket. The antisymmetrized form <code>&lt;ij||kl&gt; = (ij|kl) - (il|kj)</code> is computed on the fly where needed.</p>
+<h3 id="reference-types-common-h">Reference types (<code>common.h</code>)</h3>
+<p><code>RHFReference</code> holds the canonical closed-shell partition: <code>C_occ</code> [n_ao×n_occ], <code>C_virt</code> [n_ao×n_virt], <code>eps_occ</code>, <code>eps_virt</code>. All restricted CC paths use this struct. <code>UHFReference</code> holds the full alpha and beta MO coefficient matrices and orbital energies; the unrestricted determinant-space paths use this. Both are produced by <code>build_rhf_reference</code> / <code>build_uhf_reference</code> in <code>common.cpp</code>, which run basic dimension and occupation sanity checks before returning.</p>
+<h3 id="amplitude-and-denominator-storage-amplitudes-h">Amplitude and denominator storage (<code>amplitudes.h</code>)</h3>
+<p><code>DenominatorCache</code> pre-computes the Møller-Plesset denominators <code>d1(i,a)</code>, <code>d2(i,j,a,b)</code>, and optionally <code>d3(i,j,k,a,b,c)</code>. The <code>include_triples</code> flag allows CCSD paths to skip the <span class="math-inline">\(O(o^3 v^3)\)</span> T3 allocation. <code>RCCSDAmplitudes</code> bundles T1 and T2; <code>RCCSDTAmplitudes</code> adds T3 as a <code>Tensor6D</code>.</p>
+<h3 id="mo-integral-blocks-mo-blocks-h">MO integral blocks (<code>mo_blocks.h</code>)</h3>
+<p><code>MOBlockCache</code> stores the AO→MO transformed ERIs as named sub-tensors (<code>oooo</code>, <code>ooov</code>, <code>oovv</code>, <code>ovov</code>, <code>ovvo</code>, <code>ovvv</code>, <code>vvvv</code>) plus the full spatial tensor <code>full</code>. <code>build_mo_block_cache</code> performs the quarter-transform using <code>C_occ</code> and <code>C_virt</code> from <code>RHFReference</code>. The teaching paths use <code>full</code> to build the antisymmetrized spin-orbital two-body tensor on the fly. The production tensor backend (<code>TensorCCBlockCache</code>) omits <code>full</code> and stores only the seven named blocks to reduce memory.</p>
+<h3 id="diis-for-amplitudes-diis-h">DIIS for amplitudes (<code>diis.h</code>)</h3>
+<p><code>AmplitudeDIIS</code> mirrors the SCF DIIS helper (<code>src/scf/diis.cpp</code>) but accepts flattened <code>Eigen::VectorXd</code> amplitude vectors and residual vectors. T1 and T2 (and T3 for CCSDT) are concatenated into one vector before each <code>push</code> call, so a single <code>AmplitudeDIIS</code> instance accelerates all amplitude blocks simultaneously. Queue size defaults to 8.</p>
+<h3 id="rccsd-solver-ccsd-cpp">RCCSD solver (<code>ccsd.cpp</code>)</h3>
+<p><code>run_rccsd</code> operates in the spin-orbital basis. Each iteration: (1) builds <code>τ</code> and <code>τ̃</code>, (2) builds the five standard CCSD intermediates <code>F_ae</code>, <code>F_mi</code>, <code>F_me</code>, <code>W_mnij</code>, <code>W_abef</code>, <code>W_mbej</code>, (3) forms <code>R1</code> and <code>R2</code> by contracting amplitudes against those intermediates, (4) applies the Jacobi update using <code>DenominatorCache</code>, (5) accelerates with <code>AmplitudeDIIS</code>. The correlation energy uses the antisymmetrized form <code>E = f_{ia} t_i^a + ¼ &lt;ij||ab&gt; t_{ij}^{ab} + ½ &lt;ij||ab&gt; t_i^a t_j^b</code>.</p>
+<h3 id="rccsdt-backend-dispatch-ccsdt-cpp-tensor-backend">RCCSDT backend dispatch (<code>ccsdt.cpp</code>, <code>tensor_backend.*</code>)</h3>
+<p><code>run_rccsdt</code> calls <code>choose_rccsdt_backend(reference)</code> before doing any work. The backend choice is based on system size:</p>
+<ul>
+<li><strong><code>DeterminantPrototype</code></strong> — selected when n_spin_orb ≤ 12. Delegates to <code>solve_determinant_cc(max_rank=3)</code>.</li>
+<li><strong><code>TensorProduction</code></strong> — selected for larger systems. Delegates to <code>run_tensor_rccsdt</code> in <code>tensor_backend.*</code>, which runs a staged pipeline: CCSD warm-start → T1-dress Fock and ERIs → restricted R1/R2/R3 equations → restricted T3 symmetry restoration → DIIS. For moderate systems (n_spin_orb ≤ 16, det count ≤ 10000) a determinant backstop cross-check is optionally run from the warm-started tensor amplitudes via <code>DeterminantCCSpinOrbitalSeed</code>.</li>
+</ul>
+<h3 id="determinant-space-backend-determinant-space">Determinant-space backend (<code>determinant_space.*</code>)</h3>
+<p><code>SpinOrbitalSystem</code> holds the spin-orbital one-body tensor <code>h1</code> and antisymmetrized two-body tensor <code>g2</code>. <code>build_rhf_spin_orbital_system</code> and <code>build_uhf_spin_orbital_system</code> construct it from the respective reference and MO blocks. <code>solve_determinant_cc(system, max_rank)</code> enumerates all unique excitations up to <code>max_rank</code> out of the reference determinant, assembles the cluster operator <code>T</code>, evaluates <code>exp(-T) H exp(T) |Φ₀⟩</code> by the finite nilpotent series in the determinant basis, projects onto S/D/T manifolds to get residuals, and iterates with Jacobi updates and DIIS. Hard limits: <code>n_spin_orb ≤ 12</code>, det count ≤ 1200 (teaching / correctness use only).</p>
+<h3 id="uccsd-and-uccsdt-ccsd-cpp-ccsdt-cpp">UCCSD and UCCSDT (<code>ccsd.cpp</code>, <code>ccsdt.cpp</code>)</h3>
+<p>Both unrestricted paths call <code>build_uhf_spin_orbital_system</code> to construct a spin-orbital Hamiltonian from the UHF alpha and beta MO spaces, then forward to <code>solve_determinant_cc</code> with <code>max_rank=2</code> (UCCSD) or <code>max_rank=3</code> (UCCSDT). No separate tensor production path exists for the unrestricted methods; they are teaching-scale solvers subject to the same determinant-space size limits.</p>
 <hr>
 <h2 id="analytic-gradients-src-gradient">Analytic Gradients (<code>src/gradient/</code>)</h2>
 <p><code>compute_rhf_gradient()</code> and <code>compute_uhf_gradient()</code> return the natoms×3 nuclear gradient in Ha/Bohr via the Hellmann-Feynman and Pulay contributions. The Hellmann-Feynman term includes dV/dR (nuclear-attraction derivative with respect to nucleus coordinates). The Pulay term accounts for the basis-function center dependence and requires the energy-weighted density matrix. All derivative integrals are computed analytically via <code>_compute_1e_deriv_A</code>, <code>_compute_nuclear_deriv_A_elem</code>, and <code>_compute_eri_deriv_elem</code>.</p>

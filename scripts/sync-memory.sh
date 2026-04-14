@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CASSCF_STATUS="${REPO_ROOT}/docs/CASSCF_STATUS.md"
 VAULT_SCRIPT="${REPO_ROOT}/scripts/vault_to_claude.py"
 
