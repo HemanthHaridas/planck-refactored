@@ -42,6 +42,9 @@ namespace HartreeFock::Correlation::CC
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs)
     {
+        calculator._have_ccsd_reference_energy = false;
+        calculator._ccsd_reference_correlation_energy = 0.0;
+
         auto selector_ref = build_rhf_reference(calculator);
         if (!selector_ref)
             return std::unexpected(selector_ref.error());
@@ -69,6 +72,13 @@ namespace HartreeFock::Correlation::CC
             calculator, state_res->reference, state_res->mo_blocks);
         if (!system_res)
             return std::unexpected(system_res.error());
+
+        auto ccsd_res = solve_determinant_cc(
+            calculator, *system_res, 2, "RCCSDT[CCSD-REF] :");
+        if (!ccsd_res)
+            return std::unexpected("run_rccsdt: failed to build CCSD reference energy: " + ccsd_res.error());
+        calculator._ccsd_reference_correlation_energy = *ccsd_res;
+        calculator._have_ccsd_reference_energy = true;
 
         auto corr_res = solve_determinant_cc(
             calculator, *system_res, 3, "RCCSDT :");
@@ -100,6 +110,9 @@ namespace HartreeFock::Correlation::CC
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs)
     {
+        calculator._have_ccsd_reference_energy = false;
+        calculator._ccsd_reference_correlation_energy = 0.0;
+
         auto state_res = prepare_uccsdt(calculator, shell_pairs);
         if (!state_res)
             return std::unexpected(state_res.error());
@@ -108,6 +121,13 @@ namespace HartreeFock::Correlation::CC
             calculator, shell_pairs, state_res->reference, "UCCSDT :");
         if (!system_res)
             return std::unexpected(system_res.error());
+
+        auto ccsd_res = solve_determinant_cc(
+            calculator, *system_res, 2, "UCCSDT[CCSD-REF] :");
+        if (!ccsd_res)
+            return std::unexpected("run_uccsdt: failed to build UCCSD reference energy: " + ccsd_res.error());
+        calculator._ccsd_reference_correlation_energy = *ccsd_res;
+        calculator._have_ccsd_reference_energy = true;
 
         auto corr_res = solve_determinant_cc(
             calculator, *system_res, 3, "UCCSDT :");

@@ -664,6 +664,8 @@ int main(int argc, const char *argv[])
     // ── Post-HF correlation ───────────────────────────────────────────────────
     if (calculator._info._is_converged)
     {
+        calculator._have_ccsd_reference_energy = false;
+        calculator._ccsd_reference_correlation_energy = 0.0;
         std::expected<void, std::string> corr_res;
         std::string corr_tag;
 
@@ -759,16 +761,34 @@ int main(int argc, const char *argv[])
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
                                                      "RMP2 :", "Natural orbitals unavailable: " + nat_res.error());
                 }
-                const std::string method_label =
-                    (calculator._correlation == HartreeFock::PostHF::RMP2)  ? "MP2"
-                    : (calculator._correlation == HartreeFock::PostHF::UMP2) ? "MP2"
-                    : (calculator._correlation == HartreeFock::PostHF::RCCSD) ? "RCCSD"
-                    : (calculator._correlation == HartreeFock::PostHF::UCCSD) ? "UCCSD"
-                    : (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "RCCSDT"
-                    : (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSDT"
-                                                                            : "Correlated";
-                HartreeFock::Logger::correlation_energy(
-                    calculator._total_energy, calculator._correlation_energy, method_label);
+                if ((calculator._correlation == HartreeFock::PostHF::RCCSDT ||
+                     calculator._correlation == HartreeFock::PostHF::UCCSDT) &&
+                    calculator._have_ccsd_reference_energy)
+                {
+                    const std::string ccsd_label =
+                        (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "CCSD" : "UCCSD";
+                    const std::string ccsdt_label =
+                        (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "CCSDT" : "UCCSDT";
+                    HartreeFock::Logger::ccsdt_energy_summary(
+                        calculator._total_energy,
+                        calculator._ccsd_reference_correlation_energy,
+                        calculator._correlation_energy,
+                        ccsd_label,
+                        ccsdt_label);
+                }
+                else
+                {
+                    const std::string method_label =
+                        (calculator._correlation == HartreeFock::PostHF::RMP2)  ? "MP2"
+                        : (calculator._correlation == HartreeFock::PostHF::UMP2) ? "MP2"
+                        : (calculator._correlation == HartreeFock::PostHF::RCCSD) ? "RCCSD"
+                        : (calculator._correlation == HartreeFock::PostHF::UCCSD) ? "UCCSD"
+                        : (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "RCCSDT"
+                        : (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSDT"
+                                                                                : "Correlated";
+                    HartreeFock::Logger::correlation_energy(
+                        calculator._total_energy, calculator._correlation_energy, method_label);
+                }
             }
 
             // Re-save after converged post-HF runs so restartable correlated

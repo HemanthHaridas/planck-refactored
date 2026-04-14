@@ -1885,6 +1885,112 @@ namespace
         purify_restricted_t3(tensor);
     }
 
+    void restore_restricted_t2_from_unique(Tensor4D &t2)
+    {
+        for (int i = 0; i < t2.dim1; ++i)
+            for (int a = 0; a < t2.dim3; ++a)
+                for (int b = 0; b < t2.dim4; ++b)
+                    t2(i, i, a, b) *= 0.5;
+
+        Tensor4D original(t2.dim1, t2.dim2, t2.dim3, t2.dim4, 0.0);
+        original.data = t2.data;
+        for (int i = 0; i < t2.dim1; ++i)
+            for (int j = 0; j < t2.dim2; ++j)
+                for (int a = 0; a < t2.dim3; ++a)
+                    for (int b = 0; b < t2.dim4; ++b)
+                        t2(i, j, a, b) += original(j, i, b, a);
+    }
+
+    void restore_restricted_t3_from_unique(Tensor6D &t3)
+    {
+        for (int i = 0; i < t3.dim1; ++i)
+            for (int j = 0; j < t3.dim2; ++j)
+                for (int k = 0; k < t3.dim3; ++k)
+                {
+                    const bool all_equal = (i == j && j == k);
+                    const bool two_equal =
+                        !all_equal && (i == j || j == k || i == k);
+                    if (!two_equal && !all_equal)
+                        continue;
+                    const double scale = all_equal ? (1.0 / 6.0) : 0.5;
+                    for (int a = 0; a < t3.dim4; ++a)
+                        for (int b = 0; b < t3.dim5; ++b)
+                            for (int c = 0; c < t3.dim6; ++c)
+                                t3(i, j, k, a, b, c) *= scale;
+                }
+
+        apply_restricted_t3_permutation_symmetry(t3);
+        purify_restricted_t3(t3);
+    }
+
+    [[nodiscard]] std::size_t restricted_unique_rccsdt_size(
+        const RCCSDTAmplitudes &amps) noexcept
+    {
+        const std::size_t nocc = static_cast<std::size_t>(amps.t1.dim1);
+        const std::size_t nvirt = static_cast<std::size_t>(amps.t1.dim2);
+        const std::size_t t1_size = nocc * nvirt;
+        const std::size_t t2_size = (nocc * (nocc + 1) / 2) * nvirt * nvirt;
+        const std::size_t t3_size =
+            (nocc * (nocc + 1) * (nocc + 2) / 6) * nvirt * nvirt * nvirt;
+        return t1_size + t2_size + t3_size;
+    }
+
+    Eigen::VectorXd pack_restricted_unique_rccsdt_amplitudes(
+        const RCCSDTAmplitudes &amps)
+    {
+        Eigen::VectorXd packed(
+            static_cast<Eigen::Index>(restricted_unique_rccsdt_size(amps)));
+        Eigen::Index offset = 0;
+
+        for (const double value : amps.t1.data)
+            packed(offset++) = value;
+
+        for (int i = 0; i < amps.t2.dim1; ++i)
+            for (int j = i; j < amps.t2.dim2; ++j)
+                for (int a = 0; a < amps.t2.dim3; ++a)
+                    for (int b = 0; b < amps.t2.dim4; ++b)
+                        packed(offset++) = amps.t2(i, j, a, b);
+
+        for (int i = 0; i < amps.t3.dim1; ++i)
+            for (int j = i; j < amps.t3.dim2; ++j)
+                for (int k = j; k < amps.t3.dim3; ++k)
+                    for (int a = 0; a < amps.t3.dim4; ++a)
+                        for (int b = 0; b < amps.t3.dim5; ++b)
+                            for (int c = 0; c < amps.t3.dim6; ++c)
+                                packed(offset++) = amps.t3(i, j, k, a, b, c);
+
+        return packed;
+    }
+
+    void unpack_restricted_unique_rccsdt_amplitudes(
+        const Eigen::VectorXd &packed,
+        RCCSDTAmplitudes &amps)
+    {
+        std::fill(amps.t1.data.begin(), amps.t1.data.end(), 0.0);
+        std::fill(amps.t2.data.begin(), amps.t2.data.end(), 0.0);
+        std::fill(amps.t3.data.begin(), amps.t3.data.end(), 0.0);
+
+        Eigen::Index offset = 0;
+        for (double &value : amps.t1.data)
+            value = packed(offset++);
+
+        for (int i = 0; i < amps.t2.dim1; ++i)
+            for (int j = i; j < amps.t2.dim2; ++j)
+                for (int a = 0; a < amps.t2.dim3; ++a)
+                    for (int b = 0; b < amps.t2.dim4; ++b)
+                        amps.t2(i, j, a, b) = packed(offset++);
+        restore_restricted_t2_from_unique(amps.t2);
+
+        for (int i = 0; i < amps.t3.dim1; ++i)
+            for (int j = i; j < amps.t3.dim2; ++j)
+                for (int k = j; k < amps.t3.dim3; ++k)
+                    for (int a = 0; a < amps.t3.dim4; ++a)
+                        for (int b = 0; b < amps.t3.dim5; ++b)
+                            for (int c = 0; c < amps.t3.dim6; ++c)
+                                amps.t3(i, j, k, a, b, c) = packed(offset++);
+        restore_restricted_t3_from_unique(amps.t3);
+    }
+
 
     [[nodiscard]] double update_t3_from_r3_jacobi(
         const CanonicalRHFCCReference &reference,
@@ -2200,14 +2306,31 @@ namespace
         TensorTriplesStageMetrics best_metrics;
         bool have_best = false;
         double best_score = std::numeric_limits<double>::infinity();
+        AmplitudeDIIS diis(static_cast<int>(std::max(2u, calculator._scf._DIIS_dim)));
 
         double previous_energy =
             compute_restricted_rccsdt_correlation_energy(system, amps);
 
         for (unsigned int iter = 1; iter <= max_iter; ++iter)
         {
+            const Eigen::VectorXd unique_before =
+                pack_restricted_unique_rccsdt_amplitudes(amps);
             const RestrictedRCCSDTUpdateMetrics update_metrics =
                 update_restricted_rccsdt_amplitudes_once(system, reference, amps);
+            Eigen::VectorXd unique_after =
+                pack_restricted_unique_rccsdt_amplitudes(amps);
+            const Eigen::VectorXd unique_step = unique_after - unique_before;
+
+            diis.push(unique_after, unique_step);
+            if (calculator._scf._use_DIIS && diis.ready())
+            {
+                auto diis_res = diis.extrapolate();
+                if (diis_res)
+                {
+                    unique_after = std::move(*diis_res);
+                    unpack_restricted_unique_rccsdt_amplitudes(unique_after, amps);
+                }
+            }
 
             metrics.iterations = iter;
             metrics.sd_residual_rms = update_metrics.sd_residual_rms;
@@ -2754,6 +2877,9 @@ namespace HartreeFock::Correlation::CC
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs)
     {
+        calculator._have_ccsd_reference_energy = false;
+        calculator._ccsd_reference_correlation_energy = 0.0;
+
         auto state_res = prepare_tensor_rccsdt(calculator, shell_pairs);
         if (!state_res)
             return std::unexpected(state_res.error());
@@ -2775,6 +2901,8 @@ namespace HartreeFock::Correlation::CC
 
         state_res->warm_start_correlation_energy = rccsd_res->correlation_energy;
         state_res->warm_start_iterations = rccsd_res->iterations;
+        calculator._ccsd_reference_correlation_energy = rccsd_res->correlation_energy;
+        calculator._have_ccsd_reference_energy = true;
         const ProductionSpinOrbitalBlocks so_blocks =
             build_spin_orbital_blocks(state_res->reference, state_res->mo_blocks);
         auto full_system_res = build_spin_orbital_chemists_system(
@@ -2825,7 +2953,7 @@ namespace HartreeFock::Correlation::CC
                 HartreeFock::LogLevel::Info,
                 "RCCSDT[TENSOR] :",
                 std::format(
-                    "No determinant backstop is available for this larger system, so the converged standalone restricted tensor RCCSDT result is used directly after {} steps.",
+                    "Standalone restricted tensor RCCSDT converged in {} steps; using the converged tensor result directly.",
                     restricted_res->iterations));
             calculator._correlation_energy = restricted_res->estimated_correlation_energy;
             return {};

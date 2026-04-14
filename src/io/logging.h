@@ -284,6 +284,45 @@ namespace HartreeFock
                       << std::string(LW + VW * 3, '-') << "\n";
         }
 
+        inline void ccsdt_energy_summary(const double E_hf,
+                                         const double E_ccsd_corr,
+                                         const double E_ccsdt_corr,
+                                         const std::string &ccsd_label = "CCSD",
+                                         const std::string &ccsdt_label = "CCSDT")
+        {
+            if (is_silenced())
+                return;
+
+            std::lock_guard<std::mutex> lock(log_mutex);
+            constexpr int LW = 32;
+            constexpr int VW = 20;
+            const double E_ccsd = E_hf + E_ccsd_corr;
+            const double E_ccsdt = E_hf + E_ccsdt_corr;
+
+            std::cout << std::setw(LW) << std::left << "  HF Energy"
+                      << std::fixed << std::setprecision(10)
+                      << std::setw(VW) << std::right << E_hf
+                      << std::setw(VW) << std::right << E_hf * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_hf * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::setw(LW) << std::left << ("  " + ccsd_label + " Energy")
+                      << std::setw(VW) << std::right << E_ccsd
+                      << std::setw(VW) << std::right << E_ccsd * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_ccsd * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::setw(LW) << std::left << ("  " + ccsdt_label + " Energy")
+                      << std::setw(VW) << std::right << E_ccsdt
+                      << std::setw(VW) << std::right << E_ccsdt * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_ccsdt * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::setw(LW) << std::left << ("  " + ccsdt_label + " Correlation")
+                      << std::setw(VW) << std::right << E_ccsdt_corr
+                      << std::setw(VW) << std::right << E_ccsdt_corr * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_ccsdt_corr * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::string(LW + VW * 3, '-') << "\n";
+        }
+
         inline void mp2_natural_orbitals(const Eigen::VectorXd &occupations,
                                          const Eigen::MatrixXd &coefficients_mo,
                                          double coeff_threshold = 1e-2)
