@@ -1,6 +1,7 @@
 ### Planck
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19478938.svg)](https://doi.org/10.5281/zenodo.19478938)
+[![Mirror to GitLab](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/main.yml/badge.svg)](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/main.yml)
 
 <p align="justify">
 A quantum chemistry program implementing restricted, unrestricted, and restricted open-shell Hartree-Fock SCF and Kohn-Sham DFT with dipole and quadrupole moment analysis, Mulliken population analysis, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
