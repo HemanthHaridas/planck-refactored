@@ -420,6 +420,158 @@ On the consumer side, `compute_Q_matrix(...)` contracts the cached `(p,u,v,w)` s
 
 ---
 
+## Coupled Cluster (`src/post_hf/cc/`)
+
+<div align="justify">
+
+All coupled-cluster code lives under `src/post_hf/cc/` in namespace
+`HartreeFock::Correlation::CC`. Four solver paths are available:
+`run_rccsd`, `run_uccsd`, `run_rccsdt`, and `run_uccsdt`. Every path follows
+the same two-phase `prepare` / `run` API: `prepare_X` validates the SCF
+result, transforms integrals, and allocates amplitude tensors; `run_X` calls
+`prepare_X` internally and then drives the iterative loop to convergence.
+
+</div>
+
+### File map
+
+| File | Owns |
+|------|------|
+| `common.h` / `common.cpp` | Tensor types (`Tensor2D/4D/6D`), `RHFReference`, `UHFReference`, reference builders |
+| `amplitudes.h` / `amplitudes.cpp` | `DenominatorCache`, `RCCSDAmplitudes`, `RCCSDTAmplitudes`, zero-amplitude factories |
+| `mo_blocks.h` / `mo_blocks.cpp` | `MOBlockCache`, AO→MO four-index transform for the teaching solver |
+| `diis.h` / `diis.cpp` | `AmplitudeDIIS` — DIIS on flattened amplitude vectors |
+| `ccsd.h` / `ccsd.cpp` | `RCCSDState`, `UCCSDState`, `prepare_rccsd`, `run_rccsd`, `prepare_uccsd`, `run_uccsd` |
+| `ccsdt.h` / `ccsdt.cpp` | `RCCSDTState`, `UCCSDTState`, `prepare_rccsdt`, `run_rccsdt`, `prepare_uccsdt`, `run_uccsdt` |
+| `determinant_space.h` / `determinant_space.cpp` | `SpinOrbitalSystem`, `DeterminantCCSpinOrbitalSeed`, `build_rhf/uhf_spin_orbital_system`, `solve_determinant_cc` |
+| `tensor_backend.h` / `tensor_backend.cpp` | `CanonicalRHFCCReference`, `TensorCCBlockCache`, `TensorTriplesWorkspace`, `TensorRCCSDTState`, `run_tensor_rccsdt`, `choose_rccsdt_backend` |
+
+### Tensor types (`common.h`)
+
+<div align="justify">
+
+`Tensor2D`, `Tensor4D`, and `Tensor6D` store flat `std::vector<double>` with
+row-major layout and expose a call-operator for multi-index access.
+Indexing follows chemists' notation throughout: `Tensor4D(i,j,k,l)` stores
+`(ij|kl)`, not the physicist antisymmetrized bracket. The antisymmetrized
+form `<ij||kl> = (ij|kl) - (il|kj)` is computed on the fly where needed.
+
+</div>
+
+### Reference types (`common.h`)
+
+<div align="justify">
+
+`RHFReference` holds the canonical closed-shell partition: `C_occ` [n_ao×n_occ],
+`C_virt` [n_ao×n_virt], `eps_occ`, `eps_virt`. All restricted CC paths use
+this struct. `UHFReference` holds the full alpha and beta MO coefficient matrices
+and orbital energies; the unrestricted determinant-space paths use this.
+Both are produced by `build_rhf_reference` / `build_uhf_reference` in
+`common.cpp`, which run basic dimension and occupation sanity checks before
+returning.
+
+</div>
+
+### Amplitude and denominator storage (`amplitudes.h`)
+
+<div align="justify">
+
+`DenominatorCache` pre-computes the Møller-Plesset denominators `d1(i,a)`,
+`d2(i,j,a,b)`, and optionally `d3(i,j,k,a,b,c)`. The `include_triples` flag
+allows CCSD paths to skip the \(O(o^3 v^3)\) T3 allocation. `RCCSDAmplitudes`
+bundles T1 and T2; `RCCSDTAmplitudes` adds T3 as a `Tensor6D`.
+
+</div>
+
+### MO integral blocks (`mo_blocks.h`)
+
+<div align="justify">
+
+`MOBlockCache` stores the AO→MO transformed ERIs as named sub-tensors
+(`oooo`, `ooov`, `oovv`, `ovov`, `ovvo`, `ovvv`, `vvvv`) plus the full
+spatial tensor `full`. `build_mo_block_cache` performs the quarter-transform
+using `C_occ` and `C_virt` from `RHFReference`. The teaching paths use `full`
+to build the antisymmetrized spin-orbital two-body tensor on the fly.
+The production tensor backend (`TensorCCBlockCache`) omits `full` and stores
+only the seven named blocks to reduce memory.
+
+</div>
+
+### DIIS for amplitudes (`diis.h`)
+
+<div align="justify">
+
+`AmplitudeDIIS` mirrors the SCF DIIS helper (`src/scf/diis.cpp`) but accepts
+flattened `Eigen::VectorXd` amplitude vectors and residual vectors. T1 and T2
+(and T3 for CCSDT) are concatenated into one vector before each `push` call,
+so a single `AmplitudeDIIS` instance accelerates all amplitude blocks
+simultaneously. Queue size defaults to 8.
+
+</div>
+
+### RCCSD solver (`ccsd.cpp`)
+
+<div align="justify">
+
+`run_rccsd` operates in the spin-orbital basis. Each iteration: (1) builds
+`τ` and `τ̃`, (2) builds the five standard CCSD intermediates
+`F_ae`, `F_mi`, `F_me`, `W_mnij`, `W_abef`, `W_mbej`, (3) forms `R1` and
+`R2` by contracting amplitudes against those intermediates, (4) applies the
+Jacobi update using `DenominatorCache`, (5) accelerates with
+`AmplitudeDIIS`. The correlation energy uses the antisymmetrized form
+`E = f_{ia} t_i^a + ¼ <ij||ab> t_{ij}^{ab} + ½ <ij||ab> t_i^a t_j^b`.
+
+</div>
+
+### RCCSDT backend dispatch (`ccsdt.cpp`, `tensor_backend.*`)
+
+<div align="justify">
+
+`run_rccsdt` calls `choose_rccsdt_backend(reference)` before doing any work.
+The backend choice is based on system size:
+
+- **`DeterminantPrototype`** — selected when n_spin_orb ≤ 12.
+  Delegates to `solve_determinant_cc(max_rank=3)`.
+- **`TensorProduction`** — selected for larger systems.
+  Delegates to `run_tensor_rccsdt` in `tensor_backend.*`, which runs a
+  staged pipeline: CCSD warm-start → T1-dress Fock and ERIs → restricted
+  R1/R2/R3 equations → restricted T3 symmetry restoration → DIIS.
+  For moderate systems (n_spin_orb ≤ 16, det count ≤ 10000) a determinant
+  backstop cross-check is optionally run from the warm-started tensor
+  amplitudes via `DeterminantCCSpinOrbitalSeed`.
+
+</div>
+
+### Determinant-space backend (`determinant_space.*`)
+
+<div align="justify">
+
+`SpinOrbitalSystem` holds the spin-orbital one-body tensor `h1` and
+antisymmetrized two-body tensor `g2`. `build_rhf_spin_orbital_system` and
+`build_uhf_spin_orbital_system` construct it from the respective reference
+and MO blocks. `solve_determinant_cc(system, max_rank)` enumerates all unique
+excitations up to `max_rank` out of the reference determinant, assembles the
+cluster operator `T`, evaluates `exp(-T) H exp(T) |Φ₀⟩` by the finite
+nilpotent series in the determinant basis, projects onto S/D/T manifolds to
+get residuals, and iterates with Jacobi updates and DIIS. Hard limits:
+`n_spin_orb ≤ 12`, det count ≤ 1200 (teaching / correctness use only).
+
+</div>
+
+### UCCSD and UCCSDT (`ccsd.cpp`, `ccsdt.cpp`)
+
+<div align="justify">
+
+Both unrestricted paths call `build_uhf_spin_orbital_system` to construct a
+spin-orbital Hamiltonian from the UHF alpha and beta MO spaces, then forward
+to `solve_determinant_cc` with `max_rank=2` (UCCSD) or `max_rank=3` (UCCSDT).
+No separate tensor production path exists for the unrestricted methods; they
+are teaching-scale solvers subject to the same determinant-space size limits.
+
+</div>
+
+---
+
 ## Analytic Gradients (`src/gradient/`)
 
 <div align="justify">
