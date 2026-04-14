@@ -241,20 +241,21 @@
 <li class="toc-level-3"><a href="#mass-weighting-and-eckart-projection">Mass-Weighting and Eckart Projection</a></li>
 <li class="toc-level-3"><a href="#normal-mode-frequencies">Normal Mode Frequencies</a></li>
 <li class="toc-level-2"><a href="#18-kohn-sham-density-functional-theory">18. Kohn-Sham Density Functional Theory</a></li>
-<li class="toc-level-3"><a href="#18-1-the-kohn-sham-equations">18.1 The Kohn-Sham Equations</a></li>
-<li class="toc-level-3"><a href="#18-2-exchange-correlation-functional-families">18.2 Exchange-Correlation Functional Families</a></li>
-<li class="toc-level-3"><a href="#18-3-numerical-integration-molecular-grid">18.3 Numerical Integration: Molecular Grid</a></li>
-<li class="toc-level-3"><a href="#18-4-ao-evaluation-on-the-grid">18.4 AO Evaluation on the Grid</a></li>
-<li class="toc-level-3"><a href="#18-5-density-and-xc-evaluation">18.5 Density and XC Evaluation</a></li>
-<li class="toc-level-3"><a href="#18-6-xc-matrix-assembly">18.6 XC Matrix Assembly</a></li>
-<li class="toc-level-3"><a href="#18-7-ks-dft-scf-loop">18.7 KS-DFT SCF Loop</a></li>
-<li class="toc-level-3"><a href="#18-8-dft-code-map">18.8 DFT Code Map</a></li>
+<li class="toc-level-3"><a href="#the-kohn-sham-equations">The Kohn-Sham Equations</a></li>
+<li class="toc-level-3"><a href="#exchange-correlation-functional-families">Exchange-Correlation Functional Families</a></li>
+<li class="toc-level-3"><a href="#numerical-integration-molecular-grid">Numerical Integration: Molecular Grid</a></li>
+<li class="toc-level-3"><a href="#ao-evaluation-on-the-grid">AO Evaluation on the Grid</a></li>
+<li class="toc-level-3"><a href="#density-and-xc-evaluation">Density and XC Evaluation</a></li>
+<li class="toc-level-3"><a href="#xc-matrix-assembly">XC Matrix Assembly</a></li>
+<li class="toc-level-3"><a href="#ks-dft-scf-loop">KS-DFT SCF Loop</a></li>
+<li class="toc-level-3"><a href="#dft-code-map">DFT Code Map</a></li>
 <li class="toc-level-2"><a href="#19-molecular-properties">19. Molecular Properties</a></li>
-<li class="toc-level-3"><a href="#19-1-mulliken-population-analysis">19.1 Mulliken Population Analysis</a></li>
-<li class="toc-level-3"><a href="#19-2-electric-dipole-moment">19.2 Electric Dipole Moment</a></li>
-<li class="toc-level-3"><a href="#19-3-traceless-quadrupole-moment">19.3 Traceless Quadrupole Moment</a></li>
-<li class="toc-level-3"><a href="#19-4-rmp2-natural-orbitals">19.4 RMP2 Natural Orbitals</a></li>
-<li class="toc-level-3"><a href="#19-5-mo-symmetry-labels">19.5 MO Symmetry Labels</a></li>
+<li class="toc-level-3"><a href="#mulliken-population-analysis">Mulliken Population Analysis</a></li>
+<li class="toc-level-3"><a href="#electric-dipole-moment">Electric Dipole Moment</a></li>
+<li class="toc-level-3"><a href="#traceless-quadrupole-moment">Traceless Quadrupole Moment</a></li>
+<li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
+<li class="toc-level-3"><a href="#mo-symmetry-labels">MO Symmetry Labels</a></li>
+<li class="toc-level-3"><a href="#cartesian-to-spherical-mo-transformation">Cartesian-to-Spherical MO Transformation</a></li>
 <li class="toc-level-2"><a href="#20-checkpoint-and-restart">20. Checkpoint and Restart</a></li>
 <li class="toc-level-3"><a href="#binary-checkpoint-format">Binary Checkpoint Format</a></li>
 <li class="toc-level-3"><a href="#cross-basis-l-wdin-projection">Cross-Basis Löwdin Projection</a></li>
@@ -1647,7 +1648,7 @@ E_{ZPE} = \frac{1}{2}\sum_{k=1}^{3N-6} h\nu_k
 <p>Vibrational symmetry labels are assigned in <code>src/symmetry/vibrational_symmetry.cpp</code> by projecting each normal mode onto the SAO blocks and determining its irrep.</p>
 <hr>
 <h2 id="18-kohn-sham-density-functional-theory">18. Kohn-Sham Density Functional Theory</h2>
-<h3 id="18-1-the-kohn-sham-equations">18.1 The Kohn-Sham Equations</h3>
+<h3 id="the-kohn-sham-equations">The Kohn-Sham Equations</h3>
 <p>Kohn-Sham DFT maps the interacting many-electron problem onto a fictitious system of non-interacting electrons moving in an effective potential <span class="math-inline">\(v_s(\mathbf r)\)</span> that yields the same ground-state density as the real system. The total electronic energy is:</p>
 <p><span class="math-display">\[
 E[P] = T_s[P] + V_{ne}[P] + J[P] + E_{xc}[P] + V_{nn}
@@ -1657,7 +1658,7 @@ E[P] = T_s[P] + V_{ne}[P] + J[P] + E_{xc}[P] + V_{nn}
 F^{KS}_{\mu\nu} = h_{\mu\nu} + J_{\mu\nu} + V^{xc}_{\mu\nu}
 \]</span></p>
 <p>This is identical in structure to the HF Fock matrix, with the HF exchange matrix <span class="math-inline">\(K\)</span> replaced by the XC potential matrix <span class="math-inline">\(V^{xc}\)</span>. Planck reuses the HF SCF loop for KS-DFT: the only structural difference is how the two-electron contribution to the Fock matrix is assembled (Coulomb only, no exchange, plus <span class="math-inline">\(V^{xc}\)</span> from numerical integration).</p>
-<h3 id="18-2-exchange-correlation-functional-families">18.2 Exchange-Correlation Functional Families</h3>
+<h3 id="exchange-correlation-functional-families">Exchange-Correlation Functional Families</h3>
 <h4 id="lda-local-density-approximation">LDA (Local Density Approximation)</h4>
 <p>The XC energy depends only on the local electron density <span class="math-inline">\(\rho(\mathbf r)\)</span>:</p>
 <p><span class="math-display">\[
@@ -1688,7 +1689,7 @@ E_{xc}^{GGA}[\rho] = \int f(\rho(\mathbf r),\, |\nabla\rho(\mathbf r)|^2)\, d\ma
 <tr><td>PW91 (<code>gga_x_pw91</code>)</td><td>PW91</td><td>PW91</td></tr>
 <tr><td>PBE (<code>gga_x_pbe</code>)</td><td>PBE (<code>gga_c_pbe</code>)</td><td>PBE (default)</td></tr>
 </tbody></table></div>
-<h3 id="18-3-numerical-integration-molecular-grid">18.3 Numerical Integration: Molecular Grid</h3>
+<h3 id="numerical-integration-molecular-grid">Numerical Integration: Molecular Grid</h3>
 <p>Because <span class="math-inline">\(V^{xc}_{\mu\nu}\)</span> has no analytic closed form, it is evaluated numerically:</p>
 <p><span class="math-display">\[
 V^{xc}_{\mu\nu} = \int \phi_\mu(\mathbf r)\, v_{xc}(\mathbf r)\, \phi_\nu(\mathbf r)\, d\mathbf r
@@ -1723,9 +1724,9 @@ w_i(\mathbf r) = \frac{P_i(\mathbf r)}{\sum_k P_k(\mathbf r)} \cdot w_i^{radial-
 <tr><td><code>Fine</code></td><td>5</td><td>26 / 194 / 302 / 434 / 302</td></tr>
 <tr><td><code>UltraFine</code></td><td>6</td><td>50 / 302 / 434 / 590 / 434</td></tr>
 </tbody></table></div>
-<h3 id="18-4-ao-evaluation-on-the-grid">18.4 AO Evaluation on the Grid</h3>
+<h3 id="ao-evaluation-on-the-grid">AO Evaluation on the Grid</h3>
 <p><code>AOGridEvaluation</code> (declared in <code>src/dft/ao_grid.h</code>) stores the AO values and gradients at every grid point in a matrix of shape <code>(N_grid, N_AO)</code>. These are computed once before the KS iteration begins. For each grid point and each AO <span class="math-inline">\(\phi_\mu\)</span>, the value and Cartesian gradient components are evaluated from the contracted shell data in the <code>Basis</code> object.</p>
-<h3 id="18-5-density-and-xc-evaluation">18.5 Density and XC Evaluation</h3>
+<h3 id="density-and-xc-evaluation">Density and XC Evaluation</h3>
 <p>Given the density matrix <span class="math-inline">\(P_{\mu\nu}\)</span>, the electron density at grid point <span class="math-inline">\(g\)</span> is:</p>
 <p><span class="math-display">\[
 \rho(\mathbf r_g) = \sum_{\mu\nu} P_{\mu\nu}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\mathbf r_g)
@@ -1735,21 +1736,21 @@ w_i(\mathbf r) = \frac{P_i(\mathbf r)}{\sum_k P_k(\mathbf r)} \cdot w_i^{radial-
 <p><span class="math-display">\[
 E_{xc} = \sum_g w_g\, \rho(\mathbf r_g)\, \varepsilon_{xc}(\mathbf r_g)
 \]</span></p>
-<h3 id="18-6-xc-matrix-assembly">18.6 XC Matrix Assembly</h3>
+<h3 id="xc-matrix-assembly">XC Matrix Assembly</h3>
 <p>The XC potential matrix element is:</p>
 <p><span class="math-display">\[
 V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\mathbf r_g)
 + 2\sum_g w_g\, \mathbf v_{\sigma,g} \cdot \nabla\rho_g \cdot \left[\phi_\mu \nabla\phi_\nu + \phi_\nu \nabla\phi_\mu\right]_g
 \]</span></p>
 <p>The second term (present only for GGA) involves the density gradient and the AO gradients on the grid. Both terms are assembled in <code>assemble_xc_matrix</code> (<code>src/dft/ks_matrix.cpp</code>).</p>
-<h3 id="18-7-ks-dft-scf-loop">18.7 KS-DFT SCF Loop</h3>
+<h3 id="ks-dft-scf-loop">KS-DFT SCF Loop</h3>
 <p>The KS SCF loop in <code>DFT::Driver::run</code> follows the same outer structure as the HF loop:</p>
 <ol>
 <li>Compute 1e integrals (<span class="math-inline">\(S\)</span>, <span class="math-inline">\(T\)</span>, <span class="math-inline">\(V_{ne}\)</span>), build orthogonalizer, form initial guess</li>
 <li>At each iteration: a. Build the Coulomb matrix <span class="math-inline">\(J[P]\)</span> using the standard ERI or direct path b. Evaluate the density <span class="math-inline">\(\rho\)</span> and gradient <span class="math-inline">\(\nabla\rho\)</span> on the molecular grid c. Call libxc to get <span class="math-inline">\(\varepsilon_{xc}\)</span>, <span class="math-inline">\(v_\rho\)</span>, <span class="math-inline">\(v_\sigma\)</span> on the grid d. Assemble <span class="math-inline">\(V^{xc}_{\mu\nu}\)</span> by numerical quadrature e. Form the KS Fock matrix <span class="math-inline">\(F^{KS} = h + J + V^{xc}\)</span> f. Solve the KS secular equation, update <span class="math-inline">\(P\)</span>, check convergence</li>
 </ol>
 <p>The <code>KSPotentialMatrices</code> struct holds the Coulomb, XC-alpha, and XC-beta matrices and their sum (the full KS two-electron+XC potential). For RKS the alpha and beta components are identical; for UKS they differ because <span class="math-inline">\(\rho_\alpha \neq \rho_\beta\)</span>.</p>
-<h3 id="18-8-dft-code-map">18.8 DFT Code Map</h3>
+<h3 id="dft-code-map">DFT Code Map</h3>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Task</th>
@@ -1773,7 +1774,7 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 <hr>
 <h2 id="19-molecular-properties">19. Molecular Properties</h2>
 <p>After SCF convergence Planck computes several molecular properties from the converged density matrix.  All are printed automatically (or under <code>verbosity verbose</code>) without additional input; no extra keywords are needed.  This section covers the theory behind each property and the code path that evaluates it.</p>
-<h3 id="19-1-mulliken-population-analysis">19.1 Mulliken Population Analysis</h3>
+<h3 id="mulliken-population-analysis">Mulliken Population Analysis</h3>
 <p><strong>Theory</strong></p>
 <p>The Mulliken gross population of AO <span class="math-inline">\(\mu\)</span> is</p>
 <p><span class="math-display">\[
@@ -1799,7 +1800,7 @@ Eigen::VectorXd gross = (density.array() * overlap.array()).rowwise().sum();
 </code></pre>
 <p>The function then iterates over <code>basis._basis_functions</code>, accumulates <code>gross[μ]</code> into the correct atom bucket via <code>cv._shell-&gt;_atom_index</code>, and fills an <code>AtomicPopulation</code> struct.  When a <code>spin_density_ptr</code> is provided the same loop runs a second time over <span class="math-inline">\(\Delta P\)</span>.</p>
 <p>Population analysis is triggered when <code>_output._print_populations</code> is set or <code>verbosity</code> is <code>verbose</code> / <code>debug</code> (see <code>log_population_report</code> in <code>src/driver.cpp:71</code>).</p>
-<h3 id="19-2-electric-dipole-moment">19.2 Electric Dipole Moment</h3>
+<h3 id="electric-dipole-moment">Electric Dipole Moment</h3>
 <p><strong>Theory</strong></p>
 <p>The electronic contribution to the electric dipole moment is</p>
 <p><span class="math-display">\[
@@ -1820,7 +1821,7 @@ M^{(n)}_{i,j} = (P_\alpha - A_\alpha)\,M^{(n)}_{i-1,j} + \frac{j}{2\zeta}\,M^{(n
 M^{(0)}_{0,0} = S_{00} = \sqrt{\frac{\pi}{\zeta}}\,e^{-\alpha_a\alpha_b|A-B|^2/\zeta}, \qquad M^{(n\ge1)}_{0,0} = \frac{n}{2\zeta}\,M^{(n-1)}_{0,0}
 \]</span></p>
 <p>The function <code>_compute_multipole_matrices</code> in <code>os.cpp</code> assembles the three <span class="math-inline">\(N_b \times N_b\)</span> dipole matrices (one per Cartesian component <span class="math-inline">\(x,y,z\)</span>) and the six independent upper-triangle elements of the raw quadrupole matrix, parallelised over shell pairs with OpenMP.</p>
-<h3 id="19-3-traceless-quadrupole-moment">19.3 Traceless Quadrupole Moment</h3>
+<h3 id="traceless-quadrupole-moment">Traceless Quadrupole Moment</h3>
 <p><strong>Theory</strong></p>
 <p>The raw second-moment tensor is</p>
 <p><span class="math-display">\[
@@ -1840,7 +1841,7 @@ Q_xy = 1.5 * raw_xy;          // off-diagonal scaled by 3/2
 // ... (analogously for all components)
 </code></pre>
 <p>Both the dipole and quadrupole moments use the nuclear frame origin <span class="math-inline">\(\mathbf{o} = \mathbf{0}\)</span> (atomic units) as passed by <code>log_multipole_report</code> in <code>src/driver.cpp:52</code>.</p>
-<h3 id="19-4-rmp2-natural-orbitals">19.4 RMP2 Natural Orbitals</h3>
+<h3 id="rmp2-natural-orbitals">RMP2 Natural Orbitals</h3>
 <p><strong>Theory</strong></p>
 <p>Natural orbitals (NOs) diagonalise the one-particle density matrix (1-PDM).  For RMP2, the unrelaxed 1-PDM in the MO basis has two non-trivial blocks.</p>
 <p><em>Occupied–occupied block</em> (correlation-induced depopulation of occupied MOs):</p>
@@ -1867,7 +1868,7 @@ Q_xy = 1.5 * raw_xy;          // off-diagonal scaled by 3/2
 <li>Diagonalises via <code>Eigen::SelfAdjointEigenSolver</code>; sorts eigenvalues in descending order.</li>
 <li>Returns a <code>NaturalOrbitalResult</code> containing <code>occupations</code> and <code>coefficients_mo</code> (the transformation <span class="math-inline">\(U\)</span>) which the logger formats and prints.</li>
 </ol>
-<h3 id="19-5-mo-symmetry-labels">19.5 MO Symmetry Labels</h3>
+<h3 id="mo-symmetry-labels">MO Symmetry Labels</h3>
 <p><strong>Theory</strong></p>
 <p>When point-group symmetry is active, each MO is labelled with an irreducible representation (irrep) of the molecule&#x27;s point group.  The assignment exploits the fact that an MO <span class="math-inline">\(\phi_p = \sum_\mu C_{\mu p}\chi_\mu\)</span> belongs to irrep <span class="math-inline">\(\Gamma\)</span> if and only if</p>
 <p><span class="math-display">\[
@@ -1892,6 +1893,55 @@ c_\Gamma^{(p)} = \frac{1}{|G|}\sum_R \chi_\Gamma(R)^*\,(D^R_{MO})_{pp}
 <li><strong>Component-norm ratio</strong>: because different Cartesian functions within the same shell (e.g. <span class="math-inline">\(d_{xx}\)</span> vs <span class="math-inline">\(d_{xy}\)</span>) carry different normalisation constants, each matrix element is corrected by <span class="math-inline">\(\mathtt{norm\_target}/\mathtt{norm\_source}\)</span>.</li>
 </ul>
 <p>The full assign pipeline (<code>assign_mo_symmetry</code> in <code>mo_symmetry.cpp</code>) loops over all symmetry operations from libmsym, accumulates the projection coefficients, and returns a <code>std::vector&lt;std::string&gt;</code> of irrep labels (one per MO per spin channel).</p>
+<h3 id="cartesian-to-spherical-mo-transformation">Cartesian-to-Spherical MO Transformation</h3>
+<p><strong>Why it is needed</strong></p>
+<p>Planck&#x27;s integral engine and SCF solver work exclusively in the Cartesian Gaussian basis.  For angular momentum <span class="math-inline">\(L\)</span>, there are <span class="math-inline">\((L+1)(L+2)/2\)</span> Cartesian basis functions (e.g. 6 for <span class="math-inline">\(d\)</span>, 10 for <span class="math-inline">\(f\)</span>) but only <span class="math-inline">\(2L+1\)</span> real spherical harmonics.  libmsym — the external library used to assign irrep labels — requires the basis functions presented to it to be real spherical harmonics.  The MO coefficients that come out of the SCF are therefore in the Cartesian basis and must be transformed before they can be passed to libmsym.</p>
+<p><strong>The transformation matrix</strong></p>
+<p>For each shell of angular momentum <span class="math-inline">\(L\)</span>, every real spherical harmonic <span class="math-inline">\(Y_L^m\)</span> with <span class="math-inline">\(m = -L,\ldots,+L\)</span> can be written as a fixed linear combination of the <span class="math-inline">\((L+1)(L+2)/2\)</span> Cartesian monomials:</p>
+<p><span class="math-display">\[
+Y_L^m(\mathbf r) = \sum_{l_x+l_y+l_z=L} T^{(L)}_{m,\,(l_x l_y l_z)}\; x^{l_x} y^{l_y} z^{l_z} e^{-\alpha r^2}
+\]</span></p>
+<p>These coefficients are purely geometric and tabulated analytically.  For a basis with shells <span class="math-inline">\(s = 1,\ldots,N_{sh}\)</span>, the per-shell matrices are assembled into a block-diagonal transformation matrix</p>
+<p><span class="math-display">\[
+T^+ \in \mathbb{R}^{N_{sph} \times N_{cart}}, \qquad N_{sph} = \sum_s (2L_s+1), \quad N_{cart} = \sum_s \frac{(L_s+1)(L_s+2)}{2}
+\]</span></p>
+<p>where the <span class="math-inline">\(s\)</span>-th diagonal block <span class="math-inline">\(T^+_s \in \mathbb{R}^{(2L_s+1)\times n_{cart,s}}\)</span> is the pseudoinverse <span class="math-inline">\((T_s^\top T_s)^{-1} T_s^\top\)</span> of the Cartesian-to-spherical expansion matrix <span class="math-inline">\(T_s\)</span>.  The pseudoinverse discards the &quot;extra&quot; <span class="math-inline">\(r^2\)</span>-contaminated subspace that Cartesian Gaussians span for <span class="math-inline">\(L \geq 2\)</span>.</p>
+<p><strong>Applying the transformation</strong></p>
+<p>Given the <span class="math-inline">\(N_{cart} \times N_{MO}\)</span> matrix <span class="math-inline">\(\mathbf C\)</span> of Cartesian MO coefficients, the spherical-basis coefficients are</p>
+<p><span class="math-display">\[
+\mathbf C_{sph} = T^+\, \mathbf C \qquad (N_{sph} \times N_{MO})
+\]</span></p>
+<p>Each column of <span class="math-inline">\(\mathbf C_{sph}\)</span> is then a set of real-spherical-harmonic expansion coefficients for one MO.</p>
+<p><strong>Where the coefficients come from (hardcoded tables)</strong></p>
+<p><code>cart_to_sph_block(L)</code> in <code>src/symmetry/mo_symmetry.cpp</code> (line 499) returns the analytical block for each <span class="math-inline">\(L\)</span>:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th><span class="math-inline">\(L\)</span></th>
+<th>Cartesian functions</th>
+<th>Spherical harmonics</th>
+<th>Extra (discarded)</th>
+</tr></thead>
+<tbody>
+<tr><td>0 (S)</td><td>1</td><td>1</td><td>0</td></tr>
+<tr><td>1 (P)</td><td>3</td><td>3</td><td>0</td></tr>
+<tr><td>2 (D)</td><td>6</td><td>5</td><td>1 (<span class="math-inline">\(r^2\)</span> contamination)</td></tr>
+<tr><td>3 (F)</td><td>10</td><td>7</td><td>3</td></tr>
+<tr><td>4 (G)</td><td>15</td><td>9</td><td>6</td></tr>
+<tr><td>5 (H)</td><td>21</td><td>11</td><td>10</td></tr>
+</tbody></table></div>
+<p>For <span class="math-inline">\(L \leq 1\)</span> the Cartesian and spherical spaces are identical and <span class="math-inline">\(T^+\)</span> is simply a (possibly trivial) reordering matrix.</p>
+<p><strong>Putting it all together: the classify lambda</strong></p>
+<p><code>assign_mo_symmetry</code> (starting at line 1300 of <code>mo_symmetry.cpp</code>) defines a <code>classify</code> lambda that:</p>
+<ol>
+<li>Multiplies <code>T_cs * C</code> to produce <code>C_sph</code> — the spherical-basis MO matrix (line 1305).</li>
+<li>Reorders the rows of <code>C_sph</code> from Planck&#x27;s shell ordering into libmsym&#x27;s internal basis-function ordering using a pre-built <code>to_internal</code> index map (lines 1313–1315).</li>
+<li>Calls <code>msymSymmetrySpeciesComponents</code> with the reordered coefficient vector to obtain, for each MO, a weight per irreducible representation.</li>
+<li>Assigns the irrep label corresponding to the largest weight.</li>
+</ol>
+<p><strong>Important: the SCF is unaffected</strong></p>
+<p>This transformation is done only inside <code>assign_mo_symmetry</code>, immediately before the libmsym call.  The stored MO coefficients in <code>SpinChannel._mo_coefficients</code> remain in the Cartesian basis throughout — the conversion is ephemeral.</p>
+<p><strong>Verification tip</strong></p>
+<p>If <span class="math-inline">\(T^+\)</span> is correct, the inner product <span class="math-inline">\(\mathbf C_{sph}^\top \mathbf C_{sph}\)</span> restricted to the occupied block should equal the identity (orthonormal MOs), and the total norm of each MO column should be preserved.  Any error in the hardcoded <span class="math-inline">\(T^+\)</span> blocks shows up immediately as an MO being assigned to the wrong irrep (or split across two irreps).</p>
 <hr>
 <h2 id="20-checkpoint-and-restart">20. Checkpoint and Restart</h2>
 <h3 id="binary-checkpoint-format">Binary Checkpoint Format</h3>

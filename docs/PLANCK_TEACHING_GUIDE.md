@@ -2606,7 +2606,7 @@ by projecting each normal mode onto the SAO blocks and determining its irrep.
 
 ## 18. Kohn-Sham Density Functional Theory
 
-### 18.1 The Kohn-Sham Equations
+### The Kohn-Sham Equations
 
 Kohn-Sham DFT maps the interacting many-electron problem onto a fictitious system of non-interacting electrons moving in an effective potential \(v_s(\mathbf r)\) that yields the same ground-state density as the real system. The total electronic energy is:
 
@@ -2622,7 +2622,7 @@ F^{KS}_{\mu\nu} = h_{\mu\nu} + J_{\mu\nu} + V^{xc}_{\mu\nu}
 
 This is identical in structure to the HF Fock matrix, with the HF exchange matrix \(K\) replaced by the XC potential matrix \(V^{xc}\). Planck reuses the HF SCF loop for KS-DFT: the only structural difference is how the two-electron contribution to the Fock matrix is assembled (Coulomb only, no exchange, plus \(V^{xc}\) from numerical integration).
 
-### 18.2 Exchange-Correlation Functional Families
+### Exchange-Correlation Functional Families
 
 #### LDA (Local Density Approximation)
 
@@ -2656,7 +2656,7 @@ GGA functionals satisfy more exact constraints than LDA and generally give bette
 | PW91 (`gga_x_pw91`) | PW91 | PW91 |
 | PBE (`gga_x_pbe`) | PBE (`gga_c_pbe`) | PBE (default) |
 
-### 18.3 Numerical Integration: Molecular Grid
+### Numerical Integration: Molecular Grid
 
 Because \(V^{xc}_{\mu\nu}\) has no analytic closed form, it is evaluated numerically:
 
@@ -2702,7 +2702,7 @@ w_i(\mathbf r) = \frac{P_i(\mathbf r)}{\sum_k P_k(\mathbf r)} \cdot w_i^{radial-
 | `Fine` | 5 | 26 / 194 / 302 / 434 / 302 |
 | `UltraFine` | 6 | 50 / 302 / 434 / 590 / 434 |
 
-### 18.4 AO Evaluation on the Grid
+### AO Evaluation on the Grid
 
 `AOGridEvaluation` (declared in `src/dft/ao_grid.h`) stores the AO values and
 gradients at every grid point in a matrix of shape `(N_grid, N_AO)`. These are
@@ -2710,7 +2710,7 @@ computed once before the KS iteration begins. For each grid point and each AO
 \(\phi_\mu\), the value and Cartesian gradient components are evaluated from the
 contracted shell data in the `Basis` object.
 
-### 18.5 Density and XC Evaluation
+### Density and XC Evaluation
 
 Given the density matrix \(P_{\mu\nu}\), the electron density at grid point \(g\) is:
 
@@ -2726,7 +2726,7 @@ The libxc library (`src/dft/base/wrapper.h`) is then called with the density (an
 E_{xc} = \sum_g w_g\, \rho(\mathbf r_g)\, \varepsilon_{xc}(\mathbf r_g)
 \]
 
-### 18.6 XC Matrix Assembly
+### XC Matrix Assembly
 
 The XC potential matrix element is:
 
@@ -2737,7 +2737,7 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 
 The second term (present only for GGA) involves the density gradient and the AO gradients on the grid. Both terms are assembled in `assemble_xc_matrix` (`src/dft/ks_matrix.cpp`).
 
-### 18.7 KS-DFT SCF Loop
+### KS-DFT SCF Loop
 
 The KS SCF loop in `DFT::Driver::run` follows the same outer structure as the HF loop:
 
@@ -2752,7 +2752,7 @@ The KS SCF loop in `DFT::Driver::run` follows the same outer structure as the HF
 
 The `KSPotentialMatrices` struct holds the Coulomb, XC-alpha, and XC-beta matrices and their sum (the full KS two-electron+XC potential). For RKS the alpha and beta components are identical; for UKS they differ because \(\rho_\alpha \neq \rho_\beta\).
 
-### 18.8 DFT Code Map
+### DFT Code Map
 
 | Task | File | Function/struct |
 |---|---|---|
@@ -2775,7 +2775,7 @@ The `KSPotentialMatrices` struct holds the Coulomb, XC-alpha, and XC-beta matric
 
 After SCF convergence Planck computes several molecular properties from the converged density matrix.  All are printed automatically (or under `verbosity verbose`) without additional input; no extra keywords are needed.  This section covers the theory behind each property and the code path that evaluates it.
 
-### 19.1 Mulliken Population Analysis
+### Mulliken Population Analysis
 
 **Theory**
 
@@ -2817,7 +2817,7 @@ The function then iterates over `basis._basis_functions`, accumulates `gross[μ]
 
 Population analysis is triggered when `_output._print_populations` is set or `verbosity` is `verbose` / `debug` (see `log_population_report` in `src/driver.cpp:71`).
 
-### 19.2 Electric Dipole Moment
+### Electric Dipole Moment
 
 **Theory**
 
@@ -2851,7 +2851,7 @@ M^{(0)}_{0,0} = S_{00} = \sqrt{\frac{\pi}{\zeta}}\,e^{-\alpha_a\alpha_b|A-B|^2/\
 
 The function `_compute_multipole_matrices` in `os.cpp` assembles the three \(N_b \times N_b\) dipole matrices (one per Cartesian component \(x,y,z\)) and the six independent upper-triangle elements of the raw quadrupole matrix, parallelised over shell pairs with OpenMP.
 
-### 19.3 Traceless Quadrupole Moment
+### Traceless Quadrupole Moment
 
 **Theory**
 
@@ -2882,7 +2882,7 @@ Q_xy = 1.5 * raw_xy;          // off-diagonal scaled by 3/2
 
 Both the dipole and quadrupole moments use the nuclear frame origin \(\mathbf{o} = \mathbf{0}\) (atomic units) as passed by `log_multipole_report` in `src/driver.cpp:52`.
 
-### 19.4 RMP2 Natural Orbitals
+### RMP2 Natural Orbitals
 
 **Theory**
 
@@ -2922,7 +2922,7 @@ For the reference wavefunction alone, \(\gamma_{ii} = 2\) for occupied and \(\ga
 4. Diagonalises via `Eigen::SelfAdjointEigenSolver`; sorts eigenvalues in descending order.
 5. Returns a `NaturalOrbitalResult` containing `occupations` and `coefficients_mo` (the transformation \(U\)) which the logger formats and prints.
 
-### 19.5 MO Symmetry Labels
+### MO Symmetry Labels
 
 **Theory**
 
@@ -2953,6 +2953,70 @@ The irrep with the largest projection coefficient (closest to 1.0) is assigned.
 - **Component-norm ratio**: because different Cartesian functions within the same shell (e.g. \(d_{xx}\) vs \(d_{xy}\)) carry different normalisation constants, each matrix element is corrected by \(\mathtt{norm\_target}/\mathtt{norm\_source}\).
 
 The full assign pipeline (`assign_mo_symmetry` in `mo_symmetry.cpp`) loops over all symmetry operations from libmsym, accumulates the projection coefficients, and returns a `std::vector<std::string>` of irrep labels (one per MO per spin channel).
+
+### Cartesian-to-Spherical MO Transformation
+
+**Why it is needed**
+
+Planck's integral engine and SCF solver work exclusively in the Cartesian Gaussian basis.  For angular momentum \(L\), there are \((L+1)(L+2)/2\) Cartesian basis functions (e.g. 6 for \(d\), 10 for \(f\)) but only \(2L+1\) real spherical harmonics.  libmsym — the external library used to assign irrep labels — requires the basis functions presented to it to be real spherical harmonics.  The MO coefficients that come out of the SCF are therefore in the Cartesian basis and must be transformed before they can be passed to libmsym.
+
+**The transformation matrix**
+
+For each shell of angular momentum \(L\), every real spherical harmonic \(Y_L^m\) with \(m = -L,\ldots,+L\) can be written as a fixed linear combination of the \((L+1)(L+2)/2\) Cartesian monomials:
+
+\[
+Y_L^m(\mathbf r) = \sum_{l_x+l_y+l_z=L} T^{(L)}_{m,\,(l_x l_y l_z)}\; x^{l_x} y^{l_y} z^{l_z} e^{-\alpha r^2}
+\]
+
+These coefficients are purely geometric and tabulated analytically.  For a basis with shells \(s = 1,\ldots,N_{sh}\), the per-shell matrices are assembled into a block-diagonal transformation matrix
+
+\[
+T^+ \in \mathbb{R}^{N_{sph} \times N_{cart}}, \qquad N_{sph} = \sum_s (2L_s+1), \quad N_{cart} = \sum_s \frac{(L_s+1)(L_s+2)}{2}
+\]
+
+where the \(s\)-th diagonal block \(T^+_s \in \mathbb{R}^{(2L_s+1)\times n_{cart,s}}\) is the pseudoinverse \((T_s^\top T_s)^{-1} T_s^\top\) of the Cartesian-to-spherical expansion matrix \(T_s\).  The pseudoinverse discards the "extra" \(r^2\)-contaminated subspace that Cartesian Gaussians span for \(L \geq 2\).
+
+**Applying the transformation**
+
+Given the \(N_{cart} \times N_{MO}\) matrix \(\mathbf C\) of Cartesian MO coefficients, the spherical-basis coefficients are
+
+\[
+\mathbf C_{sph} = T^+\, \mathbf C \qquad (N_{sph} \times N_{MO})
+\]
+
+Each column of \(\mathbf C_{sph}\) is then a set of real-spherical-harmonic expansion coefficients for one MO.
+
+**Where the coefficients come from (hardcoded tables)**
+
+`cart_to_sph_block(L)` in `src/symmetry/mo_symmetry.cpp` (line 499) returns the analytical block for each \(L\):
+
+| \(L\) | Cartesian functions | Spherical harmonics | Extra (discarded) |
+|--------|---------------------|---------------------|-------------------|
+| 0 (S)  | 1                   | 1                   | 0                 |
+| 1 (P)  | 3                   | 3                   | 0                 |
+| 2 (D)  | 6                   | 5                   | 1 (\(r^2\) contamination) |
+| 3 (F)  | 10                  | 7                   | 3                 |
+| 4 (G)  | 15                  | 9                   | 6                 |
+| 5 (H)  | 21                  | 11                  | 10                |
+
+For \(L \leq 1\) the Cartesian and spherical spaces are identical and \(T^+\) is simply a (possibly trivial) reordering matrix.
+
+**Putting it all together: the classify lambda**
+
+`assign_mo_symmetry` (starting at line 1300 of `mo_symmetry.cpp`) defines a `classify` lambda that:
+
+1. Multiplies `T_cs * C` to produce `C_sph` — the spherical-basis MO matrix (line 1305).
+2. Reorders the rows of `C_sph` from Planck's shell ordering into libmsym's internal basis-function ordering using a pre-built `to_internal` index map (lines 1313–1315).
+3. Calls `msymSymmetrySpeciesComponents` with the reordered coefficient vector to obtain, for each MO, a weight per irreducible representation.
+4. Assigns the irrep label corresponding to the largest weight.
+
+**Important: the SCF is unaffected**
+
+This transformation is done only inside `assign_mo_symmetry`, immediately before the libmsym call.  The stored MO coefficients in `SpinChannel._mo_coefficients` remain in the Cartesian basis throughout — the conversion is ephemeral.
+
+**Verification tip**
+
+If \(T^+\) is correct, the inner product \(\mathbf C_{sph}^\top \mathbf C_{sph}\) restricted to the occupied block should equal the identity (orthonormal MOs), and the total norm of each MO column should be preserved.  Any error in the hardcoded \(T^+\) blocks shows up immediately as an MO being assigned to the wrong irrep (or split across two irreps).
 
 ---
 

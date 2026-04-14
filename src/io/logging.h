@@ -299,23 +299,23 @@ namespace HartreeFock
             const double E_ccsd = E_hf + E_ccsd_corr;
             const double E_ccsdt = E_hf + E_ccsdt_corr;
 
-            std::cout << std::setw(LW) << std::left << "  HF Energy"
+            std::cout << std::setw(LW) << std::left << "[INF]  HF Energy"
                       << std::fixed << std::setprecision(10)
                       << std::setw(VW) << std::right << E_hf
                       << std::setw(VW) << std::right << E_hf * HARTREE_TO_EV
                       << std::setw(VW) << std::right << E_hf * HARTREE_TO_KCALMOL
                       << "\n"
-                      << std::setw(LW) << std::left << ("  " + ccsd_label + " Energy")
+                      << std::setw(LW) << std::left << ("[INF]  " + ccsd_label + " Energy")
                       << std::setw(VW) << std::right << E_ccsd
                       << std::setw(VW) << std::right << E_ccsd * HARTREE_TO_EV
                       << std::setw(VW) << std::right << E_ccsd * HARTREE_TO_KCALMOL
                       << "\n"
-                      << std::setw(LW) << std::left << ("  " + ccsdt_label + " Energy")
+                      << std::setw(LW) << std::left << ("[INF]  " + ccsdt_label + " Energy")
                       << std::setw(VW) << std::right << E_ccsdt
                       << std::setw(VW) << std::right << E_ccsdt * HARTREE_TO_EV
                       << std::setw(VW) << std::right << E_ccsdt * HARTREE_TO_KCALMOL
                       << "\n"
-                      << std::setw(LW) << std::left << ("  " + ccsdt_label + " Correlation")
+                      << std::setw(LW) << std::left << ("[INF]  " + ccsdt_label + " Correlation")
                       << std::setw(VW) << std::right << E_ccsdt_corr
                       << std::setw(VW) << std::right << E_ccsdt_corr * HARTREE_TO_EV
                       << std::setw(VW) << std::right << E_ccsdt_corr * HARTREE_TO_KCALMOL
