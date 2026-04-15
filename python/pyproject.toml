@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ccgen"
+version = "0.1.0"
+description = "Symbolic coupled-cluster equation generator via BCH expansion and Wick contraction"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Hemanth Haridas", email = "hemanth.h@alumni.iitgn.ac.in" },
+]
+keywords = ["quantum-chemistry", "coupled-cluster", "wick-theorem", "code-generation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.urls]
+Repository = "https://github.com/hemanthharidas/planck-refactored"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ccgen"]
+
+
+[tool.ruff.lint]
+ignore = ["E401", "E402"]

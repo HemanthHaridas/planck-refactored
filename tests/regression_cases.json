@@ -175,7 +175,7 @@
       "expected_exit_code": 0,
       "contains": [
         "RCCSDT :                      Determinant-space prototype",
-        "Total RCCSDT Energy"
+        "CCSDT Energy"
       ],
       "checks": [
         {"type": "metric_close", "metric": "rhf_total_energy", "expected": -1.1167061402, "atol": 1e-9},
@@ -190,7 +190,7 @@
       "expected_exit_code": 0,
       "contains": [
         "RCCSDT :                      Determinant-space prototype",
-        "Total RCCSDT Energy"
+        "CCSDT Energy"
       ],
       "checks": [
         {"type": "metric_close", "metric": "rhf_total_energy", "expected": -7.8620238776, "atol": 1e-9},
@@ -207,7 +207,7 @@
       "contains": [
         "RCCSDT[TENSOR] :              Using the determinant-space CCSDT backstop",
         "RCCSDT[DET-BACKSTOP] :        Converged in",
-        "Total RCCSDT Energy"
+        "CCSDT Energy"
       ],
       "checks": [
         {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.9629916293, "atol": 1e-9},
@@ -239,7 +239,7 @@
       "contains": [
         "UCCSDT :",
         "Determinant-space prototype",
-        "Total UCCSDT Energy"
+        "UCCSDT Energy"
       ],
       "checks": [
         {"type": "metric_close", "metric": "rhf_total_energy", "expected": -24.1489886649, "atol": 1e-9},

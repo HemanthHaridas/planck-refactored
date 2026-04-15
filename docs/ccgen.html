@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en"> <head>
+  <meta  charset="utf-8">  <meta  name="viewport"  content="width=device-width,
+  initial-scale=1"> <title>Planck</title>
+
+  <!--  MathJax  3:  render  \(  ...  \)  inline  and \[ ... \] display -->
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath:  [['\\(',  '\\)']],  displayMath: [['\\[', '\\]']],
+        packages: {'[+]': ['ams']}, tags: 'none'
+      }, options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+      }, startup: { typeset: true }
+    };
+  </script> <script async
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js">
+  </script>
+
+  <style>
+    :root {
+      --bg:  #f6f1e8;  --panel:  #fffdf8;  --ink:  #1d2b36;  --muted:  #566472;
+      --accent:  #9a3d22; --rule: #dbcdb9; --code-bg: #f2ece2; --shadow: 0 18px
+      60px rgba(42, 33, 20, 0.08);
+    } * { box-sizing: border-box; } body {
+      margin:  0; font-family: Georgia, "Iowan Old Style", "Palatino Linotype",
+      serif; color: var(--ink);
+      background:
+        radial-gradient(
+          circle at top left, rgba(154,61,34,0.08), transparent 22rem
+        ), linear-gradient(180deg, #fbf7f0 0%, var(--bg) 100%);
+      line-height: 1.7;
+    } .page {
+      max-width: 1280px; margin: 0 auto; padding: 32px 20px 56px;
+    } .hero {
+      background: linear-gradient(
+        135deg, rgba(154,61,34,0.95), rgba(123,53,31,0.92)
+      );  color:  #fff9f2; border-radius: 24px; padding: 28px 34px; box-shadow:
+      var(--shadow); margin-bottom: 24px;
+    } .hero h1 {
+      margin: 0 0 8px; font-size: clamp(2rem, 3vw, 3.2rem); line-height: 1.1;
+    } .hero p {
+      margin:  0;  max-width:  100%;  color: rgba(255,249,242,0.92); font-size:
+      1.05rem;
+    } .layout {
+      display:  grid;  grid-template-columns:  300px minmax(0, 1fr); gap: 24px;
+      align-items: start;
+    } .sidebar, .content {
+      background:  var(--panel);  border: 1px solid var(--rule); border-radius:
+      22px; box-shadow: var(--shadow);
+    } .sidebar {
+      position:  sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y:
+      auto; padding: 22px 20px;
+    } .sidebar h2 {
+      margin:   0   0   12px;  font-size:  0.9rem;  text-transform:  uppercase;
+      letter-spacing: 0.09em; color: var(--accent);
+    }  .sidebar  ul { list-style: none; padding: 0; margin: 0; } .sidebar li
+    { margin: 0; padding: 0; } .sidebar a {
+      display:  block;  padding:  4px  0; color: var(--muted); text-decoration:
+      none; font-size: 0.9rem; line-height: 1.4;
+    } .sidebar a:hover { color: var(--accent); } .toc-level-1 a {
+      font-weight:   600;   padding-top:  7px;  color:  var(--ink);  font-size:
+      0.93rem;
+    } .toc-level-2 a { padding-left: 12px; } .toc-level-3 a { padding-left:
+    24px;  font-size:  0.85rem;  } .content { padding: 36px 40px; } .content
+    h1, .content h2, .content h3, .content h4 {
+      line-height: 1.2; color: #13202b; scroll-margin-top: 24px;
+    } .content h1 {
+      font-size:   2.1rem;   padding-bottom:  10px;  border-bottom:  1px  solid
+      var(--rule); margin-top: 0;
+    } .content h2 {
+      font-size:    1.55rem;    margin-top:    2.8rem;   padding-bottom:   4px;
+      border-bottom: 1px solid var(--rule);
+    } .content h3 {
+      font-size: 1.18rem; margin-top: 2rem; color: var(--accent);
+    } .content h4 {
+      font-size:   1rem;   margin-top:   1.5rem;   text-transform:   uppercase;
+      letter-spacing: 0.06em; color: var(--muted);
+    } .content hr {
+      border: none; border-top: 1px solid var(--rule); margin: 2.5rem 0;
+    } .content p, .content li {
+      font-size: 1.02rem; text-align: justify; hyphens: auto;
+    }  .content  ul,  .content  ol  { padding-left: 1.6rem; } .content li {
+    margin-bottom: 0.25rem; } .content code {
+      background:  var(--code-bg);  border:  1px  solid #e0d7c9; border-radius:
+      6px;  padding:  0.08rem  0.38rem; font-family: "SFMono-Regular", "Menlo",
+      "Consolas", monospace; font-size: 0.91em;
+    } .content pre {
+      background:  #201a17;  color: #f8efe5; border-radius: 14px; padding: 20px
+      22px; overflow-x: auto; line-height: 1.5;
+    } .content pre code {
+      background:   transparent;   border:   0;  padding:  0;  color:  inherit;
+      font-size: 0.93rem;
+    } .content table {
+      width:  100%;  border-collapse:  collapse;  margin:  1.4rem 0; font-size:
+      0.95rem;
+    } .content th {
+      border:  1px  solid  var(--rule);  padding:  10px 14px; text-align: left;
+      background:  rgba(154,61,34,0.08);  font-weight: 600; font-size: 0.93rem;
+      white-space: nowrap;
+    } .content td {
+      border: 1px solid var(--rule); padding: 10px 14px; vertical-align: top;
+    } .content tr:nth-child(even) td {
+      background: rgba(219,205,185,0.18);
+    } .content a { color: var(--accent); } .content img {
+      display:  block;  max-width:  100%;  height:  auto;  margin: 1.2rem auto;
+      border:  1px solid var(--rule); border-radius: 16px; background: #fffdf8;
+      box-shadow: 0 10px 28px rgba(42, 33, 20, 0.06); padding: 10px;
+    } .math-display {
+      display: block; overflow-x: auto; padding: 0.5rem 0; text-align: center;
+    }  .math-inline  { white-space: nowrap; } /* ── Scrollable table wrapper
+    ─────────────────────────────── */ .table-wrap {
+      overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 1.4rem 0;
+    }  .table-wrap  table  { margin: 0; min-width: 480px; } /* ── Mobile TOC
+    toggle button ─────────────────────────────── */ .toc-toggle {
+      display:  none;  width:  100%; background: var(--accent); color: #fff9f2;
+      border:  none;  border-radius:  12px;  padding:  10px  16px; font-family:
+      inherit;   font-size:   0.95rem;   font-weight:   600;  cursor:  pointer;
+      text-align: left; margin-bottom: 12px;
+    }  /* ── Tablet breakpoint (≤ 980 px) ────────────────────────── */ @media
+    (max-width: 980px) {
+      .layout  {  grid-template-columns: 1fr; } .sidebar { position: static;
+      max-height:  none;  }  .content { padding: 24px 18px; } .toc-toggle {
+      display: block; } .sidebar-nav { display: none; } .sidebar-nav.open {
+      display: block; } .sidebar h2 { display: none; }
+    }  /* ── Phone breakpoint (≤ 600 px) ─────────────────────────── */ @media
+    (max-width: 600px) {
+      .page  {  padding:  12px  10px  40px;  }  .hero  { padding: 18px 18px;
+      border-radius:  16px;  }  .hero  h1  {  font-size:  clamp(1.6rem,  7vw,
+      2.4rem);  }  .hero p { font-size: 0.95rem; } .content { padding: 18px
+      14px;  border-radius:  16px; } .sidebar { border-radius: 16px; padding:
+      16px 14px; } .content p, .content li {
+        text-align: left; -webkit-hyphens: none; hyphens: none;
+      } .content h1 { font-size: 1.7rem; } .content h2 { font-size: 1.3rem;
+      margin-top: 2rem; } .content h3 { font-size: 1.1rem; } .content pre {
+      padding: 14px 14px; border-radius: 10px; } .sidebar a { padding: 7px 0;
+      font-size:   0.97rem;   }  .toc-level-2  a  {  padding-left:  14px;  }
+      .toc-level-3 a { padding-left: 26px; font-size: 0.9rem; }
+    }
+  </style>
+</head> <body>
+  <div class="page">
+    <section class="hero">
+      <h1>Planck</h1>  <p>A  teaching-first,  theory-linked  walkthrough  of  the
+      Planck codebase
+         and  its  quantum  chemistry  algorithms  — from Gaussian integrals to
+         CASSCF and vibrational analysis.</p>
+    </section> <div class="layout">
+      <aside class="sidebar">
+        <button             class="toc-toggle"            aria-expanded="false"
+        aria-controls="toc-nav">
+          Contents &#9662;
+        </button> <h2>Contents</h2> <nav id="toc-nav" class="sidebar-nav">
+          <ul>
+<li class="toc-level-3"><a href="#ccgen-teaching-guide">CCGEN Teaching Guide</a></li>
+<li class="toc-level-3"><a href="#1-what-ccgen-is">1. What `ccgen` Is</a></li>
+<li class="toc-level-3"><a href="#2-architecture-overview">2. Architecture Overview</a></li>
+<li class="toc-level-3"><a href="#data-flow">Data Flow</a></li>
+<li class="toc-level-3"><a href="#directory-summary">Directory Summary</a></li>
+<li class="toc-level-3"><a href="#3-core-mathematical-model">3. Core Mathematical Model</a></li>
+<li class="toc-level-3"><a href="#normal-ordered-hamiltonian">Normal-Ordered Hamiltonian</a></li>
+<li class="toc-level-3"><a href="#cluster-operator">Cluster Operator</a></li>
+<li class="toc-level-3"><a href="#bch-expansion">BCH Expansion</a></li>
+<li class="toc-level-3"><a href="#projection">Projection</a></li>
+<li class="toc-level-3"><a href="#4-core-data-structures">4. Core Data Structures</a></li>
+<li class="toc-level-3"><a href="#index">`Index`</a></li>
+<li class="toc-level-3"><a href="#tensor">`Tensor`</a></li>
+<li class="toc-level-3"><a href="#sqop">`SQOp`</a></li>
+<li class="toc-level-3"><a href="#opterm-and-expr">`OpTerm` and `Expr`</a></li>
+<li class="toc-level-3"><a href="#algebraterm">`AlgebraTerm`</a></li>
+<li class="toc-level-3"><a href="#backendterm">`BackendTerm`</a></li>
+<li class="toc-level-3"><a href="#5-operator-construction-layer">5. Operator Construction Layer</a></li>
+<li class="toc-level-3"><a href="#hamiltonian-py">`hamiltonian.py`</a></li>
+<li class="toc-level-3"><a href="#cluster-py">`cluster.py`</a></li>
+<li class="toc-level-3"><a href="#6-formal-algebra-layer">6. Formal Algebra Layer</a></li>
+<li class="toc-level-3"><a href="#algebra-py">`algebra.py`</a></li>
+<li class="toc-level-3"><a href="#multiplication">Multiplication</a></li>
+<li class="toc-level-3"><a href="#commutator">Commutator</a></li>
+<li class="toc-level-3"><a href="#bch">BCH</a></li>
+<li class="toc-level-3"><a href="#7-wick-contraction-layer">7. Wick Contraction Layer</a></li>
+<li class="toc-level-3"><a href="#hf-vacuum-rules">HF Vacuum Rules</a></li>
+<li class="toc-level-3"><a href="#structural-pairing-cache">Structural Pairing Cache</a></li>
+<li class="toc-level-3"><a href="#wickresult">`WickResult`</a></li>
+<li class="toc-level-3"><a href="#delta-substitution">Delta Substitution</a></li>
+<li class="toc-level-3"><a href="#8-projection-layer">8. Projection Layer</a></li>
+<li class="toc-level-3"><a href="#bra-projectors">Bra Projectors</a></li>
+<li class="toc-level-3"><a href="#block-ids-and-connectivity">Block IDs and Connectivity</a></li>
+<li class="toc-level-3"><a href="#free-index-restoration">Free-Index Restoration</a></li>
+<li class="toc-level-3"><a href="#project">`project()`</a></li>
+<li class="toc-level-3"><a href="#9-canonicalization-layer">9. Canonicalization Layer</a></li>
+<li class="toc-level-3"><a href="#tensor-antisymmetry">Tensor Antisymmetry</a></li>
+<li class="toc-level-3"><a href="#dummy-relabeling">Dummy Relabeling</a></li>
+<li class="toc-level-3"><a href="#sorting-and-merge">Sorting and Merge</a></li>
+<li class="toc-level-3"><a href="#10-connectivity-analysis">10. Connectivity Analysis</a></li>
+<li class="toc-level-3"><a href="#11-contraction-ir-lowering">11. Contraction IR Lowering</a></li>
+<li class="toc-level-3"><a href="#tensorslot">`TensorSlot`</a></li>
+<li class="toc-level-3"><a href="#indexcontraction">`IndexContraction`</a></li>
+<li class="toc-level-3"><a href="#backendterm">`BackendTerm`</a></li>
+<li class="toc-level-3"><a href="#12-top-level-api">12. Top-Level API</a></li>
+<li class="toc-level-3"><a href="#targets-for-method">`targets_for_method()`</a></li>
+<li class="toc-level-3"><a href="#generate-cc-equations">`generate_cc_equations()`</a></li>
+<li class="toc-level-3"><a href="#generate-cc-contractions">`generate_cc_contractions()`</a></li>
+<li class="toc-level-3"><a href="#formatting-helpers">Formatting Helpers</a></li>
+<li class="toc-level-3"><a href="#13-emitters">13. Emitters</a></li>
+<li class="toc-level-3"><a href="#emit-pretty-py">`emit/pretty.py`</a></li>
+<li class="toc-level-3"><a href="#emit-einsum-py">`emit/einsum.py`</a></li>
+<li class="toc-level-3"><a href="#emit-cpp-loops-py">`emit/cpp_loops.py`</a></li>
+<li class="toc-level-3"><a href="#14-method-wrappers">14. Method Wrappers</a></li>
+<li class="toc-level-3"><a href="#15-worked-example-generate-cc-equations-ccsd">15. Worked Example: `generate_cc_equations(&quot;ccsd&quot;)`</a></li>
+<li class="toc-level-3"><a href="#16-testing-and-regression-strategy">16. Testing and Regression Strategy</a></li>
+<li class="toc-level-3"><a href="#17-current-limitations">17. Current Limitations</a></li>
+<li class="toc-level-3"><a href="#18-how-to-extend-the-package">18. How to Extend the Package</a></li>
+<li class="toc-level-3"><a href="#to-add-a-new-method">To Add a New Method</a></li>
+<li class="toc-level-3"><a href="#to-add-a-new-backend">To Add a New Backend</a></li>
+<li class="toc-level-3"><a href="#to-add-more-aggressive-simplification">To Add More Aggressive Simplification</a></li>
+<li class="toc-level-3"><a href="#19-minimal-usage-examples">19. Minimal Usage Examples</a></li>
+<li class="toc-level-3"><a href="#print-ccsd-equations">Print CCSD Equations</a></li>
+<li class="toc-level-3"><a href="#generate-explicit-contractions">Generate Explicit Contractions</a></li>
+<li class="toc-level-3"><a href="#emit-debug-einsum">Emit Debug `einsum`</a></li>
+<li class="toc-level-3"><a href="#20-mental-model-for-contributors">20. Mental Model for Contributors</a></li>
+</ul>
+        </nav>
+      </aside> <main class="content">
+        <h3 id="ccgen-teaching-guide">CCGEN Teaching Guide</h3>
+<p>A complete theory-to-code walkthrough of the <code>python/ccgen</code> coupled-cluster equation generator. Intended for students learning symbolic second quantization, contributors extending the generator, and developers who need to audit how a named method like CCD or CCSD turns into explicit tensor contractions.</p>
+<h3 id="1-what-ccgen-is">1. What <code>ccgen</code> Is</h3>
+<p><code>ccgen</code> is a small symbolic algebra package that derives spin-orbital coupled-cluster equations from second-quantized operators. It lives in <code>python/ccgen</code> and is intentionally separate from Planck&#x27;s production C++ solvers. The package is meant to be:</p>
+<ul>
+<li>easy to inspect term by term</li>
+<li>mathematically close to textbook CC derivations</li>
+<li>deterministic enough to regression test</li>
+<li>simple enough that new methods can be added without touching the whole stack</li>
+</ul>
+<p>The package currently handles the following workflow:</p>
+<ol>
+<li>build the normal-ordered Hamiltonian <span class="math-inline">\(H_N = F_N + V_N\)</span></li>
+<li>build a cluster operator <span class="math-inline">\(T = T_1 + T_2 + \cdots\)</span></li>
+<li>expand the similarity-transformed Hamiltonian <span class="math-inline">\(\bar H = e^{-T} H e^T\)</span> through the finite BCH series</li>
+<li>project <span class="math-inline">\(\bar H\)</span> onto the reference or excitation manifolds</li>
+<li>apply Wick contractions with Hartree-Fock vacuum rules</li>
+<li>canonicalize and merge equivalent tensor terms</li>
+<li>optionally lower the result into an explicit contraction IR</li>
+<li>emit readable text, <code>einsum</code>, or C++ loop nests</li>
+</ol>
+<p>This is not a full tensor compiler. It is a symbolic front-end plus a very simple lowering layer.</p>
+<h3 id="2-architecture-overview">2. Architecture Overview</h3>
+<h3 id="data-flow">Data Flow</h3>
+<pre><code class="language-text">
+Named method string (&quot;ccd&quot;, &quot;ccsd&quot;, &quot;ccsdt&quot;)
+  → parse excitation ranks (cluster.py)
+  → build H and T operator expressions (hamiltonian.py, cluster.py)
+  → formal BCH expansion (algebra.py)
+  → projector selection (project.py)
+  → Wick contraction + delta substitution (wick.py)
+  → connectivity filtering (connectivity.py)
+  → canonicalization + duplicate merge (canonicalize.py)
+  → algebraic equations (generate.py)
+  → optional contraction IR lowering (tensor_ir.py)
+  → emitters (emit/pretty.py, emit/einsum.py, emit/cpp_loops.py)
+</code></pre>
+<h3 id="directory-summary">Directory Summary</h3>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>File / Directory</th>
+<th>Purpose</th>
+</tr></thead>
+<tbody>
+<tr><td><code>python/ccgen/indices.py</code></td><td>typed orbital indices, naming pools, canonical dummy relabeling</td></tr>
+<tr><td><code>python/ccgen/tensors.py</code></td><td>tensor symbols and antisymmetry metadata</td></tr>
+<tr><td><code>python/ccgen/sqops.py</code></td><td>creation / annihilation operators</td></tr>
+<tr><td><code>python/ccgen/expr.py</code></td><td>formal operator monomials and sums</td></tr>
+<tr><td><code>python/ccgen/hamiltonian.py</code></td><td>normal-ordered <span class="math-inline">\(F_N\)</span> and <span class="math-inline">\(V_N\)</span></td></tr>
+<tr><td><code>python/ccgen/cluster.py</code></td><td>builds <span class="math-inline">\(T_1, T_2, T_3, \dots\)</span> from method names</td></tr>
+<tr><td><code>python/ccgen/algebra.py</code></td><td>multiplication, commutators, BCH expansion</td></tr>
+<tr><td><code>python/ccgen/wick.py</code></td><td>Wick pairing topology and Kronecker-delta substitution</td></tr>
+<tr><td><code>python/ccgen/project.py</code></td><td>bra projectors and projection onto energy / residual manifolds</td></tr>
+<tr><td><code>python/ccgen/connectivity.py</code></td><td>connected-diagram filtering</td></tr>
+<tr><td><code>python/ccgen/canonicalize.py</code></td><td>tensor antisymmetry normalization, dummy relabeling, duplicate merge</td></tr>
+<tr><td><code>python/ccgen/tensor_ir.py</code></td><td>explicit contraction metadata for backend use</td></tr>
+<tr><td><code>python/ccgen/generate.py</code></td><td>top-level user API</td></tr>
+<tr><td><code>python/ccgen/emit/</code></td><td>readable text, <code>einsum</code>, and naive C++ emitters</td></tr>
+<tr><td><code>python/ccgen/methods/</code></td><td>small wrappers like <code>build_ccsd_equations()</code></td></tr>
+<tr><td><code>python/ccgen/tests/</code></td><td>regression tests for energy formulas, stability, and lowering</td></tr>
+</tbody></table></div>
+<h3 id="3-core-mathematical-model">3. Core Mathematical Model</h3>
+<p>The package works entirely in spin-orbital second quantization.</p>
+<h3 id="normal-ordered-hamiltonian">Normal-Ordered Hamiltonian</h3>
+<p>The starting point is the normal-ordered Hamiltonian with respect to the HF reference:</p>
+<p><span class="math-display">\[
+H = F_N + V_N
+\]</span></p>
+<p>with</p>
+<p><span class="math-display">\[
+F_N = \sum_{pq} f_p^q \{ a_p^\dagger a_q \}
+\]</span></p>
+<p>and</p>
+<p><span class="math-display">\[
+V_N = \frac{1}{4}\sum_{pqrs} \langle pq || rs \rangle
+\{ a_r^\dagger a_s^\dagger a_q a_p \}
+\]</span></p>
+<p>The two-electron object <code>v(p,q,r,s)</code> is treated as an antisymmetrized integral <span class="math-inline">\(\langle pq || rs \rangle\)</span>, so antisymmetry is attached directly to the tensor symbol rather than being expanded into explicit permutation operators later.</p>
+<h3 id="cluster-operator">Cluster Operator</h3>
+<p>For a named method such as CCSD, the cluster operator is built from the requested excitation ranks:</p>
+<p><span class="math-display">\[
+T = T_1 + T_2
+\]</span></p>
+<p>with</p>
+<p><span class="math-display">\[
+T_n = \frac{1}{(n!)^2}
+\sum_{i_1\dots i_n, a_1\dots a_n}
+t_{i_1\dots i_n}^{a_1\dots a_n}
+a_{a_1}^\dagger \cdots a_{a_n}^\dagger
+a_{i_n}\cdots a_{i_1}
+\]</span></p>
+<p>The reverse ordering of the annihilators is deliberate: it matches the usual antisymmetric convention and keeps the prefactor bookkeeping simple.</p>
+<h3 id="bch-expansion">BCH Expansion</h3>
+<p>For a two-body Hamiltonian, the BCH series terminates at fourth order:</p>
+<p><span class="math-display">\[
+\bar H = H + [H,T] + \frac{1}{2}[[H,T],T]
++ \frac{1}{6}[[[H,T],T],T]
++ \frac{1}{24}[[[[H,T],T],T],T]
+\]</span></p>
+<p><code>ccgen</code> forms this as a formal operator expansion first. No contractions happen in <code>algebra.py</code>; the result is just a large sum of operator strings.</p>
+<h3 id="projection">Projection</h3>
+<p>Once <span class="math-inline">\(\bar H\)</span> is built, the package projects onto:</p>
+<ul>
+<li>the reference for the CC correlation energy</li>
+<li>singles for <span class="math-inline">\(R_i^a\)</span></li>
+<li>doubles for <span class="math-inline">\(R_{ij}^{ab}\)</span></li>
+<li>triples for <span class="math-inline">\(R_{ijk}^{abc}\)</span>, if requested</li>
+</ul>
+<p>The package constructs the bra projectors explicitly as operator strings, then performs full Wick contractions against each BCH monomial.</p>
+<h3 id="4-core-data-structures">4. Core Data Structures</h3>
+<p>The most important idea in <code>ccgen</code> is that each stage has its own data model. The code does not try to use one object for everything.</p>
+<h3 id="index"><code>Index</code></h3>
+<p>Defined in <code>indices.py</code>:</p>
+<pre><code class="language-python">
+@dataclass(frozen=True, order=True)
+class Index:
+    name: str
+    space: str     # &quot;occ&quot;, &quot;vir&quot;, or &quot;gen&quot;
+    is_dummy: bool = False
+</code></pre>
+<p>An <code>Index</code> does two jobs:</p>
+<ul>
+<li>it says which orbital space an index belongs to</li>
+<li>it says whether this occurrence is a summed dummy or a free residual label</li>
+</ul>
+<p>This distinction matters because the same literal name may be interpreted differently before and after projection. The helper constructors <code>make_occ</code>, <code>make_vir</code>, and <code>make_gen</code> keep that explicit.</p>
+<p>The module also owns the canonical naming pools:</p>
+<ul>
+<li>occupied: <code>i, j, k, l, ...</code></li>
+<li>virtual: <code>a, b, c, d, ...</code></li>
+<li>general: <code>p, q, r, s, ...</code></li>
+</ul>
+<p>The <code>relabel_dummies()</code> routine is one of the most important correctness utilities in the package. It renames summed indices deterministically while avoiding collisions with any free residual labels already present in the term.</p>
+<h3 id="tensor"><code>Tensor</code></h3>
+<p>Defined in <code>tensors.py</code>:</p>
+<pre><code class="language-python">
+@dataclass(frozen=True)
+class Tensor:
+    name: str
+    indices: tuple[Index, ...]
+    antisym_groups: tuple[tuple[int, ...], ...] = ()
+</code></pre>
+<p>This is the symbolic tensor factor used everywhere after operator building. Examples:</p>
+<ul>
+<li><code>f(p,q)</code></li>
+<li><code>v(p,q,r,s)</code></li>
+<li><code>t1(a,i)</code></li>
+<li><code>t2(a,b,i,j)</code></li>
+</ul>
+<p>The <code>antisym_groups</code> field tells canonicalization which slots may be permuted at the cost of a sign. For <code>t2(a,b,i,j)</code>, the virtual pair <code>(a,b)</code> and occupied pair <code>(i,j)</code> are each antisymmetric groups.</p>
+<h3 id="sqop"><code>SQOp</code></h3>
+<p>Defined in <code>sqops.py</code>:</p>
+<pre><code class="language-python">
+@dataclass(frozen=True, order=True)
+class SQOp:
+    kind: str     # &quot;create&quot; or &quot;annihilate&quot;
+    index: Index
+</code></pre>
+<p>This is the raw ladder-operator object used before contraction. It is kept very small on purpose. The interesting physics is not stored in the operator itself, but in how the Wick engine allows it to contract.</p>
+<h3 id="opterm-and-expr"><code>OpTerm</code> and <code>Expr</code></h3>
+<p>Defined in <code>expr.py</code>:</p>
+<pre><code class="language-python">
+@dataclass(frozen=True)
+class OpTerm:
+    coeff: Fraction
+    tensors: tuple[Tensor, ...]
+    sqops: tuple[SQOp, ...]
+    origin: tuple[object, ...] = ()
+</code></pre>
+<pre><code class="language-python">
+@dataclass
+class Expr:
+    terms: list[OpTerm]
+</code></pre>
+<p><code>OpTerm</code> is the formal monomial used in the symbolic BCH stage. It still has the original second-quantized operators attached. <code>Expr</code> is just a list of such terms with lightweight arithmetic.</p>
+<h3 id="algebraterm"><code>AlgebraTerm</code></h3>
+<p>Defined in <code>project.py</code>:</p>
+<pre><code class="language-python">
+@dataclass(frozen=True)
+class AlgebraTerm:
+    coeff: Fraction
+    factors: tuple[Tensor, ...]
+    free_indices: tuple[Index, ...]
+    summed_indices: tuple[Index, ...]
+    connected: bool
+    provenance: tuple[object, ...] = ()
+</code></pre>
+<p>This is the main symbolic output of the projection stage. Once a term becomes an <code>AlgebraTerm</code>, the ladder operators are gone. What remains is:</p>
+<ul>
+<li>a coefficient</li>
+<li>tensor factors</li>
+<li>which labels are free residual indices</li>
+<li>which labels are summed contraction indices</li>
+<li>whether the contraction graph is connected</li>
+</ul>
+<h3 id="backendterm"><code>BackendTerm</code></h3>
+<p>Defined in <code>tensor_ir.py</code>:</p>
+<pre><code class="language-python">
+@dataclass(frozen=True)
+class BackendTerm:
+    lhs_name: str
+    lhs_indices: tuple[Index, ...]
+    coefficient: Fraction
+    rhs_factors: tuple[Tensor, ...]
+    contractions: tuple[IndexContraction, ...]
+    summed_indices: tuple[Index, ...]
+    free_indices: tuple[Index, ...]
+    connected: bool
+</code></pre>
+<p>This is the contraction-aware IR used by backends. The key addition is <code>contractions</code>, which groups all tensor slots participating in a common index. That makes the term backend-neutral: a later emitter can interpret the same IR as loops, <code>einsum</code>, a graph, or a tensor-network plan.</p>
+<h3 id="5-operator-construction-layer">5. Operator Construction Layer</h3>
+<h3 id="hamiltonian-py"><code>hamiltonian.py</code></h3>
+<p>This file builds the normal-ordered one- and two-body Hamiltonian components.</p>
+<p><code>build_fock_operator()</code> constructs the single term</p>
+<p><span class="math-display">\[
+f(p,q)\, a_p^\dagger a_q
+\]</span></p>
+<p>using general indices because the occupied/virtual specialization is only determined later by contractions.</p>
+<p><code>build_two_body_operator()</code> constructs</p>
+<p><span class="math-display">\[
+\frac{1}{4} v(p,q,r,s)\,
+a_r^\dagger a_s^\dagger a_q a_p
+\]</span></p>
+<p>and stores its origin as <code>(&quot;H&quot;, &quot;V_N&quot;)</code>. The <code>origin</code> tuple is not used in the algebra itself; it exists so that emitted or debugged terms can still be traced back to their source blocks.</p>
+<h3 id="cluster-py"><code>cluster.py</code></h3>
+<p>This file has two jobs.</p>
+<p>First, it builds <span class="math-inline">\(T_n\)</span> explicitly with <code>build_tn(n)</code>. The tensor is created by <code>tn()</code> in <code>tensors.py</code>, then paired with the matching operator string</p>
+<p><span class="math-display">\[
+a_{a_1}^\dagger \cdots a_{a_n}^\dagger a_{i_n}\cdots a_{i_1}
+\]</span></p>
+<p>Second, it parses method names. <code>parse_cc_level()</code> accepts:</p>
+<ul>
+<li>compact names like <code>ccd</code>, <code>ccsd</code>, <code>ccsdt</code></li>
+<li>extended names like <code>ccsdtq5</code></li>
+<li>shorthand like <code>cc4</code></li>
+</ul>
+<p>The output is always a sorted list of ranks. <code>build_cluster(&quot;ccsd&quot;)</code> therefore just builds <span class="math-inline">\(T_1 + T_2\)</span>.</p>
+<h3 id="6-formal-algebra-layer">6. Formal Algebra Layer</h3>
+<h3 id="algebra-py"><code>algebra.py</code></h3>
+<p>This module is intentionally formal. It does not know anything about the HF vacuum and does not do any contractions.</p>
+<h3 id="multiplication">Multiplication</h3>
+<p><code>multiply_terms(a, b)</code> concatenates:</p>
+<ul>
+<li>the coefficients</li>
+<li>the tensor lists</li>
+<li>the operator strings</li>
+</ul>
+<p>Before concatenation, it renames any dummy indices in <code>b</code> that would collide with indices already present in <code>a</code>. This is essential because BCH nesting otherwise reuses the same <code>i</code>, <code>a</code>, <code>p</code>, and <code>q</code> labels in logically unrelated subexpressions.</p>
+<h3 id="commutator">Commutator</h3>
+<p><code>commutator(a, b)</code> is exactly:</p>
+<p><span class="math-display">\[
+[A,B] = AB - BA
+\]</span></p>
+<p>with no further simplification.</p>
+<h3 id="bch">BCH</h3>
+<p><code>bch_expand(H, T, max_order=4)</code> repeatedly nests the commutator and applies the factor <span class="math-inline">\(1/n!\)</span> at each level. The output is still an <code>Expr</code>, not a tensor equation.</p>
+<p>This separation is a deliberate design choice. It keeps the package readable:</p>
+<ul>
+<li><code>algebra.py</code> only knows formal operator algebra</li>
+<li><code>wick.py</code> only knows contractions</li>
+<li><code>canonicalize.py</code> only knows tensor normalization</li>
+</ul>
+<h3 id="7-wick-contraction-layer">7. Wick Contraction Layer</h3>
+<h3 id="hf-vacuum-rules">HF Vacuum Rules</h3>
+<p>The contraction rules in <code>wick.py</code> encode the Hartree-Fock vacuum explicitly. The package uses the following logic:</p>
+<ul>
+<li>a creator can contract with an annihilator only in occupied/general space</li>
+<li>an annihilator can contract with a creator only in virtual/general space</li>
+</ul>
+<p>This is the operator-level expression of the reference determinant:</p>
+<ul>
+<li>occupied orbitals are filled</li>
+<li>virtual orbitals are empty</li>
+</ul>
+<p>So a contraction like <span class="math-inline">\(a_i^\dagger a_j\)</span> may survive, while <span class="math-inline">\(a_a^\dagger a_b\)</span> does not.</p>
+<h3 id="structural-pairing-cache">Structural Pairing Cache</h3>
+<p>The expensive part of symbolic Wick expansion is not actually the delta substitution; it is repeatedly enumerating the same pairing topology for many operator strings of identical shape. <code>ccgen</code> therefore caches pairing patterns by a structural signature:</p>
+<pre><code class="language-text">
+(position, op kind, index space, block id)
+</code></pre>
+<p>This means the recursive pairing search is paid once per operator-pattern class rather than once per concrete BCH term.</p>
+<h3 id="wickresult"><code>WickResult</code></h3>
+<p>For each complete contraction pattern, the Wick engine returns:</p>
+<ul>
+<li>the fermionic sign</li>
+<li>the list of Kronecker-delta identifications</li>
+<li>the original tensor factors</li>
+<li>the graph edges connecting source blocks</li>
+</ul>
+<p>The actual tensor substitution happens later in <code>apply_deltas()</code>.</p>
+<h3 id="delta-substitution">Delta Substitution</h3>
+<p><code>apply_deltas()</code> runs a small union-find over identified indices. It enforces:</p>
+<ul>
+<li>space consistency</li>
+<li>replacement of general indices by occupied/virtual ones where possible</li>
+<li>deterministic root choice inside a shared index class</li>
+</ul>
+<p>If a delta would force an occupied index equal to a virtual one, the term is discarded as zero.</p>
+<h3 id="8-projection-layer">8. Projection Layer</h3>
+<h3 id="bra-projectors">Bra Projectors</h3>
+<p><code>project.py</code> defines projectors for:</p>
+<ul>
+<li>reference: <code>()</code></li>
+<li>singles: <span class="math-inline">\(\langle \Phi_i^a | = \langle \Phi_0 | a_i^\dagger a_a\)</span></li>
+<li>doubles: <span class="math-inline">\(\langle \Phi_{ij}^{ab} | = \langle \Phi_0 | a_i^\dagger a_j^\dagger a_b a_a\)</span></li>
+<li>triples: analogous</li>
+</ul>
+<p>The general helper <code>nfold_projector(n)</code> constructs the rank-<span class="math-inline">\(n\)</span> case.</p>
+<h3 id="block-ids-and-connectivity">Block IDs and Connectivity</h3>
+<p>Projection does not merely combine operators. It also assigns each operator to a block so the later connectivity analysis can ask whether a contraction is connected across:</p>
+<ul>
+<li>the bra projector block</li>
+<li>each tensor/operator factor block from the original term</li>
+</ul>
+<p>In practice this matters because amplitude residuals should keep only connected terms, while energy expressions may include disconnected products like <span class="math-inline">\(f_{ia} t_i^a\)</span>.</p>
+<h3 id="free-index-restoration">Free-Index Restoration</h3>
+<p>After delta substitution, a projected free label may temporarily appear as a dummy-like occupied or virtual index with the same slot name. <code>_restore_free_indices()</code> maps these back onto the canonical projector labels so the residual signature is stable and later merge logic does not mistake a free index for a summed one.</p>
+<h3 id="project"><code>project()</code></h3>
+<p>The projection routine:</p>
+<ol>
+<li>selects the correct bra projector</li>
+<li>rejects operator strings with unmatched creation/annihilation counts</li>
+<li>asks <code>wick_contract()</code> for all admissible pairings</li>
+<li>applies deltas</li>
+<li>checks connectedness</li>
+<li>separates free and summed indices</li>
+<li>emits <code>AlgebraTerm</code> objects</li>
+</ol>
+<p>At this point the terms are mathematically correct but not yet canonical.</p>
+<h3 id="9-canonicalization-layer">9. Canonicalization Layer</h3>
+<p>This module is where structurally equivalent algebraic terms are forced into a single normal form.</p>
+<h3 id="tensor-antisymmetry">Tensor Antisymmetry</h3>
+<p><code>canonicalize_tensor()</code> inspects each antisymmetry group. Two things happen:</p>
+<ol>
+<li>if an antisymmetric group repeats an index, the tensor is zero</li>
+<li>otherwise the indices are permuted into lexicographically smallest order, with the sign updated by the parity of the permutation</li>
+</ol>
+<p>This is how terms like <code>t2(a,a,i,j)</code> are eliminated automatically.</p>
+<h3 id="dummy-relabeling">Dummy Relabeling</h3>
+<p>After tensor-local normalization, <code>relabel_term_dummies()</code> walks the term in first-appearance order and assigns canonical names to summed indices.</p>
+<p>This solves the standard symbolic-equivalence problem:</p>
+<p><span class="math-display">\[
+\sum_{kc} v_{ak}^{ic} t_{kj}^{cb}
+\equiv
+\sum_{ld} v_{al}^{id} t_{lj}^{db}
+\]</span></p>
+<h3 id="sorting-and-merge">Sorting and Merge</h3>
+<p><code>canonicalize_term()</code> does the full pipeline:</p>
+<ol>
+<li>canonicalize each tensor</li>
+<li>zero out any term containing an antisymmetric repeat</li>
+<li>relabel dummies once before sorting so temporary fresh suffixes cannot affect order</li>
+<li>sort factors by tensor name and index tuple</li>
+<li>relabel dummies again so the final term uses first-appearance ordering</li>
+</ol>
+<p><code>merge_like_terms()</code> then buckets by tensor structure and free-index signature, adding coefficients when the terms are identical.</p>
+<h3 id="10-connectivity-analysis">10. Connectivity Analysis</h3>
+<p><code>connectivity.py</code> is small but conceptually important.</p>
+<p>Each Wick contraction adds an edge between the two blocks participating in that contraction. The package then runs a union-find connectivity test. For residual equations, the bra projector block is ignored and the remaining contraction graph must be connected. This matches the standard connected-cluster working equations.</p>
+<h3 id="11-contraction-ir-lowering">11. Contraction IR Lowering</h3>
+<p>The symbolic equation objects are convenient for mathematics, but backends often need explicit knowledge of which tensor slots share an index. That is the job of <code>tensor_ir.py</code>.</p>
+<h3 id="tensorslot"><code>TensorSlot</code></h3>
+<p>One <code>TensorSlot</code> means:</p>
+<ul>
+<li>which factor in the RHS we are talking about</li>
+<li>which axis inside that factor</li>
+<li>what tensor name that factor has</li>
+<li>what symbolic index labels that axis</li>
+</ul>
+<h3 id="indexcontraction"><code>IndexContraction</code></h3>
+<p>This groups all slots tied together by one symbolic index. For example, in the energy term</p>
+<p><span class="math-display">\[
+f(i,a)\, t_1(a,i)
+\]</span></p>
+<p>there are two <code>IndexContraction</code> objects:</p>
+<ul>
+<li>one for <code>i</code>, tying <code>f</code> axis 0 to <code>t1</code> axis 1</li>
+<li>one for <code>a</code>, tying <code>f</code> axis 1 to <code>t1</code> axis 0</li>
+</ul>
+<h3 id="backendterm"><code>BackendTerm</code></h3>
+<p>This lowered form is the bridge between symbolic derivation and code generation. It still stores the original tensor factors, but it now also says exactly how their slots connect. This is what makes later backends possible:</p>
+<ul>
+<li>loop emitters</li>
+<li><code>einsum</code> emitters</li>
+<li>a future contraction planner</li>
+<li>a future intermediate/factorization pass</li>
+</ul>
+<h3 id="12-top-level-api">12. Top-Level API</h3>
+<p><code>generate.py</code> exposes the package entry points.</p>
+<h3 id="targets-for-method"><code>targets_for_method()</code></h3>
+<p>Turns a method name like <code>ccsd</code> into the default manifolds:</p>
+<pre><code class="language-python">
+[&quot;energy&quot;, &quot;singles&quot;, &quot;doubles&quot;]
+</code></pre>
+<h3 id="generate-cc-equations"><code>generate_cc_equations()</code></h3>
+<p>This is the main symbolic driver. It:</p>
+<ol>
+<li>builds <code>H</code></li>
+<li>builds <code>T</code></li>
+<li>expands <code>Hbar</code></li>
+<li>projects onto the requested targets</li>
+<li>optionally filters disconnected residual terms</li>
+<li>canonicalizes and merges</li>
+</ol>
+<p>It returns:</p>
+<pre><code class="language-python">
+dict[str, list[AlgebraTerm]]
+</code></pre>
+<h3 id="generate-cc-contractions"><code>generate_cc_contractions()</code></h3>
+<p>This runs <code>generate_cc_equations()</code> and then lowers the result into <code>BackendTerm</code>s via <code>lower_equations()</code>.</p>
+<h3 id="formatting-helpers">Formatting Helpers</h3>
+<ul>
+<li><code>print_equations()</code> uses <code>emit/pretty.py</code></li>
+<li><code>print_einsum()</code> uses <code>emit/einsum.py</code></li>
+<li><code>print_cpp()</code> uses <code>emit/cpp_loops.py</code></li>
+</ul>
+<h3 id="13-emitters">13. Emitters</h3>
+<h3 id="emit-pretty-py"><code>emit/pretty.py</code></h3>
+<p>This is the human-facing printer. It emits expressions such as:</p>
+<pre><code class="language-text">
+R1(i,a) =
+  + f(a,i)
+  + 1/4 sum(j,b) f(j,b) t2(a,b,i,j)
+</code></pre>
+<p>This is the best format for inspecting algebraic structure while debugging.</p>
+<h3 id="emit-einsum-py"><code>emit/einsum.py</code></h3>
+<p>This backend turns each <code>AlgebraTerm</code> into a NumPy-style <code>einsum</code> call. It is mostly for validation and prototyping, because it makes the contraction pattern visually obvious:</p>
+<pre><code class="language-python">
+R1 += 1/4 * np.einsum(&#x27;jb,abij-&gt;ia&#x27;, F, T2)
+</code></pre>
+<h3 id="emit-cpp-loops-py"><code>emit/cpp_loops.py</code></h3>
+<p>This backend emits very naive loop nests. It does not optimize contraction ordering or generate intermediates. Its purpose is to preserve the algebra in a form that a C++ developer can read line by line.</p>
+<h3 id="14-method-wrappers">14. Method Wrappers</h3>
+<p>The files in <code>python/ccgen/methods/</code> are intentionally thin.</p>
+<ul>
+<li><code>ccd.py</code> returns energy + doubles</li>
+<li><code>ccsd.py</code> returns energy + singles + doubles</li>
+<li><code>ccsdt.py</code> returns energy + singles + doubles + triples</li>
+</ul>
+<p>These wrappers exist mainly so users can import a named builder without needing to know the generic driver API.</p>
+<h3 id="15-worked-example-generate-cc-equations-ccsd">15. Worked Example: <code>generate_cc_equations(&quot;ccsd&quot;)</code></h3>
+<p>Calling</p>
+<pre><code class="language-python">
+from ccgen.generate import generate_cc_equations
+eqs = generate_cc_equations(&quot;ccsd&quot;)
+</code></pre>
+<p>does the following:</p>
+<ol>
+<li><code>parse_cc_level(&quot;ccsd&quot;)</code> returns <code>[1, 2]</code></li>
+<li><code>build_hamiltonian()</code> returns <code>F_N + V_N</code></li>
+<li><code>build_cluster(&quot;ccsd&quot;)</code> returns <code>T_1 + T_2</code></li>
+<li><code>bch_expand()</code> builds the formal <span class="math-inline">\(\bar H\)</span></li>
+<li><code>project(..., &quot;energy&quot;)</code> generates the energy terms</li>
+<li><code>project(..., &quot;singles&quot;)</code> generates <code>R1</code></li>
+<li><code>project(..., &quot;doubles&quot;)</code> generates <code>R2</code></li>
+<li>each manifold is canonicalized and merged</li>
+</ol>
+<p>The current CCSD energy reduces to the familiar three-term expression:</p>
+<p><span class="math-display">\[
+E_{CCSD} =
+f_i^a t_i^a
++ \frac{1}{4}\langle ab || ij \rangle t_{ij}^{ab}
++ \frac{1}{2}\langle ab || ij \rangle t_i^a t_j^b
+\]</span></p>
+<p>and the test suite cross-checks that formula numerically against local PySCF.</p>
+<h3 id="16-testing-and-regression-strategy">16. Testing and Regression Strategy</h3>
+<p>The regression tests in <code>python/ccgen/tests/test_regressions.py</code> currently cover:</p>
+<ul>
+<li>dummy relabeling must not collide with free residual labels</li>
+<li>the generated CCSD energy must match the textbook / PySCF formula</li>
+<li>repeated calls must produce stable term counts</li>
+<li>no canonical term may keep repeated indices in an antisymmetric slot</li>
+<li>contraction lowering must preserve tensor-slot connectivity</li>
+</ul>
+<p>This is important because symbolic code can be &quot;almost right&quot; in ways that are very hard to notice by eye. Tiny errors in sign, relabeling, or free-index restoration can completely change a residual while still producing something that looks plausible.</p>
+<h3 id="17-current-limitations">17. Current Limitations</h3>
+<p>The package is intentionally educational, and that shows in a few places.</p>
+<ul>
+<li>It works in spin-orbital form only.</li>
+<li>The emitters are inspectable, not optimized.</li>
+<li>There is no automated intermediate generation or tensor factorization yet.</li>
+<li>The C++ emitter is a loop printer, not a production code generator.</li>
+<li>The BCH layer still builds the full formal expansion before projection.</li>
+<li>There is no direct integration with Planck&#x27;s production C++ coupled-cluster solvers.</li>
+</ul>
+<h3 id="18-how-to-extend-the-package">18. How to Extend the Package</h3>
+<h3 id="to-add-a-new-method">To Add a New Method</h3>
+<ol>
+<li>make sure <code>parse_cc_level()</code> can express the needed excitation ranks</li>
+<li>add a wrapper in <code>python/ccgen/methods/</code></li>
+<li>call <code>generate_cc_equations()</code> or <code>generate_cc_contractions()</code></li>
+<li>add regression tests for the expected manifolds</li>
+</ol>
+<h3 id="to-add-a-new-backend">To Add a New Backend</h3>
+<ol>
+<li>decide whether the backend wants <code>AlgebraTerm</code> or <code>BackendTerm</code></li>
+<li>if it needs explicit slot connectivity, consume <code>tensor_ir.py</code></li>
+<li>add the new emitter under <code>python/ccgen/emit/</code></li>
+<li>add tests that compare emitted structure against known small cases</li>
+</ol>
+<h3 id="to-add-more-aggressive-simplification">To Add More Aggressive Simplification</h3>
+<p>The right place is after canonicalization and before backend emission. That is where common-subexpression detection, intermediate introduction, or contraction ordering logic should live.</p>
+<h3 id="19-minimal-usage-examples">19. Minimal Usage Examples</h3>
+<h3 id="print-ccsd-equations">Print CCSD Equations</h3>
+<pre><code class="language-python">
+import sys
+sys.path.insert(0, &quot;python&quot;)
+
+from ccgen.generate import print_equations
+
+print(print_equations(&quot;ccsd&quot;))
+</code></pre>
+<h3 id="generate-explicit-contractions">Generate Explicit Contractions</h3>
+<pre><code class="language-python">
+import sys
+sys.path.insert(0, &quot;python&quot;)
+
+from ccgen.generate import generate_cc_contractions
+
+eqs = generate_cc_contractions(&quot;ccsd&quot;)
+term = eqs[&quot;energy&quot;][0]
+
+print(term.lhs_name)
+print(term.coefficient)
+for contraction in term.contractions:
+    print(contraction.index, contraction.slots)
+</code></pre>
+<h3 id="emit-debug-einsum">Emit Debug <code>einsum</code></h3>
+<pre><code class="language-python">
+import sys
+sys.path.insert(0, &quot;python&quot;)
+
+from ccgen.generate import print_einsum
+
+print(print_einsum(&quot;ccd&quot;))
+</code></pre>
+<h3 id="20-mental-model-for-contributors">20. Mental Model for Contributors</h3>
+<p>The easiest way to understand <code>ccgen</code> is to think of it as four stacked layers:</p>
+<ol>
+<li>operator algebra</li>
+<li>Wick contraction</li>
+<li>tensor canonicalization</li>
+<li>backend lowering / printing</li>
+</ol>
+<p>When debugging, always identify which layer a bug belongs to. A wrong term can come from:</p>
+<ul>
+<li>incorrect operator construction</li>
+<li>incorrect vacuum contraction rules</li>
+<li>incorrect delta substitution</li>
+<li>incorrect free/dummy classification</li>
+<li>incorrect antisymmetry sign handling</li>
+<li>incorrect duplicate merging</li>
+<li>incorrect backend lowering</li>
+</ul>
+<p>Treating these as separate layers is the main architectural idea of the package.</p>
+      </main>
+    </div>
+  </div> <script>
+    (function () {
+      var    btn    =    document.querySelector('.toc-toggle');   var   nav   =
+      document.getElementById('toc-nav');    if    (!btn   ||   !nav)   return;
+      btn.addEventListener('click', function () {
+        var            open           =           nav.classList.toggle('open');
+        btn.setAttribute('aria-expanded', String(open)); btn.innerHTML = open ?
+        'Contents &#9652;' : 'Contents &#9662;';
+      });
+    })();
+  </script>
+</body> </html>
