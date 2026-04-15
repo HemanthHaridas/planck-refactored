@@ -20,8 +20,14 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "mp2_total_energy": re.compile(r"^\s*Total MP2 Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "rccsd_total_energy": re.compile(r"^\s*Total RCCSD Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "uccsd_total_energy": re.compile(r"^\s*Total UCCSD Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
-    "rccsdt_total_energy": re.compile(r"^\s*Total RCCSDT Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
-    "uccsdt_total_energy": re.compile(r"^\s*Total UCCSDT Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "rccsdt_total_energy": re.compile(
+        r"^\s*(?:Total RCCSDT Energy|\[INF\]\s+CCSDT Energy)\s+([-+0-9Ee\.]+)",
+        re.MULTILINE,
+    ),
+    "uccsdt_total_energy": re.compile(
+        r"^\s*(?:Total UCCSDT Energy|\[INF\]\s+UCCSDT Energy)\s+([-+0-9Ee\.]+)",
+        re.MULTILINE,
+    ),
     "casscf_corr_energy": re.compile(r"^\s*CASSCF Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_total_energy": re.compile(r"^\s*CASSCF Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),

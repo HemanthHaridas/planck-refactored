@@ -26,8 +26,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 INPUT_PATH = REPO_ROOT / "tests/inputs/regression/post_hf/lih_rccsdt_sto3g.hfinp"
 PLANCK_EXE = REPO_ROOT / "build/hartree-fock"
 
-CORR_PATTERN = re.compile(r"^\s*Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE)
-TOTAL_PATTERN = re.compile(r"^\s*Total RCCSDT Energy\s+([-+0-9Ee\.]+)", re.MULTILINE)
+CORR_PATTERN = re.compile(
+    r"^\s*(?:Correlation Energy|\[INF\]\s+CCSDT Correlation)\s+([-+0-9Ee\.]+)",
+    re.MULTILINE,
+)
+TOTAL_PATTERN = re.compile(
+    r"^\s*(?:Total RCCSDT Energy|\[INF\]\s+CCSDT Energy)\s+([-+0-9Ee\.]+)",
+    re.MULTILINE,
+)
 
 
 def parse_last_float(pattern: re.Pattern[str], text: str, label: str) -> float:

@@ -3,8 +3,7 @@
 The main teaching document is:
 
 - `docs/PLANCK_TEACHING_GUIDE.md`
-- `docs/CASSCF_ACTIVE_CACHE_PATCH_SERIES.md` documents the planned active-cache
-  optimization series for the CASSCF hot path.
+- `docs/CCGEN_TEACHING_GUIDE.md` documents the Python coupled-cluster equation generator
 
 To export it as a standalone static webpage:
 

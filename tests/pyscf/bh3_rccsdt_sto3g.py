@@ -51,10 +51,12 @@ FAILURE_PATTERN = re.compile(
     re.MULTILINE,
 )
 TOTAL_PATTERN = re.compile(
-    r"^\s*Total RCCSDT Energy\s+([-+0-9Ee\.]+)", re.MULTILINE
+    r"^\s*(?:Total RCCSDT Energy|\[INF\]\s+CCSDT Energy)\s+([-+0-9Ee\.]+)",
+    re.MULTILINE,
 )
 CORR_PATTERN = re.compile(
-    r"^\s*Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE
+    r"^\s*(?:Correlation Energy|\[INF\]\s+CCSDT Correlation)\s+([-+0-9Ee\.]+)",
+    re.MULTILINE,
 )
 
 

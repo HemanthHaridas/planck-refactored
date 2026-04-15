@@ -37,6 +37,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 ### Documentation
 
 - `docs/PLANCK_TEACHING_GUIDE.md` — high-level implementation and usage guide
+- `docs/CCGEN_TEACHING_GUIDE.md` — theory-to-code walkthrough of the Python coupled-cluster equation generator
 - `docs/README.md` — lightweight static-site export instructions for the documentation set
 
 ### Requirements

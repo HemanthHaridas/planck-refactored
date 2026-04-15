@@ -1778,31 +1778,85 @@ namespace
                                 for (int d = 0; d < system.n_virt; ++d)
                                 {
                                     value += ints.w_vvvo(a, b, d, j) * amps.t2(i, k, d, c);
-                                    value += 0.5 * ints.f_vv(a, d) * amps.t3(i, j, k, d, b, c);
+                                    value += ints.w_vvvo(a, c, d, k) * amps.t2(i, j, d, b);
+                                    value += ints.w_vvvo(b, a, d, i) * amps.t2(j, k, d, c);
+                                    value += ints.w_vvvo(b, c, d, k) * amps.t2(j, i, d, a);
+                                    value += ints.w_vvvo(c, a, d, i) * amps.t2(k, j, d, b);
+                                    value += ints.w_vvvo(c, b, d, j) * amps.t2(k, i, d, a);
+
+                                    value += ints.f_vv(a, d) * amps.t3(i, j, k, d, b, c);
+                                    value += ints.f_vv(b, d) * amps.t3(j, i, k, d, a, c);
+                                    value += ints.f_vv(c, d) * amps.t3(k, j, i, d, b, a);
                                 }
                                 for (int l = 0; l < system.n_occ; ++l)
                                 {
                                     value -= ints.w_vooo(a, l, i, j) * amps.t2(l, k, b, c);
-                                    value -= 0.5 * ints.f_oo(l, i) * amps.t3(l, j, k, a, b, c);
+                                    value -= ints.w_vooo(a, l, i, k) * amps.t2(l, j, c, b);
+                                    value -= ints.w_vooo(b, l, j, i) * amps.t2(l, k, a, c);
+                                    value -= ints.w_vooo(b, l, j, k) * amps.t2(l, i, c, a);
+                                    value -= ints.w_vooo(c, l, k, i) * amps.t2(l, j, a, b);
+                                    value -= ints.w_vooo(c, l, k, j) * amps.t2(l, i, b, a);
+
+                                    value -= ints.f_oo(l, i) * amps.t3(l, j, k, a, b, c);
+                                    value -= ints.f_oo(l, j) * amps.t3(l, i, k, b, a, c);
+                                    value -= ints.f_oo(l, k) * amps.t3(l, j, i, c, b, a);
                                 }
                                 for (int l = 0; l < system.n_occ; ++l)
                                     for (int d = 0; d < system.n_virt; ++d)
                                     {
-                                        value += 0.25 * ints.w_ovvo(l, a, d, i) *
+                                        value += 0.5 * ints.w_ovvo(l, a, d, i) *
                                                  t3_p201(amps.t3, l, j, k, d, b, c);
-                                        value -= 0.5 * ints.w_ovov(l, a, i, d) *
-                                                 amps.t3(j, l, k, d, b, c);
+                                        value += 0.5 * ints.w_ovvo(l, b, d, j) *
+                                                 t3_p201(amps.t3, l, i, k, d, a, c);
+                                        value += 0.5 * ints.w_ovvo(l, c, d, k) *
+                                                 t3_p201(amps.t3, l, j, i, d, b, a);
+
                                         value -= ints.w_ovov(l, b, i, d) *
                                                  amps.t3(j, l, k, d, a, c);
+                                        value -= ints.w_ovov(l, c, i, d) *
+                                                 amps.t3(k, l, j, d, a, b);
+                                        value -= 0.5 * ints.w_ovov(l, a, i, d) *
+                                                 (amps.t3(j, l, k, d, b, c) +
+                                                  amps.t3(k, l, j, d, c, b));
+
+                                        value -= ints.w_ovov(l, a, j, d) *
+                                                 amps.t3(i, l, k, d, b, c);
+                                        value -= ints.w_ovov(l, c, j, d) *
+                                                 amps.t3(k, l, i, d, b, a);
+                                        value -= 0.5 * ints.w_ovov(l, b, j, d) *
+                                                 (amps.t3(i, l, k, d, a, c) +
+                                                  amps.t3(k, l, i, d, c, a));
+
+                                        value -= ints.w_ovov(l, a, k, d) *
+                                                 amps.t3(i, l, j, d, c, b);
+                                        value -= ints.w_ovov(l, b, k, d) *
+                                                 amps.t3(j, l, i, d, c, a);
+                                        value -= 0.5 * ints.w_ovov(l, c, k, d) *
+                                                 (amps.t3(i, l, j, d, a, b) +
+                                                  amps.t3(j, l, i, d, b, a));
                                     }
                                 for (int l = 0; l < system.n_occ; ++l)
                                     for (int m = 0; m < system.n_occ; ++m)
-                                        value += 0.5 * ints.w_oooo(l, m, i, j) *
+                                    {
+                                        value += ints.w_oooo(l, m, i, j) *
                                                  amps.t3(l, m, k, a, b, c);
+                                        value += ints.w_oooo(l, m, i, k) *
+                                                 amps.t3(l, m, j, a, c, b);
+                                        value += ints.w_oooo(l, m, j, k) *
+                                                 amps.t3(l, m, i, b, c, a);
+                                    }
                                 for (int d = 0; d < system.n_virt; ++d)
                                     for (int e = 0; e < system.n_virt; ++e)
-                                        value += 0.5 * ints.w_vvvv(a, b, d, e) *
+                                    {
+                                        value += ints.w_vvvv(a, b, d, e) *
                                                  amps.t3(i, j, k, d, e, c);
+                                        value += 0.5 * ints.w_vvvv(a, c, d, e) *
+                                                 (amps.t3(i, k, j, d, e, b) +
+                                                  amps.t3(k, i, j, e, d, b));
+                                        value += 0.5 * ints.w_vvvv(b, c, d, e) *
+                                                 (amps.t3(j, k, i, d, e, a) +
+                                                  amps.t3(k, j, i, e, d, a));
+                                    }
                                 triples.r3(i, j, k, a, b, c) = value;
                             }
     }
@@ -2400,10 +2454,9 @@ namespace
         constexpr double kSDDamping = 0.35;
         // The staged tensor path is meant to become the production solver for
         // larger systems, so it should not stop at a tolerance inherited from
-        // the more forgiving SCF density threshold. We keep the criterion
-        // modest enough for the current incomplete residual, but tight enough
-        // that the stage performs real coupled refinement before handing off
-        // to the moderate-case fallback.
+        // the more forgiving SCF density threshold. Keep the stage criterion
+        // tight enough that the SD/T3 coupling is genuinely refined before
+        // handing off to the moderate-case fallback.
         const double tol_stage =
             std::max(1e-7, calculator._scf._tol_density);
         const double tol_energy =
