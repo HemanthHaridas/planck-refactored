@@ -18,7 +18,7 @@
 %begin_geom
     coord_type  cartesian
     coord_units angstrom
-    use_symm    .false.
+    use_symm    .true.
 %end_geom
 
 %begin_coords

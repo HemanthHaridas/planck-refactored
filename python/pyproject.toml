@@ -24,6 +24,10 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+[project.optional-dependencies]
+optimize = ["opt_einsum>=3.3"]
+test = ["numpy", "opt_einsum>=3.3"]
+
 [project.urls]
 Repository = "https://github.com/hemanthharidas/planck-refactored"
 

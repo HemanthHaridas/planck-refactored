@@ -47,6 +47,52 @@ def _can_contract(left: SQOp, right: SQOp) -> bool:
 
 
 @lru_cache(maxsize=None)
+def _can_fully_contract(
+    signature: tuple[tuple[int, str, str, int], ...],
+) -> bool:
+    """Quick feasibility check: can all operators in *signature* pair up?
+
+    Counts creators and annihilators by space.  A valid full contraction
+    requires:
+    - create+occ pairs with annihilate+occ (or gen)
+    - annihilate+vir pairs with create+vir (or gen)
+    - gen operators are flexible and can fill either role
+
+    This is a necessary (not sufficient) condition — false positives are
+    fine, false negatives would lose valid contractions.
+    """
+    if len(signature) % 2 != 0:
+        return False
+
+    # Count (kind, space) combinations, ignoring gen (which is flexible)
+    create_occ = 0
+    annihilate_occ = 0
+    annihilate_vir = 0
+    create_vir = 0
+    gen_count = 0
+
+    for _, kind, space, _ in signature:
+        if space == "gen":
+            gen_count += 1
+        elif kind == "create" and space == "occ":
+            create_occ += 1
+        elif kind == "annihilate" and space == "occ":
+            annihilate_occ += 1
+        elif kind == "annihilate" and space == "vir":
+            annihilate_vir += 1
+        elif kind == "create" and space == "vir":
+            create_vir += 1
+
+    # Occ contractions: create_occ must pair with annihilate_occ
+    # Vir contractions: annihilate_vir must pair with create_vir
+    # Gen operators can fill any deficit
+    occ_deficit = abs(create_occ - annihilate_occ)
+    vir_deficit = abs(annihilate_vir - create_vir)
+
+    return occ_deficit + vir_deficit <= gen_count
+
+
+@lru_cache(maxsize=None)
 def _wick_pairings(
     signature: tuple[tuple[int, str, str, int], ...],
 ) -> tuple[
@@ -57,7 +103,7 @@ def _wick_pairings(
     if not signature:
         return ((1, (), ()),)
 
-    if len(signature) % 2 != 0:
+    if not _can_fully_contract(signature):
         return ()
 
     first = signature[0]
@@ -77,8 +123,13 @@ def _wick_pairings(
         ):
             continue
 
-        sign_factor = (-1) ** k
         remaining = rest[:k] + rest[k + 1:]
+
+        # Early pruning: check if remaining operators can fully contract
+        if not _can_fully_contract(remaining):
+            continue
+
+        sign_factor = (-1) ** k
         for sub_sign, sub_pairs, sub_edges in _wick_pairings(remaining):
             pair = (first[0], partner[0])
             edge = (first[3], partner[3])

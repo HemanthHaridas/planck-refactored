@@ -1,13 +1,26 @@
-"""NumPy einsum-style backend for validation and debugging."""
+"""NumPy einsum-style backend for validation and debugging.
+
+Supports optional intermediate tensor emission when used with
+the optimization.intermediates module.
+"""
 
 from __future__ import annotations
 
 from fractions import Fraction
-from typing import Sequence
+from typing import Sequence, TYPE_CHECKING
 
 from ..project import AlgebraTerm, manifold_rank
 from ..tensors import Tensor
 from ..indices import Index
+
+try:
+    import opt_einsum
+    _HAS_OPT_EINSUM = True
+except ImportError:
+    _HAS_OPT_EINSUM = False
+
+if TYPE_CHECKING:
+    from ..optimization.intermediates import IntermediateSpec
 
 
 def _residual_name(target: str) -> str:
@@ -54,29 +67,52 @@ def _coeff_str(c: Fraction) -> str:
     return str(c) + " * "
 
 
-def format_term_einsum(term: AlgebraTerm, lhs: str = "R") -> str:
-    """Format a single term as a numpy einsum call."""
+def format_term_einsum(
+    term: AlgebraTerm,
+    lhs: str = "R",
+    use_opt_einsum: bool = False,
+) -> str:
+    """Format a single term as a numpy einsum call.
+
+    Parameters
+    ----------
+    use_opt_einsum : bool
+        If True and opt_einsum is available, emit
+        ``opt_einsum.contract(...)`` instead of ``np.einsum(...)``.
+    """
     subscripts = _einsum_subscripts(term.factors, term.summed_indices)
 
     tensor_names = []
     for fac in term.factors:
-        name = fac.name.upper()
-        tensor_names.append(name)
+        if fac.name == "D":
+            tensor_names.append("D")
+        else:
+            name = fac.name.upper()
+            tensor_names.append(name)
 
-    args = ", ".join([f"'{subscripts}'"] + tensor_names)
+    if use_opt_einsum and _HAS_OPT_EINSUM:
+        fn = "opt_einsum.contract"
+        args = ", ".join(
+            [f"'{subscripts}'"] + tensor_names + ["optimize='optimal'"]
+        )
+    else:
+        fn = "np.einsum"
+        args = ", ".join([f"'{subscripts}'"] + tensor_names)
+
     coeff = _coeff_str(term.coeff)
 
     if term.coeff > 0:
-        return f"{lhs} += {coeff}np.einsum({args})"
+        return f"{lhs} += {coeff}{fn}({args})"
     else:
         neg_coeff = _coeff_str(-term.coeff)
-        return f"{lhs} -= {neg_coeff}np.einsum({args})"
+        return f"{lhs} -= {neg_coeff}{fn}({args})"
 
 
 def format_residual_einsum(
     lhs: str,
     terms: Sequence[AlgebraTerm],
     free_indices: tuple[Index, ...] | None = None,
+    use_opt_einsum: bool = False,
 ) -> str:
     """Format a full residual as numpy einsum statements."""
     lines = []
@@ -96,16 +132,73 @@ def format_residual_einsum(
         lines.append(f"{lhs} = 0.0")
 
     for t in terms:
-        lines.append(format_term_einsum(t, lhs))
+        lines.append(format_term_einsum(t, lhs, use_opt_einsum=use_opt_einsum))
 
     return "\n".join(lines)
 
 
-def format_equations_einsum(equations: dict[str, list[AlgebraTerm]]) -> str:
-    """Format all equations as numpy einsum code."""
+def format_equations_einsum(
+    equations: dict[str, list[AlgebraTerm]],
+    use_opt_einsum: bool = False,
+) -> str:
+    """Format all equations as numpy einsum code.
+
+    Parameters
+    ----------
+    use_opt_einsum : bool
+        If True and opt_einsum is installed, emit
+        ``opt_einsum.contract(...)`` calls with ``optimize='optimal'``
+        for automatic contraction path optimization.
+    """
     blocks = []
+    if use_opt_einsum and _HAS_OPT_EINSUM:
+        blocks.append("import opt_einsum")
+        blocks.append("")
     for target, terms in equations.items():
         lhs = _residual_name(target)
         free = terms[0].free_indices if terms else ()
-        blocks.append(format_residual_einsum(lhs, terms, free))
+        blocks.append(format_residual_einsum(
+            lhs, terms, free, use_opt_einsum=use_opt_einsum,
+        ))
+    return "\n\n".join(blocks)
+
+
+def format_intermediate_einsum(
+    spec: IntermediateSpec,
+) -> str:
+    """Format a single intermediate build as numpy einsum statements."""
+    lines: list[str] = []
+    lines.append(f"# Intermediate {spec.name} ({spec.index_space_sig})")
+    lines.append(format_residual_einsum(
+        spec.name,
+        spec.definition_terms,
+        spec.indices,
+    ))
+    return "\n".join(lines)
+
+
+def format_intermediates_einsum(
+    intermediates: Sequence[IntermediateSpec],
+) -> str:
+    """Format all intermediate builds as numpy einsum code."""
+    if not intermediates:
+        return ""
+    blocks = [f"# ── Intermediate tensor builds ({len(intermediates)}) ──"]
+    for spec in intermediates:
+        blocks.append(format_intermediate_einsum(spec))
+    return "\n\n".join(blocks)
+
+
+def format_equations_with_intermediates_einsum(
+    equations: dict[str, list[AlgebraTerm]],
+    intermediates: Sequence[IntermediateSpec] | None = None,
+) -> str:
+    """Format equations with optional intermediate builds as einsum code."""
+    blocks: list[str] = []
+
+    if intermediates:
+        blocks.append(format_intermediates_einsum(intermediates))
+        blocks.append("")
+
+    blocks.append(format_equations_einsum(equations))
     return "\n\n".join(blocks)
