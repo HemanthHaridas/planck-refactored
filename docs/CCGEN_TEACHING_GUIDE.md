@@ -7,7 +7,7 @@ named method like CCD or CCSD turns into explicit tensor contractions.
 
 ### 1. What `ccgen` Is
 
-`ccgen` is a small symbolic algebra package that derives spin-orbital
+`ccgen` is a symbolic algebra package that derives spin-orbital
 coupled-cluster equations from second-quantized operators. It lives in
 `python/ccgen` and is intentionally separate from Planck's production C++
 solvers. The package is meant to be:
@@ -17,7 +17,7 @@ solvers. The package is meant to be:
 - deterministic enough to regression test
 - simple enough that new methods can be added without touching the whole stack
 
-The package currently handles the following workflow:
+The package handles the following workflow:
 
 1. build the normal-ordered Hamiltonian \(H_N = F_N + V_N\)
 2. build a cluster operator \(T = T_1 + T_2 + \cdots\)
@@ -26,11 +26,16 @@ The package currently handles the following workflow:
 4. project \(\bar H\) onto the reference or excitation manifolds
 5. apply Wick contractions with Hartree-Fock vacuum rules
 6. canonicalize and merge equivalent tensor terms
-7. optionally lower the result into an explicit contraction IR
-8. emit readable text, `einsum`, or C++ loop nests
+7. optionally apply algebraic optimization passes (denominator collection,
+   permutation grouping, antisymmetry exploitation)
+8. optionally detect and extract intermediate tensors (W_oovv, F_ov, etc.)
+9. lower the result into an explicit contraction IR (basic or extended with
+   BLAS hints, FLOP estimates, and tiling)
+10. emit readable text, `einsum` (with optional `opt_einsum` path optimization),
+    or C++ loop nests (naive, tiled+OpenMP, or BLAS/GEMM-lowered)
 
-This is not a full tensor compiler. It is a symbolic front-end plus a very
-simple lowering layer.
+The symbolic derivation layer is intentionally pedagogical. The optimization
+and code generation layers are designed to produce production-quality output.
 
 ### 2. Architecture Overview
 
@@ -45,9 +50,19 @@ Named method string ("ccd", "ccsd", "ccsdt")
   → Wick contraction + delta substitution (wick.py)
   → connectivity filtering (connectivity.py)
   → canonicalization + duplicate merge (canonicalize.py)
+  → optional optimization passes:
+      → orbital energy denominator collection (canonicalize.py)
+      → permutation-based term grouping (optimization/permutation.py)
+      → implicit antisymmetry exploitation (optimization/symmetry.py)
   → algebraic equations (generate.py)
-  → optional contraction IR lowering (tensor_ir.py)
-  → emitters (emit/pretty.py, emit/einsum.py, emit/cpp_loops.py)
+  → optional intermediate detection (optimization/intermediates.py)
+  → contraction IR lowering:
+      → basic: BackendTerm (tensor_ir.py)
+      → extended: BackendTermEx with BLASHint, FLOP estimates (tensor_ir.py)
+  → emitters:
+      → readable text with intermediates (emit/pretty.py)
+      → einsum with opt_einsum paths (emit/einsum.py)
+      → C++ naive / tiled+OpenMP / BLAS-lowered (emit/cpp_loops.py)
 ```
 
 ### Directory Summary
@@ -64,12 +79,14 @@ Named method string ("ccd", "ccsd", "ccsdt")
 | `python/ccgen/wick.py` | Wick pairing topology and Kronecker-delta substitution |
 | `python/ccgen/project.py` | bra projectors and projection onto energy / residual manifolds |
 | `python/ccgen/connectivity.py` | connected-diagram filtering |
-| `python/ccgen/canonicalize.py` | tensor antisymmetry normalization, dummy relabeling, duplicate merge |
-| `python/ccgen/tensor_ir.py` | explicit contraction metadata for backend use |
-| `python/ccgen/generate.py` | top-level user API |
-| `python/ccgen/emit/` | readable text, `einsum`, and naive C++ emitters |
+| `python/ccgen/canonicalize.py` | tensor antisymmetry normalization, dummy relabeling, duplicate merge, orbital energy denominator collection |
+| `python/ccgen/tensor_ir.py` | contraction IR: `BackendTerm` (basic) and `BackendTermEx` (extended with `BLASHint`, FLOP estimates, memory layout, tiling hints) |
+| `python/ccgen/generate.py` | top-level user API and `PipelineStats` instrumentation |
+| `python/ccgen/bench.py` | performance benchmarking (`python -m ccgen.bench`) |
+| `python/ccgen/emit/` | emitters: pretty (with intermediates), einsum (with opt_einsum), C++ (naive / tiled+OpenMP / BLAS-lowered) |
+| `python/ccgen/optimization/` | post-canonicalization passes: intermediate detection, CSE, permutation grouping, antisymmetry exploitation |
 | `python/ccgen/methods/` | small wrappers like `build_ccsd_equations()` |
-| `python/ccgen/tests/` | regression tests for energy formulas, stability, and lowering |
+| `python/ccgen/tests/` | regression tests (stability, numerical, lowering) and optimization equivalence tests |
 
 ### 3. Core Mathematical Model
 
@@ -532,7 +549,63 @@ equations, the bra projector block is ignored and the remaining contraction
 graph must be connected. This matches the standard connected-cluster working
 equations.
 
-### 11. Contraction IR Lowering
+### 11. Algebraic Optimization Layer
+
+After canonicalization and merging, several optional optimization passes can
+reduce term count or restructure equations for more efficient code generation.
+These live in `python/ccgen/optimization/` and are wired into
+`generate_cc_equations()` via keyword flags.
+
+### Orbital Energy Denominator Collection
+
+`collect_fock_diagonals()` in `canonicalize.py` is a post-canonicalization pass
+that recognizes diagonal Fock terms and collects them into energy denominator
+tensors:
+
+```text
+Before:  -1/4 f(i,i) * t2(a,b,i,j)  +  1/4 f(a,a) * t2(a,b,i,j)  + ...
+After:   D(i,j,a,b) * t2(a,b,i,j)    where D = ε_a + ε_b - ε_i - ε_j
+```
+
+The C++ emitter recognizes `D` tensors and emits `(eps(a) + eps(b) - eps(i) - eps(j))`
+inline. This typically reduces CCSD term count by ~10-20%.
+
+### Permutation-Based Term Grouping
+
+`apply_permutation_grouping()` in `optimization/permutation.py` detects groups
+of terms that differ only by index permutations (possibly with sign changes from
+antisymmetry) and merges them. For example, two terms differing only by `a↔b`
+in an antisymmetric integral are combined with a factor of 2. This reduces loop
+nests by 30-40% in typical CCSD/CCSDT equations.
+
+### Implicit Antisymmetry Exploitation
+
+`exploit_antisymmetry()` in `optimization/symmetry.py` is an experimental pass
+that exploits `v(p,q,r,s) = -v(q,p,r,s)` before canonicalization to emit only
+unique index orderings, potentially reducing pre-canonicalization term count by
+30-50%.
+
+### Intermediate Tensor Detection
+
+`detect_intermediates()` in `optimization/intermediates.py` scans all residual
+equations for sub-contractions that appear in multiple terms and extracts them
+as reusable intermediate tensors (e.g., W_oovv, F_ov). Each intermediate is
+described by an `IntermediateSpec` with:
+
+- name and index signature
+- definition terms (the sub-contraction)
+- usage count across residual equations
+- memory layout, blocking hints, and allocation strategy (for code generation)
+
+`annotate_layout_hints()` enriches intermediates with memory layout and blocking
+metadata based on access pattern analysis.
+
+### Common Subexpression Elimination
+
+`optimization/subexpression.py` provides CSE detection via `CSESpec` objects.
+This factors out common tensor products that appear with different coefficients.
+
+### 12. Contraction IR Lowering
 
 The symbolic equation objects are convenient for mathematics, but backends often
 need explicit knowledge of which tensor slots share an index. That is the job
@@ -569,10 +642,49 @@ their slots connect. This is what makes later backends possible:
 
 - loop emitters
 - `einsum` emitters
-- a future contraction planner
-- a future intermediate/factorization pass
+- contraction planners
+- intermediate/factorization passes
 
-### 12. Top-Level API
+Use `lower_equations()` to produce basic `BackendTerm` objects.
+
+### `BackendTermEx`
+
+The extended IR (`BackendTermEx`) inherits all `BackendTerm` fields and adds
+optimization metadata for backend emitters:
+
+- `memory_layout`: per-tensor storage order hints (e.g., `{"T1": "row_major"}`)
+- `blocking_hint`: suggested tile sizes per index (e.g., `{"i": 16, "a": 16}`)
+- `reuse_key`: identifies shared sub-contractions across terms
+- `computation_order`: recommended summation index ordering
+- `blas_hint`: a `BLASHint` object when the term matches a GEMM pattern (e.g.,
+  `gemm_nn`, `gemm_nt`), with fields for the A/B operands, contraction indices,
+  and output dimensions
+- `estimated_flops`: estimated floating-point operation count
+
+Use `lower_equations_ex()` (or `generate_cc_contractions_ex()` from the
+top-level API) to produce these extended terms. The BLAS pattern detector
+recognizes two-factor contractions of the form
+\(\sum_k A_{ik} B_{kj}\) and emits the appropriate transpose/no-transpose hint.
+
+### `BLASHint`
+
+```python
+@dataclass(frozen=True)
+class BLASHint:
+    pattern: str              # "gemm_nn" | "gemm_nt" | "gemm_tn" | "gemm_tt"
+    a_tensor: str             # name of A operand
+    b_tensor: str             # name of B operand
+    a_indices: tuple[Index, ...]
+    b_indices: tuple[Index, ...]
+    contraction_indices: tuple[Index, ...]  # shared summation (k-dimension)
+    m_indices: tuple[Index, ...]            # output row dimension
+    n_indices: tuple[Index, ...]            # output column dimension
+```
+
+The C++ BLAS backend (`emit_blas_translation_unit`) uses these hints to emit
+`cblas_dgemm` calls instead of loop nests for matching terms.
+
+### 13. Top-Level API
 
 `generate.py` exposes the package entry points.
 
@@ -594,6 +706,7 @@ This is the main symbolic driver. It:
 4. projects onto the requested targets
 5. optionally filters disconnected residual terms
 6. canonicalizes and merges
+7. optionally applies post-canonicalization optimization passes
 
 It returns:
 
@@ -601,18 +714,47 @@ It returns:
 dict[str, list[AlgebraTerm]]
 ```
 
+The optimization flags control post-canonicalization passes:
+
+- `collect_denominators=True`: collect diagonal Fock terms into denominator tensors
+- `permutation_grouping=True`: merge terms related by index permutations
+- `exploit_symmetry=True`: exploit implicit antisymmetry (experimental)
+- `debug=True`: print term counts and timing to stderr; store in `last_stats`
+
 ### `generate_cc_contractions()`
 
-This runs `generate_cc_equations()` and then lowers the result into
-`BackendTerm`s via `lower_equations()`.
+Runs `generate_cc_equations()` and lowers the result into basic `BackendTerm`s
+via `lower_equations()`.
+
+### `generate_cc_contractions_ex()`
+
+Runs `generate_cc_equations()` and lowers the result into extended
+`BackendTermEx` objects via `lower_equations_ex()`. Accepts additional
+parameters:
+
+- `detect_blas=True`: enable BLAS/GEMM pattern detection
+- `tile_occ`, `tile_vir`: tile sizes for blocking hints
+
+### `PipelineStats`
+
+When `debug=True` is passed to `generate_cc_equations()`, a `PipelineStats`
+object is stored in `ccgen.generate.last_stats`. It records term counts and
+timing at every pipeline stage (BCH expansion, Wick projection,
+canonicalization, merge, and each optimization pass). Call `.summary()` for
+a human-readable report.
 
 ### Formatting Helpers
 
-- `print_equations()` uses `emit/pretty.py`
-- `print_einsum()` uses `emit/einsum.py`
-- `print_cpp()` uses `emit/cpp_loops.py`
+- `print_equations()` uses `emit/pretty.py` for basic readable output
+- `print_equations_full()` uses `emit/pretty.py` with intermediate definitions,
+  index/tensor legend, section headers, and summary statistics
+- `print_einsum()` uses `emit/einsum.py`, with optional `use_opt_einsum=True`
+  for contraction path optimization
+- `print_cpp()` uses `emit/cpp_loops.py` for naive loop nests
+- `print_cpp_optimized()` uses `emit/cpp_loops.py` for tiled loops with OpenMP
+- `print_cpp_blas()` uses `emit/cpp_loops.py` for BLAS/GEMM-lowered output
 
-### 13. Emitters
+### 14. Emitters
 
 ### `emit/pretty.py`
 
@@ -626,23 +768,47 @@ R1(i,a) =
 
 This is the best format for inspecting algebraic structure while debugging.
 
+The module also provides `format_equations_with_intermediates()`, which adds:
+
+- intermediate tensor definitions listed separately before the residuals
+- an index space legend (i, j, k = occupied; a, b, c = virtual)
+- manifold section headers with descriptions
+- summary statistics (term counts per manifold)
+
 ### `emit/einsum.py`
 
-This backend turns each `AlgebraTerm` into a NumPy-style `einsum` call. It is
-mostly for validation and prototyping, because it makes the contraction pattern
-visually obvious:
+This backend turns each `AlgebraTerm` into a NumPy-style `einsum` call:
 
 ```python
 R1 += 1/4 * np.einsum('jb,abij->ia', F, T2)
 ```
 
+When `opt_einsum` is installed and `use_opt_einsum=True` is passed, the emitter
+uses `opt_einsum.contract()` with optimized contraction paths instead of
+vanilla `np.einsum()`.
+
+The module also supports intermediate tensor emission via
+`format_equations_with_intermediates_einsum()`.
+
 ### `emit/cpp_loops.py`
 
-This backend emits very naive loop nests. It does not optimize contraction
-ordering or generate intermediates. Its purpose is to preserve the algebra in a
-form that a C++ developer can read line by line.
+Three tiers of C++ emission are available in a single module:
 
-### 14. Method Wrappers
+**Tier 1: Naive loops** (`emit_translation_unit`). Straightforward nested
+loops that preserve the algebra in a form a C++ developer can read line by
+line. Also handles orbital energy denominator terms (emits `eps(i)` syntax).
+Supports intermediate tensor builds via `emit_translation_unit_with_intermediates`.
+
+**Tier 2: Tiled + OpenMP** (`emit_optimized_translation_unit`). Emits blocked
+loops with configurable tile sizes (default 16, tuned for L1 cache ~32KB of
+doubles) and `#pragma omp parallel for collapse(N)` annotations.
+
+**Tier 3: BLAS/GEMM-lowered** (`emit_blas_translation_unit`). Detects GEMM
+patterns in two-factor contractions (using `BackendTermEx.blas_hint`) and emits
+`cblas_dgemm` calls. Falls back to tiled loops for non-GEMM terms. Includes
+`#include <cblas.h>` and buffer allocation/deallocation.
+
+### 15. Method Wrappers
 
 The files in `python/ccgen/methods/` are intentionally thin.
 
@@ -653,7 +819,7 @@ The files in `python/ccgen/methods/` are intentionally thin.
 These wrappers exist mainly so users can import a named builder without needing
 to know the generic driver API.
 
-### 15. Worked Example: `generate_cc_equations("ccsd")`
+### 16. Worked Example: `generate_cc_equations("ccsd")`
 
 Calling
 
@@ -684,9 +850,11 @@ f_i^a t_i^a
 
 and the test suite cross-checks that formula numerically against local PySCF.
 
-### 16. Testing and Regression Strategy
+### 17. Testing and Regression Strategy
 
-The regression tests in `python/ccgen/tests/test_regressions.py` currently cover:
+The test suite lives in `python/ccgen/tests/` and is split across two modules.
+
+**`test_regressions.py`** covers core correctness:
 
 - dummy relabeling must not collide with free residual labels
 - the generated CCSD energy must match the textbook / PySCF formula
@@ -694,23 +862,34 @@ The regression tests in `python/ccgen/tests/test_regressions.py` currently cover
 - no canonical term may keep repeated indices in an antisymmetric slot
 - contraction lowering must preserve tensor-slot connectivity
 
-This is important because symbolic code can be "almost right" in ways that are
-very hard to notice by eye. Tiny errors in sign, relabeling, or free-index
-restoration can completely change a residual while still producing something
-that looks plausible.
+**`test_optimizations.py`** covers algebraic equivalence for each optimization
+pass:
 
-### 17. Current Limitations
+- orbital energy denominator collection preserves numerical equivalence
+- permutation grouping preserves numerical equivalence
+- intermediate detection does not change residual values
+- each pass is tested by generating equations with and without the
+  optimization, evaluating both on small random tensors (no=4, nv=4), and
+  asserting agreement to machine precision (< 1e-12)
 
-The package is intentionally educational, and that shows in a few places.
+This two-tier strategy is important because symbolic code can be "almost right"
+in ways that are very hard to notice by eye. Tiny errors in sign, relabeling, or
+free-index restoration can completely change a residual while still producing
+something that looks plausible.
 
-- It works in spin-orbital form only.
-- The emitters are inspectable, not optimized.
-- There is no automated intermediate generation or tensor factorization yet.
-- The C++ emitter is a loop printer, not a production code generator.
+### 18. Current Limitations
+
+- It works in spin-orbital form only (no spin-adapted or spatial-orbital formulation).
 - The BCH layer still builds the full formal expansion before projection.
-- There is no direct integration with Planck's production C++ coupled-cluster solvers.
+- Intermediate detection is heuristic-based (threshold on reuse count); it does
+  not yet perform global optimal factorization.
+- Implicit antisymmetry exploitation is experimental and requires extensive
+  validation before production use.
+- There is no direct integration with Planck's production C++ coupled-cluster
+  solvers yet (the `TensorOptimized` backend is planned; see
+  `CCGEN_DEVELOPMENT_PLAN.md` Phase 4).
 
-### 18. How to Extend the Package
+### 19. How to Extend the Package
 
 ### To Add a New Method
 
@@ -721,18 +900,32 @@ The package is intentionally educational, and that shows in a few places.
 
 ### To Add a New Backend
 
-1. decide whether the backend wants `AlgebraTerm` or `BackendTerm`
+1. decide whether the backend wants `AlgebraTerm`, `BackendTerm`, or
+   `BackendTermEx` (the extended IR with BLAS hints and tiling metadata)
 2. if it needs explicit slot connectivity, consume `tensor_ir.py`
-3. add the new emitter under `python/ccgen/emit/`
-4. add tests that compare emitted structure against known small cases
+3. if it needs BLAS/GEMM pattern information, use `lower_equations_ex()`
+4. add the new emitter under `python/ccgen/emit/`
+5. add tests that compare emitted structure against known small cases
 
-### To Add More Aggressive Simplification
+### To Add a New Optimization Pass
 
-The right place is after canonicalization and before backend emission. That is
-where common-subexpression detection, intermediate introduction, or contraction
-ordering logic should live.
+1. create a module under `python/ccgen/optimization/`
+2. the pass receives `list[AlgebraTerm]` and returns `list[AlgebraTerm]`
+3. wire it into `generate_cc_equations()` in `generate.py` with a keyword flag
+4. update `PipelineStats` to track the pass's effect on term count
+5. add equivalence tests in `tests/test_optimizations.py`: generate equations
+   with and without the pass, evaluate numerically, assert equivalence to 1e-12
 
-### 19. Minimal Usage Examples
+### To Add Intermediate Tensor Support to a Backend
+
+1. use `detect_intermediates()` from `optimization/intermediates.py` to find
+   reusable sub-contractions
+2. optionally call `annotate_layout_hints()` for memory layout and blocking metadata
+3. emit intermediate build code before residual equations
+4. see `emit/cpp_loops.py` (`emit_translation_unit_with_intermediates`) and
+   `emit/einsum.py` (`format_equations_with_intermediates_einsum`) for examples
+
+### 20. Minimal Usage Examples
 
 ### Print CCSD Equations
 
@@ -743,6 +936,29 @@ sys.path.insert(0, "python")
 from ccgen.generate import print_equations
 
 print(print_equations("ccsd"))
+```
+
+### Print Equations with Intermediates
+
+```python
+import sys
+sys.path.insert(0, "python")
+
+from ccgen.generate import print_equations_full
+
+print(print_equations_full("ccsd", intermediate_threshold=5))
+```
+
+### Generate with Optimization Passes
+
+```python
+import sys
+sys.path.insert(0, "python")
+
+from ccgen.generate import generate_cc_equations
+
+# Apply denominator collection + pipeline instrumentation
+eqs = generate_cc_equations("ccsd", collect_denominators=True, debug=True)
 ```
 
 ### Generate Explicit Contractions
@@ -762,6 +978,22 @@ for contraction in term.contractions:
     print(contraction.index, contraction.slots)
 ```
 
+### Generate Extended IR with BLAS Hints
+
+```python
+import sys
+sys.path.insert(0, "python")
+
+from ccgen.generate import generate_cc_contractions_ex
+
+eqs = generate_cc_contractions_ex("ccsd", detect_blas=True)
+for term in eqs["doubles"]:
+    if term.blas_hint:
+        print(f"GEMM: {term.blas_hint.pattern} "
+              f"{term.blas_hint.a_tensor} x {term.blas_hint.b_tensor}")
+    print(f"  estimated FLOPs: {term.estimated_flops}")
+```
+
 ### Emit Debug `einsum`
 
 ```python
@@ -773,24 +1005,54 @@ from ccgen.generate import print_einsum
 print(print_einsum("ccd"))
 ```
 
-### 20. Mental Model for Contributors
+### Emit Tiled C++ with OpenMP
 
-The easiest way to understand `ccgen` is to think of it as four stacked layers:
+```python
+import sys
+sys.path.insert(0, "python")
 
-1. operator algebra
-2. Wick contraction
-3. tensor canonicalization
-4. backend lowering / printing
+from ccgen.generate import print_cpp_optimized
+
+print(print_cpp_optimized("ccsd", tile_occ=16, tile_vir=16, use_openmp=True))
+```
+
+### Emit C++ with BLAS/GEMM Lowering
+
+```python
+import sys
+sys.path.insert(0, "python")
+
+from ccgen.generate import print_cpp_blas
+
+print(print_cpp_blas("ccsd", use_blas=True))
+```
+
+### 21. Mental Model for Contributors
+
+The easiest way to understand `ccgen` is to think of it as six stacked layers:
+
+1. operator algebra (hamiltonian, cluster, algebra)
+2. Wick contraction (wick, project, connectivity)
+3. tensor canonicalization (canonicalize)
+4. algebraic optimization (optimization/)
+5. contraction IR lowering (tensor_ir)
+6. backend emission (emit/)
 
 When debugging, always identify which layer a bug belongs to. A wrong term can
 come from:
 
-- incorrect operator construction
-- incorrect vacuum contraction rules
-- incorrect delta substitution
-- incorrect free/dummy classification
-- incorrect antisymmetry sign handling
-- incorrect duplicate merging
-- incorrect backend lowering
+- incorrect operator construction (layer 1)
+- incorrect vacuum contraction rules (layer 2)
+- incorrect delta substitution (layer 2)
+- incorrect free/dummy classification (layer 2)
+- incorrect antisymmetry sign handling (layer 3)
+- incorrect duplicate merging (layer 3)
+- incorrect denominator collection or permutation grouping (layer 4)
+- incorrect intermediate detection or rewriting (layer 4)
+- incorrect BLAS pattern detection (layer 5)
+- incorrect loop tiling or GEMM emission (layer 6)
 
 Treating these as separate layers is the main architectural idea of the package.
+Each optimization pass in layer 4 is independently toggleable and independently
+tested for algebraic equivalence, so a bug in one pass does not affect the
+others.

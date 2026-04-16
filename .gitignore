@@ -32,3 +32,6 @@ src/base/basis.h
 # ccgen files
 python/ccgen/__pycache__
 python/ccgen/*/__pycache__
+python/CCGEN_DEVELOPMENT_PLAN.md
+python/CCGEN_OPTIMIZATIONS.md
+.gitignore

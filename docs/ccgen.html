@@ -192,46 +192,62 @@
 <li class="toc-level-3"><a href="#dummy-relabeling">Dummy Relabeling</a></li>
 <li class="toc-level-3"><a href="#sorting-and-merge">Sorting and Merge</a></li>
 <li class="toc-level-3"><a href="#10-connectivity-analysis">10. Connectivity Analysis</a></li>
-<li class="toc-level-3"><a href="#11-contraction-ir-lowering">11. Contraction IR Lowering</a></li>
+<li class="toc-level-3"><a href="#11-algebraic-optimization-layer">11. Algebraic Optimization Layer</a></li>
+<li class="toc-level-3"><a href="#orbital-energy-denominator-collection">Orbital Energy Denominator Collection</a></li>
+<li class="toc-level-3"><a href="#permutation-based-term-grouping">Permutation-Based Term Grouping</a></li>
+<li class="toc-level-3"><a href="#implicit-antisymmetry-exploitation">Implicit Antisymmetry Exploitation</a></li>
+<li class="toc-level-3"><a href="#intermediate-tensor-detection">Intermediate Tensor Detection</a></li>
+<li class="toc-level-3"><a href="#common-subexpression-elimination">Common Subexpression Elimination</a></li>
+<li class="toc-level-3"><a href="#12-contraction-ir-lowering">12. Contraction IR Lowering</a></li>
 <li class="toc-level-3"><a href="#tensorslot">`TensorSlot`</a></li>
 <li class="toc-level-3"><a href="#indexcontraction">`IndexContraction`</a></li>
 <li class="toc-level-3"><a href="#backendterm">`BackendTerm`</a></li>
-<li class="toc-level-3"><a href="#12-top-level-api">12. Top-Level API</a></li>
+<li class="toc-level-3"><a href="#backendtermex">`BackendTermEx`</a></li>
+<li class="toc-level-3"><a href="#blashint">`BLASHint`</a></li>
+<li class="toc-level-3"><a href="#13-top-level-api">13. Top-Level API</a></li>
 <li class="toc-level-3"><a href="#targets-for-method">`targets_for_method()`</a></li>
 <li class="toc-level-3"><a href="#generate-cc-equations">`generate_cc_equations()`</a></li>
 <li class="toc-level-3"><a href="#generate-cc-contractions">`generate_cc_contractions()`</a></li>
+<li class="toc-level-3"><a href="#generate-cc-contractions-ex">`generate_cc_contractions_ex()`</a></li>
+<li class="toc-level-3"><a href="#pipelinestats">`PipelineStats`</a></li>
 <li class="toc-level-3"><a href="#formatting-helpers">Formatting Helpers</a></li>
-<li class="toc-level-3"><a href="#13-emitters">13. Emitters</a></li>
+<li class="toc-level-3"><a href="#14-emitters">14. Emitters</a></li>
 <li class="toc-level-3"><a href="#emit-pretty-py">`emit/pretty.py`</a></li>
 <li class="toc-level-3"><a href="#emit-einsum-py">`emit/einsum.py`</a></li>
 <li class="toc-level-3"><a href="#emit-cpp-loops-py">`emit/cpp_loops.py`</a></li>
-<li class="toc-level-3"><a href="#14-method-wrappers">14. Method Wrappers</a></li>
-<li class="toc-level-3"><a href="#15-worked-example-generate-cc-equations-ccsd">15. Worked Example: `generate_cc_equations(&quot;ccsd&quot;)`</a></li>
-<li class="toc-level-3"><a href="#16-testing-and-regression-strategy">16. Testing and Regression Strategy</a></li>
-<li class="toc-level-3"><a href="#17-current-limitations">17. Current Limitations</a></li>
-<li class="toc-level-3"><a href="#18-how-to-extend-the-package">18. How to Extend the Package</a></li>
+<li class="toc-level-3"><a href="#15-method-wrappers">15. Method Wrappers</a></li>
+<li class="toc-level-3"><a href="#16-worked-example-generate-cc-equations-ccsd">16. Worked Example: `generate_cc_equations(&quot;ccsd&quot;)`</a></li>
+<li class="toc-level-3"><a href="#17-testing-and-regression-strategy">17. Testing and Regression Strategy</a></li>
+<li class="toc-level-3"><a href="#18-current-limitations">18. Current Limitations</a></li>
+<li class="toc-level-3"><a href="#19-how-to-extend-the-package">19. How to Extend the Package</a></li>
 <li class="toc-level-3"><a href="#to-add-a-new-method">To Add a New Method</a></li>
 <li class="toc-level-3"><a href="#to-add-a-new-backend">To Add a New Backend</a></li>
-<li class="toc-level-3"><a href="#to-add-more-aggressive-simplification">To Add More Aggressive Simplification</a></li>
-<li class="toc-level-3"><a href="#19-minimal-usage-examples">19. Minimal Usage Examples</a></li>
+<li class="toc-level-3"><a href="#to-add-a-new-optimization-pass">To Add a New Optimization Pass</a></li>
+<li class="toc-level-3"><a href="#to-add-intermediate-tensor-support-to-a-backend">To Add Intermediate Tensor Support to a Backend</a></li>
+<li class="toc-level-3"><a href="#20-minimal-usage-examples">20. Minimal Usage Examples</a></li>
 <li class="toc-level-3"><a href="#print-ccsd-equations">Print CCSD Equations</a></li>
+<li class="toc-level-3"><a href="#print-equations-with-intermediates">Print Equations with Intermediates</a></li>
+<li class="toc-level-3"><a href="#generate-with-optimization-passes">Generate with Optimization Passes</a></li>
 <li class="toc-level-3"><a href="#generate-explicit-contractions">Generate Explicit Contractions</a></li>
+<li class="toc-level-3"><a href="#generate-extended-ir-with-blas-hints">Generate Extended IR with BLAS Hints</a></li>
 <li class="toc-level-3"><a href="#emit-debug-einsum">Emit Debug `einsum`</a></li>
-<li class="toc-level-3"><a href="#20-mental-model-for-contributors">20. Mental Model for Contributors</a></li>
+<li class="toc-level-3"><a href="#emit-tiled-c-with-openmp">Emit Tiled C++ with OpenMP</a></li>
+<li class="toc-level-3"><a href="#emit-c-with-blas-gemm-lowering">Emit C++ with BLAS/GEMM Lowering</a></li>
+<li class="toc-level-3"><a href="#21-mental-model-for-contributors">21. Mental Model for Contributors</a></li>
 </ul>
         </nav>
       </aside> <main class="content">
         <h3 id="ccgen-teaching-guide">CCGEN Teaching Guide</h3>
 <p>A complete theory-to-code walkthrough of the <code>python/ccgen</code> coupled-cluster equation generator. Intended for students learning symbolic second quantization, contributors extending the generator, and developers who need to audit how a named method like CCD or CCSD turns into explicit tensor contractions.</p>
 <h3 id="1-what-ccgen-is">1. What <code>ccgen</code> Is</h3>
-<p><code>ccgen</code> is a small symbolic algebra package that derives spin-orbital coupled-cluster equations from second-quantized operators. It lives in <code>python/ccgen</code> and is intentionally separate from Planck&#x27;s production C++ solvers. The package is meant to be:</p>
+<p><code>ccgen</code> is a symbolic algebra package that derives spin-orbital coupled-cluster equations from second-quantized operators. It lives in <code>python/ccgen</code> and is intentionally separate from Planck&#x27;s production C++ solvers. The package is meant to be:</p>
 <ul>
 <li>easy to inspect term by term</li>
 <li>mathematically close to textbook CC derivations</li>
 <li>deterministic enough to regression test</li>
 <li>simple enough that new methods can be added without touching the whole stack</li>
 </ul>
-<p>The package currently handles the following workflow:</p>
+<p>The package handles the following workflow:</p>
 <ol>
 <li>build the normal-ordered Hamiltonian <span class="math-inline">\(H_N = F_N + V_N\)</span></li>
 <li>build a cluster operator <span class="math-inline">\(T = T_1 + T_2 + \cdots\)</span></li>
@@ -239,10 +255,12 @@
 <li>project <span class="math-inline">\(\bar H\)</span> onto the reference or excitation manifolds</li>
 <li>apply Wick contractions with Hartree-Fock vacuum rules</li>
 <li>canonicalize and merge equivalent tensor terms</li>
-<li>optionally lower the result into an explicit contraction IR</li>
-<li>emit readable text, <code>einsum</code>, or C++ loop nests</li>
+<li>optionally apply algebraic optimization passes (denominator collection, permutation grouping, antisymmetry exploitation)</li>
+<li>optionally detect and extract intermediate tensors (W_oovv, F_ov, etc.)</li>
+<li>lower the result into an explicit contraction IR (basic or extended with BLAS hints, FLOP estimates, and tiling)</li>
+<li>emit readable text, <code>einsum</code> (with optional <code>opt_einsum</code> path optimization), or C++ loop nests (naive, tiled+OpenMP, or BLAS/GEMM-lowered)</li>
 </ol>
-<p>This is not a full tensor compiler. It is a symbolic front-end plus a very simple lowering layer.</p>
+<p>The symbolic derivation layer is intentionally pedagogical. The optimization and code generation layers are designed to produce production-quality output.</p>
 <h3 id="2-architecture-overview">2. Architecture Overview</h3>
 <h3 id="data-flow">Data Flow</h3>
 <pre><code class="language-text">
@@ -254,9 +272,19 @@ Named method string (&quot;ccd&quot;, &quot;ccsd&quot;, &quot;ccsdt&quot;)
   → Wick contraction + delta substitution (wick.py)
   → connectivity filtering (connectivity.py)
   → canonicalization + duplicate merge (canonicalize.py)
+  → optional optimization passes:
+      → orbital energy denominator collection (canonicalize.py)
+      → permutation-based term grouping (optimization/permutation.py)
+      → implicit antisymmetry exploitation (optimization/symmetry.py)
   → algebraic equations (generate.py)
-  → optional contraction IR lowering (tensor_ir.py)
-  → emitters (emit/pretty.py, emit/einsum.py, emit/cpp_loops.py)
+  → optional intermediate detection (optimization/intermediates.py)
+  → contraction IR lowering:
+      → basic: BackendTerm (tensor_ir.py)
+      → extended: BackendTermEx with BLASHint, FLOP estimates (tensor_ir.py)
+  → emitters:
+      → readable text with intermediates (emit/pretty.py)
+      → einsum with opt_einsum paths (emit/einsum.py)
+      → C++ naive / tiled+OpenMP / BLAS-lowered (emit/cpp_loops.py)
 </code></pre>
 <h3 id="directory-summary">Directory Summary</h3>
 <div class="table-wrap"><table>
@@ -275,12 +303,14 @@ Named method string (&quot;ccd&quot;, &quot;ccsd&quot;, &quot;ccsdt&quot;)
 <tr><td><code>python/ccgen/wick.py</code></td><td>Wick pairing topology and Kronecker-delta substitution</td></tr>
 <tr><td><code>python/ccgen/project.py</code></td><td>bra projectors and projection onto energy / residual manifolds</td></tr>
 <tr><td><code>python/ccgen/connectivity.py</code></td><td>connected-diagram filtering</td></tr>
-<tr><td><code>python/ccgen/canonicalize.py</code></td><td>tensor antisymmetry normalization, dummy relabeling, duplicate merge</td></tr>
-<tr><td><code>python/ccgen/tensor_ir.py</code></td><td>explicit contraction metadata for backend use</td></tr>
-<tr><td><code>python/ccgen/generate.py</code></td><td>top-level user API</td></tr>
-<tr><td><code>python/ccgen/emit/</code></td><td>readable text, <code>einsum</code>, and naive C++ emitters</td></tr>
+<tr><td><code>python/ccgen/canonicalize.py</code></td><td>tensor antisymmetry normalization, dummy relabeling, duplicate merge, orbital energy denominator collection</td></tr>
+<tr><td><code>python/ccgen/tensor_ir.py</code></td><td>contraction IR: <code>BackendTerm</code> (basic) and <code>BackendTermEx</code> (extended with <code>BLASHint</code>, FLOP estimates, memory layout, tiling hints)</td></tr>
+<tr><td><code>python/ccgen/generate.py</code></td><td>top-level user API and <code>PipelineStats</code> instrumentation</td></tr>
+<tr><td><code>python/ccgen/bench.py</code></td><td>performance benchmarking (<code>python -m ccgen.bench</code>)</td></tr>
+<tr><td><code>python/ccgen/emit/</code></td><td>emitters: pretty (with intermediates), einsum (with opt_einsum), C++ (naive / tiled+OpenMP / BLAS-lowered)</td></tr>
+<tr><td><code>python/ccgen/optimization/</code></td><td>post-canonicalization passes: intermediate detection, CSE, permutation grouping, antisymmetry exploitation</td></tr>
 <tr><td><code>python/ccgen/methods/</code></td><td>small wrappers like <code>build_ccsd_equations()</code></td></tr>
-<tr><td><code>python/ccgen/tests/</code></td><td>regression tests for energy formulas, stability, and lowering</td></tr>
+<tr><td><code>python/ccgen/tests/</code></td><td>regression tests (stability, numerical, lowering) and optimization equivalence tests</td></tr>
 </tbody></table></div>
 <h3 id="3-core-mathematical-model">3. Core Mathematical Model</h3>
 <p>The package works entirely in spin-orbital second quantization.</p>
@@ -580,7 +610,31 @@ a_{a_1}^\dagger \cdots a_{a_n}^\dagger a_{i_n}\cdots a_{i_1}
 <h3 id="10-connectivity-analysis">10. Connectivity Analysis</h3>
 <p><code>connectivity.py</code> is small but conceptually important.</p>
 <p>Each Wick contraction adds an edge between the two blocks participating in that contraction. The package then runs a union-find connectivity test. For residual equations, the bra projector block is ignored and the remaining contraction graph must be connected. This matches the standard connected-cluster working equations.</p>
-<h3 id="11-contraction-ir-lowering">11. Contraction IR Lowering</h3>
+<h3 id="11-algebraic-optimization-layer">11. Algebraic Optimization Layer</h3>
+<p>After canonicalization and merging, several optional optimization passes can reduce term count or restructure equations for more efficient code generation. These live in <code>python/ccgen/optimization/</code> and are wired into <code>generate_cc_equations()</code> via keyword flags.</p>
+<h3 id="orbital-energy-denominator-collection">Orbital Energy Denominator Collection</h3>
+<p><code>collect_fock_diagonals()</code> in <code>canonicalize.py</code> is a post-canonicalization pass that recognizes diagonal Fock terms and collects them into energy denominator tensors:</p>
+<pre><code class="language-text">
+Before:  -1/4 f(i,i) * t2(a,b,i,j)  +  1/4 f(a,a) * t2(a,b,i,j)  + ...
+After:   D(i,j,a,b) * t2(a,b,i,j)    where D = ε_a + ε_b - ε_i - ε_j
+</code></pre>
+<p>The C++ emitter recognizes <code>D</code> tensors and emits <code>(eps(a) + eps(b) - eps(i) - eps(j))</code> inline. This typically reduces CCSD term count by ~10-20%.</p>
+<h3 id="permutation-based-term-grouping">Permutation-Based Term Grouping</h3>
+<p><code>apply_permutation_grouping()</code> in <code>optimization/permutation.py</code> detects groups of terms that differ only by index permutations (possibly with sign changes from antisymmetry) and merges them. For example, two terms differing only by <code>a↔b</code> in an antisymmetric integral are combined with a factor of 2. This reduces loop nests by 30-40% in typical CCSD/CCSDT equations.</p>
+<h3 id="implicit-antisymmetry-exploitation">Implicit Antisymmetry Exploitation</h3>
+<p><code>exploit_antisymmetry()</code> in <code>optimization/symmetry.py</code> is an experimental pass that exploits <code>v(p,q,r,s) = -v(q,p,r,s)</code> before canonicalization to emit only unique index orderings, potentially reducing pre-canonicalization term count by 30-50%.</p>
+<h3 id="intermediate-tensor-detection">Intermediate Tensor Detection</h3>
+<p><code>detect_intermediates()</code> in <code>optimization/intermediates.py</code> scans all residual equations for sub-contractions that appear in multiple terms and extracts them as reusable intermediate tensors (e.g., W_oovv, F_ov). Each intermediate is described by an <code>IntermediateSpec</code> with:</p>
+<ul>
+<li>name and index signature</li>
+<li>definition terms (the sub-contraction)</li>
+<li>usage count across residual equations</li>
+<li>memory layout, blocking hints, and allocation strategy (for code generation)</li>
+</ul>
+<p><code>annotate_layout_hints()</code> enriches intermediates with memory layout and blocking metadata based on access pattern analysis.</p>
+<h3 id="common-subexpression-elimination">Common Subexpression Elimination</h3>
+<p><code>optimization/subexpression.py</code> provides CSE detection via <code>CSESpec</code> objects. This factors out common tensor products that appear with different coefficients.</p>
+<h3 id="12-contraction-ir-lowering">12. Contraction IR Lowering</h3>
 <p>The symbolic equation objects are convenient for mathematics, but backends often need explicit knowledge of which tensor slots share an index. That is the job of <code>tensor_ir.py</code>.</p>
 <h3 id="tensorslot"><code>TensorSlot</code></h3>
 <p>One <code>TensorSlot</code> means:</p>
@@ -605,10 +659,36 @@ f(i,a)\, t_1(a,i)
 <ul>
 <li>loop emitters</li>
 <li><code>einsum</code> emitters</li>
-<li>a future contraction planner</li>
-<li>a future intermediate/factorization pass</li>
+<li>contraction planners</li>
+<li>intermediate/factorization passes</li>
 </ul>
-<h3 id="12-top-level-api">12. Top-Level API</h3>
+<p>Use <code>lower_equations()</code> to produce basic <code>BackendTerm</code> objects.</p>
+<h3 id="backendtermex"><code>BackendTermEx</code></h3>
+<p>The extended IR (<code>BackendTermEx</code>) inherits all <code>BackendTerm</code> fields and adds optimization metadata for backend emitters:</p>
+<ul>
+<li><code>memory_layout</code>: per-tensor storage order hints (e.g., <code>{&quot;T1&quot;: &quot;row_major&quot;}</code>)</li>
+<li><code>blocking_hint</code>: suggested tile sizes per index (e.g., <code>{&quot;i&quot;: 16, &quot;a&quot;: 16}</code>)</li>
+<li><code>reuse_key</code>: identifies shared sub-contractions across terms</li>
+<li><code>computation_order</code>: recommended summation index ordering</li>
+<li><code>blas_hint</code>: a <code>BLASHint</code> object when the term matches a GEMM pattern (e.g., <code>gemm_nn</code>, <code>gemm_nt</code>), with fields for the A/B operands, contraction indices, and output dimensions</li>
+<li><code>estimated_flops</code>: estimated floating-point operation count</li>
+</ul>
+<p>Use <code>lower_equations_ex()</code> (or <code>generate_cc_contractions_ex()</code> from the top-level API) to produce these extended terms. The BLAS pattern detector recognizes two-factor contractions of the form <span class="math-inline">\(\sum_k A_{ik} B_{kj}\)</span> and emits the appropriate transpose/no-transpose hint.</p>
+<h3 id="blashint"><code>BLASHint</code></h3>
+<pre><code class="language-python">
+@dataclass(frozen=True)
+class BLASHint:
+    pattern: str              # &quot;gemm_nn&quot; | &quot;gemm_nt&quot; | &quot;gemm_tn&quot; | &quot;gemm_tt&quot;
+    a_tensor: str             # name of A operand
+    b_tensor: str             # name of B operand
+    a_indices: tuple[Index, ...]
+    b_indices: tuple[Index, ...]
+    contraction_indices: tuple[Index, ...]  # shared summation (k-dimension)
+    m_indices: tuple[Index, ...]            # output row dimension
+    n_indices: tuple[Index, ...]            # output column dimension
+</code></pre>
+<p>The C++ BLAS backend (<code>emit_blas_translation_unit</code>) uses these hints to emit <code>cblas_dgemm</code> calls instead of loop nests for matching terms.</p>
+<h3 id="13-top-level-api">13. Top-Level API</h3>
 <p><code>generate.py</code> exposes the package entry points.</p>
 <h3 id="targets-for-method"><code>targets_for_method()</code></h3>
 <p>Turns a method name like <code>ccsd</code> into the default manifolds:</p>
@@ -624,20 +704,39 @@ f(i,a)\, t_1(a,i)
 <li>projects onto the requested targets</li>
 <li>optionally filters disconnected residual terms</li>
 <li>canonicalizes and merges</li>
+<li>optionally applies post-canonicalization optimization passes</li>
 </ol>
 <p>It returns:</p>
 <pre><code class="language-python">
 dict[str, list[AlgebraTerm]]
 </code></pre>
+<p>The optimization flags control post-canonicalization passes:</p>
+<ul>
+<li><code>collect_denominators=True</code>: collect diagonal Fock terms into denominator tensors</li>
+<li><code>permutation_grouping=True</code>: merge terms related by index permutations</li>
+<li><code>exploit_symmetry=True</code>: exploit implicit antisymmetry (experimental)</li>
+<li><code>debug=True</code>: print term counts and timing to stderr; store in <code>last_stats</code></li>
+</ul>
 <h3 id="generate-cc-contractions"><code>generate_cc_contractions()</code></h3>
-<p>This runs <code>generate_cc_equations()</code> and then lowers the result into <code>BackendTerm</code>s via <code>lower_equations()</code>.</p>
+<p>Runs <code>generate_cc_equations()</code> and lowers the result into basic <code>BackendTerm</code>s via <code>lower_equations()</code>.</p>
+<h3 id="generate-cc-contractions-ex"><code>generate_cc_contractions_ex()</code></h3>
+<p>Runs <code>generate_cc_equations()</code> and lowers the result into extended <code>BackendTermEx</code> objects via <code>lower_equations_ex()</code>. Accepts additional parameters:</p>
+<ul>
+<li><code>detect_blas=True</code>: enable BLAS/GEMM pattern detection</li>
+<li><code>tile_occ</code>, <code>tile_vir</code>: tile sizes for blocking hints</li>
+</ul>
+<h3 id="pipelinestats"><code>PipelineStats</code></h3>
+<p>When <code>debug=True</code> is passed to <code>generate_cc_equations()</code>, a <code>PipelineStats</code> object is stored in <code>ccgen.generate.last_stats</code>. It records term counts and timing at every pipeline stage (BCH expansion, Wick projection, canonicalization, merge, and each optimization pass). Call <code>.summary()</code> for a human-readable report.</p>
 <h3 id="formatting-helpers">Formatting Helpers</h3>
 <ul>
-<li><code>print_equations()</code> uses <code>emit/pretty.py</code></li>
-<li><code>print_einsum()</code> uses <code>emit/einsum.py</code></li>
-<li><code>print_cpp()</code> uses <code>emit/cpp_loops.py</code></li>
+<li><code>print_equations()</code> uses <code>emit/pretty.py</code> for basic readable output</li>
+<li><code>print_equations_full()</code> uses <code>emit/pretty.py</code> with intermediate definitions, index/tensor legend, section headers, and summary statistics</li>
+<li><code>print_einsum()</code> uses <code>emit/einsum.py</code>, with optional <code>use_opt_einsum=True</code> for contraction path optimization</li>
+<li><code>print_cpp()</code> uses <code>emit/cpp_loops.py</code> for naive loop nests</li>
+<li><code>print_cpp_optimized()</code> uses <code>emit/cpp_loops.py</code> for tiled loops with OpenMP</li>
+<li><code>print_cpp_blas()</code> uses <code>emit/cpp_loops.py</code> for BLAS/GEMM-lowered output</li>
 </ul>
-<h3 id="13-emitters">13. Emitters</h3>
+<h3 id="14-emitters">14. Emitters</h3>
 <h3 id="emit-pretty-py"><code>emit/pretty.py</code></h3>
 <p>This is the human-facing printer. It emits expressions such as:</p>
 <pre><code class="language-text">
@@ -646,14 +745,26 @@ R1(i,a) =
   + 1/4 sum(j,b) f(j,b) t2(a,b,i,j)
 </code></pre>
 <p>This is the best format for inspecting algebraic structure while debugging.</p>
+<p>The module also provides <code>format_equations_with_intermediates()</code>, which adds:</p>
+<ul>
+<li>intermediate tensor definitions listed separately before the residuals</li>
+<li>an index space legend (i, j, k = occupied; a, b, c = virtual)</li>
+<li>manifold section headers with descriptions</li>
+<li>summary statistics (term counts per manifold)</li>
+</ul>
 <h3 id="emit-einsum-py"><code>emit/einsum.py</code></h3>
-<p>This backend turns each <code>AlgebraTerm</code> into a NumPy-style <code>einsum</code> call. It is mostly for validation and prototyping, because it makes the contraction pattern visually obvious:</p>
+<p>This backend turns each <code>AlgebraTerm</code> into a NumPy-style <code>einsum</code> call:</p>
 <pre><code class="language-python">
 R1 += 1/4 * np.einsum(&#x27;jb,abij-&gt;ia&#x27;, F, T2)
 </code></pre>
+<p>When <code>opt_einsum</code> is installed and <code>use_opt_einsum=True</code> is passed, the emitter uses <code>opt_einsum.contract()</code> with optimized contraction paths instead of vanilla <code>np.einsum()</code>.</p>
+<p>The module also supports intermediate tensor emission via <code>format_equations_with_intermediates_einsum()</code>.</p>
 <h3 id="emit-cpp-loops-py"><code>emit/cpp_loops.py</code></h3>
-<p>This backend emits very naive loop nests. It does not optimize contraction ordering or generate intermediates. Its purpose is to preserve the algebra in a form that a C++ developer can read line by line.</p>
-<h3 id="14-method-wrappers">14. Method Wrappers</h3>
+<p>Three tiers of C++ emission are available in a single module:</p>
+<p><strong>Tier 1: Naive loops</strong> (<code>emit_translation_unit</code>). Straightforward nested loops that preserve the algebra in a form a C++ developer can read line by line. Also handles orbital energy denominator terms (emits <code>eps(i)</code> syntax). Supports intermediate tensor builds via <code>emit_translation_unit_with_intermediates</code>.</p>
+<p><strong>Tier 2: Tiled + OpenMP</strong> (<code>emit_optimized_translation_unit</code>). Emits blocked loops with configurable tile sizes (default 16, tuned for L1 cache ~32KB of doubles) and <code>#pragma omp parallel for collapse(N)</code> annotations.</p>
+<p><strong>Tier 3: BLAS/GEMM-lowered</strong> (<code>emit_blas_translation_unit</code>). Detects GEMM patterns in two-factor contractions (using <code>BackendTermEx.blas_hint</code>) and emits <code>cblas_dgemm</code> calls. Falls back to tiled loops for non-GEMM terms. Includes <code>#include &lt;cblas.h&gt;</code> and buffer allocation/deallocation.</p>
+<h3 id="15-method-wrappers">15. Method Wrappers</h3>
 <p>The files in <code>python/ccgen/methods/</code> are intentionally thin.</p>
 <ul>
 <li><code>ccd.py</code> returns energy + doubles</li>
@@ -661,7 +772,7 @@ R1 += 1/4 * np.einsum(&#x27;jb,abij-&gt;ia&#x27;, F, T2)
 <li><code>ccsdt.py</code> returns energy + singles + doubles + triples</li>
 </ul>
 <p>These wrappers exist mainly so users can import a named builder without needing to know the generic driver API.</p>
-<h3 id="15-worked-example-generate-cc-equations-ccsd">15. Worked Example: <code>generate_cc_equations(&quot;ccsd&quot;)</code></h3>
+<h3 id="16-worked-example-generate-cc-equations-ccsd">16. Worked Example: <code>generate_cc_equations(&quot;ccsd&quot;)</code></h3>
 <p>Calling</p>
 <pre><code class="language-python">
 from ccgen.generate import generate_cc_equations
@@ -686,8 +797,9 @@ f_i^a t_i^a
 + \frac{1}{2}\langle ab || ij \rangle t_i^a t_j^b
 \]</span></p>
 <p>and the test suite cross-checks that formula numerically against local PySCF.</p>
-<h3 id="16-testing-and-regression-strategy">16. Testing and Regression Strategy</h3>
-<p>The regression tests in <code>python/ccgen/tests/test_regressions.py</code> currently cover:</p>
+<h3 id="17-testing-and-regression-strategy">17. Testing and Regression Strategy</h3>
+<p>The test suite lives in <code>python/ccgen/tests/</code> and is split across two modules.</p>
+<p><strong><code>test_regressions.py</code></strong> covers core correctness:</p>
 <ul>
 <li>dummy relabeling must not collide with free residual labels</li>
 <li>the generated CCSD energy must match the textbook / PySCF formula</li>
@@ -695,18 +807,23 @@ f_i^a t_i^a
 <li>no canonical term may keep repeated indices in an antisymmetric slot</li>
 <li>contraction lowering must preserve tensor-slot connectivity</li>
 </ul>
-<p>This is important because symbolic code can be &quot;almost right&quot; in ways that are very hard to notice by eye. Tiny errors in sign, relabeling, or free-index restoration can completely change a residual while still producing something that looks plausible.</p>
-<h3 id="17-current-limitations">17. Current Limitations</h3>
-<p>The package is intentionally educational, and that shows in a few places.</p>
+<p><strong><code>test_optimizations.py</code></strong> covers algebraic equivalence for each optimization pass:</p>
 <ul>
-<li>It works in spin-orbital form only.</li>
-<li>The emitters are inspectable, not optimized.</li>
-<li>There is no automated intermediate generation or tensor factorization yet.</li>
-<li>The C++ emitter is a loop printer, not a production code generator.</li>
-<li>The BCH layer still builds the full formal expansion before projection.</li>
-<li>There is no direct integration with Planck&#x27;s production C++ coupled-cluster solvers.</li>
+<li>orbital energy denominator collection preserves numerical equivalence</li>
+<li>permutation grouping preserves numerical equivalence</li>
+<li>intermediate detection does not change residual values</li>
+<li>each pass is tested by generating equations with and without the optimization, evaluating both on small random tensors (no=4, nv=4), and asserting agreement to machine precision (&lt; 1e-12)</li>
 </ul>
-<h3 id="18-how-to-extend-the-package">18. How to Extend the Package</h3>
+<p>This two-tier strategy is important because symbolic code can be &quot;almost right&quot; in ways that are very hard to notice by eye. Tiny errors in sign, relabeling, or free-index restoration can completely change a residual while still producing something that looks plausible.</p>
+<h3 id="18-current-limitations">18. Current Limitations</h3>
+<ul>
+<li>It works in spin-orbital form only (no spin-adapted or spatial-orbital formulation).</li>
+<li>The BCH layer still builds the full formal expansion before projection.</li>
+<li>Intermediate detection is heuristic-based (threshold on reuse count); it does not yet perform global optimal factorization.</li>
+<li>Implicit antisymmetry exploitation is experimental and requires extensive validation before production use.</li>
+<li>There is no direct integration with Planck&#x27;s production C++ coupled-cluster solvers yet (the <code>TensorOptimized</code> backend is planned; see <code>CCGEN_DEVELOPMENT_PLAN.md</code> Phase 4).</li>
+</ul>
+<h3 id="19-how-to-extend-the-package">19. How to Extend the Package</h3>
 <h3 id="to-add-a-new-method">To Add a New Method</h3>
 <ol>
 <li>make sure <code>parse_cc_level()</code> can express the needed excitation ranks</li>
@@ -716,14 +833,28 @@ f_i^a t_i^a
 </ol>
 <h3 id="to-add-a-new-backend">To Add a New Backend</h3>
 <ol>
-<li>decide whether the backend wants <code>AlgebraTerm</code> or <code>BackendTerm</code></li>
+<li>decide whether the backend wants <code>AlgebraTerm</code>, <code>BackendTerm</code>, or <code>BackendTermEx</code> (the extended IR with BLAS hints and tiling metadata)</li>
 <li>if it needs explicit slot connectivity, consume <code>tensor_ir.py</code></li>
+<li>if it needs BLAS/GEMM pattern information, use <code>lower_equations_ex()</code></li>
 <li>add the new emitter under <code>python/ccgen/emit/</code></li>
 <li>add tests that compare emitted structure against known small cases</li>
 </ol>
-<h3 id="to-add-more-aggressive-simplification">To Add More Aggressive Simplification</h3>
-<p>The right place is after canonicalization and before backend emission. That is where common-subexpression detection, intermediate introduction, or contraction ordering logic should live.</p>
-<h3 id="19-minimal-usage-examples">19. Minimal Usage Examples</h3>
+<h3 id="to-add-a-new-optimization-pass">To Add a New Optimization Pass</h3>
+<ol>
+<li>create a module under <code>python/ccgen/optimization/</code></li>
+<li>the pass receives <code>list[AlgebraTerm]</code> and returns <code>list[AlgebraTerm]</code></li>
+<li>wire it into <code>generate_cc_equations()</code> in <code>generate.py</code> with a keyword flag</li>
+<li>update <code>PipelineStats</code> to track the pass&#x27;s effect on term count</li>
+<li>add equivalence tests in <code>tests/test_optimizations.py</code>: generate equations with and without the pass, evaluate numerically, assert equivalence to 1e-12</li>
+</ol>
+<h3 id="to-add-intermediate-tensor-support-to-a-backend">To Add Intermediate Tensor Support to a Backend</h3>
+<ol>
+<li>use <code>detect_intermediates()</code> from <code>optimization/intermediates.py</code> to find reusable sub-contractions</li>
+<li>optionally call <code>annotate_layout_hints()</code> for memory layout and blocking metadata</li>
+<li>emit intermediate build code before residual equations</li>
+<li>see <code>emit/cpp_loops.py</code> (<code>emit_translation_unit_with_intermediates</code>) and <code>emit/einsum.py</code> (<code>format_equations_with_intermediates_einsum</code>) for examples</li>
+</ol>
+<h3 id="20-minimal-usage-examples">20. Minimal Usage Examples</h3>
 <h3 id="print-ccsd-equations">Print CCSD Equations</h3>
 <pre><code class="language-python">
 import sys
@@ -732,6 +863,25 @@ sys.path.insert(0, &quot;python&quot;)
 from ccgen.generate import print_equations
 
 print(print_equations(&quot;ccsd&quot;))
+</code></pre>
+<h3 id="print-equations-with-intermediates">Print Equations with Intermediates</h3>
+<pre><code class="language-python">
+import sys
+sys.path.insert(0, &quot;python&quot;)
+
+from ccgen.generate import print_equations_full
+
+print(print_equations_full(&quot;ccsd&quot;, intermediate_threshold=5))
+</code></pre>
+<h3 id="generate-with-optimization-passes">Generate with Optimization Passes</h3>
+<pre><code class="language-python">
+import sys
+sys.path.insert(0, &quot;python&quot;)
+
+from ccgen.generate import generate_cc_equations
+
+# Apply denominator collection + pipeline instrumentation
+eqs = generate_cc_equations(&quot;ccsd&quot;, collect_denominators=True, debug=True)
 </code></pre>
 <h3 id="generate-explicit-contractions">Generate Explicit Contractions</h3>
 <pre><code class="language-python">
@@ -748,6 +898,20 @@ print(term.coefficient)
 for contraction in term.contractions:
     print(contraction.index, contraction.slots)
 </code></pre>
+<h3 id="generate-extended-ir-with-blas-hints">Generate Extended IR with BLAS Hints</h3>
+<pre><code class="language-python">
+import sys
+sys.path.insert(0, &quot;python&quot;)
+
+from ccgen.generate import generate_cc_contractions_ex
+
+eqs = generate_cc_contractions_ex(&quot;ccsd&quot;, detect_blas=True)
+for term in eqs[&quot;doubles&quot;]:
+    if term.blas_hint:
+        print(f&quot;GEMM: {term.blas_hint.pattern} &quot;
+              f&quot;{term.blas_hint.a_tensor} x {term.blas_hint.b_tensor}&quot;)
+    print(f&quot;  estimated FLOPs: {term.estimated_flops}&quot;)
+</code></pre>
 <h3 id="emit-debug-einsum">Emit Debug <code>einsum</code></h3>
 <pre><code class="language-python">
 import sys
@@ -757,25 +921,48 @@ from ccgen.generate import print_einsum
 
 print(print_einsum(&quot;ccd&quot;))
 </code></pre>
-<h3 id="20-mental-model-for-contributors">20. Mental Model for Contributors</h3>
-<p>The easiest way to understand <code>ccgen</code> is to think of it as four stacked layers:</p>
+<h3 id="emit-tiled-c-with-openmp">Emit Tiled C++ with OpenMP</h3>
+<pre><code class="language-python">
+import sys
+sys.path.insert(0, &quot;python&quot;)
+
+from ccgen.generate import print_cpp_optimized
+
+print(print_cpp_optimized(&quot;ccsd&quot;, tile_occ=16, tile_vir=16, use_openmp=True))
+</code></pre>
+<h3 id="emit-c-with-blas-gemm-lowering">Emit C++ with BLAS/GEMM Lowering</h3>
+<pre><code class="language-python">
+import sys
+sys.path.insert(0, &quot;python&quot;)
+
+from ccgen.generate import print_cpp_blas
+
+print(print_cpp_blas(&quot;ccsd&quot;, use_blas=True))
+</code></pre>
+<h3 id="21-mental-model-for-contributors">21. Mental Model for Contributors</h3>
+<p>The easiest way to understand <code>ccgen</code> is to think of it as six stacked layers:</p>
 <ol>
-<li>operator algebra</li>
-<li>Wick contraction</li>
-<li>tensor canonicalization</li>
-<li>backend lowering / printing</li>
+<li>operator algebra (hamiltonian, cluster, algebra)</li>
+<li>Wick contraction (wick, project, connectivity)</li>
+<li>tensor canonicalization (canonicalize)</li>
+<li>algebraic optimization (optimization/)</li>
+<li>contraction IR lowering (tensor_ir)</li>
+<li>backend emission (emit/)</li>
 </ol>
 <p>When debugging, always identify which layer a bug belongs to. A wrong term can come from:</p>
 <ul>
-<li>incorrect operator construction</li>
-<li>incorrect vacuum contraction rules</li>
-<li>incorrect delta substitution</li>
-<li>incorrect free/dummy classification</li>
-<li>incorrect antisymmetry sign handling</li>
-<li>incorrect duplicate merging</li>
-<li>incorrect backend lowering</li>
+<li>incorrect operator construction (layer 1)</li>
+<li>incorrect vacuum contraction rules (layer 2)</li>
+<li>incorrect delta substitution (layer 2)</li>
+<li>incorrect free/dummy classification (layer 2)</li>
+<li>incorrect antisymmetry sign handling (layer 3)</li>
+<li>incorrect duplicate merging (layer 3)</li>
+<li>incorrect denominator collection or permutation grouping (layer 4)</li>
+<li>incorrect intermediate detection or rewriting (layer 4)</li>
+<li>incorrect BLAS pattern detection (layer 5)</li>
+<li>incorrect loop tiling or GEMM emission (layer 6)</li>
 </ul>
-<p>Treating these as separate layers is the main architectural idea of the package.</p>
+<p>Treating these as separate layers is the main architectural idea of the package. Each optimization pass in layer 4 is independently toggleable and independently tested for algebraic equivalence, so a bug in one pass does not affect the others.</p>
       </main>
     </div>
   </div> <script>
