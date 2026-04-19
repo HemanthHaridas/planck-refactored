@@ -74,7 +74,7 @@ fi
 FILES=()
 while IFS= read -r f; do
     FILES+=("${f}")
-done < <(find src tests \( -name '*.cpp' -o -name '*.h' \) ! -path 'src/external/*' | sort)
+done < <(find src tests \( -name '*.cpp' -o -name '*.h' \) ! -path 'src/external/*' ! -path 'tests/pyscf/*' | sort)
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
     echo "No C++ files found."

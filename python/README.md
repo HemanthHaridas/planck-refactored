@@ -152,10 +152,10 @@ E_CC += 1/4 * np.einsum('ijab,abij->',V, T2)
 
 ### C++ loop-nest output
 
-Three tiers of C++ emission are available:
+Four tiers of C++ emission are available:
 
 ```python
-from ccgen.generate import print_cpp, print_cpp_optimized, print_cpp_blas
+from ccgen.generate import print_cpp, print_cpp_optimized, print_cpp_blas, print_cpp_planck
 
 # Tier 1: Naive loop nests (readable, no optimization)
 print(print_cpp("ccsd"))
@@ -165,7 +165,21 @@ print(print_cpp_optimized("ccsd", tile_occ=16, tile_vir=16, use_openmp=True))
 
 # Tier 3: BLAS/GEMM lowering (emits cblas_dgemm calls where patterns match)
 print(print_cpp_blas("ccsd", use_blas=True, use_openmp=True))
+
+# Tier 4: Planck-specific tensor kernels (targets Planck's CC infrastructure)
+print(print_cpp_planck("ccsd"))
+
+# With intermediate tensor builders
+print(print_cpp_planck("ccsd", include_intermediates=True, intermediate_threshold=5))
 ```
+
+The Planck emitter (Tier 4) targets the concrete tensor types in `src/post_hf/cc/`:
+- `CanonicalRHFCCReference` for Fock blocks
+- `TensorCCBlockCache` for ERI blocks
+- `DenominatorCache` for orbital-energy denominators
+- `RCCSDAmplitudes` / `RCCSDTAmplitudes` for cluster amplitudes
+
+It maps abstract tensor names (F, V, T1, T2, etc.) to the correct Planck accessors and handles ERI block symmetry permutations automatically.
 
 Tier 1 output:
 
@@ -261,17 +275,38 @@ python -m ccgen.bench --methods ccsd ccsdt     # specific methods
 python -m ccgen.bench --methods ccsd --timing --json   # JSON output
 ```
 
-### CLI script
+### CLI scripts
 
-A convenience script is provided for quick code generation:
+A general-purpose script is provided for quick code generation:
 
 ```bash
 cd python
-python generate_ccsdt_cpp.py ccsdt                 # CCSDT C++ to stdout
+python generate_ccsdt_cpp.py ccsdt                 # CCSDT naive C++ to stdout
 python generate_ccsdt_cpp.py ccsd -o ccsd.cpp       # CCSD C++ to file
 python generate_ccsdt_cpp.py ccsdt --pretty          # human-readable form
 python generate_ccsdt_cpp.py ccd --einsum            # numpy einsum form
 python generate_ccsdt_cpp.py ccsd --ir               # tensor contraction IR
+python generate_ccsdt_cpp.py ccsd --ir-ex            # extended IR (BLAS hints)
+python generate_ccsdt_cpp.py ccsd --tiled            # tiled + OpenMP C++
+python generate_ccsdt_cpp.py ccsd --blas             # BLAS/GEMM-lowered C++
+python generate_ccsdt_cpp.py ccsd --planck           # Planck-specific tensor kernels
+python generate_ccsdt_cpp.py ccsd --pretty-full      # with intermediates + legend
+python generate_ccsdt_cpp.py ccsd --einsum --opt-einsum  # opt_einsum contraction paths
+
+# Pipeline options (combinable with any emitter):
+python generate_ccsdt_cpp.py ccsd --tiled --collect-denominators --debug
+python generate_ccsdt_cpp.py ccsdt --blas --tile-occ 32 --tile-vir 24 --no-openmp
+```
+
+Two Planck-specific scripts are also provided:
+
+```bash
+# Generate Planck-compatible .cpp kernel files for one or more CC methods
+python generate_planck_cc_kernels.py --output-dir build/ --methods ccsd ccsdt
+python generate_planck_cc_kernels.py --output-dir build/ --methods ccsd --include-intermediates
+
+# Generate spin-orbital CCSD warm-start kernels (.inc file for tensor_backend.cpp)
+python generate_spinorbital_ccsd_warm_start.py --output ccsd_warm_start.inc
 ```
 
 ## Package structure
@@ -299,6 +334,7 @@ ccgen/
     pretty.py          Human-readable equation formatter (with intermediate support)
     einsum.py          NumPy einsum code emitter (with opt_einsum integration)
     cpp_loops.py       C++ emitter: naive, tiled+OpenMP, and BLAS/GEMM-lowered
+    planck_tensor_cpp.py  Planck-specific C++ emitter targeting Tensor2D/4D/6D infrastructure
   optimization/
     __init__.py        Optimization pass registry
     intermediates.py   Intermediate tensor detection, rewriting, and layout hints
@@ -345,8 +381,8 @@ build_hamiltonian()          build_cluster("ccsd")
          └───────────┼────────────────────────┘
                      │
                 optimized equations
-               /     |     \        \
-         pretty   einsum  cpp_loops  cpp_blas    (emitters)
+               /     |     \        \          \
+         pretty   einsum  cpp_loops  cpp_blas  cpp_planck   (emitters)
                      |
               lower_equations           (basic contraction IR)
               lower_equations_ex        (extended IR: BLAS, FLOP, tiling)
@@ -370,7 +406,20 @@ The test suite validates:
 
 ## Integration with Planck
 
-ccgen is designed to generate optimized C++ code targeting Planck's coupled-cluster tensor infrastructure (`Tensor2D`/`Tensor4D`/`Tensor6D` in `src/post_hf/cc/`). The planned integration adds a `TensorOptimized` solver path alongside the existing teaching and production backends. See `CCGEN_DEVELOPMENT_PLAN.md` for the full roadmap.
+ccgen generates C++ code targeting Planck's coupled-cluster tensor infrastructure (`Tensor2D`/`Tensor4D`/`Tensor6D` in `src/post_hf/cc/`). The Planck emitter (`print_cpp_planck` / `emit/planck_tensor_cpp.py`) maps abstract tensor expressions to Planck's concrete types:
+
+| Abstract tensor | Planck accessor |
+|----------------|----------------|
+| `F` (Fock blocks) | `reference.f_ov()`, `reference.f_oo()`, etc. |
+| `V` (ERI blocks) | `mo_blocks.oovv()`, `mo_blocks.ovov()`, etc. |
+| `T1`, `T2`, `T3` | `amplitudes.t1()`, `amplitudes.t2()`, `amplitudes.t3()` |
+| `D` (denominators) | `denominators.d_ov()`, `denominators.d_oovv()`, etc. |
+
+Two integration workflows are supported:
+
+1. **Kernel generation** (`generate_planck_cc_kernels.py`): produces standalone `.cpp` files with complete kernel functions for each CC method, suitable for the `TensorOptimized` solver path.
+
+2. **Warm-start inclusion** (`generate_spinorbital_ccsd_warm_start.py`): produces a `.inc` file with spin-orbital CCSD energy and residual functions, designed for direct inclusion in `tensor_backend.cpp`.
 
 ## License
 

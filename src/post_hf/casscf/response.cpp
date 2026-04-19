@@ -1,7 +1,7 @@
 #include "post_hf/casscf/response.h"
 
-#include "post_hf/casscf/ci.h"
 #include "post_hf/casscf/casscf_utils.h"
+#include "post_hf/casscf/ci.h"
 #include "post_hf/casscf/orbital.h"
 #include "post_hf/casscf/rdm.h"
 #include "post_hf/casscf/strings.h"
@@ -15,29 +15,29 @@
 namespace
 {
 
+    using HartreeFock::Correlation::CASSCF::as_single_column_matrix;
+    using HartreeFock::Correlation::CASSCF::build_ci_orbital_gradient_correction;
     using HartreeFock::Correlation::CASSCF::build_det_lookup;
     using HartreeFock::Correlation::CASSCF::build_spin_dets;
-    using HartreeFock::Correlation::CASSCF::build_ci_orbital_gradient_correction;
-    using HartreeFock::Correlation::CASSCF::as_single_column_matrix;
+    using HartreeFock::Correlation::CASSCF::CIDeterminantSpace;
+    using HartreeFock::Correlation::CASSCF::CISigmaApplier;
     using HartreeFock::Correlation::CASSCF::compute_2rdm_bilinear;
     using HartreeFock::Correlation::CASSCF::compute_Q_matrix;
     using HartreeFock::Correlation::CASSCF::count_occupied_below;
     using HartreeFock::Correlation::CASSCF::delta_g_sa_action;
-    using HartreeFock::Correlation::CASSCF::hessian_action;
     using HartreeFock::Correlation::CASSCF::hess_diag;
+    using HartreeFock::Correlation::CASSCF::hessian_action;
     using HartreeFock::Correlation::CASSCF::non_redundant_pairs;
+    using HartreeFock::Correlation::CASSCF::OrbitalHessianContext;
     using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
     using HartreeFock::Correlation::CASSCF::RotPair;
-    using HartreeFock::Correlation::CASSCF::StateAveragedCoupledRoot;
     using HartreeFock::Correlation::CASSCF::single_weight;
-    using HartreeFock::Correlation::CASSCF::CIDeterminantSpace;
-    using HartreeFock::Correlation::CASSCF::CISigmaApplier;
-    using HartreeFock::Correlation::CASSCF::OrbitalHessianContext;
+    using HartreeFock::Correlation::CASSCF::StateAveragedCoupledRoot;
+    using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     using HartreeFock::Correlation::CASSCFInternal::apply_response_diag_preconditioner;
+    using HartreeFock::Correlation::CASSCFInternal::CIString;
     using HartreeFock::Correlation::CASSCFInternal::project_orthogonal;
     using HartreeFock::Correlation::CASSCFInternal::single_bit_mask;
-    using HartreeFock::Correlation::CASSCFInternal::CIString;
-    using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
 
     std::size_t idx4(int p, int q, int r, int s, int n_act)
     {

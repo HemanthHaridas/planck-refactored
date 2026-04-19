@@ -58,7 +58,7 @@ namespace HartreeFock
             std::ostream &out_stream =
                 (level == Info || level == Error) ? std::cout : std::cerr;
 
-            const char *prefix = (level == Info)    ? "[INF] "
+            const char *prefix = (level == Info)      ? "[INF] "
                                  : (level == Warning) ? "[WRN] "
                                                       : "[ERR] ";
 

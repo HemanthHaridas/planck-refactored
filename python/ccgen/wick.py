@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import Sequence
 
 from .indices import Index
-from .tensors import Tensor
+from .tensors import Tensor, delta
 from .sqops import SQOp
 
 
@@ -174,9 +174,12 @@ def wick_contract(
 def apply_deltas(
     tensors: tuple[Tensor, ...],
     deltas: tuple[tuple[Index, Index], ...],
+    protected: tuple[Index, ...] = (),
 ) -> tuple[Tensor, ...] | None:
     """Apply Kronecker deltas as index substitutions."""
     parent: dict[Index, Index] = {}
+    protected_set = frozenset(protected)
+    protected_order = {idx: pos for pos, idx in enumerate(protected)}
 
     def find(x: Index) -> Index:
         while x in parent and parent[x] != x:
@@ -185,16 +188,31 @@ def apply_deltas(
             x = gp
         return x
 
+    def _prefer(lhs: Index, rhs: Index) -> tuple[Index, Index]:
+        lhs_protected = lhs in protected_set
+        rhs_protected = rhs in protected_set
+
+        if lhs_protected != rhs_protected:
+            return (lhs, rhs) if lhs_protected else (rhs, lhs)
+
+        if lhs_protected and rhs_protected:
+            lhs_rank = protected_order[lhs]
+            rhs_rank = protected_order[rhs]
+            return (lhs, rhs) if lhs_rank <= rhs_rank else (rhs, lhs)
+
+        if rhs.space != "gen" and lhs.space == "gen":
+            return rhs, lhs
+        if lhs.space == rhs.space and rhs.name < lhs.name:
+            return rhs, lhs
+        return lhs, rhs
+
     def union(a: Index, b: Index) -> bool:
         ra, rb = find(a), find(b)
         if ra == rb:
             return True
         if ra.space != "gen" and rb.space != "gen" and ra.space != rb.space:
             return False
-        if rb.space != "gen" and ra.space == "gen":
-            ra, rb = rb, ra
-        elif ra.space == rb.space and rb.name < ra.name:
-            ra, rb = rb, ra
+        ra, rb = _prefer(ra, rb)
         parent[rb] = ra
         return True
 
@@ -202,10 +220,28 @@ def apply_deltas(
         if not union(p, q):
             return None
 
-    mapping: dict[Index, Index] = {}
     all_indices: set[Index] = set()
     for t in tensors:
         all_indices.update(t.indices)
+    all_indices.update(protected)
+
+    components: dict[Index, set[Index]] = {}
+    for idx in all_indices:
+        components.setdefault(find(idx), set()).add(idx)
+
+    extra_factors: list[Tensor] = []
+    for root, members in components.items():
+        protected_members = sorted(
+            (idx for idx in members if idx in protected_set),
+            key=lambda idx: protected_order[idx],
+        )
+        if len(protected_members) <= 1:
+            continue
+        rep = protected_members[0]
+        for idx in protected_members[1:]:
+            extra_factors.append(delta(rep, idx))
+
+    mapping: dict[Index, Index] = {}
     for idx in all_indices:
         root = find(idx)
         if root != idx:
@@ -214,4 +250,7 @@ def apply_deltas(
             else:
                 mapping[idx] = root
 
-    return tuple(t.reindexed(mapping) for t in tensors)
+    transformed = tuple(t.reindexed(mapping) for t in tensors)
+    if extra_factors:
+        transformed = transformed + tuple(extra_factors)
+    return transformed

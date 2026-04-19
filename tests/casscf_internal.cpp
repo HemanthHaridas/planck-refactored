@@ -736,8 +736,8 @@ int main()
         auto default_rhs_mode = [](bool debug_commutator_rhs)
         {
             return debug_commutator_rhs
-                ? ResponseRHSMode::CommutatorOnlyApproximate
-                : ResponseRHSMode::ExactActiveSpaceOrbitalDerivative;
+                       ? ResponseRHSMode::CommutatorOnlyApproximate
+                       : ResponseRHSMode::ExactActiveSpaceOrbitalDerivative;
         };
 
         ok &= expect(default_rhs_mode(false) == ResponseRHSMode::ExactActiveSpaceOrbitalDerivative,
@@ -1470,40 +1470,40 @@ int main()
     }
 
     {
-        const Eigen::MatrixXd F_I = (Eigen::MatrixXd(4, 4) <<
-            1.10, 0.02, -0.01, 0.04,
-            0.02, 1.70, 0.03, -0.02,
-            -0.01, 0.03, 2.20, 0.05,
-            0.04, -0.02, 0.05, 2.80).finished();
+        const Eigen::MatrixXd F_I = (Eigen::MatrixXd(4, 4) << 1.10, 0.02, -0.01, 0.04,
+                                     0.02, 1.70, 0.03, -0.02,
+                                     -0.01, 0.03, 2.20, 0.05,
+                                     0.04, -0.02, 0.05, 2.80)
+                                        .finished();
 
-        const Eigen::MatrixXd gamma_root0 = (Eigen::MatrixXd(2, 2) <<
-            1.00, 0.15,
-            0.15, 0.55).finished();
-        const Eigen::MatrixXd gamma_root1 = (Eigen::MatrixXd(2, 2) <<
-            0.75, -0.10,
-            -0.10, 1.05).finished();
+        const Eigen::MatrixXd gamma_root0 = (Eigen::MatrixXd(2, 2) << 1.00, 0.15,
+                                             0.15, 0.55)
+                                                .finished();
+        const Eigen::MatrixXd gamma_root1 = (Eigen::MatrixXd(2, 2) << 0.75, -0.10,
+                                             -0.10, 1.05)
+                                                .finished();
 
-        const Eigen::MatrixXd F_A_root0 = (Eigen::MatrixXd(4, 4) <<
-            0.20, 0.01, -0.04, 0.03,
-            0.01, 0.45, 0.06, -0.02,
-            -0.04, 0.06, 0.90, 0.05,
-            0.03, -0.02, 0.05, 1.20).finished();
-        const Eigen::MatrixXd F_A_root1 = (Eigen::MatrixXd(4, 4) <<
-            0.35, -0.02, 0.07, -0.01,
-            -0.02, 0.40, -0.03, 0.08,
-            0.07, -0.03, 1.05, -0.04,
-            -0.01, 0.08, -0.04, 1.35).finished();
+        const Eigen::MatrixXd F_A_root0 = (Eigen::MatrixXd(4, 4) << 0.20, 0.01, -0.04, 0.03,
+                                           0.01, 0.45, 0.06, -0.02,
+                                           -0.04, 0.06, 0.90, 0.05,
+                                           0.03, -0.02, 0.05, 1.20)
+                                              .finished();
+        const Eigen::MatrixXd F_A_root1 = (Eigen::MatrixXd(4, 4) << 0.35, -0.02, 0.07, -0.01,
+                                           -0.02, 0.40, -0.03, 0.08,
+                                           0.07, -0.03, 1.05, -0.04,
+                                           -0.01, 0.08, -0.04, 1.35)
+                                              .finished();
 
-        const Eigen::MatrixXd Q_root0 = (Eigen::MatrixXd(4, 2) <<
-            0.05, -0.03,
-            0.02, 0.04,
-            -0.01, 0.06,
-            0.07, -0.02).finished();
-        const Eigen::MatrixXd Q_root1 = (Eigen::MatrixXd(4, 2) <<
-            -0.04, 0.02,
-            0.03, -0.05,
-            0.08, 0.01,
-            -0.02, 0.09).finished();
+        const Eigen::MatrixXd Q_root0 = (Eigen::MatrixXd(4, 2) << 0.05, -0.03,
+                                         0.02, 0.04,
+                                         -0.01, 0.06,
+                                         0.07, -0.02)
+                                            .finished();
+        const Eigen::MatrixXd Q_root1 = (Eigen::MatrixXd(4, 2) << -0.04, 0.02,
+                                         0.03, -0.05,
+                                         0.08, 0.01,
+                                         -0.02, 0.09)
+                                            .finished();
 
         const Eigen::MatrixXd G_root0 =
             compute_orbital_gradient(F_I, F_A_root0, Q_root0, gamma_root0, 1, 2, 1, {}, false);
@@ -1642,16 +1642,16 @@ int main()
             return flat;
         };
 
-        const Eigen::MatrixXd G_root0 = (Eigen::MatrixXd(4, 4) <<
-            0.0, 0.40, 1.20, 0.0,
-            -0.40, 0.0, 0.0, 0.0,
-            -1.20, 0.0, 0.0, 0.10,
-            0.0, 0.0, -0.10, 0.0).finished();
-        const Eigen::MatrixXd G_root1 = (Eigen::MatrixXd(4, 4) <<
-            0.0, 0.05, 0.20, 0.0,
-            -0.05, 0.0, 0.0, 0.0,
-            -0.20, 0.0, 0.0, 3.00,
-            0.0, 0.0, -3.00, 0.0).finished();
+        const Eigen::MatrixXd G_root0 = (Eigen::MatrixXd(4, 4) << 0.0, 0.40, 1.20, 0.0,
+                                         -0.40, 0.0, 0.0, 0.0,
+                                         -1.20, 0.0, 0.0, 0.10,
+                                         0.0, 0.0, -0.10, 0.0)
+                                            .finished();
+        const Eigen::MatrixXd G_root1 = (Eigen::MatrixXd(4, 4) << 0.0, 0.05, 0.20, 0.0,
+                                         -0.05, 0.0, 0.0, 0.0,
+                                         -0.20, 0.0, 0.0, 3.00,
+                                         0.0, 0.0, -3.00, 0.0)
+                                            .finished();
 
         const Eigen::VectorXd g_root0 = pack_pairs(G_root0);
         const Eigen::VectorXd g_root1 = pack_pairs(G_root1);
@@ -1690,16 +1690,16 @@ int main()
     }
 
     {
-        const Eigen::MatrixXd G_root0 = (Eigen::MatrixXd(4, 4) <<
-            0.0, 0.80, 0.10, 0.00,
-            -0.80, 0.0, 0.00, 0.00,
-            -0.10, 0.00, 0.0, 0.00,
-            0.00, 0.00, 0.00, 0.0).finished();
-        const Eigen::MatrixXd G_root1 = (Eigen::MatrixXd(4, 4) <<
-            0.0, -0.70, 0.00, 0.30,
-            0.70, 0.0, 0.00, 0.00,
-            0.00, 0.00, 0.0, 0.00,
-            -0.30, 0.00, 0.00, 0.0).finished();
+        const Eigen::MatrixXd G_root0 = (Eigen::MatrixXd(4, 4) << 0.0, 0.80, 0.10, 0.00,
+                                         -0.80, 0.0, 0.00, 0.00,
+                                         -0.10, 0.00, 0.0, 0.00,
+                                         0.00, 0.00, 0.00, 0.0)
+                                            .finished();
+        const Eigen::MatrixXd G_root1 = (Eigen::MatrixXd(4, 4) << 0.0, -0.70, 0.00, 0.30,
+                                         0.70, 0.0, 0.00, 0.00,
+                                         0.00, 0.00, 0.0, 0.00,
+                                         -0.30, 0.00, 0.00, 0.0)
+                                            .finished();
 
         const Eigen::MatrixXd G_avg = 0.7 * G_root0 + 0.3 * G_root1;
         const double sa_g = G_avg.cwiseAbs().maxCoeff();

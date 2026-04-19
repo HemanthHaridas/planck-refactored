@@ -12,9 +12,9 @@
 namespace HartreeFock::Correlation::CASSCF
 {
 
+    using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     using HartreeFock::Correlation::CASSCFInternal::CIResponseResult;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
-    using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     struct OrbitalHessianContext;
     struct CIDeterminantSpace;
 

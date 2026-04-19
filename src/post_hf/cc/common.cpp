@@ -1,5 +1,6 @@
 #include "post_hf/cc/common.h"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 
@@ -25,6 +26,53 @@ namespace
             total *= dim_size;
         }
         return total;
+    }
+
+    std::size_t checked_product(
+        const std::vector<int> &dims,
+        const char *label)
+    {
+        std::size_t total = 1;
+        for (const int dim : dims)
+        {
+            if (dim < 0)
+                throw std::invalid_argument(std::string(label) + ": tensor dimension cannot be negative");
+
+            const std::size_t dim_size = static_cast<std::size_t>(dim);
+            if (dim_size != 0 &&
+                total > std::numeric_limits<std::size_t>::max() / dim_size)
+                throw std::overflow_error(std::string(label) + ": tensor size overflow");
+
+            total *= dim_size;
+        }
+        return total;
+    }
+
+    std::size_t flatten_index(
+        const std::vector<int> &dims,
+        const std::vector<int> &indices,
+        const char *label)
+    {
+        if (dims.size() != indices.size())
+            throw std::invalid_argument(std::string(label) + ": index count does not match tensor order");
+
+        std::size_t offset = 0;
+        for (std::size_t pos = 0; pos < dims.size(); ++pos)
+        {
+            const int dim = dims[pos];
+            const int idx = indices[pos];
+            if (idx < 0 || idx >= dim)
+                throw std::out_of_range(std::string(label) + ": tensor index out of bounds");
+
+            offset *= static_cast<std::size_t>(dim);
+            offset += static_cast<std::size_t>(idx);
+        }
+        return offset;
+    }
+
+    std::vector<int> to_vector(std::initializer_list<int> values)
+    {
+        return std::vector<int>(values.begin(), values.end());
     }
 } // namespace
 
@@ -161,6 +209,163 @@ namespace HartreeFock::Correlation::CC
                      static_cast<std::size_t>(m)) *
                         d6 +
                     static_cast<std::size_t>(n)];
+    }
+
+    TensorND::TensorND(std::vector<int> dims_in, double value)
+        : dims(std::move(dims_in)),
+          data(checked_product(dims, "TensorND"), value)
+    {
+    }
+
+    TensorND::TensorND(std::vector<int> dims_in, std::vector<double> values)
+        : dims(std::move(dims_in)), data(std::move(values))
+    {
+        if (data.size() != checked_product(dims, "TensorND"))
+            throw std::invalid_argument("TensorND: flat data size does not match dimensions");
+    }
+
+    std::size_t TensorND::size() const noexcept
+    {
+        return data.size();
+    }
+
+    int TensorND::order() const noexcept
+    {
+        return static_cast<int>(dims.size());
+    }
+
+    double &TensorND::operator()(std::initializer_list<int> indices)
+    {
+        return (*this)(to_vector(indices));
+    }
+
+    const double &TensorND::operator()(std::initializer_list<int> indices) const
+    {
+        return (*this)(to_vector(indices));
+    }
+
+    double &TensorND::operator()(const std::vector<int> &indices)
+    {
+        return data[flatten_index(dims, indices, "TensorND")];
+    }
+
+    const double &TensorND::operator()(const std::vector<int> &indices) const
+    {
+        return data[flatten_index(dims, indices, "TensorND")];
+    }
+
+    std::size_t DenseTensorView::size() const
+    {
+        return checked_product(dims, "DenseTensorView");
+    }
+
+    int DenseTensorView::order() const noexcept
+    {
+        return static_cast<int>(dims.size());
+    }
+
+    double &DenseTensorView::operator()(std::initializer_list<int> indices)
+    {
+        return (*this)(to_vector(indices));
+    }
+
+    const double &DenseTensorView::operator()(std::initializer_list<int> indices) const
+    {
+        return (*this)(to_vector(indices));
+    }
+
+    double &DenseTensorView::operator()(const std::vector<int> &indices)
+    {
+        return data[flatten_index(dims, indices, "DenseTensorView")];
+    }
+
+    const double &DenseTensorView::operator()(const std::vector<int> &indices) const
+    {
+        return data[flatten_index(dims, indices, "DenseTensorView")];
+    }
+
+    std::size_t ConstDenseTensorView::size() const
+    {
+        return checked_product(dims, "ConstDenseTensorView");
+    }
+
+    int ConstDenseTensorView::order() const noexcept
+    {
+        return static_cast<int>(dims.size());
+    }
+
+    const double &ConstDenseTensorView::operator()(std::initializer_list<int> indices) const
+    {
+        return (*this)(to_vector(indices));
+    }
+
+    const double &ConstDenseTensorView::operator()(const std::vector<int> &indices) const
+    {
+        return data[flatten_index(dims, indices, "ConstDenseTensorView")];
+    }
+
+    DenseTensorView make_tensor_view(Tensor2D &tensor)
+    {
+        return DenseTensorView{
+            .dims = {tensor.dim1, tensor.dim2},
+            .data = tensor.data.data(),
+        };
+    }
+
+    DenseTensorView make_tensor_view(Tensor4D &tensor)
+    {
+        return DenseTensorView{
+            .dims = {tensor.dim1, tensor.dim2, tensor.dim3, tensor.dim4},
+            .data = tensor.data.data(),
+        };
+    }
+
+    DenseTensorView make_tensor_view(Tensor6D &tensor)
+    {
+        return DenseTensorView{
+            .dims = {tensor.dim1, tensor.dim2, tensor.dim3, tensor.dim4, tensor.dim5, tensor.dim6},
+            .data = tensor.data.data(),
+        };
+    }
+
+    DenseTensorView make_tensor_view(TensorND &tensor)
+    {
+        return DenseTensorView{
+            .dims = tensor.dims,
+            .data = tensor.data.data(),
+        };
+    }
+
+    ConstDenseTensorView make_tensor_view(const Tensor2D &tensor)
+    {
+        return ConstDenseTensorView{
+            .dims = {tensor.dim1, tensor.dim2},
+            .data = tensor.data.data(),
+        };
+    }
+
+    ConstDenseTensorView make_tensor_view(const Tensor4D &tensor)
+    {
+        return ConstDenseTensorView{
+            .dims = {tensor.dim1, tensor.dim2, tensor.dim3, tensor.dim4},
+            .data = tensor.data.data(),
+        };
+    }
+
+    ConstDenseTensorView make_tensor_view(const Tensor6D &tensor)
+    {
+        return ConstDenseTensorView{
+            .dims = {tensor.dim1, tensor.dim2, tensor.dim3, tensor.dim4, tensor.dim5, tensor.dim6},
+            .data = tensor.data.data(),
+        };
+    }
+
+    ConstDenseTensorView make_tensor_view(const TensorND &tensor)
+    {
+        return ConstDenseTensorView{
+            .dims = tensor.dims,
+            .data = tensor.data.data(),
+        };
     }
 
     std::expected<RHFReference, std::string> build_rhf_reference(

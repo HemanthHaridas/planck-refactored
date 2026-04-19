@@ -13,10 +13,10 @@ from fractions import Fraction
 from itertools import combinations
 from typing import Sequence
 
-from ..indices import Index
+from ..indices import Index, make_gen, make_occ, make_vir
 from ..project import AlgebraTerm
 from ..tensors import Tensor
-from ..canonicalize import canonicalize_tensor
+from ..canonicalize import relabel_term_dummies
 
 
 @dataclass(frozen=True)
@@ -91,47 +91,35 @@ class IntermediateSpec:
 def _subcontraction_signature(
     factors: tuple[Tensor, ...],
     summed: frozenset[Index],
-) -> tuple[tuple[str, ...], str]:
+) -> tuple[tuple[object, ...], str]:
     """Build a hashable signature for a sub-contraction.
 
-    The signature is independent of dummy index names — it captures
-    (sorted tensor names, index-space pattern).
+    The signature is independent of the source term's concrete index names.
+    It captures the canonicalized contraction topology of the sub-expression
+    plus the external index-space pattern used for naming.
     """
-    factor_names = tuple(sorted(f.name for f in factors))
-
-    # Collect all indices and classify as internal (summed within
-    # the sub-contraction) vs external (free wrt the sub-contraction).
-    all_indices: list[Index] = []
-    for f in factors:
-        all_indices.extend(f.indices)
-
-    idx_count: Counter[Index] = Counter()
-    for f in factors:
-        for idx in f.indices:
-            idx_count[idx] += 1
-
-    # Internal = summed AND appears only within these factors
-    # External = free indices or summed indices shared with other factors
-    internal = frozenset(
-        idx for idx in summed if idx_count[idx] >= 2
-    )
-    external = frozenset(all_indices) - internal
-
-    # Space signature of external indices (the "shape" of the intermediate)
-    ext_sorted = sorted(external, key=lambda x: (x.space, x.name))
+    internal = _internal_indices(factors, summed)
+    normalized = _normalize_subcontraction(factors, internal)
     space_sig = "".join(
         "o" if idx.space == "occ" else "v" if idx.space == "vir" else "g"
-        for idx in ext_sorted
+        for idx in normalized.free_indices
     )
-
-    return factor_names, space_sig
+    signature = (
+        tuple(
+            (f.name, tuple((idx.space, idx.name) for idx in f.indices))
+            for f in normalized.factors
+        ),
+        tuple((idx.space, idx.name) for idx in normalized.free_indices),
+        tuple((idx.space, idx.name) for idx in normalized.summed_indices),
+    )
+    return signature, space_sig
 
 
 @dataclass(frozen=True)
 class _SubContractionKey:
     """Hashable key for a sub-contraction pattern."""
 
-    factor_names: tuple[str, ...]
+    signature: tuple[object, ...]
     space_sig: str
 
 
@@ -170,11 +158,11 @@ def _extract_subcontractions(
             if not internal:
                 continue
 
-            factor_names, space_sig = _subcontraction_signature(
+            signature, space_sig = _subcontraction_signature(
                 sub_factors, summed_set,
             )
             key = _SubContractionKey(
-                factor_names=factor_names,
+                signature=signature,
                 space_sig=space_sig,
             )
             results.append((key, combo))
@@ -211,7 +199,7 @@ def detect_intermediates(
     """
     # Phase 1: count how often each sub-contraction key appears
     key_count: Counter[_SubContractionKey] = Counter()
-    key_examples: dict[_SubContractionKey, list[tuple[str, int, tuple[int, ...]]]] = {}
+    key_examples: dict[_SubContractionKey, AlgebraTerm] = {}
 
     for manifold, terms in equations.items():
         for term_idx, term in enumerate(terms):
@@ -222,9 +210,20 @@ def detect_intermediates(
                     continue
                 seen_keys.add(key)
                 key_count[key] += 1
-                key_examples.setdefault(key, []).append(
-                    (manifold, term_idx, factor_indices)
-                )
+                if key not in key_examples:
+                    sub_factors = tuple(term.factors[i] for i in factor_indices)
+                    sub_indices: Counter[Index] = Counter()
+                    for f in sub_factors:
+                        for idx in f.indices:
+                            sub_indices[idx] += 1
+                    internal = frozenset(
+                        idx for idx in sub_indices
+                        if idx in frozenset(term.summed_indices) and sub_indices[idx] >= 2
+                    )
+                    key_examples[key] = _normalize_subcontraction(
+                        sub_factors,
+                        internal,
+                    )
 
     # Phase 2: build IntermediateSpec for keys above threshold
     results: list[IntermediateSpec] = []
@@ -241,40 +240,11 @@ def detect_intermediates(
         else:
             name = base_name
 
-        # Use first example to determine external indices
-        manifold, term_idx, factor_indices = key_examples[key][0]
-        term = equations[manifold][term_idx]
-        sub_factors = tuple(term.factors[i] for i in factor_indices)
-        summed_set = frozenset(term.summed_indices)
-
-        sub_indices: Counter[Index] = Counter()
-        for f in sub_factors:
-            for idx in f.indices:
-                sub_indices[idx] += 1
-
-        internal = frozenset(
-            idx for idx in sub_indices
-            if idx in summed_set and sub_indices[idx] >= 2
-        )
-        external_indices = tuple(
-            idx for idx in _ordered_external(sub_factors, internal)
-        )
-
-        # Build a definition term from the sub-contraction
-        internal_summed = tuple(sorted(
-            internal, key=lambda x: (x.space, x.name),
-        ))
-        definition = AlgebraTerm(
-            coeff=Fraction(1),
-            factors=sub_factors,
-            free_indices=external_indices,
-            summed_indices=internal_summed,
-            connected=True,
-        )
+        definition = key_examples[key]
 
         results.append(IntermediateSpec(
             name=name,
-            indices=external_indices,
+            indices=definition.free_indices,
             definition_terms=(definition,),
             usage_count=count,
             index_space_sig=key.space_sig,
@@ -296,6 +266,90 @@ def _ordered_external(
                 seen.add(idx)
                 result.append(idx)
     return result
+
+
+def _internal_indices(
+    factors: tuple[Tensor, ...],
+    summed: frozenset[Index],
+) -> frozenset[Index]:
+    """Return indices summed internally within the sub-contraction."""
+    sub_indices: Counter[Index] = Counter()
+    for f in factors:
+        for idx in f.indices:
+            sub_indices[idx] += 1
+    return frozenset(
+        idx for idx in sub_indices
+        if idx in summed and sub_indices[idx] >= 2
+    )
+
+
+def _canonical_external_order(indices: Sequence[Index]) -> list[Index]:
+    """Return external indices in Planck-friendly canonical order.
+
+    The first-appearance order is still useful as a stable tiebreaker, but we
+    need occupied indices before virtual indices so an intermediate named
+    ``W_oovv`` is actually emitted and indexed as ``(i,j,a,b)`` rather than,
+    for example, ``(a,i,b,j)``.
+    """
+    space_order = {"occ": 0, "vir": 1, "gen": 2}
+    first_position = {idx: pos for pos, idx in enumerate(indices)}
+    return sorted(
+        indices,
+        key=lambda idx: (space_order.get(idx.space, 99), first_position[idx]),
+    )
+
+
+def _next_canonical_free_index(space: str, offset: int) -> Index:
+    if space == "occ":
+        return make_occ(f"i{offset}" if offset else "i", dummy=False)
+    if space == "vir":
+        return make_vir(f"a{offset}" if offset else "a", dummy=False)
+    return make_gen(f"p{offset}" if offset else "p", dummy=False)
+
+
+def _normalize_subcontraction(
+    factors: tuple[Tensor, ...],
+    internal: frozenset[Index],
+) -> AlgebraTerm:
+    """Canonicalize a sub-contraction independent of source index names."""
+    ordered_external = _canonical_external_order(_ordered_external(factors, internal))
+    external_map: dict[Index, Index] = {}
+    counts: dict[str, int] = {"occ": 0, "vir": 0, "gen": 0}
+    normalized_free: list[Index] = []
+
+    for idx in ordered_external:
+        canonical = _next_canonical_free_index(idx.space, counts[idx.space])
+        counts[idx.space] += 1
+        external_map[idx] = canonical
+        normalized_free.append(canonical)
+
+    dummy_map = {idx: idx.as_dummy() for idx in internal}
+    mapping = {**dummy_map, **external_map}
+    normalized = AlgebraTerm(
+        coeff=Fraction(1),
+        factors=tuple(f.reindexed(mapping) for f in factors),
+        free_indices=tuple(normalized_free),
+        summed_indices=tuple(mapping[idx] for idx in internal),
+        connected=True,
+    )
+    sorted_factors = tuple(
+        sorted(
+            normalized.factors,
+            key=lambda tensor: (
+                tensor.name,
+                tuple((idx.space, idx.name) for idx in tensor.indices),
+            ),
+        )
+    )
+    return relabel_term_dummies(
+        AlgebraTerm(
+            coeff=normalized.coeff,
+            factors=sorted_factors,
+            free_indices=normalized.free_indices,
+            summed_indices=normalized.summed_indices,
+            connected=normalized.connected,
+        )
+    )
 
 
 def build_intermediate_equations(
@@ -347,7 +401,12 @@ def _try_substitute(
         if len(spec.definition_terms) != 1:
             continue
         defn = spec.definition_terms[0]
-        match = _find_subfactors(term, defn.factors)
+        match = _find_subfactors(
+            term,
+            defn.factors,
+            defn.free_indices,
+            defn.summed_indices,
+        )
         if match is None:
             continue
 
@@ -389,6 +448,8 @@ def _try_substitute(
 def _find_subfactors(
     term: AlgebraTerm,
     pattern_factors: tuple[Tensor, ...],
+    pattern_free_indices: tuple[Index, ...] = (),
+    pattern_summed_indices: tuple[Index, ...] = (),
 ) -> tuple[frozenset[int], dict[Index, Index]] | None:
     """Find factor subset in term matching the pattern by name.
 
@@ -405,44 +466,65 @@ def _find_subfactors(
         if name not in term_by_name or not term_by_name[name]:
             return None
 
-    # Greedy matching: pick first available factor for each pattern factor
-    used: set[int] = set()
-    matched: list[int] = []
-    index_mapping: dict[Index, Index] = {}
+    ordered_patterns = sorted(
+        enumerate(pattern_factors),
+        key=lambda item: (item[1].name, item[1].rank),
+    )
 
-    for pf in pattern_factors:
-        found = False
+    def _search(
+        pos: int,
+        used: frozenset[int],
+        mapping: dict[Index, Index],
+    ) -> tuple[frozenset[int], dict[Index, Index]] | None:
+        if pos == len(ordered_patterns):
+            matched_factors = tuple(term.factors[i] for i in sorted(used))
+            actual_internal = _internal_indices(
+                matched_factors,
+                frozenset(term.summed_indices),
+            )
+            for idx in pattern_summed_indices:
+                if mapping.get(idx) not in actual_internal:
+                    return None
+            for idx in pattern_free_indices:
+                mapped = mapping.get(idx)
+                if mapped is None or mapped in actual_internal:
+                    return None
+            return used, mapping
+
+        _, pf = ordered_patterns[pos]
         for ti in term_by_name.get(pf.name, []):
             if ti in used:
                 continue
             tf = term.factors[ti]
             if tf.rank != pf.rank:
                 continue
-            # Build index mapping
-            local_map: dict[Index, Index] = {}
+
+            next_mapping = dict(mapping)
+            inverse_mapping = {value: key for key, value in next_mapping.items()}
             conflict = False
             for pi, ti_idx in zip(pf.indices, tf.indices):
-                if pi in local_map:
-                    if local_map[pi] != ti_idx:
-                        conflict = True
-                        break
-                elif pi in index_mapping:
-                    if index_mapping[pi] != ti_idx:
-                        conflict = True
-                        break
-                else:
-                    local_map[pi] = ti_idx
+                if pi.space != ti_idx.space:
+                    conflict = True
+                    break
+                mapped = next_mapping.get(pi)
+                if mapped is not None and mapped != ti_idx:
+                    conflict = True
+                    break
+                inverse = inverse_mapping.get(ti_idx)
+                if inverse is not None and inverse != pi:
+                    conflict = True
+                    break
+                next_mapping[pi] = ti_idx
+                inverse_mapping[ti_idx] = pi
             if conflict:
                 continue
-            index_mapping.update(local_map)
-            used.add(ti)
-            matched.append(ti)
-            found = True
-            break
-        if not found:
-            return None
 
-    return frozenset(matched), index_mapping
+            found = _search(pos + 1, used | frozenset({ti}), next_mapping)
+            if found is not None:
+                return found
+        return None
+
+    return _search(0, frozenset(), {})
 
 
 # ── Phase 3: Memory layout and blocking annotation ────────────────

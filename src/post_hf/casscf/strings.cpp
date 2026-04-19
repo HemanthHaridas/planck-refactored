@@ -71,13 +71,12 @@ namespace HartreeFock::Correlation::CASSCF
             for (int i = begin; i < end; ++i)
                 order.push_back(i);
             std::sort(order.begin(), order.end(), [&](int a, int b)
-            {
+                      {
                 const double ea = mo_energies(a);
                 const double eb = mo_energies(b);
                 if (std::abs(ea - eb) >= energy_tie_tol)
                     return ea < eb;
-                return a < b;
-            });
+                return a < b; });
             return order;
         }
 
@@ -124,9 +123,7 @@ namespace HartreeFock::Correlation::CASSCF
         {
             std::vector<std::pair<std::string, int>> items(counts.begin(), counts.end());
             std::sort(items.begin(), items.end(), [](const auto &lhs, const auto &rhs)
-            {
-                return lhs.first < rhs.first;
-            });
+                      { return lhs.first < rhs.first; });
 
             std::string out;
             for (const auto &[label, count] : items)
