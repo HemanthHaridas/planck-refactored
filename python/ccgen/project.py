@@ -177,17 +177,13 @@ def _classify_indices(
     for t in tensors:
         all_indices.extend(t.indices)
 
-    present = set(all_indices)
-    free_ordered: list[Index] = [
-        idx for idx in projector_free if idx in present
-    ]
     summed: set[Index] = set()
 
     for idx in all_indices:
         if idx not in free_set:
             summed.add(idx)
 
-    return tuple(free_ordered), tuple(
+    return projector_free, tuple(
         sorted(summed, key=lambda x: (x.space, x.name))
     )
 
@@ -238,7 +234,11 @@ def project(hbar: Expr, manifold: str) -> list[AlgebraTerm]:
         contractions = wick_contract(combined, term.tensors, block_ids)
 
         for wr in contractions:
-            reduced = apply_deltas(wr.tensor_factors, wr.deltas)
+            reduced = apply_deltas(
+                wr.tensor_factors,
+                wr.deltas,
+                protected=proj_free,
+            )
             if reduced is None:
                 continue
             reduced = _restore_free_indices(reduced, proj_free)

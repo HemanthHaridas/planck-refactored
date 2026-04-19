@@ -7,8 +7,10 @@ test tensors.
 
 from __future__ import annotations
 
+import re
 import sys
 import unittest
+from fractions import Fraction
 from pathlib import Path
 
 try:
@@ -20,13 +22,21 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ccgen.generate import generate_cc_equations, last_stats, PipelineStats
+from ccgen.generate import (
+    generate_cc_equations,
+    last_stats,
+    PipelineStats,
+    print_cpp_planck,
+)
+from ccgen.indices import make_occ, make_vir
+from ccgen.project import AlgebraTerm
 from ccgen.canonicalize import collect_fock_diagonals
 from ccgen.optimization.intermediates import (
     detect_intermediates,
     rewrite_equations,
     build_intermediate_equations,
     IntermediateSpec,
+    _find_subfactors,
 )
 from ccgen.optimization.subexpression import (
     detect_common_subexpressions,
@@ -45,6 +55,15 @@ from ccgen.emit.cpp_loops import (
     emit_term_tiled,
     emit_optimized_translation_unit,
 )
+from ccgen.emit.planck_tensor_cpp import (
+    emit_planck_term,
+    emit_planck_translation_unit,
+)
+from ccgen.emit.planck_rccsd_warm_start import (
+    emit_planck_spinorbital_rccsd_warm_start,
+)
+from ccgen.lowering import lower_term_restricted_closed_shell
+from ccgen.tensors import Tensor
 
 
 class IntermediateDetectionTests(unittest.TestCase):
@@ -105,6 +124,63 @@ class IntermediateDetectionTests(unittest.TestCase):
         names = [spec.name for spec in intms]
         self.assertEqual(len(names), len(set(names)), "Intermediate names must be unique")
 
+    def test_intermediate_index_order_matches_space_signature(self) -> None:
+        eqs = generate_cc_equations("ccsdt")
+        intms = detect_intermediates(eqs, threshold=10)
+        for spec in intms:
+            sig = "".join(
+                "o" if idx.space == "occ" else "v" if idx.space == "vir" else "g"
+                for idx in spec.indices
+            )
+            self.assertEqual(
+                sig,
+                spec.index_space_sig,
+                f"{spec.name} indices must match its declared space signature",
+            )
+
+    def test_detection_distinguishes_contraction_topology(self) -> None:
+        i = make_occ("i")
+        k = make_occ("k", dummy=True)
+        j1 = make_occ("j", dummy=True)
+        j2 = make_occ("j", dummy=True)
+        l = make_occ("l", dummy=True)
+        a = make_vir("a")
+        b = make_vir("b", dummy=True)
+        c = make_vir("c", dummy=True)
+
+        term1 = AlgebraTerm(
+            coeff=Fraction(1),
+            factors=(
+                Tensor("t1", (a, k)),
+                Tensor("t2", (b, c, i, j1), antisym_groups=((0, 1), (2, 3))),
+                Tensor("v", (k, j1, b, c), antisym_groups=((0, 1), (2, 3))),
+                Tensor("f", (i, a)),
+            ),
+            free_indices=(i, a),
+            summed_indices=(k, j1, b, c),
+            connected=True,
+        )
+        term2 = AlgebraTerm(
+            coeff=Fraction(1),
+            factors=(
+                Tensor("t1", (c, i)),
+                Tensor("t2", (a, b, j2, l), antisym_groups=((0, 1), (2, 3))),
+                Tensor("v", (j2, l, b, c), antisym_groups=((0, 1), (2, 3))),
+                Tensor("f", (i, a)),
+            ),
+            free_indices=(i, a),
+            summed_indices=(j2, l, b, c),
+            connected=True,
+        )
+        eqs = {"singles": [term1, term2]}
+
+        intms = detect_intermediates(eqs, threshold=2)
+        self.assertEqual(
+            intms,
+            [],
+            "Different contraction topologies must not be merged into one intermediate",
+        )
+
 
 class IntermediateRewriteTests(unittest.TestCase):
     """Tests for equation rewriting with intermediates."""
@@ -147,6 +223,90 @@ class IntermediateRewriteTests(unittest.TestCase):
         for spec in intms:
             self.assertIn(spec.name, intm_eqs)
             self.assertGreater(len(intm_eqs[spec.name]), 0)
+
+    def test_find_subfactors_backtracks_across_same_name_factors(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        a = make_vir("a")
+        b = make_vir("b")
+        pattern = (
+            Tensor("t1", (a, i)),
+            Tensor("t1", (b, j)),
+            Tensor("v", (i, j, a, b), antisym_groups=((0, 1), (2, 3))),
+        )
+        term = AlgebraTerm(
+            coeff=Fraction(1),
+            factors=(
+                Tensor("t1", (a, j)),
+                Tensor("t1", (b, i)),
+                Tensor("t1", (a, i)),
+                Tensor("t1", (b, j)),
+                Tensor("v", (i, j, a, b), antisym_groups=((0, 1), (2, 3))),
+            ),
+            free_indices=(i, j, a, b),
+            summed_indices=(),
+            connected=True,
+        )
+
+        match = _find_subfactors(term, pattern)
+        self.assertIsNotNone(match)
+        factor_indices, mapping = match
+        self.assertEqual(len(factor_indices), 3)
+        self.assertEqual(mapping[i], i)
+        self.assertEqual(mapping[j], j)
+        self.assertEqual(mapping[a], a)
+        self.assertEqual(mapping[b], b)
+
+    def test_find_subfactors_rejects_collapsed_distinct_indices(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        a = make_vir("a")
+        b = make_vir("b")
+        c = make_vir("c")
+        pattern = (
+            Tensor("t1", (a, i)),
+            Tensor("v", (i, j, b, c), antisym_groups=((0, 1), (2, 3))),
+        )
+        term = AlgebraTerm(
+            coeff=Fraction(1),
+            factors=(
+                Tensor("t1", (a, i)),
+                Tensor("v", (i, j, a, b), antisym_groups=((0, 1), (2, 3))),
+            ),
+            free_indices=(i, j, a, b),
+            summed_indices=(),
+            connected=True,
+        )
+
+        self.assertIsNone(
+            _find_subfactors(term, pattern),
+            "Distinct pattern indices must not collapse onto one actual index",
+        )
+
+    def test_find_subfactors_rejects_cross_space_mappings(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        a = make_vir("a")
+        b = make_vir("b")
+        pattern = (
+            Tensor("t1", (a, i)),
+            Tensor("v", (i, j, a, b), antisym_groups=((0, 1), (2, 3))),
+        )
+        term = AlgebraTerm(
+            coeff=Fraction(1),
+            factors=(
+                Tensor("t1", (a, i)),
+                Tensor("v", (i, a, i, j), antisym_groups=((0, 1), (2, 3))),
+            ),
+            free_indices=(i, j, a, b),
+            summed_indices=(),
+            connected=True,
+        )
+
+        self.assertIsNone(
+            _find_subfactors(term, pattern),
+            "Pattern matching must preserve occupied/virtual index spaces",
+        )
 
 
 class InstrumentationTests(unittest.TestCase):
@@ -228,6 +388,261 @@ class EmissionTests(unittest.TestCase):
         code = format_intermediates_einsum([])
         self.assertEqual(code, "")
 
+    def test_planck_translation_unit_structure(self) -> None:
+        code = emit_planck_translation_unit(
+            "ccsd",
+            generate_cc_equations("ccsd"),
+        )
+        self.assertIn('#include "post_hf/cc/tensor_backend.h"', code)
+        self.assertIn("namespace HartreeFock::Correlation::CC", code)
+        self.assertIn("double compute_ccsd_energy(", code)
+        self.assertIn("Tensor2D compute_ccsd_singles_residual(", code)
+        self.assertIn("Tensor4D compute_ccsd_doubles_residual(", code)
+        self.assertIn("reference.f_ov(i, a)", code)
+        self.assertIn("amplitudes.t1(i, a)", code)
+        self.assertIn("amplitudes.t2(i, j, a, b)", code)
+        self.assertIn("mo_blocks.oovv(i, j, a, b)", code)
+        self.assertNotIn("F(", code)
+        self.assertNotIn("V(", code)
+
+    def test_planck_translation_unit_with_intermediates(self) -> None:
+        eqs = generate_cc_equations("ccsd")
+        intermediates = [
+            spec for spec in detect_intermediates(eqs, threshold=10)
+            if spec.rank in (2, 4, 6)
+        ][:2]
+        rewritten = rewrite_equations(eqs, intermediates)
+        code = emit_planck_translation_unit(
+            "ccsd",
+            rewritten,
+            intermediates=intermediates,
+        )
+        self.assertIn("build_W_", code)
+        self.assertIn("usage=", code)
+        self.assertIn("Build reused intermediates once for this kernel", code)
+        self.assertIn("const auto W_", code)
+
+    def test_print_cpp_planck_rewrites_equations_with_intermediates(self) -> None:
+        code = print_cpp_planck(
+            "ccsd",
+            include_intermediates=True,
+            intermediate_threshold=10,
+        )
+        self.assertIn("build_W_", code)
+        self.assertIn("Build reused intermediates once for this kernel", code)
+        self.assertRegex(code, r"const auto W_[A-Za-z0-9_]* = build_W_[A-Za-z0-9_]*\(")
+
+    def test_print_cpp_planck_only_uses_supported_intermediate_ranks(self) -> None:
+        code = print_cpp_planck(
+            "ccsdt",
+            include_intermediates=True,
+            intermediate_threshold=10,
+        )
+        build_defs = set(re.findall(
+            r"^(?:double|Tensor2D|Tensor4D|Tensor6D|TensorND) build_(W_[A-Za-z0-9_]+)\(",
+            code,
+            re.MULTILINE,
+        ))
+        build_calls = set(re.findall(
+            r"const auto (W_[A-Za-z0-9_]+) = build_",
+            code,
+        ))
+        self.assertTrue(build_calls, "Expected rewritten kernels to build intermediates")
+        self.assertTrue(
+            build_calls.issubset(build_defs),
+            "Every intermediate build call must have a matching emitted definition",
+        )
+
+    def test_planck_term_reorders_planck_storage(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        a = make_vir("a")
+        b = make_vir("b")
+        term = AlgebraTerm(
+            coeff=Fraction(1, 1),
+            factors=(Tensor("t2", (a, b, i, j)), Tensor("v", (a, b, i, j))),
+            free_indices=(i, j, a, b),
+            summed_indices=(),
+            connected=True,
+        )
+        code = emit_planck_term(term)
+        self.assertIn("amplitudes.t2(i, j, a, b)", code)
+        self.assertIn("mo_blocks.oovv(i, j, a, b)", code)
+
+    def test_planck_term_emits_delta_guard(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        a = make_vir("a")
+        term = AlgebraTerm(
+            coeff=Fraction(1, 1),
+            factors=(Tensor("delta", (i, j)), Tensor("t1", (a, i))),
+            free_indices=(i, a),
+            summed_indices=(),
+            connected=True,
+        )
+        code = emit_planck_term(term)
+        self.assertIn("((i == j) ? 1.0 : 0.0)", code)
+        self.assertIn("amplitudes.t1(i, a)", code)
+
+    def test_planck_term_reorders_t3_storage(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        k = make_occ("k")
+        a = make_vir("a")
+        b = make_vir("b")
+        c = make_vir("c")
+        term = AlgebraTerm(
+            coeff=Fraction(1, 1),
+            factors=(Tensor("t3", (a, b, c, i, j, k)),),
+            free_indices=(i, j, k, a, b, c),
+            summed_indices=(),
+            connected=True,
+        )
+        code = emit_planck_term(term)
+        self.assertIn("amplitudes.t3(i, j, k, a, b, c)", code)
+
+    def test_planck_term_uses_lowered_canonical_free_order(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        a = make_vir("a")
+        b = make_vir("b")
+        term = AlgebraTerm(
+            coeff=Fraction(1, 1),
+            factors=(Tensor("t2", (a, b, i, j)),),
+            free_indices=(a, i, b, j),
+            summed_indices=(),
+            connected=True,
+        )
+        lowered = lower_term_restricted_closed_shell(term, "doubles")
+        code = emit_planck_term(lowered)
+        self.assertIn("for (int i = 0; i < no; ++i)", code)
+        self.assertIn("for (int j = 0; j < no; ++j)", code)
+        self.assertIn("for (int a = 0; a < nv; ++a)", code)
+        self.assertIn("for (int b = 0; b < nv; ++b)", code)
+        self.assertIn("result(i, j, a, b)", code)
+        self.assertIn("amplitudes.t2(i, j, a, b)", code)
+
+    def test_planck_term_uses_lowered_intermediate_index_order(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        a = make_vir("a")
+        b = make_vir("b")
+        term = AlgebraTerm(
+            coeff=Fraction(1, 1),
+            factors=(Tensor("W_oovv", (a, i, b, j)),),
+            free_indices=(a, i, b, j),
+            summed_indices=(),
+            connected=True,
+        )
+        lowered = lower_term_restricted_closed_shell(term, "doubles")
+        code = emit_planck_term(lowered)
+        self.assertIn("W_oovv(i, j, a, b)", code)
+        self.assertIn("result(i, j, a, b)", code)
+
+    def test_planck_term_uses_lowered_eri_block_and_phase(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        a = make_vir("a")
+        b = make_vir("b")
+        term = AlgebraTerm(
+            coeff=Fraction(1, 1),
+            factors=(Tensor("v", (a, i, j, b)),),
+            free_indices=(a, i, j, b),
+            summed_indices=(),
+            connected=True,
+        )
+        lowered = lower_term_restricted_closed_shell(term, "doubles")
+        code = emit_planck_term(lowered)
+        self.assertIn("result(i, j, a, b)", code)
+        self.assertIn("-mo_blocks.ovov(i, a, j, b)", code)
+
+    def test_planck_intermediate_builder_uses_lowered_layout(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        a = make_vir("a")
+        b = make_vir("b")
+        spec = IntermediateSpec(
+            name="W_oovv_test",
+            indices=(a, i, b, j),
+            definition_terms=(
+                AlgebraTerm(
+                    coeff=Fraction(1, 1),
+                    factors=(Tensor("t2", (a, b, i, j)),),
+                    free_indices=(a, i, b, j),
+                    summed_indices=(),
+                    connected=True,
+                ),
+            ),
+            usage_count=3,
+            index_space_sig="oovv",
+        )
+        code = emit_planck_translation_unit(
+            "ccsd",
+            {"energy": generate_cc_equations("ccsd", targets=["energy"])["energy"]},
+            intermediates=[spec],
+        )
+        self.assertIn("Tensor4D result(no, no, nv, nv, 0.0);", code)
+        self.assertIn("amplitudes.t2(i, j, a, b)", code)
+
+    def test_planck_translation_unit_supports_arbitrary_excitation_order(self) -> None:
+        i = make_occ("i")
+        j = make_occ("j")
+        k = make_occ("k")
+        l = make_occ("l")
+        a = make_vir("a")
+        b = make_vir("b")
+        c = make_vir("c")
+        d = make_vir("d")
+        term = AlgebraTerm(
+            coeff=Fraction(1, 1),
+            factors=(
+                Tensor("t4", (a, b, c, d, i, j, k, l)),
+                Tensor("D", (i, j, k, l, a, b, c, d)),
+            ),
+            free_indices=(i, j, k, l, a, b, c, d),
+            summed_indices=(),
+            connected=True,
+        )
+        code = emit_planck_translation_unit(
+            "ccsdtq",
+            {"quadruples": [term]},
+        )
+        self.assertIn(
+            "TensorND compute_ccsdtq_quadruples_residual(",
+            code,
+        )
+        self.assertIn(
+            "const ArbitraryOrderDenominatorCache &denominators,",
+            code,
+        )
+        self.assertIn(
+            "const ArbitraryOrderRCCAmplitudes &amplitudes)",
+            code,
+        )
+        self.assertIn(
+            "TensorND result(std::vector<int>{no, no, no, no, nv, nv, nv, nv}, 0.0);",
+            code,
+        )
+        self.assertIn(
+            "amplitudes.tensor(4)({i, j, k, l, a, b, c, d})",
+            code,
+        )
+        self.assertIn(
+            "denominators.tensor(4)({i, j, k, l, a, b, c, d})",
+            code,
+        )
+        self.assertIn(
+            "result({i, j, k, l, a, b, c, d})",
+            code,
+        )
+
+    def test_planck_rccsd_warm_start_uses_native_intermediate_pipeline(self) -> None:
+        code = emit_planck_spinorbital_rccsd_warm_start()
+        self.assertIn("const TauCache tau_cache = build_tau_cache(amps);", code)
+        self.assertIn("const RCCSDIntermediates ints = build_intermediates(", code)
+        self.assertIn("return build_residuals(reference, blocks, amps, tau_cache, ints);", code)
+        self.assertIn("compute_generated_spin_orbital_rccsd_correlation_energy(", code)
+
 
 class FactoredCanonicalizationTests(unittest.TestCase):
     """Tests verifying the factored canonicalization refactor."""
@@ -237,7 +652,7 @@ class FactoredCanonicalizationTests(unittest.TestCase):
         eqs = generate_cc_equations("ccsd")
         self.assertEqual(len(eqs["energy"]), 3)
         self.assertEqual(len(eqs["singles"]), 24)
-        self.assertEqual(len(eqs["doubles"]), 368)
+        self.assertEqual(len(eqs["doubles"]), 200)
 
     def test_ccd_term_counts_stable(self) -> None:
         eqs = generate_cc_equations("ccd")
@@ -439,12 +854,12 @@ class WickEarlyTerminationTests(unittest.TestCase):
         eqs = generate_cc_equations("ccsd")
         self.assertEqual(len(eqs["energy"]), 3)
         self.assertEqual(len(eqs["singles"]), 24)
-        self.assertEqual(len(eqs["doubles"]), 368)
+        self.assertEqual(len(eqs["doubles"]), 200)
 
     def test_ccd_term_counts_unchanged(self) -> None:
         eqs = generate_cc_equations("ccd")
         self.assertEqual(len(eqs["energy"]), 1)
-        self.assertEqual(len(eqs["doubles"]), 86)
+        self.assertEqual(len(eqs["doubles"]), 40)
 
     @unittest.skipIf(np is None, "numpy required")
     def test_ccsd_energy_still_correct(self) -> None:
@@ -586,6 +1001,9 @@ def _evaluate_residual_term(
                         else:
                             indices.append(slot)
                     value *= float(tensors[factor.name][tuple(indices)])
+                elif factor.name == "delta":
+                    lhs, rhs = factor.indices
+                    value *= 1.0 if env[lhs.name] == env[rhs.name] else 0.0
                 else:
                     indices = [env[idx.name] for idx in factor.indices]
                     value *= float(tensors[factor.name][tuple(indices)])
@@ -945,6 +1363,26 @@ class PrettyPrintingPhase3Tests(unittest.TestCase):
         output = print_equations_full("ccsd", include_intermediates=True)
         self.assertIn("Coupled-Cluster Residual Equations", output)
         self.assertIn("E_CC", output)
+
+
+class EinsumEmissionTests(unittest.TestCase):
+    """Tests for executable NumPy einsum emission."""
+
+    @unittest.skipIf(np is None, "numpy required")
+    def test_generated_einsum_code_executes(self) -> None:
+        code = format_equations_einsum(generate_cc_equations("ccsd"))
+        ns = {
+            "np": np,
+            "no": 2,
+            "nv": 3,
+            "F": np.zeros((5, 5)),
+            "V": np.zeros((5, 5, 5, 5)),
+            "T1": np.zeros((3, 2)),
+            "T2": np.zeros((3, 3, 2, 2)),
+        }
+        exec(code, ns, ns)
+        self.assertEqual(ns["R1"].shape, (2, 3))
+        self.assertEqual(ns["R2"].shape, (2, 2, 3, 3))
 
 
 class ImplicitSymmetryTests(unittest.TestCase):

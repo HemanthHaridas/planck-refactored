@@ -54,12 +54,12 @@ namespace
 
     struct RCCSDIntermediates
     {
-        Tensor2D fae;      // F_ae
-        Tensor2D fmi;      // F_mi
-        Tensor2D fme;      // F_me
-        Tensor4D wmnij;    // W_mnij
-        Tensor4D wabef;    // W_abef
-        Tensor4D wmbej;    // W_mbej
+        Tensor2D fae;   // F_ae
+        Tensor2D fmi;   // F_mi
+        Tensor2D fme;   // F_me
+        Tensor4D wmnij; // W_mnij
+        Tensor4D wabef; // W_abef
+        Tensor4D wmbej; // W_mbej
     };
 
     struct RCCSDResiduals

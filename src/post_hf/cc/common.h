@@ -3,6 +3,7 @@
 
 #include <Eigen/Core>
 #include <expected>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -67,6 +68,60 @@ namespace HartreeFock::Correlation::CC
         double &operator()(int i, int j, int k, int l, int m, int n) noexcept;
         const double &operator()(int i, int j, int k, int l, int m, int n) const noexcept;
     };
+
+    struct TensorND
+    {
+        std::vector<int> dims;
+        std::vector<double> data;
+
+        TensorND() = default;
+        explicit TensorND(std::vector<int> dims, double value = 0.0);
+        TensorND(std::vector<int> dims, std::vector<double> values);
+
+        [[nodiscard]] std::size_t size() const noexcept;
+        [[nodiscard]] int order() const noexcept;
+
+        double &operator()(std::initializer_list<int> indices);
+        const double &operator()(std::initializer_list<int> indices) const;
+        double &operator()(const std::vector<int> &indices);
+        const double &operator()(const std::vector<int> &indices) const;
+    };
+
+    struct DenseTensorView
+    {
+        std::vector<int> dims;
+        double *data = nullptr;
+
+        [[nodiscard]] std::size_t size() const;
+        [[nodiscard]] int order() const noexcept;
+
+        double &operator()(std::initializer_list<int> indices);
+        const double &operator()(std::initializer_list<int> indices) const;
+        double &operator()(const std::vector<int> &indices);
+        const double &operator()(const std::vector<int> &indices) const;
+    };
+
+    struct ConstDenseTensorView
+    {
+        std::vector<int> dims;
+        const double *data = nullptr;
+
+        [[nodiscard]] std::size_t size() const;
+        [[nodiscard]] int order() const noexcept;
+
+        const double &operator()(std::initializer_list<int> indices) const;
+        const double &operator()(const std::vector<int> &indices) const;
+    };
+
+    [[nodiscard]] DenseTensorView make_tensor_view(Tensor2D &tensor);
+    [[nodiscard]] DenseTensorView make_tensor_view(Tensor4D &tensor);
+    [[nodiscard]] DenseTensorView make_tensor_view(Tensor6D &tensor);
+    [[nodiscard]] DenseTensorView make_tensor_view(TensorND &tensor);
+
+    [[nodiscard]] ConstDenseTensorView make_tensor_view(const Tensor2D &tensor);
+    [[nodiscard]] ConstDenseTensorView make_tensor_view(const Tensor4D &tensor);
+    [[nodiscard]] ConstDenseTensorView make_tensor_view(const Tensor6D &tensor);
+    [[nodiscard]] ConstDenseTensorView make_tensor_view(const TensorND &tensor);
 
     struct RHFReference
     {

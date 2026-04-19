@@ -30,6 +30,8 @@ endif()
 include(FetchContent)
 set(FETCHCONTENT_QUIET TRUE)
 
+find_package(Python3 COMPONENTS Interpreter)
+
 # Source directory
 set(SRC_DIR ${CMAKE_SOURCE_DIR}/src)
 
@@ -195,6 +197,7 @@ add_executable(hartree-fock
 
 target_include_directories(hartree-fock PUBLIC
     ${SRC_DIR}
+    ${CMAKE_BINARY_DIR}
     ${MSYM_INSTALL_DIR}/include
     ${eigen_SOURCE_DIR}
 )
@@ -226,8 +229,48 @@ add_executable(planck-dft
     ${FREQ_SRC}
 )
 
+if(Python3_Interpreter_FOUND)
+    set(CCGEN_SPINORBITAL_WARM_START_INC
+        ${CMAKE_BINARY_DIR}/generated/cc/ccsd_spinorbital_warm_start.inc)
+
+    add_custom_command(
+        OUTPUT ${CCGEN_SPINORBITAL_WARM_START_INC}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/generate_spinorbital_ccsd_warm_start.py
+                --output ${CCGEN_SPINORBITAL_WARM_START_INC}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        DEPENDS
+            ${CMAKE_SOURCE_DIR}/python/generate_spinorbital_ccsd_warm_start.py
+            ${CMAKE_SOURCE_DIR}/python/ccgen/generate.py
+            ${CMAKE_SOURCE_DIR}/python/ccgen/project.py
+            ${CMAKE_SOURCE_DIR}/python/ccgen/wick.py
+        COMMENT "Generating spin-orbital CCSD warm-start kernels with ccgen"
+    )
+
+    add_custom_target(ccgen-spinorbital-warm-start
+        DEPENDS ${CCGEN_SPINORBITAL_WARM_START_INC}
+    )
+
+    add_custom_target(ccgen-planck-kernels
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+                --include-intermediates
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        COMMENT "Generating optimized Planck-compatible CC kernels with ccgen"
+    )
+endif()
+
+if(Python3_Interpreter_FOUND)
+    add_dependencies(hartree-fock ccgen-spinorbital-warm-start)
+    add_dependencies(hartree-fock ccgen-planck-kernels)
+endif()
+
 target_include_directories(planck-dft PUBLIC
     ${SRC_DIR}
+    ${CMAKE_BINARY_DIR}
     ${MSYM_INSTALL_DIR}/include
     ${LIBXC_INSTALL_DIR}/include
     ${eigen_SOURCE_DIR}
@@ -239,6 +282,10 @@ target_link_libraries(planck-dft
 )
 
 add_dependencies(planck-dft libmsym libxc)
+if(Python3_Interpreter_FOUND)
+    add_dependencies(planck-dft ccgen-spinorbital-warm-start)
+    add_dependencies(planck-dft ccgen-planck-kernels)
+endif()
 target_compile_definitions(planck-dft PRIVATE USING_Libxc)
 
 if(USE_OPENMP AND OpenMP_CXX_FOUND)

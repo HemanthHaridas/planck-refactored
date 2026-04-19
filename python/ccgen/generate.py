@@ -19,6 +19,8 @@ from .emit.cpp_loops import (
     emit_optimized_translation_unit,
     emit_blas_translation_unit,
 )
+from .emit.planck_tensor_cpp import emit_planck_translation_unit
+from .lowering import lower_equations_restricted_closed_shell, RestrictedClosedShellTerm
 from .tensor_ir import lower_equations, lower_equations_ex, BackendTerm, BackendTermEx
 
 
@@ -202,6 +204,26 @@ def generate_cc_contractions(
     return lower_equations(eqs)
 
 
+def generate_cc_equations_lowered(
+    method: str,
+    orbital_model: str = "restricted_closed_shell",
+    **kwargs: Any,
+) -> dict[str, list[RestrictedClosedShellTerm]]:
+    """Generate equations lowered to a backend-oriented orbital model.
+
+    The current lowering target is ``restricted_closed_shell``, which preserves
+    the original algebra terms and annotates each tensor factor with explicit
+    spatial-orbital layout metadata for restricted backends.
+    """
+    eqs = generate_cc_equations(method, **kwargs)
+    if orbital_model != "restricted_closed_shell":
+        raise ValueError(
+            "Unsupported orbital model "
+            f"{orbital_model!r}; expected 'restricted_closed_shell'"
+        )
+    return lower_equations_restricted_closed_shell(eqs)
+
+
 def generate_cc_contractions_ex(
     method: str,
     targets: list[str] | None = None,
@@ -290,6 +312,39 @@ def print_cpp_blas(
         tile_vir=tile_vir,
         use_openmp=use_openmp,
         use_blas=use_blas,
+    )
+
+
+def print_cpp_planck(
+    method: str,
+    include_intermediates: bool = False,
+    intermediate_threshold: int = 5,
+    **kwargs: Any,
+) -> str:
+    """Generate Planck-compatible C++ tensor kernels."""
+    eqs = generate_cc_equations(method, **kwargs)
+    intermediates = None
+    if include_intermediates:
+        from .optimization.intermediates import (
+            annotate_layout_hints,
+            detect_intermediates,
+            rewrite_equations,
+        )
+        detected = detect_intermediates(
+            eqs,
+            threshold=intermediate_threshold,
+        )
+        supported = [
+            spec for spec in detected
+            if spec.rank >= 0
+        ]
+        intermediates = annotate_layout_hints(supported) if supported else None
+        if intermediates:
+            eqs = rewrite_equations(eqs, list(intermediates))
+    return emit_planck_translation_unit(
+        method,
+        eqs,
+        intermediates=intermediates,
     )
 
 

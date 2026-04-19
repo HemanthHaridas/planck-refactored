@@ -1,10 +1,49 @@
 #include "post_hf/cc/ccsdt.h"
 
+#include <cstdlib>
 #include <format>
+#include <optional>
+#include <string_view>
 
 #include "io/logging.h"
 #include "post_hf/cc/determinant_space.h"
 #include "post_hf/cc/tensor_backend.h"
+#include "post_hf/cc/tensor_optimized.h"
+
+namespace
+{
+    using HartreeFock::Correlation::CC::RCCSDTBackend;
+
+    [[nodiscard]] std::optional<RCCSDTBackend> parse_rccsdt_backend_override() noexcept
+    {
+        const char *value = std::getenv("PLANCK_RCCSDT_BACKEND");
+        if (value == nullptr)
+            return std::nullopt;
+
+        const std::string_view override(value);
+        if (override == "determinant" || override == "determinant_prototype")
+            return RCCSDTBackend::DeterminantPrototype;
+        if (override == "tensor" || override == "tensor_production")
+            return RCCSDTBackend::TensorProduction;
+        if (override == "optimized" || override == "tensor_optimized")
+            return RCCSDTBackend::TensorOptimized;
+        return std::nullopt;
+    }
+
+    [[nodiscard]] const char *backend_label(const RCCSDTBackend backend) noexcept
+    {
+        switch (backend)
+        {
+        case RCCSDTBackend::DeterminantPrototype:
+            return "determinant_prototype";
+        case RCCSDTBackend::TensorProduction:
+            return "tensor_production";
+        case RCCSDTBackend::TensorOptimized:
+            return "tensor_optimized";
+        }
+        return "unknown";
+    }
+} // namespace
 
 namespace HartreeFock::Correlation::CC
 {
@@ -49,7 +88,19 @@ namespace HartreeFock::Correlation::CC
         if (!selector_ref)
             return std::unexpected(selector_ref.error());
 
-        const RCCSDTBackend backend = choose_rccsdt_backend(*selector_ref);
+        const std::optional<RCCSDTBackend> override = parse_rccsdt_backend_override();
+        const RCCSDTBackend backend = override.value_or(choose_rccsdt_backend(*selector_ref));
+
+        if (override.has_value())
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "RCCSDT :",
+                std::format(
+                    "Honoring PLANCK_RCCSDT_BACKEND={} override.",
+                    backend_label(backend)));
+        }
+
         if (backend == RCCSDTBackend::TensorProduction)
         {
             HartreeFock::Logger::logging(
@@ -57,6 +108,14 @@ namespace HartreeFock::Correlation::CC
                 "RCCSDT :",
                 "Selecting staged tensor backend because the system is larger than the determinant-space prototype limit.");
             return run_tensor_rccsdt(calculator, shell_pairs);
+        }
+        if (backend == RCCSDTBackend::TensorOptimized)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "RCCSDT :",
+                "Selecting the phase-4 optimized backend entry point.");
+            return run_tensor_optimized_rccsdt(calculator, shell_pairs);
         }
 
         HartreeFock::Logger::logging(

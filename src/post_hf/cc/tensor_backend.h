@@ -15,7 +15,8 @@ namespace HartreeFock::Correlation::CC
     enum class RCCSDTBackend
     {
         DeterminantPrototype,
-        TensorProduction
+        TensorProduction,
+        TensorOptimized
     };
 
     struct TensorMemoryBlock
@@ -98,6 +99,10 @@ namespace HartreeFock::Correlation::CC
         const std::vector<HartreeFock::ShellPair> &shell_pairs);
 
     std::expected<void, std::string> run_tensor_rccsdt(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs);
+
+    std::expected<void, std::string> run_tensor_optimized_rccsdt(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs);
 } // namespace HartreeFock::Correlation::CC

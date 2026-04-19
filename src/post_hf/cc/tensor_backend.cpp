@@ -15,6 +15,8 @@
 #include "post_hf/cc/diis.h"
 #include "post_hf/integrals.h"
 
+#include "generated/cc/ccsdt_planck_generated.cpp"
+
 namespace
 {
     [[nodiscard]] std::size_t checked_product(std::initializer_list<int> dims)
@@ -94,9 +96,9 @@ namespace
 
     using HartreeFock::Correlation::CC::AmplitudeDIIS;
     using HartreeFock::Correlation::CC::CanonicalRHFCCReference;
-    using HartreeFock::Correlation::CC::RHFReference;
     using HartreeFock::Correlation::CC::RCCSDAmplitudes;
     using HartreeFock::Correlation::CC::RCCSDTAmplitudes;
+    using HartreeFock::Correlation::CC::RHFReference;
     using HartreeFock::Correlation::CC::Tensor2D;
     using HartreeFock::Correlation::CC::Tensor4D;
     using HartreeFock::Correlation::CC::Tensor6D;
@@ -143,14 +145,14 @@ namespace
         int n_mo = 0;
         int n_occ = 0;
         int n_virt = 0;
-        Tensor2D fock;  // [p,q] chemists/MO ordering
-        Tensor4D eri;   // [p,r,q,s] to match PySCF eris.pppp storage
+        Tensor2D fock; // [p,q] chemists/MO ordering
+        Tensor4D eri;  // [p,r,q,s] to match PySCF eris.pppp storage
     };
 
     struct DressedSpinOrbitalSystem
     {
-        Tensor2D fock;  // [p,q]
-        Tensor4D eri;   // [p,r,q,s] to match PySCF's t1_eris storage
+        Tensor2D fock; // [p,q]
+        Tensor4D eri;  // [p,r,q,s] to match PySCF's t1_eris storage
     };
 
     struct DressedSinglesDoublesIntermediates
@@ -195,6 +197,23 @@ namespace
         Tensor2D r1;
         Tensor4D r2;
     };
+
+    TauCache build_tau_cache(const RCCSDAmplitudes &amps);
+
+    RCCSDIntermediates build_intermediates(
+        const ProductionSpinOrbitalReference &reference,
+        const ProductionSpinOrbitalBlocks &blocks,
+        const RCCSDAmplitudes &amps,
+        const TauCache &tau_cache);
+
+    RCCSDResiduals build_residuals(
+        const ProductionSpinOrbitalReference &reference,
+        const ProductionSpinOrbitalBlocks &blocks,
+        const RCCSDAmplitudes &amps,
+        const TauCache &tau_cache,
+        const RCCSDIntermediates &ints);
+
+#include "generated/cc/ccsd_spinorbital_warm_start.inc"
 
     struct TensorRCCSDResult
     {
@@ -1331,7 +1350,8 @@ namespace
 
     std::expected<TensorRCCSDResult, std::string> run_tensor_rccsd_stage(
         HartreeFock::Calculator &calculator,
-        const TensorRCCSDTState &state)
+        const TensorRCCSDTState &state,
+        bool use_generated_kernels)
     {
         const ProductionSpinOrbitalReference so_ref = build_spin_orbital_reference(state.reference);
         const ProductionSpinOrbitalBlocks so_blocks = build_spin_orbital_blocks(state.reference, state.mo_blocks);
@@ -1351,20 +1371,37 @@ namespace
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
             "RCCSDT[TENSOR] :",
-            std::format("Stage-1 RCCSD warm start dimensions: nocc={} nvirt={}",
-                        so_ref.n_occ, so_ref.n_virt));
+            std::format(
+                "Stage-1 RCCSD warm start dimensions: nocc={} nvirt={} (kernels={})",
+                so_ref.n_occ,
+                so_ref.n_virt,
+                use_generated_kernels ? "ccgen-generated" : "hand-optimized"));
 
         AmplitudeDIIS diis(static_cast<int>(std::max(2u, calculator._scf._DIIS_dim)));
-        double energy = compute_rccsd_correlation_energy(so_ref, so_blocks, amps);
+        double energy = use_generated_kernels
+                            ? compute_generated_spin_orbital_rccsd_correlation_energy(
+                                  so_ref, so_blocks, amps)
+                            : compute_rccsd_correlation_energy(so_ref, so_blocks, amps);
         double previous_energy = energy;
 
         for (unsigned int iter = 1; iter <= max_iter; ++iter)
         {
             const auto iter_start = std::chrono::steady_clock::now();
 
-            const TauCache tau_cache = build_tau_cache(amps);
-            const RCCSDIntermediates ints = build_intermediates(so_ref, so_blocks, amps, tau_cache);
-            const RCCSDResiduals residuals = build_residuals(so_ref, so_blocks, amps, tau_cache, ints);
+            RCCSDResiduals residuals;
+            if (use_generated_kernels)
+            {
+                residuals = compute_generated_spin_orbital_rccsd_residuals(
+                    so_ref, so_blocks, amps);
+            }
+            else
+            {
+                const TauCache tau_cache = build_tau_cache(amps);
+                const RCCSDIntermediates ints = build_intermediates(
+                    so_ref, so_blocks, amps, tau_cache);
+                residuals = build_residuals(
+                    so_ref, so_blocks, amps, tau_cache, ints);
+            }
             const Eigen::VectorXd residual_vec = pack_residuals(residuals);
             const double residual_rms = rms_norm(residual_vec);
 
@@ -1404,7 +1441,10 @@ namespace
             }
 
             unpack_amplitudes(updated, amps);
-            energy = compute_rccsd_correlation_energy(so_ref, so_blocks, amps);
+            energy = use_generated_kernels
+                         ? compute_generated_spin_orbital_rccsd_correlation_energy(
+                               so_ref, so_blocks, amps)
+                         : compute_rccsd_correlation_energy(so_ref, so_blocks, amps);
             const double delta_energy = energy - previous_energy;
             previous_energy = energy;
 
@@ -1415,8 +1455,15 @@ namespace
                 HartreeFock::LogLevel::Info,
                 "RCCSDT[TENSOR-RCCSD] :",
                 std::format(
-                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  rms(res)={:.3e}  rms(step)={:.3e}  diis={}  t={:.3f}s",
-                    iter, energy, delta_energy, residual_rms, update_rms, diis.size(), time_sec));
+                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  rms(res)={:.3e}  rms(step)={:.3e}  diis={}  kernel={}  t={:.3f}s",
+                    iter,
+                    energy,
+                    delta_energy,
+                    residual_rms,
+                    update_rms,
+                    diis.size(),
+                    use_generated_kernels ? "ccgen" : "native",
+                    time_sec));
 
             if (std::abs(delta_energy) < tol_energy && residual_rms < tol_residual)
             {
@@ -2045,7 +2092,6 @@ namespace
         restore_restricted_t3_from_unique(amps.t3);
     }
 
-
     [[nodiscard]] double update_t3_from_r3_jacobi(
         const CanonicalRHFCCReference &reference,
         TensorTriplesWorkspace &triples,
@@ -2220,12 +2266,17 @@ namespace
     };
 
     [[nodiscard]] RestrictedRCCSDTUpdateMetrics update_restricted_rccsdt_amplitudes_once(
+        const TensorRCCSDTState &state,
         const ProductionSpinOrbitalChemistsSystem &system,
         const RHFReference &reference,
-        RCCSDTAmplitudes &amps)
+        RCCSDTAmplitudes &amps,
+        bool use_generated_kernels)
     {
         RestrictedRCCSDTUpdateMetrics metrics;
-
+        RCCSDResiduals residuals;
+        Tensor6D triples_residual(
+            amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
+            amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0);
         const DressedSpinOrbitalSystem dressed =
             build_dressed_spin_orbital_system(system, amps);
 
@@ -2238,7 +2289,7 @@ namespace
 
         const DressedSinglesDoublesIntermediates sd_ints =
             build_dressed_sd_intermediates(system, dressed, amps.t2);
-        RCCSDResiduals residuals =
+        residuals =
             build_dressed_sd_residuals(system, dressed, sd_ints, sd_amps);
         const RCCSDResiduals residuals_before_t3 = residuals;
         add_dressed_triples_feedback_into_sd_residuals(
@@ -2274,6 +2325,36 @@ namespace
         metrics.r1_feedback_rms = tensor_rms(r1_feedback);
         metrics.r2_feedback_rms = tensor_rms(sym_r2_feedback);
         metrics.sd_residual_rms = rms_norm(pack_residuals(residuals));
+
+        if (use_generated_kernels)
+        {
+            triples_residual = HartreeFock::Correlation::CC::compute_ccsdt_triples_residual(
+                state.reference, state.mo_blocks, state.denominators, amps);
+            restore_restricted_t3_structure(triples_residual);
+            metrics.r3_residual_rms = triples_residual_rms(triples_residual);
+        }
+        else
+        {
+            const DressedSinglesDoublesIntermediates sd_ints_t3 =
+                build_dressed_sd_intermediates(system, dressed, amps.t2);
+            DressedTriplesIntermediates triples_ints =
+                build_dressed_triples_intermediates(
+                    system, dressed, sd_ints_t3, amps.t2);
+            add_dressed_triples_feedback_into_triples_intermediates(
+                system, dressed, amps.t3, triples_ints);
+
+            TensorTriplesWorkspace triples{
+                .amplitudes = clone_rccsdt_amplitudes(amps),
+                .r3 = Tensor6D(
+                    amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
+                    amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0),
+                .allocated = true,
+            };
+            build_dressed_triples_residual(system, triples_ints, amps, triples);
+            restore_restricted_t3_structure(triples.r3);
+            triples_residual.data = triples.r3.data;
+            metrics.r3_residual_rms = triples_residual_rms(triples_residual);
+        }
 
         double t1_sum_sq = 0.0;
         std::size_t t1_count = 0;
@@ -2311,27 +2392,8 @@ namespace
         metrics.t2_step_rms = t2_count == 0
                                   ? 0.0
                                   : std::sqrt(t2_sum_sq / static_cast<double>(t2_count));
-
-        const DressedSinglesDoublesIntermediates sd_ints_t3 =
-            build_dressed_sd_intermediates(system, dressed, amps.t2);
-        DressedTriplesIntermediates triples_ints =
-            build_dressed_triples_intermediates(
-                system, dressed, sd_ints_t3, amps.t2);
-        add_dressed_triples_feedback_into_triples_intermediates(
-            system, dressed, amps.t3, triples_ints);
-
-        TensorTriplesWorkspace triples{
-            .amplitudes = clone_rccsdt_amplitudes(amps),
-            .r3 = Tensor6D(
-                amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
-                amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0),
-            .allocated = true,
-        };
-        build_dressed_triples_residual(system, triples_ints, amps, triples);
-        restore_restricted_t3_structure(triples.r3);
-        metrics.r3_residual_rms = triples_residual_rms(triples.r3);
         metrics.t3_step_rms =
-            update_restricted_t3_from_r3_jacobi(reference, amps, triples.r3, 1.0);
+            update_restricted_t3_from_r3_jacobi(reference, amps, triples_residual, 1.0);
 
         metrics.norm_dtamps = std::sqrt(
             metrics.t1_step_rms * metrics.t1_step_rms +
@@ -2345,7 +2407,8 @@ namespace
         HartreeFock::Calculator &calculator,
         const TensorRCCSDTState &state,
         const ProductionSpinOrbitalChemistsSystem &system,
-        const TensorRCCSDResult &rccsd)
+        const TensorRCCSDResult &rccsd,
+        bool use_generated_kernels)
     {
         const RHFReference &reference = state.reference.orbital_partition;
         const unsigned int max_iter =
@@ -2370,7 +2433,8 @@ namespace
             const Eigen::VectorXd unique_before =
                 pack_restricted_unique_rccsdt_amplitudes(amps);
             const RestrictedRCCSDTUpdateMetrics update_metrics =
-                update_restricted_rccsdt_amplitudes_once(system, reference, amps);
+                update_restricted_rccsdt_amplitudes_once(
+                    state, system, reference, amps, use_generated_kernels);
             Eigen::VectorXd unique_after =
                 pack_restricted_unique_rccsdt_amplitudes(amps);
             const Eigen::VectorXd unique_step = unique_after - unique_before;
@@ -2413,7 +2477,7 @@ namespace
                 HartreeFock::LogLevel::Info,
                 "RCCSDT[TENSOR-R] :",
                 std::format(
-                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  norm(d tamps)={:.3e}  rms(SD)={:.3e}  rms(R3)={:.3e}  rms(R1[T3])={:.3e}  rms(R2[T3])={:.3e}",
+                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  norm(d tamps)={:.3e}  rms(SD)={:.3e}  rms(R3)={:.3e}  rms(R1[T3])={:.3e}  rms(R2[T3])={:.3e}  kernel={}",
                     iter,
                     metrics.estimated_correlation_energy,
                     metrics.energy_change,
@@ -2421,7 +2485,8 @@ namespace
                     metrics.sd_residual_rms,
                     metrics.r3_rms,
                     metrics.r1_feedback_rms,
-                    metrics.r2_feedback_rms));
+                    metrics.r2_feedback_rms,
+                    use_generated_kernels ? "ccgen" : "native"));
 
             if (std::abs(metrics.energy_change) < tol_energy &&
                 update_metrics.norm_dtamps < tol_normt)
@@ -2926,9 +2991,11 @@ namespace HartreeFock::Correlation::CC
         return state;
     }
 
-    std::expected<void, std::string> run_tensor_rccsdt(
+    std::expected<void, std::string> run_tensor_rccsdt_impl(
         HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        bool use_generated_warm_start,
+        bool use_generated_triples_kernel)
     {
         calculator._have_ccsd_reference_energy = false;
         calculator._ccsd_reference_correlation_energy = 0.0;
@@ -2945,10 +3012,22 @@ namespace HartreeFock::Correlation::CC
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
             "RCCSDT[TENSOR] :",
-            "Running the production-path RCCSD warm start before enabling T3 residuals.");
+            use_generated_warm_start
+                ? "Running the ccgen-generated RCCSD warm start before enabling T3 residuals."
+                : "Running the production-path RCCSD warm start before enabling T3 residuals.");
+        if (use_generated_triples_kernel)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "RCCSDT[TENSOR] :",
+                "Using the ccgen-generated restricted CCSDT triples residual inside the standalone tensor solver.");
+        }
         HartreeFock::Logger::blank();
 
-        auto rccsd_res = run_tensor_rccsd_stage(calculator, *state_res);
+        auto rccsd_res = run_tensor_rccsd_stage(
+            calculator,
+            *state_res,
+            use_generated_warm_start);
         if (!rccsd_res)
             return std::unexpected("run_tensor_rccsdt: " + rccsd_res.error());
 
@@ -2967,10 +3046,10 @@ namespace HartreeFock::Correlation::CC
         const DeterminantBackstopDecision backstop =
             choose_determinant_backstop(state_res->reference);
         const unsigned int stage_iteration_limit = backstop.enabled
-            ? 8u
-            : std::min(
-                  48u,
-                  std::max(20u, 2u * calculator._scf.get_max_cycles(calculator._shells.nbasis())));
+                                                       ? 8u
+                                                       : std::min(
+                                                             48u,
+                                                             std::max(20u, 2u * calculator._scf.get_max_cycles(calculator._shells.nbasis())));
         seed_triples_from_rccsd(*rccsd_res, state_res->triples);
 
         if (!backstop.enabled)
@@ -2986,7 +3065,8 @@ namespace HartreeFock::Correlation::CC
                 calculator,
                 *state_res,
                 *restricted_system_res,
-                *rccsd_res);
+                *rccsd_res,
+                use_generated_triples_kernel);
             if (!restricted_res)
                 return std::unexpected("run_tensor_rccsdt: " + restricted_res.error());
 
@@ -3093,5 +3173,23 @@ namespace HartreeFock::Correlation::CC
 
         return std::unexpected(
             "run_tensor_rccsdt: unexpected control flow after determinant-backstop path.");
+    }
+
+    std::expected<void, std::string> run_tensor_rccsdt(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+    {
+        return run_tensor_rccsdt_impl(calculator, shell_pairs, false, false);
+    }
+
+    std::expected<void, std::string> run_tensor_optimized_rccsdt(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info,
+            "RCCSDT[OPT] :",
+            "Using the Planck-style ccgen RCCSD warm start with the native restricted CCSDT triples solver. The generated restricted triples kernel remains experimental until a restricted derivation is available.");
+        return run_tensor_rccsdt_impl(calculator, shell_pairs, true, false);
     }
 } // namespace HartreeFock::Correlation::CC
