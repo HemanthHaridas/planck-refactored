@@ -11,8 +11,8 @@
 namespace
 {
 
-    using HartreeFock::Correlation::CASSCFInternal::contract_q_matrix;
     using HartreeFock::Correlation::CASSCFInternal::apply_response_diag_preconditioner;
+    using HartreeFock::Correlation::CASSCFInternal::contract_q_matrix;
     using HartreeFock::Correlation::CASSCFInternal::project_orthogonal;
 
 } // namespace

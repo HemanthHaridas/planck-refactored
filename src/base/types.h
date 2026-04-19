@@ -51,9 +51,9 @@ namespace HartreeFock
 
     enum class SCFType
     {
-        RHF, // Restricted Hartree-Fock
+        RHF,  // Restricted Hartree-Fock
         ROHF, // Restricted open-shell Hartree-Fock
-        UHF  // Unrestricted Hartree-Fock
+        UHF   // Unrestricted Hartree-Fock
     };
 
     enum class PostHF
@@ -759,9 +759,9 @@ namespace HartreeFock
         CalculationType _calculation = CalculationType::SinglePoint; // Default is Single point energy calculation
         PostHF _correlation = PostHF::None;                          // No Post HF corrections
 
-        double _total_energy = 0;         // Total Energy (SCF + Nuclear Repulsion)
-        double _nuclear_repulsion = 0;    // Nuclear Repulsion Energy (Bohr)
-        double _correlation_energy = 0.0; // Post-HF correlation energy (0 if not computed)
+        double _total_energy = 0;                        // Total Energy (SCF + Nuclear Repulsion)
+        double _nuclear_repulsion = 0;                   // Nuclear Repulsion Energy (Bohr)
+        double _correlation_energy = 0.0;                // Post-HF correlation energy (0 if not computed)
         double _ccsd_reference_correlation_energy = 0.0; // CCSD correlation energy cached during CCSDT runs
         bool _have_ccsd_reference_energy = false;        // Whether the cached CCSD correlation energy is valid
 

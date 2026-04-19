@@ -2,8 +2,8 @@
 
 #include "io/logging.h"
 #include "post_hf/casscf.h"
-#include "post_hf/casscf/ci.h"
 #include "post_hf/casscf/casscf_utils.h"
+#include "post_hf/casscf/ci.h"
 #include "post_hf/casscf/orbital.h"
 #include "post_hf/casscf/rdm.h"
 #include "post_hf/casscf/response.h"
@@ -25,15 +25,15 @@ namespace
     using HartreeFock::Correlation::CASSCF::CIDeterminantSpace;
     using HartreeFock::Correlation::CASSCF::CISigmaApplier;
     using HartreeFock::Correlation::CASSCF::CISolveResult;
+    using HartreeFock::Correlation::CASSCF::hess_diag;
+    using HartreeFock::Correlation::CASSCF::quadratic_model_delta;
+    using HartreeFock::Correlation::CASSCF::reorder_mo_coefficients;
     using HartreeFock::Correlation::CASSCF::ResponseMode;
     using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
     using HartreeFock::Correlation::CASSCF::RotPair;
     using HartreeFock::Correlation::CASSCF::SACoupledStepSolveResult;
-    using HartreeFock::Correlation::CASSCF::StateAveragedCoupledRoot;
-    using HartreeFock::Correlation::CASSCF::hess_diag;
-    using HartreeFock::Correlation::CASSCF::quadratic_model_delta;
-    using HartreeFock::Correlation::CASSCF::reorder_mo_coefficients;
     using HartreeFock::Correlation::CASSCF::select_active_orbitals;
+    using HartreeFock::Correlation::CASSCF::StateAveragedCoupledRoot;
     using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     using HartreeFock::Correlation::CASSCFInternal::CIResponseResult;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
@@ -713,7 +713,7 @@ namespace HartreeFock::Correlation::CASSCF
             st.g_orb = Eigen::MatrixXd::Zero(nbasis, nbasis);
 
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(dynamic) if(nr_used > 1)
+#pragma omp parallel for schedule(dynamic) if (nr_used > 1)
 #endif
             for (int r = 0; r < nr_used; ++r)
             {

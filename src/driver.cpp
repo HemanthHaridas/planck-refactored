@@ -779,13 +779,13 @@ int main(int argc, const char *argv[])
                 else
                 {
                     const std::string method_label =
-                        (calculator._correlation == HartreeFock::PostHF::RMP2)  ? "MP2"
-                        : (calculator._correlation == HartreeFock::PostHF::UMP2) ? "MP2"
-                        : (calculator._correlation == HartreeFock::PostHF::RCCSD) ? "RCCSD"
-                        : (calculator._correlation == HartreeFock::PostHF::UCCSD) ? "UCCSD"
+                        (calculator._correlation == HartreeFock::PostHF::RMP2)     ? "MP2"
+                        : (calculator._correlation == HartreeFock::PostHF::UMP2)   ? "MP2"
+                        : (calculator._correlation == HartreeFock::PostHF::RCCSD)  ? "RCCSD"
+                        : (calculator._correlation == HartreeFock::PostHF::UCCSD)  ? "UCCSD"
                         : (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "RCCSDT"
                         : (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSDT"
-                                                                                : "Correlated";
+                                                                                   : "Correlated";
                     HartreeFock::Logger::correlation_energy(
                         calculator._total_energy, calculator._correlation_energy, method_label);
                 }

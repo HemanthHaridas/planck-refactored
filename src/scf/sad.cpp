@@ -163,8 +163,8 @@ namespace
         for (const GbsShell &gbs_shell : gbs_shells)
         {
             HartreeFock::Shell shell;
-            shell._center     = Eigen::Vector3d::Zero();
-            shell._shell      = HartreeFock::BasisFunctions::_map_shell_to_L(gbs_shell.label);
+            shell._center = Eigen::Vector3d::Zero();
+            shell._shell = HartreeFock::BasisFunctions::_map_shell_to_L(gbs_shell.label);
             shell._atom_index = 0;
 
             const std::size_t nprim = gbs_shell.primitives.size();
@@ -173,7 +173,7 @@ namespace
 
             for (std::size_t i = 0; i < nprim; ++i)
             {
-                shell._primitives[i]   = gbs_shell.primitives[i].exponent;
+                shell._primitives[i] = gbs_shell.primitives[i].exponent;
                 shell._coefficients[i] = gbs_shell.primitives[i].coefficient;
             }
 
@@ -195,11 +195,11 @@ namespace
                                double_factorial(2 * am[1] - 1) *
                                double_factorial(2 * am[2] - 1);
                 basis._basis_functions.emplace_back();
-                auto &bf           = basis._basis_functions.back();
-                bf._shell          = shell_ptr;
-                bf._index          = idx;
+                auto &bf = basis._basis_functions.back();
+                bf._shell = shell_ptr;
+                bf._index = idx;
                 bf._component_norm = 1.0 / std::sqrt(static_cast<double>(df));
-                bf._cartesian      = am;
+                bf._cartesian = am;
             }
         }
         return basis;
@@ -294,26 +294,26 @@ namespace
         atom._molecule.atomic_masses.resize(1);
         atom._molecule.atomic_masses[0] =
             static_cast<double>(element_from_z(static_cast<uint64_t>(Z)).mass);
-        atom._molecule.coordinates  = Eigen::MatrixXd::Zero(1, 3);
+        atom._molecule.coordinates = Eigen::MatrixXd::Zero(1, 3);
         atom._molecule._coordinates = Eigen::MatrixXd::Zero(1, 3);
-        atom._molecule._standard    = Eigen::MatrixXd::Zero(1, 3); // Bohr
-        atom._molecule._is_bohr     = true;
-        atom._molecule.charge       = 0;
+        atom._molecule._standard = Eigen::MatrixXd::Zero(1, 3); // Bohr
+        atom._molecule._is_bohr = true;
+        atom._molecule.charge = 0;
         atom._molecule.multiplicity = mult;
         // Basis
         atom._shells = atomic_basis;
 
         // SCF options: UHF, HCore guess, conventional mode, quiet DIIS
-        atom._scf._scf       = HartreeFock::SCFType::UHF;
-        atom._scf._guess     = HartreeFock::SCFGuess::HCore;
-        atom._scf._mode      = HartreeFock::SCFMode::Conventional;
-        atom._scf._use_DIIS  = true;
-        atom._scf._DIIS_dim  = 6;
-        atom._scf._tol_energy   = 1e-10;
-        atom._scf._tol_density  = 1e-10;
+        atom._scf._scf = HartreeFock::SCFType::UHF;
+        atom._scf._guess = HartreeFock::SCFGuess::HCore;
+        atom._scf._mode = HartreeFock::SCFMode::Conventional;
+        atom._scf._use_DIIS = true;
+        atom._scf._DIIS_dim = 6;
+        atom._scf._tol_energy = 1e-10;
+        atom._scf._tol_density = 1e-10;
 
         // Integral engine: inherit from molecular calculator
-        atom._integral._engine  = mol_calc._integral._engine;
+        atom._integral._engine = mol_calc._integral._engine;
         atom._integral._tol_eri = mol_calc._integral._tol_eri;
 
         // Initialize: sets up DataSCF matrices and nuclear repulsion (= 0 for 1 atom)
@@ -330,7 +330,7 @@ namespace
             atom_pairs, n_at, atom._molecule, nullptr);
 
         atom._overlap = S_at;
-        atom._hcore   = T_at + V_at;
+        atom._hcore = T_at + V_at;
 
         // ── Run atomic UHF (suppress all Logger output) ───────────────────────
         {
@@ -409,7 +409,7 @@ namespace
             for (int i = 0; i < g; ++i)
                 for (int j = 0; j < g; ++j)
                     S_blk(i, j) = S_atom(idx[static_cast<std::size_t>(i)],
-                                          idx[static_cast<std::size_t>(j)]);
+                                         idx[static_cast<std::size_t>(j)]);
 
             Eigen::MatrixXd P_sph =
                 (Nl / static_cast<double>(g)) *
@@ -440,16 +440,17 @@ namespace
         {
             const std::string sym = std::string(
                 element_from_z(static_cast<uint64_t>(
-                    calc._molecule.atomic_numbers[static_cast<Eigen::Index>(A)])).symbol);
+                                   calc._molecule.atomic_numbers[static_cast<Eigen::Index>(A)]))
+                    .symbol);
 
             const Eigen::MatrixXd &P_atom = atomic_P_cache.at(sym);
-            const auto &ao_indices        = atom_ao_map[A];
-            const int n                   = static_cast<int>(ao_indices.size());
+            const auto &ao_indices = atom_ao_map[A];
+            const int n = static_cast<int>(ao_indices.size());
 
             for (int i = 0; i < n; ++i)
                 for (int j = 0; j < n; ++j)
                     P_mol(ao_indices[static_cast<std::size_t>(i)],
-                           ao_indices[static_cast<std::size_t>(j)]) = P_atom(i, j);
+                          ao_indices[static_cast<std::size_t>(j)]) = P_atom(i, j);
         }
 
         return P_mol;

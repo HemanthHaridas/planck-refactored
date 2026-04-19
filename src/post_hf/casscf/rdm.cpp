@@ -7,10 +7,10 @@
 namespace
 {
 
-    using HartreeFock::Correlation::CASSCF::build_det_lookup;
-    using HartreeFock::Correlation::CASSCF::build_spin_dets;
     using HartreeFock::Correlation::CASSCF::apply_annihilation;
     using HartreeFock::Correlation::CASSCF::apply_creation;
+    using HartreeFock::Correlation::CASSCF::build_det_lookup;
+    using HartreeFock::Correlation::CASSCF::build_spin_dets;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
     using HartreeFock::Correlation::CASSCFInternal::low_bit_mask;
 
