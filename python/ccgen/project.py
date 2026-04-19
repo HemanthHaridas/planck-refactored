@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import lru_cache
 
 from .indices import Index, make_occ, make_vir, OCC_POOL, VIR_POOL, extend_pool
 from .tensors import Tensor
@@ -201,7 +202,7 @@ def _restore_free_indices(
         return tensors
 
     mapping: dict[Index, Index] = {}
-    free_by_slot = {(idx.space, idx.name): idx for idx in free_indices}
+    free_by_slot = _free_slot_lookup(free_indices)
 
     for tensor in tensors:
         for idx in tensor.indices:
@@ -213,6 +214,13 @@ def _restore_free_indices(
     if not mapping:
         return tensors
     return tuple(t.reindexed(mapping) for t in tensors)
+
+
+@lru_cache(maxsize=None)
+def _free_slot_lookup(
+    free_indices: tuple[Index, ...],
+) -> dict[tuple[str, str], Index]:
+    return {(idx.space, idx.name): idx for idx in free_indices}
 
 
 def project(hbar: Expr, manifold: str) -> list[AlgebraTerm]:
@@ -231,7 +239,15 @@ def project(hbar: Expr, manifold: str) -> list[AlgebraTerm]:
             continue
 
         combined, block_ids, n_blocks = _assign_block_ids(proj_ops, term)
-        contractions = wick_contract(combined, term.tensors, block_ids)
+        ignore = 0 if manifold not in ("energy", "reference") else None
+        contractions = wick_contract(
+            combined,
+            term.tensors,
+            block_ids,
+            require_connected=(manifold not in ("energy", "reference")),
+            n_blocks=n_blocks,
+            ignore_block=ignore,
+        )
 
         for wr in contractions:
             reduced = apply_deltas(
@@ -242,9 +258,11 @@ def project(hbar: Expr, manifold: str) -> list[AlgebraTerm]:
             if reduced is None:
                 continue
             reduced = _restore_free_indices(reduced, proj_free)
-
-            ignore = 0 if manifold not in ("energy", "reference") else None
-            conn = is_connected(n_blocks, wr.block_edges, ignore_block=ignore)
+            conn = (
+                True
+                if manifold not in ("energy", "reference")
+                else is_connected(n_blocks, wr.block_edges, ignore_block=ignore)
+            )
 
             free_idx, summed_idx = _classify_indices(reduced, proj_free)
             overall_coeff = term.coeff * Fraction(wr.sign)

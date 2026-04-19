@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Sequence
 
+from .connectivity import is_connected
 from .indices import Index
 from .tensors import Tensor, delta
 from .sqops import SQOp
@@ -146,10 +147,15 @@ def wick_contract(
     sqops: Sequence[SQOp],
     tensors: tuple[Tensor, ...],
     block_ids: Sequence[int] | None = None,
+    require_connected: bool = False,
+    n_blocks: int | None = None,
+    ignore_block: int | None = None,
 ) -> list[WickResult]:
     """Enumerate all fully-contracted Wick pairings."""
     if block_ids is None:
         block_ids = [0] * len(sqops)
+    if n_blocks is None:
+        n_blocks = max(block_ids, default=-1) + 1
 
     signature = tuple(
         (i, op.kind, op.index.space, bid)
@@ -158,6 +164,12 @@ def wick_contract(
     results: list[WickResult] = []
 
     for sign, pair_positions, edges in _wick_pairings(signature):
+        if require_connected and not _pairing_is_connected(
+            n_blocks,
+            edges,
+            ignore_block,
+        ):
+            continue
         deltas = tuple(
             (sqops[i].index, sqops[j].index) for i, j in pair_positions
         )
@@ -171,6 +183,30 @@ def wick_contract(
     return results
 
 
+@lru_cache(maxsize=None)
+def _pairing_is_connected(
+    n_blocks: int,
+    edges: tuple[tuple[int, int], ...],
+    ignore_block: int | None,
+) -> bool:
+    return is_connected(n_blocks, edges, ignore_block=ignore_block)
+
+
+@lru_cache(maxsize=None)
+def _tensor_unique_indices(
+    tensors: tuple[Tensor, ...],
+) -> tuple[Index, ...]:
+    """Return unique tensor indices in first-appearance order."""
+    seen: set[Index] = set()
+    ordered: list[Index] = []
+    for tensor in tensors:
+        for idx in tensor.indices:
+            if idx not in seen:
+                seen.add(idx)
+                ordered.append(idx)
+    return tuple(ordered)
+
+
 def apply_deltas(
     tensors: tuple[Tensor, ...],
     deltas: tuple[tuple[Index, Index], ...],
@@ -180,6 +216,7 @@ def apply_deltas(
     parent: dict[Index, Index] = {}
     protected_set = frozenset(protected)
     protected_order = {idx: pos for pos, idx in enumerate(protected)}
+    tensor_indices = _tensor_unique_indices(tensors)
 
     def find(x: Index) -> Index:
         while x in parent and parent[x] != x:
@@ -220,21 +257,11 @@ def apply_deltas(
         if not union(p, q):
             return None
 
-    all_indices: set[Index] = set()
-    for t in tensors:
-        all_indices.update(t.indices)
-    all_indices.update(protected)
-
-    components: dict[Index, set[Index]] = {}
-    for idx in all_indices:
-        components.setdefault(find(idx), set()).add(idx)
-
     extra_factors: list[Tensor] = []
-    for root, members in components.items():
-        protected_members = sorted(
-            (idx for idx in members if idx in protected_set),
-            key=lambda idx: protected_order[idx],
-        )
+    protected_components: dict[Index, list[Index]] = {}
+    for idx in protected:
+        protected_components.setdefault(find(idx), []).append(idx)
+    for protected_members in protected_components.values():
         if len(protected_members) <= 1:
             continue
         rep = protected_members[0]
@@ -242,7 +269,7 @@ def apply_deltas(
             extra_factors.append(delta(rep, idx))
 
     mapping: dict[Index, Index] = {}
-    for idx in all_indices:
+    for idx in tensor_indices:
         root = find(idx)
         if root != idx:
             if idx.is_dummy or root.is_dummy:

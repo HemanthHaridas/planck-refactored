@@ -635,6 +635,22 @@ class EmissionTests(unittest.TestCase):
             "result({i, j, k, l, a, b, c, d})",
             code,
         )
+        self.assertIn(
+            '#include "post_hf/cc/generated_arbitrary_runtime.h"',
+            code,
+        )
+        self.assertIn(
+            "GeneratedArbitraryOrderKernels make_generated_ccsdtq_kernels()",
+            code,
+        )
+        self.assertIn(
+            "kernels.energy = compute_ccsdtq_energy;",
+            code,
+        )
+        self.assertIn(
+            "return to_tensor_nd(compute_ccsdtq_quadruples_residual(reference, mo_blocks, denominators, amplitudes));",
+            code,
+        )
 
     def test_planck_rccsd_warm_start_uses_native_intermediate_pipeline(self) -> None:
         code = emit_planck_spinorbital_rccsd_warm_start()
