@@ -23,9 +23,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import ccgen.generate as generate_mod
+
 from ccgen.generate import (
     generate_cc_equations,
-    last_stats,
     PipelineStats,
     print_cpp_planck,
 )
@@ -39,6 +40,7 @@ from ccgen.project import (
 )
 from ccgen.hamiltonian import build_hamiltonian
 from ccgen.cluster import build_cluster
+from ccgen.cluster import parse_cc_level, canonicalize_cc_level
 from ccgen.algebra import bch_expand
 from ccgen.expr import OpTerm
 from ccgen.canonicalize import (
@@ -221,6 +223,48 @@ class ProjectionPruningTests(unittest.TestCase):
             ("energy", "triples"),
         )
         self.assertLess(len(buckets["triples"]), len(buckets["energy"]))
+
+
+class MethodParsingAndCacheReuseTests(unittest.TestCase):
+    def test_parse_cc_level_accepts_p_and_h_aliases(self) -> None:
+        self.assertEqual(parse_cc_level("ccsdtqp"), [1, 2, 3, 4, 5])
+        self.assertEqual(parse_cc_level("ccsdtqph"), [1, 2, 3, 4, 5, 6])
+        self.assertEqual(canonicalize_cc_level("ccsdtq5"), "ccsdtqp")
+        self.assertEqual(canonicalize_cc_level("ccsdtq56"), "ccsdtqph")
+
+    def test_cache_dir_reuses_bch_prefix_levels_across_methods(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate_cc_equations(
+                "ccsd",
+                targets=["energy"],
+                cache_dir=tmpdir,
+            )
+            eqs_prefix = generate_cc_equations(
+                "ccsdt",
+                targets=["energy"],
+                cache_dir=tmpdir,
+            )
+            self.assertEqual(generate_mod.last_stats.bch_reused_from, "ccsd")
+
+            eqs_fresh = generate_cc_equations(
+                "ccsdt",
+                targets=["energy"],
+            )
+            self.assertEqual(eqs_prefix, eqs_fresh)
+
+    def test_cache_dir_exact_method_hit_reuses_bch_levels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate_cc_equations(
+                "ccsd",
+                targets=["singles"],
+                cache_dir=tmpdir,
+            )
+            generate_cc_equations(
+                "ccsd",
+                targets=["energy"],
+                cache_dir=tmpdir,
+            )
+            self.assertTrue(generate_mod.last_stats.bch_cache_hit)
 
 
 class WickPivotingTests(unittest.TestCase):

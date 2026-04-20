@@ -422,12 +422,23 @@ int main(int argc, const char *argv[])
 
                         if (mos_res->is_uhf)
                         {
-                            calculator._info._scf.alpha.density =
+                            const Eigen::MatrixXd projected_alpha =
                                 HartreeFock::Checkpoint::project_density(
                                     *X_res, S_cross, mos_res->C_alpha.leftCols(n_alpha), 1.0);
-                            calculator._info._scf.beta.density =
+                            const Eigen::MatrixXd projected_beta =
                                 HartreeFock::Checkpoint::project_density(
                                     *X_res, S_cross, mos_res->C_beta.leftCols(n_beta), 1.0);
+
+                            if (cur_spin_resolved)
+                            {
+                                calculator._info._scf.alpha.density = projected_alpha;
+                                calculator._info._scf.beta.density = projected_beta;
+                            }
+                            else
+                            {
+                                calculator._info._scf.alpha.density =
+                                    projected_alpha + projected_beta;
+                            }
                         }
                         else
                         {
