@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Symbolic coupled-cluster equation generator via BCH expansion and Wick contraction"
 requires-python = ">=3.10"
 readme = "README.md"
-license = "MIT"
+license = { text = "MIT" }
 authors = [
     { name = "Hemanth Haridas", email = "hemanth.h@alumni.iitgn.ac.in" },
 ]
