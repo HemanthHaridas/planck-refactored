@@ -69,15 +69,64 @@ def commutator(a: Expr, b: Expr) -> Expr:
     return multiply(a, b) - multiply(b, a)
 
 
+def bch_levels(H: Expr, T: Expr, max_order: int = 4) -> tuple[Expr, ...]:
+    """Return the BCH commutator ladder levels for ``exp(-T) H exp(T)``.
+
+    The returned tuple contains
+    ``(H, [H,T], [[H,T],T], ...)`` up to ``max_order``.
+    """
+    levels: list[Expr] = [H.copy().combine_like_terms()]
+    current = levels[0]
+    for _n in range(1, max_order + 1):
+        current = commutator(current, T).combine_like_terms()
+        levels.append(current)
+    return tuple(levels)
+
+
+def bch_result_from_levels(levels: tuple[Expr, ...]) -> Expr:
+    """Assemble ``Hbar`` from a BCH commutator ladder."""
+    result = levels[0].copy().combine_like_terms()
+    for n, level in enumerate(levels[1:], start=1):
+        result = (result + level * Fraction(1, factorial(n))).combine_like_terms()
+    return result.drop_zeros().combine_like_terms()
+
+
+def bch_expand_from_prefix_levels(
+    prefix_levels: tuple[Expr, ...],
+    T_prefix: Expr,
+    T_delta: Expr,
+    max_order: int = 4,
+) -> tuple[Expr, tuple[Expr, ...]]:
+    """Extend cached BCH levels for ``T_prefix`` with new ``T_delta`` terms.
+
+    The returned expression is exact for ``T_full = T_prefix + T_delta`` but
+    only recomputes commutator contributions that contain at least one factor
+    from ``T_delta``.
+    """
+    if len(prefix_levels) != max_order + 1:
+        raise ValueError(
+            "Prefix BCH level cache has incompatible order "
+            f"{len(prefix_levels) - 1}; expected {max_order}"
+        )
+
+    full_T = T_prefix + T_delta
+    delta_current = Expr([])
+    full_levels: list[Expr] = [prefix_levels[0]]
+
+    for n in range(1, max_order + 1):
+        delta_current = (
+            commutator(prefix_levels[n - 1], T_delta)
+            + commutator(delta_current, full_T)
+        ).combine_like_terms()
+        full_levels.append((prefix_levels[n] + delta_current).combine_like_terms())
+
+    levels_tuple = tuple(full_levels)
+    return bch_result_from_levels(levels_tuple), levels_tuple
+
+
 def bch_expand(H: Expr, T: Expr, max_order: int = 4) -> Expr:
     """Compute the similarity-transformed Hamiltonian via finite BCH.
 
     H-bar = H + [H,T] + 1/2![[H,T],T] + ... + 1/n![...[H,T]...,T]
     """
-    result = H.copy().combine_like_terms()
-    current = H.copy().combine_like_terms()
-    for n in range(1, max_order + 1):
-        current = commutator(current, T).combine_like_terms()
-        scale = Fraction(1, factorial(n))
-        result = (result + current * scale).combine_like_terms()
-    return result.drop_zeros().combine_like_terms()
+    return bch_result_from_levels(bch_levels(H, T, max_order=max_order))

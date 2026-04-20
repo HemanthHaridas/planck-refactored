@@ -2,6 +2,8 @@
 #include <cstring>
 #include <format>
 #include <fstream>
+#include <stdexcept>
+#include <utility>
 
 #include <Eigen/SVD>
 
@@ -98,6 +100,78 @@ static void read_spin_channel(std::istream &in, HartreeFock::SpinChannel &ch)
     ch.fock = read_matrix(in);
     ch.mo_energies = read_vector(in);
     ch.mo_coefficients = read_matrix(in);
+}
+
+static std::pair<int, int> current_spin_occupations(const HartreeFock::Calculator &calc)
+{
+    const int n_electrons = static_cast<int>(
+        calc._molecule.atomic_numbers.cast<int>().sum() - calc._molecule.charge);
+
+    if (calc._scf._scf == HartreeFock::SCFType::RHF)
+        return {n_electrons / 2, n_electrons / 2};
+
+    const int n_unpaired = static_cast<int>(calc._molecule.multiplicity) - 1;
+    return {
+        (n_electrons + n_unpaired) / 2,
+        (n_electrons - n_unpaired) / 2};
+}
+
+static Eigen::MatrixXd density_from_mos(
+    const Eigen::MatrixXd &coefficients,
+    int n_occ,
+    double factor)
+{
+    if (n_occ <= 0 || coefficients.rows() == 0 || coefficients.cols() == 0)
+        return Eigen::MatrixXd::Zero(coefficients.rows(), coefficients.rows());
+
+    const Eigen::Index n_cols = coefficients.cols();
+    const Eigen::Index n_occ_eigen = static_cast<Eigen::Index>(n_occ);
+    if (n_occ_eigen > n_cols)
+        throw std::runtime_error(std::format(
+            "Checkpoint orbital block has {} columns but {} occupied orbitals are required",
+            n_cols,
+            n_occ));
+
+    const Eigen::MatrixXd occ = coefficients.leftCols(n_occ_eigen);
+    return factor * occ * occ.transpose();
+}
+
+static void adapt_restart_spin_state(
+    HartreeFock::Calculator &calc,
+    bool checkpoint_spin_resolved,
+    const HartreeFock::SpinChannel &stored_alpha,
+    const HartreeFock::SpinChannel &stored_beta)
+{
+    const bool target_spin_resolved = (calc._scf._scf != HartreeFock::SCFType::RHF);
+    const auto [n_alpha, n_beta] = current_spin_occupations(calc);
+
+    if (checkpoint_spin_resolved)
+    {
+        if (target_spin_resolved)
+        {
+            calc._info._scf.alpha = stored_alpha;
+            calc._info._scf.beta = stored_beta;
+            return;
+        }
+
+        calc._info._scf.alpha = stored_alpha;
+        calc._info._scf.alpha.density = stored_alpha.density + stored_beta.density;
+        calc._info._scf.alpha.fock = 0.5 * (stored_alpha.fock + stored_beta.fock);
+        return;
+    }
+
+    if (!target_spin_resolved)
+    {
+        calc._info._scf.alpha = stored_alpha;
+        return;
+    }
+
+    calc._info._scf.alpha = stored_alpha;
+    calc._info._scf.beta = stored_alpha;
+    calc._info._scf.alpha.density =
+        density_from_mos(stored_alpha.mo_coefficients, n_alpha, 1.0);
+    calc._info._scf.beta.density =
+        density_from_mos(stored_alpha.mo_coefficients, n_beta, 1.0);
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -314,9 +388,25 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
     }
 
     // ── SCF results ───────────────────────────────────────────────────────────
-    read_spin_channel(in, calc._info._scf.alpha);
+    HartreeFock::SpinChannel stored_alpha;
+    HartreeFock::SpinChannel stored_beta;
+
+    read_spin_channel(in, stored_alpha);
     if (chk_uhf)
-        read_spin_channel(in, calc._info._scf.beta);
+        read_spin_channel(in, stored_beta);
+
+    try
+    {
+        adapt_restart_spin_state(
+            calc,
+            static_cast<bool>(chk_uhf),
+            stored_alpha,
+            stored_beta);
+    }
+    catch (const std::exception &e)
+    {
+        return std::unexpected(std::string(e.what()));
+    }
 
     calc._cas_mo_coefficients.resize(0, 0);
     if (version >= 3)

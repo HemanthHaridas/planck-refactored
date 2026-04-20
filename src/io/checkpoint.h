@@ -13,7 +13,8 @@
 //  [8]  magic: "PLNKCHK\0"
 //  [4]  version: uint32 = 6
 //  [8]  nbasis: uint64
-//  [1]  is_uhf: uint8
+//  [1]  is_uhf: uint8   (1 when the checkpoint carries separate alpha/beta
+//                       spin channels; used for both UHF and ROHF)
 //  [1]  is_converged: uint8
 //  [4]  last_iter: uint32
 //  [8]  total_energy: double
@@ -91,6 +92,13 @@ namespace HartreeFock
         //
         // On success, always fills: _info._scf (density/fock/MOs), _total_energy,
         //   _nuclear_repulsion.  Also fills _overlap and _hcore when load_1e_matrices.
+        //
+        // When restarting across restricted/open-shell references, the loader adapts
+        // the stored density to the current target:
+        //   RHF checkpoint -> UHF/ROHF : split the stored MO set into alpha/beta
+        //                                spin densities using the current occupations.
+        //   UHF/ROHF checkpoint -> RHF : combine alpha+beta densities into the
+        //                                restricted density matrix.
         // Returns an error string if the file is missing, corrupt, or nbasis mismatches.
         std::expected<void, std::string> load(HartreeFock::Calculator &calc,
                                               const std::string &path,

@@ -13,8 +13,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .hamiltonian import build_hamiltonian
-from .cluster import build_cluster, parse_cc_level
-from .algebra import bch_expand
+from .cluster import build_cluster, build_tn, canonicalize_cc_level, parse_cc_level
+from .algebra import bch_expand_from_prefix_levels, bch_levels, bch_result_from_levels
+from .expr import Expr
 from .project import (
     iter_projected_terms_from_terms,
     bucket_terms_by_manifold,
@@ -47,6 +48,8 @@ class PipelineStats:
     method: str = ""
     bch_terms: int = 0
     bch_time_s: float = 0.0
+    bch_cache_hit: bool = False
+    bch_reused_from: str | None = None
     manifolds: dict[str, dict[str, int | float]] = field(
         default_factory=dict,
     )
@@ -58,6 +61,10 @@ class PipelineStats:
             f"  After BCH expansion:     {self.bch_terms:>6d} terms"
             f"  ({self.bch_time_s:.2f}s)",
         ]
+        if self.bch_cache_hit:
+            lines.append("  BCH cache:              exact cache hit")
+        elif self.bch_reused_from is not None:
+            lines.append(f"  BCH prefix reuse:       {self.bch_reused_from.upper()}")
         for name, stats in self.manifolds.items():
             lines.append(f"  {name}:")
             lines.append(
@@ -100,6 +107,8 @@ last_stats: PipelineStats | None = None
 _PARALLEL_ENV_VAR = "CCGEN_PARALLEL_WORKERS"
 _MIN_CHUNK_TERMS = 8
 _CACHE_VERSION = 1
+_BCH_CACHE_VERSION = 1
+_BCH_MAX_ORDER = 4
 
 
 def targets_for_method(method: str) -> list[str]:
@@ -312,6 +321,97 @@ def _cache_root(
     return Path(cache_dir).expanduser().resolve() / method
 
 
+def _bch_cache_config(method: str) -> dict[str, object]:
+    return {
+        "version": _BCH_CACHE_VERSION,
+        "method": method,
+        "ranks": parse_cc_level(method),
+        "max_order": _BCH_MAX_ORDER,
+    }
+
+
+def _bch_config_path(root: Path) -> Path:
+    return root / "bch_config.json"
+
+
+def _bch_cache_file(root: Path) -> Path:
+    return root / "bch_levels.pkl"
+
+
+def _bch_cache_ready(root: Path, config: dict[str, object]) -> bool:
+    config_path = _bch_config_path(root)
+    if not config_path.exists():
+        root.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            json.dumps(config, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        return True
+    try:
+        existing = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return existing == config
+
+
+def _load_cached_bch_levels(root: Path) -> tuple[Expr, ...] | None:
+    path = _bch_cache_file(root)
+    if not path.exists():
+        return None
+    with path.open("rb") as handle:
+        return pickle.load(handle)
+
+
+def _store_cached_bch_levels(root: Path, levels: tuple[Expr, ...]) -> None:
+    if not _bch_cache_ready(root, _bch_cache_config(root.name)):
+        return
+    path = _bch_cache_file(root)
+    with path.open("wb") as handle:
+        pickle.dump(levels, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def _find_prefix_bch_cache(
+    cache_dir: str,
+    method: str,
+) -> tuple[str, tuple[object, ...]] | None:
+    root = Path(cache_dir).expanduser().resolve()
+    if not root.exists():
+        return None
+
+    method_ranks = tuple(parse_cc_level(method))
+    best_method: str | None = None
+    best_levels: tuple[Expr, ...] | None = None
+    best_len = -1
+
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        config_path = _bch_config_path(child)
+        if not config_path.exists():
+            continue
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        candidate_method = str(config.get("method", child.name))
+        candidate_ranks = tuple(config.get("ranks", []))
+        if not candidate_ranks or len(candidate_ranks) >= len(method_ranks):
+            continue
+        if not set(candidate_ranks).issubset(method_ranks):
+            continue
+        levels = _load_cached_bch_levels(child)
+        if levels is None:
+            continue
+        if len(candidate_ranks) > best_len:
+            best_method = candidate_method
+            best_levels = levels
+            best_len = len(candidate_ranks)
+
+    if best_method is None or best_levels is None:
+        return None
+    return best_method, best_levels
+
+
 def _cache_ready(
     root: Path,
     config: dict[str, object],
@@ -386,30 +486,77 @@ def generate_cc_equations(
     """
     global last_stats
 
-    method = method.lower()
+    method = canonicalize_cc_level(method.lower())
     if targets is None:
         targets = targets_for_method(method)
 
     H = build_hamiltonian()
     T = build_cluster(method)
 
+    cache_root_path: Path | None = None
+    bch_root_path: Path | None = None
+    if cache_dir is not None:
+        cache_root_path = _cache_root(cache_dir, method)
+        bch_root_path = _cache_root(cache_dir, method)
+
     t0 = time.monotonic()
-    Hbar = bch_expand(H, T, max_order=4)
+    bch_cache_hit = False
+    bch_reused_from: str | None = None
+    bch_levels_cached: tuple[object, ...] | None = None
+    if bch_root_path is not None and _bch_cache_ready(
+        bch_root_path,
+        _bch_cache_config(method),
+    ):
+        bch_levels_cached = _load_cached_bch_levels(bch_root_path)
+
+    if bch_levels_cached is not None:
+        levels = bch_levels_cached
+        Hbar = bch_result_from_levels(levels)
+        bch_cache_hit = True
+    else:
+        prefix_cached: tuple[str, tuple[object, ...]] | None = None
+        if cache_dir is not None:
+            prefix_cached = _find_prefix_bch_cache(cache_dir, method)
+        if prefix_cached is not None:
+            prefix_method, prefix_levels = prefix_cached
+            prefix_ranks = set(parse_cc_level(prefix_method))
+            delta_ranks = [
+                rank for rank in parse_cc_level(method)
+                if rank not in prefix_ranks
+            ]
+            T_prefix = build_cluster(prefix_method)
+            T_delta = build_tn(delta_ranks[0])
+            for rank in delta_ranks[1:]:
+                T_delta = T_delta + build_tn(rank)
+            Hbar, levels = bch_expand_from_prefix_levels(
+                prefix_levels,
+                T_prefix,
+                T_delta,
+                max_order=_BCH_MAX_ORDER,
+            )
+            bch_reused_from = prefix_method
+        else:
+            levels = bch_levels(H, T, max_order=_BCH_MAX_ORDER)
+            Hbar = bch_result_from_levels(levels)
+
+        if bch_root_path is not None:
+            _store_cached_bch_levels(bch_root_path, levels)
+
     bch_time = time.monotonic() - t0
 
     stats = PipelineStats(
         method=method,
         bch_terms=len(Hbar.terms),
         bch_time_s=bch_time,
+        bch_cache_hit=bch_cache_hit,
+        bch_reused_from=bch_reused_from,
     )
 
     equations: dict[str, list[AlgebraTerm]] = {}
     target_tuple = tuple(targets)
     term_buckets = bucket_terms_by_manifold(Hbar, target_tuple)
     resolved_workers = _resolve_parallel_workers(parallel_workers)
-    cache_root_path: Path | None = None
     if cache_dir is not None:
-        cache_root_path = _cache_root(cache_dir, method)
         config = _cache_config(
             method,
             target_tuple,

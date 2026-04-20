@@ -263,6 +263,21 @@
       ]
     },
     {
+      "id": "water_triplet_uhf_full_restart_smoke",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_restart_sto3g.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Theory :                      UHF",
+        "Checkpoint :                  Restoring",
+        "Checkpoint :                  Loaded from",
+        "UHF Converged :"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.4880704826, "atol": 1e-7}
+      ]
+    },
+    {
       "id": "water_triplet_uhf_gradient_smoke",
       "input": "tests/inputs/regression/open_shell/water_triplet_uhf_gradient_sto3g.hfinp",
       "tags": ["extended"],
@@ -292,6 +307,51 @@
       "checks": [
         {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
         {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.6536945264, "atol": 1e-9}
+      ]
+    },
+    {
+      "id": "water_radical_cation_rohf_full_restart_smoke",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_rohf_restart_sto3g.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Theory :                      ROHF",
+        "Checkpoint :                  Restoring",
+        "Checkpoint :                  Loaded from",
+        "ROHF Converged :"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.6536945264, "atol": 1e-9}
+      ]
+    },
+    {
+      "id": "water_triplet_uhf_chkdump",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfchk",
+      "executable": "chkdump",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Planck checkpoint export",
+        "UHF",
+        "Alpha Orbital Energies",
+        "Beta Orbital Energies",
+        "Total SCF Density",
+        "Beta Density Matrix"
+      ]
+    },
+    {
+      "id": "water_radical_cation_rohf_chkdump",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_rohf_sto3g.hfchk",
+      "executable": "chkdump",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Planck checkpoint export",
+        "ROHF",
+        "Alpha Orbital Energies",
+        "Beta Orbital Energies",
+        "Total SCF Density",
+        "Beta Density Matrix"
       ]
     },
     {

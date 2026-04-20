@@ -63,8 +63,19 @@ _RANK_LETTERS = {
     "d": 2,   # Doubles
     "t": 3,   # Triples
     "q": 4,   # Quadruples
+    "p": 5,   # Pentuples / quintuples
     "5": 5,   # Quintuples
+    "h": 6,   # Hextuples / sextuples
     "6": 6,   # Sextuples (hextuples)
+}
+
+_CANONICAL_RANK_LETTERS = {
+    1: "s",
+    2: "d",
+    3: "t",
+    4: "q",
+    5: "p",
+    6: "h",
 }
 
 
@@ -106,6 +117,21 @@ def parse_cc_level(level: str) -> list[int]:
 
     ranks.sort()
     return ranks
+
+
+def format_cc_level(ranks: list[int] | tuple[int, ...]) -> str:
+    """Format a rank list into the canonical symbolic CC level string."""
+    ordered = sorted(ranks)
+    try:
+        suffix = "".join(_CANONICAL_RANK_LETTERS[rank] for rank in ordered)
+    except KeyError as exc:  # pragma: no cover - guarded by parser use
+        raise ValueError(f"Unsupported excitation rank {exc.args[0]!r}") from exc
+    return f"cc{suffix}"
+
+
+def canonicalize_cc_level(level: str) -> str:
+    """Normalize a CC level string to the canonical symbolic form."""
+    return format_cc_level(parse_cc_level(level))
 
 
 def build_cluster(level: str) -> Expr:

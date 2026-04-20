@@ -6,7 +6,7 @@
 //   chkdump <file.hfchk> --density [output.cube]
 //   chkdump <file.hfchk> --mo N   [output.cube]
 //   chkdump <file.hfchk> --casscf-active [output_dir]
-//       [--spin alpha|beta]   UHF spin channel (default: alpha)
+//       [--spin alpha|beta]   open-shell spin channel (UHF/ROHF; default: alpha)
 //       [--spacing F]         grid spacing in Bohr (default: 0.2)
 //       [--pad F]             padding around molecule in Bohr (default: 5.0)
 //       [--casscf]            use CASSCF MOs instead of SCF MOs (requires --mo)
@@ -98,6 +98,29 @@ static std::vector<double> packed_lower_triangle(const Matrix& m)
 static std::vector<double> flatten_matrix(const Matrix& m)
 {
     return m.data;
+}
+
+static bool matrices_nearly_equal(const Matrix& a, const Matrix& b, double tol = 1e-10)
+{
+    if (a.rows != b.rows || a.cols != b.cols || a.data.size() != b.data.size())
+        return false;
+
+    for (std::size_t i = 0; i < a.data.size(); ++i)
+    {
+        const double scale = std::max({1.0, std::abs(a.data[i]), std::abs(b.data[i])});
+        if (std::abs(a.data[i] - b.data[i]) > tol * scale)
+            return false;
+    }
+    return true;
+}
+
+static std::string scf_reference_label(bool has_beta_spin_channel,
+                                       const Matrix& alpha_mo_c,
+                                       const Matrix& beta_mo_c)
+{
+    if (!has_beta_spin_channel)
+        return "RHF";
+    return matrices_nearly_equal(alpha_mo_c, beta_mo_c) ? "ROHF" : "UHF";
 }
 
 static std::vector<int32_t> to_int32_vector(const std::vector<int32_t>& values)
@@ -391,7 +414,8 @@ int main(int argc, char* argv[])
                      "  chkdump <file.hfchk> --density [output.cube]\n"
                      "  chkdump <file.hfchk> --mo N   [output.cube]\n"
                      "  chkdump <file.hfchk> --casscf-active [output_dir]\n"
-                     "      [--spin alpha|beta] [--spacing F] [--pad F] [--casscf]\n";
+                     "      [--spin alpha|beta] [--spacing F] [--pad F] [--casscf]\n"
+                     "      [--spin applies to UHF/ROHF MO cubes]\n";
         return EXIT_FAILURE;
     }
 
@@ -637,6 +661,9 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
+    const std::string reference_label =
+        scf_reference_label(static_cast<bool>(is_uhf), alpha_mo_c, beta_mo_c);
+
     // ── Cube mode ─────────────────────────────────────────────────────────────
 
     if (opts.cube_mode)
@@ -861,7 +888,7 @@ int main(int argc, char* argv[])
 
     out << "Planck checkpoint export\n";
     out << std::left << std::setw(10) << "SP"
-        << std::setw(10) << (is_uhf ? "UHF" : "RHF")
+        << std::setw(10) << reference_label
         << uppercase(basis_name) << "\n";
 
     write_scalar_int(out, "Number of atoms", static_cast<long long>(natoms));
