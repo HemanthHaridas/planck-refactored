@@ -12,6 +12,9 @@ A symbolic coupled-cluster equation generator that derives spin-orbital CC resid
 - **Restricted closed-shell lowering**: spin-orbital -> spatial-orbital IR with explicit occ/vir block signatures and source-slot permutations for restricted backends
 - **C++ code generation tiers**: naive loops, tiled loops with OpenMP, BLAS/GEMM-lowered output, and Planck-native tensor kernels
 - **Pipeline instrumentation**: term count and timing statistics at every stage via `PipelineStats`
+- **Per-manifold and BCH-level caching**: on-disk checkpoints (`--cache-dir`) skip projection / canonicalization for unchanged manifolds and reuse BCH expansions across higher-order methods (e.g. a cached CCSD expansion is reused as the prefix for CCSDT / CCSDTQ)
+- **Parallel manifold generation**: `--parallel-workers` fans projection and canonicalization across processes via `ProcessPoolExecutor`
+- **Optional C++ Wick accelerator**: `ccgen._wickaccel` extension (built on install when a C++ compiler is available) speeds up the packed-int Wick recursion kernels; the pure-Python path is used as a fallback
 - **Benchmarking**: built-in `bench` module for profiling generation with and without optimizations
 
 ## Theory
@@ -135,6 +138,21 @@ eqs = generate_cc_equations("ccsd", exploit_symmetry=True)
 # Enable pipeline instrumentation (prints to stderr, stores in last_stats)
 eqs = generate_cc_equations("ccsd", debug=True)
 ```
+
+### Caching and parallel generation
+
+```python
+# Persist BCH expansion + per-manifold canonical equations to disk. Reruns with
+# the same options short-circuit; higher-order methods reuse a stored lower-order
+# BCH expansion as a prefix (e.g. CCSD -> CCSDT).
+eqs = generate_cc_equations("ccsdt", cache_dir="~/.cache/ccgen")
+
+# Fan projection + canonicalization across worker processes. Useful for
+# high-rank methods (CCSDTQ / CC6) where per-manifold work dominates.
+eqs = generate_cc_equations("ccsdtq", parallel_workers=8)
+```
+
+Both options are also exposed on every `print_*` and `generate_cc_*` entry point.
 
 ### Pretty-print
 
@@ -328,6 +346,31 @@ python -m ccgen.bench --methods ccsd ccsdt     # specific methods
 python -m ccgen.bench --methods ccsd --timing --json   # JSON output
 ```
 
+### `ccgen` console script
+
+Installing the package registers a `ccgen` entry point (see `[project.scripts]`
+in `pyproject.toml`) that wraps the top-level API:
+
+```bash
+ccgen ccsd                                  # default: prints per-manifold term counts
+ccgen ccsd --format pretty                  # human-readable equations
+ccgen ccsd --format pretty-full --include-intermediates
+ccgen ccsd --format einsum --opt-einsum
+ccgen ccsdt --format cpp-optimized --tile-occ 32 --tile-vir 24
+ccgen ccsdt --format cpp-blas --no-openmp
+ccgen ccsd --format cpp-planck --include-intermediates
+
+# Pipeline controls (combinable with any --format):
+ccgen ccsdt --targets energy doubles triples
+ccgen ccsdt --parallel-workers 8 --cache-dir ~/.cache/ccgen
+ccgen ccsd --debug                          # pipeline timing + term counts to stderr
+ccgen ccsd --format counts --json           # counts as JSON
+```
+
+Additional memory-budget flags for the intermediate extractor:
+`--intermediate-threshold`, `--intermediate-memory-budget-mb`,
+`--intermediate-peak-memory-budget-mb`.
+
 ### CLI scripts
 
 A general-purpose script is provided for quick code generation:
@@ -367,7 +410,10 @@ python generate_spinorbital_ccsd_warm_start.py --output ccsd_warm_start.inc
 ```
 ccgen/
   __init__.py          Public API: generate_cc_equations, generate_cc_contractions
+  cli.py               `ccgen` console-script entry point (argparse wrapper)
   generate.py          Top-level driver: BCH -> Wick -> canonicalize -> optimize -> emit
+                       (includes per-manifold and BCH-prefix on-disk caching,
+                        ProcessPoolExecutor-based parallel manifold generation)
   hamiltonian.py       Normal-ordered Hamiltonian builder (F_N + V_N)
   cluster.py           Cluster operator builder (T1..Tn) and CC level parser
   algebra.py           Symbolic multiplication, commutator, BCH expansion
@@ -383,6 +429,9 @@ ccgen/
   tensor_ir.py         Backend-neutral contraction IR: BackendTerm (basic) and
                        BackendTermEx (extended with BLASHint, FLOP estimates, tiling)
   bench.py             Performance benchmarking (python -m ccgen.bench)
+  _wickaccel.cpp       Optional C++ extension for packed-int Wick recursion
+                       (built on install when a C++ compiler is available;
+                        pure-Python fallback otherwise)
   emit/
     pretty.py          Human-readable equation formatter (with intermediate support)
     einsum.py          NumPy einsum code emitter (with opt_einsum integration)

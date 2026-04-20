@@ -18,7 +18,7 @@ The project uses CMake 3.5+ with C++23 required and extensions disabled. Two pri
 
 | Binary | Purpose |
 |---|---|
-| `hartree-fock` | RHF/UHF SCF, MP2, CASSCF/RASSCF, analytic gradients, geometry optimization, frequencies |
+| `hartree-fock` | RHF/UHF SCF, MP2, CASSCF/RASSCF, CCSD/CCSDT/CCSDTQ, analytic gradients, geometry optimization, frequencies |
 | `planck-dft` | Kohn-Sham DFT (RKS/UKS) using the same SCF infrastructure plus libxc and a numerical grid |
 | `chkdump` | Checkpoint file inspector (optional, `BUILD_TOOLS=ON` by default) |
 
@@ -54,7 +54,7 @@ All user-visible options are encoded as scoped enums, preventing accidental inte
 |---|---|
 | `ShellType` | `S(0)`, `P(1)`, `D(2)`, `F(3)`, `G(4)`, `H(5)` |
 | `SCFType` | `RHF`, `UHF` |
-| `PostHF` | `None`, `RMP2`, `UMP2`, `CASSCF`, `RASSCF` |
+| `PostHF` | `None`, `RMP2`, `UMP2`, `RCCSD`, `UCCSD`, `RCCSDT`, `UCCSDT`, `RCCSDTQ`, `CASSCF`, `RASSCF` |
 | `CalculationType` | `SinglePoint`, `Gradient`, `GeomOpt`, `Frequency`, `GeomOptFrequency`, `ImaginaryFollow` |
 | `SCFMode` | `Conventional`, `Direct`, `Auto` |
 | `IntegralMethod` | `ObaraSaika`, `RysQuadrature`, `Auto` |
@@ -425,11 +425,15 @@ On the consumer side, `compute_Q_matrix(...)` contracts the cached `(p,u,v,w)` s
 <div align="justify">
 
 All coupled-cluster code lives under `src/post_hf/cc/` in namespace
-`HartreeFock::Correlation::CC`. Four solver paths are available:
-`run_rccsd`, `run_uccsd`, `run_rccsdt`, and `run_uccsdt`. Every path follows
-the same two-phase `prepare` / `run` API: `prepare_X` validates the SCF
-result, transforms integrals, and allocates amplitude tensors; `run_X` calls
-`prepare_X` internally and then drives the iterative loop to convergence.
+`HartreeFock::Correlation::CC`. Five user-visible solver paths are available:
+`run_rccsd`, `run_uccsd`, `run_rccsdt`, `run_uccsdt`, and `run_rccsdtq`. The
+hand-written CCSD/CCSDT solvers follow a two-phase `prepare` / `run` API:
+`prepare_X` validates the SCF result, transforms integrals, and allocates
+amplitude tensors; `run_X` calls `prepare_X` internally and then drives the
+iterative loop to convergence. The higher-rank `run_rccsdtq` path routes
+entirely through the generated arbitrary-order tensor runtime — its kernels
+are emitted ahead of time by the `ccgen` Python package (see `python/ccgen/`)
+and compiled into the binary as the `generated_arbitrary_*` translation units.
 
 </div>
 
@@ -442,9 +446,14 @@ result, transforms integrals, and allocates amplitude tensors; `run_X` calls
 | `mo_blocks.h` / `mo_blocks.cpp` | `MOBlockCache`, AO→MO four-index transform for the teaching solver |
 | `diis.h` / `diis.cpp` | `AmplitudeDIIS` — DIIS on flattened amplitude vectors |
 | `ccsd.h` / `ccsd.cpp` | `RCCSDState`, `UCCSDState`, `prepare_rccsd`, `run_rccsd`, `prepare_uccsd`, `run_uccsd` |
-| `ccsdt.h` / `ccsdt.cpp` | `RCCSDTState`, `UCCSDTState`, `prepare_rccsdt`, `run_rccsdt`, `prepare_uccsdt`, `run_uccsdt` |
+| `ccsdt.h` / `ccsdt.cpp` | `RCCSDTState`, `UCCSDTState`, `prepare_rccsdt`, `run_rccsdt`, `prepare_uccsdt`, `run_uccsdt`, three-way backend dispatch with `PLANCK_RCCSDT_BACKEND` env override |
+| `ccsdtq.h` / `ccsdtq.cpp` | `run_rccsdtq` — thin driver that wires the generated RCCSDTQ kernels into the arbitrary-order runtime |
 | `determinant_space.h` / `determinant_space.cpp` | `SpinOrbitalSystem`, `DeterminantCCSpinOrbitalSeed`, `build_rhf/uhf_spin_orbital_system`, `solve_determinant_cc` |
-| `tensor_backend.h` / `tensor_backend.cpp` | `CanonicalRHFCCReference`, `TensorCCBlockCache`, `TensorTriplesWorkspace`, `TensorRCCSDTState`, `run_tensor_rccsdt`, `choose_rccsdt_backend` |
+| `tensor_backend.h` / `tensor_backend.cpp` | `CanonicalRHFCCReference`, `TensorCCBlockCache`, `TensorTriplesWorkspace`, `TensorRCCSDTState`, `run_tensor_rccsdt`, `choose_rccsdt_backend`, `RCCSDTBackend` enum |
+| `tensor_optimized.h` / `tensor_optimized.cpp` | `run_tensor_optimized_rccsdt` — ccgen-optimized RCCSDT kernel path (third backend option, selected by `TensorOptimized`) |
+| `solver_arbitrary.h` / `solver_arbitrary.cpp` | Arbitrary-order solver: `ArbitraryOrderResiduals`, `ArbitraryOrderIterationMetrics`, pack/unpack, `update_amplitudes_with_jacobi_diis` (rank-indexed Jacobi + DIIS) |
+| `generated_arbitrary_runtime.h` / `generated_arbitrary_runtime.cpp` / `generated_arbitrary_prepare.cpp` | `ArbitraryOrderTensorCCState`, `GeneratedArbitraryOrderKernels` (function-object energy + per-rank residual kernels), `prepare_generated_arbitrary_order_state`, `run_generated_arbitrary_order_iterations` |
+| `generated_kernel_registry.h` / `generated_kernel_registry.cpp` | Registry mapping generated kernel bundles to methods (e.g. `make_generated_rccsdtq_kernels`) |
 
 ### Tensor types (`common.h`)
 
@@ -527,8 +536,10 @@ Jacobi update using `DenominatorCache`, (5) accelerates with
 
 <div align="justify">
 
-`run_rccsdt` calls `choose_rccsdt_backend(reference)` before doing any work.
-The backend choice is based on system size:
+`run_rccsdt` calls `choose_rccsdt_backend(reference)` before doing any work
+and then checks the `PLANCK_RCCSDT_BACKEND` environment variable, which can
+force any of the three backends (`determinant` / `tensor` / `optimized`, plus
+longer aliases) regardless of the size-based default. The three backends are:
 
 - **`DeterminantPrototype`** — selected when n_spin_orb ≤ 12.
   Delegates to `solve_determinant_cc(max_rank=3)`.
@@ -539,6 +550,11 @@ The backend choice is based on system size:
   For moderate systems (n_spin_orb ≤ 16, det count ≤ 10000) a determinant
   backstop cross-check is optionally run from the warm-started tensor
   amplitudes via `DeterminantCCSpinOrbitalSeed`.
+- **`TensorOptimized`** — opt-in via `PLANCK_RCCSDT_BACKEND=optimized`.
+  Delegates to `run_tensor_optimized_rccsdt` in `tensor_optimized.*`, which
+  uses kernels emitted by the `ccgen` Python package with algebraic
+  optimizations (CSE, intermediate extraction, BLAS-lowered contractions)
+  in place of the hand-written `tensor_backend` kernels.
 
 </div>
 
@@ -567,6 +583,48 @@ spin-orbital Hamiltonian from the UHF alpha and beta MO spaces, then forward
 to `solve_determinant_cc` with `max_rank=2` (UCCSD) or `max_rank=3` (UCCSDT).
 No separate tensor production path exists for the unrestricted methods; they
 are teaching-scale solvers subject to the same determinant-space size limits.
+
+</div>
+
+### Arbitrary-order tensor runtime (`solver_arbitrary.*`, `generated_arbitrary_runtime.*`, `generated_kernel_registry.*`)
+
+<div align="justify">
+
+For excitation ranks beyond T3, the hand-written kernel approach does not
+scale: the residual tensors grow in rank and the equations get too verbose
+to maintain by hand. Instead, the equations are derived symbolically in the
+`ccgen` Python package (`python/ccgen/`) — BCH expansion + Wick contraction
++ canonicalization — and lowered to C++ tensor kernels ahead of time. The
+emitted kernels are compiled into the binary as the `generated_arbitrary_*`
+translation units and wired through a small runtime.
+
+The runtime is organized around three layers:
+
+- **`ArbitraryOrderRCCAmplitudes` / `ArbitraryOrderDenominatorCache` / `ArbitraryOrderResiduals`** (in `amplitudes.h`
+  and `solver_arbitrary.h`) — rank-indexed packs of `TensorND` tensors with
+  one entry per excitation rank (`by_rank[r-1]` holds the rank-`r` tensor).
+  `DenseTensorView` / `ConstDenseTensorView` provide strided access without
+  copying.
+- **`GeneratedArbitraryOrderKernels`** (in `generated_arbitrary_runtime.h`) —
+  a bundle of `std::function` objects: one energy kernel returning `double`
+  and a `residuals_by_rank` vector of kernels each returning a `TensorND`.
+  The kernel bodies come from `ccgen` emission; the registry (e.g.
+  `make_generated_rccsdtq_kernels`) assembles them into an owned bundle.
+- **Solver loop** — `prepare_generated_arbitrary_order_state` builds the
+  canonical RHF reference, MO block cache, denominator cache, and zero
+  amplitudes. `run_generated_arbitrary_order_iterations` then iterates:
+  evaluate energy and per-rank residuals through the kernel bundle, update
+  amplitudes via `update_amplitudes_with_jacobi_diis` (rank-by-rank Jacobi
+  with a single unified DIIS on the concatenated amplitude vector), report
+  `ArbitraryOrderIterationMetrics` (global and per-rank residual RMS and
+  step RMS), and stop on energy + residual tolerance.
+
+`run_rccsdtq` is currently the only user of this pipeline; it is restricted
+to single-point calculations and drives the runtime with
+`max_excitation_rank = 4` and the RCCSDTQ kernel bundle from the registry.
+Adding a new arbitrary-order method is a matter of generating its kernels
+with `ccgen`, registering them, and adding a thin driver alongside
+`run_rccsdtq`.
 
 </div>
 
@@ -754,6 +812,8 @@ run_rhf() / run_uhf()      → DataSCF (density, Fock, MOs, energies)
     ├─ GeomOpt     → Opt::run_geomopt() / run_geomopt_ic()
     ├─ Frequency   → Freq::compute_hessian() → vibrational_analysis()
     ├─ RMP2/UMP2   → Correlation::run_rmp2() / run_ump2()
+    ├─ RCCSD/UCCSD/RCCSDT/UCCSDT → Correlation::CC::run_r/uccsd[t]()
+    ├─ RCCSDTQ     → Correlation::CC::run_rccsdtq() (ccgen-generated kernels)
     └─ CASSCF      → Correlation::run_casscf()
                          │
                          ├─ CASSCF::build_ci_space()
