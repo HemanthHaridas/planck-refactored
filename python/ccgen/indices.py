@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 OCC_POOL = list("ijklmno")
@@ -23,19 +23,28 @@ def extend_pool(pool: list[str], needed: int) -> None:
         pool.append(f"{base}{len(pool)}")
 
 
-@dataclass(frozen=True, order=True)
+@dataclass(frozen=True, order=True, slots=True)
 class Index:
     """A single spin-orbital index."""
 
     name: str
     space: str
     is_dummy: bool = False
+    _hash: int = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.space not in ("occ", "vir", "gen"):
             raise ValueError(
                 f"Invalid space '{self.space}'; expected occ/vir/gen"
             )
+        object.__setattr__(
+            self,
+            "_hash",
+            hash((self.name, self.space, self.is_dummy)),
+        )
+
+    def __hash__(self) -> int:
+        return self._hash
 
     def as_dummy(self) -> Index:
         return Index(self.name, self.space, is_dummy=True)

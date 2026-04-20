@@ -2,30 +2,77 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 from .indices import Index
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Tensor:
     """A tensor factor appearing in an algebraic term."""
 
     name: str
     indices: tuple[Index, ...]
     antisym_groups: tuple[tuple[int, ...], ...] = ()
+    _hash: int = field(init=False, repr=False, compare=False)
+    _sort_key: tuple[object, ...] | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=None,
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "_hash",
+            hash((self.name, self.indices, self.antisym_groups)),
+        )
 
     @property
     def rank(self) -> int:
         return len(self.indices)
 
+    @property
+    def sort_key(self) -> tuple[object, ...]:
+        cached = self._sort_key
+        if cached is not None:
+            return cached
+        cached = (
+            self.name,
+            tuple((idx.space, idx.name) for idx in self.indices),
+        )
+        object.__setattr__(self, "_sort_key", cached)
+        return cached
+
+    def __hash__(self) -> int:
+        return self._hash
+
     def reindexed(self, mapping: dict[Index, Index]) -> Tensor:
-        new_indices = tuple(mapping.get(i, i) for i in self.indices)
-        return Tensor(self.name, new_indices, self.antisym_groups)
+        if not mapping:
+            return self
+
+        updated: list[Index] | None = None
+        for pos, idx in enumerate(self.indices):
+            mapped = mapping.get(idx)
+            if mapped is None or mapped == idx:
+                if updated is not None:
+                    updated.append(idx)
+                continue
+            if updated is None:
+                updated = list(self.indices[:pos])
+            updated.append(mapped)
+
+        if updated is None:
+            return self
+        return Tensor(self.name, tuple(updated), self.antisym_groups)
 
     def with_indices(self, new_indices: Sequence[Index]) -> Tensor:
-        return Tensor(self.name, tuple(new_indices), self.antisym_groups)
+        new_indices_tuple = tuple(new_indices)
+        if new_indices_tuple == self.indices:
+            return self
+        return Tensor(self.name, new_indices_tuple, self.antisym_groups)
 
     def __repr__(self) -> str:
         idx_str = ",".join(repr(i) for i in self.indices)
@@ -85,3 +132,37 @@ def tn(n: int, vir: tuple[Index, ...], occ: tuple[Index, ...]) -> Tensor:
 def delta(p: Index, q: Index) -> Tensor:
     """Kronecker delta_{pq}."""
     return Tensor("delta", (p, q))
+
+
+def reindex_tensors(
+    tensors: tuple[Tensor, ...],
+    mapping: dict[Index, Index],
+) -> tuple[Tensor, ...]:
+    """Bulk reindex tensor factors, reusing original objects when possible."""
+    if not mapping:
+        return tensors
+
+    updated: list[Tensor] | None = None
+    for pos, tensor in enumerate(tensors):
+        new_indices: list[Index] | None = None
+        for idx_pos, idx in enumerate(tensor.indices):
+            mapped = mapping.get(idx)
+            if mapped is None or mapped == idx:
+                if new_indices is not None:
+                    new_indices.append(idx)
+                continue
+            if new_indices is None:
+                new_indices = list(tensor.indices[:idx_pos])
+            new_indices.append(mapped)
+
+        if new_indices is None:
+            if updated is not None:
+                updated.append(tensor)
+            continue
+        if updated is None:
+            updated = list(tensors[:pos])
+        updated.append(Tensor(tensor.name, tuple(new_indices), tensor.antisym_groups))
+
+    if updated is None:
+        return tensors
+    return tuple(updated)

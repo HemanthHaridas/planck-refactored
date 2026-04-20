@@ -2,16 +2,32 @@
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+import pickle
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
 from .hamiltonian import build_hamiltonian
 from .cluster import build_cluster, parse_cc_level
 from .algebra import bch_expand
-from .project import project, AlgebraTerm, manifold_name
-from .canonicalize import canonicalize_term, merge_like_terms, collect_fock_diagonals
+from .project import (
+    iter_projected_terms_from_terms,
+    bucket_terms_by_manifold,
+    AlgebraTerm,
+    manifold_name,
+)
+from .canonicalize import (
+    canonicalize_term,
+    merge_exact_term_into_buckets,
+    merge_term_into_buckets,
+    term_is_zero_before_canonicalization,
+    collect_fock_diagonals,
+)
 from .emit.pretty import format_equations, format_equations_with_intermediates
 from .emit.einsum import format_equations_einsum
 from .emit.cpp_loops import (
@@ -52,6 +68,10 @@ class PipelineStats:
                 lines.append(
                     f"    After connected filter:{stats['after_connected_filter']:>6d} terms"
                 )
+            if stats.get("after_precanonical_prune") is not None:
+                lines.append(
+                    f"    After pre-canonical prune:{stats['after_precanonical_prune']:>6d} terms"
+                )
             lines.append(
                 f"    After canonicalization: {stats['after_canonicalization']:>6d} terms"
                 f"  ({stats['canonicalization_time_s']:.2f}s)"
@@ -77,6 +97,10 @@ class PipelineStats:
 # Module-level storage for the most recent pipeline stats.
 last_stats: PipelineStats | None = None
 
+_PARALLEL_ENV_VAR = "CCGEN_PARALLEL_WORKERS"
+_MIN_CHUNK_TERMS = 8
+_CACHE_VERSION = 1
+
 
 def targets_for_method(method: str) -> list[str]:
     """Derive the default projection targets for a CC method.
@@ -88,6 +112,248 @@ def targets_for_method(method: str) -> list[str]:
     return ["energy"] + [manifold_name(r) for r in ranks]
 
 
+def _resolve_parallel_workers(parallel_workers: int | None) -> int:
+    if parallel_workers is not None:
+        return max(1, parallel_workers)
+
+    env_value = os.environ.get(_PARALLEL_ENV_VAR)
+    if env_value:
+        try:
+            return max(1, int(env_value))
+        except ValueError:
+            return 1
+    return 1
+
+
+def _chunk_term_bucket(
+    terms: tuple[object, ...],
+    workers: int,
+) -> list[tuple[object, ...]]:
+    if workers <= 1 or len(terms) < workers * _MIN_CHUNK_TERMS:
+        return [terms]
+
+    chunk_size = max(_MIN_CHUNK_TERMS, (len(terms) + workers - 1) // workers)
+    return [
+        terms[offset:offset + chunk_size]
+        for offset in range(0, len(terms), chunk_size)
+    ]
+
+
+def _process_term_chunk(
+    terms: tuple[object, ...],
+    manifold: str,
+    connected_only: bool,
+) -> tuple[dict[str, int | float], tuple[AlgebraTerm, ...]]:
+    raw_count = 0
+    filtered_count = 0
+    canonicalized_count = 0
+    projection_time = 0.0
+    canonicalization_time = 0.0
+    raw_buckets: dict[tuple[object, ...], AlgebraTerm] = {}
+    raw_order: list[tuple[object, ...]] = []
+    buckets: dict[tuple[object, ...], AlgebraTerm] = {}
+    order: list[tuple[object, ...]] = []
+
+    projected_terms = iter(iter_projected_terms_from_terms(terms, manifold))
+
+    while True:
+        t1 = time.monotonic()
+        try:
+            projected = next(projected_terms)
+        except StopIteration:
+            break
+        projection_time += time.monotonic() - t1
+        raw_count += 1
+        if connected_only and manifold not in ("energy", "reference"):
+            if not projected.connected:
+                continue
+            filtered_count += 1
+
+        if term_is_zero_before_canonicalization(projected):
+            continue
+        merge_exact_term_into_buckets(projected, raw_buckets, raw_order)
+
+    raw_terms = [
+        raw_buckets[sig] for sig in raw_order if raw_buckets[sig].coeff != 0
+    ]
+
+    for raw_term in raw_terms:
+        t1 = time.monotonic()
+        canonical = canonicalize_term(raw_term)
+        canonicalization_time += time.monotonic() - t1
+        canonicalized_count += 1
+        merge_term_into_buckets(canonical, buckets, order)
+
+    merged_terms = tuple(
+        buckets[sig] for sig in order if buckets[sig].coeff != 0
+    )
+    stats = {
+        "after_projection": raw_count,
+        "after_connected_filter": filtered_count,
+        "after_precanonical_prune": len(raw_terms),
+        "after_canonicalization": canonicalized_count,
+        "projection_time_s": projection_time,
+        "canonicalization_time_s": canonicalization_time,
+    }
+    return stats, merged_terms
+
+
+def _generate_manifold_equation(
+    manifold: str,
+    terms: tuple[object, ...],
+    connected_only: bool,
+    collect_denominators: bool,
+    permutation_grouping: bool,
+    exploit_symmetry: bool,
+    parallel_workers: int,
+) -> tuple[str, dict[str, int | float], list[AlgebraTerm]]:
+    mstats: dict[str, int | float] = {}
+    buckets: dict[tuple[object, ...], AlgebraTerm] = {}
+    order: list[tuple[object, ...]] = []
+
+    chunk_terms = _chunk_term_bucket(terms, parallel_workers)
+    if len(chunk_terms) == 1:
+        chunk_results = [
+            _process_term_chunk(
+                chunk_terms[0],
+                manifold,
+                connected_only,
+            )
+        ]
+    else:
+        try:
+            with ProcessPoolExecutor(max_workers=parallel_workers) as executor:
+                chunk_results = list(executor.map(
+                    _process_term_chunk,
+                    chunk_terms,
+                    [manifold] * len(chunk_terms),
+                    [connected_only] * len(chunk_terms),
+                ))
+        except (OSError, PermissionError):
+            chunk_results = [
+                _process_term_chunk(chunk, manifold, connected_only)
+                for chunk in chunk_terms
+            ]
+
+    projection_time = 0.0
+    canonicalization_time = 0.0
+    raw_count = 0
+    filtered_count = 0
+    precanonical_count = 0
+    canonicalized_count = 0
+
+    for chunk_stats, chunk_canonical in chunk_results:
+        projection_time += float(chunk_stats["projection_time_s"])
+        canonicalization_time += float(chunk_stats["canonicalization_time_s"])
+        raw_count += int(chunk_stats["after_projection"])
+        filtered_count += int(chunk_stats["after_connected_filter"])
+        precanonical_count += int(chunk_stats["after_precanonical_prune"])
+        canonicalized_count += int(chunk_stats["after_canonicalization"])
+        for term in chunk_canonical:
+            merge_term_into_buckets(term, buckets, order)
+
+    mstats["projection_time_s"] = projection_time
+    mstats["after_projection"] = raw_count
+
+    if connected_only and manifold not in ("energy", "reference"):
+        mstats["after_connected_filter"] = filtered_count
+    else:
+        mstats["after_connected_filter"] = None  # type: ignore[assignment]
+
+    mstats["after_precanonical_prune"] = precanonical_count
+    mstats["canonicalization_time_s"] = canonicalization_time
+    mstats["after_canonicalization"] = canonicalized_count
+
+    canonical = [
+        buckets[sig] for sig in order if buckets[sig].coeff != 0
+    ]
+    mstats["after_merge"] = len(canonical)
+
+    if collect_denominators and manifold not in ("energy", "reference"):
+        canonical = collect_fock_diagonals(canonical)
+        mstats["after_denom_collection"] = len(canonical)
+
+    if permutation_grouping and manifold not in ("energy", "reference"):
+        from .optimization.permutation import apply_permutation_grouping
+        canonical = apply_permutation_grouping(canonical)
+        mstats["after_perm_grouping"] = len(canonical)
+
+    if exploit_symmetry and manifold not in ("energy", "reference"):
+        from .optimization.symmetry import exploit_antisymmetry
+        canonical = exploit_antisymmetry(canonical)
+        mstats["after_symmetry"] = len(canonical)
+
+    return manifold, mstats, canonical
+
+
+def _cache_config(
+    method: str,
+    targets: tuple[str, ...],
+    connected_only: bool,
+    collect_denominators: bool,
+    permutation_grouping: bool,
+    exploit_symmetry: bool,
+) -> dict[str, object]:
+    return {
+        "version": _CACHE_VERSION,
+        "method": method,
+        "targets": list(targets),
+        "connected_only": connected_only,
+        "collect_denominators": collect_denominators,
+        "permutation_grouping": permutation_grouping,
+        "exploit_symmetry": exploit_symmetry,
+    }
+
+
+def _cache_root(
+    cache_dir: str,
+    method: str,
+) -> Path:
+    return Path(cache_dir).expanduser().resolve() / method
+
+
+def _cache_ready(
+    root: Path,
+    config: dict[str, object],
+) -> bool:
+    config_path = root / "config.json"
+    if not config_path.exists():
+        root.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
+        return True
+    try:
+        existing = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return existing == config
+
+
+def _cache_file(root: Path, manifold: str) -> Path:
+    return root / f"{manifold}.pkl"
+
+
+def _load_cached_manifold(
+    root: Path,
+    manifold: str,
+) -> tuple[dict[str, int | float], list[AlgebraTerm]] | None:
+    path = _cache_file(root, manifold)
+    if not path.exists():
+        return None
+    with path.open("rb") as handle:
+        return pickle.load(handle)
+
+
+def _store_cached_manifold(
+    root: Path,
+    manifold: str,
+    mstats: dict[str, int | float],
+    canonical: list[AlgebraTerm],
+) -> None:
+    path = _cache_file(root, manifold)
+    with path.open("wb") as handle:
+        pickle.dump((mstats, canonical), handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
 def generate_cc_equations(
     method: str,
     targets: list[str] | None = None,
@@ -96,6 +362,8 @@ def generate_cc_equations(
     permutation_grouping: bool = False,
     exploit_symmetry: bool = False,
     debug: bool = False,
+    parallel_workers: int | None = None,
+    cache_dir: str | None = None,
 ) -> dict[str, list[AlgebraTerm]]:
     """Generate coupled-cluster equations for a given method.
 
@@ -136,45 +404,93 @@ def generate_cc_equations(
     )
 
     equations: dict[str, list[AlgebraTerm]] = {}
+    target_tuple = tuple(targets)
+    term_buckets = bucket_terms_by_manifold(Hbar, target_tuple)
+    resolved_workers = _resolve_parallel_workers(parallel_workers)
+    cache_root_path: Path | None = None
+    if cache_dir is not None:
+        cache_root_path = _cache_root(cache_dir, method)
+        config = _cache_config(
+            method,
+            target_tuple,
+            connected_only,
+            collect_denominators,
+            permutation_grouping,
+            exploit_symmetry,
+        )
+        if not _cache_ready(cache_root_path, config):
+            cache_root_path = None
 
-    for manifold in targets:
-        mstats: dict[str, int | float] = {}
-
-        t0 = time.monotonic()
-        raw = project(Hbar, manifold)
-        mstats["projection_time_s"] = time.monotonic() - t0
-        mstats["after_projection"] = len(raw)
-
-        if connected_only and manifold not in ("energy", "reference"):
-            raw = [t for t in raw if t.connected]
-            mstats["after_connected_filter"] = len(raw)
-        else:
-            mstats["after_connected_filter"] = None  # type: ignore[assignment]
-
-        t0 = time.monotonic()
-        canonicalized = [canonicalize_term(t) for t in raw]
-        mstats["canonicalization_time_s"] = time.monotonic() - t0
-        mstats["after_canonicalization"] = len(canonicalized)
-
-        canonical = merge_like_terms(canonicalized)
-        mstats["after_merge"] = len(canonical)
-
-        if collect_denominators and manifold not in ("energy", "reference"):
-            canonical = collect_fock_diagonals(canonical)
-            mstats["after_denom_collection"] = len(canonical)
-
-        if permutation_grouping and manifold not in ("energy", "reference"):
-            from .optimization.permutation import apply_permutation_grouping
-            canonical = apply_permutation_grouping(canonical)
-            mstats["after_perm_grouping"] = len(canonical)
-
-        if exploit_symmetry and manifold not in ("energy", "reference"):
-            from .optimization.symmetry import exploit_antisymmetry
-            canonical = exploit_antisymmetry(canonical)
-            mstats["after_symmetry"] = len(canonical)
-
+    pending: list[str] = []
+    for manifold in target_tuple:
+        if cache_root_path is None:
+            pending.append(manifold)
+            continue
+        cached = _load_cached_manifold(cache_root_path, manifold)
+        if cached is None:
+            pending.append(manifold)
+            continue
+        mstats, canonical = cached
         stats.manifolds[manifold] = mstats
         equations[manifold] = canonical
+
+    if pending:
+        manifold_results: list[tuple[str, dict[str, int | float], list[AlgebraTerm]]] = []
+        use_manifold_parallel = resolved_workers > 1 and len(pending) > 1
+        if use_manifold_parallel:
+            try:
+                with ProcessPoolExecutor(max_workers=min(resolved_workers, len(pending))) as executor:
+                    manifold_results = list(executor.map(
+                        _generate_manifold_equation,
+                        pending,
+                        [term_buckets[name] for name in pending],
+                        [connected_only] * len(pending),
+                        [collect_denominators] * len(pending),
+                        [permutation_grouping] * len(pending),
+                        [exploit_symmetry] * len(pending),
+                        [1] * len(pending),
+                    ))
+            except (OSError, PermissionError):
+                manifold_results = [
+                    _generate_manifold_equation(
+                        manifold,
+                        term_buckets[manifold],
+                        connected_only,
+                        collect_denominators,
+                        permutation_grouping,
+                        exploit_symmetry,
+                        resolved_workers,
+                    )
+                    for manifold in pending
+                ]
+        else:
+            manifold_results = [
+                _generate_manifold_equation(
+                    manifold,
+                    term_buckets[manifold],
+                    connected_only,
+                    collect_denominators,
+                    permutation_grouping,
+                    exploit_symmetry,
+                    resolved_workers,
+                )
+                for manifold in pending
+            ]
+
+        for manifold, mstats, canonical in manifold_results:
+            stats.manifolds[manifold] = mstats
+            equations[manifold] = canonical
+            if cache_root_path is not None:
+                _store_cached_manifold(cache_root_path, manifold, mstats, canonical)
+
+    stats.manifolds = {
+        manifold: stats.manifolds[manifold]
+        for manifold in target_tuple
+    }
+    equations = {
+        manifold: equations[manifold]
+        for manifold in target_tuple
+    }
 
     last_stats = stats
 
@@ -319,6 +635,8 @@ def print_cpp_planck(
     method: str,
     include_intermediates: bool = False,
     intermediate_threshold: int = 5,
+    intermediate_memory_budget_bytes: int | None = None,
+    intermediate_peak_memory_budget_bytes: int | None = None,
     **kwargs: Any,
 ) -> str:
     """Generate Planck-compatible C++ tensor kernels."""
@@ -333,6 +651,8 @@ def print_cpp_planck(
         detected = detect_intermediates(
             eqs,
             threshold=intermediate_threshold,
+            memory_budget_bytes=intermediate_memory_budget_bytes,
+            peak_memory_budget_bytes=intermediate_peak_memory_budget_bytes,
         )
         supported = [
             spec for spec in detected
@@ -352,6 +672,8 @@ def print_equations_full(
     method: str,
     include_intermediates: bool = True,
     intermediate_threshold: int = 5,
+    intermediate_memory_budget_bytes: int | None = None,
+    intermediate_peak_memory_budget_bytes: int | None = None,
     include_legend: bool = True,
     include_stats: bool = True,
     annotate_layout: bool = False,
@@ -370,7 +692,12 @@ def print_equations_full(
             detect_intermediates,
             annotate_layout_hints,
         )
-        intms = detect_intermediates(eqs, threshold=intermediate_threshold)
+        intms = detect_intermediates(
+            eqs,
+            threshold=intermediate_threshold,
+            memory_budget_bytes=intermediate_memory_budget_bytes,
+            peak_memory_budget_bytes=intermediate_peak_memory_budget_bytes,
+        )
         if annotate_layout:
             intms = annotate_layout_hints(intms)
         intermediates = intms if intms else None

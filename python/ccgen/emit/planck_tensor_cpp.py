@@ -320,6 +320,20 @@ def _kernel_name(method: str, target: str) -> str:
     return f"compute_{method}_{target}_residual"
 
 
+def _target_rank(
+    target: str,
+    terms: Sequence[AlgebraTerm],
+    lowered_terms: Sequence[RestrictedClosedShellTerm] | None = None,
+) -> int:
+    if target == "energy":
+        return 0
+    if lowered_terms:
+        return len(lowered_terms[0].canonical_free_indices) // 2
+    if terms:
+        return len(terms[0].free_indices) // 2
+    raise ValueError(f"Cannot infer excitation rank for target {target!r}")
+
+
 def _emit_kernel(
     method: str,
     target: str,
@@ -422,6 +436,48 @@ def _emit_intermediate_builder(method: str, spec: IntermediateSpec) -> str:
     return "\n".join(lines)
 
 
+def _emit_arbitrary_order_kernel_bundle(
+    method: str,
+    equations: dict[str, list[AlgebraTerm]],
+    lowered_equations: dict[str, list[RestrictedClosedShellTerm]],
+) -> str:
+    max_rank = max(parse_cc_level(method), default=0)
+    if max_rank < 4:
+        return ""
+
+    ranked_targets: list[tuple[int, str]] = []
+    for target, terms in equations.items():
+        if target == "energy":
+            continue
+        rank = _target_rank(target, terms, lowered_equations.get(target))
+        ranked_targets.append((rank, target))
+    ranked_targets.sort()
+
+    lines: list[str] = []
+    lines.append(f"GeneratedArbitraryOrderKernels make_generated_{method}_kernels()")
+    lines.append("{")
+    lines.append("    GeneratedArbitraryOrderKernels kernels;")
+    lines.append(f"    kernels.max_excitation_rank = {max_rank};")
+    lines.append(f"    kernels.energy = {_kernel_name(method, 'energy')};")
+    lines.append(f"    kernels.residuals_by_rank.reserve({max_rank});")
+    for rank, target in ranked_targets:
+        lines.append("    kernels.residuals_by_rank.push_back(")
+        lines.append("        [](")
+        lines.append("            const CanonicalRHFCCReference &reference,")
+        lines.append("            const TensorCCBlockCache &mo_blocks,")
+        lines.append("            const ArbitraryOrderDenominatorCache &denominators,")
+        lines.append("            const ArbitraryOrderRCCAmplitudes &amplitudes) -> TensorND")
+        lines.append("        {")
+        lines.append(
+            "            return to_tensor_nd("
+            f"{_kernel_name(method, target)}(reference, mo_blocks, denominators, amplitudes));"
+        )
+        lines.append("        });")
+    lines.append("    return kernels;")
+    lines.append("}")
+    return "\n".join(lines)
+
+
 def emit_planck_translation_unit(
     method: str,
     equations: dict[str, list[AlgebraTerm]],
@@ -438,6 +494,8 @@ def emit_planck_translation_unit(
     lines.append(f"// Planck tensor kernels for {method.upper()}")
     lines.append("")
     lines.append('#include "post_hf/cc/tensor_backend.h"')
+    if max(parse_cc_level(method), default=0) >= 4:
+        lines.append('#include "post_hf/cc/generated_arbitrary_runtime.h"')
     lines.append("")
     lines.append("namespace HartreeFock::Correlation::CC")
     lines.append("{")
@@ -460,6 +518,15 @@ def emit_planck_translation_unit(
                 intermediates=intermediates,
             )
         )
+        lines.append("")
+
+    bundle_code = _emit_arbitrary_order_kernel_bundle(
+        method,
+        equations,
+        lowered_equations,
+    )
+    if bundle_code:
+        lines.append(bundle_code)
         lines.append("")
 
     lines.append("} // namespace HartreeFock::Correlation::CC")

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tempfile
 import unittest
 from fractions import Fraction
 from pathlib import Path
@@ -29,8 +30,22 @@ from ccgen.generate import (
     print_cpp_planck,
 )
 from ccgen.indices import make_occ, make_vir
-from ccgen.project import AlgebraTerm
-from ccgen.canonicalize import collect_fock_diagonals
+from ccgen.sqops import create, annihilate
+from ccgen.project import (
+    AlgebraTerm,
+    _can_term_contribute_to_rank,
+    _can_term_blocks_connect_to_rank,
+    bucket_terms_by_manifold,
+)
+from ccgen.hamiltonian import build_hamiltonian
+from ccgen.cluster import build_cluster
+from ccgen.algebra import bch_expand
+from ccgen.expr import OpTerm
+from ccgen.canonicalize import (
+    collect_fock_diagonals,
+    merge_exact_term_into_buckets,
+    term_is_zero_before_canonicalization,
+)
 from ccgen.optimization.intermediates import (
     detect_intermediates,
     rewrite_equations,
@@ -64,6 +79,7 @@ from ccgen.emit.planck_rccsd_warm_start import (
 )
 from ccgen.lowering import lower_term_restricted_closed_shell
 from ccgen.tensors import Tensor
+from ccgen.wick import wick_contract, apply_deltas
 
 
 class IntermediateDetectionTests(unittest.TestCase):
@@ -117,6 +133,246 @@ class IntermediateDetectionTests(unittest.TestCase):
         # Energy-only CCD has very few terms, unlikely to find reuse
         # (This is a sanity check, not a hard requirement)
         self.assertIsInstance(intms, list)
+
+
+class ProjectionPruningTests(unittest.TestCase):
+    """Tests for early projector-feasibility pruning."""
+
+    def test_rank_filter_rejects_short_signatures(self) -> None:
+        signature = (
+            ("create", "gen"),
+            ("annihilate", "gen"),
+        )
+        self.assertFalse(_can_term_contribute_to_rank(signature, 2))
+
+    def test_rank_filter_requires_projector_compatible_slots(self) -> None:
+        signature = (
+            ("create", "vir"),
+            ("create", "vir"),
+            ("annihilate", "vir"),
+            ("annihilate", "vir"),
+        )
+        self.assertFalse(_can_term_contribute_to_rank(signature, 2))
+
+    def test_rank_filter_accepts_doubles_like_signature(self) -> None:
+        signature = (
+            ("create", "vir"),
+            ("create", "vir"),
+            ("annihilate", "occ"),
+            ("annihilate", "occ"),
+        )
+        self.assertTrue(_can_term_contribute_to_rank(signature, 2))
+
+    def test_rank_filter_rejects_non_contractible_leftover_signature(self) -> None:
+        signature = (
+            ("create", "occ"),
+            ("create", "occ"),
+            ("create", "occ"),
+            ("create", "occ"),
+            ("create", "vir"),
+            ("create", "vir"),
+            ("annihilate", "occ"),
+            ("annihilate", "occ"),
+            ("annihilate", "vir"),
+            ("annihilate", "vir"),
+            ("annihilate", "vir"),
+            ("annihilate", "vir"),
+        )
+        self.assertFalse(_can_term_contribute_to_rank(signature, 2))
+
+    def test_block_filter_rejects_projector_channel_overcommit(self) -> None:
+        a = make_vir("a")
+        b = make_vir("b")
+        i = make_occ("i")
+        c = make_vir("c")
+        term = OpTerm(
+            coeff=Fraction(1),
+            tensors=(
+                Tensor("x1", (a,)),
+                Tensor("x2", (b,)),
+                Tensor("x3", (i,)),
+                Tensor("x4", (c,)),
+            ),
+            sqops=(
+                create(a),
+                create(b),
+                annihilate(i),
+                annihilate(c),
+            ),
+        )
+        signature = tuple((op.kind, op.index.space) for op in term.sqops)
+        self.assertTrue(_can_term_contribute_to_rank(signature, 1))
+        self.assertFalse(_can_term_blocks_connect_to_rank(term, 1))
+
+    def test_bucket_terms_by_manifold_preserves_energy_terms(self) -> None:
+        hbar = bch_expand(build_hamiltonian(), build_cluster("ccsd"), max_order=4)
+        buckets = bucket_terms_by_manifold(
+            hbar,
+            ("energy", "singles", "doubles"),
+        )
+        self.assertEqual(len(buckets["energy"]), len(hbar.terms))
+        self.assertGreater(len(buckets["singles"]), 0)
+        self.assertGreater(len(buckets["doubles"]), 0)
+
+    def test_bucket_terms_by_manifold_reduces_higher_rank_scan(self) -> None:
+        hbar = bch_expand(build_hamiltonian(), build_cluster("ccsd"), max_order=4)
+        buckets = bucket_terms_by_manifold(
+            hbar,
+            ("energy", "triples"),
+        )
+        self.assertLess(len(buckets["triples"]), len(buckets["energy"]))
+
+
+class WickPivotingTests(unittest.TestCase):
+    """Regression tests for non-leftmost Wick pivot enumeration."""
+
+    def _naive_pairings(
+        self,
+        signature: tuple[tuple[int, str, str, int], ...],
+    ) -> set[tuple[int, tuple[tuple[int, int], ...]]]:
+        from ccgen.wick import _can_contract_signature
+
+        if not signature:
+            return {(1, ())}
+
+        first = signature[0]
+        rest = signature[1:]
+        results: set[tuple[int, tuple[tuple[int, int], ...]]] = set()
+        for k, partner in enumerate(rest):
+            if first[3] == partner[3]:
+                continue
+            if not _can_contract_signature(
+                first[1], first[2], partner[1], partner[2],
+            ):
+                continue
+            remaining = rest[:k] + rest[k + 1:]
+            sign_factor = -1 if k % 2 else 1
+            for sub_sign, sub_pairs in self._naive_pairings(remaining):
+                pair = tuple(sorted((first[0], partner[0])))
+                pairs = tuple(sorted((pair,) + sub_pairs))
+                results.add((sign_factor * sub_sign, pairs))
+        return results
+
+    def test_wick_contract_matches_naive_pairings(self) -> None:
+        i = make_occ("i", dummy=False)
+        j = make_occ("j", dummy=False)
+        k = make_occ("k", dummy=False)
+        a = make_vir("a", dummy=False)
+        b = make_vir("b", dummy=False)
+        c = make_vir("c", dummy=False)
+
+        sqops = (
+            annihilate(a),
+            create(c),
+            create(i),
+            annihilate(j),
+            annihilate(b),
+            create(k),
+        )
+        block_ids = (0, 1, 2, 3, 4, 5)
+        signature = tuple(
+            (idx, op.kind, op.index.space, bid)
+            for idx, (op, bid) in enumerate(zip(sqops, block_ids))
+        )
+        actual = set()
+        position_by_index = {op.index: pos for pos, op in enumerate(sqops)}
+        for result in wick_contract(
+            sqops,
+            tensors=(),
+            block_ids=block_ids,
+        ):
+            pair_positions = tuple(sorted(
+                tuple(sorted((
+                    position_by_index[left],
+                    position_by_index[right],
+                )))
+                for left, right in result.deltas
+            ))
+            actual.add((result.sign, pair_positions))
+
+        expected = self._naive_pairings(signature)
+        self.assertSetEqual(actual, expected)
+
+
+class DeltaApplicationTests(unittest.TestCase):
+    """Regression tests for delta substitution fast paths."""
+
+    def test_apply_deltas_restores_protected_free_indices(self) -> None:
+        i_free = make_occ("i", dummy=False)
+        a_free = make_vir("a", dummy=False)
+        i_dummy = make_occ("i", dummy=True)
+        a_dummy = make_vir("a", dummy=True)
+
+        reduced = apply_deltas(
+            (Tensor("t1", (a_dummy, i_dummy)),),
+            ((a_free, a_dummy), (i_free, i_dummy)),
+            protected=(i_free, a_free),
+        )
+
+        self.assertIsNotNone(reduced)
+        assert reduced is not None
+        self.assertEqual(reduced[0].indices, (a_free, i_free))
+
+
+class PreCanonicalPruningTests(unittest.TestCase):
+    """Tests for cheap zero/duplicate pruning before canonicalization."""
+
+    def test_zero_detection_respects_antisymmetry(self) -> None:
+        a = make_vir("a", dummy=False)
+        i = make_occ("i", dummy=False)
+        term = AlgebraTerm(
+            coeff=Fraction(1),
+            factors=(Tensor("t2", (a, a, i, i), antisym_groups=((0, 1), (2, 3))),),
+            free_indices=(i, i, a, a),
+            summed_indices=(),
+            connected=True,
+        )
+        self.assertTrue(term_is_zero_before_canonicalization(term))
+
+    def test_exact_duplicate_merge_happens_before_canonicalization(self) -> None:
+        a = make_vir("a", dummy=False)
+        i = make_occ("i", dummy=False)
+        term = AlgebraTerm(
+            coeff=Fraction(1),
+            factors=(Tensor("t1", (a, i)),),
+            free_indices=(i, a),
+            summed_indices=(),
+            connected=True,
+        )
+        buckets: dict[tuple[object, ...], AlgebraTerm] = {}
+        order: list[tuple[object, ...]] = []
+        merge_exact_term_into_buckets(term, buckets, order)
+        merge_exact_term_into_buckets(term.scaled(2), buckets, order)
+        self.assertEqual(len(order), 1)
+        merged = buckets[order[0]]
+        self.assertEqual(merged.coeff, Fraction(3))
+
+
+class ParallelGenerationTests(unittest.TestCase):
+    """Tests for multiprocessing projection/canonicalization."""
+
+    def test_parallel_generation_matches_serial(self) -> None:
+        serial = generate_cc_equations("ccsd", parallel_workers=1)
+        parallel = generate_cc_equations("ccsd", parallel_workers=2)
+        self.assertEqual(serial, parallel)
+
+    def test_cache_dir_reuses_manifold_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first = generate_cc_equations(
+                "ccsd",
+                targets=["energy", "singles"],
+                cache_dir=tmpdir,
+            )
+            second = generate_cc_equations(
+                "ccsd",
+                targets=["energy", "singles"],
+                cache_dir=tmpdir,
+            )
+            self.assertEqual(first, second)
+            method_dir = Path(tmpdir) / "ccsd"
+            self.assertTrue((method_dir / "config.json").exists())
+            self.assertTrue((method_dir / "energy.pkl").exists())
+            self.assertTrue((method_dir / "singles.pkl").exists())
 
     def test_unique_names(self) -> None:
         eqs = generate_cc_equations("ccsd")
@@ -453,6 +709,26 @@ class EmissionTests(unittest.TestCase):
             "Every intermediate build call must have a matching emitted definition",
         )
 
+    def test_print_cpp_planck_respects_memory_budget(self) -> None:
+        code = print_cpp_planck(
+            "ccsd",
+            include_intermediates=True,
+            intermediate_threshold=5,
+            intermediate_memory_budget_bytes=1,
+        )
+        self.assertNotIn("build_W_", code)
+        self.assertNotIn("Build reused intermediates once for this kernel", code)
+
+    def test_print_cpp_planck_respects_peak_memory_budget(self) -> None:
+        code = print_cpp_planck(
+            "ccsd",
+            include_intermediates=True,
+            intermediate_threshold=5,
+            intermediate_peak_memory_budget_bytes=1,
+        )
+        self.assertNotIn("build_W_", code)
+        self.assertNotIn("Build reused intermediates once for this kernel", code)
+
     def test_planck_term_reorders_planck_storage(self) -> None:
         i = make_occ("i")
         j = make_occ("j")
@@ -633,6 +909,22 @@ class EmissionTests(unittest.TestCase):
         )
         self.assertIn(
             "result({i, j, k, l, a, b, c, d})",
+            code,
+        )
+        self.assertIn(
+            '#include "post_hf/cc/generated_arbitrary_runtime.h"',
+            code,
+        )
+        self.assertIn(
+            "GeneratedArbitraryOrderKernels make_generated_ccsdtq_kernels()",
+            code,
+        )
+        self.assertIn(
+            "kernels.energy = compute_ccsdtq_energy;",
+            code,
+        )
+        self.assertIn(
+            "return to_tensor_nd(compute_ccsdtq_quadruples_residual(reference, mo_blocks, denominators, amplitudes));",
             code,
         )
 
@@ -1208,6 +1500,7 @@ class MemoryLayoutTests(unittest.TestCase):
         from ccgen.optimization.intermediates import (
             detect_intermediates,
             annotate_layout_hints,
+            total_estimated_bytes,
         )
         eqs = generate_cc_equations("ccsd")
         intms = detect_intermediates(eqs, threshold=5)
@@ -1220,6 +1513,9 @@ class MemoryLayoutTests(unittest.TestCase):
                 for k, v in spec.blocking_hint.items():
                     self.assertIsInstance(k, str)
                     self.assertIsInstance(v, int)
+        self.assertEqual(total_estimated_bytes(annotated), sum(
+            spec.estimated_bytes for spec in annotated
+        ))
 
     def test_small_intermediates_use_stack(self) -> None:
         from ccgen.optimization.intermediates import (
@@ -1255,6 +1551,126 @@ class MemoryLayoutTests(unittest.TestCase):
             self.assertEqual(modified.memory_layout, "blocked")
             self.assertEqual(modified.allocation_strategy, "malloc")
             self.assertEqual(modified.name, original.name)
+
+    def test_memory_budget_filters_intermediates(self) -> None:
+        from ccgen.optimization.intermediates import (
+            detect_intermediates,
+            total_estimated_bytes,
+        )
+        eqs = generate_cc_equations("ccsd")
+        unrestricted = detect_intermediates(eqs, threshold=5)
+        self.assertTrue(unrestricted)
+        selected = detect_intermediates(
+            eqs,
+            threshold=5,
+            memory_budget_bytes=1,
+        )
+        self.assertEqual(selected, [])
+        medium_budget = unrestricted[0].estimated_bytes
+        selected = detect_intermediates(
+            eqs,
+            threshold=5,
+            memory_budget_bytes=medium_budget,
+        )
+        self.assertLessEqual(total_estimated_bytes(selected), medium_budget)
+        self.assertLessEqual(len(selected), len(unrestricted))
+        self.assertTrue(all(spec.usage_targets for spec in unrestricted))
+
+    def test_budget_selector_prefers_better_value_per_byte(self) -> None:
+        from ccgen.optimization.intermediates import select_intermediates_for_budget
+
+        i = make_occ("i")
+        a = make_vir("a")
+        b = make_vir("b")
+
+        small = IntermediateSpec(
+            name="W_small",
+            indices=(i, a),
+            definition_terms=(
+                AlgebraTerm(
+                    coeff=Fraction(1),
+                    factors=(Tensor("v", (a, b, i, i)),),
+                    free_indices=(i, a),
+                    summed_indices=(b,),
+                    connected=True,
+                ),
+            ),
+            usage_count=20,
+            index_space_sig="ov",
+        )
+        large = IntermediateSpec(
+            name="W_large",
+            indices=(a, b),
+            definition_terms=(
+                AlgebraTerm(
+                    coeff=Fraction(1),
+                    factors=(Tensor("v", (a, b, i, i)), Tensor("t1", (a, i))),
+                    free_indices=(a, b),
+                    summed_indices=(),
+                    connected=True,
+                ),
+            ),
+            usage_count=3,
+            index_space_sig="vv",
+        )
+
+        budget = large.estimated_bytes
+        selected = select_intermediates_for_budget([large, small], budget)
+        self.assertEqual([spec.name for spec in selected], ["W_small"])
+
+    def test_peak_budget_respects_per_target_live_sets(self) -> None:
+        from ccgen.optimization.intermediates import (
+            IntermediateSpec,
+            peak_estimated_bytes_by_target,
+            select_intermediates_for_peak_budget,
+        )
+
+        i = make_occ("i")
+        a = make_vir("a")
+        base_term = AlgebraTerm(
+            coeff=Fraction(1),
+            factors=(Tensor("t1", (a, i)),),
+            free_indices=(i, a),
+            summed_indices=(),
+            connected=True,
+        )
+        spec_a = IntermediateSpec(
+            name="W_a",
+            indices=(i, a),
+            definition_terms=(base_term,),
+            usage_count=8,
+            index_space_sig="ov",
+            usage_targets=("singles",),
+        )
+        spec_b = IntermediateSpec(
+            name="W_b",
+            indices=(i, a),
+            definition_terms=(base_term,),
+            usage_count=7,
+            index_space_sig="ov",
+            usage_targets=("doubles",),
+        )
+        spec_c = IntermediateSpec(
+            name="W_c",
+            indices=(i, a),
+            definition_terms=(base_term,),
+            usage_count=6,
+            index_space_sig="ov",
+            usage_targets=("singles",),
+        )
+
+        budget = spec_a.estimated_bytes
+        selected = select_intermediates_for_peak_budget(
+            [spec_a, spec_b, spec_c],
+            budget,
+        )
+        names = {spec.name for spec in selected}
+        self.assertIn("W_a", names)
+        self.assertIn("W_b", names)
+        self.assertNotIn("W_c", names)
+        peaks = peak_estimated_bytes_by_target(selected)
+        self.assertLessEqual(peaks["singles"], budget)
+        self.assertLessEqual(peaks["doubles"], budget)
 
 
 class BLASEmissionTests(unittest.TestCase):

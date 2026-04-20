@@ -96,6 +96,30 @@ class Expr:
     def drop_zeros(self) -> Expr:
         return Expr([t for t in self.terms if t.coeff != 0])
 
+    def combine_like_terms(self) -> Expr:
+        """Combine exact duplicate operator monomials by coefficient."""
+        buckets: dict[tuple[object, ...], OpTerm] = {}
+        order: list[tuple[object, ...]] = []
+
+        for term in self.terms:
+            sig = (term.tensors, term.sqops)
+            if sig in buckets:
+                prev = buckets[sig]
+                buckets[sig] = OpTerm(
+                    coeff=prev.coeff + term.coeff,
+                    tensors=prev.tensors,
+                    sqops=prev.sqops,
+                    origin=prev.origin,
+                )
+                continue
+
+            buckets[sig] = term
+            order.append(sig)
+
+        return Expr([
+            buckets[sig] for sig in order if buckets[sig].coeff != 0
+        ])
+
     def __len__(self) -> int:
         return len(self.terms)
 

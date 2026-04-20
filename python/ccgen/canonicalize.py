@@ -4,12 +4,79 @@ from __future__ import annotations
 
 from collections import defaultdict
 from fractions import Fraction
+from functools import lru_cache
 from itertools import permutations
 from typing import Sequence
 
-from .indices import Index, relabel_dummies
-from .tensors import Tensor
+from .indices import (
+    Index,
+    OCC_POOL,
+    VIR_POOL,
+    GEN_POOL,
+    extend_pool,
+    relabel_dummies,
+)
+from .tensors import Tensor, reindex_tensors
 from .project import AlgebraTerm
+
+try:
+    from . import _wickaccel
+except ImportError:  # pragma: no cover - exercised without the extension
+    _wickaccel = None
+
+
+def _space_rank(space: str) -> int:
+    if space == "occ":
+        return 0
+    if space == "vir":
+        return 1
+    return 2
+
+
+def _space_code(space: str) -> int:
+    return _space_rank(space)
+
+
+def _pool_for_space(space: str) -> list[str]:
+    if space == "occ":
+        return OCC_POOL
+    if space == "vir":
+        return VIR_POOL
+    return GEN_POOL
+
+
+_POOL_SLOT_CACHE: dict[str, tuple[int, dict[str, int]]] = {
+    "occ": (0, {}),
+    "vir": (0, {}),
+    "gen": (0, {}),
+}
+
+
+def _pool_slot_lookup(space: str) -> dict[str, int]:
+    pool = _pool_for_space(space)
+    cached_len, cached_lookup = _POOL_SLOT_CACHE[space]
+    if cached_len == len(pool):
+        return cached_lookup
+    lookup = {name: pos for pos, name in enumerate(pool)}
+    _POOL_SLOT_CACHE[space] = (len(pool), lookup)
+    return lookup
+
+
+@lru_cache(maxsize=None)
+def _reserved_slot_sets(
+    free_indices: tuple[Index, ...],
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    reserved: dict[str, set[int]] = {"occ": set(), "vir": set(), "gen": set()}
+    for idx in free_indices:
+        lookup = _pool_slot_lookup(idx.space)
+        slot = lookup.get(idx.name)
+        if slot is not None:
+            reserved[idx.space].add(slot)
+    return (
+        tuple(sorted(reserved["occ"])),
+        tuple(sorted(reserved["vir"])),
+        tuple(sorted(reserved["gen"])),
+    )
 
 
 def _canonical_ordering_for_group(
@@ -49,6 +116,24 @@ def canonicalize_tensor(tensor: Tensor) -> tuple[Tensor, int]:
     if not tensor.antisym_groups:
         return tensor, 1
 
+    if _wickaccel is not None:
+        slot_order = {
+            slot: pos for pos, slot in enumerate(sorted(
+                {(idx.space, idx.name) for idx in tensor.indices},
+                key=lambda item: (_space_rank(item[0]), item[1]),
+            ))
+        }
+        codes = tuple(slot_order[(idx.space, idx.name)] for idx in tensor.indices)
+        is_zero, sign, order = _wickaccel.canonicalize_tensor_layout(
+            codes,
+            tensor.antisym_groups,
+        )
+        if is_zero:
+            return tensor, 0
+        if tuple(order) == tuple(range(len(tensor.indices))):
+            return tensor, sign
+        return tensor.with_indices([tensor.indices[pos] for pos in order]), sign
+
     for group in tensor.antisym_groups:
         slots = [
             (tensor.indices[p].space, tensor.indices[p].name)
@@ -68,7 +153,7 @@ def canonicalize_tensor(tensor: Tensor) -> tuple[Tensor, int]:
 
 
 def _tensor_sort_key(t: Tensor) -> tuple[object, ...]:
-    return (t.name, tuple((i.space, i.name) for i in t.indices))
+    return t.sort_key
 
 
 def _all_indices_ordered(term: AlgebraTerm) -> list[Index]:
@@ -87,6 +172,46 @@ def relabel_term_dummies(term: AlgebraTerm) -> AlgebraTerm:
     free_set = frozenset(term.free_indices)
     all_idx = _all_indices_ordered(term)
 
+    if _wickaccel is not None:
+        free_mask = tuple(idx in free_set for idx in all_idx)
+        space_codes = tuple(_space_code(idx.space) for idx in all_idx)
+        occ_reserved, vir_reserved, gen_reserved = _reserved_slot_sets(
+            term.free_indices,
+        )
+
+        ordinals = _wickaccel.assign_dummy_ordinals(
+            space_codes,
+            free_mask,
+            occ_reserved,
+            vir_reserved,
+            gen_reserved,
+        )
+
+        full_mapping: dict[Index, Index] = {}
+        for idx, ordinal, is_free in zip(all_idx, ordinals, free_mask):
+            if is_free:
+                continue
+            pool = _pool_for_space(idx.space)
+            extend_pool(pool, ordinal + 1)
+            full_mapping[idx] = Index(pool[ordinal], idx.space, is_dummy=True)
+
+        new_factors = reindex_tensors(term.factors, full_mapping)
+        new_summed = tuple(
+            sorted(
+                set(full_mapping.get(s, s) for s in term.summed_indices),
+                key=lambda x: (x.space, x.name),
+            )
+        )
+
+        return AlgebraTerm(
+            coeff=term.coeff,
+            factors=new_factors,
+            free_indices=term.free_indices,
+            summed_indices=new_summed,
+            connected=term.connected,
+            provenance=term.provenance,
+        )
+
     dummies_in_order = [
         idx.as_dummy() for idx in all_idx if idx not in free_set
     ]
@@ -102,7 +227,7 @@ def relabel_term_dummies(term: AlgebraTerm) -> AlgebraTerm:
         elif idx != dummy_ver:
             full_mapping[idx] = dummy_ver
 
-    new_factors = tuple(f.reindexed(full_mapping) for f in term.factors)
+    new_factors = reindex_tensors(term.factors, full_mapping)
     new_summed = tuple(
         sorted(
             set(full_mapping.get(s, s) for s in term.summed_indices),
@@ -170,12 +295,7 @@ def canonicalize_term(term: AlgebraTerm) -> AlgebraTerm:
 
 
 def _term_signature(term: AlgebraTerm) -> tuple[object, ...]:
-    fac_key = tuple(
-        (f.name, tuple((i.space, i.name) for i in f.indices))
-        for f in term.factors
-    )
-    free_key = tuple((i.space, i.name) for i in term.free_indices)
-    return (fac_key, free_key)
+    return (term.factors, term.free_indices)
 
 
 def merge_like_terms(terms: Sequence[AlgebraTerm]) -> list[AlgebraTerm]:
@@ -184,24 +304,78 @@ def merge_like_terms(terms: Sequence[AlgebraTerm]) -> list[AlgebraTerm]:
     order: list[tuple[object, ...]] = []
 
     for t in terms:
-        sig = _term_signature(t)
-        if sig in buckets:
-            old = buckets[sig]
-            buckets[sig] = AlgebraTerm(
-                coeff=old.coeff + t.coeff,
-                factors=old.factors,
-                free_indices=old.free_indices,
-                summed_indices=old.summed_indices,
-                connected=old.connected and t.connected,
-                provenance=old.provenance,
-            )
-        else:
-            buckets[sig] = t
-            order.append(sig)
+        merge_term_into_buckets(t, buckets, order)
 
     return [
         buckets[sig] for sig in order if buckets[sig].coeff != 0
     ]
+
+
+def _exact_term_signature(term: AlgebraTerm) -> tuple[object, ...]:
+    return (
+        term.factors,
+        term.free_indices,
+        term.summed_indices,
+        term.connected,
+    )
+
+
+def merge_exact_term_into_buckets(
+    term: AlgebraTerm,
+    buckets: dict[tuple[object, ...], AlgebraTerm],
+    order: list[tuple[object, ...]],
+) -> None:
+    """Accumulate exact raw duplicates before canonicalization."""
+    sig = _exact_term_signature(term)
+    if sig in buckets:
+        old = buckets[sig]
+        buckets[sig] = AlgebraTerm(
+            coeff=old.coeff + term.coeff,
+            factors=old.factors,
+            free_indices=old.free_indices,
+            summed_indices=old.summed_indices,
+            connected=old.connected and term.connected,
+            provenance=old.provenance,
+        )
+        return
+
+    buckets[sig] = term
+    order.append(sig)
+
+
+def merge_term_into_buckets(
+    term: AlgebraTerm,
+    buckets: dict[tuple[object, ...], AlgebraTerm],
+    order: list[tuple[object, ...]],
+) -> None:
+    """Accumulate one canonical term into a merge bucket map."""
+    sig = _term_signature(term)
+    if sig in buckets:
+        old = buckets[sig]
+        buckets[sig] = AlgebraTerm(
+            coeff=old.coeff + term.coeff,
+            factors=old.factors,
+            free_indices=old.free_indices,
+            summed_indices=old.summed_indices,
+            connected=old.connected and term.connected,
+            provenance=old.provenance,
+        )
+        return
+
+    buckets[sig] = term
+    order.append(sig)
+
+
+def term_is_zero_before_canonicalization(term: AlgebraTerm) -> bool:
+    """Cheap zero test based on repeated antisymmetric tensor slots."""
+    for factor in term.factors:
+        if not factor.antisym_groups:
+            continue
+        for group in factor.antisym_groups:
+            slots = [factor.indices[pos] for pos in group]
+            if len(slots) != len(set(slots)):
+                return True
+    return False
 
 
 # ── Orbital energy denominator collection ───────────────────────────

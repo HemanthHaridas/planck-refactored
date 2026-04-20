@@ -65,6 +65,7 @@ namespace HartreeFock
         UCCSD,  // Unrestricted CCSD
         RCCSDT, // Restricted CCSDT
         UCCSDT, // Unrestricted CCSDT
+        RCCSDTQ, // Restricted CCSDTQ
         CASSCF, // Complete active space SCF
         RASSCF  // Restricted active space SCF
     };

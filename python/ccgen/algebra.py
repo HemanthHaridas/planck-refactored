@@ -74,10 +74,10 @@ def bch_expand(H: Expr, T: Expr, max_order: int = 4) -> Expr:
 
     H-bar = H + [H,T] + 1/2![[H,T],T] + ... + 1/n![...[H,T]...,T]
     """
-    result = H.copy()
-    current = H.copy()
+    result = H.copy().combine_like_terms()
+    current = H.copy().combine_like_terms()
     for n in range(1, max_order + 1):
-        current = commutator(current, T)
+        current = commutator(current, T).combine_like_terms()
         scale = Fraction(1, factorial(n))
-        result += current * scale
-    return result.drop_zeros()
+        result = (result + current * scale).combine_like_terms()
+    return result.drop_zeros().combine_like_terms()

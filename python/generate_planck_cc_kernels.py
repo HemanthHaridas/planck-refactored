@@ -36,6 +36,18 @@ def main() -> None:
         default=5,
         help="Min usage count for extracted intermediates.",
     )
+    parser.add_argument(
+        "--intermediate-memory-budget-mb",
+        type=int,
+        default=None,
+        help="Optional cumulative memory budget in MB for emitted intermediates.",
+    )
+    parser.add_argument(
+        "--intermediate-peak-memory-budget-mb",
+        type=int,
+        default=None,
+        help="Optional per-target live memory budget in MB for emitted intermediates.",
+    )
     args = parser.parse_args()
 
     output_dir = args.output_dir.resolve()
@@ -46,6 +58,16 @@ def main() -> None:
             method.lower(),
             include_intermediates=args.include_intermediates,
             intermediate_threshold=args.intermediate_threshold,
+            intermediate_memory_budget_bytes=(
+                None
+                if args.intermediate_memory_budget_mb is None
+                else args.intermediate_memory_budget_mb * 1024 * 1024
+            ),
+            intermediate_peak_memory_budget_bytes=(
+                None
+                if args.intermediate_peak_memory_budget_mb is None
+                else args.intermediate_peak_memory_budget_mb * 1024 * 1024
+            ),
         )
         out_path = output_dir / f"{method.lower()}_planck_generated.cpp"
         out_path.write_text(code + "\n", encoding="utf-8")

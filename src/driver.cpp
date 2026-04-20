@@ -713,6 +713,12 @@ int main(int argc, const char *argv[])
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Preparing unrestricted CCSDT infrastructure");
             corr_res = HartreeFock::Correlation::CC::run_uccsdt(calculator, shellpairs);
         }
+        else if (calculator._correlation == HartreeFock::PostHF::RCCSDTQ)
+        {
+            corr_tag = "RCCSDTQ :";
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Preparing generated restricted CCSDTQ infrastructure");
+            corr_res = HartreeFock::Correlation::CC::run_rccsdtq(calculator, shellpairs);
+        }
         else if (calculator._correlation == HartreeFock::PostHF::CASSCF)
         {
             corr_tag = "CASSCF :";
@@ -762,13 +768,16 @@ int main(int argc, const char *argv[])
                                                      "RMP2 :", "Natural orbitals unavailable: " + nat_res.error());
                 }
                 if ((calculator._correlation == HartreeFock::PostHF::RCCSDT ||
-                     calculator._correlation == HartreeFock::PostHF::UCCSDT) &&
+                     calculator._correlation == HartreeFock::PostHF::UCCSDT ||
+                     calculator._correlation == HartreeFock::PostHF::RCCSDTQ) &&
                     calculator._have_ccsd_reference_energy)
                 {
                     const std::string ccsd_label =
-                        (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "CCSD" : "UCCSD";
+                        (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSD" : "CCSD";
                     const std::string ccsdt_label =
-                        (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "CCSDT" : "UCCSDT";
+                        (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "CCSDT"
+                        : (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSDT"
+                        : "CCSDTQ";
                     HartreeFock::Logger::ccsdt_energy_summary(
                         calculator._total_energy,
                         calculator._ccsd_reference_correlation_energy,
@@ -785,6 +794,7 @@ int main(int argc, const char *argv[])
                         : (calculator._correlation == HartreeFock::PostHF::UCCSD)  ? "UCCSD"
                         : (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "RCCSDT"
                         : (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSDT"
+                        : (calculator._correlation == HartreeFock::PostHF::RCCSDTQ) ? "RCCSDTQ"
                                                                                    : "Correlated";
                     HartreeFock::Logger::correlation_energy(
                         calculator._total_energy, calculator._correlation_energy, method_label);
@@ -835,7 +845,8 @@ int main(int argc, const char *argv[])
         else if (calculator._correlation == HartreeFock::PostHF::RCCSD ||
                  calculator._correlation == HartreeFock::PostHF::UCCSD ||
                  calculator._correlation == HartreeFock::PostHF::RCCSDT ||
-                 calculator._correlation == HartreeFock::PostHF::UCCSDT)
+                 calculator._correlation == HartreeFock::PostHF::UCCSDT ||
+                 calculator._correlation == HartreeFock::PostHF::RCCSDTQ)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
                                          "Coupled-cluster gradients are not implemented");

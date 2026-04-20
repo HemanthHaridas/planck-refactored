@@ -9,7 +9,8 @@ A symbolic coupled-cluster equation generator that derives spin-orbital CC resid
 - **Algebraic optimizations**: orbital energy denominator collection, permutation-based term grouping, implicit antisymmetry exploitation
 - **Intermediate tensor detection**: automatic extraction of reusable sub-contractions (W_oovv, F_ov, etc.) with memory layout and blocking hints
 - **Extended contraction IR**: backend-neutral IR with BLAS/GEMM pattern detection, FLOP estimates, and tiling hints
-- **C++ code generation tiers**: naive loops, tiled loops with OpenMP, and BLAS/GEMM-lowered output
+- **Restricted closed-shell lowering**: spin-orbital -> spatial-orbital IR with explicit occ/vir block signatures and source-slot permutations for restricted backends
+- **C++ code generation tiers**: naive loops, tiled loops with OpenMP, BLAS/GEMM-lowered output, and Planck-native tensor kernels
 - **Pipeline instrumentation**: term count and timing statistics at every stage via `PipelineStats`
 - **Benchmarking**: built-in `bench` module for profiling generation with and without optimizations
 
@@ -57,6 +58,40 @@ Requires Python 3.10+. No external dependencies for the core package. Optional e
 pip install -e ".[optimize]"   # adds opt_einsum for contraction path optimization
 pip install -e ".[test]"       # adds numpy + opt_einsum for regression tests
 ```
+
+When a C++ compiler is available, installation also attempts to build the
+optional `ccgen._wickaccel` extension. This accelerates the packed-int Wick
+analysis path used by the hottest symbolic recursion kernels. If the extension
+cannot be built, `ccgen` falls back automatically to the pure-Python
+implementation.
+
+### Google Colab
+
+You can run `ccgen` on Google Colab either from a wheel built locally or
+directly from the repository subdirectory.
+
+Build a wheel locally:
+
+```bash
+cd python
+python -m pip wheel . -w dist
+```
+
+Then upload `dist/ccgen-0.1.0-py3-none-any.whl` to Colab and install it:
+
+```python
+!pip install /content/ccgen-0.1.0-py3-none-any.whl
+!pip install numpy opt_einsum
+```
+
+If the repository is hosted on GitHub, Colab can also install directly from
+the `python/` subdirectory:
+
+```python
+!pip install "git+https://github.com/hemanthharidas/planck-refactored.git#subdirectory=python"
+```
+
+For an expanded Colab-specific quickstart, see [COLAB.md](COLAB.md).
 
 ## Usage
 
@@ -225,6 +260,24 @@ for term in ir["energy"]:
               f"{len(c.slots)} slots")
 ```
 
+### Restricted closed-shell lowering
+
+For restricted spatial-orbital backends (like Planck), lower the spin-orbital equations to a layout-aware IR that annotates every tensor factor with explicit occ/vir block signatures and source-slot permutations:
+
+```python
+from ccgen import generate_cc_equations_lowered
+
+lowered = generate_cc_equations_lowered("ccsd")  # orbital_model defaults to "restricted_closed_shell"
+for term in lowered["doubles"]:
+    for factor in term.factors:
+        print(factor.tensor.name, factor.block_signature, factor.source_permutation)
+```
+
+Each lowered factor carries:
+- `block_signature` — the canonical occ/vir/gen space tuple for the factor
+- `source_permutation` — the permutation from original algebra slots to spatial layout
+- ERI symmetry phase tracking (sign from any `v(pqrs)` permutation applied during canonicalization)
+
 ### Extended contraction IR with optimization hints
 
 ```python
@@ -334,7 +387,10 @@ ccgen/
     pretty.py          Human-readable equation formatter (with intermediate support)
     einsum.py          NumPy einsum code emitter (with opt_einsum integration)
     cpp_loops.py       C++ emitter: naive, tiled+OpenMP, and BLAS/GEMM-lowered
-    planck_tensor_cpp.py  Planck-specific C++ emitter targeting Tensor2D/4D/6D infrastructure
+    planck_tensor_cpp.py       Planck-specific C++ emitter targeting Tensor2D/4D/6D infrastructure
+    planck_rccsd_warm_start.py Planck RCCSD warm-start kernel emitter (tau/fae/fmi/fme/wmnij/wabef/wmbej)
+  lowering/
+    restricted_closed_shell.py Spin-orbital -> spatial-orbital IR with block signatures and slot permutations
   optimization/
     __init__.py        Optimization pass registry
     intermediates.py   Intermediate tensor detection, rewriting, and layout hints
@@ -419,7 +475,7 @@ Two integration workflows are supported:
 
 1. **Kernel generation** (`generate_planck_cc_kernels.py`): produces standalone `.cpp` files with complete kernel functions for each CC method, suitable for the `TensorOptimized` solver path.
 
-2. **Warm-start inclusion** (`generate_spinorbital_ccsd_warm_start.py`): produces a `.inc` file with spin-orbital CCSD energy and residual functions, designed for direct inclusion in `tensor_backend.cpp`.
+2. **Warm-start inclusion** (`generate_spinorbital_ccsd_warm_start.py`): produces a `.inc` file with spin-orbital CCSD energy and residual functions in the `tau/fae/fmi/fme/wmnij/wabef/wmbej` pipeline shape that Planck's tensor RCCSDT warm-start stage expects. Designed for direct inclusion in `tensor_backend.cpp`.
 
 ## License
 

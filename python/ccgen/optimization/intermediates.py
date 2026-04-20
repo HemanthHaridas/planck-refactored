@@ -18,6 +18,8 @@ from ..project import AlgebraTerm
 from ..tensors import Tensor
 from ..canonicalize import relabel_term_dummies
 
+_SIZE_EST = {"occ": 30, "vir": 100, "gen": 50}
+
 
 @dataclass(frozen=True)
 class IntermediateSpec:
@@ -32,6 +34,7 @@ class IntermediateSpec:
     definition_terms: tuple[AlgebraTerm, ...]
     usage_count: int
     index_space_sig: str
+    usage_targets: tuple[str, ...] = ()
     memory_layout: str = "row_major"  # "row_major" | "col_major" | "blocked"
     blocking_hint: dict[str, int] | None = None  # {index_name: tile_size}
     allocation_strategy: str = "auto"  # "stack" | "malloc" | "external" | "auto"
@@ -58,16 +61,51 @@ class IntermediateSpec:
 
         Uses symbolic sizes: occ ~ 30, vir ~ 100.
         """
-        SIZE_EST = {"occ": 30, "vir": 100, "gen": 50}
         total = 1
         for idx in self.indices:
-            total *= SIZE_EST.get(idx.space, 50)
+            total *= _SIZE_EST.get(idx.space, 50)
         return total
 
     @property
     def estimated_bytes(self) -> int:
         """Estimated memory in bytes (double precision)."""
         return self.estimated_elements * 8
+
+    @property
+    def definition_complexity(self) -> int:
+        """Cheap proxy for downstream contraction savings."""
+        return max(1, sum(len(term.factors) for term in self.definition_terms))
+
+    @property
+    def estimated_build_flops(self) -> int:
+        """Cheap symbolic estimate of the cost to build the intermediate once."""
+        total = 0
+        for term in self.definition_terms:
+            seen: set[Index] = set()
+            term_cost = 1
+            for factor in term.factors:
+                for idx in factor.indices:
+                    if idx in seen:
+                        continue
+                    seen.add(idx)
+                    term_cost *= _SIZE_EST.get(idx.space, 50)
+            total += term_cost
+        return max(1, total)
+
+    @property
+    def estimated_saved_flops(self) -> int:
+        """Estimate total recomputation avoided by materializing the tensor."""
+        return max(0, self.usage_count - 1) * self.estimated_build_flops
+
+    @property
+    def estimated_reuse_value(self) -> int:
+        """Backwards-compatible value proxy for budgeted selection."""
+        return self.estimated_saved_flops
+
+    @property
+    def selection_density(self) -> float:
+        """Estimated flop savings per byte of storage."""
+        return self.estimated_saved_flops / max(1, self.estimated_bytes)
 
     def with_layout_hints(
         self,
@@ -82,6 +120,7 @@ class IntermediateSpec:
             definition_terms=self.definition_terms,
             usage_count=self.usage_count,
             index_space_sig=self.index_space_sig,
+            usage_targets=self.usage_targets,
             memory_layout=memory_layout or self.memory_layout,
             blocking_hint=blocking_hint or self.blocking_hint,
             allocation_strategy=allocation_strategy or self.allocation_strategy,
@@ -180,6 +219,8 @@ def _index_space_name(sig: str) -> str:
 def detect_intermediates(
     equations: dict[str, list[AlgebraTerm]],
     threshold: int = 2,
+    memory_budget_bytes: int | None = None,
+    peak_memory_budget_bytes: int | None = None,
 ) -> list[IntermediateSpec]:
     """Detect reusable sub-contractions across all equation manifolds.
 
@@ -193,6 +234,13 @@ def detect_intermediates(
     threshold : minimum number of terms a sub-contraction must appear
                 in to be reported (default 2)
 
+    memory_budget_bytes : optional int
+        If provided, greedily selects only the subset of detected
+        intermediates that fits within the cumulative memory budget.
+    peak_memory_budget_bytes : optional int
+        If provided, selects a subset whose live intermediate set stays
+        within the memory cap for every target manifold independently.
+
     Returns
     -------
     list of IntermediateSpec, sorted by usage count (descending)
@@ -200,6 +248,7 @@ def detect_intermediates(
     # Phase 1: count how often each sub-contraction key appears
     key_count: Counter[_SubContractionKey] = Counter()
     key_examples: dict[_SubContractionKey, AlgebraTerm] = {}
+    key_targets: dict[_SubContractionKey, set[str]] = {}
 
     for manifold, terms in equations.items():
         for term_idx, term in enumerate(terms):
@@ -210,6 +259,7 @@ def detect_intermediates(
                     continue
                 seen_keys.add(key)
                 key_count[key] += 1
+                key_targets.setdefault(key, set()).add(manifold)
                 if key not in key_examples:
                     sub_factors = tuple(term.factors[i] for i in factor_indices)
                     sub_indices: Counter[Index] = Counter()
@@ -248,9 +298,116 @@ def detect_intermediates(
             definition_terms=(definition,),
             usage_count=count,
             index_space_sig=key.space_sig,
+            usage_targets=tuple(sorted(key_targets.get(key, ()))),
         ))
 
+    if peak_memory_budget_bytes is not None:
+        return select_intermediates_for_peak_budget(results, peak_memory_budget_bytes)
+
+    if memory_budget_bytes is not None:
+        return select_intermediates_for_budget(results, memory_budget_bytes)
+
     return results
+
+
+def total_estimated_bytes(
+    intermediates: Sequence[IntermediateSpec],
+) -> int:
+    """Return the cumulative estimated footprint of materialized intermediates."""
+    return sum(spec.estimated_bytes for spec in intermediates)
+
+
+def peak_estimated_bytes_by_target(
+    intermediates: Sequence[IntermediateSpec],
+) -> dict[str, int]:
+    """Return the cumulative intermediate footprint per usage target."""
+    totals: dict[str, int] = {}
+    for spec in intermediates:
+        for target in spec.usage_targets:
+            totals[target] = totals.get(target, 0) + spec.estimated_bytes
+    return totals
+
+
+def select_intermediates_for_budget(
+    intermediates: Sequence[IntermediateSpec],
+    memory_budget_bytes: int,
+) -> list[IntermediateSpec]:
+    """Select a subset of intermediates under a cumulative memory budget.
+
+    The current selector is intentionally simple: it greedily prefers
+    intermediates with the strongest reuse proxy, then breaks ties in favor
+    of smaller tensors so tight budgets keep more reusable building blocks.
+    """
+    if memory_budget_bytes <= 0:
+        return []
+
+    ordered = sorted(
+        intermediates,
+        key=lambda spec: (
+            -spec.selection_density,
+            -spec.estimated_saved_flops,
+            -spec.usage_count,
+            spec.estimated_bytes,
+            spec.rank,
+            spec.name,
+        ),
+    )
+
+    selected: list[IntermediateSpec] = []
+    remaining = memory_budget_bytes
+    for spec in ordered:
+        if spec.estimated_bytes > remaining:
+            continue
+        selected.append(spec)
+        remaining -= spec.estimated_bytes
+
+    return sorted(
+        selected,
+        key=lambda spec: (-spec.usage_count, spec.estimated_bytes, spec.name),
+    )
+
+
+def select_intermediates_for_peak_budget(
+    intermediates: Sequence[IntermediateSpec],
+    peak_memory_budget_bytes: int,
+) -> list[IntermediateSpec]:
+    """Select intermediates while enforcing a per-target live-memory budget."""
+    if peak_memory_budget_bytes <= 0:
+        return []
+
+    ordered = sorted(
+        intermediates,
+        key=lambda spec: (
+            -spec.selection_density,
+            -spec.estimated_saved_flops,
+            -spec.usage_count,
+            spec.estimated_bytes,
+            len(spec.usage_targets),
+            spec.rank,
+            spec.name,
+        ),
+    )
+
+    selected: list[IntermediateSpec] = []
+    live_bytes_by_target: dict[str, int] = {}
+
+    for spec in ordered:
+        if any(
+            live_bytes_by_target.get(target, 0) + spec.estimated_bytes
+            > peak_memory_budget_bytes
+            for target in spec.usage_targets
+        ):
+            continue
+        selected.append(spec)
+        for target in spec.usage_targets:
+            live_bytes_by_target[target] = (
+                live_bytes_by_target.get(target, 0) + spec.estimated_bytes
+            )
+
+    return sorted(
+        selected,
+        key=lambda spec: (-spec.usage_count, spec.estimated_bytes, spec.name),
+    )
 
 
 def _ordered_external(

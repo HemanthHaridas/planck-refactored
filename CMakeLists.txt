@@ -14,6 +14,34 @@ message(STATUS "CMAKE_INSTALL_PREFIX : ${CMAKE_INSTALL_PREFIX}")
 # GPU / CUDA acceleration (disabled by default; enable with -DUSE_CUDA=ON)
 option(USE_CUDA "Enable CUDA GPU acceleration (requires CUDA toolkit)" OFF)
 
+# Coupled-cluster kernel generation via ccgen.
+# PLANCK_CC_MAXORDER sets the highest excitation rank to emit Planck-compatible
+# kernels for at build time. All CC methods from CCSD up to the requested
+# truncation are generated (e.g. MAXORDER=4 emits ccsd, ccsdt, ccsdtq).
+# Valid range: 2..6. Override from the command line:
+#   cmake .. -DPLANCK_CC_MAXORDER=4
+set(PLANCK_CC_MAXORDER "3" CACHE STRING
+    "Max CC excitation rank to generate Planck kernels for (2=CCSD, 3=CCSDT, 4=CCSDTQ, 5=CC5, 6=CC6)")
+option(PLANCK_CC_INCLUDE_INTERMEDIATES
+    "Emit ccgen intermediate builders in generated CC kernels" ON)
+set(PLANCK_CC_INTERMEDIATE_THRESHOLD "5" CACHE STRING
+    "Min usage count for extracted ccgen intermediates")
+
+if(NOT PLANCK_CC_MAXORDER MATCHES "^[2-6]$")
+    message(FATAL_ERROR
+        "PLANCK_CC_MAXORDER must be an integer in [2, 6]; got '${PLANCK_CC_MAXORDER}'")
+endif()
+
+# Build the ccgen method list up to PLANCK_CC_MAXORDER.
+# Rank -> method name mapping follows ccgen's standard CC level strings.
+set(_planck_cc_method_by_rank "ccsd" "ccsdt" "ccsdtq" "cc5" "cc6")
+set(PLANCK_CC_METHODS "")
+math(EXPR _planck_cc_method_count "${PLANCK_CC_MAXORDER} - 2")
+foreach(_rank_index RANGE 0 ${_planck_cc_method_count})
+    list(GET _planck_cc_method_by_rank ${_rank_index} _planck_cc_method)
+    list(APPEND PLANCK_CC_METHODS ${_planck_cc_method})
+endforeach()
+
 # OpenMP support (enabled by default; pass -DUSE_OPENMP=OFF to disable)
 option(USE_OPENMP "Enable OpenMP parallelism" ON)
 if(USE_OPENMP)
@@ -213,6 +241,7 @@ if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(hartree-fock OpenMP::OpenMP_CXX)
     target_compile_definitions(hartree-fock PRIVATE USE_OPENMP)
 endif()
+target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
 
 add_executable(planck-dft
     ${BASE_SRC}
@@ -252,15 +281,25 @@ if(Python3_Interpreter_FOUND)
         DEPENDS ${CCGEN_SPINORBITAL_WARM_START_INC}
     )
 
+    set(_ccgen_planck_kernel_args
+        --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+        --methods ${PLANCK_CC_METHODS}
+        --intermediate-threshold ${PLANCK_CC_INTERMEDIATE_THRESHOLD}
+    )
+    if(PLANCK_CC_INCLUDE_INTERMEDIATES)
+        list(APPEND _ccgen_planck_kernel_args --include-intermediates)
+    endif()
+
     add_custom_target(ccgen-planck-kernels
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
-                --output-dir ${CMAKE_BINARY_DIR}/generated/cc
-                --include-intermediates
+                ${_ccgen_planck_kernel_args}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
-        COMMENT "Generating optimized Planck-compatible CC kernels with ccgen"
+        COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${PLANCK_CC_METHODS})"
     )
+
+    message(STATUS "ccgen     : emitting Planck CC kernels up to rank ${PLANCK_CC_MAXORDER} [${PLANCK_CC_METHODS}]")
 endif()
 
 if(Python3_Interpreter_FOUND)
@@ -286,7 +325,7 @@ if(Python3_Interpreter_FOUND)
     add_dependencies(planck-dft ccgen-spinorbital-warm-start)
     add_dependencies(planck-dft ccgen-planck-kernels)
 endif()
-target_compile_definitions(planck-dft PRIVATE USING_Libxc)
+target_compile_definitions(planck-dft PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
 
 if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(planck-dft OpenMP::OpenMP_CXX)
@@ -366,6 +405,15 @@ if(BUILD_TESTING)
         ${SRC_DIR}/scf/population.cpp
     )
 
+    add_executable(planck-cc-arbitrary-solver
+        ${CMAKE_SOURCE_DIR}/tests/cc_arbitrary_solver.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+        ${SRC_DIR}/post_hf/cc/amplitudes.cpp
+        ${SRC_DIR}/post_hf/cc/diis.cpp
+        ${SRC_DIR}/post_hf/cc/generated_arbitrary_runtime.cpp
+        ${SRC_DIR}/post_hf/cc/solver_arbitrary.cpp
+    )
+
     target_include_directories(planck-casscf-internal PRIVATE
         ${SRC_DIR}
         ${MSYM_INSTALL_DIR}/include
@@ -383,6 +431,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-population-analysis PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-cc-arbitrary-solver PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -406,6 +459,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-population-analysis PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-arbitrary-solver PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -439,6 +498,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-population-analysis
         COMMAND planck-population-analysis
+    )
+
+    add_test(
+        NAME planck-cc-arbitrary-solver
+        COMMAND planck-cc-arbitrary-solver
     )
 endif()
 
