@@ -21,8 +21,9 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
 - **MO symmetry** — irreducible representation labels assigned to each converged orbital; non-Abelian groups automatically use the largest Abelian subgroup; linear molecules handled separately
-- **Post-HF** — RMP2 and UMP2 correlation energy corrections with natural orbital analysis; RCCSD for canonical closed-shell RHF references; teaching-oriented determinant-space UCCSD/UCCSDT prototypes for small UHF systems; RCCSDT with automatic backend dispatch (determinant-space prototype for tiny systems, tensor production solver for larger ones); CASSCF and RASSCF multireference active-space calculations
-- **Coupled cluster** — `RCCSD` is an iterative spin-orbital amplitude solver for canonical RHF references. `RCCSDT` automatically selects between a determinant-space teaching prototype (≤12 spin orbitals and ≤1200 determinants) and a tensor production backend (dressed-intermediate CCSD + staged T3 amplitude updates) for larger systems. `UCCSD` and `UCCSDT` currently use determinant-space prototypes aimed at small teaching examples and validation studies.
+- **Post-HF** — RMP2 and UMP2 correlation energy corrections with natural orbital analysis; RCCSD for canonical closed-shell RHF references; teaching-oriented determinant-space UCCSD/UCCSDT prototypes for small UHF systems; RCCSDT with automatic backend dispatch across three tiers (determinant-space prototype, tensor production solver, tensor-optimized ccgen-driven backend); CASSCF and RASSCF multireference active-space calculations
+- **Coupled cluster** — `RCCSD` is an iterative spin-orbital amplitude solver for canonical RHF references. `RCCSDT` automatically selects between (1) a determinant-space teaching prototype (≤12 spin orbitals and ≤1200 determinants), (2) a tensor production backend (dressed-intermediate CCSD + staged T3 amplitude updates), and (3) a tensor-optimized backend that consumes ccgen-generated warm-start kernels for restricted references. The backend can be forced via the `PLANCK_RCCSDT_BACKEND` environment variable (`determinant`, `tensor`, or `optimized`). `UCCSD` and `UCCSDT` currently use determinant-space prototypes aimed at small teaching examples and validation studies.
+- **ccgen — symbolic coupled-cluster equation generator** — a Python package (`python/ccgen/`) that derives spin-orbital CC residual equations at arbitrary truncation order (CCD through CC6) directly from the normal-ordered Hamiltonian via Baker-Campbell-Hausdorff expansion, Wick contraction, canonicalization, and connectivity filtering. Supports algebraic optimizations (orbital-energy denominator collection, permutation-based term grouping, implicit antisymmetry exploitation), intermediate tensor extraction with layout hints, and four tiers of C++ emission including a Planck-specific tensor emitter that targets `Tensor2D`/`Tensor4D`/`Tensor6D` and the production CC infrastructure in `src/post_hf/cc/`. Used to generate the warm-start kernels consumed by the tensor-optimized RCCSDT backend.
 - **RMP2 natural orbitals** — natural orbital occupation numbers and coefficients printed after a single-point RMP2 run
 - **CASSCF** — Complete Active Space SCF with full-CI, state-averaged (SA-CASSCF) roots, matrix-free second-order orbital optimization, and a dedicated active-integral-cache transform for the orbital-gradient/response hot path
 - **RASSCF** — Restricted Active Space SCF extending CASSCF with RAS1/RAS2/RAS3 subspace partitioning and configurable hole/electron occupation restrictions
@@ -39,6 +40,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 - `docs/PLANCK_TEACHING_GUIDE.md` — high-level implementation and usage guide
 - `docs/CCGEN_TEACHING_GUIDE.md` — theory-to-code walkthrough of the Python coupled-cluster equation generator
 - `docs/README.md` — lightweight static-site export instructions for the documentation set
+- `python/README.md` — full usage reference for the ccgen symbolic CC equation generator (API, CLI, emitter tiers, optimization passes, Planck integration workflows)
 
 ### Requirements
 
@@ -170,7 +172,7 @@ SCF procedure and convergence settings.
 |---|---|---|---|---|
 | `scf_type` | enum | `rhf`/`rks`, `rohf`, `uhf`/`uks` | `rhf` | Wavefunction type. `rks`/`uks` are aliases for `rhf`/`uhf` when using `planck-dft`. `rohf`: restricted open-shell HF; post-HF and analytic gradients are not yet supported for ROHF. |
 | `engine` | enum | `os` / `obara-saika`, `rys`, `auto` | `os` | Two-electron integral engine. `os`: Obara-Saika algorithm. `rys`: Rys quadrature. `auto`: selects the engine per shell quartet based on angular momentum. |
-| `correlation` | enum | `rmp2`, `ump2`, `ccsd`, `uccsd`, `ccsdt`, `uccsdt`, `casscf`, `rasscf` | none | Post-HF method. `rmp2`/`ump2`: Møller-Plesset second-order correction. `ccsd`: restricted coupled cluster with singles and doubles for canonical RHF references. `uccsd`: unrestricted coupled cluster with singles and doubles for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `ccsdt`: restricted coupled cluster with singles, doubles, and triples; automatically dispatches to a determinant-space teaching prototype for tiny RHF systems (≤12 spin orbitals and ≤1200 determinants) or to a tensor production backend (dressed-intermediate CCSD followed by staged T3 amplitude updates) for larger systems. `uccsdt`: unrestricted coupled cluster with singles, doubles, and triples for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `casscf`: Complete Active Space SCF (requires `nactele`, `nactorb`). `rasscf`: Restricted Active Space SCF (requires `nactele`, `nactorb`, `nras1`, `nras2`, `nras3`). |
+| `correlation` | enum | `rmp2`, `ump2`, `ccsd`, `uccsd`, `ccsdt`, `uccsdt`, `casscf`, `rasscf` | none | Post-HF method. `rmp2`/`ump2`: Møller-Plesset second-order correction. `ccsd`: restricted coupled cluster with singles and doubles for canonical RHF references. `uccsd`: unrestricted coupled cluster with singles and doubles for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `ccsdt`: restricted coupled cluster with singles, doubles, and triples; automatically dispatches to a determinant-space teaching prototype for tiny RHF systems (≤12 spin orbitals and ≤1200 determinants) or to a tensor production backend (dressed-intermediate CCSD followed by staged T3 amplitude updates) for larger systems. A third tensor-optimized backend driven by ccgen-generated warm-start kernels can be forced via the `PLANCK_RCCSDT_BACKEND=optimized` environment variable. `uccsdt`: unrestricted coupled cluster with singles, doubles, and triples for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `casscf`: Complete Active Space SCF (requires `nactele`, `nactorb`). `rasscf`: Restricted Active Space SCF (requires `nactele`, `nactorb`, `nras1`, `nras2`, `nras3`). |
 | `nactele` | int | ≥ 1 | — | Number of active electrons for CASSCF/RASSCF |
 | `nactorb` | int | ≥ 1 | — | Number of active orbitals for CASSCF/RASSCF |
 | `nroots` | int | ≥ 1 | `1` | Number of CI roots for state-averaged CASSCF (SA-CASSCF). `1` = single-state CASSCF. |
@@ -820,6 +822,111 @@ The two active π-type orbitals are exactly degenerate at the 90° twisted geome
 <p align="justify">
 The two orbitals are degenerate at the 90° twisted geometry and together span the active space of the CAS(2,2) wavefunction. Visualized from a CASSCF/STO-3G checkpoint using `chkdump --casscf-active` and rendered in VMD.
 </p>
+
+### Coupled cluster — RCCSDT on a small closed-shell system
+
+<p align="justify">
+Enable restricted CCSDT by setting <code>correlation ccsdt</code> on a converged RHF reference. The solver automatically picks the determinant-space prototype for tiny systems (≤12 spin orbitals and ≤1200 determinants) and the tensor production backend for larger ones. After convergence the CCSD reference correlation energy, the CCSDT correlation increment, and the total CCSDT energy are printed together.
+</p>
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation ccsdt
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords
+```
+
+#### Forcing a specific RCCSDT backend
+
+<p align="justify">
+The automatic dispatch can be overridden at runtime by exporting <code>PLANCK_RCCSDT_BACKEND</code> before invoking <code>hartree-fock</code>:
+</p>
+
+| Value | Backend |
+|---|---|
+| `determinant` / `determinant_prototype` | Teaching-oriented determinant-space solver (small systems only) |
+| `tensor` / `tensor_production` | Dense tensor production backend (dressed-intermediate CCSD + staged T3 updates) |
+| `optimized` / `tensor_optimized` | Phase-4 tensor-optimized backend that consumes ccgen-generated warm-start kernels (experimental for restricted CCSDT triples) |
+
+```bash
+PLANCK_RCCSDT_BACKEND=optimized ./build/hartree-fock mol.hfinp
+```
+
+### Symbolic CC equation generation — `ccgen`
+
+<p align="justify">
+The <code>python/ccgen/</code> package derives spin-orbital coupled-cluster residual equations at arbitrary truncation order (CCD, CCSD, CCSDT, CCSDTQ, CC5, CC6) from the normal-ordered Hamiltonian, applies optional algebraic optimizations, and emits production code in several formats. See <code>python/README.md</code> for the full reference.
+</p>
+
+Install locally:
+
+```bash
+cd python
+pip install -e .
+```
+
+Quick examples:
+
+```bash
+# Human-readable CCSD equations
+python generate_ccsdt_cpp.py ccsd --pretty
+
+# NumPy einsum form with opt_einsum contraction paths
+python generate_ccsdt_cpp.py ccsd --einsum --opt-einsum
+
+# Tiled + OpenMP C++ output with denominator collection
+python generate_ccsdt_cpp.py ccsd --tiled --collect-denominators
+
+# Planck-specific tensor kernels targeting src/post_hf/cc/ infrastructure
+python generate_ccsdt_cpp.py ccsdt --planck
+
+# Generate Planck-compatible .cpp kernel files
+python generate_planck_cc_kernels.py --output-dir build/ --methods ccsd ccsdt
+
+# Generate the spin-orbital CCSD warm-start .inc file used by the tensor-optimized RCCSDT backend
+python generate_spinorbital_ccsd_warm_start.py --output ccsd_warm_start.inc
+```
+
+Programmatic API:
+
+```python
+from ccgen import generate_cc_equations
+from ccgen.generate import print_equations, print_cpp_planck
+
+# Apply algebraic optimizations at generation time
+eqs = generate_cc_equations(
+    "ccsd",
+    collect_denominators=True,
+    permutation_grouping=True,
+)
+
+print(print_equations("ccsd"))
+print(print_cpp_planck("ccsdt", include_intermediates=True))
+```
 
 ### Cross-basis restart — STO-3G → 6-31G
 

@@ -35,3 +35,12 @@ python/ccgen/*/__pycache__
 python/CCGEN_DEVELOPMENT_PLAN.md
 python/CCGEN_OPTIMIZATIONS.md
 .gitignore
+python/ccgen/_wickaccel.cpython-314-darwin.so
+python/ccgen.egg-info/dependency_links.txt
+python/ccgen.egg-info/entry_points.txt
+python/ccgen.egg-info/PKG-INFO
+python/ccgen.egg-info/requires.txt
+python/ccgen.egg-info/SOURCES.txt
+python/ccgen.egg-info/top_level.txt
+python/dist
+.gitignore

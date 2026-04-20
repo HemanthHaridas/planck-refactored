@@ -493,6 +493,8 @@ namespace HartreeFock::IO
                 {"uccsd", HartreeFock::PostHF::UCCSD},
                 {"ccsdt", HartreeFock::PostHF::RCCSDT},
                 {"uccsdt", HartreeFock::PostHF::UCCSDT},
+                {"ccsdtq", HartreeFock::PostHF::RCCSDTQ},
+                {"cc4", HartreeFock::PostHF::RCCSDTQ},
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
             };
