@@ -6,6 +6,9 @@ on:
       - main
       - devel
 
+permissions:
+  contents: read
+
 jobs:
   mirror:
     runs-on: ubuntu-latest
