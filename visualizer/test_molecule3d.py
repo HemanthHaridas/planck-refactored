@@ -157,7 +157,10 @@ def test_viewer_html_contains_3dmol_cdn():
     assert "3dmol" in html.lower()
     script_srcs = re.findall(r'<script[^>]+src=["\\\']([^"\\\']+)["\\\']', html, flags=re.IGNORECASE)
     hosts = [urlparse(src).hostname for src in script_srcs]
-    assert "cdn.jsdelivr.net" in hosts
+    assert any(
+        host and (host.lower() == "cdn.jsdelivr.net" or host.lower().endswith(".cdn.jsdelivr.net"))
+        for host in hosts
+    )
 
 
 def test_viewer_html_contains_xyz_data():
