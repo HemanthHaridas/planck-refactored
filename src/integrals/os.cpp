@@ -135,6 +135,10 @@ namespace
     {
         auto write_slot = [&](std::size_t idx)
         {
+            // This scatter path is pure store-only symmetry replication: every
+            // writer computes the same integral value for a given canonical slot.
+            // We intentionally use `atomic write`, not `atomic update`, because
+            // there is no read-modify-write reduction here.
 #ifdef USE_OPENMP
 #pragma omp atomic write
 #endif
@@ -1642,7 +1646,9 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
     const std::size_t npairs = shell_pairs.size();
 
     // The contracted ERI kernel uses thread-local quartet-sized scratch, while
-    // permutation scattering uses atomic stores to keep the shared tensor race-free.
+    // permutation scattering only mirrors one computed integral into symmetry-
+    // related slots via atomic writes. These are plain stores of the same value,
+    // not `+=` reductions, so `atomic update` is intentionally not used here.
 #pragma omp parallel for schedule(dynamic)
     for (std::size_t p = 0; p < npairs; ++p)
     {
@@ -1959,7 +1965,9 @@ std::vector<double> HartreeFock::ObaraSaika::_compute_2e(
     const std::size_t npairs = shell_pairs.size();
 
     // The contracted ERI kernel uses thread-local quartet-sized scratch, while
-    // permutation scattering uses atomic stores to keep the shared tensor race-free.
+    // permutation scattering only mirrors one computed integral into symmetry-
+    // related slots via atomic writes. These are plain stores of the same value,
+    // not `+=` reductions, so `atomic update` is intentionally not used here.
 #pragma omp parallel for schedule(dynamic)
     for (std::size_t p = 0; p < npairs; ++p)
     {

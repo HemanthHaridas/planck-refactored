@@ -158,7 +158,6 @@ namespace
     static HartreeFock::Basis build_atomic_basis(const std::vector<GbsShell> &gbs_shells)
     {
         HartreeFock::Basis basis;
-        basis._shells.reserve(gbs_shells.size());
 
         for (const GbsShell &gbs_shell : gbs_shells)
         {
@@ -297,6 +296,7 @@ namespace
         atom._molecule.coordinates = Eigen::MatrixXd::Zero(1, 3);
         atom._molecule._coordinates = Eigen::MatrixXd::Zero(1, 3);
         atom._molecule._standard = Eigen::MatrixXd::Zero(1, 3); // Bohr
+        atom._molecule._standard_is_bohr = true;
         atom._molecule._is_bohr = true;
         atom._molecule.charge = 0;
         atom._molecule.multiplicity = mult;

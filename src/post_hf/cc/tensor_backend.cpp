@@ -19,27 +19,30 @@
 
 namespace
 {
-    [[nodiscard]] std::size_t checked_product(std::initializer_list<int> dims)
+    [[nodiscard]] std::expected<std::size_t, std::string> checked_product(std::initializer_list<int> dims)
     {
         std::size_t total = 1;
         for (const int dim : dims)
         {
             if (dim < 0)
-                throw std::invalid_argument("checked_product: negative tensor dimension");
+                return std::unexpected("checked_product: negative tensor dimension");
 
             const std::size_t dim_size = static_cast<std::size_t>(dim);
             if (dim_size != 0 &&
                 total > std::numeric_limits<std::size_t>::max() / dim_size)
-                throw std::overflow_error("checked_product: tensor size overflow");
+                return std::unexpected("checked_product: tensor size overflow");
 
             total *= dim_size;
         }
         return total;
     }
 
-    [[nodiscard]] std::size_t bytes_for_tensor(std::initializer_list<int> dims)
+    [[nodiscard]] std::expected<std::size_t, std::string> bytes_for_tensor(std::initializer_list<int> dims)
     {
-        return checked_product(dims) * sizeof(double);
+        auto elements = checked_product(dims);
+        if (!elements)
+            return std::unexpected(elements.error());
+        return (*elements) * sizeof(double);
     }
 
     [[nodiscard]] std::string format_bytes(std::size_t bytes)
@@ -78,20 +81,23 @@ namespace
         return static_cast<std::size_t>(std::llround(result));
     }
 
-    void append_block_memory(
+    std::expected<void, std::string> append_block_memory(
         std::vector<HartreeFock::Correlation::CC::TensorMemoryBlock> &report,
         std::size_t &total_bytes,
         const std::string &label,
         std::initializer_list<int> dims)
     {
-        const std::size_t elements = checked_product(dims);
-        const std::size_t bytes = elements * sizeof(double);
+        auto elements = checked_product(dims);
+        if (!elements)
+            return std::unexpected(elements.error());
+        const std::size_t bytes = (*elements) * sizeof(double);
         report.push_back(HartreeFock::Correlation::CC::TensorMemoryBlock{
             .label = label,
-            .elements = elements,
+            .elements = *elements,
             .bytes = bytes,
         });
         total_bytes += bytes;
+        return {};
     }
 
     using HartreeFock::Correlation::CC::AmplitudeDIIS;
@@ -2799,8 +2805,10 @@ namespace HartreeFock::Correlation::CC
                     eri, nb,
                     partition.C_occ, partition.C_occ,
                     partition.C_occ, partition.C_occ));
-            append_block_memory(blocks.memory_report, blocks.total_bytes,
-                                "oooo", {partition.n_occ, partition.n_occ, partition.n_occ, partition.n_occ});
+            if (auto mem_res = append_block_memory(blocks.memory_report, blocks.total_bytes,
+                                                   "oooo", {partition.n_occ, partition.n_occ, partition.n_occ, partition.n_occ});
+                !mem_res)
+                return std::unexpected("build_tensor_cc_block_cache: " + mem_res.error());
 
             blocks.ooov = Tensor4D(
                 partition.n_occ, partition.n_occ, partition.n_occ, partition.n_virt,
@@ -2808,8 +2816,10 @@ namespace HartreeFock::Correlation::CC
                     eri, nb,
                     partition.C_occ, partition.C_occ,
                     partition.C_occ, partition.C_virt));
-            append_block_memory(blocks.memory_report, blocks.total_bytes,
-                                "ooov", {partition.n_occ, partition.n_occ, partition.n_occ, partition.n_virt});
+            if (auto mem_res = append_block_memory(blocks.memory_report, blocks.total_bytes,
+                                                   "ooov", {partition.n_occ, partition.n_occ, partition.n_occ, partition.n_virt});
+                !mem_res)
+                return std::unexpected("build_tensor_cc_block_cache: " + mem_res.error());
 
             blocks.oovv = Tensor4D(
                 partition.n_occ, partition.n_occ, partition.n_virt, partition.n_virt,
@@ -2817,8 +2827,10 @@ namespace HartreeFock::Correlation::CC
                     eri, nb,
                     partition.C_occ, partition.C_occ,
                     partition.C_virt, partition.C_virt));
-            append_block_memory(blocks.memory_report, blocks.total_bytes,
-                                "oovv", {partition.n_occ, partition.n_occ, partition.n_virt, partition.n_virt});
+            if (auto mem_res = append_block_memory(blocks.memory_report, blocks.total_bytes,
+                                                   "oovv", {partition.n_occ, partition.n_occ, partition.n_virt, partition.n_virt});
+                !mem_res)
+                return std::unexpected("build_tensor_cc_block_cache: " + mem_res.error());
 
             blocks.ovov = Tensor4D(
                 partition.n_occ, partition.n_virt, partition.n_occ, partition.n_virt,
@@ -2826,8 +2838,10 @@ namespace HartreeFock::Correlation::CC
                     eri, nb,
                     partition.C_occ, partition.C_virt,
                     partition.C_occ, partition.C_virt));
-            append_block_memory(blocks.memory_report, blocks.total_bytes,
-                                "ovov", {partition.n_occ, partition.n_virt, partition.n_occ, partition.n_virt});
+            if (auto mem_res = append_block_memory(blocks.memory_report, blocks.total_bytes,
+                                                   "ovov", {partition.n_occ, partition.n_virt, partition.n_occ, partition.n_virt});
+                !mem_res)
+                return std::unexpected("build_tensor_cc_block_cache: " + mem_res.error());
 
             blocks.ovvo = Tensor4D(
                 partition.n_occ, partition.n_virt, partition.n_virt, partition.n_occ,
@@ -2835,8 +2849,10 @@ namespace HartreeFock::Correlation::CC
                     eri, nb,
                     partition.C_occ, partition.C_virt,
                     partition.C_virt, partition.C_occ));
-            append_block_memory(blocks.memory_report, blocks.total_bytes,
-                                "ovvo", {partition.n_occ, partition.n_virt, partition.n_virt, partition.n_occ});
+            if (auto mem_res = append_block_memory(blocks.memory_report, blocks.total_bytes,
+                                                   "ovvo", {partition.n_occ, partition.n_virt, partition.n_virt, partition.n_occ});
+                !mem_res)
+                return std::unexpected("build_tensor_cc_block_cache: " + mem_res.error());
 
             blocks.ovvv = Tensor4D(
                 partition.n_occ, partition.n_virt, partition.n_virt, partition.n_virt,
@@ -2844,8 +2860,10 @@ namespace HartreeFock::Correlation::CC
                     eri, nb,
                     partition.C_occ, partition.C_virt,
                     partition.C_virt, partition.C_virt));
-            append_block_memory(blocks.memory_report, blocks.total_bytes,
-                                "ovvv", {partition.n_occ, partition.n_virt, partition.n_virt, partition.n_virt});
+            if (auto mem_res = append_block_memory(blocks.memory_report, blocks.total_bytes,
+                                                   "ovvv", {partition.n_occ, partition.n_virt, partition.n_virt, partition.n_virt});
+                !mem_res)
+                return std::unexpected("build_tensor_cc_block_cache: " + mem_res.error());
 
             blocks.vvvv = Tensor4D(
                 partition.n_virt, partition.n_virt, partition.n_virt, partition.n_virt,
@@ -2853,8 +2871,10 @@ namespace HartreeFock::Correlation::CC
                     eri, nb,
                     partition.C_virt, partition.C_virt,
                     partition.C_virt, partition.C_virt));
-            append_block_memory(blocks.memory_report, blocks.total_bytes,
-                                "vvvv", {partition.n_virt, partition.n_virt, partition.n_virt, partition.n_virt});
+            if (auto mem_res = append_block_memory(blocks.memory_report, blocks.total_bytes,
+                                                   "vvvv", {partition.n_virt, partition.n_virt, partition.n_virt, partition.n_virt});
+                !mem_res)
+                return std::unexpected("build_tensor_cc_block_cache: " + mem_res.error());
         }
         catch (const std::exception &ex)
         {
@@ -2927,11 +2947,17 @@ namespace HartreeFock::Correlation::CC
                 nocc_so, nocc_so, nocc_so,
                 nvirt_so, nvirt_so, nvirt_so, 0.0);
             state.triples.allocated = true;
-            state.triples.storage_bytes =
-                bytes_for_tensor({nocc_so, nvirt_so}) +
-                bytes_for_tensor({nocc_so, nocc_so, nvirt_so, nvirt_so}) +
-                2 * bytes_for_tensor({nocc_so, nocc_so, nocc_so,
-                                      nvirt_so, nvirt_so, nvirt_so});
+            auto t1_bytes = bytes_for_tensor({nocc_so, nvirt_so});
+            if (!t1_bytes)
+                return std::unexpected("allocate_dense_triples_workspace: " + t1_bytes.error());
+            auto t2_bytes = bytes_for_tensor({nocc_so, nocc_so, nvirt_so, nvirt_so});
+            if (!t2_bytes)
+                return std::unexpected("allocate_dense_triples_workspace: " + t2_bytes.error());
+            auto t3_bytes = bytes_for_tensor({nocc_so, nocc_so, nocc_so,
+                                              nvirt_so, nvirt_so, nvirt_so});
+            if (!t3_bytes)
+                return std::unexpected("allocate_dense_triples_workspace: " + t3_bytes.error());
+            state.triples.storage_bytes = *t1_bytes + *t2_bytes + 2 * (*t3_bytes);
         }
         catch (const std::exception &ex)
         {
@@ -2969,20 +2995,16 @@ namespace HartreeFock::Correlation::CC
             .estimated_t3_bytes = 0,
         };
 
-        try
-        {
-            const RHFReference &partition = state.reference.orbital_partition;
-            const int nocc_so = 2 * partition.n_occ;
-            const int nvirt_so = 2 * partition.n_virt;
-            state.estimated_t3_elements = checked_product(
-                {nocc_so, nocc_so, nocc_so,
-                 nvirt_so, nvirt_so, nvirt_so});
-            state.estimated_t3_bytes = state.estimated_t3_elements * sizeof(double);
-        }
-        catch (const std::exception &ex)
-        {
-            return std::unexpected("prepare_tensor_rccsdt: " + std::string(ex.what()));
-        }
+        const RHFReference &partition = state.reference.orbital_partition;
+        const int nocc_so = 2 * partition.n_occ;
+        const int nvirt_so = 2 * partition.n_virt;
+        auto t3_elements = checked_product(
+            {nocc_so, nocc_so, nocc_so,
+             nvirt_so, nvirt_so, nvirt_so});
+        if (!t3_elements)
+            return std::unexpected("prepare_tensor_rccsdt: " + t3_elements.error());
+        state.estimated_t3_elements = *t3_elements;
+        state.estimated_t3_bytes = state.estimated_t3_elements * sizeof(double);
 
         auto triples_res = allocate_dense_triples_workspace(state);
         if (!triples_res)

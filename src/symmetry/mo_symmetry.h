@@ -2,6 +2,7 @@
 #define HF_MO_SYMMETRY_H
 
 #include "base/types.h"
+#include <expected>
 
 namespace HartreeFock
 {
@@ -10,7 +11,7 @@ namespace HartreeFock
         // Assign irreducible representation labels to all converged MOs.
         // Fills calculator._info._scf.alpha.mo_symmetry (and beta for UHF).
         // No-op when symmetry is off or the point group is C1 or linear.
-        void assign_mo_symmetry(HartreeFock::Calculator &calculator);
+        std::expected<void, std::string> assign_mo_symmetry(HartreeFock::Calculator &calculator);
 
         // Symmetry-adapted orbital (SAO) basis data.
         // Columns of `transform` are SAOs expressed in the AO basis.
@@ -36,12 +37,12 @@ namespace HartreeFock
         // Build the SAO basis for symmetry-blocked Fock diagonalization.
         // Returns valid=false for linear molecules (C∞v/D∞h), C1, or symmetry off.
         // Must be called after 1e integrals are computed and basis is built.
-        SAOBasis build_sao_basis(HartreeFock::Calculator &calculator);
+        std::expected<SAOBasis, std::string> build_sao_basis(HartreeFock::Calculator &calculator);
 
         // Build an explicit Abelian irrep multiplication table for the current
         // point group. Returns valid=false when symmetry is unavailable or the
         // full point group does not have only 1D irreps.
-        AbelianIrrepProductTable build_abelian_irrep_product_table(
+        std::expected<AbelianIrrepProductTable, std::string> build_abelian_irrep_product_table(
             HartreeFock::Calculator &calculator);
     } // namespace Symmetry
 } // namespace HartreeFock

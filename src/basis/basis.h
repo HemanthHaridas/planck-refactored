@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "base/types.h"
+#include <expected>
 
 namespace HartreeFock
 {
@@ -21,7 +22,7 @@ namespace HartreeFock
         double contracted_normalization(unsigned int L, const Eigen::VectorXd &exponents, const Eigen::VectorXd &coefficients, const Eigen::VectorXd &prim_norms);
 
         // Read Gaussian94 basis sets
-        HartreeFock::Basis read_gbs_basis(const std::string file_name, const HartreeFock::Molecule &molecule, const HartreeFock::BasisType &basis_type);
+        std::expected<HartreeFock::Basis, std::string> read_gbs_basis(const std::string file_name, const HartreeFock::Molecule &molecule, const HartreeFock::BasisType &basis_type);
 
     } // namespace BasisFunctions
 } // namespace HartreeFock

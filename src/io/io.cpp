@@ -556,6 +556,8 @@ namespace HartreeFock::IO
                  { scf._guess = map_string_enum<HartreeFock::SCFGuess>(value); }},
                 {"level_shift", [&scf](const std::string &value)
                  { scf._level_shift = std::stod(value); }},
+                {"cc_damping", [&scf](const std::string &value)
+                 { scf._cc_damping = std::stod(value); }},
                 {"diis_restart", [&scf](const std::string &value)
                  { scf._diis_restart_factor = std::stod(value); }},
                 {"scf_mode", [&scf](const std::string &value)

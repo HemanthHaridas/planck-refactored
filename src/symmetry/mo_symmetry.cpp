@@ -1,9 +1,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <expected>
 #include <map>
 #include <memory>
-#include <stdexcept>
 #include <string>
 
 #include "external/libmsym/install/include/libmsym/msym.h"
@@ -148,9 +148,9 @@ namespace
     //
     // Positions are taken from molecule.standard (Angstrom, symmetrized frame).
     // tol: distance threshold in Angstrom.
-    static std::vector<int> build_permutation(const Eigen::Matrix3d &M,
-                                              const HartreeFock::Molecule &mol,
-                                              double tol = 0.25)
+    static std::expected<std::vector<int>, std::string> build_permutation(const Eigen::Matrix3d &M,
+                                                                          const HartreeFock::Molecule &mol,
+                                                                          double tol = 0.25)
     {
         const int N = static_cast<int>(mol.natoms);
         std::vector<int> perm(N, -1);
@@ -169,7 +169,7 @@ namespace
                 }
             }
             if (perm[a] == -1)
-                throw std::runtime_error(
+                return std::unexpected(
                     "MO symmetry: atom " + std::to_string(a) +
                     " has no permutation image under this operation");
         }
@@ -339,7 +339,7 @@ namespace
     //
     // Builds the five operator matrices (two rotations, σv, optionally i) and
     // calls assign_for_linear for alpha (and beta for UHF).
-    static void assign_mo_symmetry_linear(HartreeFock::Calculator &calc)
+    static std::expected<void, std::string> assign_mo_symmetry_linear(HartreeFock::Calculator &calc)
     {
         const HartreeFock::Molecule &mol = calc._molecule;
         const HartreeFock::Basis &bs = calc._shells;
@@ -353,10 +353,12 @@ namespace
         // σv through xz-plane leaves each atom fixed,
         // inversion maps (0,0,z_a) → (0,0,−z_a) (finds the paired image atom).
 
-        auto build_SD = [&](const Eigen::Matrix3d &M) -> Eigen::MatrixXd
+        auto build_SD = [&](const Eigen::Matrix3d &M) -> std::expected<Eigen::MatrixXd, std::string>
         {
-            const std::vector<int> perm = build_permutation(M, mol);
-            const Eigen::MatrixXd D = build_ao_transform(M, perm, bs);
+            auto perm = build_permutation(M, mol);
+            if (!perm)
+                return std::unexpected(perm.error());
+            const Eigen::MatrixXd D = build_ao_transform(M, *perm, bs);
             return S * D;
         };
 
@@ -371,23 +373,33 @@ namespace
             return R;
         };
 
-        const Eigen::MatrixXd SD_pi2 = build_SD(rot_z(M_PI / 2.0));
-        const Eigen::MatrixXd SD_pi3 = build_SD(rot_z(M_PI / 3.0));
+        auto SD_pi2 = build_SD(rot_z(M_PI / 2.0));
+        if (!SD_pi2)
+            return std::unexpected(SD_pi2.error());
+        auto SD_pi3 = build_SD(rot_z(M_PI / 3.0));
+        if (!SD_pi3)
+            return std::unexpected(SD_pi3.error());
 
         // σv through xz-plane: flip y → diag(1, -1, 1)
         Eigen::Matrix3d R_sv = Eigen::Matrix3d::Identity();
         R_sv(1, 1) = -1.0;
-        const Eigen::MatrixXd SD_sv = build_SD(R_sv);
+        auto SD_sv = build_SD(R_sv);
+        if (!SD_sv)
+            return std::unexpected(SD_sv.error());
 
         // Inversion for D∞h
         std::unique_ptr<Eigen::MatrixXd> SD_inv_ptr;
         if (is_Dinfh)
-            SD_inv_ptr = std::make_unique<Eigen::MatrixXd>(
-                build_SD(-Eigen::Matrix3d::Identity()));
+        {
+            auto SD_inv = build_SD(-Eigen::Matrix3d::Identity());
+            if (!SD_inv)
+                return std::unexpected(SD_inv.error());
+            SD_inv_ptr = std::make_unique<Eigen::MatrixXd>(std::move(*SD_inv));
+        }
 
         auto classify = [&](const Eigen::MatrixXd &C, std::vector<std::string> &lbl)
         {
-            assign_for_linear(C, SD_pi2, SD_pi3, SD_sv, SD_inv_ptr.get(), lbl);
+            assign_for_linear(C, *SD_pi2, *SD_pi3, *SD_sv, SD_inv_ptr.get(), lbl);
         };
 
         classify(calc._info._scf.alpha.mo_coefficients,
@@ -399,6 +411,8 @@ namespace
             classify(calc._info._scf.beta.mo_coefficients,
                      calc._info._scf.beta.mo_symmetry);
         }
+
+        return {};
     }
 
     // ── Strip redundant E-type subscript "1" when no higher E exists ─────────────
@@ -496,7 +510,7 @@ namespace
     //   component-norm-weighted Cartesian basis.
     // T⁺ = (TᵀT)⁻¹ Tᵀ  [n_sph × n_cart]:  maps Cartesian AO coefficients
     //   to spherical AO coefficients (discards the r²-contamination subspace for L≥2).
-    static Eigen::MatrixXd cart_to_sph_block(int L)
+    static std::expected<Eigen::MatrixXd, std::string> cart_to_sph_block(int L)
     {
         if (L == 0)
             return Eigen::MatrixXd::Identity(1, 1);
@@ -666,7 +680,7 @@ namespace
             return T.completeOrthogonalDecomposition().pseudoInverse();
         }
 
-        throw std::runtime_error(
+        return std::unexpected(
             "assign_mo_symmetry: Cartesian→Spherical transform not implemented for L=" +
             std::to_string(L) + " (max supported: L=5)");
     }
@@ -751,7 +765,7 @@ namespace
 
 } // anonymous namespace
 
-HartreeFock::Symmetry::AbelianIrrepProductTable
+std::expected<HartreeFock::Symmetry::AbelianIrrepProductTable, std::string>
 HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator &calculator)
 {
     AbelianIrrepProductTable result;
@@ -776,21 +790,21 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
     }
 
     if (MSYM_SUCCESS != msymSetElements(ctx.get(), atoms.size(), atoms.data()))
-        throw std::runtime_error("build_abelian_irrep_product_table: msymSetElements failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymSetElements failed");
     if (MSYM_SUCCESS != msymFindSymmetry(ctx.get()))
-        throw std::runtime_error("build_abelian_irrep_product_table: msymFindSymmetry failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymFindSymmetry failed");
 
     msym_point_group_type_t pg_type;
     int pg_n = 0;
     if (MSYM_SUCCESS != msymGetPointGroupType(ctx.get(), &pg_type, &pg_n))
-        throw std::runtime_error("build_abelian_irrep_product_table: msymGetPointGroupType failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymGetPointGroupType failed");
     if (!is_all_1d_irreps(pg_type, pg_n))
         return result;
 
     int nelems = 0;
     msym_element_t *melems = nullptr;
     if (MSYM_SUCCESS != msymGetElements(ctx.get(), &nelems, &melems))
-        throw std::runtime_error("build_abelian_irrep_product_table: msymGetElements failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymGetElements failed");
 
     std::vector<msym_basis_function_t> bfs(nelems);
     std::memset(bfs.data(), 0, nelems * sizeof(msym_basis_function_t));
@@ -802,11 +816,11 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
         bfs[i].f.rsh.m = 0;
     }
     if (MSYM_SUCCESS != msymSetBasisFunctions(ctx.get(), nelems, bfs.data()))
-        throw std::runtime_error("build_abelian_irrep_product_table: msymSetBasisFunctions failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymSetBasisFunctions failed");
 
     const msym_character_table_t *ct = nullptr;
     if (MSYM_SUCCESS != msymGetCharacterTable(ctx.get(), &ct) || ct == nullptr)
-        throw std::runtime_error("build_abelian_irrep_product_table: msymGetCharacterTable failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymGetCharacterTable failed");
 
     const int h = ct->d;
     const double *ctable = static_cast<const double *>(ct->table);
@@ -872,7 +886,7 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
 //   7. Assemble U, fill metadata (block_sizes, block_offsets, irrep_names).
 //   8. Apply the same B1/B2 and E-label normalisations as assign_mo_symmetry.
 
-HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFock::Calculator &calculator)
+std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetry::build_sao_basis(HartreeFock::Calculator &calculator)
 {
     SAOBasis result; // valid = false by default
 
@@ -905,24 +919,24 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
     }
 
     if (MSYM_SUCCESS != msymSetElements(ctx.get(), atoms.size(), atoms.data()))
-        throw std::runtime_error("build_sao_basis: msymSetElements failed");
+        return std::unexpected("build_sao_basis: msymSetElements failed");
 
     if (MSYM_SUCCESS != msymFindSymmetry(ctx.get()))
-        throw std::runtime_error("build_sao_basis: msymFindSymmetry failed");
+        return std::unexpected("build_sao_basis: msymFindSymmetry failed");
 
     // ── Select largest Abelian subgroup if needed ─────────────────────────────
     {
         msym_point_group_type_t pg_type;
         int pg_n = 0;
         if (MSYM_SUCCESS != msymGetPointGroupType(ctx.get(), &pg_type, &pg_n))
-            throw std::runtime_error("build_sao_basis: msymGetPointGroupType failed");
+            return std::unexpected("build_sao_basis: msymGetPointGroupType failed");
 
         if (!is_all_1d_irreps(pg_type, pg_n))
         {
             int nsg = 0;
             const msym_subgroup_t *sgs = nullptr;
             if (MSYM_SUCCESS != msymGetSubgroups(ctx.get(), &nsg, &sgs))
-                throw std::runtime_error("build_sao_basis: msymGetSubgroups failed");
+                return std::unexpected("build_sao_basis: msymGetSubgroups failed");
 
             const msym_subgroup_t *best = select_preferred_abelian_subgroup(nsg, sgs);
             if (best == nullptr)
@@ -931,7 +945,7 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
                 return result;
             }
             if (MSYM_SUCCESS != msymSelectSubgroup(ctx.get(), best))
-                throw std::runtime_error("build_sao_basis: msymSelectSubgroup failed");
+                return std::unexpected("build_sao_basis: msymSelectSubgroup failed");
         }
     }
 
@@ -943,7 +957,7 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
         int nelems = 0;
         msym_element_t *melems = nullptr;
         if (MSYM_SUCCESS != msymGetElements(ctx.get(), &nelems, &melems))
-            throw std::runtime_error("build_sao_basis: msymGetElements failed");
+            return std::unexpected("build_sao_basis: msymGetElements failed");
 
         std::vector<msym_basis_function_t> bfs(nelems);
         std::memset(bfs.data(), 0, nelems * sizeof(msym_basis_function_t));
@@ -956,13 +970,13 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
             // type = 0 = MSYM_BASIS_TYPE_REAL_SPHERICAL_HARMONIC (already zeroed)
         }
         if (MSYM_SUCCESS != msymSetBasisFunctions(ctx.get(), nelems, bfs.data()))
-            throw std::runtime_error("build_sao_basis: msymSetBasisFunctions failed");
+            return std::unexpected("build_sao_basis: msymSetBasisFunctions failed");
     }
 
     // ── Get character table ───────────────────────────────────────────────────
     const msym_character_table_t *ct = nullptr;
     if (MSYM_SUCCESS != msymGetCharacterTable(ctx.get(), &ct) || ct == nullptr)
-        throw std::runtime_error("build_sao_basis: msymGetCharacterTable failed");
+        return std::unexpected("build_sao_basis: msymGetCharacterTable failed");
 
     // For an Abelian group the number of irreps == group order h.
     const int h = ct->d;
@@ -979,8 +993,10 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
     for (int c = 0; c < h; ++c)
     {
         const Eigen::Matrix3d M = sop_to_matrix(*ct->sops[c]);
-        const std::vector<int> perm = build_permutation(M, calculator._molecule);
-        D_ops[c] = build_ao_transform(M, perm, calculator._shells);
+        auto perm = build_permutation(M, calculator._molecule);
+        if (!perm)
+            return std::unexpected("build_sao_basis: " + perm.error());
+        D_ops[c] = build_ao_transform(M, *perm, calculator._shells);
     }
 
     // ── Project and S-orthonormalise SAOs for each irrep ──────────────────────
@@ -1037,7 +1053,7 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
     for (int g = 0; g < n_irreps; ++g)
         total += block_sizes[g];
     if (total != static_cast<int>(nb))
-        throw std::runtime_error(
+        return std::unexpected(
             "build_sao_basis: SAO count mismatch: got " + std::to_string(total) +
             ", expected " + std::to_string(nb));
 
@@ -1118,20 +1134,17 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
 
 // ─── Public entry point ───────────────────────────────────────────────────────
 
-void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculator)
+std::expected<void, std::string> HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculator)
 {
     if (!calculator._molecule._symmetry)
-        return;
+        return {};
     if (!calculator._info._is_converged)
-        return;
+        return {};
 
     // Linear molecules (C∞v / D∞h) use a dedicated handler.
     const std::string &pg = calculator._molecule._point_group;
     if (pg.find("inf") != std::string::npos)
-    {
-        assign_mo_symmetry_linear(calculator);
-        return;
-    }
+        return assign_mo_symmetry_linear(calculator);
 
     // ── Rebuild msym context on the symmetrized coordinates ──────────────────
     // molecule.standard is in Angstrom (symmetrized, pre-alignment frame).
@@ -1149,11 +1162,11 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
     }
 
     if (MSYM_SUCCESS != msymSetElements(ctx.get(), atoms.size(), atoms.data()))
-        throw std::runtime_error("assign_mo_symmetry: msymSetElements failed");
+        return std::unexpected("assign_mo_symmetry: msymSetElements failed");
 
     // Re-detect symmetry (do NOT align axes — keep same frame as basis centers)
     if (MSYM_SUCCESS != msymFindSymmetry(ctx.get()))
-        throw std::runtime_error("assign_mo_symmetry: msymFindSymmetry failed");
+        return std::unexpected("assign_mo_symmetry: msymFindSymmetry failed");
 
     // ── Select largest Abelian subgroup if the full group is non-Abelian ─────
     //
@@ -1164,14 +1177,14 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
         msym_point_group_type_t pg_type;
         int pg_n = 0;
         if (MSYM_SUCCESS != msymGetPointGroupType(ctx.get(), &pg_type, &pg_n))
-            throw std::runtime_error("assign_mo_symmetry: msymGetPointGroupType failed");
+            return std::unexpected("assign_mo_symmetry: msymGetPointGroupType failed");
 
         if (!is_all_1d_irreps(pg_type, pg_n))
         {
             int nsg = 0;
             const msym_subgroup_t *sgs = nullptr;
             if (MSYM_SUCCESS != msymGetSubgroups(ctx.get(), &nsg, &sgs))
-                throw std::runtime_error("assign_mo_symmetry: msymGetSubgroups failed");
+                return std::unexpected("assign_mo_symmetry: msymGetSubgroups failed");
 
             const msym_subgroup_t *best = select_preferred_abelian_subgroup(nsg, sgs);
 
@@ -1181,7 +1194,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
                 const std::string sg_name = best->name;
 
                 if (MSYM_SUCCESS != msymSelectSubgroup(ctx.get(), best))
-                    throw std::runtime_error("assign_mo_symmetry: msymSelectSubgroup failed");
+                    return std::unexpected("assign_mo_symmetry: msymSelectSubgroup failed");
 
                 HartreeFock::Logger::logging(
                     HartreeFock::LogLevel::Info,
@@ -1204,7 +1217,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
     int nelems = 0;
     msym_element_t *melems = nullptr;
     if (MSYM_SUCCESS != msymGetElements(ctx.get(), &nelems, &melems))
-        throw std::runtime_error("assign_mo_symmetry: msymGetElements failed");
+        return std::unexpected("assign_mo_symmetry: msymGetElements failed");
 
     // ── Build Cart→Sph transform T⁺ and libmsym basis function array ─────────
     //
@@ -1246,7 +1259,10 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
         const int shell_n = ++shell_n_counter[{atom, L}];
 
         // Place the per-shell T⁺ block
-        T_cs.block(sph_row, cart_col, n_sph, n_cart) = cart_to_sph_block(L);
+        auto T_shell = cart_to_sph_block(L);
+        if (!T_shell)
+            return std::unexpected(T_shell.error());
+        T_cs.block(sph_row, cart_col, n_sph, n_cart) = *T_shell;
 
         // Fill libmsym BFs for this shell (m: −L … +L)
         for (int m = -L; m <= L; ++m, ++bf_idx)
@@ -1265,12 +1281,12 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
 
     // ── Register basis functions ──────────────────────────────────────────────
     if (MSYM_SUCCESS != msymSetBasisFunctions(ctx.get(), n_sph_total, bfs.data()))
-        throw std::runtime_error("assign_mo_symmetry: msymSetBasisFunctions failed");
+        return std::unexpected("assign_mo_symmetry: msymSetBasisFunctions failed");
 
     // ── Obtain character table ────────────────────────────────────────────────
     const msym_character_table_t *ct = nullptr;
     if (MSYM_SUCCESS != msymGetCharacterTable(ctx.get(), &ct) || ct == nullptr)
-        throw std::runtime_error("assign_mo_symmetry: msymGetCharacterTable failed");
+        return std::unexpected("assign_mo_symmetry: msymGetCharacterTable failed");
     const int n_species = ct->d;
 
     // ── Build reindex map: our_bf_idx → internal_bf_idx ──────────────────────
@@ -1279,7 +1295,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
     int mbfsl = 0;
     msym_basis_function_t *mbfs = nullptr;
     if (MSYM_SUCCESS != msymGetBasisFunctions(ctx.get(), &mbfsl, &mbfs))
-        throw std::runtime_error("assign_mo_symmetry: msymGetBasisFunctions failed");
+        return std::unexpected("assign_mo_symmetry: msymGetBasisFunctions failed");
 
     // to_internal[our_idx] = internal_idx
     std::vector<int> to_internal(n_sph_total);
@@ -1297,7 +1313,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
     //   2. Reindex to internal libmsym ordering
     //   3. Call msymSymmetrySpeciesComponents → component weights per species
     //   4. Label = species with largest weight
-    auto classify = [&](const Eigen::MatrixXd &C, std::vector<std::string> &labels)
+    auto classify = [&](const Eigen::MatrixXd &C, std::vector<std::string> &labels) -> std::expected<void, std::string>
     {
         const int n_mo = static_cast<int>(C.cols());
 
@@ -1316,7 +1332,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
 
             if (MSYM_SUCCESS != msymSymmetrySpeciesComponents(
                                     ctx.get(), mbfsl, wf.data(), n_species, comp.data()))
-                throw std::runtime_error(
+                return std::unexpected(
                     "assign_mo_symmetry: msymSymmetrySpeciesComponents failed for MO " +
                     std::to_string(i));
 
@@ -1324,19 +1340,26 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
                 std::max_element(comp.begin(), comp.end()) - comp.begin());
             labels[i] = ct->s[best].name;
         }
+        return {};
     };
 
-    classify(calculator._info._scf.alpha.mo_coefficients,
-             calculator._info._scf.alpha.mo_symmetry);
+    if (auto res = classify(calculator._info._scf.alpha.mo_coefficients,
+                            calculator._info._scf.alpha.mo_symmetry);
+        !res)
+        return res;
     normalize_e_labels(ct, calculator._info._scf.alpha.mo_symmetry);
     fix_b1b2_convention(ct, calculator._info._scf.alpha.mo_symmetry);
 
     if (calculator._info._scf.is_uhf &&
         calculator._info._scf.beta.mo_coefficients.cols() > 0)
     {
-        classify(calculator._info._scf.beta.mo_coefficients,
-                 calculator._info._scf.beta.mo_symmetry);
+        if (auto res = classify(calculator._info._scf.beta.mo_coefficients,
+                                calculator._info._scf.beta.mo_symmetry);
+            !res)
+            return res;
         normalize_e_labels(ct, calculator._info._scf.beta.mo_symmetry);
         fix_b1b2_convention(ct, calculator._info._scf.beta.mo_symmetry);
     }
+
+    return {};
 }

@@ -1,6 +1,8 @@
 #include "boys.h"
+#include <cassert>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 static constexpr int TABLE_COLS = 66;
 static constexpr double TABLE_STEP = 0.1;
@@ -1589,6 +1591,10 @@ static const int TABLE_ROWS = static_cast<int>(sizeof(boysTable) / sizeof(boysTa
 
 double HartreeFock::Lookup::boys(int n, double x) noexcept
 {
+    assert(n >= 0 && n < TABLE_COLS && "boys() order exceeds precomputed lookup table");
+    if (n < 0 || n >= TABLE_COLS)
+        return std::numeric_limits<double>::quiet_NaN();
+
     // Asymptotic formula for x beyond the table range
     const double x_max = TABLE_ROWS * TABLE_STEP;
     if (x >= x_max)

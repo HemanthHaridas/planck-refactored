@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cmath>
+#include <format>
 #include <vector>
 
 #include "basis/basis.h"
@@ -454,7 +455,15 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
             const double dx = mol._standard(a, 0) - mol._standard(b, 0);
             const double dy = mol._standard(a, 1) - mol._standard(b, 1);
             const double dz = mol._standard(a, 2) - mol._standard(b, 2);
-            const double r3 = std::pow(dx * dx + dy * dy + dz * dz, 1.5);
+            const double r2 = dx * dx + dy * dy + dz * dz;
+            if (r2 < 1e-24)
+            {
+                return std::unexpected(
+                    std::format("Gradient: atoms {} and {} are coincident or too close for nuclear-repulsion differentiation",
+                                static_cast<int>(a + 1),
+                                static_cast<int>(b + 1)));
+            }
+            const double r3 = std::pow(r2, 1.5);
             grad(a, 0) -= Za * Zb * dx / r3;
             grad(a, 1) -= Za * Zb * dy / r3;
             grad(a, 2) -= Za * Zb * dz / r3;
