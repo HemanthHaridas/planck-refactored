@@ -158,7 +158,6 @@ namespace
     static HartreeFock::Basis build_atomic_basis(const std::vector<GbsShell> &gbs_shells)
     {
         HartreeFock::Basis basis;
-        basis._shells.reserve(gbs_shells.size());
 
         for (const GbsShell &gbs_shell : gbs_shells)
         {
@@ -198,7 +197,7 @@ namespace
                 auto &bf = basis._basis_functions.back();
                 bf._shell = shell_ptr;
                 bf._index = idx;
-                bf._component_norm = 1.0 / std::sqrt(static_cast<double>(df));
+                bf._component_norm = HartreeFock::BasisFunctions::component_norm(df);
                 bf._cartesian = am;
             }
         }
@@ -262,10 +261,12 @@ namespace
             n_atoms = std::max(n_atoms, static_cast<int>(bf._shell->_atom_index) + 1);
 
         std::vector<std::vector<int>> result(static_cast<std::size_t>(n_atoms));
-        for (int mu = 0; mu < static_cast<int>(mol_basis._basis_functions.size()); ++mu)
+        const HartreeFock::index_t basis_function_count =
+            static_cast<HartreeFock::index_t>(mol_basis._basis_functions.size());
+        for (HartreeFock::index_t mu = 0; mu < basis_function_count; ++mu)
         {
             const int A = static_cast<int>(mol_basis._basis_functions[static_cast<std::size_t>(mu)]._shell->_atom_index);
-            result[static_cast<std::size_t>(A)].push_back(mu);
+            result[static_cast<std::size_t>(A)].push_back(static_cast<int>(mu));
         }
         return result;
     }
@@ -297,6 +298,7 @@ namespace
         atom._molecule.coordinates = Eigen::MatrixXd::Zero(1, 3);
         atom._molecule._coordinates = Eigen::MatrixXd::Zero(1, 3);
         atom._molecule._standard = Eigen::MatrixXd::Zero(1, 3); // Bohr
+        atom._molecule._standard_is_bohr = true;
         atom._molecule._is_bohr = true;
         atom._molecule.charge = 0;
         atom._molecule.multiplicity = mult;
@@ -368,12 +370,14 @@ namespace
         std::vector<const HartreeFock::Shell *> shell_order;
         std::unordered_map<const HartreeFock::Shell *, std::vector<int>> shell_aos;
 
-        for (int mu = 0; mu < static_cast<int>(atomic_basis._basis_functions.size()); ++mu)
+        const HartreeFock::index_t basis_function_count =
+            static_cast<HartreeFock::index_t>(atomic_basis._basis_functions.size());
+        for (HartreeFock::index_t mu = 0; mu < basis_function_count; ++mu)
         {
             const HartreeFock::Shell *sp = atomic_basis._basis_functions[static_cast<std::size_t>(mu)]._shell;
             if (shell_aos.find(sp) == shell_aos.end())
                 shell_order.push_back(sp);
-            shell_aos[sp].push_back(mu);
+            shell_aos[sp].push_back(static_cast<int>(mu));
         }
 
         // Compute shell populations before modifying P_atom.  In a nonorthogonal
@@ -445,10 +449,10 @@ namespace
 
             const Eigen::MatrixXd &P_atom = atomic_P_cache.at(sym);
             const auto &ao_indices = atom_ao_map[A];
-            const int n = static_cast<int>(ao_indices.size());
+            const HartreeFock::index_t n = static_cast<HartreeFock::index_t>(ao_indices.size());
 
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
+            for (HartreeFock::index_t i = 0; i < n; ++i)
+                for (HartreeFock::index_t j = 0; j < n; ++j)
                     P_mol(ao_indices[static_cast<std::size_t>(i)],
                           ao_indices[static_cast<std::size_t>(j)]) = P_atom(i, j);
         }

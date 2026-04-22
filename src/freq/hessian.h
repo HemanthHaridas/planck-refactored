@@ -3,6 +3,7 @@
 
 #include "base/types.h"
 #include <Eigen/Dense>
+#include <expected>
 #include <functional>
 #include <string>
 #include <vector>
@@ -11,7 +12,7 @@ namespace HartreeFock
 {
     namespace Freq
     {
-        using GradientMatrixRunner = std::function<Eigen::MatrixXd(HartreeFock::Calculator &)>;
+        using GradientMatrixRunner = std::function<std::expected<Eigen::MatrixXd, std::string>(HartreeFock::Calculator &)>;
 
         struct HessianResult
         {
@@ -28,9 +29,9 @@ namespace HartreeFock
         // Compute the semi-numerical Hessian via central finite differences of
         // analytic gradients:  H[:,j] = (g(x+h·ê_j) - g(x-h·ê_j)) / (2h).
         // Requires a converged SCF in calc.  After building H, calls vibrational_analysis().
-        HessianResult compute_hessian(HartreeFock::Calculator &calc);
-        HessianResult compute_hessian(HartreeFock::Calculator &calc,
-                                      const GradientMatrixRunner &gradient_runner);
+        std::expected<HessianResult, std::string> compute_hessian(HartreeFock::Calculator &calc);
+        std::expected<HessianResult, std::string> compute_hessian(HartreeFock::Calculator &calc,
+                                                                  const GradientMatrixRunner &gradient_runner);
 
         // Mass-weight H, project out translations and rotations (Eckart conditions),
         // diagonalise, and convert eigenvalues to cm⁻¹.

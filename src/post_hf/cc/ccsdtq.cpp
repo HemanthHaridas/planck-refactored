@@ -33,9 +33,15 @@ namespace HartreeFock::Correlation::CC
 
         const unsigned int max_iter =
             calculator._scf.get_max_cycles(calculator._shells.nbasis());
-        const double tol_energy = std::max(1e-10, calculator._scf._tol_energy);
-        const double tol_residual = std::max(1e-8, calculator._scf._tol_density);
-        constexpr double damping = 0.35;
+        const double tol_energy = calculator._scf._tol_energy;
+        const double tol_residual = calculator._scf._tol_density;
+        const double damping = calculator._scf._cc_damping;
+        if (tol_energy <= 0.0)
+            return std::unexpected("run_rccsdtq: tol_energy must be positive.");
+        if (tol_residual <= 0.0)
+            return std::unexpected("run_rccsdtq: tol_density must be positive.");
+        if (damping < 0.0 || damping > 1.0)
+            return std::unexpected("run_rccsdtq: cc_damping must be between 0 and 1.");
 
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,

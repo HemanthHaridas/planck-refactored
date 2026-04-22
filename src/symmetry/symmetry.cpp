@@ -47,6 +47,7 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(HartreeFo
             // Symmetry detection failed — fall back to input geometry (already in Bohr).
             molecule._point_group = "C1";
             molecule._standard = molecule._coordinates;
+            molecule._standard_is_bohr = true;
             molecule._symmetry = false;
             return {};
         }
@@ -92,6 +93,7 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(HartreeFo
             molecule.standard(i, 2) = new_geometry[i].v[2];
         }
         molecule._standard = molecule.standard * ANGSTROM_TO_BOHR;
+        molecule._standard_is_bohr = true;
         molecule._symmetry = true;
 
         return {};

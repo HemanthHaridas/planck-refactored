@@ -5,7 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <stdexcept>
+#include <expected>
 #include <string>
 #include <vector>
 
@@ -50,7 +50,7 @@ namespace DFT
     namespace detail
     {
 
-        inline double xc_intacc_for_scheme(int angular_scheme)
+        inline std::expected<double, std::string> xc_intacc_for_scheme(int angular_scheme)
         {
             switch (angular_scheme)
             {
@@ -69,41 +69,41 @@ namespace DFT
             case 7:
                 return 4.959;
             default:
-                throw std::invalid_argument(
+                return std::unexpected(
                     "xc_intacc_for_scheme: unsupported angular scheme " +
                     std::to_string(angular_scheme));
             }
         }
 
-        inline std::array<int, 5> angular_shells_for_scheme(int angular_scheme)
+        inline std::expected<std::array<int, 5>, std::string> angular_shells_for_scheme(int angular_scheme)
         {
             switch (angular_scheme)
             {
             case 1:
-                return {14, 26, 50, 50, 26};
+                return std::array<int, 5>{14, 26, 50, 50, 26};
             case 2:
-                return {14, 26, 50, 110, 50};
+                return std::array<int, 5>{14, 26, 50, 110, 50};
             case 3:
-                return {26, 50, 110, 194, 110};
+                return std::array<int, 5>{26, 50, 110, 194, 110};
             case 4:
-                return {26, 110, 194, 302, 194};
+                return std::array<int, 5>{26, 110, 194, 302, 194};
             case 5:
-                return {26, 194, 302, 434, 302};
+                return std::array<int, 5>{26, 194, 302, 434, 302};
             case 6:
-                return {50, 302, 434, 590, 434};
+                return std::array<int, 5>{50, 302, 434, 590, 434};
             case 7:
-                return {110, 434, 590, 770, 590};
+                return std::array<int, 5>{110, 434, 590, 770, 590};
             default:
-                throw std::invalid_argument(
+                return std::unexpected(
                     "angular_shells_for_scheme: unsupported angular scheme " +
                     std::to_string(angular_scheme));
             }
         }
 
-        inline int periodic_row(int Z)
+        inline std::expected<int, std::string> periodic_row(int Z)
         {
             if (Z <= 0)
-                throw std::invalid_argument(
+                return std::unexpected(
                     "periodic_row: atomic number must be positive, got " + std::to_string(Z));
             if (Z <= 2)
                 return 1;
@@ -128,10 +128,16 @@ namespace DFT
             return scheme;
         }
 
-        inline int radial_point_count(int Z, const GridPreset &preset)
+        inline std::expected<int, std::string> radial_point_count(int Z, const GridPreset &preset)
         {
             const int scheme = effective_angular_scheme(Z, preset);
-            const double count = (15.0 * xc_intacc_for_scheme(scheme) - 40.0) + static_cast<double>(preset.radial_row_factor * periodic_row(Z));
+            const auto int_acc = xc_intacc_for_scheme(scheme);
+            if (!int_acc)
+                return std::unexpected(int_acc.error());
+            const auto row = periodic_row(Z);
+            if (!row)
+                return std::unexpected(row.error());
+            const double count = (15.0 * (*int_acc) - 40.0) + static_cast<double>(preset.radial_row_factor * (*row));
             return std::max(1, static_cast<int>(std::lround(count)));
         }
 
@@ -154,13 +160,13 @@ namespace DFT
             return 4;
         }
 
-        inline Eigen::MatrixXd coordinates_bohr(const HartreeFock::Molecule &molecule)
+        inline std::expected<Eigen::MatrixXd, std::string> coordinates_bohr(const HartreeFock::Molecule &molecule)
         {
             if (static_cast<std::size_t>(molecule._coordinates.rows()) == molecule.natoms)
                 return molecule._coordinates;
 
             if (static_cast<std::size_t>(molecule.coordinates.rows()) != molecule.natoms)
-                throw std::invalid_argument(
+                return std::unexpected(
                     "coordinates_bohr: molecule coordinates are not initialized");
 
             if (molecule._is_bohr)
@@ -214,7 +220,7 @@ namespace DFT
             return becke_switch(mu);
         }
 
-        inline double becke_partition_weight(
+        inline std::expected<double, std::string> becke_partition_weight(
             int atom_index,
             const Eigen::Vector3d &point,
             const Eigen::VectorXi &atomic_numbers,
@@ -245,90 +251,133 @@ namespace DFT
                 sum += w;
 
             if (sum <= 0.0)
-                throw std::runtime_error("becke_partition_weight: partition weights underflowed");
+                return std::unexpected("becke_partition_weight: partition weights underflowed");
 
             return weights[static_cast<std::size_t>(atom_index)] / sum;
         }
 
     } // namespace detail
 
-    inline GridPreset grid_preset(GridLevel level)
+    inline std::expected<GridPreset, std::string> grid_preset(GridLevel level)
     {
         switch (level)
         {
         case GridLevel::Coarse:
-            return {level, 3, detail::xc_intacc_for_scheme(3), 5, true};
+        {
+            auto int_acc = detail::xc_intacc_for_scheme(3);
+            if (!int_acc)
+                return std::unexpected(int_acc.error());
+            return GridPreset{level, 3, *int_acc, 5, true};
+        }
         case GridLevel::Normal:
-            return {level, 4, detail::xc_intacc_for_scheme(4), 5, true};
+        {
+            auto int_acc = detail::xc_intacc_for_scheme(4);
+            if (!int_acc)
+                return std::unexpected(int_acc.error());
+            return GridPreset{level, 4, *int_acc, 5, true};
+        }
         case GridLevel::Fine:
-            return {level, 5, detail::xc_intacc_for_scheme(5), 5, true};
+        {
+            auto int_acc = detail::xc_intacc_for_scheme(5);
+            if (!int_acc)
+                return std::unexpected(int_acc.error());
+            return GridPreset{level, 5, *int_acc, 5, true};
+        }
         case GridLevel::UltraFine:
-            return {level, 6, detail::xc_intacc_for_scheme(6), 5, true};
+        {
+            auto int_acc = detail::xc_intacc_for_scheme(6);
+            if (!int_acc)
+                return std::unexpected(int_acc.error());
+            return GridPreset{level, 6, *int_acc, 5, true};
+        }
         }
 
-        throw std::invalid_argument("grid_preset: unsupported grid level");
+        return std::unexpected("grid_preset: unsupported grid level");
     }
 
-    inline int angular_scheme(GridLevel level)
+    inline std::expected<int, std::string> angular_scheme(GridLevel level)
     {
-        return grid_preset(level).angular_scheme;
+        auto preset = grid_preset(level);
+        if (!preset)
+            return std::unexpected(preset.error());
+        return preset->angular_scheme;
     }
 
-    inline int effective_angular_scheme(int Z, GridLevel level)
+    inline std::expected<int, std::string> effective_angular_scheme(int Z, GridLevel level)
     {
-        return detail::effective_angular_scheme(Z, grid_preset(level));
+        auto preset = grid_preset(level);
+        if (!preset)
+            return std::unexpected(preset.error());
+        return detail::effective_angular_scheme(Z, *preset);
     }
 
-    inline int radial_point_count(int Z, GridLevel level)
+    inline std::expected<int, std::string> radial_point_count(int Z, GridLevel level)
     {
-        return detail::radial_point_count(Z, grid_preset(level));
+        auto preset = grid_preset(level);
+        if (!preset)
+            return std::unexpected(preset.error());
+        return detail::radial_point_count(Z, *preset);
     }
 
-    inline std::array<int, 5> angular_shell_sizes(int Z, GridLevel level)
+    inline std::expected<std::array<int, 5>, std::string> angular_shell_sizes(int Z, GridLevel level)
     {
-        return detail::angular_shells_for_scheme(effective_angular_scheme(Z, level));
+        auto scheme = effective_angular_scheme(Z, level);
+        if (!scheme)
+            return std::unexpected(scheme.error());
+        return detail::angular_shells_for_scheme(*scheme);
     }
 
-    inline int atomic_point_count(int Z, GridLevel level)
+    inline std::expected<int, std::string> atomic_point_count(int Z, GridLevel level)
     {
-        const int nr = radial_point_count(Z, level);
+        const auto nr = radial_point_count(Z, level);
+        if (!nr)
+            return std::unexpected(nr.error());
         const auto shells = angular_shell_sizes(Z, level);
+        if (!shells)
+            return std::unexpected(shells.error());
 
         int total = 0;
-        for (int ir = 0; ir < nr; ++ir)
-            total += shells[detail::pruning_region(ir, nr)];
+        for (int ir = 0; ir < *nr; ++ir)
+            total += (*shells)[detail::pruning_region(ir, *nr)];
         return total;
     }
 
-    inline Eigen::MatrixXd MakeAtomicGrid(
+    inline std::expected<Eigen::MatrixXd, std::string> MakeAtomicGrid(
         int Z,
         const Eigen::Vector3d &center,
         GridLevel level)
     {
         if (Z <= 0)
-            throw std::invalid_argument(
+            return std::unexpected(
                 "MakeAtomicGrid: atomic number must be positive, got " + std::to_string(Z));
 
-        const int nr = radial_point_count(Z, level);
+        const auto nr = radial_point_count(Z, level);
+        if (!nr)
+            return std::unexpected(nr.error());
         const auto shells = angular_shell_sizes(Z, level);
-        const Eigen::MatrixXd radial = MakeTreutlerAhlrichsGrid(nr, treutler_radius(Z));
+        if (!shells)
+            return std::unexpected(shells.error());
+        const Eigen::MatrixXd radial = MakeTreutlerAhlrichsGrid(*nr, treutler_radius(Z));
 
         std::array<Eigen::MatrixXd, 5> angular_cache = {
-            MakeLebedevGrid(shells[0]),
-            MakeLebedevGrid(shells[1]),
-            MakeLebedevGrid(shells[2]),
-            MakeLebedevGrid(shells[3]),
-            MakeLebedevGrid(shells[4]),
+            MakeLebedevGrid((*shells)[0]),
+            MakeLebedevGrid((*shells)[1]),
+            MakeLebedevGrid((*shells)[2]),
+            MakeLebedevGrid((*shells)[3]),
+            MakeLebedevGrid((*shells)[4]),
         };
 
-        Eigen::MatrixXd grid(atomic_point_count(Z, level), 4);
+        const auto total_points = atomic_point_count(Z, level);
+        if (!total_points)
+            return std::unexpected(total_points.error());
+        Eigen::MatrixXd grid(*total_points, 4);
         Eigen::Index row = 0;
 
-        for (int ir = 0; ir < nr; ++ir)
+        for (int ir = 0; ir < *nr; ++ir)
         {
             const double radius = radial(ir, 0);
             const double wr = radial(ir, 1);
-            const Eigen::MatrixXd &angular = angular_cache[detail::pruning_region(ir, nr)];
+            const Eigen::MatrixXd &angular = angular_cache[detail::pruning_region(ir, *nr)];
 
             for (Eigen::Index ia = 0; ia < angular.rows(); ++ia, ++row)
             {
@@ -345,14 +394,14 @@ namespace DFT
         return grid;
     }
 
-    inline MolecularGrid MakeMolecularGrid(
+    inline std::expected<MolecularGrid, std::string> MakeMolecularGrid(
         const Eigen::VectorXi &atomic_numbers,
         const Eigen::MatrixXd &coordinates_bohr,
         GridLevel level)
     {
         const Eigen::Index natoms = atomic_numbers.size();
         if (coordinates_bohr.rows() != natoms || coordinates_bohr.cols() != 3)
-            throw std::invalid_argument(
+            return std::unexpected(
                 "MakeMolecularGrid: coordinates must have shape natoms x 3");
 
         std::vector<Eigen::MatrixXd> atomic_grids(static_cast<std::size_t>(natoms));
@@ -360,10 +409,13 @@ namespace DFT
 
         for (Eigen::Index atom = 0; atom < natoms; ++atom)
         {
-            atomic_grids[static_cast<std::size_t>(atom)] = MakeAtomicGrid(
+            auto atomic_grid = MakeAtomicGrid(
                 atomic_numbers(atom),
                 coordinates_bohr.row(atom).transpose(),
                 level);
+            if (!atomic_grid)
+                return std::unexpected(atomic_grid.error());
+            atomic_grids[static_cast<std::size_t>(atom)] = std::move(*atomic_grid);
             total_points += atomic_grids[static_cast<std::size_t>(atom)].rows();
         }
 
@@ -378,14 +430,16 @@ namespace DFT
             for (Eigen::Index i = 0; i < atomic_grid.rows(); ++i, ++row)
             {
                 const Eigen::Vector3d point = atomic_grid.row(i).head<3>().transpose();
-                const double partition = detail::becke_partition_weight(
+                const auto partition = detail::becke_partition_weight(
                     static_cast<int>(atom),
                     point,
                     atomic_numbers,
                     coordinates_bohr);
+                if (!partition)
+                    return std::unexpected(partition.error());
 
                 result.points.row(row).head<3>() = point.transpose();
-                result.points(row, 3) = atomic_grid(i, 3) * partition;
+                result.points(row, 3) = atomic_grid(i, 3) * (*partition);
                 result.owner(row) = static_cast<int>(atom);
             }
         }
@@ -393,13 +447,16 @@ namespace DFT
         return result;
     }
 
-    inline MolecularGrid MakeMolecularGrid(
+    inline std::expected<MolecularGrid, std::string> MakeMolecularGrid(
         const HartreeFock::Molecule &molecule,
         GridLevel level)
     {
+        auto coords = detail::coordinates_bohr(molecule);
+        if (!coords)
+            return std::unexpected(coords.error());
         return MakeMolecularGrid(
             molecule.atomic_numbers,
-            detail::coordinates_bohr(molecule),
+            *coords,
             level);
     }
 

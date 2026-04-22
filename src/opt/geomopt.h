@@ -3,6 +3,7 @@
 
 #include "base/types.h"
 #include <Eigen/Core>
+#include <expected>
 #include <functional>
 #include <string>
 #include <vector>
@@ -11,7 +12,7 @@ namespace HartreeFock
 {
     namespace Opt
     {
-        using GradientRunner = std::function<Eigen::VectorXd(HartreeFock::Calculator &)>;
+        using GradientRunner = std::function<std::expected<Eigen::VectorXd, std::string>(HartreeFock::Calculator &)>;
 
         struct GeomOptResult
         {
@@ -30,16 +31,16 @@ namespace HartreeFock
         // On return, calc._molecule._standard holds the optimized geometry,
         // calc._gradient holds the gradient at the optimized geometry, and
         // calc._total_energy holds the final energy.
-        GeomOptResult run_geomopt(HartreeFock::Calculator &calc);
-        GeomOptResult run_geomopt(HartreeFock::Calculator &calc,
-                                  const GradientRunner &gradient_runner);
+        std::expected<GeomOptResult, std::string> run_geomopt(HartreeFock::Calculator &calc);
+        std::expected<GeomOptResult, std::string> run_geomopt(HartreeFock::Calculator &calc,
+                                                              const GradientRunner &gradient_runner);
 
         // Run geometry optimization in generalized internal coordinates (GIC).
         // Uses BFGS Hessian update in redundant IC space with iterative
         // Cartesian back-transform.  Same return semantics as run_geomopt.
-        GeomOptResult run_geomopt_ic(HartreeFock::Calculator &calc);
-        GeomOptResult run_geomopt_ic(HartreeFock::Calculator &calc,
-                                     const GradientRunner &gradient_runner);
+        std::expected<GeomOptResult, std::string> run_geomopt_ic(HartreeFock::Calculator &calc);
+        std::expected<GeomOptResult, std::string> run_geomopt_ic(HartreeFock::Calculator &calc,
+                                                                 const GradientRunner &gradient_runner);
     } // namespace Opt
 } // namespace HartreeFock
 

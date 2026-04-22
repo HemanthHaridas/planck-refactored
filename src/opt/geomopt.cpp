@@ -2,9 +2,9 @@
 #include "intcoords.h"
 
 #include <cmath>
+#include <expected>
 #include <format>
 #include <optional>
-#include <stdexcept>
 
 #include "base/tables.h"
 #include "basis/basis.h"
@@ -23,18 +23,22 @@
 // Updates calc._total_energy, calc._gradient, and calc._nuclear_repulsion.
 // Returns the flat (3*natoms) gradient vector.
 
-static Eigen::VectorXd _run_sp_gradient_hf(HartreeFock::Calculator &calc)
+static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFock::Calculator &calc)
 {
     const std::size_t natoms = calc._molecule.natoms;
 
     // Update input-frame coordinates from _standard (Bohr) for consistency
     calc._molecule._coordinates = calc._molecule._standard;
     calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
+    calc._molecule._standard_is_bohr = true;
 
     // Re-read basis from updated geometry (_standard used for shell centers)
     const std::string gbs_path = calc._basis._basis_path + "/" + calc._basis._basis_name;
-    calc._shells = HartreeFock::BasisFunctions::read_gbs_basis(
+    auto basis_res = HartreeFock::BasisFunctions::read_gbs_basis(
         gbs_path, calc._molecule, calc._basis._basis);
+    if (!basis_res)
+        return std::unexpected("GeomOpt basis rebuild failed: " + basis_res.error());
+    calc._shells = std::move(*basis_res);
 
     // Save converged density from the previous step to warm-start the next SCF.
     // (initialize() zeros the density, so we must capture it beforehand.)
@@ -47,6 +51,8 @@ static Eigen::VectorXd _run_sp_gradient_hf(HartreeFock::Calculator &calc)
     calc._info._scf.initialize(calc._shells.nbasis());
     calc._scf.set_scf_mode_auto(calc._shells.nbasis());
     calc._info._is_converged = false;
+    calc._correlated_total_energy = 0.0;
+    calc._have_correlated_total_energy = false;
     calc._use_sao_blocking = false;
 
     // Restore the saved density and tell SCF to use it as the initial guess.
@@ -90,47 +96,48 @@ static Eigen::VectorXd _run_sp_gradient_hf(HartreeFock::Calculator &calc)
     calc._scf._guess = saved_guess;
 
     if (!scf_res)
-        throw std::runtime_error("GeomOpt SCF failed: " + scf_res.error());
+        return std::unexpected("GeomOpt SCF failed: " + scf_res.error());
 
     // Post-HF correction / gradient
     Eigen::MatrixXd grad_mat;
     if (calc._correlation == HartreeFock::PostHF::RMP2)
     {
         if (auto corr_res = HartreeFock::Correlation::run_rmp2(calc, shell_pairs); !corr_res)
-            throw std::runtime_error("GeomOpt RMP2 failed: " + corr_res.error());
-        calc._total_energy += calc._correlation_energy;
+            return std::unexpected("GeomOpt RMP2 failed: " + corr_res.error());
+        calc._correlated_total_energy = calc._total_energy + calc._correlation_energy;
+        calc._have_correlated_total_energy = true;
         auto grad_res = HartreeFock::Gradient::compute_rmp2_gradient(calc, shell_pairs);
         if (!grad_res)
-            throw std::runtime_error("GeomOpt RMP2 gradient failed: " + grad_res.error());
+            return std::unexpected("GeomOpt RMP2 gradient failed: " + grad_res.error());
         grad_mat = std::move(*grad_res);
     }
     else if (calc._correlation == HartreeFock::PostHF::UMP2)
     {
-        throw std::runtime_error("GeomOpt UMP2 gradient is not implemented");
+        return std::unexpected("GeomOpt UMP2 gradient is not implemented");
     }
     else if (calc._correlation == HartreeFock::PostHF::RCCSD ||
              calc._correlation == HartreeFock::PostHF::UCCSD ||
              calc._correlation == HartreeFock::PostHF::RCCSDT ||
              calc._correlation == HartreeFock::PostHF::UCCSDT)
     {
-        throw std::runtime_error("GeomOpt coupled-cluster gradients are not implemented");
+        return std::unexpected("GeomOpt coupled-cluster gradients are not implemented");
     }
     else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
     {
-        throw std::runtime_error("GeomOpt ROHF gradient is not implemented");
+        return std::unexpected("GeomOpt ROHF gradient is not implemented");
     }
     else if (calc._scf._scf == HartreeFock::SCFType::UHF)
     {
         auto grad_res = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
         if (!grad_res)
-            throw std::runtime_error("GeomOpt UHF gradient failed: " + grad_res.error());
+            return std::unexpected("GeomOpt UHF gradient failed: " + grad_res.error());
         grad_mat = std::move(*grad_res);
     }
     else
     {
         auto grad_res = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
         if (!grad_res)
-            throw std::runtime_error("GeomOpt RHF gradient failed: " + grad_res.error());
+            return std::unexpected("GeomOpt RHF gradient failed: " + grad_res.error());
         grad_mat = std::move(*grad_res);
     }
 
@@ -210,13 +217,13 @@ static Eigen::VectorXd _lbfgs_direction(
 
 // ─── Main geometry optimizer ──────────────────────────────────────────────────
 
-HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
+std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::run_geomopt(
     HartreeFock::Calculator &calc)
 {
     return run_geomopt(calc, _run_sp_gradient_hf);
 }
 
-HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
+std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::run_geomopt(
     HartreeFock::Calculator &calc,
     const GradientRunner &gradient_runner)
 {
@@ -238,8 +245,11 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
     }
 
     // Run initial SCF + gradient
-    Eigen::VectorXd g = gradient_runner(calc);
-    double E = calc._total_energy;
+    auto g_res = gradient_runner(calc);
+    if (!g_res)
+        return std::unexpected(g_res.error());
+    Eigen::VectorXd g = std::move(*g_res);
+    double E = calc.current_total_energy();
     result.energies.push_back(E);
 
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Opt Step 0 :",
@@ -294,8 +304,8 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
             Eigen::VectorXd x;
         };
 
-        // Run SCF+gradient at step size a; returns nullopt on SCF failure.
-        auto ls_eval = [&](double a) -> std::optional<LSState>
+        // Run SCF+gradient at step size a; returns an error on SCF/gradient failure.
+        auto ls_eval = [&](double a) -> std::expected<LSState, std::string>
         {
             Eigen::VectorXd x_try = x + a * p;
             for (std::size_t aa = 0; aa < natoms; ++aa)
@@ -304,15 +314,11 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
                 calc._molecule._standard(aa, 1) = x_try[aa * 3 + 1];
                 calc._molecule._standard(aa, 2) = x_try[aa * 3 + 2];
             }
-            try
-            {
-                Eigen::VectorXd g_try = gradient_runner(calc);
-                return LSState{a, calc._total_energy, g_try.dot(p), g_try, x_try};
-            }
-            catch (...)
-            {
-                return std::nullopt;
-            }
+            auto g_try_res = gradient_runner(calc);
+            if (!g_try_res)
+                return std::unexpected(g_try_res.error());
+            Eigen::VectorXd g_try = std::move(*g_try_res);
+            return LSState{a, calc.current_total_energy(), g_try.dot(p), g_try, x_try};
         };
 
         bool step_accepted = false;
@@ -435,8 +441,10 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
                 calc._molecule._standard(a, 1) = x[a * 3 + 1];
                 calc._molecule._standard(a, 2) = x[a * 3 + 2];
             }
-            gradient_runner(calc);
-            break;
+            auto restore_res = gradient_runner(calc);
+            if (!restore_res)
+                return std::unexpected("GeomOpt line search failed and geometry restore failed: " + restore_res.error());
+            return std::unexpected("GeomOpt line search failed: unable to find an acceptable step");
         }
     }
 
@@ -470,13 +478,13 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt(
 // Initial diagonal Hessian (Schlegel 1984):
 //   H_ii = 0.5 (stretch), 0.2 (bend), 0.1 (torsion)  [Ha/Bohr² or Ha/rad²]
 
-HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
+std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::run_geomopt_ic(
     HartreeFock::Calculator &calc)
 {
     return run_geomopt_ic(calc, _run_sp_gradient_hf);
 }
 
-HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
+std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::run_geomopt_ic(
     HartreeFock::Calculator &calc,
     const GradientRunner &gradient_runner)
 {
@@ -570,12 +578,15 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
 
     // ── Initial SCF + gradient ────────────────────────────────────────────────
     Eigen::MatrixXd xyz = calc._molecule._standard;
-    Eigen::VectorXd g_cart = gradient_runner(calc);
+    auto g_cart_res = gradient_runner(calc);
+    if (!g_cart_res)
+        return std::unexpected(g_cart_res.error());
+    Eigen::VectorXd g_cart = std::move(*g_cart_res);
     // Zero frozen-atom gradient contributions
     for (std::size_t a = 0; a < natoms; ++a)
         if (atom_frozen[a])
             g_cart.segment(static_cast<int>(a) * 3, 3).setZero();
-    double E = calc._total_energy;
+    double E = calc.current_total_energy();
     result.energies.push_back(E);
 
     Eigen::VectorXd g_ic = ics.cart_to_ic_grad(xyz, g_cart);
@@ -657,41 +668,46 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
         // Halve the IC step until energy decreases, with a minimum-alpha fallback.
         const Eigen::VectorXd dq_full = dq;
 
-        Eigen::MatrixXd xyz_new;
-        Eigen::VectorXd g_cart_new;
-        double E_new = E + 1.0;
+        Eigen::MatrixXd xyz_trial;
+        Eigen::VectorXd g_cart_trial;
+        double trial_energy = E + 1.0;
         bool step_ok = false;
         double alpha = 1.0;
 
         for (int ls = 0; ls < 20 && !step_ok; ++ls)
         {
             Eigen::VectorXd dq_try = alpha * dq_full;
-            xyz_new = ics.ic_to_cart_step(xyz, dq_try);
+            xyz_trial = ics.ic_to_cart_step(xyz, dq_try);
 
             for (std::size_t a = 0; a < natoms; ++a)
             {
-                calc._molecule._standard(a, 0) = xyz_new(a, 0);
-                calc._molecule._standard(a, 1) = xyz_new(a, 1);
-                calc._molecule._standard(a, 2) = xyz_new(a, 2);
+                calc._molecule._standard(a, 0) = xyz_trial(a, 0);
+                calc._molecule._standard(a, 1) = xyz_trial(a, 1);
+                calc._molecule._standard(a, 2) = xyz_trial(a, 2);
             }
-            try
-            {
-                g_cart_new = gradient_runner(calc);
-                // Zero frozen-atom gradient contributions
-                for (std::size_t a = 0; a < natoms; ++a)
-                    if (atom_frozen[a])
-                        g_cart_new.segment(static_cast<int>(a) * 3, 3).setZero();
-                E_new = calc._total_energy;
-                // Accept if energy decreases OR step is negligibly small
-                if (E_new < E || alpha < 1e-6)
-                    step_ok = true;
-                else
-                    alpha *= 0.5;
-            }
-            catch (...)
+            auto g_cart_trial_res = gradient_runner(calc);
+            if (!g_cart_trial_res)
             {
                 alpha *= 0.5;
+                continue;
             }
+            g_cart_trial = std::move(*g_cart_trial_res);
+            // Zero frozen-atom gradient contributions
+            for (std::size_t a = 0; a < natoms; ++a)
+                if (atom_frozen[a])
+                    g_cart_trial.segment(static_cast<int>(a) * 3, 3).setZero();
+            trial_energy = calc.current_total_energy();
+            if (trial_energy < E)
+                step_ok = true;
+            else if (alpha < GEOMOPT_LINE_SEARCH_MIN_ALPHA)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                                             std::format("Opt Step {} :", iter + 1),
+                                             "line search hit alpha floor without decreasing the energy");
+                break;
+            }
+            else
+                alpha *= 0.5;
         }
 
         if (!step_ok)
@@ -704,23 +720,23 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
                 calc._molecule._standard(a, 1) = xyz(a, 1);
                 calc._molecule._standard(a, 2) = xyz(a, 2);
             }
-            break;
+            return std::unexpected("GeomOpt line search failed in internal coordinates");
         }
 
-        Eigen::VectorXd g_ic_new = ics.cart_to_ic_grad(xyz_new, g_cart_new);
+        Eigen::VectorXd g_ic_trial = ics.cart_to_ic_grad(xyz_trial, g_cart_trial);
         // Zero constrained IC gradient components
         for (int c = 0; c < nq; ++c)
             if (ic_frozen[c])
-                g_ic_new[c] = 0.0;
+                g_ic_trial[c] = 0.0;
 
         // ── BFGS Hessian update in IC space ───────────────────────────────────
         // s_bfgs = actual IC displacement; y_bfgs = gradient change
         Eigen::VectorXd q_old = ics.values(xyz);
-        Eigen::VectorXd q_new_val = ics.values(xyz_new);
+        Eigen::VectorXd q_trial = ics.values(xyz_trial);
         Eigen::VectorXd s_bfgs(nq);
         for (int i = 0; i < nq; ++i)
         {
-            s_bfgs[i] = q_new_val[i] - q_old[i];
+            s_bfgs[i] = q_trial[i] - q_old[i];
             if (ics.coords[i].type == ICType::Torsion)
             {
                 while (s_bfgs[i] > M_PI)
@@ -729,7 +745,7 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
                     s_bfgs[i] += 2.0 * M_PI;
             }
         }
-        Eigen::VectorXd y_bfgs = g_ic_new - g_ic;
+        Eigen::VectorXd y_bfgs = g_ic_trial - g_ic;
         // Zero constrained IC components before BFGS update
         for (int c = 0; c < nq; ++c)
         {
@@ -751,10 +767,10 @@ HartreeFock::Opt::GeomOptResult HartreeFock::Opt::run_geomopt_ic(
         }
 
         // ── Accept step ───────────────────────────────────────────────────────
-        xyz = xyz_new;
-        g_cart = g_cart_new;
-        g_ic = g_ic_new;
-        E = E_new;
+        xyz = xyz_trial;
+        g_cart = g_cart_trial;
+        g_ic = g_ic_trial;
+        E = trial_energy;
         result.energies.push_back(E);
         const double g_rms_step = std::sqrt(g_cart.squaredNorm() /
                                             static_cast<double>(g_cart.size()));

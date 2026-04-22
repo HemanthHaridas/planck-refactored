@@ -1,5 +1,6 @@
 .vscode
 build
+arXiv
 src/external
 src/base/basis.h
 inputs
@@ -46,3 +47,4 @@ python/dist
 .gitignore
 tests/inputs/regression/open_shell/water_radical_cation_rohf_restart_sto3g.hfchk
 tests/inputs/regression/open_shell/water_triplet_uhf_restart_sto3g.hfchk
+CODE_REVIEW.md

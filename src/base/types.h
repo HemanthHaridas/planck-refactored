@@ -21,6 +21,8 @@ constexpr int MAX_L = 6;
 
 namespace HartreeFock
 {
+    using index_t = Eigen::Index;
+
     enum class BasisType
     {
         Cartesian, // Cartesian gaussians
@@ -177,6 +179,7 @@ namespace HartreeFock
 
         bool _symmetry = false; // Symmetry flag
         bool _is_bohr = false;
+        bool _standard_is_bohr = false;
 
         void clear() noexcept
         {
@@ -196,6 +199,7 @@ namespace HartreeFock
             _point_group = "C1";
             _symmetry = false;
             _is_bohr = false;
+            _standard_is_bohr = false;
         }
     };
 
@@ -245,7 +249,7 @@ namespace HartreeFock
 
     struct Basis
     {
-        std::vector<Shell> _shells;                  // Shells
+        std::deque<Shell> _shells;                   // Shells; deque keeps Shell* stable across push_back
         std::deque<ContractedView> _basis_functions; // Basis functions; deque keeps references stable across push_back
 
         std::size_t nshells() const noexcept
@@ -279,6 +283,7 @@ namespace HartreeFock
         double _tol_density = 1E-10;       // Density tolerance
         double _level_shift = 0.0;         // Virtual orbital level shift in Hartree (0 = off)
         double _diis_restart_factor = 2.0; // Restart DIIS when error grows by this factor (0 = off)
+        double _cc_damping = 0.35;         // Coupled-cluster damping factor for tensor CC iterations
 
         SCFType _scf = SCFType::RHF;           // SCF Type (Default is RHF)
         SCFMode _mode = SCFMode::Conventional; // SCF Mode (Default is Conventional)
@@ -762,7 +767,9 @@ namespace HartreeFock
 
         double _total_energy = 0;                        // Total Energy (SCF + Nuclear Repulsion)
         double _nuclear_repulsion = 0;                   // Nuclear Repulsion Energy (Bohr)
+        double _correlated_total_energy = 0.0;          // Correlated total energy when post-HF augments the SCF reference
         double _correlation_energy = 0.0;                // Post-HF correlation energy (0 if not computed)
+        bool _have_correlated_total_energy = false;      // Whether the correlated total energy is valid
         double _ccsd_reference_correlation_energy = 0.0; // CCSD correlation energy cached during CCSDT runs
         bool _have_ccsd_reference_energy = false;        // Whether the cached CCSD correlation energy is valid
 
@@ -807,10 +814,16 @@ namespace HartreeFock
         double _hessian_step = 5e-3;                    // finite-difference step in Bohr
         double _imag_follow_step = 0.2;                 // Cartesian displacement along imaginary mode, Bohr
 
+        double current_total_energy() const noexcept
+        {
+            return _have_correlated_total_energy ? _correlated_total_energy : _total_energy;
+        }
+
         void _compute_nuclear_repulsion() noexcept
         {
             assert(_molecule._standard.rows() == static_cast<Eigen::Index>(_molecule.natoms) &&
                    _molecule._standard.cols() == 3 &&
+                   _molecule._standard_is_bohr &&
                    "_compute_nuclear_repulsion requires molecule._standard to be initialized in Bohr");
             const std::size_t N = _molecule.natoms;
             double E_nuc = 0.0;

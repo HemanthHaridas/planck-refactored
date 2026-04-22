@@ -617,13 +617,14 @@ namespace HartreeFock::Correlation::CASSCF
         const Eigen::MatrixXd I = Eigen::MatrixXd::Identity(nb, nb);
         // Apply the antisymmetric orbital step with a Cayley transform, then
         // restore S-orthonormality with a symmetric Löwdin-like cleanup.
-        Eigen::MatrixXd C_new =
+        Eigen::MatrixXd rotated_coefficients =
             C_old * (I - 0.5 * kappa).colPivHouseholderQr().solve(I + 0.5 * kappa);
 
-        Eigen::MatrixXd ovlp = C_new.transpose() * S * C_new;
+        Eigen::MatrixXd ovlp = rotated_coefficients.transpose() * S * rotated_coefficients;
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(ovlp);
         Eigen::VectorXd inv_sqrt = eig.eigenvalues().array().max(1e-12).sqrt().inverse();
-        return C_new * (eig.eigenvectors() * inv_sqrt.asDiagonal() * eig.eigenvectors().transpose());
+        return rotated_coefficients *
+               (eig.eigenvectors() * inv_sqrt.asDiagonal() * eig.eigenvectors().transpose());
     }
 
 } // namespace HartreeFock::Correlation::CASSCF

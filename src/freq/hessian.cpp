@@ -1,8 +1,8 @@
 #include "hessian.h"
 
 #include <cmath>
+#include <expected>
 #include <format>
-#include <stdexcept>
 
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
@@ -37,17 +37,21 @@ static constexpr double CM_INV_TO_HARTREE = 4.5563352527e-6;
 // calc._molecule._standard; then computes the analytic gradient.
 // Returns the gradient as a natoms×3 matrix (atom-major).
 
-static Eigen::MatrixXd _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
+static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
 {
     // Sync coordinate frames
     calc._molecule._coordinates = calc._molecule._standard;
     calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
+    calc._molecule._standard_is_bohr = true;
 
     // Rebuild basis
     const std::string gbs_path =
         calc._basis._basis_path + "/" + calc._basis._basis_name;
-    calc._shells = HartreeFock::BasisFunctions::read_gbs_basis(
+    auto basis_res = HartreeFock::BasisFunctions::read_gbs_basis(
         gbs_path, calc._molecule, calc._basis._basis);
+    if (!basis_res)
+        return std::unexpected("Hessian basis rebuild failed: " + basis_res.error());
+    calc._shells = std::move(*basis_res);
 
     // Reset SCF state (no SAO blocking during finite-difference steps)
     calc._info._scf = HartreeFock::DataSCF(
@@ -80,25 +84,25 @@ static Eigen::MatrixXd _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
         scf_res = HartreeFock::SCF::run_rhf(calc, shell_pairs);
 
     if (!scf_res)
-        throw std::runtime_error("Hessian SCF failed: " + scf_res.error());
+        return std::unexpected("Hessian SCF failed: " + scf_res.error());
 
     Eigen::MatrixXd grad;
     if (calc._scf._scf == HartreeFock::SCFType::UHF)
     {
         auto grad_res = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
         if (!grad_res)
-            throw std::runtime_error("Hessian UHF gradient failed: " + grad_res.error());
+            return std::unexpected("Hessian UHF gradient failed: " + grad_res.error());
         grad = std::move(*grad_res);
     }
     else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
     {
-        throw std::runtime_error("Hessian ROHF gradient is not implemented");
+        return std::unexpected("Hessian ROHF gradient is not implemented");
     }
     else
     {
         auto grad_res = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
         if (!grad_res)
-            throw std::runtime_error("Hessian RHF gradient failed: " + grad_res.error());
+            return std::unexpected("Hessian RHF gradient failed: " + grad_res.error());
         grad = std::move(*grad_res);
     }
 
@@ -271,13 +275,13 @@ void HartreeFock::Freq::vibrational_analysis(
 
 // ─── Compute semi-numerical Hessian ──────────────────────────────────────────
 
-HartreeFock::Freq::HessianResult
+std::expected<HartreeFock::Freq::HessianResult, std::string>
 HartreeFock::Freq::compute_hessian(HartreeFock::Calculator &calc)
 {
     return compute_hessian(calc, _run_sp_gradient_freq_hf);
 }
 
-HartreeFock::Freq::HessianResult
+std::expected<HartreeFock::Freq::HessianResult, std::string>
 HartreeFock::Freq::compute_hessian(
     HartreeFock::Calculator &calc,
     const GradientMatrixRunner &gradient_runner)
@@ -302,11 +306,17 @@ HartreeFock::Freq::compute_hessian(
 
         // Forward displacement
         calc._molecule._standard(atom, dir) = x_orig + h;
-        Eigen::MatrixXd g_fwd = gradient_runner(calc);
+        auto g_fwd_res = gradient_runner(calc);
+        if (!g_fwd_res)
+            return std::unexpected(g_fwd_res.error());
+        Eigen::MatrixXd g_fwd = std::move(*g_fwd_res);
 
         // Backward displacement
         calc._molecule._standard(atom, dir) = x_orig - h;
-        Eigen::MatrixXd g_bck = gradient_runner(calc);
+        auto g_bck_res = gradient_runner(calc);
+        if (!g_bck_res)
+            return std::unexpected(g_bck_res.error());
+        Eigen::MatrixXd g_bck = std::move(*g_bck_res);
 
         // Restore
         calc._molecule._standard(atom, dir) = x_orig;
@@ -330,6 +340,7 @@ HartreeFock::Freq::compute_hessian(
     // the energy / density printed after the hessian block is consistent.
     calc._molecule._coordinates = calc._molecule._standard;
     calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
+    calc._molecule._standard_is_bohr = true;
 
     // Run vibrational analysis
     vibrational_analysis(result, calc);

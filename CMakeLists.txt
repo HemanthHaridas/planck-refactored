@@ -121,49 +121,49 @@ externalproject_add(
 )
 
 # Collect sources automatically
-file(GLOB BASE_SRC
+file(GLOB BASE_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/base/*.h
     ${SRC_DIR}/base/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB IO_SRC
+file(GLOB IO_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/io/*.h
     ${SRC_DIR}/io/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB LOOKUP_SRC
+file(GLOB LOOKUP_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/lookup/*.h
     ${SRC_DIR}/lookup/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB SYMM_SRC
+file(GLOB SYMM_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/symmetry/*.h
     ${SRC_DIR}/symmetry/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB BASIS_SRC
+file(GLOB BASIS_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/basis/*.h
     ${SRC_DIR}/basis/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB INT_SRC
+file(GLOB INT_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/integrals/*.h
     ${SRC_DIR}/integrals/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB SCF_SRC
+file(GLOB SCF_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/scf/*.h
     ${SRC_DIR}/scf/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB POSTHF_SRC
+file(GLOB POSTHF_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/post_hf/*.h
     ${SRC_DIR}/post_hf/*.cpp
     ${SRC_DIR}/post_hf/cc/*.h
@@ -173,17 +173,17 @@ file(GLOB POSTHF_SRC
 )
 list(REMOVE_ITEM POSTHF_SRC ${SRC_DIR}/post_hf/casscf.cpp)
 
-file(GLOB GRADIENT_SRC
+file(GLOB GRADIENT_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/gradient/*.h
     ${SRC_DIR}/gradient/*.cpp
 )
 
-file(GLOB OPT_SRC
+file(GLOB OPT_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/opt/*.h
     ${SRC_DIR}/opt/*.cpp
 )
 
-file(GLOB FREQ_SRC
+file(GLOB FREQ_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/freq/*.h
     ${SRC_DIR}/freq/*.cpp
 )

@@ -426,7 +426,7 @@ Eigen::VectorXd HartreeFock::Opt::IntCoordSystem::cart_to_ic_grad(
 // ── IntCoordSystem::ic_to_cart_step ──────────────────────────────────────────
 //
 // Iterative back-transform following Schlegel (1984):
-//   x_new = x0 + B^T G^+ dq         (first-order)
+//   x_trial = x0 + B^T G^+ dq       (first-order)
 //   then iterate:  x += B(x)^T G(x)^+ residual
 //   until ‖residual‖ < 1e-10 or max_iter reached.
 
@@ -450,11 +450,11 @@ Eigen::MatrixXd HartreeFock::Opt::IntCoordSystem::ic_to_cart_step(
     // Microiterations
     for (int iter = 0; iter < max_iter; ++iter)
     {
-        Eigen::VectorXd q_new = values(xyz);
+        Eigen::VectorXd q_trial = values(xyz);
         Eigen::VectorXd dq_actual(nics());
         for (int i = 0; i < nics(); ++i)
         {
-            dq_actual[i] = q_new[i] - q0[i];
+            dq_actual[i] = q_trial[i] - q0[i];
             // Wrap torsions to [-π, π]
             if (coords[i].type == ICType::Torsion)
             {

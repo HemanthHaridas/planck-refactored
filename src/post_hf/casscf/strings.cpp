@@ -439,12 +439,12 @@ namespace HartreeFock::Correlation::CASSCF
         // Build the minimal symmetry context only when the point group supports a
         // one-dimensional abelian product table.
         auto product_table = HartreeFock::Symmetry::build_abelian_irrep_product_table(calc);
-        if (!product_table.valid || product_table.irrep_names.empty())
+        if (!product_table || !product_table->valid || product_table->irrep_names.empty())
             return std::nullopt;
 
         SymmetryContext ctx;
-        ctx.names = std::move(product_table.irrep_names);
-        ctx.product = std::move(product_table.product);
+        ctx.names = std::move(product_table->irrep_names);
+        ctx.product = std::move(product_table->product);
         ctx.abelian_1d_only = true;
 
         int identity = -1;

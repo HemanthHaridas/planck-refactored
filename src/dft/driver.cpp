@@ -4,7 +4,6 @@
 #include <chrono>
 #include <format>
 #include <numeric>
-#include <stdexcept>
 #include <string>
 
 #include "base/wrapper.h"
@@ -39,7 +38,7 @@ namespace DFT::Driver
                 return DFT::GridLevel::UltraFine;
             }
 
-            throw std::invalid_argument("Unsupported DFT grid quality");
+            return DFT::GridLevel::Normal;
         }
 
         constexpr double NUMERICAL_GRADIENT_STEP_BOHR = 1.0e-3;
@@ -138,6 +137,7 @@ namespace DFT::Driver
             if (!options.use_symmetry || !calculator._geometry._use_symm)
             {
                 calculator._molecule._standard = calculator._molecule._coordinates;
+                calculator._molecule._standard_is_bohr = true;
                 calculator._molecule._symmetry = false;
                 calculator._molecule._point_group = "C1";
                 HartreeFock::Logger::logging(
@@ -196,6 +196,7 @@ namespace DFT::Driver
             }
 
             calculator._molecule._standard = geometry->coords_bohr;
+            calculator._molecule._standard_is_bohr = true;
             calculator._molecule._coordinates = geometry->coords_bohr;
             calculator._molecule.coordinates = geometry->coords_bohr / ANGSTROM_TO_BOHR;
             calculator._molecule.charge = geometry->charge;
@@ -215,21 +216,17 @@ namespace DFT::Driver
 
         std::expected<void, std::string> read_basis_and_initialize(HartreeFock::Calculator &calculator)
         {
-            try
-            {
-                const std::string gbs_path =
-                    calculator._basis._basis_path + "/" + calculator._basis._basis_name;
-                calculator._shells = HartreeFock::BasisFunctions::read_gbs_basis(
-                    gbs_path,
-                    calculator._molecule,
-                    calculator._basis._basis);
-                calculator.initialize();
-                return {};
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected("DFT basis setup failed: " + std::string(e.what()));
-            }
+            const std::string gbs_path =
+                calculator._basis._basis_path + "/" + calculator._basis._basis_name;
+            auto basis_res = HartreeFock::BasisFunctions::read_gbs_basis(
+                gbs_path,
+                calculator._molecule,
+                calculator._basis._basis);
+            if (!basis_res)
+                return std::unexpected("DFT basis setup failed: " + basis_res.error());
+            calculator._shells = std::move(*basis_res);
+            calculator.initialize();
+            return {};
         }
 
         void maybe_build_sao_basis(HartreeFock::Calculator &calculator, const Options &options)
@@ -241,26 +238,25 @@ namespace DFT::Driver
                 calculator._molecule._point_group.find("inf") != std::string::npos)
                 return;
 
-            try
-            {
-                auto sao = HartreeFock::Symmetry::build_sao_basis(calculator);
-                if (!sao.valid)
-                    return;
-
-                calculator._sao_transform = std::move(sao.transform);
-                calculator._sao_irrep_index = std::move(sao.sao_irrep_index);
-                calculator._sao_irrep_names = std::move(sao.irrep_names);
-                calculator._sao_block_sizes = std::move(sao.block_sizes);
-                calculator._sao_block_offsets = std::move(sao.block_offsets);
-                calculator._use_sao_blocking = true;
-            }
-            catch (const std::exception &e)
+            auto sao = HartreeFock::Symmetry::build_sao_basis(calculator);
+            if (!sao)
             {
                 HartreeFock::Logger::logging(
                     HartreeFock::LogLevel::Warning,
                     "DFT SAO :",
-                    std::format("Skipped: {}", e.what()));
+                    std::format("Skipped: {}", sao.error()));
+                return;
             }
+
+            if (!sao->valid)
+                return;
+
+            calculator._sao_transform = std::move(sao->transform);
+            calculator._sao_irrep_index = std::move(sao->sao_irrep_index);
+            calculator._sao_irrep_names = std::move(sao->irrep_names);
+            calculator._sao_block_sizes = std::move(sao->block_sizes);
+            calculator._sao_block_offsets = std::move(sao->block_offsets);
+            calculator._use_sao_blocking = true;
         }
 
         void reset_sao_state(HartreeFock::Calculator &calculator)
@@ -354,75 +350,69 @@ namespace DFT::Driver
             if (auto one_e = compute_one_electron_terms(calculator, shell_pairs); !one_e)
                 return std::unexpected("Current-basis 1e integral build failed before density projection: " + one_e.error());
 
-            try
+            const std::string small_gbs =
+                calculator._basis._basis_path + "/" + mos->basis_name;
+            auto small_shells = HartreeFock::BasisFunctions::read_gbs_basis(
+                small_gbs,
+                calculator._molecule,
+                calculator._basis._basis);
+            if (!small_shells)
+                return std::unexpected(small_shells.error());
+
+            auto orthogonalizer = HartreeFock::SCF::build_orthogonalizer(calculator._overlap);
+            if (!orthogonalizer)
+                return std::unexpected("Orthogonalizer failed before density projection: " + orthogonalizer.error());
+
+            const Eigen::MatrixXd cross_overlap =
+                HartreeFock::ObaraSaika::_compute_cross_overlap(
+                    calculator._shells,
+                    *small_shells);
+
+            int n_electrons = 0;
+            for (auto z : calculator._molecule.atomic_numbers)
+                n_electrons += z;
+            n_electrons -= calculator._molecule.charge;
+
+            const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+            const int n_alpha = (n_electrons + n_unpaired) / 2;
+            const int n_beta = (n_electrons - n_unpaired) / 2;
+            const bool current_unrestricted =
+                calculator._scf._scf == HartreeFock::SCFType::UHF;
+
+            if (mos->is_uhf)
             {
-                const std::string small_gbs =
-                    calculator._basis._basis_path + "/" + mos->basis_name;
-                const HartreeFock::Basis small_shells =
-                    HartreeFock::BasisFunctions::read_gbs_basis(
-                        small_gbs,
-                        calculator._molecule,
-                        calculator._basis._basis);
+                calculator._info._scf.alpha.density =
+                    HartreeFock::Checkpoint::project_density(
+                        *orthogonalizer,
+                        cross_overlap,
+                        mos->C_alpha.leftCols(n_alpha),
+                        1.0);
+                calculator._info._scf.beta.density =
+                    HartreeFock::Checkpoint::project_density(
+                        *orthogonalizer,
+                        cross_overlap,
+                        mos->C_beta.leftCols(n_beta),
+                        1.0);
+            }
+            else
+            {
+                const double alpha_factor = current_unrestricted ? 1.0 : 2.0;
+                calculator._info._scf.alpha.density =
+                    HartreeFock::Checkpoint::project_density(
+                        *orthogonalizer,
+                        cross_overlap,
+                        mos->C_alpha.leftCols(n_alpha),
+                        alpha_factor);
 
-                auto orthogonalizer = HartreeFock::SCF::build_orthogonalizer(calculator._overlap);
-                if (!orthogonalizer)
-                    return std::unexpected("Orthogonalizer failed before density projection: " + orthogonalizer.error());
-
-                const Eigen::MatrixXd cross_overlap =
-                    HartreeFock::ObaraSaika::_compute_cross_overlap(
-                        calculator._shells,
-                        small_shells);
-
-                int n_electrons = 0;
-                for (auto z : calculator._molecule.atomic_numbers)
-                    n_electrons += z;
-                n_electrons -= calculator._molecule.charge;
-
-                const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
-                const int n_alpha = (n_electrons + n_unpaired) / 2;
-                const int n_beta = (n_electrons - n_unpaired) / 2;
-                const bool current_unrestricted =
-                    calculator._scf._scf == HartreeFock::SCFType::UHF;
-
-                if (mos->is_uhf)
+                if (current_unrestricted)
                 {
-                    calculator._info._scf.alpha.density =
-                        HartreeFock::Checkpoint::project_density(
-                            *orthogonalizer,
-                            cross_overlap,
-                            mos->C_alpha.leftCols(n_alpha),
-                            1.0);
                     calculator._info._scf.beta.density =
                         HartreeFock::Checkpoint::project_density(
                             *orthogonalizer,
                             cross_overlap,
-                            mos->C_beta.leftCols(n_beta),
+                            mos->C_alpha.leftCols(n_beta),
                             1.0);
                 }
-                else
-                {
-                    const double alpha_factor = current_unrestricted ? 1.0 : 2.0;
-                    calculator._info._scf.alpha.density =
-                        HartreeFock::Checkpoint::project_density(
-                            *orthogonalizer,
-                            cross_overlap,
-                            mos->C_alpha.leftCols(n_alpha),
-                            alpha_factor);
-
-                    if (current_unrestricted)
-                    {
-                        calculator._info._scf.beta.density =
-                            HartreeFock::Checkpoint::project_density(
-                                *orthogonalizer,
-                                cross_overlap,
-                                mos->C_alpha.leftCols(n_beta),
-                                1.0);
-                    }
-                }
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected(std::string(e.what()));
             }
 
             HartreeFock::Logger::logging(
@@ -998,6 +988,7 @@ namespace DFT::Driver
         {
             calculator._molecule._coordinates = calculator._molecule._standard;
             calculator._molecule.coordinates = calculator._molecule._standard / ANGSTROM_TO_BOHR;
+            calculator._molecule._standard_is_bohr = true;
             calculator._molecule.standard = calculator._molecule.coordinates;
             calculator._molecule._symmetry = false;
             calculator._molecule._point_group = "C1";
@@ -1006,19 +997,15 @@ namespace DFT::Driver
             const Eigen::MatrixXd previous_alpha_density = calculator._info._scf.alpha.density;
             const Eigen::MatrixXd previous_beta_density = calculator._info._scf.beta.density;
 
-            try
-            {
-                const std::string gbs_path =
-                    calculator._basis._basis_path + "/" + calculator._basis._basis_name;
-                calculator._shells = HartreeFock::BasisFunctions::read_gbs_basis(
-                    gbs_path,
-                    calculator._molecule,
-                    calculator._basis._basis);
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected("DFT basis setup failed: " + std::string(e.what()));
-            }
+            const std::string gbs_path =
+                calculator._basis._basis_path + "/" + calculator._basis._basis_name;
+            auto basis_res = HartreeFock::BasisFunctions::read_gbs_basis(
+                gbs_path,
+                calculator._molecule,
+                calculator._basis._basis);
+            if (!basis_res)
+                return std::unexpected("DFT basis setup failed: " + basis_res.error());
+            calculator._shells = std::move(*basis_res);
 
             calculator._info._scf = HartreeFock::DataSCF(
                 calculator._scf._scf == HartreeFock::SCFType::UHF);
@@ -1030,22 +1017,21 @@ namespace DFT::Driver
             calculator._compute_nuclear_repulsion();
 
             PreparedSystem prepared;
-            prepared.grid_preset = grid_preset(to_grid_level(calculator._dft._grid));
+            auto preset = grid_preset(to_grid_level(calculator._dft._grid));
+            if (!preset)
+                return std::unexpected(preset.error());
+            prepared.grid_preset = *preset;
             prepared.shell_pairs = build_shellpairs(calculator._shells);
 
             if (auto res = compute_one_electron_terms(calculator, prepared.shell_pairs); !res)
                 return std::unexpected(res.error());
 
-            try
-            {
-                prepared.molecular_grid = MakeMolecularGrid(
-                    calculator._molecule,
-                    to_grid_level(calculator._dft._grid));
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected("DFT molecular grid construction failed: " + std::string(e.what()));
-            }
+            auto molecular_grid = MakeMolecularGrid(
+                calculator._molecule,
+                to_grid_level(calculator._dft._grid));
+            if (!molecular_grid)
+                return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
+            prepared.molecular_grid = std::move(*molecular_grid);
 
             auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
             if (!ao_grid)
@@ -1155,6 +1141,7 @@ namespace DFT::Driver
             auto energy_at = [&](const Eigen::MatrixXd &geometry) -> std::expected<double, std::string>
             {
                 calculator._molecule._standard = geometry;
+                calculator._molecule._standard_is_bohr = true;
                 HartreeFock::Logger::ScopedSilence silence;
                 auto result = run_single_point_current_geometry(
                     calculator,
@@ -1188,6 +1175,7 @@ namespace DFT::Driver
             }
 
             calculator._molecule._standard = reference_geometry;
+            calculator._molecule._standard_is_bohr = true;
             {
                 HartreeFock::Logger::ScopedSilence silence;
                 auto reference = run_single_point_current_geometry(
@@ -1366,28 +1354,20 @@ namespace DFT::Driver
                     "Computing fully numerical Hessian (central differences, gradient step = {:.4f} Bohr)",
                     NUMERICAL_GRADIENT_STEP_BOHR));
 
-            try
+            auto gradient_runner = [&](HartreeFock::Calculator &inner) -> std::expected<Eigen::MatrixXd, std::string>
             {
-                auto gradient_runner = [&](HartreeFock::Calculator &inner) -> Eigen::MatrixXd
-                {
-                    auto gradient = compute_numeric_gradient(
-                        inner,
-                        functionals,
-                        NUMERICAL_GRADIENT_STEP_BOHR);
-                    if (!gradient)
-                        throw std::runtime_error(gradient.error());
-                    return *gradient;
-                };
+                return compute_numeric_gradient(
+                    inner,
+                    functionals,
+                    NUMERICAL_GRADIENT_STEP_BOHR);
+            };
 
-                auto result = HartreeFock::Freq::compute_hessian(calculator, gradient_runner);
-                store_frequency_result(calculator, result);
-                print_frequency_report(calculator, result);
-                return result;
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected(std::string(e.what()));
-            }
+            auto result = HartreeFock::Freq::compute_hessian(calculator, gradient_runner);
+            if (!result)
+                return std::unexpected(result.error());
+            store_frequency_result(calculator, *result);
+            print_frequency_report(calculator, *result);
+            return result;
         }
 
         std::expected<Result, std::string> run_geometry_optimization(
@@ -1396,6 +1376,7 @@ namespace DFT::Driver
         {
             calculator.prepare_coordinates();
             calculator._molecule._standard = calculator._molecule._coordinates;
+            calculator._molecule._standard_is_bohr = true;
             calculator._molecule.standard = calculator._molecule.coordinates;
 
             if (!calculator._constraints.empty())
@@ -1426,44 +1407,38 @@ namespace DFT::Driver
                     : "Starting L-BFGS optimizer with numerical KS gradients");
             HartreeFock::Logger::blank();
 
-            auto gradient_runner = [&](HartreeFock::Calculator &inner) -> Eigen::VectorXd
+            auto gradient_runner = [&](HartreeFock::Calculator &inner) -> std::expected<Eigen::VectorXd, std::string>
             {
                 auto gradient = compute_numeric_gradient(
                     inner,
                     functionals,
                     NUMERICAL_GRADIENT_STEP_BOHR);
                 if (!gradient)
-                    throw std::runtime_error(gradient.error());
+                    return std::unexpected(gradient.error());
                 return flatten_gradient_atom_major(*gradient);
             };
 
-            HartreeFock::Opt::GeomOptResult opt_result;
-            try
-            {
-                opt_result = use_internal_coordinates
-                                 ? HartreeFock::Opt::run_geomopt_ic(calculator, gradient_runner)
-                                 : HartreeFock::Opt::run_geomopt(calculator, gradient_runner);
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected(std::string(e.what()));
-            }
+            auto opt_result = use_internal_coordinates
+                                  ? HartreeFock::Opt::run_geomopt_ic(calculator, gradient_runner)
+                                  : HartreeFock::Opt::run_geomopt(calculator, gradient_runner);
+            if (!opt_result)
+                return std::unexpected(opt_result.error());
 
             HartreeFock::Logger::blank();
             HartreeFock::Logger::logging(
-                opt_result.converged ? HartreeFock::LogLevel::Info : HartreeFock::LogLevel::Warning,
+                opt_result->converged ? HartreeFock::LogLevel::Info : HartreeFock::LogLevel::Warning,
                 "Geometry Optimization :",
-                opt_result.converged
-                    ? std::format("Converged in {} steps", opt_result.iterations)
-                    : std::format("Did NOT converge after {} steps", opt_result.iterations));
+                opt_result->converged
+                    ? std::format("Converged in {} steps", opt_result->iterations)
+                    : std::format("Did NOT converge after {} steps", opt_result->iterations));
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "Final Energy :",
-                std::format("{:.10f} Eh", opt_result.energy));
+                std::format("{:.10f} Eh", opt_result->energy));
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "Final max|g| :",
-                std::format("{:.6e} Ha/Bohr", opt_result.grad_max));
+                std::format("{:.6e} Ha/Bohr", opt_result->grad_max));
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "Optimized Geometry (Angstrom) :",
@@ -1477,17 +1452,17 @@ namespace DFT::Driver
                         "  Atom {:3d}:  {:14d}  {:14.8f}  {:14.8f}  {:14.8f}",
                         static_cast<int>(atom + 1),
                         static_cast<int>(calculator._molecule.atomic_numbers[atom]),
-                        opt_result.final_coords(static_cast<Eigen::Index>(atom), 0) * BOHR_TO_ANGSTROM,
-                        opt_result.final_coords(static_cast<Eigen::Index>(atom), 1) * BOHR_TO_ANGSTROM,
-                        opt_result.final_coords(static_cast<Eigen::Index>(atom), 2) * BOHR_TO_ANGSTROM));
+                        opt_result->final_coords(static_cast<Eigen::Index>(atom), 0) * BOHR_TO_ANGSTROM,
+                        opt_result->final_coords(static_cast<Eigen::Index>(atom), 1) * BOHR_TO_ANGSTROM,
+                        opt_result->final_coords(static_cast<Eigen::Index>(atom), 2) * BOHR_TO_ANGSTROM));
             }
             HartreeFock::Logger::blank();
 
             return Result{
-                .total_energy = opt_result.energy,
+                .total_energy = opt_result->energy,
                 .xc_energy = 0.0,
                 .integrated_electrons = 0.0,
-                .converged = opt_result.converged};
+                .converged = opt_result->converged};
         }
 
     } // namespace
@@ -1593,7 +1568,10 @@ namespace DFT::Driver
             return std::unexpected(res.error());
 
         PreparedSystem prepared;
-        prepared.grid_preset = grid_preset(grid_level);
+        auto preset = grid_preset(grid_level);
+        if (!preset)
+            return std::unexpected(preset.error());
+        prepared.grid_preset = *preset;
         prepared.shell_pairs = build_shellpairs(calculator._shells);
 
         RestartState restart_state;
@@ -1613,14 +1591,10 @@ namespace DFT::Driver
 
         maybe_build_sao_basis(calculator, options);
 
-        try
-        {
-            prepared.molecular_grid = MakeMolecularGrid(calculator._molecule, grid_level);
-        }
-        catch (const std::exception &e)
-        {
-            return std::unexpected("DFT molecular grid construction failed: " + std::string(e.what()));
-        }
+        auto molecular_grid = MakeMolecularGrid(calculator._molecule, grid_level);
+        if (!molecular_grid)
+            return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
+        prepared.molecular_grid = std::move(*molecular_grid);
 
         auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
         if (!ao_grid)
