@@ -1,5 +1,6 @@
 #include "post_hf/casscf/response.h"
 
+#include "base/tables.h"
 #include "post_hf/casscf/casscf_utils.h"
 #include "post_hf/casscf/ci.h"
 #include "post_hf/casscf/orbital.h"
@@ -235,8 +236,9 @@ namespace
         const Eigen::MatrixXd &M,
         const std::vector<RotPair> &pairs)
     {
-        Eigen::VectorXd packed = Eigen::VectorXd::Zero(static_cast<int>(pairs.size()));
-        for (int i = 0; i < static_cast<int>(pairs.size()); ++i)
+        const HartreeFock::index_t pair_count = static_cast<HartreeFock::index_t>(pairs.size());
+        Eigen::VectorXd packed = Eigen::VectorXd::Zero(pair_count);
+        for (HartreeFock::index_t i = 0; i < pair_count; ++i)
             packed(i) = M(pairs[static_cast<std::size_t>(i)].p, pairs[static_cast<std::size_t>(i)].q);
         return packed;
     }
@@ -247,7 +249,8 @@ namespace
         int nbasis)
     {
         Eigen::MatrixXd M = Eigen::MatrixXd::Zero(nbasis, nbasis);
-        for (int i = 0; i < static_cast<int>(pairs.size()) && i < packed.size(); ++i)
+        const HartreeFock::index_t pair_count = static_cast<HartreeFock::index_t>(pairs.size());
+        for (HartreeFock::index_t i = 0; i < pair_count && i < packed.size(); ++i)
         {
             const auto &pair = pairs[static_cast<std::size_t>(i)];
             M(pair.p, pair.q) = packed(i);
@@ -277,9 +280,9 @@ namespace
         if (orbital_hessian_ctx == nullptr || op.pairs.empty() || static_cast<int>(op.pairs.size()) > max_dense_pairs)
             return op;
 
-        const int npairs = static_cast<int>(op.pairs.size());
+        const HartreeFock::index_t npairs = static_cast<HartreeFock::index_t>(op.pairs.size());
         op.matrix = Eigen::MatrixXd::Zero(npairs, npairs);
-        for (int col = 0; col < npairs; ++col)
+        for (HartreeFock::index_t col = 0; col < npairs; ++col)
         {
             Eigen::VectorXd e = Eigen::VectorXd::Zero(npairs);
             e(col) = 1.0;
@@ -310,7 +313,7 @@ namespace
         bool use_sym)
     {
         if (x.size() == 0 || op.pairs.empty())
-            return Eigen::VectorXd::Zero(static_cast<int>(op.pairs.size()));
+            return Eigen::VectorXd::Zero(static_cast<HartreeFock::index_t>(op.pairs.size()));
         if (op.available && op.matrix.rows() == x.size())
             return op.matrix * x;
 
@@ -329,8 +332,9 @@ namespace
         double level_shift)
     {
         const Eigen::MatrixXd F_sum = F_I_mo + F_A_mo;
-        Eigen::VectorXd denom = Eigen::VectorXd::Ones(static_cast<int>(pairs.size()));
-        for (int k = 0; k < static_cast<int>(pairs.size()); ++k)
+        const HartreeFock::index_t pair_count = static_cast<HartreeFock::index_t>(pairs.size());
+        Eigen::VectorXd denom = Eigen::VectorXd::Ones(pair_count);
+        for (HartreeFock::index_t k = 0; k < pair_count; ++k)
         {
             const auto &pair = pairs[static_cast<std::size_t>(k)];
             denom(k) = hess_diag(F_sum, pair.p, pair.q) + level_shift;
@@ -463,7 +467,7 @@ namespace
                 Eigen::VectorXd best_trial = step;
                 Eigen::VectorXd best_trial_r = best_r;
                 double best_trial_norm = best_norm;
-                for (double scale : {1.0, 0.5, 0.25, 0.125})
+                for (double scale : CASSCF_PROBE_STEP_SCALES)
                 {
                     const Eigen::VectorXd trial = cap_packed_step(step + scale * correction);
                     const Eigen::VectorXd trial_r = residual(trial);
@@ -917,7 +921,7 @@ namespace HartreeFock::Correlation::CASSCF
             Eigen::VectorXd best_ci_step = result.ci_step;
             double best_metric = current_metric;
 
-            for (double scale : {1.0, 0.5, 0.25, 0.125})
+            for (double scale : CASSCF_PROBE_STEP_SCALES)
             {
                 Eigen::MatrixXd trial_orbital_step =
                     result.orbital_step + scale * correction.orbital_step;
@@ -1119,7 +1123,7 @@ namespace HartreeFock::Correlation::CASSCF
             std::vector<Eigen::VectorXd> best_ci_steps = result.ci_steps;
             double best_metric = current_metric;
 
-            for (double scale : {1.0, 0.5, 0.25, 0.125})
+            for (double scale : CASSCF_PROBE_STEP_SCALES)
             {
                 Eigen::MatrixXd trial_orbital_step =
                     result.orbital_step + scale * orbital_correction;

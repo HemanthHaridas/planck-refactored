@@ -174,6 +174,11 @@ static int double_factorial(int n)
     return result;
 }
 
+double HartreeFock::BasisFunctions::component_norm(int df)
+{
+    return 1.0 / std::sqrt(static_cast<double>(df));
+}
+
 std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read_gbs_basis(const std::string file_name, const HartreeFock::Molecule &molecule, const HartreeFock::BasisType &basis_type)
 {
     if (!(basis_type == HartreeFock::BasisType::Cartesian))
@@ -276,7 +281,7 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
                 auto &basis_function = basis._basis_functions.back();
                 basis_function._shell = shell_ptr;
                 basis_function._index = idx;
-                basis_function._component_norm = 1.0 / std::sqrt(static_cast<double>(df));
+                basis_function._component_norm = HartreeFock::BasisFunctions::component_norm(df);
                 basis_function._cartesian = am;
             }
         }

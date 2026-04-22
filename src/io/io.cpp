@@ -869,6 +869,20 @@ namespace HartreeFock::IO
         return {};
     }
 
+    static std::expected<void, std::string> validate_requested_methods(
+        const HartreeFock::Calculator &calculator)
+    {
+        if (calculator._correlation == HartreeFock::PostHF::RCCSDTQ &&
+            calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+        {
+            return std::unexpected(
+                "RCCSDTQ is currently available only for single-point calculations; "
+                "choose calculation_type sp or remove correlation ccsdtq.");
+        }
+
+        return {};
+    }
+
     // ── Constraint section parser ─────────────────────────────────────────────
     //
     // Accepted line formats (all indices are 1-based):
@@ -1221,6 +1235,9 @@ namespace HartreeFock::IO
             if (auto res = _parse_constraints(it->second, calculator._constraints); !res)
                 return std::unexpected(res.error());
         }
+
+        if (auto res = validate_requested_methods(calculator); !res)
+            return std::unexpected(res.error());
 
         return {};
     }

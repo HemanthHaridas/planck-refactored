@@ -371,12 +371,12 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
 
         const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
 
-        // ── New density P_new ─────────────────────────────────────────────────
-        const Eigen::MatrixXd P_new = 2.0 * C_occ * C_occ.transpose();
+        // ── Next density ──────────────────────────────────────────────────────
+        const Eigen::MatrixXd density_next = 2.0 * C_occ * C_occ.transpose();
 
         // ── Convergence checks ────────────────────────────────────────────────
         const IterationMetrics metrics =
-            restricted_iteration_metrics(P, P_new, E_prev, E_total);
+            restricted_iteration_metrics(P, density_next, E_prev, E_total);
 
         const double iter_time = std::chrono::duration<double>(
                                      std::chrono::steady_clock::now() - iter_start)
@@ -391,7 +391,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
             0.0,
             iter_time);
 
-        P = P_new;
+        P = density_next;
         E_prev = E_total;
 
         store_restricted_iteration(
@@ -717,13 +717,15 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             // shift_active stays false (level shift incompatible with SAO blocking).
         }
 
-        // ── New spin densities ────────────────────────────────────────────────
-        const Eigen::MatrixXd Pa_new = Ca.leftCols(n_alpha) * Ca.leftCols(n_alpha).transpose();
-        const Eigen::MatrixXd Pb_new = Cb.leftCols(n_beta) * Cb.leftCols(n_beta).transpose();
+        // ── Next spin densities ───────────────────────────────────────────────
+        const Eigen::MatrixXd density_alpha_next =
+            Ca.leftCols(n_alpha) * Ca.leftCols(n_alpha).transpose();
+        const Eigen::MatrixXd density_beta_next =
+            Cb.leftCols(n_beta) * Cb.leftCols(n_beta).transpose();
 
         // ── Convergence on total density ──────────────────────────────────────
         const IterationMetrics metrics = unrestricted_iteration_metrics(
-            Pa, Pb, Pa_new, Pb_new, E_prev, E_total);
+            Pa, Pb, density_alpha_next, density_beta_next, E_prev, E_total);
 
         const double iter_time = std::chrono::duration<double>(
                                      std::chrono::steady_clock::now() - iter_start)
@@ -738,8 +740,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             0.0,
             iter_time);
 
-        Pa = Pa_new;
-        Pb = Pb_new;
+        Pa = density_alpha_next;
+        Pb = density_beta_next;
         E_prev = E_total;
 
         store_unrestricted_iteration(
@@ -1068,11 +1070,13 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
 
         _reorder_rohf_orbitals(C, eps, epsa, epsb, mo_sym, n_closed, n_open);
 
-        const Eigen::MatrixXd Pa_new = C.leftCols(n_alpha) * C.leftCols(n_alpha).transpose();
-        const Eigen::MatrixXd Pb_new = C.leftCols(n_beta) * C.leftCols(n_beta).transpose();
+        const Eigen::MatrixXd density_alpha_next =
+            C.leftCols(n_alpha) * C.leftCols(n_alpha).transpose();
+        const Eigen::MatrixXd density_beta_next =
+            C.leftCols(n_beta) * C.leftCols(n_beta).transpose();
 
         const IterationMetrics metrics = unrestricted_iteration_metrics(
-            Pa, Pb, Pa_new, Pb_new, E_prev, E_total);
+            Pa, Pb, density_alpha_next, density_beta_next, E_prev, E_total);
 
         const double iter_time = std::chrono::duration<double>(
                                      std::chrono::steady_clock::now() - iter_start)
@@ -1087,8 +1091,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
             0.0,
             iter_time);
 
-        Pa = Pa_new;
-        Pb = Pb_new;
+        Pa = density_alpha_next;
+        Pb = density_beta_next;
         E_prev = E_total;
 
         calculator._info._scf.alpha.mo_symmetry = mo_sym;

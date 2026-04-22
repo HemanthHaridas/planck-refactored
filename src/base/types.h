@@ -21,6 +21,8 @@ constexpr int MAX_L = 6;
 
 namespace HartreeFock
 {
+    using index_t = Eigen::Index;
+
     enum class BasisType
     {
         Cartesian, // Cartesian gaussians

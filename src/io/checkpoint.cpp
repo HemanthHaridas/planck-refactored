@@ -15,6 +15,9 @@
 // ─── Low-level binary helpers ─────────────────────────────────────────────────
 
 // Primitive scalar write/read helpers
+// The checkpoint payload is currently host-endian and assumes IEEE-754 doubles.
+// The magic/version banner below is used to reject incompatible or stale files
+// explicitly rather than silently mis-decoding them.
 
 template <typename T>
 static void write_pod(std::ostream &out, T val)

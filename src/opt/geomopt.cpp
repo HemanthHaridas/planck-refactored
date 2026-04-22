@@ -668,38 +668,38 @@ std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::ru
         // Halve the IC step until energy decreases, with a minimum-alpha fallback.
         const Eigen::VectorXd dq_full = dq;
 
-        Eigen::MatrixXd xyz_new;
-        Eigen::VectorXd g_cart_new;
-        double E_new = E + 1.0;
+        Eigen::MatrixXd xyz_trial;
+        Eigen::VectorXd g_cart_trial;
+        double trial_energy = E + 1.0;
         bool step_ok = false;
         double alpha = 1.0;
 
         for (int ls = 0; ls < 20 && !step_ok; ++ls)
         {
             Eigen::VectorXd dq_try = alpha * dq_full;
-            xyz_new = ics.ic_to_cart_step(xyz, dq_try);
+            xyz_trial = ics.ic_to_cart_step(xyz, dq_try);
 
             for (std::size_t a = 0; a < natoms; ++a)
             {
-                calc._molecule._standard(a, 0) = xyz_new(a, 0);
-                calc._molecule._standard(a, 1) = xyz_new(a, 1);
-                calc._molecule._standard(a, 2) = xyz_new(a, 2);
+                calc._molecule._standard(a, 0) = xyz_trial(a, 0);
+                calc._molecule._standard(a, 1) = xyz_trial(a, 1);
+                calc._molecule._standard(a, 2) = xyz_trial(a, 2);
             }
-            auto g_cart_new_res = gradient_runner(calc);
-            if (!g_cart_new_res)
+            auto g_cart_trial_res = gradient_runner(calc);
+            if (!g_cart_trial_res)
             {
                 alpha *= 0.5;
                 continue;
             }
-            g_cart_new = std::move(*g_cart_new_res);
+            g_cart_trial = std::move(*g_cart_trial_res);
             // Zero frozen-atom gradient contributions
             for (std::size_t a = 0; a < natoms; ++a)
                 if (atom_frozen[a])
-                    g_cart_new.segment(static_cast<int>(a) * 3, 3).setZero();
-            E_new = calc.current_total_energy();
-            if (E_new < E)
+                    g_cart_trial.segment(static_cast<int>(a) * 3, 3).setZero();
+            trial_energy = calc.current_total_energy();
+            if (trial_energy < E)
                 step_ok = true;
-            else if (alpha < 1e-6)
+            else if (alpha < GEOMOPT_LINE_SEARCH_MIN_ALPHA)
             {
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
                                              std::format("Opt Step {} :", iter + 1),
@@ -723,20 +723,20 @@ std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::ru
             return std::unexpected("GeomOpt line search failed in internal coordinates");
         }
 
-        Eigen::VectorXd g_ic_new = ics.cart_to_ic_grad(xyz_new, g_cart_new);
+        Eigen::VectorXd g_ic_trial = ics.cart_to_ic_grad(xyz_trial, g_cart_trial);
         // Zero constrained IC gradient components
         for (int c = 0; c < nq; ++c)
             if (ic_frozen[c])
-                g_ic_new[c] = 0.0;
+                g_ic_trial[c] = 0.0;
 
         // ── BFGS Hessian update in IC space ───────────────────────────────────
         // s_bfgs = actual IC displacement; y_bfgs = gradient change
         Eigen::VectorXd q_old = ics.values(xyz);
-        Eigen::VectorXd q_new_val = ics.values(xyz_new);
+        Eigen::VectorXd q_trial = ics.values(xyz_trial);
         Eigen::VectorXd s_bfgs(nq);
         for (int i = 0; i < nq; ++i)
         {
-            s_bfgs[i] = q_new_val[i] - q_old[i];
+            s_bfgs[i] = q_trial[i] - q_old[i];
             if (ics.coords[i].type == ICType::Torsion)
             {
                 while (s_bfgs[i] > M_PI)
@@ -745,7 +745,7 @@ std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::ru
                     s_bfgs[i] += 2.0 * M_PI;
             }
         }
-        Eigen::VectorXd y_bfgs = g_ic_new - g_ic;
+        Eigen::VectorXd y_bfgs = g_ic_trial - g_ic;
         // Zero constrained IC components before BFGS update
         for (int c = 0; c < nq; ++c)
         {
@@ -767,10 +767,10 @@ std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::ru
         }
 
         // ── Accept step ───────────────────────────────────────────────────────
-        xyz = xyz_new;
-        g_cart = g_cart_new;
-        g_ic = g_ic_new;
-        E = E_new;
+        xyz = xyz_trial;
+        g_cart = g_cart_trial;
+        g_ic = g_ic_trial;
+        E = trial_energy;
         result.energies.push_back(E);
         const double g_rms_step = std::sqrt(g_cart.squaredNorm() /
                                             static_cast<double>(g_cart.size()));

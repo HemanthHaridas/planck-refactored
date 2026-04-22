@@ -44,6 +44,18 @@ namespace
         throw std::runtime_error(message);
     }
 
+    template <typename T, typename E>
+    T require_expected(std::expected<T, E> result, const std::string &context)
+    {
+        if (!result)
+        {
+            std::ostringstream oss;
+            oss << context << ": " << result.error();
+            throw std::runtime_error(oss.str());
+        }
+        return std::move(*result);
+    }
+
     void test_angular_grid_invariants()
     {
         const double four_pi = 4.0 * std::numbers::pi;
@@ -173,10 +185,18 @@ namespace
 
     void test_orca_like_grid_presets()
     {
-        const auto coarse = DFT::grid_preset(DFT::GridLevel::Coarse);
-        const auto normal = DFT::grid_preset(DFT::GridLevel::Normal);
-        const auto fine = DFT::grid_preset(DFT::GridLevel::Fine);
-        const auto ultrafine = DFT::grid_preset(DFT::GridLevel::UltraFine);
+        const auto coarse = require_expected(
+            DFT::grid_preset(DFT::GridLevel::Coarse),
+            "grid_preset(Coarse)");
+        const auto normal = require_expected(
+            DFT::grid_preset(DFT::GridLevel::Normal),
+            "grid_preset(Normal)");
+        const auto fine = require_expected(
+            DFT::grid_preset(DFT::GridLevel::Fine),
+            "grid_preset(Fine)");
+        const auto ultrafine = require_expected(
+            DFT::grid_preset(DFT::GridLevel::UltraFine),
+            "grid_preset(UltraFine)");
 
         require(coarse.angular_scheme == 3, "Coarse grid should map to AngularGrid 3");
         require(normal.angular_scheme == 4, "Normal grid should map to AngularGrid 4");
@@ -188,18 +208,26 @@ namespace
         require_near(fine.int_acc, 4.629, 1e-12, "Wrong IntAcc for fine grid");
         require_near(ultrafine.int_acc, 4.959, 1e-12, "Wrong IntAcc for ultrafine grid");
 
-        require(DFT::effective_angular_scheme(1, DFT::GridLevel::Normal) == 3,
+        require(require_expected(
+                    DFT::effective_angular_scheme(1, DFT::GridLevel::Normal),
+                    "effective_angular_scheme(H, Normal)") == 3,
                 "Light-atom reduction should lower H/He angular scheme by one");
-        require(DFT::radial_point_count(8, DFT::GridLevel::Normal) > 0,
+        require(require_expected(
+                    DFT::radial_point_count(8, DFT::GridLevel::Normal),
+                    "radial_point_count(O, Normal)") > 0,
                 "Normal grid should allocate radial points for oxygen");
     }
 
     void test_atomic_and_molecular_grid_generation()
     {
         const Eigen::Vector3d center = Eigen::Vector3d::Zero();
-        const Eigen::MatrixXd atomic_grid = DFT::MakeAtomicGrid(8, center, DFT::GridLevel::Normal);
+        const Eigen::MatrixXd atomic_grid = require_expected(
+            DFT::MakeAtomicGrid(8, center, DFT::GridLevel::Normal),
+            "MakeAtomicGrid(O, Normal)");
 
-        require(atomic_grid.rows() == DFT::atomic_point_count(8, DFT::GridLevel::Normal),
+        require(atomic_grid.rows() == require_expected(
+                                         DFT::atomic_point_count(8, DFT::GridLevel::Normal),
+                                         "atomic_point_count(O, Normal)"),
                 "Atomic grid point count does not match the preset");
         require(atomic_grid.cols() == 4, "Atomic grid should have 4 columns");
 
@@ -216,7 +244,9 @@ namespace
         mol._coordinates.resize(1, 3);
         mol._coordinates << 0.0, 0.0, 0.0;
 
-        const DFT::MolecularGrid mol_grid = DFT::MakeMolecularGrid(mol, DFT::GridLevel::Normal);
+        const DFT::MolecularGrid mol_grid = require_expected(
+            DFT::MakeMolecularGrid(mol, DFT::GridLevel::Normal),
+            "MakeMolecularGrid(single O, Normal)");
         require(mol_grid.points.rows() == atomic_grid.rows(),
                 "Single-atom molecular grid should match the atomic grid size");
         require(mol_grid.owner.size() == mol_grid.points.rows(),
@@ -235,12 +265,17 @@ namespace
         h2_xyz << -0.7, 0.0, 0.0,
             0.7, 0.0, 0.0;
 
-        const DFT::MolecularGrid h2_grid = DFT::MakeMolecularGrid(
-            h2_z,
-            h2_xyz,
-            DFT::GridLevel::Coarse);
+        const DFT::MolecularGrid h2_grid = require_expected(
+            DFT::MakeMolecularGrid(
+                h2_z,
+                h2_xyz,
+                DFT::GridLevel::Coarse),
+            "MakeMolecularGrid(H2, Coarse)");
 
-        require(h2_grid.points.rows() == 2 * DFT::atomic_point_count(1, DFT::GridLevel::Coarse),
+        require(h2_grid.points.rows() ==
+                    2 * require_expected(
+                            DFT::atomic_point_count(1, DFT::GridLevel::Coarse),
+                            "atomic_point_count(H, Coarse)"),
                 "Two-atom molecular grid should concatenate the two atomic grids");
 
         double total_weight = 0.0;

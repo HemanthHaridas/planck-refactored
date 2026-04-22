@@ -2521,8 +2521,10 @@ namespace
             return std::unexpected(
                 "run_staged_tensor_triples_iterations: triples workspace is not allocated.");
 
-        constexpr double kT3Damping = 0.35;
-        constexpr double kSDDamping = 0.35;
+        const double triples_damping = calculator._scf._cc_damping;
+        const double sd_damping = calculator._scf._cc_damping;
+        if (triples_damping < 0.0 || triples_damping > 1.0)
+            return std::unexpected("run_staged_tensor_triples_iterations: cc_damping must be between 0 and 1.");
         // The staged tensor path is meant to become the production solver for
         // larger systems, so it should not stop at a tolerance inherited from
         // the more forgiving SCF density threshold. Keep the stage criterion
@@ -2606,7 +2608,7 @@ namespace
             metrics.r2_feedback_rms = tensor_rms(sym_r2_feedback);
             metrics.sd_residual_rms = rms_norm(pack_residuals(residuals));
             const SDUpdateMetrics sd_update = update_sd_amplitudes_with_feedback(
-                calculator, state, residuals, sd_amps, diis, kSDDamping, false);
+                calculator, state, residuals, sd_amps, diis, sd_damping, false);
             metrics.t1_step_rms = sd_update.t1_step_rms;
             metrics.t2_step_rms = sd_update.t2_step_rms;
             store_sd_amplitudes(sd_amps, triples);
@@ -2639,7 +2641,7 @@ namespace
             restore_restricted_t3_structure(triples.r3);
             metrics.r3_rms = triples_residual_rms(triples.r3);
             metrics.t3_step_rms = update_t3_from_r3_jacobi(
-                state.reference, triples, kT3Damping);
+                state.reference, triples, triples_damping);
 
             // Project T3 onto restricted subspace BEFORE pushing to DIIS so the
             // subspace vectors are consistent with what the next iteration will see.
