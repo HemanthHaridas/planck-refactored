@@ -2,8 +2,10 @@
 test_molecule3d.py — unit tests for molecule3d.py.
 """
 
+import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import numpy as np
 
@@ -153,7 +155,9 @@ def test_viewer_html_is_string():
 def test_viewer_html_contains_3dmol_cdn():
     html = viewer_html(WATER_ATOMS)
     assert "3dmol" in html.lower()
-    assert "cdn.jsdelivr.net" in html
+    script_srcs = re.findall(r'<script[^>]+src=["\\\']([^"\\\']+)["\\\']', html, flags=re.IGNORECASE)
+    hosts = [urlparse(src).hostname for src in script_srcs]
+    assert "cdn.jsdelivr.net" in hosts
 
 
 def test_viewer_html_contains_xyz_data():
