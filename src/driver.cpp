@@ -1095,7 +1095,14 @@ int main(int argc, const char *argv[])
             calculator._info._is_converged = false;
             calculator._use_sao_blocking = false;
 
-            calculator._compute_nuclear_repulsion();
+            if (auto nuclear_repulsion = calculator.recompute_nuclear_repulsion(); !nuclear_repulsion)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "Final Symmetry SCF :",
+                    nuclear_repulsion.error());
+                goto skip_final_symmetry_scf;
+            }
 
             auto sp_sym = build_shellpairs(calculator._shells);
             HartreeFock::Symmetry::update_integral_symmetry(calculator);

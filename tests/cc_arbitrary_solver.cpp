@@ -41,7 +41,9 @@ namespace
         ArbitraryOrderRCCAmplitudes restored = amps;
         for (auto &tensor : restored.by_rank)
             std::fill(tensor.data.begin(), tensor.data.end(), -99.0);
-        unpack_amplitudes(packed, restored);
+        auto unpacked = unpack_amplitudes(packed, restored);
+        if (!unpacked.has_value())
+            return expect(false, unpacked.error());
 
         return expect(restored.by_rank[0].data == amps.by_rank[0].data, "Rank-1 unpack mismatch") &&
                expect(restored.by_rank[1].data == amps.by_rank[1].data, "Rank-2 unpack mismatch") &&
@@ -56,11 +58,13 @@ namespace
             .n_occ = 2,
             .n_virt = 1,
         };
-        const ArbitraryOrderResiduals residuals = make_zero_rcc_residuals(ref, 4);
-        return expect(residuals.by_rank.size() == 4, "Expected ranks 1..4 residual storage") &&
-               expect(residuals.by_rank[0].dims == std::vector<int>({2, 1}), "Rank-1 residual dims mismatch") &&
-               expect(residuals.by_rank[1].dims == std::vector<int>({2, 2, 1, 1}), "Rank-2 residual dims mismatch") &&
-               expect(residuals.by_rank[3].dims == std::vector<int>({2, 2, 2, 2, 1, 1, 1, 1}), "Rank-4 residual dims mismatch");
+        auto residuals = make_zero_rcc_residuals(ref, 4);
+        if (!residuals.has_value())
+            return expect(false, residuals.error());
+        return expect(residuals->by_rank.size() == 4, "Expected ranks 1..4 residual storage") &&
+               expect(residuals->by_rank[0].dims == std::vector<int>({2, 1}), "Rank-1 residual dims mismatch") &&
+               expect(residuals->by_rank[1].dims == std::vector<int>({2, 2, 1, 1}), "Rank-2 residual dims mismatch") &&
+               expect(residuals->by_rank[3].dims == std::vector<int>({2, 2, 2, 2, 1, 1, 1, 1}), "Rank-4 residual dims mismatch");
     }
 
     bool test_jacobi_update_across_ranks()
@@ -219,8 +223,8 @@ namespace
                                 const ArbitraryOrderDenominatorCache &denoms,
                                 const ArbitraryOrderRCCAmplitudes &amps) -> TensorND
                 {
-                    const auto denom = denoms.tensor(rank);
-                    const auto amp = amps.tensor(rank);
+                    const TensorND &denom = denoms.by_rank[static_cast<std::size_t>(rank - 1)];
+                    const TensorND &amp = amps.by_rank[static_cast<std::size_t>(rank - 1)];
                     TensorND residual(denom.dims, 0.0);
                     for (std::size_t idx = 0; idx < denom.size(); ++idx)
                         residual.data[idx] = targets[static_cast<std::size_t>(rank - 1)] -

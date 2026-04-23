@@ -990,7 +990,8 @@ namespace DFT::Driver
             calculator._scf.set_max_cycles_auto(calculator._shells.nbasis());
             calculator._info._is_converged = false;
             calculator._eri.clear();
-            calculator._compute_nuclear_repulsion();
+            if (auto nuclear_repulsion = calculator.recompute_nuclear_repulsion(); !nuclear_repulsion)
+                return std::unexpected("DFT geometry preparation failed: " + nuclear_repulsion.error());
 
             PreparedSystem prepared;
             auto preset = grid_preset(to_grid_level(calculator._dft._grid));

@@ -839,7 +839,7 @@ namespace HartreeFock
             return _have_correlated_total_energy ? _correlated_total_energy : _total_energy;
         }
 
-        void _compute_nuclear_repulsion() noexcept
+        std::expected<void, std::string> _compute_nuclear_repulsion()
         {
             assert(_molecule._standard.rows() == static_cast<Eigen::Index>(_molecule.natoms) &&
                    _molecule._standard.cols() == 3 &&
@@ -861,13 +861,19 @@ namespace HartreeFock
                            "_compute_nuclear_repulsion encountered overlapping nuclei");
                     if (r2 < 1.0e-24)
                     {
-                        _nuclear_repulsion = std::numeric_limits<double>::quiet_NaN();
-                        return;
+                        return std::unexpected(
+                            "nuclear repulsion is undefined because two nuclei occupy the same position.");
                     }
                     E_nuc += Za * Zb / std::sqrt(r2);
                 }
             }
             _nuclear_repulsion = E_nuc;
+            return {};
+        }
+
+        std::expected<void, std::string> recompute_nuclear_repulsion()
+        {
+            return _compute_nuclear_repulsion();
         }
 
     public:
@@ -916,10 +922,9 @@ namespace HartreeFock
             // prepare_coordinates() must have been called before initialize().
             // Nothing to do here for coordinate conversion.
 
-            _compute_nuclear_repulsion();
-            if (!std::isfinite(_nuclear_repulsion))
-                return std::unexpected(
-                    "initialize: nuclear repulsion is undefined because two nuclei occupy the same position.");
+            auto nuclear_repulsion = recompute_nuclear_repulsion();
+            if (!nuclear_repulsion)
+                return std::unexpected("initialize: " + nuclear_repulsion.error());
 
             return {};
         }

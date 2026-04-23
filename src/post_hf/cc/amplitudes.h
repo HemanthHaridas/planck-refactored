@@ -20,8 +20,8 @@ namespace HartreeFock::Correlation::CC
 
         [[nodiscard]] int max_rank() const noexcept;
         [[nodiscard]] bool has_rank(int excitation_rank) const noexcept;
-        [[nodiscard]] DenseTensorView tensor(int excitation_rank);
-        [[nodiscard]] ConstDenseTensorView tensor(int excitation_rank) const;
+        [[nodiscard]] std::expected<DenseTensorView, std::string> tensor(int excitation_rank);
+        [[nodiscard]] std::expected<ConstDenseTensorView, std::string> tensor(int excitation_rank) const;
     };
 
     struct RCCSDAmplitudes
@@ -31,8 +31,8 @@ namespace HartreeFock::Correlation::CC
 
         [[nodiscard]] int max_rank() const noexcept;
         [[nodiscard]] bool has_rank(int excitation_rank) const noexcept;
-        [[nodiscard]] DenseTensorView tensor(int excitation_rank);
-        [[nodiscard]] ConstDenseTensorView tensor(int excitation_rank) const;
+        [[nodiscard]] std::expected<DenseTensorView, std::string> tensor(int excitation_rank);
+        [[nodiscard]] std::expected<ConstDenseTensorView, std::string> tensor(int excitation_rank) const;
     };
 
     struct RCCSDTAmplitudes
@@ -43,8 +43,8 @@ namespace HartreeFock::Correlation::CC
 
         [[nodiscard]] int max_rank() const noexcept;
         [[nodiscard]] bool has_rank(int excitation_rank) const noexcept;
-        [[nodiscard]] DenseTensorView tensor(int excitation_rank);
-        [[nodiscard]] ConstDenseTensorView tensor(int excitation_rank) const;
+        [[nodiscard]] std::expected<DenseTensorView, std::string> tensor(int excitation_rank);
+        [[nodiscard]] std::expected<ConstDenseTensorView, std::string> tensor(int excitation_rank) const;
     };
 
     struct ArbitraryOrderDenominatorCache
@@ -53,8 +53,8 @@ namespace HartreeFock::Correlation::CC
 
         [[nodiscard]] int max_rank() const noexcept;
         [[nodiscard]] bool has_rank(int excitation_rank) const noexcept;
-        [[nodiscard]] DenseTensorView tensor(int excitation_rank);
-        [[nodiscard]] ConstDenseTensorView tensor(int excitation_rank) const;
+        [[nodiscard]] std::expected<DenseTensorView, std::string> tensor(int excitation_rank);
+        [[nodiscard]] std::expected<ConstDenseTensorView, std::string> tensor(int excitation_rank) const;
     };
 
     struct ArbitraryOrderRCCAmplitudes
@@ -63,8 +63,8 @@ namespace HartreeFock::Correlation::CC
 
         [[nodiscard]] int max_rank() const noexcept;
         [[nodiscard]] bool has_rank(int excitation_rank) const noexcept;
-        [[nodiscard]] DenseTensorView tensor(int excitation_rank);
-        [[nodiscard]] ConstDenseTensorView tensor(int excitation_rank) const;
+        [[nodiscard]] std::expected<DenseTensorView, std::string> tensor(int excitation_rank);
+        [[nodiscard]] std::expected<ConstDenseTensorView, std::string> tensor(int excitation_rank) const;
     };
 
     // `include_triples=false` is useful for the current teaching code paths that
