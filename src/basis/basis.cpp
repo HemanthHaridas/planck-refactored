@@ -1,13 +1,20 @@
 #include "basis.h"
 
-HartreeFock::ShellType HartreeFock::BasisFunctions::_map_shell_to_L(const std::string &label)
+std::expected<HartreeFock::ShellType, std::string> HartreeFock::BasisFunctions::_map_shell_to_L(const std::string &label)
 {
-    return (label == "S") ? HartreeFock::ShellType::S : (label == "P") ? HartreeFock::ShellType::P
-                                                    : (label == "D")   ? HartreeFock::ShellType::D
-                                                    : (label == "F")   ? HartreeFock::ShellType::F
-                                                    : (label == "G")   ? HartreeFock::ShellType::G
-                                                    : (label == "H")   ? HartreeFock::ShellType::H
-                                                                       : throw std::runtime_error("Unknown shell label: " + label);
+    if (label == "S")
+        return HartreeFock::ShellType::S;
+    if (label == "P")
+        return HartreeFock::ShellType::P;
+    if (label == "D")
+        return HartreeFock::ShellType::D;
+    if (label == "F")
+        return HartreeFock::ShellType::F;
+    if (label == "G")
+        return HartreeFock::ShellType::G;
+    if (label == "H")
+        return HartreeFock::ShellType::H;
+    return std::unexpected("Unknown shell label: " + label);
 }
 
 std::vector<Eigen::Vector3i> HartreeFock::BasisFunctions::_cartesian_shell_order(unsigned int L)
@@ -40,15 +47,13 @@ Eigen::VectorXd HartreeFock::BasisFunctions::primitive_normalization(unsigned in
     return normalizations;
 }
 
-double HartreeFock::BasisFunctions::contracted_normalization(unsigned int L, const Eigen::VectorXd &exponents, const Eigen::VectorXd &coefficients, const Eigen::VectorXd &prim_norms)
+std::expected<double, std::string> HartreeFock::BasisFunctions::contracted_normalization(unsigned int L, const Eigen::VectorXd &exponents, const Eigen::VectorXd &coefficients, const Eigen::VectorXd &prim_norms)
 {
     constexpr double pi = 3.1415926535897932384626433832795;
     const std::size_t n = exponents.size();
 
     if (coefficients.size() != n || prim_norms.size() != n)
-    {
-        throw std::runtime_error("contracted_normalization: size mismatch");
-    }
+        return std::unexpected("contracted_normalization: size mismatch");
 
     // Pairwise sums ai + aj
     Eigen::MatrixXd aij = exponents.replicate(1, n) + exponents.transpose().replicate(n, 1);

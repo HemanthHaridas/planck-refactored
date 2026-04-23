@@ -3,6 +3,8 @@
 
 #include <array>
 #include <cstdint>
+#include <expected>
+#include <string>
 #include <string_view>
 
 struct ElementData
@@ -13,9 +15,9 @@ struct ElementData
     double radius;           // Covalent radius (Angstrom)
 };
 
-extern const std::array<ElementData, 99> periodic_table;
+extern const std::array<ElementData, 99> planck_periodic_table;
 
-const ElementData &element_from_symbol(std::string_view symbol);
-const ElementData &element_from_z(std::uint64_t Z);
+std::expected<ElementData, std::string> element_from_symbol(std::string_view symbol);
+std::expected<ElementData, std::string> element_from_z(std::uint64_t Z);
 
 #endif // !HF_ELEMENTS_H

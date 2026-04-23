@@ -4,7 +4,6 @@
 #include <cstdlib>
 #include <expected>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -17,14 +16,12 @@ namespace HartreeFock
         class SymmetryContext
         {
         public:
-            // Constructor
-            SymmetryContext()
+            static std::expected<SymmetryContext, std::string> create()
             {
-                _ctx = msymCreateContext();
-                if (!_ctx)
-                {
-                    throw std::runtime_error("Failed to create msym_context");
-                }
+                msym_context ctx = msymCreateContext();
+                if (!ctx)
+                    return std::unexpected("Failed to create msym_context");
+                return SymmetryContext(ctx);
             }
 
             ~SymmetryContext()
@@ -63,7 +60,9 @@ namespace HartreeFock
             }
 
         private:
-            msym_context _ctx;
+            explicit SymmetryContext(msym_context ctx) noexcept : _ctx(ctx) {}
+
+            msym_context _ctx = nullptr;
         };
 
         class SymmetryElements

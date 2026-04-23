@@ -13,6 +13,7 @@ namespace HartreeFock
 {
     enum LogLevel
     {
+        Debug,
         Info,
         Warning,
         Error,
@@ -58,9 +59,10 @@ namespace HartreeFock
             std::ostream &out_stream =
                 (level == Info || level == Error) ? std::cout : std::cerr;
 
-            const char *prefix = (level == Info)      ? "[INF] "
+            const char *prefix = (level == Debug)   ? "[DBG] "
+                                 : (level == Info)  ? "[INF] "
                                  : (level == Warning) ? "[WRN] "
-                                                      : "[ERR] ";
+                                                       : "[ERR] ";
 
             out_stream << prefix << std::setw(30) << std::left << label;
 

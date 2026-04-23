@@ -1,8 +1,8 @@
 #include "post_hf/cc/common.h"
 
 #include <algorithm>
+#include <cassert>
 #include <limits>
-#include <stdexcept>
 
 namespace
 {
@@ -16,12 +16,18 @@ namespace
         for (const int dim : dims)
         {
             if (dim < 0)
-                throw std::invalid_argument(std::string(label) + ": tensor dimension cannot be negative");
+            {
+                assert(dim >= 0 && "tensor dimension cannot be negative");
+                return 0;
+            }
 
             const std::size_t dim_size = static_cast<std::size_t>(dim);
             if (dim_size != 0 &&
                 total > std::numeric_limits<std::size_t>::max() / dim_size)
-                throw std::overflow_error(std::string(label) + ": tensor size overflow");
+            {
+                assert(false && "tensor size overflow");
+                return 0;
+            }
 
             total *= dim_size;
         }
@@ -36,12 +42,18 @@ namespace
         for (const int dim : dims)
         {
             if (dim < 0)
-                throw std::invalid_argument(std::string(label) + ": tensor dimension cannot be negative");
+            {
+                assert(dim >= 0 && "tensor dimension cannot be negative");
+                return 0;
+            }
 
             const std::size_t dim_size = static_cast<std::size_t>(dim);
             if (dim_size != 0 &&
                 total > std::numeric_limits<std::size_t>::max() / dim_size)
-                throw std::overflow_error(std::string(label) + ": tensor size overflow");
+            {
+                assert(false && "tensor size overflow");
+                return 0;
+            }
 
             total *= dim_size;
         }
@@ -54,7 +66,10 @@ namespace
         const char *label)
     {
         if (dims.size() != indices.size())
-            throw std::invalid_argument(std::string(label) + ": index count does not match tensor order");
+        {
+            assert(dims.size() == indices.size() && "index count does not match tensor order");
+            return 0;
+        }
 
         std::size_t offset = 0;
         for (std::size_t pos = 0; pos < dims.size(); ++pos)
@@ -62,7 +77,10 @@ namespace
             const int dim = dims[pos];
             const int idx = indices[pos];
             if (idx < 0 || idx >= dim)
-                throw std::out_of_range(std::string(label) + ": tensor index out of bounds");
+            {
+                assert(idx >= 0 && idx < dim && "tensor index out of bounds");
+                return 0;
+            }
 
             offset *= static_cast<std::size_t>(dim);
             offset += static_cast<std::size_t>(idx);
@@ -98,8 +116,12 @@ namespace HartreeFock::Correlation::CC
     Tensor2D::Tensor2D(int d1, int d2, std::vector<double> values)
         : dim1(d1), dim2(d2), data(std::move(values))
     {
-        if (data.size() != checked_product({d1, d2}, "Tensor2D"))
-            throw std::invalid_argument("Tensor2D: flat data size does not match dimensions");
+        const std::size_t expected_size = checked_product({d1, d2}, "Tensor2D");
+        if (data.size() != expected_size)
+        {
+            assert(data.size() == expected_size && "Tensor2D: flat data size does not match dimensions");
+            data.assign(expected_size, 0.0);
+        }
     }
 
     std::size_t Tensor2D::size() const noexcept
@@ -128,8 +150,12 @@ namespace HartreeFock::Correlation::CC
     Tensor4D::Tensor4D(int d1, int d2, int d3, int d4, std::vector<double> values)
         : dim1(d1), dim2(d2), dim3(d3), dim4(d4), data(std::move(values))
     {
-        if (data.size() != checked_product({d1, d2, d3, d4}, "Tensor4D"))
-            throw std::invalid_argument("Tensor4D: flat data size does not match dimensions");
+        const std::size_t expected_size = checked_product({d1, d2, d3, d4}, "Tensor4D");
+        if (data.size() != expected_size)
+        {
+            assert(data.size() == expected_size && "Tensor4D: flat data size does not match dimensions");
+            data.assign(expected_size, 0.0);
+        }
     }
 
     std::size_t Tensor4D::size() const noexcept
@@ -168,8 +194,12 @@ namespace HartreeFock::Correlation::CC
     Tensor6D::Tensor6D(int d1, int d2, int d3, int d4, int d5, int d6, std::vector<double> values)
         : dim1(d1), dim2(d2), dim3(d3), dim4(d4), dim5(d5), dim6(d6), data(std::move(values))
     {
-        if (data.size() != checked_product({d1, d2, d3, d4, d5, d6}, "Tensor6D"))
-            throw std::invalid_argument("Tensor6D: flat data size does not match dimensions");
+        const std::size_t expected_size = checked_product({d1, d2, d3, d4, d5, d6}, "Tensor6D");
+        if (data.size() != expected_size)
+        {
+            assert(data.size() == expected_size && "Tensor6D: flat data size does not match dimensions");
+            data.assign(expected_size, 0.0);
+        }
     }
 
     std::size_t Tensor6D::size() const noexcept
@@ -220,8 +250,12 @@ namespace HartreeFock::Correlation::CC
     TensorND::TensorND(std::vector<int> dims_in, std::vector<double> values)
         : dims(std::move(dims_in)), data(std::move(values))
     {
-        if (data.size() != checked_product(dims, "TensorND"))
-            throw std::invalid_argument("TensorND: flat data size does not match dimensions");
+        const std::size_t expected_size = checked_product(dims, "TensorND");
+        if (data.size() != expected_size)
+        {
+            assert(data.size() == expected_size && "TensorND: flat data size does not match dimensions");
+            data.assign(expected_size, 0.0);
+        }
     }
 
     std::size_t TensorND::size() const noexcept

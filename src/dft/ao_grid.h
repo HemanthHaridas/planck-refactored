@@ -125,7 +125,8 @@ namespace DFT
             case 2:
                 return grad_z;
             default:
-                throw std::out_of_range("AOGridEvaluation::gradient axis must be 0, 1, or 2");
+                assert(false && "AOGridEvaluation::gradient axis must be 0, 1, or 2");
+                return grad_z;
             }
         }
     };

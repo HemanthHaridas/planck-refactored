@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <numbers>
 
 // ─── Scratch buffer dimensions ────────────────────────────────────────────────
 //
@@ -241,7 +242,7 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const double WQx = Wx - Qx, WQy = Wy - Qy, WQz = Wz - Qz;
 
     // Overall prefactor: K_AB * K_CD * 2*sqrt(rho/pi)
-    const double prefac = ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / M_PI);
+    const double prefac = ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / std::numbers::pi);
 
     // Number of Rys roots
     const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;

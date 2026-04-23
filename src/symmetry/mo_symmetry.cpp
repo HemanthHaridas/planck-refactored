@@ -4,6 +4,7 @@
 #include <expected>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <string>
 
 #include "external/libmsym/install/include/libmsym/msym.h"
@@ -68,7 +69,7 @@ namespace
         {
             V3d v(sop.v[0], sop.v[1], sop.v[2]);
             v.normalize();
-            const double angle = 2.0 * M_PI * sop.power / sop.order;
+            const double angle = 2.0 * std::numbers::pi * sop.power / sop.order;
             const double c = std::cos(angle), s = std::sin(angle);
             M3d K;
             K << 0, -v.z(), v.y(),
@@ -81,7 +82,7 @@ namespace
         {
             V3d v(sop.v[0], sop.v[1], sop.v[2]);
             v.normalize();
-            const double angle = 2.0 * M_PI * sop.power / sop.order;
+            const double angle = 2.0 * std::numbers::pi * sop.power / sop.order;
             const double c = std::cos(angle), s = std::sin(angle);
             M3d K;
             K << 0, -v.z(), v.y(),
@@ -373,10 +374,10 @@ namespace
             return R;
         };
 
-        auto SD_pi2 = build_SD(rot_z(M_PI / 2.0));
+        auto SD_pi2 = build_SD(rot_z(std::numbers::pi / 2.0));
         if (!SD_pi2)
             return std::unexpected(SD_pi2.error());
-        auto SD_pi3 = build_SD(rot_z(M_PI / 3.0));
+        auto SD_pi3 = build_SD(rot_z(std::numbers::pi / 3.0));
         if (!SD_pi3)
             return std::unexpected(SD_pi3.error());
 
@@ -777,7 +778,10 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
     if (pg == "C1" || pg.find("inf") != std::string::npos)
         return result;
 
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected("build_abelian_irrep_product_table: " + ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
 
     for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)
@@ -906,7 +910,10 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
     const std::size_t nb = calculator._shells.nbasis();
 
     // ── Rebuild libmsym context (NO axis alignment) ───────────────────────────
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected("build_sao_basis: " + ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
 
     for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)
@@ -1149,7 +1156,10 @@ std::expected<void, std::string> HartreeFock::Symmetry::assign_mo_symmetry(Hartr
     // ── Rebuild msym context on the symmetrized coordinates ──────────────────
     // molecule.standard is in Angstrom (symmetrized, pre-alignment frame).
     // Basis function centers are consistent with this frame (via _standard = Bohr).
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected("assign_mo_symmetry: " + ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
 
     for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)

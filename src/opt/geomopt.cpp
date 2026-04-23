@@ -4,6 +4,7 @@
 #include <cmath>
 #include <expected>
 #include <format>
+#include <numbers>
 #include <optional>
 
 #include "base/tables.h"
@@ -30,7 +31,7 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     // Update input-frame coordinates from _standard (Bohr) for consistency
     calc._molecule._coordinates = calc._molecule._standard;
     calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
-    calc._molecule._standard_is_bohr = true;
+    calc._molecule.set_standard_from_bohr(calc._molecule._standard);
 
     // Re-read basis from updated geometry (_standard used for shell centers)
     const std::string gbs_path = calc._basis._basis_path + "/" + calc._basis._basis_name;
@@ -739,10 +740,10 @@ std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::ru
             s_bfgs[i] = q_trial[i] - q_old[i];
             if (ics.coords[i].type == ICType::Torsion)
             {
-                while (s_bfgs[i] > M_PI)
-                    s_bfgs[i] -= 2.0 * M_PI;
-                while (s_bfgs[i] < -M_PI)
-                    s_bfgs[i] += 2.0 * M_PI;
+                while (s_bfgs[i] > std::numbers::pi)
+                    s_bfgs[i] -= 2.0 * std::numbers::pi;
+                while (s_bfgs[i] < -std::numbers::pi)
+                    s_bfgs[i] += 2.0 * std::numbers::pi;
             }
         }
         Eigen::VectorXd y_bfgs = g_ic_trial - g_ic;

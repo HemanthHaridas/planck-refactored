@@ -42,7 +42,7 @@ static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(Hart
     // Sync coordinate frames
     calc._molecule._coordinates = calc._molecule._standard;
     calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
-    calc._molecule._standard_is_bohr = true;
+    calc._molecule.set_standard_from_bohr(calc._molecule._standard);
 
     // Rebuild basis
     const std::string gbs_path =
@@ -128,9 +128,7 @@ static Eigen::MatrixXd _eckart_basis(const HartreeFock::Calculator &calc)
     Eigen::VectorXd m(N), sq(N);
     for (std::size_t a = 0; a < N; ++a)
     {
-        m[a] = element_from_z(static_cast<uint64_t>(
-                                  calc._molecule.atomic_numbers[a]))
-                   .mass;
+        m[a] = calc._molecule.atomic_masses[a];
         sq[a] = std::sqrt(m[a]);
     }
 
@@ -197,9 +195,7 @@ void HartreeFock::Freq::vibrational_analysis(
     Eigen::VectorXd mass_vec(n3);
     for (std::size_t a = 0; a < N; ++a)
     {
-        const double m = element_from_z(static_cast<uint64_t>(
-                                            calc._molecule.atomic_numbers[a]))
-                             .mass;
+        const double m = calc._molecule.atomic_masses[a];
         mass_vec[static_cast<int>(a) * 3 + 0] = m;
         mass_vec[static_cast<int>(a) * 3 + 1] = m;
         mass_vec[static_cast<int>(a) * 3 + 2] = m;
@@ -258,8 +254,20 @@ void HartreeFock::Freq::vibrational_analysis(
             L_cart.col(c) /= norm;
     }
     result.normal_modes = std::move(L_cart);
-    result.mode_symmetry = HartreeFock::Symmetry::assign_vibrational_symmetry(
+    auto mode_symmetry = HartreeFock::Symmetry::assign_vibrational_symmetry(
         calc, result.normal_modes);
+    if (!mode_symmetry)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Vibrational Symmetry :",
+            "Unavailable: " + mode_symmetry.error());
+        result.mode_symmetry.clear();
+    }
+    else
+    {
+        result.mode_symmetry = std::move(*mode_symmetry);
+    }
 
     // Zero-point energy (sum over real modes only)
     result.zpe = 0.0;
@@ -340,7 +348,7 @@ HartreeFock::Freq::compute_hessian(
     // the energy / density printed after the hessian block is consistent.
     calc._molecule._coordinates = calc._molecule._standard;
     calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
-    calc._molecule._standard_is_bohr = true;
+    calc._molecule.set_standard_from_bohr(calc._molecule._standard);
 
     // Run vibrational analysis
     vibrational_analysis(result, calc);

@@ -213,7 +213,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     }
     else if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
     {
-        P = HartreeFock::SCF::compute_sad_guess_rhf(calculator);
+        auto sad_res = HartreeFock::SCF::compute_sad_guess_rhf(calculator);
+        if (!sad_res)
+            return std::unexpected("RHF SAD guess failed: " + sad_res.error());
+        P = std::move(*sad_res);
     }
     else if (sao_active)
     {

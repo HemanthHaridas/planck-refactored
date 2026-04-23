@@ -2,6 +2,7 @@
 #define HF_RYS_ROOTS_H
 
 #include <cmath>
+#include <numbers>
 
 namespace HartreeFock
 {
@@ -34,7 +35,7 @@ namespace HartreeFock
             else
             {
                 const double sqrtT = std::sqrt(T);
-                const double F0 = 0.5 * std::sqrt(M_PI / T) * std::erf(sqrtT);
+                const double F0 = 0.5 * std::sqrt(std::numbers::pi / T) * std::erf(sqrtT);
                 const double F1 = (F0 - std::exp(-T)) / (2.0 * T);
                 root = F1 / F0;
                 weight = F0;

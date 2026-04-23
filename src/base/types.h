@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <deque>
 #include <expected>
+#include <limits>
+#include <numbers>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -179,7 +181,24 @@ namespace HartreeFock
 
         bool _symmetry = false; // Symmetry flag
         bool _is_bohr = false;
+        bool standard_is_angstrom = false;
         bool _standard_is_bohr = false;
+
+        void set_standard_from_angstrom(const Eigen::MatrixXd &coords_angstrom) noexcept
+        {
+            standard = coords_angstrom;
+            _standard = coords_angstrom * ANGSTROM_TO_BOHR;
+            standard_is_angstrom = true;
+            _standard_is_bohr = true;
+        }
+
+        void set_standard_from_bohr(const Eigen::MatrixXd &coords_bohr) noexcept
+        {
+            _standard = coords_bohr;
+            standard = coords_bohr * BOHR_TO_ANGSTROM;
+            standard_is_angstrom = true;
+            _standard_is_bohr = true;
+        }
 
         void clear() noexcept
         {
@@ -199,6 +218,7 @@ namespace HartreeFock
             _point_group = "C1";
             _symmetry = false;
             _is_bohr = false;
+            standard_is_angstrom = false;
             _standard_is_bohr = false;
         }
     };
@@ -549,7 +569,7 @@ namespace HartreeFock
                     pp.zeta = zeta;
                     pp.inv_zeta = inv_zeta;
                     pp.coeff_product = cA * cB * A._shell->_normalizations[i] * B._shell->_normalizations[j] * A._component_norm * B._component_norm;
-                    pp.prefactor = std::pow(M_PI * inv_zeta, 1.5) * std::exp(-alpha_beta_over_zeta * R2);
+                    pp.prefactor = std::pow(std::numbers::pi * inv_zeta, 1.5) * std::exp(-alpha_beta_over_zeta * R2);
 
                     // Gaussian product center
                     pp.center = (alpha * A._shell->_center + beta * B._shell->_center) * inv_zeta;
@@ -762,22 +782,10 @@ namespace HartreeFock
         Molecule _molecule;
         Basis _shells;
 
-        CalculationType _calculation = CalculationType::SinglePoint; // Default is Single point energy calculation
-        PostHF _correlation = PostHF::None;                          // No Post HF corrections
-
-        double _total_energy = 0;                        // Total Energy (SCF + Nuclear Repulsion)
-        double _nuclear_repulsion = 0;                   // Nuclear Repulsion Energy (Bohr)
-        double _correlated_total_energy = 0.0;          // Correlated total energy when post-HF augments the SCF reference
-        double _correlation_energy = 0.0;                // Post-HF correlation energy (0 if not computed)
-        bool _have_correlated_total_energy = false;      // Whether the correlated total energy is valid
-        double _ccsd_reference_correlation_energy = 0.0; // CCSD correlation energy cached during CCSDT runs
-        bool _have_ccsd_reference_energy = false;        // Whether the cached CCSD correlation energy is valid
-
         // CASSCF / RASSCF results
         OptionsActiveSpace _active_space;     // active space specification
         Eigen::VectorXd _cas_nat_occ;         // active natural occupation numbers
         Eigen::MatrixXd _cas_mo_coefficients; // converged CASSCF MO coefficients [nb×nb] in the optimization basis
-        double _casscf_rhf_energy = 0.0;      // RHF reference energy (for ΔE printout)
         Eigen::VectorXd _cas_root_energies;   // per-root total CASSCF energies (length nroots; empty for SS-CASSCF)
 
         Eigen::MatrixXd _overlap; // Overlap matrix S
@@ -793,16 +801,10 @@ namespace HartreeFock
         std::vector<std::string> _sao_irrep_names; // Mulliken name per irrep index
         std::vector<int> _sao_block_sizes;         // n_SAOs per irrep block
         std::vector<int> _sao_block_offsets;       // start offset per block in SAO ordering
-        bool _use_sao_blocking = false;
         std::vector<SignedAOSymOp> _integral_symmetry_ops; // signed AO permutations used to reduce integral work
-        bool _use_integral_symmetry = false;
 
         // Gradient and geometry optimization
         Eigen::MatrixXd _gradient;                    // natoms×3, Ha/Bohr; set by compute_rhf/uhf_gradient()
-        double _geomopt_grad_tol = 3e-4;              // convergence: max |∂E/∂x_i| in Ha/Bohr
-        int _geomopt_max_iter = 50;                   // maximum geometry steps
-        int _geomopt_lbfgs_m = 10;                    // L-BFGS history size
-        OptCoords _opt_coords = OptCoords::Cartesian; // coordinate system for optimization
         std::vector<GeomConstraint> _constraints;     // from %begin_constraints section
 
         // Hessian / frequency analysis
@@ -810,9 +812,27 @@ namespace HartreeFock
         Eigen::VectorXd _frequencies;                   // n_vib vibrational frequencies in cm⁻¹
         Eigen::MatrixXd _normal_modes;                  // 3N × n_vib mass-unweighted normal modes
         std::vector<std::string> _vibrational_symmetry; // n_vib Mulliken labels
+
+        double _total_energy = 0;                        // Total Energy (SCF + Nuclear Repulsion)
+        double _nuclear_repulsion = 0;                   // Nuclear Repulsion Energy (Bohr)
+        double _correlated_total_energy = 0.0;           // Correlated total energy when post-HF augments the SCF reference
+        double _correlation_energy = 0.0;                // Post-HF correlation energy (0 if not computed)
+        double _ccsd_reference_correlation_energy = 0.0; // CCSD correlation energy cached during CCSDT runs
+        double _casscf_rhf_energy = 0.0;                 // RHF reference energy (for ΔE printout)
+        double _geomopt_grad_tol = 3e-4;                 // convergence: max |∂E/∂x_i| in Ha/Bohr
         double _zpe = 0.0;                              // zero-point energy in Ha
         double _hessian_step = 5e-3;                    // finite-difference step in Bohr
         double _imag_follow_step = 0.2;                 // Cartesian displacement along imaginary mode, Bohr
+
+        CalculationType _calculation = CalculationType::SinglePoint; // Default is Single point energy calculation
+        PostHF _correlation = PostHF::None;                          // No Post HF corrections
+        int _geomopt_max_iter = 50;                                  // maximum geometry steps
+        int _geomopt_lbfgs_m = 10;                                   // L-BFGS history size
+        OptCoords _opt_coords = OptCoords::Cartesian;                // coordinate system for optimization
+        bool _have_correlated_total_energy = false;                  // Whether the correlated total energy is valid
+        bool _have_ccsd_reference_energy = false;                    // Whether the cached CCSD correlation energy is valid
+        bool _use_sao_blocking = false;
+        bool _use_integral_symmetry = false;
 
         double current_total_energy() const noexcept
         {
@@ -836,7 +856,15 @@ namespace HartreeFock
                     const double dx = _molecule._standard(a, 0) - _molecule._standard(b, 0);
                     const double dy = _molecule._standard(a, 1) - _molecule._standard(b, 1);
                     const double dz = _molecule._standard(a, 2) - _molecule._standard(b, 2);
-                    E_nuc += Za * Zb / std::sqrt(dx * dx + dy * dy + dz * dz);
+                    const double r2 = dx * dx + dy * dy + dz * dz;
+                    assert(r2 > 1.0e-24 &&
+                           "_compute_nuclear_repulsion encountered overlapping nuclei");
+                    if (r2 < 1.0e-24)
+                    {
+                        _nuclear_repulsion = std::numeric_limits<double>::quiet_NaN();
+                        return;
+                    }
+                    E_nuc += Za * Zb / std::sqrt(r2);
                 }
             }
             _nuclear_repulsion = E_nuc;
@@ -889,6 +917,9 @@ namespace HartreeFock
             // Nothing to do here for coordinate conversion.
 
             _compute_nuclear_repulsion();
+            if (!std::isfinite(_nuclear_repulsion))
+                return std::unexpected(
+                    "initialize: nuclear repulsion is undefined because two nuclei occupy the same position.");
 
             return {};
         }
