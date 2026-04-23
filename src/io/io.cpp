@@ -5,6 +5,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <numbers>
 #include <numeric>
 
 #include <Eigen/Geometry>
@@ -1156,7 +1157,7 @@ namespace HartreeFock::IO
         molecule._standard_is_bohr = false;
         molecule.coordinates.setZero();
 
-        const double deg2rad = M_PI / 180.0;
+        const double deg2rad = std::numbers::pi / 180.0;
 
         for (std::size_t i = 0; i < molecule.natoms; i++)
         {
@@ -1209,8 +1210,8 @@ namespace HartreeFock::IO
                     perp = Eigen::Vector3d(0.0, 1.0, 0.0);
                 perp.normalize();
 
-                Eigen::Vector3d pos = A + r * (std::cos(M_PI - theta) * AB.normalized() +
-                                               std::sin(M_PI - theta) * perp);
+                Eigen::Vector3d pos = A + r * (std::cos(std::numbers::pi - theta) * AB.normalized() +
+                                               std::sin(std::numbers::pi - theta) * perp);
                 molecule.coordinates.row(i) = pos.transpose();
             }
             else

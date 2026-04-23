@@ -162,8 +162,7 @@ static std::expected<BasisSet, std::string> read_gbs(std::ifstream &input)
     return basis;
 }
 
-// Returns (2n-1)!! with the convention (-1)!! = 1.
-static int double_factorial(int n)
+int HartreeFock::BasisFunctions::double_factorial(int n)
 {
     if (n <= 0)
         return 1;
@@ -287,7 +286,9 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
             for (auto am : HartreeFock::BasisFunctions::_cartesian_shell_order(L))
             {
                 const std::size_t idx = basis._basis_functions.size();
-                const int df = double_factorial(2 * am[0] - 1) * double_factorial(2 * am[1] - 1) * double_factorial(2 * am[2] - 1);
+                const int df = HartreeFock::BasisFunctions::double_factorial(2 * am[0] - 1) *
+                               HartreeFock::BasisFunctions::double_factorial(2 * am[1] - 1) *
+                               HartreeFock::BasisFunctions::double_factorial(2 * am[2] - 1);
                 basis._basis_functions.emplace_back();
                 auto &basis_function = basis._basis_functions.back();
                 basis_function._shell = shell_ptr;

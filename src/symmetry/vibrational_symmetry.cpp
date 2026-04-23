@@ -3,6 +3,7 @@
 #include <cmath>
 #include <expected>
 #include <limits>
+#include <numbers>
 
 #include "wrapper.h"
 
@@ -29,7 +30,7 @@ namespace
         {
             V3d v(sop.v[0], sop.v[1], sop.v[2]);
             v.normalize();
-            const double angle = 2.0 * M_PI * sop.power / sop.order;
+            const double angle = 2.0 * std::numbers::pi * sop.power / sop.order;
             const double c = std::cos(angle);
             const double s = std::sin(angle);
             M3d K;
@@ -42,7 +43,7 @@ namespace
         {
             V3d v(sop.v[0], sop.v[1], sop.v[2]);
             v.normalize();
-            const double angle = 2.0 * M_PI * sop.power / sop.order;
+            const double angle = 2.0 * std::numbers::pi * sop.power / sop.order;
             const double c = std::cos(angle);
             const double s = std::sin(angle);
             M3d K;

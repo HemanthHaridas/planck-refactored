@@ -10,6 +10,7 @@
 #include <deque>
 #include <expected>
 #include <limits>
+#include <numbers>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -568,7 +569,7 @@ namespace HartreeFock
                     pp.zeta = zeta;
                     pp.inv_zeta = inv_zeta;
                     pp.coeff_product = cA * cB * A._shell->_normalizations[i] * B._shell->_normalizations[j] * A._component_norm * B._component_norm;
-                    pp.prefactor = std::pow(M_PI * inv_zeta, 1.5) * std::exp(-alpha_beta_over_zeta * R2);
+                    pp.prefactor = std::pow(std::numbers::pi * inv_zeta, 1.5) * std::exp(-alpha_beta_over_zeta * R2);
 
                     // Gaussian product center
                     pp.center = (alpha * A._shell->_center + beta * B._shell->_center) * inv_zeta;

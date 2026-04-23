@@ -21,6 +21,9 @@ namespace HartreeFock
         // Contracted normalization
         std::expected<double, std::string> contracted_normalization(unsigned int L, const Eigen::VectorXd &exponents, const Eigen::VectorXd &coefficients, const Eigen::VectorXd &prim_norms);
 
+        // (2n-1)!! with the convention (-1)!! = 1.
+        int double_factorial(int n);
+
         // Cartesian component normalization 1/sqrt((2lx-1)!!(2ly-1)!!(2lz-1)!!)
         double component_norm(int df);
 

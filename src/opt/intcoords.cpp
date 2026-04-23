@@ -4,6 +4,7 @@
 #include <Eigen/Geometry>
 #include <Eigen/SVD>
 #include <cmath>
+#include <numbers>
 #include <stdexcept>
 
 // ── Covalent radii (Angstrom) from Alvarez (2008) ────────────────────────────
@@ -298,8 +299,8 @@ HartreeFock::Opt::IntCoordSystem HartreeFock::Opt::IntCoordSystem::build(
         ics.coords.push_back({ICType::Stretch, {i, j, -1, -1}});
 
     // ── Bends (all A–B–C with B central, A-B and B-C bonded) ─────────────────
-    constexpr double ang_lo = 5.0 * M_PI / 180.0;
-    constexpr double ang_hi = 175.0 * M_PI / 180.0;
+    constexpr double ang_lo = 5.0 * std::numbers::pi / 180.0;
+    constexpr double ang_hi = 175.0 * std::numbers::pi / 180.0;
 
     for (int B = 0; B < N; ++B)
     {
@@ -458,10 +459,10 @@ Eigen::MatrixXd HartreeFock::Opt::IntCoordSystem::ic_to_cart_step(
             // Wrap torsions to [-π, π]
             if (coords[i].type == ICType::Torsion)
             {
-                while (dq_actual[i] > M_PI)
-                    dq_actual[i] -= 2.0 * M_PI;
-                while (dq_actual[i] < -M_PI)
-                    dq_actual[i] += 2.0 * M_PI;
+                while (dq_actual[i] > std::numbers::pi)
+                    dq_actual[i] -= 2.0 * std::numbers::pi;
+                while (dq_actual[i] < -std::numbers::pi)
+                    dq_actual[i] += 2.0 * std::numbers::pi;
             }
         }
         Eigen::VectorXd residual = dq - dq_actual;

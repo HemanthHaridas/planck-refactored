@@ -62,19 +62,6 @@ namespace
                 c = 'E';
     }
 
-    static int double_factorial(int n)
-    {
-        if (n <= 0)
-            return 1;
-        int result = 1;
-        while (n > 0)
-        {
-            result *= n;
-            n -= 2;
-        }
-        return result;
-    }
-
     static std::expected<BasisSet, std::string> read_gbs(std::ifstream &input)
     {
         BasisSet basis;
@@ -198,9 +185,9 @@ namespace
             for (auto am : HartreeFock::BasisFunctions::_cartesian_shell_order(L))
             {
                 const std::size_t idx = basis._basis_functions.size();
-                const int df = double_factorial(2 * am[0] - 1) *
-                               double_factorial(2 * am[1] - 1) *
-                               double_factorial(2 * am[2] - 1);
+                const int df = HartreeFock::BasisFunctions::double_factorial(2 * am[0] - 1) *
+                               HartreeFock::BasisFunctions::double_factorial(2 * am[1] - 1) *
+                               HartreeFock::BasisFunctions::double_factorial(2 * am[2] - 1);
                 basis._basis_functions.emplace_back();
                 auto &bf = basis._basis_functions.back();
                 bf._shell = shell_ptr;

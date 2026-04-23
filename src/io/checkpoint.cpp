@@ -450,11 +450,9 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
         const uint64_t chk_nb = read_pod<uint64_t>(in);
         const uint8_t chk_uhf = read_pod<uint8_t>(in);
         const uint8_t chk_conv = read_pod<uint8_t>(in);
-        const uint32_t chk_iters = read_pod<uint32_t>(in);
+        [[maybe_unused]] const uint32_t chk_iters = read_pod<uint32_t>(in); // informational only
         const double tot_e = read_pod<double>(in);
         const double nuc_e = read_pod<double>(in);
-
-        (void)chk_iters; // informational only
 
         // ── Molecule ──────────────────────────────────────────────────────────
         const uint64_t natoms = read_pod<uint64_t>(in);

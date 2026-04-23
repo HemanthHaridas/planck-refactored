@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <numbers>
 #include <vector>
 
 namespace
@@ -702,7 +703,7 @@ static double _os_nuclear_primitive(
     // Nuclear prefactor = 2*pi/zeta * exp(-alpha*beta/zeta * |AB|^2)
     //                   = pp.prefactor * 2*pi/zeta * (zeta/pi)^1.5
     //                   = pp.prefactor * 2 * sqrt(zeta/pi)
-    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / M_PI);
+    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / std::numbers::pi);
 
     // VRR table V[ix][iy][iz][m]
     // Spatial dims: each axis runs 0..lAq+lBq ≤ 2*MAX_L, so VRR_DIM = 2*MAX_L+1.
@@ -915,7 +916,7 @@ static void _eri_vrr(
 
     const int MMAX = lABx + lABy + lABz + lCDx + lCDy + lCDz;
 
-    const double prefac = ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / M_PI);
+    const double prefac = ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / std::numbers::pi);
 
     // ── Seed ─────────────────────────────────────────────────────────────────
     for (int m = 0; m <= MMAX; ++m)
@@ -1269,7 +1270,7 @@ static double _os_nuclear_primitive_dC(
     const double pCz = pp.center[2] - nuc_pos[2];
     const double T = pp.zeta * (pCx * pCx + pCy * pCy + pCz * pCz);
 
-    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / M_PI);
+    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / std::numbers::pi);
     const double pAx = pp.pA[0], pAy = pp.pA[1], pAz = pp.pA[2];
     const double hiz = pp.inv_zeta * 0.5;
     const double PC_dir = (direction == 0) ? pCx : (direction == 1) ? pCy
@@ -1874,7 +1875,7 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_cross_overlap(
                     const Eigen::Vector3d pA = P - A;
                     const Eigen::Vector3d pB = P - B;
 
-                    const double prefactor = std::pow(M_PI * inv_zeta, 1.5) * std::exp(-alpha * beta * inv_zeta * R2);
+                    const double prefactor = std::pow(std::numbers::pi * inv_zeta, 1.5) * std::exp(-alpha * beta * inv_zeta * R2);
 
                     const double Sx = _os_1d(half_inv_zeta, pA[0], pB[0], lAx, lBx);
                     const double Sy = _os_1d(half_inv_zeta, pA[1], pB[1], lAy, lBy);
