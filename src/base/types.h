@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <expected>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -179,7 +180,24 @@ namespace HartreeFock
 
         bool _symmetry = false; // Symmetry flag
         bool _is_bohr = false;
+        bool standard_is_angstrom = false;
         bool _standard_is_bohr = false;
+
+        void set_standard_from_angstrom(const Eigen::MatrixXd &coords_angstrom) noexcept
+        {
+            standard = coords_angstrom;
+            _standard = coords_angstrom * ANGSTROM_TO_BOHR;
+            standard_is_angstrom = true;
+            _standard_is_bohr = true;
+        }
+
+        void set_standard_from_bohr(const Eigen::MatrixXd &coords_bohr) noexcept
+        {
+            _standard = coords_bohr;
+            standard = coords_bohr * BOHR_TO_ANGSTROM;
+            standard_is_angstrom = true;
+            _standard_is_bohr = true;
+        }
 
         void clear() noexcept
         {
@@ -199,6 +217,7 @@ namespace HartreeFock
             _point_group = "C1";
             _symmetry = false;
             _is_bohr = false;
+            standard_is_angstrom = false;
             _standard_is_bohr = false;
         }
     };
@@ -836,7 +855,15 @@ namespace HartreeFock
                     const double dx = _molecule._standard(a, 0) - _molecule._standard(b, 0);
                     const double dy = _molecule._standard(a, 1) - _molecule._standard(b, 1);
                     const double dz = _molecule._standard(a, 2) - _molecule._standard(b, 2);
-                    E_nuc += Za * Zb / std::sqrt(dx * dx + dy * dy + dz * dz);
+                    const double r2 = dx * dx + dy * dy + dz * dz;
+                    assert(r2 > 1.0e-24 &&
+                           "_compute_nuclear_repulsion encountered overlapping nuclei");
+                    if (r2 < 1.0e-24)
+                    {
+                        _nuclear_repulsion = std::numeric_limits<double>::quiet_NaN();
+                        return;
+                    }
+                    E_nuc += Za * Zb / std::sqrt(r2);
                 }
             }
             _nuclear_repulsion = E_nuc;
@@ -889,6 +916,9 @@ namespace HartreeFock
             // Nothing to do here for coordinate conversion.
 
             _compute_nuclear_repulsion();
+            if (!std::isfinite(_nuclear_repulsion))
+                return std::unexpected(
+                    "initialize: nuclear repulsion is undefined because two nuclei occupy the same position.");
 
             return {};
         }

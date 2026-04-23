@@ -42,7 +42,7 @@ static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(Hart
     // Sync coordinate frames
     calc._molecule._coordinates = calc._molecule._standard;
     calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
-    calc._molecule._standard_is_bohr = true;
+    calc._molecule.set_standard_from_bohr(calc._molecule._standard);
 
     // Rebuild basis
     const std::string gbs_path =
@@ -340,7 +340,7 @@ HartreeFock::Freq::compute_hessian(
     // the energy / density printed after the hessian block is consistent.
     calc._molecule._coordinates = calc._molecule._standard;
     calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
-    calc._molecule._standard_is_bohr = true;
+    calc._molecule.set_standard_from_bohr(calc._molecule._standard);
 
     // Run vibrational analysis
     vibrational_analysis(result, calc);

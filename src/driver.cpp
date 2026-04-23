@@ -203,8 +203,7 @@ int main(int argc, const char *argv[])
             }
 
             // Override geometry, charge, and multiplicity
-            calculator._molecule._standard = geo->coords_bohr;
-            calculator._molecule._standard_is_bohr = true;
+            calculator._molecule.set_standard_from_bohr(geo->coords_bohr);
             calculator._molecule._coordinates = geo->coords_bohr;
             calculator._molecule.coordinates = geo->coords_bohr / ANGSTROM_TO_BOHR;
             calculator._molecule.charge = geo->charge;
@@ -252,8 +251,7 @@ int main(int argc, const char *argv[])
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :", "Symmetry detection is turned off by request");
         // No reorientation — standard frame equals input frame.
-        calculator._molecule._standard = calculator._molecule._coordinates;
-        calculator._molecule._standard_is_bohr = true;
+        calculator._molecule.set_standard_from_bohr(calculator._molecule._coordinates);
         HartreeFock::Logger::blank();
     }
 
@@ -989,7 +987,7 @@ int main(int argc, const char *argv[])
                 // Keep all three coordinate frames in sync
                 calculator._molecule._coordinates = calculator._molecule._standard;
                 calculator._molecule.coordinates = calculator._molecule._standard / ANGSTROM_TO_BOHR;
-                calculator._molecule._standard_is_bohr = true;
+                calculator._molecule.set_standard_from_bohr(calculator._molecule._standard);
 
                 // Log displaced geometry
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,

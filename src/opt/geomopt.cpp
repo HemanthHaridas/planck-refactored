@@ -30,7 +30,7 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     // Update input-frame coordinates from _standard (Bohr) for consistency
     calc._molecule._coordinates = calc._molecule._standard;
     calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
-    calc._molecule._standard_is_bohr = true;
+    calc._molecule.set_standard_from_bohr(calc._molecule._standard);
 
     // Re-read basis from updated geometry (_standard used for shell centers)
     const std::string gbs_path = calc._basis._basis_path + "/" + calc._basis._basis_name;

@@ -55,6 +55,17 @@ namespace HartreeFock::Correlation::CC
                 state_res->reference.orbital_partition.n_occ,
                 state_res->reference.orbital_partition.n_virt,
                 state_res->max_excitation_rank));
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info,
+            "RCCSDTQ :",
+            std::format(
+                "Using max_iter={} tol_energy={:.3e} tol_density={:.3e} cc_damping={:.3f} diis={} (dim={}).",
+                max_iter,
+                tol_energy,
+                tol_residual,
+                damping,
+                calculator._scf._use_DIIS ? "on" : "off",
+                calculator._scf._DIIS_dim));
 
         auto solve_res = run_generated_arbitrary_order_iterations(
             std::move(*state_res),

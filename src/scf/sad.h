@@ -2,6 +2,7 @@
 #define HF_SAD_H
 
 #include <Eigen/Core>
+#include <expected>
 #include <string>
 #include <unordered_map>
 
@@ -14,7 +15,7 @@ namespace HartreeFock
         // Returns one atomic Basis per unique element symbol present in molecule.
         // Each basis is constructed for a single atom at the origin, using the
         // same contraction/normalization conventions as read_gbs_basis in gaussian.cpp.
-        std::unordered_map<std::string, HartreeFock::Basis>
+        std::expected<std::unordered_map<std::string, HartreeFock::Basis>, std::string>
         read_gbs_basis_atomic(const std::string &file_name,
                               const HartreeFock::Molecule &molecule,
                               const HartreeFock::BasisType &basis_type);
@@ -37,7 +38,8 @@ namespace HartreeFock
         //   - calc._overlap already computed (molecular S matrix)
         //   - calc._basis._basis_path + "/" + _basis_name pointing to the GBS file
         //   - n_electrons = sum(Z) - charge must be even
-        Eigen::MatrixXd compute_sad_guess_rhf(const HartreeFock::Calculator &calc);
+        std::expected<Eigen::MatrixXd, std::string> compute_sad_guess_rhf(
+            const HartreeFock::Calculator &calc);
 
     } // namespace SCF
 } // namespace HartreeFock

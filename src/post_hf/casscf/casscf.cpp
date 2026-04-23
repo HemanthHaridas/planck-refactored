@@ -205,7 +205,7 @@ namespace
         const std::vector<int> assignment = match_roots_by_max_overlap(overlaps);
         Eigen::VectorXd E_reordered = E;
         Eigen::MatrixXd V_reordered = V;
-        std::vector<bool> used_new(static_cast<std::size_t>(V.cols()), false);
+        std::vector<bool> used_candidate_roots(static_cast<std::size_t>(V.cols()), false);
         int swaps = 0;
         double min_overlap = 1.0;
 
@@ -216,7 +216,7 @@ namespace
                 continue;
             E_reordered(i) = E(j);
             V_reordered.col(i) = V.col(j);
-            used_new[static_cast<std::size_t>(j)] = true;
+            used_candidate_roots[static_cast<std::size_t>(j)] = true;
             min_overlap = std::min(min_overlap, std::abs(overlaps(i, j)));
             if (i != j)
                 ++swaps;
@@ -225,7 +225,7 @@ namespace
         int next_slot = nmatch;
         for (int j = 0; j < V.cols() && next_slot < V.cols(); ++j)
         {
-            if (used_new[static_cast<std::size_t>(j)])
+            if (used_candidate_roots[static_cast<std::size_t>(j)])
                 continue;
             E_reordered(next_slot) = E(j);
             V_reordered.col(next_slot) = V.col(j);

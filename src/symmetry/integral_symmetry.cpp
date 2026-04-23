@@ -1,5 +1,6 @@
 #include "integral_symmetry.h"
 
+#include <cassert>
 #include <array>
 #include <map>
 #include <stdexcept>
@@ -77,10 +78,14 @@ std::size_t HartreeFock::Symmetry::update_integral_symmetry(
 
     if (!calculator._molecule._symmetry ||
         calculator._molecule._point_group == "C1" ||
+        !calculator._molecule.standard_is_angstrom ||
         calculator._molecule.standard.rows() != static_cast<Eigen::Index>(calculator._molecule.natoms))
     {
         return calculator._integral_symmetry_ops.size();
     }
+
+    assert(calculator._molecule.standard_is_angstrom &&
+           "update_integral_symmetry requires molecule.standard in Angstrom");
 
     const auto &basis = calculator._shells;
     const auto &bfs = basis._basis_functions;

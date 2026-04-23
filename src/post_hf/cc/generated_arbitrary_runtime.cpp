@@ -39,6 +39,25 @@ namespace HartreeFock::Correlation::CC
             return {};
         }
 
+        std::expected<double, std::string> evaluate_generated_arbitrary_order_energy(
+            const ArbitraryOrderTensorCCState &state,
+            const GeneratedArbitraryOrderKernels &kernels,
+            const char *context)
+        {
+            try
+            {
+                return kernels.energy(
+                    state.reference,
+                    state.mo_blocks,
+                    state.denominators,
+                    state.amplitudes);
+            }
+            catch (const std::exception &ex)
+            {
+                return std::unexpected(std::string(context) + ": " + ex.what());
+            }
+        }
+
     } // namespace
 
     TensorND to_tensor_nd(const Tensor2D &tensor)
@@ -117,61 +136,62 @@ namespace HartreeFock::Correlation::CC
         if (!valid)
             return std::unexpected(valid.error());
 
-        try
+        AmplitudeDIIS diis(diis_dim);
+        auto initial_energy_res = evaluate_generated_arbitrary_order_energy(
+            state,
+            kernels,
+            "run_generated_arbitrary_order_iterations");
+        if (!initial_energy_res)
+            return std::unexpected(initial_energy_res.error());
+        double previous_energy = *initial_energy_res;
+
+        GeneratedArbitraryOrderSolveResult result{
+            .state = state,
+            .correlation_energy = previous_energy,
+        };
+
+        for (unsigned int iter = 1; iter <= max_iterations; ++iter)
         {
-            AmplitudeDIIS diis(diis_dim);
-            double previous_energy = kernels.energy(
-                state.reference, state.mo_blocks, state.denominators, state.amplitudes);
+            auto residuals_res =
+                evaluate_generated_arbitrary_order_residuals(result.state, kernels);
+            if (!residuals_res)
+                return std::unexpected(residuals_res.error());
 
-            GeneratedArbitraryOrderSolveResult result{
-                .state = state,
-                .correlation_energy = previous_energy,
-            };
+            auto metrics_res = update_amplitudes_with_jacobi_diis(
+                result.state.amplitudes,
+                *residuals_res,
+                result.state.denominators,
+                diis,
+                damping,
+                use_diis);
+            if (!metrics_res)
+                return std::unexpected(metrics_res.error());
 
-            for (unsigned int iter = 1; iter <= max_iterations; ++iter)
+            auto energy_res = evaluate_generated_arbitrary_order_energy(
+                result.state,
+                kernels,
+                "run_generated_arbitrary_order_iterations");
+            if (!energy_res)
+                return std::unexpected(energy_res.error());
+            const double energy = *energy_res;
+
+            result.iterations = iter;
+            result.energy_change = energy - previous_energy;
+            result.correlation_energy = energy;
+            result.metrics = std::move(*metrics_res);
+
+            previous_energy = energy;
+
+            if (std::abs(result.energy_change) < tol_energy &&
+                result.metrics.residual_rms < tol_residual)
             {
-                auto residuals_res =
-                    evaluate_generated_arbitrary_order_residuals(result.state, kernels);
-                if (!residuals_res)
-                    return std::unexpected(residuals_res.error());
-
-                auto metrics_res = update_amplitudes_with_jacobi_diis(
-                    result.state.amplitudes,
-                    *residuals_res,
-                    result.state.denominators,
-                    diis,
-                    damping,
-                    use_diis);
-                if (!metrics_res)
-                    return std::unexpected(metrics_res.error());
-
-                const double energy = kernels.energy(
-                    result.state.reference,
-                    result.state.mo_blocks,
-                    result.state.denominators,
-                    result.state.amplitudes);
-
-                result.iterations = iter;
-                result.energy_change = energy - previous_energy;
-                result.correlation_energy = energy;
-                result.metrics = std::move(*metrics_res);
-
-                previous_energy = energy;
-
-                if (std::abs(result.energy_change) < tol_energy &&
-                    result.metrics.residual_rms < tol_residual)
-                {
-                    result.converged = true;
-                    return result;
-                }
+                result.converged = true;
+                return result;
             }
+        }
 
-            return result;
-        }
-        catch (const std::exception &ex)
-        {
-            return std::unexpected(
-                "run_generated_arbitrary_order_iterations: " + std::string(ex.what()));
-        }
+        return std::unexpected(
+            "run_generated_arbitrary_order_iterations: generated tensor iterations did not converge within " +
+            std::to_string(max_iterations) + " iterations.");
     }
 } // namespace HartreeFock::Correlation::CC

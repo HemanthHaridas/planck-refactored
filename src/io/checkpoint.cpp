@@ -255,6 +255,9 @@ static void adapt_restart_spin_state(
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+// Checkpoint payloads are written in native host byte order and with native
+// IEEE-754 `double` layout. MAGIC/VERSION let us reject incompatible files
+// explicitly rather than silently interpreting foreign-endian data.
 static constexpr char MAGIC[8] = {'P', 'L', 'N', 'K', 'C', 'H', 'K', '\0'};
 static constexpr uint32_t VERSION = 6;
 

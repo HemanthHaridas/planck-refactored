@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -9,11 +10,23 @@
 #include <Eigen/Geometry>
 
 #include "io.h"
+#include "io/logging.h"
 #include "lookup/elements.h"
 
 namespace HartreeFock::IO
 {
     using SectionMap = std::unordered_map<std::string, std::vector<std::string>>;
+    using ParseHandler = std::function<std::expected<void, std::string>(const std::string &)>;
+
+    static void log_parse_exception_detail(
+        const std::string &context,
+        const std::exception &error)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Debug,
+            "Input Parser :",
+            std::format("{} ignored exception detail: {}", context, error.what()));
+    }
 
     // Helper functions
     static void trim(std::string &s)
@@ -98,8 +111,9 @@ namespace HartreeFock::IO
             {
                 count = std::stoi(count_text);
             }
-            catch (const std::exception &)
+            catch (const std::exception &e)
             {
+                log_parse_exception_detail(keyword, e);
                 return std::unexpected(keyword + " counts must be integers");
             }
             if (count < 0)
@@ -125,8 +139,9 @@ namespace HartreeFock::IO
             {
                 values.push_back(std::stoi(token));
             }
-            catch (const std::exception &)
+            catch (const std::exception &e)
             {
+                log_parse_exception_detail(keyword, e);
                 return std::unexpected(keyword + " requires integer values");
             }
         }
@@ -203,10 +218,24 @@ namespace HartreeFock::IO
     }
 
     template <typename T>
-    T map_string_enum(const std::string &value);
+    std::expected<T, std::string> map_string_enum(const std::string &value);
+
+    template <typename T>
+    static std::expected<T, std::string> lookup_enum(
+        const std::unordered_map<std::string, T> &table,
+        const std::string &value,
+        const std::string &label)
+    {
+        const auto lowered = toLower(value);
+        auto it = table.find(lowered);
+        if (it != table.end())
+            return it->second;
+        return std::unexpected(label + value);
+    }
 
     template <>
-    HartreeFock::CalculationType map_string_enum<HartreeFock::CalculationType>(const std::string &value)
+    std::expected<HartreeFock::CalculationType, std::string>
+    map_string_enum<HartreeFock::CalculationType>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::CalculationType> _table =
             {
@@ -231,16 +260,12 @@ namespace HartreeFock::IO
                 {"imag_follow", HartreeFock::CalculationType::ImaginaryFollow},
                 {"irc_follow", HartreeFock::CalculationType::ImaginaryFollow}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Calculation Type : " + value);
+        return lookup_enum(_table, value, "Invalid Calculation Type : ");
     }
 
     template <>
-    HartreeFock::Verbosity map_string_enum<HartreeFock::Verbosity>(const std::string &value)
+    std::expected<HartreeFock::Verbosity, std::string>
+    map_string_enum<HartreeFock::Verbosity>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::Verbosity> _table =
             {
@@ -251,32 +276,24 @@ namespace HartreeFock::IO
                 {"verbose", HartreeFock::Verbosity::Verbose},
                 {"debug", HartreeFock::Verbosity::Debug}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Verbosity : " + value);
+        return lookup_enum(_table, value, "Invalid Verbosity : ");
     }
 
     template <>
-    HartreeFock::BasisType map_string_enum<HartreeFock::BasisType>(const std::string &value)
+    std::expected<HartreeFock::BasisType, std::string>
+    map_string_enum<HartreeFock::BasisType>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::BasisType> _table =
             {
                 {"cartesian", HartreeFock::BasisType::Cartesian},
                 {"spherical", HartreeFock::BasisType::Spherical}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid BasisType : " + value);
+        return lookup_enum(_table, value, "Invalid BasisType : ");
     }
 
     template <>
-    HartreeFock::OptCoords map_string_enum<HartreeFock::OptCoords>(const std::string &value)
+    std::expected<HartreeFock::OptCoords, std::string>
+    map_string_enum<HartreeFock::OptCoords>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::OptCoords> _table =
             {
@@ -285,16 +302,12 @@ namespace HartreeFock::IO
                 {"ic", HartreeFock::OptCoords::Internal},
                 {"gic", HartreeFock::OptCoords::Internal}};
 
-        auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid OptCoords : " + value);
+        return lookup_enum(_table, value, "Invalid OptCoords : ");
     }
 
     template <>
-    HartreeFock::DFTGridQuality map_string_enum<HartreeFock::DFTGridQuality>(const std::string &value)
+    std::expected<HartreeFock::DFTGridQuality, std::string>
+    map_string_enum<HartreeFock::DFTGridQuality>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::DFTGridQuality> _table =
             {
@@ -305,16 +318,12 @@ namespace HartreeFock::IO
                 {"ultra-fine", HartreeFock::DFTGridQuality::UltraFine},
                 {"ultra_fine", HartreeFock::DFTGridQuality::UltraFine}};
 
-        const auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid DFTGridQuality : " + value);
+        return lookup_enum(_table, value, "Invalid DFTGridQuality : ");
     }
 
     template <>
-    HartreeFock::XCExchangeFunctional map_string_enum<HartreeFock::XCExchangeFunctional>(const std::string &value)
+    std::expected<HartreeFock::XCExchangeFunctional, std::string>
+    map_string_enum<HartreeFock::XCExchangeFunctional>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::XCExchangeFunctional> _table =
             {
@@ -331,16 +340,12 @@ namespace HartreeFock::IO
                 {"pbe", HartreeFock::XCExchangeFunctional::PBE},
                 {"gga_x_pbe", HartreeFock::XCExchangeFunctional::PBE}};
 
-        const auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid XC exchange functional : " + value);
+        return lookup_enum(_table, value, "Invalid XC exchange functional : ");
     }
 
     template <>
-    HartreeFock::XCCorrelationFunctional map_string_enum<HartreeFock::XCCorrelationFunctional>(const std::string &value)
+    std::expected<HartreeFock::XCCorrelationFunctional, std::string>
+    map_string_enum<HartreeFock::XCCorrelationFunctional>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::XCCorrelationFunctional> _table =
             {
@@ -358,36 +363,56 @@ namespace HartreeFock::IO
                 {"pbe", HartreeFock::XCCorrelationFunctional::PBE},
                 {"gga_c_pbe", HartreeFock::XCCorrelationFunctional::PBE}};
 
-        const auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid XC correlation functional : " + value);
+        return lookup_enum(_table, value, "Invalid XC correlation functional : ");
     }
 
     std::expected<void, std::string> _parse_control(const std::vector<std::string> &lines, HartreeFock::CalculationType &calculation, HartreeFock::OptionsBasis &basis, HartreeFock::OptionsOutput &output)
     {
         // (key, value) pairs
-        const std::unordered_map<std::string, std::function<void(const std::string &)>> _control_map =
+        const std::unordered_map<std::string, ParseHandler> _control_map =
             {
-                {"basis", [&basis](const std::string &value)
-                 { basis._basis_name = value; }},
-                {"basis_type", [&basis](const std::string &value)
-                 { basis._basis = map_string_enum<HartreeFock::BasisType>(value); }},
-                {"calculation", [&calculation](const std::string &value)
-                 { calculation = map_string_enum<HartreeFock::CalculationType>(value); }},
-                {"verbosity", [&output](const std::string &value)
-                 { output._verbosity = map_string_enum<HartreeFock::Verbosity>(value); }},
-                {"basis_path", [&basis](const std::string &value)
-                 { basis._basis_path = value; }},
+                {"basis", [&basis](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     basis._basis_name = value;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"basis_type", [&basis](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::BasisType>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     basis._basis = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"calculation", [&calculation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::CalculationType>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     calculation = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"verbosity", [&output](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::Verbosity>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     output._verbosity = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"basis_path", [&basis](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     basis._basis_path = value;
+                     return std::expected<void, std::string>{};
+                 }},
 
-                {"print_populations", [&output](const std::string &value)
+                {"print_populations", [&output](const std::string &value) -> std::expected<void, std::string>
                  {
                      auto parsed = toBool(value);
                      if (!parsed)
-                         throw std::invalid_argument(parsed.error());
+                         return std::unexpected(parsed.error());
                      output._print_populations = *parsed;
+                     return std::expected<void, std::string>{};
                  }}};
 
         for (const std::string line : lines)
@@ -408,7 +433,9 @@ namespace HartreeFock::IO
             {
                 try
                 {
-                    it->second(value);
+                    auto parsed = it->second(value);
+                    if (!parsed)
+                        return std::unexpected(std::string("Error parsing control '") + key + "': " + parsed.error());
                 }
                 catch (const std::exception &e)
                 {
@@ -425,7 +452,8 @@ namespace HartreeFock::IO
     }
 
     template <>
-    HartreeFock::SCFGuess map_string_enum<HartreeFock::SCFGuess>(const std::string &value)
+    std::expected<HartreeFock::SCFGuess, std::string>
+    map_string_enum<HartreeFock::SCFGuess>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::SCFGuess> _table =
             {
@@ -436,16 +464,12 @@ namespace HartreeFock::IO
                 {"full", HartreeFock::SCFGuess::ReadFull},
             };
 
-        auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid SCFGuess: " + value);
+        return lookup_enum(_table, value, "Invalid SCFGuess: ");
     }
 
     template <>
-    HartreeFock::SCFMode map_string_enum<HartreeFock::SCFMode>(const std::string &value)
+    std::expected<HartreeFock::SCFMode, std::string>
+    map_string_enum<HartreeFock::SCFMode>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::SCFMode> _table =
             {
@@ -453,16 +477,12 @@ namespace HartreeFock::IO
                 {"direct", HartreeFock::SCFMode::Direct},
                 {"auto", HartreeFock::SCFMode::Auto}};
 
-        auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid SCFMode: " + value);
+        return lookup_enum(_table, value, "Invalid SCFMode: ");
     }
 
     template <>
-    HartreeFock::SCFType map_string_enum<HartreeFock::SCFType>(const std::string &value)
+    std::expected<HartreeFock::SCFType, std::string>
+    map_string_enum<HartreeFock::SCFType>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::SCFType> _table =
             {
@@ -473,16 +493,12 @@ namespace HartreeFock::IO
                 {"rks", HartreeFock::SCFType::RHF},
                 {"uks", HartreeFock::SCFType::UHF}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid SCFType : " + value);
+        return lookup_enum(_table, value, "Invalid SCFType : ");
     }
 
     template <>
-    HartreeFock::PostHF map_string_enum<HartreeFock::PostHF>(const std::string &value)
+    std::expected<HartreeFock::PostHF, std::string>
+    map_string_enum<HartreeFock::PostHF>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::PostHF> _table =
             {
@@ -499,16 +515,12 @@ namespace HartreeFock::IO
                 {"rasscf", HartreeFock::PostHF::RASSCF},
             };
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Correlation : " + value);
+        return lookup_enum(_table, value, "Invalid Correlation : ");
     }
 
     template <>
-    HartreeFock::IntegralMethod map_string_enum<HartreeFock::IntegralMethod>(const std::string &value)
+    std::expected<HartreeFock::IntegralMethod, std::string>
+    map_string_enum<HartreeFock::IntegralMethod>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::IntegralMethod> _table =
             {
@@ -519,83 +531,177 @@ namespace HartreeFock::IO
                 {"auto", HartreeFock::IntegralMethod::Auto},
             };
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Correlation : " + value);
+        return lookup_enum(_table, value, "Invalid Correlation : ");
     }
 
     std::expected<void, std::string> _parse_scf(const std::vector<std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space)
     {
         // (key, value) pairs
-        const std::unordered_map<std::string, std::function<void(const std::string &)>> _scf_map =
+        const std::unordered_map<std::string, ParseHandler> _scf_map =
             {
-                {"scf_type", [&scf](const std::string &value)
-                 { scf._scf = map_string_enum<HartreeFock::SCFType>(value); }},
-                {"diis_dim", [&scf](const std::string &value)
-                 { scf._DIIS_dim = std::stoi(value); }},
-                {"max_cycles", [&scf](const std::string &value)
-                 { scf._max_cycles = std::stoi(value); }},
-                {"tol_energy", [&scf](const std::string &value)
-                 { scf._tol_energy = std::stod(value); }},
-                {"tol_density", [&scf](const std::string &value)
-                 { scf._tol_density = std::stod(value); }},
-                {"threshold", [&scf](const std::string &value)
-                 { scf._threshold = std::stoi(value); }},
+                {"scf_type", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::SCFType>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._scf = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"diis_dim", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._DIIS_dim = std::stoi(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"max_cycles", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._max_cycles = std::stoi(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tol_energy", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._tol_energy = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tol_density", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._tol_density = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"threshold", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._threshold = std::stoi(value);
+                     return std::expected<void, std::string>{};
+                 }},
 
-                {"correlation", [&correlation](const std::string &value)
-                 { correlation = map_string_enum<HartreeFock::PostHF>(value); }},
-                {"engine", [&integral](const std::string &value)
-                 { integral._engine = map_string_enum<HartreeFock::IntegralMethod>(value); }},
-                {"tol_eri", [&integral](const std::string &value)
-                 { integral._tol_eri = std::stod(value); }},
+                {"correlation", [&correlation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::PostHF>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     correlation = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"engine", [&integral](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::IntegralMethod>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     integral._engine = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tol_eri", [&integral](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     integral._tol_eri = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
 
-                {"guess", [&scf](const std::string &value)
-                 { scf._guess = map_string_enum<HartreeFock::SCFGuess>(value); }},
-                {"level_shift", [&scf](const std::string &value)
-                 { scf._level_shift = std::stod(value); }},
-                {"cc_damping", [&scf](const std::string &value)
-                 { scf._cc_damping = std::stod(value); }},
-                {"diis_restart", [&scf](const std::string &value)
-                 { scf._diis_restart_factor = std::stod(value); }},
-                {"scf_mode", [&scf](const std::string &value)
-                 { scf._mode = map_string_enum<HartreeFock::SCFMode>(value); }},
+                {"guess", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::SCFGuess>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._guess = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"level_shift", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._level_shift = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"cc_damping", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._cc_damping = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"diis_restart", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._diis_restart_factor = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"scf_mode", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::SCFMode>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._mode = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
 
                 // Active space (CASSCF / RASSCF)
-                {"nactele", [&active_space](const std::string &v)
-                 { active_space.nactele = std::stoi(v); }},
-                {"nactorb", [&active_space](const std::string &v)
-                 { active_space.nactorb = std::stoi(v); }},
-                {"nroots", [&active_space](const std::string &v)
-                 { active_space.nroots = std::stoi(v); }},
-                {"nras1", [&active_space](const std::string &v)
-                 { active_space.nras1 = std::stoi(v); }},
-                {"nras2", [&active_space](const std::string &v)
-                 { active_space.nras2 = std::stoi(v); }},
-                {"nras3", [&active_space](const std::string &v)
-                 { active_space.nras3 = std::stoi(v); }},
+                {"nactele", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nactele = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nactorb", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nactorb = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nroots", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nroots = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nras1", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nras1 = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nras2", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nras2 = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nras3", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nras3 = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
 
-                {"max_holes", [&active_space](const std::string &v)
-                 { active_space.max_holes = std::stoi(v); }},
-                {"max_elec", [&active_space](const std::string &v)
-                 { active_space.max_elec = std::stoi(v); }},
+                {"max_holes", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.max_holes = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"max_elec", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.max_elec = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
 
-                {"mcscf_max_iter", [&active_space](const std::string &v)
-                 { active_space.mcscf_max_iter = static_cast<unsigned int>(std::stoi(v)); }},
-                {"mcscf_micro_per_macro", [&active_space](const std::string &v)
-                 { active_space.mcscf_micro_per_macro = static_cast<unsigned int>(std::stoi(v)); }},
+                {"mcscf_max_iter", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.mcscf_max_iter = static_cast<unsigned int>(std::stoi(v));
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mcscf_micro_per_macro", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.mcscf_micro_per_macro = static_cast<unsigned int>(std::stoi(v));
+                     return std::expected<void, std::string>{};
+                 }},
 
-                {"tol_mcscf_energy", [&active_space](const std::string &v)
-                 { active_space.tol_mcscf_energy = std::stod(v); }},
-                {"tol_mcscf_grad", [&active_space](const std::string &v)
-                 { active_space.tol_mcscf_grad = std::stod(v); }},
+                {"tol_mcscf_energy", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.tol_mcscf_energy = std::stod(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tol_mcscf_grad", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.tol_mcscf_grad = std::stod(v);
+                     return std::expected<void, std::string>{};
+                 }},
 
-                {"ci_max_dim", [&active_space](const std::string &v)
-                 { active_space.ci_max_dim = static_cast<unsigned int>(std::stoi(v)); }},
-                {"target_irrep", [&active_space](const std::string &v)
-                 { active_space.target_irrep = v; }}};
+                {"ci_max_dim", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.ci_max_dim = static_cast<unsigned int>(std::stoi(v));
+                     return std::expected<void, std::string>{};
+                 }},
+                {"target_irrep", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.target_irrep = v;
+                     return std::expected<void, std::string>{};
+                 }}};
 
         for (const std::string line : lines)
         {
@@ -683,7 +789,9 @@ namespace HartreeFock::IO
             {
                 try
                 {
-                    it->second(value);
+                    auto parsed = it->second(value);
+                    if (!parsed)
+                        return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
                 }
                 catch (const std::exception &e)
                 {
@@ -703,34 +811,56 @@ namespace HartreeFock::IO
         const std::vector<std::string> &lines,
         HartreeFock::OptionsDFT &dft)
     {
-        const std::unordered_map<std::string, std::function<void(const std::string &)>> _dft_map =
+        const std::unordered_map<std::string, ParseHandler> _dft_map =
             {
-                {"grid", [&dft](const std::string &value)
-                 { dft._grid = map_string_enum<HartreeFock::DFTGridQuality>(value); }},
-                {"grid_level", [&dft](const std::string &value)
-                 { dft._grid = map_string_enum<HartreeFock::DFTGridQuality>(value); }},
-
-                {"exchange", [&dft](const std::string &value)
+                {"grid", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
-                     dft._exchange = map_string_enum<HartreeFock::XCExchangeFunctional>(value);
+                     auto parsed = map_string_enum<HartreeFock::DFTGridQuality>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._grid = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"grid_level", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::DFTGridQuality>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._grid = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+
+                {"exchange", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::XCExchangeFunctional>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._exchange = *parsed;
                      if (dft._exchange != HartreeFock::XCExchangeFunctional::Custom)
                          dft._exchange_id = 0;
+                     return std::expected<void, std::string>{};
                  }},
-                {"correlation", [&dft](const std::string &value)
+                {"correlation", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
-                     dft._correlation = map_string_enum<HartreeFock::XCCorrelationFunctional>(value);
+                     auto parsed = map_string_enum<HartreeFock::XCCorrelationFunctional>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._correlation = *parsed;
                      if (dft._correlation != HartreeFock::XCCorrelationFunctional::Custom)
                          dft._correlation_id = 0;
+                     return std::expected<void, std::string>{};
                  }},
-                {"exchange_id", [&dft](const std::string &value)
+                {"exchange_id", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
                      dft._exchange = HartreeFock::XCExchangeFunctional::Custom;
                      dft._exchange_id = std::stoi(value);
+                     return std::expected<void, std::string>{};
                  }},
-                {"correlation_id", [&dft](const std::string &value)
+                {"correlation_id", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
                      dft._correlation = HartreeFock::XCCorrelationFunctional::Custom;
                      dft._correlation_id = std::stoi(value);
+                     return std::expected<void, std::string>{};
                  }}};
 
         for (const std::string &line : lines)
@@ -762,7 +892,9 @@ namespace HartreeFock::IO
             {
                 try
                 {
-                    it->second(value);
+                    auto parsed = it->second(value);
+                    if (!parsed)
+                        return std::unexpected(std::string("Error parsing dft '") + key + "': " + parsed.error());
                 }
                 catch (const std::exception &e)
                 {
@@ -779,7 +911,8 @@ namespace HartreeFock::IO
     }
 
     template <>
-    HartreeFock::Units map_string_enum<HartreeFock::Units>(const std::string &value)
+    std::expected<HartreeFock::Units, std::string>
+    map_string_enum<HartreeFock::Units>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::Units> _table =
             {
@@ -787,16 +920,12 @@ namespace HartreeFock::IO
                 {"angstrom", HartreeFock::Units::Angstrom},
                 {"bohr", HartreeFock::Units::Bohr}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Units : " + value);
+        return lookup_enum(_table, value, "Invalid Units : ");
     }
 
     template <>
-    HartreeFock::CoordType map_string_enum<HartreeFock::CoordType>(const std::string &value)
+    std::expected<HartreeFock::CoordType, std::string>
+    map_string_enum<HartreeFock::CoordType>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::CoordType> _table =
             {
@@ -805,27 +934,43 @@ namespace HartreeFock::IO
                 {"zmatrix", HartreeFock::CoordType::ZMatrix},
                 {"internal", HartreeFock::CoordType::ZMatrix}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Units : " + value);
+        return lookup_enum(_table, value, "Invalid CoordType : ");
     }
 
     std::expected<void, std::string> _parse_geom(const std::vector<std::string> &lines, HartreeFock::OptionsGeometry &geom, HartreeFock::OptCoords &opt_coords, double &imag_follow_step)
     {
         // (key, value) pairs
-        const std::unordered_map<std::string, std::function<void(const std::string &)>> _geom_map =
+        const std::unordered_map<std::string, ParseHandler> _geom_map =
             {
-                {"coord_type", [&geom](const std::string &value)
-                 { geom._type = map_string_enum<HartreeFock::CoordType>(value); }},
-                {"coord_units", [&geom](const std::string &value)
-                 { geom._units = map_string_enum<HartreeFock::Units>(value); }},
-                {"opt_coords", [&opt_coords](const std::string &value)
-                 { opt_coords = map_string_enum<HartreeFock::OptCoords>(value); }},
-                {"imag_follow_step", [&imag_follow_step](const std::string &value)
-                 { imag_follow_step = std::stod(value); }}};
+                {"coord_type", [&geom](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::CoordType>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     geom._type = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"coord_units", [&geom](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::Units>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     geom._units = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"opt_coords", [&opt_coords](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::OptCoords>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     opt_coords = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"imag_follow_step", [&imag_follow_step](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     imag_follow_step = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }}};
 
         for (const std::string line : lines)
         {
@@ -853,7 +998,9 @@ namespace HartreeFock::IO
             {
                 try
                 {
-                    it->second(value);
+                    auto parsed = it->second(value);
+                    if (!parsed)
+                        return std::unexpected(std::string("Error parsing geom '") + key + "': " + parsed.error());
                 }
                 catch (const std::exception &e)
                 {
@@ -1005,6 +1152,8 @@ namespace HartreeFock::IO
         molecule.standard.resize(molecule.natoms, 3);
         molecule._coordinates.resize(molecule.natoms, 3);
         molecule._standard.resize(molecule.natoms, 3);
+        molecule.standard_is_angstrom = false;
+        molecule._standard_is_bohr = false;
         molecule.coordinates.setZero();
 
         const double deg2rad = M_PI / 180.0;
@@ -1022,8 +1171,9 @@ namespace HartreeFock::IO
                 molecule.atomic_numbers[i] = el.Z;
                 molecule.atomic_masses[i] = el.mass;
             }
-            catch (...)
+            catch (const std::exception &e)
             {
+                log_parse_exception_detail("zmat atomic symbol", e);
                 return std::unexpected("Unknown atomic symbol: " + sym);
             }
 
@@ -1124,6 +1274,8 @@ namespace HartreeFock::IO
 
         molecule._coordinates.resize(molecule.natoms, 3);
         molecule._standard.resize(molecule.natoms, 3);
+        molecule.standard_is_angstrom = false;
+        molecule._standard_is_bohr = false;
 
         // Temporary variables
         std::string _atom;

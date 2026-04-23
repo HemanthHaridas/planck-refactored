@@ -136,8 +136,7 @@ namespace DFT::Driver
 
             if (!options.use_symmetry || !calculator._geometry._use_symm)
             {
-                calculator._molecule._standard = calculator._molecule._coordinates;
-                calculator._molecule._standard_is_bohr = true;
+                calculator._molecule.set_standard_from_bohr(calculator._molecule._coordinates);
                 calculator._molecule._symmetry = false;
                 calculator._molecule._point_group = "C1";
                 HartreeFock::Logger::logging(
@@ -195,8 +194,7 @@ namespace DFT::Driver
                     calculator._molecule.natoms));
             }
 
-            calculator._molecule._standard = geometry->coords_bohr;
-            calculator._molecule._standard_is_bohr = true;
+            calculator._molecule.set_standard_from_bohr(geometry->coords_bohr);
             calculator._molecule._coordinates = geometry->coords_bohr;
             calculator._molecule.coordinates = geometry->coords_bohr / ANGSTROM_TO_BOHR;
             calculator._molecule.charge = geometry->charge;
@@ -988,8 +986,7 @@ namespace DFT::Driver
         {
             calculator._molecule._coordinates = calculator._molecule._standard;
             calculator._molecule.coordinates = calculator._molecule._standard / ANGSTROM_TO_BOHR;
-            calculator._molecule._standard_is_bohr = true;
-            calculator._molecule.standard = calculator._molecule.coordinates;
+            calculator._molecule.set_standard_from_bohr(calculator._molecule._standard);
             calculator._molecule._symmetry = false;
             calculator._molecule._point_group = "C1";
             reset_sao_state(calculator);
@@ -1140,8 +1137,7 @@ namespace DFT::Driver
 
             auto energy_at = [&](const Eigen::MatrixXd &geometry) -> std::expected<double, std::string>
             {
-                calculator._molecule._standard = geometry;
-                calculator._molecule._standard_is_bohr = true;
+                calculator._molecule.set_standard_from_bohr(geometry);
                 HartreeFock::Logger::ScopedSilence silence;
                 auto result = run_single_point_current_geometry(
                     calculator,
@@ -1174,8 +1170,7 @@ namespace DFT::Driver
                 }
             }
 
-            calculator._molecule._standard = reference_geometry;
-            calculator._molecule._standard_is_bohr = true;
+            calculator._molecule.set_standard_from_bohr(reference_geometry);
             {
                 HartreeFock::Logger::ScopedSilence silence;
                 auto reference = run_single_point_current_geometry(
@@ -1190,7 +1185,7 @@ namespace DFT::Driver
             calculator._molecule._point_group = reference_point_group;
             calculator._molecule._coordinates = calculator._molecule._standard;
             calculator._molecule.coordinates = calculator._molecule._standard / ANGSTROM_TO_BOHR;
-            calculator._molecule.standard = calculator._molecule.coordinates;
+            calculator._molecule.set_standard_from_bohr(calculator._molecule._standard);
 
             calculator._gradient = gradient;
             return gradient;
@@ -1375,9 +1370,7 @@ namespace DFT::Driver
             const InitializedFunctionals &functionals)
         {
             calculator.prepare_coordinates();
-            calculator._molecule._standard = calculator._molecule._coordinates;
-            calculator._molecule._standard_is_bohr = true;
-            calculator._molecule.standard = calculator._molecule.coordinates;
+            calculator._molecule.set_standard_from_bohr(calculator._molecule._coordinates);
 
             if (!calculator._constraints.empty())
             {

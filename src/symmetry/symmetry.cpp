@@ -46,8 +46,7 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(HartreeFo
         {
             // Symmetry detection failed — fall back to input geometry (already in Bohr).
             molecule._point_group = "C1";
-            molecule._standard = molecule._coordinates;
-            molecule._standard_is_bohr = true;
+            molecule.set_standard_from_bohr(molecule._coordinates);
             molecule._symmetry = false;
             return {};
         }
@@ -84,16 +83,14 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(HartreeFo
 
         // libmsym returns coordinates in the same units as input (Angstrom).
         // Store both the Angstrom and the Bohr versions.
-        molecule.standard.resize(molecule.natoms, 3);
-        molecule._standard.resize(molecule.natoms, 3);
+        Eigen::MatrixXd standard_coords(molecule.natoms, 3);
         for (size_t i = 0; i < molecule.natoms; ++i)
         {
-            molecule.standard(i, 0) = new_geometry[i].v[0];
-            molecule.standard(i, 1) = new_geometry[i].v[1];
-            molecule.standard(i, 2) = new_geometry[i].v[2];
+            standard_coords(i, 0) = new_geometry[i].v[0];
+            standard_coords(i, 1) = new_geometry[i].v[1];
+            standard_coords(i, 2) = new_geometry[i].v[2];
         }
-        molecule._standard = molecule.standard * ANGSTROM_TO_BOHR;
-        molecule._standard_is_bohr = true;
+        molecule.set_standard_from_angstrom(standard_coords);
         molecule._symmetry = true;
 
         return {};
