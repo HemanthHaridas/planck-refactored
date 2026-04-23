@@ -1,6 +1,5 @@
 #include "post_hf/cc/solver_arbitrary.h"
 
-#include <cassert>
 #include <cmath>
 
 namespace HartreeFock::Correlation::CC
@@ -66,31 +65,26 @@ namespace HartreeFock::Correlation::CC
         return excitation_rank >= 1 && excitation_rank <= max_rank();
     }
 
-    DenseTensorView ArbitraryOrderResiduals::tensor(int excitation_rank)
+    std::expected<DenseTensorView, std::string> ArbitraryOrderResiduals::tensor(int excitation_rank)
     {
-        auto view = checked_residual_tensor(*this, excitation_rank);
-        assert(view && "Requested residual rank is not available");
-        return view ? *view : DenseTensorView{};
+        return checked_residual_tensor(*this, excitation_rank);
     }
 
-    ConstDenseTensorView ArbitraryOrderResiduals::tensor(int excitation_rank) const
+    std::expected<ConstDenseTensorView, std::string> ArbitraryOrderResiduals::tensor(int excitation_rank) const
     {
-        auto view = checked_residual_tensor(*this, excitation_rank);
-        assert(view && "Requested residual rank is not available");
-        return view ? *view : ConstDenseTensorView{};
+        return checked_residual_tensor(*this, excitation_rank);
     }
 
-    ArbitraryOrderResiduals make_zero_rcc_residuals(
+    std::expected<ArbitraryOrderResiduals, std::string> make_zero_rcc_residuals(
         const RHFReference &reference,
         int max_excitation_rank)
     {
-        ArbitraryOrderResiduals residuals;
         if (max_excitation_rank < 1)
         {
-            assert(false && "make_zero_rcc_residuals: max_excitation_rank must be at least 1");
-            return residuals;
+            return std::unexpected("make_zero_rcc_residuals: max_excitation_rank must be at least 1");
         }
 
+        ArbitraryOrderResiduals residuals;
         residuals.by_rank.reserve(static_cast<std::size_t>(max_excitation_rank));
         for (int rank = 1; rank <= max_excitation_rank; ++rank)
             residuals.by_rank.emplace_back(rank_dims(reference, rank), 0.0);
@@ -111,20 +105,20 @@ namespace HartreeFock::Correlation::CC
         return packed;
     }
 
-    void unpack_amplitudes(const Eigen::VectorXd &packed, ArbitraryOrderRCCAmplitudes &amps)
+    std::expected<void, std::string> unpack_amplitudes(const Eigen::VectorXd &packed, ArbitraryOrderRCCAmplitudes &amps)
     {
         const Eigen::VectorXd::Index expected_size =
             static_cast<Eigen::Index>(pack_amplitudes(amps).size());
         if (packed.size() != expected_size)
         {
-            assert(false && "unpack_amplitudes: packed vector size does not match amplitude storage");
-            return;
+            return std::unexpected("unpack_amplitudes: packed vector size does not match amplitude storage");
         }
 
         Eigen::Index offset = 0;
         for (auto &tensor : amps.by_rank)
             for (double &value : tensor.data)
                 value = packed(offset++);
+        return {};
     }
 
     Eigen::VectorXd pack_residuals(const ArbitraryOrderResiduals &residuals)
@@ -185,38 +179,41 @@ namespace HartreeFock::Correlation::CC
         Eigen::Index offset = 0;
         for (int rank = 1; rank <= amps.max_rank(); ++rank)
         {
-            const ConstDenseTensorView amp =
-                static_cast<const ArbitraryOrderRCCAmplitudes &>(amps).tensor(rank);
+            auto amp = static_cast<const ArbitraryOrderRCCAmplitudes &>(amps).tensor(rank);
+            if (!amp)
+                return std::unexpected("update_amplitudes_with_jacobi_diis: " + amp.error());
             auto residual = checked_residual_tensor(residuals, rank);
             if (!residual)
                 return std::unexpected("update_amplitudes_with_jacobi_diis: " + residual.error());
-            const ConstDenseTensorView denom = denominators.tensor(rank);
+            auto denom = denominators.tensor(rank);
+            if (!denom)
+                return std::unexpected("update_amplitudes_with_jacobi_diis: " + denom.error());
 
             auto amp_residual_layout =
-                require_same_layout(amp, *residual, "update_amplitudes_with_jacobi_diis");
+                require_same_layout(*amp, *residual, "update_amplitudes_with_jacobi_diis");
             if (!amp_residual_layout)
                 return std::unexpected(amp_residual_layout.error());
             auto amp_denom_layout =
-                require_same_layout(amp, denom, "update_amplitudes_with_jacobi_diis");
+                require_same_layout(*amp, *denom, "update_amplitudes_with_jacobi_diis");
             if (!amp_denom_layout)
                 return std::unexpected(amp_denom_layout.error());
 
             metrics.residual_rms_by_rank.push_back(tensor_rms(*residual));
 
             double step_sum_sq = 0.0;
-            for (std::size_t idx = 0; idx < amp.size(); ++idx)
+            for (std::size_t idx = 0; idx < amp->size(); ++idx)
             {
                 double delta = 0.0;
-                if (std::abs(denom.data[idx]) >= 1e-12)
-                    delta = damping * residual->data[idx] / denom.data[idx];
+                if (std::abs(denom->data[idx]) >= 1e-12)
+                    delta = damping * residual->data[idx] / denom->data[idx];
                 updated(offset + static_cast<Eigen::Index>(idx)) += delta;
                 step_sum_sq += delta * delta;
             }
 
             const double rank_rms =
-                amp.size() == 0 ? 0.0 : std::sqrt(step_sum_sq / static_cast<double>(amp.size()));
+                amp->size() == 0 ? 0.0 : std::sqrt(step_sum_sq / static_cast<double>(amp->size()));
             metrics.step_rms_by_rank.push_back(rank_rms);
-            offset += static_cast<Eigen::Index>(amp.size());
+            offset += static_cast<Eigen::Index>(amp->size());
         }
 
         diis.push(updated, residual_vec);
@@ -228,7 +225,9 @@ namespace HartreeFock::Correlation::CC
             updated = std::move(*diis_res);
         }
 
-        unpack_amplitudes(updated, amps);
+        auto unpacked = unpack_amplitudes(updated, amps);
+        if (!unpacked)
+            return std::unexpected(unpacked.error());
 
         const Eigen::VectorXd update_delta = updated - current;
         metrics.update_rms = rms_norm(update_delta);
@@ -239,8 +238,10 @@ namespace HartreeFock::Correlation::CC
             Eigen::Index rank_offset = 0;
             for (int rank = 1; rank <= amps.max_rank(); ++rank)
             {
-                const std::size_t rank_size =
-                    amps.tensor(rank).size();
+                auto amp = amps.tensor(rank);
+                if (!amp)
+                    return std::unexpected("update_amplitudes_with_jacobi_diis: " + amp.error());
+                const std::size_t rank_size = amp->size();
                 double step_sum_sq = 0.0;
                 for (std::size_t idx = 0; idx < rank_size; ++idx)
                 {

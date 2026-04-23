@@ -6,9 +6,21 @@
 
 namespace
 {
+    double &tensor_error_slot() noexcept
+    {
+        static double value = 0.0;
+        return value;
+    }
+
+    const double &const_tensor_error_slot() noexcept
+    {
+        static const double value = 0.0;
+        return value;
+    }
+
     // Every tensor constructor goes through the same checked product helper so a
     // bad dimension or integer overflow fails early with a readable message.
-    std::size_t checked_product(
+    std::expected<std::size_t, std::string> checked_product(
         std::initializer_list<int> dims,
         const char *label)
     {
@@ -16,25 +28,19 @@ namespace
         for (const int dim : dims)
         {
             if (dim < 0)
-            {
-                assert(dim >= 0 && "tensor dimension cannot be negative");
-                return 0;
-            }
+                return std::unexpected(std::string(label) + ": tensor dimension cannot be negative");
 
             const std::size_t dim_size = static_cast<std::size_t>(dim);
             if (dim_size != 0 &&
                 total > std::numeric_limits<std::size_t>::max() / dim_size)
-            {
-                assert(false && "tensor size overflow");
-                return 0;
-            }
+                return std::unexpected(std::string(label) + ": tensor size overflow");
 
             total *= dim_size;
         }
         return total;
     }
 
-    std::size_t checked_product(
+    std::expected<std::size_t, std::string> checked_product(
         const std::vector<int> &dims,
         const char *label)
     {
@@ -42,34 +48,25 @@ namespace
         for (const int dim : dims)
         {
             if (dim < 0)
-            {
-                assert(dim >= 0 && "tensor dimension cannot be negative");
-                return 0;
-            }
+                return std::unexpected(std::string(label) + ": tensor dimension cannot be negative");
 
             const std::size_t dim_size = static_cast<std::size_t>(dim);
             if (dim_size != 0 &&
                 total > std::numeric_limits<std::size_t>::max() / dim_size)
-            {
-                assert(false && "tensor size overflow");
-                return 0;
-            }
+                return std::unexpected(std::string(label) + ": tensor size overflow");
 
             total *= dim_size;
         }
         return total;
     }
 
-    std::size_t flatten_index(
+    std::expected<std::size_t, std::string> flatten_index(
         const std::vector<int> &dims,
         const std::vector<int> &indices,
         const char *label)
     {
         if (dims.size() != indices.size())
-        {
-            assert(dims.size() == indices.size() && "index count does not match tensor order");
-            return 0;
-        }
+            return std::unexpected(std::string(label) + ": index count does not match tensor order");
 
         std::size_t offset = 0;
         for (std::size_t pos = 0; pos < dims.size(); ++pos)
@@ -77,10 +74,7 @@ namespace
             const int dim = dims[pos];
             const int idx = indices[pos];
             if (idx < 0 || idx >= dim)
-            {
-                assert(idx >= 0 && idx < dim && "tensor index out of bounds");
-                return 0;
-            }
+                return std::unexpected(std::string(label) + ": tensor index out of bounds");
 
             offset *= static_cast<std::size_t>(dim);
             offset += static_cast<std::size_t>(idx);
@@ -91,6 +85,20 @@ namespace
     std::vector<int> to_vector(std::initializer_list<int> values)
     {
         return std::vector<int>(values.begin(), values.end());
+    }
+
+    std::expected<std::size_t, std::string> checked_fixed_rank_index(
+        const std::vector<int> &dims,
+        const std::vector<int> &indices,
+        std::size_t data_size,
+        const char *label)
+    {
+        auto offset = flatten_index(dims, indices, label);
+        if (!offset)
+            return std::unexpected(offset.error());
+        if (*offset >= data_size)
+            return std::unexpected(std::string(label) + ": tensor storage is smaller than the declared dimensions");
+        return offset;
     }
 } // namespace
 
@@ -109,18 +117,29 @@ namespace HartreeFock::Correlation::CC
     } // namespace
 
     Tensor2D::Tensor2D(int d1, int d2, double value)
-        : dim1(d1), dim2(d2), data(checked_product({d1, d2}, "Tensor2D"), value)
+        : dim1(d1), dim2(d2)
     {
+        auto total = checked_product({d1, d2}, "Tensor2D");
+        if (!total)
+        {
+            assert(false && "Tensor2D dimension validation failed");
+            dim1 = 0;
+            dim2 = 0;
+            return;
+        }
+        data.assign(*total, value);
     }
 
     Tensor2D::Tensor2D(int d1, int d2, std::vector<double> values)
         : dim1(d1), dim2(d2), data(std::move(values))
     {
-        const std::size_t expected_size = checked_product({d1, d2}, "Tensor2D");
-        if (data.size() != expected_size)
+        auto expected_size = checked_product({d1, d2}, "Tensor2D");
+        if (!expected_size || data.size() != *expected_size)
         {
-            assert(data.size() == expected_size && "Tensor2D: flat data size does not match dimensions");
-            data.assign(expected_size, 0.0);
+            assert(false && "Tensor2D flat data size does not match dimensions");
+            dim1 = 0;
+            dim2 = 0;
+            data.clear();
         }
     }
 
@@ -131,30 +150,54 @@ namespace HartreeFock::Correlation::CC
 
     double &Tensor2D::operator()(int i, int j) noexcept
     {
-        return data[(static_cast<std::size_t>(i) * static_cast<std::size_t>(dim2)) +
-                    static_cast<std::size_t>(j)];
+        auto offset = checked_fixed_rank_index({dim1, dim2}, {i, j}, data.size(), "Tensor2D");
+        if (!offset)
+        {
+            assert(false && "Tensor2D index validation failed");
+            return tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     const double &Tensor2D::operator()(int i, int j) const noexcept
     {
-        return data[(static_cast<std::size_t>(i) * static_cast<std::size_t>(dim2)) +
-                    static_cast<std::size_t>(j)];
+        auto offset = checked_fixed_rank_index({dim1, dim2}, {i, j}, data.size(), "Tensor2D");
+        if (!offset)
+        {
+            assert(false && "Tensor2D index validation failed");
+            return const_tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     Tensor4D::Tensor4D(int d1, int d2, int d3, int d4, double value)
-        : dim1(d1), dim2(d2), dim3(d3), dim4(d4),
-          data(checked_product({d1, d2, d3, d4}, "Tensor4D"), value)
+        : dim1(d1), dim2(d2), dim3(d3), dim4(d4)
     {
+        auto total = checked_product({d1, d2, d3, d4}, "Tensor4D");
+        if (!total)
+        {
+            assert(false && "Tensor4D dimension validation failed");
+            dim1 = 0;
+            dim2 = 0;
+            dim3 = 0;
+            dim4 = 0;
+            return;
+        }
+        data.assign(*total, value);
     }
 
     Tensor4D::Tensor4D(int d1, int d2, int d3, int d4, std::vector<double> values)
         : dim1(d1), dim2(d2), dim3(d3), dim4(d4), data(std::move(values))
     {
-        const std::size_t expected_size = checked_product({d1, d2, d3, d4}, "Tensor4D");
-        if (data.size() != expected_size)
+        auto expected_size = checked_product({d1, d2, d3, d4}, "Tensor4D");
+        if (!expected_size || data.size() != *expected_size)
         {
-            assert(data.size() == expected_size && "Tensor4D: flat data size does not match dimensions");
-            data.assign(expected_size, 0.0);
+            assert(false && "Tensor4D flat data size does not match dimensions");
+            dim1 = 0;
+            dim2 = 0;
+            dim3 = 0;
+            dim4 = 0;
+            data.clear();
         }
     }
 
@@ -165,40 +208,58 @@ namespace HartreeFock::Correlation::CC
 
     double &Tensor4D::operator()(int i, int j, int k, int l) noexcept
     {
-        const std::size_t d2 = static_cast<std::size_t>(dim2);
-        const std::size_t d3 = static_cast<std::size_t>(dim3);
-        const std::size_t d4 = static_cast<std::size_t>(dim4);
-        return data[(((static_cast<std::size_t>(i) * d2) + static_cast<std::size_t>(j)) * d3 +
-                     static_cast<std::size_t>(k)) *
-                        d4 +
-                    static_cast<std::size_t>(l)];
+        auto offset = checked_fixed_rank_index({dim1, dim2, dim3, dim4}, {i, j, k, l}, data.size(), "Tensor4D");
+        if (!offset)
+        {
+            assert(false && "Tensor4D index validation failed");
+            return tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     const double &Tensor4D::operator()(int i, int j, int k, int l) const noexcept
     {
-        const std::size_t d2 = static_cast<std::size_t>(dim2);
-        const std::size_t d3 = static_cast<std::size_t>(dim3);
-        const std::size_t d4 = static_cast<std::size_t>(dim4);
-        return data[(((static_cast<std::size_t>(i) * d2) + static_cast<std::size_t>(j)) * d3 +
-                     static_cast<std::size_t>(k)) *
-                        d4 +
-                    static_cast<std::size_t>(l)];
+        auto offset = checked_fixed_rank_index({dim1, dim2, dim3, dim4}, {i, j, k, l}, data.size(), "Tensor4D");
+        if (!offset)
+        {
+            assert(false && "Tensor4D index validation failed");
+            return const_tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     Tensor6D::Tensor6D(int d1, int d2, int d3, int d4, int d5, int d6, double value)
-        : dim1(d1), dim2(d2), dim3(d3), dim4(d4), dim5(d5), dim6(d6),
-          data(checked_product({d1, d2, d3, d4, d5, d6}, "Tensor6D"), value)
+        : dim1(d1), dim2(d2), dim3(d3), dim4(d4), dim5(d5), dim6(d6)
     {
+        auto total = checked_product({d1, d2, d3, d4, d5, d6}, "Tensor6D");
+        if (!total)
+        {
+            assert(false && "Tensor6D dimension validation failed");
+            dim1 = 0;
+            dim2 = 0;
+            dim3 = 0;
+            dim4 = 0;
+            dim5 = 0;
+            dim6 = 0;
+            return;
+        }
+        data.assign(*total, value);
     }
 
     Tensor6D::Tensor6D(int d1, int d2, int d3, int d4, int d5, int d6, std::vector<double> values)
         : dim1(d1), dim2(d2), dim3(d3), dim4(d4), dim5(d5), dim6(d6), data(std::move(values))
     {
-        const std::size_t expected_size = checked_product({d1, d2, d3, d4, d5, d6}, "Tensor6D");
-        if (data.size() != expected_size)
+        auto expected_size = checked_product({d1, d2, d3, d4, d5, d6}, "Tensor6D");
+        if (!expected_size || data.size() != *expected_size)
         {
-            assert(data.size() == expected_size && "Tensor6D: flat data size does not match dimensions");
-            data.assign(expected_size, 0.0);
+            assert(false && "Tensor6D flat data size does not match dimensions");
+            dim1 = 0;
+            dim2 = 0;
+            dim3 = 0;
+            dim4 = 0;
+            dim5 = 0;
+            dim6 = 0;
+            data.clear();
         }
     }
 
@@ -209,52 +270,56 @@ namespace HartreeFock::Correlation::CC
 
     double &Tensor6D::operator()(int i, int j, int k, int l, int m, int n) noexcept
     {
-        const std::size_t d2 = static_cast<std::size_t>(dim2);
-        const std::size_t d3 = static_cast<std::size_t>(dim3);
-        const std::size_t d4 = static_cast<std::size_t>(dim4);
-        const std::size_t d5 = static_cast<std::size_t>(dim5);
-        const std::size_t d6 = static_cast<std::size_t>(dim6);
-        return data[(((((static_cast<std::size_t>(i) * d2) + static_cast<std::size_t>(j)) * d3 +
-                       static_cast<std::size_t>(k)) *
-                          d4 +
-                      static_cast<std::size_t>(l)) *
-                         d5 +
-                     static_cast<std::size_t>(m)) *
-                        d6 +
-                    static_cast<std::size_t>(n)];
+        auto offset = checked_fixed_rank_index(
+            {dim1, dim2, dim3, dim4, dim5, dim6},
+            {i, j, k, l, m, n},
+            data.size(),
+            "Tensor6D");
+        if (!offset)
+        {
+            assert(false && "Tensor6D index validation failed");
+            return tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     const double &Tensor6D::operator()(int i, int j, int k, int l, int m, int n) const noexcept
     {
-        const std::size_t d2 = static_cast<std::size_t>(dim2);
-        const std::size_t d3 = static_cast<std::size_t>(dim3);
-        const std::size_t d4 = static_cast<std::size_t>(dim4);
-        const std::size_t d5 = static_cast<std::size_t>(dim5);
-        const std::size_t d6 = static_cast<std::size_t>(dim6);
-        return data[(((((static_cast<std::size_t>(i) * d2) + static_cast<std::size_t>(j)) * d3 +
-                       static_cast<std::size_t>(k)) *
-                          d4 +
-                      static_cast<std::size_t>(l)) *
-                         d5 +
-                     static_cast<std::size_t>(m)) *
-                        d6 +
-                    static_cast<std::size_t>(n)];
+        auto offset = checked_fixed_rank_index(
+            {dim1, dim2, dim3, dim4, dim5, dim6},
+            {i, j, k, l, m, n},
+            data.size(),
+            "Tensor6D");
+        if (!offset)
+        {
+            assert(false && "Tensor6D index validation failed");
+            return const_tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     TensorND::TensorND(std::vector<int> dims_in, double value)
-        : dims(std::move(dims_in)),
-          data(checked_product(dims, "TensorND"), value)
+        : dims(std::move(dims_in))
     {
+        auto total = checked_product(dims, "TensorND");
+        if (!total)
+        {
+            assert(false && "TensorND dimension validation failed");
+            dims.clear();
+            return;
+        }
+        data.assign(*total, value);
     }
 
     TensorND::TensorND(std::vector<int> dims_in, std::vector<double> values)
         : dims(std::move(dims_in)), data(std::move(values))
     {
-        const std::size_t expected_size = checked_product(dims, "TensorND");
-        if (data.size() != expected_size)
+        auto expected_size = checked_product(dims, "TensorND");
+        if (!expected_size || data.size() != *expected_size)
         {
-            assert(data.size() == expected_size && "TensorND: flat data size does not match dimensions");
-            data.assign(expected_size, 0.0);
+            assert(false && "TensorND flat data size does not match dimensions");
+            dims.clear();
+            data.clear();
         }
     }
 
@@ -280,17 +345,35 @@ namespace HartreeFock::Correlation::CC
 
     double &TensorND::operator()(const std::vector<int> &indices)
     {
-        return data[flatten_index(dims, indices, "TensorND")];
+        auto offset = flatten_index(dims, indices, "TensorND");
+        if (!offset)
+        {
+            assert(false && "TensorND index validation failed");
+            return tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     const double &TensorND::operator()(const std::vector<int> &indices) const
     {
-        return data[flatten_index(dims, indices, "TensorND")];
+        auto offset = flatten_index(dims, indices, "TensorND");
+        if (!offset)
+        {
+            assert(false && "TensorND index validation failed");
+            return const_tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     std::size_t DenseTensorView::size() const
     {
-        return checked_product(dims, "DenseTensorView");
+        auto total = checked_product(dims, "DenseTensorView");
+        if (!total)
+        {
+            assert(false && "DenseTensorView dimension validation failed");
+            return 0;
+        }
+        return *total;
     }
 
     int DenseTensorView::order() const noexcept
@@ -310,17 +393,35 @@ namespace HartreeFock::Correlation::CC
 
     double &DenseTensorView::operator()(const std::vector<int> &indices)
     {
-        return data[flatten_index(dims, indices, "DenseTensorView")];
+        auto offset = flatten_index(dims, indices, "DenseTensorView");
+        if (!offset)
+        {
+            assert(false && "DenseTensorView index validation failed");
+            return tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     const double &DenseTensorView::operator()(const std::vector<int> &indices) const
     {
-        return data[flatten_index(dims, indices, "DenseTensorView")];
+        auto offset = flatten_index(dims, indices, "DenseTensorView");
+        if (!offset)
+        {
+            assert(false && "DenseTensorView index validation failed");
+            return const_tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     std::size_t ConstDenseTensorView::size() const
     {
-        return checked_product(dims, "ConstDenseTensorView");
+        auto total = checked_product(dims, "ConstDenseTensorView");
+        if (!total)
+        {
+            assert(false && "ConstDenseTensorView dimension validation failed");
+            return 0;
+        }
+        return *total;
     }
 
     int ConstDenseTensorView::order() const noexcept
@@ -335,7 +436,13 @@ namespace HartreeFock::Correlation::CC
 
     const double &ConstDenseTensorView::operator()(const std::vector<int> &indices) const
     {
-        return data[flatten_index(dims, indices, "ConstDenseTensorView")];
+        auto offset = flatten_index(dims, indices, "ConstDenseTensorView");
+        if (!offset)
+        {
+            assert(false && "ConstDenseTensorView index validation failed");
+            return const_tensor_error_slot();
+        }
+        return data[*offset];
     }
 
     DenseTensorView make_tensor_view(Tensor2D &tensor)

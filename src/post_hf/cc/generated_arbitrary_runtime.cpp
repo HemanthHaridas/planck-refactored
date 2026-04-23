@@ -1,8 +1,6 @@
 #include "post_hf/cc/generated_arbitrary_runtime.h"
 
 #include <cmath>
-#include <exception>
-
 namespace HartreeFock::Correlation::CC
 {
     namespace
@@ -42,20 +40,13 @@ namespace HartreeFock::Correlation::CC
         std::expected<double, std::string> evaluate_generated_arbitrary_order_energy(
             const ArbitraryOrderTensorCCState &state,
             const GeneratedArbitraryOrderKernels &kernels,
-            const char *context)
+            [[maybe_unused]] const char *context)
         {
-            try
-            {
-                return kernels.energy(
-                    state.reference,
-                    state.mo_blocks,
-                    state.denominators,
-                    state.amplitudes);
-            }
-            catch (const std::exception &ex)
-            {
-                return std::unexpected(std::string(context) + ": " + ex.what());
-            }
+            return kernels.energy(
+                state.reference,
+                state.mo_blocks,
+                state.denominators,
+                state.amplitudes);
         }
 
     } // namespace
@@ -89,33 +80,31 @@ namespace HartreeFock::Correlation::CC
         if (!valid)
             return std::unexpected(valid.error());
 
-        try
+        ArbitraryOrderResiduals residuals;
+        residuals.by_rank.reserve(static_cast<std::size_t>(state.max_excitation_rank));
+        for (int rank = 1; rank <= state.max_excitation_rank; ++rank)
         {
-            ArbitraryOrderResiduals residuals;
-            residuals.by_rank.reserve(static_cast<std::size_t>(state.max_excitation_rank));
-            for (int rank = 1; rank <= state.max_excitation_rank; ++rank)
+            const auto &kernel = kernels.residuals_by_rank[static_cast<std::size_t>(rank - 1)];
+            TensorND tensor = kernel(
+                state.reference,
+                state.mo_blocks,
+                state.denominators,
+                state.amplitudes);
+            auto denominator = state.denominators.tensor(rank);
+            if (!denominator)
             {
-                const auto &kernel = kernels.residuals_by_rank[static_cast<std::size_t>(rank - 1)];
-                TensorND tensor = kernel(
-                    state.reference,
-                    state.mo_blocks,
-                    state.denominators,
-                    state.amplitudes);
-                if (tensor.dims != state.denominators.tensor(rank).dims)
-                {
-                    return std::unexpected(
-                        "evaluate_generated_arbitrary_order_residuals: residual tensor shape mismatch at rank " +
-                        std::to_string(rank) + ".");
-                }
-                residuals.by_rank.push_back(std::move(tensor));
+                return std::unexpected(
+                    "evaluate_generated_arbitrary_order_residuals: " + denominator.error());
             }
-            return residuals;
+            if (tensor.dims != denominator->dims)
+            {
+                return std::unexpected(
+                    "evaluate_generated_arbitrary_order_residuals: residual tensor shape mismatch at rank " +
+                    std::to_string(rank) + ".");
+            }
+            residuals.by_rank.push_back(std::move(tensor));
         }
-        catch (const std::exception &ex)
-        {
-            return std::unexpected(
-                "evaluate_generated_arbitrary_order_residuals: " + std::string(ex.what()));
-        }
+        return residuals;
     }
 
     std::expected<GeneratedArbitraryOrderSolveResult, std::string>

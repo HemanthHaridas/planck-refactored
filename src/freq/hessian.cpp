@@ -61,7 +61,8 @@ static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(Hart
     calc._info._is_converged = false;
     calc._use_sao_blocking = false;
 
-    calc._compute_nuclear_repulsion();
+    if (auto nuclear_repulsion = calc.recompute_nuclear_repulsion(); !nuclear_repulsion)
+        return std::unexpected("Hessian geometry rebuild failed: " + nuclear_repulsion.error());
 
     auto shell_pairs = build_shellpairs(calc._shells);
     HartreeFock::Symmetry::update_integral_symmetry(calc);

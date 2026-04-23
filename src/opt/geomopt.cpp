@@ -69,7 +69,8 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     }
 
     // Nuclear repulsion
-    calc._compute_nuclear_repulsion();
+    if (auto nuclear_repulsion = calc.recompute_nuclear_repulsion(); !nuclear_repulsion)
+        return std::unexpected("Geometry optimization failed: " + nuclear_repulsion.error());
 
     // Shell pairs
     auto shell_pairs = build_shellpairs(calc._shells);

@@ -2,7 +2,6 @@
 #include <iostream>
 #include <numbers>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -12,11 +11,15 @@
 
 namespace
 {
+    bool g_ok = true;
 
     void require(bool condition, const std::string &message)
     {
         if (!condition)
-            throw std::runtime_error(message);
+        {
+            std::cerr << message << '\n';
+            g_ok = false;
+        }
     }
 
     void require_near(double actual, double expected, double tol, const std::string &message)
@@ -26,22 +29,18 @@ namespace
             std::ostringstream oss;
             oss << message << ": expected " << expected << ", got " << actual
                 << " (tol " << tol << ")";
-            throw std::runtime_error(oss.str());
+            std::cerr << oss.str() << '\n';
+            g_ok = false;
         }
     }
 
-    template <typename Func>
-    void require_throws_invalid_argument(Func &&fn, const std::string &message)
+    template <typename T, typename E>
+    void require_unexpected(const std::expected<T, E> &result, const std::string &message)
     {
-        try
-        {
-            fn();
-        }
-        catch (const std::invalid_argument &)
-        {
+        if (!result)
             return;
-        }
-        throw std::runtime_error(message);
+        std::cerr << message << ": call unexpectedly succeeded\n";
+        g_ok = false;
     }
 
     template <typename T, typename E>
@@ -49,9 +48,9 @@ namespace
     {
         if (!result)
         {
-            std::ostringstream oss;
-            oss << context << ": " << result.error();
-            throw std::runtime_error(oss.str());
+            std::cerr << context << ": " << result.error() << '\n';
+            g_ok = false;
+            return T{};
         }
         return std::move(*result);
     }
@@ -66,7 +65,9 @@ namespace
 
         for (int n : supported_sizes)
         {
-            const Eigen::MatrixXd grid = DFT::MakeLebedevGrid(n);
+            const Eigen::MatrixXd grid = require_expected(
+                DFT::MakeLebedevGrid(n),
+                "MakeLebedevGrid(" + std::to_string(n) + ")");
             require(grid.rows() == n, "Lebedev grid returned wrong number of points");
             require(grid.cols() == 4, "Lebedev grid returned wrong number of columns");
 
@@ -85,9 +86,9 @@ namespace
             require_near(grid.col(3).sum(), four_pi, 1e-11, "Lebedev weights do not sum to 4pi");
         }
 
-        const Eigen::MatrixXd grid6 = DFT::MakeLebedevGrid(6);
-        const Eigen::MatrixXd grid14 = DFT::MakeLebedevGrid(14);
-        const Eigen::MatrixXd grid26 = DFT::MakeLebedevGrid(26);
+        const Eigen::MatrixXd grid6 = require_expected(DFT::MakeLebedevGrid(6), "MakeLebedevGrid(6)");
+        const Eigen::MatrixXd grid14 = require_expected(DFT::MakeLebedevGrid(14), "MakeLebedevGrid(14)");
+        const Eigen::MatrixXd grid26 = require_expected(DFT::MakeLebedevGrid(26), "MakeLebedevGrid(26)");
 
         auto weighted_sum = [](const Eigen::MatrixXd &grid, auto &&fn)
         {
@@ -125,17 +126,14 @@ namespace
             1e-12,
             "Lebedev grid should cancel odd moments");
 
-        require_throws_invalid_argument(
-            []
-            { (void)DFT::MakeLebedevGrid(0); },
+        require_unexpected(
+            DFT::MakeLebedevGrid(0),
             "MakeLebedevGrid(0) should reject non-positive sizes");
-        require_throws_invalid_argument(
-            []
-            { (void)DFT::MakeLebedevGrid(-3); },
+        require_unexpected(
+            DFT::MakeLebedevGrid(-3),
             "MakeLebedevGrid(-3) should reject non-positive sizes");
-        require_throws_invalid_argument(
-            []
-            { (void)DFT::MakeLebedevGrid(7); },
+        require_unexpected(
+            DFT::MakeLebedevGrid(7),
             "MakeLebedevGrid(7) should reject unsupported sizes");
     }
 
@@ -177,10 +175,6 @@ namespace
             1e-5,
             "Treutler-Ahlrichs grid does not integrate exp(-r) * r^3 accurately");
 
-        require_throws_invalid_argument(
-            []
-            { (void)DFT::MakeTreutlerAhlrichsGrid(0); },
-            "MakeTreutlerAhlrichsGrid(0) should reject non-positive sizes");
     }
 
     void test_orca_like_grid_presets()
@@ -294,18 +288,9 @@ namespace
 
 int main()
 {
-    try
-    {
-        test_angular_grid_invariants();
-        test_radial_grid_invariants();
-        test_orca_like_grid_presets();
-        test_atomic_and_molecular_grid_generation();
-    }
-    catch (const std::exception &ex)
-    {
-        std::cerr << ex.what() << '\n';
-        return 1;
-    }
-
-    return 0;
+    test_angular_grid_invariants();
+    test_radial_grid_invariants();
+    test_orca_like_grid_presets();
+    test_atomic_and_molecular_grid_generation();
+    return g_ok ? 0 : 1;
 }

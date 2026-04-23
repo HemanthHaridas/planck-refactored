@@ -3,7 +3,7 @@
 
 #include <cmath>
 #include <expected>
-#include <stdexcept>
+#include <functional>
 #include <string>
 
 #include <Eigen/Dense>
@@ -114,19 +114,18 @@ namespace DFT
             return values.cols();
         }
 
-        [[nodiscard]] const Eigen::MatrixXd &gradient(int axis) const
+        [[nodiscard]] std::expected<std::reference_wrapper<const Eigen::MatrixXd>, std::string> gradient(int axis) const
         {
             switch (axis)
             {
             case 0:
-                return grad_x;
+                return std::cref(grad_x);
             case 1:
-                return grad_y;
+                return std::cref(grad_y);
             case 2:
-                return grad_z;
+                return std::cref(grad_z);
             default:
-                assert(false && "AOGridEvaluation::gradient axis must be 0, 1, or 2");
-                return grad_z;
+                return std::unexpected("AOGridEvaluation::gradient axis must be 0, 1, or 2");
             }
         }
     };

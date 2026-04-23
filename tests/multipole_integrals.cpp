@@ -1,7 +1,6 @@
 #include <cmath>
 #include <iostream>
 #include <sstream>
-#include <stdexcept>
 
 #include "base/types.h"
 #include "integrals/os.h"
@@ -9,6 +8,7 @@
 
 namespace
 {
+    bool g_ok = true;
 
     void require_near(double actual, double expected, double tol, const std::string &message)
     {
@@ -17,7 +17,8 @@ namespace
             std::ostringstream oss;
             oss << message << ": expected " << expected << ", got " << actual
                 << " (tol " << tol << ")";
-            throw std::runtime_error(oss.str());
+            std::cerr << oss.str() << '\n';
+            g_ok = false;
         }
     }
 
@@ -93,16 +94,7 @@ namespace
 
 int main()
 {
-    try
-    {
-        test_centered_s_orbital();
-        test_shifted_s_orbital();
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << e.what() << '\n';
-        return 1;
-    }
-
-    return 0;
+    test_centered_s_orbital();
+    test_shifted_s_orbital();
+    return g_ok ? 0 : 1;
 }

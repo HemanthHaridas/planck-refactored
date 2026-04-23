@@ -21,8 +21,8 @@ namespace HartreeFock::Correlation::CC
 
         [[nodiscard]] int max_rank() const noexcept;
         [[nodiscard]] bool has_rank(int excitation_rank) const noexcept;
-        [[nodiscard]] DenseTensorView tensor(int excitation_rank);
-        [[nodiscard]] ConstDenseTensorView tensor(int excitation_rank) const;
+        [[nodiscard]] std::expected<DenseTensorView, std::string> tensor(int excitation_rank);
+        [[nodiscard]] std::expected<ConstDenseTensorView, std::string> tensor(int excitation_rank) const;
     };
 
     struct ArbitraryOrderIterationMetrics
@@ -33,12 +33,14 @@ namespace HartreeFock::Correlation::CC
         std::vector<double> step_rms_by_rank;
     };
 
-    ArbitraryOrderResiduals make_zero_rcc_residuals(
+    std::expected<ArbitraryOrderResiduals, std::string> make_zero_rcc_residuals(
         const RHFReference &reference,
         int max_excitation_rank);
 
     Eigen::VectorXd pack_amplitudes(const ArbitraryOrderRCCAmplitudes &amps);
-    void unpack_amplitudes(const Eigen::VectorXd &packed, ArbitraryOrderRCCAmplitudes &amps);
+    std::expected<void, std::string> unpack_amplitudes(
+        const Eigen::VectorXd &packed,
+        ArbitraryOrderRCCAmplitudes &amps);
 
     Eigen::VectorXd pack_residuals(const ArbitraryOrderResiduals &residuals);
 

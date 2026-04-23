@@ -359,13 +359,14 @@ namespace DFT
             return std::unexpected(shells.error());
         const Eigen::MatrixXd radial = MakeTreutlerAhlrichsGrid(*nr, treutler_radius(Z));
 
-        std::array<Eigen::MatrixXd, 5> angular_cache = {
-            MakeLebedevGrid((*shells)[0]),
-            MakeLebedevGrid((*shells)[1]),
-            MakeLebedevGrid((*shells)[2]),
-            MakeLebedevGrid((*shells)[3]),
-            MakeLebedevGrid((*shells)[4]),
-        };
+        std::array<Eigen::MatrixXd, 5> angular_cache;
+        for (std::size_t shell_index = 0; shell_index < angular_cache.size(); ++shell_index)
+        {
+            auto angular_grid = MakeLebedevGrid((*shells)[shell_index]);
+            if (!angular_grid)
+                return std::unexpected(angular_grid.error());
+            angular_cache[shell_index] = std::move(*angular_grid);
+        }
 
         const auto total_points = atomic_point_count(Z, level);
         if (!total_points)
