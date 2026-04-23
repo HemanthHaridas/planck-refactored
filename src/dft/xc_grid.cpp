@@ -234,18 +234,24 @@ namespace DFT
         return (grad_x.array().square() + grad_y.array().square() + grad_z.array().square()).matrix();
     }
 
-    double DensityChannelOnGrid::integrated_density(const MolecularGrid &molecular_grid) const
+    std::expected<double, std::string> DensityChannelOnGrid::integrated_density(const MolecularGrid &molecular_grid) const
     {
         if (molecular_grid.points.cols() != 4)
-            throw std::invalid_argument("integrated_density requires a molecular grid with quadrature weights");
+        {
+            return std::unexpected(
+                "integrated_density requires a molecular grid with quadrature weights");
+        }
 
         if (molecular_grid.points.rows() != npoints())
-            throw std::invalid_argument("integrated_density received inconsistent density/grid sizes");
+        {
+            return std::unexpected(
+                "integrated_density received inconsistent density/grid sizes");
+        }
 
         return molecular_grid.points.col(3).dot(rho);
     }
 
-    double DensityOnGrid::integrated_electrons(const MolecularGrid &molecular_grid) const
+    std::expected<double, std::string> DensityOnGrid::integrated_electrons(const MolecularGrid &molecular_grid) const
     {
         return total.integrated_density(molecular_grid);
     }
@@ -349,7 +355,10 @@ namespace DFT
         evaluation.exchange_energy = evaluation.exchange.energy;
         evaluation.correlation_energy = evaluation.correlation.energy;
         evaluation.total_energy = evaluation.exchange_energy + evaluation.correlation_energy;
-        evaluation.integrated_electrons = density.integrated_electrons(molecular_grid);
+        auto integrated_electrons = density.integrated_electrons(molecular_grid);
+        if (!integrated_electrons)
+            return std::unexpected(integrated_electrons.error());
+        evaluation.integrated_electrons = *integrated_electrons;
         return evaluation;
     }
 

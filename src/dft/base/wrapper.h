@@ -2,10 +2,11 @@
 #define DFT_LIBXC_WRAPPER_H
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cstring>
 #include <expected>
-#include <stdexcept>
+#include <system_error>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,14 +30,16 @@ namespace DFT
         class Functional
         {
         public:
-            Functional(int functional_id, Spin spin)
-                : spin_(spin)
+            static std::expected<Functional, std::string> create(int functional_id, Spin spin)
             {
-                std::memset(&func_, 0, sizeof(func_));
-                if (xc_func_init(&func_, functional_id, static_cast<int>(spin)) != 0)
-                    throw std::runtime_error(
+                Functional functional(spin);
+                if (xc_func_init(&functional.func_, functional_id, static_cast<int>(spin)) != 0)
+                {
+                    return std::unexpected(
                         "xc_func_init failed for functional id " + std::to_string(functional_id));
-                initialized_ = true;
+                }
+                functional.initialized_ = true;
+                return functional;
             }
 
             ~Functional()
@@ -193,6 +196,11 @@ namespace DFT
             }
 
         private:
+            explicit Functional(Spin spin) : spin_(spin)
+            {
+                std::memset(&func_, 0, sizeof(func_));
+            }
+
             xc_func_type func_{};
             bool initialized_ = false;
             Spin spin_ = Spin::Unpolarized;
@@ -203,29 +211,42 @@ namespace DFT
             return xc_version_string();
         }
 
-        inline int functional_id(std::string_view name)
+        inline std::expected<int, std::string> functional_id(std::string_view name)
         {
             if (name.empty())
-                throw std::invalid_argument("libxc functional name must not be empty");
+                return std::unexpected("libxc functional name must not be empty");
 
             const bool numeric = std::all_of(name.begin(), name.end(),
                                              [](unsigned char c)
                                              { return std::isdigit(c) != 0; });
             if (numeric)
-                return std::stoi(std::string(name));
+            {
+                int parsed = 0;
+                const char *begin = name.data();
+                const char *end = begin + name.size();
+                const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+                if (ec != std::errc{} || ptr != end || parsed <= 0)
+                {
+                    return std::unexpected("Invalid numeric libxc functional id: " +
+                                           std::string(name));
+                }
+                return parsed;
+            }
 
             const int id = xc_functional_get_number(std::string(name).c_str());
             if (id <= 0)
-                throw std::invalid_argument("Unknown libxc functional: " + std::string(name));
+                return std::unexpected("Unknown libxc functional: " + std::string(name));
             return id;
         }
 
-        inline std::string functional_name(int functional_id)
+        inline std::expected<std::string, std::string> functional_name(int functional_id)
         {
             const char *name = xc_functional_get_name(functional_id);
             if (!name)
-                throw std::invalid_argument(
+            {
+                return std::unexpected(
                     "Unknown libxc functional id: " + std::to_string(functional_id));
+            }
             return name;
         }
 

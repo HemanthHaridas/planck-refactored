@@ -777,7 +777,10 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
     if (pg == "C1" || pg.find("inf") != std::string::npos)
         return result;
 
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected("build_abelian_irrep_product_table: " + ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
 
     for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)
@@ -906,7 +909,10 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
     const std::size_t nb = calculator._shells.nbasis();
 
     // ── Rebuild libmsym context (NO axis alignment) ───────────────────────────
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected("build_sao_basis: " + ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
 
     for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)
@@ -1149,7 +1155,10 @@ std::expected<void, std::string> HartreeFock::Symmetry::assign_mo_symmetry(Hartr
     // ── Rebuild msym context on the symmetrized coordinates ──────────────────
     // molecule.standard is in Angstrom (symmetrized, pre-alignment frame).
     // Basis function centers are consistent with this frame (via _standard = Bohr).
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected("assign_mo_symmetry: " + ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
 
     for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)

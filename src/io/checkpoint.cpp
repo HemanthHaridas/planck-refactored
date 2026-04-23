@@ -44,6 +44,28 @@ static void read_exact(std::istream &in, char *data, std::size_t bytes, std::str
 }
 
 static constexpr std::uint32_t MAX_CHECKPOINT_STRING_BYTES = 4096;
+static constexpr std::uint64_t MAX_CHECKPOINT_NATOMS = 1'000'000;
+
+static int checked_atom_count(std::uint64_t natoms, std::string_view label)
+{
+    if (natoms > MAX_CHECKPOINT_NATOMS)
+    {
+        throw std::runtime_error(std::format(
+            "Checkpoint {} atom count {} exceeds supported limit {}",
+            label,
+            natoms,
+            MAX_CHECKPOINT_NATOMS));
+    }
+    if (natoms > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+    {
+        throw std::runtime_error(std::format(
+            "Checkpoint {} atom count {} exceeds Eigen int indexing limit {}",
+            label,
+            natoms,
+            std::numeric_limits<int>::max()));
+    }
+    return static_cast<int>(natoms);
+}
 
 static std::uint64_t checked_element_count(
     std::int64_t rows,
@@ -436,17 +458,16 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
 
         // ── Molecule ──────────────────────────────────────────────────────────
         const uint64_t natoms = read_pod<uint64_t>(in);
-        const int32_t chk_charge = read_pod<int32_t>(in);
-        const uint32_t chk_mult = read_pod<uint32_t>(in);
-
-        (void)chk_charge;
-        (void)chk_mult; // user input takes precedence; just skip
+        checked_atom_count(natoms, "geometry block");
+        [[maybe_unused]] const int32_t chk_charge = read_pod<int32_t>(in);
+        [[maybe_unused]] const uint32_t chk_mult = read_pod<uint32_t>(in);
 
         for (uint64_t i = 0; i < natoms; ++i)
             read_pod<int32_t>(in); // skip stored atomic numbers
 
-        for (uint64_t i = 0; i < natoms * 3; ++i)
-            read_pod<double>(in); // skip stored coordinates
+        for (uint64_t i = 0; i < natoms; ++i)
+            for (int k = 0; k < 3; ++k)
+                read_pod<double>(in); // skip stored coordinates
 
         const std::string chk_basis = read_string(in);
         if (chk_basis != calc._basis._basis_name)
@@ -551,14 +572,16 @@ HartreeFock::Checkpoint::load_mos(const std::string &path)
 
         // ── Skip molecule ──────────────────────────────────────────────────────
         const uint64_t natoms = read_pod<uint64_t>(in);
+        checked_atom_count(natoms, "geometry block");
         read_pod<int32_t>(in);  // charge
         read_pod<uint32_t>(in); // multiplicity
 
         for (uint64_t i = 0; i < natoms; ++i)
             read_pod<int32_t>(in); // atomic_numbers
 
-        for (uint64_t i = 0; i < natoms * 3; ++i)
-            read_pod<double>(in); // coordinates
+        for (uint64_t i = 0; i < natoms; ++i)
+            for (int k = 0; k < 3; ++k)
+                read_pod<double>(in); // coordinates
 
         result.basis_name = read_string(in);
         read_pod<uint8_t>(in); // has_opt_coords
@@ -630,15 +653,17 @@ HartreeFock::Checkpoint::load_geometry(const std::string &path)
         read_pod<double>(in);   // nuclear_repulsion
 
         GeometryData geo;
-        geo.natoms = static_cast<std::size_t>(read_pod<uint64_t>(in));
+        const uint64_t natoms = read_pod<uint64_t>(in);
+        const int natoms_int = checked_atom_count(natoms, "geometry block");
+        geo.natoms = static_cast<std::size_t>(natoms_int);
         geo.charge = static_cast<int>(read_pod<int32_t>(in));
         geo.multiplicity = static_cast<unsigned int>(read_pod<uint32_t>(in));
 
-        geo.atomic_numbers.resize(static_cast<int>(geo.natoms));
+        geo.atomic_numbers.resize(natoms_int);
         for (std::size_t i = 0; i < geo.natoms; ++i)
             geo.atomic_numbers[static_cast<int>(i)] = read_pod<int32_t>(in);
 
-        geo.coords_bohr.resize(static_cast<int>(geo.natoms), 3);
+        geo.coords_bohr.resize(natoms_int, 3);
         for (std::size_t i = 0; i < geo.natoms; ++i)
             for (int k = 0; k < 3; ++k)
                 geo.coords_bohr(static_cast<int>(i), k) = read_pod<double>(in);

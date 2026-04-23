@@ -27,7 +27,7 @@ namespace DFT
 
         [[nodiscard]] Eigen::VectorXd gradient_squared() const;
 
-        [[nodiscard]] double integrated_density(const MolecularGrid &molecular_grid) const;
+        [[nodiscard]] std::expected<double, std::string> integrated_density(const MolecularGrid &molecular_grid) const;
     };
 
     struct DensityOnGrid
@@ -42,7 +42,7 @@ namespace DFT
             return total.npoints();
         }
 
-        [[nodiscard]] double integrated_electrons(const MolecularGrid &molecular_grid) const;
+        [[nodiscard]] std::expected<double, std::string> integrated_electrons(const MolecularGrid &molecular_grid) const;
     };
 
     struct XCFunctionalGridResult

@@ -216,7 +216,8 @@ namespace DFT
                 break;
             }
             default:
-                throw std::invalid_argument("SphGenOh: invalid code " + std::to_string(code));
+                assert(false && "SphGenOh: invalid code");
+                return;
             }
         }
 
@@ -4906,8 +4907,10 @@ namespace DFT
             return M;
         }
         if (n <= 0)
-            throw std::invalid_argument(
-                "MakeLebedevGrid: n must be positive, got " + std::to_string(n));
+        {
+            assert(n > 0 && "MakeLebedevGrid: n must be positive");
+            return Eigen::MatrixXd{};
+        }
         detail::GridVec g;
         switch (n)
         {
@@ -5008,8 +5011,8 @@ namespace DFT
             detail::MakeAngularGrid_5810(g);
             break;
         default:
-            throw std::invalid_argument(
-                "MakeLebedevGrid: unsupported grid size " + std::to_string(n));
+            assert(false && "MakeLebedevGrid: unsupported grid size");
+            return Eigen::MatrixXd{};
         }
         return detail::gridvec_to_matrix(g);
     }

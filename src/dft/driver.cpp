@@ -69,14 +69,7 @@ namespace DFT::Driver
                 break;
             }
 
-            try
-            {
-                return DFT::XC::functional_id(functional_name);
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected(std::string(e.what()));
-            }
+            return DFT::XC::functional_id(functional_name);
         }
 
         std::expected<int, std::string> resolve_functional_id(
@@ -108,14 +101,7 @@ namespace DFT::Driver
                 break;
             }
 
-            try
-            {
-                return DFT::XC::functional_id(functional_name);
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected(std::string(e.what()));
-            }
+            return DFT::XC::functional_id(functional_name);
         }
 
         std::expected<void, std::string> setup_symmetry(
@@ -930,14 +916,7 @@ namespace DFT::Driver
             int functional_id,
             DFT::XC::Spin spin)
         {
-            try
-            {
-                return DFT::XC::Functional(functional_id, spin);
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected(std::string(e.what()));
-            }
+            return DFT::XC::Functional::create(functional_id, spin);
         }
 
         struct InitializedFunctionals

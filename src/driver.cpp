@@ -119,7 +119,8 @@ static void log_population_report(const HartreeFock::Calculator &calculator)
 
     for (const auto &atom : analysis->atoms)
     {
-        const std::string symbol = std::string(element_from_z(static_cast<std::uint64_t>(atom.atomic_number)).symbol);
+        const auto element = element_from_z(static_cast<std::uint64_t>(atom.atomic_number));
+        const std::string symbol = element ? std::string(element->symbol) : "?";
         std::cout << std::setw(6) << std::right << (atom.atom_index + 1)
                   << std::setw(8) << std::right << symbol
                   << std::setw(8) << std::right << atom.atomic_number

@@ -197,7 +197,11 @@ namespace HartreeFock::Correlation::CASSCF
         {
             result.push_back(v);
             const CIString c = v & (-v);
+            if (c == 0)
+                break;
             const CIString r = v + c;
+            if (r == 0)
+                break;
             v = (((r ^ v) >> 2) / c) | r;
         }
         return result;

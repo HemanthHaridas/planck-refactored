@@ -97,7 +97,9 @@ namespace
             int charge;
             if ((header >> symbol >> charge) && header.eof())
             {
-                auto _ = element_from_symbol(symbol);
+                auto element = element_from_symbol(symbol);
+                if (!element)
+                    return std::unexpected(element.error());
                 current_element = symbol;
                 basis.try_emplace(symbol);
                 continue;
@@ -155,7 +157,7 @@ namespace
     // Build a single-atom Basis for element `sym` at the origin.
     // Convention matches read_gbs_basis exactly: primitive norms folded into
     // coefficients, Cartesian AOs, _atom_index = 0.
-    static HartreeFock::Basis build_atomic_basis(const std::vector<GbsShell> &gbs_shells)
+    static std::expected<HartreeFock::Basis, std::string> build_atomic_basis(const std::vector<GbsShell> &gbs_shells)
     {
         HartreeFock::Basis basis;
 
@@ -163,7 +165,10 @@ namespace
         {
             HartreeFock::Shell shell;
             shell._center = Eigen::Vector3d::Zero();
-            shell._shell = HartreeFock::BasisFunctions::_map_shell_to_L(gbs_shell.label);
+            auto shell_type = HartreeFock::BasisFunctions::_map_shell_to_L(gbs_shell.label);
+            if (!shell_type)
+                return std::unexpected(shell_type.error());
+            shell._shell = *shell_type;
             shell._atom_index = 0;
 
             const std::size_t nprim = gbs_shell.primitives.size();
@@ -180,8 +185,11 @@ namespace
             shell._normalizations = HartreeFock::BasisFunctions::primitive_normalization(
                 L, shell._primitives);
 
-            const double Nc = HartreeFock::BasisFunctions::contracted_normalization(
+            auto normalization = HartreeFock::BasisFunctions::contracted_normalization(
                 L, shell._primitives, shell._coefficients, shell._normalizations);
+            if (!normalization)
+                return std::unexpected(normalization.error());
+            const double Nc = *normalization;
             shell._coefficients *= Nc;
 
             basis._shells.push_back(std::move(shell));
@@ -293,8 +301,10 @@ namespace
         atom._molecule.atomic_numbers.resize(1);
         atom._molecule.atomic_numbers[0] = Z;
         atom._molecule.atomic_masses.resize(1);
-        atom._molecule.atomic_masses[0] =
-            static_cast<double>(element_from_z(static_cast<uint64_t>(Z)).mass);
+        auto atom_element = element_from_z(static_cast<uint64_t>(Z));
+        if (!atom_element)
+            return std::unexpected("SAD: atomic lookup failed: " + atom_element.error());
+        atom._molecule.atomic_masses[0] = static_cast<double>(atom_element->mass);
         atom._molecule.coordinates = Eigen::MatrixXd::Zero(1, 3);
         atom._molecule._coordinates = Eigen::MatrixXd::Zero(1, 3);
         atom._molecule.set_standard_from_bohr(Eigen::MatrixXd::Zero(1, 3));
@@ -430,7 +440,7 @@ namespace
     // Assembles the block-diagonal raw SAD density in the full molecular AO
     // basis by inserting each atom's cached averaged atomic block at the
     // appropriate molecular AO positions.
-    static Eigen::MatrixXd assemble_raw_sad_density(
+    static std::expected<Eigen::MatrixXd, std::string> assemble_raw_sad_density(
         const HartreeFock::Calculator &calc,
         const std::unordered_map<std::string, Eigen::MatrixXd> &atomic_P_cache)
     {
@@ -441,10 +451,12 @@ namespace
 
         for (std::size_t A = 0; A < calc._molecule.natoms; ++A)
         {
-            const std::string sym = std::string(
-                element_from_z(static_cast<uint64_t>(
-                                   calc._molecule.atomic_numbers[static_cast<Eigen::Index>(A)]))
-                    .symbol);
+            auto element = element_from_z(static_cast<uint64_t>(
+                calc._molecule.atomic_numbers[static_cast<Eigen::Index>(A)]));
+            if (!element)
+                return std::unexpected("SAD: atomic lookup failed while assembling density: " +
+                                       element.error());
+            const std::string sym = std::string(element->symbol);
 
             const Eigen::MatrixXd &P_atom = atomic_P_cache.at(sym);
             const auto &ao_indices = atom_ao_map[A];
@@ -528,8 +540,11 @@ namespace HartreeFock
 
             for (std::size_t i = 0; i < molecule.natoms; ++i)
             {
-                const std::string sym = std::string(
-                    element_from_z(static_cast<uint64_t>(molecule.atomic_numbers[static_cast<Eigen::Index>(i)])).symbol);
+                auto element = element_from_z(static_cast<uint64_t>(
+                    molecule.atomic_numbers[static_cast<Eigen::Index>(i)]));
+                if (!element)
+                    return std::unexpected(element.error());
+                const std::string sym = std::string(element->symbol);
 
                 if (!seen.insert(sym).second)
                     continue;
@@ -538,7 +553,10 @@ namespace HartreeFock
                 if (it == gbs.end())
                     return std::unexpected("Element not found in basis file: " + sym);
 
-                result.emplace(sym, build_atomic_basis(it->second));
+                auto atomic_basis = build_atomic_basis(it->second);
+                if (!atomic_basis)
+                    return std::unexpected(atomic_basis.error());
+                result.emplace(sym, std::move(*atomic_basis));
             }
 
             return result;
@@ -569,7 +587,10 @@ namespace HartreeFock
 
             for (auto &[sym, atomic_basis] : atomic_bases)
             {
-                const int Z = static_cast<int>(element_from_symbol(sym).Z);
+                auto element = element_from_symbol(sym);
+                if (!element)
+                    return std::unexpected(element.error());
+                const int Z = static_cast<int>(element->Z);
 
                 auto atomic_res = run_atomic_uhf(Z, atomic_basis, calc);
                 if (!atomic_res)
@@ -583,7 +604,10 @@ namespace HartreeFock
             }
 
             // ── Step 3: assemble block-diagonal molecular density ─────────────
-            Eigen::MatrixXd P_raw = assemble_raw_sad_density(calc, atomic_P_cache);
+            auto raw_density = assemble_raw_sad_density(calc, atomic_P_cache);
+            if (!raw_density)
+                return std::unexpected(raw_density.error());
+            Eigen::MatrixXd P_raw = std::move(*raw_density);
             P_raw = 0.5 * (P_raw + P_raw.transpose());
 
             // ── Step 4: reconstruct proper RHF density ────────────────────────

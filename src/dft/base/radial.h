@@ -108,8 +108,10 @@ namespace DFT
     inline Eigen::MatrixXd MakeTreutlerAhlrichsGrid(int n, double R = 1.0, double alpha = 0.6)
     {
         if (n <= 0)
-            throw std::invalid_argument(
-                "MakeTreutlerAhlrichsGrid: n must be positive, got " + std::to_string(n));
+        {
+            assert(n > 0 && "MakeTreutlerAhlrichsGrid: n must be positive");
+            return Eigen::MatrixXd{};
+        }
 
         const double ln2 = std::log(2.0);
         const double step = std::numbers::pi / static_cast<double>(n + 1);

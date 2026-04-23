@@ -12,14 +12,14 @@ namespace HartreeFock
 {
     namespace BasisFunctions
     {
-        HartreeFock::ShellType _map_shell_to_L(const std::string &label);    // Map shell label to angular momentum
+        std::expected<HartreeFock::ShellType, std::string> _map_shell_to_L(const std::string &label); // Map shell label to angular momentum
         std::vector<Eigen::Vector3i> _cartesian_shell_order(unsigned int L); // Generator for angular momentum tuples
 
         // Primtive normalizations
         Eigen::VectorXd primitive_normalization(unsigned int L, const Eigen::VectorXd &exponents);
 
         // Contracted normalization
-        double contracted_normalization(unsigned int L, const Eigen::VectorXd &exponents, const Eigen::VectorXd &coefficients, const Eigen::VectorXd &prim_norms);
+        std::expected<double, std::string> contracted_normalization(unsigned int L, const Eigen::VectorXd &exponents, const Eigen::VectorXd &coefficients, const Eigen::VectorXd &prim_norms);
 
         // Cartesian component normalization 1/sqrt((2lx-1)!!(2ly-1)!!(2lz-1)!!)
         double component_norm(int df);

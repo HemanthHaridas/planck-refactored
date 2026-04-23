@@ -1,8 +1,8 @@
 #include "vibrational_symmetry.h"
 
 #include <cmath>
+#include <expected>
 #include <limits>
-#include <stdexcept>
 
 #include "wrapper.h"
 
@@ -170,7 +170,7 @@ namespace
         return -1;
     }
 
-    static Eigen::MatrixXd build_cartesian_representation(
+    static std::expected<Eigen::MatrixXd, std::string> build_cartesian_representation(
         const HartreeFock::Molecule &mol,
         const msym_symmetry_operation_t &sop)
     {
@@ -189,7 +189,7 @@ namespace
                 static_cast<int>(mol.atomic_numbers[a]),
                 used);
             if (b < 0)
-                throw std::runtime_error("vibrational symmetry: failed to map transformed atom");
+                return std::unexpected("vibrational symmetry: failed to map transformed atom");
 
             rep.block<3, 3>(3 * b, 3 * static_cast<int>(a)) = M;
         }
@@ -198,7 +198,7 @@ namespace
     }
 } // namespace
 
-std::vector<std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
+std::expected<std::vector<std::string>, std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
     const HartreeFock::Calculator &calc,
     const Eigen::MatrixXd &normal_modes)
 {
@@ -211,7 +211,10 @@ std::vector<std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
     if (pg.find("inf") != std::string::npos)
         return {};
 
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected(ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calc._molecule.natoms);
 
     for (std::size_t i = 0; i < calc._molecule.natoms; ++i)
@@ -269,7 +272,10 @@ std::vector<std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
     reps.reserve(static_cast<std::size_t>(nc));
     for (int c = 0; c < nc; ++c)
     {
-        reps.push_back(build_cartesian_representation(calc._molecule, *ct->sops[c]));
+        auto rep = build_cartesian_representation(calc._molecule, *ct->sops[c]);
+        if (!rep)
+            return std::unexpected(rep.error());
+        reps.push_back(std::move(*rep));
     }
 
     std::vector<std::string> labels(static_cast<std::size_t>(normal_modes.cols()));

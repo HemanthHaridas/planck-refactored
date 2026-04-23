@@ -1,14 +1,13 @@
 #include "post_hf/cc/amplitudes.h"
 
-#include <exception>
-#include <stdexcept>
+#include <cassert>
 #include <vector>
 
 namespace HartreeFock::Correlation::CC
 {
     namespace
     {
-        DenseTensorView amplitude_tensor_or_throw(
+        std::expected<DenseTensorView, std::string> checked_amplitude_tensor(
             Tensor2D &t1,
             Tensor4D &t2,
             Tensor6D *t3,
@@ -27,10 +26,10 @@ namespace HartreeFock::Correlation::CC
                 default:
                     break;
             }
-            throw std::out_of_range("Requested excitation rank is not available in this tensor pack");
+            return std::unexpected("Requested excitation rank is not available in this tensor pack");
         }
 
-        ConstDenseTensorView amplitude_tensor_or_throw(
+        std::expected<ConstDenseTensorView, std::string> checked_amplitude_tensor(
             const Tensor2D &t1,
             const Tensor4D &t2,
             const Tensor6D *t3,
@@ -49,7 +48,7 @@ namespace HartreeFock::Correlation::CC
                 default:
                     break;
             }
-            throw std::out_of_range("Requested excitation rank is not available in this tensor pack");
+            return std::unexpected("Requested excitation rank is not available in this tensor pack");
         }
 
         std::vector<int> rank_dims(
@@ -78,12 +77,16 @@ namespace HartreeFock::Correlation::CC
 
     DenseTensorView DenominatorCache::tensor(int excitation_rank)
     {
-        return amplitude_tensor_or_throw(d1, d2, &d3, excitation_rank);
+        auto view = checked_amplitude_tensor(d1, d2, &d3, excitation_rank);
+        assert(view && "Requested excitation rank is not available in this tensor pack");
+        return view ? *view : DenseTensorView{};
     }
 
     ConstDenseTensorView DenominatorCache::tensor(int excitation_rank) const
     {
-        return amplitude_tensor_or_throw(d1, d2, &d3, excitation_rank);
+        auto view = checked_amplitude_tensor(d1, d2, &d3, excitation_rank);
+        assert(view && "Requested excitation rank is not available in this tensor pack");
+        return view ? *view : ConstDenseTensorView{};
     }
 
     int RCCSDAmplitudes::max_rank() const noexcept
@@ -98,12 +101,16 @@ namespace HartreeFock::Correlation::CC
 
     DenseTensorView RCCSDAmplitudes::tensor(int excitation_rank)
     {
-        return amplitude_tensor_or_throw(t1, t2, nullptr, excitation_rank);
+        auto view = checked_amplitude_tensor(t1, t2, nullptr, excitation_rank);
+        assert(view && "Requested excitation rank is not available in this tensor pack");
+        return view ? *view : DenseTensorView{};
     }
 
     ConstDenseTensorView RCCSDAmplitudes::tensor(int excitation_rank) const
     {
-        return amplitude_tensor_or_throw(t1, t2, nullptr, excitation_rank);
+        auto view = checked_amplitude_tensor(t1, t2, nullptr, excitation_rank);
+        assert(view && "Requested excitation rank is not available in this tensor pack");
+        return view ? *view : ConstDenseTensorView{};
     }
 
     int RCCSDTAmplitudes::max_rank() const noexcept
@@ -118,12 +125,16 @@ namespace HartreeFock::Correlation::CC
 
     DenseTensorView RCCSDTAmplitudes::tensor(int excitation_rank)
     {
-        return amplitude_tensor_or_throw(t1, t2, &t3, excitation_rank);
+        auto view = checked_amplitude_tensor(t1, t2, &t3, excitation_rank);
+        assert(view && "Requested excitation rank is not available in this tensor pack");
+        return view ? *view : DenseTensorView{};
     }
 
     ConstDenseTensorView RCCSDTAmplitudes::tensor(int excitation_rank) const
     {
-        return amplitude_tensor_or_throw(t1, t2, &t3, excitation_rank);
+        auto view = checked_amplitude_tensor(t1, t2, &t3, excitation_rank);
+        assert(view && "Requested excitation rank is not available in this tensor pack");
+        return view ? *view : ConstDenseTensorView{};
     }
 
     int ArbitraryOrderDenominatorCache::max_rank() const noexcept
@@ -139,14 +150,20 @@ namespace HartreeFock::Correlation::CC
     DenseTensorView ArbitraryOrderDenominatorCache::tensor(int excitation_rank)
     {
         if (!has_rank(excitation_rank))
-            throw std::out_of_range("Requested denominator rank is not available");
+        {
+            assert(false && "Requested denominator rank is not available");
+            return DenseTensorView{};
+        }
         return make_tensor_view(by_rank[static_cast<std::size_t>(excitation_rank - 1)]);
     }
 
     ConstDenseTensorView ArbitraryOrderDenominatorCache::tensor(int excitation_rank) const
     {
         if (!has_rank(excitation_rank))
-            throw std::out_of_range("Requested denominator rank is not available");
+        {
+            assert(false && "Requested denominator rank is not available");
+            return ConstDenseTensorView{};
+        }
         return make_tensor_view(by_rank[static_cast<std::size_t>(excitation_rank - 1)]);
     }
 
@@ -163,14 +180,20 @@ namespace HartreeFock::Correlation::CC
     DenseTensorView ArbitraryOrderRCCAmplitudes::tensor(int excitation_rank)
     {
         if (!has_rank(excitation_rank))
-            throw std::out_of_range("Requested amplitude rank is not available");
+        {
+            assert(false && "Requested amplitude rank is not available");
+            return DenseTensorView{};
+        }
         return make_tensor_view(by_rank[static_cast<std::size_t>(excitation_rank - 1)]);
     }
 
     ConstDenseTensorView ArbitraryOrderRCCAmplitudes::tensor(int excitation_rank) const
     {
         if (!has_rank(excitation_rank))
-            throw std::out_of_range("Requested amplitude rank is not available");
+        {
+            assert(false && "Requested amplitude rank is not available");
+            return ConstDenseTensorView{};
+        }
         return make_tensor_view(by_rank[static_cast<std::size_t>(excitation_rank - 1)]);
     }
 
@@ -178,46 +201,39 @@ namespace HartreeFock::Correlation::CC
         const RHFReference &reference,
         bool include_triples)
     {
-        try
-        {
-            DenominatorCache denoms;
-            denoms.d1 = Tensor2D(reference.n_occ, reference.n_virt, 0.0);
-            denoms.d2 = Tensor4D(reference.n_occ, reference.n_occ, reference.n_virt, reference.n_virt, 0.0);
-            if (include_triples)
-                denoms.d3 = Tensor6D(reference.n_occ, reference.n_occ, reference.n_occ,
-                                     reference.n_virt, reference.n_virt, reference.n_virt, 0.0);
+        DenominatorCache denoms;
+        denoms.d1 = Tensor2D(reference.n_occ, reference.n_virt, 0.0);
+        denoms.d2 = Tensor4D(reference.n_occ, reference.n_occ, reference.n_virt, reference.n_virt, 0.0);
+        if (include_triples)
+            denoms.d3 = Tensor6D(reference.n_occ, reference.n_occ, reference.n_occ,
+                                 reference.n_virt, reference.n_virt, reference.n_virt, 0.0);
 
-            for (int i = 0; i < reference.n_occ; ++i)
+        for (int i = 0; i < reference.n_occ; ++i)
+            for (int a = 0; a < reference.n_virt; ++a)
+                denoms.d1(i, a) = reference.eps_occ(i) - reference.eps_virt(a);
+
+        for (int i = 0; i < reference.n_occ; ++i)
+            for (int j = 0; j < reference.n_occ; ++j)
                 for (int a = 0; a < reference.n_virt; ++a)
-                    denoms.d1(i, a) = reference.eps_occ(i) - reference.eps_virt(a);
+                    for (int b = 0; b < reference.n_virt; ++b)
+                        denoms.d2(i, j, a, b) =
+                            reference.eps_occ(i) + reference.eps_occ(j) -
+                            reference.eps_virt(a) - reference.eps_virt(b);
 
+        if (include_triples)
+        {
             for (int i = 0; i < reference.n_occ; ++i)
                 for (int j = 0; j < reference.n_occ; ++j)
-                    for (int a = 0; a < reference.n_virt; ++a)
-                        for (int b = 0; b < reference.n_virt; ++b)
-                            denoms.d2(i, j, a, b) =
-                                reference.eps_occ(i) + reference.eps_occ(j) -
-                                reference.eps_virt(a) - reference.eps_virt(b);
-
-            if (include_triples)
-            {
-                for (int i = 0; i < reference.n_occ; ++i)
-                    for (int j = 0; j < reference.n_occ; ++j)
-                        for (int k = 0; k < reference.n_occ; ++k)
-                            for (int a = 0; a < reference.n_virt; ++a)
-                                for (int b = 0; b < reference.n_virt; ++b)
-                                    for (int c = 0; c < reference.n_virt; ++c)
-                                        denoms.d3(i, j, k, a, b, c) =
-                                            reference.eps_occ(i) + reference.eps_occ(j) + reference.eps_occ(k) -
-                                            reference.eps_virt(a) - reference.eps_virt(b) - reference.eps_virt(c);
-            }
-
-            return denoms;
+                    for (int k = 0; k < reference.n_occ; ++k)
+                        for (int a = 0; a < reference.n_virt; ++a)
+                            for (int b = 0; b < reference.n_virt; ++b)
+                                for (int c = 0; c < reference.n_virt; ++c)
+                                    denoms.d3(i, j, k, a, b, c) =
+                                        reference.eps_occ(i) + reference.eps_occ(j) + reference.eps_occ(k) -
+                                        reference.eps_virt(a) - reference.eps_virt(b) - reference.eps_virt(c);
         }
-        catch (const std::exception &ex)
-        {
-            return std::unexpected("build_denominator_cache: " + std::string(ex.what()));
-        }
+
+        return denoms;
     }
 
     std::expected<ArbitraryOrderDenominatorCache, std::string> build_arbitrary_order_denominator_cache(
@@ -227,45 +243,38 @@ namespace HartreeFock::Correlation::CC
         if (max_excitation_rank < 1)
             return std::unexpected("build_arbitrary_order_denominator_cache: max_excitation_rank must be at least 1.");
 
-        try
+        ArbitraryOrderDenominatorCache denoms;
+        denoms.by_rank.reserve(static_cast<std::size_t>(max_excitation_rank));
+
+        for (int rank = 1; rank <= max_excitation_rank; ++rank)
         {
-            ArbitraryOrderDenominatorCache denoms;
-            denoms.by_rank.reserve(static_cast<std::size_t>(max_excitation_rank));
+            TensorND tensor(rank_dims(reference, rank), 0.0);
+            std::vector<int> indices(static_cast<std::size_t>(2 * rank), 0);
 
-            for (int rank = 1; rank <= max_excitation_rank; ++rank)
+            const std::size_t total = tensor.size();
+            for (std::size_t linear = 0; linear < total; ++linear)
             {
-                TensorND tensor(rank_dims(reference, rank), 0.0);
-                std::vector<int> indices(static_cast<std::size_t>(2 * rank), 0);
-
-                const std::size_t total = tensor.size();
-                for (std::size_t linear = 0; linear < total; ++linear)
+                std::size_t cursor = linear;
+                for (int pos = 2 * rank - 1; pos >= 0; --pos)
                 {
-                    std::size_t cursor = linear;
-                    for (int pos = 2 * rank - 1; pos >= 0; --pos)
-                    {
-                        const int dim = tensor.dims[static_cast<std::size_t>(pos)];
-                        indices[static_cast<std::size_t>(pos)] = static_cast<int>(cursor % static_cast<std::size_t>(dim));
-                        cursor /= static_cast<std::size_t>(dim);
-                    }
-
-                    double denom = 0.0;
-                    for (int occ = 0; occ < rank; ++occ)
-                        denom += reference.eps_occ(indices[static_cast<std::size_t>(occ)]);
-                    for (int vir = 0; vir < rank; ++vir)
-                        denom -= reference.eps_virt(indices[static_cast<std::size_t>(rank + vir)]);
-
-                    tensor(indices) = denom;
+                    const int dim = tensor.dims[static_cast<std::size_t>(pos)];
+                    indices[static_cast<std::size_t>(pos)] = static_cast<int>(cursor % static_cast<std::size_t>(dim));
+                    cursor /= static_cast<std::size_t>(dim);
                 }
 
-                denoms.by_rank.push_back(std::move(tensor));
+                double denom = 0.0;
+                for (int occ = 0; occ < rank; ++occ)
+                    denom += reference.eps_occ(indices[static_cast<std::size_t>(occ)]);
+                for (int vir = 0; vir < rank; ++vir)
+                    denom -= reference.eps_virt(indices[static_cast<std::size_t>(rank + vir)]);
+
+                tensor(indices) = denom;
             }
 
-            return denoms;
+            denoms.by_rank.push_back(std::move(tensor));
         }
-        catch (const std::exception &ex)
-        {
-            return std::unexpected("build_arbitrary_order_denominator_cache: " + std::string(ex.what()));
-        }
+
+        return denoms;
     }
 
     RCCSDAmplitudes make_zero_rccsd_amplitudes(const RHFReference &reference)

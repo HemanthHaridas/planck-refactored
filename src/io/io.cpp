@@ -1165,17 +1165,11 @@ namespace HartreeFock::IO
             if (!(iss >> sym))
                 return std::unexpected("Invalid Z-matrix line: " + lines[i + 2]);
 
-            try
-            {
-                const ElementData el = element_from_symbol(sym);
-                molecule.atomic_numbers[i] = el.Z;
-                molecule.atomic_masses[i] = el.mass;
-            }
-            catch (const std::exception &e)
-            {
-                log_parse_exception_detail("zmat atomic symbol", e);
-                return std::unexpected("Unknown atomic symbol: " + sym);
-            }
+            const auto el = element_from_symbol(sym);
+            if (!el)
+                return std::unexpected(el.error());
+            molecule.atomic_numbers[i] = el->Z;
+            molecule.atomic_masses[i] = el->mass;
 
             if (i == 0)
             {
@@ -1292,16 +1286,11 @@ namespace HartreeFock::IO
             }
 
             // Check if element is supported
-            try
-            {
-                const ElementData _element = element_from_symbol(_atom);
-                molecule.atomic_numbers[i] = _element.Z;
-                molecule.atomic_masses[i] = _element.mass;
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected(std::string("Unknown atomic symbol: ") + _atom);
-            }
+            const auto element = element_from_symbol(_atom);
+            if (!element)
+                return std::unexpected(element.error());
+            molecule.atomic_numbers[i] = element->Z;
+            molecule.atomic_masses[i] = element->mass;
 
             molecule.coordinates(i, 0) = _x;
             molecule.coordinates(i, 1) = _y;

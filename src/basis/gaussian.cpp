@@ -85,7 +85,9 @@ static std::expected<BasisSet, std::string> read_gbs(std::ifstream &input)
             // Check if header has two elements [Element name, Charge] and only two elements
             if ((header >> symbol >> charge) && header.eof())
             {
-                auto _ = element_from_symbol(symbol);
+                auto element = element_from_symbol(symbol);
+                if (!element)
+                    return std::unexpected(element.error());
                 current_element = symbol;
                 basis.try_emplace(symbol); // Place element
                 continue;
@@ -230,8 +232,10 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
 
     for (std::size_t i = 0; i < molecule.natoms; i++)
     {
-        std::string element = std::string(
-            element_from_z(molecule.atomic_numbers[i]).symbol);
+        auto element_data = element_from_z(molecule.atomic_numbers[i]);
+        if (!element_data)
+            return std::unexpected(element_data.error());
+        std::string element = std::string(element_data->symbol);
 
         // Find element in basis set
         auto it = gbs.find(element);
@@ -246,7 +250,10 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
         {
             HartreeFock::Shell shell;
             shell._center = molecule._standard.row(i).transpose();
-            shell._shell = _map_shell_to_L(gbs_shell.label);
+            auto shell_type = _map_shell_to_L(gbs_shell.label);
+            if (!shell_type)
+                return std::unexpected(shell_type.error());
+            shell._shell = *shell_type;
             shell._atom_index = i;
 
             // Get size of primitives
@@ -265,7 +272,11 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
             unsigned int L = static_cast<unsigned int>(shell._shell);
 
             shell._normalizations = primitive_normalization(L, shell._primitives);
-            const double Nc = HartreeFock::BasisFunctions::contracted_normalization(L, shell._primitives, shell._coefficients, shell._normalizations);
+            auto normalization = HartreeFock::BasisFunctions::contracted_normalization(
+                L, shell._primitives, shell._coefficients, shell._normalizations);
+            if (!normalization)
+                return std::unexpected(normalization.error());
+            const double Nc = *normalization;
 
             // Scale all coefficients by normalization factor
             shell._coefficients = shell._coefficients * Nc;
