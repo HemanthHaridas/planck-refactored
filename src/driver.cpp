@@ -843,9 +843,17 @@ int main(int argc, const char *argv[])
         }
         else if (calculator._correlation == HartreeFock::PostHF::UMP2)
         {
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
-                                         "UMP2 gradient is not implemented");
-            return EXIT_FAILURE;
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Gradient :",
+                                         "Using analytic UMP2 gradient (spin-resolved density + pair density)");
+            calculator._correlated_total_energy = calculator._total_energy + calculator._correlation_energy;
+            calculator._have_correlated_total_energy = true;
+            auto grad_res = HartreeFock::Gradient::compute_ump2_gradient(calculator, shellpairs);
+            if (!grad_res)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :", grad_res.error());
+                return EXIT_FAILURE;
+            }
+            grad = std::move(*grad_res);
         }
         else if (calculator._correlation == HartreeFock::PostHF::RCCSD ||
                  calculator._correlation == HartreeFock::PostHF::UCCSD ||

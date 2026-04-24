@@ -54,6 +54,17 @@ namespace HartreeFock::Correlation
         std::vector<double> pair_dm2_ao;   // explicit MP2 pair-density correction
     };
 
+    struct UMP2GradientIntermediates
+    {
+        Eigen::MatrixXd P_alpha_ao;        // alpha HF + correlated first-order density
+        Eigen::MatrixXd P_beta_ao;         // beta HF + correlated first-order density
+        Eigen::MatrixXd P_alpha_corr_ao;   // alpha correlated density correction
+        Eigen::MatrixXd P_beta_corr_ao;    // beta correlated density correction
+        Eigen::MatrixXd P_total_ao;        // spin-summed HF + correlated first-order density
+        Eigen::MatrixXd W_ao;              // spin-summed energy-weighted density
+        std::vector<double> Gamma_pair_ao; // explicit UMP2 pair-density correction
+    };
+
     std::expected<RMP2AmplitudeData, std::string> build_rmp2_amplitudes(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs);
@@ -108,6 +119,14 @@ namespace HartreeFock::Correlation
     // the first-order densities used in the one- and two-electron terms, the
     // correlated overlap/Lagrangian objects, and the explicit pair density.
     std::expected<RMP2GradientIntermediates, std::string> build_rmp2_gradient_intermediates(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs);
+
+    // Build unrestricted MP2 analytic-gradient intermediates in spin-resolved
+    // form. The current implementation includes the explicit UMP2 pair density
+    // and spin-block unrelaxed 1PDM contributions; it is intended for canonical
+    // UHF references.
+    std::expected<UMP2GradientIntermediates, std::string> build_ump2_gradient_intermediates(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs);
 } // namespace HartreeFock::Correlation

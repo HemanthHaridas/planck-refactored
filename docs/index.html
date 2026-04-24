@@ -208,7 +208,8 @@
 <li class="toc-level-3"><a href="#derivative-integrals">Derivative Integrals</a></li>
 <li class="toc-level-3"><a href="#uhf-gradient">UHF Gradient</a></li>
 <li class="toc-level-2"><a href="#13-coupled-perturbed-hf-and-the-mp2-gradient">13. Coupled-Perturbed HF and the MP2 Gradient</a></li>
-<li class="toc-level-3"><a href="#the-z-vector-method">The Z-Vector Method</a></li>
+<li class="toc-level-3"><a href="#rmp2-z-vector-method">RMP2 Z-Vector Method</a></li>
+<li class="toc-level-3"><a href="#ump2-gradient-intermediates">UMP2 Gradient Intermediates</a></li>
 <li class="toc-level-2"><a href="#14-coupled-cluster-in-planck">14. Coupled Cluster in Planck</a></li>
 <li class="toc-level-3"><a href="#rccsd">RCCSD</a></li>
 <li class="toc-level-3"><a href="#worked-example-a-singles-residual-term">Worked Example: a Singles-Residual Term</a></li>
@@ -279,8 +280,8 @@
 <li>RMP2 and UMP2 correlation energies with RMP2 natural orbital analysis</li>
 <li>RCCSD for canonical closed-shell RHF references</li>
 <li>Small-system determinant-space teaching prototypes for RCCSDT, UCCSD, and UCCSDT</li>
-<li>Analytic RHF and UHF nuclear gradients</li>
-<li>Analytic RMP2 nuclear gradients (Z-vector / CPHF)</li>
+<li>Analytic RHF, UHF, RMP2, and UMP2 nuclear gradients</li>
+<li>Analytic RMP2 nuclear gradients include Z-vector / CPHF relaxation</li>
 <li>Geometry optimization in Cartesian and internal coordinates</li>
 <li>Semi-numerical Hessians and harmonic vibrational analysis</li>
 <li>CASSCF and RASSCF active-space multiconfigurational SCF</li>
@@ -321,7 +322,7 @@ Input file (.hfinp)
 <tr><td><code>src/scf</code></td><td>orthogonalizer, initial guess, RHF/UHF SCF loops</td></tr>
 <tr><td><code>src/symmetry</code></td><td>libmsym wrapper, SAO basis, MO labeling, integral sym ops</td></tr>
 <tr><td><code>src/post_hf</code></td><td>MP2 energy/gradient, RCCSD/UCCSD/RCCSDT/UCCSDT, CASSCF/RASSCF, AO→MO transforms, CPHF</td></tr>
-<tr><td><code>src/gradient</code></td><td>analytic RHF, UHF, RMP2 gradients</td></tr>
+<tr><td><code>src/gradient</code></td><td>analytic RHF, UHF, RMP2, and UMP2 gradients</td></tr>
 <tr><td><code>src/opt</code></td><td>L-BFGS/BFGS optimizer, internal coordinates, constraints</td></tr>
 <tr><td><code>src/freq</code></td><td>finite-difference Hessian, vibrational analysis</td></tr>
 <tr><td><code>src/dft</code></td><td>Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, KS driver</td></tr>
@@ -934,7 +935,7 @@ W_{\mu\nu} = \sum_{i}^{\alpha,occ} \varepsilon^\alpha_i C^\alpha_{\mu i} C^\alph
 \]</span></p>
 <hr>
 <h2 id="13-coupled-perturbed-hf-and-the-mp2-gradient">13. Coupled-Perturbed HF and the MP2 Gradient</h2>
-<h3 id="the-z-vector-method">The Z-Vector Method</h3>
+<h3 id="rmp2-z-vector-method">RMP2 Z-Vector Method</h3>
 <p>The RMP2 energy gradient requires the response of the HF density to a nuclear perturbation. Rather than solving the full CPHF equations for every nuclear displacement (which would scale as <span class="math-inline">\(O(3N \cdot n_b^3)\)</span>), the Z-vector method (Handy and Schaefer, 1984) collapses the response into a single solve.</p>
 <p>The unrelaxed MP2 one-particle density is:</p>
 <p><span class="math-display">\[
@@ -949,6 +950,28 @@ t_{ij}^{ab} = \frac{(ia|jb)}{\varepsilon_i + \varepsilon_j - \varepsilon_a - \va
 \sum_{bj} A_{ai,bj} Z_{bj} = L_{ai}
 \]</span></p>
 <p>where <span class="math-inline">\(\mathbf A\)</span> is the orbital Hessian (also the CPHF matrix) and <span class="math-inline">\(\mathbf L\)</span> is the MP2 Lagrangian source term. <code>build_rhf_cphf_matrix</code> in <code>src/post_hf/rhf_response.cpp</code> builds <span class="math-inline">\(\mathbf A\)</span>. The final gradient is then assembled from the relaxed density and the appropriate derivative integrals.</p>
+<h3 id="ump2-gradient-intermediates">UMP2 Gradient Intermediates</h3>
+<p>The UMP2 gradient starts from canonical UHF orbitals and keeps the MP2 correction spin-resolved. <code>build_ump2_gradient_intermediates</code> in <code>src/post_hf/mp2_gradient.cpp</code> builds three MO integral blocks:</p>
+<ul>
+<li><span class="math-inline">\((i^\alpha a^\alpha|j^\alpha b^\alpha)\)</span> for alpha-alpha same-spin pairs</li>
+<li><span class="math-inline">\((i^\beta a^\beta|j^\beta b^\beta)\)</span> for beta-beta same-spin pairs</li>
+<li><span class="math-inline">\((i^\alpha a^\alpha|j^\beta b^\beta)\)</span> for alpha-beta opposite-spin pairs</li>
+</ul>
+<p>Same-spin terms use antisymmetrized amplitudes,</p>
+<p><span class="math-display">\[
+t^{ab}_{ij,\sigma\sigma} =
+\frac{(ia|jb)_\sigma - (ib|ja)_\sigma}
+{\varepsilon^\sigma_i + \varepsilon^\sigma_j -
+ \varepsilon^\sigma_a - \varepsilon^\sigma_b}
+\]</span></p>
+<p>while opposite-spin terms have no exchange contribution,</p>
+<p><span class="math-display">\[
+t^{ab}_{ij,\alpha\beta} =
+\frac{(i^\alpha a^\alpha|j^\beta b^\beta)}
+{\varepsilon^\alpha_i + \varepsilon^\beta_j -
+ \varepsilon^\alpha_a - \varepsilon^\beta_b}.
+\]</span></p>
+<p>These amplitudes populate spin-specific occupied/virtual 1-PDM corrections <span class="math-inline">\(D^\alpha\)</span> and <span class="math-inline">\(D^\beta\)</span>, an AO-space spin-summed energy-weighted density <span class="math-inline">\(W\)</span>, and an explicit AO pair-density correction <span class="math-inline">\(\Gamma^{MP2}\)</span>. The final driver entry point, <code>compute_ump2_gradient</code> in <code>src/gradient/gradient.cpp</code>, combines those objects with the UHF reference two-particle density expression and reuses the same derivative-integral contraction infrastructure as the RHF, UHF, and RMP2 gradients.</p>
 <hr>
 <h2 id="14-coupled-cluster-in-planck">14. Coupled Cluster in Planck</h2>
 <p>Planck currently contains four coupled-cluster paths:</p>
@@ -2020,7 +2043,14 @@ driver.cpp
       run_casscf()             → E_CASSCF, natural orbitals
 
   if gradient or geomopt or frequency:
-      compute_rhf_gradient()   → _gradient (gradient.cpp)
+      if post_hf == RMP2:
+          compute_rmp2_gradient() → _gradient (gradient.cpp + mp2_gradient.cpp)
+      elif post_hf == UMP2:
+          compute_ump2_gradient() → _gradient (gradient.cpp + mp2_gradient.cpp)
+      elif reference == UHF:
+          compute_uhf_gradient()  → _gradient (gradient.cpp)
+      else:
+          compute_rhf_gradient()  → _gradient (gradient.cpp)
 
   if geomopt:
       run_geomopt()            → optimized geometry (geomopt.cpp)
@@ -2075,6 +2105,7 @@ driver.cpp
 <tr><td>CC denominators/DIIS</td><td><code>src/post_hf/cc/amplitudes.cpp</code>, <code>src/post_hf/cc/diis.cpp</code></td><td><code>build_denominator_cache</code>, <code>AmplitudeDIIS</code></td></tr>
 <tr><td>CPHF Z-vector</td><td><code>src/post_hf/rhf_response.cpp</code></td><td><code>build_rhf_cphf_matrix</code></td></tr>
 <tr><td>RMP2 gradient</td><td><code>src/post_hf/mp2_gradient.cpp</code></td><td><code>compute_rmp2_gradient</code></td></tr>
+<tr><td>UMP2 gradient intermediates</td><td><code>src/post_hf/mp2_gradient.cpp</code></td><td><code>build_ump2_gradient_intermediates</code></td></tr>
 <tr><td>CI string generation</td><td><code>src/post_hf/casscf.cpp</code></td><td>Gosper enumeration</td></tr>
 <tr><td>CI solve (Davidson)</td><td><code>src/post_hf/casscf.cpp</code></td><td>Davidson solver</td></tr>
 <tr><td>1-RDM, 2-RDM</td><td><code>src/post_hf/casscf.cpp</code></td><td><code>compute_1rdm</code>, <code>compute_2rdm</code></td></tr>
@@ -2082,6 +2113,7 @@ driver.cpp
 <tr><td>Orbital update</td><td><code>src/post_hf/casscf.cpp</code></td><td>Cayley transform</td></tr>
 <tr><td>RHF gradient</td><td><code>src/gradient/gradient.cpp</code></td><td><code>compute_rhf_gradient</code></td></tr>
 <tr><td>UHF gradient</td><td><code>src/gradient/gradient.cpp</code></td><td><code>compute_uhf_gradient</code></td></tr>
+<tr><td>UMP2 gradient</td><td><code>src/gradient/gradient.cpp</code></td><td><code>compute_ump2_gradient</code></td></tr>
 <tr><td>Derivative integrals</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_1e_deriv_A</code>, <code>_compute_eri_deriv_elem</code></td></tr>
 <tr><td>L-BFGS optimizer</td><td><code>src/opt/geomopt.cpp</code></td><td><code>run_geomopt</code></td></tr>
 <tr><td>Internal coordinates</td><td><code>src/opt/intcoords.cpp</code></td><td>Wilson B matrix</td></tr>
@@ -2130,10 +2162,9 @@ driver.cpp
 <tr><td>Analytic RHF gradient</td><td>Complete</td></tr>
 <tr><td>Analytic UHF gradient</td><td>Complete</td></tr>
 <tr><td>Analytic RMP2 gradient (Z-vector)</td><td>Complete</td></tr>
-<tr><td>UMP2 gradient</td><td>Not implemented (throws at runtime)</td></tr>
+<tr><td>Analytic UMP2 gradient</td><td>Complete</td></tr>
 <tr><td>CASSCF / RASSCF</td><td>Complete</td></tr>
-<tr><td>Geometry optimization (RHF/UHF/RMP2)</td><td>Complete</td></tr>
-<tr><td>UMP2 geometry optimization</td><td>Blocked by missing UMP2 gradient</td></tr>
+<tr><td>Geometry optimization (RHF/UHF/RMP2/UMP2)</td><td>Complete</td></tr>
 <tr><td>Semi-numerical Hessian</td><td>Complete</td></tr>
 <tr><td>Harmonic vibrational analysis</td><td>Complete</td></tr>
 <tr><td>Checkpoint save/restart</td><td>Complete</td></tr>

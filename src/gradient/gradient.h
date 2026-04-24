@@ -28,6 +28,14 @@ namespace HartreeFock
         std::expected<Eigen::MatrixXd, std::string> compute_rmp2_gradient(
             HartreeFock::Calculator &calc,
             const std::vector<HartreeFock::ShellPair> &shell_pairs);
+
+        // Analytic UMP2 nuclear gradient from spin-resolved UMP2 density and
+        // pair-density intermediates.
+        // Returns natoms×3 matrix in Ha/Bohr.
+        // Requires a converged UHF reference and correlation = UMP2.
+        std::expected<Eigen::MatrixXd, std::string> compute_ump2_gradient(
+            HartreeFock::Calculator &calc,
+            const std::vector<HartreeFock::ShellPair> &shell_pairs);
     } // namespace Gradient
 } // namespace HartreeFock
 

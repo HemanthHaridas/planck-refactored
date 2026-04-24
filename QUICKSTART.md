@@ -151,7 +151,7 @@ After a converged run, `water.hfchk` is written automatically. Add `guess read` 
 
 ### Gradient only
 
-Set `calculation gradient` to compute the analytic nuclear gradient at the input geometry and stop. The gradient is printed in Ha/Bohr, one row per atom:
+Set `calculation gradient` to compute the analytic nuclear gradient at the input geometry and stop. The gradient is printed in Ha/Bohr, one row per atom. RHF, UHF, RMP2, and UMP2 gradients use this same entry point:
 
 ```
 %begin_control
@@ -403,6 +403,27 @@ After a single-point RMP2 run, Planck automatically diagonalizes the unrelaxed M
 ```
 
 Occupancies close to 2 indicate strongly occupied (nearly HF) natural orbitals; small values (0.01–0.1) indicate correlation-driven occupation of virtual space. This output is useful for selecting an appropriate active space before a CASSCF calculation.
+
+To compute an analytic MP2 gradient, switch the control block to `calculation gradient` and keep the same correlation keyword. Closed-shell references use `correlation rmp2`; open-shell references use `scf_type uhf` with `correlation ump2`:
+
+```
+%begin_control
+    basis       sto-3g
+    calculation gradient
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type      uhf
+    correlation   ump2
+    engine        os
+    level_shift   0.3
+    diis_restart  2.0
+%end_scf
+```
+
+The gradient section reports the correlated MP2 derivative and includes the usual maximum and RMS gradient norms.
 
 ### 9. Coupled cluster
 

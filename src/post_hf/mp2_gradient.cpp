@@ -1,5 +1,6 @@
 #include "mp2_gradient.h"
 
+#include <cmath>
 #include <format>
 
 #include "integrals/base.h"
@@ -82,6 +83,75 @@ namespace
             calculator._integral._engine,
             calculator._integral._tol_eri,
             calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+    }
+
+    struct UMP2Counts
+    {
+        int n_alpha = 0;
+        int n_beta = 0;
+        int nva = 0;
+        int nvb = 0;
+    };
+
+    std::expected<UMP2Counts, std::string> get_ump2_counts(
+        const HartreeFock::Calculator &calculator,
+        int nb)
+    {
+        int n_electrons = 0;
+        for (auto Z : calculator._molecule.atomic_numbers)
+            n_electrons += static_cast<int>(Z);
+        n_electrons -= calculator._molecule.charge;
+
+        const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+        UMP2Counts counts;
+        counts.n_alpha = (n_electrons + n_unpaired) / 2;
+        counts.n_beta = (n_electrons - n_unpaired) / 2;
+        counts.nva = nb - counts.n_alpha;
+        counts.nvb = nb - counts.n_beta;
+
+        if (counts.n_alpha <= 0 || counts.nva <= 0)
+            return std::unexpected("UMP2 gradient: no alpha occupied or virtual orbitals.");
+        if (counts.n_beta <= 0 || counts.nvb <= 0)
+            return std::unexpected("UMP2 gradient: no beta occupied or virtual orbitals.");
+        return counts;
+    }
+
+    void add_rank4_mo_to_ao(
+        std::vector<double> &dm2_ao,
+        int nao,
+        const Eigen::MatrixXd &C1,
+        int p,
+        const Eigen::MatrixXd &C2,
+        int q,
+        const Eigen::MatrixXd &C3,
+        int r,
+        const Eigen::MatrixXd &C4,
+        int s,
+        double coeff)
+    {
+        if (std::abs(coeff) < 1e-14)
+            return;
+
+        for (int mu = 0; mu < nao; ++mu)
+        {
+            const double c1 = C1(mu, p);
+            if (std::abs(c1) < 1e-14)
+                continue;
+            for (int nu = 0; nu < nao; ++nu)
+            {
+                const double c12 = c1 * C2(nu, q);
+                if (std::abs(c12) < 1e-14)
+                    continue;
+                for (int la = 0; la < nao; ++la)
+                {
+                    const double c123 = c12 * C3(la, r);
+                    if (std::abs(c123) < 1e-14)
+                        continue;
+                    for (int si = 0; si < nao; ++si)
+                        dm2_ao[idx_dm2(mu, nu, la, si, nao)] += coeff * c123 * C4(si, s);
+                }
+            }
+        }
     }
 
 } // namespace
@@ -458,6 +528,156 @@ namespace HartreeFock::Correlation
         out.vhf_s1occ_ao = std::move(vhf_s1occ);
         out.Gamma_pair_ao = pair_dm2_ao;
         out.pair_dm2_ao = pair_dm2_ao;
+        return out;
+    }
+
+    std::expected<UMP2GradientIntermediates, std::string> build_ump2_gradient_intermediates(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+    {
+        if (!calculator._info._scf.is_uhf ||
+            calculator._scf._scf != HartreeFock::SCFType::UHF)
+            return std::unexpected("build_ump2_gradient_intermediates: UHF reference required.");
+        if (!calculator._info._is_converged)
+            return std::unexpected("build_ump2_gradient_intermediates: SCF not converged.");
+
+        const int nb = static_cast<int>(calculator._shells.nbasis());
+        auto counts_res = get_ump2_counts(calculator, nb);
+        if (!counts_res)
+            return std::unexpected(counts_res.error());
+        const auto counts = *counts_res;
+
+        const Eigen::MatrixXd &Ca = calculator._info._scf.alpha.mo_coefficients;
+        const Eigen::MatrixXd &Cb = calculator._info._scf.beta.mo_coefficients;
+        const Eigen::VectorXd &epsa = calculator._info._scf.alpha.mo_energies;
+        const Eigen::VectorXd &epsb = calculator._info._scf.beta.mo_energies;
+
+        const Eigen::MatrixXd Ca_occ = Ca.leftCols(counts.n_alpha);
+        const Eigen::MatrixXd Ca_virt = Ca.middleCols(counts.n_alpha, counts.nva);
+        const Eigen::MatrixXd Cb_occ = Cb.leftCols(counts.n_beta);
+        const Eigen::MatrixXd Cb_virt = Cb.middleCols(counts.n_beta, counts.nvb);
+
+        std::vector<double> eri_local;
+        const std::vector<double> &eri = ensure_eri(
+            calculator, shell_pairs, eri_local, "UMP2 Gradient :");
+
+        const auto mo_aa = transform_eri(eri, nb, Ca_occ, Ca_virt, Ca_occ, Ca_virt);
+        const auto mo_bb = transform_eri(eri, nb, Cb_occ, Cb_virt, Cb_occ, Cb_virt);
+        const auto mo_ab = transform_eri(eri, nb, Ca_occ, Ca_virt, Cb_occ, Cb_virt);
+
+        Eigen::MatrixXd Da_occ = Eigen::MatrixXd::Zero(counts.n_alpha, counts.n_alpha);
+        Eigen::MatrixXd Da_virt = Eigen::MatrixXd::Zero(counts.nva, counts.nva);
+        Eigen::MatrixXd Db_occ = Eigen::MatrixXd::Zero(counts.n_beta, counts.n_beta);
+        Eigen::MatrixXd Db_virt = Eigen::MatrixXd::Zero(counts.nvb, counts.nvb);
+
+        std::vector<double> pair_dm2_ao(static_cast<std::size_t>(nb) * nb * nb * nb, 0.0);
+
+        auto idx_aa = [nva = counts.nva, na = counts.n_alpha](int i, int a, int j, int b) -> std::size_t
+        {
+            return ((static_cast<std::size_t>(i) * nva + a) * na + j) * nva + b;
+        };
+        auto idx_bb = [nvb = counts.nvb, nbeta = counts.n_beta](int i, int a, int j, int b) -> std::size_t
+        {
+            return ((static_cast<std::size_t>(i) * nvb + a) * nbeta + j) * nvb + b;
+        };
+        auto idx_ab = [nva = counts.nva, nbeta = counts.n_beta, nvb = counts.nvb](int i, int a, int j, int b) -> std::size_t
+        {
+            return ((static_cast<std::size_t>(i) * nva + a) * nbeta + j) * nvb + b;
+        };
+
+        for (int i = 0; i < counts.n_alpha; ++i)
+            for (int j = 0; j < counts.n_alpha; ++j)
+                for (int a = 0; a < counts.nva; ++a)
+                    for (int b = 0; b < counts.nva; ++b)
+                    {
+                        const double iajb = mo_aa[idx_aa(i, a, j, b)];
+                        const double ibja = mo_aa[idx_aa(i, b, j, a)];
+                        const double denom = epsa(i) + epsa(j) -
+                                             epsa(counts.n_alpha + a) -
+                                             epsa(counts.n_alpha + b);
+                        const double t = (iajb - ibja) / denom;
+                        Da_occ(i, i) -= 0.25 * t * t;
+                        Da_occ(j, j) -= 0.25 * t * t;
+                        Da_virt(a, a) += 0.25 * t * t;
+                        Da_virt(b, b) += 0.25 * t * t;
+                        add_rank4_mo_to_ao(pair_dm2_ao, nb, Ca_occ, i, Ca_virt, a, Ca_occ, j, Ca_virt, b, t);
+                        add_rank4_mo_to_ao(pair_dm2_ao, nb, Ca_virt, a, Ca_occ, i, Ca_virt, b, Ca_occ, j, t);
+                    }
+
+        for (int i = 0; i < counts.n_beta; ++i)
+            for (int j = 0; j < counts.n_beta; ++j)
+                for (int a = 0; a < counts.nvb; ++a)
+                    for (int b = 0; b < counts.nvb; ++b)
+                    {
+                        const double iajb = mo_bb[idx_bb(i, a, j, b)];
+                        const double ibja = mo_bb[idx_bb(i, b, j, a)];
+                        const double denom = epsb(i) + epsb(j) -
+                                             epsb(counts.n_beta + a) -
+                                             epsb(counts.n_beta + b);
+                        const double t = (iajb - ibja) / denom;
+                        Db_occ(i, i) -= 0.25 * t * t;
+                        Db_occ(j, j) -= 0.25 * t * t;
+                        Db_virt(a, a) += 0.25 * t * t;
+                        Db_virt(b, b) += 0.25 * t * t;
+                        add_rank4_mo_to_ao(pair_dm2_ao, nb, Cb_occ, i, Cb_virt, a, Cb_occ, j, Cb_virt, b, t);
+                        add_rank4_mo_to_ao(pair_dm2_ao, nb, Cb_virt, a, Cb_occ, i, Cb_virt, b, Cb_occ, j, t);
+                    }
+
+        for (int i = 0; i < counts.n_alpha; ++i)
+            for (int j = 0; j < counts.n_beta; ++j)
+                for (int a = 0; a < counts.nva; ++a)
+                    for (int b = 0; b < counts.nvb; ++b)
+                    {
+                        const double iajb = mo_ab[idx_ab(i, a, j, b)];
+                        const double denom = epsa(i) + epsb(j) -
+                                             epsa(counts.n_alpha + a) -
+                                             epsb(counts.n_beta + b);
+                        const double t = iajb / denom;
+                        Da_occ(i, i) -= t * t;
+                        Db_occ(j, j) -= t * t;
+                        Da_virt(a, a) += t * t;
+                        Db_virt(b, b) += t * t;
+                        add_rank4_mo_to_ao(pair_dm2_ao, nb, Ca_occ, i, Ca_virt, a, Cb_occ, j, Cb_virt, b, 2.0 * t);
+                        add_rank4_mo_to_ao(pair_dm2_ao, nb, Ca_virt, a, Ca_occ, i, Cb_virt, b, Cb_occ, j, 2.0 * t);
+                    }
+
+        const Eigen::MatrixXd Pa_corr =
+            Ca_occ * Da_occ * Ca_occ.transpose() +
+            Ca_virt * Da_virt * Ca_virt.transpose();
+        const Eigen::MatrixXd Pb_corr =
+            Cb_occ * Db_occ * Cb_occ.transpose() +
+            Cb_virt * Db_virt * Cb_virt.transpose();
+
+        Eigen::MatrixXd Wa_corr = Eigen::MatrixXd::Zero(nb, nb);
+        for (int i = 0; i < counts.n_alpha; ++i)
+            for (int j = 0; j < counts.n_alpha; ++j)
+                Wa_corr += 0.5 * (epsa(i) + epsa(j)) * Da_occ(i, j) *
+                           (Ca_occ.col(i) * Ca_occ.col(j).transpose());
+        for (int a = 0; a < counts.nva; ++a)
+            for (int b = 0; b < counts.nva; ++b)
+                Wa_corr += 0.5 * (epsa(counts.n_alpha + a) + epsa(counts.n_alpha + b)) * Da_virt(a, b) *
+                           (Ca_virt.col(a) * Ca_virt.col(b).transpose());
+
+        Eigen::MatrixXd Wb_corr = Eigen::MatrixXd::Zero(nb, nb);
+        for (int i = 0; i < counts.n_beta; ++i)
+            for (int j = 0; j < counts.n_beta; ++j)
+                Wb_corr += 0.5 * (epsb(i) + epsb(j)) * Db_occ(i, j) *
+                           (Cb_occ.col(i) * Cb_occ.col(j).transpose());
+        for (int a = 0; a < counts.nvb; ++a)
+            for (int b = 0; b < counts.nvb; ++b)
+                Wb_corr += 0.5 * (epsb(counts.n_beta + a) + epsb(counts.n_beta + b)) * Db_virt(a, b) *
+                           (Cb_virt.col(a) * Cb_virt.col(b).transpose());
+
+        UMP2GradientIntermediates out;
+        out.P_alpha_corr_ao = Pa_corr;
+        out.P_beta_corr_ao = Pb_corr;
+        out.P_alpha_ao = calculator._info._scf.alpha.density + Pa_corr;
+        out.P_beta_ao = calculator._info._scf.beta.density + Pb_corr;
+        out.P_total_ao = out.P_alpha_ao + out.P_beta_ao;
+        out.W_ao = Ca_occ * epsa.head(counts.n_alpha).asDiagonal() * Ca_occ.transpose() +
+                   Cb_occ * epsb.head(counts.n_beta).asDiagonal() * Cb_occ.transpose() +
+                   Wa_corr + Wb_corr;
+        out.Gamma_pair_ao = std::move(pair_dm2_ao);
         return out;
     }
 

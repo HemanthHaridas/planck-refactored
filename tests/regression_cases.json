@@ -169,6 +169,21 @@
       ]
     },
     {
+      "id": "water_radical_cation_ump2_gradient_smoke",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_uhf_ump2_gradient_sto3g.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Using analytic UMP2 gradient (spin-resolved density + pair density)",
+        "Nuclear Gradient (Ha/Bohr) :"
+      ],
+      "checks": [
+        {"type": "metric_present", "metric": "gradient_max"},
+        {"type": "metric_present", "metric": "gradient_rms"},
+        {"type": "metric_eq", "metric": "gradient_atom_lines", "expected": 3}
+      ]
+    },
+    {
       "id": "h2_rccsdt_sto3g",
       "input": "tests/inputs/regression/post_hf/h2_rccsdt_sto3g.hfinp",
       "tags": ["smoke", "extended"],
