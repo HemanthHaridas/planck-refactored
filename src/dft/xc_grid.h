@@ -75,6 +75,7 @@ namespace DFT
         double exchange_energy = 0.0;
         double correlation_energy = 0.0;
         double total_energy = 0.0;
+        double exact_exchange_coefficient = 0.0;
         double integrated_electrons = 0.0;
     };
 

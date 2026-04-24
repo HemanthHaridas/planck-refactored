@@ -3277,7 +3277,8 @@ driver.cpp
 | Arbitrary libxc functionals via integer ID | Complete |
 | Molecular grid (Treutler-Ahlrichs + Lebedev + Becke) | Complete |
 | DFT geometry optimization / gradients | Not implemented |
-| Hybrid XC functionals (e.g. B3LYP) | Not supported (requires HF exchange) |
+| Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs) | Complete |
+| Range-separated and double-hybrid XC functionals | Not supported |
 | Spherical harmonic basis | Not supported (Cartesian only) |
 
 ---

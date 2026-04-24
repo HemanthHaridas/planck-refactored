@@ -137,6 +137,12 @@ namespace DFT
                     label + " meta-GGA functionals are not supported yet because tau/laplacian terms are not wired");
             }
 
+            if (functional.is_hybrid() && !functional.is_global_hybrid())
+            {
+                return std::unexpected(
+                    label + " range-separated and double-hybrid functionals are not supported yet");
+            }
+
             if (!functional.is_supported_semilocal())
             {
                 return std::unexpected(
@@ -208,6 +214,26 @@ namespace DFT
             result.energy_density =
                 (density.total.rho.array() * result.exc.array()).matrix();
             result.energy = molecular_grid.points.col(3).dot(result.energy_density);
+            return result;
+        }
+
+        XCFunctionalGridResult zero_functional_result(
+            const DensityOnGrid &density,
+            const std::string &name)
+        {
+            const Eigen::Index npoints = density.npoints();
+            const Eigen::Index spin_components = density.polarized ? 2 : 1;
+
+            XCFunctionalGridResult result;
+            result.name = name;
+            result.family = XC_FAMILY_UNKNOWN;
+            result.polarized = density.polarized;
+            result.uses_gradients = false;
+            result.exc = Eigen::VectorXd::Zero(npoints);
+            result.vrho = Eigen::MatrixXd::Zero(npoints, spin_components);
+            result.vsigma.resize(npoints, 0);
+            result.energy_density = Eigen::VectorXd::Zero(npoints);
+            result.energy = 0.0;
             return result;
         }
 
@@ -329,11 +355,15 @@ namespace DFT
         if (!exchange)
             return std::unexpected(exchange.error());
 
-        auto correlation = evaluate_functional_on_grid(
-            molecular_grid,
-            density,
-            correlation_functional,
-            "correlation");
+        std::expected<XCFunctionalGridResult, std::string> correlation =
+            exchange_functional.is_combined_exchange_correlation()
+                ? std::expected<XCFunctionalGridResult, std::string>(
+                      zero_functional_result(density, "included in " + exchange->name))
+                : evaluate_functional_on_grid(
+                      molecular_grid,
+                      density,
+                      correlation_functional,
+                      "correlation");
         if (!correlation)
             return std::unexpected(correlation.error());
 
@@ -355,6 +385,8 @@ namespace DFT
         evaluation.exchange_energy = evaluation.exchange.energy;
         evaluation.correlation_energy = evaluation.correlation.energy;
         evaluation.total_energy = evaluation.exchange_energy + evaluation.correlation_energy;
+        evaluation.exact_exchange_coefficient =
+            exchange_functional.is_hybrid() ? exchange_functional.exact_exchange_coefficient() : 0.0;
         auto integrated_electrons = density.integrated_electrons(molecular_grid);
         if (!integrated_electrons)
             return std::unexpected(integrated_electrons.error());

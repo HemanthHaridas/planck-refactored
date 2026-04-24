@@ -790,7 +790,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 
 ### 15. Kohn-Sham DFT calculation
 
-Kohn-Sham DFT uses a separate executable, `planck-dft`. It reads the same `.hfinp` format but requires a `%begin_dft` block that selects the exchange-correlation functional and integration grid. The `scf_type` keyword in `%begin_scf` controls the reference: `rhf` → RKS, `uhf` → UKS.
+Kohn-Sham DFT uses a separate executable, `planck-dft`. It reads the same `.hfinp` format but requires a `%begin_dft` block that selects the exchange-correlation functional and integration grid. The `scf_type` keyword in `%begin_scf` controls the reference: `rhf` → RKS, `uhf` → UKS. Global hybrid functionals such as B3LYP and PBE0 include their own correlation through libxc, so the `correlation` keyword is ignored for those combined XC choices.
 
 #### Minimal PBE/STO-3G single point — water (RKS)
 
@@ -874,6 +874,8 @@ The same post-SCF multipole analysis is available in `planck-dft`, because the d
 | `exchange b88` + `correlation p86` | BP86 | GGA |
 | `exchange pbe` + `correlation pbe` | PBE (default) | GGA |
 | `exchange pw91` + `correlation pw91` | PW91 | GGA |
+| `exchange b3lyp` | B3LYP | global hybrid GGA |
+| `exchange pbe0` | PBE0 | global hybrid GGA |
 
 #### Grid quality
 
@@ -1068,7 +1070,7 @@ To use any libxc functional by its integer ID, replace the enum keywords with nu
 
 # planck-dft only: selects XC functional and numerical integration grid
 %begin_dft
-    exchange     slater | b88 | pw91 | pbe      # exchange functional (default: pbe)
+    exchange     slater | b88 | pw91 | pbe | b3lyp | pbe0  # exchange/XC functional (default: pbe)
     correlation  vwn5 | lyp | p86 | pw91 | pbe  # correlation functional (default: pbe)
     exchange_id  <int>                           # custom libxc exchange ID (overrides exchange)
     correlation_id <int>                         # custom libxc correlation ID (overrides correlation)

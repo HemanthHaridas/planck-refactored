@@ -61,7 +61,7 @@ All user-visible options are encoded as scoped enums, preventing accidental inte
 | `SCFGuess` | `HCore`, `SAD`, `ReadDensity`, `ReadFull` |
 | `OptCoords` | `Cartesian`, `Internal` |
 | `DFTGridQuality` | `Coarse`, `Normal`, `Fine`, `UltraFine` |
-| `XCExchangeFunctional` | `Custom`, `Slater`, `B88`, `PW91`, `PBE` |
+| `XCExchangeFunctional` | `Custom`, `Slater`, `B88`, `PW91`, `PBE`, `B3LYP`, `PBE0` |
 | `XCCorrelationFunctional` | `Custom`, `VWN5`, `LYP`, `P86`, `PW91`, `PBE` |
 
 ### `Molecule`
@@ -717,7 +717,7 @@ Five-region pruning reduces the angular order near the nucleus (where the densit
 
 <div align="justify">
 
-`XC::Functional` is an RAII wrapper around a libxc `xc_func_type`. The `evaluate()` method takes a density array (and gradient array for GGA functionals) and fills the XC energy density and potential arrays. The libxc functional ID is resolved from the `XCExchangeFunctional` / `XCCorrelationFunctional` enums; `Custom` mode accepts a raw libxc integer ID for any functional in the libxc library. The `USING_Libxc` preprocessor guard ensures that this header (and its libxc dependency) is only compiled into `planck-dft` and not `hartree-fock`.
+`XC::Functional` is an RAII wrapper around a libxc `xc_func_type`. The `evaluate()` method takes a density array (and gradient array for GGA functionals) and fills the XC energy density and potential arrays. The wrapper also exposes libxc hybrid metadata, including the global exact-exchange coefficient. The libxc functional ID is resolved from the `XCExchangeFunctional` / `XCCorrelationFunctional` enums; `Custom` mode accepts a raw libxc integer ID for any functional in the libxc library. The `USING_Libxc` preprocessor guard ensures that this header (and its libxc dependency) is only compiled into `planck-dft` and not `hartree-fock`.
 
 </div>
 
@@ -733,7 +733,7 @@ Five-region pruning reduces the angular order near the nucleus (where the densit
 
 <div align="justify">
 
-`evaluate_density_on_grid()` contracts the density matrix with the AO values to produce the electron density at each grid point: `ρ(r) = Σ_{μν} P_{μν} χ_μ(r) χ_ν(r)`. `evaluate_xc_on_grid()` passes ρ (and ∇ρ for GGA) to the libxc wrapper and returns the XC energy density and potential at each point. The integrated electron count `∫ρ dV` is checked as a grid quality diagnostic.
+`evaluate_density_on_grid()` contracts the density matrix with the AO values to produce the electron density at each grid point: `ρ(r) = Σ_{μν} P_{μν} χ_μ(r) χ_ν(r)`. `evaluate_xc_on_grid()` passes ρ (and ∇ρ for GGA) to the libxc wrapper and returns the XC energy density and potential at each point. Combined exchange-correlation functionals such as B3LYP and PBE0 are evaluated once through the exchange slot, and the separate correlation slot is ignored to avoid double counting. The integrated electron count `∫ρ dV` is checked as a grid quality diagnostic.
 
 </div>
 
@@ -741,7 +741,7 @@ Five-region pruning reduces the angular order near the nucleus (where the densit
 
 <div align="justify">
 
-`assemble_xc_matrix()` integrates `V_{XC,μν} = ∫ v_xc(r) χ_μ(r) χ_ν(r) dV` using the pre-evaluated AO grid values and quadrature weights. `combine_ks_potential()` assembles the full KS Fock matrix `F_KS = H_core + J + V_XC` where J is the Coulomb contribution from the SCF infrastructure. The resulting `KSPotentialMatrices` are passed back to the SCF loop, which diagonalizes `F_KS` exactly as it would diagonalize a HF Fock matrix.
+`assemble_xc_matrix()` integrates `V_{XC,μν} = ∫ v_xc(r) χ_μ(r) χ_ν(r) dV` using the pre-evaluated AO grid values and quadrature weights. `combine_ks_potential()` assembles the full KS Fock matrix `F_KS = H_core + J + V_XC + V_X^exact` where J is the Coulomb contribution from the SCF infrastructure and `V_X^exact` is present for global hybrids. The hybrid exchange energy is accumulated alongside the semilocal grid energy. The resulting `KSPotentialMatrices` are passed back to the SCF loop, which diagonalizes `F_KS` exactly as it would diagonalize a HF Fock matrix.
 
 </div>
 

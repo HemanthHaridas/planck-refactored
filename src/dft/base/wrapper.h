@@ -120,6 +120,26 @@ namespace DFT
                 return xc_hyb_exx_coef(&func_);
             }
 
+            int hybrid_type() const noexcept
+            {
+                return xc_hyb_type(&func_);
+            }
+
+            bool is_hybrid() const noexcept
+            {
+                return hybrid_type() != XC_HYB_SEMILOCAL;
+            }
+
+            bool is_global_hybrid() const noexcept
+            {
+                return hybrid_type() == XC_HYB_HYBRID;
+            }
+
+            bool is_combined_exchange_correlation() const noexcept
+            {
+                return kind() == XC_EXCHANGE_CORRELATION;
+            }
+
             bool is_lda_like() const noexcept
             {
                 return family() == XC_FAMILY_LDA;

@@ -14,7 +14,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 <div align="justify">
 
 - **RHF / ROHF / UHF** — closed-shell, restricted open-shell, and unrestricted Hartree-Fock; ROHF uses a Roothaan-type effective Fock construction with aufbau orbital reordering and DIIS convergence
-- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA and GGA exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals via integer ID
+- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, and global hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals via integer ID
 - **Two integral engines** — Obara-Saika for low angular momentum; Rys quadrature for high angular momentum; automatic engine selection per shell quartet (`engine auto`)
 - **Electric multipole moments** — dipole and quadrupole moment analysis after SCF convergence for both `hartree-fock` and `planck-dft`
 - **Mulliken population analysis** — atomic gross populations, net charges, and (for UHF/ROHF) spin populations; printed when `print_populations true` or verbosity is `verbose`/`debug`
@@ -212,7 +212,7 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
 | `grid` / `grid_level` | enum | `coarse`, `normal`, `fine`, `ultrafine` | `normal` | Molecular integration grid quality. Higher quality uses more radial shells and angular points; see grid preset table below. |
-| `exchange` | enum | `slater`/`lda`, `b88`/`becke88`, `pw91`, `pbe` | `pbe` | Exchange functional |
+| `exchange` | enum | `slater`/`lda`, `b88`/`becke88`, `pw91`, `pbe`, `b3lyp`, `pbe0`/`pbeh` | `pbe` | Exchange or combined exchange-correlation functional. Combined XC entries such as `b3lyp` and `pbe0` ignore the separate `correlation` keyword. |
 | `correlation` | enum | `vwn`/`vwn5`, `lyp`, `p86`, `pw91`, `pbe` | `pbe` | Correlation functional |
 | `exchange_id` | int | any libxc integer ID | — | Use an arbitrary libxc exchange functional by its integer identifier. Overrides `exchange`. |
 | `correlation_id` | int | any libxc integer ID | — | Use an arbitrary libxc correlation functional by its integer identifier. Overrides `correlation`. |
@@ -239,6 +239,8 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | BPW91 | `b88` | `pw91` | GGA |
 | PW91 | `pw91` | `pw91` | GGA |
 | PBE | `pbe` | `pbe` | GGA (default) |
+| B3LYP | `b3lyp` | ignored | Global hybrid GGA |
+| PBE0 | `pbe0` | ignored | Global hybrid GGA |
 
 ### Section: `%begin_geom`
 

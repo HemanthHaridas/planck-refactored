@@ -449,6 +449,42 @@
       ]
     },
     {
+      "id": "h2_dft_b3lyp_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_b3lyp.hfinp",
+      "executable": "planck-dft",
+      "tags": ["smoke", "core", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "DFT Hybrid XC :               B3LYP exact exchange coefficient = 0.200000",
+        "DFT Correlation :             Using B3LYP as a combined XC functional; configured correlation is ignored",
+        "RKS Converged :",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "Dinfh"},
+        {"type": "metric_close", "metric": "dft_total_energy", "expected": -1.1634835764, "atol": 1e-9}
+      ]
+    },
+    {
+      "id": "h_dft_uks_b3lyp_sto3g",
+      "input": "tests/inputs/regression/dft/h_dft_uks_b3lyp.hfinp",
+      "executable": "planck-dft",
+      "tags": ["smoke", "core", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   UKS",
+        "DFT Hybrid XC :               B3LYP exact exchange coefficient = 0.200000",
+        "DFT Correlation :             Using B3LYP as a combined XC functional; configured correlation is ignored",
+        "UKS Converged :",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "C1"},
+        {"type": "metric_close", "metric": "dft_total_energy", "expected": -0.4675325872, "atol": 1e-9}
+      ]
+    },
+    {
       "id": "water_triplet_uks_pbe_sto3g",
       "input": "tests/inputs/regression/dft/water_triplet_uks_pbe_sto3g.hfinp",
       "executable": "planck-dft",

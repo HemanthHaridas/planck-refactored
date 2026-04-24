@@ -627,6 +627,10 @@ const inline std::string map_enum<HartreeFock::XCExchangeFunctional>(HartreeFock
         return "PW91";
     case HartreeFock::XCExchangeFunctional::PBE:
         return "PBE";
+    case HartreeFock::XCExchangeFunctional::B3LYP:
+        return "B3LYP";
+    case HartreeFock::XCExchangeFunctional::PBE0:
+        return "PBE0";
     }
     return "Unknown";
 }

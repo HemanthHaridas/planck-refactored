@@ -112,7 +112,9 @@ namespace HartreeFock
         Slater,
         B88,
         PW91,
-        PBE
+        PBE,
+        B3LYP,
+        PBE0
     };
 
     enum class XCCorrelationFunctional
