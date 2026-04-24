@@ -191,16 +191,30 @@ namespace DFT
 
     KSPotentialMatrices combine_ks_potential(
         const Eigen::Ref<const Eigen::MatrixXd> &coulomb,
-        const XCMatrixContribution &xc_matrix)
+        const XCMatrixContribution &xc_matrix,
+        double exact_exchange_coefficient,
+        const Eigen::MatrixXd &exact_exchange_alpha,
+        const Eigen::MatrixXd &exact_exchange_beta,
+        double exact_exchange_energy)
     {
         KSPotentialMatrices potential;
         potential.polarized = xc_matrix.polarized;
         potential.coulomb = coulomb;
         potential.xc_alpha = xc_matrix.alpha;
         potential.xc_beta = xc_matrix.beta;
-        potential.alpha = coulomb + xc_matrix.alpha;
+        potential.exact_exchange_alpha =
+            exact_exchange_alpha.size() == 0
+                ? Eigen::MatrixXd::Zero(coulomb.rows(), coulomb.cols())
+                : exact_exchange_alpha;
+        potential.exact_exchange_beta =
+            exact_exchange_beta.size() == 0
+                ? potential.exact_exchange_alpha
+                : exact_exchange_beta;
+        potential.exact_exchange_coefficient = exact_exchange_coefficient;
+        potential.exact_exchange_energy = exact_exchange_energy;
+        potential.alpha = coulomb + xc_matrix.alpha + potential.exact_exchange_alpha;
         potential.beta = xc_matrix.polarized
-                             ? (coulomb + xc_matrix.beta)
+                             ? (coulomb + xc_matrix.beta + potential.exact_exchange_beta)
                              : potential.alpha;
         return potential;
     }

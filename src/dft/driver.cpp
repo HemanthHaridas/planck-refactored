@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <numeric>
 #include <string>
@@ -66,6 +67,12 @@ namespace DFT::Driver
                 break;
             case HartreeFock::XCExchangeFunctional::PBE:
                 functional_name = "gga_x_pbe";
+                break;
+            case HartreeFock::XCExchangeFunctional::B3LYP:
+                functional_name = "hyb_gga_xc_b3lyp";
+                break;
+            case HartreeFock::XCExchangeFunctional::PBE0:
+                functional_name = "hyb_gga_xc_pbeh";
                 break;
             }
 
@@ -481,6 +488,35 @@ namespace DFT::Driver
             return coulomb;
         }
 
+        Eigen::MatrixXd build_exchange_from_eri(
+            const std::vector<double> &eri,
+            const Eigen::Ref<const Eigen::MatrixXd> &density,
+            std::size_t nbasis)
+        {
+            const std::size_t nb = nbasis;
+            const std::size_t nb2 = nb * nb;
+            const std::size_t nb3 = nb * nb * nb;
+
+            Eigen::MatrixXd exchange = Eigen::MatrixXd::Zero(
+                static_cast<Eigen::Index>(nb),
+                static_cast<Eigen::Index>(nb));
+
+            for (std::size_t mu = 0; mu < nb; ++mu)
+                for (std::size_t nu = 0; nu < nb; ++nu)
+                    for (std::size_t lam = 0; lam < nb; ++lam)
+                        for (std::size_t sig = 0; sig < nb; ++sig)
+                            exchange(mu, nu) += density(lam, sig) * eri[mu * nb3 + lam * nb2 + nu * nb + sig];
+
+            return exchange;
+        }
+
+        double density_trace_product(
+            const Eigen::Ref<const Eigen::MatrixXd> &density,
+            const Eigen::Ref<const Eigen::MatrixXd> &matrix)
+        {
+            return (density.array() * matrix.array()).sum();
+        }
+
         std::expected<void, std::string> ensure_eri_tensor(
             HartreeFock::Calculator &calculator,
             const PreparedSystem &prepared)
@@ -672,7 +708,10 @@ namespace DFT::Driver
 
                     const Eigen::MatrixXd fock = calculator._hcore + ks_potential->alpha;
                     const double electronic_energy =
-                        (density.array() * calculator._hcore.array()).sum() + 0.5 * (density.array() * ks_potential->coulomb.array()).sum() + xc_grid->total_energy;
+                        (density.array() * calculator._hcore.array()).sum() +
+                        0.5 * (density.array() * ks_potential->coulomb.array()).sum() +
+                        xc_grid->total_energy +
+                        ks_potential->exact_exchange_energy;
                     const double total_energy = electronic_energy + calculator._nuclear_repulsion;
 
                     double diis_error = 0.0;
@@ -733,7 +772,7 @@ namespace DFT::Driver
                     calculator._info._scf.alpha.mo_symmetry = diagonalization->mo_symmetry;
 
                     result.total_energy = total_energy;
-                    result.xc_energy = xc_grid->total_energy;
+                    result.xc_energy = xc_grid->total_energy + ks_potential->exact_exchange_energy;
                     result.integrated_electrons = xc_grid->integrated_electrons;
 
                     if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
@@ -806,7 +845,10 @@ namespace DFT::Driver
                 const Eigen::MatrixXd total_density = alpha_density + beta_density;
 
                 const double electronic_energy =
-                    (total_density.array() * calculator._hcore.array()).sum() + 0.5 * (total_density.array() * ks_potential->coulomb.array()).sum() + xc_grid->total_energy;
+                    (total_density.array() * calculator._hcore.array()).sum() +
+                    0.5 * (total_density.array() * ks_potential->coulomb.array()).sum() +
+                    xc_grid->total_energy +
+                    ks_potential->exact_exchange_energy;
                 const double total_energy = electronic_energy + calculator._nuclear_repulsion;
 
                 double diis_error = 0.0;
@@ -890,7 +932,7 @@ namespace DFT::Driver
                 calculator._info._scf.beta.mo_symmetry = beta_diagonalization->mo_symmetry;
 
                 result.total_energy = total_energy;
-                result.xc_energy = xc_grid->total_energy;
+                result.xc_energy = xc_grid->total_energy + ks_potential->exact_exchange_energy;
                 result.integrated_electrons = xc_grid->integrated_electrons;
 
                 if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
@@ -953,6 +995,32 @@ namespace DFT::Driver
             auto correlation = initialize_functional(calculator._dft._correlation_id, spin);
             if (!correlation)
                 return std::unexpected("DFT correlation functional initialization failed: " + correlation.error());
+
+            if (exchange->is_hybrid() && !exchange->is_global_hybrid())
+            {
+                return std::unexpected(
+                    "DFT hybrid functional initialization failed: only global hybrids are supported; "
+                    "range-separated and double-hybrid functionals are not yet implemented");
+            }
+
+            if (exchange->is_global_hybrid())
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "DFT Hybrid XC :",
+                    std::format("{} exact exchange coefficient = {:.6f}",
+                                exchange->name(),
+                                exchange->exact_exchange_coefficient()));
+            }
+
+            if (exchange->is_combined_exchange_correlation())
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "DFT Correlation :",
+                    std::format("Using {} as a combined XC functional; configured correlation is ignored",
+                                exchange->name()));
+            }
 
             return InitializedFunctionals{
                 .exchange = std::move(*exchange),
@@ -1506,9 +1574,10 @@ namespace DFT::Driver
             return std::unexpected("alpha density matrix is not initialized for KS matrix assembly");
 
         Eigen::MatrixXd total_density = alpha_density;
+        Eigen::MatrixXd beta_density;
         if (calculator._scf._scf == HartreeFock::SCFType::UHF)
         {
-            const auto &beta_density = calculator._info._scf.beta.density;
+            beta_density = calculator._info._scf.beta.density;
             if (beta_density.rows() != nbasis || beta_density.cols() != nbasis)
                 return std::unexpected("beta density matrix is not initialized for KS matrix assembly");
             total_density += beta_density;
@@ -1519,7 +1588,51 @@ namespace DFT::Driver
             total_density,
             calculator._shells.nbasis());
 
-        return combine_ks_potential(coulomb, *xc_matrix);
+        const double exact_exchange_coefficient = xc_grid.exact_exchange_coefficient;
+        Eigen::MatrixXd exact_exchange_alpha;
+        Eigen::MatrixXd exact_exchange_beta;
+        double exact_exchange_energy = 0.0;
+
+        if (std::abs(exact_exchange_coefficient) > 1.0e-14)
+        {
+            if (calculator._scf._scf == HartreeFock::SCFType::UHF)
+            {
+                const Eigen::MatrixXd exchange_alpha = build_exchange_from_eri(
+                    calculator._eri,
+                    alpha_density,
+                    calculator._shells.nbasis());
+                const Eigen::MatrixXd exchange_beta = build_exchange_from_eri(
+                    calculator._eri,
+                    beta_density,
+                    calculator._shells.nbasis());
+                exact_exchange_alpha = -exact_exchange_coefficient * exchange_alpha;
+                exact_exchange_beta = -exact_exchange_coefficient * exchange_beta;
+                exact_exchange_energy =
+                    -0.5 * exact_exchange_coefficient *
+                    (density_trace_product(alpha_density, exchange_alpha) +
+                     density_trace_product(beta_density, exchange_beta));
+            }
+            else
+            {
+                const Eigen::MatrixXd exchange = build_exchange_from_eri(
+                    calculator._eri,
+                    alpha_density,
+                    calculator._shells.nbasis());
+                exact_exchange_alpha = -0.5 * exact_exchange_coefficient * exchange;
+                exact_exchange_beta = exact_exchange_alpha;
+                exact_exchange_energy =
+                    -0.25 * exact_exchange_coefficient *
+                    density_trace_product(alpha_density, exchange);
+            }
+        }
+
+        return combine_ks_potential(
+            coulomb,
+            *xc_matrix,
+            exact_exchange_coefficient,
+            exact_exchange_alpha,
+            exact_exchange_beta,
+            exact_exchange_energy);
     }
 
     std::expected<PreparedSystem, std::string>

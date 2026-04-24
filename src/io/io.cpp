@@ -339,7 +339,13 @@ namespace HartreeFock::IO
                 {"pw91", HartreeFock::XCExchangeFunctional::PW91},
                 {"gga_x_pw91", HartreeFock::XCExchangeFunctional::PW91},
                 {"pbe", HartreeFock::XCExchangeFunctional::PBE},
-                {"gga_x_pbe", HartreeFock::XCExchangeFunctional::PBE}};
+                {"gga_x_pbe", HartreeFock::XCExchangeFunctional::PBE},
+                {"b3lyp", HartreeFock::XCExchangeFunctional::B3LYP},
+                {"hyb_gga_xc_b3lyp", HartreeFock::XCExchangeFunctional::B3LYP},
+                {"pbe0", HartreeFock::XCExchangeFunctional::PBE0},
+                {"pbeh", HartreeFock::XCExchangeFunctional::PBE0},
+                {"pbe1pbe", HartreeFock::XCExchangeFunctional::PBE0},
+                {"hyb_gga_xc_pbeh", HartreeFock::XCExchangeFunctional::PBE0}};
 
         return lookup_enum(_table, value, "Invalid XC exchange functional : ");
     }

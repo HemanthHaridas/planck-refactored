@@ -50,9 +50,20 @@ Grid quality levels (`DFTGridQuality`):
 
 ## Supported Functionals
 
-**Exchange**: Slater (LDA), B88 (GGA), PW91, PBE, Custom  
-**Correlation**: VWN5 (LDA), LYP (GGA), P86, PW91, PBE, Custom  
-LDA and GGA are both supported. Hybrid (exact-exchange mixing) not yet implemented.
+**Exchange**: Slater (LDA), B88 (GGA), PW91, PBE, **B3LYP**, **PBE0**, Custom
+**Correlation**: VWN5 (LDA), LYP (GGA), P86, PW91, PBE, Custom
+LDA, GGA, and **global hybrids** (B3LYP, PBE0) are supported. Range-separated and double-hybrid functionals are rejected at init with an explicit unsupported diagnostic.
+
+## Global Hybrid XC (commit f208777)
+
+`src/dft/base/wrapper.h` exposes `hybrid_type()`, `is_hybrid()`, `is_global_hybrid()`, and `exact_exchange_coefficient()` from libxc. When a global hybrid is selected:
+
+1. `XCExchangeFunctional::B3LYP` / `PBE0` are named aliases; combined exchange-correlation libxc IDs are used without double-counting the correlation slot (see `src/dft/driver.cpp:999` and around line 1591).
+2. The KS build assembles an AO exchange matrix `K` from the ERI tensor (both RKS and UKS) in `src/dft/driver.cpp` (scaled by `exact_exchange_coefficient`).
+3. The scaled exact-exchange contribution is added to the KS potential via `build_ks_matrix` (see `src/dft/ks_matrix.h` — `exact_exchange_alpha` / `exact_exchange_beta` / `exact_exchange_energy` parameters).
+4. The matching exchange energy is included in the reported DFT total energy.
+
+Regression cases: `h2_dft_b3lyp_sto3g` and `h_dft_uks_b3lyp_sto3g`.
 
 ## Checkpoint / Restart
 

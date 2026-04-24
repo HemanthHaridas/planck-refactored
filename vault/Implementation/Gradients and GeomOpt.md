@@ -11,7 +11,7 @@ tags: [gradient, geomopt, lbfgs, hessian, frequency]
 
 ## Analytic Gradients
 
-`src/gradient/gradient.cpp` — computes ∂E/∂R for RHF, UHF, RMP2.
+`src/gradient/gradient.cpp` — computes ∂E/∂R for RHF, UHF, **RMP2, and UMP2**.
 
 Components:
 - One-electron gradient: ∂H_core/∂R (kinetic + nuclear attraction derivatives)
@@ -20,6 +20,16 @@ Components:
 - Orbital response (Pulay terms): couples density matrix response to basis function derivatives
 
 For MP2: requires orbital response (Z-vector / coupled-perturbed HF) to handle the response of the HF orbitals to the nuclear displacement.
+
+## UMP2 Gradient (commit 22c0645)
+
+`src/post_hf/mp2_gradient.{cpp,h}` — spin-resolved UMP2 gradient intermediates for canonical UHF references:
+- Same-spin and opposite-spin MP2 amplitude handling
+- Correlated alpha/beta density corrections
+- Spin-summed energy-weighted density
+- Explicit AO pair-density contributions
+
+Wired into the gradient driver (`src/driver.cpp`) so `correlation ump2` with `calculation gradient` now produces the correlated nuclear gradient instead of exiting as unimplemented. Regression: `water_radical_cation_ump2_gradient_smoke`.
 
 ## Geometry Optimization
 
@@ -53,6 +63,8 @@ Convergence criteria: max force < threshold AND RMS displacement < threshold (OR
 
 ## Key Files
 
-- `src/gradient/gradient.cpp` — analytic gradient
-- `src/opt/opt.cpp` — L-BFGS and IC-BFGS optimizers
-- `src/freq/freq.cpp` — semi-numerical Hessian and vibrational analysis
+- `src/gradient/gradient.cpp` — analytic gradient (RHF/UHF/RMP2/UMP2)
+- `src/post_hf/mp2_gradient.cpp` + `mp2_gradient.h` — UMP2 gradient intermediates
+- `src/post_hf/rhf_response.cpp` + `rhf_response.h` — RHF Z-vector / CPHF machinery shared with RMP2 gradient
+- `src/opt/geomopt.cpp` + `opt/intcoords.cpp` — L-BFGS and IC-BFGS optimizers
+- `src/freq/hessian.cpp` — semi-numerical Hessian and vibrational analysis

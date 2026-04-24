@@ -22,9 +22,10 @@ Quantum chemistry engine in C++23. Two binaries: `hartree-fock` (HF/MP2/CASSCF) 
 ### Implementation
 - [[SCF and DIIS]] — RHF/UHF loop, convergence, DIIS
 - [[CASSCF and SA-CASSCF]] — CASSCF/SA-CASSCF/RASSCF details
-- [[DFT]] — KS-DFT, grid, libxc
+- [[Coupled Cluster]] — RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ + arbitrary-order
+- [[DFT]] — KS-DFT, grid, libxc, global hybrids
 - [[Integral Engine]] — Obara-Saika / Rys ERI, shell pairs
-- [[Gradients and GeomOpt]] — analytic gradients, L-BFGS, IC-BFGS
+- [[Gradients and GeomOpt]] — analytic gradients (RHF/UHF/RMP2/UMP2), L-BFGS, IC-BFGS
 
 ### Gotchas
 - [[Coordinate Units]] — Angstrom vs Bohr pitfalls
@@ -43,6 +44,8 @@ Quantum chemistry engine in C++23. Two binaries: `hartree-fock` (HF/MP2/CASSCF) 
 | All types/enums | `src/base/types.h` |
 | Entry point | `src/driver.cpp` |
 | Input parser | `src/io/io.cpp` |
+| Checkpoint I/O | `src/io/checkpoint.cpp` |
 | ERI engine | `src/integrals/os.cpp` |
-| CASSCF main loop | `src/post_hf/casscf/casscf.cpp` |
+| CASSCF main loop | `src/post_hf/casscf/casscf.cpp` (`run_mcscf_loop`) |
+| CC tensor backend | `src/post_hf/cc/tensor_backend.cpp` |
 | DFT driver | `src/dft/driver.cpp` |

@@ -31,16 +31,21 @@ Single header that every module includes. ~561 lines. Namespace `HartreeFock`. N
 ```cpp
 enum class ShellType      { S=0, P=1, D=2, F=3, G=4, H=5 };
 enum class SCFType        { RHF, UHF };
+enum class SCFMode        { Conventional, Direct, Auto };
 enum class IntegralMethod { ObaraSaika, RysQuadrature, Auto };
 enum class CalculationType{ SinglePoint, Gradient, GeomOpt, Frequency,
                             GeomOptFrequency, ImaginaryFollow };
-enum class PostHF         { None, RMP2, UMP2, CASSCF, RASSCF };
+enum class PostHF         { None, RMP2, UMP2,
+                            RCCSD, UCCSD, RCCSDT, UCCSDT, RCCSDTQ,
+                            CASSCF, RASSCF };
 enum class CoordType      { Cartesian, ZMatrix };
+enum class OptCoords      { Cartesian, Internal };
 
 // DFT-specific
-enum class DFTGridQuality      { Coarse, Normal, Fine, UltraFine };
-enum class XCExchangeFunctional{ Slater, B88, PW91, PBE, Custom };
-enum class XCCorrelationFunctional{ VWN5, LYP, P86, PW91, PBE, Custom };
+enum class DFTGridQuality       { Coarse, Normal, Fine, UltraFine };
+enum class XCExchangeFunctional { Custom, Slater, B88, PW91, PBE,
+                                  B3LYP, PBE0 };
+enum class XCCorrelationFunctional { Custom, VWN5, LYP, P86, PW91, PBE };
 ```
 
 ## ContractedView._index Invariant

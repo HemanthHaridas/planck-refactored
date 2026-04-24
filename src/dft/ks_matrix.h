@@ -27,8 +27,12 @@ namespace DFT
         Eigen::MatrixXd coulomb;
         Eigen::MatrixXd xc_alpha;
         Eigen::MatrixXd xc_beta;
+        Eigen::MatrixXd exact_exchange_alpha;
+        Eigen::MatrixXd exact_exchange_beta;
         Eigen::MatrixXd alpha;
         Eigen::MatrixXd beta;
+        double exact_exchange_coefficient = 0.0;
+        double exact_exchange_energy = 0.0;
     };
 
     std::expected<XCMatrixContribution, std::string>
@@ -39,7 +43,11 @@ namespace DFT
 
     KSPotentialMatrices combine_ks_potential(
         const Eigen::Ref<const Eigen::MatrixXd> &coulomb,
-        const XCMatrixContribution &xc_matrix);
+        const XCMatrixContribution &xc_matrix,
+        double exact_exchange_coefficient = 0.0,
+        const Eigen::MatrixXd &exact_exchange_alpha = Eigen::MatrixXd(),
+        const Eigen::MatrixXd &exact_exchange_beta = Eigen::MatrixXd(),
+        double exact_exchange_energy = 0.0);
 
 } // namespace DFT
 
