@@ -511,3 +511,48 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rmp2_
     return compute_closed_shell_gradient_from_density(calc, shell_pairs,
                                                       grad_data.P_ao, grad_data.W_ao, gamma_fn);
 }
+
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_ump2_gradient(
+    HartreeFock::Calculator &calc,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs)
+{
+    if (calc._correlation != HartreeFock::PostHF::UMP2)
+        return std::unexpected(std::string("UMP2 gradient requested without correlation = UMP2"));
+    if (calc._scf._scf != HartreeFock::SCFType::UHF || !calc._info._scf.is_uhf)
+        return std::unexpected(std::string("UMP2 gradient requires a UHF reference"));
+
+    auto grad_res = HartreeFock::Correlation::build_ump2_gradient_intermediates(calc, shell_pairs);
+    if (!grad_res)
+        return std::unexpected(std::string("UMP2 gradient build failed: ") + grad_res.error());
+    const auto &grad_data = *grad_res;
+
+    const Eigen::MatrixXd &Pa_ref = calc._info._scf.alpha.density;
+    const Eigen::MatrixXd &Pb_ref = calc._info._scf.beta.density;
+    const Eigen::MatrixXd Pt_ref = Pa_ref + Pb_ref;
+    const Eigen::MatrixXd &dPa = grad_data.P_alpha_corr_ao;
+    const Eigen::MatrixXd &dPb = grad_data.P_beta_corr_ao;
+    const Eigen::MatrixXd dPt = dPa + dPb;
+    const int nb = static_cast<int>(calc._shells.nbasis());
+    const auto &gamma_pair = grad_data.Gamma_pair_ao;
+
+    auto gamma_fn = [&Pa_ref, &Pb_ref, &Pt_ref, &dPa, &dPb, &dPt, &gamma_pair, nb](std::size_t ii, std::size_t jj,
+                                                                                   std::size_t kk, std::size_t ll) -> double
+    {
+        const double ref =
+            2.0 * Pt_ref(ii, jj) * Pt_ref(kk, ll) -
+            2.0 * Pa_ref(ii, kk) * Pa_ref(jj, ll) -
+            2.0 * Pb_ref(ii, kk) * Pb_ref(jj, ll);
+
+        const double linear =
+            2.0 * (dPt(ii, jj) * Pt_ref(kk, ll) + Pt_ref(ii, jj) * dPt(kk, ll)) -
+            2.0 * (dPa(ii, kk) * Pa_ref(jj, ll) + Pa_ref(ii, kk) * dPa(jj, ll)) -
+            2.0 * (dPb(ii, kk) * Pb_ref(jj, ll) + Pb_ref(ii, kk) * dPb(jj, ll));
+
+        return ref + linear +
+               gamma_pair[idx_dm2_grad(static_cast<int>(ii), static_cast<int>(jj),
+                                       static_cast<int>(kk), static_cast<int>(ll), nb)];
+    };
+
+    return compute_closed_shell_gradient_from_density(
+        calc, shell_pairs, grad_data.P_total_ao, grad_data.W_ao, gamma_fn);
+}
