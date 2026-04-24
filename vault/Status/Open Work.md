@@ -9,7 +9,7 @@ tags: [status, open-work, bugs, todo]
 
 # Open Work
 
-Last updated: 2026-04-10
+Last updated: 2026-04-24
 
 ## Missing Features
 
@@ -20,8 +20,8 @@ Last updated: 2026-04-10
 
 ## Potential Improvements
 
-- Hybrid DFT (exact-exchange mixing) — not yet implemented in `planck-dft`
+- Range-separated and double-hybrid DFT (only global hybrids are currently supported; B3LYP and PBE0 are available as of commit f208777)
 - Analytic Hessian (currently semi-numerical only)
 - TDDFT / linear response
-- Natural orbital analysis
-- Mulliken / Löwdin population analysis output
+- Löwdin population analysis (Mulliken is implemented)
+- ccgen `TensorOptimized` solver path (Phase 4) — scaffolding exists in `src/post_hf/cc/tensor_optimized.{cpp,h}` and `generated_kernel_registry`

@@ -15,12 +15,18 @@ tags: [casscf, sa-casscf, rasscf, mcscf, ci, active-space]
 
 | File | Responsibility |
 |------|---------------|
-| `src/post_hf/casscf/casscf.cpp` | Macro-iteration loop, convergence gating, output |
+| `src/post_hf/casscf/casscf.cpp` | Top-level macro-iteration loop (`run_mcscf_loop`), convergence gating, output |
+| `src/post_hf/casscf/casscf_driver_internal.cpp` + `.h` | Root-tracking, `StateSpecificData`/`McscfState`, weighted-gradient utilities, probe + candidate-step assembly (commit ff56d66) |
+| `src/post_hf/casscf/casscf_utils.h` | Shared utilities for the driver/internal split |
 | `src/post_hf/casscf/ci.cpp` | FCI / CI diagonalization (direct-sigma) |
 | `src/post_hf/casscf/orbital.cpp` | Orbital rotation, `matrix_free_hessian_action` |
 | `src/post_hf/casscf/rdm.cpp` | 1-RDM and 2-RDM computation |
 | `src/post_hf/casscf/response.cpp` | SA coupled solve (`solve_sa_coupled_orbital_ci_step`) |
 | `src/post_hf/casscf/strings.cpp` | Active space setup, `select_active_orbitals`, `IrrepCount` |
+
+### 2026-04-23 Refactor (ff56d66)
+
+`casscf.cpp` was split from 1581 → 1134 lines by extracting the root-tracking and state-averaging helper layer into the new private `casscf_driver_internal.{h,cpp}` pair. `run_mcscf_loop()` remains in `casscf.cpp` as the top-level macroiteration driver so the remaining file reads around control flow rather than the support machinery.
 
 ## Convergence Gating
 
