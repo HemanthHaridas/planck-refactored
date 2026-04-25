@@ -381,6 +381,38 @@ namespace HartreeFock::IO
         return lookup_enum(_table, value, "Invalid XC correlation functional : ");
     }
 
+    template <>
+    std::expected<HartreeFock::LinearResponseMethod, std::string>
+    map_string_enum<HartreeFock::LinearResponseMethod>(const std::string &value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::LinearResponseMethod> _table =
+            {
+                {"tda", HartreeFock::LinearResponseMethod::TDA},
+                {"casida", HartreeFock::LinearResponseMethod::Casida},
+                {"full", HartreeFock::LinearResponseMethod::Casida},
+                {"full_casida", HartreeFock::LinearResponseMethod::Casida},
+                {"full-casida", HartreeFock::LinearResponseMethod::Casida}};
+
+        return lookup_enum(_table, value, "Invalid linear-response method : ");
+    }
+
+    template <>
+    std::expected<HartreeFock::LinearResponseSpin, std::string>
+    map_string_enum<HartreeFock::LinearResponseSpin>(const std::string &value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::LinearResponseSpin> _table =
+            {
+                {"auto", HartreeFock::LinearResponseSpin::Auto},
+                {"singlet", HartreeFock::LinearResponseSpin::Singlet},
+                {"triplet", HartreeFock::LinearResponseSpin::Triplet},
+                {"spinconserving", HartreeFock::LinearResponseSpin::SpinConserving},
+                {"spin_conserving", HartreeFock::LinearResponseSpin::SpinConserving},
+                {"spin-conserving", HartreeFock::LinearResponseSpin::SpinConserving},
+                {"unrestricted", HartreeFock::LinearResponseSpin::SpinConserving}};
+
+        return lookup_enum(_table, value, "Invalid linear-response spin mode : ");
+    }
+
     std::expected<void, std::string> _parse_control(const std::vector<std::string> &lines, HartreeFock::CalculationType &calculation, HartreeFock::OptionsBasis &basis, HartreeFock::OptionsOutput &output)
     {
         // (key, value) pairs
@@ -896,6 +928,38 @@ namespace HartreeFock::IO
                      dft._lr_nstates = std::stoi(value);
                      if (dft._lr_nstates < 1)
                          return std::unexpected("nstates must be >= 1");
+                     return std::expected<void, std::string>{};
+                 }},
+                {"lr_method", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::LinearResponseMethod>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._lr_method = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tddft_method", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::LinearResponseMethod>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._lr_method = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"lr_spin", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::LinearResponseSpin>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._lr_spin = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tddft_spin", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::LinearResponseSpin>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._lr_spin = *parsed;
                      return std::expected<void, std::string>{};
                  }}};
 

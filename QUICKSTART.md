@@ -1,6 +1,6 @@
 ### Quickstart
 
-This guide gets you from zero to a converged Hartree-Fock calculation in five minutes.
+This guide gets you from zero to a converged Hartree-Fock calculation in five minutes, then shows the shortest path into DFT and TDDFT.
 
 ### 1. Build
 
@@ -91,6 +91,26 @@ ZZ                     ...
 
 The total energy is printed in Hartree, eV, and kcal/mol. After convergence, Planck also prints dipole and quadrupole components automatically from the final AO density matrix. Dipoles are reported in atomic units and Debye; quadrupoles are reported as a traceless Cartesian tensor in atomic units.
 
+### 2b. First DFT calculation
+
+Use `planck-dft` to run Kohn-Sham DFT with libxc functionals:
+
+```bash
+./build/planck-dft water.hfinp
+```
+
+Add a `%begin_dft` block to switch on DFT. For example, PBE/STO-3G:
+
+```text
+%begin_dft
+    grid        coarse
+    exchange    pbe
+    correlation pbe
+%end_dft
+```
+
+`scf_type rhf` gives an RKS reference and `scf_type uhf` gives a UKS reference.
+
 ### 3. Open-shell calculation (UHF)
 
 For open-shell systems set `scf_type uhf` and the correct multiplicity. Triplet water (M=3):
@@ -115,6 +135,52 @@ UHF output includes spin contamination diagnostics:
 <S^2> :   2.004321  (exact: 2.000000)
 <S>   :   1.415390
 ```
+
+The same `scf_type uhf` setting also selects UKS when you run `planck-dft`.
+
+### 3b. TDDFT / linear response
+
+Planck’s TDDFT driver lives in `planck-dft` and is requested with `calculation tddft` (aliases: `linearresponse`, `lr`, `td-dft`).
+
+Minimal closed-shell singlet example:
+
+```text
+%begin_control
+    basis       sto-3g
+    calculation tddft
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    engine      os
+%end_scf
+
+%begin_dft
+    grid        coarse
+    exchange    pbe
+    correlation pbe
+    lr_nstates  3
+%end_dft
+```
+
+Useful TDDFT controls:
+
+```text
+lr_nstates   5                # number of roots
+lr_method    casida           # default; use tda for A-only response
+lr_spin      singlet          # RKS: singlet or triplet
+lr_spin      spin_conserving  # UKS/open-shell response
+```
+
+Current behavior:
+
+- `lr_method casida` is the default and solves the full \(A/B\) problem.
+- `lr_method tda` keeps the older Hermitian \(A\)-only approximation.
+- RKS supports `singlet` and `triplet` response.
+- UKS supports spin-conserving response blocks.
+- Semilocal XC kernels are included for the supported LDA and GGA functionals.
 
 
 ### 4. Checkpoint and restart

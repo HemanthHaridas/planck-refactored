@@ -15,7 +15,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 
 - **RHF / ROHF / UHF** — closed-shell, restricted open-shell, and unrestricted Hartree-Fock; ROHF uses a Roothaan-type effective Fock construction with aufbau orbital reordering and DIIS convergence
 - **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, and global hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals via integer ID
-- **Initial TDDFT / linear response** — closed-shell RKS excited-state roots via a TDA-style singlet response build on top of converged KS orbitals, with transition dipoles and oscillator strengths. The current implementation includes Hartree and global-hybrid exact-exchange coupling, but does not yet include semilocal XC kernels or UKS response.
+- **TDDFT / linear response** — full Casida and optional TDA excited-state roots on top of converged KS orbitals, with RKS singlet/triplet support, UKS spin-conserving response, semilocal XC kernels, transition dipoles, and oscillator strengths
 - **Two integral engines** — Obara-Saika for low angular momentum; Rys quadrature for high angular momentum; automatic engine selection per shell quartet (`engine auto`)
 - **Electric multipole moments** — dipole and quadrupole moment analysis after SCF convergence for both `hartree-fock` and `planck-dft`
 - **Mulliken population analysis** — atomic gross populations, net charges, and (for UHF/ROHF) spin populations; printed when `print_populations true` or verbosity is `verbose`/`debug`
@@ -217,7 +217,9 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | `correlation` | enum | `vwn`/`vwn5`, `lyp`, `p86`, `pw91`, `pbe` | `pbe` | Correlation functional |
 | `exchange_id` | int | any libxc integer ID | — | Use an arbitrary libxc exchange functional by its integer identifier. Overrides `exchange`. |
 | `correlation_id` | int | any libxc integer ID | — | Use an arbitrary libxc correlation functional by its integer identifier. Overrides `correlation`. |
-| `lr_nstates` / `tddft_nstates` / `nstates` | int | ≥ 1 | `5` | Number of singlet excited states to report for `calculation tddft` / `linearresponse`. |
+| `lr_nstates` / `tddft_nstates` / `nstates` | int | ≥ 1 | `5` | Number of excited states to report for `calculation tddft` / `linearresponse`. |
+| `lr_method` / `tddft_method` | enum | `casida`, `full`, `tda` | `casida` | Linear-response solver form. `casida`/`full` solves the full \(A/B\) problem; `tda` diagonalizes the Hermitian \(A\) block only. |
+| `lr_spin` / `tddft_spin` | enum | `auto`, `singlet`, `triplet`, `spin_conserving` | `auto` | Spin channel for TDDFT response. `auto` resolves to `singlet` for RKS and `spin_conserving` for UKS. `triplet` is currently available for closed-shell RKS only. |
 | `use_sao_blocking` | bool | `.true.`, `.false.` | `.true.` | Enable symmetry-adapted AO blocking for the Coulomb matrix assembly. |
 | `print_grid_summary` | bool | `.true.`, `.false.` | `.true.` | Print a per-atom grid point count summary before the KS iterations. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.false.` | Write a `.dftchk` checkpoint file after successful convergence. |

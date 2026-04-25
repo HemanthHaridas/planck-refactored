@@ -250,7 +250,7 @@
 <li class="toc-level-3"><a href="#xc-matrix-assembly">XC Matrix Assembly</a></li>
 <li class="toc-level-3"><a href="#ks-dft-scf-loop">KS-DFT SCF Loop</a></li>
 <li class="toc-level-3"><a href="#dft-code-map">DFT Code Map</a></li>
-<li class="toc-level-3"><a href="#initial-td-dft-linear-response">Initial TD-DFT / Linear Response</a></li>
+<li class="toc-level-3"><a href="#td-dft-linear-response">TD-DFT / Linear Response</a></li>
 <li class="toc-level-2"><a href="#19-molecular-properties">19. Molecular Properties</a></li>
 <li class="toc-level-3"><a href="#mulliken-population-analysis">Mulliken Population Analysis</a></li>
 <li class="toc-level-3"><a href="#l-wdin-population-analysis">Löwdin Population Analysis</a></li>
@@ -1797,46 +1797,138 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 <tr><td>KS-DFT main loop</td><td><code>src/dft/driver.cpp</code></td><td><code>DFT::Driver::run</code></td></tr>
 <tr><td>DFT entry point</td><td><code>src/dft/main.cpp</code></td><td><code>main</code></td></tr>
 </tbody></table></div>
-<h3 id="initial-td-dft-linear-response">Initial TD-DFT / Linear Response</h3>
+<h3 id="td-dft-linear-response">TD-DFT / Linear Response</h3>
 <p><strong>What is implemented</strong></p>
-<p>Planck currently provides an initial excited-state solver for <code>planck-dft</code> via <code>calculation tddft</code> (aliases: <code>td-dft</code>, <code>linearresponse</code>, <code>lr</code>).  The present implementation is intentionally narrow and teaching-oriented:</p>
+<p>Planck provides a TDDFT excited-state solver for <code>planck-dft</code> via <code>calculation tddft</code> (aliases: <code>td-dft</code>, <code>linearresponse</code>, <code>lr</code>) on top of the converged Kohn-Sham reference. The current implementation supports:</p>
 <ul>
-<li>closed-shell <strong>RKS only</strong></li>
-<li>singlet excitations only</li>
-<li><strong>TDA-style</strong> response build (the Hermitian <span class="math-inline">\(A\)</span> matrix is diagonalized; no full Casida <span class="math-inline">\(A/B\)</span> non-Hermitian solve yet)</li>
-<li>Hartree coupling is included</li>
-<li>global-hybrid exact exchange is included through the functional&#x27;s exact exchange coefficient</li>
-<li>semilocal XC response kernels <span class="math-inline">\(f_{xc}\)</span> are <strong>not</strong> yet included</li>
-<li>UKS/open-shell response is not yet implemented</li>
+<li>closed-shell <strong>RKS</strong> singlet and triplet response</li>
+<li>open-shell <strong>UKS</strong> spin-conserving response</li>
+<li><strong>full Casida</strong> response as the default solver</li>
+<li>optional <strong>TDA</strong> response via <code>lr_method tda</code></li>
+<li>Hartree coupling</li>
+<li>global-hybrid exact exchange through the functional exact-exchange fraction</li>
+<li>semilocal XC response kernels <span class="math-inline">\(f_{xc}\)</span> for the supported LDA and GGA libxc functionals</li>
 </ul>
-<p>So, despite the user-facing <code>tddft</code> keyword, the current method is best thought of as a first linear-response / TDA excited-state module layered on top of the converged Kohn-Sham orbitals.</p>
+<p>The implementation is still intentionally compact and dense-matrix based, but it is no longer limited to the original RKS singlet TDA scaffold.</p>
 <p><strong>Theory</strong></p>
-<p>For a closed-shell reference with occupied orbitals <span class="math-inline">\(i,j\)</span> and virtual orbitals <span class="math-inline">\(a,b\)</span>, Planck forms the orbital-rotation excitation basis <span class="math-inline">\(| i \rightarrow a \rangle\)</span> and builds the TDA matrix</p>
+<p>TD-DFT in Planck is formulated in the usual Kohn-Sham orbital-rotation basis. Starting from a converged KS determinant, we consider first-order amplitudes that mix occupied orbitals <span class="math-inline">\(i,j,\dots\)</span> with virtual orbitals <span class="math-inline">\(a,b,\dots\)</span>.  In that basis, the linear-response problem is written in terms of forward and backward amplitudes <span class="math-inline">\(X\)</span> and <span class="math-inline">\(Y\)</span>:</p>
 <p><span class="math-display">\[
-A_{ia,jb} = \delta_{ij}\delta_{ab}(\varepsilon_a - \varepsilon_i)
-          + 2(ia|jb)
-          - c_x (ij|ab)
+\begin{pmatrix}
+A & B \\
+B & A
+\end{pmatrix}
+\begin{pmatrix}
+X \\
+Y
+\end{pmatrix}
+=
+\omega
+\begin{pmatrix}
+1 & 0 \\
+0 & -1
+\end{pmatrix}
+\begin{pmatrix}
+X \\
+Y
+\end{pmatrix}
 \]</span></p>
-<p>where <span class="math-inline">\(c_x\)</span> is the global-hybrid exact-exchange fraction.  In this initial implementation the semilocal XC kernel contribution is omitted, so the response matrix contains only the orbital-energy gap term, the Coulomb coupling, and the hybrid exchange correction.</p>
-<p>Diagonalizing <span class="math-inline">\(A\)</span> gives the excitation energies <span class="math-inline">\(\omega_k\)</span> and the excitation amplitudes <span class="math-inline">\(X^{(k)}_{ia}\)</span>.  Transition dipoles are then evaluated from the occupied-virtual dipole blocks:</p>
+<p>The diagonal orbital-energy-gap part is simple:</p>
+<p><span class="math-display">\[
+A_{ia,jb}^{(0)} = \delta_{ij}\delta_{ab}(\varepsilon_a - \varepsilon_i),
+\qquad
+B_{ia,jb}^{(0)} = 0
+\]</span></p>
+<p>Everything interesting is in the interaction kernel.  In Planck, each matrix element is built from three physical pieces:</p>
+<ol>
+<li>Coulomb (Hartree) response</li>
+<li>exact-exchange response for global hybrids</li>
+<li>semilocal XC-kernel response <span class="math-inline">\(f_{xc}\)</span></li>
+</ol>
+<p>So the working matrices are</p>
+<p><span class="math-display">\[
+A = A^{(0)} + K^{J} + K^{x,\mathrm{hyb}} + K^{xc},
+\qquad
+B = B^{J} + B^{x,\mathrm{hyb}} + B^{xc}
+\]</span></p>
+<p>For a closed-shell RKS reference, Planck then spin-adapts these spatial-orbital blocks into singlet and triplet channels.</p>
+<p>For <strong>singlets</strong>, the Coulomb term survives and carries the familiar factor of two:</p>
+<p><span class="math-display">\[
+A^{S}_{ia,jb}
+= \delta_{ij}\delta_{ab}(\varepsilon_a - \varepsilon_i)
++ 2(ia|jb)
+- c_x(ij|ab)
++ K^{S,xc}_{ia,jb}
+\]</span></p>
+<p><span class="math-display">\[
+B^{S}_{ia,jb}
+= 2(ia|bj)
+- c_x(ib|aj)
++ L^{S,xc}_{ia,jb}
+\]</span></p>
+<p>where <span class="math-inline">\(c_x\)</span> is the global-hybrid exact-exchange fraction.  Here <span class="math-inline">\(K^{S,xc}\)</span> and <span class="math-inline">\(L^{S,xc}\)</span> are the singlet-projected semilocal XC-kernel contributions.</p>
+<p>For <strong>triplets</strong>, the Coulomb contribution drops out after spin adaptation, so only exchange and spin-dependent XC-kernel terms remain:</p>
+<p><span class="math-display">\[
+A^{T}_{ia,jb}
+= \delta_{ij}\delta_{ab}(\varepsilon_a - \varepsilon_i)
+- c_x(ij|ab)
++ K^{T,xc}_{ia,jb}
+\]</span></p>
+<p><span class="math-display">\[
+B^{T}_{ia,jb}
+= - c_x(ib|aj)
++ L^{T,xc}_{ia,jb}
+\]</span></p>
+<p>This is why triplet roots can sit much lower than singlets built from the same orbital pair: the repulsive Hartree response is absent in the triplet channel.</p>
+<p>For <strong>UKS</strong>, Planck does not attempt a singlet/triplet spin adaptation. Instead, it keeps separate alpha and beta excitation spaces and builds the full spin-conserving block problem</p>
+<p><span class="math-display">\[
+\begin{pmatrix}
+A^{\alpha\alpha} & A^{\alpha\beta} \\
+A^{\beta\alpha}  & A^{\beta\beta}
+\end{pmatrix},
+\qquad
+\begin{pmatrix}
+B^{\alpha\alpha} & B^{\alpha\beta} \\
+B^{\beta\alpha}  & B^{\beta\beta}
+\end{pmatrix}
+\]</span></p>
+<p>The same-spin blocks contain Coulomb, hybrid exchange, and XC-kernel terms. The opposite-spin blocks contain Coulomb and XC-kernel coupling, but no exact exchange term because there is no alpha-beta Fock exchange in a standard spin-separated KS reference.</p>
+<p>The semilocal kernel enters through the functional derivative</p>
+<p><span class="math-display">\[
+f_{xc}^{\sigma\tau}(\mathbf r,\mathbf r')
+= \frac{\delta v_{xc}^{\sigma}(\mathbf r)}
+       {\delta \rho_{\tau}(\mathbf r')}
+\]</span></p>
+<p>For LDA this depends only on the local spin densities. For GGA it also depends on the density gradients, so the response contains both <span class="math-inline">\(\rho\)</span>- and <span class="math-inline">\(\nabla\rho\)</span>-dependent pieces.  Rather than coding separate analytic expressions for every supported semilocal functional, Planck evaluates the XC AO matrix on the numerical grid and differentiates that matrix with respect to trial transition densities.  Conceptually, this is equivalent to applying the semilocal <span class="math-inline">\(f_{xc}\)</span> kernel to a first-order density response and projecting the result back into the occupied-virtual MO basis.</p>
+<p>With <code>lr_method casida</code>, Planck solves the full response problem through the standard symmetric Casida transformation.  Defining <span class="math-inline">\(S = A - B\)</span> and <span class="math-inline">\(T = A + B\)</span>, the code forms the Hermitian problem</p>
+<p><span class="math-display">\[
+S^{1/2} T S^{1/2} F = \omega^2 F
+\]</span></p>
+<p>then reconstructs <span class="math-inline">\(X\)</span> and <span class="math-inline">\(Y\)</span> from the transformed eigenvectors.  This is why the full-Casida path still reduces to a real symmetric diagonalization once <span class="math-inline">\(A-B\)</span> is positive definite.</p>
+<p>With <code>lr_method tda</code>, the backward amplitudes are discarded, <span class="math-inline">\(Y = 0\)</span>, and only the Hermitian <span class="math-inline">\(A\)</span> block is diagonalized:</p>
+<p><span class="math-display">\[
+A X = \omega X
+\]</span></p>
+<p>The TDA is cheaper and often qualitatively reasonable, but it neglects de-excitation coupling and therefore does not reproduce the full Casida roots exactly.</p>
+<p>Once a root is found, Planck builds the transition dipole from the occupied-virtual dipole blocks:</p>
 <p><span class="math-display">\[
 \boldsymbol{\mu}^{(k)}_{\mathrm{tr}}
-= \sqrt{2}\sum_{ia} X^{(k)}_{ia}\,\langle i|\hat{\mathbf r}|a\rangle
+= \sum_{ia} (X^{(k)}_{ia} + Y^{(k)}_{ia})\,\langle i|\hat{\mathbf r}|a\rangle
 \]</span></p>
-<p>and the oscillator strength is reported as</p>
+<p>For spin-adapted closed-shell singlets, Planck applies the conventional <span class="math-inline">\(\sqrt{2}\)</span> factor when converting from the spatial-orbital amplitudes to the transition dipole. Closed-shell triplet roots therefore carry zero electric dipole oscillator strength in the current report. The oscillator strength is reported as</p>
 <p><span class="math-display">\[
 f_k = \frac{2}{3}\,\omega_k\,\left|\boldsymbol{\mu}^{(k)}_{\mathrm{tr}}\right|^2
 \]</span></p>
 <p>with <span class="math-inline">\(\omega_k\)</span> in Hartree and <span class="math-inline">\(\boldsymbol{\mu}_{\mathrm{tr}}\)</span> in atomic units.</p>
 <p><strong>Code path</strong></p>
-<p><code>src/dft/driver.cpp</code> — <code>run_linear_response_tda()</code></p>
+<p><code>src/dft/driver.cpp</code> — <code>run_linear_response()</code></p>
 <p>The solver reuses the converged KS reference already built by the SCF scaffold:</p>
 <ol>
-<li>confirm the reference is converged, closed-shell, and restricted</li>
-<li>split the MO coefficient matrix into occupied and virtual blocks</li>
-<li>transform AO ERIs into the <span class="math-inline">\(ovov\)</span> and <span class="math-inline">\(oovv\)</span> blocks needed by the response kernel</li>
-<li>assemble the dense TDA matrix <span class="math-inline">\(A\)</span></li>
-<li>diagonalize <span class="math-inline">\(A\)</span> with <code>Eigen::SelfAdjointEigenSolver</code></li>
+<li>confirm the reference is converged and resolve the spin channel requested by <code>lr_spin</code></li>
+<li>split the converged MO coefficients into occupied and virtual blocks for the active spin space or spaces</li>
+<li>transform AO ERIs into the MO blocks needed for Coulomb and hybrid-exchange response terms</li>
+<li>evaluate semilocal XC response contributions on the numerical grid by differentiating the assembled XC AO matrix with respect to trial transition densities</li>
+<li>assemble dense <span class="math-inline">\(A\)</span> and <span class="math-inline">\(B\)</span> blocks</li>
+<li>solve either the TDA eigenproblem or the full Casida transformed eigenproblem</li>
 <li>build transition dipoles from AO dipole integrals transformed to the occupied-virtual MO basis</li>
 <li>sort and print the dominant occupied <span class="math-inline">\(\rightarrow\)</span> virtual configurations for each root</li>
 </ol>
@@ -2279,7 +2371,7 @@ driver.cpp
 <tr><td>GGA XC functionals (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation)</td><td>Complete</td></tr>
 <tr><td>Arbitrary libxc functionals via integer ID</td><td>Complete</td></tr>
 <tr><td>Molecular grid (Treutler-Ahlrichs + Lebedev + Becke)</td><td>Complete</td></tr>
-<tr><td>Initial TD-DFT / linear response (closed-shell RKS, TDA-style singlets)</td><td>Complete</td></tr>
+<tr><td>TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels)</td><td>Complete</td></tr>
 <tr><td>DFT geometry optimization / gradients</td><td>Not implemented</td></tr>
 <tr><td>Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs)</td><td>Complete</td></tr>
 <tr><td>Range-separated and double-hybrid XC functionals</td><td>Not supported</td></tr>
