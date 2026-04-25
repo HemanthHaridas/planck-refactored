@@ -115,7 +115,7 @@ static long double _boys_moment(int m, long double T) noexcept
     if (m == 0)
         return F;
 
-    const long double eT = std::expl(-T);
+    const long double eT = std::exp(-T);
     for (int k = 1; k <= m; ++k)
         F = ((2 * k - 1) * F - eT) / (2.0L * T);
     return F;
