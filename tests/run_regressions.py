@@ -31,6 +31,7 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "casscf_corr_energy": re.compile(r"^\s*CASSCF Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_total_energy": re.compile(r"^\s*CASSCF Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),
+    "lr_root1_energy_ev": re.compile(r"^\s*1\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
     "casscf_sa_gnorm": re.compile(r"sa_g=([-+0-9Ee\.]+)"),
     "casscf_root_screen_gnorm": re.compile(r"root_screen_g=([-+0-9Ee\.]+)"),
     "casscf_max_root_gnorm": re.compile(r"max_root_g=([-+0-9Ee\.]+)"),
@@ -69,6 +70,14 @@ class CaseResult:
 def load_manifest(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def load_pyscf_references(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    return payload.get("cases", {})
 
 
 def extract_metrics(output: str) -> dict[str, Any]:
@@ -122,20 +131,52 @@ def resolve_executable(case: dict[str, Any], repo_root: Path, build_dir: str, de
     return repo_root / executable_path
 
 
-def run_case(case: dict[str, Any], repo_root: Path, build_dir: str, default_executable: Path) -> CaseResult:
+def resolve_metric_expectation(
+    case_id: str,
+    metric: str,
+    check: dict[str, Any],
+    pyscf_references: dict[str, Any],
+) -> tuple[float, float]:
+    override = pyscf_references.get(case_id, {}).get(metric)
+    if override is None:
+        return float(check["expected"]), float(check.get("atol", 1e-9))
+    return float(override["expected"]), float(override.get("atol", check.get("atol", 1e-9)))
+
+
+def run_case(
+    case: dict[str, Any],
+    repo_root: Path,
+    build_dir: str,
+    default_executable: Path,
+    pyscf_references: dict[str, Any],
+) -> CaseResult:
     case_id = case["id"]
     input_path = repo_root / case["input"]
     timeout_s = int(case.get("timeout_s", 120))
     executable = resolve_executable(case, repo_root, build_dir, default_executable)
 
     start = time.perf_counter()
-    proc = subprocess.run(
-        [str(executable), str(input_path)],
-        cwd=repo_root,
-        text=True,
-        capture_output=True,
-        timeout=timeout_s,
-    )
+    try:
+        proc = subprocess.run(
+            [str(executable), str(input_path)],
+            cwd=repo_root,
+            text=True,
+            capture_output=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        duration_s = time.perf_counter() - start
+        detail_lines = [f"timed out after {timeout_s}s"]
+        partial_output = ((exc.stdout or "") + (exc.stderr or "")).strip()
+        if partial_output:
+            detail_lines.append("---- captured output ----")
+            detail_lines.extend(partial_output.splitlines()[-40:])
+        return CaseResult(
+            case_id=case_id,
+            passed=False,
+            duration_s=duration_s,
+            details=detail_lines,
+        )
     duration_s = time.perf_counter() - start
 
     output = proc.stdout + proc.stderr
@@ -171,8 +212,7 @@ def run_case(case: dict[str, Any], repo_root: Path, build_dir: str, default_exec
 
         elif ctype == "metric_close":
             metric = check["metric"]
-            expected = float(check["expected"])
-            atol = float(check.get("atol", 1e-9))
+            expected, atol = resolve_metric_expectation(case_id, metric, check, pyscf_references)
             actual = metrics.get(metric)
             if actual is None or not approx_equal(float(actual), expected, atol):
                 passed = False
@@ -244,6 +284,7 @@ def should_run(case: dict[str, Any], suite: str, selected_cases: set[str]) -> bo
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Planck regression tests")
     parser.add_argument("--manifest", default="tests/regression_cases.json")
+    parser.add_argument("--pyscf-refs", default="tests/pyscf/regression_references.json")
     parser.add_argument("--build-dir", default="build")
     parser.add_argument("--executable", default=None)
     parser.add_argument("--suite", default="core", choices=["smoke", "core", "extended", "all"])
@@ -254,6 +295,7 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     manifest_path = repo_root / args.manifest
     manifest = load_manifest(manifest_path)
+    pyscf_references = load_pyscf_references(repo_root / args.pyscf_refs if args.pyscf_refs else None)
     cases = manifest["cases"]
 
     if args.list:
@@ -278,7 +320,7 @@ def main() -> int:
     total_start = time.perf_counter()
 
     for case in chosen:
-        result = run_case(case, repo_root, args.build_dir, executable)
+        result = run_case(case, repo_root, args.build_dir, executable, pyscf_references)
         status = "PASS" if result.passed else "FAIL"
         print(f"[{status}] {result.case_id} ({result.duration_s:.2f}s)")
         for line in result.details:

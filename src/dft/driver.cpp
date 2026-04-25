@@ -1,5 +1,7 @@
 #include "driver.h"
 
+#include <Eigen/QR>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -11,9 +13,11 @@
 #include "basis/basis.h"
 #include "freq/hessian.h"
 #include "integrals/base.h"
+#include "integrals/os.h"
 #include "io/checkpoint.h"
 #include "io/logging.h"
 #include "opt/geomopt.h"
+#include "post_hf/integrals.h"
 #include "scf/scf.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/mo_symmetry.h"
@@ -44,10 +48,193 @@ namespace DFT::Driver
 
         constexpr double NUMERICAL_GRADIENT_STEP_BOHR = 1.0e-3;
 
+        struct LinearResponseContribution
+        {
+            int occupied = 0;
+            int virtual_orbital = 0;
+            double weight = 0.0;
+            std::string occupied_symmetry;
+            std::string virtual_symmetry;
+        };
+
+        struct LinearResponseRoot
+        {
+            int root = 0;
+            double excitation_energy = 0.0;
+            double excitation_energy_ev = 0.0;
+            Eigen::Vector3d transition_dipole = Eigen::Vector3d::Zero();
+            double oscillator_strength = 0.0;
+            std::vector<LinearResponseContribution> dominant_contributions;
+        };
+
+        struct DavidsonEigenpairResult
+        {
+            Eigen::VectorXd eigenvalues;
+            Eigen::MatrixXd eigenvectors;
+            Eigen::VectorXd residual_norms;
+            int iterations = 0;
+            bool converged = false;
+        };
+
+        template <typename Apply>
+        std::expected<DavidsonEigenpairResult, std::string> davidson_lowest_eigenpairs(
+            int dimension,
+            int nroots,
+            const Eigen::VectorXd &diagonal,
+            Apply &&apply,
+            double tolerance,
+            int max_iterations,
+            int max_subspace_dimension)
+        {
+            if (dimension <= 0 || nroots <= 0)
+            {
+                return DavidsonEigenpairResult{
+                    .eigenvalues = Eigen::VectorXd(),
+                    .eigenvectors = Eigen::MatrixXd(dimension, 0),
+                    .residual_norms = Eigen::VectorXd(),
+                    .iterations = 0,
+                    .converged = true};
+            }
+
+            if (diagonal.size() != dimension)
+                return std::unexpected("Davidson solver received a diagonal with inconsistent dimension");
+
+            const int nr = std::min(nroots, dimension);
+            const int initial_subspace = std::min(dimension, std::max(2 * nr, 4));
+            const int subspace_limit = std::max(initial_subspace + 1, max_subspace_dimension);
+
+            Eigen::MatrixXd basis = Eigen::MatrixXd::Zero(dimension, initial_subspace);
+            std::vector<int> order(static_cast<std::size_t>(dimension));
+            std::iota(order.begin(), order.end(), 0);
+            std::stable_sort(order.begin(), order.end(),
+                             [&](int lhs, int rhs)
+                             { return diagonal(lhs) < diagonal(rhs); });
+            for (int col = 0; col < initial_subspace; ++col)
+                basis(order[static_cast<std::size_t>(col)], col) = 1.0;
+
+            {
+                Eigen::HouseholderQR<Eigen::MatrixXd> qr(basis);
+                basis = qr.householderQ() * Eigen::MatrixXd::Identity(dimension, initial_subspace);
+            }
+
+            DavidsonEigenpairResult result{
+                .eigenvalues = Eigen::VectorXd::Zero(nr),
+                .eigenvectors = Eigen::MatrixXd::Zero(dimension, nr),
+                .residual_norms = Eigen::VectorXd::Constant(nr, std::numeric_limits<double>::infinity()),
+                .iterations = 0,
+                .converged = false};
+
+            for (int iteration = 0; iteration < max_iterations; ++iteration)
+            {
+                const int m = static_cast<int>(basis.cols());
+                Eigen::MatrixXd sigma_basis(dimension, m);
+                for (int col = 0; col < m; ++col)
+                    sigma_basis.col(col) = apply(basis.col(col));
+
+                const Eigen::MatrixXd projected = basis.transpose() * sigma_basis;
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> projected_solver(projected);
+                if (projected_solver.info() != Eigen::Success)
+                    return std::unexpected("TDDFT / Davidson projected diagonalization failed");
+
+                result.iterations = iteration + 1;
+                result.eigenvalues = projected_solver.eigenvalues().head(nr);
+                const Eigen::MatrixXd projected_vectors = projected_solver.eigenvectors().leftCols(nr);
+                result.eigenvectors = basis * projected_vectors;
+
+                double max_residual = 0.0;
+                std::vector<Eigen::VectorXd> corrections;
+                corrections.reserve(static_cast<std::size_t>(nr));
+
+                for (int root = 0; root < nr; ++root)
+                {
+                    Eigen::VectorXd residual =
+                        sigma_basis * projected_vectors.col(root) -
+                        result.eigenvalues(root) * result.eigenvectors.col(root);
+                    result.residual_norms(root) = residual.norm();
+                    max_residual = std::max(max_residual, result.residual_norms(root));
+                    if (result.residual_norms(root) <= tolerance)
+                        continue;
+
+                    for (int idx = 0; idx < dimension; ++idx)
+                    {
+                        double denom = result.eigenvalues(root) - diagonal(idx);
+                        if (std::abs(denom) < 1e-10)
+                            denom = (denom >= 0.0) ? 1e-10 : -1e-10;
+                        residual(idx) /= denom;
+                    }
+
+                    for (int col = 0; col < m; ++col)
+                        residual -= basis.col(col).dot(residual) * basis.col(col);
+                    for (const Eigen::VectorXd &accepted : corrections)
+                        residual -= accepted.dot(residual) * accepted;
+
+                    const double norm = residual.norm();
+                    if (norm > 1e-12)
+                        corrections.push_back(residual / norm);
+                }
+
+                if (max_residual <= tolerance)
+                {
+                    result.converged = true;
+                    return result;
+                }
+
+                if (corrections.empty())
+                    return result;
+
+                if (m + static_cast<int>(corrections.size()) > subspace_limit)
+                {
+                    basis = result.eigenvectors.leftCols(nr);
+                    for (int col = 0; col < static_cast<int>(basis.cols()); ++col)
+                    {
+                        for (int prev = 0; prev < col; ++prev)
+                            basis.col(col) -= basis.col(prev).dot(basis.col(col)) * basis.col(prev);
+                        const double norm = basis.col(col).norm();
+                        if (norm > 1e-12)
+                            basis.col(col) /= norm;
+                    }
+                    const int restart_cols = static_cast<int>(basis.cols());
+                    basis.conservativeResize(Eigen::NoChange, restart_cols + static_cast<int>(corrections.size()));
+                    for (int idx = 0; idx < static_cast<int>(corrections.size()); ++idx)
+                        basis.col(restart_cols + idx) = corrections[static_cast<std::size_t>(idx)];
+                }
+                else
+                {
+                    const int old_cols = m;
+                    basis.conservativeResize(Eigen::NoChange, old_cols + static_cast<int>(corrections.size()));
+                    for (int idx = 0; idx < static_cast<int>(corrections.size()); ++idx)
+                        basis.col(old_cols + idx) = corrections[static_cast<std::size_t>(idx)];
+                }
+
+                for (int col = 0; col < static_cast<int>(basis.cols()); ++col)
+                {
+                    for (int prev = 0; prev < col; ++prev)
+                        basis.col(col) -= basis.col(prev).dot(basis.col(col)) * basis.col(prev);
+                    const double norm = basis.col(col).norm();
+                    if (norm < 1e-12)
+                    {
+                        if (col + 1 < static_cast<int>(basis.cols()))
+                            basis.col(col) = basis.col(basis.cols() - 1);
+                        basis.conservativeResize(Eigen::NoChange, basis.cols() - 1);
+                        --col;
+                    }
+                    else
+                    {
+                        basis.col(col) /= norm;
+                    }
+                }
+            }
+
+            return result;
+        }
+
         std::expected<int, std::string> resolve_functional_id(
             HartreeFock::XCExchangeFunctional functional,
             int explicit_id)
         {
+            // The input layer can name a functional symbolically (PBE, B3LYP,
+            // ...) or pass a raw libxc id.  Normalize both cases here so the
+            // rest of the driver only deals with resolved libxc identifiers.
             if (explicit_id > 0)
                 return explicit_id;
 
@@ -116,6 +303,10 @@ namespace DFT::Driver
             const Options &options,
             bool preserve_checkpoint_ao_frame)
         {
+            // Full restarts are special: the checkpoint density and orbitals
+            // live in the original AO frame used when they were written.  If
+            // we re-standardized the molecule before loading them, every AO-
+            // indexed quantity would silently refer to the wrong frame.
             if (preserve_checkpoint_ao_frame)
             {
                 calculator._molecule._point_group = "C1";
@@ -167,6 +358,10 @@ namespace DFT::Driver
             if (calculator._scf._guess != HartreeFock::SCFGuess::ReadFull)
                 return false;
 
+            // ReadFull tries to restore the complete SCF state, including the
+            // geometry that defined the checkpoint AO basis.  If geometry load
+            // fails we degrade gracefully to ReadDensity, which can still reuse
+            // a density matrix when the current geometry/basis are compatible.
             auto geometry = HartreeFock::Checkpoint::load_geometry(calculator._checkpoint_path);
             if (!geometry)
             {
@@ -222,6 +417,9 @@ namespace DFT::Driver
 
         void maybe_build_sao_basis(HartreeFock::Calculator &calculator, const Options &options)
         {
+            // SAO blocking only helps when symmetry is both enabled and
+            // non-trivial.  In C1 or linear infinite groups there is no useful
+            // irrep partition to exploit, so keep the ordinary AO machinery.
             if (!calculator._dft._use_sao_blocking ||
                 !options.use_sao_blocking ||
                 !calculator._molecule._symmetry ||
@@ -264,6 +462,9 @@ namespace DFT::Driver
             HartreeFock::Calculator &calculator,
             const std::vector<HartreeFock::ShellPair> &shell_pairs)
         {
+            // Integral symmetry metadata depends on the current molecular
+            // orientation and shell layout, so refresh it before every one-
+            // electron build for the current geometry.
             HartreeFock::Symmetry::update_integral_symmetry(calculator);
 
             auto [S, T] = _compute_1e(
@@ -297,6 +498,9 @@ namespace DFT::Driver
 
             const auto make_spin_density = [&calculator, &X](std::size_t n_occ, bool doubled_occupancy) -> Eigen::MatrixXd
             {
+                // The fallback KS guess is the diagonalized core Hamiltonian in
+                // the orthonormal AO basis, identical in spirit to the HCore
+                // SCF guess used on the Hartree-Fock side.
                 const Eigen::MatrixXd Hprime = X->transpose() * calculator._hcore * (*X);
                 Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(Hprime);
                 const Eigen::MatrixXd C = (*X) * solver.eigenvectors();
@@ -644,12 +848,277 @@ namespace DFT::Driver
             return occupancy * occupied * occupied.transpose();
         }
 
+        void print_linear_response_report(
+            const std::vector<LinearResponseRoot> &roots,
+            double exact_exchange_coefficient)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "TDDFT / Linear Response :",
+                std::format(
+                    "TDA-style singlet solver with {:.6f} exact-exchange kernel coefficient",
+                    exact_exchange_coefficient));
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "TDDFT / Linear Response :",
+                "Semilocal XC response kernels are not included in this initial implementation");
+            HartreeFock::Logger::blank();
+
+            std::cout << std::string(118, '-') << "\n"
+                      << std::setw(6) << "Root"
+                      << std::setw(16) << "Omega (Eh)"
+                      << std::setw(14) << "Omega (eV)"
+                      << std::setw(14) << "f"
+                      << std::setw(16) << "mu_x (au)"
+                      << std::setw(16) << "mu_y (au)"
+                      << std::setw(16) << "mu_z (au)"
+                      << std::setw(20) << "|mu| (Debye)"
+                      << "\n"
+                      << std::string(118, '-') << "\n";
+
+            for (const LinearResponseRoot &root : roots)
+            {
+                const double mu_norm_debye = root.transition_dipole.norm() * AU_TO_DEBYE;
+                std::cout << std::setw(6) << root.root
+                          << std::setw(16) << std::fixed << std::setprecision(8) << root.excitation_energy
+                          << std::setw(14) << std::fixed << std::setprecision(6) << root.excitation_energy_ev
+                          << std::setw(14) << std::fixed << std::setprecision(6) << root.oscillator_strength
+                          << std::setw(16) << std::fixed << std::setprecision(6) << root.transition_dipole.x()
+                          << std::setw(16) << std::fixed << std::setprecision(6) << root.transition_dipole.y()
+                          << std::setw(16) << std::fixed << std::setprecision(6) << root.transition_dipole.z()
+                          << std::setw(20) << std::fixed << std::setprecision(6) << mu_norm_debye
+                          << "\n";
+            }
+
+            std::cout << std::string(118, '-') << "\n";
+
+            for (const LinearResponseRoot &root : roots)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "",
+                    std::format("  Root {:2d} dominant configurations:", root.root));
+
+                for (const LinearResponseContribution &contribution : root.dominant_contributions)
+                {
+                    const std::string occupied_label =
+                        contribution.occupied_symmetry.empty()
+                            ? std::format("MO{}", contribution.occupied)
+                            : std::format("MO{} ({})", contribution.occupied, contribution.occupied_symmetry);
+                    const std::string virtual_label =
+                        contribution.virtual_symmetry.empty()
+                            ? std::format("MO{}", contribution.virtual_orbital)
+                            : std::format("MO{} ({})", contribution.virtual_orbital, contribution.virtual_symmetry);
+
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info,
+                        "",
+                        std::format("    {:<18} -> {:<18} weight = {:.6f}",
+                                    occupied_label,
+                                    virtual_label,
+                                    contribution.weight));
+                }
+            }
+            HartreeFock::Logger::blank();
+        }
+
+        std::expected<std::vector<LinearResponseRoot>, std::string> run_linear_response_tda(
+            HartreeFock::Calculator &calculator,
+            const DFT::XC::Functional &exchange_functional)
+        {
+            if (!calculator._info._is_converged)
+                return std::unexpected("TDDFT / linear response requires a converged RKS reference");
+            if (calculator._scf._scf != HartreeFock::SCFType::RHF || calculator._info._scf.is_uhf)
+                return std::unexpected("Initial TDDFT / linear response support currently requires a closed-shell RKS reference");
+
+            const int n_electrons = static_cast<int>(
+                calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
+            if (n_electrons % 2 != 0)
+                return std::unexpected("Closed-shell RKS TDDFT / linear response requires an even number of electrons");
+
+            const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator._shells.nbasis());
+            const int n_occ = n_electrons / 2;
+            const int n_virt = static_cast<int>(nbasis) - n_occ;
+            if (n_occ <= 0 || n_virt <= 0)
+                return std::unexpected("TDDFT / linear response requires at least one occupied and one virtual orbital");
+
+            const int nov = n_occ * n_virt;
+            const int nroots = std::min(std::max(calculator._dft._lr_nstates, 1), nov);
+
+            const Eigen::MatrixXd &coefficients = calculator._info._scf.alpha.mo_coefficients;
+            const Eigen::VectorXd &energies = calculator._info._scf.alpha.mo_energies;
+            const std::vector<std::string> &mo_symmetry = calculator._info._scf.alpha.mo_symmetry;
+
+            const Eigen::MatrixXd C_occ = coefficients.leftCols(n_occ);
+            const Eigen::MatrixXd C_virt = coefficients.middleCols(n_occ, n_virt);
+
+            std::vector<double> eri_local;
+            const auto shell_pairs = build_shellpairs(calculator._shells);
+            const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
+                calculator,
+                shell_pairs,
+                eri_local,
+                "TDDFT / Linear Response :");
+
+            const std::vector<double> mo_ia_jb =
+                HartreeFock::Correlation::transform_eri(eri, static_cast<std::size_t>(nbasis), C_occ, C_virt, C_occ, C_virt);
+            const std::vector<double> mo_ij_ab =
+                HartreeFock::Correlation::transform_eri(eri, static_cast<std::size_t>(nbasis), C_occ, C_occ, C_virt, C_virt);
+
+            auto idx_ia = [n_virt](int i, int a) -> int
+            {
+                return i * n_virt + a;
+            };
+            auto idx_ia_jb = [n_occ, n_virt](int i, int a, int j, int b) -> std::size_t
+            {
+                return ((static_cast<std::size_t>(i) * n_virt + a) * n_occ + j) * n_virt + b;
+            };
+            auto idx_ij_ab = [n_occ, n_virt](int i, int j, int a, int b) -> std::size_t
+            {
+                return ((static_cast<std::size_t>(i) * n_occ + j) * n_virt + a) * n_virt + b;
+            };
+
+            const double exact_exchange_coefficient =
+                exchange_functional.is_hybrid() ? exchange_functional.exact_exchange_coefficient() : 0.0;
+
+            Eigen::VectorXd diagonal = Eigen::VectorXd::Zero(nov);
+            for (int i = 0; i < n_occ; ++i)
+                for (int a = 0; a < n_virt; ++a)
+                {
+                    const int ia = idx_ia(i, a);
+                    diagonal(ia) =
+                        energies(n_occ + a) - energies(i) +
+                        2.0 * mo_ia_jb[idx_ia_jb(i, a, i, a)] -
+                        exact_exchange_coefficient * mo_ij_ab[idx_ij_ab(i, i, a, a)];
+                }
+
+            const auto apply_tda_matrix = [&](const Eigen::Ref<const Eigen::VectorXd> &trial) -> Eigen::VectorXd
+            {
+                Eigen::VectorXd sigma = Eigen::VectorXd::Zero(nov);
+                for (int i = 0; i < n_occ; ++i)
+                    for (int a = 0; a < n_virt; ++a)
+                    {
+                        const int ia = idx_ia(i, a);
+                        double value = (energies(n_occ + a) - energies(i)) * trial(ia);
+                        for (int j = 0; j < n_occ; ++j)
+                            for (int b = 0; b < n_virt; ++b)
+                            {
+                                const int jb = idx_ia(j, b);
+                                value += 2.0 * mo_ia_jb[idx_ia_jb(i, a, j, b)] * trial(jb);
+                                value -= exact_exchange_coefficient * mo_ij_ab[idx_ij_ab(i, j, a, b)] * trial(jb);
+                            }
+                        sigma(ia) = value;
+                    }
+                return sigma;
+            };
+
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "TDDFT / Davidson :",
+                std::format("Solving {} lowest roots in a {}-dimensional excitation space", nroots, nov));
+
+            auto davidson = davidson_lowest_eigenpairs(
+                nov,
+                nroots,
+                diagonal,
+                apply_tda_matrix,
+                1.0e-8,
+                100,
+                std::max(6 * nroots, 24));
+            if (!davidson)
+                return std::unexpected(davidson.error());
+
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "TDDFT / Davidson :",
+                std::format(
+                    "{} after {} iterations (max residual {:.3e})",
+                    davidson->converged ? "Converged" : "Stopped",
+                    davidson->iterations,
+                    davidson->residual_norms.size() > 0 ? davidson->residual_norms.maxCoeff() : 0.0));
+            HartreeFock::Logger::blank();
+
+            const HartreeFock::MultipoleMatrices multipoles =
+                HartreeFock::ObaraSaika::_compute_multipole_matrices(
+                    shell_pairs,
+                    static_cast<std::size_t>(nbasis),
+                    Eigen::Vector3d::Zero());
+
+            std::array<Eigen::MatrixXd, 3> mo_dipole_ov = {
+                C_occ.transpose() * multipoles.dipole[0] * C_virt,
+                C_occ.transpose() * multipoles.dipole[1] * C_virt,
+                C_occ.transpose() * multipoles.dipole[2] * C_virt};
+
+            std::vector<LinearResponseRoot> roots;
+            roots.reserve(static_cast<std::size_t>(nroots));
+
+            for (int root = 0; root < nroots; ++root)
+            {
+                const Eigen::VectorXd amplitudes = davidson->eigenvectors.col(root);
+                Eigen::Vector3d transition_dipole = Eigen::Vector3d::Zero();
+
+                for (int i = 0; i < n_occ; ++i)
+                    for (int a = 0; a < n_virt; ++a)
+                    {
+                        const double amplitude = amplitudes(idx_ia(i, a));
+                        transition_dipole.x() += std::sqrt(2.0) * amplitude * mo_dipole_ov[0](i, a);
+                        transition_dipole.y() += std::sqrt(2.0) * amplitude * mo_dipole_ov[1](i, a);
+                        transition_dipole.z() += std::sqrt(2.0) * amplitude * mo_dipole_ov[2](i, a);
+                    }
+
+                std::vector<LinearResponseContribution> contributions;
+                contributions.reserve(static_cast<std::size_t>(nov));
+                for (int i = 0; i < n_occ; ++i)
+                    for (int a = 0; a < n_virt; ++a)
+                    {
+                        const double amplitude = amplitudes(idx_ia(i, a));
+                        contributions.push_back(
+                            LinearResponseContribution{
+                                .occupied = i + 1,
+                                .virtual_orbital = n_occ + a + 1,
+                                .weight = amplitude * amplitude,
+                                .occupied_symmetry =
+                                    (static_cast<std::size_t>(i) < mo_symmetry.size()) ? mo_symmetry[static_cast<std::size_t>(i)] : "",
+                                .virtual_symmetry =
+                                    (static_cast<std::size_t>(n_occ + a) < mo_symmetry.size()) ? mo_symmetry[static_cast<std::size_t>(n_occ + a)] : ""});
+                    }
+
+                std::ranges::sort(
+                    contributions,
+                    [](const LinearResponseContribution &lhs, const LinearResponseContribution &rhs)
+                    {
+                        return lhs.weight > rhs.weight;
+                    });
+                if (contributions.size() > 3)
+                    contributions.resize(3);
+
+                const double excitation_energy = davidson->eigenvalues(root);
+                const double oscillator_strength =
+                    std::max(0.0, (2.0 / 3.0) * excitation_energy * transition_dipole.squaredNorm());
+
+                roots.push_back(
+                    LinearResponseRoot{
+                        .root = root + 1,
+                        .excitation_energy = excitation_energy,
+                        .excitation_energy_ev = excitation_energy * HARTREE_TO_EV,
+                        .transition_dipole = transition_dipole,
+                        .oscillator_strength = oscillator_strength,
+                        .dominant_contributions = std::move(contributions)});
+            }
+
+            print_linear_response_report(roots, exact_exchange_coefficient);
+            return roots;
+        }
+
         std::expected<Result, std::string> run_ks_scf_scaffold(
             HartreeFock::Calculator &calculator,
             const PreparedSystem &prepared,
             const DFT::XC::Functional &x_functional,
             const DFT::XC::Functional &c_functional)
         {
+            // This routine is the shared KS-SCF engine used for the initial
+            // single-point, displaced geometries in numerical derivatives, and
+            // repeated geometry-optimization/frequency evaluations.
             if (prepared.ao_grid.npoints() != prepared.molecular_grid.points.rows())
                 return std::unexpected("DFT KS-SCF scaffold reached with inconsistent AO/grid dimensions");
 
@@ -694,6 +1163,10 @@ namespace DFT::Driver
                     const auto iter_start = std::chrono::steady_clock::now();
                     calculator._info._scf.alpha.density = density;
 
+                    // DFT replaces the HF Coulomb/exchange build with a grid
+                    // loop that evaluates the current density, queries libxc
+                    // for the semilocal derivatives, and assembles the AO-space
+                    // KS potential for the present density matrix.
                     auto xc_grid = evaluate_current_density_and_xc(
                         calculator,
                         prepared,
@@ -717,6 +1190,9 @@ namespace DFT::Driver
                     double diis_error = 0.0;
                     if (use_diis)
                     {
+                        // Reuse the standard commutator error in the orthogonal
+                        // AO basis so KS and HF share the same convergence
+                        // acceleration machinery.
                         const Eigen::MatrixXd error =
                             X.transpose() *
                             (fock * density * calculator._overlap - calculator._overlap * density * fock) *
@@ -1113,6 +1589,10 @@ namespace DFT::Driver
             const InitializedFunctionals &functionals,
             bool preserve_previous_density)
         {
+            // Geometry-derivative code paths call back into the driver many
+            // times.  This helper rebuilds only geometry-dependent objects and
+            // optionally seeds the next SCF with the density from the previous
+            // nearby geometry for faster convergence.
             auto prepared = prepare_current_geometry(calculator, preserve_previous_density);
             if (!prepared)
                 return std::unexpected(prepared.error());
@@ -1185,6 +1665,9 @@ namespace DFT::Driver
 
             auto energy_at = [&](const Eigen::MatrixXd &geometry) -> std::expected<double, std::string>
             {
+                // Each displaced-point energy is a full DFT single-point at a
+                // new geometry.  Silence the nested SCF logging so the user sees
+                // the final derivative report rather than dozens of inner traces.
                 calculator._molecule.set_standard_from_bohr(geometry);
                 HartreeFock::Logger::ScopedSilence silence;
                 auto result = run_single_point_current_geometry(
@@ -1728,10 +2211,27 @@ namespace DFT::Driver
                 functionals->exchange.name(),
                 functionals->correlation.name()));
 
+        // All higher-level DFT workflows start from the same converged KS
+        // reference.  Gradient, optimization, and frequency branches then build
+        // their derivative-specific machinery on top of that shared entry step.
         switch (calculator._calculation)
         {
         case HartreeFock::CalculationType::SinglePoint:
             return run_initial_single_point(calculator, options, *functionals);
+
+        case HartreeFock::CalculationType::LinearResponse:
+        {
+            auto result = run_initial_single_point(calculator, options, *functionals);
+            if (!result)
+                return std::unexpected(result.error());
+            if (!result->converged)
+                return *result;
+
+            auto response = run_linear_response_tda(calculator, functionals->exchange);
+            if (!response)
+                return std::unexpected(response.error());
+            return *result;
+        }
 
         case HartreeFock::CalculationType::Gradient:
         {

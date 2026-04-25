@@ -93,6 +93,49 @@ int main()
                      "total spin population should equal Tr((P_alpha-P_beta) S)");
     }
 
+    const auto lowdin =
+        HartreeFock::SCF::lowdin_population_analysis(molecule, basis, S, P, &spin);
+
+    ok &= expect(static_cast<bool>(lowdin),
+                 "Löwdin analysis should accept compatible molecule, basis, overlap, and density data");
+    if (lowdin)
+    {
+        ok &= expect(near(lowdin->atoms[0].electron_population, 1.1),
+                     "atom 1 Löwdin population should equal the diagonal of S^(1/2) P S^(1/2) for this symmetric toy case");
+        ok &= expect(near(lowdin->atoms[1].electron_population, 1.1),
+                     "atom 2 Löwdin population should equal the diagonal of S^(1/2) P S^(1/2) for this symmetric toy case");
+        ok &= expect(near(lowdin->atoms[0].spin_population, 0.5959591794226539, 1e-10),
+                     "atom 1 Löwdin spin population should come from the diagonal of S^(1/2) (P_alpha-P_beta) S^(1/2)");
+        ok &= expect(near(lowdin->atoms[1].spin_population, 0.2040408205773456, 1e-10),
+                     "atom 2 Löwdin spin population should come from the diagonal of S^(1/2) (P_alpha-P_beta) S^(1/2)");
+        ok &= expect(near(lowdin->total_electrons, 2.2),
+                     "total Löwdin population should equal Tr(P S)");
+        ok &= expect(near(lowdin->total_spin_population, 0.8),
+                     "total Löwdin spin population should equal Tr((P_alpha-P_beta) S)");
+    }
+
+    Eigen::MatrixXd alpha(2, 2);
+    alpha << 0.8, 0.25,
+        0.25, 0.6;
+    Eigen::MatrixXd beta(2, 2);
+    beta << 0.2, 0.25,
+        0.25, 0.4;
+
+    const auto mayer =
+        HartreeFock::SCF::mayer_bond_order_analysis(molecule, basis, S, P, &alpha, &beta);
+
+    ok &= expect(static_cast<bool>(mayer),
+                 "Mayer bond-order analysis should accept compatible molecule, basis, overlap, and spin densities");
+    if (mayer)
+    {
+        ok &= expect(near(mayer->bond_orders(0, 1), 0.2474, 1e-12),
+                     "Mayer bond order should be the sum of alpha and beta (P S) cross products for the atom pair");
+        ok &= expect(near(mayer->bond_orders(1, 0), 0.2474, 1e-12),
+                     "Mayer bond-order matrix should be symmetric");
+        ok &= expect(near(mayer->bond_orders(0, 0), 0.0),
+                     "Mayer bond-order diagonal should remain zero");
+    }
+
     const Eigen::MatrixXd bad_density = Eigen::MatrixXd::Identity(3, 3);
     const auto bad =
         HartreeFock::SCF::mulliken_population_analysis(molecule, basis, S, bad_density);

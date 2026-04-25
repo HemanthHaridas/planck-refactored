@@ -1,6 +1,7 @@
 # PySCF Reference Calculations
 
-External reference suite for validating Planck CASSCF/SA-CASSCF energies against PySCF.
+External reference suite for validating Planck CASSCF, SA-CASSCF, CCSD, and
+CCSDT energies against PySCF.
 
 ## Requirements
 
@@ -12,28 +13,36 @@ PySCF 2.x is required. These scripts have no other dependencies beyond PySCF and
 
 ## Running
 
-Run all cases and print a comparison table:
+Run all equivalence cases and print a comparison table:
 
 ```bash
-python3 tests/pyscf/run_all.py
+tests/pyscf/.venv/bin/python tests/pyscf/run_all.py
+```
+
+When configuring with CMake, the `planck-pyscf-equivalence` test will
+automatically use `tests/pyscf/.venv/bin/python` when that repo-local virtualenv
+exists. On other machines you can point CMake at any Python with PySCF installed:
+
+```bash
+cmake -S . -B build -DPLANCK_PYSCF_PYTHON=/path/to/python
 ```
 
 Run specific cases:
 
 ```bash
-python3 tests/pyscf/run_all.py --case h2_cas22_sto3g water_cas44_sto3g
+tests/pyscf/.venv/bin/python tests/pyscf/run_all.py --case h2_cas22_sto3g --case water_cas44_sto3g
 ```
 
 Run a single script directly:
 
 ```bash
-python3 tests/pyscf/h2_cas22_sto3g.py
+tests/pyscf/.venv/bin/python tests/pyscf/h2_cas22_sto3g.py
 ```
 
-Adjust tolerance (default 1e-5 Eh):
+List available cases:
 
 ```bash
-python3 tests/pyscf/run_all.py --tolerance 1e-4
+tests/pyscf/.venv/bin/python tests/pyscf/run_all.py --list
 ```
 
 ## Cases
@@ -49,31 +58,21 @@ python3 tests/pyscf/run_all.py --tolerance 1e-4
 | `ethylene_casscf_ccpvdz.py` | C₂H₄ (planar) | cc-pVDZ | CAS(2e,2o) | SS-CASSCF |
 | `water_cas44_sto3g_sa2.py` | H₂O | STO-3G | CAS(4e,4o) | SA-CASSCF (2 roots) |
 | `ethylene_cas44_sto3g_sa2.py` | C₂H₄ (90° twisted) | STO-3G | CAS(4e,4o) | SA-CASSCF (2 roots) |
+| `h2_rccsd_sto3g.py` | H₂ | STO-3G | n/a | RCCSD |
+| `lih_rccsdt_sto3g.py` | LiH | STO-3G | n/a | RCCSDT |
+| `b_uccsdt_sto3g.py` | B | STO-3G | n/a | UCCSD/UCCSDT |
+| `bh3_rccsdt_sto3g.py` | BH₃ | STO-3G | n/a | RCCSDT diagnostic |
 
-All geometries match the Planck `.hfinp` inputs in `tests/benchmarks/casscf/pyscf_reference/`.
-
-## Planck reference energies
-
-| Case | Planck / Eh |
-|---|---|
-| h2_cas22_sto3g | −1.1372838351 |
-| lih_cas22_sto3g | −7.8811184797 |
-| water_cas44_sto3g | −74.4700757755 |
-| water_cas44_631g | −75.5497490402 |
-| water_cas44_ccpvdz | −75.6045806122 |
-| ethylene_casscf_321g | −77.5145223872 |
-| ethylene_casscf_ccpvdz | −77.9524855976 |
-| water_cas44_sto3g_sa2 (SA-weighted) | −74.7751279351 |
-| ethylene_cas44_sto3g_sa2 (SA-weighted) | −77.0034974301 |
+The case manifest lives in `tests/pyscf/cases.json`. All geometries match the
+Planck `.hfinp` inputs in `tests/benchmarks/casscf/pyscf_reference/` or
+`tests/inputs/regression/post_hf/`.
 
 ## Tolerance
 
-- SS-CASSCF: energies should agree within 1e-5 Eh
-- SA-CASSCF: SA-weighted energies should agree within 1e-5 Eh
-
-The tolerance covers differences in convergence thresholds, orbital reordering, and
-minor numerical path differences. Larger disagreements indicate a genuine algorithmic
-discrepancy.
+- Most CASSCF and CC cross-checks use `1e-7` to `1e-8` Eh tolerances inside the
+  individual scripts.
+- The BH₃ tensor RCCSDT case is intentionally diagnostic: it is accepted either
+  as a full match or as the current known no-fallback non-convergence status.
 
 ## Notes on orbital selection
 

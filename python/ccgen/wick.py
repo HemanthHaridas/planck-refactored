@@ -29,6 +29,10 @@ _SPACE_SHIFT = 18
 _BLOCK_SHIFT = 20
 _EDGE_LOW_MASK = (1 << 20) - 1
 
+# The contraction search runs on compact integer "signatures" rather than rich
+# SQOp objects.  Each packed word stores the operator's original position, its
+# creation/annihilation kind, orbital space, and block id, which makes the hot
+# recursion/caching path cheap to hash and pass into the optional C++ helper.
 
 @dataclass(frozen=True)
 class WickResult:
@@ -156,6 +160,10 @@ def _analyze_signature_python(
     n_blocks: int,
     ignore_block: int | None,
 ) -> tuple[bool, int, tuple[int, ...]]:
+    # Cheap pruning before recursion:
+    # 1. reject signatures that can never be fully paired,
+    # 2. reject branches that can no longer become connected,
+    # 3. choose the most constrained pivot so the branching factor stays small.
     if not _can_fully_contract(signature):
         return False, -1, ()
 
@@ -291,6 +299,9 @@ def _choose_pivot_position(
         count = len(candidates)
         if count == 0:
             return -1
+        # Prefer operators with the fewest legal partners, then break ties by
+        # the nearest partner distance.  This is the same "most constrained
+        # variable" idea used in CSP search and cuts the recursive tree a lot.
         span = min(abs(partner - pos) for partner in candidates)
         if (
             best_count is None
@@ -348,6 +359,9 @@ def _iter_wick_pairings_uncached(
         partner = signature[partner_pos]
         remaining = _remove_positions(signature, pivot_pos, partner_pos)
 
+        # Crossing an odd number of fermionic operators flips the sign of the
+        # contraction.  Because `signature` preserves the current operator order,
+        # the parity is just the number of operators strictly between the pair.
         gap = abs(partner_pos - pivot_pos) - 1
         sign_factor = -1 if gap % 2 else 1
         pair = (_word_pos(pivot), _word_pos(partner))
@@ -411,6 +425,9 @@ def _component_labels(
     if not blocks:
         return ()
 
+    # Union-find over tensor/projector blocks lets us answer "which blocks are
+    # already connected by chosen contractions?" quickly during recursive
+    # pruning without materializing explicit graph objects.
     index_of = {block: pos for pos, block in enumerate(blocks)}
     parent = list(range(len(blocks)))
 
@@ -449,6 +466,9 @@ def _can_still_be_connected(
     n_blocks: int,
     ignore_block: int | None,
 ) -> bool:
+    # For connected-only projection we do not wait until the end to check graph
+    # connectivity.  Instead we ask whether the remaining operators still admit
+    # enough inter-block contractions to connect today's partial components.
     blocks = _relevant_blocks(n_blocks, ignore_block)
     component_by_pos = _component_labels(blocks, current_edges)
     n_components = len(set(component_by_pos))
@@ -526,6 +546,9 @@ def wick_contract(
     if n_blocks is None:
         n_blocks = max(block_ids, default=-1) + 1
 
+    # Build the structural signature once, recurse in the compact integer
+    # representation, then translate the winning pairings back to Index-level
+    # delta constraints for downstream algebra code.
     signature = tuple(
         _pack_signature_op(
             i,
@@ -639,6 +662,9 @@ def apply_deltas(
         space_codes, name_codes, dummy_mask = _delta_layout_metadata(
             all_indices_tuple
         )
+        # The accelerated path solves the same union/find-style index merging as
+        # the Python fallback below, but works directly on compact metadata
+        # arrays instead of Python Index objects.
         ok, roots = _wickaccel.apply_deltas_layout(
             space_codes,
             name_codes,
@@ -664,6 +690,10 @@ def apply_deltas(
             lhs_protected = lhs_pos in protected_rank
             rhs_protected = rhs_pos in protected_rank
 
+            # Representative choice is semantic, not arbitrary:
+            # protected external indices win over dummy ones, non-generic spaces
+            # win over generic placeholders, and otherwise we keep a stable
+            # lexical choice for deterministic output.
             if lhs_protected != rhs_protected:
                 return (lhs_pos, rhs_pos) if lhs_protected else (rhs_pos, lhs_pos)
 

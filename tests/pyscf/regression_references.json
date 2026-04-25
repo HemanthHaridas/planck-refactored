@@ -1,0 +1,136 @@
+{
+  "cases": {
+    "b_uccsd_sto3g": {
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -24.148988598853652
+      },
+      "uccsd_total_energy": {
+        "atol": 1e-06,
+        "expected": -24.18925808470455
+      }
+    },
+    "b_uccsdt_sto3g": {
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -24.148988598853652
+      },
+      "uccsdt_total_energy": {
+        "atol": 1e-06,
+        "expected": -24.189263556910305
+      }
+    },
+    "ch4_rmp2_sto3g": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -39.78320307368553
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -39.72674332479202
+      }
+    },
+    "h2_rccsdt_sto3g": {
+      "rccsdt_total_energy": {
+        "atol": 3e-07,
+        "expected": -1.137274570976646
+      },
+      "rhf_total_energy": {
+        "atol": 5e-08,
+        "expected": -1.1167061372361056
+      }
+    },
+    "h2_rmp2_sto3g": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -1.1298973809859585
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -1.1167593073964255
+      }
+    },
+    "hf_rmp2_sto3g": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -98.58812430415765
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -98.5707799860142
+      }
+    },
+    "lih_rccsdt_sto3g": {
+      "rccsdt_total_energy": {
+        "atol": 1e-07,
+        "expected": -7.882401799102108
+      },
+      "rhf_total_energy": {
+        "atol": 5e-08,
+        "expected": -7.862023860127114
+      }
+    },
+    "lih_rmp2_sto3g": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -7.874888499239941
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -7.862023860127114
+      }
+    },
+    "nh3_rmp2_sto3g": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -55.499667030106394
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -55.436386833801876
+      }
+    },
+    "water_casscf_c2v_b1": {
+      "casscf_total_energy": {
+        "atol": 1e-05,
+        "expected": -74.5856164513
+      }
+    },
+    "water_casscf_ccpvdz_a1": {
+      "casscf_total_energy": {
+        "atol": 1e-05,
+        "expected": -76.0440109036
+      }
+    },
+    "water_radical_cation_uhf_ump2_sto3g": {
+      "mp2_total_energy": {
+        "atol": 1e-06,
+        "expected": -74.68333544047587
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -74.65570586363151
+      }
+    },
+    "water_rccsdt_sto3g": {
+      "rccsdt_total_energy": {
+        "atol": 1e-06,
+        "expected": -75.01249757526931
+      },
+      "rhf_total_energy": {
+        "atol": 5e-08,
+        "expected": -74.9629916147492
+      }
+    },
+    "water_rmp2_sto3g": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -74.97677732883211
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -74.94588076098961
+      }
+    }
+  }
+}

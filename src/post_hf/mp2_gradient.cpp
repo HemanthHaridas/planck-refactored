@@ -12,6 +12,9 @@ namespace
 {
     inline std::size_t idx_iajb(int i, int a, int j, int b, int n_occ, int n_virt)
     {
+        // Shared flattening convention for ovov tensors used throughout the
+        // MP2 codepath.  Keeping this centralized avoids subtle mismatches
+        // between energy, density, and gradient intermediates.
         return ((static_cast<std::size_t>(i) * n_virt + a) * n_occ + j) * n_virt + b;
     }
 
@@ -53,6 +56,9 @@ namespace
         const std::vector<double> &pair_dm2,
         int nb)
     {
+        // Forms the AO-space Imat contraction that appears in the Lagrangian
+        // treatment of orbital-response terms:
+        //   I_pq = sum_{i,r,s} (ip|rs) * Gamma_{iqrs}
         Eigen::MatrixXd imat = Eigen::MatrixXd::Zero(nb, nb);
         for (int p = 0; p < nb; ++p)
             for (int q = 0; q < nb; ++q)
@@ -97,6 +103,9 @@ namespace
         const HartreeFock::Calculator &calculator,
         int nb)
     {
+        // Reconstruct the spin occupations from total charge and multiplicity
+        // instead of trusting cached counts.  That keeps the gradient path
+        // aligned with the same electron bookkeeping used in the UHF driver.
         int n_electrons = 0;
         for (auto Z : calculator._molecule.atomic_numbers)
             n_electrons += static_cast<int>(Z);
@@ -132,6 +141,10 @@ namespace
         if (std::abs(coeff) < 1e-14)
             return;
 
+        // Generic 4-index back-transformation for one rank-1 separable MO 2PDM
+        // contribution.  The UMP2 implementation builds the explicit pair
+        // density term-by-term and accumulates each contribution directly in AO
+        // space to avoid storing large spin-resolved 2PDM tensors in MO space.
         for (int mu = 0; mu < nao; ++mu)
         {
             const double c1 = C1(mu, p);
@@ -309,6 +322,10 @@ namespace HartreeFock::Correlation
                     {
                         const double t_ijab = amp.t2[idx_iajb(i, a, j, b, amp.n_occ, amp.n_virt)];
                         const double t_ijba = amp.t2[idx_iajb(i, b, j, a, amp.n_occ, amp.n_virt)];
+                        // Explicit connected MP2 pair-density contribution in
+                        // spin-summed spatial-orbital form.  The disconnected
+                        // reference/HF pieces are added elsewhere in the full
+                        // Lagrangian-based gradient assembly.
                         const double dovov = 4.0 * t_ijab - 2.0 * t_ijba;
 
                         dm2[idx_dm2(i, o + a, j, o + b, nmo)] += dovov;
@@ -476,6 +493,9 @@ namespace HartreeFock::Correlation
         Eigen::MatrixXd imat_ao = contract_imat_from_pair_density(eri, pair_dm2_ao, nb);
         Eigen::MatrixXd imat_mo = -C.transpose() * imat_ao * calculator._overlap * C;
 
+        // Xvo is the occupied-virtual orbital-gradient block of the MP2
+        // Lagrangian.  Solving the RHF CPHF system with -Xvo gives the Z-vector
+        // that restores the missing first-order orbital relaxation.
         Eigen::MatrixXd Xvo =
             amp.C_virt.transpose() * veff_corr_ao * amp.C_occ + imat_mo.topRightCorner(amp.n_occ, amp.n_virt).transpose() - imat_mo.bottomLeftCorner(amp.n_virt, amp.n_occ);
 
@@ -488,6 +508,8 @@ namespace HartreeFock::Correlation
         corr_relaxed_mo.bottomLeftCorner(amp.n_virt, amp.n_occ) = z;
         corr_relaxed_mo.topRightCorner(amp.n_occ, amp.n_virt) = z.transpose();
 
+        // Final first-order density = RHF reference occupancy + MP2 oo/vv
+        // correction + ov response block from the Z-vector.
         Eigen::MatrixXd P_mo = build_rhf_reference_density_mo(amp.n_occ, nb) + corr_relaxed_mo;
         Eigen::MatrixXd P_ao = C * P_mo * C.transpose();
 
@@ -502,6 +524,9 @@ namespace HartreeFock::Correlation
         for (int a = 0; a < amp.n_virt; ++a)
             for (int i = 0; i < amp.n_occ; ++i)
             {
+                // Mixed occupied-virtual blocks use occupied energies so the
+                // AO-space weighted density matches the conventional RHF/MP2
+                // Pulay-form expression.
                 zeta_weights(amp.n_occ + a, i) = amp.eps_occ(i);
                 zeta_weights(i, amp.n_occ + a) = amp.eps_occ(i);
             }
@@ -585,6 +610,10 @@ namespace HartreeFock::Correlation
             return ((static_cast<std::size_t>(i) * nva + a) * nbeta + j) * nvb + b;
         };
 
+        // Same-spin alpha and beta blocks use antisymmetrized amplitudes,
+        // exactly mirroring the energy expression.  The diagonal oo/vv updates
+        // here are the simplest unrelaxed density pieces needed by the current
+        // UMP2 gradient implementation.
         for (int i = 0; i < counts.n_alpha; ++i)
             for (int j = 0; j < counts.n_alpha; ++j)
                 for (int a = 0; a < counts.nva; ++a)
@@ -623,6 +652,10 @@ namespace HartreeFock::Correlation
                         add_rank4_mo_to_ao(pair_dm2_ao, nb, Cb_virt, a, Cb_occ, i, Cb_virt, b, Cb_occ, j, t);
                     }
 
+        // Opposite-spin alpha-beta pairs do not antisymmetrize; instead they
+        // contribute directly through the Coulomb-like amplitude.  The factor
+        // of 2.0 in the AO pair-density accumulation restores the spin-summed
+        // convention expected by the derivative contractions.
         for (int i = 0; i < counts.n_alpha; ++i)
             for (int j = 0; j < counts.n_beta; ++j)
                 for (int a = 0; a < counts.nva; ++a)
@@ -648,6 +681,8 @@ namespace HartreeFock::Correlation
             Cb_occ * Db_occ * Cb_occ.transpose() +
             Cb_virt * Db_virt * Cb_virt.transpose();
 
+        // Build spin-resolved energy-weighted densities in AO space.  These are
+        // the UHF analog of the RHF `W` matrix used in overlap/Pulay terms.
         Eigen::MatrixXd Wa_corr = Eigen::MatrixXd::Zero(nb, nb);
         for (int i = 0; i < counts.n_alpha; ++i)
             for (int j = 0; j < counts.n_alpha; ++j)

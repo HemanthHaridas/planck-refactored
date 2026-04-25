@@ -98,6 +98,9 @@ HartreeFock::Correlation::run_ump2(
             for (std::size_t a = 0; a < nva; ++a)
                 for (std::size_t b = 0; b < nva; ++b)
                 {
+                    // Same-spin MP2 must use antisymmetrized integrals because
+                    // exchanging the two alpha electrons changes the sign of
+                    // the spin-adapted two-electron state.
                     const double iajb = mo_aa[i * nva * n_alpha * nva + a * n_alpha * nva + j * nva + b];
                     const double ibja = mo_aa[i * nva * n_alpha * nva + b * n_alpha * nva + j * nva + a];
                     const double anti = iajb - ibja;
@@ -113,6 +116,8 @@ HartreeFock::Correlation::run_ump2(
             for (std::size_t a = 0; a < nvb; ++a)
                 for (std::size_t b = 0; b < nvb; ++b)
                 {
+                    // The beta-beta contribution is algebraically identical to
+                    // alpha-alpha, just evaluated in the beta orbital space.
                     const double iajb = mo_bb[i * nvb * n_beta * nvb + a * n_beta * nvb + j * nvb + b];
                     const double ibja = mo_bb[i * nvb * n_beta * nvb + b * n_beta * nvb + j * nvb + a];
                     const double anti = iajb - ibja;
@@ -158,6 +163,9 @@ HartreeFock::Correlation::compute_rmp2_natural_orbitals(
     const int nmo = n_occ + n_virt;
 
     Eigen::MatrixXd dm1_mo = Eigen::MatrixXd::Zero(nmo, nmo);
+    // Natural orbitals come from the spin-summed 1PDM.  The RHF reference
+    // contributes the closed-shell occupation of 2.0 in the occupied block,
+    // while the MP2 density correction contributes the oo and vv blocks.
     dm1_mo.topLeftCorner(n_occ, n_occ) =
         2.0 * Eigen::MatrixXd::Identity(n_occ, n_occ) + dens.P_occ + dens.P_occ.transpose();
     dm1_mo.bottomRightCorner(n_virt, n_virt) =
@@ -176,6 +184,8 @@ HartreeFock::Correlation::compute_rmp2_natural_orbitals(
 
     for (int i = 0; i < nmo; ++i)
     {
+        // Eigen returns eigenpairs in ascending order, but natural orbitals are
+        // conventionally reported from highest to lowest occupation.
         const int src = nmo - 1 - i;
         result.occupations(i) = occ_asc(src);
         result.coefficients_mo.col(i) = coeff_asc.col(src);

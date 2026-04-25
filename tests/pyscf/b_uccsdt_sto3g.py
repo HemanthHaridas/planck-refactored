@@ -27,9 +27,18 @@ PLANCK_EXE = REPO_ROOT / "build/hartree-fock"
 UCCSD_INPUT = REPO_ROOT / "tests/inputs/regression/post_hf/b_uccsd_sto3g.hfinp"
 UCCSDT_INPUT = REPO_ROOT / "tests/inputs/regression/post_hf/b_uccsdt_sto3g.hfinp"
 
-CORR_PATTERN = re.compile(r"^\s*Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE)
-UCCSD_TOTAL_PATTERN = re.compile(r"^\s*Total UCCSD Energy\s+([-+0-9Ee\.]+)", re.MULTILINE)
-UCCSDT_TOTAL_PATTERN = re.compile(r"^\s*Total UCCSDT Energy\s+([-+0-9Ee\.]+)", re.MULTILINE)
+CORR_PATTERN = re.compile(
+    r"^\s*(?:Correlation Energy|\[INF\]\s+UCCSDT? Correlation)\s+([-+0-9Ee\.]+)",
+    re.MULTILINE,
+)
+UCCSD_TOTAL_PATTERN = re.compile(
+    r"^\s*(?:Total UCCSD Energy|\[INF\]\s+UCCSD Energy)\s+([-+0-9Ee\.]+)",
+    re.MULTILINE,
+)
+UCCSDT_TOTAL_PATTERN = re.compile(
+    r"^\s*(?:Total UCCSDT Energy|\[INF\]\s+UCCSDT Energy)\s+([-+0-9Ee\.]+)",
+    re.MULTILINE,
+)
 
 
 def parse_last_float(pattern: re.Pattern[str], text: str, label: str) -> float:

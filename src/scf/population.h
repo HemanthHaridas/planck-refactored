@@ -30,12 +30,32 @@ namespace HartreeFock::SCF
         bool has_spin_population = false;
     };
 
+    struct MayerBondOrderAnalysis
+    {
+        Eigen::MatrixXd bond_orders;
+    };
+
     std::expected<PopulationAnalysis, std::string> mulliken_population_analysis(
         const Molecule &molecule,
         const Basis &basis,
         const Eigen::MatrixXd &overlap,
         const Eigen::MatrixXd &total_density,
         const Eigen::MatrixXd *spin_density = nullptr);
+
+    std::expected<PopulationAnalysis, std::string> lowdin_population_analysis(
+        const Molecule &molecule,
+        const Basis &basis,
+        const Eigen::MatrixXd &overlap,
+        const Eigen::MatrixXd &total_density,
+        const Eigen::MatrixXd *spin_density = nullptr);
+
+    std::expected<MayerBondOrderAnalysis, std::string> mayer_bond_order_analysis(
+        const Molecule &molecule,
+        const Basis &basis,
+        const Eigen::MatrixXd &overlap,
+        const Eigen::MatrixXd &total_density,
+        const Eigen::MatrixXd *alpha_density = nullptr,
+        const Eigen::MatrixXd *beta_density = nullptr);
 } // namespace HartreeFock::SCF
 
 #endif // HF_SCF_POPULATION_H

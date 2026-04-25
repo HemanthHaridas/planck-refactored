@@ -35,6 +35,10 @@ namespace HartreeFock::Correlation::CASSCF
         if (overlaps.size() == 0)
             return;
 
+        // State-averaged and excited-state optimizations care about "which
+        // root is which" from one macroiteration to the next.  Reorder the new
+        // CI eigenpairs so they follow the previous root identities by maximum
+        // overlap instead of raw eigenvalue order.
         const std::vector<int> assignment = match_roots_by_max_overlap(overlaps);
         Eigen::VectorXd E_reordered = E;
         Eigen::MatrixXd V_reordered = V;
@@ -110,6 +114,9 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<double> &source,
         double weight)
     {
+        // Several SA-CASSCF intermediates are accumulated as weighted sums over
+        // roots.  Lazily size the destination from the first contributor so
+        // callers can start from an empty buffer.
         if (destination.empty())
             destination.assign(source.size(), 0.0);
         for (std::size_t i = 0; i < source.size(); ++i)
@@ -153,6 +160,8 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<StateSpecificData> &roots,
         int nbasis)
     {
+        // The state-averaged orbital step is driven by the weighted sum of the
+        // root-specific orbital gradients, not by any single state alone.
         Eigen::MatrixXd gradient = Eigen::MatrixXd::Zero(nbasis, nbasis);
         for (const auto &root : roots)
             gradient.noalias() += root.weight * root.g_orb;
@@ -218,6 +227,11 @@ namespace HartreeFock::Correlation::CASSCF
                 continue;
             }
 
+            // Score the proposed orbital step against each root's local
+            // quadratic model, then aggregate with SA weights.  The spread
+            // around the weighted prediction is used later as a "fairness"
+            // diagnostic: a step that helps the average but badly hurts one
+            // root is less trustworthy.
             const Eigen::MatrixXd F_sum = F_I_mo + root.F_A_mo;
             Eigen::VectorXd g_flat(static_cast<int>(pairs.size()));
             Eigen::VectorXd h_flat(static_cast<int>(pairs.size()));

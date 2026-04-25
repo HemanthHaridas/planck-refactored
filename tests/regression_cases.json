@@ -467,6 +467,24 @@
       ]
     },
     {
+      "id": "h2_dft_tddft_pbe_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_tddft_pbe.hfinp",
+      "executable": "planck-dft",
+      "tags": ["smoke", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "TDDFT / Linear Response :     TDA-style singlet solver",
+        "Root  1 dominant configurations:",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "Dinfh"},
+        {"type": "metric_close", "metric": "dft_total_energy", "expected": -1.1497054828, "atol": 1e-9},
+        {"type": "metric_close", "metric": "lr_root1_energy_ev", "expected": 29.991901, "atol": 1e-6}
+      ]
+    },
+    {
       "id": "h_dft_uks_b3lyp_sto3g",
       "input": "tests/inputs/regression/dft/h_dft_uks_b3lyp.hfinp",
       "executable": "planck-dft",
@@ -519,6 +537,7 @@
       "id": "water_casscf_ccpvdz_a1",
       "input": "tests/benchmarks/casscf/pyscf_reference/water_cas44_ccpvdz.hfinp",
       "tags": ["extended"],
+      "timeout_s": 300,
       "expected_exit_code": 0,
       "contains": [
         "Point Group :                 C2v",
