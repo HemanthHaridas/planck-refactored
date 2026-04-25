@@ -17,6 +17,7 @@
 #include "io/checkpoint.h"
 #include "io/logging.h"
 #include "opt/geomopt.h"
+#include "populations/multipole.h"
 #include "post_hf/integrals.h"
 #include "scf/scf.h"
 #include "symmetry/integral_symmetry.h"

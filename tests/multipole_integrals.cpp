@@ -3,8 +3,8 @@
 #include <sstream>
 
 #include "base/types.h"
-#include "integrals/os.h"
 #include "integrals/shellpair.h"
+#include "populations/multipole.h"
 
 namespace
 {

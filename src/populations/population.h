@@ -1,5 +1,5 @@
-#ifndef HF_SCF_POPULATION_H
-#define HF_SCF_POPULATION_H
+#ifndef HF_POPULATIONS_POPULATION_H
+#define HF_POPULATIONS_POPULATION_H
 
 #include <Eigen/Core>
 
@@ -58,4 +58,4 @@ namespace HartreeFock::SCF
         const Eigen::MatrixXd *beta_density = nullptr);
 } // namespace HartreeFock::SCF
 
-#endif // HF_SCF_POPULATION_H
+#endif // HF_POPULATIONS_POPULATION_H
