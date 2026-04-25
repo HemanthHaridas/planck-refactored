@@ -250,8 +250,11 @@
 <li class="toc-level-3"><a href="#xc-matrix-assembly">XC Matrix Assembly</a></li>
 <li class="toc-level-3"><a href="#ks-dft-scf-loop">KS-DFT SCF Loop</a></li>
 <li class="toc-level-3"><a href="#dft-code-map">DFT Code Map</a></li>
+<li class="toc-level-3"><a href="#initial-td-dft-linear-response">Initial TD-DFT / Linear Response</a></li>
 <li class="toc-level-2"><a href="#19-molecular-properties">19. Molecular Properties</a></li>
 <li class="toc-level-3"><a href="#mulliken-population-analysis">Mulliken Population Analysis</a></li>
+<li class="toc-level-3"><a href="#l-wdin-population-analysis">Löwdin Population Analysis</a></li>
+<li class="toc-level-3"><a href="#mayer-bond-orders">Mayer Bond Orders</a></li>
 <li class="toc-level-3"><a href="#electric-dipole-moment">Electric Dipole Moment</a></li>
 <li class="toc-level-3"><a href="#traceless-quadrupole-moment">Traceless Quadrupole Moment</a></li>
 <li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
@@ -1794,9 +1797,53 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 <tr><td>KS-DFT main loop</td><td><code>src/dft/driver.cpp</code></td><td><code>DFT::Driver::run</code></td></tr>
 <tr><td>DFT entry point</td><td><code>src/dft/main.cpp</code></td><td><code>main</code></td></tr>
 </tbody></table></div>
+<h3 id="initial-td-dft-linear-response">Initial TD-DFT / Linear Response</h3>
+<p><strong>What is implemented</strong></p>
+<p>Planck currently provides an initial excited-state solver for <code>planck-dft</code> via <code>calculation tddft</code> (aliases: <code>td-dft</code>, <code>linearresponse</code>, <code>lr</code>).  The present implementation is intentionally narrow and teaching-oriented:</p>
+<ul>
+<li>closed-shell <strong>RKS only</strong></li>
+<li>singlet excitations only</li>
+<li><strong>TDA-style</strong> response build (the Hermitian <span class="math-inline">\(A\)</span> matrix is diagonalized; no full Casida <span class="math-inline">\(A/B\)</span> non-Hermitian solve yet)</li>
+<li>Hartree coupling is included</li>
+<li>global-hybrid exact exchange is included through the functional&#x27;s exact exchange coefficient</li>
+<li>semilocal XC response kernels <span class="math-inline">\(f_{xc}\)</span> are <strong>not</strong> yet included</li>
+<li>UKS/open-shell response is not yet implemented</li>
+</ul>
+<p>So, despite the user-facing <code>tddft</code> keyword, the current method is best thought of as a first linear-response / TDA excited-state module layered on top of the converged Kohn-Sham orbitals.</p>
+<p><strong>Theory</strong></p>
+<p>For a closed-shell reference with occupied orbitals <span class="math-inline">\(i,j\)</span> and virtual orbitals <span class="math-inline">\(a,b\)</span>, Planck forms the orbital-rotation excitation basis <span class="math-inline">\(| i \rightarrow a \rangle\)</span> and builds the TDA matrix</p>
+<p><span class="math-display">\[
+A_{ia,jb} = \delta_{ij}\delta_{ab}(\varepsilon_a - \varepsilon_i)
+          + 2(ia|jb)
+          - c_x (ij|ab)
+\]</span></p>
+<p>where <span class="math-inline">\(c_x\)</span> is the global-hybrid exact-exchange fraction.  In this initial implementation the semilocal XC kernel contribution is omitted, so the response matrix contains only the orbital-energy gap term, the Coulomb coupling, and the hybrid exchange correction.</p>
+<p>Diagonalizing <span class="math-inline">\(A\)</span> gives the excitation energies <span class="math-inline">\(\omega_k\)</span> and the excitation amplitudes <span class="math-inline">\(X^{(k)}_{ia}\)</span>.  Transition dipoles are then evaluated from the occupied-virtual dipole blocks:</p>
+<p><span class="math-display">\[
+\boldsymbol{\mu}^{(k)}_{\mathrm{tr}}
+= \sqrt{2}\sum_{ia} X^{(k)}_{ia}\,\langle i|\hat{\mathbf r}|a\rangle
+\]</span></p>
+<p>and the oscillator strength is reported as</p>
+<p><span class="math-display">\[
+f_k = \frac{2}{3}\,\omega_k\,\left|\boldsymbol{\mu}^{(k)}_{\mathrm{tr}}\right|^2
+\]</span></p>
+<p>with <span class="math-inline">\(\omega_k\)</span> in Hartree and <span class="math-inline">\(\boldsymbol{\mu}_{\mathrm{tr}}\)</span> in atomic units.</p>
+<p><strong>Code path</strong></p>
+<p><code>src/dft/driver.cpp</code> — <code>run_linear_response_tda()</code></p>
+<p>The solver reuses the converged KS reference already built by the SCF scaffold:</p>
+<ol>
+<li>confirm the reference is converged, closed-shell, and restricted</li>
+<li>split the MO coefficient matrix into occupied and virtual blocks</li>
+<li>transform AO ERIs into the <span class="math-inline">\(ovov\)</span> and <span class="math-inline">\(oovv\)</span> blocks needed by the response kernel</li>
+<li>assemble the dense TDA matrix <span class="math-inline">\(A\)</span></li>
+<li>diagonalize <span class="math-inline">\(A\)</span> with <code>Eigen::SelfAdjointEigenSolver</code></li>
+<li>build transition dipoles from AO dipole integrals transformed to the occupied-virtual MO basis</li>
+<li>sort and print the dominant occupied <span class="math-inline">\(\rightarrow\)</span> virtual configurations for each root</li>
+</ol>
+<p>The report printed by <code>print_linear_response_report()</code> includes the root index, excitation energy in Hartree and eV, oscillator strength, Cartesian transition dipole components, the dipole norm in Debye, and the three largest configuration weights.</p>
 <hr>
 <h2 id="19-molecular-properties">19. Molecular Properties</h2>
-<p>After SCF convergence Planck computes several molecular properties from the converged density matrix.  All are printed automatically (or under <code>verbosity verbose</code>) without additional input; no extra keywords are needed.  This section covers the theory behind each property and the code path that evaluates it.</p>
+<p>After SCF convergence Planck can compute several molecular properties from the converged density matrix. Dipole and quadrupole moments are printed automatically; population and bond-order reports are printed when <code>print_populations true</code> or the output <code>verbosity</code> is <code>verbose</code> / <code>debug</code>. This section covers the theory behind each property and the code path that evaluates it.</p>
 <h3 id="mulliken-population-analysis">Mulliken Population Analysis</h3>
 <p><strong>Theory</strong></p>
 <p>The Mulliken gross population of AO <span class="math-inline">\(\mu\)</span> is</p>
@@ -1823,6 +1870,61 @@ Eigen::VectorXd gross = (density.array() * overlap.array()).rowwise().sum();
 </code></pre>
 <p>The function then iterates over <code>basis._basis_functions</code>, accumulates <code>gross[μ]</code> into the correct atom bucket via <code>cv._shell-&gt;_atom_index</code>, and fills an <code>AtomicPopulation</code> struct.  When a <code>spin_density_ptr</code> is provided the same loop runs a second time over <span class="math-inline">\(\Delta P\)</span>.</p>
 <p>Population analysis is triggered when <code>_output._print_populations</code> is set or <code>verbosity</code> is <code>verbose</code> / <code>debug</code> (see <code>log_population_report</code> in <code>src/driver.cpp:71</code>).</p>
+<h3 id="l-wdin-population-analysis">Löwdin Population Analysis</h3>
+<p><strong>Theory</strong></p>
+<p>Mulliken populations depend directly on the AO overlap partitioning.  Löwdin analysis instead first orthogonalizes the AO basis with the symmetric overlap square root:</p>
+<p><span class="math-display">\[
+\mathbf S = \mathbf U\,\mathbf s\,\mathbf U^\mathrm T,
+\qquad
+\mathbf S^{1/2} = \mathbf U\,\mathbf s^{1/2}\,\mathbf U^\mathrm T
+\]</span></p>
+<p>The density matrix is then transformed into the orthogonal Löwdin AO basis:</p>
+<p><span class="math-display">\[
+\widetilde{\mathbf P} = \mathbf S^{1/2}\mathbf P \mathbf S^{1/2}
+\]</span></p>
+<p>The AO populations are simply the diagonal elements of this orthogonalized density,</p>
+<p><span class="math-display">\[
+q_\mu^{\mathrm{L\ddot owdin}} = \widetilde P_{\mu\mu}
+\]</span></p>
+<p>and atomic populations are obtained by summing over the AOs on each atom:</p>
+<p><span class="math-display">\[
+N_A^{\mathrm{L\ddot owdin}} = \sum_{\mu \in A} \widetilde P_{\mu\mu}
+\]</span></p>
+<p>For open-shell references the same transformation is applied to the spin-density matrix <span class="math-inline">\(\Delta P = P^\alpha - P^\beta\)</span>, giving</p>
+<p><span class="math-display">\[
+\widetilde{\Delta P} = \mathbf S^{1/2}\Delta\mathbf P\,\mathbf S^{1/2}
+\]</span></p>
+<p>and the atomic spin population is the sum of the diagonal entries belonging to that atom.</p>
+<p><strong>Code path</strong></p>
+<p><code>src/scf/population.cpp</code> — <code>lowdin_population_analysis()</code></p>
+<p>The implementation diagonalizes the AO overlap with <code>Eigen::SelfAdjointEigenSolver</code>, clips tiny eigenvalues with a numerical threshold, reconstructs the symmetric square root <span class="math-inline">\(\mathbf S^{1/2}\)</span>, and forms the orthogonalized density and spin-density matrices.  The atomic accumulation step is then shared with Mulliken analysis through <code>accumulate_atomic_populations()</code>, so the printed report has the same table layout: per-atom electron population, net charge, and optional spin population.</p>
+<h3 id="mayer-bond-orders">Mayer Bond Orders</h3>
+<p><strong>Theory</strong></p>
+<p>Mayer bond orders are built from the AO population matrix</p>
+<p><span class="math-display">\[
+\mathbf{PS} = \mathbf P \mathbf S
+\]</span></p>
+<p>For atoms <span class="math-inline">\(A\)</span> and <span class="math-inline">\(B\)</span>, the closed-shell Mayer bond order is</p>
+<p><span class="math-display">\[
+B_{AB}^{\mathrm{Mayer}} =
+\sum_{\mu \in A}\sum_{\nu \in B}
+(\mathbf{PS})_{\mu\nu}(\mathbf{PS})_{\nu\mu}
+\]</span></p>
+<p>This measures how strongly the AO subspaces on atoms <span class="math-inline">\(A\)</span> and <span class="math-inline">\(B\)</span> mix through the occupied density in a non-orthogonal basis.</p>
+<p>For open-shell references Planck uses the spin-resolved form, summing separate <span class="math-inline">\(\alpha\)</span> and <span class="math-inline">\(\beta\)</span> contributions:</p>
+<p><span class="math-display">\[
+B_{AB}^{\mathrm{Mayer}} =
+\sum_{\mu \in A}\sum_{\nu \in B}
+\left[
+(\mathbf P^\alpha \mathbf S)_{\mu\nu}(\mathbf P^\alpha \mathbf S)_{\nu\mu}
++
+(\mathbf P^\beta \mathbf S)_{\mu\nu}(\mathbf P^\beta \mathbf S)_{\nu\mu}
+\right]
+\]</span></p>
+<p>The diagonal <span class="math-inline">\(B_{AA}\)</span> is left at zero in the printed matrix, and the off-diagonal matrix is symmetrized.</p>
+<p><strong>Code path</strong></p>
+<p><code>src/scf/population.cpp</code> — <code>mayer_bond_order_analysis()</code></p>
+<p>The routine first validates the density dimensions and builds the AO lists for each atom.  It then forms either <span class="math-inline">\(\mathbf P\mathbf S\)</span> or the spin-resolved <span class="math-inline">\(\mathbf P^\alpha\mathbf S\)</span> / <span class="math-inline">\(\mathbf P^\beta\mathbf S\)</span> products and loops over atom pairs <span class="math-inline">\(A < B\)</span>.  For each AO pair <span class="math-inline">\(\mu \in A\)</span>, <span class="math-inline">\(\nu \in B\)</span> it accumulates the appropriate product into a dense <code>natoms × natoms</code> bond-order matrix.  <code>src/driver.cpp</code> prints the final matrix below the Mulliken and Löwdin tables whenever population reporting is enabled.</p>
 <h3 id="electric-dipole-moment">Electric Dipole Moment</h3>
 <p><strong>Theory</strong></p>
 <p>The electronic contribution to the electric dipole moment is</p>
@@ -2129,7 +2231,10 @@ driver.cpp
 <tr><td>XC matrix assembly</td><td><code>src/dft/ks_matrix.cpp</code></td><td><code>assemble_xc_matrix</code></td></tr>
 <tr><td>KS potential matrices</td><td><code>src/dft/ks_matrix.cpp</code></td><td><code>combine_ks_potential</code></td></tr>
 <tr><td>KS-DFT driver</td><td><code>src/dft/driver.cpp</code></td><td><code>DFT::Driver::run</code></td></tr>
+<tr><td>TD-DFT / linear response (TDA)</td><td><code>src/dft/driver.cpp</code></td><td><code>run_linear_response_tda</code>, <code>print_linear_response_report</code></td></tr>
 <tr><td>Mulliken population analysis</td><td><code>src/scf/population.cpp</code></td><td><code>mulliken_population_analysis</code>, <code>gross_ao_population</code></td></tr>
+<tr><td>Löwdin population analysis</td><td><code>src/scf/population.cpp</code></td><td><code>lowdin_population_analysis</code>, <code>symmetric_overlap_sqrt</code></td></tr>
+<tr><td>Mayer bond orders</td><td><code>src/scf/population.cpp</code></td><td><code>mayer_bond_order_analysis</code></td></tr>
 <tr><td>Dipole / quadrupole AO integrals</td><td><code>src/integrals/os.cpp</code></td><td><code>_os_1d_moments</code>, <code>_compute_multipole_matrices</code></td></tr>
 <tr><td>Multipole moments (traceless)</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_multipole_moments</code></td></tr>
 <tr><td>RMP2 natural orbitals</td><td><code>src/post_hf/mp2.cpp</code></td><td><code>compute_rmp2_natural_orbitals</code></td></tr>
@@ -2145,7 +2250,7 @@ driver.cpp
 </tr></thead>
 <tbody>
 <tr><td>RHF and UHF SCF</td><td>Complete</td></tr>
-<tr><td>ROHF SCF</td><td>Complete (Guest–Saunders effective Fock; no SAD guess; post-HF not yet supported from ROHF reference)</td></tr>
+<tr><td>ROHF SCF</td><td>Complete (Guest–Saunders effective Fock with SAD guess; post-HF not yet supported from ROHF reference)</td></tr>
 <tr><td>Obara-Saika 1e and 2e integrals</td><td>Complete</td></tr>
 <tr><td>Rys quadrature ERIs</td><td>Complete</td></tr>
 <tr><td>Conventional and direct SCF</td><td>Complete</td></tr>
@@ -2174,6 +2279,7 @@ driver.cpp
 <tr><td>GGA XC functionals (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation)</td><td>Complete</td></tr>
 <tr><td>Arbitrary libxc functionals via integer ID</td><td>Complete</td></tr>
 <tr><td>Molecular grid (Treutler-Ahlrichs + Lebedev + Becke)</td><td>Complete</td></tr>
+<tr><td>Initial TD-DFT / linear response (closed-shell RKS, TDA-style singlets)</td><td>Complete</td></tr>
 <tr><td>DFT geometry optimization / gradients</td><td>Not implemented</td></tr>
 <tr><td>Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs)</td><td>Complete</td></tr>
 <tr><td>Range-separated and double-hybrid XC functionals</td><td>Not supported</td></tr>

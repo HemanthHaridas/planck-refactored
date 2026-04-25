@@ -138,6 +138,9 @@ def _chunk_term_bucket(
     terms: tuple[object, ...],
     workers: int,
 ) -> list[tuple[object, ...]]:
+    # Tiny workloads are cheaper to run serially than to pickle, dispatch, and
+    # merge across worker processes.  Once a bucket is large enough, split it
+    # into reasonably even chunks so each worker gets a similar amount of work.
     if workers <= 1 or len(terms) < workers * _MIN_CHUNK_TERMS:
         return [terms]
 
@@ -163,6 +166,9 @@ def _process_term_chunk(
     buckets: dict[tuple[object, ...], AlgebraTerm] = {}
     order: list[tuple[object, ...]] = []
 
+    # Projection is streamed term-by-term so we never materialize the full
+    # projected list for a large BCH expansion.  This keeps memory usage closer
+    # to "current chunk" size instead of "all terms for the manifold".
     projected_terms = iter(iter_projected_terms_from_terms(terms, manifold))
 
     while True:
@@ -178,6 +184,9 @@ def _process_term_chunk(
                 continue
             filtered_count += 1
 
+        # Many projected terms can be recognized as zero before the more
+        # expensive canonicalization step.  Pruning them here keeps the later
+        # merge/canonicalize passes focused on genuinely distinct algebra.
         if term_is_zero_before_canonicalization(projected):
             continue
         merge_exact_term_into_buckets(projected, raw_buckets, raw_order)
@@ -187,6 +196,9 @@ def _process_term_chunk(
     ]
 
     for raw_term in raw_terms:
+        # Canonicalization normalizes dummy-index naming and tensor ordering so
+        # algebraically equivalent terms acquire the same signature and can be
+        # merged into a single bucket.
         t1 = time.monotonic()
         canonical = canonicalize_term(raw_term)
         canonicalization_time += time.monotonic() - t1
@@ -220,6 +232,9 @@ def _generate_manifold_equation(
     buckets: dict[tuple[object, ...], AlgebraTerm] = {}
     order: list[tuple[object, ...]] = []
 
+    # First parallelization layer: split one manifold's BCH term bucket into
+    # chunks.  This is the right level when a single target equation dominates
+    # the runtime.
     chunk_terms = _chunk_term_bucket(terms, parallel_workers)
     if len(chunk_terms) == 1:
         chunk_results = [
@@ -239,6 +254,9 @@ def _generate_manifold_equation(
                     [connected_only] * len(chunk_terms),
                 ))
         except (OSError, PermissionError):
+            # Multiprocessing is opportunistic.  If the host disallows process
+            # creation or file-descriptor passing, we transparently fall back
+            # to the serial path instead of failing the generation request.
             chunk_results = [
                 _process_term_chunk(chunk, manifold, connected_only)
                 for chunk in chunk_terms
@@ -278,6 +296,8 @@ def _generate_manifold_equation(
     ]
     mstats["after_merge"] = len(canonical)
 
+    # The remaining passes are optional algebra simplifications layered after
+    # the canonical term list has been established.
     if collect_denominators and manifold not in ("energy", "reference"):
         canonical = collect_fock_diagonals(canonical)
         mstats["after_denom_collection"] = len(canonical)
@@ -399,6 +419,9 @@ def _find_prefix_bch_cache(
             continue
         if not set(candidate_ranks).issubset(method_ranks):
             continue
+        # Reuse is only valid when the cached method is a strict prefix in the
+        # excitation hierarchy, e.g. CCSD -> CCSDT.  Among valid candidates we
+        # prefer the longest prefix to minimize the amount of new BCH work.
         levels = _load_cached_bch_levels(child)
         if levels is None:
             continue
@@ -490,6 +513,9 @@ def generate_cc_equations(
     if targets is None:
         targets = targets_for_method(method)
 
+    # Build the symbolic Hamiltonian H and cluster operator T once, then reuse
+    # them throughout the pipeline.  Everything below transforms or projects
+    # the resulting BCH-expanded similarity-transformed Hamiltonian.
     H = build_hamiltonian()
     T = build_cluster(method)
 
@@ -528,6 +554,9 @@ def generate_cc_equations(
             T_delta = build_tn(delta_ranks[0])
             for rank in delta_ranks[1:]:
                 T_delta = T_delta + build_tn(rank)
+            # Reconstruct Hbar by continuing from the cached prefix BCH levels
+            # rather than restarting from H.  For higher-rank methods this can
+            # avoid repeating the most expensive lower-order commutators.
             Hbar, levels = bch_expand_from_prefix_levels(
                 prefix_levels,
                 T_prefix,
@@ -583,6 +612,9 @@ def generate_cc_equations(
 
     if pending:
         manifold_results: list[tuple[str, dict[str, int | float], list[AlgebraTerm]]] = []
+        # Second parallelization layer: distribute different manifolds across
+        # workers.  When we take this route, each worker handles its assigned
+        # manifold serially to avoid nested process pools.
         use_manifold_parallel = resolved_workers > 1 and len(pending) > 1
         if use_manifold_parallel:
             try:
@@ -598,6 +630,8 @@ def generate_cc_equations(
                         [1] * len(pending),
                     ))
             except (OSError, PermissionError):
+                # If manifold-level fan-out is unavailable, retry locally and
+                # still allow intra-manifold chunking via resolved_workers.
                 manifold_results = [
                     _generate_manifold_equation(
                         manifold,
@@ -630,6 +664,8 @@ def generate_cc_equations(
             if cache_root_path is not None:
                 _store_cached_manifold(cache_root_path, manifold, mstats, canonical)
 
+    # Preserve the caller-requested target order even if cache hits and parallel
+    # execution completed in a different sequence.
     stats.manifolds = {
         manifold: stats.manifolds[manifold]
         for manifold in target_tuple

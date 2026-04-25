@@ -82,6 +82,12 @@ namespace
         constexpr double merit_weight = 0.10;
         selection.merit = selection.energy + merit_weight * selection.sa_gnorm * selection.sa_gnorm;
 
+        // Candidate generation produces a menu of orbital directions from
+        // different heuristics (AH, Newton-like, fallback probes, root-first
+        // variants, ...).  This selector actually tests them by rotating the
+        // orbitals, re-evaluating the MCSCF state, and accepting only moves
+        // that improve energy/merit without clearly destabilizing the SA
+        // gradient.
         for (const auto &candidate : candidates)
         {
             for (double scale : CASSCF_MACRO_STEP_SCALES)
@@ -240,6 +246,10 @@ namespace HartreeFock::Correlation::CASSCF
         std::vector<int> all_mo_irr;
         if (have_sym && point_group_is_abelian_for_labels && !calc._info._scf.alpha.mo_symmetry.empty())
         {
+            // Only Abelian point groups are used for CI screening here because
+            // the current machinery assumes one-dimensional irrep products.
+            // Non-Abelian labels remain useful for reporting, but not for the
+            // determinant-space selection logic below.
             sym_ctx = build_symmetry_context(calc);
             if (!sym_ctx)
                 return std::unexpected(tag + ": failed to build an Abelian irrep product table for CI screening.");

@@ -10,6 +10,11 @@ namespace HartreeFock::Correlation::CC
             const RHFReference &reference,
             int excitation_rank)
         {
+            // Rank-r amplitudes/residuals are stored as dense tensors with
+            // occupied indices first and virtual indices second:
+            //   t_r(i1, ..., ir, a1, ..., ar)
+            // This helper produces the shape expected by every rank-specific
+            // buffer so allocation and validation stay consistent.
             std::vector<int> dims;
             dims.reserve(static_cast<std::size_t>(2 * excitation_rank));
             for (int i = 0; i < excitation_rank; ++i)
@@ -86,6 +91,8 @@ namespace HartreeFock::Correlation::CC
 
         ArbitraryOrderResiduals residuals;
         residuals.by_rank.reserve(static_cast<std::size_t>(max_excitation_rank));
+        // Allocate one zero-filled tensor per excitation manifold so the
+        // solver can treat CCSD, CCSDT, ... with the same update code.
         for (int rank = 1; rank <= max_excitation_rank; ++rank)
             residuals.by_rank.emplace_back(rank_dims(reference, rank), 0.0);
         return residuals;
@@ -97,6 +104,9 @@ namespace HartreeFock::Correlation::CC
         for (const auto &tensor : amps.by_rank)
             total_size += tensor.size();
 
+        // DIIS operates on flat vectors rather than ragged tensor collections.
+        // We therefore serialize the rank-1, rank-2, ... amplitude blocks into
+        // one contiguous vector while preserving their existing in-memory order.
         Eigen::VectorXd packed(static_cast<Eigen::Index>(total_size));
         Eigen::Index offset = 0;
         for (const auto &tensor : amps.by_rank)
@@ -115,6 +125,8 @@ namespace HartreeFock::Correlation::CC
         }
 
         Eigen::Index offset = 0;
+        // The inverse of pack_amplitudes(): restore the solver state back into
+        // the per-rank tensors after Jacobi updates and optional DIIS mixing.
         for (auto &tensor : amps.by_rank)
             for (double &value : tensor.data)
                 value = packed(offset++);
@@ -179,6 +191,10 @@ namespace HartreeFock::Correlation::CC
         Eigen::Index offset = 0;
         for (int rank = 1; rank <= amps.max_rank(); ++rank)
         {
+            // Pull rank-matched tensor views so each excitation manifold is
+            // updated against its own residual and denominator tensor.  Layout
+            // checks make the flattening logic below safe even if a caller
+            // constructed one of the storage objects incorrectly.
             auto amp = static_cast<const ArbitraryOrderRCCAmplitudes &>(amps).tensor(rank);
             if (!amp)
                 return std::unexpected("update_amplitudes_with_jacobi_diis: " + amp.error());
@@ -203,6 +219,10 @@ namespace HartreeFock::Correlation::CC
             double step_sum_sq = 0.0;
             for (std::size_t idx = 0; idx < amp->size(); ++idx)
             {
+                // Plain Jacobi step:
+                //   t <- t + damping * R / D
+                // Small denominators are skipped instead of amplified to avoid
+                // exploding updates from nearly singular orbital gaps.
                 double delta = 0.0;
                 if (std::abs(denom->data[idx]) >= 1e-12)
                     delta = damping * residual->data[idx] / denom->data[idx];
@@ -216,6 +236,9 @@ namespace HartreeFock::Correlation::CC
             offset += static_cast<Eigen::Index>(amp->size());
         }
 
+        // DIIS sees the fully packed amplitude/residual vectors so it can mix
+        // information across all excitation ranks at once instead of solving
+        // separate extrapolation problems for T1, T2, T3, ...
         diis.push(updated, residual_vec);
         if (use_diis && diis.ready())
         {
@@ -234,6 +257,10 @@ namespace HartreeFock::Correlation::CC
 
         if (use_diis && diis.size() >= 2)
         {
+            // Once DIIS changes the step, the per-rank RMS values computed from
+            // the raw Jacobi updates are no longer accurate.  Recompute them
+            // from the final extrapolated vector so diagnostics reflect the
+            // actual move accepted by the solver.
             metrics.step_rms_by_rank.clear();
             Eigen::Index rank_offset = 0;
             for (int rank = 1; rank <= amps.max_rank(); ++rank)

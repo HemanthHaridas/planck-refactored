@@ -1,0 +1,94 @@
+{
+  "cases": [
+    {
+      "id": "b_uccsdt_sto3g",
+      "script": "tests/pyscf/b_uccsdt_sto3g.py",
+      "kind": "cc",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "bh3_rccsdt_sto3g",
+      "script": "tests/pyscf/bh3_rccsdt_sto3g.py",
+      "kind": "cc",
+      "allowed_statuses": ["PASS", "PLANCK_NO_FALLBACK_DID_NOT_CONVERGE"]
+    },
+    {
+      "id": "ethylene_cas44_sto3g_sa2",
+      "script": "tests/pyscf/ethylene_cas44_sto3g_sa2.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "ethylene_casscf_321g",
+      "script": "tests/pyscf/ethylene_casscf_321g.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "ethylene_casscf_321g_nroot2",
+      "script": "tests/pyscf/ethylene_casscf_321g_nroot2.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "ethylene_casscf_ccpvdz",
+      "script": "tests/pyscf/ethylene_casscf_ccpvdz.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "h2_cas22_sto3g",
+      "script": "tests/pyscf/h2_cas22_sto3g.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "h2_rccsd_sto3g",
+      "script": "tests/pyscf/h2_rccsd_sto3g.py",
+      "kind": "cc",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "lih_cas22_sto3g",
+      "script": "tests/pyscf/lih_cas22_sto3g.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "lih_rccsdt_sto3g",
+      "script": "tests/pyscf/lih_rccsdt_sto3g.py",
+      "kind": "cc",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "water_cas44_631g",
+      "script": "tests/pyscf/water_cas44_631g.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "water_cas44_b1",
+      "script": "tests/pyscf/water_cas44_b1.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "water_cas44_ccpvdz",
+      "script": "tests/pyscf/water_cas44_ccpvdz.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "water_cas44_sto3g",
+      "script": "tests/pyscf/water_cas44_sto3g.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "water_cas44_sto3g_sa2",
+      "script": "tests/pyscf/water_cas44_sto3g_sa2.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    }
+  ]
+}

@@ -77,69 +77,159 @@ static void log_population_report(const HartreeFock::Calculator &calculator)
     if (!wants_population)
         return;
 
-    Eigen::MatrixXd total_density = calculator._info._scf.alpha.density;
-    Eigen::MatrixXd spin_density;
-    const Eigen::MatrixXd *spin_density_ptr = nullptr;
-    if (calculator._info._scf.is_uhf)
+    auto print_population_table = [](const std::string &title,
+                                     const HartreeFock::SCF::PopulationAnalysis &analysis)
     {
-        total_density += calculator._info._scf.beta.density;
-        spin_density = calculator._info._scf.alpha.density - calculator._info._scf.beta.density;
-        spin_density_ptr = &spin_density;
-    }
-
-    auto analysis = HartreeFock::SCF::mulliken_population_analysis(
-        calculator._molecule,
-        calculator._shells,
-        calculator._overlap,
-        total_density,
-        spin_density_ptr);
-
-    if (!analysis)
-    {
-        HartreeFock::Logger::logging(
-            HartreeFock::LogLevel::Warning,
-            "Population Analysis :",
-            "Unavailable: " + analysis.error());
-        HartreeFock::Logger::blank();
-        return;
-    }
-
-    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Mulliken Population Analysis :", "");
-    const int line_width = analysis->has_spin_population ? 94 : 78;
-    std::cout << std::string(line_width, '-') << "\n"
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, title + " :", "");
+        const int line_width = analysis.has_spin_population ? 94 : 78;
+        std::cout << std::string(line_width, '-') << "\n"
               << std::setw(6) << std::right << "Atom"
               << std::setw(8) << std::right << "Elem"
               << std::setw(8) << std::right << "Z"
               << std::setw(20) << std::right << "Population"
               << std::setw(20) << std::right << "Charge";
-    if (analysis->has_spin_population)
-        std::cout << std::setw(16) << std::right << "Spin";
-    std::cout << "\n"
+        if (analysis.has_spin_population)
+            std::cout << std::setw(16) << std::right << "Spin";
+        std::cout << "\n"
               << std::string(line_width, '-') << "\n";
 
-    for (const auto &atom : analysis->atoms)
+        for (const auto &atom : analysis.atoms)
+        {
+            const auto element = element_from_z(static_cast<std::uint64_t>(atom.atomic_number));
+            const std::string symbol = element ? std::string(element->symbol) : "?";
+            std::cout << std::setw(6) << std::right << (atom.atom_index + 1)
+                      << std::setw(8) << std::right << symbol
+                      << std::setw(8) << std::right << atom.atomic_number
+                      << std::setw(20) << std::right << std::fixed << std::setprecision(8) << atom.electron_population
+                      << std::setw(20) << std::right << std::fixed << std::setprecision(8) << atom.net_charge;
+            if (analysis.has_spin_population)
+                std::cout << std::setw(16) << std::right << std::fixed << std::setprecision(8) << atom.spin_population;
+            std::cout << "\n";
+        }
+
+        std::cout << std::string(line_width, '-') << "\n"
+                  << std::setw(22) << std::left << "  Total"
+                  << std::setw(20) << std::right << std::fixed << std::setprecision(8) << analysis.total_electrons
+                  << std::setw(20) << std::right << std::fixed << std::setprecision(8) << analysis.total_charge;
+        if (analysis.has_spin_population)
+            std::cout << std::setw(16) << std::right << std::fixed << std::setprecision(8) << analysis.total_spin_population;
+        std::cout << "\n"
+                  << std::string(line_width, '-') << "\n";
+        HartreeFock::Logger::blank();
+    };
+
+    auto print_mayer_bond_orders = [](const HartreeFock::Calculator &calculator,
+                                      const HartreeFock::SCF::MayerBondOrderAnalysis &analysis)
     {
-        const auto element = element_from_z(static_cast<std::uint64_t>(atom.atomic_number));
-        const std::string symbol = element ? std::string(element->symbol) : "?";
-        std::cout << std::setw(6) << std::right << (atom.atom_index + 1)
-                  << std::setw(8) << std::right << symbol
-                  << std::setw(8) << std::right << atom.atomic_number
-                  << std::setw(20) << std::right << std::fixed << std::setprecision(8) << atom.electron_population
-                  << std::setw(20) << std::right << std::fixed << std::setprecision(8) << atom.net_charge;
-        if (analysis->has_spin_population)
-            std::cout << std::setw(16) << std::right << std::fixed << std::setprecision(8) << atom.spin_population;
-        std::cout << "\n";
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Mayer Bond Orders :", "");
+        constexpr int line_width = 54;
+        std::cout << std::string(line_width, '-') << "\n"
+                  << std::setw(8) << std::right << "Atom A"
+                  << std::setw(8) << std::right << "Atom B"
+                  << std::setw(10) << std::right << "Elem A"
+                  << std::setw(10) << std::right << "Elem B"
+                  << std::setw(18) << std::right << "Bond Order"
+                  << "\n"
+                  << std::string(line_width, '-') << "\n";
+
+        for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
+        {
+            for (std::size_t b = a + 1; b < calculator._molecule.natoms; ++b)
+            {
+                const auto elem_a = element_from_z(static_cast<std::uint64_t>(
+                    calculator._molecule.atomic_numbers(static_cast<Eigen::Index>(a))));
+                const auto elem_b = element_from_z(static_cast<std::uint64_t>(
+                    calculator._molecule.atomic_numbers(static_cast<Eigen::Index>(b))));
+                const std::string sym_a = elem_a ? std::string(elem_a->symbol) : "?";
+                const std::string sym_b = elem_b ? std::string(elem_b->symbol) : "?";
+
+                std::cout << std::setw(8) << std::right << (a + 1)
+                          << std::setw(8) << std::right << (b + 1)
+                          << std::setw(10) << std::right << sym_a
+                          << std::setw(10) << std::right << sym_b
+                          << std::setw(18) << std::right << std::fixed << std::setprecision(8)
+                          << analysis.bond_orders(static_cast<Eigen::Index>(a), static_cast<Eigen::Index>(b))
+                          << "\n";
+            }
+        }
+
+        std::cout << std::string(line_width, '-') << "\n";
+        HartreeFock::Logger::blank();
+    };
+
+    const bool has_spin_channels =
+        calculator._scf._scf != HartreeFock::SCFType::RHF &&
+        calculator._info._scf.beta.density.rows() == calculator._info._scf.alpha.density.rows();
+
+    Eigen::MatrixXd total_density = calculator._info._scf.alpha.density;
+    Eigen::MatrixXd spin_density;
+    const Eigen::MatrixXd *spin_density_ptr = nullptr;
+    const Eigen::MatrixXd *alpha_density_ptr = nullptr;
+    const Eigen::MatrixXd *beta_density_ptr = nullptr;
+    if (has_spin_channels)
+    {
+        total_density += calculator._info._scf.beta.density;
+        spin_density = calculator._info._scf.alpha.density - calculator._info._scf.beta.density;
+        spin_density_ptr = &spin_density;
+        alpha_density_ptr = &calculator._info._scf.alpha.density;
+        beta_density_ptr = &calculator._info._scf.beta.density;
     }
 
-    std::cout << std::string(line_width, '-') << "\n"
-              << std::setw(22) << std::left << "  Total"
-              << std::setw(20) << std::right << std::fixed << std::setprecision(8) << analysis->total_electrons
-              << std::setw(20) << std::right << std::fixed << std::setprecision(8) << analysis->total_charge;
-    if (analysis->has_spin_population)
-        std::cout << std::setw(16) << std::right << std::fixed << std::setprecision(8) << analysis->total_spin_population;
-    std::cout << "\n"
-              << std::string(line_width, '-') << "\n";
-    HartreeFock::Logger::blank();
+    auto mulliken = HartreeFock::SCF::mulliken_population_analysis(
+        calculator._molecule,
+        calculator._shells,
+        calculator._overlap,
+        total_density,
+        spin_density_ptr);
+    if (!mulliken)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Population Analysis :",
+            "Unavailable: " + mulliken.error());
+        HartreeFock::Logger::blank();
+        return;
+    }
+    print_population_table("Mulliken Population Analysis", *mulliken);
+
+    auto lowdin = HartreeFock::SCF::lowdin_population_analysis(
+        calculator._molecule,
+        calculator._shells,
+        calculator._overlap,
+        total_density,
+        spin_density_ptr);
+    if (!lowdin)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Löwdin Population Analysis :",
+            "Unavailable: " + lowdin.error());
+        HartreeFock::Logger::blank();
+    }
+    else
+    {
+        print_population_table("Löwdin Population Analysis", *lowdin);
+    }
+
+    auto mayer = HartreeFock::SCF::mayer_bond_order_analysis(
+        calculator._molecule,
+        calculator._shells,
+        calculator._overlap,
+        total_density,
+        alpha_density_ptr,
+        beta_density_ptr);
+    if (!mayer)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Mayer Bond Orders :",
+            "Unavailable: " + mayer.error());
+        HartreeFock::Logger::blank();
+    }
+    else
+    {
+        print_mayer_bond_orders(calculator, *mayer);
+    }
 }
 
 int main(int argc, const char *argv[])

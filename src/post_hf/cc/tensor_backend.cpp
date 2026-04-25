@@ -355,6 +355,10 @@ namespace
         so.eps_occ = Eigen::VectorXd(so.n_occ);
         so.eps_virt = Eigen::VectorXd(so.n_virt);
 
+        // Start from the spatial-orbital RHF partition and duplicate each
+        // orbital energy into alpha/beta spin-orbital slots.  The tensor CC
+        // backend then works entirely in spin-orbital indexing even though the
+        // source SCF reference is restricted.
         for (int i = 0; i < so.n_occ; ++i)
             so.eps_occ(i) = base.eps_occ(spatial_index(i));
         for (int a = 0; a < so.n_virt; ++a)
@@ -388,6 +392,10 @@ namespace
             .vvvv = Tensor4D(so.n_virt, so.n_virt, so.n_virt, so.n_virt, 0.0),
         };
 
+        // Expand each spatial block into antisymmetrized spin-orbital blocks.
+        // The `same_spin` gates encode the RHF selection rule that a spatial
+        // integral contributes only when the corresponding spin labels match,
+        // and the second term in each assignment inserts the exchange piece.
         for (int i = 0; i < so.n_occ; ++i)
             for (int j = 0; j < so.n_occ; ++j)
                 for (int k = 0; k < so.n_occ; ++k)
@@ -500,6 +508,10 @@ namespace
             .vvvv = Tensor4D(so.n_virt, so.n_virt, so.n_virt, so.n_virt, 0.0),
         };
 
+        // This variant keeps plain chemists-notation Coulomb blocks without the
+        // antisymmetrization step above.  The generated RCCSDT path and the
+        // PySCF-aligned "dressed intermediate" experiments consume these raw
+        // blocks directly and apply their own permutation algebra later.
         for (int i = 0; i < so.n_occ; ++i)
             for (int j = 0; j < so.n_occ; ++j)
                 for (int k = 0; k < so.n_occ; ++k)

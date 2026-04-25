@@ -2,6 +2,7 @@
 #define HF_LOGGING_H
 
 #include <iomanip>
+#include <format>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -559,6 +560,8 @@ const inline std::string map_enum<HartreeFock::CalculationType>(HartreeFock::Cal
         return "Geometry Optimization + Frequency";
     case HartreeFock::CalculationType::ImaginaryFollow:
         return "Imaginary Mode Follow";
+    case HartreeFock::CalculationType::LinearResponse:
+        return "TDDFT / Linear Response";
     }
     return "Unknown";
 }

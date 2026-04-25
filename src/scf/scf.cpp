@@ -499,15 +499,26 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
          calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
 
-    if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
-        return std::unexpected("SAD guess is currently implemented only for RHF");
-
-    Eigen::MatrixXd Pa = use_chk_uhf
-                             ? calculator._info._scf.alpha.density
-                             : make_density_spin(n_alpha);
-    Eigen::MatrixXd Pb = use_chk_uhf
-                             ? calculator._info._scf.beta.density
-                             : make_density_spin(n_beta);
+    Eigen::MatrixXd Pa, Pb;
+    if (use_chk_uhf)
+    {
+        Pa = calculator._info._scf.alpha.density;
+        Pb = calculator._info._scf.beta.density;
+    }
+    else if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
+    {
+        auto sad_res = HartreeFock::SCF::compute_sad_guess_open_shell(
+            calculator, n_alpha, n_beta);
+        if (!sad_res)
+            return std::unexpected("UHF SAD guess failed: " + sad_res.error());
+        Pa = std::move(sad_res->first);
+        Pb = std::move(sad_res->second);
+    }
+    else
+    {
+        Pa = make_density_spin(n_alpha);
+        Pb = make_density_spin(n_beta);
+    }
 
     const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
     const double level_shift = calculator._scf._level_shift;
@@ -910,8 +921,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
 
     if (n_open < 0)
         return std::unexpected("ROHF requires n_alpha >= n_beta");
-    if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
-        return std::unexpected("SAD guess is currently implemented only for RHF");
 
     auto X_result = build_orthogonalizer(S);
     if (!X_result)
@@ -992,6 +1001,15 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
         if (Pa.rows() != static_cast<Eigen::Index>(nbasis) ||
             Pb.rows() != static_cast<Eigen::Index>(nbasis))
             return std::unexpected("ROHF checkpoint density is missing alpha/beta spin channels");
+    }
+    else if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
+    {
+        auto sad_res = HartreeFock::SCF::compute_sad_guess_open_shell(
+            calculator, n_alpha, n_beta);
+        if (!sad_res)
+            return std::unexpected("ROHF SAD guess failed: " + sad_res.error());
+        Pa = std::move(sad_res->first);
+        Pb = std::move(sad_res->second);
     }
     else
     {

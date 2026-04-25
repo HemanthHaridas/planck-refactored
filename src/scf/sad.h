@@ -4,6 +4,7 @@
 #include <Eigen/Core>
 #include <expected>
 #include <string>
+#include <utility>
 #include <unordered_map>
 
 #include "base/types.h"
@@ -40,6 +41,23 @@ namespace HartreeFock
         //   - n_electrons = sum(Z) - charge must be even
         std::expected<Eigen::MatrixXd, std::string> compute_sad_guess_rhf(
             const HartreeFock::Calculator &calc);
+
+        // Compute spin-resolved SAD initial densities for open-shell SCF.
+        //
+        // The atomic step is the same as in RHF SAD (atomic UHF + shell-wise
+        // spherical averaging), but the molecular projection is performed
+        // separately for alpha and beta occupations:
+        //   X = S^{-1/2}  →  diagonalize X^T P_alpha X and X^T P_beta X
+        //   → occupy the top n_alpha / n_beta natural orbitals with unit
+        //      occupancy in each spin channel.
+        //
+        // The result can be used directly as the initial {P_alpha, P_beta}
+        // guess for both UHF and ROHF.
+        std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+        compute_sad_guess_open_shell(
+            const HartreeFock::Calculator &calc,
+            int n_alpha,
+            int n_beta);
 
     } // namespace SCF
 } // namespace HartreeFock

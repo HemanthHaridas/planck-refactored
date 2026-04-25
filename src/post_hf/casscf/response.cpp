@@ -148,6 +148,10 @@ namespace
         if (!have_full_cache)
             return dga_active_only;
 
+        // The active-only derivative above captures rotations entirely within
+        // the active block.  When the cache is available, extend it with the
+        // core/virtual -> active couplings by differentiating the mixed-basis
+        // (p,u,v,w) integral cache against the full orbital rotation.
         std::vector<double> dga = dga_active_only;
         for (int t = 0; t < n_act; ++t)
             for (int u = 0; u < n_act; ++u)
@@ -277,6 +281,10 @@ namespace
         op.pairs = symmetry_allowed_pairs(n_core, n_act, n_virt, mo_irreps, use_sym);
         op.nbasis = nbasis;
 
+        // For modest pair counts we explicitly build the orbital-response
+        // matrix and solve in that reduced pair basis.  Larger problems fall
+        // back to matrix-free actions elsewhere to avoid dense O(n_pair^2)
+        // storage and setup costs.
         if (orbital_hessian_ctx == nullptr || op.pairs.empty() || static_cast<int>(op.pairs.size()) > max_dense_pairs)
             return op;
 

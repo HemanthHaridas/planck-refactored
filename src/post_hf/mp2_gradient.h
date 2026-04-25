@@ -21,7 +21,11 @@ namespace HartreeFock::Correlation
         Eigen::VectorXd eps_occ;
         Eigen::VectorXd eps_virt;
 
-        // Stored in row-major [i,a,j,b] order.
+        // Stored in row-major [i,a,j,b] order so all downstream MP2 routines
+        // can share the same flat indexing helper.  `iajb` is the direct MO
+        // integral, `ibja` is the exchanged view, `t2` is the plain MP2
+        // amplitude, and `tau` is the spin-adapted combination used in RMP2
+        // energies and densities.
         std::vector<double> iajb;
         std::vector<double> ibja;
         std::vector<double> t2;
@@ -56,13 +60,16 @@ namespace HartreeFock::Correlation
 
     struct UMP2GradientIntermediates
     {
+        // Spin-resolved relaxed-density-like objects used by the analytic UMP2
+        // gradient driver.  The current implementation keeps the correction in
+        // AO form because the final derivative contraction is also AO-based.
         Eigen::MatrixXd P_alpha_ao;        // alpha HF + correlated first-order density
         Eigen::MatrixXd P_beta_ao;         // beta HF + correlated first-order density
-        Eigen::MatrixXd P_alpha_corr_ao;   // alpha correlated density correction
-        Eigen::MatrixXd P_beta_corr_ao;    // beta correlated density correction
+        Eigen::MatrixXd P_alpha_corr_ao;   // alpha correlated density correction only
+        Eigen::MatrixXd P_beta_corr_ao;    // beta correlated density correction only
         Eigen::MatrixXd P_total_ao;        // spin-summed HF + correlated first-order density
         Eigen::MatrixXd W_ao;              // spin-summed energy-weighted density
-        std::vector<double> Gamma_pair_ao; // explicit UMP2 pair-density correction
+        std::vector<double> Gamma_pair_ao; // explicit AO-space UMP2 pair-density term
     };
 
     std::expected<RMP2AmplitudeData, std::string> build_rmp2_amplitudes(

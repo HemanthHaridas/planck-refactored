@@ -507,6 +507,24 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+    set(PLANCK_PYSCF_PYTHON "" CACHE FILEPATH
+        "Python interpreter with PySCF installed for tests/pyscf")
+    set(_planck_pyscf_default "${CMAKE_SOURCE_DIR}/tests/pyscf/.venv/bin/python")
+    if(NOT PLANCK_PYSCF_PYTHON)
+        if(EXISTS "${_planck_pyscf_default}")
+            set(PLANCK_PYSCF_PYTHON "${_planck_pyscf_default}")
+        else()
+            set(PLANCK_PYSCF_PYTHON "${Python3_EXECUTABLE}")
+        endif()
+    endif()
+
+    execute_process(
+        COMMAND ${PLANCK_PYSCF_PYTHON} -c "import pyscf"
+        RESULT_VARIABLE PLANCK_PYSCF_IMPORT_RESULT
+        OUTPUT_QUIET
+        ERROR_QUIET
+    )
+
     add_test(
         NAME planck-regression-smoke
         COMMAND ${Python3_EXECUTABLE}
@@ -567,6 +585,27 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         USES_TERMINAL
     )
+
+    if(PLANCK_PYSCF_IMPORT_RESULT EQUAL 0)
+        add_test(
+            NAME planck-pyscf-equivalence
+            COMMAND ${PLANCK_PYSCF_PYTHON}
+                    ${CMAKE_SOURCE_DIR}/tests/pyscf/run_all.py
+                    --python ${PLANCK_PYSCF_PYTHON}
+        )
+
+        add_custom_target(pyscf-equivalence
+            COMMAND ${PLANCK_PYSCF_PYTHON}
+                    ${CMAKE_SOURCE_DIR}/tests/pyscf/run_all.py
+                    --python ${PLANCK_PYSCF_PYTHON}
+            DEPENDS hartree-fock
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            USES_TERMINAL
+        )
+    else()
+        message(STATUS
+            "PySCF tests : skipped (set PLANCK_PYSCF_PYTHON to a Python with PySCF installed)")
+    endif()
 endif()
 
 # ── Basis set fetcher ─────────────────────────────────────────────────────────

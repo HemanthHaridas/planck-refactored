@@ -259,7 +259,15 @@ namespace HartreeFock::IO
 
                 {"imagfollow", HartreeFock::CalculationType::ImaginaryFollow},
                 {"imag_follow", HartreeFock::CalculationType::ImaginaryFollow},
-                {"irc_follow", HartreeFock::CalculationType::ImaginaryFollow}};
+                {"irc_follow", HartreeFock::CalculationType::ImaginaryFollow},
+
+                {"tddft", HartreeFock::CalculationType::LinearResponse},
+                {"td-dft", HartreeFock::CalculationType::LinearResponse},
+                {"td_dft", HartreeFock::CalculationType::LinearResponse},
+                {"linearresponse", HartreeFock::CalculationType::LinearResponse},
+                {"linear_response", HartreeFock::CalculationType::LinearResponse},
+                {"linear-response", HartreeFock::CalculationType::LinearResponse},
+                {"lr", HartreeFock::CalculationType::LinearResponse}};
 
         return lookup_enum(_table, value, "Invalid Calculation Type : ");
     }
@@ -867,6 +875,27 @@ namespace HartreeFock::IO
                  {
                      dft._correlation = HartreeFock::XCCorrelationFunctional::Custom;
                      dft._correlation_id = std::stoi(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"lr_nstates", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     dft._lr_nstates = std::stoi(value);
+                     if (dft._lr_nstates < 1)
+                         return std::unexpected("lr_nstates must be >= 1");
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tddft_nstates", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     dft._lr_nstates = std::stoi(value);
+                     if (dft._lr_nstates < 1)
+                         return std::unexpected("tddft_nstates must be >= 1");
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nstates", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     dft._lr_nstates = std::stoi(value);
+                     if (dft._lr_nstates < 1)
+                         return std::unexpected("nstates must be >= 1");
                      return std::expected<void, std::string>{};
                  }}};
 

@@ -5,6 +5,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -269,11 +270,18 @@ namespace
     // ── Atomic UHF ───────────────────────────────────────────────────────────
 
     // Runs atomic UHF for element Z in the given atomic basis (single atom at
-    // the origin).  Returns (P_alpha + P_beta, S_atom) — both in the atomic AO
+    // the origin).  Returns (P_alpha, P_beta, S_atom) — all in the atomic AO
     // basis ordering (size n_at × n_at).
     // Inherits integral engine and ERI tolerance from the molecular calculator.
     // All Logger output is suppressed via ScopedSilence.
-    static std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+    struct AtomicSadSpinDensities
+    {
+        Eigen::MatrixXd alpha;
+        Eigen::MatrixXd beta;
+        Eigen::MatrixXd overlap;
+    };
+
+    static std::expected<AtomicSadSpinDensities, std::string>
     run_atomic_uhf(int Z,
                    const HartreeFock::Basis &atomic_basis,
                    const HartreeFock::Calculator &mol_calc)
@@ -339,10 +347,10 @@ namespace
                     "SAD: atomic UHF failed for Z = " + std::to_string(Z) + ": " + result.error());
         }
 
-        Eigen::MatrixXd P_atom =
-            atom._info._scf.alpha.density + atom._info._scf.beta.density;
-
-        return std::pair{std::move(P_atom), std::move(S_at)};
+        return AtomicSadSpinDensities{
+            .alpha = atom._info._scf.alpha.density,
+            .beta = atom._info._scf.beta.density,
+            .overlap = std::move(S_at)};
     }
 
     // ── Spherical averaging ───────────────────────────────────────────────────
@@ -493,6 +501,35 @@ namespace
         return 0.5 * (P + P.transpose());
     }
 
+    // Projects one raw spin channel onto the nearest proper idempotent
+    // spin-density with trace n_occ in the molecular AO metric.
+    static std::expected<Eigen::MatrixXd, std::string> project_raw_sad_to_spin_density(
+        const Eigen::MatrixXd &P_raw,
+        const Eigen::MatrixXd &S_mol,
+        int n_occ,
+        double thresh)
+    {
+        if (n_occ < 0)
+            return std::unexpected("SAD: spin occupation cannot be negative");
+        if (n_occ > P_raw.rows())
+            return std::unexpected("SAD: spin occupation exceeds AO dimension");
+
+        const Eigen::MatrixXd X = make_thresholded_inverse_sqrt(S_mol, thresh);
+
+        Eigen::MatrixXd P_bar = X.transpose() * P_raw * X;
+        P_bar = 0.5 * (P_bar + P_bar.transpose());
+
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_bar);
+        if (es.info() != Eigen::Success)
+            return std::unexpected("SAD: failed to diagonalize orthogonalized spin density");
+
+        const Eigen::MatrixXd U_occ = es.eigenvectors().rightCols(n_occ);
+        const Eigen::MatrixXd C_occ = X * U_occ;
+
+        Eigen::MatrixXd P = C_occ * C_occ.transpose();
+        return 0.5 * (P + P.transpose());
+    }
+
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -582,7 +619,9 @@ namespace HartreeFock
                 auto atomic_res = run_atomic_uhf(Z, atomic_basis, calc);
                 if (!atomic_res)
                     return std::unexpected(atomic_res.error());
-                auto [P_atom, S_atom] = std::move(*atomic_res);
+                Eigen::MatrixXd P_atom =
+                    std::move(atomic_res->alpha) + std::move(atomic_res->beta);
+                const Eigen::MatrixXd &S_atom = atomic_res->overlap;
 
                 spherical_average_atomic_density(atomic_basis, S_atom, P_atom, 1e-10);
                 P_atom = 0.5 * (P_atom + P_atom.transpose());
@@ -600,6 +639,76 @@ namespace HartreeFock
             // ── Step 4: reconstruct proper RHF density ────────────────────────
             return project_raw_sad_to_rhf_density(
                 P_raw, calc._overlap, n_electrons, 1e-8);
+        }
+
+        std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+        compute_sad_guess_open_shell(
+            const HartreeFock::Calculator &calc,
+            int n_alpha,
+            int n_beta)
+        {
+            if (n_alpha < 0 || n_beta < 0)
+                return std::unexpected("SAD: alpha and beta occupations must be non-negative");
+            if (n_alpha < n_beta)
+                return std::unexpected("SAD: expected n_alpha >= n_beta for open-shell SAD");
+
+            const std::string gbs_file =
+                calc._basis._basis_path + "/" + calc._basis._basis_name;
+            auto atomic_bases_res = read_gbs_basis_atomic(
+                gbs_file,
+                calc._molecule,
+                calc._basis._basis);
+            if (!atomic_bases_res)
+                return std::unexpected(atomic_bases_res.error());
+            auto atomic_bases = std::move(*atomic_bases_res);
+
+            std::unordered_map<std::string, Eigen::MatrixXd> atomic_Pa_cache;
+            std::unordered_map<std::string, Eigen::MatrixXd> atomic_Pb_cache;
+
+            for (auto &[sym, atomic_basis] : atomic_bases)
+            {
+                auto element = element_from_symbol(sym);
+                if (!element)
+                    return std::unexpected(element.error());
+                const int Z = static_cast<int>(element->Z);
+
+                auto atomic_res = run_atomic_uhf(Z, atomic_basis, calc);
+                if (!atomic_res)
+                    return std::unexpected(atomic_res.error());
+
+                Eigen::MatrixXd P_alpha = std::move(atomic_res->alpha);
+                Eigen::MatrixXd P_beta = std::move(atomic_res->beta);
+                const Eigen::MatrixXd &S_atom = atomic_res->overlap;
+
+                spherical_average_atomic_density(atomic_basis, S_atom, P_alpha, 1e-10);
+                spherical_average_atomic_density(atomic_basis, S_atom, P_beta, 1e-10);
+                P_alpha = 0.5 * (P_alpha + P_alpha.transpose());
+                P_beta = 0.5 * (P_beta + P_beta.transpose());
+
+                atomic_Pa_cache[sym] = std::move(P_alpha);
+                atomic_Pb_cache[sym] = std::move(P_beta);
+            }
+
+            auto raw_alpha = assemble_raw_sad_density(calc, atomic_Pa_cache);
+            if (!raw_alpha)
+                return std::unexpected(raw_alpha.error());
+            auto raw_beta = assemble_raw_sad_density(calc, atomic_Pb_cache);
+            if (!raw_beta)
+                return std::unexpected(raw_beta.error());
+
+            Eigen::MatrixXd Pa_raw = 0.5 * ((*raw_alpha) + raw_alpha->transpose());
+            Eigen::MatrixXd Pb_raw = 0.5 * ((*raw_beta) + raw_beta->transpose());
+
+            auto Pa = project_raw_sad_to_spin_density(Pa_raw, calc._overlap, n_alpha, 1e-8);
+            if (!Pa)
+                return std::unexpected(Pa.error());
+            auto Pb = project_raw_sad_to_spin_density(Pb_raw, calc._overlap, n_beta, 1e-8);
+            if (!Pb)
+                return std::unexpected(Pb.error());
+
+            return std::pair<Eigen::MatrixXd, Eigen::MatrixXd>{
+                std::move(*Pa),
+                std::move(*Pb)};
         }
 
     } // namespace SCF

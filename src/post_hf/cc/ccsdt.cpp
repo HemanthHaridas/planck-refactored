@@ -16,6 +16,9 @@ namespace
 
     [[nodiscard]] std::optional<RCCSDTBackend> parse_rccsdt_backend_override() noexcept
     {
+        // A simple environment-variable override is enough for development and
+        // regression testing: it lets us force a backend without threading a
+        // debugging option through the public input language.
         const char *value = std::getenv("PLANCK_RCCSDT_BACKEND");
         if (value == nullptr)
             return std::nullopt;
@@ -91,6 +94,10 @@ namespace HartreeFock::Correlation::CC
         const std::optional<RCCSDTBackend> override = parse_rccsdt_backend_override();
         const RCCSDTBackend backend = override.value_or(choose_rccsdt_backend(*selector_ref));
 
+        // Backend choice is centralized here so all RCCSDT entry points share
+        // the same policy: small systems can use the determinant-space teaching
+        // backend, larger ones move to tensor implementations, and developers
+        // can still pin a backend explicitly for debugging.
         if (override.has_value())
         {
             HartreeFock::Logger::logging(
@@ -136,6 +143,8 @@ namespace HartreeFock::Correlation::CC
             calculator, *system_res, 2, "RCCSDT[CCSD-REF] :");
         if (!ccsd_res)
             return std::unexpected("run_rccsdt: failed to build CCSD reference energy: " + ccsd_res.error());
+        // Record a same-backend CCSD reference so later reporting can separate
+        // the triples correction from the underlying doubles contribution.
         calculator._ccsd_reference_correlation_energy = *ccsd_res;
         calculator._have_ccsd_reference_energy = true;
 

@@ -81,7 +81,8 @@ namespace HartreeFock
         GeomOpt,          // Geometry Optimization
         Frequency,        // Frequency Calculation
         GeomOptFrequency, // Geometry optimization followed by frequency calculation
-        ImaginaryFollow   // Freq → displace along largest imaginary mode → geomopt
+        ImaginaryFollow,  // Freq → displace along largest imaginary mode → geomopt
+        LinearResponse    // TDDFT / linear-response excited states
     };
 
     enum class SCFMode
@@ -381,6 +382,7 @@ namespace HartreeFock
         XCCorrelationFunctional _correlation = XCCorrelationFunctional::PBE;
         int _exchange_id = 0;    // 0 => resolve from _exchange through libxc
         int _correlation_id = 0; // 0 => resolve from _correlation through libxc
+        int _lr_nstates = 5;
         bool _use_sao_blocking = true;
         bool _print_grid_summary = true;
         bool _save_checkpoint = false;

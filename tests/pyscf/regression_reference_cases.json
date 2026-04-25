@@ -1,0 +1,134 @@
+{
+  "cases": [
+    {
+      "id": "h2_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_h2.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "lih_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_lih.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "hf_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_hf.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_water.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "nh3_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_nh3.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "ch4_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_ch4.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_radical_cation_uhf_ump2_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_uhf_ump2_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-6
+      }
+    },
+    {
+      "id": "h2_rccsdt_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/h2_rccsdt_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 5e-8,
+        "rccsdt_total_energy": 3e-7
+      }
+    },
+    {
+      "id": "lih_rccsdt_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/lih_rccsdt_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 5e-8,
+        "rccsdt_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_rccsdt_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/water_rccsdt_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 5e-8,
+        "rccsdt_total_energy": 1e-6
+      }
+    },
+    {
+      "id": "b_uccsd_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/b_uccsd_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "uccsd_total_energy": 1e-6
+      }
+    },
+    {
+      "id": "b_uccsdt_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/b_uccsdt_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "uccsdt_total_energy": 1e-6
+      }
+    },
+    {
+      "id": "water_casscf_c2v_b1",
+      "mode": "script",
+      "script": "tests/pyscf/water_cas44_b1.py",
+      "parse_labels": {
+        "casscf_total_energy": "CASSCF_ENERGY"
+      },
+      "tolerances": {
+        "casscf_total_energy": 1e-5
+      }
+    },
+    {
+      "id": "water_casscf_ccpvdz_a1",
+      "mode": "script",
+      "script": "tests/pyscf/water_cas44_ccpvdz.py",
+      "parse_labels": {
+        "casscf_total_energy": "CASSCF_ENERGY"
+      },
+      "tolerances": {
+        "casscf_total_energy": 1e-5
+      }
+    }
+  ]
+}

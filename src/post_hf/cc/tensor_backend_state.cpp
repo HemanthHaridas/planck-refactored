@@ -93,6 +93,9 @@ namespace HartreeFock::Correlation::CC
         const Eigen::MatrixXd fock_mo =
             C_full.transpose() * calculator._info._scf.alpha.fock * C_full;
 
+        // Keep both views of the RHF reference: the original occupied/virtual
+        // partition plus explicit oo/ov/vv Fock blocks that the tensor CC
+        // kernels consume directly without repeated MO slicing.
         CanonicalRHFCCReference reference{
             .orbital_partition = std::move(*ref_res),
             .f_oo = Tensor2D(base.n_occ, base.n_occ, 0.0),
@@ -131,6 +134,9 @@ namespace HartreeFock::Correlation::CC
         TensorCCBlockCache blocks;
         try
         {
+            // Materialize the standard RHF MO-ERI blocks once up front.  The
+            // tensor RCCSD(T) paths pay this memory cost in exchange for much
+            // simpler and faster residual kernels later on.
             blocks.oooo = Tensor4D(
                 partition.n_occ, partition.n_occ, partition.n_occ, partition.n_occ,
                 HartreeFock::Correlation::transform_eri(
@@ -254,6 +260,9 @@ namespace HartreeFock::Correlation::CC
     std::string format_tensor_memory_summary(
         const TensorRCCSDTState &state)
     {
+        // Report per-block sizes instead of only a grand total so users can see
+        // which ERI block dominates memory when a tensor calculation becomes
+        // impractical for a given basis.
         std::ostringstream out;
         out << "Tensor RCCSDT memory estimate:";
         for (const TensorMemoryBlock &block : state.mo_blocks.memory_report)
