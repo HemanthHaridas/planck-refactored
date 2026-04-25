@@ -128,6 +128,20 @@ namespace HartreeFock
         PBE
     };
 
+    enum class LinearResponseMethod
+    {
+        TDA,
+        Casida
+    };
+
+    enum class LinearResponseSpin
+    {
+        Auto,
+        Singlet,
+        Triplet,
+        SpinConserving
+    };
+
     enum class OptCoords
     {
         Cartesian, // Optimize in Cartesian coordinates (L-BFGS, default)
@@ -383,6 +397,8 @@ namespace HartreeFock
         int _exchange_id = 0;    // 0 => resolve from _exchange through libxc
         int _correlation_id = 0; // 0 => resolve from _correlation through libxc
         int _lr_nstates = 5;
+        LinearResponseMethod _lr_method = LinearResponseMethod::Casida;
+        LinearResponseSpin _lr_spin = LinearResponseSpin::Auto;
         bool _use_sao_blocking = true;
         bool _print_grid_summary = true;
         bool _save_checkpoint = false;

@@ -474,14 +474,50 @@
       "expected_exit_code": 0,
       "contains": [
         "Reference :                   RKS",
-        "TDDFT / Linear Response :     TDA-style singlet solver",
+        "TDDFT / Linear Response :     full Casida singlet solver",
         "Root  1 dominant configurations:",
         "DFT Energy :"
       ],
       "checks": [
         {"type": "metric_eq", "metric": "point_group", "expected": "Dinfh"},
         {"type": "metric_close", "metric": "dft_total_energy", "expected": -1.1497054828, "atol": 1e-9},
-        {"type": "metric_close", "metric": "lr_root1_energy_ev", "expected": 29.991901, "atol": 1e-6}
+        {"type": "metric_close", "metric": "lr_root1_energy_ev", "expected": 25.406411, "atol": 1e-6}
+      ]
+    },
+    {
+      "id": "h2_dft_tddft_triplet_pbe_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_tddft_triplet_pbe.hfinp",
+      "executable": "planck-dft",
+      "tags": ["smoke", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "TDDFT / Linear Response :     full Casida triplet solver",
+        "Root  1 dominant configurations:",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "Dinfh"},
+        {"type": "metric_close", "metric": "dft_total_energy", "expected": -1.1497054828, "atol": 1e-9},
+        {"type": "metric_close", "metric": "lr_root1_energy_ev", "expected": 16.500027, "atol": 1e-6}
+      ]
+    },
+    {
+      "id": "water_triplet_uks_tddft_pbe_sto3g",
+      "input": "tests/inputs/regression/dft/water_triplet_uks_tddft_pbe_sto3g.hfinp",
+      "executable": "planck-dft",
+      "tags": ["smoke", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   UKS",
+        "TDDFT / Linear Response :     full Casida spin-conserving solver",
+        "Root  1 dominant configurations:",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
+        {"type": "metric_close", "metric": "dft_total_energy", "expected": -74.8467253782, "atol": 1e-9},
+        {"type": "metric_close", "metric": "lr_root1_energy_ev", "expected": 3.122993, "atol": 1e-6}
       ]
     },
     {
