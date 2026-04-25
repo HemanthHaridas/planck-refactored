@@ -1,4 +1,4 @@
-#include "scf/population.h"
+#include "populations/population.h"
 
 #include <Eigen/Core>
 

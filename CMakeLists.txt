@@ -162,6 +162,11 @@ file(GLOB SCF_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/scf/*.cpp
 )
 
+file(GLOB POPULATIONS_SRC CONFIGURE_DEPENDS
+    ${SRC_DIR}/populations/*.h
+    ${SRC_DIR}/populations/*.cpp
+)
+
 # Collect sources automatically
 file(GLOB POSTHF_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/post_hf/*.h
@@ -217,6 +222,7 @@ add_executable(hartree-fock
     ${INT_SRC}
     ${IO_SRC}
     ${SCF_SRC}
+    ${POPULATIONS_SRC}
     ${POSTHF_SRC}
     ${GRADIENT_SRC}
     ${OPT_SRC}
@@ -252,6 +258,7 @@ add_executable(planck-dft
     ${INT_SRC}
     ${IO_SRC}
     ${SCF_SRC}
+    ${POPULATIONS_SRC}
     ${POSTHF_SRC}
     ${GRADIENT_SRC}
     ${OPT_SRC}
@@ -397,12 +404,13 @@ if(BUILD_TESTING)
     add_executable(planck-multipole-integrals
         ${CMAKE_SOURCE_DIR}/tests/multipole_integrals.cpp
         ${INT_SRC}
+        ${POPULATIONS_SRC}
         ${LOOKUP_SRC}
     )
 
     add_executable(planck-population-analysis
         ${CMAKE_SOURCE_DIR}/tests/population_analysis.cpp
-        ${SRC_DIR}/scf/population.cpp
+        ${POPULATIONS_SRC}
     )
 
     add_executable(planck-cc-arbitrary-solver
