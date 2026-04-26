@@ -82,8 +82,8 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
         "sphere_radii": [_SPH_R_Z.get(a.Z, 0.55) for a in atoms],
         "num_atoms": len(atoms),
         "num_electrons": n_elec,
-        "charge": 0,
-        "multiplicity": 1,
+        "charge": run.charge if run.charge is not None else 0,
+        "multiplicity": run.multiplicity if run.multiplicity is not None else 1,
     }
 
     # SCF
@@ -187,6 +187,43 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
             ),
         }
 
+    # TDDFT / UV-Vis
+    tddft_data = None
+    if run.tddft_roots or run.uvvis_points or run.uvvis_peaks:
+        tddft_data = {
+            "roots": [
+                {
+                    "root": root.root,
+                    "omega_eh": float(root.omega_eh),
+                    "omega_ev": float(root.omega_ev),
+                    "wavelength_nm": float(root.wavelength_nm),
+                    "oscillator_strength": float(root.oscillator_strength),
+                }
+                for root in run.tddft_roots
+            ],
+            "uvvis_points": [
+                {
+                    "energy_ev": float(point.energy_ev),
+                    "wavelength_nm": float(point.wavelength_nm),
+                    "intensity": float(point.intensity),
+                }
+                for point in run.uvvis_points
+            ],
+            "uvvis_peaks": [
+                {
+                    "energy_ev": float(point.energy_ev),
+                    "wavelength_nm": float(point.wavelength_nm),
+                    "intensity": float(point.intensity),
+                }
+                for point in run.uvvis_peaks
+            ],
+            "uvvis_sigma_ev": (
+                float(run.uvvis_sigma_ev)
+                if run.uvvis_sigma_ev is not None else None
+            ),
+            "uvvis_spectrum_path": run.uvvis_spectrum_path,
+        }
+
     return {
         "status": "done",
         "level": run.scf_type or "RHF",
@@ -202,6 +239,7 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
         "casscf": casscf_data,
         "geopt": geopt_data,
         "freq": freq_data,
+        "tddft": tddft_data,
     }
 
 

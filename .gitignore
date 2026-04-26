@@ -48,3 +48,4 @@ python/dist
 tests/inputs/regression/open_shell/water_radical_cation_rohf_restart_sto3g.hfchk
 tests/inputs/regression/open_shell/water_triplet_uhf_restart_sto3g.hfchk
 CODE_REVIEW.md
+tests/inputs/regression/dft/h2_dft_tddft_pbe.uvvis.dat

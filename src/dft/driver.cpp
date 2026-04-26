@@ -5,7 +5,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <format>
+#include <iomanip>
+#include <limits>
 #include <numeric>
 #include <string>
 
@@ -64,9 +68,17 @@ namespace DFT::Driver
             int root = 0;
             double excitation_energy = 0.0;
             double excitation_energy_ev = 0.0;
+            double wavelength_nm = 0.0;
             Eigen::Vector3d transition_dipole = Eigen::Vector3d::Zero();
             double oscillator_strength = 0.0;
             std::vector<LinearResponseContribution> dominant_contributions;
+        };
+
+        struct UVVisSpectrumPoint
+        {
+            double energy_ev = 0.0;
+            double wavelength_nm = 0.0;
+            double intensity = 0.0;
         };
 
         struct DavidsonEigenpairResult
@@ -910,6 +922,196 @@ namespace DFT::Driver
             return "unknown";
         }
 
+        constexpr double EV_NM_CONVERSION = 1239.8419843320026;
+        constexpr double UVVIS_BROADENING_EV = 0.15;
+        constexpr int UVVIS_SPECTRUM_POINTS = 400;
+
+        double energy_ev_to_wavelength_nm(double energy_ev)
+        {
+            if (energy_ev <= 1.0e-12)
+                return 0.0;
+            return EV_NM_CONVERSION / energy_ev;
+        }
+
+        std::vector<UVVisSpectrumPoint> build_uvvis_spectrum(
+            const std::vector<LinearResponseRoot> &roots,
+            double sigma_ev = UVVIS_BROADENING_EV,
+            int npoints = UVVIS_SPECTRUM_POINTS)
+        {
+            std::vector<UVVisSpectrumPoint> spectrum;
+            if (roots.empty() || sigma_ev <= 0.0 || npoints < 2)
+                return spectrum;
+
+            double min_energy = std::numeric_limits<double>::infinity();
+            double max_energy = 0.0;
+            for (const LinearResponseRoot &root : roots)
+            {
+                if (root.excitation_energy_ev <= 1.0e-8)
+                    continue;
+                min_energy = std::min(min_energy, root.excitation_energy_ev);
+                max_energy = std::max(max_energy, root.excitation_energy_ev);
+            }
+
+            if (!std::isfinite(min_energy) || max_energy <= 0.0)
+                return spectrum;
+
+            const double start_ev = std::max(0.05, min_energy - 4.0 * sigma_ev);
+            const double end_ev = std::max(start_ev + 8.0 * sigma_ev, max_energy + 4.0 * sigma_ev);
+            const double step_ev = (end_ev - start_ev) / static_cast<double>(npoints - 1);
+
+            spectrum.reserve(static_cast<std::size_t>(npoints));
+            for (int point = 0; point < npoints; ++point)
+            {
+                const double energy_ev = start_ev + step_ev * static_cast<double>(point);
+                double intensity = 0.0;
+                for (const LinearResponseRoot &root : roots)
+                {
+                    if (root.excitation_energy_ev <= 1.0e-8)
+                        continue;
+                    const double delta = (energy_ev - root.excitation_energy_ev) / sigma_ev;
+                    intensity += root.oscillator_strength * std::exp(-0.5 * delta * delta);
+                }
+
+                spectrum.push_back(
+                    UVVisSpectrumPoint{
+                        .energy_ev = energy_ev,
+                        .wavelength_nm = energy_ev_to_wavelength_nm(energy_ev),
+                        .intensity = intensity});
+            }
+
+            return spectrum;
+        }
+
+        std::vector<UVVisSpectrumPoint> extract_uvvis_peaks(
+            const std::vector<UVVisSpectrumPoint> &spectrum,
+            std::size_t max_peaks = 5,
+            double min_separation_ev = UVVIS_BROADENING_EV / 4.0)
+        {
+            std::vector<UVVisSpectrumPoint> peaks;
+            if (spectrum.size() < 3)
+                return peaks;
+
+            for (std::size_t i = 1; i + 1 < spectrum.size(); ++i)
+            {
+                if (spectrum[i].intensity >= spectrum[i - 1].intensity &&
+                    spectrum[i].intensity >= spectrum[i + 1].intensity &&
+                    spectrum[i].intensity > 1.0e-12)
+                {
+                    peaks.push_back(spectrum[i]);
+                }
+            }
+
+            std::ranges::sort(
+                peaks,
+                [](const UVVisSpectrumPoint &lhs, const UVVisSpectrumPoint &rhs)
+                {
+                    return lhs.intensity > rhs.intensity;
+                });
+
+            std::vector<UVVisSpectrumPoint> unique_peaks;
+            unique_peaks.reserve(std::min(max_peaks, peaks.size()));
+            for (const UVVisSpectrumPoint &peak : peaks)
+            {
+                const bool too_close = std::ranges::any_of(
+                    unique_peaks,
+                    [&](const UVVisSpectrumPoint &accepted)
+                    {
+                        return std::abs(accepted.energy_ev - peak.energy_ev) < min_separation_ev;
+                    });
+                if (too_close)
+                    continue;
+
+                unique_peaks.push_back(peak);
+                if (unique_peaks.size() >= max_peaks)
+                    break;
+            }
+            std::ranges::sort(
+                unique_peaks,
+                [](const UVVisSpectrumPoint &lhs, const UVVisSpectrumPoint &rhs)
+                {
+                    return lhs.energy_ev < rhs.energy_ev;
+                });
+            return unique_peaks;
+        }
+
+        std::expected<std::filesystem::path, std::string> write_uvvis_spectrum_file(
+            const HartreeFock::Calculator &calculator,
+            const std::vector<UVVisSpectrumPoint> &spectrum,
+            double sigma_ev = UVVIS_BROADENING_EV)
+        {
+            if (spectrum.empty())
+                return std::unexpected("no UV-Vis spectrum points were generated");
+
+            std::filesystem::path path = calculator._checkpoint_path;
+            path.replace_extension(".uvvis.dat");
+            std::ofstream out(path);
+            if (!out)
+                return std::unexpected("failed to open UV-Vis spectrum output file");
+
+            out << "# Gaussian-broadened UV-Vis spectrum\n";
+            out << std::format("# sigma_eV = {:.6f}\n", sigma_ev);
+            out << "# Energy_eV Wavelength_nm Intensity_arb\n";
+            out << std::fixed << std::setprecision(8);
+            for (const UVVisSpectrumPoint &point : spectrum)
+            {
+                out << std::setw(14) << point.energy_ev
+                    << std::setw(16) << point.wavelength_nm
+                    << std::setw(18) << point.intensity
+                    << "\n";
+            }
+
+            return path;
+        }
+
+        void print_uvvis_spectrum_report(
+            const HartreeFock::Calculator &calculator,
+            const std::vector<LinearResponseRoot> &roots)
+        {
+            const std::vector<UVVisSpectrumPoint> spectrum = build_uvvis_spectrum(roots);
+            if (spectrum.empty())
+                return;
+
+            auto spectrum_path = write_uvvis_spectrum_file(calculator, spectrum);
+            if (spectrum_path)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "UV-Vis Spectrum :",
+                    std::format(
+                        "Wrote {} Gaussian-broadened points to {} (sigma = {:.3f} eV)",
+                        spectrum.size(),
+                        spectrum_path->string(),
+                        UVVIS_BROADENING_EV));
+            }
+            else
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "UV-Vis Spectrum :",
+                    "Spectrum file write failed: " + spectrum_path.error());
+            }
+
+            const std::vector<UVVisSpectrumPoint> peaks = extract_uvvis_peaks(spectrum);
+            if (peaks.empty())
+                return;
+
+            std::cout << std::string(66, '-') << "\n"
+                      << std::setw(14) << "Peak (eV)"
+                      << std::setw(16) << "Lambda (nm)"
+                      << std::setw(18) << "Intensity (arb)"
+                      << "\n"
+                      << std::string(66, '-') << "\n";
+            for (const UVVisSpectrumPoint &peak : peaks)
+            {
+                std::cout << std::setw(14) << std::fixed << std::setprecision(6) << peak.energy_ev
+                          << std::setw(16) << std::fixed << std::setprecision(3) << peak.wavelength_nm
+                          << std::setw(18) << std::fixed << std::setprecision(6) << peak.intensity
+                          << "\n";
+            }
+            std::cout << std::string(66, '-') << "\n";
+            HartreeFock::Logger::blank();
+        }
+
         Eigen::MatrixXd transition_density_matrix(
             const Eigen::Ref<const Eigen::VectorXd> &occupied,
             const Eigen::Ref<const Eigen::VectorXd> &virtual_orbital)
@@ -1176,17 +1378,18 @@ namespace DFT::Driver
                     : "Semilocal XC response kernels are not included");
             HartreeFock::Logger::blank();
 
-            std::cout << std::string(118, '-') << "\n"
+            std::cout << std::string(132, '-') << "\n"
                       << std::setw(6) << "Root"
                       << std::setw(16) << "Omega (Eh)"
                       << std::setw(14) << "Omega (eV)"
+                      << std::setw(14) << "Lambda (nm)"
                       << std::setw(14) << "f"
                       << std::setw(16) << "mu_x (au)"
                       << std::setw(16) << "mu_y (au)"
                       << std::setw(16) << "mu_z (au)"
                       << std::setw(20) << "|mu| (Debye)"
                       << "\n"
-                      << std::string(118, '-') << "\n";
+                      << std::string(132, '-') << "\n";
 
             for (const LinearResponseRoot &root : roots)
             {
@@ -1194,6 +1397,7 @@ namespace DFT::Driver
                 std::cout << std::setw(6) << root.root
                           << std::setw(16) << std::fixed << std::setprecision(8) << root.excitation_energy
                           << std::setw(14) << std::fixed << std::setprecision(6) << root.excitation_energy_ev
+                          << std::setw(14) << std::fixed << std::setprecision(3) << root.wavelength_nm
                           << std::setw(14) << std::fixed << std::setprecision(6) << root.oscillator_strength
                           << std::setw(16) << std::fixed << std::setprecision(6) << root.transition_dipole.x()
                           << std::setw(16) << std::fixed << std::setprecision(6) << root.transition_dipole.y()
@@ -1202,7 +1406,7 @@ namespace DFT::Driver
                           << "\n";
             }
 
-            std::cout << std::string(118, '-') << "\n";
+            std::cout << std::string(132, '-') << "\n";
 
             for (const LinearResponseRoot &root : roots)
             {
@@ -1366,7 +1570,19 @@ namespace DFT::Driver
                 offset += space.nov();
             }
 
-            const int nroots = std::min(std::max(calculator._dft._lr_nstates, 1), total_dimension);
+            const int requested_nroots = std::max(calculator._dft._lr_nstates, 1);
+            const int requested_root = calculator._dft._lr_root;
+            if (requested_root > 0 && requested_root > total_dimension)
+            {
+                return std::unexpected(std::format(
+                    "Requested TDDFT root {} exceeds the excitation-space dimension {}",
+                    requested_root,
+                    total_dimension));
+            }
+
+            const int nroots = std::min(
+                std::max(requested_nroots, std::max(requested_root, 1)),
+                total_dimension);
             const auto shell_pairs = build_shellpairs(calculator._shells);
             std::vector<double> eri_local;
             const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
@@ -1577,9 +1793,10 @@ namespace DFT::Driver
                 HartreeFock::LogLevel::Info,
                 "TDDFT / Dense Solve :",
                 std::format(
-                    "Building {} {} roots in a {}-dimensional excitation space",
+                    "Building {} {} response with {} solved roots in a {}-dimensional excitation space",
                     linear_response_method_label(calculator._dft._lr_method),
                     linear_response_spin_label(spin_mode),
+                    nroots,
                     total_dimension));
 
             auto eigenpairs = solve_response_problem(A, B, calculator._dft._lr_method, nroots);
@@ -1687,18 +1904,34 @@ namespace DFT::Driver
                         .root = root_index + 1,
                         .excitation_energy = pair.omega,
                         .excitation_energy_ev = pair.omega * HARTREE_TO_EV,
+                        .wavelength_nm = energy_ev_to_wavelength_nm(pair.omega * HARTREE_TO_EV),
                         .transition_dipole = transition_dipole,
                         .oscillator_strength = oscillator_strength,
                         .dominant_contributions = std::move(contributions)});
             }
 
+            std::vector<LinearResponseRoot> reported_roots = roots;
+            if (requested_root > 0)
+            {
+                if (requested_root > static_cast<int>(roots.size()))
+                {
+                    return std::unexpected(std::format(
+                        "Requested TDDFT root {} was not found among the {} solved roots",
+                        requested_root,
+                        roots.size()));
+                }
+
+                reported_roots = {roots[static_cast<std::size_t>(requested_root - 1)]};
+            }
+
             print_linear_response_report(
-                roots,
+                reported_roots,
                 linear_response_method_label(calculator._dft._lr_method),
                 linear_response_spin_label(spin_mode),
                 true,
                 exact_exchange_coefficient);
-            return roots;
+            print_uvvis_spectrum_report(calculator, roots);
+            return reported_roots;
         }
 
         std::expected<Result, std::string> run_ks_scf_scaffold(

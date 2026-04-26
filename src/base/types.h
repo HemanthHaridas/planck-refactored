@@ -397,6 +397,7 @@ namespace HartreeFock
         int _exchange_id = 0;    // 0 => resolve from _exchange through libxc
         int _correlation_id = 0; // 0 => resolve from _correlation through libxc
         int _lr_nstates = 5;
+        int _lr_root = 0; // 0 => report all solved roots; otherwise select 1-based root index
         LinearResponseMethod _lr_method = LinearResponseMethod::Casida;
         LinearResponseSpin _lr_spin = LinearResponseSpin::Auto;
         bool _use_sao_blocking = true;

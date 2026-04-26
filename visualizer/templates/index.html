@@ -375,6 +375,7 @@
           <button class="tab-btn" id="btn-tab-casscf" data-tab="casscf" onclick="showTab('casscf', this)" style="display:none">CASSCF</button>
           <button class="tab-btn" id="btn-tab-geopt"  data-tab="geopt"  onclick="showTab('geopt',  this)" style="display:none">Geopt Trajectory</button>
           <button class="tab-btn" id="btn-tab-vib"    data-tab="vib"    onclick="showTab('vib',    this)" style="display:none">Vibrations</button>
+          <button class="tab-btn" id="btn-tab-uvvis"  data-tab="uvvis"  onclick="showTab('uvvis',  this)" style="display:none">UV-Vis Spectrum</button>
         </div>
         <div id="plots-panels">
           <div class="tab-panel active" id="tab-scf">    <canvas id="c-scf"></canvas></div>
@@ -397,6 +398,7 @@
               <div id="vib-mode-list" class="vib-mode-list"></div>
             </div>
           </div>
+          <div class="tab-panel"        id="tab-uvvis">  <canvas id="c-uvvis"></canvas></div>
         </div>
       </div>
 
@@ -1181,13 +1183,101 @@ function renderGeoptChart(geopt) {
   });
 }
 
+function renderUVVisChart(tddft) {
+  destroyChart('uvvis');
+  const points = tddft.uvvis_points || [];
+  const roots = tddft.roots || [];
+  if (!points.length) return;
+
+  const ctx = document.getElementById('c-uvvis').getContext('2d');
+  const lineData = points.map(point => ({
+    x: point.wavelength_nm,
+    y: point.intensity,
+  }));
+  const sticks = roots
+    .filter(root => root.oscillator_strength > 0)
+    .map((root, idx) => ({
+      label: idx === 0 ? 'Oscillator strengths' : '',
+      data: [
+        {x: root.wavelength_nm, y: 0},
+        {x: root.wavelength_nm, y: root.oscillator_strength},
+      ],
+      borderColor: '#f0883e',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      showLine: true,
+      fill: false,
+      _showLegend: idx === 0,
+    }));
+
+  charts['uvvis'] = new Chart(ctx, {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          type: 'line',
+          label: 'Broadened spectrum',
+          data: lineData,
+          parsing: false,
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,0.10)',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.18,
+          fill: true,
+        },
+        ...sticks,
+      ],
+    },
+    options: {
+      ...BASE_OPTS,
+      plugins: {
+        ...BASE_OPTS.plugins,
+        legend: {
+          labels: {
+            font: MF,
+            color: TICK_COLOR,
+            boxWidth: 8,
+            padding: 8,
+            filter: item => item.datasetIndex === 0 || sticks[item.datasetIndex - 1]?._showLegend,
+          },
+        },
+        tooltip: {
+          ...BASE_OPTS.plugins.tooltip,
+          callbacks: {
+            label: context => {
+              const {x, y} = context.parsed;
+              if (context.datasetIndex === 0) {
+                return ` λ = ${x.toFixed(2)} nm, I = ${y.toFixed(4)} arb`;
+              }
+              const root = roots[context.datasetIndex - 1];
+              return ` Root ${root.root}: λ = ${x.toFixed(2)} nm, f = ${y.toFixed(4)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ...BASE_OPTS.scales.x,
+          reverse: true,
+          title: {display: true, text: 'Wavelength (nm)', font: MF, color: TICK_COLOR},
+        },
+        y: {
+          ...BASE_OPTS.scales.y,
+          title: {display: true, text: 'Intensity / oscillator strength', font: MF, color: TICK_COLOR},
+        },
+      },
+    },
+  });
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    RESULTS PANEL
 ═══════════════════════════════════════════════════════════════════════════ */
 function fmt(v, d=8) { return (v == null) ? '—' : v.toFixed(d); }
 
 function renderResults(data) {
-  const {level, basis, scf, mp2, casscf, geopt, molecule} = data;
+  const {level, basis, scf, mp2, casscf, geopt, molecule, tddft} = data;
   const isMP2 = level==='RMP2' || level==='UMP2';
   if (!scf && !geopt && !molecule) return;
 
@@ -1317,6 +1407,28 @@ function renderResults(data) {
     </div>`;
   }
 
+  if (tddft && tddft.roots && tddft.roots.length) {
+    const brightest = [...tddft.roots].sort(
+      (a, b) => b.oscillator_strength - a.oscillator_strength
+    )[0];
+    html += `<div class="r-card">
+      <div class="r-title">TDDFT / UV-Vis</div>
+      <div class="r-row"><span class="r-lbl">Excited roots</span>
+        <span class="r-val">${tddft.roots.length}</span></div>
+      ${tddft.uvvis_sigma_ev != null ? `<div class="r-row"><span class="r-lbl">Broadening</span>
+        <span class="r-val">${tddft.uvvis_sigma_ev.toFixed(3)} eV</span></div>` : ''}
+      ${brightest ? `<div class="r-divider"></div>
+      <div class="r-row"><span class="r-lbl">Brightest root</span>
+        <span class="r-val teal">#${brightest.root}</span></div>
+      <div class="r-row"><span class="r-lbl">Excitation</span>
+        <span class="r-val">${brightest.omega_ev.toFixed(4)} eV</span></div>
+      <div class="r-row"><span class="r-lbl">Wavelength</span>
+        <span class="r-val">${brightest.wavelength_nm.toFixed(2)} nm</span></div>
+      <div class="r-row"><span class="r-lbl">f</span>
+        <span class="r-val">${brightest.oscillator_strength.toFixed(4)}</span></div>` : ''}
+    </div>`;
+  }
+
   document.getElementById('results-data').innerHTML = html;
   document.getElementById('results-empty').style.display = 'none';
   document.getElementById('results-data').style.display  = 'block';
@@ -1360,7 +1472,7 @@ async function loadFromAPI() {
 }
 
 function applyData(data) {
-  const {level, basis, molecule, scf, mp2, casscf, geopt, freq,
+  const {level, basis, molecule, scf, mp2, casscf, geopt, freq, tddft,
          point_group, calculation_type, log_file} = data;
 
   // Populate info panel
@@ -1411,6 +1523,14 @@ function applyData(data) {
   if (freq) {
     renderVibPanel(freq);
     showTab('vib', document.querySelector('[data-tab="vib"]'));
+  }
+
+  // UV-Vis spectrum
+  const hasUVVis = tddft && tddft.uvvis_points && tddft.uvvis_points.length > 0;
+  document.getElementById('btn-tab-uvvis').style.display = hasUVVis ? '' : 'none';
+  if (hasUVVis) {
+    renderUVVisChart(tddft);
+    showTab('uvvis', document.querySelector('[data-tab="uvvis"]'));
   }
 
   renderResults(data);
