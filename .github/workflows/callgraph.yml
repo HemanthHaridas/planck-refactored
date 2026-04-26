@@ -56,7 +56,7 @@ jobs:
 
       - name: Build hartree-fock executable
         run: |
-          cmake --build "${BUILD_DIR}" --verbose -j$(nprocs)
+          cmake --build "${BUILD_DIR}" --verbose -j1
           test -x "${BUILD_DIR}/hartree-fock"
 
       - name: Generate callgraphs
