@@ -6,6 +6,9 @@ on:
       - devel
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   BUILD_DIR: build
   PROFILE_DIR: profiling
