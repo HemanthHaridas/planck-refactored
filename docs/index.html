@@ -1919,6 +1919,56 @@ A X = \omega X
 f_k = \frac{2}{3}\,\omega_k\,\left|\boldsymbol{\mu}^{(k)}_{\mathrm{tr}}\right|^2
 \]</span></p>
 <p>with <span class="math-inline">\(\omega_k\)</span> in Hartree and <span class="math-inline">\(\boldsymbol{\mu}_{\mathrm{tr}}\)</span> in atomic units.</p>
+<p><strong>How <code>nroots</code> and <code>root</code> work</strong></p>
+<p>The TDDFT eigenproblem is built in a finite occupied-virtual excitation space. If there are <span class="math-inline">\(N_{\mathrm{exc}}\)</span> spin-adapted or spin-resolved single excitations after the RKS/UKS block construction, then the dense response matrix has dimension <span class="math-inline">\(N_{\mathrm{exc}}\)</span>, and at most that many positive excitation energies can be returned.  Planck exposes two user controls:</p>
+<ul>
+<li><code>nroots</code> (aliases: <code>lr_nstates</code>, <code>tddft_nstates</code>, <code>nstates</code>) asks the solver to compute the lowest <span class="math-inline">\(n\)</span> roots</li>
+<li><code>root</code> asks the report layer to keep only one specific 1-based root index</li>
+</ul>
+<p>Mathematically, if the requested number of states is <span class="math-inline">\(n_{\mathrm{req}}\)</span> and the requested printed root is <span class="math-inline">\(r_{\mathrm{req}}\)</span>, Planck chooses the number of roots to solve as</p>
+<p><span class="math-display">\[
+n_{\mathrm{solve}}
+= \min\!\left(N_{\mathrm{exc}},
+\max\!\left(n_{\mathrm{req}}, \max(r_{\mathrm{req}}, 1)\right)\right)
+\]</span></p>
+<p>This rule is important.  A request such as <code>nroots 3</code> means &quot;compute the three lowest roots and report all three.&quot;  A request such as <code>root 5</code> means &quot;even if the default state count is smaller, solve at least five roots so that root 5 actually exists, then print only root 5.&quot;  In other words, <code>root</code> is a selection filter on top of the solved manifold, not a different eigenproblem.</p>
+<p>After diagonalization, Planck sorts the accepted positive-energy roots by increasing <span class="math-inline">\(\omega_k\)</span>, assigns user-facing root numbers <span class="math-inline">\(1,2,\dots\)</span>, and stores for each root</p>
+<p><span class="math-display">\[
+\left\{\omega_k,\; \omega_k(\mathrm{eV}),\; \lambda_k(\mathrm{nm}),\;
+f_k,\; \boldsymbol{\mu}^{(k)}_{\mathrm{tr}}\right\}
+\]</span></p>
+<p>The selected <code>root</code> is then taken from that sorted list.  This is why the printed root index remains the physical excitation ordering rather than being renumbered to 1 when only one state is reported.</p>
+<p>For the full Casida path, the code solves a symmetric eigenproblem in <span class="math-inline">\(\omega^2\)</span>, discards non-positive <span class="math-inline">\(\omega^2\)</span>, reconstructs <span class="math-inline">\(X\)</span> and <span class="math-inline">\(Y\)</span>, and accepts the lowest positive <span class="math-inline">\(\omega\)</span> values until <span class="math-inline">\(n_{\mathrm{solve}}\)</span> roots have been collected.  For the TDA path, the code simply takes the lowest <span class="math-inline">\(n_{\mathrm{solve}}\)</span> eigenpairs of <span class="math-inline">\(A\)</span>.</p>
+<p><strong>Wavelengths, oscillator strengths, and UV-Vis spectra</strong></p>
+<p>Each discrete TDDFT excitation corresponds to a stick in the absorption spectrum.  Planck converts the excitation energy from Hartree to eV and to a vacuum wavelength through</p>
+<p><span class="math-display">\[
+\omega_k(\mathrm{eV}) = \omega_k(\mathrm{Eh}) \times 27.211386\ldots
+\]</span></p>
+<p><span class="math-display">\[
+\lambda_k(\mathrm{nm}) = \frac{1239.841984\ldots}{\omega_k(\mathrm{eV})}
+\]</span></p>
+<p>The quantity reported in the TDDFT root table is the electric-dipole oscillator strength</p>
+<p><span class="math-display">\[
+f_k = \frac{2}{3}\,\omega_k\,\left|\boldsymbol{\mu}^{(k)}_{\mathrm{tr}}\right|^2
+\]</span></p>
+<p>so the raw theoretical absorption spectrum is a sum of delta functions,</p>
+<p><span class="math-display">\[
+I(E) = \sum_k f_k\,\delta(E - \omega_k)
+\]</span></p>
+<p>which is not directly plottable as a smooth experimental-looking UV-Vis band shape.  Planck therefore broadens each discrete line with a Gaussian of fixed width <span class="math-inline">\(\sigma\)</span> in eV.  The plotted spectrum on the energy grid is</p>
+<p><span class="math-display">\[
+I_{\sigma}(E)
+= \sum_k f_k
+\exp\!\left[
+-\frac{1}{2}\left(\frac{E-\omega_k(\mathrm{eV})}{\sigma}\right)^2
+\right]
+\]</span></p>
+<p>The implementation currently uses a fixed width of <span class="math-inline">\(\sigma = 0.150\ \mathrm{eV}\)</span> and evaluates this broadened spectrum on a uniform 400-point energy grid spanning the solved roots with a small margin. The resulting table is written to <code>*.uvvis.dat</code> with columns <span class="math-inline">\(E\)</span> (eV), <span class="math-inline">\(\lambda\)</span> (nm), and intensity (arbitrary units).  The units are &quot;arbitrary&quot; because Planck is reporting a broadened stick spectrum suitable for visualization, not an absolute molar absorptivity.</p>
+<p>Two practical details follow from that construction:</p>
+<ol>
+<li>The UV-Vis curve is built from <strong>all solved roots</strong>, not only from the optionally selected printed <code>root</code>.  If the user asks for <code>root 2</code>, Planck still uses the whole solved manifold when generating the broadened spectrum.</li>
+<li>The peak heights in the broadened curve are controlled jointly by the oscillator strengths <span class="math-inline">\(f_k\)</span> and by the chosen broadening <span class="math-inline">\(\sigma\)</span>.  A dark state with very small <span class="math-inline">\(f_k\)</span> contributes negligibly even if its excitation energy lies in the plotted window.</li>
+</ol>
 <p><strong>Code path</strong></p>
 <p><code>src/dft/driver.cpp</code> — <code>run_linear_response()</code></p>
 <p>The solver reuses the converged KS reference already built by the SCF scaffold:</p>
@@ -1928,11 +1978,13 @@ f_k = \frac{2}{3}\,\omega_k\,\left|\boldsymbol{\mu}^{(k)}_{\mathrm{tr}}\right|^2
 <li>transform AO ERIs into the MO blocks needed for Coulomb and hybrid-exchange response terms</li>
 <li>evaluate semilocal XC response contributions on the numerical grid by differentiating the assembled XC AO matrix with respect to trial transition densities</li>
 <li>assemble dense <span class="math-inline">\(A\)</span> and <span class="math-inline">\(B\)</span> blocks</li>
-<li>solve either the TDA eigenproblem or the full Casida transformed eigenproblem</li>
+<li>choose the solved root count from the excitation-space dimension, <code>nroots</code>, and optional <code>root</code>, then solve either the TDA eigenproblem or the full Casida transformed eigenproblem</li>
 <li>build transition dipoles from AO dipole integrals transformed to the occupied-virtual MO basis</li>
-<li>sort and print the dominant occupied <span class="math-inline">\(\rightarrow\)</span> virtual configurations for each root</li>
+<li>convert each accepted root into excitation energies in Hartree/eV, wavelengths in nm, and oscillator strengths</li>
+<li>optionally filter the printed report to the selected <code>root</code>, while keeping the physical root index</li>
+<li>build a Gaussian-broadened UV-Vis spectrum from the solved roots, write <code>*.uvvis.dat</code>, and print the peak summary plus dominant occupied <span class="math-inline">\(\rightarrow\)</span> virtual configurations for each reported root</li>
 </ol>
-<p>The report printed by <code>print_linear_response_report()</code> includes the root index, excitation energy in Hartree and eV, oscillator strength, Cartesian transition dipole components, the dipole norm in Debye, and the three largest configuration weights.</p>
+<p>The report printed by <code>print_linear_response_report()</code> includes the root index, excitation energy in Hartree and eV, oscillator strength, Cartesian transition dipole components, the dipole norm in Debye, and the three largest configuration weights.  The UV-Vis helper <code>print_uvvis_spectrum_report()</code> then writes the broadened spectrum file and prints the strongest broadened peaks in energy and wavelength units.</p>
 <hr>
 <h2 id="19-molecular-properties">19. Molecular Properties</h2>
 <p>After SCF convergence Planck can compute several molecular properties from the converged density matrix. Dipole and quadrupole moments are printed automatically; population and bond-order reports are printed when <code>print_populations true</code> or the output <code>verbosity</code> is <code>verbose</code> / <code>debug</code>. This section covers the theory behind each property and the code path that evaluates it.</p>

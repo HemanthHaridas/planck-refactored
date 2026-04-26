@@ -99,6 +99,22 @@ class CASRoot:
 
 
 @dataclass
+class TDDFTRoot:
+    root: int
+    omega_eh: float
+    omega_ev: float
+    wavelength_nm: float
+    oscillator_strength: float
+
+
+@dataclass
+class UVVisPoint:
+    energy_ev: float
+    wavelength_nm: float
+    intensity: float
+
+
+@dataclass
 class ParsedRun:
     # --- metadata ---
     calculation_type: Optional[str] = None
@@ -159,6 +175,13 @@ class ParsedRun:
     casscf_total_energy: Optional[float] = None
     casscf_sa_roots: list[CASRoot] = field(default_factory=list)
 
+    # --- TDDFT / UV-Vis ---
+    tddft_roots: list[TDDFTRoot] = field(default_factory=list)
+    uvvis_points: list[UVVisPoint] = field(default_factory=list)
+    uvvis_peaks: list[UVVisPoint] = field(default_factory=list)
+    uvvis_sigma_ev: Optional[float] = None
+    uvvis_spectrum_path: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
 # Compiled regexes
@@ -184,7 +207,7 @@ _LOG_RE = re.compile(
 )
 
 # 110-dash separator (SCF table header/footer).
-_DASH110_RE = re.compile(r'^-{110}\s*$')
+_DASH_RE = re.compile(r'^-+\s*$')
 
 # SCF iteration row.
 _SCF_ITER_RE = re.compile(
@@ -281,6 +304,26 @@ _CASSCF_TOTAL_ENERGY_RE = re.compile(
 _CASSCF_SA_ROOT_RE = re.compile(
     r'^\s*Root\s+(\d+)\s+([-+\d.eE]+)\s+Eh\s+\(weight\s+([\d.eE+\-]+)\)'
 )
+_TDDFT_ROOT_HEADER_RE = re.compile(
+    r'^Root\s+Omega \(Eh\)\s+Omega \(eV\)\s+Lambda \(nm\)\s+f\b'
+)
+_TDDFT_ROOT_ROW_RE = re.compile(
+    r'^\s*(\d+)'
+    r'\s+([-+\d.eE]+)'
+    r'\s+([-+\d.eE]+)'
+    r'\s+([-+\d.eE]+)'
+    r'\s+([-+\d.eE]+)'
+    r'(?:\s+.*)?$'
+)
+_UVVIS_WRITE_RE = re.compile(
+    r'Wrote\s+\d+\s+Gaussian-broadened points to\s+(\S+)\s+\(sigma =\s+([-+\d.eE]+)\s+eV\)'
+)
+_UVVIS_PEAK_HEADER_RE = re.compile(
+    r'^Peak \(eV\)\s+Lambda \(nm\)\s+Intensity \(arb\)\s*$'
+)
+_UVVIS_PEAK_ROW_RE = re.compile(
+    r'^\s*([-+\d.eE]+)\s+([-+\d.eE]+)\s+([-+\d.eE]+)\s*$'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +341,8 @@ class _State(Enum):
     GRADIENT = auto()
     STEP_GEOM = auto()
     NORMAL_MODE = auto()
+    TDDFT_ROOTS = auto()
+    UVVIS_PEAKS = auto()
 
 
 @dataclass(frozen=True)
@@ -319,6 +364,8 @@ class _ParseContext:
     cas_dashes: int = 0
     in_cas_nat_occ: bool = False
     pending_grad_atom: Optional[int] = None
+    tddft_root_dashes: int = 0
+    uvvis_peak_dashes: int = 0
 
 
 _TEXT_LABEL_FIELDS: dict[str, str] = {
@@ -442,7 +489,7 @@ def _set_gradient_summary(run: ParsedRun, field_name: str, message: str) -> None
 
 
 def _consume_separator_line(ctx: _ParseContext, raw: str) -> bool:
-    if not _DASH110_RE.match(raw):
+    if not _DASH_RE.match(raw):
         return False
 
     if ctx.state == _State.SCF_TABLE:
@@ -457,6 +504,18 @@ def _consume_separator_line(ctx: _ParseContext, raw: str) -> bool:
         if ctx.cas_dashes >= 2:
             ctx.state = _State.INIT
             ctx.cas_done = True
+        return True
+
+    if ctx.state == _State.TDDFT_ROOTS:
+        ctx.tddft_root_dashes += 1
+        if ctx.tddft_root_dashes >= 2:
+            ctx.state = _State.INIT
+        return True
+
+    if ctx.state == _State.UVVIS_PEAKS:
+        ctx.uvvis_peak_dashes += 1
+        if ctx.uvvis_peak_dashes >= 2:
+            ctx.state = _State.INIT
         return True
 
     if not ctx.scf_done and ctx.scf_armed:
@@ -483,6 +542,34 @@ def _consume_table_row(ctx: _ParseContext, raw: str) -> bool:
         match = _SCF_ITER_RE.match(raw)
         if match:
             ctx.run.casscf_iters.append(_parse_casscf_row(match))
+            return True
+        return False
+
+    if ctx.state == _State.TDDFT_ROOTS:
+        match = _TDDFT_ROOT_ROW_RE.match(raw)
+        if match:
+            ctx.run.tddft_roots.append(
+                TDDFTRoot(
+                    root=int(match.group(1)),
+                    omega_eh=float(match.group(2)),
+                    omega_ev=float(match.group(3)),
+                    wavelength_nm=float(match.group(4)),
+                    oscillator_strength=float(match.group(5)),
+                )
+            )
+            return True
+        return False
+
+    if ctx.state == _State.UVVIS_PEAKS:
+        match = _UVVIS_PEAK_ROW_RE.match(raw)
+        if match:
+            ctx.run.uvvis_peaks.append(
+                UVVisPoint(
+                    energy_ev=float(match.group(1)),
+                    wavelength_nm=float(match.group(2)),
+                    intensity=float(match.group(3)),
+                )
+            )
             return True
         return False
 
@@ -631,6 +718,13 @@ def _consume_named_line(ctx: _ParseContext, line: _StructuredLine) -> bool:
             ctx.run.zpe_kcal = float(match.group(2))
         return True
 
+    if line.label == "UV-Vis Spectrum :":
+        match = _UVVIS_WRITE_RE.search(line.message)
+        if match:
+            ctx.run.uvvis_spectrum_path = match.group(1)
+            ctx.run.uvvis_sigma_ev = float(match.group(2))
+        return True
+
     if line.label == "Normal Mode Displacements :":
         ctx.state = _State.INIT
         return True
@@ -651,6 +745,18 @@ def _consume_named_line(ctx: _ParseContext, line: _StructuredLine) -> bool:
 
 
 def _consume_blank_line(ctx: _ParseContext, message: str) -> None:
+    stripped = message.strip()
+
+    if _TDDFT_ROOT_HEADER_RE.match(stripped):
+        ctx.state = _State.TDDFT_ROOTS
+        ctx.tddft_root_dashes = 0
+        return
+
+    if _UVVIS_PEAK_HEADER_RE.match(stripped):
+        ctx.state = _State.UVVIS_PEAKS
+        ctx.uvvis_peak_dashes = 0
+        return
+
     if ctx.state == _State.INPUT_COORDS:
         atom = _try_coord(message)
         if atom:
@@ -730,6 +836,95 @@ def _reset_section_state_on_unhandled_label(ctx: _ParseContext) -> None:
         ctx.pending_grad_atom = None
 
 
+def _consume_message_line(ctx: _ParseContext, text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+
+    if _TDDFT_ROOT_HEADER_RE.match(stripped):
+        ctx.state = _State.TDDFT_ROOTS
+        ctx.tddft_root_dashes = 0
+        return True
+
+    if _UVVIS_PEAK_HEADER_RE.match(stripped):
+        ctx.state = _State.UVVIS_PEAKS
+        ctx.uvvis_peak_dashes = 0
+        return True
+
+    if ctx.state == _State.TDDFT_ROOTS:
+        match = _TDDFT_ROOT_ROW_RE.match(stripped)
+        if match:
+            ctx.run.tddft_roots.append(
+                TDDFTRoot(
+                    root=int(match.group(1)),
+                    omega_eh=float(match.group(2)),
+                    omega_ev=float(match.group(3)),
+                    wavelength_nm=float(match.group(4)),
+                    oscillator_strength=float(match.group(5)),
+                )
+            )
+            return True
+
+    if ctx.state == _State.UVVIS_PEAKS:
+        match = _UVVIS_PEAK_ROW_RE.match(stripped)
+        if match:
+            ctx.run.uvvis_peaks.append(
+                UVVisPoint(
+                    energy_ev=float(match.group(1)),
+                    wavelength_nm=float(match.group(2)),
+                    intensity=float(match.group(3)),
+                )
+            )
+            return True
+
+    return False
+
+
+def _resolve_uvvis_path(log_path: Path, spectrum_path: str) -> Optional[Path]:
+    candidate = Path(spectrum_path)
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+
+    candidates = [
+        log_path.parent / spectrum_path,
+        candidate,
+    ]
+    for resolved in candidates:
+        if resolved.exists():
+            return resolved.resolve()
+    return None
+
+
+def _load_uvvis_points(log_path: Path, run: ParsedRun) -> None:
+    if not run.uvvis_spectrum_path:
+        return
+
+    spectrum_path = _resolve_uvvis_path(log_path, run.uvvis_spectrum_path)
+    if spectrum_path is None:
+        return
+
+    points: list[UVVisPoint] = []
+    try:
+        for raw in spectrum_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = _UVVIS_PEAK_ROW_RE.match(line)
+            if not match:
+                continue
+            points.append(
+                UVVisPoint(
+                    energy_ev=float(match.group(1)),
+                    wavelength_nm=float(match.group(2)),
+                    intensity=float(match.group(3)),
+                )
+            )
+    except OSError:
+        return
+
+    run.uvvis_points = points
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -741,9 +936,10 @@ def parse_log(path: str | Path) -> ParsedRun:
     raw-table rows, structured labels, and section-local blank rows each
     have dedicated handlers so state transitions are easier to follow.
     """
+    log_path = Path(path)
     ctx = _ParseContext()
 
-    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+    for raw in log_path.read_text(encoding="utf-8").splitlines():
         if _consume_separator_line(ctx, raw):
             continue
 
@@ -757,6 +953,9 @@ def parse_log(path: str | Path) -> ParsedRun:
         if line is None:
             continue
 
+        if _consume_message_line(ctx, raw):
+            continue
+
         if line.label:
             if _consume_named_line(ctx, line):
                 continue
@@ -768,4 +967,5 @@ def parse_log(path: str | Path) -> ParsedRun:
     ctx.run.n_imaginary = sum(
         1 for mode in ctx.run.freq_modes if mode.frequency < 0
     )
+    _load_uvvis_points(log_path, ctx.run)
     return ctx.run

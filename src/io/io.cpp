@@ -930,6 +930,20 @@ namespace HartreeFock::IO
                          return std::unexpected("nstates must be >= 1");
                      return std::expected<void, std::string>{};
                  }},
+                {"nroots", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     dft._lr_nstates = std::stoi(value);
+                     if (dft._lr_nstates < 1)
+                         return std::unexpected("nroots must be >= 1");
+                     return std::expected<void, std::string>{};
+                 }},
+                {"root", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     dft._lr_root = std::stoi(value);
+                     if (dft._lr_root < 1)
+                         return std::unexpected("root must be >= 1");
+                     return std::expected<void, std::string>{};
+                 }},
                 {"lr_method", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
                      auto parsed = map_string_enum<HartreeFock::LinearResponseMethod>(value);

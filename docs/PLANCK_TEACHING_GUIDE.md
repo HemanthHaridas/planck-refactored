@@ -3003,6 +3003,110 @@ f_k = \frac{2}{3}\,\omega_k\,\left|\boldsymbol{\mu}^{(k)}_{\mathrm{tr}}\right|^2
 with \(\omega_k\) in Hartree and \(\boldsymbol{\mu}_{\mathrm{tr}}\) in atomic
 units.
 
+**How `nroots` and `root` work**
+
+The TDDFT eigenproblem is built in a finite occupied-virtual excitation space.
+If there are \(N_{\mathrm{exc}}\) spin-adapted or spin-resolved single
+excitations after the RKS/UKS block construction, then the dense response
+matrix has dimension \(N_{\mathrm{exc}}\), and at most that many positive
+excitation energies can be returned.  Planck exposes two user controls:
+
+- `nroots` (aliases: `lr_nstates`, `tddft_nstates`, `nstates`) asks the solver
+  to compute the lowest \(n\) roots
+- `root` asks the report layer to keep only one specific 1-based root index
+
+Mathematically, if the requested number of states is
+\(n_{\mathrm{req}}\) and the requested printed root is
+\(r_{\mathrm{req}}\), Planck chooses the number of roots to solve as
+
+\[
+n_{\mathrm{solve}}
+= \min\!\left(N_{\mathrm{exc}},
+\max\!\left(n_{\mathrm{req}}, \max(r_{\mathrm{req}}, 1)\right)\right)
+\]
+
+This rule is important.  A request such as `nroots 3` means "compute the three
+lowest roots and report all three."  A request such as `root 5` means "even if
+the default state count is smaller, solve at least five roots so that root 5
+actually exists, then print only root 5."  In other words, `root` is a
+selection filter on top of the solved manifold, not a different eigenproblem.
+
+After diagonalization, Planck sorts the accepted positive-energy roots by
+increasing \(\omega_k\), assigns user-facing root numbers \(1,2,\dots\), and
+stores for each root
+
+\[
+\left\{\omega_k,\; \omega_k(\mathrm{eV}),\; \lambda_k(\mathrm{nm}),\;
+f_k,\; \boldsymbol{\mu}^{(k)}_{\mathrm{tr}}\right\}
+\]
+
+The selected `root` is then taken from that sorted list.  This is why the
+printed root index remains the physical excitation ordering rather than being
+renumbered to 1 when only one state is reported.
+
+For the full Casida path, the code solves a symmetric eigenproblem in
+\(\omega^2\), discards non-positive \(\omega^2\), reconstructs \(X\) and \(Y\),
+and accepts the lowest positive \(\omega\) values until
+\(n_{\mathrm{solve}}\) roots have been collected.  For the TDA path, the code
+simply takes the lowest \(n_{\mathrm{solve}}\) eigenpairs of \(A\).
+
+**Wavelengths, oscillator strengths, and UV-Vis spectra**
+
+Each discrete TDDFT excitation corresponds to a stick in the absorption
+spectrum.  Planck converts the excitation energy from Hartree to eV and to a
+vacuum wavelength through
+
+\[
+\omega_k(\mathrm{eV}) = \omega_k(\mathrm{Eh}) \times 27.211386\ldots
+\]
+
+\[
+\lambda_k(\mathrm{nm}) = \frac{1239.841984\ldots}{\omega_k(\mathrm{eV})}
+\]
+
+The quantity reported in the TDDFT root table is the electric-dipole
+oscillator strength
+
+\[
+f_k = \frac{2}{3}\,\omega_k\,\left|\boldsymbol{\mu}^{(k)}_{\mathrm{tr}}\right|^2
+\]
+
+so the raw theoretical absorption spectrum is a sum of delta functions,
+
+\[
+I(E) = \sum_k f_k\,\delta(E - \omega_k)
+\]
+
+which is not directly plottable as a smooth experimental-looking UV-Vis band
+shape.  Planck therefore broadens each discrete line with a Gaussian of fixed
+width \(\sigma\) in eV.  The plotted spectrum on the energy grid is
+
+\[
+I_{\sigma}(E)
+= \sum_k f_k
+\exp\!\left[
+-\frac{1}{2}\left(\frac{E-\omega_k(\mathrm{eV})}{\sigma}\right)^2
+\right]
+\]
+
+The implementation currently uses a fixed width of
+\(\sigma = 0.150\ \mathrm{eV}\) and evaluates this broadened spectrum on a
+uniform 400-point energy grid spanning the solved roots with a small margin.
+The resulting table is written to `*.uvvis.dat` with columns
+\(E\) (eV), \(\lambda\) (nm), and intensity (arbitrary units).  The units are
+"arbitrary" because Planck is reporting a broadened stick spectrum suitable for
+visualization, not an absolute molar absorptivity.
+
+Two practical details follow from that construction:
+
+1. The UV-Vis curve is built from **all solved roots**, not only from the
+   optionally selected printed `root`.  If the user asks for `root 2`, Planck
+   still uses the whole solved manifold when generating the broadened spectrum.
+2. The peak heights in the broadened curve are controlled jointly by the
+   oscillator strengths \(f_k\) and by the chosen broadening \(\sigma\).  A
+   dark state with very small \(f_k\) contributes negligibly even if its
+   excitation energy lies in the plotted window.
+
 **Code path**
 
 `src/dft/driver.cpp` — `run_linear_response()`
@@ -3019,16 +3123,25 @@ The solver reuses the converged KS reference already built by the SCF scaffold:
    differentiating the assembled XC AO matrix with respect to trial transition
    densities
 5. assemble dense \(A\) and \(B\) blocks
-6. solve either the TDA eigenproblem or the full Casida transformed eigenproblem
+6. choose the solved root count from the excitation-space dimension,
+   `nroots`, and optional `root`, then solve either the TDA eigenproblem or
+   the full Casida transformed eigenproblem
 7. build transition dipoles from AO dipole integrals transformed to the
    occupied-virtual MO basis
-8. sort and print the dominant occupied \(\rightarrow\) virtual configurations
-   for each root
+8. convert each accepted root into excitation energies in Hartree/eV,
+   wavelengths in nm, and oscillator strengths
+9. optionally filter the printed report to the selected `root`, while keeping
+   the physical root index
+10. build a Gaussian-broadened UV-Vis spectrum from the solved roots, write
+    `*.uvvis.dat`, and print the peak summary plus dominant
+    occupied \(\rightarrow\) virtual configurations for each reported root
 
 The report printed by `print_linear_response_report()` includes the root index,
 excitation energy in Hartree and eV, oscillator strength, Cartesian transition
 dipole components, the dipole norm in Debye, and the three largest
-configuration weights.
+configuration weights.  The UV-Vis helper `print_uvvis_spectrum_report()`
+then writes the broadened spectrum file and prints the strongest broadened
+peaks in energy and wavelength units.
 
 ---
 
