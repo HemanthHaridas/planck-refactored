@@ -50,7 +50,7 @@ jobs:
         run: |
           cmake -S . -B "${BUILD_DIR}" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_STANDARD=23 \
             -DCMAKE_CXX_STANDARD_REQUIRED=ON \
             -DCMAKE_CXX_EXTENSIONS=OFF
 
