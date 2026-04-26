@@ -1,0 +1,104 @@
+name: Callgraph Profiling
+
+on:
+  push:
+    branches:
+      - devel
+  workflow_dispatch:
+
+env:
+  BUILD_DIR: build
+  PROFILE_DIR: profiling
+  CC: gcc
+  CXX: g++
+
+jobs:
+  callgraph:
+    name: Build once and generate callgraphs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            git \
+            ca-certificates \
+            build-essential \
+            cmake \
+            valgrind \
+            graphviz \
+            python3 \
+            python3-pip
+
+      - name: Install gprof2dot
+        run: |
+          python3 -m pip install --user --break-system-packages gprof2dot
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Show compiler versions
+        run: |
+          gcc --version
+          g++ --version
+          cmake --version
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B "${BUILD_DIR}" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+            -DCMAKE_CXX_EXTENSIONS=OFF
+
+      - name: Build hartree-fock executable
+        run: |
+          cmake --build "${BUILD_DIR}" --verbose -j$(nprocs)
+          test -x "${BUILD_DIR}/hartree-fock"
+
+      - name: Generate callgraphs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          declare -A CASES
+          CASES["water_rhf"]="tests/inputs/regressions/scf/water_rhf_os_symm.hfinp"
+          CASES["water_casscf"]="tests/inputs/regressions/post_hf/water_cas44.hfinp"
+          CASES["bh3_rccsdt"]="tests/inputs/regressions/post_hf/bh3_rccsdt_sto3g.hfinp"
+
+          for CASE_NAME in water_rhf water_casscf bh3_rccsdt; do
+            INPUT_FILE="${CASES[$CASE_NAME]}"
+
+            echo "========================================"
+            echo "Profiling case: ${CASE_NAME}"
+            echo "Input file: ${INPUT_FILE}"
+            echo "========================================"
+
+            test -f "${INPUT_FILE}"
+
+            mkdir -p "${PROFILE_DIR}/${CASE_NAME}"
+
+            valgrind \
+              --tool=callgrind \
+              --callgrind-out-file="${PROFILE_DIR}/${CASE_NAME}/callgrind.out" \
+              "./${BUILD_DIR}/hartree-fock" "${INPUT_FILE}"
+
+            gprof2dot -f callgrind \
+              "${PROFILE_DIR}/${CASE_NAME}/callgrind.out" \
+              > "${PROFILE_DIR}/${CASE_NAME}/callgraph.dot"
+
+            dot -Tsvg \
+              "${PROFILE_DIR}/${CASE_NAME}/callgraph.dot" \
+              -o "${PROFILE_DIR}/${CASE_NAME}/callgraph.svg"
+          done
+
+      - name: Upload profiling artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: callgraph-profiling
+          path: profiling/
+          retention-days: 7
