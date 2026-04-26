@@ -142,6 +142,9 @@ namespace HartreeFock
         SpinConserving
     };
 
+    // Implicit solvation model selection. Only the conductor-like
+    // polarizable continuum model (C-PCM) is currently implemented; the
+    // input parser also accepts "cpcm" as an alias for "pcm".
     enum class SolvationModel
     {
         None,
@@ -246,10 +249,15 @@ namespace HartreeFock
         }
     };
 
+    // Generic point charge in space — used both for QM/MM-style external
+    // charges and for the unit charges placed at PCM cavity tesserae when
+    // the reaction-field operator is assembled (see src/solvation/pcm.cpp).
+    // _compute_external_charge_attraction in the OS engine consumes a list
+    // of these and returns the matching AO matrix.
     struct ExternalCharge
     {
         Eigen::Vector3d position = Eigen::Vector3d::Zero(); // Bohr
-        double charge = 0.0;                                // Atomic units
+        double charge = 0.0;                                // Atomic units (e)
     };
 
     struct Shell
@@ -417,6 +425,24 @@ namespace HartreeFock
         bool _save_checkpoint = false;
     };
 
+    // User-controllable knobs for the polarizable continuum model. Currently
+    // only C-PCM is implemented (see src/solvation/pcm.cpp); the model field
+    // is kept as an enum so additional flavours (IEF-PCM, SS(V)PE) can be
+    // dropped in without breaking the input format.
+    //
+    //   _model                    — None disables solvation entirely.
+    //   _solvent                  — Optional named solvent (sets _dielectric
+    //                               from a built-in table in src/io/io.cpp);
+    //                               left empty when the user passes a raw
+    //                               dielectric instead.
+    //   _dielectric               — eps_r of the continuum. Default 1.0
+    //                               (vacuum) means f(eps) = 0 and PCM is
+    //                               effectively off even when _model = PCM.
+    //   _cavity_scale             — Multiplier on each atom's vdW radius
+    //                               when forming the cavity sphere. 1.2 is
+    //                               the standard Bondi-radius PCM choice.
+    //   _surface_points_per_atom  — Fibonacci-sphere tesserae per atom
+    //                               BEFORE bury-test pruning. Minimum 6.
     struct OptionsSolvation
     {
         SolvationModel _model = SolvationModel::None;

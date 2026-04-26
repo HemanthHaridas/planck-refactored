@@ -25,6 +25,12 @@ namespace HartreeFock
             const std::size_t nbasis,
             const HartreeFock::Molecule &molecule,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+        // Build the AO matrix V_munu = -sum_c q_c <mu | 1/|r - r_c| | nu>
+        // for an arbitrary list of point charges. Same Obara-Saika kernel
+        // as _compute_nuclear_attraction; nuclear attraction is in fact a
+        // thin wrapper that builds the charge list from the molecule and
+        // calls into this routine. Used by the C-PCM module to assemble
+        // one matrix per cavity tessera (see src/solvation/pcm.cpp).
         Eigen::MatrixXd _compute_external_charge_attraction(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const std::size_t nbasis,
