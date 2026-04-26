@@ -142,6 +142,12 @@ namespace HartreeFock
         SpinConserving
     };
 
+    enum class SolvationModel
+    {
+        None,
+        PCM
+    };
+
     enum class OptCoords
     {
         Cartesian, // Optimize in Cartesian coordinates (L-BFGS, default)
@@ -238,6 +244,12 @@ namespace HartreeFock
             standard_is_angstrom = false;
             _standard_is_bohr = false;
         }
+    };
+
+    struct ExternalCharge
+    {
+        Eigen::Vector3d position = Eigen::Vector3d::Zero(); // Bohr
+        double charge = 0.0;                                // Atomic units
     };
 
     struct Shell
@@ -403,6 +415,15 @@ namespace HartreeFock
         bool _use_sao_blocking = true;
         bool _print_grid_summary = true;
         bool _save_checkpoint = false;
+    };
+
+    struct OptionsSolvation
+    {
+        SolvationModel _model = SolvationModel::None;
+        std::string _solvent = "";
+        double _dielectric = 1.0;
+        double _cavity_scale = 1.2;
+        int _surface_points_per_atom = 60;
     };
 
     // Optional symmetry-aware orbital selection metadata for active-space setup.
@@ -798,6 +819,7 @@ namespace HartreeFock
         OptionsGeometry _geometry;
         OptionsIntegral _integral;
         OptionsDFT _dft;
+        OptionsSolvation _solvation;
         OptionsOutput _output;
         InfoSCF _info;
         Molecule _molecule;

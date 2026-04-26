@@ -25,6 +25,11 @@ namespace HartreeFock
             const std::size_t nbasis,
             const HartreeFock::Molecule &molecule,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+        Eigen::MatrixXd _compute_external_charge_attraction(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const std::size_t nbasis,
+            const std::vector<HartreeFock::ExternalCharge> &charges,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
         // Build the full AO ERI tensor. Applies Schwarz screening:
         // quartets with Q(i,j)·Q(k,l) < tol_eri are skipped.
         std::vector<double> _compute_2e(const std::vector<HartreeFock::ShellPair> &shell_pairs,

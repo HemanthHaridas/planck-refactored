@@ -8,6 +8,12 @@
 #include <numbers>
 #include <vector>
 
+static Eigen::MatrixXd compute_external_charge_attraction_impl(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::size_t nbasis,
+    const std::vector<HartreeFock::ExternalCharge> &charges,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops);
+
 namespace
 {
     using SymOps = std::vector<HartreeFock::SignedAOSymOp>;
@@ -570,67 +576,29 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_nuclear_attraction(
     const HartreeFock::Molecule &molecule,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    const std::size_t npairs = shell_pairs.size();
-    Eigen::MatrixXd V = Eigen::MatrixXd::Zero(nbasis, nbasis);
-    const bool use_sym = use_symmetry_ops(sym_ops);
-
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; p++)
+    std::vector<HartreeFock::ExternalCharge> charges;
+    charges.reserve(molecule.natoms);
+    for (std::size_t a = 0; a < molecule.natoms; ++a)
     {
-        const auto &sp = shell_pairs[p];
-        const std::size_t ii = sp.A._index;
-        const std::size_t jj = sp.B._index;
-        std::vector<PairOrbitElem> orbit;
-
-        if (use_sym)
-        {
-            auto [orb, forced_zero] = build_pair_orbit(ii, jj, *sym_ops);
-            if (forced_zero)
-                continue;
-            orbit = std::move(orb);
-            if (orbit.front().i != ii || orbit.front().j != jj)
-                continue;
-        }
-
-        const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
-        const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
-
-        // AB = A - B (used by HRR)
-        const double ABx = sp.R[0], ABy = sp.R[1], ABz = sp.R[2];
-
-        double v_elem = 0.0;
-
-        for (std::size_t a = 0; a < molecule.natoms; a++)
-        {
-            const double Z_C = static_cast<double>(molecule.atomic_numbers[a]);
-            // Nucleus position in Bohr — molecule._standard is always in Bohr
-            const Eigen::Vector3d C(molecule._standard(a, 0),
-                                    molecule._standard(a, 1),
-                                    molecule._standard(a, 2));
-
-            double v_nuc = 0.0;
-            for (const auto &pp : sp.primitive_pairs)
-                v_nuc += _os_nuclear_primitive(pp, lAx, lAy, lAz, lBx, lBy, lBz, ABx, ABy, ABz, C) * pp.coeff_product;
-
-            v_elem -= Z_C * v_nuc; // nuclear attraction is negative
-        }
-
-        if (!use_sym)
-        {
-            V(ii, jj) = v_elem;
-            V(jj, ii) = v_elem;
-            continue;
-        }
-
-        for (const auto &elem : orbit)
-        {
-            const double ve = static_cast<double>(elem.sign) * v_elem;
-            V(elem.i, elem.j) = ve;
-            V(elem.j, elem.i) = ve;
-        }
+        charges.push_back(
+            HartreeFock::ExternalCharge{
+                .position = Eigen::Vector3d(
+                    molecule._standard(a, 0),
+                    molecule._standard(a, 1),
+                    molecule._standard(a, 2)),
+                .charge = static_cast<double>(molecule.atomic_numbers[a])});
     }
 
-    return V;
+    return ::compute_external_charge_attraction_impl(shell_pairs, nbasis, charges, sym_ops);
+}
+
+Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_external_charge_attraction(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::size_t nbasis,
+    const std::vector<HartreeFock::ExternalCharge> &charges,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    return ::compute_external_charge_attraction_impl(shell_pairs, nbasis, charges, sym_ops);
 }
 
 // ─── 4-center ERI: VRR ───────────────────────────────────────────────────────
@@ -953,6 +921,73 @@ static double _os_eri_primitive(
 
     // C→D HRR reusing the existing _nuclear_hrr (same 3-phase sweep)
     return _nuclear_hrr(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+}
+
+static Eigen::MatrixXd compute_external_charge_attraction_impl(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::size_t nbasis,
+    const std::vector<HartreeFock::ExternalCharge> &charges,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    const std::size_t npairs = shell_pairs.size();
+    Eigen::MatrixXd V = Eigen::MatrixXd::Zero(nbasis, nbasis);
+    const bool use_sym = use_symmetry_ops(sym_ops);
+
+#pragma omp parallel for schedule(dynamic)
+    for (std::size_t p = 0; p < npairs; p++)
+    {
+        const auto &sp = shell_pairs[p];
+        const std::size_t ii = sp.A._index;
+        const std::size_t jj = sp.B._index;
+        std::vector<PairOrbitElem> orbit;
+
+        if (use_sym)
+        {
+            auto [orb, forced_zero] = build_pair_orbit(ii, jj, *sym_ops);
+            if (forced_zero)
+                continue;
+            orbit = std::move(orb);
+            if (orbit.front().i != ii || orbit.front().j != jj)
+                continue;
+        }
+
+        const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
+        const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
+        const double ABx = sp.R[0], ABy = sp.R[1], ABz = sp.R[2];
+
+        double v_elem = 0.0;
+
+        for (const auto &charge : charges)
+        {
+            double v_point = 0.0;
+            for (const auto &pp : sp.primitive_pairs)
+                v_point += _os_nuclear_primitive(
+                               pp,
+                               lAx, lAy, lAz,
+                               lBx, lBy, lBz,
+                               ABx, ABy, ABz,
+                               charge.position) *
+                           pp.coeff_product;
+
+            v_elem -= charge.charge * v_point;
+        }
+
+        if (!use_sym)
+        {
+            V(ii, jj) = v_elem;
+            V(jj, ii) = v_elem;
+            continue;
+        }
+
+        for (const auto &elem : orbit)
+        {
+            const double ve = static_cast<double>(elem.sign) * v_elem;
+            V(elem.i, elem.j) = ve;
+            V(elem.j, elem.i) = ve;
+        }
+    }
+
+    return V;
 }
 
 // ─── 4-center ERI: contracted shell quartet ──────────────────────────────────

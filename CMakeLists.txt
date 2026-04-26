@@ -193,6 +193,11 @@ file(GLOB FREQ_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/freq/*.cpp
 )
 
+file(GLOB SOLVATION_SRC CONFIGURE_DEPENDS
+    ${SRC_DIR}/solvation/*.h
+    ${SRC_DIR}/solvation/*.cpp
+)
+
 set(HF_MAIN_SRC
     ${SRC_DIR}/driver.cpp
 )
@@ -222,6 +227,7 @@ add_executable(hartree-fock
     ${INT_SRC}
     ${IO_SRC}
     ${SCF_SRC}
+    ${SOLVATION_SRC}
     ${POPULATIONS_SRC}
     ${POSTHF_SRC}
     ${GRADIENT_SRC}
@@ -258,6 +264,7 @@ add_executable(planck-dft
     ${INT_SRC}
     ${IO_SRC}
     ${SCF_SRC}
+    ${SOLVATION_SRC}
     ${POPULATIONS_SRC}
     ${POSTHF_SRC}
     ${GRADIENT_SRC}

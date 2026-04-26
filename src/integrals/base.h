@@ -26,6 +26,16 @@ inline Eigen::MatrixXd _compute_nuclear_attraction(
     return HartreeFock::ObaraSaika::_compute_nuclear_attraction(shell_pairs, nbasis, molecule, sym_ops);
 }
 
+inline Eigen::MatrixXd _compute_external_charge_attraction(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::size_t nbasis,
+    const std::vector<HartreeFock::ExternalCharge> &charges,
+    const HartreeFock::IntegralMethod &engine,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
+{
+    return HartreeFock::ObaraSaika::_compute_external_charge_attraction(shell_pairs, nbasis, charges, sym_ops);
+}
+
 inline std::vector<double> _compute_2e(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const std::size_t nbasis,
