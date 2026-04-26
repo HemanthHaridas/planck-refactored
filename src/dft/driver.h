@@ -2,6 +2,7 @@
 #define DFT_DRIVER_H
 
 #include <expected>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include "base/wrapper.h"
 #include "integrals/shellpair.h"
 #include "ks_matrix.h"
+#include "solvation/pcm.h"
 #include "xc_grid.h"
 
 namespace DFT::Driver
@@ -32,6 +34,7 @@ namespace DFT::Driver
         MolecularGrid molecular_grid;
         AOGridEvaluation ao_grid;
         GridPreset grid_preset;
+        std::optional<HartreeFock::Solvation::PCMState> pcm;
     };
 
     struct Result
@@ -39,6 +42,7 @@ namespace DFT::Driver
         double total_energy = 0.0;
         double xc_energy = 0.0;
         double integrated_electrons = 0.0;
+        double solvation_energy = 0.0;
         bool converged = false;
     };
 

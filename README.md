@@ -15,6 +15,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 
 - **RHF / ROHF / UHF** — closed-shell, restricted open-shell, and unrestricted Hartree-Fock; ROHF uses a Roothaan-type effective Fock construction with aufbau orbital reordering and DIIS convergence
 - **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, and global hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals via integer ID
+- **PCM solvation** — self-consistent conductor-like polarizable continuum model (C-PCM) for single-point RHF/UHF/RKS/UKS calculations with user-defined dielectric, named solvents, atom-centered cavities, and surface discretization controls
 - **TDDFT / linear response** — full Casida and optional TDA excited-state roots on top of converged KS orbitals, with RKS singlet/triplet support, UKS spin-conserving response, semilocal XC kernels, transition dipoles, oscillator strengths, wavelengths, and Gaussian-broadened UV-Vis spectra
 - **Two integral engines** — Obara-Saika for low angular momentum; Rys quadrature for high angular momentum; automatic engine selection per shell quartet (`engine auto`)
 - **Electric multipole moments** — dipole and quadrupole moment analysis after SCF convergence for both `hartree-fock` and `planck-dft`
@@ -134,6 +135,10 @@ Input files use an INI-style block format with the extension `.hfinp`. Each sect
     ...
 %end_dft
 
+%begin_pcm             (optional)
+    ...
+%end_pcm
+
 %begin_geom
     ...
 %end_geom
@@ -224,6 +229,20 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | `use_sao_blocking` | bool | `.true.`, `.false.` | `.true.` | Enable symmetry-adapted AO blocking for the Coulomb matrix assembly. |
 | `print_grid_summary` | bool | `.true.`, `.false.` | `.true.` | Print a per-atom grid point count summary before the KS iterations. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.false.` | Write a `.dftchk` checkpoint file after successful convergence. |
+
+### Section: `%begin_pcm`
+
+<p align="justify">
+Optional continuum-solvation settings for a self-consistent conductor-like PCM surface model. The current implementation is available for single-point SCF/DFT calculations only and is not yet wired into post-HF, gradients, geometry optimization, or ROHF.
+</p>
+
+| Keyword | Type | Values | Default | Description |
+|---|---|---|---|---|
+| `model` | enum | `pcm`, `cpcm`, `none` | `none` | Solvation model selector. `pcm` and `cpcm` currently map to the same conductor-like PCM implementation. |
+| `solvent` | string | `water`, `acetonitrile`, `methanol`, `ethanol`, `dmso`, `dichloromethane`, `chloroform`, `thf`, `toluene`, `benzene`, `hexane` | — | Named solvent shortcut that sets the dielectric constant. |
+| `dielectric` / `epsilon` / `eps` | float | > 1 | `1.0` | Dielectric constant of the continuum. Overrides the solvent preset when both are given. |
+| `cavity_scale` | float | > 0 | `1.2` | Scale factor applied to the atom-centered radii used to build the PCM cavity. |
+| `surface_points` / `surface_points_per_atom` | int | ≥ 6 | `60` | Number of Fibonacci-distributed surface points generated per atom before overlap culling. |
 
 #### DFT grid presets
 

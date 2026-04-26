@@ -413,6 +413,19 @@ namespace HartreeFock::IO
         return lookup_enum(_table, value, "Invalid linear-response spin mode : ");
     }
 
+    template <>
+    std::expected<HartreeFock::SolvationModel, std::string>
+    map_string_enum<HartreeFock::SolvationModel>(const std::string &value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::SolvationModel> _table =
+            {
+                {"none", HartreeFock::SolvationModel::None},
+                {"pcm", HartreeFock::SolvationModel::PCM},
+                {"cpcm", HartreeFock::SolvationModel::PCM}};
+
+        return lookup_enum(_table, value, "Invalid SolvationModel : ");
+    }
+
     std::expected<void, std::string> _parse_control(const std::vector<std::string> &lines, HartreeFock::CalculationType &calculation, HartreeFock::OptionsBasis &basis, HartreeFock::OptionsOutput &output)
     {
         // (key, value) pairs
@@ -1024,6 +1037,115 @@ namespace HartreeFock::IO
         return {};
     }
 
+    static std::expected<double, std::string> dielectric_from_solvent_name(const std::string &value)
+    {
+        static const std::unordered_map<std::string, double> _table =
+            {
+                {"water", 78.3553},
+                {"acetonitrile", 35.688},
+                {"methanol", 32.613},
+                {"ethanol", 24.852},
+                {"dmso", 46.826},
+                {"dimethylsulfoxide", 46.826},
+                {"dichloromethane", 8.93},
+                {"methylenechloride", 8.93},
+                {"chloroform", 4.7113},
+                {"thf", 7.4257},
+                {"tetrahydrofuran", 7.4257},
+                {"toluene", 2.3741},
+                {"benzene", 2.2706},
+                {"hexane", 1.8819}};
+
+        return lookup_enum(_table, value, "Unknown PCM solvent: ");
+    }
+
+    std::expected<void, std::string> _parse_pcm(
+        const std::vector<std::string> &lines,
+        HartreeFock::OptionsSolvation &solvation)
+    {
+        const std::unordered_map<std::string, ParseHandler> _pcm_map =
+            {
+                {"model", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::SolvationModel>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     solvation._model = *parsed;
+                     return {};
+                 }},
+                {"dielectric", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._dielectric = std::stod(value);
+                     return {};
+                 }},
+                {"epsilon", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._dielectric = std::stod(value);
+                     return {};
+                 }},
+                {"eps", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._dielectric = std::stod(value);
+                     return {};
+                 }},
+                {"cavity_scale", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._cavity_scale = std::stod(value);
+                     return {};
+                 }},
+                {"surface_points", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._surface_points_per_atom = std::stoi(value);
+                     return {};
+                 }},
+                {"surface_points_per_atom", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._surface_points_per_atom = std::stoi(value);
+                     return {};
+                 }},
+                {"solvent", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     const std::string lowered = toLower(value);
+                     auto dielectric = dielectric_from_solvent_name(lowered);
+                     if (!dielectric)
+                         return std::unexpected(dielectric.error());
+                     solvation._solvent = lowered;
+                     solvation._dielectric = *dielectric;
+                     return {};
+                 }}};
+
+        for (const std::string &line : lines)
+        {
+            std::istringstream _iss(line);
+            std::string key, value;
+
+            if (!(_iss >> key >> value))
+                return std::unexpected("Missing value for pcm keyword: " + key);
+
+            key = toLower(key);
+
+            if (auto it = _pcm_map.find(key); it != _pcm_map.end())
+            {
+                try
+                {
+                    auto parsed = it->second(value);
+                    if (!parsed)
+                        return std::unexpected(std::string("Error parsing pcm '") + key + "': " + parsed.error());
+                }
+                catch (const std::exception &e)
+                {
+                    return std::unexpected(std::string("Error parsing pcm '") + key + "': " + e.what());
+                }
+            }
+            else
+            {
+                return std::unexpected("Unknown pcm keyword: " + key);
+            }
+        }
+
+        return {};
+    }
+
     template <>
     std::expected<HartreeFock::Units, std::string>
     map_string_enum<HartreeFock::Units>(const std::string &value)
@@ -1139,6 +1261,33 @@ namespace HartreeFock::IO
             return std::unexpected(
                 "RCCSDTQ is currently available only for single-point calculations; "
                 "choose calculation_type sp or remove correlation ccsdtq.");
+        }
+
+        if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+        {
+            if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+            {
+                return std::unexpected(
+                    "PCM is currently implemented only for single-point energy calculations.");
+            }
+
+            if (calculator._correlation != HartreeFock::PostHF::None)
+            {
+                return std::unexpected(
+                    "PCM is currently available only for SCF/DFT references without post-HF correlation.");
+            }
+
+            if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+                return std::unexpected("PCM is not implemented for ROHF references");
+
+            if (calculator._solvation._dielectric <= 1.0)
+                return std::unexpected("PCM dielectric must be greater than 1.0");
+
+            if (calculator._solvation._surface_points_per_atom < 6)
+                return std::unexpected("PCM surface_points_per_atom must be at least 6");
+
+            if (calculator._solvation._cavity_scale <= 0.0)
+                return std::unexpected("PCM cavity_scale must be positive");
         }
 
         return {};
@@ -1459,6 +1608,13 @@ namespace HartreeFock::IO
         if (auto it = _sections.find("dft"); it != _sections.end())
         {
             if (auto res = _parse_dft(it->second, calculator._dft); !res)
+                return std::unexpected(res.error());
+        }
+
+        // pcm (optional)
+        if (auto it = _sections.find("pcm"); it != _sections.end())
+        {
+            if (auto res = _parse_pcm(it->second, calculator._solvation); !res)
                 return std::unexpected(res.error());
         }
 

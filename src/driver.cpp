@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 
@@ -24,6 +25,7 @@
 #include "post_hf/cc.h"
 #include "post_hf/mp2.h"
 #include "scf/scf.h"
+#include "solvation/pcm.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/mo_symmetry.h"
 #include "symmetry/symmetry.h"
@@ -325,6 +327,16 @@ int main(int argc, const char *argv[])
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis :", calculator._basis._basis_name);
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Charge :", calculator._molecule.charge);
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Multiplicity :", calculator._molecule.multiplicity);
+    if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info,
+            "Solvation :",
+            std::format(
+                "PCM (epsilon = {:.4f}, points/atom = {})",
+                calculator._solvation._dielectric,
+                calculator._solvation._surface_points_per_atom));
+    }
     HartreeFock::Logger::blank();
 
     // Detect Symmetry
@@ -647,11 +659,23 @@ int main(int argc, const char *argv[])
         HartreeFock::Logger::blank();
     }
 
+    std::optional<HartreeFock::Solvation::PCMState> pcm_state;
+    if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+    {
+        auto pcm_res = HartreeFock::Solvation::build_pcm_state(calculator, shellpairs);
+        if (!pcm_res)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "PCM Failed :", pcm_res.error());
+            return EXIT_FAILURE;
+        }
+        pcm_state = std::move(*pcm_res);
+    }
+
     // ── SCF ───────────────────────────────────────────────────────────────────
     if (calculator._scf._scf == HartreeFock::SCFType::RHF)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin SCF Cycles :", "");
-        if (auto res = HartreeFock::SCF::run_rhf(calculator, shellpairs); !res)
+        if (auto res = HartreeFock::SCF::run_rhf(calculator, shellpairs, pcm_state ? &*pcm_state : nullptr); !res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
             return EXIT_FAILURE;
@@ -660,7 +684,7 @@ int main(int argc, const char *argv[])
     else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin ROHF SCF Cycles :", "");
-        if (auto res = HartreeFock::SCF::run_rohf(calculator, shellpairs); !res)
+        if (auto res = HartreeFock::SCF::run_rohf(calculator, shellpairs, pcm_state ? &*pcm_state : nullptr); !res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
             return EXIT_FAILURE;
@@ -669,7 +693,7 @@ int main(int argc, const char *argv[])
     else
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin UHF SCF Cycles :", "");
-        if (auto res = HartreeFock::SCF::run_uhf(calculator, shellpairs); !res)
+        if (auto res = HartreeFock::SCF::run_uhf(calculator, shellpairs, pcm_state ? &*pcm_state : nullptr); !res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
             return EXIT_FAILURE;

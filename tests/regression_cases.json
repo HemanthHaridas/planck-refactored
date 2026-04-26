@@ -140,6 +140,17 @@
       ]
     },
     {
+      "id": "water_rhf_pcm_water_sto3g",
+      "input": "tests/inputs/regression/hf/water_rhf_pcm_water_sto3g.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": ["PCM :", "PCM Solvent :", "SCF Converged after", "Total Energy"],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.9516348658, "atol": 1e-9}
+      ]
+    },
+    {
       "id": "water_rhf_gradient_smoke",
       "input": "tests/inputs/regression/geometry/water_rhf_gradient.hfinp",
       "tags": ["smoke", "extended"],
@@ -570,6 +581,18 @@
       "checks": [
         {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
         {"type": "metric_close", "metric": "dft_total_energy", "expected": -74.8467253782, "atol": 1e-9}
+      ]
+    },
+    {
+      "id": "water_rks_pbe_pcm_water_sto3g",
+      "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_water_sto3g.hfinp",
+      "executable": "planck-dft",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": ["PCM :", "PCM Solvent :", "RKS Converged :", "PCM Solvation Energy :"],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
+        {"type": "metric_close", "metric": "dft_total_energy", "expected": -75.2268156823, "atol": 1e-9}
       ]
     },
     {

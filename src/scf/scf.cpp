@@ -172,7 +172,10 @@ void HartreeFock::SCF::store_unrestricted_iteration(
 
 // ─── SCF iteration ───────────────────────────────────────────────────────────
 
-std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculator &calculator, const std::vector<HartreeFock::ShellPair> &shell_pairs)
+std::expected<void, std::string> HartreeFock::SCF::run_rhf(
+    HartreeFock::Calculator &calculator,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const HartreeFock::Solvation::PCMState *pcm)
 {
     const Eigen::MatrixXd &S = calculator._overlap;
     const Eigen::MatrixXd &H = calculator._hcore;
@@ -280,12 +283,24 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
                                 : _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine, tol_eri,
                                                    calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
-        // ── Fock matrix ───────────────────────────────────────────────────────
-        const Eigen::MatrixXd F = H + G;
+        Eigen::MatrixXd V_pcm = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        double pcm_energy = 0.0;
+        if (pcm != nullptr && pcm->enabled())
+        {
+            auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(calculator, *pcm, P);
+            if (!pcm_result)
+                return std::unexpected("PCM build failed inside RHF iteration: " + pcm_result.error());
+            V_pcm = std::move(pcm_result->reaction_potential);
+            pcm_energy = pcm_result->solvation_energy;
+        }
 
-        // ── Electronic energy  E = 0.5 * tr(P * (H + F)) ────────────────────
-        // Always computed from the raw (non-extrapolated) Fock matrix.
-        const double E_elec = 0.5 * (P.array() * (H + F).array()).sum();
+        // ── Fock matrix ───────────────────────────────────────────────────────
+        const Eigen::MatrixXd F_gas = H + G;
+        const Eigen::MatrixXd F = F_gas + V_pcm;
+
+        // ── Electronic energy  E = E_gas + G_pcm ────────────────────────────
+        const double E_gas = 0.5 * (P.array() * (H + F_gas).array()).sum();
+        const double E_elec = E_gas + pcm_energy;
         const double E_total = E_elec + calculator._nuclear_repulsion;
 
         // ── DIIS: compute Pulay error and push to subspace ────────────────────
@@ -451,7 +466,8 @@ static void _log_spin_contamination(
 
 std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     HartreeFock::Calculator &calculator,
-    const std::vector<HartreeFock::ShellPair> &shell_pairs)
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const HartreeFock::Solvation::PCMState *pcm)
 {
     const Eigen::MatrixXd &S = calculator._overlap;
     const Eigen::MatrixXd &H = calculator._hcore;
@@ -569,11 +585,26 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                             : _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine, tol_eri,
                                                    calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
-        const Eigen::MatrixXd Fa = H + Ga;
-        const Eigen::MatrixXd Fb = H + Gb;
+        const Eigen::MatrixXd P_total = Pa + Pb;
+        Eigen::MatrixXd V_pcm = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        double pcm_energy = 0.0;
+        if (pcm != nullptr && pcm->enabled())
+        {
+            auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(calculator, *pcm, P_total);
+            if (!pcm_result)
+                return std::unexpected("PCM build failed inside UHF iteration: " + pcm_result.error());
+            V_pcm = std::move(pcm_result->reaction_potential);
+            pcm_energy = pcm_result->solvation_energy;
+        }
 
-        // ── Electronic energy — always from the bare (unshifted) Fock ───────────
-        const double E_elec = 0.5 * ((Pa.array() * (H + Fa).array()).sum() + (Pb.array() * (H + Fb).array()).sum());
+        const Eigen::MatrixXd Fa_gas = H + Ga;
+        const Eigen::MatrixXd Fb_gas = H + Gb;
+        const Eigen::MatrixXd Fa = Fa_gas + V_pcm;
+        const Eigen::MatrixXd Fb = Fb_gas + V_pcm;
+
+        // ── Electronic energy — always from the bare gas-phase Fock plus PCM ──
+        const double E_gas = 0.5 * ((Pa.array() * (H + Fa_gas).array()).sum() + (Pb.array() * (H + Fb_gas).array()).sum());
+        const double E_elec = E_gas + pcm_energy;
         const double E_total = E_elec + calculator._nuclear_repulsion;
 
         // ── Level shift: build Fa_s/Fb_s before DIIS ─────────────────────────
@@ -899,8 +930,10 @@ static void _reorder_rohf_orbitals(
 
 std::expected<void, std::string> HartreeFock::SCF::run_rohf(
     HartreeFock::Calculator &calculator,
-    const std::vector<HartreeFock::ShellPair> &shell_pairs)
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const HartreeFock::Solvation::PCMState *pcm)
 {
+    (void)pcm;
     const Eigen::MatrixXd &S = calculator._overlap;
     const Eigen::MatrixXd &H = calculator._hcore;
     const std::size_t nbasis = calculator._shells.nbasis();

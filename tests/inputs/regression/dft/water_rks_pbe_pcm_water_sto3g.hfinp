@@ -1,0 +1,45 @@
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    6
+    engine      os
+    guess       hcore
+    max_cycles  60
+    tol_energy  1.0e-8
+    tol_density 1.0e-8
+%end_scf
+
+%begin_dft
+    grid                coarse
+    exchange            pbe
+    correlation         pbe
+    print_grid_summary  .false.
+%end_dft
+
+%begin_pcm
+    model       pcm
+    solvent     water
+    cavity_scale 1.2
+    surface_points_per_atom 24
+%end_pcm
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.000000
+H     0.758602     0.000000     0.504284
+H    -0.758602     0.000000     0.504284
+%end_coords

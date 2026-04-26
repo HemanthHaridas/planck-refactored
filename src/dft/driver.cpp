@@ -2003,12 +2003,27 @@ namespace DFT::Driver
                     if (!ks_potential)
                         return std::unexpected("DFT KS potential assembly failed: " + ks_potential.error());
 
-                    const Eigen::MatrixXd fock = calculator._hcore + ks_potential->alpha;
-                    const double electronic_energy =
+                    Eigen::MatrixXd pcm_potential = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                    double pcm_energy = 0.0;
+                    if (prepared.pcm && prepared.pcm->enabled())
+                    {
+                        auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(
+                            calculator,
+                            *prepared.pcm,
+                            density);
+                        if (!pcm_result)
+                            return std::unexpected("DFT PCM reaction-field build failed: " + pcm_result.error());
+                        pcm_potential = std::move(pcm_result->reaction_potential);
+                        pcm_energy = pcm_result->solvation_energy;
+                    }
+
+                    const Eigen::MatrixXd fock = calculator._hcore + ks_potential->alpha + pcm_potential;
+                    const double electronic_energy_gas =
                         (density.array() * calculator._hcore.array()).sum() +
                         0.5 * (density.array() * ks_potential->coulomb.array()).sum() +
                         xc_grid->total_energy +
                         ks_potential->exact_exchange_energy;
+                    const double electronic_energy = electronic_energy_gas + pcm_energy;
                     const double total_energy = electronic_energy + calculator._nuclear_repulsion;
 
                     double diis_error = 0.0;
@@ -2074,6 +2089,7 @@ namespace DFT::Driver
                     result.total_energy = total_energy;
                     result.xc_energy = xc_grid->total_energy + ks_potential->exact_exchange_energy;
                     result.integrated_electrons = xc_grid->integrated_electrons;
+                    result.solvation_energy = pcm_energy;
 
                     if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
                     {
@@ -2140,15 +2156,30 @@ namespace DFT::Driver
                 if (!ks_potential)
                     return std::unexpected("DFT KS potential assembly failed: " + ks_potential.error());
 
-                const Eigen::MatrixXd fock_alpha = calculator._hcore + ks_potential->alpha;
-                const Eigen::MatrixXd fock_beta = calculator._hcore + ks_potential->beta;
                 const Eigen::MatrixXd total_density = alpha_density + beta_density;
+                Eigen::MatrixXd pcm_potential = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                double pcm_energy = 0.0;
+                if (prepared.pcm && prepared.pcm->enabled())
+                {
+                    auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(
+                        calculator,
+                        *prepared.pcm,
+                        total_density);
+                    if (!pcm_result)
+                        return std::unexpected("DFT PCM reaction-field build failed: " + pcm_result.error());
+                    pcm_potential = std::move(pcm_result->reaction_potential);
+                    pcm_energy = pcm_result->solvation_energy;
+                }
 
-                const double electronic_energy =
+                const Eigen::MatrixXd fock_alpha = calculator._hcore + ks_potential->alpha + pcm_potential;
+                const Eigen::MatrixXd fock_beta = calculator._hcore + ks_potential->beta + pcm_potential;
+
+                const double electronic_energy_gas =
                     (total_density.array() * calculator._hcore.array()).sum() +
                     0.5 * (total_density.array() * ks_potential->coulomb.array()).sum() +
                     xc_grid->total_energy +
                     ks_potential->exact_exchange_energy;
+                const double electronic_energy = electronic_energy_gas + pcm_energy;
                 const double total_energy = electronic_energy + calculator._nuclear_repulsion;
 
                 double diis_error = 0.0;
@@ -2234,6 +2265,7 @@ namespace DFT::Driver
                 result.total_energy = total_energy;
                 result.xc_energy = xc_grid->total_energy + ks_potential->exact_exchange_energy;
                 result.integrated_electrons = xc_grid->integrated_electrons;
+                result.solvation_energy = pcm_energy;
 
                 if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
                 {
@@ -2382,6 +2414,14 @@ namespace DFT::Driver
             if (!ao_grid)
                 return std::unexpected("DFT AO grid evaluation failed: " + ao_grid.error());
             prepared.ao_grid = std::move(*ao_grid);
+
+            if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+            {
+                auto pcm = HartreeFock::Solvation::build_pcm_state(calculator, prepared.shell_pairs);
+                if (!pcm)
+                    return std::unexpected("DFT PCM setup failed: " + pcm.error());
+                prepared.pcm = std::move(*pcm);
+            }
 
             const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator._shells.nbasis());
             const bool can_reuse_alpha =
@@ -2993,6 +3033,14 @@ namespace DFT::Driver
         if (!ao_grid)
             return std::unexpected("DFT AO grid evaluation failed: " + ao_grid.error());
         prepared.ao_grid = std::move(*ao_grid);
+
+        if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+        {
+            auto pcm = HartreeFock::Solvation::build_pcm_state(calculator, prepared.shell_pairs);
+            if (!pcm)
+                return std::unexpected("DFT PCM setup failed: " + pcm.error());
+            prepared.pcm = std::move(*pcm);
+        }
 
         const bool restart_loaded = restart_state.density_loaded;
         if (!restart_loaded)

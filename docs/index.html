@@ -251,7 +251,17 @@
 <li class="toc-level-3"><a href="#ks-dft-scf-loop">KS-DFT SCF Loop</a></li>
 <li class="toc-level-3"><a href="#dft-code-map">DFT Code Map</a></li>
 <li class="toc-level-3"><a href="#td-dft-linear-response">TD-DFT / Linear Response</a></li>
-<li class="toc-level-2"><a href="#19-molecular-properties">19. Molecular Properties</a></li>
+<li class="toc-level-2"><a href="#19-polarizable-continuum-solvation-c-pcm">19. Polarizable Continuum Solvation (C-PCM)</a></li>
+<li class="toc-level-3"><a href="#the-apparent-surface-charge-picture">The Apparent-Surface-Charge Picture</a></li>
+<li class="toc-level-3"><a href="#cavity-construction-fibonacci-sphere-tessellation">Cavity Construction (Fibonacci-Sphere Tessellation)</a></li>
+<li class="toc-level-3"><a href="#the-surface-influence-matrix">The Surface Influence Matrix <span class="math-inline">\(\mathbf{D}\)</span></a></li>
+<li class="toc-level-3"><a href="#total-solute-potential-at-the-surface">Total Solute Potential at the Surface</a></li>
+<li class="toc-level-3"><a href="#apparent-charges-and-the-reaction-field-operator">Apparent Charges and the Reaction-Field Operator</a></li>
+<li class="toc-level-3"><a href="#coupling-to-the-scf-ks-dft-loop">Coupling to the SCF / KS-DFT Loop</a></li>
+<li class="toc-level-3"><a href="#input-format-and-solvent-library">Input Format and Solvent Library</a></li>
+<li class="toc-level-3"><a href="#limitations-and-cost">Limitations and Cost</a></li>
+<li class="toc-level-3"><a href="#code-map">Code Map</a></li>
+<li class="toc-level-2"><a href="#20-molecular-properties">20. Molecular Properties</a></li>
 <li class="toc-level-3"><a href="#mulliken-population-analysis">Mulliken Population Analysis</a></li>
 <li class="toc-level-3"><a href="#l-wdin-population-analysis">Löwdin Population Analysis</a></li>
 <li class="toc-level-3"><a href="#mayer-bond-orders">Mayer Bond Orders</a></li>
@@ -260,13 +270,13 @@
 <li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
 <li class="toc-level-3"><a href="#mo-symmetry-labels">MO Symmetry Labels</a></li>
 <li class="toc-level-3"><a href="#cartesian-to-spherical-mo-transformation">Cartesian-to-Spherical MO Transformation</a></li>
-<li class="toc-level-2"><a href="#20-checkpoint-and-restart">20. Checkpoint and Restart</a></li>
+<li class="toc-level-2"><a href="#21-checkpoint-and-restart">21. Checkpoint and Restart</a></li>
 <li class="toc-level-3"><a href="#binary-checkpoint-format">Binary Checkpoint Format</a></li>
 <li class="toc-level-3"><a href="#cross-basis-l-wdin-projection">Cross-Basis Löwdin Projection</a></li>
-<li class="toc-level-2"><a href="#21-execution-flow-of-a-typical-run">21. Execution Flow of a Typical Run</a></li>
-<li class="toc-level-2"><a href="#22-theory-to-code-map">22. Theory-to-Code Map</a></li>
-<li class="toc-level-2"><a href="#23-current-implementation-status">23. Current Implementation Status</a></li>
-<li class="toc-level-2"><a href="#24-how-to-study-this-codebase">24. How to Study This Codebase</a></li>
+<li class="toc-level-2"><a href="#22-execution-flow-of-a-typical-run">22. Execution Flow of a Typical Run</a></li>
+<li class="toc-level-2"><a href="#23-theory-to-code-map">23. Theory-to-Code Map</a></li>
+<li class="toc-level-2"><a href="#24-current-implementation-status">24. Current Implementation Status</a></li>
+<li class="toc-level-2"><a href="#25-how-to-study-this-codebase">25. How to Study This Codebase</a></li>
 </ul>
         </nav>
       </aside> <main class="content">
@@ -1986,7 +1996,154 @@ I_{\sigma}(E)
 </ol>
 <p>The report printed by <code>print_linear_response_report()</code> includes the root index, excitation energy in Hartree and eV, oscillator strength, Cartesian transition dipole components, the dipole norm in Debye, and the three largest configuration weights.  The UV-Vis helper <code>print_uvvis_spectrum_report()</code> then writes the broadened spectrum file and prints the strongest broadened peaks in energy and wavelength units.</p>
 <hr>
-<h2 id="19-molecular-properties">19. Molecular Properties</h2>
+<h2 id="19-polarizable-continuum-solvation-c-pcm">19. Polarizable Continuum Solvation (C-PCM)</h2>
+<p>Planck implements a conductor-like polarizable continuum model (C-PCM) for single-point HF (RHF/UHF) and KS-DFT (RKS/UKS) calculations. The solvent is treated as a structureless dielectric medium of relative permittivity <span class="math-inline">\(\varepsilon\)</span> that surrounds a molecule-shaped cavity. The solute polarizes the dielectric; the polarized dielectric back-polarizes the solute via a <em>reaction field</em>, which is added self-consistently to the Fock or Kohn-Sham matrix during the SCF iterations.</p>
+<p>Implementation files:</p>
+<ul>
+<li><code>src/solvation/pcm.{h,cpp}</code> — cavity construction, surface-charge solver, reaction-field assembly</li>
+<li><code>src/scf/scf.cpp</code> — RHF/UHF reaction-field coupling inside the SCF loop</li>
+<li><code>src/dft/driver.cpp</code> — RKS/UKS reaction-field coupling</li>
+<li><code>src/io/io.cpp</code> — <code>%begin_pcm</code> block parser</li>
+</ul>
+<h3 id="the-apparent-surface-charge-picture">The Apparent-Surface-Charge Picture</h3>
+<p>In an apparent-surface-charge (ASC) formulation, the polarization of the dielectric is represented by a layer of charges <span class="math-inline">\(q_i\)</span> that lives on the boundary <span class="math-inline">\(\Gamma\)</span> of the molecular cavity. Each surface element (tessera) <span class="math-inline">\(i\)</span> has position <span class="math-inline">\(\mathbf{s}_i\)</span> and area <span class="math-inline">\(a_i\)</span>. The reaction potential felt by the solute is, to a first approximation, the Coulomb potential of these surface charges:</p>
+<p><span class="math-display">\[
+\phi^{\text{rxn}}(\mathbf{r}) = \sum_i \frac{q_i}{|\mathbf{r} - \mathbf{s}_i|}.
+\]</span></p>
+<p>The surface charges respond to the <em>total</em> electrostatic potential <span class="math-inline">\(\phi^{\text{tot}}(\mathbf{s}_i)\)</span> produced by the solute at each tessera — nuclei plus electrons — through a linear surface integral equation. In C-PCM, that integral equation reduces to a single dense linear system</p>
+<p><span class="math-display">\[
+\mathbf{D}\,\mathbf{q} = -f(\varepsilon)\,\boldsymbol{\phi}^{\text{tot}},
+\qquad
+f(\varepsilon) = \frac{\varepsilon - 1}{\varepsilon + 1/2},
+\]</span></p>
+<p>where <span class="math-inline">\(\mathbf{D}\)</span> is the <em>surface influence matrix</em> (Coulomb interaction between tesserae) and <span class="math-inline">\(f(\varepsilon)\)</span> is the C-PCM dielectric scaling factor. The form <span class="math-inline">\((\varepsilon - 1)/(\varepsilon + 1/2)\)</span> is Klamt and Schüürmann&#x27;s COSMO/C-PCM choice — it interpolates smoothly between vacuum (<span class="math-inline">\(\varepsilon \to 1\)</span>, <span class="math-inline">\(f \to 0\)</span>, no polarization) and a perfect conductor (<span class="math-inline">\(\varepsilon \to \infty\)</span>, <span class="math-inline">\(f \to 1\)</span>).</p>
+<p>Once the apparent charges are known, the reaction-field contribution to the electronic energy is</p>
+<p><span class="math-display">\[
+G^{\text{rxn}} = \tfrac{1}{2} \sum_i q_i \, \phi^{\text{tot}}(\mathbf{s}_i),
+\]</span></p>
+<p>and the <em>operator</em> that the solute electrons feel is</p>
+<p><span class="math-display">\[
+\hat{V}^{\text{rxn}} = \sum_i q_i \int \frac{\chi_\mu^*(\mathbf{r})\,\chi_\nu(\mathbf{r})}{|\mathbf{r} - \mathbf{s}_i|}\,\mathrm{d}\mathbf{r}.
+\]</span></p>
+<p>In matrix form this is just a weighted sum of one-electron nuclear-attraction- like integrals against unit point charges placed at the tesserae; that is exactly the integral primitive <code>_compute_external_charge_attraction</code> already provides in the Obara-Saika engine.</p>
+<h3 id="cavity-construction-fibonacci-sphere-tessellation">Cavity Construction (Fibonacci-Sphere Tessellation)</h3>
+<p>Each atom <span class="math-inline">\(A\)</span> is wrapped in a sphere of radius</p>
+<p><span class="math-display">\[
+R_A = s \cdot R_A^{\text{vdW}},
+\]</span></p>
+<p>where <span class="math-inline">\(R_A^{\text{vdW}}\)</span> is the element&#x27;s van der Waals radius (from <code>src/lookup/elements.cpp</code>, converted to Bohr) and <span class="math-inline">\(s\)</span> is the user-controlled cavity scale (<code>cavity_scale</code>, default <span class="math-inline">\(s = 1.2\)</span>, matching common Bondi-radius PCM conventions). On each sphere, <code>points_per_atom</code> surface points are placed using a <em>Fibonacci-sphere</em> (golden-angle) distribution — <code>fibonacci_sphere</code> in <code>pcm.cpp</code>. This gives a quasi-uniform tiling on the sphere with a single parameter and no special-case handling at the poles.</p>
+<p>Each candidate point gets an area</p>
+<p><span class="math-display">\[
+a_i = \frac{4\pi R_A^2}{N_{\text{points/atom}}}.
+\]</span></p>
+<p>The atomic spheres overlap in molecules. Points that fall <em>inside</em> another atom&#x27;s sphere are <em>buried</em> and discarded — only the exposed surface (the solvent-accessible patches) is kept. After this pruning, the surviving points <span class="math-inline">\(\{\mathbf{s}_i, a_i\}\)</span> form the cavity discretization. If every point is buried (an unlikely pathological case for tiny <code>points_per_atom</code>), the build returns an error rather than silently producing an empty cavity.</p>
+<p>The cavity construction is carried out once at the start of the calculation; because Planck currently restricts PCM to single-point energies, the cavity does not need to be rebuilt at each geometry step.</p>
+<h3 id="the-surface-influence-matrix">The Surface Influence Matrix <span class="math-inline">\(\mathbf{D}\)</span></h3>
+<p>For <span class="math-inline">\(i \ne j\)</span>, the off-diagonal element is the Coulomb interaction between two unit charges placed on tesserae <span class="math-inline">\(i\)</span> and <span class="math-inline">\(j\)</span>:</p>
+<p><span class="math-display">\[
+D_{ij} = \frac{1}{|\mathbf{s}_i - \mathbf{s}_j|}.
+\]</span></p>
+<p>The diagonal elements are <em>singular</em> under a strict point-charge model — a point charge interacting with itself diverges. The standard cure is to spread each surface charge over its tessera and approximate the self-interaction by</p>
+<p><span class="math-display">\[
+D_{ii} = k\,\sqrt{\frac{4\pi}{a_i}},
+\]</span></p>
+<p>which is the Coulomb self-energy of a uniformly charged disc of area <span class="math-inline">\(a_i\)</span> up to a small numerical factor. Planck uses</p>
+<p><span class="math-display">\[
+k = 1.07 \quad (\texttt{ISWIG\_DIAGONAL\_SCALE} \text{ in } \texttt{pcm.cpp}),
+\]</span></p>
+<p>the empirical correction of Pascual-Ahuir, Silla and Tuñon (the &quot;ISWIG&quot; prescription) that gives accurate solvation free energies for a range of solvents. The matrix <span class="math-inline">\(\mathbf{D}\)</span> is dense, symmetric, and positive-definite, which is why a Cholesky-class factorization (<code>Eigen::LDLT</code>) is used to solve for the apparent charges.</p>
+<h3 id="total-solute-potential-at-the-surface">Total Solute Potential at the Surface</h3>
+<p>The right-hand side of the C-PCM linear system is the total electrostatic potential the solute produces at each tessera. It splits into a nuclear and an electronic piece:</p>
+<p><span class="math-display">\[
+\phi^{\text{tot}}(\mathbf{s}_i) = \underbrace{\sum_A \frac{Z_A}{|\mathbf{s}_i - \mathbf{R}_A|}}_{\phi^{\text{nuc}}_i}
++ \sum_{\mu\nu} P_{\mu\nu}\,\Bigl[\!\!\!\!
+\underbrace{- \int \frac{\chi_\mu^*(\mathbf{r})\,\chi_\nu(\mathbf{r})}{|\mathbf{r} - \mathbf{s}_i|}\,\mathrm{d}\mathbf{r}}_{V^{(i)}_{\mu\nu}}
+\Bigr],
+\]</span></p>
+<p>where the sign convention used in <code>pcm.cpp</code> folds the electron sign into the integral matrix <span class="math-inline">\(\mathbf{V}^{(i)}\)</span>. The matrices <span class="math-inline">\(\mathbf{V}^{(i)}\)</span> are <em>independent of the density</em>: each is just the AO matrix of a unit point charge placed at <span class="math-inline">\(\mathbf{s}_i\)</span>, and is computed exactly once during <code>build_pcm_state</code> via <code>_compute_external_charge_attraction(... unit_charge ...)</code>. The cost of one cavity build is therefore <span class="math-inline">\(N_{\text{tess}}\)</span> one-electron nuclear-attraction builds, each cheap relative to the two-electron problem.</p>
+<p>The nuclear potential <span class="math-inline">\(\phi^{\text{nuc}}_i\)</span> is also density-independent and is cached up front in <code>state.nuclear_potential</code>. During the SCF loop, the only <span class="math-inline">\(O(N_{\text{tess}})\)</span> work that depends on the current density is the contraction</p>
+<p><span class="math-display">\[
+\phi^{\text{el}}_i = \sum_{\mu\nu} P_{\mu\nu}\,V^{(i)}_{\mu\nu}
+\]</span></p>
+<p>— a single Frobenius product per tessera per SCF iteration.</p>
+<h3 id="apparent-charges-and-the-reaction-field-operator">Apparent Charges and the Reaction-Field Operator</h3>
+<p>With the precomputed pieces in hand, each SCF iteration in <code>evaluate_pcm_reaction_field</code> does:</p>
+<ol>
+<li><strong>Total potential at the surface:</strong> <span class="math-inline">\(\phi^{\text{tot}}_i = \phi^{\text{nuc}}_i + \sum_{\mu\nu} P_{\mu\nu}\,V^{(i)}_{\mu\nu}\)</span>.</li>
+<li><strong>Solve C-PCM linear system:</strong> <span class="math-inline">\(\mathbf{D}\,\mathbf{q} = -f(\varepsilon)\,\boldsymbol{\phi}^{\text{tot}}\)</span> via the Cholesky-class <code>Eigen::LDLT</code> factorization built once and re-solved each iteration. (The factorization could be cached across iterations; it is recomputed for clarity.)</li>
+<li><strong>Reaction-field operator in AO basis:</strong> <span class="math-inline">\(V^{\text{rxn}}_{\mu\nu} = \sum_i q_i \, V^{(i)}_{\mu\nu}\)</span> — a linear combination of the precomputed unit-charge matrices.</li>
+<li><strong>Solvation energy contribution:</strong> <span class="math-inline">\(G^{\text{rxn}} = \tfrac{1}{2}\,\mathbf{q}^\top \boldsymbol{\phi}^{\text{tot}}\)</span>.</li>
+</ol>
+<p>Because both <span class="math-inline">\(\mathbf{q}\)</span> and <span class="math-inline">\(\boldsymbol{\phi}^{\text{tot}}\)</span> depend on <span class="math-inline">\(\mathbf{P}\)</span>, <span class="math-inline">\(V^{\text{rxn}}_{\mu\nu}\)</span> depends on the density, and the problem is genuinely self-consistent — the reaction field must be rebuilt at every SCF iteration alongside the Coulomb and exchange terms.</p>
+<h3 id="coupling-to-the-scf-ks-dft-loop">Coupling to the SCF / KS-DFT Loop</h3>
+<p>For RHF (<code>run_rhf</code> in <code>scf.cpp</code>) the working Fock matrix becomes</p>
+<p><span class="math-display">\[
+\mathbf{F} = \mathbf{F}^{\text{gas}} + \mathbf{V}^{\text{rxn}},
+\]</span></p>
+<p>and the reported electronic energy at each iteration is</p>
+<p><span class="math-display">\[
+E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
+\]</span></p>
+<p>where <span class="math-inline">\(E^{\text{gas}}_{\text{elec}}\)</span> is the standard <span class="math-inline">\(\tfrac{1}{2}\mathrm{tr}[\mathbf{P}(\mathbf{H}^{\text{core}} + \mathbf{F}^{\text{gas}})]\)</span> formed <em>before</em> PCM is added.</p>
+<p>For UHF (<code>run_uhf</code> in <code>scf.cpp</code>) the same reaction-field operator is added to <em>both</em> spin Fock matrices,</p>
+<p><span class="math-display">\[
+\mathbf{F}_\alpha = \mathbf{F}_\alpha^{\text{gas}} + \mathbf{V}^{\text{rxn}}, \qquad
+\mathbf{F}_\beta  = \mathbf{F}_\beta^{\text{gas}}  + \mathbf{V}^{\text{rxn}},
+\]</span></p>
+<p>because <span class="math-inline">\(V^{\text{rxn}}\)</span> is built from the <em>total</em> density <span class="math-inline">\(\mathbf{P} = \mathbf{P}_\alpha + \mathbf{P}_\beta\)</span> and is spin-independent. The same pattern is used in the KS-DFT driver (<code>src/dft/driver.cpp</code>): RKS adds <span class="math-inline">\(\mathbf{V}^{\text{rxn}}\)</span> to the single Fock matrix; UKS adds the same operator to both spin channels. In every case the solvation energy <span class="math-inline">\(G^{\text{rxn}}\)</span> is added to the electronic part of the total energy <em>once</em>, not twice — the <span class="math-inline">\(\tfrac{1}{2}\)</span> prefactor in <span class="math-inline">\(G^{\text{rxn}}\)</span> is exactly the factor that prevents double counting when the reaction-field operator is also inside <span class="math-inline">\(\mathbf{F}\)</span>.</p>
+<p>The DFT driver further reports the converged solvation energy separately as &quot;PCM Solvation Energy : … Eh&quot; so the user can see the dielectric stabilization distinct from the gas-phase total.</p>
+<h3 id="input-format-and-solvent-library">Input Format and Solvent Library</h3>
+<p>PCM is requested with a <code>%begin_pcm</code> block. A representative input (<code>tests/inputs/regression/hf/water_rhf_pcm_water_sto3g.hfinp</code>) reads:</p>
+<pre><code>
+%begin_pcm
+    model       pcm
+    solvent     water
+    cavity_scale 1.2
+    surface_points_per_atom 24
+%end_pcm
+</code></pre>
+<p>Recognized keywords (parsed by <code>_parse_pcm</code> in <code>src/io/io.cpp</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Keyword</th>
+<th>Meaning</th>
+</tr></thead>
+<tbody>
+<tr><td><code>model</code></td><td><code>pcm</code> / <code>cpcm</code> (alias for the same C-PCM model) or <code>none</code></td></tr>
+<tr><td><code>solvent</code></td><td>Named solvent; sets dielectric from a small built-in table</td></tr>
+<tr><td><code>dielectric</code> / <code>epsilon</code> / <code>eps</code></td><td>Override the dielectric directly</td></tr>
+<tr><td><code>cavity_scale</code></td><td>van der Waals radius scale <span class="math-inline">\(s\)</span> (default 1.2)</td></tr>
+<tr><td><code>surface_points</code> / <code>surface_points_per_atom</code></td><td>tesserae per atom (default 60, minimum 6)</td></tr>
+</tbody></table></div>
+<p>Built-in solvent dielectrics (<code>dielectric_from_solvent_name</code> in <code>io.cpp</code>): water (78.3553), acetonitrile (35.688), methanol (32.613), ethanol (24.852), DMSO (46.826), dichloromethane (8.93), chloroform (4.7113), THF (7.4257), toluene (2.3741), benzene (2.2706), hexane (1.8819). Listing a <code>solvent</code> overrides any prior <code>dielectric</code> value; passing both is allowed but the solvent name wins.</p>
+<p>PCM is currently <strong>gated to single-point energy calculations only</strong> (see the check around <code>src/io/io.cpp:1266</code>). Combining <code>model pcm</code> with <code>calculation gradient</code>, <code>geomopt</code>, or <code>frequency</code> produces an explicit input error rather than a silently incomplete result, because analytic PCM gradients (which require derivatives of the cavity, the influence matrix, and the reaction-field operator) are not implemented.</p>
+<h3 id="limitations-and-cost">Limitations and Cost</h3>
+<ul>
+<li><strong>Single-point only.</strong> No PCM gradient, geometry optimization, or frequencies. Post-HF (MP2, CC, CASSCF) is not coupled to PCM either — the reaction field is enforced only at the SCF/KS level.</li>
+<li><strong>C-PCM only.</strong> The dielectric scaling <span class="math-inline">\((\varepsilon - 1)/(\varepsilon + \tfrac{1}{2})\)</span> is the conductor-like form. IEF-PCM and SS(V)PE are not implemented.</li>
+<li><strong>Vacuum-style cavity.</strong> The cavity uses scaled van der Waals spheres with a Fibonacci-sphere tessellation and bury-test pruning. There is no smoothing layer between spheres (no GEPOL/SES), which can introduce small ripples in the energy as a function of geometry.</li>
+<li><strong>Cost.</strong> Each SCF iteration adds: one <span class="math-inline">\(N_{\text{tess}}\)</span>-by-<span class="math-inline">\(N_{\text{basis}}^2\)</span> Frobenius reduction to build <span class="math-inline">\(\boldsymbol{\phi}^{\text{tot}}\)</span>; one <span class="math-inline">\(O(N_{\text{tess}}^3)\)</span> Cholesky-class solve on <span class="math-inline">\(\mathbf{D}\)</span>; and one <span class="math-inline">\(N_{\text{tess}}\)</span>-by-<span class="math-inline">\(N_{\text{basis}}^2\)</span> accumulation to assemble <span class="math-inline">\(\mathbf{V}^{\text{rxn}}\)</span>. For typical organic molecules with <code>surface_points_per_atom</code> <span class="math-inline">\(\sim 60\)</span>, this is dominated by the precomputation of the unit-charge attraction matrices, which happens once in <code>build_pcm_state</code>.</li>
+</ul>
+<h3 id="code-map">Code Map</h3>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Concept</th>
+<th>File</th>
+<th>Function</th>
+</tr></thead>
+<tbody>
+<tr><td><code>OptionsSolvation</code> (model, dielectric, scale, npoints)</td><td><code>src/base/types.h</code></td><td><code>OptionsSolvation</code></td></tr>
+<tr><td><code>SolvationModel::{None, PCM}</code></td><td><code>src/base/types.h</code></td><td>enum</td></tr>
+<tr><td><code>%begin_pcm</code> parser + solvent table</td><td><code>src/io/io.cpp</code></td><td><code>_parse_pcm</code>, <code>dielectric_from_solvent_name</code></td></tr>
+<tr><td>Cavity build, influence matrix, unit-charge matrices</td><td><code>src/solvation/pcm.cpp</code></td><td><code>build_pcm_state</code>, <code>fibonacci_sphere</code></td></tr>
+<tr><td>SCF reaction field per iteration</td><td><code>src/solvation/pcm.cpp</code></td><td><code>evaluate_pcm_reaction_field</code></td></tr>
+<tr><td>RHF + PCM coupling</td><td><code>src/scf/scf.cpp</code></td><td><code>run_rhf</code> (PCM block near line 286)</td></tr>
+<tr><td>UHF + PCM coupling</td><td><code>src/scf/scf.cpp</code></td><td><code>run_uhf</code> (PCM block near line 589)</td></tr>
+<tr><td>RKS / UKS + PCM coupling</td><td><code>src/dft/driver.cpp</code></td><td>KS Fock assembly with <code>pcm_potential</code></td></tr>
+<tr><td>Single-point gating</td><td><code>src/io/io.cpp</code></td><td>check around line 1266</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="20-molecular-properties">20. Molecular Properties</h2>
 <p>After SCF convergence Planck can compute several molecular properties from the converged density matrix. Dipole and quadrupole moments are printed automatically; population and bond-order reports are printed when <code>print_populations true</code> or the output <code>verbosity</code> is <code>verbose</code> / <code>debug</code>. This section covers the theory behind each property and the code path that evaluates it.</p>
 <h3 id="mulliken-population-analysis">Mulliken Population Analysis</h3>
 <p><strong>Theory</strong></p>
@@ -2212,7 +2369,7 @@ T^+ \in \mathbb{R}^{N_{sph} \times N_{cart}}, \qquad N_{sph} = \sum_s (2L_s+1), 
 <p><strong>Verification tip</strong></p>
 <p>If <span class="math-inline">\(T^+\)</span> is correct, the inner product <span class="math-inline">\(\mathbf C_{sph}^\top \mathbf C_{sph}\)</span> restricted to the occupied block should equal the identity (orthonormal MOs), and the total norm of each MO column should be preserved.  Any error in the hardcoded <span class="math-inline">\(T^+\)</span> blocks shows up immediately as an MO being assigned to the wrong irrep (or split across two irreps).</p>
 <hr>
-<h2 id="20-checkpoint-and-restart">20. Checkpoint and Restart</h2>
+<h2 id="21-checkpoint-and-restart">21. Checkpoint and Restart</h2>
 <h3 id="binary-checkpoint-format">Binary Checkpoint Format</h3>
 <p>The checkpoint file (<code>*.hfchk</code>) stores:</p>
 <ul>
@@ -2237,7 +2394,7 @@ P^{small}_{\lambda'\sigma'}\, (S^{cross})^T_{\sigma'\mu}\,
 \]</span></p>
 <p>implemented via a singular value decomposition (Löwdin SVD) of the cross-overlap in <code>src/io/checkpoint.cpp</code>. This provides a physically motivated initial density for the new basis, significantly reducing the number of SCF iterations required.</p>
 <hr>
-<h2 id="21-execution-flow-of-a-typical-run">21. Execution Flow of a Typical Run</h2>
+<h2 id="22-execution-flow-of-a-typical-run">22. Execution Flow of a Typical Run</h2>
 <pre><code>
 driver.cpp
   parse_input()                → Calculator._scf, _basis, _geometry, etc.
@@ -2310,7 +2467,7 @@ driver.cpp
   save_checkpoint()
 </code></pre>
 <hr>
-<h2 id="22-theory-to-code-map">22. Theory-to-Code Map</h2>
+<h2 id="23-theory-to-code-map">23. Theory-to-Code Map</h2>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Theory concept</th>
@@ -2376,6 +2533,10 @@ driver.cpp
 <tr><td>KS potential matrices</td><td><code>src/dft/ks_matrix.cpp</code></td><td><code>combine_ks_potential</code></td></tr>
 <tr><td>KS-DFT driver</td><td><code>src/dft/driver.cpp</code></td><td><code>DFT::Driver::run</code></td></tr>
 <tr><td>TD-DFT / linear response (TDA)</td><td><code>src/dft/driver.cpp</code></td><td><code>run_linear_response_tda</code>, <code>print_linear_response_report</code></td></tr>
+<tr><td>C-PCM cavity + influence matrix</td><td><code>src/solvation/pcm.cpp</code></td><td><code>build_pcm_state</code>, <code>fibonacci_sphere</code></td></tr>
+<tr><td>C-PCM reaction-field operator</td><td><code>src/solvation/pcm.cpp</code></td><td><code>evaluate_pcm_reaction_field</code></td></tr>
+<tr><td>External-charge AO matrices (PCM unit potentials)</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_external_charge_attraction</code></td></tr>
+<tr><td>PCM input parsing + solvent table</td><td><code>src/io/io.cpp</code></td><td><code>_parse_pcm</code>, <code>dielectric_from_solvent_name</code></td></tr>
 <tr><td>Mulliken population analysis</td><td><code>src/scf/population.cpp</code></td><td><code>mulliken_population_analysis</code>, <code>gross_ao_population</code></td></tr>
 <tr><td>Löwdin population analysis</td><td><code>src/scf/population.cpp</code></td><td><code>lowdin_population_analysis</code>, <code>symmetric_overlap_sqrt</code></td></tr>
 <tr><td>Mayer bond orders</td><td><code>src/scf/population.cpp</code></td><td><code>mayer_bond_order_analysis</code></td></tr>
@@ -2386,7 +2547,7 @@ driver.cpp
 <tr><td>MO irrep labels</td><td><code>src/symmetry/mo_symmetry.cpp</code></td><td><code>assign_mo_symmetry</code></td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="23-current-implementation-status">23. Current Implementation Status</h2>
+<h2 id="24-current-implementation-status">24. Current Implementation Status</h2>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Feature</th>
@@ -2428,9 +2589,12 @@ driver.cpp
 <tr><td>Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs)</td><td>Complete</td></tr>
 <tr><td>Range-separated and double-hybrid XC functionals</td><td>Not supported</td></tr>
 <tr><td>Spherical harmonic basis</td><td>Not supported (Cartesian only)</td></tr>
+<tr><td>C-PCM solvation (RHF/UHF/RKS/UKS, single-point energy)</td><td>Complete</td></tr>
+<tr><td>PCM gradients / geometry optimization / frequencies</td><td>Not implemented</td></tr>
+<tr><td>PCM coupling to post-HF (MP2, CC, CASSCF)</td><td>Not implemented</td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="24-how-to-study-this-codebase">24. How to Study This Codebase</h2>
+<h2 id="25-how-to-study-this-codebase">25. How to Study This Codebase</h2>
 <p>Recommended reading order for the HF/post-HF pipeline:</p>
 <ol>
 <li><code>src/base/types.h</code> — understand every struct before reading any algorithm</li>

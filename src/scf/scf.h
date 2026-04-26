@@ -7,6 +7,7 @@
 
 #include "base/types.h"
 #include "integrals/shellpair.h"
+#include "solvation/pcm.h"
 
 namespace HartreeFock
 {
@@ -96,21 +97,24 @@ namespace HartreeFock
         // Stores converged density, Fock, MO energies/coefficients in calculator._info._scf.
         // Returns an error string if convergence is not achieved.
         std::expected<void, std::string> run_rhf(HartreeFock::Calculator &calculator,
-                                                 const std::vector<HartreeFock::ShellPair> &shell_pairs);
+                                                 const std::vector<HartreeFock::ShellPair> &shell_pairs,
+                                                 const HartreeFock::Solvation::PCMState *pcm = nullptr);
 
         // Run the UHF SCF procedure.
         // Uses molecule.multiplicity to derive n_alpha and n_beta.
         // Stores converged alpha and beta channels in calculator._info._scf.
         // Returns an error string if convergence is not achieved.
         std::expected<void, std::string> run_uhf(HartreeFock::Calculator &calculator,
-                                                 const std::vector<HartreeFock::ShellPair> &shell_pairs);
+                                                 const std::vector<HartreeFock::ShellPair> &shell_pairs,
+                                                 const HartreeFock::Solvation::PCMState *pcm = nullptr);
 
         // Run the ROHF SCF procedure.
         // Uses molecule.multiplicity to derive the closed/open-shell occupations.
         // Stores alpha/beta densities and one shared MO coefficient set in both channels.
         // Returns an error string if convergence is not achieved.
         std::expected<void, std::string> run_rohf(HartreeFock::Calculator &calculator,
-                                                  const std::vector<HartreeFock::ShellPair> &shell_pairs);
+                                                  const std::vector<HartreeFock::ShellPair> &shell_pairs,
+                                                  const HartreeFock::Solvation::PCMState *pcm = nullptr);
     } // namespace SCF
 } // namespace HartreeFock
 

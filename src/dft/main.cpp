@@ -121,6 +121,16 @@ int main(int argc, const char *argv[])
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Correlation :", map_enum(calculator._dft._correlation));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Charge :", calculator._molecule.charge);
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Multiplicity :", calculator._molecule.multiplicity);
+    if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info,
+            "Solvation :",
+            std::format(
+                "PCM (epsilon = {:.4f}, points/atom = {})",
+                calculator._solvation._dielectric,
+                calculator._solvation._surface_points_per_atom));
+    }
     HartreeFock::Logger::blank();
 
     const auto result = DFT::Driver::run(calculator);
@@ -140,6 +150,13 @@ int main(int argc, const char *argv[])
         HartreeFock::LogLevel::Info,
         "DFT Energy :",
         std::format("{:.10f} Eh", result->total_energy));
+    if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info,
+            "PCM Solvation Energy :",
+            std::format("{:.10f} Eh", result->solvation_energy));
+    }
     HartreeFock::Logger::logging(
         HartreeFock::LogLevel::Info,
         "Converged :",
