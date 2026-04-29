@@ -358,33 +358,37 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
       background: linear-gradient(
         135deg, rgba(154,61,34,0.95), rgba(123,53,31,0.92)
       );  color:  #fff9f2; border-radius: 24px; padding: 28px 34px; box-shadow:
-      var(--shadow); margin-bottom: 24px;
+      var(--shadow); margin-bottom: 24px; min-width: 0;
     }} .hero h1 {{
       margin: 0 0 8px; font-size: clamp(2rem, 3vw, 3.2rem); line-height: 1.1;
+      overflow-wrap: anywhere;
     }} .hero p {{
       margin:  0;  max-width:  100%;  color: rgba(255,249,242,0.92); font-size:
-      1.05rem;
+      1.05rem; overflow-wrap: anywhere;
     }} .layout {{
       display:  grid;  grid-template-columns:  300px minmax(0, 1fr); gap: 24px;
-      align-items: start;
+      align-items: start; min-width: 0;
     }} .sidebar, .content {{
       background:  var(--panel);  border: 1px solid var(--rule); border-radius:
-      22px; box-shadow: var(--shadow);
+      22px; box-shadow: var(--shadow); min-width: 0;
     }} .sidebar {{
       position:  sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y:
       auto; padding: 22px 20px;
     }} .sidebar h2 {{
       margin:   0   0   12px;  font-size:  0.9rem;  text-transform:  uppercase;
       letter-spacing: 0.09em; color: var(--accent);
-    }}  .sidebar  ul {{ list-style: none; padding: 0; margin: 0; }} .sidebar li
+    }}  .sidebar  ul {{ list-style: none; padding: 0; margin: 0; min-width: 0; }} .sidebar li
     {{ margin: 0; padding: 0; }} .sidebar a {{
       display:  block;  padding:  4px  0; color: var(--muted); text-decoration:
-      none; font-size: 0.9rem; line-height: 1.4;
+      none; font-size: 0.9rem; line-height: 1.4; overflow-wrap: anywhere;
+      word-break: break-word;
     }} .sidebar a:hover {{ color: var(--accent); }} .toc-level-1 a {{
       font-weight:   600;   padding-top:  7px;  color:  var(--ink);  font-size:
       0.93rem;
     }} .toc-level-2 a {{ padding-left: 12px; }} .toc-level-3 a {{ padding-left:
-    24px;  font-size:  0.85rem;  }} .content {{ padding: 36px 40px; }} .content
+    24px;  font-size:  0.85rem;  }} .sidebar .math-inline {{
+      white-space: normal;
+    }} .content {{ padding: 36px 40px; }} .content
     h1, .content h2, .content h3, .content h4 {{
       line-height: 1.2; color: #13202b; scroll-margin-top: 24px;
     }} .content h1 {{
@@ -442,14 +446,14 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
     }}  /* ── Tablet breakpoint (≤ 980 px) ────────────────────────── */ @media
     (max-width: 980px) {{
       .layout  {{  grid-template-columns: 1fr; }} .sidebar {{ position: static;
-      max-height:  none;  }}  .content {{ padding: 24px 18px; }} .toc-toggle {{
-      display: block; }} .sidebar-nav {{ display: none; }} .sidebar-nav.open {{
-      display: block; }} .sidebar h2 {{ display: none; }}
+      max-height:  none; overflow-x: hidden; }}  .content {{ padding: 24px 18px; }}
+      .toc-toggle {{ display: block; }} .sidebar-nav {{ display: none; min-width: 0; }}
+      .sidebar-nav.open {{ display: block; }} .sidebar h2 {{ display: none; }}
     }}  /* ── Phone breakpoint (≤ 600 px) ─────────────────────────── */ @media
     (max-width: 600px) {{
       .page  {{  padding:  12px  10px  40px;  }}  .hero  {{ padding: 18px 18px;
       border-radius:  16px;  }}  .hero  h1  {{  font-size:  clamp(1.6rem,  7vw,
-      2.4rem);  }}  .hero p {{ font-size: 0.95rem; }} .content {{ padding: 18px
+      2.4rem);  line-height: 1.08; }}  .hero p {{ font-size: 0.95rem; }} .content {{ padding: 18px
       14px;  border-radius:  16px; }} .sidebar {{ border-radius: 16px; padding:
       16px 14px; }} .content p, .content li {{
         text-align: left; -webkit-hyphens: none; hyphens: none;
@@ -457,7 +461,7 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
       margin-top: 2rem; }} .content h3 {{ font-size: 1.1rem; }} .content pre {{
       padding: 14px 14px; border-radius: 10px; }} .sidebar a {{ padding: 7px 0;
       font-size:   0.97rem;   }}  .toc-level-2  a  {{  padding-left:  14px;  }}
-      .toc-level-3 a {{ padding-left: 26px; font-size: 0.9rem; }}
+      .toc-level-3 a {{ padding-left: 22px; font-size: 0.9rem; }}
     }}
   </style>
 </head> <body>
