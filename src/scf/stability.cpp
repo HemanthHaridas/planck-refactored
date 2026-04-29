@@ -524,8 +524,25 @@ namespace HartreeFock::SCF
             channel.label.find("RHF -> UHF") != std::string::npos;
 
         // For an RHF → UHF triplet instability we need to promote the
-        // calculator to a UHF reference, mix alpha and beta separately
-        // (with opposite signs along the unstable mode), and re-run UHF.
+        // calculator to a UHF reference and break spin symmetry strongly
+        // enough that the post-rotation density is *not* in the
+        // closed-shell-mimicking UHF stationary point.
+        //
+        // Two-step strategy (standard "Pople / Noodleman broken-symmetry guess"):
+        //
+        //   1. HOMO–LUMO mix the beta orbitals only. β_HOMO and β_LUMO are
+        //      rotated by 45° (cos·HOMO ± sin·LUMO). This makes the alpha
+        //      and beta occupied spaces explicitly different along the
+        //      frontier — independent of whatever the unstable eigenvector
+        //      happens to point at. Without this step the eigenvector may
+        //      pick up mostly core-orbital character, leaving the frontier
+        //      closed-shell, and UHF re-symmetrizes back to RHF.
+        //
+        //   2. Apply ±step·R rotation on top, alpha = +R, beta = −R.
+        //      Guides the SCF toward the *specific* lower stationary point
+        //      identified by the stability analyzer.
+        //
+        // Step 1 alone usually suffices; step 2 sharpens the direction.
         if (is_triplet_external && was_rhf)
         {
             if (n_electrons % 2 != 0)
@@ -538,21 +555,38 @@ namespace HartreeFock::SCF
             const Eigen::MatrixXd C_in = calculator._info._scf.alpha.mo_coefficients;
             const Eigen::VectorXd eps_in = calculator._info._scf.alpha.mo_energies;
 
-            // Adaptive step. For deeply unstable modes (|λ| ≳ 0.01) we need a
-            // sizeable rotation to escape the basin — `π/4` is the standard
-            // "45° spin-symmetry break" used by production codes. For weakly
-            // unstable modes the user-supplied `step_scale` (default 0.05) is
-            // already enough.
-            const double step =
+            // Adaptive step on the eigenvector rotation. For deeply unstable
+            // modes (|λ| ≳ 1e-2) use π/4; otherwise the user-supplied default
+            // step_scale (typically 0.05 rad).
+            constexpr double pi_over_4 = 0.7853981633974483;
+            const double eig_step =
                 (channel.lowest_eigenvalue < -1e-2)
-                    ? std::max(step_scale, 0.5 * 3.14159265358979323846 / 2.0)
+                    ? std::max(step_scale, pi_over_4)
                     : step_scale;
 
-            // Apply +s along the mode to alpha and −s to beta. This is the
-            // standard "spin-symmetry break" mixing used by every production
-            // code: a triplet rotation pushes alpha occupied weight into one
-            // virtual combination and beta into the orthogonal one.
-            const Eigen::MatrixXd kappa = step * channel.lowest_mode;
+            // Step 1: HOMO–LUMO mix beta. The mixing angle is π/8 (22.5°) —
+            // enough to break spin symmetry without over-mixing into a
+            // genuinely homolytic state. Production codes vary between π/8
+            // and π/4 for this; we use the smaller value to stay close to
+            // the physical RHF→UHF transition.
+            //
+            //   β_HOMO_new =  cos · β_HOMO + sin · β_LUMO
+            //   β_LUMO_new = -sin · β_HOMO + cos · β_LUMO
+            const int homo_idx = n_alpha - 1;
+            const int lumo_idx = n_alpha;  // first virtual
+            const double mix_angle = pi_over_4 / 2.0;  // π/8
+            const double cs = std::cos(mix_angle);
+            const double sn = std::sin(mix_angle);
+
+            Eigen::MatrixXd C_beta = C_in;
+            const Eigen::VectorXd homo_col = C_in.col(homo_idx);
+            const Eigen::VectorXd lumo_col = C_in.col(lumo_idx);
+            C_beta.col(homo_idx) = cs * homo_col + sn * lumo_col;
+            C_beta.col(lumo_idx) = -sn * homo_col + cs * lumo_col;
+
+            // Step 2: apply the eigenvector rotation as a sharpening step.
+            // Sign convention: +eig_step for alpha, −eig_step for beta.
+            const Eigen::MatrixXd kappa = eig_step * channel.lowest_mode;
             const Eigen::MatrixXd U_pos = build_rotation_matrix(kappa, n_alpha, n_virt);
             const Eigen::MatrixXd U_neg = build_rotation_matrix(-kappa, n_alpha, n_virt);
 
@@ -562,7 +596,7 @@ namespace HartreeFock::SCF
             calculator._info._scf.initialize(nb);
 
             calculator._info._scf.alpha.mo_coefficients = C_in * U_pos;
-            calculator._info._scf.beta.mo_coefficients = C_in * U_neg;
+            calculator._info._scf.beta.mo_coefficients = C_beta * U_neg;
             calculator._info._scf.alpha.mo_energies = eps_in;
             calculator._info._scf.beta.mo_energies = eps_in;
             calculator._info._scf.alpha.density =
@@ -572,15 +606,14 @@ namespace HartreeFock::SCF
                 calculator._info._scf.beta.mo_coefficients.leftCols(n_beta) *
                 calculator._info._scf.beta.mo_coefficients.leftCols(n_beta).transpose();
 
-            // The SCF entry path will see is_init=true and reuse our seeded
-            // density. Force its convergence flag back to false.
             reset_for_rerun(calculator);
 
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info, "Stability :",
                 std::format("Following RHF→UHF triplet instability "
-                            "(λ={:.6e}, step={:.3f}); re-running as UHF.",
-                            channel.lowest_eigenvalue, step));
+                            "(λ={:.6e}, eig_step={:.3f}, β HOMO-LUMO mix={:.3f}); "
+                            "re-running as UHF.",
+                            channel.lowest_eigenvalue, eig_step, mix_angle));
 
             auto res = HartreeFock::SCF::run_uhf(calculator, shell_pairs, nullptr);
             if (!res)

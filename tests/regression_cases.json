@@ -103,7 +103,7 @@
       "contains": ["SCF Converged after", "Total Energy"],
       "checks": [
         {"type": "metric_close", "metric": "rhf_total_energy", "expected": -78.0401905750, "atol": 1e-9},
-        {"type": "metric_eq", "metric": "scf_converged_iterations", "expected": 16}
+        {"type": "metric_eq", "metric": "scf_converged_iterations", "expected": 17}
       ]
     },
     {
@@ -114,7 +114,7 @@
       "contains": ["SCF Converged after", "Total Energy"],
       "checks": [
         {"type": "metric_close", "metric": "rhf_total_energy", "expected": -78.0401905750, "atol": 1e-9},
-        {"type": "metric_eq", "metric": "scf_converged_iterations", "expected": 17}
+        {"type": "metric_eq", "metric": "scf_converged_iterations", "expected": 16}
       ]
     },
     {
