@@ -179,6 +179,8 @@
 <li class="toc-level-3"><a href="#symmetric-orthogonalization">Symmetric Orthogonalization</a></li>
 <li class="toc-level-3"><a href="#initial-density-guess">Initial Density Guess</a></li>
 <li class="toc-level-3"><a href="#sad-guess">SAD Guess</a></li>
+<li class="toc-level-3"><a href="#when-the-guess-matters-a-case-study">When the Guess Matters: A Case Study</a></li>
+<li class="toc-level-3"><a href="#wavefunction-stability-analysis">Wavefunction Stability Analysis</a></li>
 <li class="toc-level-3"><a href="#scf-iteration-loop">SCF Iteration Loop</a></li>
 <li class="toc-level-3"><a href="#level-shifting">Level Shifting</a></li>
 <li class="toc-level-2"><a href="#7-diis-convergence-acceleration">7. DIIS Convergence Acceleration</a></li>
@@ -595,6 +597,114 @@ P = 2 C_{\mathrm{occ}} C_{\mathrm{occ}}^T.
 <li><code>run_rohf</code> also calls <code>compute_sad_guess_open_shell</code></li>
 </ul>
 <p>So SAD is available for all three SCF flavors currently implemented by Planck.</p>
+<h3 id="when-the-guess-matters-a-case-study">When the Guess Matters: A Case Study</h3>
+<p>Different initial guesses can converge to <strong>different SCF stationary points</strong>. This is not a bug. SCF does not minimize the energy directly; it solves the fixed-point equation <span class="math-inline">\([\mathbf F, \mathbf P] = 0\)</span>, and any density whose Fock eigenvectors reproduce that density is a valid solution. The global minimum is one such fixed point, but for a symmetric molecule there can be others — broken-symmetry stationary points where the density localizes asymmetrically across equivalent atoms. DIIS converges to whichever fixed point lies in the same basin as the initial guess.</p>
+<p>A clean illustration is RHF/3-21G on planar ethylene with <code>use_symm false</code>:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Guess</th>
+<th>Iterations</th>
+<th>Total energy (Eh)</th>
+<th>Dipole (D)</th>
+<th>Core MOs (Eh)</th>
+</tr></thead>
+<tbody>
+<tr><td>HCore</td><td>27</td><td><span class="math-inline">\(-77.38375\)</span></td><td><span class="math-inline">\(-2.78\)</span></td><td><span class="math-inline">\(-11.306, -11.043\)</span></td></tr>
+<tr><td>SAD</td><td>89</td><td><span class="math-inline">\(-77.41957\)</span></td><td><span class="math-inline">\( 0.00\)</span></td><td><span class="math-inline">\(-11.174, -11.174\)</span></td></tr>
+</tbody></table></div>
+<p>The HCore solution is <strong>0.036 Eh (≈22.5 kcal/mol) higher</strong> than the SAD solution. Two diagnostics tell us what went wrong:</p>
+<ol>
+<li>**The two carbon <span class="math-inline">\(1s\)</span> core orbitals are split by 0.26 Eh under HCore but degenerate to within <span class="math-inline">\(2\times10^{-6}\)</span> Eh under SAD.** Ethylene&#x27;s two carbons are equivalent, so the core orbitals must form a near-degenerate symmetric/antisymmetric pair. The HCore solution has localized one core onto each carbon individually rather than forming the symmetry-adapted combination.</li>
+<li><strong>A 2.78 D dipole along the C–C axis.</strong> Ethylene is centrosymmetric — the exact dipole is zero. A non-zero dipole along the bond axis means net negative charge has piled up on one carbon (<span class="math-inline">\(\mathrm C^{\delta-}\)</span>) and positive charge on the other (<span class="math-inline">\(\mathrm C^{\delta+}\)</span>). The SCF has found a charge-transfer broken-symmetry solution.</li>
+</ol>
+<p>Why does HCore find this and SAD does not?</p>
+<p><span class="math-inline">\(\mathbf H^{core} = \mathbf T + \mathbf V_{ne}\)</span> is totally symmetric — it commutes with every symmetry operation of the nuclear framework — so its <em>eigenvalues</em> respect the molecular symmetry. But for degenerate eigenvalues, the <em>eigenvectors</em> returned by LAPACK are an arbitrary orthonormal basis of the degenerate subspace. The two carbon <span class="math-inline">\(1s\)</span> combinations are exactly degenerate in <span class="math-inline">\(\mathbf H^{core}\)</span> (the carbons are equivalent in the one-electron Hamiltonian), so LAPACK typically returns the localized atom-centered pair <span class="math-inline">\(\{1s_L,\,1s_R\}\)</span> rather than the symmetry-adapted pair <span class="math-inline">\(\{(1s_L+1s_R)/\sqrt2,\,(1s_L-1s_R)/\sqrt2\}\)</span>. The initial <em>density</em> is the same either way (it is the sum of the two projectors), but the first Fock build uses the <em>occupied orbitals</em> to construct <span class="math-inline">\(\mathbf K\)</span>, and the exchange contribution is sensitive to whether the occupied space is represented locally or canonically. From there, DIIS amplifies whatever small CT-direction component the early iterations contain, and a self- reinforcing <span class="math-inline">\(\delta\rho \to \delta F \to \delta\rho\)</span> loop along the charge-transfer mode locks the SCF into the broken-symmetry well.</p>
+<p>SAD avoids this two ways. First, the SAD density is <em>built</em> from spherically averaged atomic blocks — equivalent atoms get identical density blocks by construction, so the initial density already lies in the totally-symmetric subspace. Second, SAD never goes through a degenerate <span class="math-inline">\(\mathbf H^{core}\)</span> diagonalization, so there is no LAPACK-basis-choice step that breaks the two-carbon symmetry arbitrarily.</p>
+<p>Two practical fixes for HCore, both confirmed on this case:</p>
+<ul>
+<li><strong>Turn symmetry on.</strong> With <code>use_symm true</code> the Fock matrix is built and diagonalized in irrep blocks. The CT rotation that mixes occupied <span class="math-inline">\(a_g\)</span> core with virtual <span class="math-inline">\(b_{1u}\)</span> lives across blocks and is therefore forbidden. The same HCore input that gave <span class="math-inline">\(-77.3838\)</span> without symmetry gives <span class="math-inline">\(-77.41957\)</span> — agreement with SAD to nine decimals — once symmetry is enabled.</li>
+<li><strong>Use SAD.</strong> Cheaper and more general: it works for asymmetric molecules too, and it does not require detecting a point group.</li>
+</ul>
+<p>The deeper lesson is that broken-symmetry RHF stationary points are real features of the Hartree-Fock energy surface, not numerical artifacts. They become genuine ground states for stretched bonds (where RHF fails and UHF takes over). The instability we hit on equilibrium ethylene is the same mechanism that drives the well-known RHF <span class="math-inline">\(\to\)</span> UHF transition at bond dissociation. Treat HCore as a fine guess for asymmetric molecules and small clusters, but reach for SAD or <code>use_symm true</code> whenever the molecule has equivalent atoms.</p>
+<h3 id="wavefunction-stability-analysis">Wavefunction Stability Analysis</h3>
+<p>The case study above raises a concrete question: how can the SCF tell whether the converged solution is a global minimum, a broken-symmetry local minimum, or an unstable stationary point? The answer is <strong>stability analysis</strong> — diagonalizing the orbital Hessian (the second variation of the HF energy with respect to occupied-virtual orbital rotations) and checking its lowest eigenvalues. Negative eigenvalues mean an orbital rotation exists that lowers the energy.</p>
+<p>Planck implements this in <a href="../src/scf/stability.cpp">src/scf/stability.cpp</a>, gated by the input keywords</p>
+<pre><code>
+%begin_scf
+    stability_check   .true.   ; build orbital Hessian, report lowest eigs
+    stability_follow  .true.   ; if unstable, rotate along the unstable mode
+                              ; and re-run SCF
+%end_scf
+</code></pre>
+<h4 id="the-orbital-hessian">The Orbital Hessian</h4>
+<p>Around a converged closed-shell RHF solution, parametrize a small rotation of the occupied orbitals into virtuals as <span class="math-inline">\(\kappa = \kappa_{ai} (E_{ai} -
+E_{ia})\)</span> where <span class="math-inline">\(E_{pq}\)</span> is the singlet excitation operator. Expanding the energy to second order in <span class="math-inline">\(\kappa\)</span>:</p>
+<p><span class="math-display">\[
+E(\kappa) - E(0)
+  = \kappa^T \mathbf g
+  + \tfrac12 \kappa^T \mathbf H \kappa + \mathcal O(\kappa^3).
+\]</span></p>
+<p>At a stationary point <span class="math-inline">\(\mathbf g = 0\)</span>, and the question of stability reduces to the lowest eigenvalue of the <strong>orbital Hessian</strong> <span class="math-inline">\(\mathbf H\)</span>. The key fact is that <span class="math-inline">\(\mathbf H\)</span> splits into independent <strong>singlet</strong> and <strong>triplet</strong> blocks (because the closed-shell reference is a singlet, the linear response separates by spin):</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Block</th>
+<th>Diagonal <span class="math-inline">\(\mathbf A\)</span></th>
+<th>Coupling <span class="math-inline">\(\mathbf B\)</span></th>
+</tr></thead>
+<tbody>
+<tr><td>Singlet</td><td><span class="math-inline">\( (\varepsilon_a - \varepsilon_i)\delta + 2(ai|bj) - (ab|ij) \)</span></td><td><span class="math-inline">\( 2(ai|bj) - (aj|bi) \)</span></td></tr>
+<tr><td>Triplet</td><td><span class="math-inline">\( (\varepsilon_a - \varepsilon_i)\delta - (ab|ij) \)</span></td><td><span class="math-inline">\( -(aj|bi) \)</span></td></tr>
+</tbody></table></div>
+<p>The full block-structured Hessian is <span class="math-inline">\(\begin{pmatrix} \mathbf A & \mathbf B \\ \mathbf B & \mathbf A \end{pmatrix}\)</span> in the <span class="math-inline">\((X, Y)\)</span> excitation/de-excitation basis. Its eigenvalues come in <span class="math-inline">\(\pm\)</span>-pairs whose signs are determined by the lowest eigenvalues of <span class="math-inline">\(\mathbf A \pm \mathbf B\)</span>. So three matrix builds answer three physically distinct questions.</p>
+<h4 id="the-three-standard-rhf-stability-checks">The Three Standard RHF Stability Checks</h4>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Check</th>
+<th>Matrix</th>
+<th>Negative ⇒</th>
+</tr></thead>
+<tbody>
+<tr><td><strong>Internal real</strong></td><td><span class="math-inline">\(\mathbf A^S + \mathbf B^S\)</span></td><td>Another <em>real RHF</em> solution exists at lower energy</td></tr>
+<tr><td><strong>Internal complex</strong></td><td><span class="math-inline">\(\mathbf A^S - \mathbf B^S\)</span></td><td>A <em>complex-orbital RHF</em> would be lower</td></tr>
+<tr><td><strong>External triplet</strong></td><td><span class="math-inline">\(\mathbf A^T - \mathbf B^T\)</span></td><td>A <em>UHF</em> solution would be lower (RHF→UHF)</td></tr>
+</tbody></table></div>
+<p>The internal-complex matrix <span class="math-inline">\(\mathbf A^S - \mathbf B^S\)</span> and the external- triplet matrix <span class="math-inline">\(\mathbf A^T - \mathbf B^T\)</span> reduce to the <em>same</em> algebraic form</p>
+<p><span class="math-display">\[
+\bigl[\mathbf A - \mathbf B\bigr]_{ai,bj}
+   = (\varepsilon_a - \varepsilon_i)\delta_{ab}\delta_{ij}
+     - (ab|ij) + (aj|bi),
+\]</span></p>
+<p>once the <span class="math-inline">\((ai|bj)\)</span> Coulomb pieces cancel. The two checks are distinguished only by which physical perturbation each tests. In practice, when ethylene/3-21G HCore-no-symm reaches the broken-symmetry RHF, both diagnostics light up simultaneously — they share a matrix and an unstable mode.</p>
+<h4 id="uhf-stability">UHF Stability</h4>
+<p>For UHF the orbital Hessian has <span class="math-inline">\(\alpha\alpha\)</span>, <span class="math-inline">\(\alpha\beta\)</span>, <span class="math-inline">\(\beta\alpha\)</span>, and <span class="math-inline">\(\beta\beta\)</span> blocks. Two physically distinct checks are reported:</p>
+<ul>
+<li><strong>Internal UHF→UHF</strong> (spin-conserving) — full <span class="math-inline">\(\alpha\alpha \oplus \beta\beta\)</span> Hessian with the <span class="math-inline">\(\alpha\beta\)</span> Coulomb cross-coupling included. Negative ⇒ another UHF stationary point is lower.</li>
+<li><strong>External UHF→GHF</strong> (spin-flip) — couples <span class="math-inline">\(\alpha\)</span>-occupied to <span class="math-inline">\(\beta\)</span>-virtual rotations. Planck reports a diagonal-only approximation here (just <span class="math-inline">\(\varepsilon^\beta_a - \varepsilon^\alpha_i\)</span> gaps) since full GHF stability requires extra cross-spin two-electron blocks and Planck does not yet support a GHF reference to follow into.</li>
+</ul>
+<h4 id="following-an-unstable-mode">Following an Unstable Mode</h4>
+<p>When a check fires and <code>stability_follow .true.</code>, Planck rotates the orbitals along the lowest unstable eigenvector and re-runs SCF. The rotation is built from the eigenvector <span class="math-inline">\(R_{ai}\)</span> (reshaped <span class="math-inline">\(n_v \times
+n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R = U_R \Sigma V_R^T\)</span>,</p>
+<p><span class="math-display">\[
+\exp\!\begin{pmatrix} 0 & -R^T \\ R & 0 \end{pmatrix}
+  = \begin{pmatrix} V_R \cos\Sigma\, V_R^T & -V_R \sin\Sigma\, U_R^T \\
+                    U_R \sin\Sigma\, V_R^T &  U_R \cos\Sigma\, U_R^T
+    \end{pmatrix}.
+\]</span></p>
+<p>This is exactly unitary at any step size, so the orbitals stay orthonormal.</p>
+<p>Two follow modes:</p>
+<ul>
+<li><strong>RHF → UHF (triplet external)</strong> — the most common case. Planck promotes the calculator to UHF, applies a <span class="math-inline">\(+s\)</span> rotation to the alpha MOs and a <span class="math-inline">\(-s\)</span> rotation to beta, then re-enters <code>run_uhf</code>. The opposite-sign mixing is the standard &quot;spin-symmetry break&quot;: alpha and beta were equal before, and now they are explicitly different along the unstable mode.</li>
+<li><strong>Internal RHF→RHF or UHF→UHF</strong> — Planck applies the rotation within the same SCF type and re-enters the same <code>run_*</code> entry point. The seeded density is read by SCF via the <code>ReadDensity</code> guess path, so no fresh HCore/SAD step happens.</li>
+</ul>
+<p>The step size is <strong>adaptive</strong>: for weakly unstable modes (<span class="math-inline">\(|\lambda| < 10^{-2}\)</span>) the user-supplied default of <code>0.05 rad</code> is enough to escape the basin; for deeply unstable modes the step is bumped to <span class="math-inline">\(\pi/4 = 0.785 rad\)</span> (a 45° rotation), which is the standard &quot;break-symmetry-hard&quot; amplitude used by every production code.</p>
+<h4 id="when-following-doesn-t-cleanly-re-converge">When Following Doesn&#x27;t Cleanly Re-converge</h4>
+<p>Following a stability instability is genuinely re-running SCF from a different starting point — it inherits all the convergence behavior of the underlying solver. In particular:</p>
+<ul>
+<li>If the rotated reference is close to a <em>new</em> instability (e.g. ethylene RHF is itself unstable to UHF as well as to the broken-symmetry RHF), the follow may land on yet another stationary point lower than the original. This is correct behavior and is what published stability codes also do.</li>
+<li>If the SCF noise floor is at the same scale as the convergence threshold, DIIS may oscillate around the new minimum without declaring convergence. When this happens, the warning *&quot;Follow failed: ... did not converge in N iterations&quot;* is printed, and the final reported energy is the last iterate (which is approximately right but not at machine precision). Resolution: increase <code>max_cycles</code>, switch ERI engine, or restart from the saved checkpoint with a tighter <code>tol_density</code>.</li>
+</ul>
+<h4 id="cost">Cost</h4>
+<p>The orbital Hessian is dense in the occupied-virtual space: <span class="math-inline">\((n_v \cdot n_o)^2\)</span> doubles per channel. For ethylene/3-21G that is <span class="math-inline">\((18 \cdot 8)^2 \approx 165\)</span> KB per matrix; for a 100-basis closed-shell system it is <span class="math-inline">\(\approx 35\)</span> MB. The cost of the AO<span class="math-inline">\(\to\)</span>MO transform is already amortized with the CPHF code path. For systems above a few hundred basis functions, replace the dense diagonalization with a Davidson iteration on the matrix-vector product — Planck does not yet do this.</p>
 <h3 id="scf-iteration-loop">SCF Iteration Loop</h3>
 <p>Each RHF iteration in <code>run_rhf</code>:</p>
 <ol>
