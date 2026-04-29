@@ -45,7 +45,12 @@ python/ccgen.egg-info/SOURCES.txt
 python/ccgen.egg-info/top_level.txt
 python/dist
 .gitignore
-tests/inputs/regression/open_shell/water_radical_cation_rohf_restart_sto3g.hfchk
-tests/inputs/regression/open_shell/water_triplet_uhf_restart_sto3g.hfchk
 CODE_REVIEW.md
-tests/inputs/regression/dft/h2_dft_tddft_pbe.uvvis.dat
+# Regression-test artifacts: SCF checkpoints and UV-vis spectra are
+# produced by the test runs themselves and should not be committed.
+# Already-tracked baseline checkpoints (e.g. water_rhf_pcm_water_sto3g.hfchk)
+# are unaffected because git skips ignore-rules for tracked files.
+tests/inputs/**/*.hfchk
+tests/inputs/**/*.uvvis.dat
+tests/benchmarks/**/*.hfchk
+tests/benchmarks/**/*.uvvis.dat

@@ -515,19 +515,18 @@ A clean illustration is RHF/3-21G on planar ethylene with `use_symm false`:
 The HCore solution is **0.036 Eh (≈22.5 kcal/mol) higher** than the SAD
 solution. Two diagnostics tell us what went wrong:
 
-1. **The two carbon \(1s\) core orbitals are split by 0.26 Eh under HCore but
-   degenerate to within \(2\times10^{-6}\) Eh under SAD.** Ethylene's two
-   carbons are equivalent, so the core orbitals must form a near-degenerate
-   symmetric/antisymmetric pair. The HCore solution has localized one core
-   onto each carbon individually rather than forming the symmetry-adapted
-   combination.
+1. **The two carbon \(1s\) core orbitals are split by 0.26 Eh under HCore but degenerate to within \(2\times10^{-6}\) Eh under SAD.**
+   Ethylene's two carbons are equivalent, so the core orbitals must form a
+   near-degenerate symmetric/antisymmetric pair. The HCore solution has
+   localized one core onto each carbon individually rather than forming
+   the symmetry-adapted combination.
 2. **A 2.78 D dipole along the C–C axis.** Ethylene is centrosymmetric — the
    exact dipole is zero. A non-zero dipole along the bond axis means net
    negative charge has piled up on one carbon (\(\mathrm C^{\delta-}\)) and
    positive charge on the other (\(\mathrm C^{\delta+}\)). The SCF has found
    a charge-transfer broken-symmetry solution.
 
-Why does HCore find this and SAD does not?
+#### Why does HCore find this and SAD does not?
 
 \(\mathbf H^{core} = \mathbf T + \mathbf V_{ne}\) is totally symmetric — it
 commutes with every symmetry operation of the nuclear framework — so its
@@ -684,39 +683,42 @@ This is exactly unitary at any step size, so the orbitals stay orthonormal.
 Two follow modes:
 
 - **RHF → UHF (triplet external)** — the most common case. Planck promotes
-  the calculator to UHF, applies a \(+s\) rotation to the alpha MOs and a
-  \(-s\) rotation to beta, then re-enters `run_uhf`. The opposite-sign
-  mixing is the standard "spin-symmetry break": alpha and beta were equal
-  before, and now they are explicitly different along the unstable mode.
-- **Internal RHF→RHF or UHF→UHF** — Planck applies the rotation within the
-  same SCF type and re-enters the same `run_*` entry point. The seeded
-  density is read by SCF via the `ReadDensity` guess path, so no fresh
-  HCore/SAD step happens.
+  the calculator to UHF using a two-step broken-symmetry guess:
 
-The step size is **adaptive**: for weakly unstable modes
-(\(|\lambda| < 10^{-2}\)) the user-supplied default of `0.05 rad` is enough
-to escape the basin; for deeply unstable modes the step is bumped to
-\(\pi/4 = 0.785 rad\) (a 45° rotation), which is the standard
-"break-symmetry-hard" amplitude used by every production code.
+  1. **HOMO–LUMO mix on beta only.** Rotate \(\beta_{\text{HOMO}}\) and
+     \(\beta_{\text{LUMO}}\) by \(\pi/8\) (22.5°). This makes the alpha and
+     beta occupied spaces explicitly different along the frontier, *regardless
+     of what the unstable eigenvector mostly points at*. Without this step,
+     unstable modes that pick up mostly core-orbital character leave the
+     frontier closed-shell, and UHF re-symmetrizes back to the starting RHF.
+  2. **Apply the eigenvector rotation as a sharpening step.** Alpha gets
+     \(+\,s\,R\), beta gets \(-\,s\,R\). This guides the SCF toward the
+     specific lower stationary point identified by the analyzer.
 
-#### When Following Doesn't Cleanly Re-converge
+  The step \(s\) is adaptive: \(|\lambda| < 10^{-2}\) uses the user-supplied
+  default of `0.05 rad`; \(|\lambda| \ge 10^{-2}\) bumps to \(\pi/4 = 0.785 rad\),
+  the standard "break-symmetry-hard" amplitude.
 
-Following a stability instability is genuinely re-running SCF from a
-different starting point — it inherits all the convergence behavior of the
-underlying solver. In particular:
+- **Internal RHF→RHF or UHF→UHF** — Planck applies the eigenvector rotation
+  within the same SCF type and re-enters the same `run_*` entry point. The
+  seeded density is read by SCF via the `ReadDensity` guess path, so no
+  fresh HCore/SAD step happens.
 
-- If the rotated reference is close to a *new* instability (e.g. ethylene
-  RHF is itself unstable to UHF as well as to the broken-symmetry RHF),
-  the follow may land on yet another stationary point lower than the
-  original. This is correct behavior and is what published stability codes
-  also do.
-- If the SCF noise floor is at the same scale as the convergence threshold,
-  DIIS may oscillate around the new minimum without declaring convergence.
-  When this happens, the warning *"Follow failed: ... did not converge in
-  N iterations"* is printed, and the final reported energy is the last
-  iterate (which is approximately right but not at machine precision).
-  Resolution: increase `max_cycles`, switch ERI engine, or restart from the
-  saved checkpoint with a tighter `tol_density`.
+#### What Following Actually Finds
+
+Following an instability is genuinely re-running SCF from a different
+starting point — it inherits all the convergence behavior of the underlying
+solver. In particular, if the rotated reference is close to *another*
+instability (e.g. ethylene RHF at small basis is itself unstable to UHF in
+addition to the broken-symmetry RHF), the follow may land on yet another
+stationary point lower than the original. This is correct behavior and
+matches every published stability code: the follow finds *some* lower
+stationary point, not necessarily the *physical* ground state. For
+ethylene/3-21G specifically, the post-follow UHF lands at \(E = -77.5245\)
+with \(\langle S^2\rangle \approx 1.04\), which is a deeply spin-broken
+biradical solution — real, but unphysical for closed-shell ethylene at
+equilibrium. Larger basis sets and more correlation eliminate this
+spurious low UHF.
 
 #### Cost
 
@@ -828,8 +830,7 @@ symmetry-adapted orbital (SAO) basis. `build_sao_basis` in
 `src/symmetry/mo_symmetry.cpp`:
 
 1. Re-enters libmsym to obtain the character table and group operations
-2. For groups with multi-dimensional irreps, selects the **largest Abelian
-   subgroup** with all-1D irreducible representations (at most D\(_{2h}\))
+2. For groups with multi-dimensional irreps, selects the **largest Abelian subgroup** with all-1D irreducible representations (at most D\(_{2h}\))
 3. Builds projection operators for each irrep \(\Gamma_g\):
    \[
    \hat P^{(\Gamma)} = \frac{d_\Gamma}{h} \sum_{R} \chi^{(\Gamma)}(R)^* \hat R
