@@ -819,7 +819,8 @@ namespace HartreeFock::IO
             }
 
             if (key == "use_diis" || key == "save_checkpoint" ||
-                key == "mcscf_debug_numeric_newton" || key == "mcscf_debug_commutator_rhs")
+                key == "mcscf_debug_numeric_newton" || key == "mcscf_debug_commutator_rhs" ||
+                key == "stability_check" || key == "stability_follow")
             {
                 if (!(_iss >> value))
                     return std::unexpected("Missing value for scf keyword: " + key);
@@ -834,8 +835,12 @@ namespace HartreeFock::IO
                     scf._save_checkpoint = *parsed;
                 else if (key == "mcscf_debug_numeric_newton")
                     active_space.mcscf_debug_numeric_newton = *parsed;
-                else
+                else if (key == "mcscf_debug_commutator_rhs")
                     active_space.mcscf_debug_commutator_rhs = *parsed;
+                else if (key == "stability_check")
+                    scf._stability_check = *parsed;
+                else
+                    scf._stability_follow = *parsed;
                 continue;
             }
 

@@ -38,6 +38,18 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "gradient_max": re.compile(r"Gradient max\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
     "gradient_rms": re.compile(r"Gradient rms\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
     "point_group": re.compile(r"(?:Point Group\s*:\s*|Detected point group\s+)([A-Za-z0-9_+\-]+)"),
+    "stability_real_internal": re.compile(
+        r"RHF -> RHF \(real, internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
+    "stability_complex_internal": re.compile(
+        r"RHF -> complex RHF \(internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
+    "stability_triplet_external": re.compile(
+        r"RHF -> UHF \(triplet, external\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
+    "stability_uhf_internal": re.compile(
+        r"UHF -> UHF \(spin-conserving, internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
 }
 
 COUNT_PATTERNS: dict[str, re.Pattern[str]] = {
