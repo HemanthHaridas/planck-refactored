@@ -36,33 +36,37 @@
       background: linear-gradient(
         135deg, rgba(154,61,34,0.95), rgba(123,53,31,0.92)
       );  color:  #fff9f2; border-radius: 24px; padding: 28px 34px; box-shadow:
-      var(--shadow); margin-bottom: 24px;
+      var(--shadow); margin-bottom: 24px; min-width: 0;
     } .hero h1 {
       margin: 0 0 8px; font-size: clamp(2rem, 3vw, 3.2rem); line-height: 1.1;
+      overflow-wrap: anywhere;
     } .hero p {
       margin:  0;  max-width:  100%;  color: rgba(255,249,242,0.92); font-size:
-      1.05rem;
+      1.05rem; overflow-wrap: anywhere;
     } .layout {
       display:  grid;  grid-template-columns:  300px minmax(0, 1fr); gap: 24px;
-      align-items: start;
+      align-items: start; min-width: 0;
     } .sidebar, .content {
       background:  var(--panel);  border: 1px solid var(--rule); border-radius:
-      22px; box-shadow: var(--shadow);
+      22px; box-shadow: var(--shadow); min-width: 0;
     } .sidebar {
       position:  sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y:
       auto; padding: 22px 20px;
     } .sidebar h2 {
       margin:   0   0   12px;  font-size:  0.9rem;  text-transform:  uppercase;
       letter-spacing: 0.09em; color: var(--accent);
-    }  .sidebar  ul { list-style: none; padding: 0; margin: 0; } .sidebar li
+    }  .sidebar  ul { list-style: none; padding: 0; margin: 0; min-width: 0; } .sidebar li
     { margin: 0; padding: 0; } .sidebar a {
       display:  block;  padding:  4px  0; color: var(--muted); text-decoration:
-      none; font-size: 0.9rem; line-height: 1.4;
+      none; font-size: 0.9rem; line-height: 1.4; overflow-wrap: anywhere;
+      word-break: break-word;
     } .sidebar a:hover { color: var(--accent); } .toc-level-1 a {
       font-weight:   600;   padding-top:  7px;  color:  var(--ink);  font-size:
       0.93rem;
     } .toc-level-2 a { padding-left: 12px; } .toc-level-3 a { padding-left:
-    24px;  font-size:  0.85rem;  } .content { padding: 36px 40px; } .content
+    24px;  font-size:  0.85rem;  } .sidebar .math-inline {
+      white-space: normal;
+    } .content { padding: 36px 40px; } .content
     h1, .content h2, .content h3, .content h4 {
       line-height: 1.2; color: #13202b; scroll-margin-top: 24px;
     } .content h1 {
@@ -120,14 +124,14 @@
     }  /* ── Tablet breakpoint (≤ 980 px) ────────────────────────── */ @media
     (max-width: 980px) {
       .layout  {  grid-template-columns: 1fr; } .sidebar { position: static;
-      max-height:  none;  }  .content { padding: 24px 18px; } .toc-toggle {
-      display: block; } .sidebar-nav { display: none; } .sidebar-nav.open {
-      display: block; } .sidebar h2 { display: none; }
+      max-height:  none; overflow-x: hidden; }  .content { padding: 24px 18px; }
+      .toc-toggle { display: block; } .sidebar-nav { display: none; min-width: 0; }
+      .sidebar-nav.open { display: block; } .sidebar h2 { display: none; }
     }  /* ── Phone breakpoint (≤ 600 px) ─────────────────────────── */ @media
     (max-width: 600px) {
       .page  {  padding:  12px  10px  40px;  }  .hero  { padding: 18px 18px;
       border-radius:  16px;  }  .hero  h1  {  font-size:  clamp(1.6rem,  7vw,
-      2.4rem);  }  .hero p { font-size: 0.95rem; } .content { padding: 18px
+      2.4rem);  line-height: 1.08; }  .hero p { font-size: 0.95rem; } .content { padding: 18px
       14px;  border-radius:  16px; } .sidebar { border-radius: 16px; padding:
       16px 14px; } .content p, .content li {
         text-align: left; -webkit-hyphens: none; hyphens: none;
@@ -135,7 +139,7 @@
       margin-top: 2rem; } .content h3 { font-size: 1.1rem; } .content pre {
       padding: 14px 14px; border-radius: 10px; } .sidebar a { padding: 7px 0;
       font-size:   0.97rem;   }  .toc-level-2  a  {  padding-left:  14px;  }
-      .toc-level-3 a { padding-left: 26px; font-size: 0.9rem; }
+      .toc-level-3 a { padding-left: 22px; font-size: 0.9rem; }
     }
   </style>
 </head> <body>
@@ -174,6 +178,7 @@
 <li class="toc-level-2"><a href="#6-scf-algorithm">6. SCF Algorithm</a></li>
 <li class="toc-level-3"><a href="#symmetric-orthogonalization">Symmetric Orthogonalization</a></li>
 <li class="toc-level-3"><a href="#initial-density-guess">Initial Density Guess</a></li>
+<li class="toc-level-3"><a href="#sad-guess">SAD Guess</a></li>
 <li class="toc-level-3"><a href="#scf-iteration-loop">SCF Iteration Loop</a></li>
 <li class="toc-level-3"><a href="#level-shifting">Level Shifting</a></li>
 <li class="toc-level-2"><a href="#7-diis-convergence-acceleration">7. DIIS Convergence Acceleration</a></li>
@@ -293,6 +298,7 @@
 <li>RMP2 and UMP2 correlation energies with RMP2 natural orbital analysis</li>
 <li>RCCSD for canonical closed-shell RHF references</li>
 <li>Small-system determinant-space teaching prototypes for RCCSDT, UCCSD, and UCCSDT</li>
+<li>Generated arbitrary-order restricted tensor kernels, including RCCSDTQ when built</li>
 <li>Analytic RHF, UHF, RMP2, and UMP2 nuclear gradients</li>
 <li>Analytic RMP2 nuclear gradients include Z-vector / CPHF relaxation</li>
 <li>Geometry optimization in Cartesian and internal coordinates</li>
@@ -534,7 +540,6 @@ F^{eff} = \mathbf P_c^T F_c \mathbf P_c
 <p>The spin-contamination diagnostic <span class="math-inline">\(\langle S^2 \rangle\)</span> is printed after convergence.  For a pure spin state ROHF always gives exactly <span class="math-inline">\(\langle S^2\rangle = S(S+1)\)</span> — unlike UHF, which can mix higher spin states.</p>
 <h4 id="limitations">Limitations</h4>
 <ul>
-<li>SAD guess is not available for ROHF (<code>SCFGuess::SAD</code> returns an error at runtime); use <code>hcore</code> (default) or checkpoint restart.</li>
 <li>Post-HF methods (MP2, CC, CASSCF) currently require RHF or UHF reference; ROHF converged orbitals can be used as a warm-start checkpoint for a subsequent UHF calculation.</li>
 </ul>
 <hr>
@@ -559,6 +564,37 @@ F^{eff} = \mathbf P_c^T F_c \mathbf P_c
 <p>Implemented in <code>build_orthogonalizer</code> in <code>src/scf/scf.cpp</code>.</p>
 <h3 id="initial-density-guess">Initial Density Guess</h3>
 <p>The default initial guess (<code>SCFGuess::HCore</code>) diagonalizes the core Hamiltonian <span class="math-inline">\(\mathbf H^{core} = \mathbf T + \mathbf V\)</span> to produce an initial set of MO coefficients and a starting density matrix. This corresponds to completely neglecting electron-electron repulsion in the initial guess.</p>
+<h3 id="sad-guess">SAD Guess</h3>
+<p>Planck also supports a <strong>superposition of atomic densities</strong> (SAD) initial guess through <code>SCFGuess::SAD</code>. The implementation lives in <code>src/scf/sad.cpp</code> with the public entry points declared in <code>src/scf/sad.h</code>:</p>
+<ul>
+<li><code>compute_sad_guess_rhf(calc)</code> for closed-shell RHF</li>
+<li><code>compute_sad_guess_open_shell(calc, n_alpha, n_beta)</code> for UHF and ROHF</li>
+</ul>
+<p>The guiding idea is simple: instead of guessing the molecular density from the one-electron core Hamiltonian, first solve each atom in isolation, then add those atomic densities together in the molecular AO basis. This usually produces a more chemically reasonable starting point for stretched bonds, heteronuclear systems, and open-shell cases.</p>
+<p>Planck builds that guess in four stages:</p>
+<ol>
+<li><strong>Read one atomic basis per unique element</strong> — <code>read_gbs_basis_atomic</code> reuses the same GBS file and Cartesian normalization conventions as the full molecular calculation.</li>
+<li><strong>Run atomic UHF calculations</strong> — for each unique element, <code>run_atomic_uhf</code> builds an isolated atom at the origin, computes its one-electron integrals, and runs a silent atomic UHF with an HCore guess.</li>
+<li><strong>Apply shell-wise spherical averaging</strong> — the raw atomic density is not rotationally invariant because Cartesian <span class="math-inline">\(p,d,f,\dots\)</span> components can carry directional bias. <code>spherical_average_atomic_density</code> replaces each shell block by a spherically averaged form while preserving the shell population in the atomic AO metric.</li>
+<li><strong>Assemble and project back to a valid molecular density</strong> — the averaged atomic blocks are inserted atom-by-atom into a block-diagonal molecular density. That raw SAD density is then orthogonalized with <span class="math-inline">\(S^{-1/2}\)</span>, diagonalized, and reconstructed from the leading natural orbitals so the final guess has the correct RHF or spin-resolved UHF/ROHF occupations.</li>
+</ol>
+<p>For RHF, the reconstruction step is</p>
+<p><span class="math-display">\[
+\bar P = X^T P_{\mathrm{raw}} X, \qquad X = S^{-1/2}
+\]</span></p>
+<p>followed by diagonalization of <span class="math-inline">\(\bar P\)</span>, keeping the top <span class="math-inline">\(n_{\mathrm{occ}} = N_e/2\)</span> natural orbitals, and rebuilding</p>
+<p><span class="math-display">\[
+P = 2 C_{\mathrm{occ}} C_{\mathrm{occ}}^T.
+\]</span></p>
+<p>For open-shell SAD, Planck performs the same projection separately for the alpha and beta raw densities and occupies the top <span class="math-inline">\(n_\alpha\)</span> and <span class="math-inline">\(n_\beta\)</span> natural orbitals with unit occupancy in each spin channel.</p>
+<p>This projection step matters because the literal block-summed atomic density is generally <strong>not idempotent</strong> and does not exactly correspond to a single Slater determinant in the molecular AO space. The projection turns it into the nearest proper SCF starting density while preserving the overall electron count to within the overlap-thresholding tolerance.</p>
+<p>In <code>src/scf/scf.cpp</code>, the SAD path is selected before the usual HCore/SAO guess construction:</p>
+<ul>
+<li><code>run_rhf</code> calls <code>compute_sad_guess_rhf</code></li>
+<li><code>run_uhf</code> calls <code>compute_sad_guess_open_shell</code></li>
+<li><code>run_rohf</code> also calls <code>compute_sad_guess_open_shell</code></li>
+</ul>
+<p>So SAD is available for all three SCF flavors currently implemented by Planck.</p>
 <h3 id="scf-iteration-loop">SCF Iteration Loop</h3>
 <p>Each RHF iteration in <code>run_rhf</code>:</p>
 <ol>
@@ -987,12 +1023,13 @@ t^{ab}_{ij,\alpha\beta} =
 <p>These amplitudes populate spin-specific occupied/virtual 1-PDM corrections <span class="math-inline">\(D^\alpha\)</span> and <span class="math-inline">\(D^\beta\)</span>, an AO-space spin-summed energy-weighted density <span class="math-inline">\(W\)</span>, and an explicit AO pair-density correction <span class="math-inline">\(\Gamma^{MP2}\)</span>. The final driver entry point, <code>compute_ump2_gradient</code> in <code>src/gradient/gradient.cpp</code>, combines those objects with the UHF reference two-particle density expression and reuses the same derivative-integral contraction infrastructure as the RHF, UHF, and RMP2 gradients.</p>
 <hr>
 <h2 id="14-coupled-cluster-in-planck">14. Coupled Cluster in Planck</h2>
-<p>Planck currently contains four coupled-cluster paths:</p>
+<p>Planck currently contains five coupled-cluster paths:</p>
 <ul>
 <li><strong>RCCSD</strong> — a conventional iterative amplitude solver in the spin-orbital basis for canonical closed-shell RHF references</li>
-<li><strong>RCCSDT</strong> — dual-backend: a determinant-space teaching prototype for small systems and a staged tensor production solver for larger systems; the backend is chosen automatically by <code>choose_rccsdt_backend</code></li>
+<li><strong>RCCSDT</strong> — dual-backend: a determinant-space teaching prototype for small systems and a staged tensor solver for larger systems; the default routing is chosen automatically by <code>choose_rccsdt_backend</code>, and an additional <code>TensorOptimized</code> entry point can be forced for development via <code>PLANCK_RCCSDT_BACKEND=optimized</code></li>
 <li><strong>UCCSD</strong> — a teaching-oriented small-system determinant-space solver for canonical UHF references</li>
 <li><strong>UCCSDT</strong> — the corresponding determinant-space triples extension for canonical UHF references</li>
+<li><strong>RCCSDTQ</strong> — generated arbitrary-order restricted tensor kernels, available for single-point calculations when Planck is built with CCSDTQ kernel support</li>
 </ul>
 <p>All paths live under <code>src/post_hf/cc/</code>. The shared setup pieces are intentionally kept separate from the actual solver loops:</p>
 <ul>
@@ -1002,7 +1039,10 @@ t^{ab}_{ij,\alpha\beta} =
 <li><code>amplitudes.*</code> owns the explicit tensor containers and orbital-energy denominators</li>
 <li><code>diis.*</code> mirrors the SCF DIIS helper, but for flattened CC amplitude vectors</li>
 <li><code>determinant_space.*</code> contains the shared small-system backend used by <code>RCCSDT</code> (determinant path), <code>UCCSD</code>, and <code>UCCSDT</code></li>
-<li><code>tensor_backend.*</code> contains the production tensor solver for RCCSDT that handles systems beyond the determinant-space prototype limit</li>
+<li><code>tensor_backend.*</code> contains RCCSDT backend routing and the tensor iteration driver for systems beyond the determinant-space prototype limit</li>
+<li><code>tensor_backend_state.*</code> owns the tensor RCCSDT state-building helpers</li>
+<li><code>tensor_optimized.*</code> provides the optimized RCCSDT entry point that reuses the ccgen-generated warm-start path</li>
+<li><code>solver_arbitrary.*</code> and the <code>generated_...</code> translation units support generated arbitrary-order restricted tensor kernels such as RCCSDTQ</li>
 </ul>
 <h3 id="rccsd">RCCSD</h3>
 <p>Planck&#x27;s original <code>RCCSD</code> solver in <code>src/post_hf/cc/ccsd.cpp</code> uses the standard coupled-cluster ansatz</p>
@@ -1212,15 +1252,17 @@ value += amps.t2(j, m, b, e) * ints.wmbej(m, a, e, i);
 </ol>
 <p>This keeps the mapping between textbook equations and source code visible in <code>src/post_hf/cc/ccsd.cpp</code>.</p>
 <h3 id="rccsdt-backend-selection">RCCSDT Backend Selection</h3>
-<p><code>run_rccsdt</code> in <code>src/post_hf/cc/ccsdt.cpp</code> does not commit to a single solver strategy. Instead it calls <code>choose_rccsdt_backend(reference)</code> which inspects the system size and returns one of two values from the <code>RCCSDTBackend</code> enum:</p>
+<p><code>run_rccsdt</code> in <code>src/post_hf/cc/ccsdt.cpp</code> does not commit to a single solver strategy. Instead it calls <code>choose_rccsdt_backend(reference)</code> which inspects the system size and returns a value from the <code>RCCSDTBackend</code> enum:</p>
 <pre><code class="language-cpp">
 enum class RCCSDTBackend
 {
     DeterminantPrototype, // small systems: determinant-space teaching solver
     TensorProduction,     // larger systems: staged tensor contractions
+    TensorOptimized       // forced developer entry point with generated warm-start
 };
 </code></pre>
-<p>If the backend is <code>TensorProduction</code>, <code>run_rccsdt</code> delegates to <code>run_tensor_rccsdt</code> in <code>tensor_backend.*</code>. Otherwise it falls through to the determinant-space prototype described below.</p>
+<p>In the current code path, <code>choose_rccsdt_backend</code> itself only returns <code>DeterminantPrototype</code> or <code>TensorProduction</code> based on system size. The <code>TensorOptimized</code> variant is selected only through the <code>PLANCK_RCCSDT_BACKEND=optimized</code> / <code>tensor_optimized</code> environment override in <code>run_rccsdt</code>.</p>
+<p>If the backend is <code>TensorProduction</code>, <code>run_rccsdt</code> delegates to <code>run_tensor_rccsdt</code> in <code>tensor_backend.*</code>. If the override selects <code>TensorOptimized</code>, it delegates to <code>run_tensor_optimized_rccsdt</code>. Otherwise it falls through to the determinant-space prototype described below.</p>
 <p><code>run_tensor_rccsdt</code> is itself a staged pipeline:</p>
 <ol>
 <li><strong>Tensor RCCSD warm-start</strong> — converges T1/T2 in the spin-orbital basis.</li>
@@ -2501,10 +2543,11 @@ driver.cpp
 <tr><td>RCCSD setup/solve</td><td><code>src/post_hf/cc/ccsd.cpp</code></td><td><code>prepare_rccsd</code>, <code>run_rccsd</code></td></tr>
 <tr><td>UCCSD setup/solve</td><td><code>src/post_hf/cc/ccsd.cpp</code></td><td><code>prepare_uccsd</code>, <code>run_uccsd</code></td></tr>
 <tr><td>Determinant-space CC backend</td><td><code>src/post_hf/cc/determinant_space.cpp</code></td><td><code>build_rhf_spin_orbital_system</code>, <code>build_uhf_spin_orbital_system</code>, <code>solve_determinant_cc</code></td></tr>
-<tr><td>RCCSDT dispatch + backend selection</td><td><code>src/post_hf/cc/ccsdt.cpp</code></td><td><code>prepare_rccsdt</code>, <code>run_rccsdt</code>, <code>choose_rccsdt_backend</code></td></tr>
-<tr><td>RCCSDT tensor production</td><td><code>src/post_hf/cc/tensor_backend.cpp</code></td><td><code>prepare_tensor_rccsdt</code>, <code>run_tensor_rccsdt</code>, <code>build_tensor_cc_block_cache</code>, <code>allocate_dense_triples_workspace</code></td></tr>
-<tr><td>Tensor CC block cache</td><td><code>src/post_hf/cc/tensor_backend.cpp</code></td><td><code>build_canonical_rhf_cc_reference</code>, <code>format_tensor_memory_summary</code></td></tr>
+<tr><td>RCCSDT dispatch + backend selection</td><td><code>src/post_hf/cc/ccsdt.cpp</code>, <code>src/post_hf/cc/tensor_backend.cpp</code></td><td><code>prepare_rccsdt</code>, <code>run_rccsdt</code>, <code>choose_rccsdt_backend</code></td></tr>
+<tr><td>RCCSDT tensor production</td><td><code>src/post_hf/cc/tensor_backend.cpp</code>, <code>src/post_hf/cc/tensor_backend_state.cpp</code></td><td><code>prepare_tensor_rccsdt</code>, <code>run_tensor_rccsdt</code>, <code>build_tensor_cc_block_cache</code>, <code>allocate_dense_triples_workspace</code></td></tr>
+<tr><td>Tensor CC block cache</td><td><code>src/post_hf/cc/tensor_backend_state.cpp</code></td><td><code>build_canonical_rhf_cc_reference</code>, <code>format_tensor_memory_summary</code></td></tr>
 <tr><td>UCCSDT prototype</td><td><code>src/post_hf/cc/ccsdt.cpp</code></td><td><code>prepare_uccsdt</code>, <code>run_uccsdt</code></td></tr>
+<tr><td>RCCSDTQ generated tensor path</td><td><code>src/post_hf/cc/ccsdtq.cpp</code>, <code>src/post_hf/cc/solver_arbitrary.cpp</code></td><td><code>run_rccsdtq</code>, <code>solve_generated_arbitrary_order_cc</code></td></tr>
 <tr><td>CC denominators/DIIS</td><td><code>src/post_hf/cc/amplitudes.cpp</code>, <code>src/post_hf/cc/diis.cpp</code></td><td><code>build_denominator_cache</code>, <code>AmplitudeDIIS</code></td></tr>
 <tr><td>CPHF Z-vector</td><td><code>src/post_hf/rhf_response.cpp</code></td><td><code>build_rhf_cphf_matrix</code></td></tr>
 <tr><td>RMP2 gradient</td><td><code>src/post_hf/mp2_gradient.cpp</code></td><td><code>compute_rmp2_gradient</code></td></tr>
@@ -2532,7 +2575,7 @@ driver.cpp
 <tr><td>XC matrix assembly</td><td><code>src/dft/ks_matrix.cpp</code></td><td><code>assemble_xc_matrix</code></td></tr>
 <tr><td>KS potential matrices</td><td><code>src/dft/ks_matrix.cpp</code></td><td><code>combine_ks_potential</code></td></tr>
 <tr><td>KS-DFT driver</td><td><code>src/dft/driver.cpp</code></td><td><code>DFT::Driver::run</code></td></tr>
-<tr><td>TD-DFT / linear response (TDA)</td><td><code>src/dft/driver.cpp</code></td><td><code>run_linear_response_tda</code>, <code>print_linear_response_report</code></td></tr>
+<tr><td>TD-DFT / linear response</td><td><code>src/dft/driver.cpp</code></td><td><code>run_linear_response</code>, <code>print_linear_response_report</code></td></tr>
 <tr><td>C-PCM cavity + influence matrix</td><td><code>src/solvation/pcm.cpp</code></td><td><code>build_pcm_state</code>, <code>fibonacci_sphere</code></td></tr>
 <tr><td>C-PCM reaction-field operator</td><td><code>src/solvation/pcm.cpp</code></td><td><code>evaluate_pcm_reaction_field</code></td></tr>
 <tr><td>External-charge AO matrices (PCM unit potentials)</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_external_charge_attraction</code></td></tr>
@@ -2567,8 +2610,9 @@ driver.cpp
 <tr><td>RMP2 and UMP2 energy</td><td>Complete</td></tr>
 <tr><td>RCCSD single-point energy</td><td>Complete</td></tr>
 <tr><td>UCCSD single-point energy</td><td>Teaching-oriented small-system determinant-space prototype</td></tr>
-<tr><td>RCCSDT single-point energy</td><td>Dual-backend: determinant-space prototype (small systems) + tensor production solver (larger systems); backend auto-selected by <code>choose_rccsdt_backend</code></td></tr>
+<tr><td>RCCSDT single-point energy</td><td>Determinant prototype for tiny systems plus tensor production/optimized entry points for larger restricted references; size-based default selected by <code>choose_rccsdt_backend</code>, optional override via <code>PLANCK_RCCSDT_BACKEND</code></td></tr>
 <tr><td>UCCSDT single-point energy</td><td>Teaching-oriented small-system determinant-space prototype</td></tr>
+<tr><td>RCCSDTQ single-point energy</td><td>Generated restricted tensor kernels when built with CCSDTQ support</td></tr>
 <tr><td>Analytic RHF gradient</td><td>Complete</td></tr>
 <tr><td>Analytic UHF gradient</td><td>Complete</td></tr>
 <tr><td>Analytic RMP2 gradient (Z-vector)</td><td>Complete</td></tr>
@@ -2582,7 +2626,7 @@ driver.cpp
 <tr><td>Kohn-Sham DFT (RKS/UKS)</td><td>Complete</td></tr>
 <tr><td>LDA XC functionals (Slater, VWN5)</td><td>Complete</td></tr>
 <tr><td>GGA XC functionals (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation)</td><td>Complete</td></tr>
-<tr><td>Arbitrary libxc functionals via integer ID</td><td>Complete</td></tr>
+<tr><td>Arbitrary libxc functionals via integer ID</td><td>Complete within the currently supported LDA/GGA/global-hybrid subset; unsupported libxc families still error explicitly</td></tr>
 <tr><td>Molecular grid (Treutler-Ahlrichs + Lebedev + Becke)</td><td>Complete</td></tr>
 <tr><td>TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels)</td><td>Complete</td></tr>
 <tr><td>DFT geometry optimization / gradients</td><td>Not implemented</td></tr>
