@@ -352,6 +352,8 @@ namespace HartreeFock
 
         bool _use_DIIS = true;        // Use DIIS (Default is true)
         bool _save_checkpoint = true; // Save checkpoint after convergence
+        bool _stability_check = false;  // Run wavefunction stability analysis after SCF
+        bool _stability_follow = false; // If unstable, rotate along the unstable mode and re-run SCF
 
         static unsigned int max_cycles_for_nbasis(std::size_t nbasis) noexcept
         {

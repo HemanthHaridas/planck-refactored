@@ -129,6 +129,37 @@
       ]
     },
     {
+      "id": "water_rhf_stability_stable",
+      "input": "tests/inputs/regression/hf/water_rhf_stability_stable.hfinp",
+      "tags": ["core", "extended"],
+      "expected_exit_code": 0,
+      "contains": ["Wavefunction stability analysis:", "RHF -> RHF (real, internal)", "stable"],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.9458807581, "atol": 1e-9},
+        {"type": "metric_ge", "metric": "stability_real_internal", "value": 0.0},
+        {"type": "metric_ge", "metric": "stability_complex_internal", "value": 0.0},
+        {"type": "metric_ge", "metric": "stability_triplet_external", "value": 0.0}
+      ]
+    },
+    {
+      "id": "ethylene_rhf_stability_unstable",
+      "input": "tests/inputs/regression/hf/ethylene_rhf_stability_unstable.hfinp",
+      "tags": ["core", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Wavefunction stability analysis:",
+        "RHF -> UHF (triplet, external)",
+        "UNSTABLE",
+        "Wavefunction is unstable"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -77.3837525262, "atol": 1e-9},
+        {"type": "metric_le", "metric": "stability_triplet_external", "value": -1.0e-3},
+        {"type": "metric_le", "metric": "stability_complex_internal", "value": -1.0e-3},
+        {"type": "metric_le", "metric": "stability_real_internal", "value": -1.0e-3}
+      ]
+    },
+    {
       "id": "water_rhf_os_c2v_symmetry_matches_ao_reference",
       "input": "tests/inputs/regression/hf/water_rhf_os_symm.hfinp",
       "tags": ["core", "extended"],

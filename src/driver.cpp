@@ -25,6 +25,7 @@
 #include "post_hf/cc.h"
 #include "post_hf/mp2.h"
 #include "scf/scf.h"
+#include "scf/stability.h"
 #include "solvation/pcm.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/mo_symmetry.h"
@@ -697,6 +698,87 @@ int main(int argc, const char *argv[])
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
             return EXIT_FAILURE;
+        }
+    }
+
+    // ── Wavefunction stability analysis ────────────────────────────────────────
+    // Optional: build the orbital Hessian, look for negative eigenvalues, and
+    // optionally rotate along the lowest unstable mode and re-converge SCF.
+    // ROHF stability is not implemented, so the check is silently skipped.
+    if (calculator._scf._stability_check && calculator._info._is_converged &&
+        calculator._scf._scf != HartreeFock::SCFType::ROHF)
+    {
+        const bool rhf_ref = (calculator._scf._scf == HartreeFock::SCFType::RHF);
+        auto stab_res = rhf_ref
+            ? HartreeFock::SCF::analyze_rhf_stability(calculator, shellpairs)
+            : HartreeFock::SCF::analyze_uhf_stability(calculator, shellpairs);
+
+        if (!stab_res)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                                         "Stability :", "Skipped: " + stab_res.error());
+        }
+        else
+        {
+            HartreeFock::Logger::blank();
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Stability :",
+                                         "Wavefunction stability analysis:");
+            for (const auto &ch : stab_res->channels)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info, "Stability :",
+                    std::format("  {:<48s}  λ_min = {:+.6e}  [{}]",
+                                ch.label, ch.lowest_eigenvalue,
+                                ch.is_unstable ? "UNSTABLE" : "stable"));
+            }
+
+            if (stab_res->any_unstable && calculator._scf._stability_follow)
+            {
+                // Pick which unstable channel to follow. When the RHF→UHF
+                // (triplet external) channel is unstable, prefer it: the
+                // promotion to UHF is the most general escape and is what
+                // users almost always mean. Otherwise fall back to whichever
+                // unstable channel has the most negative eigenvalue.
+                const auto &channels = stab_res->channels;
+                std::size_t pick = channels.size();
+                for (std::size_t k = 0; k < channels.size(); ++k)
+                    if (channels[k].is_unstable &&
+                        channels[k].label.find("RHF -> UHF") != std::string::npos)
+                    {
+                        pick = k;
+                        break;
+                    }
+                if (pick == channels.size())
+                {
+                    pick = 0;
+                    for (std::size_t k = 1; k < channels.size(); ++k)
+                        if (channels[k].is_unstable &&
+                            channels[k].lowest_eigenvalue < channels[pick].lowest_eigenvalue)
+                            pick = k;
+                }
+
+                auto follow_res = HartreeFock::SCF::follow_instability_and_rerun(
+                    calculator, shellpairs, channels[pick]);
+                if (!follow_res)
+                {
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                                                 "Stability :",
+                                                 "Follow failed: " + follow_res.error());
+                }
+                else
+                {
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info, "Stability :",
+                        std::format("Re-converged after follow: E = {:.10f} Eh", *follow_res));
+                }
+            }
+            else if (stab_res->any_unstable)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning, "Stability :",
+                    "Wavefunction is unstable. Set 'stability_follow true' to "
+                    "rotate and re-converge.");
+            }
         }
     }
 
