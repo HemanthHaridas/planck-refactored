@@ -747,15 +747,15 @@ Three observations are useful for teaching:
    minimal basis only sees the external triplet instability, λ ≈ −2.6 × 10⁻³.
    No second RHF basin is visible because the basis cannot represent the
    broken-symmetry RHF.
-2. **3-21G is the only basis where guess choice splits which RHF basin is
-   reached.** Pre-follow, HCore lands on a real-internally unstable RHF
-   stationary point (a saddle on the RHF manifold) and SAD lands on the
-   true RHF minimum 36 mEh lower. 6-31G and cc-pVDZ both have enough flex-
-   ibility that DIIS funnels both guesses into the same RHF basin (they
-   converge to identical Fock matrices to all printed digits).
-3. **For 6-31G and cc-pVDZ the converged RHF is itself real-internally
-   unstable.** The guess didn't matter because there's only one RHF basin
-   reachable from either guess — but that basin is not even an RHF minimum.
+2. **3-21G is the only basis where guess choice splits which RHF basin is reached.**
+   Pre-follow, HCore lands on a real-internally unstable RHF stationary point
+   (a saddle on the RHF manifold) and SAD lands on the true RHF minimum 36
+   mEh lower. 6-31G and cc-pVDZ both have enough flexibility that DIIS funnels
+   both guesses into the same RHF basin (they converge to identical Fock
+   matrices to all printed digits).
+3. **For 6-31G and cc-pVDZ the converged RHF is itself real-internally unstable.**
+   The guess didn't matter because there's only one RHF basin reachable from
+   either guess — but that basin is not even an RHF minimum.
 
 **After follow with `stability_follow .true., max_cycles 300, use_diis .true.`**:
 
