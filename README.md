@@ -23,6 +23,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 - **Conventional and Direct SCF** — ERI tensor stored once (conventional) or recomputed per iteration (direct); auto-selection based on system size
 - **DIIS** — convergence acceleration with optional automatic subspace restart
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
+- **Wavefunction stability analysis** — orbital-Hessian eigenvalue check after SCF for three RHF channels (real-internal singlet `A+B`, complex-internal singlet `A−B`, and external triplet `A^T−B^T` for RHF→UHF) and two UHF channels (spin-conserving internal and a diagonal-approximation external GHF check). When an instability is detected, optional detect-and-follow rotates the orbitals along the lowest unstable mode (using a two-step broken-symmetry guess for triplet RHF→UHF: π/8 β HOMO–LUMO mix + adaptive eigenvector rotation) and re-converges SCF
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
 - **MO symmetry** — irreducible representation labels assigned to each converged orbital; non-Abelian groups automatically use the largest Abelian subgroup; linear molecules handled separately
 - **Post-HF** — RMP2 and UMP2 correlation energy corrections; RMP2 natural orbital analysis; analytic RMP2 and UMP2 nuclear gradients; RCCSD for canonical closed-shell RHF references; teaching-oriented determinant-space UCCSD/UCCSDT prototypes for small UHF systems; RCCSDT with automatic backend dispatch across three tiers (determinant-space prototype, tensor production solver, tensor-optimized ccgen-driven backend); CASSCF and RASSCF multireference active-space calculations
@@ -208,6 +209,8 @@ SCF procedure and convergence settings.
 | `threshold` | int | ≥ 1 | `100` | Basis function count cutoff used by `scf_mode auto` to decide between conventional and direct. |
 | `guess` | enum | `hcore`, `sad`, `density`, `full` | `hcore` | Initial density guess. `sad`: Superposition of Atomic Densities. `density`: load density matrix from checkpoint. `full`: restore geometry and density from checkpoint. Falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.true.` | Write a `.hfchk` checkpoint file after successful convergence |
+| `stability_check` | bool | `.true.`, `.false.` | `.false.` | Run wavefunction stability analysis after SCF convergence. Builds the orbital Hessian in occupied-virtual MO space and reports the lowest eigenvalue of each channel (three RHF channels for closed-shell references, two UHF channels for unrestricted references). Negative eigenvalues indicate an orbital rotation that lowers the energy. Cost: \(O((n_v \cdot n_o)^2)\) memory per channel. |
+| `stability_follow` | bool | `.true.`, `.false.` | `.false.` | When an instability is detected, rotate the orbitals along the lowest unstable mode and re-run SCF. For external triplet RHF→UHF instabilities, Planck promotes the calculator to UHF and applies a two-step broken-symmetry guess (π/8 β HOMO–LUMO mix + adaptive ±step·R rotation). For internal instabilities, the rotation is applied within the same SCF type. Implies `stability_check`. |
 
 ### Section: `%begin_dft`
 
@@ -601,6 +604,53 @@ H     0.000000    0.756950    -0.468703
 H     0.000000   -0.756950    -0.468703
 %end_coords
 ```
+
+### Wavefunction stability — twisted ethylene, 3-21G
+
+<p align="justify">
+Set <code>stability_check .true.</code> to print the orbital-Hessian lowest eigenvalues after SCF convergence. Set <code>stability_follow .true.</code> to additionally rotate along any unstable mode and re-converge — this is the standard escape path when HCore lands on a broken-symmetry stationary point. Twisted ethylene is the canonical demonstration: HCore + <code>use_symm .false.</code> reaches a charge-localized RHF that is real-internally unstable, complex-internally unstable, and triplet-externally unstable; the follow promotes to UHF and re-converges to a real spin-broken stationary point.
+</p>
+
+```
+%begin_control
+    basis       3-21g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type           rhf
+    use_diis           .true.
+    diis_dim           8
+    engine             os
+    guess              hcore
+    max_cycles         100
+    stability_check    .true.
+    stability_follow   .true.
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+6
+0   1
+C    -0.669500    0.000000    0.000000
+C     0.669500    0.000000    0.000000
+H    -1.233698    0.927942    0.000000
+H    -1.233698   -0.927942    0.000000
+H     1.233698    0.000000    0.927942
+H     1.233698    0.000000   -0.927942
+%end_coords
+```
+
+<p align="justify">
+The teaching guide chapter <em>Wavefunction Stability Analysis</em> derives the three RHF channels, explains the SVD-based orbital rotation, and walks through a four-basis sweep that isolates a DIIS limit-cycle pathology specific to STO-3G with the HCore guess.
+</p>
 
 ### Analytic gradient — water, STO-3G
 
