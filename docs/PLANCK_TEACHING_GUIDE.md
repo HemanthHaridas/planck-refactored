@@ -720,6 +720,166 @@ biradical solution — real, but unphysical for closed-shell ethylene at
 equilibrium. Larger basis sets and more correlation eliminate this
 spurious low UHF.
 
+#### Case Study: Twisted Ethylene, Guess Sensitivity, and the STO-3G Pathology
+
+A clean illustration of how guess choice, basis flexibility, and the follow
+machinery interact comes from running 90°-twisted ethylene
+(`tests/benchmarks/scf/ethylene_rhf_stability_unstable.hfinp`) across four
+basis sets with two guesses each (HCore vs SAD), once with
+`stability_follow .false.` and once with `.true.` and `max_cycles 300`.
+
+**Pre-follow RHF (just `stability_check`)**:
+
+| Basis    | Guess | Iters | E(RHF) / Eh    | RHF→RHF (real,int) | Notes |
+|----------|-------|------:|---------------:|--------------------|-------|
+| STO-3G   | HCore | 75    | −76.85549982   | +0.108 stable     | Stable RHF basin |
+| STO-3G   | SAD   | 74    | −76.85549982   | +0.108 stable     | Same basin |
+| 3-21G    | HCore | 39    | −77.38375253   | **−0.071 UNSTABLE** | Wrong basin |
+| 3-21G    | SAD   | 56    | **−77.41957055** | +0.068 stable   | Correct basin (lower by 36 mEh) |
+| 6-31G    | HCore | 93    | −77.79102440   | −0.069 UNSTABLE   | Same basin both guesses |
+| 6-31G    | SAD   | 54    | −77.79102440   | −0.069 UNSTABLE   | Same basin both guesses |
+| cc-pVDZ  | HCore | 46    | −77.83343086   | −0.061 UNSTABLE   | Same basin both guesses |
+| cc-pVDZ  | SAD   | 28    | −77.83343086   | −0.061 UNSTABLE   | Same basin both guesses |
+
+Three observations are useful for teaching:
+
+1. **STO-3G is too small to expose the real-internal RHF instability.** The
+   minimal basis only sees the external triplet instability, λ ≈ −2.6 × 10⁻³.
+   No second RHF basin is visible because the basis cannot represent the
+   broken-symmetry RHF.
+2. **3-21G is the only basis where guess choice splits which RHF basin is
+   reached.** Pre-follow, HCore lands on a real-internally unstable RHF
+   stationary point (a saddle on the RHF manifold) and SAD lands on the
+   true RHF minimum 36 mEh lower. 6-31G and cc-pVDZ both have enough flex-
+   ibility that DIIS funnels both guesses into the same RHF basin (they
+   converge to identical Fock matrices to all printed digits).
+3. **For 6-31G and cc-pVDZ the converged RHF is itself real-internally
+   unstable.** The guess didn't matter because there's only one RHF basin
+   reachable from either guess — but that basin is not even an RHF minimum.
+
+**After follow with `stability_follow .true., max_cycles 300, use_diis .true.`**:
+
+| Basis    | Guess | UHF iters | E(UHF) / Eh    | Converged? |
+|----------|-------|----------:|---------------:|-----------|
+| STO-3G   | HCore | 300+      | −76.79737861   | **❌ DIIS stalls** |
+| STO-3G   | SAD   | 96        | −77.00413153   | ✅         |
+| 3-21G    | HCore | 220       | −77.52454006   | ✅         |
+| 3-21G    | SAD   | 172       | −77.52454006   | ✅         |
+| 6-31G    | HCore | 126       | −77.93022197   | ✅         |
+| 6-31G    | SAD   | 145       | −77.93022197   | ✅         |
+| cc-pVDZ  | HCore | 194       | −77.96312737   | ✅         |
+| cc-pVDZ  | SAD   | 101       | −77.96312737   | ✅         |
+
+Three of the four basis sets converge HCore = SAD to all 10 printed digits
+after follow — the broken-symmetry UHF is the unique reference, and the
+follow machinery dissolves the guess dependence. The 3-21G HCore/SAD pre-
+follow gap of 36 mEh shrinks to < 1 nEh (10⁻¹⁰ Eh) post-follow.
+
+**The STO-3G HCore pathology — and what actually causes it.** STO-3G HCore
+is the one combination where the follow does not converge with default
+DIIS settings. The failure mode is *not* energy-lowering failure: the
+energy is dead flat at −76.79737861 from iteration ~100 onward, with
+ΔE = 0 to 10 digits, while the density oscillates persistently with
+`Max(D)` in the 10⁻⁹ – 10⁻⁶ range — never satisfying the density threshold
+`_tol_density = 1e-10`. From the iteration trail past iteration 100:
+
+```
+212  -76.7973786094   ΔE=0e+00   RMS(D)=2.97e-08   Max(D)=1.37e-07   DIIS=9.55e-08
+…
+300  -76.7973786095   ΔE=0e+00   RMS(D)=2.85e-09   Max(D)=2.33e-08   DIIS=1.53e-09
+```
+
+The decisive diagnostic is what happens when DIIS is turned off
+(`use_diis .false.`) with everything else identical:
+
+| Run | use_diis | UHF iters | E(UHF) / Eh    | Converged? |
+|---|---|---:|---:|---|
+| STO-3G HCore (DIIS on)  | .true.  | 300+ | −76.79737861   | ❌ |
+| STO-3G HCore (DIIS off) | .false. | **45** | **−77.00413153** | **✅** |
+| STO-3G SAD  (DIIS on)   | .true.  | 96   | −77.00413153   | ✅ |
+
+Without DIIS, HCore converges in **45 iterations** — fewer than SAD with
+DIIS — to **exactly the same UHF energy** as SAD (−77.0041315259 Eh). This
+is the cleanest possible attribution: the proximate cause of the failure
+is **DIIS itself**, not the guess, not the basis size, not the follow
+step. Plain Roothaan-Hall iteration from the same HCore-derived,
+follow-rotated starting orbitals reaches the correct broken-symmetry UHF
+without difficulty.
+
+What is going on physically:
+
+1. The post-follow starting orbitals from HCore sit near a region of the
+   UHF energy surface where two broken-symmetry density solutions are
+   almost degenerate (their energy difference is below 10⁻¹⁰ Eh). The
+   plain SCF map between these two densities is *contractive* — fixed-point
+   iteration converges to one of them in tens of cycles.
+2. DIIS extrapolates the next Fock matrix from a linear combination of
+   recent iterates that minimizes the predicted error
+   `e = FPS − SPF`. When two physically distinct densities both produce
+   small `e` and the energy gradient is essentially zero in the subspace
+   that distinguishes them, DIIS has no useful signal to choose between
+   them. The extrapolated Fock alternates between Fock matrices that
+   would each individually contract toward a different solution. The
+   density iterates limit-cycle.
+3. The contraction toward either single solution that plain Roothaan-Hall
+   would provide is destroyed by the DIIS averaging: each cycle the
+   averaging pulls the density back across the watershed.
+
+Why this hits *only* STO-3G HCore and not the other seven combinations:
+
+- **STO-3G** is the only basis where the post-follow starting density
+  sits this close to the watershed. With one 2p shell per carbon and no
+  polarization, the broken-symmetry singlet has very limited variational
+  freedom — multiple near-degenerate UHF densities exist within nano-
+  hartree of each other. Larger bases break this near-degeneracy and the
+  DIIS error vector picks a unique direction.
+- **HCore** is the only guess in STO-3G that lands in a real-internally
+  *stable* RHF basin (λ_min(real,int) = +0.108, the largest of any basis
+  / guess combination). The follow's small eigenvector rotation
+  (eig_step = 0.05 rad, since |λ_triplet| = 2.6 × 10⁻³ < 10⁻²) plus the
+  π/8 β HOMO–LUMO mix gives a starting point that is exactly *between*
+  the two broken-symmetry wells rather than inside one of them. SAD
+  starts from projected atomic densities that already break the alpha/
+  beta symmetry on the C 2p shell, placing the post-follow starting
+  point inside one well from the start.
+
+So the four ingredients are: (a) STO-3G's tiny variational space hosts a
+near-degenerate pair of UHF stationary points, (b) HCore + small
+follow step lands the starting density on the watershed, (c) plain SCF
+iteration from there *would* contract into one of them, but (d) DIIS
+averages across the watershed and locks the iteration into a limit cycle.
+Removing any one of (a), (b), or (d) restores convergence — the other
+runs in the table prove this experimentally:
+
+- Remove (a): bigger basis (3-21G, 6-31G, cc-pVDZ HCore) → converges with
+  DIIS.
+- Remove (b): better guess (STO-3G SAD) → converges with DIIS.
+- Remove (d): STO-3G HCore with `use_diis .false.` → converges in 45
+  cycles.
+
+**Pedagogical takeaways.** Three lessons generalize beyond this specific
+case:
+
+- DIIS is not a free win. It dramatically accelerates convergence when
+  the SCF map is approximately linear and there is a single attractor,
+  but it can *prevent* convergence when the iteration sits near the
+  watershed of two near-degenerate solutions and the gradient signal in
+  that subspace is below the DIIS error scale. The classic remedies are
+  (i) initial damping or level-shifting until the density is clearly in
+  one basin, (ii) DIIS reset when the error vector ceases to shrink, or
+  (iii) plain Roothaan-Hall fallback in the late iterations.
+- Reading the iteration trail matters. ΔE = 0 to all digits with
+  `Max(D)` 10⁻⁷–10⁻⁸ *never* satisfying the density threshold is the
+  signature of DIIS limit-cycling between near-degenerate stationary
+  points, not of slow convergence — bumping `max_cycles` will not help.
+  The right diagnostic experiment is a one-line change to `use_diis
+  .false.` and rerun.
+- Guess-dependent pre-follow results like the 3-21G 36 mEh splitting are
+  not numerical noise. They are real evidence of multiple SCF stationary
+  points and should always be cross-checked by enabling stability
+  analysis. After following, hcore = sad to 10 digits is the signal the
+  underlying reference is unique.
+
 #### Cost
 
 The orbital Hessian is dense in the occupied-virtual space:

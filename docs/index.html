@@ -702,6 +702,98 @@ n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R =
 </ul>
 <h4 id="what-following-actually-finds">What Following Actually Finds</h4>
 <p>Following an instability is genuinely re-running SCF from a different starting point — it inherits all the convergence behavior of the underlying solver. In particular, if the rotated reference is close to <em>another</em> instability (e.g. ethylene RHF at small basis is itself unstable to UHF in addition to the broken-symmetry RHF), the follow may land on yet another stationary point lower than the original. This is correct behavior and matches every published stability code: the follow finds <em>some</em> lower stationary point, not necessarily the <em>physical</em> ground state. For ethylene/3-21G specifically, the post-follow UHF lands at <span class="math-inline">\(E = -77.5245\)</span> with <span class="math-inline">\(\langle S^2\rangle \approx 1.04\)</span>, which is a deeply spin-broken biradical solution — real, but unphysical for closed-shell ethylene at equilibrium. Larger basis sets and more correlation eliminate this spurious low UHF.</p>
+<h4 id="case-study-twisted-ethylene-guess-sensitivity-and-the-sto-3g-pathology">Case Study: Twisted Ethylene, Guess Sensitivity, and the STO-3G Pathology</h4>
+<p>A clean illustration of how guess choice, basis flexibility, and the follow machinery interact comes from running 90°-twisted ethylene (<code>tests/benchmarks/scf/ethylene_rhf_stability_unstable.hfinp</code>) across four basis sets with two guesses each (HCore vs SAD), once with <code>stability_follow .false.</code> and once with <code>.true.</code> and <code>max_cycles 300</code>.</p>
+<p><strong>Pre-follow RHF (just <code>stability_check</code>)</strong>:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Basis</th>
+<th>Guess</th>
+<th>Iters</th>
+<th>E(RHF) / Eh</th>
+<th>RHF→RHF (real,int)</th>
+<th>Notes</th>
+</tr></thead>
+<tbody>
+<tr><td>STO-3G</td><td>HCore</td><td>75</td><td>−76.85549982</td><td>+0.108 stable</td><td>Stable RHF basin</td></tr>
+<tr><td>STO-3G</td><td>SAD</td><td>74</td><td>−76.85549982</td><td>+0.108 stable</td><td>Same basin</td></tr>
+<tr><td>3-21G</td><td>HCore</td><td>39</td><td>−77.38375253</td><td><strong>−0.071 UNSTABLE</strong></td><td>Wrong basin</td></tr>
+<tr><td>3-21G</td><td>SAD</td><td>56</td><td><strong>−77.41957055</strong></td><td>+0.068 stable</td><td>Correct basin (lower by 36 mEh)</td></tr>
+<tr><td>6-31G</td><td>HCore</td><td>93</td><td>−77.79102440</td><td>−0.069 UNSTABLE</td><td>Same basin both guesses</td></tr>
+<tr><td>6-31G</td><td>SAD</td><td>54</td><td>−77.79102440</td><td>−0.069 UNSTABLE</td><td>Same basin both guesses</td></tr>
+<tr><td>cc-pVDZ</td><td>HCore</td><td>46</td><td>−77.83343086</td><td>−0.061 UNSTABLE</td><td>Same basin both guesses</td></tr>
+<tr><td>cc-pVDZ</td><td>SAD</td><td>28</td><td>−77.83343086</td><td>−0.061 UNSTABLE</td><td>Same basin both guesses</td></tr>
+</tbody></table></div>
+<p>Three observations are useful for teaching:</p>
+<ol>
+<li><strong>STO-3G is too small to expose the real-internal RHF instability.</strong> The minimal basis only sees the external triplet instability, λ ≈ −2.6 × 10⁻³. No second RHF basin is visible because the basis cannot represent the broken-symmetry RHF.</li>
+<li>**3-21G is the only basis where guess choice splits which RHF basin is reached.** Pre-follow, HCore lands on a real-internally unstable RHF stationary point (a saddle on the RHF manifold) and SAD lands on the true RHF minimum 36 mEh lower. 6-31G and cc-pVDZ both have enough flex- ibility that DIIS funnels both guesses into the same RHF basin (they converge to identical Fock matrices to all printed digits).</li>
+<li>**For 6-31G and cc-pVDZ the converged RHF is itself real-internally unstable.** The guess didn&#x27;t matter because there&#x27;s only one RHF basin reachable from either guess — but that basin is not even an RHF minimum.</li>
+</ol>
+<p><strong>After follow with <code>stability_follow .true., max_cycles 300, use_diis .true.</code></strong>:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Basis</th>
+<th>Guess</th>
+<th>UHF iters</th>
+<th>E(UHF) / Eh</th>
+<th>Converged?</th>
+</tr></thead>
+<tbody>
+<tr><td>STO-3G</td><td>HCore</td><td>300+</td><td>−76.79737861</td><td><strong>❌ DIIS stalls</strong></td></tr>
+<tr><td>STO-3G</td><td>SAD</td><td>96</td><td>−77.00413153</td><td>✅</td></tr>
+<tr><td>3-21G</td><td>HCore</td><td>220</td><td>−77.52454006</td><td>✅</td></tr>
+<tr><td>3-21G</td><td>SAD</td><td>172</td><td>−77.52454006</td><td>✅</td></tr>
+<tr><td>6-31G</td><td>HCore</td><td>126</td><td>−77.93022197</td><td>✅</td></tr>
+<tr><td>6-31G</td><td>SAD</td><td>145</td><td>−77.93022197</td><td>✅</td></tr>
+<tr><td>cc-pVDZ</td><td>HCore</td><td>194</td><td>−77.96312737</td><td>✅</td></tr>
+<tr><td>cc-pVDZ</td><td>SAD</td><td>101</td><td>−77.96312737</td><td>✅</td></tr>
+</tbody></table></div>
+<p>Three of the four basis sets converge HCore = SAD to all 10 printed digits after follow — the broken-symmetry UHF is the unique reference, and the follow machinery dissolves the guess dependence. The 3-21G HCore/SAD pre- follow gap of 36 mEh shrinks to &lt; 1 nEh (10⁻¹⁰ Eh) post-follow.</p>
+<p><strong>The STO-3G HCore pathology — and what actually causes it.</strong> STO-3G HCore is the one combination where the follow does not converge with default DIIS settings. The failure mode is <em>not</em> energy-lowering failure: the energy is dead flat at −76.79737861 from iteration ~100 onward, with ΔE = 0 to 10 digits, while the density oscillates persistently with <code>Max(D)</code> in the 10⁻⁹ – 10⁻⁶ range — never satisfying the density threshold <code>_tol_density = 1e-10</code>. From the iteration trail past iteration 100:</p>
+<pre><code>
+212  -76.7973786094   ΔE=0e+00   RMS(D)=2.97e-08   Max(D)=1.37e-07   DIIS=9.55e-08
+…
+300  -76.7973786095   ΔE=0e+00   RMS(D)=2.85e-09   Max(D)=2.33e-08   DIIS=1.53e-09
+</code></pre>
+<p>The decisive diagnostic is what happens when DIIS is turned off (<code>use_diis .false.</code>) with everything else identical:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Run</th>
+<th>use_diis</th>
+<th>UHF iters</th>
+<th>E(UHF) / Eh</th>
+<th>Converged?</th>
+</tr></thead>
+<tbody>
+<tr><td>STO-3G HCore (DIIS on)</td><td>.true.</td><td>300+</td><td>−76.79737861</td><td>❌</td></tr>
+<tr><td>STO-3G HCore (DIIS off)</td><td>.false.</td><td><strong>45</strong></td><td><strong>−77.00413153</strong></td><td><strong>✅</strong></td></tr>
+<tr><td>STO-3G SAD  (DIIS on)</td><td>.true.</td><td>96</td><td>−77.00413153</td><td>✅</td></tr>
+</tbody></table></div>
+<p>Without DIIS, HCore converges in <strong>45 iterations</strong> — fewer than SAD with DIIS — to <strong>exactly the same UHF energy</strong> as SAD (−77.0041315259 Eh). This is the cleanest possible attribution: the proximate cause of the failure is <strong>DIIS itself</strong>, not the guess, not the basis size, not the follow step. Plain Roothaan-Hall iteration from the same HCore-derived, follow-rotated starting orbitals reaches the correct broken-symmetry UHF without difficulty.</p>
+<p>What is going on physically:</p>
+<ol>
+<li>The post-follow starting orbitals from HCore sit near a region of the UHF energy surface where two broken-symmetry density solutions are almost degenerate (their energy difference is below 10⁻¹⁰ Eh). The plain SCF map between these two densities is <em>contractive</em> — fixed-point iteration converges to one of them in tens of cycles.</li>
+<li>DIIS extrapolates the next Fock matrix from a linear combination of recent iterates that minimizes the predicted error <code>e = FPS − SPF</code>. When two physically distinct densities both produce small <code>e</code> and the energy gradient is essentially zero in the subspace that distinguishes them, DIIS has no useful signal to choose between them. The extrapolated Fock alternates between Fock matrices that would each individually contract toward a different solution. The density iterates limit-cycle.</li>
+<li>The contraction toward either single solution that plain Roothaan-Hall would provide is destroyed by the DIIS averaging: each cycle the averaging pulls the density back across the watershed.</li>
+</ol>
+<p>Why this hits <em>only</em> STO-3G HCore and not the other seven combinations:</p>
+<ul>
+<li><strong>STO-3G</strong> is the only basis where the post-follow starting density sits this close to the watershed. With one 2p shell per carbon and no polarization, the broken-symmetry singlet has very limited variational freedom — multiple near-degenerate UHF densities exist within nano- hartree of each other. Larger bases break this near-degeneracy and the DIIS error vector picks a unique direction.</li>
+<li><strong>HCore</strong> is the only guess in STO-3G that lands in a real-internally <em>stable</em> RHF basin (λ_min(real,int) = +0.108, the largest of any basis / guess combination). The follow&#x27;s small eigenvector rotation (eig_step = 0.05 rad, since |λ_triplet| = 2.6 × 10⁻³ &lt; 10⁻²) plus the π/8 β HOMO–LUMO mix gives a starting point that is exactly <em>between</em> the two broken-symmetry wells rather than inside one of them. SAD starts from projected atomic densities that already break the alpha/ beta symmetry on the C 2p shell, placing the post-follow starting point inside one well from the start.</li>
+</ul>
+<p>So the four ingredients are: (a) STO-3G&#x27;s tiny variational space hosts a near-degenerate pair of UHF stationary points, (b) HCore + small follow step lands the starting density on the watershed, (c) plain SCF iteration from there <em>would</em> contract into one of them, but (d) DIIS averages across the watershed and locks the iteration into a limit cycle. Removing any one of (a), (b), or (d) restores convergence — the other runs in the table prove this experimentally:</p>
+<ul>
+<li>Remove (a): bigger basis (3-21G, 6-31G, cc-pVDZ HCore) → converges with DIIS.</li>
+<li>Remove (b): better guess (STO-3G SAD) → converges with DIIS.</li>
+<li>Remove (d): STO-3G HCore with <code>use_diis .false.</code> → converges in 45 cycles.</li>
+</ul>
+<p><strong>Pedagogical takeaways.</strong> Three lessons generalize beyond this specific case:</p>
+<ul>
+<li>DIIS is not a free win. It dramatically accelerates convergence when the SCF map is approximately linear and there is a single attractor, but it can <em>prevent</em> convergence when the iteration sits near the watershed of two near-degenerate solutions and the gradient signal in that subspace is below the DIIS error scale. The classic remedies are (i) initial damping or level-shifting until the density is clearly in one basin, (ii) DIIS reset when the error vector ceases to shrink, or (iii) plain Roothaan-Hall fallback in the late iterations.</li>
+<li>Reading the iteration trail matters. ΔE = 0 to all digits with <code>Max(D)</code> 10⁻⁷–10⁻⁸ <em>never</em> satisfying the density threshold is the signature of DIIS limit-cycling between near-degenerate stationary points, not of slow convergence — bumping <code>max_cycles</code> will not help. The right diagnostic experiment is a one-line change to `use_diis .false.` and rerun.</li>
+<li>Guess-dependent pre-follow results like the 3-21G 36 mEh splitting are not numerical noise. They are real evidence of multiple SCF stationary points and should always be cross-checked by enabling stability analysis. After following, hcore = sad to 10 digits is the signal the underlying reference is unique.</li>
+</ul>
 <h4 id="cost">Cost</h4>
 <p>The orbital Hessian is dense in the occupied-virtual space: <span class="math-inline">\((n_v \cdot n_o)^2\)</span> doubles per channel. For ethylene/3-21G that is <span class="math-inline">\((18 \cdot 8)^2 \approx 165\)</span> KB per matrix; for a 100-basis closed-shell system it is <span class="math-inline">\(\approx 35\)</span> MB. The cost of the AO<span class="math-inline">\(\to\)</span>MO transform is already amortized with the CPHF code path. For systems above a few hundred basis functions, replace the dense diagonalization with a Davidson iteration on the matrix-vector product — Planck does not yet do this.</p>
 <h3 id="scf-iteration-loop">SCF Iteration Loop</h3>
