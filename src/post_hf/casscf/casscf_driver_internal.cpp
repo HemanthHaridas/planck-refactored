@@ -338,23 +338,24 @@ namespace HartreeFock::Correlation::CASSCF
         std::vector<CandidateStep> &candidates,
         const std::vector<Eigen::MatrixXd> &root_steps,
         const std::string &base_label,
-        bool cap_steps)
+        bool cap_steps,
+        double max_rot)
     {
         const HartreeFock::index_t root_count =
             static_cast<HartreeFock::index_t>(root_steps.size());
+        const double trust_radius_frob = 4.0 * max_rot;
         for (HartreeFock::index_t root = 0; root < root_count; ++root)
         {
             Eigen::MatrixXd step = root_steps[static_cast<std::size_t>(root)];
             if (cap_steps)
             {
                 const double max_elem = step.cwiseAbs().maxCoeff();
-                if (max_elem > 0.20)
-                    step *= 0.20 / max_elem;
+                if (max_elem > max_rot)
+                    step *= max_rot / max_elem;
 
-                const double trust_radius = 0.80;
                 const double frob = step.norm();
-                if (frob > trust_radius)
-                    step *= trust_radius / frob;
+                if (frob > trust_radius_frob)
+                    step *= trust_radius_frob / frob;
             }
             append_candidate_step(
                 candidates,

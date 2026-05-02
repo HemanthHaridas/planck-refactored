@@ -49,6 +49,15 @@ Iteration table prints:
 **Step scales tried**: `{1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625}`
 **Merit function**: `E_cas + 0.1·‖g_orb‖²` (lowest wins)
 
+**Trust region**: every macro orbital step κ is capped element-wise at
+`mcscf_max_rot` (default `0.20`, settable in `[scf]`) and Frobenius-norm
+at `4 × mcscf_max_rot`. Per-pair single-direction probe steps under
+stagnation also use ±`mcscf_max_rot`. Empirically the cap is rarely
+binding (water SA-2 from sad/hcore takes `step_norm ≤ 0.11` even when
+`mcscf_max_rot = 10`); larger values do not change which basin the
+optimizer reaches, since the search direction comes from a local-Newton
+step that points into the local well regardless of step size.
+
 **Plateau escape**: if stagnation_streak ≥ 2 and both energy and step are flat, convergence is declared with a `[WRN]` line.
 
 ## Shared-κ SA Coupled Solve
@@ -80,9 +89,9 @@ Default mode: `ResponseRHSMode::ExactOrbitalDerivative` — exact CI-response RH
 - **Reversed Cayley sign** (`apply_orbital_rotation`): was applying `exp(-κ)` instead of `exp(+κ)`. Caused line search to test uphill directions and reject every candidate. Now fixed.
 - **`guess hcore` + `use_symm true` → wrong RHF**: d2d RHF branch preservation fix (commit 46aa199).
 
-## Open Work
+## Regression Coverage
 
-- SA stationarity assertion: `tests/regression_cases.json` has no `lte` check on `casscf_sa_gnorm` for any SA case — add `{ "metric": "casscf_sa_gnorm", "type": "lte", "value": 1e-5 }` to all SA entries
+- SA stationarity is gated by `metric_le` checks on `casscf_sa_gnorm` (≤ 1e-5) in `tests/regression_cases.json` for `water_casscf_sa2_sto3g` and `ethylene_casscf_sa2_sto3g`, alongside `casscf_total_energy` matches against the PySCF reference table.
 
 ## RASSCF
 

@@ -484,6 +484,13 @@ namespace HartreeFock
         double tol_mcscf_energy = 1e-8;
         double tol_mcscf_grad = 1e-5;
 
+        // MCSCF orbital trust region. mcscf_max_rot caps the largest
+        // element of κ in each macro step (default 0.20). The Frobenius
+        // norm cap is held at 4× this value. Larger values let the
+        // optimizer take larger core-active rotations and may reach
+        // deeper SA basins; smaller values are more conservative.
+        double mcscf_max_rot = 0.20;
+
         // CASSCF / SA-CASSCF
         int nactele = 0; // number of active electrons
         int nactorb = 0; // number of active orbitals
@@ -503,6 +510,20 @@ namespace HartreeFock
 
         bool mcscf_debug_numeric_newton = false; // debug-only numeric Newton fallback
         bool mcscf_debug_commutator_rhs = false; // debug-only approximate commutator-only CI-response RHS
+
+        // Opt-in CIAH-style uphill step acceptance for SA-CASSCF basin escape.
+        // When false (default), the candidate selector is strictly monotone on
+        // (energy, merit, gradient) and convergence is gated on the SA gradient
+        // alone — bit-identical to historical behavior. When true, the selector
+        // additionally accepts trial steps whose quadratic model predicts a
+        // downhill move (model-trust filter), and convergence additionally
+        // requires the maximum per-root orbital gradient to be small. Useful
+        // for cases where the SA-weighted gradient vanishes while individual
+        // roots are still far from stationary (see docs/CASSCF_STATUS.md P3).
+        bool mcscf_accept_uphill = false;
+        // When mcscf_accept_uphill is on, this caps the largest uphill ΔE
+        // (Hartree) the model-trust filter will tolerate per macro step.
+        double mcscf_uphill_max_eh = 5e-3;
     };
 
     struct OptionsOutput

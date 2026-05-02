@@ -1798,6 +1798,20 @@ F^{gen}_{pq} = \sum_r h_{pr} D_{rq} + \sum_{rst} (pr|st) d_{qrst}
 <h3 id="convergence-and-robustness">Convergence and Robustness</h3>
 <p>The orbital macro-step uses <strong>merit-function-based step selection</strong>: multiple candidate orbital steps (augmented-Hessian result, first micro-step, gradient fallback, and their pairwise averages) are each evaluated by a full CASSCF energy computation, and the step that minimizes <span class="math-inline">\(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\)</span> is accepted. This avoids the sign ambiguity that plagued earlier Cayley-map implementations and removes any dependence on DIIS extrapolation.</p>
 <p>When repeated macro-iterations accept only negligibly small steps without reducing the true orbital gradient (stagnation), the driver switches to direct orbital-gradient probe steps and single-pair directional probes, letting the exact CASSCF energy screen pick the productive rotations.</p>
+<h4 id="why-uphill-climbing-was-required-water-sa-2-sad-start">Why uphill climbing was required (water SA-2, SAD start)</h4>
+<p>The water CAS(4,4)/STO-3G SA-2 SAD-start case is a useful teaching example because it has two nearby SA stationary basins:</p>
+<ul>
+<li><strong>Upper/local basin</strong> around <code>-74.7751377977 Eh</code></li>
+<li><strong>Deeper basin</strong> around <code>-74.7877865 Eh</code> (PySCF SAD-start minimum)</li>
+</ul>
+<p>With strictly monotone acceptance, the optimizer can get trapped in the upper basin even when the SA gradient is tiny. The reason is specific to state-averaging: the weighted SA gradient can cancel across roots (<span class="math-inline">\(g_{\mathrm{SA}}=\sum_r w_r g_r \approx 0\)</span>) while individual per-root gradients are still sizable. In that regime, the physically useful move is often a <strong>small uphill step</strong> in <span class="math-inline">\(E_{\mathrm{SA}}\)</span> that crosses a barrier; the next macro step then descends into the deeper well.</p>
+<p>This is exactly what the PySCF CIAH/newton trajectory does on this system: it accepts a bounded uphill move and then takes a larger downhill move into the lower-energy basin. To mirror that behavior, Planck exposes <code>mcscf_accept_uphill</code> with an energy cap <code>mcscf_uphill_max_eh</code>.</p>
+<p>Planck now keeps two regression fixtures for this one input family:</p>
+<ul>
+<li><code>water_cas44_sto3g_sa2_sad.hfinp</code> (default monotone mode) validates the historical upper-basin landing near <code>-74.7751377977 Eh</code>.</li>
+<li><code>water_cas44_sto3g_sa2_sad_uphill.hfinp</code> (<code>mcscf_accept_uphill .true.</code>) validates the basin-escape path and lands near <code>-74.7877864784 Eh</code>, matching PySCF SAD-start to within <code>~3.6e-08 Eh</code>.</li>
+</ul>
+<p>Keeping both is intentional: it teaches that AH/CIAH quality alone is not the whole story in SA-CASSCF; <strong>acceptance policy is part of the algorithm</strong>. The paired fixtures also prevent accidental drift in either mode (strict-monotone robustness or uphill-enabled global-basin reachability).</p>
 <p>The CI density matrices (1-RDM and 2-RDM) are built using exact creation/annihilation operators in the spin-orbital determinant basis with a determinant lookup table, ensuring the CI eigenvalue, density matrices, and reconstructed energy are mutually consistent for all active-space sizes.</p>
 <p>At convergence, the active-space 1-RDM is diagonalized to yield <strong>natural orbitals</strong> with occupation numbers reported in descending order (<code>_cas_nat_occ</code>).</p>
 <p>Validation energies (RHF/STO-3G geometry unless noted):</p>

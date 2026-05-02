@@ -31,6 +31,13 @@ See `docs/CASSCF_STATUS.md` for full implementation status and remaining work.
 | water_cas44_sto3g_sa2 | CAS(4e,4o) | STO-3G | 2 | −74.7751377977 | −74.7751378317 | 3.4e-08 | **PASS** |
 | ethylene_cas44_sto3g_sa2 | CAS(4e,4o) | STO-3G | 2 | −77.0034974301 | −77.0034974774 | 4.7e-08 | **PASS** |
 
+### SAD-guess companions (P3 update, 2026-05-02)
+
+| Input | Active space | Basis | Roots | Guess | Planck SA / Eh | PySCF SAD-start / Eh | Delta / Eh | Note |
+|---|---|---|---|---|---|---|---|---|
+| water_cas44_sto3g_sa2_sad | CAS(4e,4o) | STO-3G | 2 | sad (original) | −74.7751377977 | −74.7877865139 | 1.26e-02 | Baseline monotone SAD landing (upper/local SA basin). Kept as regression control. |
+| water_cas44_sto3g_sa2_sad_uphill | CAS(4e,4o) | STO-3G | 2 | sad + `mcscf_accept_uphill` | −74.7877864784 | −74.7877865139 | 3.6e-08 | Uphill-enabled landing matches PySCF SAD-start basin. |
+
 ---
 
 ## Reference energy notes
@@ -38,12 +45,15 @@ See `docs/CASSCF_STATUS.md` for full implementation status and remaining work.
 ### Water CAS(4,4) SS
 PySCF references use the hcore-start converged values (both codes start from
 the same RHF after the d2d branch-preservation fix, commit 46aa199).
-The PySCF SAD-start minimum for water SA-2 (−74.7877865139 Eh, 13 mEh lower)
-has not been validated in Planck — see `docs/CASSCF_STATUS.md` item P4.
+The PySCF SAD-start minimum for water SA-2 (−74.7877865139 Eh) is now matched
+within 3.6e-08 Eh by Planck when `mcscf_accept_uphill .true.` is enabled in the
+SAD-guess companion input. See `docs/CASSCF_STATUS.md` item P3.
 
 ### Water SA-2
-Both codes converge from `guess hcore` to −74.7751378 Eh. The PySCF SAD-start
-minimum is lower and has not been compared.
+Both codes converge from `guess hcore` to −74.7751378 Eh. For `guess sad`,
+Planck reaches −74.7877864784 Eh when uphill acceptance is enabled
+(`mcscf_accept_uphill .true.`), matching the PySCF SAD-start basin to
+3.6e-08 Eh.
 
 ### Twisted ethylene SA-2
 Both codes converge from `guess hcore` to −77.0034974 Eh. Planck and PySCF
