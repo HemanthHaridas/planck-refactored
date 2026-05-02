@@ -129,27 +129,28 @@ Tolerance: 1e-5 Eh (all pass well within this).
 
 Note: PySCF references for water and ethylene were updated to use the
 hcore-start converged values (both codes agree from this starting point).
-The water SA-2 SAD-start minimum (−74.7877865139 Eh, 13 mEh lower) has not
-been validated in Planck — see P3.
+The water SA-2 SAD-start minimum (−74.7877865139 Eh) is now matched in Planck
+when uphill acceptance is enabled (`mcscf_accept_uphill .true.`) — see P3.
 
 ---
 
 ## Remaining Work (Priority Order)
 
-### P0: SA stationarity assertion in the regression runner
+### P0: SA stationarity assertion in the regression runner — DONE (2026-05-01)
 
-`run_regressions.py` parses `casscf_sa_gnorm` (`sa_g=...` in the log) but
-never asserts it is below `tol_mcscf_grad` (default 1e-5). SA convergence
-should be a hard test criterion, not just a scraped metric.
+Two SA cases now gate on `casscf_sa_gnorm ≤ 1e-5` via the existing
+`metric_le` check type, alongside `casscf_total_energy` against the PySCF
+reference:
 
-**Deliverables:**
-- In `regression_cases.json`, for all SA test cases, add a `lte` check on
-  `casscf_sa_gnorm` with threshold 1e-5.
-- Also verify the final macro iteration did not fire the plateau escape path
-  (no `[WRN]` about plateau in the last pass). This can be a `files_not_contain`
-  type check if the runner supports it, or a manual grep in a wrapper script.
+- `water_casscf_sa2_sto3g` — water CAS(4,4)/STO-3G, 2 roots; final `sa_g ≈ 1.6e-08`.
+- `ethylene_casscf_sa2_sto3g` — ethylene CAS(4,4)/STO-3G, 2 roots, D2d; final `sa_g ≈ 3.9e-07`.
 
-**File:** `tests/run_regressions.py`, `tests/regression_cases.json`
+A future polish item is asserting that the final macro iteration did not
+fire the plateau escape path (no `[WRN]` about plateau). This would need a
+`files_not_contain` (or `not_contains_in_last_n_lines`) check type added to
+the runner.
+
+**File:** `tests/regression_cases.json`
 
 ---
 
@@ -181,19 +182,40 @@ FD-Newton path.
 
 ---
 
-### P3: Water SA-2 SAD-start validation
+### P3: Water SA-2 SAD-start validation — CLOSED (2026-05-02)
 
-From the hcore start, Planck and PySCF agree at −74.7751378 Eh. The PySCF
-SAD-start minimum (−74.7877865 Eh, 13 mEh lower) has not been tested in
-Planck. The SAD minimum may be the global SA minimum.
+We keep **both** SAD-start fixtures in regressions:
 
-**Deliverables:**
-- Add a water SA-2 input that uses the default (SAD) guess.
-- Run Planck; compare to PySCF SAD-start −74.7877865139 Eh.
-- If Planck finds the lower minimum: update the gate value and document.
-- If Planck stalls at the higher minimum: record as a known optimizer
-  limitation (the SA optimizer finds only local minima from some starting
-  points) and track as a future correctness item.
+1. `water_cas44_sto3g_sa2_sad.hfinp` (original behavior, no uphill)
+   - converges to **−74.7751377977 Eh** (upper/local SA basin).
+2. `water_cas44_sto3g_sa2_sad_uphill.hfinp` (`mcscf_accept_uphill .true.`)
+   - converges to **−74.7877864784 Eh**, matching the PySCF SAD-start value
+     **−74.7877865139 Eh** within `3.6e-08 Eh` (deeper basin).
+
+Both are gated in `tests/regression_cases.json` as:
+- `water_casscf_sa2_sto3g_sad_guess`
+- `water_casscf_sa2_sto3g_sad_guess_uphill`
+
+### Why both are kept
+
+- They validate **two intentional optimizer modes** (strict monotone vs
+  uphill-enabled basin escape), both of which are currently supported.
+- They protect against accidental regressions that would either:
+  - break the historical monotone landing (`−74.7751377977 Eh`), or
+  - break the PySCF-matching uphill landing (`−74.7877864784 Eh`).
+- They provide a stable A/B harness for future optimizer changes, so we can
+  distinguish "basin policy changed" from "numerical bug introduced".
+
+### Learnings
+
+- The water SA-2 SAD case is genuinely **multi-basin** under the current
+  orbital parameterization and trust-region controls.
+- The core blocker was not Hessian quality alone; it was **acceptance policy**:
+  allowing bounded uphill steps enables the barrier-crossing move.
+- Matching PySCF on this case requires not just AH/CIAH machinery, but also a
+  compatible step-acceptance strategy.
+- Keeping both fixtures codifies this: same method family, different accepted
+  basin depending on acceptance mode.
 
 ---
 

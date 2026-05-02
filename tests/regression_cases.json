@@ -688,6 +688,65 @@
         {"type": "metric_eq", "metric": "point_group", "expected": "D2d"},
         {"type": "metric_close", "metric": "casscf_total_energy", "expected": -77.5145223873, "atol": 1e-9}
       ]
+    },
+    {
+      "id": "water_casscf_sa2_sto3g",
+      "input": "tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "CASSCF :                      Converged.",
+        "State-averaged over 2 roots :"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -74.7751377977, "atol": 1e-9},
+        {"type": "metric_le",    "metric": "casscf_sa_gnorm",     "value":     1e-5}
+      ]
+    },
+    {
+      "id": "water_casscf_sa2_sto3g_sad_guess",
+      "input": "tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2_sad.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "CASSCF :                      Converged.",
+        "State-averaged over 2 roots :"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -74.7751377977, "atol": 1e-9},
+        {"type": "metric_le",    "metric": "casscf_sa_gnorm",     "value":     1e-5}
+      ]
+    },
+    {
+      "id": "water_casscf_sa2_sto3g_sad_guess_uphill",
+      "input": "tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2_sad_uphill.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "CASSCF :                      Converged.",
+        "State-averaged over 2 roots :"
+      ],
+      "checks": [
+        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -74.7877864784, "atol": 1e-9},
+        {"type": "metric_le",    "metric": "casscf_sa_gnorm",     "value":     1e-5}
+      ]
+    },
+    {
+      "id": "ethylene_casscf_sa2_sto3g",
+      "input": "tests/benchmarks/casscf/pyscf_reference/ethylene_cas44_sto3g_sa2.hfinp",
+      "tags": ["extended"],
+      "timeout_s": 300,
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 D2d",
+        "CASSCF :                      Converged.",
+        "State-averaged over 2 roots :"
+      ],
+      "checks": [
+        {"type": "metric_eq",    "metric": "point_group",         "expected": "D2d"},
+        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -77.0034974301, "atol": 1e-9},
+        {"type": "metric_le",    "metric": "casscf_sa_gnorm",     "value":     1e-5}
+      ]
     }
   ]
 }

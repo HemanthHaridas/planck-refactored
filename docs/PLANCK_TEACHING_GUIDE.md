@@ -2877,6 +2877,40 @@ reducing the true orbital gradient (stagnation), the driver switches to direct
 orbital-gradient probe steps and single-pair directional probes, letting the
 exact CASSCF energy screen pick the productive rotations.
 
+#### Why uphill climbing was required (water SA-2, SAD start)
+
+The water CAS(4,4)/STO-3G SA-2 SAD-start case is a useful teaching example
+because it has two nearby SA stationary basins:
+
+- **Upper/local basin** around `-74.7751377977 Eh`
+- **Deeper basin** around `-74.7877865 Eh` (PySCF SAD-start minimum)
+
+With strictly monotone acceptance, the optimizer can get trapped in the upper
+basin even when the SA gradient is tiny. The reason is specific to
+state-averaging: the weighted SA gradient can cancel across roots
+(\(g_{\mathrm{SA}}=\sum_r w_r g_r \approx 0\)) while individual per-root
+gradients are still sizable. In that regime, the physically useful move is
+often a **small uphill step** in \(E_{\mathrm{SA}}\) that crosses a barrier;
+the next macro step then descends into the deeper well.
+
+This is exactly what the PySCF CIAH/newton trajectory does on this system:
+it accepts a bounded uphill move and then takes a larger downhill move into the
+lower-energy basin. To mirror that behavior, Planck exposes
+`mcscf_accept_uphill` with an energy cap `mcscf_uphill_max_eh`.
+
+Planck now keeps two regression fixtures for this one input family:
+
+- `water_cas44_sto3g_sa2_sad.hfinp` (default monotone mode) validates the
+  historical upper-basin landing near `-74.7751377977 Eh`.
+- `water_cas44_sto3g_sa2_sad_uphill.hfinp` (`mcscf_accept_uphill .true.`)
+  validates the basin-escape path and lands near `-74.7877864784 Eh`,
+  matching PySCF SAD-start to within `~3.6e-08 Eh`.
+
+Keeping both is intentional: it teaches that AH/CIAH quality alone is not the
+whole story in SA-CASSCF; **acceptance policy is part of the algorithm**.
+The paired fixtures also prevent accidental drift in either mode
+(strict-monotone robustness or uphill-enabled global-basin reachability).
+
 The CI density matrices (1-RDM and 2-RDM) are built using exact
 creation/annihilation operators in the spin-orbital determinant basis with a
 determinant lookup table, ensuring the CI eigenvalue, density matrices, and

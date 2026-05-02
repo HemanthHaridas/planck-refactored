@@ -751,6 +751,22 @@ namespace HartreeFock::IO
                      active_space.tol_mcscf_grad = std::stod(v);
                      return std::expected<void, std::string>{};
                  }},
+                {"mcscf_max_rot", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("mcscf_max_rot must be positive");
+                     active_space.mcscf_max_rot = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mcscf_uphill_max_eh", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("mcscf_uphill_max_eh must be positive");
+                     active_space.mcscf_uphill_max_eh = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
 
                 {"ci_max_dim", [&active_space](const std::string &v) -> std::expected<void, std::string>
                  {
@@ -820,6 +836,7 @@ namespace HartreeFock::IO
 
             if (key == "use_diis" || key == "save_checkpoint" ||
                 key == "mcscf_debug_numeric_newton" || key == "mcscf_debug_commutator_rhs" ||
+                key == "mcscf_accept_uphill" ||
                 key == "stability_check" || key == "stability_follow")
             {
                 if (!(_iss >> value))
@@ -837,6 +854,8 @@ namespace HartreeFock::IO
                     active_space.mcscf_debug_numeric_newton = *parsed;
                 else if (key == "mcscf_debug_commutator_rhs")
                     active_space.mcscf_debug_commutator_rhs = *parsed;
+                else if (key == "mcscf_accept_uphill")
+                    active_space.mcscf_accept_uphill = *parsed;
                 else if (key == "stability_check")
                     scf._stability_check = *parsed;
                 else

@@ -3,6 +3,7 @@
 #include "io/logging.h"
 #include "base/tables.h"
 #include "post_hf/casscf.h"
+#include "post_hf/casscf/aug-hessian-orbital.h"
 #include "post_hf/casscf/casscf_driver_internal.h"
 #include "post_hf/casscf/casscf_utils.h"
 #include "post_hf/casscf/ci.h"
@@ -71,7 +72,9 @@ namespace
         const McscfState &current_state,
         const std::vector<RotPair> &opt_pairs,
         double tol_energy,
-        EvaluateFn &&evaluate)
+        EvaluateFn &&evaluate,
+        bool accept_uphill = false,
+        double uphill_max_eh = 5e-3)
     {
         CandidateSelection selection;
         selection.state = current_state;
@@ -142,6 +145,94 @@ namespace
                         current_state.roots, current_state.F_I_mo, opt_pairs, selection.step);
                 selection.predicted_delta = prediction.weighted_delta;
                 selection.max_root_predicted_delta_deviation = prediction.max_root_deviation;
+            }
+        }
+
+        // Pass 2: per-root-gradient-driven uphill acceptance (opt-in via
+        // mcscf_accept_uphill). Only fires when (a) the user opted in AND
+        // (b) Pass 1 above found no strict-monotone improvement. This keeps
+        // every existing case bit-identical at default settings — Pass 2 is
+        // skipped entirely when selection.accepted is already true.
+        //
+        // Pass 2 targets the "false SA stationary point" failure mode: the
+        // SA-weighted gradient g_SA = Σ w_I g_I has vanished by cancellation
+        // even though individual per-root gradients g_I remain large. The SA
+        // energy is at a local minimum of E_SA(κ), but each individual root's
+        // gradient still points into a nearby deeper basin. To escape, we
+        // accept a step that *increases* E_SA (bounded by uphill_max_eh) when
+        // it *reduces* the worst per-root orbital gradient. This is the signal
+        // PySCF's mc.newton() implicitly follows — its convergence is gated on
+        // the per-MO orbital gradient, so it keeps stepping past SA-stationary
+        // basins until per-root gradients also vanish.
+        if (accept_uphill && !selection.accepted)
+        {
+            double best_max_root_gnorm = current_state.max_root_gnorm;
+            for (const auto &candidate : candidates)
+            {
+                for (double scale : CASSCF_MACRO_STEP_SCALES)
+                {
+                    Eigen::MatrixXd trial_step = scale * candidate.step;
+                    if (trial_step.cwiseAbs().maxCoeff() < 1e-12)
+                        continue;
+
+                    const Eigen::MatrixXd rotated_coefficients =
+                        HartreeFock::Correlation::CASSCF::apply_orbital_rotation(
+                            coefficients, trial_step, overlap);
+                    auto trial_res = evaluate(rotated_coefficients, root_reference, false);
+                    if (!trial_res)
+                        continue;
+                    const auto &trial = *trial_res;
+
+                    const double actual_dE = trial.E_cas - current_state.E_cas;
+                    // Cap the worst uphill move we tolerate per macro step.
+                    if (actual_dE > uphill_max_eh)
+                        continue;
+                    // The trial must reduce the worst per-root orbital
+                    // gradient — otherwise it has not made progress toward a
+                    // true SA-stationary point where every root vanishes.
+                    //
+                    // Use a modest relative drop (0.05%) plus a tiny absolute
+                    // floor.  The old fixed 0.99 factor demanded a full 1%
+                    // reduction; at false SA-stationary points (|g_SA|≈0) the
+                    // available trust-region/probe steps often improve the
+                    // worst root by only ~0.3–0.7%, so every candidate was
+                    // rejected and the macro loop stalled.
+                    const double rel_floor =
+                        best_max_root_gnorm * (1.0 - 5.0e-4);
+                    const double abs_floor =
+                        best_max_root_gnorm -
+                        std::max(1.0e-8, 1.0e-6 * best_max_root_gnorm);
+                    const double max_root_threshold =
+                        std::max(rel_floor, abs_floor);
+                    if (!(trial.max_root_gnorm < max_root_threshold))
+                        continue;
+                    // No cap on the new SA gradient: at a false-stationary
+                    // point, |g_SA| ≈ 0 by construction; any meaningful
+                    // basin-escape probe will increase it (PySCF traces show
+                    // |g_SA| jumps from 1e-3 to 1e-1 across an escape step).
+                    // The actual_dE cap and the per-root reduction guard are
+                    // sufficient acceptance criteria.
+
+                    best_max_root_gnorm = trial.max_root_gnorm;
+                    const WeightedQuadraticModelPrediction prediction =
+                        build_weighted_root_quadratic_model_prediction(
+                            current_state.roots, current_state.F_I_mo, opt_pairs, trial_step);
+                    selection.accepted = true;
+                    selection.energy = trial.E_cas;
+                    selection.sa_gnorm = trial.gnorm;
+                    selection.merit = trial.E_cas + merit_weight * trial.gnorm * trial.gnorm;
+                    selection.state = trial;
+                    selection.coefficients = rotated_coefficients;
+                    selection.step = trial_step;
+                    selection.label =
+                        (std::abs(scale - 1.0) < 1e-12)
+                            ? candidate.label + "[uphill]"
+                            : std::format("{}@{:.5f}[uphill]", candidate.label, scale);
+                    selection.weighted_root_gnorm = trial.weighted_root_gnorm;
+                    selection.max_root_gnorm = trial.max_root_gnorm;
+                    selection.predicted_delta = prediction.weighted_delta;
+                    selection.max_root_predicted_delta_deviation = prediction.max_root_deviation;
+                }
             }
         }
 
@@ -341,6 +432,8 @@ namespace HartreeFock::Correlation::CASSCF
         const bool use_numeric_newton_debug = as.mcscf_debug_numeric_newton;
         const int numeric_newton_pair_limit = 64;
         const int ci_dense_threshold = 500;
+        const double max_rot = (as.mcscf_max_rot > 0.0) ? as.mcscf_max_rot : 0.20;
+        const double trust_radius_frob = 4.0 * max_rot;
 
         logging(LogLevel::Info, tag + " :",
                 std::format("Active space: ({:d}e, {:d}o)  n_core={:d}  n_virt={:d}  CI dim ≤ {:d}",
@@ -351,6 +444,9 @@ namespace HartreeFock::Correlation::CASSCF
         logging(LogLevel::Info, tag + " :",
                 std::format("CI response RHS: {}",
                             response_rhs_mode_name(configured_rhs_mode)));
+        logging(LogLevel::Info, tag + " :",
+                std::format("Orbital trust region: max_rot={:.3f}  Frobenius cap={:.3f}",
+                            max_rot, trust_radius_frob));
         if (configured_rhs_mode == ResponseRHSMode::CommutatorOnlyApproximate)
             logging(LogLevel::Warning, tag + " :",
                     "Using debug-only approximate commutator RHS instead of the default exact orbital-derivative response.");
@@ -561,26 +657,24 @@ namespace HartreeFock::Correlation::CASSCF
 
             Eigen::MatrixXd kappa = unpack_pairs(step);
             const double max_elem = kappa.cwiseAbs().maxCoeff();
-            if (max_elem > 0.20)
-                kappa *= 0.20 / max_elem;
+            if (max_elem > max_rot)
+                kappa *= max_rot / max_elem;
 
-            const double trust_radius = 0.80;
             const double frob = kappa.norm();
-            if (frob > trust_radius)
-                kappa *= trust_radius / frob;
+            if (frob > trust_radius_frob)
+                kappa *= trust_radius_frob / frob;
             return kappa;
         };
 
         auto cap_orbital_step = [&](Eigen::MatrixXd kappa)
         {
             const double max_elem = kappa.cwiseAbs().maxCoeff();
-            if (max_elem > 0.20)
-                kappa *= 0.20 / max_elem;
+            if (max_elem > max_rot)
+                kappa *= max_rot / max_elem;
 
-            const double trust_radius = 0.80;
             const double frob = kappa.norm();
-            if (frob > trust_radius)
-                kappa *= trust_radius / frob;
+            if (frob > trust_radius_frob)
+                kappa *= trust_radius_frob / frob;
             return kappa;
         };
 
@@ -655,7 +749,16 @@ namespace HartreeFock::Correlation::CASSCF
             const bool e_conv = macro > 1 && std::abs(st_current.E_cas - E_prev) < as.tol_mcscf_energy;
             const bool g_conv = sa_gradient_converged(st_current.gnorm, as.tol_mcscf_grad);
             const bool no_orb_rot = (st_current.gnorm == 0.0);
-            if ((e_conv && g_conv) || (g_conv && no_orb_rot))
+            // Under mcscf_accept_uphill, additionally require the per-root
+            // gradient to be small (within 100x of the SA tolerance) before
+            // declaring convergence. This keeps the optimizer iterating past
+            // SA-stationary points where individual roots are still large,
+            // letting the Pass-2 uphill branch attempt a basin escape.
+            const double max_root_gconv_tol = 100.0 * as.tol_mcscf_grad;
+            const bool per_root_g_conv =
+                !as.mcscf_accept_uphill ||
+                st_current.max_root_gnorm <= max_root_gconv_tol;
+            if (per_root_g_conv && ((e_conv && g_conv) || (g_conv && no_orb_rot)))
             {
                 if (macro == 1)
                 {
@@ -765,7 +868,7 @@ namespace HartreeFock::Correlation::CASSCF
                             n_act,
                             n_virt,
                             level_shift_local,
-                            0.20,
+                            max_rot,
                             all_mo_irr,
                             use_sym,
                             &root_hessian_ctx);
@@ -822,7 +925,7 @@ namespace HartreeFock::Correlation::CASSCF
                     n_act,
                     n_virt,
                     level_shift,
-                    0.20,
+                    max_rot,
                     all_mo_irr,
                     use_sym,
                     &sa_hessian_ctx,
@@ -842,7 +945,7 @@ namespace HartreeFock::Correlation::CASSCF
                 const RootResolvedOrbitalStepSet kappa_step_set = build_root_resolved_orbital_step_set(
                     st_current.roots, st_current.F_I_mo, nbasis,
                     n_core, n_act, n_virt,
-                    level_shift, 0.20, all_mo_irr, use_sym);
+                    level_shift, max_rot, all_mo_irr, use_sym);
                 const Eigen::MatrixXd &kappa = kappa_step_set.weighted;
                 kappa_total += kappa;
 
@@ -895,8 +998,8 @@ namespace HartreeFock::Correlation::CASSCF
                 }
             }
             const double max_k = kappa_total.cwiseAbs().maxCoeff();
-            if (max_k > 0.20)
-                kappa_total *= 0.20 / max_k;
+            if (max_k > max_rot)
+                kappa_total *= max_rot / max_k;
             const Eigen::MatrixXd &kappa_coupled = sa_coupled_result.orbital_step;
             const RootResolvedOrbitalStepSet kappa_grad_step_set =
                 build_root_resolved_gradient_fallback_step_set(st_current.roots);
@@ -915,7 +1018,33 @@ namespace HartreeFock::Correlation::CASSCF
                  (!coupled_step_reliable || stagnation_streak >= 2));
             const bool use_diagonal_fallback = stagnation_streak >= 2;
 
+            // CIAH augmented-Hessian step over the SA-averaged orbital
+            // gradient. Uses the same Hessian context the SA coupled solve
+            // already built, so the cost over the existing cascade is one
+            // extra Davidson loop driven by delta_g_sa_action. We always
+            // generate the candidate so the merit selector can compare it
+            // against sa-coupled; it only wins when the bordered eigenvalue
+            // is well-conditioned and the resulting kappa survives the cap.
+            const OrbitalAugHessianStep sa_aug_hess =
+                solve_orbital_augmented_hessian_step(
+                    st_current.g_orb,
+                    st_current.F_I_mo,
+                    st_current.F_A_mo,
+                    &sa_hessian_ctx,
+                    n_core,
+                    n_act,
+                    n_virt,
+                    level_shift,
+                    max_rot,
+                    all_mo_irr,
+                    use_sym);
+            const Eigen::MatrixXd &kappa_aug_hess = sa_aug_hess.kappa;
+
             append_candidate_step(step_candidates, kappa_coupled, "sa-coupled");
+            if (sa_aug_hess.kappa.allFinite() &&
+                sa_aug_hess.kappa.cwiseAbs().maxCoeff() > 1e-12 &&
+                !sa_aug_hess.ah.orbital_only_fallback)
+                append_candidate_step(step_candidates, kappa_aug_hess, "sa-aug-hessian");
             if (use_numeric_newton_fallback)
                 append_candidate_step(step_candidates, kappa_newton, "numeric-newton");
             if (use_diagonal_fallback)
@@ -952,7 +1081,7 @@ namespace HartreeFock::Correlation::CASSCF
                         break;
 
                     const double signed_probe =
-                        (probe_signal.weighted_signed(k) >= 0.0) ? -0.20 : 0.20;
+                        (probe_signal.weighted_signed(k) >= 0.0) ? -max_rot : max_rot;
                     append_candidate_step(
                         step_candidates,
                         build_single_pair_probe_step(k, signed_probe),
@@ -973,7 +1102,9 @@ namespace HartreeFock::Correlation::CASSCF
                     st_current,
                     opt_pairs,
                     as.tol_mcscf_energy,
-                    evaluate);
+                    evaluate,
+                    as.mcscf_accept_uphill,
+                    as.mcscf_uphill_max_eh);
 
             if (accepted_candidate.accepted)
             {
@@ -1076,7 +1207,12 @@ namespace HartreeFock::Correlation::CASSCF
             const bool e_conv_post = macro > 1 && std::abs(dE) < as.tol_mcscf_energy;
             const bool g_conv_post = sa_gradient_converged(reported_gnorm, as.tol_mcscf_grad);
             const bool no_orb_rot_post = (reported_gnorm == 0.0);
-            if ((e_conv_post && g_conv_post) || (g_conv_post && no_orb_rot_post))
+            const double max_root_gconv_tol_post = 100.0 * as.tol_mcscf_grad;
+            const bool per_root_g_conv_post =
+                !as.mcscf_accept_uphill ||
+                reported_max_root_gnorm <= max_root_gconv_tol_post;
+            if (per_root_g_conv_post &&
+                ((e_conv_post && g_conv_post) || (g_conv_post && no_orb_rot_post)))
             {
                 converged = true;
                 break;
