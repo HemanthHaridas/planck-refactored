@@ -197,6 +197,9 @@ SCF procedure and convergence settings.
 | `mcscf_micro_per_macro` | int | ≥ 1 | `4` | Micro-iterations per macro-iteration |
 | `tol_mcscf_energy` | float | > 0 | `1e-8` | CASSCF energy convergence threshold in Hartree |
 | `tol_mcscf_grad` | float | > 0 | `1e-5` | CASSCF orbital gradient convergence threshold |
+| `mcscf_max_rot` | float | > 0 | `0.20` | CASSCF orbital trust-region cap (max absolute κ element per macro step). |
+| `mcscf_accept_uphill` | bool | `.true.`, `.false.` | `.false.` | Opt-in SA-CASSCF basin-escape mode: allows bounded uphill trial acceptance when it reduces worst per-root orbital gradients. |
+| `mcscf_uphill_max_eh` | float | > 0 | `5e-3` | Maximum allowed uphill \u0394E (Eh) per macro step when `mcscf_accept_uphill .true.` is enabled. |
 | `use_diis` | bool | `.true.`, `.false.` | `.true.` | Enable DIIS convergence acceleration |
 | `diis_dim` | int | ≥ 2 | `8` | Maximum DIIS subspace size |
 | `diis_restart` | float | ≥ 0 | `2.0` | Clear the DIIS subspace when the error grows by more than this factor relative to the previous iteration. Set to `0` to disable. |
@@ -915,7 +918,30 @@ H    0.000000   -0.757005   -0.468704
 ```
 
 <p align="justify">
-Expected energy: `E(CASSCF) ≈ -75.9851 Eh` for H₂O CAS(4,4)/STO-3G.
+Expected energy: `E(CASSCF) ≈ -74.9760 Eh` for H₂O CAS(4,4)/STO-3G.
+</p>
+
+### SA-CASSCF SAD-start basins — monotone vs uphill-enabled
+
+<p align="justify">
+For water CAS(4,4)/STO-3G with `guess sad` and `nroots 2`, two SA stationary
+basins are observed:
+</p>
+
+<div align="justify">
+
+- **Monotone mode** (`mcscf_accept_uphill .false.`, default): converges near
+  `-74.7751378 Eh` (upper/local basin).
+- **Uphill-enabled mode** (`mcscf_accept_uphill .true.`): converges near
+  `-74.7877865 Eh` (deeper basin, matching PySCF SAD-start).
+
+</div>
+
+<p align="justify">
+This behavior is intentional and regression-gated with two fixtures:
+`water_cas44_sto3g_sa2_sad.hfinp` (original monotone path) and
+`water_cas44_sto3g_sa2_sad_uphill.hfinp` (uphill-enabled path). The paired
+cases ensure both optimizer modes remain stable.
 </p>
 
 ### CASSCF correlated π-orbitals — twisted ethylene, CAS(2,2)/STO-3G
