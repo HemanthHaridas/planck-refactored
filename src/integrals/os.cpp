@@ -142,10 +142,10 @@ namespace
     {
         auto write_slot = [&](std::size_t idx)
         {
-            // This scatter path is pure store-only symmetry replication: every
-            // writer computes the same integral value for a given canonical slot.
-            // We intentionally use `atomic write`, not `atomic update`, because
-            // there is no read-modify-write reduction here.
+        // This scatter path is pure store-only symmetry replication: every
+        // writer computes the same integral value for a given canonical slot.
+        // We intentionally use `atomic write`, not `atomic update`, because
+        // there is no read-modify-write reduction here.
 #ifdef USE_OPENMP
 #pragma omp atomic write
 #endif

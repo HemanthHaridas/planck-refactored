@@ -1,7 +1,7 @@
 #include "post_hf/casscf/casscf.h"
 
-#include "io/logging.h"
 #include "base/tables.h"
+#include "io/logging.h"
 #include "post_hf/casscf.h"
 #include "post_hf/casscf/aug-hessian-orbital.h"
 #include "post_hf/casscf/casscf_driver_internal.h"
@@ -25,15 +25,15 @@
 namespace
 {
 
+    using HartreeFock::Correlation::CASSCF::append_candidate_step;
+    using HartreeFock::Correlation::CASSCF::append_root_candidate_steps;
+    using HartreeFock::Correlation::CASSCF::build_weighted_root_quadratic_model_prediction;
+    using HartreeFock::Correlation::CASSCF::CandidateSelection;
+    using HartreeFock::Correlation::CASSCF::CandidateStep;
     using HartreeFock::Correlation::CASSCF::CIDeterminantSpace;
     using HartreeFock::Correlation::CASSCF::CISigmaApplier;
     using HartreeFock::Correlation::CASSCF::CISolveResult;
-    using HartreeFock::Correlation::CASSCF::CandidateSelection;
-    using HartreeFock::Correlation::CASSCF::CandidateStep;
     using HartreeFock::Correlation::CASSCF::hess_diag;
-    using HartreeFock::Correlation::CASSCF::build_weighted_root_quadratic_model_prediction;
-    using HartreeFock::Correlation::CASSCF::append_candidate_step;
-    using HartreeFock::Correlation::CASSCF::append_root_candidate_steps;
     using HartreeFock::Correlation::CASSCF::MacroDiagnostics;
     using HartreeFock::Correlation::CASSCF::McscfState;
     using HartreeFock::Correlation::CASSCF::quadratic_model_delta;
@@ -41,14 +41,14 @@ namespace
     using HartreeFock::Correlation::CASSCF::ResponseMode;
     using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
     using HartreeFock::Correlation::CASSCF::RootReference;
-    using HartreeFock::Correlation::CASSCF::RotPair;
     using HartreeFock::Correlation::CASSCF::RootResolvedCoupledStepSet;
     using HartreeFock::Correlation::CASSCF::RootResolvedGradientScreen;
     using HartreeFock::Correlation::CASSCF::RootResolvedOrbitalStepSet;
+    using HartreeFock::Correlation::CASSCF::RotPair;
     using HartreeFock::Correlation::CASSCF::SACoupledStepSolveResult;
     using HartreeFock::Correlation::CASSCF::select_active_orbitals;
-    using HartreeFock::Correlation::CASSCF::StateSpecificData;
     using HartreeFock::Correlation::CASSCF::StateAveragedCoupledRoot;
+    using HartreeFock::Correlation::CASSCF::StateSpecificData;
     using HartreeFock::Correlation::CASSCF::WeightedQuadraticModelPrediction;
     using HartreeFock::Correlation::CASSCF::WeightedRootProbeSignal;
     using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;

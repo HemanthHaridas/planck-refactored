@@ -261,8 +261,14 @@ namespace DFT
         Eigen::MatrixXd h_yz;
         Eigen::MatrixXd h_zz;
 
-        [[nodiscard]] Eigen::Index npoints() const noexcept { return h_xx.rows(); }
-        [[nodiscard]] Eigen::Index nbasis() const noexcept { return h_xx.cols(); }
+        [[nodiscard]] Eigen::Index npoints() const noexcept
+        {
+            return h_xx.rows();
+        }
+        [[nodiscard]] Eigen::Index nbasis() const noexcept
+        {
+            return h_xx.cols();
+        }
     };
 
     inline std::expected<AOGridHessian, std::string>

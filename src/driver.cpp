@@ -87,15 +87,15 @@ static void log_population_report(const HartreeFock::Calculator &calculator)
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, title + " :", "");
         const int line_width = analysis.has_spin_population ? 94 : 78;
         std::cout << std::string(line_width, '-') << "\n"
-              << std::setw(6) << std::right << "Atom"
-              << std::setw(8) << std::right << "Elem"
-              << std::setw(8) << std::right << "Z"
-              << std::setw(20) << std::right << "Population"
-              << std::setw(20) << std::right << "Charge";
+                  << std::setw(6) << std::right << "Atom"
+                  << std::setw(8) << std::right << "Elem"
+                  << std::setw(8) << std::right << "Z"
+                  << std::setw(20) << std::right << "Population"
+                  << std::setw(20) << std::right << "Charge";
         if (analysis.has_spin_population)
             std::cout << std::setw(16) << std::right << "Spin";
         std::cout << "\n"
-              << std::string(line_width, '-') << "\n";
+                  << std::string(line_width, '-') << "\n";
 
         for (const auto &atom : analysis.atoms)
         {
@@ -710,8 +710,8 @@ int main(int argc, const char *argv[])
     {
         const bool rhf_ref = (calculator._scf._scf == HartreeFock::SCFType::RHF);
         auto stab_res = rhf_ref
-            ? HartreeFock::SCF::analyze_rhf_stability(calculator, shellpairs)
-            : HartreeFock::SCF::analyze_uhf_stability(calculator, shellpairs);
+                            ? HartreeFock::SCF::analyze_rhf_stability(calculator, shellpairs)
+                            : HartreeFock::SCF::analyze_uhf_stability(calculator, shellpairs);
 
         if (!stab_res)
         {
@@ -976,9 +976,9 @@ int main(int argc, const char *argv[])
                     const std::string ccsd_label =
                         (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSD" : "CCSD";
                     const std::string ccsdt_label =
-                        (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "CCSDT"
+                        (calculator._correlation == HartreeFock::PostHF::RCCSDT)   ? "CCSDT"
                         : (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSDT"
-                        : "CCSDTQ";
+                                                                                   : "CCSDTQ";
                     HartreeFock::Logger::ccsdt_energy_summary(
                         calculator._total_energy,
                         calculator._ccsd_reference_correlation_energy,
@@ -989,14 +989,14 @@ int main(int argc, const char *argv[])
                 else
                 {
                     const std::string method_label =
-                        (calculator._correlation == HartreeFock::PostHF::RMP2)     ? "MP2"
-                        : (calculator._correlation == HartreeFock::PostHF::UMP2)   ? "MP2"
-                        : (calculator._correlation == HartreeFock::PostHF::RCCSD)  ? "RCCSD"
-                        : (calculator._correlation == HartreeFock::PostHF::UCCSD)  ? "UCCSD"
-                        : (calculator._correlation == HartreeFock::PostHF::RCCSDT) ? "RCCSDT"
-                        : (calculator._correlation == HartreeFock::PostHF::UCCSDT) ? "UCCSDT"
+                        (calculator._correlation == HartreeFock::PostHF::RMP2)      ? "MP2"
+                        : (calculator._correlation == HartreeFock::PostHF::UMP2)    ? "MP2"
+                        : (calculator._correlation == HartreeFock::PostHF::RCCSD)   ? "RCCSD"
+                        : (calculator._correlation == HartreeFock::PostHF::UCCSD)   ? "UCCSD"
+                        : (calculator._correlation == HartreeFock::PostHF::RCCSDT)  ? "RCCSDT"
+                        : (calculator._correlation == HartreeFock::PostHF::UCCSDT)  ? "UCCSDT"
                         : (calculator._correlation == HartreeFock::PostHF::RCCSDTQ) ? "RCCSDTQ"
-                                                                                   : "Correlated";
+                                                                                    : "Correlated";
                     HartreeFock::Logger::correlation_energy(
                         calculator._total_energy, calculator._correlation_energy, method_label);
                 }
@@ -1143,73 +1143,73 @@ int main(int argc, const char *argv[])
             return EXIT_FAILURE;
         }
 
-            // Store for completeness
-            calculator._hessian = freq_result->hessian;
-            calculator._frequencies = freq_result->frequencies;
-            calculator._normal_modes = freq_result->normal_modes;
-            calculator._vibrational_symmetry = freq_result->mode_symmetry;
-            calculator._zpe = freq_result->zpe;
+        // Store for completeness
+        calculator._hessian = freq_result->hessian;
+        calculator._frequencies = freq_result->frequencies;
+        calculator._normal_modes = freq_result->normal_modes;
+        calculator._vibrational_symmetry = freq_result->mode_symmetry;
+        calculator._zpe = freq_result->zpe;
 
-            if (freq_result->n_imaginary == 0)
+        if (freq_result->n_imaginary == 0)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                                         "Imaginary Follow :",
+                                         "No imaginary frequencies found — structure is a minimum; skipping optimization.");
+        }
+        else
+        {
+            // frequencies[] is sorted ascending; imaginary modes are negative and first.
+            // Scan to find the one with the largest absolute value.
+            int imag_idx = 0;
+            double max_abs = std::abs(freq_result->frequencies[0]);
+            for (int i = 1; i < freq_result->n_vib; ++i)
             {
-                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                                             "Imaginary Follow :",
-                                             "No imaginary frequencies found — structure is a minimum; skipping optimization.");
-            }
-            else
-            {
-                // frequencies[] is sorted ascending; imaginary modes are negative and first.
-                // Scan to find the one with the largest absolute value.
-                int imag_idx = 0;
-                double max_abs = std::abs(freq_result->frequencies[0]);
-                for (int i = 1; i < freq_result->n_vib; ++i)
+                if (freq_result->frequencies[i] >= 0.0)
+                    break;
+                const double a = std::abs(freq_result->frequencies[i]);
+                if (a > max_abs)
                 {
-                    if (freq_result->frequencies[i] >= 0.0)
-                        break;
-                    const double a = std::abs(freq_result->frequencies[i]);
-                    if (a > max_abs)
-                    {
-                        max_abs = a;
-                        imag_idx = i;
-                    }
+                    max_abs = a;
+                    imag_idx = i;
                 }
-
-                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                                             "Imaginary Follow :",
-                                             std::format("{} imaginary mode(s); following mode {} ({:.2f}i cm\u207b\u00b9), step {:.4f} Bohr",
-                                                         freq_result->n_imaginary, imag_idx + 1,
-                                                         -freq_result->frequencies[imag_idx],
-                                                         calculator._imag_follow_step));
-
-                // Displace _standard (Bohr) along the chosen mode column.
-                // normal_modes is 3N×n_vib, unit-norm Cartesian columns, mass-unweighted.
-                const std::size_t N_if = calculator._molecule.natoms;
-                const double stp = calculator._imag_follow_step;
-                for (std::size_t a = 0; a < N_if; ++a)
-                    for (int d = 0; d < 3; ++d)
-                        calculator._molecule._standard(a, d) +=
-                            stp * freq_result->normal_modes(static_cast<int>(a) * 3 + d, imag_idx);
-
-                // Keep all three coordinate frames in sync
-                calculator._molecule._coordinates = calculator._molecule._standard;
-                calculator._molecule.coordinates = calculator._molecule._standard / ANGSTROM_TO_BOHR;
-                calculator._molecule.set_standard_from_bohr(calculator._molecule._standard);
-
-                // Log displaced geometry
-                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                                             "Displaced Geometry (Angstrom) :", "");
-                for (std::size_t a = 0; a < N_if; ++a)
-                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                                                 std::format("  Atom {:3d}:  {:14d}  {:14.8f}  {:14.8f}  {:14.8f}",
-                                                             static_cast<int>(a + 1),
-                                                             static_cast<int>(calculator._molecule.atomic_numbers[a]),
-                                                             calculator._molecule.coordinates(a, 0),
-                                                             calculator._molecule.coordinates(a, 1),
-                                                             calculator._molecule.coordinates(a, 2)));
-                HartreeFock::Logger::blank();
-
-                imag_follow_armed = true;
             }
+
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                                         "Imaginary Follow :",
+                                         std::format("{} imaginary mode(s); following mode {} ({:.2f}i cm\u207b\u00b9), step {:.4f} Bohr",
+                                                     freq_result->n_imaginary, imag_idx + 1,
+                                                     -freq_result->frequencies[imag_idx],
+                                                     calculator._imag_follow_step));
+
+            // Displace _standard (Bohr) along the chosen mode column.
+            // normal_modes is 3N×n_vib, unit-norm Cartesian columns, mass-unweighted.
+            const std::size_t N_if = calculator._molecule.natoms;
+            const double stp = calculator._imag_follow_step;
+            for (std::size_t a = 0; a < N_if; ++a)
+                for (int d = 0; d < 3; ++d)
+                    calculator._molecule._standard(a, d) +=
+                        stp * freq_result->normal_modes(static_cast<int>(a) * 3 + d, imag_idx);
+
+            // Keep all three coordinate frames in sync
+            calculator._molecule._coordinates = calculator._molecule._standard;
+            calculator._molecule.coordinates = calculator._molecule._standard / ANGSTROM_TO_BOHR;
+            calculator._molecule.set_standard_from_bohr(calculator._molecule._standard);
+
+            // Log displaced geometry
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                                         "Displaced Geometry (Angstrom) :", "");
+            for (std::size_t a = 0; a < N_if; ++a)
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                                             std::format("  Atom {:3d}:  {:14d}  {:14.8f}  {:14.8f}  {:14.8f}",
+                                                         static_cast<int>(a + 1),
+                                                         static_cast<int>(calculator._molecule.atomic_numbers[a]),
+                                                         calculator._molecule.coordinates(a, 0),
+                                                         calculator._molecule.coordinates(a, 1),
+                                                         calculator._molecule.coordinates(a, 2)));
+            HartreeFock::Logger::blank();
+
+            imag_follow_armed = true;
+        }
     }
 
     // ── Geometry optimization ─────────────────────────────────────────────────
@@ -1475,100 +1475,100 @@ int main(int argc, const char *argv[])
             return EXIT_FAILURE;
         }
 
-            // Store results on the calculator
-            calculator._hessian = freq_result->hessian;
-            calculator._frequencies = freq_result->frequencies;
-            calculator._normal_modes = freq_result->normal_modes;
-            calculator._vibrational_symmetry = freq_result->mode_symmetry;
-            calculator._zpe = freq_result->zpe;
+        // Store results on the calculator
+        calculator._hessian = freq_result->hessian;
+        calculator._frequencies = freq_result->frequencies;
+        calculator._normal_modes = freq_result->normal_modes;
+        calculator._vibrational_symmetry = freq_result->mode_symmetry;
+        calculator._zpe = freq_result->zpe;
 
-            // ── Print frequency table ─────────────────────────────────────────
-            HartreeFock::Logger::blank();
-            const int n_vib = freq_result->n_vib;
-            const int n_tr = static_cast<int>(calculator._molecule.natoms * 3) - n_vib;
-            const std::string geo_label = freq_result->is_linear ? "linear" : "non-linear";
+        // ── Print frequency table ─────────────────────────────────────────
+        HartreeFock::Logger::blank();
+        const int n_vib = freq_result->n_vib;
+        const int n_tr = static_cast<int>(calculator._molecule.natoms * 3) - n_vib;
+        const std::string geo_label = freq_result->is_linear ? "linear" : "non-linear";
 
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                                         "Vibrational Frequencies :", "");
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                                         std::format("  Molecule: {} ({} T+R modes removed, {} vibrational modes)",
-                                                     geo_label, n_tr, n_vib));
-            const bool have_mode_symmetry =
-                freq_result->mode_symmetry.size() == static_cast<std::size_t>(n_vib) &&
-                !freq_result->mode_symmetry.empty();
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                                         have_mode_symmetry
-                                             ? "  ─────────────────────────────────────────────────────"
-                                             : "  ──────────────────────────────────────────");
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                                         have_mode_symmetry
-                                             ? "    Mode    Symmetry    Frequency (cm⁻¹)"
-                                             : "    Mode    Frequency (cm⁻¹)");
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                                         have_mode_symmetry
-                                             ? "  ─────────────────────────────────────────────────────"
-                                             : "  ────────────────────────────────────────────");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                                     "Vibrational Frequencies :", "");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                                     std::format("  Molecule: {} ({} T+R modes removed, {} vibrational modes)",
+                                                 geo_label, n_tr, n_vib));
+        const bool have_mode_symmetry =
+            freq_result->mode_symmetry.size() == static_cast<std::size_t>(n_vib) &&
+            !freq_result->mode_symmetry.empty();
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                                     have_mode_symmetry
+                                         ? "  ─────────────────────────────────────────────────────"
+                                         : "  ──────────────────────────────────────────");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                                     have_mode_symmetry
+                                         ? "    Mode    Symmetry    Frequency (cm⁻¹)"
+                                         : "    Mode    Frequency (cm⁻¹)");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                                     have_mode_symmetry
+                                         ? "  ─────────────────────────────────────────────────────"
+                                         : "  ────────────────────────────────────────────");
 
-            for (int i = 0; i < n_vib; ++i)
-            {
-                const double freq = freq_result->frequencies[i];
-                if (freq < 0.0)
-                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                                                 have_mode_symmetry
-                                                     ? std::format("  {:6d}  {:10s}  {:14.2f}i  (imaginary)",
-                                                                   i + 1,
-                                                                   freq_result->mode_symmetry[static_cast<std::size_t>(i)],
-                                                                   -freq)
-                                                     : std::format("  {:6d}  {:14.2f}i  (imaginary)", i + 1, -freq));
-                else
-                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                                                 have_mode_symmetry
-                                                     ? std::format("  {:6d}  {:10s}  {:14.2f}",
-                                                                   i + 1,
-                                                                   freq_result->mode_symmetry[static_cast<std::size_t>(i)],
-                                                                   freq)
-                                                     : std::format("  {:6d}  {:14.2f}", i + 1, freq));
-            }
-
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                                         have_mode_symmetry
-                                             ? "  ─────────────────────────────────────────────────────"
-                                             : "  ────────────────────────────────────────────");
-
-            if (freq_result->n_imaginary > 0)
-                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                                             "Frequency :",
-                                             std::format("{} imaginary frequency(ies) — structure may be a saddle point",
-                                                         freq_result->n_imaginary));
-
-            const double zpe_kcal = freq_result->zpe * 627.509474;
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                                         "Zero-point energy :",
-                                         std::format("{:.6f} Eh  ({:.2f} kcal/mol)",
-                                                     freq_result->zpe, zpe_kcal));
-
-            // ── Normal mode displacements (mass-unweighted, Cartesian-normalised) ──
-            HartreeFock::Logger::blank();
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                                             "Normal Mode Displacements :", "");
-            for (int i = 0; i < n_vib; ++i)
-            {
-                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
-                                             std::format("Normal Mode {:4d} :", i + 1),
+        for (int i = 0; i < n_vib; ++i)
+        {
+            const double freq = freq_result->frequencies[i];
+            if (freq < 0.0)
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
                                              have_mode_symmetry
-                                                 ? freq_result->mode_symmetry[static_cast<std::size_t>(i)]
-                                                 : std::string{});
-                for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
-                {
-                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
-                                                 std::format("  {:4d}   {:12.8f}   {:12.8f}   {:12.8f}",
-                                                             static_cast<int>(a + 1),
-                                                             freq_result->normal_modes(static_cast<int>(a) * 3 + 0, i),
-                                                             freq_result->normal_modes(static_cast<int>(a) * 3 + 1, i),
-                                                             freq_result->normal_modes(static_cast<int>(a) * 3 + 2, i)));
-                }
+                                                 ? std::format("  {:6d}  {:10s}  {:14.2f}i  (imaginary)",
+                                                               i + 1,
+                                                               freq_result->mode_symmetry[static_cast<std::size_t>(i)],
+                                                               -freq)
+                                                 : std::format("  {:6d}  {:14.2f}i  (imaginary)", i + 1, -freq));
+            else
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                                             have_mode_symmetry
+                                                 ? std::format("  {:6d}  {:10s}  {:14.2f}",
+                                                               i + 1,
+                                                               freq_result->mode_symmetry[static_cast<std::size_t>(i)],
+                                                               freq)
+                                                 : std::format("  {:6d}  {:14.2f}", i + 1, freq));
+        }
+
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                                     have_mode_symmetry
+                                         ? "  ─────────────────────────────────────────────────────"
+                                         : "  ────────────────────────────────────────────");
+
+        if (freq_result->n_imaginary > 0)
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                                         "Frequency :",
+                                         std::format("{} imaginary frequency(ies) — structure may be a saddle point",
+                                                     freq_result->n_imaginary));
+
+        const double zpe_kcal = freq_result->zpe * 627.509474;
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                                     "Zero-point energy :",
+                                     std::format("{:.6f} Eh  ({:.2f} kcal/mol)",
+                                                 freq_result->zpe, zpe_kcal));
+
+        // ── Normal mode displacements (mass-unweighted, Cartesian-normalised) ──
+        HartreeFock::Logger::blank();
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                                     "Normal Mode Displacements :", "");
+        for (int i = 0; i < n_vib; ++i)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
+                                         std::format("Normal Mode {:4d} :", i + 1),
+                                         have_mode_symmetry
+                                             ? freq_result->mode_symmetry[static_cast<std::size_t>(i)]
+                                             : std::string{});
+            for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                                             std::format("  {:4d}   {:12.8f}   {:12.8f}   {:12.8f}",
+                                                         static_cast<int>(a + 1),
+                                                         freq_result->normal_modes(static_cast<int>(a) * 3 + 0, i),
+                                                         freq_result->normal_modes(static_cast<int>(a) * 3 + 1, i),
+                                                         freq_result->normal_modes(static_cast<int>(a) * 3 + 2, i)));
             }
-            HartreeFock::Logger::blank();
+        }
+        HartreeFock::Logger::blank();
     }
 
     const auto program_end = SystemClock::now();

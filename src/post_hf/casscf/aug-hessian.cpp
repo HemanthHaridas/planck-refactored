@@ -19,18 +19,18 @@ namespace HartreeFock::Correlation::CASSCF
         // exceeds v0_min (or eigenpair 0 if none qualifies).
         struct SubspaceMode
         {
-            double          eigenvalue   = 0.0;
+            double eigenvalue = 0.0;
             Eigen::VectorXd eigenvector;
-            double          v0           = 0.0;
-            bool            valid        = false;
-            int             chosen_index = -1;
+            double v0 = 0.0;
+            bool valid = false;
+            int chosen_index = -1;
         };
 
         SubspaceMode regular_step(
             const Eigen::MatrixXd &heff,
             const Eigen::MatrixXd &ovlp,
-            double                 v0_min,
-            double                 lindep)
+            double v0_min,
+            double lindep)
         {
             SubspaceMode mode;
             const Eigen::Index n = heff.rows();
@@ -47,24 +47,24 @@ namespace HartreeFock::Correlation::CASSCF
                 return mode;
 
             Eigen::VectorXd seigs = overlap_eig.eigenvalues();
-            Eigen::MatrixXd U     = overlap_eig.eigenvectors();
-            const double s_min    = seigs.minCoeff();
+            Eigen::MatrixXd U = overlap_eig.eigenvectors();
+            const double s_min = seigs.minCoeff();
             if (!(std::isfinite(s_min)) || s_min < lindep)
                 return mode;
 
             // Whiten the bordered system into a standard symmetric eigenproblem:
             //   X = U diag(1/sqrt(s)),   H_white = X^T H X.
             Eigen::VectorXd inv_sqrt = seigs.array().rsqrt();
-            Eigen::MatrixXd X        = U * inv_sqrt.asDiagonal();
-            Eigen::MatrixXd H_white  = X.transpose() * H * X;
-            H_white                  = 0.5 * (H_white + H_white.transpose());
+            Eigen::MatrixXd X = U * inv_sqrt.asDiagonal();
+            Eigen::MatrixXd H_white = X.transpose() * H * X;
+            H_white = 0.5 * (H_white + H_white.transpose());
 
             Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(H_white);
             if (eig.info() != Eigen::Success)
                 return mode;
 
-            const Eigen::VectorXd &w  = eig.eigenvalues();
-            const Eigen::MatrixXd  Vg = X * eig.eigenvectors();
+            const Eigen::VectorXd &w = eig.eigenvalues();
+            const Eigen::MatrixXd Vg = X * eig.eigenvectors();
 
             // Pick the smallest eigenvalue with |v[0]| > v0_min. PySCF's
             // ciah._regular_step (pyscf/soscf/ciah.py:295) defends against
@@ -82,10 +82,10 @@ namespace HartreeFock::Correlation::CASSCF
             if (chosen < 0)
                 chosen = 0;
 
-            mode.eigenvalue   = w(chosen);
-            mode.eigenvector  = Vg.col(chosen);
-            mode.v0           = mode.eigenvector(0);
-            mode.valid        = true;
+            mode.eigenvalue = w(chosen);
+            mode.eigenvector = Vg.col(chosen);
+            mode.v0 = mode.eigenvector(0);
+            mode.valid = true;
             mode.chosen_index = chosen;
             return mode;
         }
@@ -95,9 +95,9 @@ namespace HartreeFock::Correlation::CASSCF
         // residual; caller should reject the new vector if the norm is below
         // the linear-dependence threshold.
         double orthonormalize_against(
-            Eigen::VectorXd       &v,
+            Eigen::VectorXd &v,
             const Eigen::MatrixXd &V,
-            double                 lindep)
+            double lindep)
         {
             for (Eigen::Index k = 0; k < V.cols(); ++k)
             {
@@ -113,11 +113,11 @@ namespace HartreeFock::Correlation::CASSCF
     } // namespace
 
     AugHessianResult solve_augmented_hessian(
-        const AugHessianHopFn     &h_op,
-        const AugHessianGradFn    &g_op,
+        const AugHessianHopFn &h_op,
+        const AugHessianGradFn &g_op,
         const AugHessianPrecondFn &precond,
-        const Eigen::VectorXd     &x0,
-        const AugHessianOptions   &opts)
+        const Eigen::VectorXd &x0,
+        const AugHessianOptions &opts)
     {
         AugHessianResult result;
         result.x = Eigen::VectorXd::Zero(x0.size());
@@ -135,17 +135,18 @@ namespace HartreeFock::Correlation::CASSCF
             return result;
         }
 
-        const int    max_cycle    = std::max(1, opts.ah_max_cycle);
-        const int    max_subspace = std::max(1, std::min(opts.max_subspace, max_cycle));
-        const double lindep       = opts.ah_lindep;
-        const double v0_min       = opts.v0_min;
+        const int max_cycle = std::max(1, opts.ah_max_cycle);
+        const int max_subspace = std::max(1, std::min(opts.max_subspace, max_cycle));
+        const double lindep = opts.ah_lindep;
+        const double v0_min = opts.v0_min;
 
-        auto seed_initial_vector = [&]() -> Eigen::VectorXd {
+        auto seed_initial_vector = [&]() -> Eigen::VectorXd
+        {
             // Seed with the supplied trial vector; if it is empty/degenerate
             // fall back to the steepest-descent direction -g (the natural
             // first Krylov vector of the bordered system).
             Eigen::VectorXd seed = x0;
-            const double norm    = seed.norm();
+            const double norm = seed.norm();
             if (!(std::isfinite(norm)) || norm < lindep)
                 seed = -g;
             const double final_norm = seed.norm();
@@ -158,18 +159,18 @@ namespace HartreeFock::Correlation::CASSCF
         if (seed.size() != x0.size() || seed.norm() == 0.0)
             return result;
 
-        Eigen::MatrixXd V (x0.size(), 1);
+        Eigen::MatrixXd V(x0.size(), 1);
         Eigen::MatrixXd HV(x0.size(), 1);
-        V.col(0)  = seed;
+        V.col(0) = seed;
         HV.col(0) = h_op(seed);
         if (!HV.col(0).allFinite())
             return result;
 
         double prev_eigenvalue = std::numeric_limits<double>::infinity();
         Eigen::VectorXd best_x = Eigen::VectorXd::Zero(x0.size());
-        double          best_residual = std::numeric_limits<double>::infinity();
-        double          best_eigenvalue = 0.0;
-        double          best_v0 = 0.0;
+        double best_residual = std::numeric_limits<double>::infinity();
+        double best_eigenvalue = 0.0;
+        double best_v0 = 0.0;
 
         for (int iter = 1; iter <= max_cycle; ++iter)
         {
@@ -184,8 +185,8 @@ namespace HartreeFock::Correlation::CASSCF
             for (int j = 0; j < m; ++j)
             {
                 const double gxj = g.dot(V.col(j));
-                heff(0, j + 1)   = gxj;
-                heff(j + 1, 0)   = gxj;
+                heff(0, j + 1) = gxj;
+                heff(j + 1, 0) = gxj;
                 for (int i = 0; i < m; ++i)
                 {
                     heff(i + 1, j + 1) = V.col(i).dot(HV.col(j));
@@ -207,13 +208,13 @@ namespace HartreeFock::Correlation::CASSCF
             for (int j = 0; j < m; ++j)
                 coeffs(j) = mode.eigenvector(j + 1) / safe_v0;
 
-            Eigen::VectorXd x_trial   = V * coeffs;
-            Eigen::VectorXd Hx_trial  = HV * coeffs;
+            Eigen::VectorXd x_trial = V * coeffs;
+            Eigen::VectorXd Hx_trial = HV * coeffs;
 
             // Davidson residual for the bordered system:
             //   r = H x + g - w x        (the leading 1 in the augmented
             // vector contributes g; we already factored 1/v0 into x).
-            const double w           = mode.eigenvalue;
+            const double w = mode.eigenvalue;
             Eigen::VectorXd residual = Hx_trial + g - w * x_trial;
             const double residual_norm = residual.norm();
 
@@ -221,10 +222,10 @@ namespace HartreeFock::Correlation::CASSCF
             // micro-cycle stalls or breaks down.
             if (std::isfinite(residual_norm) && residual_norm < best_residual)
             {
-                best_residual    = residual_norm;
-                best_x           = x_trial;
-                best_eigenvalue  = w;
-                best_v0          = mode.v0;
+                best_residual = residual_norm;
+                best_x = x_trial;
+                best_eigenvalue = w;
+                best_v0 = mode.v0;
             }
 
             result.iterations = iter;
@@ -234,9 +235,9 @@ namespace HartreeFock::Correlation::CASSCF
             if (residual_norm < opts.ah_conv_tol || eigenvalue_change < opts.ah_conv_tol)
             {
                 result.converged = true;
-                result.x         = x_trial;
+                result.x = x_trial;
                 result.eigenvalue = w;
-                result.v0         = mode.v0;
+                result.v0 = mode.v0;
                 result.residual_norm = residual_norm;
                 result.orbital_only_fallback = false;
                 return result;
@@ -247,9 +248,9 @@ namespace HartreeFock::Correlation::CASSCF
             if (iter >= opts.ah_start_cycle && residual_norm < opts.ah_start_tol)
             {
                 result.converged = true;
-                result.x         = x_trial;
+                result.x = x_trial;
                 result.eigenvalue = w;
-                result.v0         = mode.v0;
+                result.v0 = mode.v0;
                 result.residual_norm = residual_norm;
                 result.orbital_only_fallback = false;
                 return result;
@@ -261,8 +262,8 @@ namespace HartreeFock::Correlation::CASSCF
             // Identity preconditioner is used when the caller supplied none,
             // matching the safest fallback in ciah.davidson_cc.
             Eigen::VectorXd next = precond
-                ? precond(residual, w - opts.ah_level_shift)
-                : residual;
+                                       ? precond(residual, w - opts.ah_level_shift)
+                                       : residual;
             if (!next.allFinite())
                 break;
 
@@ -279,10 +280,11 @@ namespace HartreeFock::Correlation::CASSCF
             // newest correction so we do not lose progress already made.
             if (m >= max_subspace)
             {
-                Eigen::MatrixXd V_new (x0.size(), 0);
+                Eigen::MatrixXd V_new(x0.size(), 0);
                 Eigen::MatrixXd HV_new(x0.size(), 0);
 
-                auto append_restart = [&](Eigen::VectorXd v) {
+                auto append_restart = [&](Eigen::VectorXd v)
+                {
                     const double v_norm = v.norm();
                     if (!(std::isfinite(v_norm)) || v_norm < lindep)
                         return;
@@ -291,7 +293,7 @@ namespace HartreeFock::Correlation::CASSCF
                         return;
                     V_new.conservativeResize(Eigen::NoChange, V_new.cols() + 1);
                     HV_new.conservativeResize(Eigen::NoChange, HV_new.cols() + 1);
-                    V_new.col(V_new.cols() - 1)   = v;
+                    V_new.col(V_new.cols() - 1) = v;
                     HV_new.col(HV_new.cols() - 1) = h_op(v);
                 };
 
@@ -299,14 +301,14 @@ namespace HartreeFock::Correlation::CASSCF
                 append_restart(next);
                 if (V_new.cols() == 0)
                     break;
-                V  = std::move(V_new);
+                V = std::move(V_new);
                 HV = std::move(HV_new);
                 continue;
             }
 
-            V.conservativeResize (Eigen::NoChange, m + 1);
+            V.conservativeResize(Eigen::NoChange, m + 1);
             HV.conservativeResize(Eigen::NoChange, m + 1);
-            V.col(m)  = next;
+            V.col(m) = next;
             HV.col(m) = h_op(next);
             if (!HV.col(m).allFinite())
                 break;
@@ -314,9 +316,9 @@ namespace HartreeFock::Correlation::CASSCF
 
         // Ran out of iterations (or broke down). Return the best iterate we
         // saw; the caller can decide whether to accept it or fall back.
-        result.x             = best_x;
-        result.eigenvalue    = best_eigenvalue;
-        result.v0            = best_v0;
+        result.x = best_x;
+        result.eigenvalue = best_eigenvalue;
+        result.v0 = best_v0;
         result.residual_norm = best_residual;
 
         // Orbital-only fallback: if the chosen AH eigenvalue dropped below

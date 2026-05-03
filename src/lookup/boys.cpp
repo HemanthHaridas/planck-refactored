@@ -1,6 +1,6 @@
 #include "boys.h"
-#include <cassert>
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <limits>
 

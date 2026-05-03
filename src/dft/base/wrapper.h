@@ -2,13 +2,13 @@
 #define DFT_LIBXC_WRAPPER_H
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <cstring>
 #include <expected>
-#include <system_error>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 

@@ -61,7 +61,7 @@ namespace
 
         return points;
     }
-}
+} // namespace
 
 // One-shot cavity + density-independent precomputation. After this returns,
 // PCMState contains everything the per-iteration evaluator needs.

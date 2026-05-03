@@ -1,7 +1,7 @@
 #include "integral_symmetry.h"
 
-#include <cassert>
 #include <array>
+#include <cassert>
 #include <map>
 #include <stdexcept>
 #include <tuple>

@@ -26,7 +26,10 @@ namespace HartreeFock::SCF
         }
 
         // Flatten the (a,i) compound index of the response space.
-        int flat_ai(int a, int i, int n_occ) { return a * n_occ + i; }
+        int flat_ai(int a, int i, int n_occ)
+        {
+            return a * n_occ + i;
+        }
 
         // Total number of electrons minus charge.
         int total_electrons(const HartreeFock::Calculator &calc)
@@ -72,8 +75,8 @@ namespace HartreeFock::SCF
             RHFChannel channel,
             const Eigen::VectorXd &eps,
             int n_occ, int n_virt,
-            const std::vector<double> &mo_ai_bj,  // [n_virt × n_occ × n_virt × n_occ]
-            const std::vector<double> &mo_ab_ij)  // [n_virt × n_virt × n_occ × n_occ]
+            const std::vector<double> &mo_ai_bj, // [n_virt × n_occ × n_virt × n_occ]
+            const std::vector<double> &mo_ab_ij) // [n_virt × n_virt × n_occ × n_occ]
         {
             const int nov = n_virt * n_occ;
             Eigen::MatrixXd M = Eigen::MatrixXd::Zero(nov, nov);
@@ -178,7 +181,7 @@ namespace HartreeFock::SCF
         //
         // This is exact and unitary to machine precision regardless of step size.
         Eigen::MatrixXd build_rotation_matrix(
-            const Eigen::MatrixXd &kappa_vo,  // [n_virt × n_occ]
+            const Eigen::MatrixXd &kappa_vo, // [n_virt × n_occ]
             int n_occ, int n_virt)
         {
             const int nb = n_occ + n_virt;
@@ -189,8 +192,8 @@ namespace HartreeFock::SCF
 
             Eigen::JacobiSVD<Eigen::MatrixXd> svd(
                 kappa_vo, Eigen::ComputeThinU | Eigen::ComputeThinV);
-            const Eigen::MatrixXd &Ur = svd.matrixU();   // [n_virt × r]
-            const Eigen::MatrixXd &Vr = svd.matrixV();   // [n_occ × r]
+            const Eigen::MatrixXd &Ur = svd.matrixU(); // [n_virt × r]
+            const Eigen::MatrixXd &Vr = svd.matrixV(); // [n_occ × r]
             const Eigen::VectorXd sigma = svd.singularValues();
             const int r = static_cast<int>(sigma.size());
 
@@ -573,8 +576,8 @@ namespace HartreeFock::SCF
             //   β_HOMO_new =  cos · β_HOMO + sin · β_LUMO
             //   β_LUMO_new = -sin · β_HOMO + cos · β_LUMO
             const int homo_idx = n_alpha - 1;
-            const int lumo_idx = n_alpha;  // first virtual
-            const double mix_angle = pi_over_4 / 2.0;  // π/8
+            const int lumo_idx = n_alpha;             // first virtual
+            const double mix_angle = pi_over_4 / 2.0; // π/8
             const double cs = std::cos(mix_angle);
             const double sn = std::sin(mix_angle);
 
@@ -640,7 +643,7 @@ namespace HartreeFock::SCF
             calculator._info._scf.alpha.mo_coefficients.leftCols(n_alpha) *
             calculator._info._scf.alpha.mo_coefficients.leftCols(n_alpha).transpose();
         if (!is_uhf)
-            calculator._info._scf.alpha.density *= 2.0;  // RHF closed-shell density
+            calculator._info._scf.alpha.density *= 2.0; // RHF closed-shell density
 
         if (is_uhf && channel.lowest_mode_beta.size() > 0)
         {

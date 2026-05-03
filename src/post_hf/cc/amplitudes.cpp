@@ -14,16 +14,16 @@ namespace HartreeFock::Correlation::CC
         {
             switch (excitation_rank)
             {
-                case 1:
-                    return make_tensor_view(t1);
-                case 2:
-                    return make_tensor_view(t2);
-                case 3:
-                    if (t3 != nullptr && t3->size() > 0)
-                        return make_tensor_view(*t3);
-                    break;
-                default:
-                    break;
+            case 1:
+                return make_tensor_view(t1);
+            case 2:
+                return make_tensor_view(t2);
+            case 3:
+                if (t3 != nullptr && t3->size() > 0)
+                    return make_tensor_view(*t3);
+                break;
+            default:
+                break;
             }
             return std::unexpected("Requested excitation rank is not available in this tensor pack");
         }
@@ -36,16 +36,16 @@ namespace HartreeFock::Correlation::CC
         {
             switch (excitation_rank)
             {
-                case 1:
-                    return make_tensor_view(t1);
-                case 2:
-                    return make_tensor_view(t2);
-                case 3:
-                    if (t3 != nullptr && t3->size() > 0)
-                        return make_tensor_view(*t3);
-                    break;
-                default:
-                    break;
+            case 1:
+                return make_tensor_view(t1);
+            case 2:
+                return make_tensor_view(t2);
+            case 3:
+                if (t3 != nullptr && t3->size() > 0)
+                    return make_tensor_view(*t3);
+                break;
+            default:
+                break;
             }
             return std::unexpected("Requested excitation rank is not available in this tensor pack");
         }

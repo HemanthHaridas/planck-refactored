@@ -1,8 +1,8 @@
 #ifndef HF_LOGGING_H
 #define HF_LOGGING_H
 
-#include <iomanip>
 #include <format>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -60,10 +60,10 @@ namespace HartreeFock
             std::ostream &out_stream =
                 (level == Info || level == Error) ? std::cout : std::cerr;
 
-            const char *prefix = (level == Debug)   ? "[DBG] "
-                                 : (level == Info)  ? "[INF] "
+            const char *prefix = (level == Debug)     ? "[DBG] "
+                                 : (level == Info)    ? "[INF] "
                                  : (level == Warning) ? "[WRN] "
-                                                       : "[ERR] ";
+                                                      : "[ERR] ";
 
             out_stream << prefix << std::setw(30) << std::left << label;
 

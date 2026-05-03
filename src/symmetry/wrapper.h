@@ -60,7 +60,9 @@ namespace HartreeFock
             }
 
         private:
-            explicit SymmetryContext(msym_context ctx) noexcept : _ctx(ctx) {}
+            explicit SymmetryContext(msym_context ctx) noexcept : _ctx(ctx)
+            {
+            }
 
             msym_context _ctx = nullptr;
         };
@@ -68,7 +70,9 @@ namespace HartreeFock
         class SymmetryElements
         {
         public:
-            explicit SymmetryElements(size_t n_atoms) : elems_(n_atoms) {}
+            explicit SymmetryElements(size_t n_atoms) : elems_(n_atoms)
+            {
+            }
 
             // Non-copyable
             SymmetryElements(const SymmetryElements &) = delete;
