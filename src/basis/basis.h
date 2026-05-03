@@ -13,7 +13,7 @@ namespace HartreeFock
     namespace BasisFunctions
     {
         std::expected<HartreeFock::ShellType, std::string> _map_shell_to_L(const std::string &label); // Map shell label to angular momentum
-        std::vector<Eigen::Vector3i> _cartesian_shell_order(unsigned int L); // Generator for angular momentum tuples
+        std::vector<Eigen::Vector3i> _cartesian_shell_order(unsigned int L);                          // Generator for angular momentum tuples
 
         // Primtive normalizations
         Eigen::VectorXd primitive_normalization(unsigned int L, const Eigen::VectorXd &exponents);

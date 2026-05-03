@@ -383,10 +383,7 @@ namespace DFT::Gradient
             {
                 const double vs = xc.vsigma(ip, 0);
                 const Eigen::Vector3d coeff =
-                    2.0 * vs * Eigen::Vector3d(
-                                   xc.density.total.grad_x(ip),
-                                   xc.density.total.grad_y(ip),
-                                   xc.density.total.grad_z(ip));
+                    2.0 * vs * Eigen::Vector3d(xc.density.total.grad_x(ip), xc.density.total.grad_y(ip), xc.density.total.grad_z(ip));
                 const double wv0 = w * vrho * 0.5;
                 const double wv1 = w * coeff.x();
                 const double wv2 = w * coeff.y();

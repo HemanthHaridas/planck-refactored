@@ -16,8 +16,8 @@
 // Each row of the returned matrix is [x, y, z, w].
 
 #include <Eigen/Dense>
-#include <cassert>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstdlib>
 #include <expected>

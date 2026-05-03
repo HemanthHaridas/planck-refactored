@@ -26,43 +26,43 @@ namespace HartreeFock::Correlation::CASSCF
     // orbital blocks. Symmetry-forbidden pairs are zeroed in place so the
     // packed vector contains only physically variable rotations.
     Eigen::VectorXd pack_rotation_matrix(
-        const Eigen::MatrixXd       &kappa,
-        const std::vector<RotPair>  &pairs,
-        const std::vector<int>      &mo_irreps,
-        bool                         use_sym);
+        const Eigen::MatrixXd &kappa,
+        const std::vector<RotPair> &pairs,
+        const std::vector<int> &mo_irreps,
+        bool use_sym);
 
     // Inverse of pack_rotation_matrix: scatter a flat pair vector into the
     // antisymmetric (nbasis x nbasis) representation expected by
     // delta_g_sa_action and apply_orbital_rotation.
     Eigen::MatrixXd unpack_rotation_vector(
-        const Eigen::VectorXd       &x,
-        const std::vector<RotPair>  &pairs,
-        int                          nbasis);
+        const Eigen::VectorXd &x,
+        const std::vector<RotPair> &pairs,
+        int nbasis);
 
     // Build a Hessian-vector callback that wraps delta_g_sa_action. The
     // returned closure captures every input by reference, so the caller is
     // responsible for keeping F_I_mo / F_A_mo / context / pairs / mo_irreps
     // alive for the entire CIAH solve.
     AugHessianHopFn make_orbital_hessian_action(
-        const OrbitalHessianContext  *context,
-        const Eigen::MatrixXd        &F_I_mo,
-        const Eigen::MatrixXd        &F_A_mo,
-        int                           n_core,
-        int                           n_act,
-        int                           n_virt,
-        const std::vector<RotPair>   &pairs,
-        const std::vector<int>       &mo_irreps,
-        bool                          use_sym);
+        const OrbitalHessianContext *context,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt,
+        const std::vector<RotPair> &pairs,
+        const std::vector<int> &mo_irreps,
+        bool use_sym);
 
     // Build a gradient callback that returns the packed (signed) g vector
     // from a fixed orbital gradient matrix. The closure takes a copy of
     // g_orb so the caller can free the source matrix without invalidating
     // the AH solver.
     AugHessianGradFn make_orbital_gradient(
-        const Eigen::MatrixXd        &g_orb,
-        const std::vector<RotPair>   &pairs,
-        const std::vector<int>       &mo_irreps,
-        bool                          use_sym);
+        const Eigen::MatrixXd &g_orb,
+        const std::vector<RotPair> &pairs,
+        const std::vector<int> &mo_irreps,
+        bool use_sym);
 
     // Build the diagonal Hessian preconditioner used inside CIAH Davidson.
     // For each pair (p, q) the denominator is (h_pp_qq + level_shift) - e
@@ -70,13 +70,13 @@ namespace HartreeFock::Correlation::CASSCF
     // protects against tiny denominators in the same way the existing
     // diagonal augmented_hessian_step does.
     AugHessianPrecondFn make_orbital_preconditioner(
-        const Eigen::MatrixXd        &F_I_mo,
-        const Eigen::MatrixXd        &F_A_mo,
-        const std::vector<RotPair>   &pairs,
-        const std::vector<int>       &mo_irreps,
-        bool                          use_sym,
-        double                        level_shift,
-        double                        denom_floor = 1e-4);
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        const std::vector<RotPair> &pairs,
+        const std::vector<int> &mo_irreps,
+        bool use_sym,
+        double level_shift,
+        double denom_floor = 1e-4);
 
     // Top-level entry point. Builds the three callbacks, runs the CIAH
     // Davidson, and returns the orbital step as an antisymmetric matrix
@@ -85,23 +85,23 @@ namespace HartreeFock::Correlation::CASSCF
     // whether to accept the step.
     struct OrbitalAugHessianStep
     {
-        Eigen::MatrixXd  kappa;
+        Eigen::MatrixXd kappa;
         AugHessianResult ah;
     };
 
     OrbitalAugHessianStep solve_orbital_augmented_hessian_step(
-        const Eigen::MatrixXd        &g_orb,
-        const Eigen::MatrixXd        &F_I_mo,
-        const Eigen::MatrixXd        &F_A_mo,
-        const OrbitalHessianContext  *context,
-        int                           n_core,
-        int                           n_act,
-        int                           n_virt,
-        double                        level_shift,
-        double                        max_rot,
-        const std::vector<int>       &mo_irreps,
-        bool                          use_sym,
-        const AugHessianOptions      &opts = AugHessianOptions{});
+        const Eigen::MatrixXd &g_orb,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        const OrbitalHessianContext *context,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        double max_rot,
+        const std::vector<int> &mo_irreps,
+        bool use_sym,
+        const AugHessianOptions &opts = AugHessianOptions{});
 
 } // namespace HartreeFock::Correlation::CASSCF
 

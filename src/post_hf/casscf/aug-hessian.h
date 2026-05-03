@@ -22,9 +22,9 @@ namespace HartreeFock::Correlation::CASSCF
     // The callbacks give the caller full control over how the gradient and
     // Hessian-vector product are computed without coupling this solver to
     // the CASSCF data structures.
-    using AugHessianHopFn      = std::function<Eigen::VectorXd(const Eigen::VectorXd &)>;
-    using AugHessianGradFn     = std::function<Eigen::VectorXd()>;
-    using AugHessianPrecondFn  = std::function<Eigen::VectorXd(const Eigen::VectorXd &, double)>;
+    using AugHessianHopFn = std::function<Eigen::VectorXd(const Eigen::VectorXd &)>;
+    using AugHessianGradFn = std::function<Eigen::VectorXd()>;
+    using AugHessianPrecondFn = std::function<Eigen::VectorXd(const Eigen::VectorXd &, double)>;
 
     // Tunables follow the PySCF defaults documented in
     // pyscf/mcscf/mc1step.py:707-733. The early-exit threshold ah_start_tol
@@ -32,21 +32,21 @@ namespace HartreeFock::Correlation::CASSCF
     // cheap when the Krylov subspace is producing usable steps.
     struct AugHessianOptions
     {
-        double ah_conv_tol         = 1e-12;
-        double ah_start_tol        = 2.5;
-        int    ah_start_cycle      = 1;
-        int    ah_max_cycle        = 30;
-        double ah_lindep           = 1e-14;
-        double ah_level_shift      = 0.0;
+        double ah_conv_tol = 1e-12;
+        double ah_start_tol = 2.5;
+        int ah_start_cycle = 1;
+        int ah_max_cycle = 30;
+        double ah_lindep = 1e-14;
+        double ah_level_shift = 0.0;
         // Mode-selection guard from ciah._regular_step (line 295). Eigenvectors
         // with |v[0]| below this threshold imply the orbital step blows up and
         // are skipped in favor of the next eigenvector.
-        double v0_min              = 0.1;
+        double v0_min = 0.1;
         // Below this AH eigenvalue the bordered system is dropped and only the
         // pure orbital block is solved (ciah lines 301-306).
-        double orbital_only_floor  = 1e-4;
+        double orbital_only_floor = 1e-4;
         // Maximum Krylov subspace size before restart. Bounded by ah_max_cycle.
-        int    max_subspace        = 30;
+        int max_subspace = 30;
     };
 
     struct AugHessianResult
@@ -55,19 +55,19 @@ namespace HartreeFock::Correlation::CASSCF
         // packed in the same layout the caller used to define h_op.
         Eigen::VectorXd x;
         // AH eigenvalue selected from the subspace.
-        double          eigenvalue     = 0.0;
+        double eigenvalue = 0.0;
         // First component of the bordered eigenvector. The orbital scaling is
         // 1/v0; small |v0| means the step would explode.
-        double          v0             = 0.0;
+        double v0 = 0.0;
         // Final residual norm of (H + g v0 - w v0) x.
-        double          residual_norm  = 0.0;
+        double residual_norm = 0.0;
         // Number of Davidson iterations actually run.
-        int             iterations     = 0;
+        int iterations = 0;
         // Whether the convergence test was satisfied (vs. early-exit / restart).
-        bool            converged      = false;
+        bool converged = false;
         // True when the orbital-only fallback fired because the AH eigenvalue
         // dropped below opts.orbital_only_floor.
-        bool            orbital_only_fallback = false;
+        bool orbital_only_fallback = false;
     };
 
     // Solve the bordered AH eigenproblem with a CIAH-style Davidson inner
@@ -78,11 +78,11 @@ namespace HartreeFock::Correlation::CASSCF
     // the current Ritz value as the level-shift target; if it is null, an
     // identity preconditioner is used.
     AugHessianResult solve_augmented_hessian(
-        const AugHessianHopFn     &h_op,
-        const AugHessianGradFn    &g_op,
+        const AugHessianHopFn &h_op,
+        const AugHessianGradFn &g_op,
         const AugHessianPrecondFn &precond,
-        const Eigen::VectorXd     &x0,
-        const AugHessianOptions   &opts);
+        const Eigen::VectorXd &x0,
+        const AugHessianOptions &opts);
 
 } // namespace HartreeFock::Correlation::CASSCF
 

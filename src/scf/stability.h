@@ -19,10 +19,10 @@ namespace HartreeFock::SCF
     // back into the natural virtual-by-occupied layout.
     struct StabilityChannel
     {
-        std::string label;                // human-readable channel name
-        bool is_unstable = false;         // lowest_eigenvalue < -tol
-        double lowest_eigenvalue = 0.0;   // signed lowest eigenvalue
-        Eigen::MatrixXd lowest_mode;      // reshaped [n_virt x n_occ]
+        std::string label;              // human-readable channel name
+        bool is_unstable = false;       // lowest_eigenvalue < -tol
+        double lowest_eigenvalue = 0.0; // signed lowest eigenvalue
+        Eigen::MatrixXd lowest_mode;    // reshaped [n_virt x n_occ]
         // For UHF spin-flip: separate alpha→beta and beta→alpha blocks of the
         // mode are stored here; otherwise empty.
         Eigen::MatrixXd lowest_mode_beta;

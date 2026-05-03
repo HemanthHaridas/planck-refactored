@@ -43,8 +43,8 @@ namespace DFT
 
     struct MolecularGrid
     {
-        Eigen::MatrixXd points; // N x 4 -> x, y, z, weight  (Bohr / quadrature weight)
-        Eigen::VectorXi owner;  // Generating atom index for each point
+        Eigen::MatrixXd points;            // N x 4 -> x, y, z, weight  (Bohr / quadrature weight)
+        Eigen::VectorXi owner;             // Generating atom index for each point
         Eigen::VectorXd atomic_weights;    // Unpartitioned atomic-grid weights
         Eigen::VectorXd partition_weights; // Becke partition weight of owner atom
     };

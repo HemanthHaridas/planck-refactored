@@ -6,8 +6,8 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <numeric>

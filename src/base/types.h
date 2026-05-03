@@ -62,16 +62,16 @@ namespace HartreeFock
 
     enum class PostHF
     {
-        None,   // No Post-HF corrections
-        RMP2,   // Restricted MP2
-        UMP2,   // Unrestricted MP2
-        RCCSD,  // Restricted CCSD
-        UCCSD,  // Unrestricted CCSD
-        RCCSDT, // Restricted CCSDT
-        UCCSDT, // Unrestricted CCSDT
+        None,    // No Post-HF corrections
+        RMP2,    // Restricted MP2
+        UMP2,    // Unrestricted MP2
+        RCCSD,   // Restricted CCSD
+        UCCSD,   // Unrestricted CCSD
+        RCCSDT,  // Restricted CCSDT
+        UCCSDT,  // Unrestricted CCSDT
         RCCSDTQ, // Restricted CCSDTQ
-        CASSCF, // Complete active space SCF
-        RASSCF  // Restricted active space SCF
+        CASSCF,  // Complete active space SCF
+        RASSCF   // Restricted active space SCF
     };
 
     enum class CalculationType
@@ -350,8 +350,8 @@ namespace HartreeFock
         unsigned int _threshold = 100; // Threshold before switching to Direct mode (Default is 100)
         unsigned int _DIIS_dim = 8;    // Dimension of DIIS Error Vector (Default is 8)
 
-        bool _use_DIIS = true;        // Use DIIS (Default is true)
-        bool _save_checkpoint = true; // Save checkpoint after convergence
+        bool _use_DIIS = true;          // Use DIIS (Default is true)
+        bool _save_checkpoint = true;   // Save checkpoint after convergence
         bool _stability_check = false;  // Run wavefunction stability analysis after SCF
         bool _stability_follow = false; // If unstable, rotate along the unstable mode and re-run SCF
 
@@ -888,16 +888,16 @@ namespace HartreeFock
 
         // Symmetry-adapted orbital (SAO) blocking — populated by build_sao_basis() pre-SCF.
         // When _use_sao_blocking is true, run_rhf/run_uhf use per-irrep block diagonalization.
-        Eigen::MatrixXd _sao_transform;            // U [nb×nb]: AO→SAO unitary
-        std::vector<int> _sao_irrep_index;         // irrep index per SAO column
-        std::vector<std::string> _sao_irrep_names; // Mulliken name per irrep index
-        std::vector<int> _sao_block_sizes;         // n_SAOs per irrep block
-        std::vector<int> _sao_block_offsets;       // start offset per block in SAO ordering
+        Eigen::MatrixXd _sao_transform;                    // U [nb×nb]: AO→SAO unitary
+        std::vector<int> _sao_irrep_index;                 // irrep index per SAO column
+        std::vector<std::string> _sao_irrep_names;         // Mulliken name per irrep index
+        std::vector<int> _sao_block_sizes;                 // n_SAOs per irrep block
+        std::vector<int> _sao_block_offsets;               // start offset per block in SAO ordering
         std::vector<SignedAOSymOp> _integral_symmetry_ops; // signed AO permutations used to reduce integral work
 
         // Gradient and geometry optimization
-        Eigen::MatrixXd _gradient;                    // natoms×3, Ha/Bohr; set by compute_rhf/uhf_gradient()
-        std::vector<GeomConstraint> _constraints;     // from %begin_constraints section
+        Eigen::MatrixXd _gradient;                // natoms×3, Ha/Bohr; set by compute_rhf/uhf_gradient()
+        std::vector<GeomConstraint> _constraints; // from %begin_constraints section
 
         // Hessian / frequency analysis
         Eigen::MatrixXd _hessian;                       // 3N×3N Cartesian Hessian, Ha/Bohr²
@@ -912,9 +912,9 @@ namespace HartreeFock
         double _ccsd_reference_correlation_energy = 0.0; // CCSD correlation energy cached during CCSDT runs
         double _casscf_rhf_energy = 0.0;                 // RHF reference energy (for ΔE printout)
         double _geomopt_grad_tol = 3e-4;                 // convergence: max |∂E/∂x_i| in Ha/Bohr
-        double _zpe = 0.0;                              // zero-point energy in Ha
-        double _hessian_step = 5e-3;                    // finite-difference step in Bohr
-        double _imag_follow_step = 0.2;                 // Cartesian displacement along imaginary mode, Bohr
+        double _zpe = 0.0;                               // zero-point energy in Ha
+        double _hessian_step = 5e-3;                     // finite-difference step in Bohr
+        double _imag_follow_step = 0.2;                  // Cartesian displacement along imaginary mode, Bohr
 
         CalculationType _calculation = CalculationType::SinglePoint; // Default is Single point energy calculation
         PostHF _correlation = PostHF::None;                          // No Post HF corrections

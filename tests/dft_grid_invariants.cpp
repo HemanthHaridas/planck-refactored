@@ -174,7 +174,6 @@ namespace
             6.0,
             1e-5,
             "Treutler-Ahlrichs grid does not integrate exp(-r) * r^3 accurately");
-
     }
 
     void test_orca_like_grid_presets()
@@ -220,8 +219,8 @@ namespace
             "MakeAtomicGrid(O, Normal)");
 
         require(atomic_grid.rows() == require_expected(
-                                         DFT::atomic_point_count(8, DFT::GridLevel::Normal),
-                                         "atomic_point_count(O, Normal)"),
+                                          DFT::atomic_point_count(8, DFT::GridLevel::Normal),
+                                          "atomic_point_count(O, Normal)"),
                 "Atomic grid point count does not match the preset");
         require(atomic_grid.cols() == 4, "Atomic grid should have 4 columns");
 
