@@ -293,6 +293,29 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rhf_g
     return compute_closed_shell_gradient_from_density(calc, shell_pairs, P, W, gamma_fn);
 }
 
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_gradient(
+    const HartreeFock::Calculator &calc,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    double exact_exchange_coefficient)
+{
+    const Eigen::MatrixXd &P = calc._info._scf.alpha.density;
+    int n_elec = 0;
+    for (std::size_t a = 0; a < calc._molecule.natoms; ++a)
+        n_elec += calc._molecule.atomic_numbers[a];
+    n_elec -= calc._molecule.charge;
+    const int n_occ = n_elec / 2;
+
+    const Eigen::MatrixXd C_occ = calc._info._scf.alpha.mo_coefficients.leftCols(n_occ);
+    const Eigen::VectorXd eps = calc._info._scf.alpha.mo_energies.head(n_occ);
+    const Eigen::MatrixXd W = 2.0 * C_occ * eps.asDiagonal() * C_occ.transpose();
+    const double cx = exact_exchange_coefficient;
+    auto gamma_fn = [&P, cx](std::size_t ii, std::size_t jj, std::size_t kk, std::size_t ll) -> double
+    {
+        return 2.0 * P(ii, jj) * P(kk, ll) - cx * P(ii, kk) * P(jj, ll);
+    };
+    return compute_closed_shell_gradient_from_density(calc, shell_pairs, P, W, gamma_fn);
+}
+
 // ─── UHF Gradient ─────────────────────────────────────────────────────────────
 
 std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_gradient(
@@ -444,6 +467,177 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
     }
 
     // ── Term 4: nuclear repulsion ─────────────────────────────────────────────
+    for (std::size_t a = 0; a < natoms; ++a)
+    {
+        for (std::size_t b = 0; b < natoms; ++b)
+        {
+            if (a == b)
+                continue;
+            const double Za = static_cast<double>(mol.atomic_numbers[a]);
+            const double Zb = static_cast<double>(mol.atomic_numbers[b]);
+            const double dx = mol._standard(a, 0) - mol._standard(b, 0);
+            const double dy = mol._standard(a, 1) - mol._standard(b, 1);
+            const double dz = mol._standard(a, 2) - mol._standard(b, 2);
+            const double r2 = dx * dx + dy * dy + dz * dz;
+            if (r2 < 1e-24)
+            {
+                return std::unexpected(
+                    std::format("Gradient: atoms {} and {} are coincident or too close for nuclear-repulsion differentiation",
+                                static_cast<int>(a + 1),
+                                static_cast<int>(b + 1)));
+            }
+            const double r3 = std::pow(r2, 1.5);
+            grad(a, 0) -= Za * Zb * dx / r3;
+            grad(a, 1) -= Za * Zb * dy / r3;
+            grad(a, 2) -= Za * Zb * dz / r3;
+        }
+    }
+
+    return grad;
+}
+
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_gradient(
+    const HartreeFock::Calculator &calc,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    double exact_exchange_coefficient)
+{
+    const auto &mol = calc._molecule;
+    const auto &basis = calc._shells;
+    const std::size_t natoms = mol.natoms;
+    const std::size_t nb = basis.nbasis();
+
+    const Eigen::MatrixXd &P_a = calc._info._scf.alpha.density;
+    const Eigen::MatrixXd &P_b = calc._info._scf.beta.density;
+    const Eigen::MatrixXd P_t = P_a + P_b;
+
+    int n_elec = 0;
+    for (std::size_t a = 0; a < natoms; ++a)
+        n_elec += mol.atomic_numbers[a];
+    n_elec -= mol.charge;
+    const int n_unpaired = static_cast<int>(mol.multiplicity) - 1;
+    const int n_alpha = (n_elec + n_unpaired) / 2;
+    const int n_beta = (n_elec - n_unpaired) / 2;
+
+    const Eigen::MatrixXd Ca_occ = calc._info._scf.alpha.mo_coefficients.leftCols(n_alpha);
+    const Eigen::VectorXd ea = calc._info._scf.alpha.mo_energies.head(n_alpha);
+    const Eigen::MatrixXd Cb_occ = calc._info._scf.beta.mo_coefficients.leftCols(n_beta);
+    const Eigen::VectorXd eb = calc._info._scf.beta.mo_energies.head(n_beta);
+
+    const Eigen::MatrixXd W = Ca_occ * ea.asDiagonal() * Ca_occ.transpose() + Cb_occ * eb.asDiagonal() * Cb_occ.transpose();
+
+    Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(natoms, 3);
+
+    auto shell_atom_res = build_shell_atom_map(calc);
+    if (!shell_atom_res)
+        return std::unexpected(shell_atom_res.error());
+    const std::vector<int> shell_atom = std::move(*shell_atom_res);
+    const auto &shells = basis._shells;
+    const auto &bfs = basis._basis_functions;
+    const std::size_t nshells = shells.size();
+    const Eigen::MatrixXd schwarz_q = build_pair_schwarz_table(shell_pairs, nb);
+
+    std::vector<int> bf_shell(nb, -1);
+    for (std::size_t s = 0; s < nshells; ++s)
+        for (std::size_t mu = 0; mu < nb; ++mu)
+            if (bfs[mu]._shell == &shells[s])
+                bf_shell[mu] = static_cast<int>(s);
+
+    for (const auto &sp : shell_pairs)
+    {
+        const std::size_t ii = sp.A._index;
+        const std::size_t jj = sp.B._index;
+        const int atom_ii = shell_atom[bf_shell[ii]];
+        const int atom_jj = shell_atom[bf_shell[jj]];
+
+        const auto dST_A = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
+        const auto dV_A = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp, mol);
+
+        for (int q = 0; q < 3; ++q)
+        {
+            const double contrib = 2.0 * P_t(ii, jj) * (dST_A[q + 3] + dV_A[q]) - 2.0 * W(ii, jj) * dST_A[q];
+            grad(atom_ii, q) += contrib;
+        }
+
+        if (ii != jj)
+        {
+            HartreeFock::ShellPair sp_rev(sp.B, sp.A);
+            const auto dST_B = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp_rev);
+            const auto dV_B = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp_rev, mol);
+
+            for (int q = 0; q < 3; ++q)
+            {
+                const double contrib = 2.0 * P_t(jj, ii) * (dST_B[q + 3] + dV_B[q]) - 2.0 * W(jj, ii) * dST_B[q];
+                grad(atom_jj, q) += contrib;
+            }
+        }
+    }
+
+    for (std::size_t atom_a = 0; atom_a < natoms; ++atom_a)
+    {
+        const double Z_A = static_cast<double>(mol.atomic_numbers[atom_a]);
+        const Eigen::Vector3d C_A(mol._standard(atom_a, 0),
+                                  mol._standard(atom_a, 1),
+                                  mol._standard(atom_a, 2));
+
+        for (int q = 0; q < 3; ++q)
+        {
+            double dV_sum = 0.0;
+            for (const auto &sp : shell_pairs)
+            {
+                const std::size_t ii = sp.A._index;
+                const std::size_t jj = sp.B._index;
+                const double dv = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
+                    sp, C_A, Z_A, q);
+                if (ii == jj)
+                    dV_sum += P_t(ii, jj) * dv;
+                else
+                    dV_sum += 2.0 * P_t(ii, jj) * dv;
+            }
+            grad(atom_a, q) += dV_sum;
+        }
+    }
+
+    const double cx = exact_exchange_coefficient;
+    auto gamma_fn = [&P_t, &P_a, &P_b, cx](std::size_t ii, std::size_t jj,
+                                           std::size_t kk, std::size_t ll) -> double
+    {
+        return 2.0 * P_t(ii, jj) * P_t(kk, ll) -
+               cx * (2.0 * P_a(ii, kk) * P_a(jj, ll) + 2.0 * P_b(ii, kk) * P_b(jj, ll));
+    };
+
+    for (const auto &spAB : shell_pairs)
+    {
+        const std::size_t ii = spAB.A._index;
+        const std::size_t jj = spAB.B._index;
+        const int atom_A = shell_atom[bf_shell[ii]];
+        const int atom_B = shell_atom[bf_shell[jj]];
+
+        for (const auto &spCD : shell_pairs)
+        {
+            const std::size_t kk = spCD.A._index;
+            const std::size_t ll = spCD.B._index;
+            const int atom_C = shell_atom[bf_shell[kk]];
+            const int atom_D = shell_atom[bf_shell[ll]];
+
+            if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
+                continue;
+
+            const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
+            accumulate_eri_gradient_permutations(
+                grad,
+                dI,
+                gamma_fn,
+                ii,
+                jj,
+                kk,
+                ll,
+                atom_A,
+                atom_B,
+                atom_C,
+                atom_D);
+        }
+    }
+
     for (std::size_t a = 0; a < natoms; ++a)
     {
         for (std::size_t b = 0; b < natoms; ++b)

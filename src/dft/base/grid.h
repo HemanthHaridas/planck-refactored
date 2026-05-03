@@ -45,6 +45,8 @@ namespace DFT
     {
         Eigen::MatrixXd points; // N x 4 -> x, y, z, weight  (Bohr / quadrature weight)
         Eigen::VectorXi owner;  // Generating atom index for each point
+        Eigen::VectorXd atomic_weights;    // Unpartitioned atomic-grid weights
+        Eigen::VectorXd partition_weights; // Becke partition weight of owner atom
     };
 
     namespace detail
@@ -196,6 +198,17 @@ namespace DFT
             for (int k = 0; k < 3; ++k)
                 mu = 1.5 * mu - 0.5 * mu * mu * mu;
             return 0.5 * (1.0 - mu);
+        }
+
+        inline double becke_switch_derivative(double mu)
+        {
+            double derivative = 1.0;
+            for (int k = 0; k < 3; ++k)
+            {
+                derivative *= 1.5 * (1.0 - mu * mu);
+                mu = 1.5 * mu - 0.5 * mu * mu * mu;
+            }
+            return -0.5 * derivative;
         }
 
         inline double pair_partition(
@@ -423,6 +436,8 @@ namespace DFT
         MolecularGrid result;
         result.points.resize(total_points, 4);
         result.owner.resize(total_points);
+        result.atomic_weights.resize(total_points);
+        result.partition_weights.resize(total_points);
 
         Eigen::Index row = 0;
         for (Eigen::Index atom = 0; atom < natoms; ++atom)
@@ -442,6 +457,8 @@ namespace DFT
                 result.points.row(row).head<3>() = point.transpose();
                 result.points(row, 3) = atomic_grid(i, 3) * (*partition);
                 result.owner(row) = static_cast<int>(atom);
+                result.atomic_weights(row) = atomic_grid(i, 3);
+                result.partition_weights(row) = *partition;
             }
         }
 
