@@ -18,7 +18,7 @@ self-consistent field theory. It implements:
 - RCCSD for canonical closed-shell RHF references
 - Small-system determinant-space teaching prototypes for RCCSDT, UCCSD, and UCCSDT
 - Generated arbitrary-order restricted tensor kernels, including RCCSDTQ when built
-- Analytic RHF, UHF, RMP2, and UMP2 nuclear gradients
+- Analytic RHF, UHF, RKS, UKS, RMP2, and UMP2 nuclear gradients
 - Analytic RMP2 nuclear gradients include Z-vector / CPHF relaxation
 - Geometry optimization in Cartesian and internal coordinates
 - Semi-numerical Hessians and harmonic vibrational analysis
@@ -69,7 +69,7 @@ Input file (.hfinp)
 | `src/gradient` | analytic RHF, UHF, RMP2, and UMP2 gradients |
 | `src/opt` | L-BFGS/BFGS optimizer, internal coordinates, constraints |
 | `src/freq` | finite-difference Hessian, vibrational analysis |
-| `src/dft` | Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, KS driver |
+| `src/dft` | Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, analytic KS gradients, KS driver |
 | `src/dft/base` | grid construction headers: radial (Treutler-Ahlrichs), angular (Lebedev), Becke partition, libxc wrapper |
 
 ### 3. Core Data Structures
@@ -1616,6 +1616,196 @@ The UHF gradient has the same structure but uses the total density
 W_{\mu\nu} = \sum_{i}^{\alpha,occ} \varepsilon^\alpha_i C^\alpha_{\mu i} C^\alpha_{\nu i}
            + \sum_{i}^{\beta,occ}  \varepsilon^\beta_i  C^\beta_{\mu i}  C^\beta_{\nu i}
 \]
+
+### Analytic Kohn-Sham DFT Gradients
+
+For Kohn-Sham DFT, the variational part of the gradient has the same
+Hellmann-Feynman + Pulay structure as HF, but the effective one-electron
+operator is now the KS operator and the total energy contains the semilocal
+exchange-correlation term:
+
+\[
+E_{KS}
+= E_{1e} + E_J + c_x E_x^{HF} + E_{xc}^{sl} + E_{nuc}
+\]
+
+Here \(c_x\) is the global-hybrid exact-exchange fraction
+(\(c_x = 0\) for pure LDA/GGA, \(c_x > 0\) for B3LYP/PBE0), and
+\(E_{xc}^{sl}\) denotes the semilocal libxc contribution evaluated on the
+numerical grid.
+
+Planck therefore splits the DFT gradient into two conceptually different parts:
+
+1. the **HF-like variational skeleton**, which handles
+   \(T\), \(V\), Coulomb, exact exchange, Pulay overlap response, and nuclear
+   repulsion;
+2. the **XC grid term**, which contributes both an AO-matrix derivative and a
+   moving-grid response.
+
+For RKS, the HF-like part is identical to RHF except that the exchange piece in
+the two-particle density is scaled by \(c_x\):
+
+\[
+\Gamma^{RKS}_{\mu\nu\lambda\sigma}
+= 2 P_{\mu\nu} P_{\lambda\sigma}
+ - c_x P_{\mu\lambda} P_{\nu\sigma}
+\]
+
+For UKS, the Coulomb term still depends on \(P^\alpha + P^\beta\), while exact
+exchange remains spin-diagonal and is scaled by the same \(c_x\).
+
+#### XC Derivative Matrix
+
+The key lesson from numerical-grid DFT is that the XC force is **not** best
+thought of as one giant scalar derivative of
+\(\sum_p w_p \rho_p \varepsilon_{xc,p}\).  Instead, the fixed-grid part is most
+cleanly written as a first derivative of the XC potential matrix with respect
+to the AO bra coordinate, exactly analogous to the derivative Coulomb and
+exchange matrices used in HF gradients.
+
+Planck forms a three-component XC derivative matrix
+\(\mathbf V^{xc,(1)}_q\) on the numerical grid and contracts it against the
+density block on the atom whose basis functions carry the derivative:
+
+\[
+\left(\frac{dE_{xc}}{dX_A}\right)_{\text{fixed grid}}
+= 2 \sum_{\mu \in A,\nu} P_{\mu\nu} \, V^{xc,(1)}_{q,\mu\nu}
+\]
+
+and similarly for \(Y_A\) and \(Z_A\).  The factor of 2 appears because the
+derivative is assembled on the bra AO and the Hermitian ket contribution is
+added explicitly, exactly as in the RHF/UHF gradient code.
+
+For an LDA functional, only AO values and first derivatives are needed.  If
+\(v_\rho = \partial(\rho \varepsilon_{xc})/\partial \rho\), then for grid point
+\(p\),
+
+\[
+\widetilde V^{LDA}_{q,\mu\nu}(p)
+= w_p \, \partial_q \phi_\mu(\mathbf r_p)\, v_{\rho,p}\, \phi_\nu(\mathbf r_p)
+\]
+
+and Planck converts this electron-coordinate derivative into a nuclear
+derivative matrix with the sign change
+\(\mathbf V^{xc,(1)}_q = -\widetilde{\mathbf V}^{LDA}_q\).
+
+For a GGA functional, the semilocal dependence on
+\(\sigma = \nabla \rho \cdot \nabla \rho\) introduces AO gradients and AO
+Hessians.  Defining
+
+\[
+u_0 = \frac{1}{2} v_\rho,
+\qquad
+\mathbf u = 2 v_\sigma \nabla \rho
+\]
+
+for the RKS case, Planck builds the auxiliary vectors
+
+\[
+a_\nu = u_0 \phi_\nu + \mathbf u \cdot \nabla \phi_\nu
+\]
+
+\[
+b_{q,\mu} = u_0 \, \partial_q \phi_\mu
++ \sum_{r \in \{x,y,z\}} u_r \, \partial_{qr}^2 \phi_\mu
+\]
+
+and then accumulates
+
+\[
+\widetilde V^{GGA}_{q,\mu\nu}(p)
+= w_p\Big[\partial_q \phi_\mu(\mathbf r_p)\, a_\nu
++ b_{q,\mu}\, \phi_\nu(\mathbf r_p)\Big]
+\]
+
+again with the nuclear-gradient sign
+\(\mathbf V^{xc,(1)}_q = -\widetilde{\mathbf V}^{GGA}_q\).
+
+For UKS, the same construction is carried out separately for the alpha and beta
+density matrices.  The gradient-dependent coefficients become spin-coupled:
+
+\[
+\mathbf u^\alpha
+= 2 v_{\sigma_{aa}} \nabla \rho_\alpha
++ v_{\sigma_{ab}} \nabla \rho_\beta
+\]
+
+\[
+\mathbf u^\beta
+= v_{\sigma_{ab}} \nabla \rho_\alpha
++ 2 v_{\sigma_{bb}} \nabla \rho_\beta
+\]
+
+so Planck builds one XC derivative matrix for each spin channel and contracts
+them against \(P^\alpha\) and \(P^\beta\) separately.
+
+#### Moving-Grid Response
+
+Atom-centered DFT quadrature adds a second, genuinely DFT-specific force term:
+the grid itself moves when the nuclei move.  In Planck’s Treutler-Ahlrichs +
+Lebedev + Becke construction, two responses matter:
+
+1. **Becke partition-weight response**:
+   the fuzzy-cell partition \(g_A(\mathbf r)\) changes because the interatomic
+   shape functions depend on the nuclear coordinates;
+2. **owner-point translation response**:
+   every atomic grid point translates rigidly with the atom that generated it.
+
+If point \(p\) belongs to atom \(I(p)\), has unpartitioned atomic weight
+\(w_p^{atom}\), final Becke weight \(g_{I(p)}(\mathbf r_p)\), and XC energy
+density \(f_p = \rho_p \varepsilon_{xc,p}\), then the partition response is
+
+\[
+\left(\frac{dE_{xc}}{dX_A}\right)_{\text{weight}}
+= \sum_p
+ w_p^{atom}
+ \times \frac{\partial g_{I(p)}(\mathbf r_p)}{\partial X_A}
+ \times f_p
+\]
+
+The owner-point translation response is most compactly written in terms of the
+same per-point electron-coordinate XC derivative matrix
+\(\widetilde{\mathbf V}_q(p)\) used above:
+
+\[
+\left(\frac{dE_{xc}}{dX_A}\right)_{\text{point shift}}
+= \sum_p \delta_{A,I(p)} \, 2 \sum_{\mu\nu}
+\widetilde V_{q,\mu\nu}(p) P_{\nu\mu}
+\]
+
+and analogously for \(Y_A\) and \(Z_A\).  This is exactly the extra
+“grid-coordinate” force that PySCF labels as the grids response.
+
+Putting everything together,
+
+\[
+\frac{dE_{KS}}{dX_A}
+= \left(\frac{dE}{dX_A}\right)_{\text{HF-like skeleton}}
++ \left(\frac{dE_{xc}}{dX_A}\right)_{\text{fixed grid}}
++ \left(\frac{dE_{xc}}{dX_A}\right)_{\text{weight}}
++ \left(\frac{dE_{xc}}{dX_A}\right)_{\text{point shift}}
+\]
+
+This is why a correct analytic DFT gradient needs more than “HF gradient plus
+\(\partial(\rho\varepsilon_{xc})/\partial R\)”: the numerical grid injects its
+own geometry dependence.
+
+#### Code Mapping
+
+Planck’s implementation follows the decomposition above:
+
+- `src/dft/base/grid.h` stores the owner atom, unpartitioned atomic weight, and
+  Becke partition weight for each molecular-grid point
+- `becke_partition_owner_derivatives(...)` in `src/dft/dft_gradient.cpp`
+  differentiates the Treutler-adjusted Becke partition
+- `compute_xc_nuclear_gradient_rks(...)` and
+  `compute_xc_nuclear_gradient_uks(...)` in `src/dft/dft_gradient.cpp` build
+  the XC derivative matrices and add the moving-grid response
+- `compute_rks_gradient(...)` / `compute_uks_gradient(...)` in
+  `src/gradient/gradient.cpp` provide the HF-like skeleton with Coulomb and
+  exact-exchange scaling
+- `DFT::Driver::compute_analytic_ks_gradient(...)` in `src/dft/driver.cpp`
+  sums the two pieces into the final \(N_{atoms} \times 3\) gradient
 
 ---
 
@@ -4408,14 +4598,16 @@ driver.cpp
       run_casscf()             → E_CASSCF, natural orbitals
 
   if gradient or geomopt or frequency:
-      if post_hf == RMP2:
-          compute_rmp2_gradient() → _gradient (gradient.cpp + mp2_gradient.cpp)
+      if driver == planck-dft:
+          compute_analytic_ks_gradient() → _gradient (dft/driver.cpp + dft_gradient.cpp)
+      elif post_hf == RMP2:
+          compute_rmp2_gradient()       → _gradient (gradient.cpp + mp2_gradient.cpp)
       elif post_hf == UMP2:
-          compute_ump2_gradient() → _gradient (gradient.cpp + mp2_gradient.cpp)
+          compute_ump2_gradient()       → _gradient (gradient.cpp + mp2_gradient.cpp)
       elif reference == UHF:
-          compute_uhf_gradient()  → _gradient (gradient.cpp)
+          compute_uhf_gradient()        → _gradient (gradient.cpp)
       else:
-          compute_rhf_gradient()  → _gradient (gradient.cpp)
+          compute_rhf_gradient()        → _gradient (gradient.cpp)
 
   if geomopt:
       run_geomopt()            → optimized geometry (geomopt.cpp)
@@ -4544,8 +4736,9 @@ driver.cpp
 | GGA XC functionals (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation) | Complete |
 | Arbitrary libxc functionals via integer ID | Complete within the currently supported LDA/GGA/global-hybrid subset; unsupported libxc families still error explicitly |
 | Molecular grid (Treutler-Ahlrichs + Lebedev + Becke) | Complete |
+| Analytic KS-DFT gradient (RKS/UKS, LDA/GGA/global hybrid) | Complete |
 | TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels) | Complete |
-| DFT geometry optimization / gradients | Not implemented |
+| DFT geometry optimization / gradients | Complete |
 | Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs) | Complete |
 | Range-separated and double-hybrid XC functionals | Not supported |
 | Spherical harmonic basis | Not supported (Cartesian only) |
@@ -4578,8 +4771,9 @@ Recommended reading order for the KS-DFT pipeline (read after items 1–5 above)
 14. `src/dft/base/grid.h` — Becke partitioning, pruning, molecular grid assembly
 15. `src/dft/ao_grid.h` — AO and gradient evaluation at grid points
 16. `src/dft/xc_grid.cpp` — density, XC energy and potentials on the grid
-16. `src/dft/ks_matrix.cpp` — \(V^{xc}_{\mu\nu}\) and full KS potential matrices
-17. `src/dft/driver.cpp` — the KS-DFT SCF loop end to end
+17. `src/dft/ks_matrix.cpp` — \(V^{xc}_{\mu\nu}\) and full KS potential matrices
+18. `src/dft/dft_gradient.cpp` — analytic KS gradient assembly, including moving-grid response
+19. `src/dft/driver.cpp` — the KS-DFT SCF loop end to end
 
 This order follows the dependency graph: basic state and types first, then
 integral machinery, then the SCF loop that uses those integrals, then the

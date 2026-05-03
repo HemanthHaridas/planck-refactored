@@ -15,7 +15,9 @@
 
 #include "base/wrapper.h"
 #include "basis/basis.h"
+#include "dft_gradient.h"
 #include "freq/hessian.h"
+#include "gradient/gradient.h"
 #include "integrals/base.h"
 #include "integrals/os.h"
 #include "io/checkpoint.h"
@@ -2359,6 +2361,11 @@ namespace DFT::Driver
                 .correlation = std::move(*correlation)};
         }
 
+        std::expected<Eigen::MatrixXd, std::string> compute_analytic_ks_gradient(
+            HartreeFock::Calculator &calculator,
+            const PreparedSystem &prepared,
+            const InitializedFunctionals &functionals);
+
         std::expected<PreparedSystem, std::string> prepare_current_geometry(
             HartreeFock::Calculator &calculator,
             bool preserve_previous_density)
@@ -2443,6 +2450,41 @@ namespace DFT::Driver
             {
                 if (auto res = initialize_ks_guess(calculator); !res)
                     return std::unexpected(res.error());
+            }
+
+            return prepared;
+        }
+
+        // Rebuild Lebedev/Becke quadrature and AO values without disturbing the SCF
+        // wavefunction — required for analytic gradients after KS convergence.
+        std::expected<PreparedSystem, std::string> prepare_quadrature_for_calculator(
+            HartreeFock::Calculator &calculator)
+        {
+            PreparedSystem prepared;
+            auto preset = grid_preset(to_grid_level(calculator._dft._grid));
+            if (!preset)
+                return std::unexpected(preset.error());
+            prepared.grid_preset = *preset;
+            prepared.shell_pairs = build_shellpairs(calculator._shells);
+
+            auto molecular_grid = MakeMolecularGrid(
+                calculator._molecule,
+                to_grid_level(calculator._dft._grid));
+            if (!molecular_grid)
+                return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
+            prepared.molecular_grid = std::move(*molecular_grid);
+
+            auto ao_grid = evaluate_ao_basis_on_grid(calculator._shells, prepared.molecular_grid);
+            if (!ao_grid)
+                return std::unexpected("DFT AO grid evaluation failed: " + ao_grid.error());
+            prepared.ao_grid = std::move(*ao_grid);
+
+            if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+            {
+                auto pcm = HartreeFock::Solvation::build_pcm_state(calculator, prepared.shell_pairs);
+                if (!pcm)
+                    return std::unexpected("DFT PCM setup failed: " + pcm.error());
+                prepared.pcm = std::move(*pcm);
             }
 
             return prepared;
@@ -2741,15 +2783,22 @@ namespace DFT::Driver
                 HartreeFock::LogLevel::Info,
                 "Frequency :",
                 std::format(
-                    "Computing fully numerical Hessian (central differences, gradient step = {:.4f} Bohr)",
+                    "Computing numerical Hessian via analytic KS gradients (central differences, gradient step = {:.4f} Bohr)",
                     NUMERICAL_GRADIENT_STEP_BOHR));
 
             auto gradient_runner = [&](HartreeFock::Calculator &inner) -> std::expected<Eigen::MatrixXd, std::string>
             {
-                return compute_numeric_gradient(
-                    inner,
-                    functionals,
-                    NUMERICAL_GRADIENT_STEP_BOHR);
+                auto ks = run_single_point_current_geometry(inner, functionals, true);
+                if (!ks)
+                    return std::unexpected(ks.error());
+                if (!ks->converged)
+                    return std::unexpected("KS-SCF did not converge during Hessian displacement");
+
+                auto pq = prepare_quadrature_for_calculator(inner);
+                if (!pq)
+                    return std::unexpected(pq.error());
+
+                return compute_analytic_ks_gradient(inner, *pq, functionals);
             };
 
             auto result = HartreeFock::Freq::compute_hessian(calculator, gradient_runner);
@@ -2791,16 +2840,23 @@ namespace DFT::Driver
                 HartreeFock::LogLevel::Info,
                 "Geometry Optimization :",
                 use_internal_coordinates
-                    ? "Starting IC-BFGS optimizer with numerical KS gradients"
-                    : "Starting L-BFGS optimizer with numerical KS gradients");
+                    ? "Starting IC-BFGS optimizer with analytic KS gradients"
+                    : "Starting L-BFGS optimizer with analytic KS gradients");
             HartreeFock::Logger::blank();
 
             auto gradient_runner = [&](HartreeFock::Calculator &inner) -> std::expected<Eigen::VectorXd, std::string>
             {
-                auto gradient = compute_numeric_gradient(
-                    inner,
-                    functionals,
-                    NUMERICAL_GRADIENT_STEP_BOHR);
+                auto ks = run_single_point_current_geometry(inner, functionals, true);
+                if (!ks)
+                    return std::unexpected(ks.error());
+                if (!ks->converged)
+                    return std::unexpected("KS-SCF did not converge during analytic gradient evaluation");
+
+                auto pq = prepare_quadrature_for_calculator(inner);
+                if (!pq)
+                    return std::unexpected(pq.error());
+
+                auto gradient = compute_analytic_ks_gradient(inner, *pq, functionals);
                 if (!gradient)
                     return std::unexpected(gradient.error());
                 return flatten_gradient_atom_major(*gradient);
@@ -2895,6 +2951,94 @@ namespace DFT::Driver
             exchange_functional,
             correlation_functional);
     }
+
+    namespace
+    {
+
+        std::expected<Eigen::MatrixXd, std::string> compute_analytic_ks_gradient(
+            HartreeFock::Calculator &calculator,
+            const PreparedSystem &prepared,
+            const InitializedFunctionals &functionals)
+        {
+            if (prepared.pcm && prepared.pcm->enabled())
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "DFT Gradient :",
+                    "Analytic KS gradient omits PCM geometry response; use numerical gradient if solvation coupling is required.");
+            }
+
+            auto xc_grid = evaluate_current_density_and_xc(
+                calculator,
+                prepared,
+                functionals.exchange,
+                functionals.correlation);
+            if (!xc_grid)
+                return std::unexpected("DFT analytic gradient: XC evaluation failed: " + xc_grid.error());
+
+            const Eigen::Index npoints = prepared.molecular_grid.points.rows();
+            const Eigen::Index nbasis = prepared.ao_grid.nbasis();
+
+            DFT::AOGridHessian hess;
+            if (xc_grid->vsigma.cols() > 0)
+            {
+                auto hess_res = DFT::evaluate_ao_hessian_on_grid(calculator._shells, prepared.molecular_grid);
+                if (!hess_res)
+                    return std::unexpected("DFT analytic gradient: AO Hessian failed: " + hess_res.error());
+                hess = std::move(*hess_res);
+            }
+            else
+            {
+                hess.h_xx.resize(npoints, nbasis);
+                hess.h_xy.resize(npoints, nbasis);
+                hess.h_xz.resize(npoints, nbasis);
+                hess.h_yy.resize(npoints, nbasis);
+                hess.h_yz.resize(npoints, nbasis);
+                hess.h_zz.resize(npoints, nbasis);
+                hess.h_xx.setZero();
+                hess.h_xy.setZero();
+                hess.h_xz.setZero();
+                hess.h_yy.setZero();
+                hess.h_yz.setZero();
+                hess.h_zz.setZero();
+            }
+
+            const double cx = xc_grid->exact_exchange_coefficient;
+
+            auto wf_grad =
+                calculator._scf._scf == HartreeFock::SCFType::UHF
+                    ? HartreeFock::Gradient::compute_uks_gradient(calculator, prepared.shell_pairs, cx)
+                    : HartreeFock::Gradient::compute_rks_gradient(calculator, prepared.shell_pairs, cx);
+            if (!wf_grad)
+                return std::unexpected("DFT Coulomb/exchange gradient failed: " + wf_grad.error());
+
+            auto xc_grad =
+                calculator._scf._scf == HartreeFock::SCFType::UHF
+                    ? DFT::Gradient::compute_xc_nuclear_gradient_uks(
+                          calculator._molecule,
+                          calculator._shells,
+                          prepared.molecular_grid,
+                          prepared.ao_grid,
+                          hess,
+                          *xc_grid,
+                          calculator._info._scf.alpha.density,
+                          calculator._info._scf.beta.density)
+                    : DFT::Gradient::compute_xc_nuclear_gradient_rks(
+                          calculator._molecule,
+                          calculator._shells,
+                          prepared.molecular_grid,
+                          prepared.ao_grid,
+                          hess,
+                          *xc_grid,
+                          calculator._info._scf.alpha.density);
+            if (!xc_grad)
+                return std::unexpected("DFT XC nuclear gradient failed: " + xc_grad.error());
+
+            calculator._gradient = *wf_grad + *xc_grad;
+            return calculator._gradient;
+        }
+
+    } // namespace
 
     std::expected<KSPotentialMatrices, std::string>
     assemble_current_ks_potential(
@@ -3120,12 +3264,16 @@ namespace DFT::Driver
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "Gradient :",
-                std::format(
-                    "Computing numerical nuclear gradient (central differences, h = {:.4f} Bohr)",
-                    NUMERICAL_GRADIENT_STEP_BOHR));
-            auto gradient = compute_numeric_gradient(calculator, *functionals);
+                "Computing analytic nuclear gradient (Kohn-Sham + grid XC)");
+
+            auto prepared_grad = prepare_quadrature_for_calculator(calculator);
+            if (!prepared_grad)
+                return std::unexpected("DFT analytic gradient quadrature preparation failed: " +
+                                       prepared_grad.error());
+
+            auto gradient = compute_analytic_ks_gradient(calculator, *prepared_grad, *functionals);
             if (!gradient)
-                return std::unexpected("DFT numerical gradient failed: " + gradient.error());
+                return std::unexpected("DFT analytic gradient failed: " + gradient.error());
             print_gradient_report(*gradient);
             return *result;
         }

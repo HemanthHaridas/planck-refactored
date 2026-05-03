@@ -178,6 +178,26 @@ file(GLOB POSTHF_SRC CONFIGURE_DEPENDS
 )
 list(REMOVE_ITEM POSTHF_SRC ${SRC_DIR}/post_hf/casscf.cpp)
 
+# planck-dft only needs a subset of post_hf:
+#   integrals.cpp        — AO-ERI / AO→MO transforms used for hybrid-XC exact
+#                          exchange (dft/driver.cpp) and stability analysis
+#                          (scf/stability.cpp)
+#   mp2.cpp              — Correlation::run_rmp2, referenced from opt/geomopt.cpp
+#   mp2_gradient.cpp     — RMP2/UMP2 gradient intermediates, referenced from
+#                          gradient/gradient.cpp
+#   rhf_response.cpp     — solve_rhf_cphf, used by mp2_gradient.cpp
+# CASSCF, RASSCF, and coupled-cluster sources are intentionally excluded.
+set(POSTHF_DFT_SRC
+    ${SRC_DIR}/post_hf/integrals.h
+    ${SRC_DIR}/post_hf/integrals.cpp
+    ${SRC_DIR}/post_hf/mp2.h
+    ${SRC_DIR}/post_hf/mp2.cpp
+    ${SRC_DIR}/post_hf/mp2_gradient.h
+    ${SRC_DIR}/post_hf/mp2_gradient.cpp
+    ${SRC_DIR}/post_hf/rhf_response.h
+    ${SRC_DIR}/post_hf/rhf_response.cpp
+)
+
 file(GLOB GRADIENT_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/gradient/*.h
     ${SRC_DIR}/gradient/*.cpp
@@ -205,6 +225,8 @@ set(HF_MAIN_SRC
 set(DFT_SRC
     ${SRC_DIR}/dft/main.cpp
     ${SRC_DIR}/dft/ao_grid.h
+    ${SRC_DIR}/dft/dft_gradient.cpp
+    ${SRC_DIR}/dft/dft_gradient.h
     ${SRC_DIR}/dft/driver.cpp
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
@@ -266,7 +288,7 @@ add_executable(planck-dft
     ${SCF_SRC}
     ${SOLVATION_SRC}
     ${POPULATIONS_SRC}
-    ${POSTHF_SRC}
+    ${POSTHF_DFT_SRC}
     ${GRADIENT_SRC}
     ${OPT_SRC}
     ${FREQ_SRC}
@@ -546,6 +568,13 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
                 ${CMAKE_SOURCE_DIR}/tests/run_regressions.py
                 --build-dir ${CMAKE_BINARY_DIR}
                 --suite smoke
+    )
+
+    add_test(
+        NAME planck-dft-gradient-fd
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/dft_gradient_fd.py
+                --build-dir ${CMAKE_BINARY_DIR}
     )
 
     add_test(
