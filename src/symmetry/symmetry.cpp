@@ -9,8 +9,58 @@
 #include "wrapper.h"
 
 // Full implementation of detectSymmetry
-std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(HartreeFock::Molecule &molecule)
+std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(
+    HartreeFock::Molecule &molecule,
+    HartreeFock::Units input_units)
 {
+    const auto expected_rows = static_cast<Eigen::Index>(molecule.natoms);
+    const bool have_raw_coords =
+        molecule.coordinates.rows() == expected_rows &&
+        molecule.coordinates.cols() == 3;
+    const bool have_bohr_coords =
+        molecule._is_bohr &&
+        molecule._coordinates.rows() == expected_rows &&
+        molecule._coordinates.cols() == 3;
+    const bool have_standard_bohr =
+        molecule._standard_is_bohr &&
+        molecule._standard.rows() == expected_rows &&
+        molecule._standard.cols() == 3;
+
+    Eigen::MatrixXd bohr_coords;
+    Eigen::MatrixXd coords_angstrom;
+
+    if (have_standard_bohr)
+    {
+        bohr_coords = molecule._standard;
+    }
+    else if (have_bohr_coords)
+    {
+        bohr_coords = molecule._coordinates;
+    }
+    else if (have_raw_coords)
+    {
+        bohr_coords = (input_units == HartreeFock::Units::Bohr)
+                          ? molecule.coordinates
+                          : molecule.coordinates * ANGSTROM_TO_BOHR;
+    }
+    else
+    {
+        return std::unexpected("Symmetry detection requires initialized molecular coordinates.");
+    }
+
+    if (have_raw_coords && input_units == HartreeFock::Units::Angstrom)
+    {
+        // Preserve the declared Angstrom frame exactly instead of converting
+        // Bohr -> Angstrom and back through floating-point roundoff.
+        coords_angstrom = molecule.coordinates;
+    }
+    else
+    {
+        // For Bohr inputs, or when only a Bohr frame is available, build the
+        // libmsym input explicitly from the authoritative Bohr geometry.
+        coords_angstrom = bohr_coords * BOHR_TO_ANGSTROM;
+    }
+
     auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
     if (!ctx_result)
         return std::unexpected(ctx_result.error());
@@ -33,9 +83,9 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(HartreeFo
     {
         atoms.data()[i].m = molecule.atomic_masses[i];
         atoms.data()[i].n = molecule.atomic_numbers[i];
-        atoms.data()[i].v[0] = molecule.coordinates(i, 0);
-        atoms.data()[i].v[1] = molecule.coordinates(i, 1);
-        atoms.data()[i].v[2] = molecule.coordinates(i, 2);
+        atoms.data()[i].v[0] = coords_angstrom(i, 0);
+        atoms.data()[i].v[1] = coords_angstrom(i, 1);
+        atoms.data()[i].v[2] = coords_angstrom(i, 2);
     }
 
     if (MSYM_SUCCESS != msymSetElements(ctx.get(), atoms.size(), atoms.data()))
@@ -47,7 +97,7 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(HartreeFo
     {
         // Symmetry detection failed — fall back to input geometry (already in Bohr).
         molecule._point_group = "C1";
-        molecule.set_standard_from_bohr(molecule._coordinates);
+        molecule.set_standard_from_bohr(bohr_coords);
         molecule._symmetry = false;
         return {};
     }

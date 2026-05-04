@@ -650,7 +650,8 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
     calc._total_energy = *tot_e;
     calc._correlated_total_energy = 0.0;
     calc._have_correlated_total_energy = false;
-    calc._nuclear_repulsion = *nuc_e;
+    if (load_1e_matrices)
+        calc._nuclear_repulsion = *nuc_e;
     calc._info._is_converged = static_cast<bool>(*chk_conv);
 
     if (!in)

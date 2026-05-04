@@ -709,7 +709,8 @@ namespace HartreeFock::Correlation::CC
             static_cast<Eigen::Index>(det_space.determinants.size()),
             det_space.reference_index);
 
-        const unsigned int max_iter = calculator._scf.get_max_cycles(calculator._shells.nbasis());
+        const unsigned int max_iter =
+            std::max(calculator._scf.get_max_cycles(calculator._shells.nbasis()), 100u);
         const double tol_energy = calculator._scf._tol_energy;
         const double tol_residual = calculator._scf._tol_density;
         const bool use_diis = calculator._scf._use_DIIS;

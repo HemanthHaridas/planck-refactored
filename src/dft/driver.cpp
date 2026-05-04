@@ -346,7 +346,10 @@ namespace DFT::Driver
                 return {};
             }
 
-            if (auto res = HartreeFock::Symmetry::detectSymmetry(calculator._molecule); !res)
+            if (auto res = HartreeFock::Symmetry::detectSymmetry(
+                    calculator._molecule,
+                    calculator._geometry._units);
+                !res)
                 return std::unexpected("DFT symmetry detection failed: " + res.error());
 
             HartreeFock::Logger::logging(
@@ -2370,9 +2373,7 @@ namespace DFT::Driver
             HartreeFock::Calculator &calculator,
             bool preserve_previous_density)
         {
-            calculator._molecule._coordinates = calculator._molecule._standard;
-            calculator._molecule.coordinates = calculator._molecule._standard / ANGSTROM_TO_BOHR;
-            calculator._molecule.set_standard_from_bohr(calculator._molecule._standard);
+            calculator.sync_coordinate_frames_from_standard();
             calculator._molecule._symmetry = false;
             calculator._molecule._point_group = "C1";
             reset_sao_state(calculator);
@@ -2620,9 +2621,7 @@ namespace DFT::Driver
 
             calculator._molecule._symmetry = reference_symmetry;
             calculator._molecule._point_group = reference_point_group;
-            calculator._molecule._coordinates = calculator._molecule._standard;
-            calculator._molecule.coordinates = calculator._molecule._standard / ANGSTROM_TO_BOHR;
-            calculator._molecule.set_standard_from_bohr(calculator._molecule._standard);
+            calculator.sync_coordinate_frames_from_standard();
 
             calculator._gradient = gradient;
             return gradient;

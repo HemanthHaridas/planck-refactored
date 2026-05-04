@@ -32,7 +32,7 @@ namespace HartreeFock::Correlation::CC
             return std::unexpected("run_rccsdtq: " + kernels_res.error());
 
         const unsigned int max_iter =
-            calculator._scf.get_max_cycles(calculator._shells.nbasis());
+            std::max(calculator._scf.get_max_cycles(calculator._shells.nbasis()), 100u);
         const double tol_energy = calculator._scf._tol_energy;
         const double tol_residual = calculator._scf._tol_density;
         const double damping = calculator._scf._cc_damping;

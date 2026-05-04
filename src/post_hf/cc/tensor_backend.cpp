@@ -367,11 +367,44 @@ namespace
         return so;
     }
 
-    ProductionSpinOrbitalBlocks build_spin_orbital_blocks(
+    std::expected<void, std::string> enforce_spin_orbital_vvvv_memory_cap(
+        const HartreeFock::Calculator &calculator,
+        const ProductionSpinOrbitalReference &so_ref,
+        std::string_view context)
+    {
+        const double cap_gb = calculator._scf._cc_max_memory_gb;
+        if (cap_gb <= 0.0)
+            return {};
+
+        const long double nvirt = static_cast<long double>(so_ref.n_virt);
+        const long double estimated_bytes =
+            nvirt * nvirt * nvirt * nvirt * static_cast<long double>(sizeof(double));
+        const long double cap_bytes =
+            cap_gb * 1024.0L * 1024.0L * 1024.0L;
+        if (estimated_bytes <= cap_bytes)
+            return {};
+
+        return std::unexpected(std::format(
+            "{} would allocate an estimated {:.2f} GiB spin-orbital vvvv block, exceeding cc_max_memory_gb={:.2f}.",
+            context,
+            static_cast<double>(estimated_bytes / (1024.0L * 1024.0L * 1024.0L)),
+            cap_gb));
+    }
+
+    std::expected<ProductionSpinOrbitalBlocks, std::string> build_spin_orbital_blocks(
+        const HartreeFock::Calculator &calculator,
         const CanonicalRHFCCReference &reference,
         const TensorCCBlockCache &spatial)
     {
         const auto so = build_spin_orbital_reference(reference);
+        if (auto cap_res = enforce_spin_orbital_vvvv_memory_cap(
+                calculator,
+                so,
+                "Spin-orbital tensor expansion");
+            !cap_res)
+        {
+            return std::unexpected(cap_res.error());
+        }
 
         const auto occ = [](int i) noexcept -> int
         {
@@ -1309,7 +1342,10 @@ namespace
         bool use_generated_kernels)
     {
         const ProductionSpinOrbitalReference so_ref = build_spin_orbital_reference(state.reference);
-        const ProductionSpinOrbitalBlocks so_blocks = build_spin_orbital_blocks(state.reference, state.mo_blocks);
+        auto so_blocks_res = build_spin_orbital_blocks(calculator, state.reference, state.mo_blocks);
+        if (!so_blocks_res)
+            return std::unexpected(so_blocks_res.error());
+        const ProductionSpinOrbitalBlocks so_blocks = std::move(*so_blocks_res);
 
         RCCSDAmplitudes amps{
             .t1 = Tensor2D(so_ref.n_occ, so_ref.n_virt, 0.0),
@@ -1317,11 +1353,12 @@ namespace
         };
         initialize_mp2_guess(so_blocks, state, amps);
 
-        const unsigned int max_iter = calculator._scf.get_max_cycles(calculator._shells.nbasis());
+        const unsigned int max_iter =
+            std::max(calculator._scf.get_max_cycles(calculator._shells.nbasis()), 100u);
         const double tol_energy = calculator._scf._tol_energy;
         const double tol_residual = calculator._scf._tol_density;
         const bool use_diis = calculator._scf._use_DIIS;
-        const double damping = 0.8;
+        const double damping = std::clamp(calculator._scf._cc_damping, 0.0, 1.0);
 
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
@@ -2759,8 +2796,11 @@ namespace HartreeFock::Correlation::CC
         state_res->warm_start_iterations = rccsd_res->iterations;
         calculator._ccsd_reference_correlation_energy = rccsd_res->correlation_energy;
         calculator._have_ccsd_reference_energy = true;
-        const ProductionSpinOrbitalBlocks so_blocks =
-            build_spin_orbital_blocks(state_res->reference, state_res->mo_blocks);
+        auto so_blocks_res =
+            build_spin_orbital_blocks(calculator, state_res->reference, state_res->mo_blocks);
+        if (!so_blocks_res)
+            return std::unexpected("run_tensor_rccsdt: " + so_blocks_res.error());
+        const ProductionSpinOrbitalBlocks so_blocks = std::move(*so_blocks_res);
         auto full_system_res = build_spin_orbital_chemists_system(
             calculator,
             shell_pairs,

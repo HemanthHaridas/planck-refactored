@@ -40,9 +40,7 @@ static constexpr double CM_INV_TO_HARTREE = 4.5563352527e-6;
 static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
 {
     // Sync coordinate frames
-    calc._molecule._coordinates = calc._molecule._standard;
-    calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
-    calc._molecule.set_standard_from_bohr(calc._molecule._standard);
+    calc.sync_coordinate_frames_from_standard();
 
     // Rebuild basis
     const std::string gbs_path =
@@ -347,9 +345,7 @@ HartreeFock::Freq::compute_hessian(
 
     // Restore the calculator's SCF state to the undisplaced geometry so
     // the energy / density printed after the hessian block is consistent.
-    calc._molecule._coordinates = calc._molecule._standard;
-    calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
-    calc._molecule.set_standard_from_bohr(calc._molecule._standard);
+    calc.sync_coordinate_frames_from_standard();
 
     // Run vibrational analysis
     vibrational_analysis(result, calc);

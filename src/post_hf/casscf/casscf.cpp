@@ -1196,7 +1196,10 @@ namespace HartreeFock::Correlation::CASSCF
                 logging(LogLevel::Warning, tag + " :",
                         "CI response Davidson solve did not fully converge for at least one root; using single-step fallback.");
 
-            if (stagnation_streak >= 2 && small_energy_change && accepted_micro_step_plateau)
+            if (stagnation_streak >= 2 &&
+                small_energy_change &&
+                accepted_micro_step_plateau &&
+                reported_gnorm < 100.0 * as.tol_mcscf_grad)
             {
                 logging(LogLevel::Warning, tag + " :",
                         "Treating the stationary orbital plateau as converged: the CASSCF energy and accepted orbital step are flat, while the weighted and max-root orbital-gradient screens are no longer improving.");

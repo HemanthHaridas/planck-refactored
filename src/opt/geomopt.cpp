@@ -2,6 +2,7 @@
 #include "intcoords.h"
 
 #include <cmath>
+#include <deque>
 #include <expected>
 #include <format>
 #include <numbers>
@@ -29,9 +30,7 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     const std::size_t natoms = calc._molecule.natoms;
 
     // Update input-frame coordinates from _standard (Bohr) for consistency
-    calc._molecule._coordinates = calc._molecule._standard;
-    calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
-    calc._molecule.set_standard_from_bohr(calc._molecule._standard);
+    calc.sync_coordinate_frames_from_standard();
 
     // Re-read basis from updated geometry (_standard used for shell centers)
     const std::string gbs_path = calc._basis._basis_path + "/" + calc._basis._basis_name;
@@ -181,9 +180,9 @@ static void _log_step_geometry(const HartreeFock::Calculator &calc)
 // returns the L-BFGS search direction p = -H_k * g.
 static Eigen::VectorXd _lbfgs_direction(
     const Eigen::VectorXd &g,
-    const std::vector<Eigen::VectorXd> &s_hist,
-    const std::vector<Eigen::VectorXd> &y_hist,
-    const std::vector<double> &rho_hist)
+    const std::deque<Eigen::VectorXd> &s_hist,
+    const std::deque<Eigen::VectorXd> &y_hist,
+    const std::deque<double> &rho_hist)
 {
     const int m = static_cast<int>(s_hist.size());
     Eigen::VectorXd q = g;
@@ -262,11 +261,8 @@ std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::ru
     _log_step_geometry(calc);
 
     // L-BFGS history
-    std::vector<Eigen::VectorXd> s_hist, y_hist;
-    std::vector<double> rho_hist;
-    s_hist.reserve(lbfgs_m);
-    y_hist.reserve(lbfgs_m);
-    rho_hist.reserve(lbfgs_m);
+    std::deque<Eigen::VectorXd> s_hist, y_hist;
+    std::deque<double> rho_hist;
 
     for (int iter = 0; iter < max_iter; ++iter)
     {
@@ -413,16 +409,17 @@ std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::ru
 
             // Only update L-BFGS history when curvature is positive.
             // With strong Wolfe this is guaranteed; otherwise use the guard.
-            if (wolfe_curvature_met || sy > 1e-30)
+            const double curvature_floor = 1.0e-8 * s.norm() * y.norm();
+            if (wolfe_curvature_met || sy > curvature_floor)
             {
                 s_hist.push_back(s);
                 y_hist.push_back(y);
                 rho_hist.push_back(1.0 / sy);
                 if (static_cast<int>(s_hist.size()) > lbfgs_m)
                 {
-                    s_hist.erase(s_hist.begin());
-                    y_hist.erase(y_hist.begin());
-                    rho_hist.erase(rho_hist.begin());
+                    s_hist.pop_front();
+                    y_hist.pop_front();
+                    rho_hist.pop_front();
                 }
             }
 

@@ -184,7 +184,10 @@ HartreeFock::Solvation::build_pcm_state(
         {
             const Eigen::Vector3d nucleus = calculator._molecule._standard.row(static_cast<Eigen::Index>(atom));
             const double charge = static_cast<double>(calculator._molecule.atomic_numbers(static_cast<Eigen::Index>(atom)));
-            state.nuclear_potential(i) += charge / (site.position - nucleus).norm();
+            const double distance = (site.position - nucleus).norm();
+            if (distance < 1.0e-6)
+                return std::unexpected("PCM tessera coincides with a nucleus");
+            state.nuclear_potential(i) += charge / distance;
         }
 
         // V^(i) = AO matrix of a single +1 charge at s_i. We re-use the same

@@ -267,7 +267,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
     HartreeFock::DIISState diis;
     diis.max_vecs = calculator._scf._DIIS_dim;
     const bool use_diis = calculator._scf._use_DIIS;
-
     const double tol_eri = calculator._integral._tol_eri;
     double E_prev = 0.0;
 
@@ -536,7 +535,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         Pb = make_density_spin(n_beta);
     }
 
-    const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
+    const unsigned int max_iter = std::max(calculator._scf.get_max_cycles(nbasis), 75u);
     const double level_shift = calculator._scf._level_shift;
     const double restart_factor = calculator._scf._diis_restart_factor;
 
@@ -1078,7 +1077,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
     HartreeFock::DIISState diis;
     diis.max_vecs = calculator._scf._DIIS_dim;
     const bool use_diis = calculator._scf._use_DIIS;
-
     const double tol_eri = calculator._integral._tol_eri;
     double E_prev = 0.0;
 
