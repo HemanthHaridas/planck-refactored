@@ -1401,7 +1401,7 @@ namespace DFT::Driver
                 const double mu_norm_debye = root.transition_dipole.norm() * AU_TO_DEBYE;
                 std::cout << std::setw(6) << root.root
                           << std::setw(16) << std::fixed << std::setprecision(8) << root.excitation_energy
-                          << std::setw(14) << std::fixed << std::setprecision(6) << root.excitation_energy_ev
+                          << std::setw(14) << std::fixed << std::setprecision(7) << root.excitation_energy_ev
                           << std::setw(14) << std::fixed << std::setprecision(3) << root.wavelength_nm
                           << std::setw(14) << std::fixed << std::setprecision(6) << root.oscillator_strength
                           << std::setw(16) << std::fixed << std::setprecision(6) << root.transition_dipole.x()
