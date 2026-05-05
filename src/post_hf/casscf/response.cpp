@@ -1,6 +1,7 @@
 #include "post_hf/casscf/response.h"
 
 #include "base/tables.h"
+#include "io/logging.h"
 #include "post_hf/casscf/casscf_utils.h"
 #include "post_hf/casscf/ci.h"
 #include "post_hf/casscf/orbital.h"
@@ -414,8 +415,35 @@ namespace
                     use_sym);
 
             Eigen::VectorXd evals = eig.eigenvalues();
+            int clamped_count = 0;
             for (int i = 0; i < evals.size(); ++i)
+            {
+                if (evals(i) < 1e-4)
+                    ++clamped_count;
                 evals(i) = std::max(evals(i), 1e-4);
+            }
+            if (evals.size() > 0 &&
+                static_cast<double>(clamped_count) / static_cast<double>(evals.size()) > 0.2)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "CASSCF Response :",
+                    std::format(
+                        "Orbital Hessian has heavy negative/near-zero curvature ({} of {} eigenvalues clamped); falling back to the diagonal preconditioner.",
+                        clamped_count,
+                        evals.size()));
+                return HartreeFock::Correlation::CASSCF::diagonal_preconditioned_orbital_step(
+                    orbital_residual,
+                    F_I_mo,
+                    F_A_mo,
+                    n_core,
+                    n_act,
+                    n_virt,
+                    level_shift,
+                    max_rot,
+                    mo_irreps,
+                    use_sym);
+            }
             step =
                 -eig.eigenvectors() * evals.cwiseInverse().asDiagonal() * eig.eigenvectors().transpose() * g;
             step = cap_packed_step(std::move(step));

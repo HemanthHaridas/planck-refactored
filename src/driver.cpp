@@ -364,7 +364,10 @@ int main(int argc, const char *argv[])
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Symmetry Detection :", "We use libmsym library to detect point groups");
 
-        if (auto res = HartreeFock::Symmetry::detectSymmetry(calculator._molecule); !res)
+        if (auto res = HartreeFock::Symmetry::detectSymmetry(
+                calculator._molecule,
+                calculator._geometry._units);
+            !res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Symmetry Detection Failed :", res.error());
             return EXIT_FAILURE;
@@ -1191,9 +1194,7 @@ int main(int argc, const char *argv[])
                         stp * freq_result->normal_modes(static_cast<int>(a) * 3 + d, imag_idx);
 
             // Keep all three coordinate frames in sync
-            calculator._molecule._coordinates = calculator._molecule._standard;
-            calculator._molecule.coordinates = calculator._molecule._standard / ANGSTROM_TO_BOHR;
-            calculator._molecule.set_standard_from_bohr(calculator._molecule._standard);
+            calculator.sync_coordinate_frames_from_standard();
 
             // Log displaced geometry
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
@@ -1267,7 +1268,10 @@ int main(int argc, const char *argv[])
         HartreeFock::Logger::blank();
 
         // Detect point group of the optimized structure
-        if (auto res = HartreeFock::Symmetry::detectSymmetry(calculator._molecule); !res)
+        if (auto res = HartreeFock::Symmetry::detectSymmetry(
+                calculator._molecule,
+                calculator._geometry._units);
+            !res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
                                          "Symmetry Detection :", std::format("Failed: {} — skipping symmetry SCF", res.error()));

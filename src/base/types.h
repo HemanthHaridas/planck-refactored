@@ -340,7 +340,8 @@ namespace HartreeFock
         double _tol_density = 1E-10;       // Density tolerance
         double _level_shift = 0.0;         // Virtual orbital level shift in Hartree (0 = off)
         double _diis_restart_factor = 2.0; // Restart DIIS when error grows by this factor (0 = off)
-        double _cc_damping = 0.35;         // Coupled-cluster damping factor for tensor CC iterations
+        double _cc_damping = 0.8;          // Coupled-cluster damping factor for tensor CC iterations
+        double _cc_max_memory_gb = 4.0;    // Soft cap for large tensor-CC intermediates (0 = off)
 
         SCFType _scf = SCFType::RHF;           // SCF Type (Default is RHF)
         SCFMode _mode = SCFMode::Conventional; // SCF Mode (Default is Conventional)
@@ -634,6 +635,7 @@ namespace HartreeFock
             R = A._shell->_center - B._shell->_center;
             R2 = R.squaredNorm();
             Rnorm = std::sqrt(R2);
+            screening = 0.0;
 
             const std::size_t nA = A._shell->nprimitives();
             const std::size_t nB = B._shell->nprimitives();
@@ -984,6 +986,21 @@ namespace HartreeFock
                 _molecule._coordinates = _molecule.coordinates * ANGSTROM_TO_BOHR;
             }
             _molecule._is_bohr = true;
+        }
+
+        void sync_coordinate_frames_from_standard() noexcept
+        {
+            assert(_molecule._standard.rows() == static_cast<Eigen::Index>(_molecule.natoms) &&
+                   _molecule._standard.cols() == 3 &&
+                   _molecule._standard_is_bohr &&
+                   "sync_coordinate_frames_from_standard requires molecule._standard in Bohr");
+            _molecule._coordinates = _molecule._standard;
+            if (_geometry._units == Units::Bohr)
+                _molecule.coordinates = _molecule._standard;
+            else
+                _molecule.coordinates = _molecule._standard * BOHR_TO_ANGSTROM;
+            _molecule._is_bohr = true;
+            _molecule.set_standard_from_bohr(_molecule._standard);
         }
 
         // Getter

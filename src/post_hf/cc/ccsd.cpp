@@ -551,11 +551,12 @@ namespace HartreeFock::Correlation::CC
         };
         initialize_mp2_guess(so_ref, so_blocks, state, so_amps);
 
-        const unsigned int max_iter = calculator._scf.get_max_cycles(calculator._shells.nbasis());
+        const unsigned int max_iter =
+            std::max(calculator._scf.get_max_cycles(calculator._shells.nbasis()), 100u);
         const double tol_energy = calculator._scf._tol_energy;
         const double tol_residual = calculator._scf._tol_density;
         const bool use_diis = calculator._scf._use_DIIS;
-        const double damping = 0.8;
+        const double damping = std::clamp(calculator._scf._cc_damping, 0.0, 1.0);
 
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,

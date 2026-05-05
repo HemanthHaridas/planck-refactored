@@ -442,6 +442,11 @@ if(BUILD_TESTING)
         ${POPULATIONS_SRC}
     )
 
+    add_executable(planck-symmetry-units
+        ${CMAKE_SOURCE_DIR}/tests/symmetry_units.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+    )
+
     add_executable(planck-cc-arbitrary-solver
         ${CMAKE_SOURCE_DIR}/tests/cc_arbitrary_solver.cpp
         ${SRC_DIR}/post_hf/cc/common.cpp
@@ -469,6 +474,12 @@ if(BUILD_TESTING)
 
     target_include_directories(planck-population-analysis PRIVATE
         ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-symmetry-units PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
     )
 
@@ -501,6 +512,12 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-symmetry-units PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-cc-arbitrary-solver PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -516,6 +533,11 @@ if(BUILD_TESTING)
         ${MSYM_INSTALL_DIR}/lib/libmsym.a
     )
     add_dependencies(planck-casscf-internal libmsym)
+
+    target_link_libraries(planck-symmetry-units
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-symmetry-units libmsym)
 
     add_test(
         NAME planck-casscf-internal
@@ -535,6 +557,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-population-analysis
         COMMAND planck-population-analysis
+    )
+
+    add_test(
+        NAME planck-symmetry-units
+        COMMAND planck-symmetry-units
     )
 
     add_test(

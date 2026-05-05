@@ -190,6 +190,7 @@ namespace
         write_slot(k * nb3 + l * nb2 + j * nb + i);
         write_slot(l * nb3 + k * nb2 + j * nb + i);
     }
+
 } // namespace
 
 static bool _auto_prefers_rys(const HartreeFock::ShellPair &spAB,
@@ -412,7 +413,6 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
     const int L = lABx + lABy + lABz + lCDx + lCDy + lCDz;
     const int n = L / 2 + 1;
-
     // Fetch Rys roots and weights
     double t2[HartreeFock::Rys::RYS_MAX_ROOTS];
     double w[HartreeFock::Rys::RYS_MAX_ROOTS];

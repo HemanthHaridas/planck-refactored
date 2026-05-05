@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <format>
+#include <memory>
 #include <vector>
 
 #include "basis/basis.h"
@@ -144,6 +145,7 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
     const auto &bfs = basis._basis_functions;
     const std::size_t nshells = shells.size();
     const Eigen::MatrixXd schwarz_q = build_pair_schwarz_table(shell_pairs, nb);
+    std::vector<std::unique_ptr<HartreeFock::ShellPair>> reversed_pairs(shell_pairs.size());
 
     std::vector<int> bf_shell(nb, -1);
     for (std::size_t s = 0; s < nshells; ++s)
@@ -155,6 +157,7 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
 
     for (const auto &sp : shell_pairs)
     {
+        const std::size_t pair_index = static_cast<std::size_t>(&sp - shell_pairs.data());
         const std::size_t ii = sp.A._index;
         const std::size_t jj = sp.B._index;
         const int atom_ii = shell_atom[bf_shell[ii]];
@@ -171,7 +174,9 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
 
         if (ii != jj)
         {
-            HartreeFock::ShellPair sp_rev(sp.B, sp.A);
+            if (!reversed_pairs[pair_index])
+                reversed_pairs[pair_index] = std::make_unique<HartreeFock::ShellPair>(sp.B, sp.A);
+            const auto &sp_rev = *reversed_pairs[pair_index];
             const auto dST_B = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp_rev);
             const auto dV_B = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp_rev, mol);
 

@@ -673,6 +673,11 @@ namespace HartreeFock::IO
                      scf._cc_damping = std::stod(value);
                      return std::expected<void, std::string>{};
                  }},
+                {"cc_max_memory_gb", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._cc_max_memory_gb = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
                 {"diis_restart", [&scf](const std::string &value) -> std::expected<void, std::string>
                  {
                      scf._diis_restart_factor = std::stod(value);
