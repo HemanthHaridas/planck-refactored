@@ -35,6 +35,8 @@ namespace DFT::Driver
         AOGridEvaluation ao_grid;
         GridPreset grid_preset;
         std::optional<HartreeFock::Solvation::PCMState> pcm;
+        mutable std::vector<double> short_range_eri;
+        mutable double short_range_eri_omega = -1.0;
     };
 
     struct Result
@@ -56,7 +58,7 @@ namespace DFT::Driver
     std::expected<KSPotentialMatrices, std::string>
     assemble_current_ks_potential(
         HartreeFock::Calculator &calculator,
-        const PreparedSystem &prepared,
+        PreparedSystem &prepared,
         const XCGridEvaluation &xc_grid);
 
     std::expected<PreparedSystem, std::string>

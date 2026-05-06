@@ -1,7 +1,7 @@
 # PySCF Reference Calculations
 
-External reference suite for validating Planck CASSCF, SA-CASSCF, CCSD, and
-CCSDT energies against PySCF.
+External reference suite for validating Planck CASSCF, SA-CASSCF, CCSD,
+CCSDT, and selected DFT energies against PySCF.
 
 ## Requirements
 
@@ -58,6 +58,8 @@ tests/pyscf/.venv/bin/python tests/pyscf/run_all.py --list
 | `ethylene_casscf_ccpvdz.py` | C₂H₄ (planar) | cc-pVDZ | CAS(2e,2o) | SS-CASSCF |
 | `water_cas44_sto3g_sa2.py` | H₂O | STO-3G | CAS(4e,4o) | SA-CASSCF (2 roots) |
 | `ethylene_cas44_sto3g_sa2.py` | C₂H₄ (90° twisted) | STO-3G | CAS(4e,4o) | SA-CASSCF (2 roots) |
+| `h2_dft_hse06_sto3g.py` | H₂ | STO-3G | n/a | RKS HSE06 |
+| `h2_dft_b2plyp_sto3g.py` | H₂ | STO-3G | n/a | RKS B2PLYP + scaled MP2 |
 | `h2_rccsd_sto3g.py` | H₂ | STO-3G | n/a | RCCSD |
 | `lih_rccsdt_sto3g.py` | LiH | STO-3G | n/a | RCCSDT |
 | `b_uccsdt_sto3g.py` | B | STO-3G | n/a | UCCSD/UCCSDT |
@@ -65,7 +67,18 @@ tests/pyscf/.venv/bin/python tests/pyscf/run_all.py --list
 
 The case manifest lives in `tests/pyscf/cases.json`. All geometries match the
 Planck `.hfinp` inputs in `tests/benchmarks/casscf/pyscf_reference/` or
-`tests/inputs/regression/post_hf/`.
+`tests/inputs/regression/`.
+
+## DFT Notes
+
+- `h2_dft_hse06_sto3g.py` uses PySCF's native `hse06` libxc mapping.
+- PySCF 2.12.1 does not expose libxc's named `b2plyp` functional directly, so
+  `h2_dft_b2plyp_sto3g.py` builds the equivalent hybrid reference with the
+  custom XC string `0.53*HF + 0.47*B88, 0.73*LYP` and then adds the scaled
+  MP2 correction (`0.27 * E_MP2`) before comparing to Planck.
+- The DFT equivalence scripts force `fine` grids on both Planck and PySCF so
+  they can use microhartree-level tolerances without being dominated by coarse
+  quadrature differences.
 
 ## Tolerance
 

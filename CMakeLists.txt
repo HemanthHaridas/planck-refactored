@@ -430,6 +430,10 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dft_grid_invariants.cpp
     )
 
+    add_executable(planck-dft-functional-support
+        ${CMAKE_SOURCE_DIR}/tests/dft_functional_support.cpp
+    )
+
     add_executable(planck-multipole-integrals
         ${CMAKE_SOURCE_DIR}/tests/multipole_integrals.cpp
         ${INT_SRC}
@@ -467,6 +471,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-dft-functional-support PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+    )
+
     target_include_directories(planck-multipole-integrals PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -495,6 +504,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-grid-invariants PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-functional-support PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -539,6 +554,11 @@ if(BUILD_TESTING)
     )
     add_dependencies(planck-symmetry-units libmsym)
 
+    target_link_libraries(planck-dft-functional-support
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-functional-support libxc)
+
     add_test(
         NAME planck-casscf-internal
         COMMAND planck-casscf-internal
@@ -547,6 +567,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-grid-invariants
         COMMAND planck-dft-grid-invariants
+    )
+
+    add_test(
+        NAME planck-dft-functional-support
+        COMMAND planck-dft-functional-support
     )
 
     add_test(

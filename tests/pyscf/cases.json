@@ -43,6 +43,18 @@
       "allowed_statuses": ["PASS"]
     },
     {
+      "id": "h2_dft_b2plyp_sto3g",
+      "script": "tests/pyscf/h2_dft_b2plyp_sto3g.py",
+      "kind": "dft",
+      "allowed_statuses": ["PASS"]
+    },
+    {
+      "id": "h2_dft_hse06_sto3g",
+      "script": "tests/pyscf/h2_dft_hse06_sto3g.py",
+      "kind": "dft",
+      "allowed_statuses": ["PASS"]
+    },
+    {
       "id": "h2_rccsd_sto3g",
       "script": "tests/pyscf/h2_rccsd_sto3g.py",
       "kind": "cc",

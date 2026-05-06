@@ -57,3 +57,4 @@ tests/benchmarks/**/*.hfchk
 tests/benchmarks/**/*.uvvis.dat
 *.png
 *.log
+tests/*/__pycache__

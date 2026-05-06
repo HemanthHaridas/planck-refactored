@@ -10,6 +10,7 @@
 
 #include <Eigen/Geometry>
 
+#include "dft/base/wrapper.h"
 #include "io.h"
 #include "io/logging.h"
 #include "lookup/elements.h"
@@ -57,6 +58,22 @@ namespace HartreeFock::IO
             line.erase(pos);
         trim(line);
         return line;
+    }
+
+    static std::expected<int, std::string> resolve_libxc_name_or_id(
+        const std::string &value,
+        const std::string &label)
+    {
+        auto resolved = DFT::XC::functional_id(value);
+        if (!resolved)
+        {
+            return std::unexpected(
+                std::format("{} {} (and libxc resolution failed: {})",
+                            label,
+                            value,
+                            resolved.error()));
+        }
+        return resolved;
     }
 
     static std::expected<bool, std::string> toBool(const std::string &parsedString)
@@ -922,21 +939,39 @@ namespace HartreeFock::IO
                 {"exchange", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
                      auto parsed = map_string_enum<HartreeFock::XCExchangeFunctional>(value);
-                     if (!parsed)
-                         return std::unexpected(parsed.error());
-                     dft._exchange = *parsed;
-                     if (dft._exchange != HartreeFock::XCExchangeFunctional::Custom)
-                         dft._exchange_id = 0;
+                     if (parsed)
+                     {
+                         dft._exchange = *parsed;
+                         if (dft._exchange != HartreeFock::XCExchangeFunctional::Custom)
+                             dft._exchange_id = 0;
+                         return std::expected<void, std::string>{};
+                     }
+
+                     auto exchange_id = resolve_libxc_name_or_id(value, "Invalid XC exchange functional :");
+                     if (!exchange_id)
+                         return std::unexpected(exchange_id.error());
+
+                     dft._exchange = HartreeFock::XCExchangeFunctional::Custom;
+                     dft._exchange_id = *exchange_id;
                      return std::expected<void, std::string>{};
                  }},
                 {"correlation", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
                      auto parsed = map_string_enum<HartreeFock::XCCorrelationFunctional>(value);
-                     if (!parsed)
-                         return std::unexpected(parsed.error());
-                     dft._correlation = *parsed;
-                     if (dft._correlation != HartreeFock::XCCorrelationFunctional::Custom)
-                         dft._correlation_id = 0;
+                     if (parsed)
+                     {
+                         dft._correlation = *parsed;
+                         if (dft._correlation != HartreeFock::XCCorrelationFunctional::Custom)
+                             dft._correlation_id = 0;
+                         return std::expected<void, std::string>{};
+                     }
+
+                     auto correlation_id = resolve_libxc_name_or_id(value, "Invalid XC correlation functional :");
+                     if (!correlation_id)
+                         return std::unexpected(correlation_id.error());
+
+                     dft._correlation = HartreeFock::XCCorrelationFunctional::Custom;
+                     dft._correlation_id = *correlation_id;
                      return std::expected<void, std::string>{};
                  }},
                 {"exchange_id", [&dft](const std::string &value) -> std::expected<void, std::string>

@@ -40,17 +40,19 @@ inline std::vector<double> _compute_2e(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const std::size_t nbasis,
     const HartreeFock::IntegralMethod &engine,
+    HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+    double omega = 0.0,
     double tol_eri = 1e-10,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
 {
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
-        return HartreeFock::RysQuad::_compute_2e(shell_pairs, nbasis, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::Auto:
-        return HartreeFock::RysQuad::_compute_2e_auto(shell_pairs, nbasis, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_auto(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
     default:
-        return HartreeFock::ObaraSaika::_compute_2e(shell_pairs, nbasis, tol_eri, sym_ops);
+        return HartreeFock::ObaraSaika::_compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
     }
 }
 
@@ -58,17 +60,19 @@ inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair
                                         const Eigen::MatrixXd &density,
                                         const std::size_t nbasis,
                                         const HartreeFock::IntegralMethod &engine,
+                                        HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+                                        double omega = 0.0,
                                         double tol_eri = 1e-10,
                                         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
 {
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
-        return HartreeFock::RysQuad::_compute_2e_fock(shell_pairs, density, nbasis, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::Auto:
-        return HartreeFock::RysQuad::_compute_2e_fock_auto(shell_pairs, density, nbasis, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_auto(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     default:
-        return HartreeFock::ObaraSaika::_compute_2e_fock(shell_pairs, density, nbasis, tol_eri, sym_ops);
+        return HartreeFock::ObaraSaika::_compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     }
 }
 
@@ -78,17 +82,19 @@ _compute_2e_fock_uhf(const std::vector<HartreeFock::ShellPair> &shell_pairs,
                      const Eigen::MatrixXd &Pb,
                      const std::size_t nbasis,
                      const HartreeFock::IntegralMethod &engine,
+                     HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+                     double omega = 0.0,
                      double tol_eri = 1e-10,
                      const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
 {
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
-        return HartreeFock::RysQuad::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::Auto:
-        return HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(shell_pairs, Pa, Pb, nbasis, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     default:
-        return HartreeFock::ObaraSaika::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, tol_eri, sym_ops);
+        return HartreeFock::ObaraSaika::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     }
 }
 

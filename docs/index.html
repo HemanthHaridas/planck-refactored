@@ -294,7 +294,7 @@
 <p>Planck is a compact electronic structure program built around Gaussian-basis self-consistent field theory. It implements:</p>
 <ul>
 <li>Restricted and unrestricted Hartree-Fock (RHF/UHF) with DIIS acceleration</li>
-<li>Kohn-Sham DFT (RKS/UKS) with LDA and GGA exchange-correlation functionals via libxc</li>
+<li>Kohn-Sham DFT (RKS/UKS) with LDA, GGA, hybrid, range-separated-hybrid, and double-hybrid exchange-correlation functionals via libxc</li>
 <li>Obara-Saika and Rys-quadrature two-electron integral engines</li>
 <li>Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF</li>
 <li>Point-group detection, symmetry-adapted orbitals, and MO irrep labeling</li>
@@ -2057,6 +2057,7 @@ E[P] = T_s[P] + V_{ne}[P] + J[P] + E_{xc}[P] + V_{nn}
 F^{KS}_{\mu\nu} = h_{\mu\nu} + J_{\mu\nu} + V^{xc}_{\mu\nu}
 \]</span></p>
 <p>This is identical in structure to the HF Fock matrix, with the HF exchange matrix <span class="math-inline">\(K\)</span> replaced by the XC potential matrix <span class="math-inline">\(V^{xc}\)</span>. Planck reuses the HF SCF loop for KS-DFT: the only structural difference is how the two-electron contribution to the Fock matrix is assembled (Coulomb only, no exchange, plus <span class="math-inline">\(V^{xc}\)</span> from numerical integration).</p>
+<p>For semilocal functionals this statement is literal. For hybrids, Planck adds the exact-exchange part back explicitly. Global hybrids use a scaled full-range exchange matrix. Range-separated hybrids and range-separated double hybrids use the screened-ERI path introduced in the integral engines: the KS build forms <span class="math-inline">\(\alpha K^{\text{full}} + \beta K^{\text{SR}}(\omega)\)</span>, where <span class="math-inline">\(\alpha\)</span>, <span class="math-inline">\(\beta\)</span>, and <span class="math-inline">\(\omega\)</span> come from libxc&#x27;s CAM metadata. Double hybrids then add a post-KS MP2-like correction scaled by the libxc PT2 coefficient.</p>
 <h3 id="exchange-correlation-functional-families">Exchange-Correlation Functional Families</h3>
 <h4 id="lda-local-density-approximation">LDA (Local Density Approximation)</h4>
 <p>The XC energy depends only on the local electron density <span class="math-inline">\(\rho(\mathbf r)\)</span>:</p>
@@ -2088,6 +2089,26 @@ E_{xc}^{GGA}[\rho] = \int f(\rho(\mathbf r),\, |\nabla\rho(\mathbf r)|^2)\, d\ma
 <tr><td>PW91 (<code>gga_x_pw91</code>)</td><td>PW91</td><td>PW91</td></tr>
 <tr><td>PBE (<code>gga_x_pbe</code>)</td><td>PBE (<code>gga_c_pbe</code>)</td><td>PBE (default)</td></tr>
 </tbody></table></div>
+<h4 id="hybrids-range-separation-and-double-hybrids">Hybrids, range separation, and double hybrids</h4>
+<p>Global hybrids mix a fraction of Hartree-Fock exchange into the KS reference:</p>
+<p><span class="math-display">\[
+E_{xc}^{hyb} = a_x E_x^{HF} + (1-a_x)E_x^{DFT} + E_c^{DFT}
+\]</span></p>
+<p>Range-separated hybrids split the Coulomb operator into long-range and short-range pieces,</p>
+<p><span class="math-display">\[
+\frac{1}{r_{12}} = \frac{\operatorname{erf}(\omega r_{12})}{r_{12}}
+                 + \frac{\operatorname{erfc}(\omega r_{12})}{r_{12}},
+\]</span></p>
+<p>and then apply different exact-exchange fractions to the two pieces. In Planck&#x27;s current libxc-driven notation the implemented KS exchange build is</p>
+<p><span class="math-display">\[
+K^{xc}_{exact} = \alpha K^{full} + \beta K^{SR}(\omega).
+\]</span></p>
+<p>That form covers screened hybrids such as HSE06 (<span class="math-inline">\(\alpha=0\)</span>, <span class="math-inline">\(\beta=0.25\)</span>, <span class="math-inline">\(\omega \approx 0.11\)</span>) and range-separated double hybrids such as <span class="math-inline">\(\omega\)</span>B2PLYP.</p>
+<p>Double hybrids extend the hybrid idea once more:</p>
+<p><span class="math-display">\[
+E^{DH} = E^{KS-hyb} + c_{PT2} E^{(2)}.
+\]</span></p>
+<p>In Planck the converged KS reference is followed by an RHF/UHF-based MP2-like correction from <code>src/post_hf/mp2.cpp</code>, scaled by the libxc PT2 coefficient. For B2PLYP, for example, libxc supplies <span class="math-inline">\(a_x = 0.53\)</span> and <span class="math-inline">\(c_{PT2} = 0.27\)</span>.</p>
 <h3 id="numerical-integration-molecular-grid">Numerical Integration: Molecular Grid</h3>
 <p>Because <span class="math-inline">\(V^{xc}_{\mu\nu}\)</span> has no analytic closed form, it is evaluated numerically:</p>
 <p><span class="math-display">\[
@@ -2123,6 +2144,7 @@ w_i(\mathbf r) = \frac{P_i(\mathbf r)}{\sum_k P_k(\mathbf r)} \cdot w_i^{radial-
 <tr><td><code>Fine</code></td><td>5</td><td>26 / 194 / 302 / 434 / 302</td></tr>
 <tr><td><code>UltraFine</code></td><td>6</td><td>50 / 302 / 434 / 590 / 434</td></tr>
 </tbody></table></div>
+<p>The practical lesson from cross-code benchmarking is that the choice of grid matters as much as the SCF convergence threshold. Planck&#x27;s molecular grids are ORCA-like Treutler-Ahlrichs + pruned Lebedev grids; PySCF&#x27;s <code>grids.level</code> presets are different quadrature families. On the current H<span class="math-inline">\(_2\)</span>/STO-3G DFT fixtures, coarse-grid Planck-vs-PySCF comparisons differ by about <span class="math-inline">\(10^{-3}\)</span> Eh even for ordinary B3LYP, while <code>fine</code> and <code>ultrafine</code> grids reduce the gap back to <span class="math-inline">\(10^{-6}\)</span> to <span class="math-inline">\(10^{-7}\)</span> Eh. This is why the PySCF equivalence scripts in <code>tests/pyscf/</code> force <code>fine</code> grids for the DFT cases.</p>
 <h3 id="ao-evaluation-on-the-grid">AO Evaluation on the Grid</h3>
 <p><code>AOGridEvaluation</code> (declared in <code>src/dft/ao_grid.h</code>) stores the AO values and gradients at every grid point in a matrix of shape <code>(N_grid, N_AO)</code>. These are computed once before the KS iteration begins. For each grid point and each AO <span class="math-inline">\(\phi_\mu\)</span>, the value and Cartesian gradient components are evaluated from the contracted shell data in the <code>Basis</code> object.</p>
 <h3 id="density-and-xc-evaluation">Density and XC Evaluation</h3>
@@ -2949,13 +2971,15 @@ driver.cpp
 <tr><td>Kohn-Sham DFT (RKS/UKS)</td><td>Complete</td></tr>
 <tr><td>LDA XC functionals (Slater, VWN5)</td><td>Complete</td></tr>
 <tr><td>GGA XC functionals (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation)</td><td>Complete</td></tr>
-<tr><td>Arbitrary libxc functionals via integer ID</td><td>Complete within the currently supported LDA/GGA/global-hybrid subset; unsupported libxc families still error explicitly</td></tr>
+<tr><td>Arbitrary libxc functionals via integer ID or libxc name</td><td>Complete within the currently supported single-point KS subset; unsupported workflow/family combinations still error explicitly</td></tr>
 <tr><td>Molecular grid (Treutler-Ahlrichs + Lebedev + Becke)</td><td>Complete</td></tr>
 <tr><td>Analytic KS-DFT gradient (RKS/UKS, LDA/GGA/global hybrid)</td><td>Complete</td></tr>
 <tr><td>TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels)</td><td>Complete</td></tr>
 <tr><td>DFT geometry optimization / gradients</td><td>Complete</td></tr>
 <tr><td>Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs)</td><td>Complete</td></tr>
-<tr><td>Range-separated and double-hybrid XC functionals</td><td>Not supported</td></tr>
+<tr><td>Range-separated hybrid XC functionals (for example HSE06)</td><td>Complete for single-point energies</td></tr>
+<tr><td>Double-hybrid XC functionals (for example B2PLYP)</td><td>Complete for single-point energies</td></tr>
+<tr><td>Range-separated double hybrids (for example <span class="math-inline">\(\omega\)</span>B2PLYP)</td><td>Complete for single-point energies</td></tr>
 <tr><td>Spherical harmonic basis</td><td>Not supported (Cartesian only)</td></tr>
 <tr><td>C-PCM solvation (RHF/UHF/RKS/UKS, single-point energy)</td><td>Complete</td></tr>
 <tr><td>PCM gradients / geometry optimization / frequencies</td><td>Not implemented</td></tr>

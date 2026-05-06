@@ -14,7 +14,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 <div align="justify">
 
 - **RHF / ROHF / UHF** — closed-shell, restricted open-shell, and unrestricted Hartree-Fock; ROHF uses a Roothaan-type effective Fock construction with aufbau orbital reordering and DIIS convergence
-- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, and global hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals via integer ID
+- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, global hybrid, range-separated hybrid, and double-hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals by name or integer ID. Range-separated and double-hybrid functionals are currently implemented for single-point energies
 - **PCM solvation** — self-consistent conductor-like polarizable continuum model (C-PCM) for single-point RHF/UHF/RKS/UKS calculations with user-defined dielectric, named solvents, atom-centered cavities, and surface discretization controls
 - **TDDFT / linear response** — full Casida and optional TDA excited-state roots on top of converged KS orbitals, with RKS singlet/triplet support, UKS spin-conserving response, semilocal XC kernels, transition dipoles, oscillator strengths, wavelengths, and Gaussian-broadened UV-Vis spectra
 - **Two integral engines** — Obara-Saika for low angular momentum; Rys quadrature for high angular momentum; automatic engine selection per shell quartet (`engine auto`)
@@ -224,8 +224,8 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
 | `grid` / `grid_level` | enum | `coarse`, `normal`, `fine`, `ultrafine` | `normal` | Molecular integration grid quality. Higher quality uses more radial shells and angular points; see grid preset table below. |
-| `exchange` | enum | `slater`/`lda`, `b88`/`becke88`, `pw91`, `pbe`, `b3lyp`, `pbe0`/`pbeh` | `pbe` | Exchange or combined exchange-correlation functional. Combined XC entries such as `b3lyp` and `pbe0` ignore the separate `correlation` keyword. |
-| `correlation` | enum | `vwn`/`vwn5`, `lyp`, `p86`, `pw91`, `pbe` | `pbe` | Correlation functional |
+| `exchange` | enum/string | built-in aliases such as `slater`/`lda`, `b88`/`becke88`, `pw91`, `pbe`, `b3lyp`, `pbe0`/`pbeh`, `hse06`, `b2plyp`; or any libxc name | `pbe` | Exchange or combined exchange-correlation functional. Combined XC entries such as `b3lyp`, `pbe0`, `hse06`, and `b2plyp` ignore the separate `correlation` keyword. Unknown strings are resolved through libxc by name. |
+| `correlation` | enum/string | `vwn`/`vwn5`, `lyp`, `p86`, `pw91`, `pbe`; or any libxc name | `pbe` | Correlation functional |
 | `exchange_id` | int | any libxc integer ID | — | Use an arbitrary libxc exchange functional by its integer identifier. Overrides `exchange`. |
 | `correlation_id` | int | any libxc integer ID | — | Use an arbitrary libxc correlation functional by its integer identifier. Overrides `correlation`. |
 | `lr_nstates` / `tddft_nstates` / `nstates` / `nroots` | int | ≥ 1 | `5` | Number of TDDFT roots to solve for `calculation tddft` / `linearresponse`. |
@@ -235,6 +235,13 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | `use_sao_blocking` | bool | `.true.`, `.false.` | `.true.` | Enable symmetry-adapted AO blocking for the Coulomb matrix assembly. |
 | `print_grid_summary` | bool | `.true.`, `.false.` | `.true.` | Print a per-atom grid point count summary before the KS iterations. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.false.` | Write a `.dftchk` checkpoint file after successful convergence. |
+
+<p align="justify">
+Range-separated hybrids and double hybrids are currently supported for
+single-point energies. Analytic gradients, geometry optimization, frequencies,
+and TDDFT remain limited to the existing LDA/GGA/global-hybrid path and still
+error explicitly for the newer non-global cases.
+</p>
 
 ### Section: `%begin_pcm`
 
@@ -271,6 +278,17 @@ Optional continuum-solvation settings for a self-consistent conductor-like PCM s
 | PBE | `pbe` | `pbe` | GGA (default) |
 | B3LYP | `b3lyp` | ignored | Global hybrid GGA |
 | PBE0 | `pbe0` | ignored | Global hybrid GGA |
+| HSE06 | `hse06` | ignored | Range-separated hybrid GGA |
+| B2PLYP | `b2plyp` | ignored | Double-hybrid GGA |
+
+<p align="justify">
+For cross-code DFT comparisons, matching the SCF convergence threshold alone is
+not enough: different molecular quadrature grids can shift total energies by
+\(10^{-3}\) Eh on coarse settings. The PySCF equivalence tests in
+`tests/pyscf/` therefore force `fine` grids on both sides, where Planck and
+PySCF agree again at the \(10^{-6}\) to \(10^{-7}\) Eh level for B3LYP, HSE06,
+and B2PLYP on the current H\(_2\)/STO-3G fixtures.
+</p>
 
 ### Section: `%begin_geom`
 

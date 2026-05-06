@@ -942,6 +942,8 @@ The same post-SCF multipole analysis is available in `planck-dft`, because the d
 | `exchange pw91` + `correlation pw91` | PW91 | GGA |
 | `exchange b3lyp` | B3LYP | global hybrid GGA |
 | `exchange pbe0` | PBE0 | global hybrid GGA |
+| `exchange hse06` | HSE06 | range-separated hybrid GGA |
+| `exchange b2plyp` | B2PLYP | double-hybrid GGA |
 
 #### Grid quality
 
@@ -1068,7 +1070,10 @@ H     0.000000     0.000000     0.370000
 
 #### Custom libxc functional
 
-To use any libxc functional by its integer ID, replace the enum keywords with numeric IDs:
+`exchange` and `correlation` first try the built-in aliases above, then fall back
+to libxc names. That means inputs such as `exchange hse06`,
+`exchange hyb_gga_xc_cam_b3lyp`, or `exchange b2plyp` are accepted directly.
+You can also select any libxc functional by its integer ID:
 
 ```
 %begin_dft
@@ -1077,6 +1082,10 @@ To use any libxc functional by its integer ID, replace the enum keywords with nu
     grid           normal
 %end_dft
 ```
+
+Range-separated and double-hybrid functionals are currently implemented for
+single-point energies. Their gradient, optimization, frequency, and TDDFT
+workflows are still rejected with an explicit diagnostic.
 
 ### 16. All input keywords at a glance
 

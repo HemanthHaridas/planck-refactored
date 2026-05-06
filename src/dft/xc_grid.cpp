@@ -150,12 +150,6 @@ namespace DFT
                     label + " meta-GGA functionals are not supported yet because tau/laplacian terms are not wired");
             }
 
-            if (functional.is_hybrid() && !functional.is_global_hybrid())
-            {
-                return std::unexpected(
-                    label + " range-separated and double-hybrid functionals are not supported yet");
-            }
-
             if (!functional.is_supported_semilocal())
             {
                 return std::unexpected(
@@ -404,8 +398,11 @@ namespace DFT
         evaluation.exchange_energy = evaluation.exchange.energy;
         evaluation.correlation_energy = evaluation.correlation.energy;
         evaluation.total_energy = evaluation.exchange_energy + evaluation.correlation_energy;
+        evaluation.full_range_exchange_coefficient = exchange_functional.fock_exchange_coefficient();
+        evaluation.short_range_exchange_coefficient = exchange_functional.short_range_exchange_coefficient();
+        evaluation.range_separation_omega = exchange_functional.range_separation_omega();
         evaluation.exact_exchange_coefficient =
-            exchange_functional.is_hybrid() ? exchange_functional.exact_exchange_coefficient() : 0.0;
+            evaluation.full_range_exchange_coefficient + evaluation.short_range_exchange_coefficient;
         auto integrated_electrons = density.integrated_electrons(molecular_grid);
         if (!integrated_electrons)
             return std::unexpected(integrated_electrons.error());

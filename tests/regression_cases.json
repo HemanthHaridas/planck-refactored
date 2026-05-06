@@ -599,6 +599,43 @@
       ]
     },
     {
+      "id": "h2_dft_hse06_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_hse06.hfinp",
+      "executable": "planck-dft",
+      "tags": ["smoke", "core", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "DFT Correlation :             Using HSE06 as a combined XC functional; configured correlation is ignored",
+        "DFT 2e Integrals :            Building short-range ERI tensor for omega = 0.110000 (0.0 MB)",
+        "RKS Converged :",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "Dinfh"},
+        {"type": "metric_close", "metric": "dft_total_energy", "expected": -1.1527116906, "atol": 1e-9}
+      ]
+    },
+    {
+      "id": "h2_dft_b2plyp_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_b2plyp.hfinp",
+      "executable": "planck-dft",
+      "tags": ["smoke", "core", "extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "DFT Hybrid XC :               Double hybrid of Grimme exact exchange coefficient = 0.530000",
+        "DFT Double Hybrid :           Double hybrid of Grimme PT2 correlation coefficient = 0.270000",
+        "DFT Correlation :             Using Double hybrid of Grimme as a combined XC functional; configured correlation is ignored",
+        "RKS Converged :",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {"type": "metric_eq", "metric": "point_group", "expected": "Dinfh"},
+        {"type": "metric_close", "metric": "dft_total_energy", "expected": -1.1479369543, "atol": 1e-9}
+      ]
+    },
+    {
       "id": "water_triplet_uks_pbe_sto3g",
       "input": "tests/inputs/regression/dft/water_triplet_uks_pbe_sto3g.hfinp",
       "executable": "planck-dft",

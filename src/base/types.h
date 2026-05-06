@@ -99,6 +99,13 @@ namespace HartreeFock
         Auto           // OS for L<4, Rys for L>=4 per quartet
     };
 
+    enum class ERIKernel
+    {
+        Coulomb,   // 1 / r12
+        LongRange, // erf(omega r12) / r12
+        ShortRange // erfc(omega r12) / r12
+    };
+
     enum class DFTGridQuality
     {
         Coarse,

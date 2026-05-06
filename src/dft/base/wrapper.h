@@ -27,6 +27,13 @@ namespace DFT
             Polarized = XC_POLARIZED
         };
 
+        struct CAMCoefficients
+        {
+            double omega = 0.0;
+            double alpha = 0.0;
+            double beta = 0.0;
+        };
+
         class Functional
         {
         public:
@@ -133,6 +140,122 @@ namespace DFT
             bool is_global_hybrid() const noexcept
             {
                 return hybrid_type() == XC_HYB_HYBRID;
+            }
+
+            bool is_range_separated() const noexcept
+            {
+                const int type = hybrid_type();
+                if (type == XC_HYB_CAM || type == XC_HYB_CAMY || type == XC_HYB_CAMG)
+                    return true;
+
+                if (func_.hyb_type == nullptr)
+                    return false;
+
+                for (int term = 0; term < func_.hyb_number_terms; ++term)
+                {
+                    switch (func_.hyb_type[term])
+                    {
+                    case XC_HYB_ERF_SR:
+                    case XC_HYB_YUKAWA_SR:
+                    case XC_HYB_GAUSSIAN_SR:
+                        return true;
+                    default:
+                        break;
+                    }
+                }
+                return false;
+            }
+
+            bool has_pt2_term() const noexcept
+            {
+                if (func_.hyb_type == nullptr || func_.hyb_coeff == nullptr)
+                    return false;
+
+                for (int term = 0; term < func_.hyb_number_terms; ++term)
+                {
+                    if (func_.hyb_type[term] == XC_HYB_PT2)
+                        return true;
+                }
+                return false;
+            }
+
+            bool is_double_hybrid() const noexcept
+            {
+                return hybrid_type() == XC_HYB_DOUBLE_HYBRID || has_pt2_term();
+            }
+
+            CAMCoefficients cam_coefficients() const noexcept
+            {
+                CAMCoefficients coefficients;
+                if (func_.hyb_type == nullptr || func_.hyb_coeff == nullptr || func_.hyb_omega == nullptr)
+                    return coefficients;
+
+                for (int term = 0; term < func_.hyb_number_terms; ++term)
+                {
+                    switch (func_.hyb_type[term])
+                    {
+                    case XC_HYB_FOCK:
+                        coefficients.alpha += func_.hyb_coeff[term];
+                        break;
+                    case XC_HYB_ERF_SR:
+                    case XC_HYB_YUKAWA_SR:
+                    case XC_HYB_GAUSSIAN_SR:
+                        coefficients.beta += func_.hyb_coeff[term];
+                        if (std::abs(func_.hyb_omega[term]) > 0.0)
+                            coefficients.omega = func_.hyb_omega[term];
+                        break;
+                    default:
+                        break;
+                    }
+                }
+
+                return coefficients;
+            }
+
+            double perturbative_correlation_coefficient() const noexcept
+            {
+                if (func_.hyb_type == nullptr || func_.hyb_coeff == nullptr)
+                    return 0.0;
+
+                for (int term = 0; term < func_.hyb_number_terms; ++term)
+                {
+                    if (func_.hyb_type[term] == XC_HYB_PT2)
+                        return func_.hyb_coeff[term];
+                }
+                return 0.0;
+            }
+
+            double fock_exchange_coefficient() const noexcept
+            {
+                if (is_global_hybrid())
+                    return exact_exchange_coefficient();
+
+                if (func_.hyb_type == nullptr || func_.hyb_coeff == nullptr)
+                    return 0.0;
+
+                double coefficient = 0.0;
+                for (int term = 0; term < func_.hyb_number_terms; ++term)
+                {
+                    if (func_.hyb_type[term] == XC_HYB_FOCK)
+                        coefficient += func_.hyb_coeff[term];
+                }
+                return coefficient;
+            }
+
+            double short_range_exchange_coefficient() const noexcept
+            {
+                if (!is_range_separated())
+                    return 0.0;
+
+                return cam_coefficients().beta;
+            }
+
+            double range_separation_omega() const noexcept
+            {
+                if (!is_range_separated())
+                    return 0.0;
+
+                return cam_coefficients().omega;
             }
 
             bool is_combined_exchange_correlation() const noexcept
@@ -253,10 +376,47 @@ namespace DFT
                 return parsed;
             }
 
-            const int id = xc_functional_get_number(std::string(name).c_str());
-            if (id <= 0)
-                return std::unexpected("Unknown libxc functional: " + std::string(name));
-            return id;
+            std::string normalized(name);
+            std::transform(
+                normalized.begin(),
+                normalized.end(),
+                normalized.begin(),
+                [](unsigned char c)
+                {
+                    if (c == '-' || std::isspace(c))
+                        return '_';
+                    return static_cast<char>(std::tolower(c));
+                });
+
+            std::vector<std::string> candidates = {normalized};
+            const auto starts_with = [&normalized](std::string_view prefix)
+            {
+                return normalized.rfind(prefix, 0) == 0;
+            };
+
+            if (!starts_with("lda_") &&
+                !starts_with("gga_") &&
+                !starts_with("hyb_") &&
+                !starts_with("mgga_") &&
+                !starts_with("hyb_mgga_"))
+            {
+                candidates.push_back("hyb_gga_xc_" + normalized);
+                candidates.push_back("gga_xc_" + normalized);
+                candidates.push_back("hyb_gga_x_" + normalized);
+                candidates.push_back("gga_x_" + normalized);
+                candidates.push_back("gga_c_" + normalized);
+                candidates.push_back("hyb_mgga_xc_" + normalized);
+                candidates.push_back("mgga_xc_" + normalized);
+            }
+
+            for (const auto &candidate : candidates)
+            {
+                const int id = xc_functional_get_number(candidate.c_str());
+                if (id > 0)
+                    return id;
+            }
+
+            return std::unexpected("Unknown libxc functional: " + std::string(name));
         }
 
         inline std::expected<std::string, std::string> functional_name(int functional_id)
