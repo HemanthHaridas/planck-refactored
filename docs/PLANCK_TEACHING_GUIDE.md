@@ -10,7 +10,7 @@ Planck is a compact electronic structure program built around Gaussian-basis
 self-consistent field theory. It implements:
 
 - Restricted and unrestricted Hartree-Fock (RHF/UHF) with DIIS acceleration
-- Kohn-Sham DFT (RKS/UKS) with LDA and GGA exchange-correlation functionals via libxc
+- Kohn-Sham DFT (RKS/UKS) with LDA, GGA, hybrid, range-separated-hybrid, and double-hybrid exchange-correlation functionals via libxc
 - Obara-Saika and Rys-quadrature two-electron integral engines
 - Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF
 - Point-group detection, symmetry-adapted orbitals, and MO irrep labeling
@@ -3360,6 +3360,14 @@ F^{KS}_{\mu\nu} = h_{\mu\nu} + J_{\mu\nu} + V^{xc}_{\mu\nu}
 
 This is identical in structure to the HF Fock matrix, with the HF exchange matrix \(K\) replaced by the XC potential matrix \(V^{xc}\). Planck reuses the HF SCF loop for KS-DFT: the only structural difference is how the two-electron contribution to the Fock matrix is assembled (Coulomb only, no exchange, plus \(V^{xc}\) from numerical integration).
 
+For semilocal functionals this statement is literal. For hybrids, Planck adds
+the exact-exchange part back explicitly. Global hybrids use a scaled full-range
+exchange matrix. Range-separated hybrids and range-separated double hybrids use
+the screened-ERI path introduced in the integral engines: the KS build forms
+\(\alpha K^{\text{full}} + \beta K^{\text{SR}}(\omega)\), where \(\alpha\),
+\(\beta\), and \(\omega\) come from libxc's CAM metadata. Double hybrids then
+add a post-KS MP2-like correction scaled by the libxc PT2 coefficient.
+
 ### Exchange-Correlation Functional Families
 
 #### LDA (Local Density Approximation)
@@ -3393,6 +3401,44 @@ GGA functionals satisfy more exact constraints than LDA and generally give bette
 | B88 | PW91 (`gga_c_pw91`) | BPW91 |
 | PW91 (`gga_x_pw91`) | PW91 | PW91 |
 | PBE (`gga_x_pbe`) | PBE (`gga_c_pbe`) | PBE (default) |
+
+#### Hybrids, range separation, and double hybrids
+
+Global hybrids mix a fraction of Hartree-Fock exchange into the KS reference:
+
+\[
+E_{xc}^{hyb} = a_x E_x^{HF} + (1-a_x)E_x^{DFT} + E_c^{DFT}
+\]
+
+Range-separated hybrids split the Coulomb operator into long-range and
+short-range pieces,
+
+\[
+\frac{1}{r_{12}} = \frac{\operatorname{erf}(\omega r_{12})}{r_{12}}
+                 + \frac{\operatorname{erfc}(\omega r_{12})}{r_{12}},
+\]
+
+and then apply different exact-exchange fractions to the two pieces. In
+Planck's current libxc-driven notation the implemented KS exchange build is
+
+\[
+K^{xc}_{exact} = \alpha K^{full} + \beta K^{SR}(\omega).
+\]
+
+That form covers screened hybrids such as HSE06 (\(\alpha=0\),
+\(\beta=0.25\), \(\omega \approx 0.11\)) and range-separated double hybrids
+such as \(\omega\)B2PLYP.
+
+Double hybrids extend the hybrid idea once more:
+
+\[
+E^{DH} = E^{KS-hyb} + c_{PT2} E^{(2)}.
+\]
+
+In Planck the converged KS reference is followed by an RHF/UHF-based MP2-like
+correction from `src/post_hf/mp2.cpp`, scaled by the libxc PT2 coefficient.
+For B2PLYP, for example, libxc supplies \(a_x = 0.53\) and
+\(c_{PT2} = 0.27\).
 
 ### Numerical Integration: Molecular Grid
 
@@ -3439,6 +3485,15 @@ w_i(\mathbf r) = \frac{P_i(\mathbf r)}{\sum_k P_k(\mathbf r)} \cdot w_i^{radial-
 | `Normal` | 4 | 26 / 110 / 194 / 302 / 194 |
 | `Fine` | 5 | 26 / 194 / 302 / 434 / 302 |
 | `UltraFine` | 6 | 50 / 302 / 434 / 590 / 434 |
+
+The practical lesson from cross-code benchmarking is that the choice of grid
+matters as much as the SCF convergence threshold. Planck's molecular grids are
+ORCA-like Treutler-Ahlrichs + pruned Lebedev grids; PySCF's `grids.level`
+presets are different quadrature families. On the current H\(_2\)/STO-3G DFT
+fixtures, coarse-grid Planck-vs-PySCF comparisons differ by about
+\(10^{-3}\) Eh even for ordinary B3LYP, while `fine` and `ultrafine` grids
+reduce the gap back to \(10^{-6}\) to \(10^{-7}\) Eh. This is why the PySCF
+equivalence scripts in `tests/pyscf/` force `fine` grids for the DFT cases.
 
 ### AO Evaluation on the Grid
 
@@ -4734,13 +4789,15 @@ driver.cpp
 | Kohn-Sham DFT (RKS/UKS) | Complete |
 | LDA XC functionals (Slater, VWN5) | Complete |
 | GGA XC functionals (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation) | Complete |
-| Arbitrary libxc functionals via integer ID | Complete within the currently supported LDA/GGA/global-hybrid subset; unsupported libxc families still error explicitly |
+| Arbitrary libxc functionals via integer ID or libxc name | Complete within the currently supported single-point KS subset; unsupported workflow/family combinations still error explicitly |
 | Molecular grid (Treutler-Ahlrichs + Lebedev + Becke) | Complete |
 | Analytic KS-DFT gradient (RKS/UKS, LDA/GGA/global hybrid) | Complete |
 | TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels) | Complete |
 | DFT geometry optimization / gradients | Complete |
 | Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs) | Complete |
-| Range-separated and double-hybrid XC functionals | Not supported |
+| Range-separated hybrid XC functionals (for example HSE06) | Complete for single-point energies |
+| Double-hybrid XC functionals (for example B2PLYP) | Complete for single-point energies |
+| Range-separated double hybrids (for example \(\omega\)B2PLYP) | Complete for single-point energies |
 | Spherical harmonic basis | Not supported (Cartesian only) |
 | C-PCM solvation (RHF/UHF/RKS/UKS, single-point energy) | Complete |
 | PCM gradients / geometry optimization / frequencies | Not implemented |

@@ -243,6 +243,36 @@ namespace
     };
 
     static thread_local EriScratch _eri_scratch;
+
+    struct ScreenedKernelData
+    {
+        double rho = 0.0;
+        double prefactor_scale = 1.0;
+        double boys_scale = 1.0;
+    };
+
+    static ScreenedKernelData screened_kernel_data(
+        double rho,
+        HartreeFock::ERIKernel kernel,
+        double omega) noexcept
+    {
+        if (kernel == HartreeFock::ERIKernel::Coulomb)
+            return ScreenedKernelData{.rho = rho, .prefactor_scale = 1.0, .boys_scale = 1.0};
+
+        if (omega <= 0.0)
+        {
+            return kernel == HartreeFock::ERIKernel::LongRange
+                       ? ScreenedKernelData{.rho = 0.0, .prefactor_scale = 0.0, .boys_scale = 0.0}
+                       : ScreenedKernelData{.rho = rho, .prefactor_scale = 1.0, .boys_scale = 1.0};
+        }
+
+        const double omega2 = omega * omega;
+        const double lambda = omega2 / (omega2 + rho);
+        return ScreenedKernelData{
+            .rho = lambda * rho,
+            .prefactor_scale = std::sqrt(lambda),
+            .boys_scale = lambda};
+    }
 } // namespace
 
 inline double HartreeFock::ObaraSaika::_os_1d(const double gamma, const double distPA, const double distPB, const int lA, const int lB)
@@ -620,18 +650,22 @@ static void _eri_vrr(
     const HartreeFock::PrimitivePair &ppCD,
     const int lABx, const int lABy, const int lABz,
     const int lCDx, const int lCDy, const int lCDz,
-    EriScratch &scratch)
+    EriScratch &scratch,
+    HartreeFock::ERIKernel kernel,
+    double omega)
 {
     const double zetaAB = ppAB.zeta;
     const double zetaCD = ppCD.zeta;
     const double delta = zetaAB + zetaCD;
     const double rho = zetaAB * zetaCD / delta;
+    const ScreenedKernelData screen = screened_kernel_data(rho, kernel, omega);
+    const double effective_rho = screen.rho;
 
     const double inv_2_zetaAB = 0.5 / zetaAB;
     const double inv_2_zetaCD = 0.5 / zetaCD;
     const double inv_2_delta = 0.5 / delta;
-    const double rho_over_zetaAB = rho / zetaAB;
-    const double rho_over_zetaCD = rho / zetaCD;
+    const double rho_over_zetaAB = effective_rho / zetaAB;
+    const double rho_over_zetaCD = effective_rho / zetaCD;
 
     const auto &P = ppAB.center;
     const auto &Q = ppCD.center;
@@ -650,11 +684,13 @@ static void _eri_vrr(
     const double QCx = ppCD.pA[0], QCy = ppCD.pA[1], QCz = ppCD.pA[2];
 
     const double PQx = P[0] - Q[0], PQy = P[1] - Q[1], PQz = P[2] - Q[2];
-    const double T = rho * (PQx * PQx + PQy * PQy + PQz * PQz);
+    const double T = screen.boys_scale * rho * (PQx * PQx + PQy * PQy + PQz * PQz);
 
     const int MMAX = lABx + lABy + lABz + lCDx + lCDy + lCDz;
 
-    const double prefac = ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / std::numbers::pi);
+    const double prefac =
+        ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / std::numbers::pi) *
+        screen.prefactor_scale;
 
     // ── Seed ─────────────────────────────────────────────────────────────────
     for (int m = 0; m <= MMAX; ++m)
@@ -887,7 +923,9 @@ static double _os_eri_primitive(
     const int lCx, const int lCy, const int lCz,
     const int lDx, const int lDy, const int lDz,
     const double ABx, const double ABy, const double ABz,
-    const double CDx, const double CDy, const double CDz)
+    const double CDx, const double CDy, const double CDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
 {
     const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
     const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
@@ -897,7 +935,7 @@ static double _os_eri_primitive(
     scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
 
     // Build the quartet-sized VRR table in thread-local dynamic scratch.
-    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch);
+    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
 
     // Extract m=0 slice into HRR buffer and zero unused entries
     for (int ax = 0; ax <= lABx; ++ax)
@@ -997,7 +1035,9 @@ static double _contracted_eri(
     const int lAx, const int lAy, const int lAz,
     const int lBx, const int lBy, const int lBz,
     const int lCx, const int lCy, const int lCz,
-    const int lDx, const int lDy, const int lDz)
+    const int lDx, const int lDy, const int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
 {
     const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
     const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
@@ -1005,7 +1045,26 @@ static double _contracted_eri(
     double eri = 0.0;
     for (const auto &ppAB : spAB.primitive_pairs)
         for (const auto &ppCD : spCD.primitive_pairs)
-            eri += ppAB.coeff_product * ppCD.coeff_product * _os_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, ABx, ABy, ABz, CDx, CDy, CDz);
+        {
+            const double full =
+                _os_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                  lCx, lCy, lCz, lDx, lDy, lDz,
+                                  ABx, ABy, ABz, CDx, CDy, CDz,
+                                  HartreeFock::ERIKernel::Coulomb, 0.0);
+
+            double value = full;
+            if (kernel != HartreeFock::ERIKernel::Coulomb)
+            {
+                const double long_range =
+                    _os_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                      lCx, lCy, lCz, lDx, lDy, lDz,
+                                      ABx, ABy, ABz, CDx, CDy, CDz,
+                                      HartreeFock::ERIKernel::LongRange, omega);
+                value = (kernel == HartreeFock::ERIKernel::LongRange) ? long_range : (full - long_range);
+            }
+
+            eri += ppAB.coeff_product * ppCD.coeff_product * value;
+        }
     return eri;
 }
 
@@ -1015,11 +1074,14 @@ double HartreeFock::ObaraSaika::_contracted_eri_elem(
     int lAx, int lAy, int lAz,
     int lBx, int lBy, int lBz,
     int lCx, int lCy, int lCz,
-    int lDx, int lDy, int lDz)
+    int lDx, int lDy, int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
 {
     return _contracted_eri(spAB, spCD,
                            lAx, lAy, lAz, lBx, lBy, lBz,
-                           lCx, lCy, lCz, lDx, lDy, lDz);
+                           lCx, lCy, lCz, lDx, lDy, lDz,
+                           kernel, omega);
 }
 
 // ─── Gradient: derivative integral helpers ────────────────────────────────────
@@ -1319,7 +1381,10 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += (2.0 * ppAB.alpha) * ppAB.coeff_product * ppCD.coeff_product * _os_eri_primitive(ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, ABx, ABy, ABz, CDx, CDy, CDz);
+                eri += (2.0 * ppAB.alpha) * ppAB.coeff_product * ppCD.coeff_product * _os_eri_primitive(
+                    ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                    ABx, ABy, ABz, CDx, CDy, CDz,
+                    HartreeFock::ERIKernel::Coulomb, 0.0);
         return eri;
     };
 
@@ -1329,7 +1394,10 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += ppAB.coeff_product * (2.0 * ppAB.beta) * ppCD.coeff_product * _os_eri_primitive(ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, ABx, ABy, ABz, CDx, CDy, CDz);
+                eri += ppAB.coeff_product * (2.0 * ppAB.beta) * ppCD.coeff_product * _os_eri_primitive(
+                    ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                    ABx, ABy, ABz, CDx, CDy, CDz,
+                    HartreeFock::ERIKernel::Coulomb, 0.0);
         return eri;
     };
 
@@ -1339,7 +1407,10 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += ppAB.coeff_product * (2.0 * ppCD.alpha) * ppCD.coeff_product * _os_eri_primitive(ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, ABx, ABy, ABz, CDx, CDy, CDz);
+                eri += ppAB.coeff_product * (2.0 * ppCD.alpha) * ppCD.coeff_product * _os_eri_primitive(
+                    ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                    ABx, ABy, ABz, CDx, CDy, CDz,
+                    HartreeFock::ERIKernel::Coulomb, 0.0);
         return eri;
     };
 
@@ -1349,7 +1420,10 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += ppAB.coeff_product * ppCD.coeff_product * (2.0 * ppCD.beta) * _os_eri_primitive(ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, ABx, ABy, ABz, CDx, CDy, CDz);
+                eri += ppAB.coeff_product * ppCD.coeff_product * (2.0 * ppCD.beta) * _os_eri_primitive(
+                    ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                    ABx, ABy, ABz, CDx, CDy, CDz,
+                    HartreeFock::ERIKernel::Coulomb, 0.0);
         return eri;
     };
 
@@ -1358,7 +1432,8 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
     {
         return _contracted_eri(spAB, spCD,
                                ax, ay, az, bx, by, bz,
-                               cx, cy, cz, dx, dy, dz);
+                               cx, cy, cz, dx, dy, dz,
+                               HartreeFock::ERIKernel::Coulomb, 0.0);
     };
 
     for (int q = 0; q < 3; ++q)
@@ -1436,6 +1511,8 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &density,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -1491,7 +1568,8 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
 
             const double val = _contracted_eri(spAB, spCD,
                                                lAx, lAy, lAz, lBx, lBy, lBz,
-                                               lCx, lCy, lCz, lDx, lDy, lDz);
+                                               lCx, lCy, lCz, lDx, lDy, lDz,
+                                               kernel, omega);
 
             if (!use_sym)
             {
@@ -1535,6 +1613,8 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
     const Eigen::MatrixXd &Pa,
     const Eigen::MatrixXd &Pb,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -1586,7 +1666,8 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
 
             const double val = _contracted_eri(spAB, spCD,
                                                lAx, lAy, lAz, lBx, lBy, lBz,
-                                               lCx, lCy, lCz, lDx, lDy, lDz);
+                                               lCx, lCy, lCz, lDx, lDy, lDz,
+                                               kernel, omega);
 
             if (!use_sym)
             {
@@ -1732,7 +1813,8 @@ static Eigen::MatrixXd _compute_schwarz_table(
 
         const double diag = _contracted_eri(sp, sp,
                                             lAx, lAy, lAz, lBx, lBy, lBz,
-                                            lAx, lAy, lAz, lBx, lBy, lBz);
+                                            lAx, lAy, lAz, lBx, lBy, lBz,
+                                            HartreeFock::ERIKernel::Coulomb, 0.0);
         const double q = std::sqrt(std::abs(diag));
         if (!use_sym)
         {
@@ -1755,6 +1837,8 @@ static Eigen::MatrixXd _compute_schwarz_table(
 std::vector<double> HartreeFock::ObaraSaika::_compute_2e(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -1810,7 +1894,8 @@ std::vector<double> HartreeFock::ObaraSaika::_compute_2e(
 
             const double val = _contracted_eri(spAB, spCD,
                                                lAx, lAy, lAz, lBx, lBy, lBz,
-                                               lCx, lCy, lCz, lDx, lDy, lDz);
+                                               lCx, lCy, lCz, lDx, lDy, lDz,
+                                               kernel, omega);
 
             if (!use_sym)
             {

@@ -87,6 +87,8 @@ namespace
             density,
             calculator._shells.nbasis(),
             calculator._integral._engine,
+            HartreeFock::ERIKernel::Coulomb,
+            0.0,
             calculator._integral._tol_eri,
             calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
     }

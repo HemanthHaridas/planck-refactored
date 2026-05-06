@@ -15,9 +15,10 @@ This directory now separates lightweight regression inputs from heavier benchmar
 - `benchmarks/`
   - `casscf/archive/` for older exploratory CASSCF inputs and logs
   - `casscf/pyscf_reference/` for the PySCF-backed CASSCF reference corpus
+  - `dft/pyscf_reference/` for DFT cross-check and timing scripts against PySCF
   - `scf/engine_symmetry/` for engine/symmetry/SAD benchmark matrices
 - `pyscf/`
-  - External PySCF references for validating selected CASSCF energies
+  - External PySCF references for validating selected CASSCF, CC, and DFT energies
 - `run_regressions.py`
   - Manifest-driven binary runner for `hartree-fock` and `planck-dft`
 - `regression_cases.json`

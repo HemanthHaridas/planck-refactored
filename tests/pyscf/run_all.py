@@ -138,7 +138,7 @@ def main() -> int:
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     parser.add_argument("--python", default=str(DEFAULT_PYTHON))
     parser.add_argument("--case", action="append", default=[])
-    parser.add_argument("--kind", choices=["all", "casscf", "cc"], default="all")
+    parser.add_argument("--kind", choices=["all", "casscf", "cc", "dft"], default="all")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()

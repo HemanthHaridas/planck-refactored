@@ -25,6 +25,7 @@
 #include "opt/geomopt.h"
 #include "populations/multipole.h"
 #include "post_hf/integrals.h"
+#include "post_hf/mp2.h"
 #include "scf/scf.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/mo_symmetry.h"
@@ -760,12 +761,57 @@ namespace DFT::Driver
                     prepared.shell_pairs,
                     nbasis,
                     calculator._integral._engine,
+                    HartreeFock::ERIKernel::Coulomb,
+                    0.0,
                     calculator._integral._tol_eri,
                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
             }
             catch (const std::exception &e)
             {
                 return std::unexpected("Failed to build ERI tensor for KS Coulomb term: " + std::string(e.what()));
+            }
+
+            return {};
+        }
+
+        std::expected<void, std::string> ensure_short_range_eri_tensor(
+            HartreeFock::Calculator &calculator,
+            PreparedSystem &prepared,
+            double omega)
+        {
+            if (omega <= 0.0)
+                return {};
+
+            const std::size_t nbasis = calculator._shells.nbasis();
+            const std::size_t expected_size = nbasis * nbasis * nbasis * nbasis;
+            if (prepared.short_range_eri_omega == omega &&
+                prepared.short_range_eri.size() == expected_size)
+            {
+                return {};
+            }
+
+            try
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "DFT 2e Integrals :",
+                    std::format("Building short-range ERI tensor for omega = {:.6f} ({:.1f} MB)",
+                                omega,
+                                expected_size * 8.0 / 1e6));
+                prepared.short_range_eri = _compute_2e(
+                    prepared.shell_pairs,
+                    nbasis,
+                    calculator._integral._engine,
+                    HartreeFock::ERIKernel::ShortRange,
+                    omega,
+                    calculator._integral._tol_eri,
+                    calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                prepared.short_range_eri_omega = omega;
+            }
+            catch (const std::exception &e)
+            {
+                return std::unexpected(
+                    "Failed to build short-range ERI tensor for KS exchange: " + std::string(e.what()));
             }
 
             return {};
@@ -1941,7 +1987,7 @@ namespace DFT::Driver
 
         std::expected<Result, std::string> run_ks_scf_scaffold(
             HartreeFock::Calculator &calculator,
-            const PreparedSystem &prepared,
+            PreparedSystem &prepared,
             const DFT::XC::Functional &x_functional,
             const DFT::XC::Functional &c_functional)
         {
@@ -2302,7 +2348,96 @@ namespace DFT::Driver
         {
             DFT::XC::Functional exchange;
             DFT::XC::Functional correlation;
+            double implemented_exact_exchange_coefficient = 0.0;
+            double perturbative_correlation_coefficient = 0.0;
+            bool has_range_separation = false;
+            bool has_double_hybrid_pt2 = false;
         };
+
+        std::string workflow_label(HartreeFock::CalculationType calculation)
+        {
+            switch (calculation)
+            {
+            case HartreeFock::CalculationType::SinglePoint:
+                return "single-point energies";
+            case HartreeFock::CalculationType::LinearResponse:
+                return "linear-response / TDDFT";
+            case HartreeFock::CalculationType::Gradient:
+                return "analytic gradients";
+            case HartreeFock::CalculationType::GeomOpt:
+                return "geometry optimization";
+            case HartreeFock::CalculationType::Frequency:
+                return "frequency analysis";
+            case HartreeFock::CalculationType::GeomOptFrequency:
+                return "geometry optimization + frequency analysis";
+            case HartreeFock::CalculationType::ImaginaryFollow:
+                return "imaginary-mode following";
+            }
+
+            return "this workflow";
+        }
+
+        std::expected<void, std::string> validate_workflow_support(
+            const HartreeFock::Calculator &calculator,
+            const InitializedFunctionals &functionals)
+        {
+            if (calculator._calculation == HartreeFock::CalculationType::SinglePoint)
+                return {};
+
+            if (!functionals.has_range_separation &&
+                !functionals.has_double_hybrid_pt2)
+            {
+                return {};
+            }
+
+            return std::unexpected(
+                std::format(
+                    "{} currently supports only single-point energies for range-separated and double-hybrid functionals",
+                    workflow_label(calculator._calculation)));
+        }
+
+        std::expected<void, std::string> apply_post_ks_double_hybrid_correction(
+            HartreeFock::Calculator &calculator,
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const InitializedFunctionals &functionals,
+            Result &result)
+        {
+            if (std::abs(functionals.perturbative_correlation_coefficient) <= 1.0e-14)
+                return {};
+
+            std::expected<void, std::string> correction =
+                calculator._scf._scf == HartreeFock::SCFType::UHF
+                    ? HartreeFock::Correlation::run_ump2(calculator, shell_pairs)
+                    : HartreeFock::Correlation::run_rmp2(calculator, shell_pairs);
+            if (!correction)
+            {
+                return std::unexpected(
+                    "DFT double-hybrid perturbative correction failed: " + correction.error());
+            }
+
+            const double bare_pt2 = calculator._correlation_energy;
+            const double scaled_pt2 =
+                functionals.perturbative_correlation_coefficient * bare_pt2;
+
+            calculator._correlation_energy = scaled_pt2;
+            calculator._correlated_total_energy = calculator._total_energy + scaled_pt2;
+            calculator._have_correlated_total_energy = true;
+
+            result.total_energy += scaled_pt2;
+            result.xc_energy += scaled_pt2;
+
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "DFT Double Hybrid :",
+                std::format(
+                    "{} PT2 coefficient = {:.6f}; bare MP2-like correction = {:.10f} Eh; scaled contribution = {:.10f} Eh",
+                    functionals.exchange.name(),
+                    functionals.perturbative_correlation_coefficient,
+                    bare_pt2,
+                    scaled_pt2));
+
+            return {};
+        }
 
         std::expected<InitializedFunctionals, std::string> initialize_functionals(
             HartreeFock::Calculator &calculator)
@@ -2333,12 +2468,11 @@ namespace DFT::Driver
             if (!correlation)
                 return std::unexpected("DFT correlation functional initialization failed: " + correlation.error());
 
-            if (exchange->is_hybrid() && !exchange->is_global_hybrid())
-            {
-                return std::unexpected(
-                    "DFT hybrid functional initialization failed: only global hybrids are supported; "
-                    "range-separated and double-hybrid functionals are not yet implemented");
-            }
+            const bool has_range_separation = exchange->is_range_separated();
+            const double implemented_exact_exchange_coefficient =
+                exchange->fock_exchange_coefficient();
+            const double perturbative_correlation_coefficient =
+                exchange->perturbative_correlation_coefficient();
 
             if (exchange->is_global_hybrid())
             {
@@ -2348,6 +2482,38 @@ namespace DFT::Driver
                     std::format("{} exact exchange coefficient = {:.6f}",
                                 exchange->name(),
                                 exchange->exact_exchange_coefficient()));
+            }
+            else if (exchange->is_range_separated())
+            {
+                const auto cam = exchange->cam_coefficients();
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "DFT Hybrid XC :",
+                    std::format(
+                        "{} range-separated exchange uses alpha(full-range) = {:.6f}, beta(short-range) = {:.6f}, omega = {:.6f}",
+                        exchange->name(),
+                        cam.alpha,
+                        cam.beta,
+                        cam.omega));
+            }
+            else if (std::abs(implemented_exact_exchange_coefficient) > 1.0e-14)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "DFT Hybrid XC :",
+                    std::format("{} exact exchange coefficient = {:.6f}",
+                                exchange->name(),
+                                implemented_exact_exchange_coefficient));
+            }
+
+            if (std::abs(perturbative_correlation_coefficient) > 1.0e-14)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "DFT Double Hybrid :",
+                    std::format("{} PT2 correlation coefficient = {:.6f}",
+                                exchange->name(),
+                                perturbative_correlation_coefficient));
             }
 
             if (exchange->is_combined_exchange_correlation())
@@ -2361,7 +2527,11 @@ namespace DFT::Driver
 
             return InitializedFunctionals{
                 .exchange = std::move(*exchange),
-                .correlation = std::move(*correlation)};
+                .correlation = std::move(*correlation),
+                .implemented_exact_exchange_coefficient = implemented_exact_exchange_coefficient,
+                .perturbative_correlation_coefficient = perturbative_correlation_coefficient,
+                .has_range_separation = has_range_separation,
+                .has_double_hybrid_pt2 = std::abs(perturbative_correlation_coefficient) > 1.0e-14};
         }
 
         std::expected<Eigen::MatrixXd, std::string> compute_analytic_ks_gradient(
@@ -2504,11 +2674,25 @@ namespace DFT::Driver
             if (!prepared)
                 return std::unexpected(prepared.error());
 
-            return run_ks_scf_scaffold(
+            auto result = run_ks_scf_scaffold(
                 calculator,
                 *prepared,
                 functionals.exchange,
                 functionals.correlation);
+            if (!result)
+                return result;
+
+            if (auto correction = apply_post_ks_double_hybrid_correction(
+                    calculator,
+                    prepared->shell_pairs,
+                    functionals,
+                    *result);
+                !correction)
+            {
+                return std::unexpected(correction.error());
+            }
+
+            return result;
         }
 
         std::expected<Result, std::string> run_initial_single_point(
@@ -2532,6 +2716,16 @@ namespace DFT::Driver
                 functionals.correlation);
             if (!result)
                 return result;
+
+            if (auto correction = apply_post_ks_double_hybrid_correction(
+                    calculator,
+                    prepared->shell_pairs,
+                    functionals,
+                    *result);
+                !correction)
+            {
+                return std::unexpected(correction.error());
+            }
 
             if ((calculator._dft._save_checkpoint || options.save_checkpoint) && result->converged)
             {
@@ -3042,7 +3236,7 @@ namespace DFT::Driver
     std::expected<KSPotentialMatrices, std::string>
     assemble_current_ks_potential(
         HartreeFock::Calculator &calculator,
-        const PreparedSystem &prepared,
+        PreparedSystem &prepared,
         const XCGridEvaluation &xc_grid)
     {
         if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
@@ -3078,40 +3272,78 @@ namespace DFT::Driver
             total_density,
             calculator._shells.nbasis());
 
-        const double exact_exchange_coefficient = xc_grid.exact_exchange_coefficient;
+        const double full_range_exchange_coefficient = xc_grid.full_range_exchange_coefficient;
+        const double short_range_exchange_coefficient = xc_grid.short_range_exchange_coefficient;
+        const double exact_exchange_coefficient =
+            full_range_exchange_coefficient + short_range_exchange_coefficient;
         Eigen::MatrixXd exact_exchange_alpha;
         Eigen::MatrixXd exact_exchange_beta;
         double exact_exchange_energy = 0.0;
+
+        if (std::abs(short_range_exchange_coefficient) > 1.0e-14)
+        {
+            if (auto screened_eri_ready =
+                    ensure_short_range_eri_tensor(calculator, prepared, xc_grid.range_separation_omega);
+                !screened_eri_ready)
+            {
+                return std::unexpected(screened_eri_ready.error());
+            }
+        }
 
         if (std::abs(exact_exchange_coefficient) > 1.0e-14)
         {
             if (calculator._scf._scf == HartreeFock::SCFType::UHF)
             {
-                const Eigen::MatrixXd exchange_alpha = build_exchange_from_eri(
-                    calculator._eri,
-                    alpha_density,
-                    calculator._shells.nbasis());
-                const Eigen::MatrixXd exchange_beta = build_exchange_from_eri(
-                    calculator._eri,
-                    beta_density,
-                    calculator._shells.nbasis());
-                exact_exchange_alpha = -exact_exchange_coefficient * exchange_alpha;
-                exact_exchange_beta = -exact_exchange_coefficient * exchange_beta;
+                Eigen::MatrixXd exchange_alpha = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                Eigen::MatrixXd exchange_beta = Eigen::MatrixXd::Zero(nbasis, nbasis);
+
+                if (std::abs(full_range_exchange_coefficient) > 1.0e-14)
+                {
+                    exchange_alpha.noalias() +=
+                        full_range_exchange_coefficient *
+                        build_exchange_from_eri(calculator._eri, alpha_density, calculator._shells.nbasis());
+                    exchange_beta.noalias() +=
+                        full_range_exchange_coefficient *
+                        build_exchange_from_eri(calculator._eri, beta_density, calculator._shells.nbasis());
+                }
+
+                if (std::abs(short_range_exchange_coefficient) > 1.0e-14)
+                {
+                    exchange_alpha.noalias() +=
+                        short_range_exchange_coefficient *
+                        build_exchange_from_eri(prepared.short_range_eri, alpha_density, calculator._shells.nbasis());
+                    exchange_beta.noalias() +=
+                        short_range_exchange_coefficient *
+                        build_exchange_from_eri(prepared.short_range_eri, beta_density, calculator._shells.nbasis());
+                }
+
+                exact_exchange_alpha = -exchange_alpha;
+                exact_exchange_beta = -exchange_beta;
                 exact_exchange_energy =
-                    -0.5 * exact_exchange_coefficient *
+                    -0.5 *
                     (density_trace_product(alpha_density, exchange_alpha) +
                      density_trace_product(beta_density, exchange_beta));
             }
             else
             {
-                const Eigen::MatrixXd exchange = build_exchange_from_eri(
-                    calculator._eri,
-                    alpha_density,
-                    calculator._shells.nbasis());
-                exact_exchange_alpha = -0.5 * exact_exchange_coefficient * exchange;
+                Eigen::MatrixXd exchange = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                if (std::abs(full_range_exchange_coefficient) > 1.0e-14)
+                {
+                    exchange.noalias() +=
+                        full_range_exchange_coefficient *
+                        build_exchange_from_eri(calculator._eri, alpha_density, calculator._shells.nbasis());
+                }
+                if (std::abs(short_range_exchange_coefficient) > 1.0e-14)
+                {
+                    exchange.noalias() +=
+                        short_range_exchange_coefficient *
+                        build_exchange_from_eri(prepared.short_range_eri, alpha_density, calculator._shells.nbasis());
+                }
+
+                exact_exchange_alpha = -0.5 * exchange;
                 exact_exchange_beta = exact_exchange_alpha;
                 exact_exchange_energy =
-                    -0.25 * exact_exchange_coefficient *
+                    -0.25 *
                     density_trace_product(alpha_density, exchange);
             }
         }
@@ -3216,6 +3448,9 @@ namespace DFT::Driver
         auto functionals = initialize_functionals(calculator);
         if (!functionals)
             return std::unexpected(functionals.error());
+
+        if (auto workflow_support = validate_workflow_support(calculator, *functionals); !workflow_support)
+            return std::unexpected(workflow_support.error());
 
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,

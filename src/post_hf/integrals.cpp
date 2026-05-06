@@ -54,7 +54,8 @@ namespace HartreeFock::Correlation
         const std::size_t nb = calc._shells.nbasis();
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, tag,
                                      std::format("Building AO ERI tensor ({:.1f} MB)", nb * nb * nb * nb * 8.0 / 1e6));
-        eri_local = _compute_2e(shell_pairs, nb, calc._integral._engine, 1e-10,
+        eri_local = _compute_2e(shell_pairs, nb, calc._integral._engine,
+                                HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10,
                                 calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
         return eri_local;
     }

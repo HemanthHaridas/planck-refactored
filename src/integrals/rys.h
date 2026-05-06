@@ -28,7 +28,9 @@ namespace HartreeFock
             int lCx, int lCy, int lCz,
             int lDx, int lDy, int lDz,
             double ABx, double ABy, double ABz,
-            double CDx, double CDy, double CDz) noexcept;
+            double CDx, double CDy, double CDz,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0) noexcept;
 
         // ── Contracted shell quartet ───────────────────────────────────────────────
         //
@@ -39,7 +41,9 @@ namespace HartreeFock
             int lAx, int lAy, int lAz,
             int lBx, int lBy, int lBz,
             int lCx, int lCy, int lCz,
-            int lDx, int lDy, int lDz) noexcept;
+            int lDx, int lDy, int lDz,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0) noexcept;
 
         // ── Public API — mirrors ObaraSaika:: signatures ───────────────────────────
 
@@ -47,6 +51,8 @@ namespace HartreeFock
         std::vector<double> _compute_2e(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
@@ -54,6 +60,8 @@ namespace HartreeFock
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const Eigen::MatrixXd &density,
             std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
@@ -64,6 +72,8 @@ namespace HartreeFock
             const Eigen::MatrixXd &Pa,
             const Eigen::MatrixXd &Pb,
             std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
@@ -75,6 +85,8 @@ namespace HartreeFock
         std::vector<double> _compute_2e_auto(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
@@ -82,6 +94,8 @@ namespace HartreeFock
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const Eigen::MatrixXd &density,
             std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
@@ -91,6 +105,8 @@ namespace HartreeFock
             const Eigen::MatrixXd &Pa,
             const Eigen::MatrixXd &Pb,
             std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 

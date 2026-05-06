@@ -40,6 +40,8 @@ namespace HartreeFock
         // quartets with Q(i,j)·Q(k,l) < tol_eri are skipped.
         std::vector<double> _compute_2e(const std::vector<HartreeFock::ShellPair> &shell_pairs,
                                         std::size_t nbasis,
+                                        HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+                                        double omega = 0.0,
                                         double tol_eri = 1e-10,
                                         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
@@ -50,7 +52,9 @@ namespace HartreeFock
             int lAx, int lAy, int lAz,
             int lBx, int lBy, int lBz,
             int lCx, int lCy, int lCz,
-            int lDx, int lDy, int lDz);
+            int lDx, int lDy, int lDz,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0);
 
         Eigen::MatrixXd _compute_fock_rhf(const std::vector<double> &_eri,
                                           const Eigen::MatrixXd &density,
@@ -66,6 +70,8 @@ namespace HartreeFock
         Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair> &shell_pairs,
                                          const Eigen::MatrixXd &density,
                                          std::size_t nbasis,
+                                         HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+                                         double omega = 0.0,
                                          double tol_eri = 1e-10,
                                          const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
@@ -76,6 +82,8 @@ namespace HartreeFock
                              const Eigen::MatrixXd &Pa,
                              const Eigen::MatrixXd &Pb,
                              std::size_t nbasis,
+                             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+                             double omega = 0.0,
                              double tol_eri = 1e-10,
                              const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 

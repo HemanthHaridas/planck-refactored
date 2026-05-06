@@ -52,6 +52,36 @@ namespace
         int sign = 1;
     };
 
+    struct ScreenedKernelData
+    {
+        double rho = 0.0;
+        double prefactor_scale = 1.0;
+        double boys_scale = 1.0;
+    };
+
+    static ScreenedKernelData screened_kernel_data(
+        double rho,
+        HartreeFock::ERIKernel kernel,
+        double omega) noexcept
+    {
+        if (kernel == HartreeFock::ERIKernel::Coulomb)
+            return ScreenedKernelData{.rho = rho, .prefactor_scale = 1.0, .boys_scale = 1.0};
+
+        if (omega <= 0.0)
+        {
+            return kernel == HartreeFock::ERIKernel::LongRange
+                       ? ScreenedKernelData{.rho = 0.0, .prefactor_scale = 0.0, .boys_scale = 0.0}
+                       : ScreenedKernelData{.rho = rho, .prefactor_scale = 1.0, .boys_scale = 1.0};
+        }
+
+        const double omega2 = omega * omega;
+        const double lambda = omega2 / (omega2 + rho);
+        return ScreenedKernelData{
+            .rho = lambda * rho,
+            .prefactor_scale = std::sqrt(lambda),
+            .boys_scale = lambda};
+    }
+
     static bool use_symmetry_ops(const SymOps *sym_ops)
     {
         return sym_ops != nullptr && sym_ops->size() > 1;
@@ -226,14 +256,16 @@ static double _auto_contracted_eri(
     int lAx, int lAy, int lAz,
     int lBx, int lBy, int lBz,
     int lCx, int lCy, int lCz,
-    int lDx, int lDy, int lDz) noexcept
+    int lDx, int lDy, int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega) noexcept
 {
     if (_auto_prefers_rys(spAB, spCD))
         return HartreeFock::RysQuad::_rys_contracted_eri(
-            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz);
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
 
     return HartreeFock::ObaraSaika::_contracted_eri_elem(
-        spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz);
+        spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
 }
 
 // ─── 1D Rys VRR ───────────────────────────────────────────────────────────────
@@ -373,7 +405,9 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const int lCx, const int lCy, const int lCz,
     const int lDx, const int lDy, const int lDz,
     const double ABx, const double ABy, const double ABz,
-    const double CDx, const double CDy, const double CDz) noexcept
+    const double CDx, const double CDy, const double CDz,
+    HartreeFock::ERIKernel kernel,
+    double omega) noexcept
 {
     // Derived quantities
     const double zeta = ppAB.zeta;
@@ -381,8 +415,10 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const double delta = zeta + eta;
     const double inv_delta = 1.0 / delta;
     const double rho = zeta * eta * inv_delta;
-    const double rho_over_zeta = rho * ppAB.inv_zeta;
-    const double rho_over_eta = rho * ppCD.inv_zeta;
+    const ScreenedKernelData screen = screened_kernel_data(rho, kernel, omega);
+    const double effective_rho = screen.rho;
+    const double rho_over_zeta = effective_rho * ppAB.inv_zeta;
+    const double rho_over_eta = effective_rho * ppCD.inv_zeta;
 
     // Gaussian product centers P and Q
     const double Px = ppAB.center[0], Py = ppAB.center[1], Pz = ppAB.center[2];
@@ -390,7 +426,7 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
 
     // PQ displacement and Boys argument T = rho * |PQ|^2
     const double PQx = Px - Qx, PQy = Py - Qy, PQz = Pz - Qz;
-    const double T = rho * (PQx * PQx + PQy * PQy + PQz * PQz);
+    const double T = screen.boys_scale * rho * (PQx * PQx + PQy * PQy + PQz * PQz);
 
     // PA and QC vectors (stored in PrimitivePair.pA)
     const double PAx = ppAB.pA[0], PAy = ppAB.pA[1], PAz = ppAB.pA[2];
@@ -406,7 +442,9 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const double WQx = Wx - Qx, WQy = Wy - Qy, WQz = Wz - Qz;
 
     // Overall prefactor: K_AB * K_CD * 2*sqrt(rho/pi)
-    const double prefac = ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / std::numbers::pi);
+    const double prefac =
+        ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / std::numbers::pi) *
+        screen.prefactor_scale;
 
     // Number of Rys roots
     const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
@@ -492,7 +530,9 @@ double HartreeFock::RysQuad::_rys_contracted_eri(
     const int lAx, const int lAy, const int lAz,
     const int lBx, const int lBy, const int lBz,
     const int lCx, const int lCy, const int lCz,
-    const int lDx, const int lDy, const int lDz) noexcept
+    const int lDx, const int lDy, const int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega) noexcept
 {
     const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
     const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
@@ -500,7 +540,26 @@ double HartreeFock::RysQuad::_rys_contracted_eri(
     double eri = 0.0;
     for (const auto &ppAB : spAB.primitive_pairs)
         for (const auto &ppCD : spCD.primitive_pairs)
-            eri += ppAB.coeff_product * ppCD.coeff_product * _rys_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, ABx, ABy, ABz, CDx, CDy, CDz);
+        {
+            const double full =
+                _rys_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                   lCx, lCy, lCz, lDx, lDy, lDz,
+                                   ABx, ABy, ABz, CDx, CDy, CDz,
+                                   HartreeFock::ERIKernel::Coulomb, 0.0);
+
+            double value = full;
+            if (kernel != HartreeFock::ERIKernel::Coulomb)
+            {
+                const double long_range =
+                    _rys_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                       lCx, lCy, lCz, lDx, lDy, lDz,
+                                       ABx, ABy, ABz, CDx, CDy, CDz,
+                                       HartreeFock::ERIKernel::LongRange, omega);
+                value = (kernel == HartreeFock::ERIKernel::LongRange) ? long_range : (full - long_range);
+            }
+
+            eri += ppAB.coeff_product * ppCD.coeff_product * value;
+        }
     return eri;
 }
 
@@ -558,6 +617,8 @@ static Eigen::MatrixXd _rys_schwarz_table(
 std::vector<double> HartreeFock::RysQuad::_compute_2e(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -605,7 +666,8 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e(
             const double val = HartreeFock::RysQuad::_rys_contracted_eri(
                 spAB, spCD,
                 lAx, lAy, lAz, lBx, lBy, lBz,
-                lCx, lCy, lCz, lDx, lDy, lDz);
+                lCx, lCy, lCz, lDx, lDy, lDz,
+                kernel, omega);
 
             if (!use_sym)
             {
@@ -629,6 +691,8 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e(
 std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -675,7 +739,8 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
             const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
             const double val = _auto_contracted_eri(spAB, spCD,
                                                     lAx, lAy, lAz, lBx, lBy, lBz,
-                                                    lCx, lCy, lCz, lDx, lDy, lDz);
+                                                    lCx, lCy, lCz, lDx, lDy, lDz,
+                                                    kernel, omega);
 
             if (!use_sym)
             {
@@ -702,6 +767,8 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &density,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -709,7 +776,7 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock(
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
 
-    std::vector<double> eri = _compute_2e(shell_pairs, nbasis, tol_eri, sym_ops);
+    std::vector<double> eri = _compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
 
     Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
 
@@ -732,6 +799,8 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf(
     const Eigen::MatrixXd &Pa,
     const Eigen::MatrixXd &Pb,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -740,7 +809,7 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf(
     const std::size_t nb3 = nb * nb * nb;
 
     const Eigen::MatrixXd Pt = Pa + Pb;
-    std::vector<double> eri = _compute_2e(shell_pairs, nbasis, tol_eri, sym_ops);
+    std::vector<double> eri = _compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
 
     Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
     Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
@@ -773,13 +842,15 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &density,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
-    std::vector<double> eri = _compute_2e_auto(shell_pairs, nbasis, tol_eri, sym_ops);
+    std::vector<double> eri = _compute_2e_auto(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
     Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
 
 #pragma omp parallel for schedule(static)
@@ -798,6 +869,8 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(
     const Eigen::MatrixXd &Pa,
     const Eigen::MatrixXd &Pb,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -805,7 +878,7 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
     const Eigen::MatrixXd Pt = Pa + Pb;
-    std::vector<double> eri = _compute_2e_auto(shell_pairs, nbasis, tol_eri, sym_ops);
+    std::vector<double> eri = _compute_2e_auto(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
     Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
     Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
 
