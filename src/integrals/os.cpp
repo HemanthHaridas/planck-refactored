@@ -171,8 +171,16 @@ namespace
         int cy_dim = 0;
         int cz_dim = 0;
         int m_dim = 0;
+        std::size_t ax_stride = 0;
+        std::size_t ay_stride = 0;
+        std::size_t az_stride = 0;
+        std::size_t cx_stride = 0;
+        std::size_t cy_stride = 0;
+        std::size_t cz_stride = 0;
         std::vector<double> vrr;
         std::vector<double> hrr;
+        double *vrr_data = nullptr;
+        double *hrr_data = nullptr;
 
         void resize_for_quartet(
             int lABx, int lABy, int lABz,
@@ -186,25 +194,35 @@ namespace
             cy_dim = lCDy + 1;
             cz_dim = lCDz + 1;
             m_dim = mmax + 1;
+            cz_stride = 1;
+            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
+            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
+            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
+            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
+            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
 
             const std::size_t spatial =
                 static_cast<std::size_t>(ax_dim) * ay_dim * az_dim *
                 cx_dim * cy_dim * cz_dim;
-            vrr.assign(spatial * static_cast<std::size_t>(m_dim), 0.0);
+            const std::size_t vrr_size = spatial * static_cast<std::size_t>(m_dim);
+            if (vrr.size() != vrr_size)
+                vrr.resize(vrr_size);
+            std::fill(vrr.begin(), vrr.end(), 0.0);
             hrr.resize(spatial);
+            vrr_data = vrr.data();
+            hrr_data = hrr.data();
         }
 
         std::size_t spatial_index(
             int ax, int ay, int az,
             int cx, int cy, int cz) const
         {
-            std::size_t idx = static_cast<std::size_t>(ax);
-            idx = idx * static_cast<std::size_t>(ay_dim) + static_cast<std::size_t>(ay);
-            idx = idx * static_cast<std::size_t>(az_dim) + static_cast<std::size_t>(az);
-            idx = idx * static_cast<std::size_t>(cx_dim) + static_cast<std::size_t>(cx);
-            idx = idx * static_cast<std::size_t>(cy_dim) + static_cast<std::size_t>(cy);
-            idx = idx * static_cast<std::size_t>(cz_dim) + static_cast<std::size_t>(cz);
-            return idx;
+            return static_cast<std::size_t>(ax) * ax_stride +
+                   static_cast<std::size_t>(ay) * ay_stride +
+                   static_cast<std::size_t>(az) * az_stride +
+                   static_cast<std::size_t>(cx) * cx_stride +
+                   static_cast<std::size_t>(cy) * cy_stride +
+                   static_cast<std::size_t>(cz) * cz_stride;
         }
 
         double &v(
@@ -212,9 +230,9 @@ namespace
             int cx, int cy, int cz,
             int m)
         {
-            return vrr[spatial_index(ax, ay, az, cx, cy, cz) *
-                           static_cast<std::size_t>(m_dim) +
-                       static_cast<std::size_t>(m)];
+            return vrr_data[spatial_index(ax, ay, az, cx, cy, cz) *
+                                static_cast<std::size_t>(m_dim) +
+                            static_cast<std::size_t>(m)];
         }
 
         const double &v(
@@ -222,23 +240,23 @@ namespace
             int cx, int cy, int cz,
             int m) const
         {
-            return vrr[spatial_index(ax, ay, az, cx, cy, cz) *
-                           static_cast<std::size_t>(m_dim) +
-                       static_cast<std::size_t>(m)];
+            return vrr_data[spatial_index(ax, ay, az, cx, cy, cz) *
+                                static_cast<std::size_t>(m_dim) +
+                            static_cast<std::size_t>(m)];
         }
 
         double &h(
             int ax, int ay, int az,
             int cx, int cy, int cz)
         {
-            return hrr[spatial_index(ax, ay, az, cx, cy, cz)];
+            return hrr_data[spatial_index(ax, ay, az, cx, cy, cz)];
         }
 
         const double &h(
             int ax, int ay, int az,
             int cx, int cy, int cz) const
         {
-            return hrr[spatial_index(ax, ay, az, cx, cy, cz)];
+            return hrr_data[spatial_index(ax, ay, az, cx, cy, cz)];
         }
     };
 

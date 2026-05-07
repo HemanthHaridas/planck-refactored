@@ -53,20 +53,25 @@ namespace DFT
                 density.grad_z(point)};
         }
 
-        Eigen::VectorXd gradient_projection(
+        void gradient_projection(
             const AOGridEvaluation &ao_grid,
             Eigen::Index point,
-            const Eigen::Vector3d &coefficient)
+            const Eigen::Vector3d &coefficient,
+            Eigen::Ref<Eigen::VectorXd> output)
         {
-            return (coefficient.x() * ao_grid.grad_x.row(point).transpose() + coefficient.y() * ao_grid.grad_y.row(point).transpose() + coefficient.z() * ao_grid.grad_z.row(point).transpose()).eval();
+            output.noalias() =
+                coefficient.x() * ao_grid.grad_x.row(point).transpose() +
+                coefficient.y() * ao_grid.grad_y.row(point).transpose() +
+                coefficient.z() * ao_grid.grad_z.row(point).transpose();
         }
 
+        template <typename PhiDerived, typename GradDerived>
         void accumulate_local_potential(
             Eigen::Ref<Eigen::MatrixXd> matrix,
             double weight,
             double vrho,
-            const Eigen::VectorXd &phi,
-            const Eigen::VectorXd &gradient_term)
+            const Eigen::MatrixBase<PhiDerived> &phi,
+            const Eigen::MatrixBase<GradDerived> &gradient_term)
         {
             if (weight == 0.0)
                 return;
@@ -103,6 +108,8 @@ namespace DFT
         {
             Eigen::MatrixXd alpha_local = Eigen::MatrixXd::Zero(nbasis, nbasis);
             Eigen::MatrixXd beta_local = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            Eigen::VectorXd gradient_term_alpha = Eigen::VectorXd::Zero(nbasis);
+            Eigen::VectorXd gradient_term_beta = Eigen::VectorXd::Zero(nbasis);
 
 #ifdef USE_OPENMP
 #pragma omp for nowait schedule(static)
@@ -113,17 +120,17 @@ namespace DFT
                 if (weight == 0.0)
                     continue;
 
-                const Eigen::VectorXd phi = ao_grid.values.row(point).transpose();
+                const auto phi = ao_grid.values.row(point).transpose();
 
                 if (!polarized)
                 {
-                    Eigen::VectorXd gradient_term = Eigen::VectorXd::Zero(nbasis);
+                    gradient_term_alpha.setZero();
                     if (xc_grid.vsigma.cols() == 1)
                     {
                         const Eigen::Vector3d coefficient =
                             2.0 * xc_grid.vsigma(point, 0) *
                             density_gradient_at(xc_grid.density.total, point);
-                        gradient_term = gradient_projection(ao_grid, point, coefficient);
+                        gradient_projection(ao_grid, point, coefficient, gradient_term_alpha);
                     }
 
                     accumulate_local_potential(
@@ -131,12 +138,12 @@ namespace DFT
                         weight,
                         xc_grid.vrho(point, 0),
                         phi,
-                        gradient_term);
+                        gradient_term_alpha);
                     continue;
                 }
 
-                Eigen::VectorXd gradient_term_alpha = Eigen::VectorXd::Zero(nbasis);
-                Eigen::VectorXd gradient_term_beta = Eigen::VectorXd::Zero(nbasis);
+                gradient_term_alpha.setZero();
+                gradient_term_beta.setZero();
 
                 if (xc_grid.vsigma.cols() == 3)
                 {
@@ -148,8 +155,8 @@ namespace DFT
                     const Eigen::Vector3d coefficient_beta =
                         xc_grid.vsigma(point, 1) * grad_alpha + 2.0 * xc_grid.vsigma(point, 2) * grad_beta;
 
-                    gradient_term_alpha = gradient_projection(ao_grid, point, coefficient_alpha);
-                    gradient_term_beta = gradient_projection(ao_grid, point, coefficient_beta);
+                    gradient_projection(ao_grid, point, coefficient_alpha, gradient_term_alpha);
+                    gradient_projection(ao_grid, point, coefficient_beta, gradient_term_beta);
                 }
 
                 accumulate_local_potential(
