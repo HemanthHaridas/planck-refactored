@@ -10,10 +10,13 @@
 
 #include <Eigen/Geometry>
 
-#include "dft/base/wrapper.h"
 #include "io.h"
 #include "io/logging.h"
 #include "lookup/elements.h"
+
+#ifdef USING_Libxc
+#include "dft/base/wrapper.h"
+#endif
 
 namespace HartreeFock::IO
 {
@@ -64,6 +67,7 @@ namespace HartreeFock::IO
         const std::string &value,
         const std::string &label)
     {
+#ifdef USING_Libxc
         auto resolved = DFT::XC::functional_id(value);
         if (!resolved)
         {
@@ -74,6 +78,12 @@ namespace HartreeFock::IO
                             resolved.error()));
         }
         return resolved;
+#else
+        return std::unexpected(
+            std::format("{} {} (libxc support is unavailable in this executable)",
+                        label,
+                        value));
+#endif
     }
 
     static std::expected<bool, std::string> toBool(const std::string &parsedString)
