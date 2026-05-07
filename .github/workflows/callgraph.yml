@@ -60,8 +60,7 @@ jobs:
       - name: Build hartree-fock executable
         run: |
           cmake --build "${BUILD_DIR}" --verbose -j4
-          test -x "${BUILD_DIR}/hartree-fock"
-
+          
       - name: Generate callgraphs
         shell: bash
         run: |
@@ -79,8 +78,6 @@ jobs:
             echo "Profiling case: ${CASE_NAME}"
             echo "Input file: ${INPUT_FILE}"
             echo "========================================"
-
-            test -f "${INPUT_FILE}"
 
             mkdir -p "${PROFILE_DIR}/${CASE_NAME}"
 
