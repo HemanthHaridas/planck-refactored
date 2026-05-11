@@ -103,7 +103,10 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     Eigen::MatrixXd grad_mat;
     if (calc._correlation == HartreeFock::PostHF::RMP2)
     {
-        if (auto corr_res = HartreeFock::Correlation::run_rmp2(calc, shell_pairs); !corr_res)
+        auto mp2_res = HartreeFock::Correlation::rmp2_kernel(calc, shell_pairs, calc._mp2);
+        if (!mp2_res)
+            return std::unexpected("GeomOpt RMP2 failed: " + mp2_res.error());
+        if (auto corr_res = HartreeFock::Correlation::apply_rmp2_result(calc, *mp2_res); !corr_res)
             return std::unexpected("GeomOpt RMP2 failed: " + corr_res.error());
         calc._correlated_total_energy = calc._total_energy + calc._correlation_energy;
         calc._have_correlated_total_energy = true;

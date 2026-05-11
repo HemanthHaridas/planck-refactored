@@ -2407,8 +2407,20 @@ namespace DFT::Driver
 
             std::expected<void, std::string> correction =
                 calculator._scf._scf == HartreeFock::SCFType::UHF
-                    ? HartreeFock::Correlation::run_ump2(calculator, shell_pairs)
-                    : HartreeFock::Correlation::run_rmp2(calculator, shell_pairs);
+                    ? [&]() -> std::expected<void, std::string>
+                      {
+                          auto mp2_res = HartreeFock::Correlation::ump2_kernel(calculator, shell_pairs, calculator._mp2);
+                          return mp2_res
+                                     ? HartreeFock::Correlation::apply_ump2_result(calculator, *mp2_res)
+                                     : std::unexpected(mp2_res.error());
+                      }()
+                    : [&]() -> std::expected<void, std::string>
+                      {
+                          auto mp2_res = HartreeFock::Correlation::rmp2_kernel(calculator, shell_pairs, calculator._mp2);
+                          return mp2_res
+                                     ? HartreeFock::Correlation::apply_rmp2_result(calculator, *mp2_res)
+                                     : std::unexpected(mp2_res.error());
+                      }();
             if (!correction)
             {
                 return std::unexpected(

@@ -211,8 +211,51 @@
       ]
     },
     {
+      "id": "h2_rmp2_gradient_fd",
+      "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
+      "executable": "tests/rmp2_gradient_fd.py",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_rmp2_gradient_smoke",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_gradient_sto3g.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Using analytic RMP2 gradient (relaxed density + pair density + Z-vector)",
+        "Nuclear Gradient (Ha/Bohr) :"
+      ],
+      "checks": [
+        {"type": "metric_present", "metric": "gradient_max"},
+        {"type": "metric_present", "metric": "gradient_rms"},
+        {"type": "metric_eq", "metric": "gradient_atom_lines", "expected": 3},
+        {"type": "metric_le", "metric": "gradient_max", "value": 0.3}
+      ]
+    },
+    {
       "id": "water_radical_cation_ump2_gradient_smoke",
       "input": "tests/inputs/regression/open_shell/water_radical_cation_uhf_ump2_gradient_sto3g.hfinp",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Using analytic UMP2 gradient (spin-resolved density + pair density)",
+        "Nuclear Gradient (Ha/Bohr) :"
+      ],
+      "checks": [
+        {"type": "metric_present", "metric": "gradient_max"},
+        {"type": "metric_present", "metric": "gradient_rms"},
+        {"type": "metric_eq", "metric": "gradient_atom_lines", "expected": 3}
+      ]
+    },
+    {
+      "id": "water_triplet_uhf_ump2_gradient_smoke",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_ump2_gradient_sto3g.hfinp",
       "tags": ["extended"],
       "expected_exit_code": 0,
       "contains": [
