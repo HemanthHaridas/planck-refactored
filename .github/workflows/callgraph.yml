@@ -67,9 +67,9 @@ jobs:
           set -euo pipefail
 
           declare -A CASES
-          CASES["water_rhf"]="tests/inputs/regressions/scf/water_rhf_os_symm.hfinp"
-          CASES["water_casscf"]="tests/inputs/regressions/post_hf/water_cas44.hfinp"
-          CASES["bh3_rccsdt"]="tests/inputs/regressions/post_hf/bh3_rccsdt_sto3g.hfinp"
+          CASES["water_rhf"]="tests/inputs/regression/scf/water_rhf_os_symm.hfinp"
+          CASES["water_casscf"]="tests/inputs/regression/post_hf/water_cas44.hfinp"
+          CASES["bh3_rccsdt"]="tests/inputs/regression/post_hf/bh3_rccsdt_sto3g.hfinp"
 
           for CASE_NAME in water_rhf water_casscf bh3_rccsdt; do
             INPUT_FILE="${CASES[$CASE_NAME]}"
