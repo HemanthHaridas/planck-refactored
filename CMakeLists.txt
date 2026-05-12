@@ -182,7 +182,10 @@ list(REMOVE_ITEM POSTHF_SRC ${SRC_DIR}/post_hf/casscf.cpp)
 #   integrals.cpp        — AO-ERI / AO→MO transforms used for hybrid-XC exact
 #                          exchange (dft/driver.cpp) and stability analysis
 #                          (scf/stability.cpp)
-#   mp2.cpp              — Correlation::run_rmp2, referenced from opt/geomopt.cpp
+#   mp2.cpp              — MP2 driver entry points
+#   mp2_internal.cpp     — shared ChemistsERIs / frozen-orbital helpers
+#   mp2_rmp2.cpp         — RMP2 kernel + RDM builders
+#   mp2_ump2.cpp         — UMP2 kernel + RDM builders
 #   mp2_gradient.cpp     — RMP2/UMP2 gradient intermediates, referenced from
 #                          gradient/gradient.cpp
 #   rhf_response.cpp     — solve_rhf_cphf, used by mp2_gradient.cpp
@@ -192,10 +195,18 @@ set(POSTHF_DFT_SRC
     ${SRC_DIR}/post_hf/integrals.cpp
     ${SRC_DIR}/post_hf/mp2.h
     ${SRC_DIR}/post_hf/mp2.cpp
+    ${SRC_DIR}/post_hf/mp2_internal.h
+    ${SRC_DIR}/post_hf/mp2_internal.cpp
+    ${SRC_DIR}/post_hf/mp2_rmp2.cpp
+    ${SRC_DIR}/post_hf/mp2_ump2.cpp
     ${SRC_DIR}/post_hf/mp2_gradient.h
     ${SRC_DIR}/post_hf/mp2_gradient.cpp
+    ${SRC_DIR}/post_hf/cc/diis.h
+    ${SRC_DIR}/post_hf/cc/diis.cpp
     ${SRC_DIR}/post_hf/rhf_response.h
     ${SRC_DIR}/post_hf/rhf_response.cpp
+    ${SRC_DIR}/post_hf/uhf_response.h
+    ${SRC_DIR}/post_hf/uhf_response.cpp
 )
 
 file(GLOB GRADIENT_SRC CONFIGURE_DEPENDS

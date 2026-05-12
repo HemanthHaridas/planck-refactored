@@ -621,7 +621,7 @@ namespace HartreeFock::IO
         return lookup_enum(_table, value, "Invalid Correlation : ");
     }
 
-    std::expected<void, std::string> _parse_scf(const std::vector<std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space)
+    std::expected<void, std::string> _parse_scf(const std::vector<std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space, HartreeFock::OptionsMP2 &mp2)
     {
         // (key, value) pairs
         const std::unordered_map<std::string, ParseHandler> _scf_map =
@@ -809,6 +809,45 @@ namespace HartreeFock::IO
                  {
                      active_space.target_irrep = v;
                      return std::expected<void, std::string>{};
+                 }},
+
+                // MP2 options (RMP2 / UMP2)
+                {"mp2_max_cycle", [&mp2](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 1)
+                         return std::unexpected("mp2_max_cycle must be >= 1");
+                     mp2.max_cycle = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_conv_tol", [&mp2](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("mp2_conv_tol must be positive");
+                     mp2.conv_tol = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_conv_tol_normt", [&mp2](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("mp2_conv_tol_normt must be positive");
+                     mp2.conv_tol_normt = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_diis_space", [&mp2](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 2)
+                         return std::unexpected("mp2_diis_space must be >= 2");
+                     mp2.diis_space = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_level_shift", [&mp2](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     mp2.level_shift = std::stod(v);
+                     return std::expected<void, std::string>{};
                  }}};
 
         for (const std::string line : lines)
@@ -866,10 +905,23 @@ namespace HartreeFock::IO
                 continue;
             }
 
+            if (key == "mp2_frozen")
+            {
+                // Either a single integer (freeze the lowest N occupied orbitals,
+                // PySCF shortcut) or a space-separated list of explicit 0-based MO
+                // indices to freeze.
+                auto parsed = parse_int_list(_iss, key);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
+                mp2.frozen = std::move(*parsed);
+                continue;
+            }
+
             if (key == "use_diis" || key == "save_checkpoint" ||
                 key == "mcscf_debug_numeric_newton" || key == "mcscf_debug_commutator_rhs" ||
                 key == "mcscf_accept_uphill" ||
-                key == "stability_check" || key == "stability_follow")
+                key == "stability_check" || key == "stability_follow" ||
+                key == "mp2_with_t2")
             {
                 if (!(_iss >> value))
                     return std::unexpected("Missing value for scf keyword: " + key);
@@ -890,8 +942,10 @@ namespace HartreeFock::IO
                     active_space.mcscf_accept_uphill = *parsed;
                 else if (key == "stability_check")
                     scf._stability_check = *parsed;
-                else
+                else if (key == "stability_follow")
                     scf._stability_follow = *parsed;
+                else
+                    mp2.with_t2 = *parsed;
                 continue;
             }
 
@@ -1670,7 +1724,7 @@ namespace HartreeFock::IO
         // scf
         if (auto it = _sections.find("scf"); it != _sections.end())
         {
-            if (auto res = _parse_scf(it->second, calculator._scf, calculator._correlation, calculator._integral, calculator._active_space); !res)
+            if (auto res = _parse_scf(it->second, calculator._scf, calculator._correlation, calculator._integral, calculator._active_space, calculator._mp2); !res)
                 return std::unexpected(res.error());
         }
         else

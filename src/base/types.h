@@ -534,6 +534,27 @@ namespace HartreeFock
         double mcscf_uphill_max_eh = 5e-3;
     };
 
+    // MP2 options. Mirrors PySCF's mp.MP2Base attributes (frozen, level_shift,
+    // max_cycle, conv_tol, conv_tol_normt, diis_space, with_t2). Defaults match
+    // PySCF so behavior is unchanged when none of the keywords are supplied.
+    struct OptionsMP2
+    {
+        // Frozen orbitals. Empty list means "no frozen orbitals". A list of
+        // length 1 with a non-negative value is treated as the PySCF "freeze
+        // the lowest N orbitals" shortcut. Otherwise it is a list of explicit
+        // 0-based MO indices to freeze (alpha-channel indices for UMP2; the
+        // same set is applied to both spin channels, matching PySCF when a
+        // flat list is given).
+        std::vector<int> frozen;
+
+        double level_shift = 0.0;       // virtual-orbital level shift in iterative MP2
+        double conv_tol = 1e-7;         // |ΔE| threshold for iterative MP2
+        double conv_tol_normt = 1e-5;   // ‖ΔT2‖ threshold for iterative MP2
+        int max_cycle = 50;             // maximum iterative MP2 cycles
+        int diis_space = 6;             // DIIS subspace size for iterative MP2
+        bool with_t2 = true;            // store T2 amplitudes (gradient/RDM consumers need them)
+    };
+
     struct OptionsOutput
     {
         Verbosity _verbosity = Verbosity::Minimal; // Default Verbosity is Minimal
@@ -888,6 +909,29 @@ namespace HartreeFock
         Eigen::VectorXd _cas_nat_occ;         // active natural occupation numbers
         Eigen::MatrixXd _cas_mo_coefficients; // converged CASSCF MO coefficients [nb×nb] in the optimization basis
         Eigen::VectorXd _cas_root_energies;   // per-root total CASSCF energies (length nroots; empty for SS-CASSCF)
+
+        // MP2 options and cached results. _mp2 is the input-driven option block.
+        // The amplitude and active-orbital fields cache the last applied MP2
+        // kernel result so gradient and RDM consumers can reuse it without
+        // forcing the older driver-style run_* wrappers.
+        OptionsMP2 _mp2;
+        int _mp2_nocc = 0;
+        int _mp2_nvir = 0;
+        int _mp2_nocca = 0;
+        int _mp2_noccb = 0;
+        int _mp2_nvira = 0;
+        int _mp2_nvirb = 0;
+        std::vector<int> _mp2_active_mo;        // active (non-frozen) MO indices into the full MO list (RMP2)
+        std::vector<int> _mp2_active_mo_alpha;  // UMP2 alpha active mask
+        std::vector<int> _mp2_active_mo_beta;   // UMP2 beta active mask
+        std::vector<double> _mp2_t2;            // RMP2 T2[i,j,a,b] (row-major), empty if not computed
+        std::vector<double> _ump2_t2_aa;        // UMP2 αα block
+        std::vector<double> _ump2_t2_ab;        // UMP2 αβ block
+        std::vector<double> _ump2_t2_bb;        // UMP2 ββ block
+        double _mp2_e_corr_ss = 0.0;            // same-spin correlation energy
+        double _mp2_e_corr_os = 0.0;            // opposite-spin correlation energy
+        bool _mp2_converged = true;             // iterative MP2 convergence flag (true = canonical or converged)
+        int _mp2_n_iter = 0;                    // iterative MP2 cycles taken (0 for canonical kernel)
 
         Eigen::MatrixXd _overlap; // Overlap matrix S
         Eigen::MatrixXd _hcore;   // Core Hamiltonian H = T + V

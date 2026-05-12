@@ -52,6 +52,33 @@ static std::size_t idx_dm2_grad(int p, int q, int r, int s, int nbf)
     return ((static_cast<std::size_t>(p) * nbf + q) * nbf + r) * nbf + s;
 }
 
+static Eigen::MatrixXd compute_nuclear_repulsion_gradient(
+    const HartreeFock::Calculator &calc)
+{
+    const auto &mol = calc._molecule;
+    Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(mol.natoms, 3);
+    for (std::size_t a = 0; a < mol.natoms; ++a)
+    {
+        for (std::size_t b = 0; b < mol.natoms; ++b)
+        {
+            if (a == b)
+                continue;
+            const double Za = static_cast<double>(mol.atomic_numbers[a]);
+            const double Zb = static_cast<double>(mol.atomic_numbers[b]);
+            const double dx = mol._standard(a, 0) - mol._standard(b, 0);
+            const double dy = mol._standard(a, 1) - mol._standard(b, 1);
+            const double dz = mol._standard(a, 2) - mol._standard(b, 2);
+            const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const double r3 = r * r * r;
+            const double fac = Za * Zb / r3;
+            grad(a, 0) -= fac * dx;
+            grad(a, 1) -= fac * dy;
+            grad(a, 2) -= fac * dz;
+        }
+    }
+    return grad;
+}
+
 static Eigen::MatrixXd build_pair_schwarz_table(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     std::size_t nbasis)
@@ -128,7 +155,8 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &P,
     const Eigen::MatrixXd &W,
-    GammaFn &&gamma_fn)
+    GammaFn &&gamma_fn,
+    bool assume_pair_exchange_symmetry = true)
 {
     const auto &mol = calc._molecule;
     const auto &basis = calc._shells;
@@ -213,36 +241,80 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
         }
     }
 
-    for (const auto &spAB : shell_pairs)
+    if (assume_pair_exchange_symmetry)
     {
-        const std::size_t ii = spAB.A._index;
-        const std::size_t jj = spAB.B._index;
-        const int atom_A = shell_atom[bf_shell[ii]];
-        const int atom_B = shell_atom[bf_shell[jj]];
-
-        for (const auto &spCD : shell_pairs)
+        for (const auto &spAB : shell_pairs)
         {
-            const std::size_t kk = spCD.A._index;
-            const std::size_t ll = spCD.B._index;
-            const int atom_C = shell_atom[bf_shell[kk]];
-            const int atom_D = shell_atom[bf_shell[ll]];
+            const std::size_t ii = spAB.A._index;
+            const std::size_t jj = spAB.B._index;
+            const int atom_A = shell_atom[bf_shell[ii]];
+            const int atom_B = shell_atom[bf_shell[jj]];
 
-            if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
-                continue;
+            for (const auto &spCD : shell_pairs)
+            {
+                const std::size_t kk = spCD.A._index;
+                const std::size_t ll = spCD.B._index;
+                const int atom_C = shell_atom[bf_shell[kk]];
+                const int atom_D = shell_atom[bf_shell[ll]];
 
-            const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
-            accumulate_eri_gradient_permutations(
-                grad,
-                dI,
-                gamma_fn,
-                ii,
-                jj,
-                kk,
-                ll,
-                atom_A,
-                atom_B,
-                atom_C,
-                atom_D);
+                if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
+                    continue;
+
+                const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
+                accumulate_eri_gradient_permutations(
+                    grad,
+                    dI,
+                    gamma_fn,
+                    ii,
+                    jj,
+                    kk,
+                    ll,
+                    atom_A,
+                    atom_B,
+                    atom_C,
+                    atom_D);
+            }
+        }
+    }
+    else
+    {
+        std::vector<HartreeFock::ShellPair> all_pairs;
+        all_pairs.reserve(nb * nb);
+        for (std::size_t ii = 0; ii < nb; ++ii)
+            for (std::size_t jj = 0; jj < nb; ++jj)
+                all_pairs.emplace_back(bfs[ii], bfs[jj]);
+
+        for (const auto &spAB : all_pairs)
+        {
+            const std::size_t ii = spAB.A._index;
+            const std::size_t jj = spAB.B._index;
+            const int atom_A = shell_atom[bf_shell[ii]];
+            const int atom_B = shell_atom[bf_shell[jj]];
+
+            for (const auto &spCD : all_pairs)
+            {
+                const std::size_t kk = spCD.A._index;
+                const std::size_t ll = spCD.B._index;
+                const int atom_C = shell_atom[bf_shell[kk]];
+                const int atom_D = shell_atom[bf_shell[ll]];
+
+                if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
+                    continue;
+
+                const double gamma = gamma_fn(ii, jj, kk, ll);
+                if (std::abs(gamma) < 1e-14)
+                    continue;
+
+                const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
+                const double fac = 0.25 * gamma;
+                for (int q = 0; q < 3; ++q)
+                {
+                    grad(atom_A, q) += fac * dI[q];
+                    grad(atom_B, q) += fac * dI[3 + q];
+                    grad(atom_C, q) += fac * dI[6 + q];
+                    grad(atom_D, q) += fac * dI[9 + q];
+                }
+            }
         }
     }
 
@@ -681,34 +753,13 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rmp2_
     if (calc._scf._scf != HartreeFock::SCFType::RHF || calc._info._scf.is_uhf)
         return std::unexpected(std::string("RMP2 gradient requires an RHF reference"));
 
-    auto grad_res = HartreeFock::Correlation::build_rmp2_gradient_intermediates(calc, shell_pairs);
+    auto mp2_res = HartreeFock::Correlation::rmp2_kernel(calc, shell_pairs, calc._mp2);
+    if (!mp2_res)
+        return std::unexpected(std::string("RMP2 gradient MP2 kernel failed: ") + mp2_res.error());
+    auto grad_res = HartreeFock::Correlation::build_rmp2_gradient_intermediates(calc, shell_pairs, *mp2_res);
     if (!grad_res)
         return std::unexpected(std::string("RMP2 gradient build failed: ") + grad_res.error());
-    const auto &grad_data = *grad_res;
-
-    const Eigen::MatrixXd &P_ref = calc._info._scf.alpha.density;
-    const Eigen::MatrixXd P_corr = grad_data.P_gamma_ao - P_ref;
-    const int nb = static_cast<int>(calc._shells.nbasis());
-    const auto &gamma_pair = grad_data.Gamma_pair_ao;
-
-    auto gamma_fn = [&P_ref, &P_corr, &gamma_pair, nb](std::size_t ii, std::size_t jj,
-                                                       std::size_t kk, std::size_t ll) -> double
-    {
-        const double P0_ij = P_ref(ii, jj);
-        const double P0_kl = P_ref(kk, ll);
-        const double P0_ik = P_ref(ii, kk);
-        const double P0_jl = P_ref(jj, ll);
-
-        const double dP_ij = P_corr(ii, jj);
-        const double dP_kl = P_corr(kk, ll);
-        const double dP_ik = P_corr(ii, kk);
-        const double dP_jl = P_corr(jj, ll);
-
-        return 2.0 * P0_ij * P0_kl - P0_ik * P0_jl + 2.0 * (dP_ij * P0_kl + P0_ij * dP_kl) - (dP_ik * P0_jl + P0_ik * dP_jl) + gamma_pair[idx_dm2_grad(static_cast<int>(ii), static_cast<int>(jj), static_cast<int>(kk), static_cast<int>(ll), nb)];
-    };
-
-    return compute_closed_shell_gradient_from_density(calc, shell_pairs,
-                                                      grad_data.P_ao, grad_data.W_ao, gamma_fn);
+    return grad_res->electronic_gradient + compute_nuclear_repulsion_gradient(calc);
 }
 
 std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_ump2_gradient(
@@ -720,38 +771,11 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_ump2_
     if (calc._scf._scf != HartreeFock::SCFType::UHF || !calc._info._scf.is_uhf)
         return std::unexpected(std::string("UMP2 gradient requires a UHF reference"));
 
-    auto grad_res = HartreeFock::Correlation::build_ump2_gradient_intermediates(calc, shell_pairs);
+    auto mp2_res = HartreeFock::Correlation::ump2_kernel(calc, shell_pairs, calc._mp2);
+    if (!mp2_res)
+        return std::unexpected(std::string("UMP2 gradient MP2 kernel failed: ") + mp2_res.error());
+    auto grad_res = HartreeFock::Correlation::build_ump2_gradient_intermediates(calc, shell_pairs, *mp2_res);
     if (!grad_res)
         return std::unexpected(std::string("UMP2 gradient build failed: ") + grad_res.error());
-    const auto &grad_data = *grad_res;
-
-    const Eigen::MatrixXd &Pa_ref = calc._info._scf.alpha.density;
-    const Eigen::MatrixXd &Pb_ref = calc._info._scf.beta.density;
-    const Eigen::MatrixXd Pt_ref = Pa_ref + Pb_ref;
-    const Eigen::MatrixXd &dPa = grad_data.P_alpha_corr_ao;
-    const Eigen::MatrixXd &dPb = grad_data.P_beta_corr_ao;
-    const Eigen::MatrixXd dPt = dPa + dPb;
-    const int nb = static_cast<int>(calc._shells.nbasis());
-    const auto &gamma_pair = grad_data.Gamma_pair_ao;
-
-    auto gamma_fn = [&Pa_ref, &Pb_ref, &Pt_ref, &dPa, &dPb, &dPt, &gamma_pair, nb](std::size_t ii, std::size_t jj,
-                                                                                   std::size_t kk, std::size_t ll) -> double
-    {
-        const double ref =
-            2.0 * Pt_ref(ii, jj) * Pt_ref(kk, ll) -
-            2.0 * Pa_ref(ii, kk) * Pa_ref(jj, ll) -
-            2.0 * Pb_ref(ii, kk) * Pb_ref(jj, ll);
-
-        const double linear =
-            2.0 * (dPt(ii, jj) * Pt_ref(kk, ll) + Pt_ref(ii, jj) * dPt(kk, ll)) -
-            2.0 * (dPa(ii, kk) * Pa_ref(jj, ll) + Pa_ref(ii, kk) * dPa(jj, ll)) -
-            2.0 * (dPb(ii, kk) * Pb_ref(jj, ll) + Pb_ref(ii, kk) * dPb(jj, ll));
-
-        return ref + linear +
-               gamma_pair[idx_dm2_grad(static_cast<int>(ii), static_cast<int>(jj),
-                                       static_cast<int>(kk), static_cast<int>(ll), nb)];
-    };
-
-    return compute_closed_shell_gradient_from_density(
-        calc, shell_pairs, grad_data.P_total_ao, grad_data.W_ao, gamma_fn);
+    return grad_res->electronic_gradient + compute_nuclear_repulsion_gradient(calc);
 }

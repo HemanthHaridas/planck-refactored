@@ -143,6 +143,12 @@ def resolve_executable(case: dict[str, Any], repo_root: Path, build_dir: str, de
     return repo_root / executable_path
 
 
+def build_command(executable: Path, input_path: Path) -> list[str]:
+    if executable.suffix == ".py":
+        return [sys.executable, str(executable), str(input_path)]
+    return [str(executable), str(input_path)]
+
+
 def resolve_metric_expectation(
     case_id: str,
     metric: str,
@@ -170,7 +176,7 @@ def run_case(
     start = time.perf_counter()
     try:
         proc = subprocess.run(
-            [str(executable), str(input_path)],
+            build_command(executable, input_path),
             cwd=repo_root,
             text=True,
             capture_output=True,

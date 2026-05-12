@@ -885,13 +885,19 @@ int main(int argc, const char *argv[])
         {
             corr_tag = "RMP2 :";
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Computing MP2 correlation energy");
-            corr_res = HartreeFock::Correlation::run_rmp2(calculator, shellpairs);
+            auto mp2_res = HartreeFock::Correlation::rmp2_kernel(calculator, shellpairs, calculator._mp2);
+            corr_res = mp2_res
+                           ? HartreeFock::Correlation::apply_rmp2_result(calculator, *mp2_res)
+                           : std::unexpected(mp2_res.error());
         }
         else if (calculator._correlation == HartreeFock::PostHF::UMP2)
         {
             corr_tag = "UMP2 :";
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Computing MP2 correlation energy");
-            corr_res = HartreeFock::Correlation::run_ump2(calculator, shellpairs);
+            auto mp2_res = HartreeFock::Correlation::ump2_kernel(calculator, shellpairs, calculator._mp2);
+            corr_res = mp2_res
+                           ? HartreeFock::Correlation::apply_ump2_result(calculator, *mp2_res)
+                           : std::unexpected(mp2_res.error());
         }
         else if (calculator._correlation == HartreeFock::PostHF::RCCSD)
         {
@@ -962,8 +968,10 @@ int main(int argc, const char *argv[])
             {
                 if (calculator._correlation == HartreeFock::PostHF::RMP2)
                 {
-                    auto nat_res = HartreeFock::Correlation::compute_rmp2_natural_orbitals(
-                        calculator, shellpairs);
+                    auto mp2_res = HartreeFock::Correlation::rmp2_kernel(calculator, shellpairs, calculator._mp2);
+                    auto nat_res = mp2_res
+                                       ? HartreeFock::Correlation::rmp2_make_natural_orbitals(*mp2_res)
+                                       : std::unexpected(mp2_res.error());
                     if (nat_res)
                         HartreeFock::Logger::mp2_natural_orbitals(
                             nat_res->occupations, nat_res->coefficients_mo);
