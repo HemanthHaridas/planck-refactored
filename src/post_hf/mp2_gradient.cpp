@@ -1,7 +1,11 @@
 #include "mp2_gradient.h"
 
+#include <cstdlib>
 #include <expected>
+#include <iostream>
+#include <iomanip>
 #include <string>
+#include <string_view>
 
 #include "integrals/base.h"
 #include "post_hf/integrals.h"
@@ -11,6 +15,42 @@
 
 namespace
 {
+    void maybe_print_rmp2_term_matrix(const char *name, const Eigen::MatrixXd &term)
+    {
+        const char *enabled = std::getenv("PLANCK_DEBUG_RMP2_TERMS");
+        if (enabled == nullptr || std::string_view(enabled) != "1")
+            return;
+
+        std::cout << "PLANCK_RMP2_TERM " << name << "\n";
+        std::cout << std::setprecision(16);
+        for (Eigen::Index atom = 0; atom < term.rows(); ++atom)
+        {
+            std::cout << "PLANCK_RMP2_TERM_ROW "
+                      << name << " "
+                      << (atom + 1) << " "
+                      << term(atom, 0) << " "
+                      << term(atom, 1) << " "
+                      << term(atom, 2) << "\n";
+        }
+    }
+
+    void maybe_print_rmp2_matrix(const char *name, const Eigen::MatrixXd &mat)
+    {
+        const char *enabled = std::getenv("PLANCK_DEBUG_RMP2_MATRICES");
+        if (enabled == nullptr || std::string_view(enabled) != "1")
+            return;
+
+        std::cout << "PLANCK_RMP2_MATRIX " << name << " " << mat.rows() << " " << mat.cols() << "\n";
+        std::cout << std::setprecision(16);
+        for (Eigen::Index row = 0; row < mat.rows(); ++row)
+            for (Eigen::Index col = 0; col < mat.cols(); ++col)
+                std::cout << "PLANCK_RMP2_MATRIX_ELEM "
+                          << name << " "
+                          << row << " "
+                          << col << " "
+                          << mat(row, col) << "\n";
+    }
+
     inline std::size_t idx_dm2(int p, int q, int r, int s, int nmo)
     {
         return ((static_cast<std::size_t>(p) * nmo + q) * nmo + r) * nmo + s;
@@ -108,54 +148,88 @@ namespace
         return grad;
     }
 
+    struct OneElectronGradientTerms
+    {
+        Eigen::MatrixXd total;
+        Eigen::MatrixXd kinetic;
+        Eigen::MatrixXd nuc_a;
+        Eigen::MatrixXd nuc_c;
+    };
+
+    OneElectronGradientTerms one_electron_gradient_terms_from_density(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> & /*shell_pairs*/,
+        const Eigen::MatrixXd &density)
+    {
+        OneElectronGradientTerms terms{
+            .total = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3),
+            .kinetic = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3),
+            .nuc_a = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3),
+            .nuc_c = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3)};
+        const auto &mol = calculator._molecule;
+        const int nao = static_cast<int>(calculator._shells.nbasis());
+        const auto &bfs = calculator._shells._basis_functions;
+        const auto atom_aos = build_atom_ao_lists(calculator);
+        for (std::size_t atom = 0; atom < mol.natoms; ++atom)
+        {
+            std::array<Eigen::MatrixXd, 3> kinetic_ao{
+                Eigen::MatrixXd::Zero(nao, nao),
+                Eigen::MatrixXd::Zero(nao, nao),
+                Eigen::MatrixXd::Zero(nao, nao)};
+            std::array<Eigen::MatrixXd, 3> nuc_a_ao{
+                Eigen::MatrixXd::Zero(nao, nao),
+                Eigen::MatrixXd::Zero(nao, nao),
+                Eigen::MatrixXd::Zero(nao, nao)};
+            std::array<Eigen::MatrixXd, 3> nuc_c_ao{
+                Eigen::MatrixXd::Zero(nao, nao),
+                Eigen::MatrixXd::Zero(nao, nao),
+                Eigen::MatrixXd::Zero(nao, nao)};
+
+            for (int p : atom_aos[atom])
+                for (int nu = 0; nu < nao; ++nu)
+                {
+                    const HartreeFock::ShellPair sp(bfs[p], bfs[nu]);
+                    const auto dST_A = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
+                    const auto dV_A = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp, mol);
+                    for (int q = 0; q < 3; ++q)
+                    {
+                        kinetic_ao[q](p, nu) += dST_A[q + 3];
+                        nuc_a_ao[q](p, nu) += dV_A[q];
+                    }
+                }
+
+            const double Z = static_cast<double>(mol.atomic_numbers[atom]);
+            const Eigen::Vector3d center(mol._standard(atom, 0), mol._standard(atom, 1), mol._standard(atom, 2));
+            for (int q = 0; q < 3; ++q)
+            {
+                kinetic_ao[q] = kinetic_ao[q] + kinetic_ao[q].transpose().eval();
+                nuc_a_ao[q] = nuc_a_ao[q] + nuc_a_ao[q].transpose().eval();
+                for (int ii = 0; ii < nao; ++ii)
+                    for (int jj = 0; jj <= ii; ++jj)
+                    {
+                        const HartreeFock::ShellPair sp(bfs[ii], bfs[jj]);
+                        const double dv = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(sp, center, Z, q);
+                        nuc_c_ao[q](ii, jj) += dv;
+                        if (ii != jj)
+                            nuc_c_ao[q](jj, ii) += dv;
+                    }
+                terms.kinetic(atom, q) = (kinetic_ao[q].cwiseProduct(density.transpose())).sum();
+                terms.nuc_a(atom, q) = (nuc_a_ao[q].cwiseProduct(density.transpose())).sum();
+                terms.nuc_c(atom, q) = (nuc_c_ao[q].cwiseProduct(density.transpose())).sum();
+                terms.total(atom, q) = terms.kinetic(atom, q) + terms.nuc_a(atom, q) + terms.nuc_c(atom, q);
+            }
+        }
+        return terms;
+    }
+
     Eigen::MatrixXd one_electron_gradient_from_density(
         const HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &density)
     {
-        Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
-        const auto &mol = calculator._molecule;
-        for (const auto &sp : shell_pairs)
-        {
-            const int ii = static_cast<int>(sp.A._index);
-            const int jj = static_cast<int>(sp.B._index);
-            const int atom_i = static_cast<int>(sp.A._shell->_atom_index);
-            const int atom_j = static_cast<int>(sp.B._shell->_atom_index);
-
-            const auto dST_A = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
-            const auto dV_A = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp, mol);
-            for (int q = 0; q < 3; ++q)
-                grad(atom_i, q) += 2.0 * density(ii, jj) * (dST_A[q + 3] + dV_A[q]);
-
-            if (ii != jj)
-            {
-                const HartreeFock::ShellPair sp_rev(sp.B, sp.A);
-                const auto dST_B = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp_rev);
-                const auto dV_B = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp_rev, mol);
-                for (int q = 0; q < 3; ++q)
-                    grad(atom_j, q) += 2.0 * density(jj, ii) * (dST_B[q + 3] + dV_B[q]);
-            }
-        }
-
-        for (std::size_t atom = 0; atom < mol.natoms; ++atom)
-        {
-            const double Z = static_cast<double>(mol.atomic_numbers[atom]);
-            const Eigen::Vector3d center(mol._standard(atom, 0), mol._standard(atom, 1), mol._standard(atom, 2));
-            for (int q = 0; q < 3; ++q)
-            {
-                double accum = 0.0;
-                for (const auto &sp : shell_pairs)
-                {
-                    const int ii = static_cast<int>(sp.A._index);
-                    const int jj = static_cast<int>(sp.B._index);
-                    const double dv = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(sp, center, Z, q);
-                    accum += (ii == jj ? 1.0 : 2.0) * density(ii, jj) * dv;
-                }
-                grad(atom, q) += accum;
-            }
-        }
-        return grad;
+        return one_electron_gradient_terms_from_density(calculator, shell_pairs, density).total;
     }
+
 }
 
 namespace HartreeFock::Correlation
@@ -238,30 +312,43 @@ namespace HartreeFock::Correlation
                         part_dm2[idx_part(i, p, q, j)] = val;
                     }
 
+        // 4-term contraction (correct formula matching PySCF)
         std::vector<double> dm2buf_full(static_cast<std::size_t>(nao) * nao * nao * nao, 0.0);
         for (int p = 0; p < nao; ++p)
             for (int q = 0; q < nao; ++q)
                 for (int r = 0; r < nao; ++r)
                     for (int s = 0; s < nao; ++s)
                     {
-                        double base = 0.0;
+                        double val = 0.0;
                         for (int i = 0; i < nocc; ++i)
                             for (int j = 0; j < nocc; ++j)
                             {
-                                base += C_occ(p, i) * part_dm2[idx_part(i, q, r, j)] * C_occ(s, j);
-                                base += C_occ(q, i) * part_dm2[idx_part(i, p, r, j)] * C_occ(s, j);
+                                val += C_occ(p, i) * part_dm2[idx_part(i, q, r, j)] * C_occ(s, j);
+                                val += C_occ(q, i) * part_dm2[idx_part(i, p, r, j)] * C_occ(s, j);
+                                val += C_occ(p, i) * part_dm2[idx_part(i, q, s, j)] * C_occ(r, j);
+                                val += C_occ(q, i) * part_dm2[idx_part(i, p, s, j)] * C_occ(r, j);
                             }
-                        double swap = 0.0;
-                        for (int i = 0; i < nocc; ++i)
-                            for (int j = 0; j < nocc; ++j)
-                            {
-                                swap += C_occ(p, i) * part_dm2[idx_part(i, q, s, j)] * C_occ(r, j);
-                                swap += C_occ(q, i) * part_dm2[idx_part(i, p, s, j)] * C_occ(r, j);
-                            }
-                        dm2buf_full[idx_dm2(p, q, r, s, nao)] = base + swap;
+                        dm2buf_full[idx_dm2(p, q, r, s, nao)] = val;
                     }
 
+        // Debug output
+        if (const char* debug = std::getenv("PLANCK_DEBUG_DM2BUF"))
+        {
+            if (std::string_view(debug) == "1")
+            {
+                std::cout << "PLANCK_DM2BUF_FULL ";
+                for (double val : dm2buf_full)
+                    std::cout << val << " ";
+                std::cout << "\n";
+            }
+        }
+
         Eigen::MatrixXd electronic = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
+        Eigen::MatrixXd two_e_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
+        Eigen::MatrixXd vhf1_rs_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
+        Eigen::MatrixXd vhf1_rq_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
+        Eigen::MatrixXd vhf1_pq_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
+        Eigen::MatrixXd vhf1_ps_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
         Eigen::MatrixXd imat_ao = Eigen::MatrixXd::Zero(nao, nao);
         std::vector<std::array<Eigen::MatrixXd, 3>> vhf1(calculator._molecule.natoms);
         for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
@@ -269,7 +356,7 @@ namespace HartreeFock::Correlation
                 vhf1[atom][q] = Eigen::MatrixXd::Zero(nao, nao);
 
         const auto &bfs = calculator._shells._basis_functions;
-        const Eigen::MatrixXd hf_dm1 = calculator._info._scf.alpha.density;
+        const Eigen::MatrixXd hf_dm1 = 2.0 * C_occ * C_occ.transpose();
         for (std::size_t atom = 0; atom < atom_aos.size(); ++atom)
         {
             for (int p : atom_aos[atom])
@@ -282,7 +369,10 @@ namespace HartreeFock::Correlation
                             const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
                             const double dm2v = dm2buf_full[idx_dm2(p, q, r, s, nao)];
                             for (int comp = 0; comp < 3; ++comp)
+                            {
+                                two_e_terms(atom, comp) += dI[comp] * dm2v;
                                 electronic(atom, comp) += dI[comp] * dm2v;
+                            }
 
                             const double eri_pqrs = eri[idx_dm2(p, q, r, s, nao)];
                             for (int v = 0; v < nao; ++v)
@@ -297,17 +387,38 @@ namespace HartreeFock::Correlation
                             }
                         }
         }
-
         imat_ao = -imat_ao;
         Eigen::MatrixXd imat_mo = result.mo_coeff.transpose() * imat_ao * calculator._overlap * result.mo_coeff;
         const Eigen::MatrixXd veff_corr_ao = 2.0 * build_veff_from_density(calculator, shell_pairs, dm1_corr_ao);
+
+        // Debug: print imat details
+        if (const char *enabled = std::getenv("PLANCK_DEBUG_RMP2_IMAT"))
+            if (std::string_view(enabled) == "1")
+            {
+                std::cout << "PLANCK_DEBUG_IMAT_MO " << imat_mo.rows() << " " << imat_mo.cols() << "\n";
+                std::cout << std::setprecision(16);
+                for (int i = 0; i < imat_mo.rows(); ++i)
+                    for (int j = 0; j < imat_mo.cols(); ++j)
+                        std::cout << "PLANCK_DEBUG_IMAT_MO_ELEM " << i << " " << j << " " << imat_mo(i, j) << "\n";
+
+                auto block_tr = imat_mo.topRightCorner(nocc, nvirt);
+                auto block_bl = imat_mo.bottomLeftCorner(nvirt, nocc);
+                std::cout << "PLANCK_DEBUG_IMAT_TOP_RIGHT " << block_tr.rows() << " " << block_tr.cols() << "\n";
+                for (int i = 0; i < block_tr.rows(); ++i)
+                    for (int j = 0; j < block_tr.cols(); ++j)
+                        std::cout << "PLANCK_DEBUG_IMAT_TOP_RIGHT_ELEM " << i << " " << j << " " << block_tr(i, j) << "\n";
+
+                std::cout << "PLANCK_DEBUG_IMAT_BOTTOM_LEFT " << block_bl.rows() << " " << block_bl.cols() << "\n";
+                for (int i = 0; i < block_bl.rows(); ++i)
+                    for (int j = 0; j < block_bl.cols(); ++j)
+                        std::cout << "PLANCK_DEBUG_IMAT_BOTTOM_LEFT_ELEM " << i << " " << j << " " << block_bl(i, j) << "\n";
+            }
 
         Eigen::MatrixXd Xvo =
             C_virt.transpose() * veff_corr_ao * C_occ +
             imat_mo.topRightCorner(nocc, nvirt).transpose() -
             imat_mo.bottomLeftCorner(nvirt, nocc);
-
-        auto z_res = solve_rhf_cphf(calculator, shell_pairs, Xvo);
+        auto z_res = solve_rhf_cphf(calculator, shell_pairs, result.mo_coeff, result.mo_energy, Xvo);
         if (!z_res)
             return std::unexpected(z_res.error());
         const Eigen::MatrixXd &z = *z_res;
@@ -336,22 +447,32 @@ namespace HartreeFock::Correlation
         const Eigen::MatrixXd zeta_ao =
             W_ref + result.mo_coeff * zeta_weights.cwiseProduct(corr_relaxed_mo) * result.mo_coeff.transpose();
 
-        imat_mo.topRightCorner(nocc, nvirt) = imat_mo.bottomLeftCorner(nvirt, nocc).transpose();
+        imat_mo.bottomLeftCorner(nvirt, nocc) = imat_mo.topRightCorner(nocc, nvirt).transpose();
         imat_ao = result.mo_coeff * imat_mo * result.mo_coeff.transpose();
 
         const Eigen::MatrixXd occ_projector = C_occ * C_occ.transpose();
-        const Eigen::MatrixXd dm1_corr_relaxed_ao = P_ao - calculator._info._scf.alpha.density;
+        const Eigen::MatrixXd dm1_corr_relaxed_ao = P_ao - hf_dm1;
         const Eigen::MatrixXd vhf_s1occ =
             occ_projector *
             build_veff_from_density(calculator, shell_pairs, dm1_corr_relaxed_ao + dm1_corr_relaxed_ao.transpose()) *
             occ_projector;
 
-        const Eigen::MatrixXd dm1_total_ao = calculator._info._scf.alpha.density + dm1_corr_relaxed_ao;
-        const Eigen::MatrixXd one_e = one_electron_gradient_from_density(calculator, shell_pairs, dm1_total_ao);
-        electronic += one_e;
+        const Eigen::MatrixXd dm1_total_ao = hf_dm1 + dm1_corr_relaxed_ao;
+        const auto one_e_terms = one_electron_gradient_terms_from_density(calculator, shell_pairs, dm1_total_ao);
+        electronic += one_e_terms.total;
 
-        const Eigen::MatrixXd dm1p = calculator._info._scf.alpha.density + 2.0 * dm1_corr_relaxed_ao;
+        const Eigen::MatrixXd dm1p = hf_dm1 + 2.0 * dm1_corr_relaxed_ao;
+
+        maybe_print_rmp2_matrix("z", z);
+        maybe_print_rmp2_matrix("corr_relaxed_mo", corr_relaxed_mo);
+        maybe_print_rmp2_matrix("P_ao", P_ao);
+        maybe_print_rmp2_matrix("dm1_corr_relaxed_ao", dm1_corr_relaxed_ao);
+        maybe_print_rmp2_matrix("dm1p", dm1p);
+
         Eigen::MatrixXd overlap_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
+        Eigen::MatrixXd s_im1_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
+        Eigen::MatrixXd s_zeta_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
+        Eigen::MatrixXd s_vhf_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
         for (std::size_t atom = 0; atom < atom_aos.size(); ++atom)
             for (int p : atom_aos[atom])
                 for (int nu = 0; nu < nao; ++nu)
@@ -360,11 +481,18 @@ namespace HartreeFock::Correlation
                     const auto dST = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
                     for (int q = 0; q < 3; ++q)
                     {
-                        overlap_terms(atom, q) += dST[q] * imat_ao(p, nu);
-                        overlap_terms(atom, q) += dST[q] * imat_ao(nu, p);
-                        overlap_terms(atom, q) -= dST[q] * zeta_ao(p, nu);
-                        overlap_terms(atom, q) -= dST[q] * zeta_ao(nu, p);
-                        overlap_terms(atom, q) -= 2.0 * dST[q] * vhf_s1occ(p, nu);
+                        const double s_im1 =
+                            dST[q] * imat_ao(p, nu) +
+                            dST[q] * imat_ao(nu, p);
+                        const double s_zeta =
+                            -dST[q] * zeta_ao(p, nu) -
+                            dST[q] * zeta_ao(nu, p);
+                        const double s_vhf =
+                            -2.0 * dST[q] * vhf_s1occ(p, nu);
+                        s_im1_terms(atom, q) += s_im1;
+                        s_zeta_terms(atom, q) += s_zeta;
+                        s_vhf_terms(atom, q) += s_vhf;
+                        overlap_terms(atom, q) += s_im1 + s_zeta + s_vhf;
                     }
                 }
         electronic += overlap_terms;
@@ -377,13 +505,46 @@ namespace HartreeFock::Correlation
                 electronic(atom, q) += vhf1_terms(atom, q);
             }
 
+        for (std::size_t atom = 0; atom < atom_aos.size(); ++atom)
+            for (int p : atom_aos[atom])
+                for (int q = 0; q < nao; ++q)
+                    for (int r = 0; r < nao; ++r)
+                        for (int s = 0; s < nao; ++s)
+                        {
+                            const HartreeFock::ShellPair spAB(bfs[p], bfs[q]);
+                            const HartreeFock::ShellPair spCD(bfs[r], bfs[s]);
+                            const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
+                            for (int comp = 0; comp < 3; ++comp)
+                            {
+                                vhf1_rs_terms(atom, comp) += dI[comp] * hf_dm1(p, q) * dm1p(r, s);
+                                vhf1_rq_terms(atom, comp) -= 0.5 * dI[comp] * hf_dm1(p, s) * dm1p(r, q);
+                                vhf1_pq_terms(atom, comp) += dI[comp] * hf_dm1(r, s) * dm1p(p, q);
+                                vhf1_ps_terms(atom, comp) -= 0.5 * dI[comp] * hf_dm1(q, r) * dm1p(p, s);
+                            }
+                        }
+
+        maybe_print_rmp2_term_matrix("two_e", two_e_terms);
+        maybe_print_rmp2_term_matrix("h1", one_e_terms.total);
+        maybe_print_rmp2_term_matrix("h1_kinetic", one_e_terms.kinetic);
+        maybe_print_rmp2_term_matrix("h1_nuc_a", one_e_terms.nuc_a);
+        maybe_print_rmp2_term_matrix("h1_nuc_c", one_e_terms.nuc_c);
+        maybe_print_rmp2_term_matrix("s_im1", s_im1_terms);
+        maybe_print_rmp2_term_matrix("s_zeta", s_zeta_terms);
+        maybe_print_rmp2_term_matrix("s_vhf", s_vhf_terms);
+        maybe_print_rmp2_term_matrix("vhf1", vhf1_terms);
+        maybe_print_rmp2_term_matrix("vhf1_rs", vhf1_rs_terms);
+        maybe_print_rmp2_term_matrix("vhf1_rq", vhf1_rq_terms);
+        maybe_print_rmp2_term_matrix("vhf1_pq", vhf1_pq_terms);
+        maybe_print_rmp2_term_matrix("vhf1_ps", vhf1_ps_terms);
+        maybe_print_rmp2_term_matrix("electronic", electronic);
+
         RMP2GradientIntermediates out;
         out.electronic_gradient = std::move(electronic);
         out.P_mo = P_mo;
         out.P_ao = P_ao;
         out.W_ao = 0.5 * (zeta_ao + zeta_ao.transpose() - imat_ao - imat_ao.transpose()) + vhf_s1occ;
         out.P_total_ao = P_ao;
-        out.P_gamma_ao = calculator._info._scf.alpha.density + 2.0 * dm1_corr_relaxed_ao;
+        out.P_gamma_ao = hf_dm1 + 2.0 * dm1_corr_relaxed_ao;
         out.im1_ao = std::move(imat_ao);
         out.zeta_ao = zeta_ao;
         out.vhf_s1occ_ao = vhf_s1occ;

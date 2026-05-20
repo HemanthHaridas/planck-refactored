@@ -13,11 +13,15 @@ namespace HartreeFock::Correlation
 {
     std::expected<Eigen::MatrixXd, std::string> build_rhf_cphf_matrix(
         HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs);
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &mo_coeff,
+        const Eigen::VectorXd &mo_energy);
 
     std::expected<Eigen::MatrixXd, std::string> solve_rhf_cphf(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &mo_coeff,
+        const Eigen::VectorXd &mo_energy,
         const Eigen::MatrixXd &rhs);
 } // namespace HartreeFock::Correlation
 

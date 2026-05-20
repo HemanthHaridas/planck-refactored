@@ -1312,7 +1312,6 @@ std::array<double, 3> HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
     const double ABx = sp.R[0], ABy = sp.R[1], ABz = sp.R[2];
 
     std::array<double, 3> result{};
-
     for (int q = 0; q < 3; ++q)
     {
         const int lAq = sp.A._cartesian[q];
@@ -1330,14 +1329,12 @@ std::array<double, 3> HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
                 const double w = pp.coeff_product;
                 const double w2al = 2.0 * pp.alpha * w;
 
-                // +1 shift: -Z * 2α * V_prim(lA+ê_q, lB)
                 {
                     const int axp = lAx + (q == 0), ayp = lAy + (q == 1), azp = lAz + (q == 2);
                     double Vp = _os_nuclear_primitive(pp, axp, ayp, azp,
                                                       lBx, lBy, lBz, ABx, ABy, ABz, C);
                     dV -= Z * w2al * Vp;
                 }
-                // -1 shift: +Z * lAq * V_prim(lA-ê_q, lB)
                 if (lAq > 0)
                 {
                     const int axm = lAx - (q == 0), aym = lAy - (q == 1), azm = lAz - (q == 2);
