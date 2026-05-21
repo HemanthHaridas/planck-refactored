@@ -312,7 +312,11 @@ namespace HartreeFock::Correlation
                         part_dm2[idx_part(i, p, q, j)] = val;
                     }
 
-        // 4-term contraction (correct formula matching PySCF)
+        // dm2buf_full = einsum('pi,iqrj,sj->pqrs') + einsum('qi,iprj,sj->pqrs').
+        // PySCF additionally symmetrizes r<->s (dm2buf + dm2buf.T(0,1,3,2)) but only
+        // because it contracts against s2kl-packed ERIs with a diagonal-halving
+        // correction. We contract against full (unpacked) ERIs/derivatives, so the
+        // r<->s symmetrization would double-count the pair — it is omitted here.
         std::vector<double> dm2buf_full(static_cast<std::size_t>(nao) * nao * nao * nao, 0.0);
         for (int p = 0; p < nao; ++p)
             for (int q = 0; q < nao; ++q)
@@ -325,8 +329,6 @@ namespace HartreeFock::Correlation
                             {
                                 val += C_occ(p, i) * part_dm2[idx_part(i, q, r, j)] * C_occ(s, j);
                                 val += C_occ(q, i) * part_dm2[idx_part(i, p, r, j)] * C_occ(s, j);
-                                val += C_occ(p, i) * part_dm2[idx_part(i, q, s, j)] * C_occ(r, j);
-                                val += C_occ(q, i) * part_dm2[idx_part(i, p, s, j)] * C_occ(r, j);
                             }
                         dm2buf_full[idx_dm2(p, q, r, s, nao)] = val;
                     }
@@ -367,16 +369,23 @@ namespace HartreeFock::Correlation
                             const HartreeFock::ShellPair spAB(bfs[p], bfs[q]);
                             const HartreeFock::ShellPair spCD(bfs[r], bfs[s]);
                             const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
-                            const double dm2v = dm2buf_full[idx_dm2(p, q, r, s, nao)];
+                            // PySCF contracts the pair density with the ERI derivative
+                            // with an overall factor of 2 (grad/mp2.py: de -= ... * 2);
+                            // dm2buf_full carries only one bra-derivative permutation here.
+                            const double dm2v = 2.0 * dm2buf_full[idx_dm2(p, q, r, s, nao)];
                             for (int comp = 0; comp < 3; ++comp)
                             {
                                 two_e_terms(atom, comp) += dI[comp] * dm2v;
                                 electronic(atom, comp) += dI[comp] * dm2v;
                             }
 
+                            // Imat(q,v) += sum_{p,r,s} (pq|rs) * dm2buf[p,v,r,s].
+                            // dm2buf_full omits the r<->s symmetrization, so the
+                            // full-ERI contraction matches PySCF's packed Imat with
+                            // factor 1 (verified element-wise: ratio 1.0).
                             const double eri_pqrs = eri[idx_dm2(p, q, r, s, nao)];
                             for (int v = 0; v < nao; ++v)
-                                imat_ao(q, v) += 0.5 * eri_pqrs * dm2buf_full[idx_dm2(p, v, r, s, nao)];
+                                imat_ao(q, v) += eri_pqrs * dm2buf_full[idx_dm2(p, v, r, s, nao)];
 
                             for (int comp = 0; comp < 3; ++comp)
                             {

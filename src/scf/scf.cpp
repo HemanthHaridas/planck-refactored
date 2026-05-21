@@ -4,6 +4,7 @@
 #include <format>
 #include <limits>
 #include <numeric>
+#include <tuple>
 
 #include "integrals/base.h"
 #include "io/logging.h"
@@ -561,9 +562,11 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         HartreeFock::Logger::blank();
     }
 
-    // ── DIIS state per spin ───────────────────────────────────────────────────
-    HartreeFock::DIISState diis_a, diis_b;
-    diis_a.max_vecs = diis_b.max_vecs = calculator._scf._DIIS_dim;
+    // ── Combined-spin DIIS ────────────────────────────────────────────────────
+    // Alpha and beta Fock are coupled through the shared Coulomb term, so they are
+    // extrapolated together with a single coefficient vector (see UHFDIISState).
+    HartreeFock::UHFDIISState diis;
+    diis.max_vecs = calculator._scf._DIIS_dim;
     const bool use_diis = calculator._scf._use_DIIS;
 
     const double tol_eri = calculator._integral._tol_eri;
@@ -627,38 +630,35 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             Fb_s += shift_b;
         }
 
-        // ── DIIS: Pulay errors from the shifted Fock ─────────────────────────
+        // ── DIIS: combined-spin Pulay errors from the shifted Fock ───────────
         double diis_err = 0.0;
+        Eigen::MatrixXd Fa_diag = Fa_s, Fb_diag = Fb_s;
         if (use_diis)
         {
             const Eigen::MatrixXd ea = X.transpose() * (Fa_s * Pa * S - S * Pa * Fa_s) * X;
             const Eigen::MatrixXd eb = X.transpose() * (Fb_s * Pb * S - S * Pb * Fb_s) * X;
 
-            // RMS norm — same normalization as DIISState::error_norm()
-            const auto rms_norm = [](const Eigen::MatrixXd &m)
-            {
-                return std::sqrt(m.squaredNorm() / static_cast<double>(m.size()));
-            };
-            const double cur_err = std::max(rms_norm(ea), rms_norm(eb));
+            // Combined RMS error over both spins (matches UHFDIISState::error_norm).
+            const double cur_err = std::sqrt(
+                (ea.squaredNorm() + eb.squaredNorm()) /
+                static_cast<double>(ea.size() + eb.size()));
 
             // ── DIIS restart ──────────────────────────────────────────────────
             if (restart_factor > 0.0 && iter > 2 && cur_err > diis_err_prev * restart_factor)
             {
-                diis_a.clear();
-                diis_b.clear();
+                diis.clear();
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
                                              "DIIS :", std::format("Subspace restarted at iter {} (error grew {:.1f}×)", iter, cur_err / diis_err_prev));
             }
 
-            diis_a.push(Fa_s, ea);
-            diis_b.push(Fb_s, eb);
-            diis_err = std::max(diis_a.error_norm(), diis_b.error_norm());
+            diis.push(Fa_s, Fb_s, ea, eb);
+            diis_err = diis.error_norm();
             diis_err_prev = cur_err;
-        }
 
-        // Extrapolated (shifted) Fock for diagonalization
-        const Eigen::MatrixXd Fa_diag = (use_diis && diis_a.ready()) ? diis_a.extrapolate() : Fa_s;
-        const Eigen::MatrixXd Fb_diag = (use_diis && diis_b.ready()) ? diis_b.extrapolate() : Fb_s;
+            // Extrapolate both spins with one shared coefficient vector.
+            if (diis.ready())
+                std::tie(Fa_diag, Fb_diag) = diis.extrapolate();
+        }
 
         // ── Diagonalize alpha and beta ────────────────────────────────────────
         Eigen::MatrixXd Ca(nbasis, nbasis), Cb(nbasis, nbasis);

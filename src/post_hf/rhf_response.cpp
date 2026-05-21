@@ -90,7 +90,12 @@ namespace HartreeFock::Correlation
                         const double ai_jb = eri_mo[idx_eri(aa, i, j, bb)];
                         const double ab_ji = eri_mo[idx_eri(aa, bb, j, i)];
                         const double aj_bi = eri_mo[idx_eri(aa, j, bb, i)];
-                        A(idx_ai(b, j), ai) -= 4.0 * ai_jb - ab_ji - aj_bi;
+                        // Standard RHF CPHF coupling: A_{ai,bj} = (e_a-e_i)d + [4(ai|jb)-(ab|ji)-(aj|bi)].
+                        // The coupling adds (matching PySCF cphf.solve's fvind operator).
+                        // solve_rhf_cphf solves A z = -rhs; the overall sign on z is chosen
+                        // so the resulting vo block is phase-consistent with the doo/dvv
+                        // blocks of the MP2 relaxed density (see mp2_gradient.cpp).
+                        A(idx_ai(b, j), ai) += 4.0 * ai_jb - ab_ji - aj_bi;
                     }
             }
         maybe_print_rhf_response_matrix("A", A);

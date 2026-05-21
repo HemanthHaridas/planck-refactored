@@ -59,3 +59,4 @@ tests/benchmarks/**/*.uvvis.dat
 *.log
 tests/*/__pycache__
 *.hfchk
+__pycache__
