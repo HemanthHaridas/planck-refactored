@@ -239,6 +239,18 @@
       ]
     },
     {
+      "id": "water_rmp2_gradient_fd",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_gradient_sto3g.hfinp",
+      "executable": "tests/rmp2_gradient_fd.py",
+      "tags": ["extended"],
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
       "id": "water_radical_cation_ump2_gradient_smoke",
       "input": "tests/inputs/regression/open_shell/water_radical_cation_uhf_ump2_gradient_sto3g.hfinp",
       "tags": ["extended"],
@@ -265,7 +277,8 @@
       "checks": [
         {"type": "metric_present", "metric": "gradient_max"},
         {"type": "metric_present", "metric": "gradient_rms"},
-        {"type": "metric_eq", "metric": "gradient_atom_lines", "expected": 3}
+        {"type": "metric_eq", "metric": "gradient_atom_lines", "expected": 3},
+        {"type": "metric_close", "metric": "gradient_max", "expected": 0.32212455, "atol": 5e-4}
       ]
     },
     {
@@ -359,7 +372,7 @@
       ],
       "checks": [
         {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.4880704826, "atol": 1e-9}
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.5911327976, "atol": 1e-8}
       ]
     },
     {

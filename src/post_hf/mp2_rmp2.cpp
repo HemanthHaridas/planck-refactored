@@ -106,10 +106,10 @@ namespace HartreeFock::Correlation
                         }
                         for (int k = 0; k < result.n_occ; ++k)
                         {
+                            const double t_ijab = result.t2[idx_t2(i, j, a, b, result.n_occ, result.n_virt)];
                             const double t_ikab = result.t2[idx_t2(i, k, a, b, result.n_occ, result.n_virt)];
-                            const double t_jkab = result.t2[idx_t2(j, k, a, b, result.n_occ, result.n_virt)];
-                            const double t_jkba = result.t2[idx_t2(j, k, b, a, result.n_occ, result.n_virt)];
-                            doo(i, j) += 2.0 * t_ikab * t_jkab - t_ikab * t_jkba;
+                            const double t_ikba = result.t2[idx_t2(i, k, b, a, result.n_occ, result.n_virt)];
+                            doo(j, k) += 2.0 * t_ijab * t_ikab - t_ijab * t_ikba;
                         }
                     }
 

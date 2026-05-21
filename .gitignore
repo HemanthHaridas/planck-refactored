@@ -59,3 +59,5 @@ tests/benchmarks/**/*.uvvis.dat
 *.log
 tests/*/__pycache__
 *.hfchk
+__pycache__
+RMP2_GRADIENT_FIX_SUMMARY.md

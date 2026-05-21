@@ -14,6 +14,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "basis.h"
@@ -863,6 +864,95 @@ namespace HartreeFock
         {
             fock_history.clear();
             error_history.clear();
+        }
+    };
+
+    // Combined-spin DIIS for UHF.  Alpha and beta Fock matrices are coupled
+    // through the shared Coulomb term, so they MUST be extrapolated with a single
+    // set of coefficients.  This stores the (Fa, Fb) pair per iteration and builds
+    // one B matrix from the stacked error e = [e_a; e_b]:
+    //   B_{ij} = Tr(e_a,i^T e_a,j) + Tr(e_b,i^T e_b,j).
+    // Extrapolating each spin separately (two independent DIISState objects)
+    // produces a mutually inconsistent (Fa, Fb) pair and can stall convergence.
+    struct UHFDIISState
+    {
+        std::deque<Eigen::MatrixXd> fock_a_history;
+        std::deque<Eigen::MatrixXd> fock_b_history;
+        std::deque<Eigen::MatrixXd> error_a_history;
+        std::deque<Eigen::MatrixXd> error_b_history;
+        std::size_t max_vecs = 8;
+
+        void push(const Eigen::MatrixXd &Fa, const Eigen::MatrixXd &Fb,
+                  const Eigen::MatrixXd &ea, const Eigen::MatrixXd &eb)
+        {
+            fock_a_history.push_back(Fa);
+            fock_b_history.push_back(Fb);
+            error_a_history.push_back(ea);
+            error_b_history.push_back(eb);
+            if (fock_a_history.size() > max_vecs)
+            {
+                fock_a_history.pop_front();
+                fock_b_history.pop_front();
+                error_a_history.pop_front();
+                error_b_history.pop_front();
+            }
+        }
+
+        std::size_t size() const noexcept { return fock_a_history.size(); }
+        bool ready() const noexcept { return size() >= 2; }
+
+        // Solve the augmented DIIS system for one shared coefficient vector and
+        // return the extrapolated (Fa, Fb) pair.  Requires ready() == true.
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd> extrapolate() const
+        {
+            const std::size_t m = size();
+            Eigen::MatrixXd B = Eigen::MatrixXd::Zero(m + 1, m + 1);
+            for (std::size_t i = 0; i < m; ++i)
+            {
+                for (std::size_t j = i; j < m; ++j)
+                {
+                    const double bij =
+                        (error_a_history[i].array() * error_a_history[j].array()).sum() +
+                        (error_b_history[i].array() * error_b_history[j].array()).sum();
+                    B(i, j) = bij;
+                    B(j, i) = bij;
+                }
+                B(i, m) = -1.0;
+                B(m, i) = -1.0;
+            }
+
+            Eigen::VectorXd rhs = Eigen::VectorXd::Zero(m + 1);
+            rhs(m) = -1.0;
+            const Eigen::VectorXd c = B.colPivHouseholderQr().solve(rhs);
+
+            Eigen::MatrixXd Fa = Eigen::MatrixXd::Zero(fock_a_history[0].rows(), fock_a_history[0].cols());
+            Eigen::MatrixXd Fb = Eigen::MatrixXd::Zero(fock_b_history[0].rows(), fock_b_history[0].cols());
+            for (std::size_t i = 0; i < m; ++i)
+            {
+                Fa += c(i) * fock_a_history[i];
+                Fb += c(i) * fock_b_history[i];
+            }
+            return {std::move(Fa), std::move(Fb)};
+        }
+
+        // Combined RMS error of the most recent (e_a, e_b) pair.
+        double error_norm() const
+        {
+            if (error_a_history.empty())
+                return 0.0;
+            const auto &ea = error_a_history.back();
+            const auto &eb = error_b_history.back();
+            const double sq = ea.squaredNorm() + eb.squaredNorm();
+            const double n = static_cast<double>(ea.size() + eb.size());
+            return std::sqrt(sq / n);
+        }
+
+        void clear() noexcept
+        {
+            fock_a_history.clear();
+            fock_b_history.clear();
+            error_a_history.clear();
+            error_b_history.clear();
         }
     };
 

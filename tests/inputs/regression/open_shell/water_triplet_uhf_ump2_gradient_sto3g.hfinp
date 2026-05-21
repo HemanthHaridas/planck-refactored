@@ -11,6 +11,7 @@
     use_diis    .true.
     diis_dim    8
     engine      os
+    guess       sad
 %end_scf
 
 %begin_geom
