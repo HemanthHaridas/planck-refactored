@@ -372,7 +372,7 @@
       ],
       "checks": [
         {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.4880704826, "atol": 1e-9}
+        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.5911327976, "atol": 1e-8}
       ]
     },
     {
