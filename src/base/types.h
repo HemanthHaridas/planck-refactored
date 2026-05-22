@@ -72,7 +72,8 @@ namespace HartreeFock
         UCCSDT,  // Unrestricted CCSDT
         RCCSDTQ, // Restricted CCSDTQ
         CASSCF,  // Complete active space SCF
-        RASSCF   // Restricted active space SCF
+        RASSCF,  // Restricted active space SCF
+        FCI      // Full configuration interaction (whole MO space, RHF reference)
     };
 
     enum class CalculationType

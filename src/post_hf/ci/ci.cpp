@@ -1,4 +1,4 @@
-#include "post_hf/casscf/ci.h"
+#include "post_hf/ci/ci.h"
 
 #include <Eigen/Eigenvalues>
 #include <Eigen/QR>
@@ -9,7 +9,7 @@
 #include <functional>
 #include <limits>
 
-namespace HartreeFock::Correlation::CASSCF
+namespace HartreeFock::Correlation::CI
 {
 
     namespace
@@ -758,4 +758,4 @@ namespace HartreeFock::Correlation::CASSCF
         return result;
     }
 
-} // namespace HartreeFock::Correlation::CASSCF
+} // namespace HartreeFock::Correlation::CI

@@ -1,11 +1,11 @@
-#ifndef HF_POSTHF_CASSCF_RDM_H
-#define HF_POSTHF_CASSCF_RDM_H
+#ifndef HF_POSTHF_CI_RDM_H
+#define HF_POSTHF_CI_RDM_H
 
-#include "post_hf/casscf/strings.h"
+#include "post_hf/ci/strings.h"
 
 #include <Eigen/Core>
 
-namespace HartreeFock::Correlation::CASSCF
+namespace HartreeFock::Correlation::CI
 {
 
     // The RDM builders all take the same determinant ordering and spin-string
@@ -68,6 +68,13 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<std::pair<int, int>> &dets,
         int n_act);
 
-} // namespace HartreeFock::Correlation::CASSCF
+} // namespace HartreeFock::Correlation::CI
 
-#endif // HF_POSTHF_CASSCF_RDM_H
+// Backward-compatibility alias: see strings.h. CASSCF code references these CI
+// symbols as CASSCF::<name>; re-export so existing call sites compile unchanged.
+namespace HartreeFock::Correlation::CASSCF
+{
+    using namespace HartreeFock::Correlation::CI;
+}
+
+#endif // HF_POSTHF_CI_RDM_H

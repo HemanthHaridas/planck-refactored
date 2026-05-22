@@ -600,6 +600,7 @@ namespace HartreeFock::IO
                 {"cc4", HartreeFock::PostHF::RCCSDTQ},
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
+                {"fci", HartreeFock::PostHF::FCI},
             };
 
         return lookup_enum(_table, value, "Invalid Correlation : ");
@@ -1389,6 +1390,14 @@ namespace HartreeFock::IO
             return std::unexpected(
                 "RCCSDTQ is currently available only for single-point calculations; "
                 "choose calculation_type sp or remove correlation ccsdtq.");
+        }
+
+        if (calculator._correlation == HartreeFock::PostHF::FCI &&
+            calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+        {
+            return std::unexpected(
+                "FCI is currently available only for single-point calculations; "
+                "choose calculation_type sp or remove correlation fci.");
         }
 
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)

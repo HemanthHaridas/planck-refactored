@@ -6,7 +6,7 @@
 
 #include <Eigen/Core>
 
-#include "post_hf/casscf/ci.h"
+#include "post_hf/ci/ci.h"
 #include "post_hf/casscf/orbital.h"
 #include "post_hf/casscf/response.h"
 

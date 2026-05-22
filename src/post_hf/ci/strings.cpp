@@ -1,4 +1,4 @@
-#include "post_hf/casscf/strings.h"
+#include "post_hf/ci/strings.h"
 
 #include "base/types.h"
 #include "symmetry/mo_symmetry.h"
@@ -10,7 +10,7 @@
 #include <numeric>
 #include <string>
 
-namespace HartreeFock::Correlation::CASSCF
+namespace HartreeFock::Correlation::CI
 {
 
     using CASSCFInternal::kCIStringBits;
@@ -574,4 +574,4 @@ namespace HartreeFock::Correlation::CASSCF
         return lut;
     }
 
-} // namespace HartreeFock::Correlation::CASSCF
+} // namespace HartreeFock::Correlation::CI
