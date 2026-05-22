@@ -818,8 +818,15 @@ measured.
 
 FCI reuses the same determinant-string, Slater-Condon, and Davidson machinery as
 CASSCF — it is simply CASSCF's CI step with the active space taken to be the
-whole basis and no orbital optimization. It requires a converged **RHF**
-reference and is **single-point only**. No active-space keywords are needed.
+whole basis and no orbital optimization. It runs from a converged **RHF** or
+**ROHF** reference (so open-shell systems are supported) and is **single-point
+only**. No active-space keywords are needed.
+
+Because FCI diagonalizes the *complete* determinant space, its total energy is
+independent of the reference orbitals — RHF and ROHF give the same FCI energy
+where both apply. The reported *correlation* energy, however, is measured against
+whichever reference was used (\(E_{\text{FCI}} - E_{\text{ref}}\)), so it differs
+between an RHF and an ROHF reference for the same system.
 
 The determinant count grows combinatorially
 (\(\binom{n_{\text{orb}}}{n_\alpha}\binom{n_{\text{orb}}}{n_\beta}\)), so FCI is
@@ -872,6 +879,36 @@ For water/STO-3G this matches PySCF's FCI reference (`-75.0124130264`) to better
 than \(10^{-8}\,E_h\). To report several states, set `nroots` to the number of
 lowest roots you want printed (the ground state is always used for the reported
 total energy). Larger FCI spaces require raising `ci_max_dim`.
+
+**Open-shell example.** Switch `scf_type` to `rohf` and set an open-shell
+multiplicity in the coordinate header to run FCI on a radical or a triplet. For
+the O₂ triplet (multiplicity 3) in STO-3G:
+
+```
+%begin_scf
+    scf_type    rohf
+    correlation fci
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+...
+%begin_coords
+2
+0   3
+O    0.000000    0.000000   -0.604000
+O    0.000000    0.000000    0.604000
+%end_coords
+```
+
+```
+[INF] FCI :                         Full CI over 10 orbitals, 9 alpha / 7 beta electrons  (CI dim = 1200)
+  Total FCI Energy                   -147.7441885517    -4020.3241802795   -92710.8780539364
+```
+
+which matches PySCF's FCI reference (`-147.7441885427`) to better than
+\(10^{-8}\,E_h\).
 
 The theory is developed in detail in §15 of the
 [Planck Teaching Guide](docs/PLANCK_TEACHING_GUIDE.md).
