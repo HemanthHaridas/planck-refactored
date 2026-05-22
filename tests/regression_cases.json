@@ -1702,6 +1702,29 @@
           "right": "rhf_total_energy"
         }
       ]
+    },
+    {
+      "id": "water_fcidump_c2v_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_fcidump_c2v_sto3g.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "FCIDUMP :",
+        "ORBSYM: C2v"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9629329919,
+          "atol": 1e-08
+        }
+      ]
     }
   ]
 }

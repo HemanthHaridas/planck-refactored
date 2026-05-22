@@ -53,11 +53,13 @@ CODE_REVIEW.md
 # are unaffected because git skips ignore-rules for tracked files.
 tests/inputs/**/*.hfchk
 tests/inputs/**/*.uvvis.dat
+tests/inputs/**/*.fcidump
 tests/benchmarks/**/*.hfchk
 tests/benchmarks/**/*.uvvis.dat
 *.png
 *.log
 tests/*/__pycache__
 *.hfchk
+*.fcidump
 __pycache__
 RMP2_GRADIENT_FIX_SUMMARY.md
