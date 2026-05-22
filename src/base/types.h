@@ -483,6 +483,13 @@ namespace HartreeFock
         // Empty string → use the totally-symmetric irrep of the detected point group.
         std::string target_irrep = "";
 
+        // FCIDUMP export. When non-empty, the driver writes the MO-basis
+        // one- and two-electron integrals (plus nuclear repulsion and, when
+        // symmetry is available, per-orbital ORBSYM labels) to this path in the
+        // standard MOLPRO FCIDUMP format so the Hamiltonian can be handed to an
+        // external FCI/DMRG/selected-CI solver. Empty → no dump.
+        std::string fcidump_path = "";
+
         // Optional symmetry-aware MO selection. If present, the parser records
         // explicit irrep quotas for the core and active blocks, and an optional
         // full MO permutation can override the automatic picker.

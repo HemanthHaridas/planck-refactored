@@ -15,6 +15,7 @@
 #include "integrals/base.h"
 #include "integrals/shellpair.h"
 #include "io/checkpoint.h"
+#include "io/fcidump.h"
 #include "io/io.h"
 #include "io/logging.h"
 #include "lookup/elements.h"
@@ -863,6 +864,23 @@ int main(int argc, const char *argv[])
     HartreeFock::Logger::converged_energy(calculator._total_energy, calculator._nuclear_repulsion);
     log_population_report(calculator);
     log_multipole_report(calculator, shellpairs);
+
+    // ── FCIDUMP export ────────────────────────────────────────────────────────
+    // Independent of the post-HF method: when an output path is configured, hand
+    // the converged MO-basis Hamiltonian off to an external FCI/DMRG/selected-CI
+    // solver. Done before the post-HF dispatch so it runs even with
+    // `correlation none`, and shares the same SCF orbitals any in-house FCI uses.
+    if (calculator._info._is_converged && !calculator._active_space.fcidump_path.empty())
+    {
+        auto dump_res = HartreeFock::IO::write_fcidump(
+            calculator, shellpairs, calculator._active_space.fcidump_path);
+        if (!dump_res)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error,
+                                         "FCIDUMP : Failed :", dump_res.error());
+            return EXIT_FAILURE;
+        }
+    }
 
     // ── Post-HF correlation ───────────────────────────────────────────────────
     if (calculator._info._is_converged)

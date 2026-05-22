@@ -811,6 +811,13 @@ namespace HartreeFock::IO
                      active_space.target_irrep = v;
                      return std::expected<void, std::string>{};
                  }},
+                {"fcidump", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     if (v.empty())
+                         return std::unexpected("fcidump requires an output file path");
+                     active_space.fcidump_path = v;
+                     return std::expected<void, std::string>{};
+                 }},
 
                 // MP2 options (RMP2 / UMP2)
                 {"mp2_max_cycle", [&mp2](const std::string &v) -> std::expected<void, std::string>
