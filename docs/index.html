@@ -106,7 +106,11 @@
       border: 1px solid var(--rule); padding: 10px 14px; vertical-align: top;
     } .content tr:nth-child(even) td {
       background: rgba(219,205,185,0.18);
-    } .content a { color: var(--accent); } .content img {
+    } .content blockquote {
+      margin: 1.4rem 0; padding: 0.6rem 1.2rem; border-left: 4px solid
+      var(--accent); background: rgba(154,61,34,0.06); border-radius: 0 10px
+      10px 0; color: var(--muted); font-style: italic;
+    } .content blockquote p { margin: 0; } .content a { color: var(--accent); } .content img {
       display:  block;  max-width:  100%;  height:  auto;  margin: 1.2rem auto;
       border:  1px solid var(--rule); border-radius: 16px; background: #fffdf8;
       box-shadow: 0 10px 28px rgba(42, 33, 20, 0.06); padding: 10px;
@@ -392,7 +396,7 @@ Input file (.hfinp)
 <li>package the Hamiltonian in a form another program can read.</li>
 </ul>
 <p><code>FCIDUMP</code> is the standard text format for that last step. Historically it comes from the MOLPRO ecosystem, but in practice it has become the common interchange format for external determinant-based solvers such as FCI, selected CI, DMRG, and FCIQMC codes. The main conceptual point is:</p>
-<p>&gt; An FCIDUMP file does not store a wavefunction. It stores the second-quantized &gt; electronic Hamiltonian in a chosen orthonormal spatial-orbital basis.</p>
+<blockquote><p>An FCIDUMP file does not store a wavefunction. It stores the second-quantized electronic Hamiltonian in a chosen orthonormal spatial-orbital basis.</p></blockquote>
 <p>In that basis, the nonrelativistic electronic Hamiltonian is</p>
 <p><span class="math-display">\[
 \hat H = E_{nuc}
