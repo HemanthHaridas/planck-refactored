@@ -126,6 +126,85 @@ integral symmetry ops, and active-space results.
 IDs (`_exchange_id`, `_correlation_id`), and boolean flags for SAO blocking,
 grid printing, and checkpoint saving.
 
+### FCIDUMP as an Interchange Format
+
+One important idea in quantum chemistry software is that the expensive part is
+often not the many-body solver itself, but the preparation of a good
+molecular-orbital Hamiltonian:
+
+- choose a basis,
+- solve SCF,
+- transform the one- and two-electron integrals from AO basis to MO basis,
+- package the Hamiltonian in a form another program can read.
+
+`FCIDUMP` is the standard text format for that last step. Historically it comes
+from the MOLPRO ecosystem, but in practice it has become the common interchange
+format for external determinant-based solvers such as FCI, selected CI, DMRG,
+and FCIQMC codes. The main conceptual point is:
+
+> An FCIDUMP file does not store a wavefunction. It stores the second-quantized
+> electronic Hamiltonian in a chosen orthonormal spatial-orbital basis.
+
+In that basis, the nonrelativistic electronic Hamiltonian is
+
+\[
+\hat H = E_{nuc}
++ \sum_{ij} h_{ij}\, a_i^\dagger a_j
++ \frac{1}{2}\sum_{ijkl} (ij|kl)\,
+  a_i^\dagger a_k^\dagger a_l a_j
+\]
+
+where:
+
+- \(E_{nuc}\) is the scalar nuclear repulsion energy,
+- \(h_{ij}\) are the one-electron matrix elements in the MO basis,
+- \((ij|kl)\) are the two-electron repulsion integrals in chemists' notation.
+
+That is exactly the information an exact diagonalizer or approximate CI-style
+solver needs. So an FCIDUMP lets one program do the SCF + integral work and a
+different program do the many-electron solve.
+
+In Planck, the exporter lives in `src/io/fcidump.{h,cpp}`. After a converged
+SCF, it writes:
+
+- an `&FCI` header with `NORB`, `NELEC`, `MS2`, `ORBSYM`, and `ISYM`,
+- the unique MO-basis two-electron integrals,
+- the unique MO-basis one-electron integrals,
+- the nuclear repulsion energy as the final scalar record.
+
+The body uses the standard FCIDUMP convention:
+
+- two-electron entries are written as `value  i  j  k  l`,
+- one-electron entries are marked by `k=l=0`,
+- the scalar constant term is marked by `i=j=k=l=0`,
+- orbital indices are 1-based.
+
+Planck writes only the symmetry-unique subset of the two-electron tensor, using
+the usual 8-fold permutation symmetry of a real restricted Hamiltonian. A
+reader reconstructs the rest from those symmetry relations.
+
+There are two practical restrictions worth remembering:
+
+1. Planck currently exports only converged **RHF** and **ROHF** references.
+   This is because the standard FCIDUMP layout assumes one common set of
+   spatial orbitals for both spins. UHF would need an unrestricted extension
+   that many downstream programs do not read.
+2. The file is an MO-basis Hamiltonian, so its contents depend on the orbital
+   basis chosen by the SCF reference. Different canonical orbital sets can lead
+   to different matrix elements, even though an exact FCI energy from that
+   Hamiltonian is invariant to rotations within the occupied or virtual spaces.
+
+When symmetry is available, Planck also fills the `ORBSYM` field using the
+standard MOLPRO/PySCF integer numbering for supported Abelian point groups.
+When the point group is unsupported or non-Abelian, it safely falls back to all
+ones, which means "treat every orbital as totally symmetric."
+
+To request a dump in an input file, set the `fcidump` keyword to an output path.
+The driver performs the export immediately after SCF convergence, even if no
+in-house post-HF method is requested. Conceptually, that makes FCIDUMP a bridge
+from Planck's SCF/integral machinery to the broader ecosystem of external
+correlated solvers.
+
 ---
 
 ## 4. Gaussian Basis Functions
