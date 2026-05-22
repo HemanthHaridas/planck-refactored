@@ -3008,6 +3008,18 @@ the system is **multireference**, and methods built around a single determinant
 (like MP2 or CCSD) degrade while FCI (and its active-space cousin CASSCF) remain
 correct.
 
+A property worth emphasizing is that the FCI **total** energy is *invariant to
+the choice of reference orbitals*. Any non-singular linear transformation of the
+one-particle basis (for example, switching from restricted to open-shell orbitals
+for a radical) merely re-expresses the *same* complete determinant space; the
+diagonalization of \(\mathbf H\) over that space returns the same lowest
+eigenvalue. The orbitals are scaffolding, not part of the answer. The
+*correlation* energy is the one reference-dependent quantity, because it is
+defined relative to a particular reference, \(E_{\text{corr}} = E_{\text{FCI}}
+- E_{\text{ref}}\); different references (e.g. restricted vs. open-shell) give the
+same \(E_{\text{FCI}}\) but partition it differently into "reference" and
+"correlation."
+
 A subtle but important property: FCI is **size-extensive** and
 **size-consistent** — the energy of two infinitely separated fragments equals the
 sum of the fragment energies. *Truncated* CI (CISD, CISDT, …) loses this

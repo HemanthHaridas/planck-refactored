@@ -875,8 +875,13 @@ int main(int argc, const char *argv[])
         std::string corr_tag;
 
         if (calculator._scf._scf == HartreeFock::SCFType::ROHF &&
-            calculator._correlation != HartreeFock::PostHF::None)
+            calculator._correlation != HartreeFock::PostHF::None &&
+            calculator._correlation != HartreeFock::PostHF::FCI)
         {
+            // FCI is exempt: it diagonalizes the full determinant space, which is
+            // reference-invariant, and ROHF supplies a single common spatial-orbital
+            // set the restricted CI engine can consume directly. Other ROHF post-HF
+            // methods remain unimplemented.
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error,
                                          "Post-HF :", "ROHF post-HF references are not implemented");
             return EXIT_FAILURE;

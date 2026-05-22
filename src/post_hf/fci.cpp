@@ -30,11 +30,16 @@ namespace HartreeFock::Correlation
 
         // ── Reference and method guards ────────────────────────────────────────
         // FCI here is CASCI over the whole basis; it reuses the spatial-orbital CI
-        // engine and so requires a converged RHF reference.
+        // engine, which assumes a single common spatial-orbital set for both spins.
+        // Both RHF and ROHF satisfy that (ROHF stores one common orbital set for
+        // alpha and beta), so either can serve as the reference. The FCI energy is
+        // invariant to the orbital choice; only the correlation energy
+        // (E_FCI - E_ref) depends on which reference was used.
         if (!calc._info._is_converged)
-            return std::unexpected(tag + ": requires a converged RHF reference.");
-        if (calc._scf._scf != HartreeFock::SCFType::RHF)
-            return std::unexpected(tag + ": only RHF reference supported.");
+            return std::unexpected(tag + ": requires a converged RHF or ROHF reference.");
+        if (calc._scf._scf != HartreeFock::SCFType::RHF &&
+            calc._scf._scf != HartreeFock::SCFType::ROHF)
+            return std::unexpected(tag + ": only RHF or ROHF references supported.");
 
         const int nbasis = static_cast<int>(calc._shells.nbasis());
         if (nbasis <= 0)
@@ -92,6 +97,9 @@ namespace HartreeFock::Correlation
         const int nroots = std::max(1, calc._active_space.nroots);
 
         // ── MO basis and effective integrals ───────────────────────────────────
+        // For RHF the alpha channel holds the (only) MO set; for ROHF the alpha and
+        // beta channels hold the same common spatial orbitals, so reading the alpha
+        // channel gives the genuine reference orbitals for both spins.
         const Eigen::MatrixXd &C = calc._info._scf.alpha.mo_coefficients;
         if (C.rows() != nbasis || C.cols() != nbasis)
             return std::unexpected(tag + ": MO coefficient matrix has wrong size.");
