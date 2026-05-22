@@ -175,6 +175,8 @@ file(GLOB POSTHF_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/post_hf/cc/*.cpp
     ${SRC_DIR}/post_hf/casscf/*.h
     ${SRC_DIR}/post_hf/casscf/*.cpp
+    ${SRC_DIR}/post_hf/ci/*.h
+    ${SRC_DIR}/post_hf/ci/*.cpp
 )
 list(REMOVE_ITEM POSTHF_SRC ${SRC_DIR}/post_hf/casscf.cpp)
 
@@ -426,11 +428,11 @@ find_package(Python3 COMPONENTS Interpreter)
 if(BUILD_TESTING)
     add_executable(planck-casscf-internal
         ${CMAKE_SOURCE_DIR}/tests/casscf_internal.cpp
-        ${SRC_DIR}/post_hf/casscf/ci.cpp
+        ${SRC_DIR}/post_hf/ci/ci.cpp
         ${SRC_DIR}/post_hf/casscf/orbital.cpp
-        ${SRC_DIR}/post_hf/casscf/rdm.cpp
+        ${SRC_DIR}/post_hf/ci/rdm.cpp
         ${SRC_DIR}/post_hf/casscf/response.cpp
-        ${SRC_DIR}/post_hf/casscf/strings.cpp
+        ${SRC_DIR}/post_hf/ci/strings.cpp
         ${SRC_DIR}/post_hf/integrals.cpp
         ${INT_SRC}
         ${LOOKUP_SRC}

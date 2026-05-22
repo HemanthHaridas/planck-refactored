@@ -1,7 +1,7 @@
-#ifndef HF_POSTHF_CASSCF_CI_H
-#define HF_POSTHF_CASSCF_CI_H
+#ifndef HF_POSTHF_CI_CI_H
+#define HF_POSTHF_CI_CI_H
 
-#include "post_hf/casscf/strings.h"
+#include "post_hf/ci/strings.h"
 
 #include <Eigen/Core>
 
@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-namespace HartreeFock::Correlation::CASSCF
+namespace HartreeFock::Correlation::CI
 {
 
     // The determinant space keeps the ordering, diagonal, and optional dense
@@ -146,6 +146,13 @@ namespace HartreeFock::Correlation::CASSCF
         int dense_threshold = 500,
         int max_iter = 1000);
 
-} // namespace HartreeFock::Correlation::CASSCF
+} // namespace HartreeFock::Correlation::CI
 
-#endif // HF_POSTHF_CASSCF_CI_H
+// Backward-compatibility alias: see strings.h. CASSCF code references these CI
+// symbols as CASSCF::<name>; re-export so existing call sites compile unchanged.
+namespace HartreeFock::Correlation::CASSCF
+{
+    using namespace HartreeFock::Correlation::CI;
+}
+
+#endif // HF_POSTHF_CI_CI_H

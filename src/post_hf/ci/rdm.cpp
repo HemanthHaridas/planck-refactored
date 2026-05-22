@@ -1,6 +1,6 @@
-#include "post_hf/casscf/rdm.h"
+#include "post_hf/ci/rdm.h"
 
-#include "post_hf/casscf/strings.h"
+#include "post_hf/ci/strings.h"
 
 #include <bit>
 
@@ -261,7 +261,7 @@ namespace
 
 } // namespace
 
-namespace HartreeFock::Correlation::CASSCF
+namespace HartreeFock::Correlation::CI
 {
 
     Eigen::MatrixXd compute_1rdm(
@@ -332,4 +332,4 @@ namespace HartreeFock::Correlation::CASSCF
         return compute_2rdm_impl(bra_vecs, ket_vecs, weights, a_strs, b_strs, dets, n_act, true);
     }
 
-} // namespace HartreeFock::Correlation::CASSCF
+} // namespace HartreeFock::Correlation::CI

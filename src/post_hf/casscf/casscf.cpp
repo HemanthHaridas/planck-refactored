@@ -6,11 +6,11 @@
 #include "post_hf/casscf/aug-hessian-orbital.h"
 #include "post_hf/casscf/casscf_driver_internal.h"
 #include "post_hf/casscf/casscf_utils.h"
-#include "post_hf/casscf/ci.h"
+#include "post_hf/ci/ci.h"
 #include "post_hf/casscf/orbital.h"
-#include "post_hf/casscf/rdm.h"
+#include "post_hf/ci/rdm.h"
 #include "post_hf/casscf/response.h"
-#include "post_hf/casscf/strings.h"
+#include "post_hf/ci/strings.h"
 #include "post_hf/integrals.h"
 
 #include <algorithm>

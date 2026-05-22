@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "io/logging.h"
-#include "post_hf/casscf/strings.h"
+#include "post_hf/ci/strings.h"
 #include "post_hf/casscf_internal.h"
 #include "post_hf/cc/diis.h"
 #include "post_hf/integrals.h"

@@ -230,7 +230,15 @@
 <li class="toc-level-3"><a href="#a-good-teaching-test-lih-sto-3g">A Good Teaching Test: LiH/STO-3G</a></li>
 <li class="toc-level-3"><a href="#a-good-open-shell-teaching-test-b-sto-3g">A Good Open-Shell Teaching Test: B/STO-3G</a></li>
 <li class="toc-level-3"><a href="#the-tensor-only-benchmark-bh3-sto-3g">The Tensor-Only Benchmark: BH3/STO-3G</a></li>
-<li class="toc-level-2"><a href="#15-casscf-and-rasscf">15. CASSCF and RASSCF</a></li>
+<li class="toc-level-2"><a href="#15-full-configuration-interaction-fci">15. Full Configuration Interaction (FCI)</a></li>
+<li class="toc-level-3"><a href="#what-fci-is">What FCI Is</a></li>
+<li class="toc-level-3"><a href="#the-electronic-hamiltonian-in-second-quantization">The Electronic Hamiltonian in Second Quantization</a></li>
+<li class="toc-level-3"><a href="#the-determinant-expansion-and-its-size">The Determinant Expansion and Its Size</a></li>
+<li class="toc-level-3"><a href="#matrix-elements-the-slater-condon-rules">Matrix Elements: the Slater-Condon Rules</a></li>
+<li class="toc-level-3"><a href="#solving-the-eigenvalue-problem-davidson">Solving the Eigenvalue Problem: Davidson</a></li>
+<li class="toc-level-3"><a href="#correlation-energy-and-the-reference">Correlation Energy and the Reference</a></li>
+<li class="toc-level-3"><a href="#relationship-to-other-correlation-methods">Relationship to Other Correlation Methods</a></li>
+<li class="toc-level-2"><a href="#16-casscf-and-rasscf">16. CASSCF and RASSCF</a></li>
 <li class="toc-level-3"><a href="#motivation">Motivation</a></li>
 <li class="toc-level-3"><a href="#determinant-representation">Determinant Representation</a></li>
 <li class="toc-level-3"><a href="#ci-hamiltonian-matrix-vector-product">CI Hamiltonian Matrix-Vector Product</a></li>
@@ -242,14 +250,14 @@
 <li class="toc-level-3"><a href="#convergence-and-robustness">Convergence and Robustness</a></li>
 <li class="toc-level-3"><a href="#twisted-ethylene-a-canonical-casscf-example">Twisted Ethylene: A Canonical CASSCF Example</a></li>
 <li class="toc-level-3"><a href="#rasscf-extensions">RASSCF Extensions</a></li>
-<li class="toc-level-2"><a href="#16-geometry-optimization">16. Geometry Optimization</a></li>
+<li class="toc-level-2"><a href="#17-geometry-optimization">17. Geometry Optimization</a></li>
 <li class="toc-level-3"><a href="#l-bfgs-cartesian-coordinates">L-BFGS (Cartesian Coordinates)</a></li>
 <li class="toc-level-3"><a href="#internal-coordinate-optimization-bfgs">Internal Coordinate Optimization (BFGS)</a></li>
-<li class="toc-level-2"><a href="#17-vibrational-analysis">17. Vibrational Analysis</a></li>
+<li class="toc-level-2"><a href="#18-vibrational-analysis">18. Vibrational Analysis</a></li>
 <li class="toc-level-3"><a href="#semi-numerical-hessian">Semi-Numerical Hessian</a></li>
 <li class="toc-level-3"><a href="#mass-weighting-and-eckart-projection">Mass-Weighting and Eckart Projection</a></li>
 <li class="toc-level-3"><a href="#normal-mode-frequencies">Normal Mode Frequencies</a></li>
-<li class="toc-level-2"><a href="#18-kohn-sham-density-functional-theory">18. Kohn-Sham Density Functional Theory</a></li>
+<li class="toc-level-2"><a href="#19-kohn-sham-density-functional-theory">19. Kohn-Sham Density Functional Theory</a></li>
 <li class="toc-level-3"><a href="#the-kohn-sham-equations">The Kohn-Sham Equations</a></li>
 <li class="toc-level-3"><a href="#exchange-correlation-functional-families">Exchange-Correlation Functional Families</a></li>
 <li class="toc-level-3"><a href="#numerical-integration-molecular-grid">Numerical Integration: Molecular Grid</a></li>
@@ -259,7 +267,7 @@
 <li class="toc-level-3"><a href="#ks-dft-scf-loop">KS-DFT SCF Loop</a></li>
 <li class="toc-level-3"><a href="#dft-code-map">DFT Code Map</a></li>
 <li class="toc-level-3"><a href="#td-dft-linear-response">TD-DFT / Linear Response</a></li>
-<li class="toc-level-2"><a href="#19-polarizable-continuum-solvation-c-pcm">19. Polarizable Continuum Solvation (C-PCM)</a></li>
+<li class="toc-level-2"><a href="#20-polarizable-continuum-solvation-c-pcm">20. Polarizable Continuum Solvation (C-PCM)</a></li>
 <li class="toc-level-3"><a href="#the-apparent-surface-charge-picture">The Apparent-Surface-Charge Picture</a></li>
 <li class="toc-level-3"><a href="#cavity-construction-fibonacci-sphere-tessellation">Cavity Construction (Fibonacci-Sphere Tessellation)</a></li>
 <li class="toc-level-3"><a href="#the-surface-influence-matrix">The Surface Influence Matrix <span class="math-inline">\(\mathbf{D}\)</span></a></li>
@@ -269,7 +277,7 @@
 <li class="toc-level-3"><a href="#input-format-and-solvent-library">Input Format and Solvent Library</a></li>
 <li class="toc-level-3"><a href="#limitations-and-cost">Limitations and Cost</a></li>
 <li class="toc-level-3"><a href="#code-map">Code Map</a></li>
-<li class="toc-level-2"><a href="#20-molecular-properties">20. Molecular Properties</a></li>
+<li class="toc-level-2"><a href="#21-molecular-properties">21. Molecular Properties</a></li>
 <li class="toc-level-3"><a href="#mulliken-population-analysis">Mulliken Population Analysis</a></li>
 <li class="toc-level-3"><a href="#l-wdin-population-analysis">Löwdin Population Analysis</a></li>
 <li class="toc-level-3"><a href="#mayer-bond-orders">Mayer Bond Orders</a></li>
@@ -278,13 +286,13 @@
 <li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
 <li class="toc-level-3"><a href="#mo-symmetry-labels">MO Symmetry Labels</a></li>
 <li class="toc-level-3"><a href="#cartesian-to-spherical-mo-transformation">Cartesian-to-Spherical MO Transformation</a></li>
-<li class="toc-level-2"><a href="#21-checkpoint-and-restart">21. Checkpoint and Restart</a></li>
+<li class="toc-level-2"><a href="#22-checkpoint-and-restart">22. Checkpoint and Restart</a></li>
 <li class="toc-level-3"><a href="#binary-checkpoint-format">Binary Checkpoint Format</a></li>
 <li class="toc-level-3"><a href="#cross-basis-l-wdin-projection">Cross-Basis Löwdin Projection</a></li>
-<li class="toc-level-2"><a href="#22-execution-flow-of-a-typical-run">22. Execution Flow of a Typical Run</a></li>
-<li class="toc-level-2"><a href="#23-theory-to-code-map">23. Theory-to-Code Map</a></li>
-<li class="toc-level-2"><a href="#24-current-implementation-status">24. Current Implementation Status</a></li>
-<li class="toc-level-2"><a href="#25-how-to-study-this-codebase">25. How to Study This Codebase</a></li>
+<li class="toc-level-2"><a href="#23-execution-flow-of-a-typical-run">23. Execution Flow of a Typical Run</a></li>
+<li class="toc-level-2"><a href="#24-theory-to-code-map">24. Theory-to-Code Map</a></li>
+<li class="toc-level-2"><a href="#25-current-implementation-status">25. Current Implementation Status</a></li>
+<li class="toc-level-2"><a href="#26-how-to-study-this-codebase">26. How to Study This Codebase</a></li>
 </ul>
         </nav>
       </aside> <main class="content">
@@ -1813,7 +1821,94 @@ exp(-T) H exp(T) |Phi0&gt;
    4000\)</span> independent elements. This is small enough to store densely but large enough that the <span class="math-inline">\(O(o^3 v^4)\)</span> and <span class="math-inline">\(O(o^4 v^3)\)</span> contractions in R3 are non-trivial, making it a useful check that the contraction order and intermediate reuse in <code>tensor_backend.cpp</code> are correct.</li>
 </ol>
 <hr>
-<h2 id="15-casscf-and-rasscf">15. CASSCF and RASSCF</h2>
+<h2 id="15-full-configuration-interaction-fci">15. Full Configuration Interaction (FCI)</h2>
+<h3 id="what-fci-is">What FCI Is</h3>
+<p>Hartree-Fock approximates the many-electron wavefunction by a <em>single</em> Slater determinant — the antisymmetrized product of the occupied molecular orbitals. This is a mean-field picture: each electron feels the <em>average</em> field of the others, but their instantaneous, position-dependent avoidance of one another — <strong>electron correlation</strong> — is missing.</p>
+<p>Full Configuration Interaction restores correlation <em>exactly within the chosen basis set</em>. The idea is simple: instead of one determinant, expand the wavefunction in <strong>all</strong> determinants that can be built from the available spin-orbitals, and let the variational principle fix the coefficients:</p>
+<p><span class="math-display">\[
+|\Psi_{\text{FCI}}\rangle = \sum_I c_I\, |D_I\rangle .
+\]</span></p>
+<p>Here <span class="math-inline">\(I\)</span> runs over every way of placing the <span class="math-inline">\(N\)</span> electrons into the <span class="math-inline">\(2K\)</span> spin-orbitals generated by <span class="math-inline">\(K\)</span> spatial molecular orbitals. Substituting this expansion into the time-independent Schrödinger equation <span class="math-inline">\(\hat H |\Psi\rangle = E|\Psi\rangle\)</span> and projecting onto each determinant turns the problem into a matrix eigenvalue equation</p>
+<p><span class="math-display">\[
+\mathbf{H}\,\mathbf{c} = E\,\mathbf{c}, \qquad
+H_{IJ} = \langle D_I | \hat H | D_J \rangle ,
+\]</span></p>
+<p>whose lowest eigenvalue is the <strong>exact</strong> ground-state energy for that basis. As the one-electron basis approaches completeness, the FCI energy approaches the true non-relativistic Born-Oppenheimer energy. FCI is therefore the gold standard: every approximate correlation method (MP2, CCSD, CASSCF, …) is, in the end, an attempt to capture as much of the FCI answer as possible at lower cost.</p>
+<h3 id="the-electronic-hamiltonian-in-second-quantization">The Electronic Hamiltonian in Second Quantization</h3>
+<p>In the molecular-orbital basis the non-relativistic electronic Hamiltonian is</p>
+<p><span class="math-display">\[
+\hat H = \sum_{pq} h_{pq}\, \hat a_p^\dagger \hat a_q
+       + \tfrac{1}{2} \sum_{pqrs} (pq|rs)\, \hat a_p^\dagger \hat a_r^\dagger \hat a_s \hat a_q
+       + E_{\text{nuc}},
+\]</span></p>
+<p>where the one-electron integrals carry the kinetic energy and electron-nuclear attraction,</p>
+<p><span class="math-display">\[
+h_{pq} = \int \phi_p^*(\mathbf r)\left[ -\tfrac{1}{2}\nabla^2
+        - \sum_A \frac{Z_A}{|\mathbf r - \mathbf R_A|} \right]\phi_q(\mathbf r)\,d\mathbf r ,
+\]</span></p>
+<p>the two-electron integrals are the Coulomb repulsions in chemists&#x27; notation,</p>
+<p><span class="math-display">\[
+(pq|rs) = \iint \frac{\phi_p^*(\mathbf r_1)\phi_q(\mathbf r_1)\,
+                       \phi_r^*(\mathbf r_2)\phi_s(\mathbf r_2)}
+                      {|\mathbf r_1 - \mathbf r_2|}\, d\mathbf r_1\, d\mathbf r_2 ,
+\]</span></p>
+<p>and <span class="math-inline">\(E_{\text{nuc}}\)</span> is the (constant) nuclear repulsion. The operators <span class="math-inline">\(\hat a_p^\dagger\)</span> and <span class="math-inline">\(\hat a_q\)</span> create and annihilate an electron in spin-orbital <span class="math-inline">\(p\)</span>, <span class="math-inline">\(q\)</span>; their anticommutation algebra is what builds the antisymmetry of the wavefunction directly into the bookkeeping. Diagonalizing <span class="math-inline">\(\hat H\)</span> in the determinant basis is exactly the matrix problem above, with <span class="math-inline">\(E_{\text{nuc}}\)</span> shifting every diagonal element by the same constant.</p>
+<h3 id="the-determinant-expansion-and-its-size">The Determinant Expansion and Its Size</h3>
+<p>For a closed-shell, spin-restricted reference, the determinants are conveniently labeled by an <strong>alpha string</strong> and a <strong>beta string</strong> — bitmasks recording which spatial orbitals carry an up-spin and a down-spin electron, respectively. With <span class="math-inline">\(K\)</span> spatial orbitals, <span class="math-inline">\(N_\alpha\)</span> alpha and <span class="math-inline">\(N_\beta\)</span> beta electrons, the number of determinants is</p>
+<p><span class="math-display">\[
+N_{\text{det}} = \binom{K}{N_\alpha}\binom{K}{N_\beta} .
+\]</span></p>
+<p>This is the defining feature — and curse — of FCI: the dimension grows <strong>factorially</strong>. Water in STO-3G (<span class="math-inline">\(K=7\)</span>, <span class="math-inline">\(N_\alpha=N_\beta=5\)</span>) gives <span class="math-inline">\(\binom{7}{5}^2 = 21^2 = 441\)</span> determinants, trivially diagonalizable. The same molecule in cc-pVDZ (<span class="math-inline">\(K=24\)</span>) gives <span class="math-inline">\(\binom{24}{5}^2 \approx 1.8\times 10^9\)</span> — already intractable by dense diagonalization. FCI is thus an exact method that is only <em>affordable</em> for small molecules in small bases, which is precisely why it serves as a benchmark rather than a production method, and why any practical implementation must cap the allowed determinant count.</p>
+<p>Because the alpha and beta strings are independent, the CI coefficient vector has the natural structure of a matrix <span class="math-inline">\(c_{I_\alpha I_\beta}\)</span>. This factorization is what makes the determinant-driven (string-based) algorithms efficient: a single excitation acts on only one spin string at a time.</p>
+<h3 id="matrix-elements-the-slater-condon-rules">Matrix Elements: the Slater-Condon Rules</h3>
+<p>The Hamiltonian is a sum of one- and two-electron operators, so a matrix element <span class="math-inline">\(\langle D_I | \hat H | D_J \rangle\)</span> vanishes unless the determinants differ by <strong>at most two</strong> spin-orbitals. This dramatic sparsity is captured by the <strong>Slater-Condon rules</strong>, organized by the number of differing orbitals:</p>
+<ul>
+<li><strong>Identical determinants</strong> (<span class="math-inline">\(D_I = D_J\)</span>) — the diagonal: <span class="math-display">\[
+  H_{II} = \sum_{i\in D_I} h_{ii}
+         + \tfrac{1}{2}\sum_{i,j\in D_I}\big[(ii|jj) - (ij|ji)\big],
+  \]</span> i.e. the sum of one-electron energies plus all Coulomb minus exchange pair interactions among the occupied orbitals.</li>
+</ul>
+<ul>
+<li><strong>Single excitation</strong> (<span class="math-inline">\(D_I\)</span> and <span class="math-inline">\(D_J\)</span> differ in one orbital, <span class="math-inline">\(p \to q\)</span>): <span class="math-display">\[
+  H_{IJ} = \gamma\left[ h_{pq}
+         + \sum_{i\in D_I\cap D_J}\big[(pq|ii) - (pi|iq)\big]\right],
+  \]</span> where <span class="math-inline">\(\gamma=\pm 1\)</span> is a parity (sign) factor from reordering the second-quantized operators past the intervening occupied orbitals.</li>
+</ul>
+<ul>
+<li><strong>Double excitation</strong> (two orbitals differ, <span class="math-inline">\(pr \to qs\)</span>): <span class="math-display">\[
+  H_{IJ} = \gamma\big[(pq|rs) - (ps|rq)\big],
+  \]</span> a pure two-electron term.</li>
+</ul>
+<ul>
+<li><strong>Three or more differences</strong>: <span class="math-inline">\(H_{IJ} = 0\)</span>.</li>
+</ul>
+<p>The parity factors are the only subtle part. They arise because <span class="math-inline">\(\hat a_p^\dagger \hat a_q\)</span> acting on a determinant must move the operator past every occupied orbital between positions <span class="math-inline">\(p\)</span> and <span class="math-inline">\(q\)</span>; each transposition flips the sign. When determinants are stored as bitmasks, this sign is obtained directly by counting the set bits lying between <span class="math-inline">\(p\)</span> and <span class="math-inline">\(q\)</span>, rather than re-deriving the permutation each time.</p>
+<h3 id="solving-the-eigenvalue-problem-davidson">Solving the Eigenvalue Problem: Davidson</h3>
+<p>We only want the lowest one (or few) eigenpairs of a very large, very sparse, real-symmetric matrix. Forming <span class="math-inline">\(\mathbf H\)</span> densely costs <span class="math-inline">\(O(N_{\text{det}}^2)\)</span> storage and is wasteful when only a handful of roots are needed. The <strong>Davidson algorithm</strong> is the standard answer:</p>
+<ol>
+<li>Start from a guess vector (typically the unit vector on the lowest-diagonal determinant) and build a small subspace <span class="math-inline">\(\mathbf V\)</span>.</li>
+<li>Project the Hamiltonian into the subspace, <span class="math-inline">\(\tilde{\mathbf H} = \mathbf V^\top \mathbf H \mathbf V\)</span>, and diagonalize the small matrix to get a Ritz pair <span class="math-inline">\((\theta, \mathbf x)\)</span>.</li>
+<li>Form the <strong>residual</strong> <span class="math-inline">\(\mathbf r = (\mathbf H - \theta\mathbf 1)\mathbf V\mathbf x\)</span>. If <span class="math-inline">\(\|\mathbf r\|\)</span> is below tolerance, the root is converged.</li>
+<li>Otherwise <strong>precondition</strong> the residual with the diagonal, <span class="math-inline">\(\delta_i = r_i / (\theta - H_{ii})\)</span>, orthogonalize it against the current subspace, append it to <span class="math-inline">\(\mathbf V\)</span>, and repeat.</li>
+</ol>
+<p>The only operation Davidson needs is the <strong>matrix-vector product</strong> <span class="math-inline">\(\boldsymbol\sigma = \mathbf H\,\mathbf c\)</span> (the &quot;sigma build&quot;), which can be evaluated determinant-by-determinant via the Slater-Condon rules without ever storing <span class="math-inline">\(\mathbf H\)</span>. For determinant spaces small enough to diagonalize directly, one simply forms the dense matrix and uses a standard eigensolver; for larger spaces the Davidson sigma-build is the only viable route.</p>
+<h3 id="correlation-energy-and-the-reference">Correlation Energy and the Reference</h3>
+<p>The FCI <strong>correlation energy</strong> is the difference between the exact (in-basis) energy and the Hartree-Fock reference:</p>
+<p><span class="math-display">\[
+E_{\text{corr}}^{\text{FCI}} = E_{\text{FCI}} - E_{\text{RHF}} .
+\]</span></p>
+<p>By the variational principle <span class="math-inline">\(E_{\text{FCI}} \le E_{\text{RHF}}\)</span>, so the correlation energy is always negative — adding determinants can only lower the energy. The Hartree-Fock determinant is itself one of the <span class="math-inline">\(D_I\)</span>, and it normally dominates the expansion (its coefficient is close to 1) when the single-reference picture is qualitatively correct. When that coefficient drops substantially — for stretched bonds, diradicals, or transition-metal centers — the system is <strong>multireference</strong>, and methods built around a single determinant (like MP2 or CCSD) degrade while FCI (and its active-space cousin CASSCF) remain correct.</p>
+<p>A subtle but important property: FCI is <strong>size-extensive</strong> and <strong>size-consistent</strong> — the energy of two infinitely separated fragments equals the sum of the fragment energies. <em>Truncated</em> CI (CISD, CISDT, …) loses this property, which is the deep reason coupled cluster, not truncated CI, became the workhorse for size-extensive correlation. FCI sits above all of them as the untruncated limit.</p>
+<h3 id="relationship-to-other-correlation-methods">Relationship to Other Correlation Methods</h3>
+<p>FCI is the conceptual hub of the correlated methods:</p>
+<ul>
+<li><strong>MP2</strong> (§11) is the leading term of a perturbation series whose infinite resummation would give FCI; it captures dynamic correlation cheaply but perturbatively.</li>
+<li><strong>Coupled cluster</strong> (§14) reaches FCI in the limit of including all excitation ranks (CCSD → CCSDT → … → CCSDTQ… → FCI), trading the linear CI expansion for an exponential ansatz <span class="math-inline">\(e^{\hat T}\)</span> that restores size-extensivity at each truncation.</li>
+<li><strong>CASSCF</strong> (§16) is <em>FCI restricted to an active space</em> of chemically important orbitals, with the orbitals themselves variationally optimized. FCI is the special case in which the active space is the entire orbital basis and no orbital optimization is performed.</li>
+</ul>
+<p>All three share the same conceptual core — a determinant expansion diagonalized under the Slater-Condon rules — and differ only in how that expansion is truncated, resummed, or restricted.</p>
+<hr>
+<h2 id="16-casscf-and-rasscf">16. CASSCF and RASSCF</h2>
 <h3 id="motivation">Motivation</h3>
 <p>Hartree-Fock fails near bond breaking, in transition metal chemistry, and wherever a single Slater determinant is qualitatively wrong. CASSCF (Complete Active Space SCF) partitions orbitals into:</p>
 <ul>
@@ -1821,7 +1916,7 @@ exp(-T) H exp(T) |Phi0&gt;
 <li><strong>active</strong> — partially occupied, included in CI</li>
 <li><strong>virtual</strong> — unoccupied, excluded from CI</li>
 </ul>
-<p>The wavefunction is a full CI expansion within the active space:</p>
+<p>The wavefunction is a full CI expansion within the active space — i.e. an FCI (§15) restricted to the active orbitals, with the orbitals themselves optimized:</p>
 <p><span class="math-display">\[
 |\Psi_{CASSCF}\rangle = \sum_I c_I |D_I\rangle
 \]</span></p>
@@ -1984,7 +2079,7 @@ H     1.233698    0.000000   -0.927942
 </ul>
 <p>The same CI machinery is used, but the string generation enforces the occupation restrictions via bitcount masks on the RAS1 and RAS3 blocks.</p>
 <hr>
-<h2 id="16-geometry-optimization">16. Geometry Optimization</h2>
+<h2 id="17-geometry-optimization">17. Geometry Optimization</h2>
 <h3 id="l-bfgs-cartesian-coordinates">L-BFGS (Cartesian Coordinates)</h3>
 <p>Cartesian L-BFGS minimizes <span class="math-inline">\(E(\mathbf x)\)</span> where <span class="math-inline">\(\mathbf x \in \mathbb{R}^{3N}\)</span> is the flattened nuclear coordinate vector. The quasi-Newton update direction is:</p>
 <p><span class="math-display">\[
@@ -2015,7 +2110,7 @@ d\mathbf q = \mathbf B\, d\mathbf x, \quad B_{kl} = \frac{\partial q_k}{\partial
 <p>Geometry constraints (fixed bonds, angles, dihedrals, frozen atoms) are enforced by projecting out the constrained internal coordinate contributions from the gradient before the BFGS step.</p>
 <p>Convergence criterion: maximum absolute gradient element <span class="math-inline">\(\max_i |\partial E / \partial X_i| < \epsilon_{grad}\)</span> (default <span class="math-inline">\(3 \times 10^{-4}\)</span> Ha/Bohr).</p>
 <hr>
-<h2 id="17-vibrational-analysis">17. Vibrational Analysis</h2>
+<h2 id="18-vibrational-analysis">18. Vibrational Analysis</h2>
 <h3 id="semi-numerical-hessian">Semi-Numerical Hessian</h3>
 <p>The Hessian matrix is computed by central finite differences of analytic gradients:</p>
 <p><span class="math-display">\[
@@ -2046,7 +2141,7 @@ E_{ZPE} = \frac{1}{2}\sum_{k=1}^{3N-6} h\nu_k
 \]</span></p>
 <p>Vibrational symmetry labels are assigned in <code>src/symmetry/vibrational_symmetry.cpp</code> by projecting each normal mode onto the SAO blocks and determining its irrep.</p>
 <hr>
-<h2 id="18-kohn-sham-density-functional-theory">18. Kohn-Sham Density Functional Theory</h2>
+<h2 id="19-kohn-sham-density-functional-theory">19. Kohn-Sham Density Functional Theory</h2>
 <h3 id="the-kohn-sham-equations">The Kohn-Sham Equations</h3>
 <p>Kohn-Sham DFT maps the interacting many-electron problem onto a fictitious system of non-interacting electrons moving in an effective potential <span class="math-inline">\(v_s(\mathbf r)\)</span> that yields the same ground-state density as the real system. The total electronic energy is:</p>
 <p><span class="math-display">\[
@@ -2381,7 +2476,7 @@ I_{\sigma}(E)
 </ol>
 <p>The report printed by <code>print_linear_response_report()</code> includes the root index, excitation energy in Hartree and eV, oscillator strength, Cartesian transition dipole components, the dipole norm in Debye, and the three largest configuration weights.  The UV-Vis helper <code>print_uvvis_spectrum_report()</code> then writes the broadened spectrum file and prints the strongest broadened peaks in energy and wavelength units.</p>
 <hr>
-<h2 id="19-polarizable-continuum-solvation-c-pcm">19. Polarizable Continuum Solvation (C-PCM)</h2>
+<h2 id="20-polarizable-continuum-solvation-c-pcm">20. Polarizable Continuum Solvation (C-PCM)</h2>
 <p>Planck implements a conductor-like polarizable continuum model (C-PCM) for single-point HF (RHF/UHF) and KS-DFT (RKS/UKS) calculations. The solvent is treated as a structureless dielectric medium of relative permittivity <span class="math-inline">\(\varepsilon\)</span> that surrounds a molecule-shaped cavity. The solute polarizes the dielectric; the polarized dielectric back-polarizes the solute via a <em>reaction field</em>, which is added self-consistently to the Fock or Kohn-Sham matrix during the SCF iterations.</p>
 <p>Implementation files:</p>
 <ul>
@@ -2528,7 +2623,7 @@ E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
 <tr><td>Single-point gating</td><td><code>src/io/io.cpp</code></td><td>check around line 1266</td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="20-molecular-properties">20. Molecular Properties</h2>
+<h2 id="21-molecular-properties">21. Molecular Properties</h2>
 <p>After SCF convergence Planck can compute several molecular properties from the converged density matrix. Dipole and quadrupole moments are printed automatically; population and bond-order reports are printed when <code>print_populations true</code> or the output <code>verbosity</code> is <code>verbose</code> / <code>debug</code>. This section covers the theory behind each property and the code path that evaluates it.</p>
 <h3 id="mulliken-population-analysis">Mulliken Population Analysis</h3>
 <p><strong>Theory</strong></p>
@@ -2754,7 +2849,7 @@ T^+ \in \mathbb{R}^{N_{sph} \times N_{cart}}, \qquad N_{sph} = \sum_s (2L_s+1), 
 <p><strong>Verification tip</strong></p>
 <p>If <span class="math-inline">\(T^+\)</span> is correct, the inner product <span class="math-inline">\(\mathbf C_{sph}^\top \mathbf C_{sph}\)</span> restricted to the occupied block should equal the identity (orthonormal MOs), and the total norm of each MO column should be preserved.  Any error in the hardcoded <span class="math-inline">\(T^+\)</span> blocks shows up immediately as an MO being assigned to the wrong irrep (or split across two irreps).</p>
 <hr>
-<h2 id="21-checkpoint-and-restart">21. Checkpoint and Restart</h2>
+<h2 id="22-checkpoint-and-restart">22. Checkpoint and Restart</h2>
 <h3 id="binary-checkpoint-format">Binary Checkpoint Format</h3>
 <p>The checkpoint file (<code>*.hfchk</code>) stores:</p>
 <ul>
@@ -2779,7 +2874,7 @@ P^{small}_{\lambda'\sigma'}\, (S^{cross})^T_{\sigma'\mu}\,
 \]</span></p>
 <p>implemented via a singular value decomposition (Löwdin SVD) of the cross-overlap in <code>src/io/checkpoint.cpp</code>. This provides a physically motivated initial density for the new basis, significantly reducing the number of SCF iterations required.</p>
 <hr>
-<h2 id="22-execution-flow-of-a-typical-run">22. Execution Flow of a Typical Run</h2>
+<h2 id="23-execution-flow-of-a-typical-run">23. Execution Flow of a Typical Run</h2>
 <pre><code>
 driver.cpp
   parse_input()                → Calculator._scf, _basis, _geometry, etc.
@@ -2854,7 +2949,7 @@ driver.cpp
   save_checkpoint()
 </code></pre>
 <hr>
-<h2 id="23-theory-to-code-map">23. Theory-to-Code Map</h2>
+<h2 id="24-theory-to-code-map">24. Theory-to-Code Map</h2>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Theory concept</th>
@@ -2935,7 +3030,7 @@ driver.cpp
 <tr><td>MO irrep labels</td><td><code>src/symmetry/mo_symmetry.cpp</code></td><td><code>assign_mo_symmetry</code></td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="24-current-implementation-status">24. Current Implementation Status</h2>
+<h2 id="25-current-implementation-status">25. Current Implementation Status</h2>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Feature</th>
@@ -2986,7 +3081,7 @@ driver.cpp
 <tr><td>PCM coupling to post-HF (MP2, CC, CASSCF)</td><td>Not implemented</td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="25-how-to-study-this-codebase">25. How to Study This Codebase</h2>
+<h2 id="26-how-to-study-this-codebase">26. How to Study This Codebase</h2>
 <p>Recommended reading order for the HF/post-HF pipeline:</p>
 <ol>
 <li><code>src/base/types.h</code> — understand every struct before reading any algorithm</li>

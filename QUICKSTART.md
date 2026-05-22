@@ -806,7 +806,77 @@ H    0.000000   -0.757005   -0.468704
 %end_coords
 ```
 
-### 12. SCF mode
+### 12. Full configuration interaction (FCI)
+
+`correlation fci` performs **Full Configuration Interaction** over the *entire*
+MO space: it builds every Slater determinant obtainable by distributing the
+electrons among all molecular orbitals, then diagonalizes the electronic
+Hamiltonian in that determinant basis. Within a given basis set this is the
+*exact* solution of the electronic Schrödinger equation, so it is the gold
+standard against which approximate correlation methods (MP2, CCSD, …) are
+measured.
+
+FCI reuses the same determinant-string, Slater-Condon, and Davidson machinery as
+CASSCF — it is simply CASSCF's CI step with the active space taken to be the
+whole basis and no orbital optimization. It requires a converged **RHF**
+reference and is **single-point only**. No active-space keywords are needed.
+
+The determinant count grows combinatorially
+(\(\binom{n_{\text{orb}}}{n_\alpha}\binom{n_{\text{orb}}}{n_\beta}\)), so FCI is
+only practical for small systems and minimal/double-zeta bases. The run aborts
+if the determinant count exceeds `ci_max_dim` (default `10000`) or if the basis
+has more orbitals than the packed-determinant encoding allows.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation fci
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O    0.000000    0.000000    0.117176
+H    0.000000    0.757005   -0.468704
+H    0.000000   -0.757005   -0.468704
+%end_coords
+```
+
+The output reports the FCI determinant dimension, the correlation energy
+(\(E_{\text{FCI}} - E_{\text{RHF}}\)), and the total FCI energy:
+
+```
+[INF] FCI :                         Full CI over 7 orbitals, 5 alpha / 5 beta electrons  (CI dim = 441)
+  Correlation Energy                   -0.0494800411       -1.3464205095      -31.0491945604
+  Total FCI Energy                    -75.0124130330    -2041.1917442848   -47070.9998505472
+```
+
+For water/STO-3G this matches PySCF's FCI reference (`-75.0124130264`) to better
+than \(10^{-8}\,E_h\). To report several states, set `nroots` to the number of
+lowest roots you want printed (the ground state is always used for the reported
+total energy). Larger FCI spaces require raising `ci_max_dim`.
+
+The theory is developed in detail in §15 of the
+[Planck Teaching Guide](docs/PLANCK_TEACHING_GUIDE.md).
+
+### 13. SCF mode
 
 | Mode | Keyword | When to use |
 |---|---|---|
@@ -832,7 +902,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 ```
 
 
-### 13. Basis sets
+### 14. Basis sets
 
 | Keyword | Description |
 |---|---|
@@ -842,7 +912,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | `6-31g*` | 6-31G + d polarization on heavy atoms |
 
 
-### 14. Convergence tips
+### 15. Convergence tips
 
 | Problem | Fix |
 |---|---|
@@ -854,7 +924,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | MO labels are Ag/Bg/Au/Bu instead of Eg/Eu | Expected — for non-Abelian groups (D3d, Oh, …) the program uses the largest Abelian subgroup (e.g. C2h for D3d). The active group is printed to the log. |
 
 
-### 15. Kohn-Sham DFT calculation
+### 16. Kohn-Sham DFT calculation
 
 Kohn-Sham DFT uses a separate executable, `planck-dft`. It reads the same `.hfinp` format but requires a `%begin_dft` block that selects the exchange-correlation functional and integration grid. The `scf_type` keyword in `%begin_scf` controls the reference: `rhf` → RKS, `uhf` → UKS. Global hybrid functionals such as B3LYP and PBE0 include their own correlation through libxc, so the `correlation` keyword is ignored for those combined XC choices.
 
@@ -1087,7 +1157,7 @@ Range-separated and double-hybrid functionals are currently implemented for
 single-point energies. Their gradient, optimization, frequency, and TDDFT
 workflows are still rejected with an explicit diagnostic.
 
-### 16. All input keywords at a glance
+### 17. All input keywords at a glance
 
 ```
 %begin_control

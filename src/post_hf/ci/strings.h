@@ -1,5 +1,5 @@
-#ifndef HF_POSTHF_CASSCF_STRINGS_H
-#define HF_POSTHF_CASSCF_STRINGS_H
+#ifndef HF_POSTHF_CI_STRINGS_H
+#define HF_POSTHF_CI_STRINGS_H
 
 #include "base/types.h"
 #include "post_hf/casscf_internal.h"
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace HartreeFock::Correlation::CASSCF
+namespace HartreeFock::Correlation::CI
 {
 
     using HartreeFock::Correlation::CASSCFInternal::CIString;
@@ -104,6 +104,15 @@ namespace HartreeFock::Correlation::CASSCF
     // Reverse lookup from packed determinant key to CI index.
     std::unordered_map<CIString, int> build_det_lookup(const std::vector<CIString> &sd);
 
-} // namespace HartreeFock::Correlation::CASSCF
+} // namespace HartreeFock::Correlation::CI
 
-#endif // HF_POSTHF_CASSCF_STRINGS_H
+// Backward-compatibility alias: the CI engine used to live in the CASSCF
+// namespace. CASSCF (and its tests) still reference these symbols as
+// CASSCF::<name>, so re-export the CI namespace into CASSCF. New code should
+// prefer the CI namespace directly.
+namespace HartreeFock::Correlation::CASSCF
+{
+    using namespace HartreeFock::Correlation::CI;
+}
+
+#endif // HF_POSTHF_CI_STRINGS_H

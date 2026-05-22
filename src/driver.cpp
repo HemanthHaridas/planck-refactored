@@ -23,6 +23,7 @@
 #include "populations/population.h"
 #include "post_hf/casscf.h"
 #include "post_hf/cc.h"
+#include "post_hf/fci.h"
 #include "post_hf/mp2.h"
 #include "scf/scf.h"
 #include "scf/stability.h"
@@ -941,6 +942,13 @@ int main(int argc, const char *argv[])
             calculator._casscf_rhf_energy = calculator._total_energy;
             corr_res = HartreeFock::Correlation::run_rasscf(calculator, shellpairs);
         }
+        else if (calculator._correlation == HartreeFock::PostHF::FCI)
+        {
+            corr_tag = "FCI :";
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag,
+                                         "Computing full configuration interaction energy");
+            corr_res = HartreeFock::Correlation::run_fci(calculator, shellpairs);
+        }
 
         if (corr_res.has_value() == false && !corr_tag.empty())
         {
@@ -1007,6 +1015,7 @@ int main(int argc, const char *argv[])
                         : (calculator._correlation == HartreeFock::PostHF::RCCSDT)  ? "RCCSDT"
                         : (calculator._correlation == HartreeFock::PostHF::UCCSDT)  ? "UCCSDT"
                         : (calculator._correlation == HartreeFock::PostHF::RCCSDTQ) ? "RCCSDTQ"
+                        : (calculator._correlation == HartreeFock::PostHF::FCI)     ? "FCI"
                                                                                     : "Correlated";
                     HartreeFock::Logger::correlation_energy(
                         calculator._total_energy, calculator._correlation_energy, method_label);
