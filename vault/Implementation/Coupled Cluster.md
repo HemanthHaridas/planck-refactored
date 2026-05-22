@@ -11,7 +11,7 @@ tags: [cc, ccsd, ccsdt, ccsdtq, ccgen, post-hf]
 
 ## Status
 
-Teaching determinant-space prototypes plus a tensor production backend for RCCSD, UCCSD, RCCSDT, UCCSDT, and RCCSDTQ, plus an arbitrary-order RCC solver driven by `ccgen`-generated residuals.
+Teaching determinant-space prototypes plus tensor backends for RCCSD, UCCSD, RCCSDT, UCCSDT, and RCCSDTQ, plus an arbitrary-order RCC solver driven by `ccgen`-generated residuals.
 
 ## Namespace
 
@@ -29,10 +29,10 @@ All CC code is in `HartreeFock::Correlation::CC`. Lives under `src/post_hf/cc/`.
 | `ccsd.{cpp,h}` | RCCSD and UCCSD teaching solvers |
 | `ccsdt.{cpp,h}` | RCCSDT and UCCSDT teaching solvers |
 | `ccsdtq.{cpp,h}` | RCCSDTQ solver |
-| `tensor_backend.{cpp,h}` | Tensor production backend (selectable via `RCCSDTBackend` enum) |
+| `tensor_backend.{cpp,h}` | Tensor production backend plus RCCSDT backend selection helpers |
 | `tensor_backend_internal.h` + `tensor_backend_state.cpp` | Private helpers: tensor state prep, memory accounting, ERI block cache, canonical RHF reference construction, dense triples workspace allocation (extracted in commit ff56d66) |
 | `solver_arbitrary.{cpp,h}` | General-rank RCC solver using `ArbitraryOrderResiduals`, Jacobi+DIIS via `update_amplitudes_with_jacobi_diis` |
-| `tensor_optimized.{cpp,h}` | `TensorOptimized` solver path for ccgen-generated kernels (Phase 4) |
+| `tensor_optimized.{cpp,h}` | Tensor-optimized RCCSDT backend entry point consuming ccgen-generated warm-start kernels |
 | `generated_kernel_registry.{cpp,h}` | Registry for ccgen-generated kernels |
 | `generated_arbitrary_prepare.cpp` + `generated_arbitrary_runtime.{cpp,h}` | Runtime for arbitrary-order generated residuals |
 
@@ -65,13 +65,22 @@ Builders return `std::expected`:
 - Driven by `ccgen`-generated residuals (Phase 3 integration)
 - Tested in `tests/cc_arbitrary_solver.cpp`
 
+## RCCSDT Backend Routing
+
+`src/post_hf/cc/ccsdt.cpp` selects among three restricted CCSDT backends:
+- determinant-space prototype,
+- tensor production backend,
+- tensor-optimized backend.
+
+The runtime override is `PLANCK_RCCSDT_BACKEND={determinant,tensor,optimized}`. In-tree comments and README still describe the optimized path as experimental/Phase 4, so it is best treated as present but not yet the default production route.
+
 ## Driver Routing
 
 `src/driver.cpp` lines ~692–787 handle `PostHF::RCCSD`, `UCCSD`, `RCCSDT`, `UCCSDT` (and extensions for RCCSDTQ).
 
 ## ccgen Integration
 
-The Python `ccgen` tool (outside `src/`) generates CC equation residuals algebraically and emits C++ kernels. Phase 4 will route through `TensorOptimized` to apply algebraic optimizations.
+The Python `ccgen` tool (outside `src/`) generates CC equation residuals algebraically and emits C++ kernels. Those generated kernels already feed the arbitrary-order RCC solver and the RCCSDT tensor-optimized warm-start path.
 
 ## Third-Party Attribution
 

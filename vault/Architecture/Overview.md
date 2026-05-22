@@ -13,11 +13,11 @@ tags: [architecture, modules, namespace]
 
 | Binary | Entry | Purpose |
 |--------|-------|---------|
-| `hartree-fock` | `src/driver.cpp` | RHF/UHF SCF, MP2, CASSCF/RASSCF, analytic gradients, geomopt, frequencies |
-| `planck-dft` | `src/dft/main.cpp` | Kohn-Sham DFT (RKS/UKS), gradient, geomopt, frequencies |
+| `hartree-fock` | `src/driver.cpp` | RHF/UHF/ROHF SCF, PCM single points, MP2, CC, CASSCF/RASSCF/FCI, analytic gradients, geomopt, frequencies |
+| `planck-dft` | `src/dft/main.cpp` | Kohn-Sham DFT (RKS/UKS), TDDFT, PCM single points, gradient, geomopt, frequencies |
 | `chkdump` | `tools/` | Checkpoint file inspector (BUILD_TOOLS=ON) |
 
-Both share: integrals, basis set handling, symmetry, I/O, geometry optimization.
+Both share: integrals, basis set handling, symmetry, I/O, checkpointing, PCM implementation, and geometry optimization primitives.
 
 ## Namespace
 
@@ -37,7 +37,8 @@ src/
   basis/       — gaussian.cpp (GBS reader), basis.cpp (normalization)
   integrals/   — shellpair.cpp, os.cpp (Obara-Saika ERI), rys.cpp (Rys quadrature)
   symmetry/    — symmetry.cpp (libmsym wrapper), wrapper.h
-  scf/         — scf.cpp (RHF/UHF loop), diis.cpp
+  scf/         — scf.cpp (RHF/UHF/ROHF loop), diis.cpp, stability.cpp, sad.cpp
+  solvation/   — pcm.cpp (shared C-PCM implementation)
   post_hf/
     mp2.cpp                — RMP2/UMP2 energies
     mp2_gradient.cpp/.h    — UMP2 gradient intermediates
@@ -63,6 +64,7 @@ src/
   opt/         — geomopt.cpp (L-BFGS), intcoords.cpp (IC-BFGS)
   freq/        — hessian.cpp (semi-numerical Hessian + vibrational analysis)
   dft/
-    base/      — grid.h, radial.h, angular.h, wrapper.h (libxc), ao_grid.h
+    base/      — grid.h, radial.h, angular.h, wrapper.h (libxc)
+    ao_grid.h  — AO values/gradients on the grid
     xc_grid.cpp, ks_matrix.cpp, driver.cpp, main.cpp
 ```

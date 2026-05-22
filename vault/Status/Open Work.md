@@ -9,10 +9,12 @@ tags: [status, open-work, bugs, todo]
 
 # Open Work
 
-Last updated: 2026-05-01
+Last updated: 2026-05-22
 
 ## Potential Improvements
 
-- Range-separated and double-hybrid DFT (only global hybrids are currently supported; B3LYP and PBE0 are available as of commit f208777)
+- DFT gradients / geometry optimization / frequencies / TDDFT for range-separated and double-hybrid functionals are still not implemented; those functionals are currently single-point only
 - Analytic Hessian (currently semi-numerical only)
-- ccgen `TensorOptimized` solver path (Phase 4) — scaffolding exists in `src/post_hf/cc/tensor_optimized.{cpp,h}` and `generated_kernel_registry`
+- DFT imaginary-mode following is still not implemented (`src/dft/driver.cpp`)
+- ROHF post-HF beyond FCI, analytic gradients, stability analysis, and PCM remain incomplete
+- ccgen `TensorOptimized` RCCSDT backend exists, but it is still described in-tree as an experimental/Phase-4 path

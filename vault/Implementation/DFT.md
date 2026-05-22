@@ -1,17 +1,25 @@
 ---
 name: DFT
-description: Kohn-Sham DFT implementation — grid, libxc, KS matrix, planck-dft binary
+description: Kohn-Sham DFT and TDDFT implementation — grid, libxc, PCM, KS matrix, `planck-dft`
 type: implementation
 priority: medium
 include_in_claude: true
-tags: [dft, ks-dft, rks, uks, libxc, grid]
+tags: [dft, ks-dft, tddft, rks, uks, libxc, grid, pcm]
 ---
 
 # Kohn-Sham DFT (`planck-dft` binary)
 
 ## Entry Point
 
-`DFT::Driver::run` in `src/dft/driver.cpp`. Handles: SinglePoint, Gradient, GeomOpt, Frequency, GeomOptFrequency, ImaginaryFollow.
+`DFT::Driver::run` in `src/dft/driver.cpp`. Handles:
+- SinglePoint
+- Gradient
+- GeomOpt
+- Frequency
+- GeomOptFrequency
+- TDDFT / linear response
+
+`ImaginaryFollow` is parsed at the input level but currently returns an explicit unimplemented diagnostic in the DFT driver.
 
 ## Grid Construction
 
@@ -48,13 +56,27 @@ Grid quality levels (`DFTGridQuality`):
 - V_xc from grid integration
 - Symmetry + SAO blocking supported
 
+## PCM Solvation
+
+`planck-dft` can add a self-consistent C-PCM reaction field for single-point RKS/UKS calculations. The DFT driver builds a reusable `PCMState` once, then adds the reaction potential and solvation energy during each SCF iteration.
+
+Key pieces:
+- setup: `HartreeFock::Solvation::build_pcm_state`
+- per-iteration reaction field: `HartreeFock::Solvation::evaluate_pcm_reaction_field`
+- implementation: `src/solvation/pcm.{h,cpp}`
+
+Analytic KS gradients currently warn/error if PCM geometry response would be required; PCM is not wired through DFT geometry optimization, frequencies, or TDDFT.
+
 ## Supported Functionals
 
-**Exchange**: Slater (LDA), B88 (GGA), PW91, PBE, **B3LYP**, **PBE0**, Custom
-**Correlation**: VWN5 (LDA), LYP (GGA), P86, PW91, PBE, Custom
-LDA, GGA, and **global hybrids** (B3LYP, PBE0) are supported. Range-separated and double-hybrid functionals are rejected at init with an explicit unsupported diagnostic.
+**Exchange**: Slater (LDA), B88 (GGA), PW91, PBE, B3LYP, PBE0, HSE06, custom libxc names/IDs
+**Correlation**: VWN5 (LDA), LYP (GGA), P86, PW91, PBE, B2PLYP-style combined XC entries, custom libxc names/IDs
 
-## Global Hybrid XC (commit f208777)
+Support is split by workflow:
+- LDA/GGA/global-hybrid path: single points, gradients, geomopt, frequencies, and TDDFT
+- Range-separated hybrids and double hybrids: single-point energies only
+
+## Hybrid / Range-Separated / Double-Hybrid XC
 
 `src/dft/base/wrapper.h` exposes `hybrid_type()`, `is_hybrid()`, `is_global_hybrid()`, and `exact_exchange_coefficient()` from libxc. When a global hybrid is selected:
 
@@ -64,6 +86,23 @@ LDA, GGA, and **global hybrids** (B3LYP, PBE0) are supported. Range-separated an
 4. The matching exchange energy is included in the reported DFT total energy.
 
 Regression cases: `h2_dft_b3lyp_sto3g` and `h_dft_uks_b3lyp_sto3g`.
+
+The same wrapper layer now also exposes `is_range_separated()` and `is_double_hybrid()`. The driver accepts those functionals for single-point calculations, computes the implemented exact-exchange share, and applies the additional perturbative correction path for double hybrids where supported. Non-single-point workflows still reject them explicitly.
+
+## TDDFT / Linear Response
+
+`src/dft/driver.cpp` contains a dense linear-response implementation with:
+- full Casida and TDA solvers,
+- RKS singlet/triplet support,
+- UKS spin-conserving response,
+- transition dipoles, oscillator strengths, and per-root reporting,
+- Gaussian-broadened UV-Vis spectrum output.
+
+Relevant input knobs live in `%begin_dft`:
+- `lr_nstates` / `tddft_nstates` / `nroots`
+- `root`
+- `lr_method` / `tddft_method`
+- `lr_spin` / `tddft_spin`
 
 ## Checkpoint / Restart
 
@@ -77,4 +116,5 @@ Same checkpoint system as HF — saves MO coefficients and energies. Cross-basis
 - `src/dft/ao_grid.h` — AO-on-grid evaluation
 - `src/dft/xc_grid.cpp` + `xc_grid.h` — density + XC
 - `src/dft/ks_matrix.cpp` + `ks_matrix.h` — KS potential matrix
+- `src/solvation/pcm.cpp` + `pcm.h` — shared PCM implementation used by HF and DFT
 - `src/dft/main.cpp` — binary entry point

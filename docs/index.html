@@ -166,6 +166,7 @@
 <li class="toc-level-3"><a href="#shell-and-contractedview">`Shell` and `ContractedView`</a></li>
 <li class="toc-level-3"><a href="#shellpair">`ShellPair`</a></li>
 <li class="toc-level-3"><a href="#calculator">`Calculator`</a></li>
+<li class="toc-level-3"><a href="#fcidump-as-an-interchange-format">FCIDUMP as an Interchange Format</a></li>
 <li class="toc-level-2"><a href="#4-gaussian-basis-functions">4. Gaussian Basis Functions</a></li>
 <li class="toc-level-3"><a href="#primitive-gaussians">Primitive Gaussians</a></li>
 <li class="toc-level-3"><a href="#contracted-gaussians">Contracted Gaussians</a></li>
@@ -382,6 +383,52 @@ Input file (.hfinp)
 <h3 id="calculator"><code>Calculator</code></h3>
 <p>The top-level object. Owns everything: options structs (<code>OptionsSCF</code>, <code>OptionsBasis</code>, <code>OptionsGeometry</code>, <code>OptionsIntegral</code>, <code>OptionsOutput</code>, <code>OptionsDFT</code>), <code>Molecule</code>, <code>Basis</code>, <code>DataSCF</code>, all integral matrices (<code>_overlap</code>, <code>_hcore</code>, <code>_eri</code>), energies, gradient, Hessian, SAO data, integral symmetry ops, and active-space results.</p>
 <p><code>OptionsDFT</code> holds the DFT-specific settings: <code>_grid</code> (grid quality enum), <code>_exchange</code> and <code>_correlation</code> (XC functional enums), optional raw libxc integer IDs (<code>_exchange_id</code>, <code>_correlation_id</code>), and boolean flags for SAO blocking, grid printing, and checkpoint saving.</p>
+<h3 id="fcidump-as-an-interchange-format">FCIDUMP as an Interchange Format</h3>
+<p>One important idea in quantum chemistry software is that the expensive part is often not the many-body solver itself, but the preparation of a good molecular-orbital Hamiltonian:</p>
+<ul>
+<li>choose a basis,</li>
+<li>solve SCF,</li>
+<li>transform the one- and two-electron integrals from AO basis to MO basis,</li>
+<li>package the Hamiltonian in a form another program can read.</li>
+</ul>
+<p><code>FCIDUMP</code> is the standard text format for that last step. Historically it comes from the MOLPRO ecosystem, but in practice it has become the common interchange format for external determinant-based solvers such as FCI, selected CI, DMRG, and FCIQMC codes. The main conceptual point is:</p>
+<p>&gt; An FCIDUMP file does not store a wavefunction. It stores the second-quantized &gt; electronic Hamiltonian in a chosen orthonormal spatial-orbital basis.</p>
+<p>In that basis, the nonrelativistic electronic Hamiltonian is</p>
+<p><span class="math-display">\[
+\hat H = E_{nuc}
++ \sum_{ij} h_{ij}\, a_i^\dagger a_j
++ \frac{1}{2}\sum_{ijkl} (ij|kl)\,
+  a_i^\dagger a_k^\dagger a_l a_j
+\]</span></p>
+<p>where:</p>
+<ul>
+<li><span class="math-inline">\(E_{nuc}\)</span> is the scalar nuclear repulsion energy,</li>
+<li><span class="math-inline">\(h_{ij}\)</span> are the one-electron matrix elements in the MO basis,</li>
+<li><span class="math-inline">\((ij|kl)\)</span> are the two-electron repulsion integrals in chemists&#x27; notation.</li>
+</ul>
+<p>That is exactly the information an exact diagonalizer or approximate CI-style solver needs. So an FCIDUMP lets one program do the SCF + integral work and a different program do the many-electron solve.</p>
+<p>In Planck, the exporter lives in <code>src/io/fcidump.{h,cpp}</code>. After a converged SCF, it writes:</p>
+<ul>
+<li>an <code>&amp;FCI</code> header with <code>NORB</code>, <code>NELEC</code>, <code>MS2</code>, <code>ORBSYM</code>, and <code>ISYM</code>,</li>
+<li>the unique MO-basis two-electron integrals,</li>
+<li>the unique MO-basis one-electron integrals,</li>
+<li>the nuclear repulsion energy as the final scalar record.</li>
+</ul>
+<p>The body uses the standard FCIDUMP convention:</p>
+<ul>
+<li>two-electron entries are written as <code>value  i  j  k  l</code>,</li>
+<li>one-electron entries are marked by <code>k=l=0</code>,</li>
+<li>the scalar constant term is marked by <code>i=j=k=l=0</code>,</li>
+<li>orbital indices are 1-based.</li>
+</ul>
+<p>Planck writes only the symmetry-unique subset of the two-electron tensor, using the usual 8-fold permutation symmetry of a real restricted Hamiltonian. A reader reconstructs the rest from those symmetry relations.</p>
+<p>There are two practical restrictions worth remembering:</p>
+<ol>
+<li>Planck currently exports only converged <strong>RHF</strong> and <strong>ROHF</strong> references. This is because the standard FCIDUMP layout assumes one common set of spatial orbitals for both spins. UHF would need an unrestricted extension that many downstream programs do not read.</li>
+<li>The file is an MO-basis Hamiltonian, so its contents depend on the orbital basis chosen by the SCF reference. Different canonical orbital sets can lead to different matrix elements, even though an exact FCI energy from that Hamiltonian is invariant to rotations within the occupied or virtual spaces.</li>
+</ol>
+<p>When symmetry is available, Planck also fills the <code>ORBSYM</code> field using the standard MOLPRO/PySCF integer numbering for supported Abelian point groups. When the point group is unsupported or non-Abelian, it safely falls back to all ones, which means &quot;treat every orbital as totally symmetric.&quot;</p>
+<p>To request a dump in an input file, set the <code>fcidump</code> keyword to an output path. The driver performs the export immediately after SCF convergence, even if no in-house post-HF method is requested. Conceptually, that makes FCIDUMP a bridge from Planck&#x27;s SCF/integral machinery to the broader ecosystem of external correlated solvers.</p>
 <hr>
 <h2 id="4-gaussian-basis-functions">4. Gaussian Basis Functions</h2>
 <h3 id="primitive-gaussians">Primitive Gaussians</h3>

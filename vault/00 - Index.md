@@ -9,7 +9,7 @@ tags: [index, overview]
 
 # Planck — Knowledge Vault Index
 
-Quantum chemistry engine in C++23. Two binaries: `hartree-fock` (HF/MP2/CASSCF) and `planck-dft` (KS-DFT).
+Quantum chemistry engine in C++23. Main binaries: `hartree-fock` (HF/post-HF) and `planck-dft` (KS-DFT/TDDFT), plus `chkdump` when tools are enabled.
 
 ## Navigation
 
@@ -20,10 +20,10 @@ Quantum chemistry engine in C++23. Two binaries: `hartree-fock` (HF/MP2/CASSCF) 
 - [[Data Flow]] — input → SCF → output pipeline
 
 ### Implementation
-- [[SCF and DIIS]] — RHF/UHF loop, convergence, DIIS
+- [[SCF and DIIS]] — RHF/UHF/ROHF loops, guesses, DIIS, stability analysis
 - [[CASSCF and SA-CASSCF]] — CASSCF/SA-CASSCF/RASSCF details
 - [[Coupled Cluster]] — RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ + arbitrary-order
-- [[DFT]] — KS-DFT, grid, libxc, global hybrids
+- [[DFT]] — KS-DFT, TDDFT, PCM, libxc hybrids/range separation
 - [[Integral Engine]] — Obara-Saika / Rys ERI, shell pairs
 - [[Gradients and GeomOpt]] — analytic gradients (RHF/UHF/RMP2/UMP2), L-BFGS, IC-BFGS
 
@@ -46,6 +46,7 @@ Quantum chemistry engine in C++23. Two binaries: `hartree-fock` (HF/MP2/CASSCF) 
 | Input parser | `src/io/io.cpp` |
 | Checkpoint I/O | `src/io/checkpoint.cpp` |
 | ERI engine | `src/integrals/os.cpp` |
+| PCM solvation | `src/solvation/pcm.cpp` |
 | CASSCF main loop | `src/post_hf/casscf/casscf.cpp` (`run_mcscf_loop`) |
 | CC tensor backend | `src/post_hf/cc/tensor_backend.cpp` |
 | DFT driver | `src/dft/driver.cpp` |

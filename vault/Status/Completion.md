@@ -9,24 +9,26 @@ tags: [status, completion, validated]
 
 # Completion Status
 
-Last updated: 2026-04-24
+Last updated: 2026-05-22
 
 ## Fully Implemented and Validated
 
 ### HF/SCF
-- RHF and UHF SCF with DIIS (queue size configurable)
-- ROHF scaffolding (87a08ef)
+- RHF, UHF, and ROHF SCF with DIIS (`src/scf/scf.cpp`)
 - SAD guess (commit 733fb31) and H_core guess
 - Symmetry detection + MO irrep labeling (libmsym)
 - Mulliken population analysis
 - Checkpoint system: same-basis restart + cross-basis Löwdin projection
+- Wavefunction stability analysis for RHF/UHF, plus optional instability following (`stability_check`, `stability_follow`)
+- PCM solvation for single-point RHF/UHF runs (`src/solvation/pcm.{h,cpp}`)
 
 ### Post-HF
 - RMP2 and UMP2 correlation energies
+- FCI over the full MO space for small RHF/ROHF references
 - **CASSCF**: fully implemented, 11/11 PySCF gate cases passing (2026-04-08)
 - **SA-CASSCF**: shared-κ coupled solver, exact CI-response RHS, stagnation escape
 - **RASSCF**: active space partitioning (RAS1/RAS2/RAS3)
-- **Coupled cluster**: RCCSD, UCCSD, RCCSDT, UCCSDT, RCCSDTQ — teaching determinant-space prototypes plus tensor production backends. Arbitrary-order RCC solver via ccgen-generated residuals.
+- **Coupled cluster**: RCCSD, UCCSD, RCCSDT, UCCSDT, RCCSDTQ — teaching determinant-space prototypes plus tensor production backends. RCCSDT can also be forced onto the tensor-optimized ccgen warm-start path via `PLANCK_RCCSDT_BACKEND=optimized`. Arbitrary-order RCC solver via ccgen-generated residuals.
 
 ### ERI Engine
 - Obara-Saika (`integrals/os.cpp`) — primary engine
@@ -43,10 +45,13 @@ Last updated: 2026-04-24
 
 ### DFT (`planck-dft` binary)
 - RKS and UKS
-- LDA (Slater, VWN5), GGA (B88, LYP, PBE, PW91), and **global hybrids (B3LYP, PBE0)** via libxc (commit f208777)
+- LDA (Slater, VWN5), GGA (B88, LYP, PBE, PW91), global hybrids (B3LYP, PBE0), and arbitrary libxc functional selection by name or ID
+- Range-separated and double-hybrid libxc functionals for single-point energies (for example HSE06, B2PLYP)
 - Treutler-Ahlrichs radial + Lebedev angular + Becke partitioning
 - Grid quality levels: Coarse, Normal, Fine, UltraFine
-- SP, Gradient, GeomOpt, Frequency, GeomOptFrequency, ImaginaryFollow
+- Single-point PCM solvation for RKS/UKS
+- Linear-response TDDFT / Casida + TDA excited states with transition dipoles, oscillator strengths, and UV-Vis spectrum output
+- SP, Gradient, GeomOpt, Frequency, GeomOptFrequency
 - Checkpoint/restart, symmetry+SAO blocking
 
 ### Error Handling Hardening (commits 1593541, 6851a44, 6ca12ff, 6f4c220)
