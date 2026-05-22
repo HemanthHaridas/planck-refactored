@@ -115,8 +115,10 @@ def render_markdown(
     in_list = False
     in_ordered_list = False
     in_table = False
+    in_quote = False
     pending_header: list[str] | None = None  # first row before separator
     paragraph: list[str] = []
+    quote: list[str] = []
 
     def slugify(t: str) -> str:
         # Strip  math placeholder tokens before building the URL anchor so that
@@ -135,6 +137,19 @@ def render_markdown(
             if joined:
                 output.append(f"<p>{inline_format(joined)}</p>")
             paragraph = []
+
+    def flush_quote() -> None:
+        nonlocal quote, in_quote
+        if in_quote:
+            joined = " ".join(
+                part.strip() for part in quote if part.strip()
+            )
+            if joined:
+                output.append(
+                    f"<blockquote><p>{inline_format(joined)}</p></blockquote>"
+                )
+            quote = []
+            in_quote = False
 
     def close_list() -> None:
         nonlocal in_list, in_ordered_list
@@ -166,6 +181,7 @@ def render_markdown(
         # ── Fenced code block ─────────────────────────────────────────
         if line.startswith("```"):
             flush_paragraph()
+            flush_quote()
             close_list()
             if not in_code:
                 in_code = True
@@ -187,9 +203,22 @@ def render_markdown(
         # ── Blank line ────────────────────────────────────────────────
         if not line.strip():
             flush_paragraph()
+            flush_quote()
             close_list()
             close_table()
             continue
+
+        # ── Blockquote ────────────────────────────────────────────────
+        m_quote = re.match(r"^>\s?(.*)$", line)
+        if m_quote:
+            flush_paragraph()
+            close_list()
+            close_table()
+            in_quote = True
+            quote.append(m_quote.group(1))
+            continue
+        # A non-quote, non-blank line ends any open blockquote.
+        flush_quote()
 
         # ── Headings ──────────────────────────────────────────────────
         heading = re.match(r"^(#{1,6})\s+(.*)$", line)
@@ -292,6 +321,7 @@ def render_markdown(
         paragraph.append(line)
 
     flush_paragraph()
+    flush_quote()
     close_list()
     close_table()
 
@@ -428,7 +458,11 @@ def page_template(title: str, toc_html: str, content_html: str) -> str:
       border: 1px solid var(--rule); padding: 10px 14px; vertical-align: top;
     }} .content tr:nth-child(even) td {{
       background: rgba(219,205,185,0.18);
-    }} .content a {{ color: var(--accent); }} .content img {{
+    }} .content blockquote {{
+      margin: 1.4rem 0; padding: 0.6rem 1.2rem; border-left: 4px solid
+      var(--accent); background: rgba(154,61,34,0.06); border-radius: 0 10px
+      10px 0; color: var(--muted); font-style: italic;
+    }} .content blockquote p {{ margin: 0; }} .content a {{ color: var(--accent); }} .content img {{
       display:  block;  max-width:  100%;  height:  auto;  margin: 1.2rem auto;
       border:  1px solid var(--rule); border-radius: 16px; background: #fffdf8;
       box-shadow: 0 10px 28px rgba(42, 33, 20, 0.06); padding: 10px;
