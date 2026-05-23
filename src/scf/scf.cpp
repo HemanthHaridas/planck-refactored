@@ -1045,7 +1045,11 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
     (void)pcm;
     const Eigen::MatrixXd &S = calculator._overlap;
     const Eigen::MatrixXd &H = calculator._hcore;
-    const std::size_t nbasis = calculator._shells.nbasis();
+    // Working AO dimension: spherical (2L+1 per shell) in spherical mode, Cartesian
+    // otherwise. The integral engine still builds in the Cartesian basis (nbasis_cart);
+    // the ERI / direct Fock are transformed into the spherical basis. See run_rhf.
+    const std::size_t nbasis = calculator.working_nbasis();
+    const std::size_t nbasis_cart = calculator._shells.nbasis();
 
     const int n_electrons = static_cast<int>(
         calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
@@ -1176,10 +1180,20 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
                                      std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
-        eri = _compute_2e(shell_pairs, nbasis, calculator._integral._engine,
+        // Built in the Cartesian basis (nbasis_cart), then transformed to spherical
+        // with the same S-normalized C used for S/H. Cartesian mode: no transform.
+        eri = _compute_2e(shell_pairs, nbasis_cart, calculator._integral._engine,
                           HartreeFock::ERIKernel::Coulomb, 0.0,
                           calculator._integral._tol_eri,
                           calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        if (calculator._shells._spherical)
+        {
+            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+                eri, calculator._shells._cart_to_sph, nbasis_cart);
+            if (!eri_sph)
+                return std::unexpected(eri_sph.error());
+            eri = std::move(*eri_sph);
+        }
         calculator._eri = eri;
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
         HartreeFock::Logger::blank();
@@ -1197,11 +1211,34 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
     {
         const auto iter_start = std::chrono::steady_clock::now();
 
-        auto [Ga, Gb] = use_conventional
-                            ? HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis)
-                            : _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine,
-                                                   HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
-                                                   calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        // Conventional contracts the (spherical) ERI; direct builds per-quartet in
+        // Cartesian with spherical back-projection/forward-transform per spin channel.
+        Eigen::MatrixXd Ga;
+        Eigen::MatrixXd Gb;
+        if (use_conventional)
+        {
+            std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
+        }
+        else if (calculator._shells._spherical)
+        {
+            const Eigen::MatrixXd &C = calculator._shells._cart_to_sph;
+            const Eigen::MatrixXd Pa_cart = C.transpose() * Pa * C;
+            const Eigen::MatrixXd Pb_cart = C.transpose() * Pb * C;
+            auto [Ga_cart, Gb_cart] =
+                _compute_2e_fock_uhf(shell_pairs, Pa_cart, Pb_cart, nbasis_cart,
+                                     calculator._integral._engine,
+                                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+            Ga = C * Ga_cart * C.transpose();
+            Gb = C * Gb_cart * C.transpose();
+        }
+        else
+        {
+            std::tie(Ga, Gb) =
+                _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine,
+                                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        }
 
         const Eigen::MatrixXd Fa = H + Ga;
         const Eigen::MatrixXd Fb = H + Gb;

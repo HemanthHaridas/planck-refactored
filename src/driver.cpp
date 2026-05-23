@@ -456,7 +456,8 @@ int main(int argc, const char *argv[])
         if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
             return reject("Calculation type " + map_enum(calculator._calculation));
         if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
-            calculator._scf._scf != HartreeFock::SCFType::UHF)
+            calculator._scf._scf != HartreeFock::SCFType::UHF &&
+            calculator._scf._scf != HartreeFock::SCFType::ROHF)
             return reject("SCF type " + map_enum(calculator._scf._scf));
         if (calculator._correlation != HartreeFock::PostHF::None)
             return reject("The requested post-HF / correlated method");
