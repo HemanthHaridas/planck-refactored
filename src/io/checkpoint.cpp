@@ -579,11 +579,15 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
     [[maybe_unused]] const uint8_t has_opt_coords_value = *has_opt_coords;
 
     // ── Validate basis size ───────────────────────────────────────────────
-    const std::size_t cur_nb = calc._shells.nbasis();
+    // The stored nb is _overlap.rows(): the spherical AO count in spherical mode,
+    // Cartesian otherwise. Compare against working_nbasis() so same-basis spherical
+    // restart matches, and a Cartesian-vs-spherical mismatch (same basis name, but
+    // different basis_type than the checkpoint) is correctly rejected here.
+    const std::size_t cur_nb = calc.working_nbasis();
     if (*chk_nb != static_cast<uint64_t>(cur_nb))
         return std::unexpected(
-            std::format("Checkpoint nbasis ({}) does not match current nbasis ({}); "
-                        "use the same basis set or remove the checkpoint file.",
+            std::format("Checkpoint nbasis ({}) does not match current working nbasis ({}); "
+                        "use the same basis set and basis_type, or remove the checkpoint file.",
                         *chk_nb, cur_nb));
 
     // ── One-electron matrices ─────────────────────────────────────────────

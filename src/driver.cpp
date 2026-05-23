@@ -464,13 +464,11 @@ int main(int argc, const char *argv[])
             return reject("The requested post-HF / correlated method");
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             return reject("PCM solvation");
-        if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
-            return reject("SAD initial guess");
-        if (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
-            calculator._scf._guess == HartreeFock::SCFGuess::ReadFull)
-            return reject("Checkpoint restart (guess density/full)");
         if (calculator._molecule._symmetry)
             return reject("Symmetry / SAO blocking");
+        // Checkpoint restart for spherical is wired only for the same-basis case
+        // below; cross-basis Löwdin projection in the spherical basis is not yet
+        // supported (the check is refined after the checkpoint header is read).
     }
 
     // Now initialize SCF data structures
@@ -481,6 +479,30 @@ int main(int argc, const char *argv[])
     std::vector<HartreeFock::ShellPair> shellpairs = build_shellpairs(calculator._shells);
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Number of Shell pairs :", shellpairs.size());
     HartreeFock::Logger::blank();
+
+    // ── Spherical transform normalization (must precede every consumer) ──────────
+    // The load-time C produces correct spherical directions but unnormalized rows.
+    // Normalize each row m by 1/√((C S_cart Cᵀ)_mm) so diag(S_sph) = 1, using the
+    // real Cartesian overlap. This is done here — once, right after the basis exists
+    // and before any S/H/ERI transform — so it is independent of the SCF guess. (On a
+    // "guess full" checkpoint restart the 1e block below is skipped, but the ERI is
+    // still rebuilt and transformed with C, so C must already be normalized here.)
+    if (calculator._shells._spherical)
+    {
+        const auto [S_cart, T_cart_unused] =
+            _compute_1e(shellpairs, calculator._shells.nbasis(),
+                        calculator._integral._engine, nullptr);
+        (void)T_cart_unused;
+        Eigen::MatrixXd C = calculator._shells._cart_to_sph;
+        const Eigen::MatrixXd CS = C * S_cart; // [n_sph × n_cart]
+        for (Eigen::Index m = 0; m < C.rows(); ++m)
+        {
+            const double norm2 = CS.row(m).dot(C.row(m));
+            if (norm2 > 0.0)
+                C.row(m) /= std::sqrt(norm2);
+        }
+        calculator._shells._cart_to_sph = std::move(C);
+    }
 
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "SCF Mode :", map_enum<HartreeFock::SCFMode>(calculator._scf._mode));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Nuclear Repulsion :", std::format("{:.10f} Eh", calculator._nuclear_repulsion));
@@ -516,6 +538,22 @@ int main(int argc, const char *argv[])
         {
             // ── Cross-basis projection path ────────────────────────────────────
             auto mos_res = HartreeFock::Checkpoint::load_mos(calculator._checkpoint_path);
+
+            // Cross-basis Löwdin projection is not yet wired for spherical bases:
+            // the projection below builds Cartesian integrals and cross-overlaps and
+            // would be inconsistent with the spherical working basis. Same-basis
+            // spherical restart is supported (handled by the matching-nbasis branch
+            // above); cross-basis spherical is rejected here.
+            if (calculator._shells._spherical && mos_res &&
+                mos_res->nbasis != calculator._shells.nbasis_sph())
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Error, "Spherical Basis :",
+                    "cross-basis checkpoint projection is not supported with a spherical "
+                    "basis (basis_type spherical); restart with the same basis, or use "
+                    "basis_type cartesian for cross-basis projection.");
+                return EXIT_FAILURE;
+            }
 
             if (mos_res && mos_res->nbasis != calculator._shells.nbasis())
             {
@@ -660,31 +698,12 @@ int main(int argc, const char *argv[])
 
         // One-electron integrals are computed in the Cartesian basis. In spherical
         // mode, map them into the (2L+1)-per-shell spherical basis with the block-
-        // diagonal transform C: M_sph = C · M_cart · Cᵀ. After this _overlap and
-        // _hcore are spherical-dimensioned (working_nbasis()) and SCF works entirely
-        // in the spherical basis. (Step 2.2; the Cartesian path is unchanged because
-        // the branch is skipped when _spherical is false.)
+        // diagonal transform C: M_sph = C · M_cart · Cᵀ. C was normalized right after
+        // the basis was built (above), so diag(_overlap) = 1 and SCF works entirely in
+        // the spherical basis. (Step 2.2; the Cartesian path is unchanged.)
         if (calculator._shells._spherical)
         {
-            // The transform built at load time produces correct spherical *directions*,
-            // but its rows are not unit-normalized against the actual Cartesian Gaussian
-            // overlap (Cartesian functions within a shell are not mutually orthogonal —
-            // e.g. ⟨d_xx|d_yy⟩ ≠ 0 — and contraction makes the norm exponent-dependent,
-            // so it cannot be normalized analytically from L alone). Scale each spherical
-            // row m by 1/√((C S Cᵀ)_mm) using the real S so that diag(S_sph) = 1. The
-            // normalized C is written back to _cart_to_sph so the ERI transform (Step
-            // 2.3) reuses one consistent transform for all AO quantities.
-            Eigen::MatrixXd C = calculator._shells._cart_to_sph;
-            const Eigen::MatrixXd CS = C * S; // [n_sph × n_cart]
-            for (Eigen::Index m = 0; m < C.rows(); ++m)
-            {
-                const double norm2 = CS.row(m).dot(C.row(m));
-                if (norm2 <= 0.0)
-                    continue; // degenerate row; leave untouched (should not occur)
-                C.row(m) /= std::sqrt(norm2);
-            }
-            calculator._shells._cart_to_sph = C;
-
+            const Eigen::MatrixXd &C = calculator._shells._cart_to_sph;
             calculator._overlap = C * S * C.transpose();
             calculator._hcore = C * (T + V) * C.transpose();
         }
