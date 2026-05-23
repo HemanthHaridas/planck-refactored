@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -433,6 +434,45 @@ int main(int argc, const char *argv[])
     }
     calculator._shells = std::move(*basis_res);
 
+    // ── Spherical-harmonic basis: supported-feature gate (Phase 2, Step 2.0) ─────
+    // The spherical path currently covers only single-point Conventional RHF/UHF
+    // energies. Every other workflow still consumes Cartesian-dimensioned quantities
+    // (post-HF caches, gradients, DFT grid, checkpoint, PCM, SAO blocking), so we hard
+    // error here — naming the specific unsupported feature — rather than risk a silent
+    // wrong answer. Each guard is lifted independently as later phases wire spherical
+    // support through that consumer. The whole block is inert in Cartesian mode.
+    if (calculator._shells._spherical)
+    {
+        auto reject = [&](const std::string &what) -> int {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Error, "Spherical Basis :",
+                what + " is not yet supported with a spherical basis "
+                       "(basis_type spherical); currently only single-point "
+                       "Conventional RHF/UHF energies are available. Use "
+                       "basis_type cartesian for this calculation.");
+            return EXIT_FAILURE;
+        };
+
+        if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+            return reject("Calculation type " + map_enum(calculator._calculation));
+        if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
+            calculator._scf._scf != HartreeFock::SCFType::UHF)
+            return reject("SCF type " + map_enum(calculator._scf._scf));
+        if (calculator._scf._mode == HartreeFock::SCFMode::Direct)
+            return reject("Direct SCF mode");
+        if (calculator._correlation != HartreeFock::PostHF::None)
+            return reject("The requested post-HF / correlated method");
+        if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+            return reject("PCM solvation");
+        if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
+            return reject("SAD initial guess");
+        if (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
+            calculator._scf._guess == HartreeFock::SCFGuess::ReadFull)
+            return reject("Checkpoint restart (guess density/full)");
+        if (calculator._molecule._symmetry)
+            return reject("Symmetry / SAO blocking");
+    }
+
     // Now initialize SCF data structures
     calculator.initialize();
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis Construction :", std::format("Generated {} Shells and {} contracted functions", calculator._shells.nshells(), calculator._shells.nbasis()));
@@ -618,8 +658,41 @@ int main(int argc, const char *argv[])
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Nuclear attraction done");
         HartreeFock::Logger::blank();
 
-        calculator._overlap = S;
-        calculator._hcore = T + V;
+        // One-electron integrals are computed in the Cartesian basis. In spherical
+        // mode, map them into the (2L+1)-per-shell spherical basis with the block-
+        // diagonal transform C: M_sph = C · M_cart · Cᵀ. After this _overlap and
+        // _hcore are spherical-dimensioned (working_nbasis()) and SCF works entirely
+        // in the spherical basis. (Step 2.2; the Cartesian path is unchanged because
+        // the branch is skipped when _spherical is false.)
+        if (calculator._shells._spherical)
+        {
+            // The transform built at load time produces correct spherical *directions*,
+            // but its rows are not unit-normalized against the actual Cartesian Gaussian
+            // overlap (Cartesian functions within a shell are not mutually orthogonal —
+            // e.g. ⟨d_xx|d_yy⟩ ≠ 0 — and contraction makes the norm exponent-dependent,
+            // so it cannot be normalized analytically from L alone). Scale each spherical
+            // row m by 1/√((C S Cᵀ)_mm) using the real S so that diag(S_sph) = 1. The
+            // normalized C is written back to _cart_to_sph so the ERI transform (Step
+            // 2.3) reuses one consistent transform for all AO quantities.
+            Eigen::MatrixXd C = calculator._shells._cart_to_sph;
+            const Eigen::MatrixXd CS = C * S; // [n_sph × n_cart]
+            for (Eigen::Index m = 0; m < C.rows(); ++m)
+            {
+                const double norm2 = CS.row(m).dot(C.row(m));
+                if (norm2 <= 0.0)
+                    continue; // degenerate row; leave untouched (should not occur)
+                C.row(m) /= std::sqrt(norm2);
+            }
+            calculator._shells._cart_to_sph = C;
+
+            calculator._overlap = C * S * C.transpose();
+            calculator._hcore = C * (T + V) * C.transpose();
+        }
+        else
+        {
+            calculator._overlap = S;
+            calculator._hcore = T + V;
+        }
     }
 
     // ── SAO basis for symmetry-blocked Fock diagonalization ──────────────────

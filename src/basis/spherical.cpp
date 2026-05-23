@@ -1,7 +1,9 @@
 #include "spherical.h"
 
 #include <cmath>
+#include <cstddef>
 #include <string>
+#include <vector>
 
 // Cartesian → real-spherical transform, moved verbatim out of the symmetry
 // module (src/symmetry/mo_symmetry.cpp) so it can be shared and independently
@@ -218,4 +220,97 @@ HartreeFock::BasisFunctions::build_cart_to_sph(const HartreeFock::Basis &basis)
         return std::unexpected("build_cart_to_sph: assembled block offsets do not match basis sizes");
 
     return C;
+}
+
+std::expected<std::vector<double>, std::string>
+HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+    const std::vector<double> &eri_cart,
+    const Eigen::MatrixXd &C,
+    std::size_t n_cart,
+    std::size_t max_n_cart)
+{
+    if (static_cast<std::size_t>(C.cols()) != n_cart)
+        return std::unexpected("transform_eri_cart_to_sph: C.cols() does not match n_cart");
+    if (n_cart > max_n_cart)
+        return std::unexpected(
+            "transform_eri_cart_to_sph: n_cart=" + std::to_string(n_cart) +
+            " exceeds the dense spherical-ERI limit (" + std::to_string(max_n_cart) +
+            "). Spherical mode currently supports modest systems only.");
+
+    const std::size_t nc = n_cart;
+    const std::size_t ns = static_cast<std::size_t>(C.rows());
+    if (eri_cart.size() != nc * nc * nc * nc)
+        return std::unexpected("transform_eri_cart_to_sph: eri_cart size does not match n_cart^4");
+
+    // Four successive single-index contractions. Each step replaces one Cartesian index
+    // (size nc) with a spherical index (size ns); intermediates shrink as we go.
+    // Indexing is row-major in the order (a,b,c,d).
+    auto Cval = [&](std::size_t s, std::size_t c) -> double {
+        return C(static_cast<Eigen::Index>(s), static_cast<Eigen::Index>(c));
+    };
+
+    // Step 1: t1[p,ν,λ,σ] = Σ_μ C[p,μ] eri[μ,ν,λ,σ]   shape ns·nc·nc·nc
+    std::vector<double> t1(ns * nc * nc * nc, 0.0);
+    for (std::size_t p = 0; p < ns; ++p)
+        for (std::size_t mu = 0; mu < nc; ++mu)
+        {
+            const double c = Cval(p, mu);
+            if (c == 0.0)
+                continue;
+            const double *src = &eri_cart[mu * nc * nc * nc];
+            double *dst = &t1[p * nc * nc * nc];
+            for (std::size_t k = 0; k < nc * nc * nc; ++k)
+                dst[k] += c * src[k];
+        }
+
+    // Step 2: t2[p,q,λ,σ] = Σ_ν C[q,ν] t1[p,ν,λ,σ]   shape ns·ns·nc·nc
+    std::vector<double> t2(ns * ns * nc * nc, 0.0);
+    for (std::size_t p = 0; p < ns; ++p)
+        for (std::size_t q = 0; q < ns; ++q)
+            for (std::size_t nu = 0; nu < nc; ++nu)
+            {
+                const double c = Cval(q, nu);
+                if (c == 0.0)
+                    continue;
+                const double *src = &t1[(p * nc + nu) * nc * nc];
+                double *dst = &t2[(p * ns + q) * nc * nc];
+                for (std::size_t k = 0; k < nc * nc; ++k)
+                    dst[k] += c * src[k];
+            }
+    t1.clear();
+    t1.shrink_to_fit();
+
+    // Step 3: t3[p,q,r,σ] = Σ_λ C[r,λ] t2[p,q,λ,σ]   shape ns·ns·ns·nc
+    std::vector<double> t3(ns * ns * ns * nc, 0.0);
+    for (std::size_t pq = 0; pq < ns * ns; ++pq)
+        for (std::size_t r = 0; r < ns; ++r)
+            for (std::size_t lam = 0; lam < nc; ++lam)
+            {
+                const double c = Cval(r, lam);
+                if (c == 0.0)
+                    continue;
+                const double *src = &t2[(pq * nc + lam) * nc];
+                double *dst = &t3[(pq * ns + r) * nc];
+                for (std::size_t s = 0; s < nc; ++s)
+                    dst[s] += c * src[s];
+            }
+    t2.clear();
+    t2.shrink_to_fit();
+
+    // Step 4: out[p,q,r,s] = Σ_σ C[s,σ] t3[p,q,r,σ]   shape ns⁴
+    std::vector<double> out(ns * ns * ns * ns, 0.0);
+    for (std::size_t pqr = 0; pqr < ns * ns * ns; ++pqr)
+    {
+        const double *src = &t3[pqr * nc];
+        double *dst = &out[pqr * ns];
+        for (std::size_t s = 0; s < ns; ++s)
+        {
+            double acc = 0.0;
+            for (std::size_t sig = 0; sig < nc; ++sig)
+                acc += Cval(s, sig) * src[sig];
+            dst[s] = acc;
+        }
+    }
+
+    return out;
 }

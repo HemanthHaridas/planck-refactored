@@ -5,6 +5,7 @@
 #include <Eigen/QR>
 #include <expected>
 #include <string>
+#include <vector>
 
 #include "base/types.h"
 
@@ -45,6 +46,23 @@ namespace HartreeFock
         // (see cart_to_sph_block). The result depends only on the shells already loaded
         // into `basis`, so it must be called after the Cartesian shells are built.
         std::expected<Eigen::MatrixXd, std::string> build_cart_to_sph(const HartreeFock::Basis &basis);
+
+        // ── Whole-ERI Cartesian → spherical transform ─────────────────────────────
+        //
+        // Transforms a dense Cartesian ERI tensor (chemists' notation, flat row-major
+        // [n_cart^4], index p*n³+q*n²+r*n+s) into the spherical AO basis by contracting
+        // all four indices with C [n_sph × n_cart]:
+        //   (pq|rs)_sph = Σ_{μνλσ} C_pμ C_qν C_rλ C_sσ (μν|λσ)_cart
+        // performed as four successive single-index contractions (O(n_cart⁴·n_sph)).
+        //
+        // `n_cart` must equal C.cols(); the returned tensor is flat [n_sph^4]. To bound
+        // memory/time, errors if n_cart exceeds `max_n_cart` (default 150 — the dense
+        // n⁴ tensor and this transform are only viable for modest systems anyway).
+        std::expected<std::vector<double>, std::string> transform_eri_cart_to_sph(
+            const std::vector<double> &eri_cart,
+            const Eigen::MatrixXd &C,
+            std::size_t n_cart,
+            std::size_t max_n_cart = 150);
 
     } // namespace BasisFunctions
 } // namespace HartreeFock

@@ -1108,6 +1108,16 @@ namespace HartreeFock
             return _have_correlated_total_energy ? _correlated_total_energy : _total_energy;
         }
 
+        // Working AO dimension the SCF operates in: the spherical count (2L+1 per
+        // shell) when the basis is in spherical mode, else the Cartesian count. The
+        // integral engine always works in the Cartesian basis (_shells.nbasis()); the
+        // driver transforms S/H/ERI into the spherical basis, after which SCF must size
+        // everything off this value. Equals _shells.nbasis() in Cartesian mode.
+        std::size_t working_nbasis() const noexcept
+        {
+            return _shells.nbasis_sph();
+        }
+
         std::expected<void, std::string> _compute_nuclear_repulsion()
         {
             assert(_molecule._standard.rows() == static_cast<Eigen::Index>(_molecule.natoms) &&

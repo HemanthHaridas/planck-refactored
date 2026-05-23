@@ -1725,6 +1725,90 @@
           "atol": 1e-08
         }
       ]
+    },
+    {
+      "id": "water_spherical_casscf_rejected",
+      "input": "tests/inputs/regression/spherical/water_spherical_casscf_rejected.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 1,
+      "contains": [
+        "Spherical Basis :",
+        "post-HF / correlated method is not yet supported"
+      ]
+    },
+    {
+      "id": "water_spherical_gradient_rejected",
+      "input": "tests/inputs/regression/spherical/water_spherical_gradient_rejected.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 1,
+      "contains": [
+        "Spherical Basis :",
+        "Analytic Gradient is not yet supported"
+      ]
+    },
+    {
+      "id": "water_spherical_symmetry_rejected",
+      "input": "tests/inputs/regression/spherical/water_spherical_symmetry_rejected.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 1,
+      "contains": [
+        "Spherical Basis :",
+        "Symmetry / SAO blocking is not yet supported"
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "li_uhf_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/li_uhf_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "UHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -7.431235811,
+          "atol": 1e-08
+        }
+      ]
     }
   ]
 }
