@@ -1778,7 +1778,8 @@
       ],
       "expected_exit_code": 0,
       "contains": [
-        "SCF Converged after"
+        "SCF Converged after",
+        "|mu|                    0.872741          0.000000          0.872741  2.218286"
       ],
       "checks": [
         {

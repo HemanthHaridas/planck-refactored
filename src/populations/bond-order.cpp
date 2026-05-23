@@ -21,7 +21,8 @@ namespace HartreeFock::SCF
             return std::unexpected("Mayer bond-order analysis " + valid.error());
         }
 
-        const Eigen::Index nbasis = static_cast<Eigen::Index>(basis.nbasis());
+        // Spherical mode: densities are in the (2L+1)-per-shell spherical AO basis.
+        const Eigen::Index nbasis = static_cast<Eigen::Index>(basis.nbasis_sph());
         if (alpha_density != nullptr && !detail::matrix_has_shape(*alpha_density, nbasis, nbasis))
             return std::unexpected(std::format(
                 "Mayer bond-order analysis alpha-density matrix has shape {}x{} but expected {}x{}",
