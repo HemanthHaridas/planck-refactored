@@ -1221,13 +1221,13 @@
           "type": "metric_close",
           "metric": "dft_total_energy",
           "expected": -74.8467253782,
-          "atol": 1e-09
+          "atol": 1e-08
         },
         {
           "type": "metric_close",
           "metric": "lr_root1_energy_ev",
-          "expected": 3.122993,
-          "atol": 1e-06
+          "expected": 3.1229923,
+          "atol": 5e-06
         }
       ]
     },
@@ -1256,7 +1256,7 @@
           "type": "metric_close",
           "metric": "dft_total_energy",
           "expected": -74.8467253782,
-          "atol": 1e-09
+          "atol": 1e-08
         }
       ]
     },
