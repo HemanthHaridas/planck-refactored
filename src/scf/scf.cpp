@@ -12,6 +12,31 @@
 #include "sad.h"
 #include "scf.h"
 
+namespace
+{
+    // Direct-mode two-electron build in spherical mode.
+    //
+    // The per-quartet builder (_compute_2e_fock / _uhf) works in the Cartesian basis,
+    // but in spherical mode the density and the Fock are spherical-dimensioned. We
+    // back-project the spherical density to Cartesian (P_cart = C^T P_sph C), build the
+    // Cartesian G, then forward-transform (G_sph = C G_cart C^T). G = J − ½K is linear
+    // in the density and built from the same Cartesian ERIs the conventional path
+    // contracts, so this reproduces the conventional spherical G exactly (validated
+    // against the conventional spherical energy). The contamination subspace discarded
+    // by C never enters the spherical G because both the density it is built from and
+    // the result are projected through C. RHF helper; the UHF variant mirrors it inline.
+    template <typename BuildCartFock>
+    Eigen::MatrixXd spherical_direct_fock(
+        const Eigen::MatrixXd &C,        // [n_sph × n_cart] S-normalized transform
+        const Eigen::MatrixXd &P_sph,    // [n_sph × n_sph] spherical density
+        BuildCartFock &&build_cart_fock) // (P_cart) -> G_cart [n_cart × n_cart]
+    {
+        const Eigen::MatrixXd P_cart = C.transpose() * P_sph * C;
+        const Eigen::MatrixXd G_cart = build_cart_fock(P_cart);
+        return C * G_cart * C.transpose();
+    }
+} // namespace
+
 // ─── Orthogonalization ────────────────────────────────────────────────────────
 
 std::expected<Eigen::MatrixXd, std::string> HartreeFock::SCF::build_orthogonalizer(const Eigen::MatrixXd &S, double threshold)
@@ -299,11 +324,32 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         const auto iter_start = std::chrono::steady_clock::now();
 
         // ── Build two-electron contribution G = J - 0.5*K ────────────────────
-        Eigen::MatrixXd G = use_conventional
-                                ? HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis)
-                                : _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine,
-                                                   HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
-                                                   calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        // Conventional: contract the (spherical, in spherical mode) ERI tensor.
+        // Direct: the per-quartet builder works in Cartesian; in spherical mode the
+        // density is back-projected and the result forward-transformed (see
+        // spherical_direct_fock). In Cartesian mode the builder is called directly.
+        Eigen::MatrixXd G;
+        if (use_conventional)
+        {
+            G = HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis);
+        }
+        else if (calculator._shells._spherical)
+        {
+            G = spherical_direct_fock(
+                calculator._shells._cart_to_sph, P,
+                [&](const Eigen::MatrixXd &P_cart) {
+                    return _compute_2e_fock(shell_pairs, P_cart, nbasis_cart,
+                                            calculator._integral._engine,
+                                            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                });
+        }
+        else
+        {
+            G = _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine,
+                                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                 calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        }
 
         Eigen::MatrixXd V_pcm = Eigen::MatrixXd::Zero(nbasis, nbasis);
         double pcm_energy = 0.0;
@@ -622,11 +668,34 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         const auto iter_start = std::chrono::steady_clock::now();
 
         // ── Two-electron Fock contributions ───────────────────────────────────
-        auto [Ga, Gb] = use_conventional
-                            ? HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis)
-                            : _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine,
-                                                   HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
-                                                   calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        // Conventional contracts the (spherical) ERI; direct builds per-quartet in
+        // Cartesian, with spherical back-projection/forward-transform per spin channel.
+        Eigen::MatrixXd Ga;
+        Eigen::MatrixXd Gb;
+        if (use_conventional)
+        {
+            std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
+        }
+        else if (calculator._shells._spherical)
+        {
+            const Eigen::MatrixXd &C = calculator._shells._cart_to_sph;
+            const Eigen::MatrixXd Pa_cart = C.transpose() * Pa * C;
+            const Eigen::MatrixXd Pb_cart = C.transpose() * Pb * C;
+            auto [Ga_cart, Gb_cart] =
+                _compute_2e_fock_uhf(shell_pairs, Pa_cart, Pb_cart, nbasis_cart,
+                                     calculator._integral._engine,
+                                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+            Ga = C * Ga_cart * C.transpose();
+            Gb = C * Gb_cart * C.transpose();
+        }
+        else
+        {
+            std::tie(Ga, Gb) =
+                _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine,
+                                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        }
 
         const Eigen::MatrixXd P_total = Pa + Pb;
         Eigen::MatrixXd V_pcm = Eigen::MatrixXd::Zero(nbasis, nbasis);

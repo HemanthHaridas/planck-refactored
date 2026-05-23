@@ -1812,6 +1812,28 @@
       ]
     },
     {
+      "id": "water_rhf_spherical_direct_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_direct_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "SCF Mode :                    Direct"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
       "id": "li_uhf_spherical_631gd",
       "input": "tests/inputs/regression/spherical/li_uhf_spherical_631gd.hfinp",
       "tags": [

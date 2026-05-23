@@ -458,8 +458,6 @@ int main(int argc, const char *argv[])
         if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
             calculator._scf._scf != HartreeFock::SCFType::UHF)
             return reject("SCF type " + map_enum(calculator._scf._scf));
-        if (calculator._scf._mode == HartreeFock::SCFMode::Direct)
-            return reject("Direct SCF mode");
         if (calculator._correlation != HartreeFock::PostHF::None)
             return reject("The requested post-HF / correlated method");
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
