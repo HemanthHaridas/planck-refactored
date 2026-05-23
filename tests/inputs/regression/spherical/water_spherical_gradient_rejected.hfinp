@@ -1,0 +1,24 @@
+%begin_control
+    basis       sto-3g
+    calculation gradient
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.117176
+H     0.000000     0.757200    -0.468704
+H     0.000000    -0.757200    -0.468704
+%end_coords

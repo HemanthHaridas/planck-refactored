@@ -437,6 +437,9 @@ if(BUILD_TESTING)
         ${INT_SRC}
         ${LOOKUP_SRC}
         ${SYMM_SRC}
+        # SYMM_SRC (mo_symmetry.cpp) now calls BasisFunctions::cart_to_sph_block,
+        # defined in src/basis/spherical.cpp — link it (Eigen-only, no msym/xc dep).
+        ${SRC_DIR}/basis/spherical.cpp
     )
 
     add_executable(planck-dft-grid-invariants
@@ -473,6 +476,12 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/cc/solver_arbitrary.cpp
     )
 
+    add_executable(planck-spherical-transform
+        ${CMAKE_SOURCE_DIR}/tests/spherical_transform.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+    )
+
     target_include_directories(planck-casscf-internal PRIVATE
         ${SRC_DIR}
         ${MSYM_INSTALL_DIR}/include
@@ -506,6 +515,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-cc-arbitrary-solver PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-spherical-transform PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -547,6 +561,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-cc-arbitrary-solver PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-spherical-transform PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -605,6 +625,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-cc-arbitrary-solver
         COMMAND planck-cc-arbitrary-solver
+    )
+
+    add_test(
+        NAME planck-spherical-transform
+        COMMAND planck-spherical-transform
     )
 endif()
 

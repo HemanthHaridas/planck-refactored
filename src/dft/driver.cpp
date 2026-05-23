@@ -3454,6 +3454,16 @@ namespace DFT::Driver
     std::expected<Result, std::string>
     run(HartreeFock::Calculator &calculator, const Options &options)
     {
+        // Spherical-harmonic basis is not yet wired through the DFT path (KS matrix,
+        // grid AO evaluation, exact-exchange assembly all assume Cartesian AO counts).
+        // Reject at the entry point — before functional resolution or any basis load —
+        // rather than risk a silent wrong answer. The HF driver supports spherical
+        // single-point RHF/UHF energies.
+        if (calculator._basis._basis == HartreeFock::BasisType::Spherical)
+            return std::unexpected(
+                "Spherical basis (basis_type spherical) is not supported by planck-dft; "
+                "use basis_type cartesian, or run spherical single points through hartree-fock.");
+
         if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
             return std::unexpected("ROKS/ROHF DFT references are not implemented; use UKS for open-shell DFT");
 

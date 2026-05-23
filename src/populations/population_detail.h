@@ -28,7 +28,9 @@ namespace HartreeFock::SCF::detail
         // Every population variant reduces to atom-wise post-processing on AO
         // matrices, so a single validation helper keeps the public entry points
         // consistent about accepted shapes and initialization requirements.
-        const Eigen::Index nbasis = static_cast<Eigen::Index>(basis.nbasis());
+        // In spherical mode the overlap/density are in the (2L+1)-per-shell
+        // spherical AO basis, so validate against that dimension.
+        const Eigen::Index nbasis = static_cast<Eigen::Index>(basis.nbasis_sph());
         if (nbasis == 0)
             return std::unexpected("population analysis requires a non-empty AO basis");
         if (molecule.atomic_numbers.size() != static_cast<Eigen::Index>(molecule.natoms))
@@ -57,6 +59,28 @@ namespace HartreeFock::SCF::detail
         // higher-level routines stay agnostic to the shell/basis-function packing
         // details used by the integral builders.
         std::vector<std::vector<int>> atom_to_aos(molecule.natoms);
+
+        // In spherical mode the density/overlap the population routines consume are
+        // in the (2L+1)-per-shell spherical AO ordering, not the Cartesian
+        // _basis_functions list. Group spherical AOs by atom directly from the shells
+        // (the spherical AO order matches shell order, m = −L…+L per shell).
+        if (basis._spherical)
+        {
+            int ao = 0;
+            for (const Shell &sh : basis._shells)
+            {
+                const std::size_t atom = static_cast<std::size_t>(sh._atom_index);
+                if (atom >= molecule.natoms)
+                    return std::unexpected(std::format(
+                        "shell belongs to atom {} but molecule has only {} atom(s)",
+                        atom + 1, molecule.natoms));
+                const int n_sph = 2 * static_cast<int>(sh._shell) + 1;
+                for (int k = 0; k < n_sph; ++k)
+                    atom_to_aos[atom].push_back(ao++);
+            }
+            return atom_to_aos;
+        }
+
         for (std::size_t mu = 0; mu < basis._basis_functions.size(); ++mu)
         {
             const ContractedView &bf = basis._basis_functions[mu];

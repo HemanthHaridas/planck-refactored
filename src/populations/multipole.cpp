@@ -184,7 +184,14 @@ HartreeFock::ObaraSaika::_compute_multipole_moments(
     // The reporting path wants physical moments, not raw AO integrals, so this
     // routine contracts the AO multipole matrices with the converged density and
     // then adds the nuclear point-charge contribution about the same origin.
-    const std::size_t nbasis = calculator._shells.nbasis();
+    //
+    // The AO multipole matrices are always built in the Cartesian basis (the
+    // integral engine works there). In spherical mode the converged density is in
+    // the (2L+1)-per-shell spherical basis, so the Cartesian matrices are mapped to
+    // the spherical basis with the same transform C used for S/H/ERI before the
+    // density contraction. nbasis_cart sizes the integral build; nbasis the density.
+    const std::size_t nbasis_cart = calculator._shells.nbasis();
+    const std::size_t nbasis = calculator._shells.nbasis_sph();
     const Eigen::Index nbasis_idx = static_cast<Eigen::Index>(nbasis);
     const auto &alpha_density = calculator._info._scf.alpha.density;
 
@@ -203,8 +210,23 @@ HartreeFock::ObaraSaika::_compute_multipole_moments(
         total_density += beta_density;
     }
 
-    const HartreeFock::MultipoleMatrices matrices =
-        _compute_multipole_matrices(shell_pairs, nbasis, origin);
+    HartreeFock::MultipoleMatrices matrices =
+        _compute_multipole_matrices(shell_pairs, nbasis_cart, origin);
+
+    // Spherical mode: map each Cartesian AO multipole matrix M into the spherical
+    // basis (M_sph = C M C^T) so it contracts dimension-consistently with the
+    // spherical density. C is the S-normalized transform stored on the basis.
+    if (calculator._shells._spherical)
+    {
+        const Eigen::MatrixXd &C = calculator._shells._cart_to_sph;
+        if (C.rows() != nbasis_idx ||
+            C.cols() != static_cast<Eigen::Index>(nbasis_cart))
+            return std::unexpected("multipole analysis: spherical transform has unexpected shape");
+        for (int axis = 0; axis < 3; ++axis)
+            matrices.dipole[axis] = C * matrices.dipole[axis] * C.transpose();
+        for (int k = 0; k < 6; ++k)
+            matrices.quadrupole[k] = C * matrices.quadrupole[k] * C.transpose();
+    }
 
     HartreeFock::MultipoleMoments moments{};
     moments.origin = origin;

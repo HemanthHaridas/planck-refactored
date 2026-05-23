@@ -12,6 +12,7 @@ self-consistent field theory. It implements:
 - Restricted and unrestricted Hartree-Fock (RHF/UHF) with DIIS acceleration
 - Kohn-Sham DFT (RKS/UKS) with LDA, GGA, hybrid, range-separated-hybrid, and double-hybrid exchange-correlation functionals via libxc
 - Obara-Saika and Rys-quadrature two-electron integral engines
+- Cartesian and real spherical-harmonic Gaussian basis functions
 - Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF
 - Point-group detection, symmetry-adapted orbitals, and MO irrep labeling
 - RMP2 and UMP2 correlation energies with RMP2 natural orbital analysis
@@ -222,8 +223,11 @@ g(\mathbf r; \alpha, \mathbf A, l_x, l_y, l_z)
 The total angular momentum is \(L = l_x + l_y + l_z\). For \(L=0\) there is
 one s-type function; for \(L=1\) there are three p-type functions
 (\(l_x l_y l_z = 100, 010, 001\)); for \(L=2\) there are six Cartesian
-d-type functions, and so on. Planck uses only Cartesian Gaussians; spherical
-harmonics are not supported.
+d-type functions, and so on. The integral engine works entirely in this
+Cartesian basis. Calculations may also be run in a real spherical-harmonic
+basis (\(2L+1\) functions per shell), which is obtained from the Cartesian
+integrals by a fixed linear transform — see "Spherical Harmonic Basis
+Functions" below.
 
 ### Contracted Gaussians
 
@@ -1355,7 +1359,255 @@ AO-sign factor.
 
 ---
 
-## 10. Rys Quadrature
+## 10. Spherical Harmonic Basis Functions
+
+The integral engine of the previous section is built entirely on *Cartesian*
+Gaussians — products of monomials \(x^{l_x}y^{l_y}z^{l_z}\) times a Gaussian
+radial factor. But most modern basis sets (the correlation-consistent
+`cc-pVNZ` family, the Karlsruhe `def2` sets, and others) are *defined* in terms
+of real spherical harmonics. This section explains why the two differ, how one
+is obtained from the other by a fixed linear transform, exactly how that
+transform threads through every integral, and what is gained by working in the
+spherical basis.
+
+### Why Cartesian and Spherical Differ
+
+For a shell of angular momentum \(L\) there are
+
+\[
+n_{\text{cart}} = \frac{(L+1)(L+2)}{2}
+\qquad\text{Cartesian functions, but only}\qquad
+n_{\text{sph}} = 2L+1
+\]
+
+genuine angular degrees of freedom. The two counts agree for \(L=0\) (1 = 1)
+and \(L=1\) (3 = 3), but diverge from \(L=2\) onward: 6 Cartesian d-functions
+versus 5 spherical, 10 versus 7 f-functions, 15 versus 9 g-functions, and so on.
+
+The discrepancy is not redundancy in the loose sense — the extra Cartesian
+functions are linearly independent — it is *contamination by lower angular
+momentum*. Consider the six Cartesian d-functions
+\(\{x^2, y^2, z^2, xy, xz, yz\}\). Their symmetric combination
+
+\[
+x^2 + y^2 + z^2 = r^2
+\]
+
+is spherically symmetric: it is an \(s\)-type ( \(L=0\) ) function dressed in a
+degree-2 polynomial. It carries no \(d\) angular character at all. The Cartesian
+d-shell therefore spans the five true \(d\) spherical harmonics **plus** one
+spurious \(s\)-like function. In general the \(n_{\text{cart}}\) Cartesian
+functions of degree \(L\) decompose as
+
+\[
+n_{\text{cart}} \;=\; \underbrace{(2L+1)}_{\text{pure }L}
+\;+\; \underbrace{(2(L-2)+1)}_{\text{contaminating }L-2}
+\;+\; \underbrace{(2(L-4)+1)}_{\text{contaminating }L-4} \;+\; \cdots
+\]
+
+so a Cartesian g-shell (15 functions) is \(9 = 2\cdot4{+}1\) true g-functions,
+plus \(5\) d-like and \(1\) s-like contaminants hidden inside degree-4
+polynomials (\(r^2\) times a d, \(r^4\) times an s). The spherical basis keeps
+only the pure-\(L\) part and discards the contamination.
+
+### The Real Solid Harmonics
+
+The pure angular functions are the **real solid harmonics** \(S_{L,m}(\mathbf r)\),
+\(m = -L, \dots, +L\). They are the unique (up to sign and scale) degree-\(L\)
+homogeneous polynomials that are *harmonic*, i.e. annihilated by the Laplacian:
+
+\[
+\nabla^2 S_{L,m} = 0 .
+\]
+
+This single property is what removes the contamination: \(r^2\) is **not**
+harmonic (\(\nabla^2 r^2 = 6 \neq 0\)), so any \(r^2\)-bearing component is
+automatically excluded. For \(L=2\) the five real solid harmonics are the
+familiar shapes
+
+\[
+d_{xy},\; d_{yz},\; d_{z^2}\!\propto 2z^2-x^2-y^2,\; d_{xz},\; d_{x^2-y^2}\!\propto x^2-y^2 ,
+\]
+
+each a Laplacian-free combination of the Cartesian monomials. Because each
+\(S_{L,m}\) is a fixed linear combination of the degree-\(L\) Cartesian
+monomials, the relationship between the two bases is a constant matrix that
+depends only on \(L\) — not on the molecule, the exponents, or the geometry.
+
+### The Transform Matrix
+
+For one shell, collect the \(n_{\text{cart}}\) Cartesian functions into a vector
+\(\boldsymbol\chi^{\text{cart}}\) and the \(n_{\text{sph}}\) spherical functions
+into \(\boldsymbol\chi^{\text{sph}}\). There is a fixed rectangular matrix
+\(\mathbf c\) of shape \(n_{\text{sph}} \times n_{\text{cart}}\) with
+
+\[
+\chi^{\text{sph}}_{m} \;=\; \sum_{k=1}^{n_{\text{cart}}} c_{mk}\,\chi^{\text{cart}}_{k} .
+\]
+
+Each row of \(\mathbf c\) holds the coefficients of one real solid harmonic in
+the Cartesian monomials. The matrix is *not square*: it has more columns than
+rows. Its kernel (the directions sent to zero) is exactly the contamination
+subspace — the \(r^2\)-, \(r^4\)-, … bearing combinations. This is the key
+structural fact that everything below depends on:
+
+\[
+\mathbf c\,\mathbf c^{\dagger} = \mathbf 1_{n_{\text{sph}}}
+\quad\text{(rows orthonormal),}\qquad
+\mathbf c^{\dagger}\mathbf c \neq \mathbf 1_{n_{\text{cart}}}
+\quad\text{(}\mathbf c^{\dagger}\mathbf c\text{ is a projector, not the identity).}
+\]
+
+\(\mathbf c^{\dagger}\mathbf c\) is the orthogonal projector onto the harmonic
+subspace within the Cartesian space; applying it twice changes nothing, but it is
+not invertible because it annihilates the contamination.
+
+For a whole molecule the per-shell blocks are assembled into one
+block-diagonal matrix \(\mathbf C\) of shape
+\(N_{\text{sph}} \times N_{\text{cart}}\), where
+\(N_{\text{sph}} = \sum_{\text{shells}} (2L+1)\) and
+\(N_{\text{cart}} = \sum_{\text{shells}} (L+1)(L+2)/2\). Block \(s\) on the
+diagonal is the \(\mathbf c\) for that shell; everything off the shell's own
+block is zero, because solid harmonics mix only the Cartesian functions of the
+*same* shell.
+
+### A Normalization Subtlety
+
+One detail trips up naïve implementations. The Cartesian functions *within a
+shell are not mutually orthogonal*: for example the overlap
+\(\langle x^2 \mid y^2 \rangle\) of two normalized Cartesian d-functions is
+\(1/3\), not 0. Consequently the rows of the bare solid-harmonic matrix
+\(\mathbf c\), although correct in *direction*, do not automatically yield
+unit-normalized spherical functions when expressed over the (already
+individually normalized) Cartesian functions. Worse, for contracted shells the
+required rescaling depends on the contraction, so it cannot be written down from
+\(L\) alone.
+
+The fix is to fix the scale *after the fact* using the real overlap matrix. Let
+\(\mathbf S^{\text{cart}}\) be the Cartesian overlap. The spherical overlap is
+\(\mathbf S^{\text{sph}} = \mathbf C\,\mathbf S^{\text{cart}}\,\mathbf C^{\dagger}\),
+and we rescale each row \(m\) of \(\mathbf C\) by
+\(1/\sqrt{(\mathbf C\,\mathbf S^{\text{cart}}\,\mathbf C^{\dagger})_{mm}}\) so
+that the diagonal of \(\mathbf S^{\text{sph}}\) is exactly 1. After this single
+calibration the spherical functions are properly normalized and the *same*
+calibrated \(\mathbf C\) is reused for every other quantity. A quick correctness
+check on any implementation: the diagonal of the spherical overlap must be all
+ones.
+
+### How the Integrals Transform
+
+The decisive practical point is that **the integral engine never has to change**.
+All one- and two-electron integrals are evaluated in the Cartesian basis exactly
+as in the previous section, and the spherical results are obtained by contracting
+the Cartesian results with \(\mathbf C\). Because integration is linear and
+\(\mathbf C\) is a constant matrix, the transform commutes through every
+integral.
+
+**One-electron matrices** (overlap \(\mathbf S\), kinetic, nuclear attraction,
+the core Hamiltonian \(\mathbf H\), dipole and higher multipole matrices) are
+rank-2 objects with one Cartesian index on each side. Each transforms by a
+two-sided product:
+
+\[
+\mathbf M^{\text{sph}} \;=\; \mathbf C\,\mathbf M^{\text{cart}}\,\mathbf C^{\dagger},
+\qquad
+M^{\text{sph}}_{pq} = \sum_{\mu\nu} C_{p\mu}\,M^{\text{cart}}_{\mu\nu}\,C_{q\nu} .
+\]
+
+The \(N_{\text{cart}} \times N_{\text{cart}}\) Cartesian matrix becomes an
+\(N_{\text{sph}} \times N_{\text{sph}}\) spherical one — smaller, with the
+contaminated rows and columns projected out.
+
+**The two-electron integrals** \((\mu\nu\,|\,\lambda\sigma)\) form a rank-4
+tensor, so the transform contracts **all four indices**, once each:
+
+\[
+(pq\,|\,rs)^{\text{sph}}
+= \sum_{\mu\nu\lambda\sigma}
+  C_{p\mu}\,C_{q\nu}\,C_{r\lambda}\,C_{s\sigma}\,
+  (\mu\nu\,|\,\lambda\sigma)^{\text{cart}} .
+\]
+
+Carrying this out as one giant sum would scale as \(N^8\); instead it is done as
+four successive single-index contractions (transform the first index, then the
+second, and so on), each an \(N^4 \times N\) operation. This is the identical
+"quarter transformation" structure used for the AO→MO integral transform in MP2
+and coupled cluster, applied here with \(\mathbf C\) in place of the MO
+coefficients. The result is the spherical ERI tensor, dimension
+\(N_{\text{sph}}^4\) rather than \(N_{\text{cart}}^4\).
+
+**Energies and densities** then live entirely in the spherical basis: the SCF
+builds its Fock matrix, density, and orbitals at dimension \(N_{\text{sph}}\),
+and the total energy is identical whether one transforms the integrals up front
+(and runs SCF in the spherical basis) or runs SCF in the Cartesian basis and
+discards the contamination at the end — because the contamination subspace does
+not couple to the harmonic subspace through the Hamiltonian.
+
+### Direct Fock Builds and the Projector Identity
+
+There is a subtlety when the two-electron contribution is built *on the fly*
+(direct SCF) rather than from a stored, pre-transformed tensor. The on-the-fly
+builder naturally produces a Cartesian Fock contribution \(\mathbf G\) from a
+Cartesian density. To use it in a spherical calculation, the spherical density
+\(\mathbf P^{\text{sph}}\) is pushed back to the Cartesian space, the Cartesian
+\(\mathbf G\) is built, and the result is pulled forward again:
+
+\[
+\mathbf P^{\text{cart}} = \mathbf C^{\dagger}\mathbf P^{\text{sph}}\mathbf C,
+\qquad
+\mathbf G^{\text{sph}} = \mathbf C\,\mathbf G(\mathbf P^{\text{cart}})\,\mathbf C^{\dagger}.
+\]
+
+Because \(\mathbf c^{\dagger}\mathbf c\) is a *projector* rather than the
+identity, \(\mathbf P^{\text{cart}}\) is not a faithful Cartesian density — it
+lives only in the harmonic subspace. The reason this still gives the exact
+spherical \(\mathbf G\) is that \(\mathbf G\) (the Coulomb-minus-exchange
+operator) is linear in the density and is built from the same Cartesian
+integrals; the contamination subspace that the back-projection omits never
+contributes to the spherical \(\mathbf G\), because the final forward transform
+by \(\mathbf C\) projects it out anyway. The round trip is therefore exact, and
+the direct and conventional spherical energies agree to machine precision — a
+useful invariant for testing.
+
+### Why Use Spherical Harmonics at All
+
+Several practical advantages follow from discarding the contamination:
+
+- **Correctness against published references.** Basis sets such as `cc-pVNZ`
+  are *parameterized* assuming spherical harmonics. Running them as Cartesian
+  silently changes the variational space (it adds the contaminating lower-\(L\)
+  functions), which shifts total energies, correlation energies, and properties
+  away from the literature values everyone else reports. To reproduce standard
+  numbers, the basis must be treated as spherical.
+
+- **Smaller working dimension.** The SCF, the density, the orbital set, and —
+  most importantly — the \(N^4\) two-electron tensor all shrink from
+  \(N_{\text{cart}}\) to \(N_{\text{sph}}\). The saving grows with angular
+  momentum: a g-shell drops from 15 functions to 9 (40%), and because the ERI
+  tensor scales as the fourth power, even a modest per-shell reduction
+  compounds sharply in memory and floating-point cost for large basis sets.
+
+- **No near-linear-dependence from contamination.** The \(r^2\)-type
+  contaminants of different shells on the same atom are nearly parallel
+  (they are all "an \(s\) function in disguise"). Keeping them can make the
+  Cartesian overlap matrix ill-conditioned, threatening the
+  \(\mathbf S^{-1/2}\) orthogonalization. Projecting them out improves the
+  conditioning of the working basis.
+
+- **Cleaner symmetry and angular labeling.** Each spherical function carries a
+  definite \((L, m)\) label, which maps directly onto the irreducible
+  representations used by point-group machinery and onto the angular characters
+  chemists reason about (\(p_x, d_{z^2}, \ldots\)). Cartesian contaminants have
+  no clean angular label.
+
+The cost of all this is a single fixed matrix multiply applied to integrals that
+were going to be computed anyway — a negligible overhead compared to building
+the integrals themselves, and one that *reduces* the cost of everything
+downstream.
+
+---
+
+## 11. Rys Quadrature
 
 ### The Basic Idea
 
@@ -1559,7 +1811,7 @@ pruning is currently an OS-only optimization.
 
 ---
 
-## 11. MP2 Correlation Energy
+## 12. MP2 Correlation Energy
 
 ### Second-Order Perturbation Theory
 
@@ -1638,7 +1890,7 @@ The result struct `RMP2NaturalOrbitals` carries three fields: `occupations` (des
 
 ---
 
-## 12. Analytic Nuclear Gradients
+## 13. Analytic Nuclear Gradients
 
 ### Hellmann-Feynman Theorem and Pulay Forces
 
@@ -1888,7 +2140,7 @@ Planck’s implementation follows the decomposition above:
 
 ---
 
-## 13. Coupled-Perturbed HF and the MP2 Gradient
+## 14. Coupled-Perturbed HF and the MP2 Gradient
 
 ### RMP2 Z-Vector Method
 
@@ -1959,7 +2211,7 @@ UHF, and RMP2 gradients.
 
 ---
 
-## 14. Coupled Cluster in Planck
+## 15. Coupled Cluster in Planck
 
 Planck currently contains five coupled-cluster paths:
 
@@ -2910,7 +3162,7 @@ smaller systems cannot:
 
 ---
 
-## 15. Full Configuration Interaction (FCI)
+## 16. Full Configuration Interaction (FCI)
 
 ### What FCI Is
 
@@ -3128,7 +3380,7 @@ truncated, resummed, or restricted.
 
 ---
 
-## 16. CASSCF and RASSCF
+## 17. CASSCF and RASSCF
 
 ### Motivation
 
@@ -3514,7 +3766,7 @@ occupation restrictions via bitcount masks on the RAS1 and RAS3 blocks.
 
 ---
 
-## 17. Geometry Optimization
+## 18. Geometry Optimization
 
 ### L-BFGS (Cartesian Coordinates)
 
@@ -3578,7 +3830,7 @@ Ha/Bohr).
 
 ---
 
-## 18. Vibrational Analysis
+## 19. Vibrational Analysis
 
 ### Semi-Numerical Hessian
 
@@ -3640,7 +3892,7 @@ by projecting each normal mode onto the SAO blocks and determining its irrep.
 
 ---
 
-## 19. Kohn-Sham Density Functional Theory
+## 20. Kohn-Sham Density Functional Theory
 
 ### The Kohn-Sham Equations
 
@@ -4200,7 +4452,7 @@ peaks in energy and wavelength units.
 
 ---
 
-## 20. Polarizable Continuum Solvation (C-PCM)
+## 21. Polarizable Continuum Solvation (C-PCM)
 
 Planck implements a conductor-like polarizable continuum model (C-PCM) for
 single-point HF (RHF/UHF) and KS-DFT (RKS/UKS) calculations. The solvent is
@@ -4500,7 +4752,7 @@ reaction-field operator) are not implemented.
 
 ---
 
-## 21. Molecular Properties
+## 22. Molecular Properties
 
 After SCF convergence Planck can compute several molecular properties from the
 converged density matrix. Dipole and quadrupole moments are printed
@@ -4858,7 +5110,7 @@ If \(T^+\) is correct, the inner product \(\mathbf C_{sph}^\top \mathbf C_{sph}\
 
 ---
 
-## 22. Checkpoint and Restart
+## 23. Checkpoint and Restart
 
 ### Binary Checkpoint Format
 
@@ -4898,7 +5150,7 @@ iterations required.
 
 ---
 
-## 23. Execution Flow of a Typical Run
+## 24. Execution Flow of a Typical Run
 
 ```
 driver.cpp
@@ -4976,7 +5228,7 @@ driver.cpp
 
 ---
 
-## 24. Theory-to-Code Map
+## 25. Theory-to-Code Map
 
 | Theory concept | Primary file(s) | Key function(s) |
 |---|---|---|
@@ -5054,7 +5306,7 @@ driver.cpp
 
 ---
 
-## 25. Current Implementation Status
+## 26. Current Implementation Status
 
 | Feature | Status |
 |---|---|
@@ -5103,7 +5355,7 @@ driver.cpp
 
 ---
 
-## 26. How to Study This Codebase
+## 27. How to Study This Codebase
 
 Recommended reading order for the HF/post-HF pipeline:
 

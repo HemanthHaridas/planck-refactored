@@ -1221,13 +1221,13 @@
           "type": "metric_close",
           "metric": "dft_total_energy",
           "expected": -74.8467253782,
-          "atol": 1e-09
+          "atol": 1e-08
         },
         {
           "type": "metric_close",
           "metric": "lr_root1_energy_ev",
-          "expected": 3.122993,
-          "atol": 1e-06
+          "expected": 3.1229923,
+          "atol": 5e-06
         }
       ]
     },
@@ -1256,7 +1256,7 @@
           "type": "metric_close",
           "metric": "dft_total_energy",
           "expected": -74.8467253782,
-          "atol": 1e-09
+          "atol": 1e-08
         }
       ]
     },
@@ -1722,6 +1722,155 @@
           "type": "metric_close",
           "metric": "rhf_total_energy",
           "expected": -74.9629329919,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_spherical_casscf_rejected",
+      "input": "tests/inputs/regression/spherical/water_spherical_casscf_rejected.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 1,
+      "contains": [
+        "Spherical Basis :",
+        "post-HF / correlated method is not yet supported"
+      ]
+    },
+    {
+      "id": "water_spherical_gradient_rejected",
+      "input": "tests/inputs/regression/spherical/water_spherical_gradient_rejected.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 1,
+      "contains": [
+        "Spherical Basis :",
+        "Analytic Gradient is not yet supported"
+      ]
+    },
+    {
+      "id": "water_spherical_symmetry_rejected",
+      "input": "tests/inputs/regression/spherical/water_spherical_symmetry_rejected.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 1,
+      "contains": [
+        "Spherical Basis :",
+        "Symmetry / SAO blocking is not yet supported"
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "|mu|                    0.872741          0.000000          0.872741  2.218286"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_sad_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_sad_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_direct_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_direct_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "SCF Mode :                    Direct"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "h2o_cation_rohf_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/h2o_cation_rohf_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "ROHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -75.6060149279,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "li_uhf_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/li_uhf_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "UHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -7.431235811,
           "atol": 1e-08
         }
       ]

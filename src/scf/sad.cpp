@@ -473,6 +473,23 @@ namespace
     // top n_occ = n_electrons/2 natural orbitals.
     //
     // Guarantees Tr(P * S) = n_electrons (up to the linear-dependence threshold).
+    // Map a Cartesian-basis density into the spherical AO basis: P_sph = C P_cart C^T.
+    // Used to bring the block-diagonal raw SAD guess into the working spherical basis
+    // before projection. C is the S-normalized whole-basis transform built at load.
+    static std::expected<Eigen::MatrixXd, std::string> transform_density_cart_to_sph(
+        const HartreeFock::Calculator &calc,
+        const Eigen::MatrixXd &P_cart)
+    {
+        const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
+        const Eigen::Index n_cart = static_cast<Eigen::Index>(calc._shells.nbasis());
+        const Eigen::Index n_sph = static_cast<Eigen::Index>(calc._shells.nbasis_sph());
+        if (C.rows() != n_sph || C.cols() != n_cart)
+            return std::unexpected("SAD: spherical transform has unexpected shape");
+        if (P_cart.rows() != n_cart || P_cart.cols() != n_cart)
+            return std::unexpected("SAD: raw density has unexpected (non-Cartesian) shape");
+        return Eigen::MatrixXd(C * P_cart * C.transpose());
+    }
+
     static std::expected<Eigen::MatrixXd, std::string> project_raw_sad_to_rhf_density(
         const Eigen::MatrixXd &P_raw,
         const Eigen::MatrixXd &S_mol,
@@ -545,10 +562,13 @@ namespace HartreeFock
                               const HartreeFock::Molecule &molecule,
                               const HartreeFock::BasisType &basis_type)
         {
-            if (basis_type != HartreeFock::BasisType::Cartesian)
-                return std::unexpected(
-                    "Spherical Harmonics are not supported. "
-                    "Only Cartesian basis functions are currently supported");
+            // SAD always builds its per-atom bases, atomic UHF, spherical averaging
+            // and raw density in the Cartesian basis; the resulting molecular density
+            // is mapped to the spherical basis once, after assembly (see
+            // compute_sad_guess_rhf). So we ignore basis_type here and always read
+            // Cartesian atomic shells — a spherical request is handled by the
+            // post-assembly transform, not by reading spherical atomic shells.
+            (void)basis_type;
 
             std::ifstream file(file_name);
             if (!file)
@@ -636,6 +656,20 @@ namespace HartreeFock
             Eigen::MatrixXd P_raw = std::move(*raw_density);
             P_raw = 0.5 * (P_raw + P_raw.transpose());
 
+            // The raw SAD density is block-diagonal in the Cartesian AO basis. In
+            // spherical mode the overlap below (and the SCF that consumes the guess)
+            // are in the spherical basis, so map the guess into the spherical basis
+            // first: P_sph = C P_cart C^T. The result is only an initial guess, so the
+            // contamination subspace discarded by C is irrelevant. (No-op in
+            // Cartesian mode, where _cart_to_sph is empty.)
+            if (calc._shells._spherical)
+            {
+                if (auto t = transform_density_cart_to_sph(calc, P_raw); !t)
+                    return std::unexpected(t.error());
+                else
+                    P_raw = std::move(*t);
+            }
+
             // ── Step 4: reconstruct proper RHF density ────────────────────────
             return project_raw_sad_to_rhf_density(
                 P_raw, calc._overlap, n_electrons, 1e-8);
@@ -698,6 +732,20 @@ namespace HartreeFock
 
             Eigen::MatrixXd Pa_raw = 0.5 * ((*raw_alpha) + raw_alpha->transpose());
             Eigen::MatrixXd Pb_raw = 0.5 * ((*raw_beta) + raw_beta->transpose());
+
+            // Spherical mode: bring both raw spin densities into the spherical basis
+            // before projection (see compute_sad_guess_rhf for the rationale).
+            if (calc._shells._spherical)
+            {
+                auto ta = transform_density_cart_to_sph(calc, Pa_raw);
+                if (!ta)
+                    return std::unexpected(ta.error());
+                Pa_raw = std::move(*ta);
+                auto tb = transform_density_cart_to_sph(calc, Pb_raw);
+                if (!tb)
+                    return std::unexpected(tb.error());
+                Pb_raw = std::move(*tb);
+            }
 
             auto Pa = project_raw_sad_to_spin_density(Pa_raw, calc._overlap, n_alpha, 1e-8);
             if (!Pa)

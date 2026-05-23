@@ -46,6 +46,24 @@ namespace HartreeFock::Correlation
         std::vector<double> &eri_local,
         const std::string &tag)
     {
+        // Defensive: in spherical mode the cached calc._eri is the SCF's spherical
+        // ERI (dimension nbasis_sph), but every post-HF consumer here indexes the
+        // tensor as Cartesian (nbasis). Post-HF is already gated off for spherical
+        // bases in the driver, so this branch should be unreachable — building a
+        // fresh Cartesian tensor below would *also* be wrong because the MO
+        // coefficients are spherical. Reuse of the cached tensor across the
+        // cart/sph boundary is the silent-wrong-answer trap, so refuse it explicitly
+        // rather than return a mismatched tensor.
+        if (calc._shells._spherical)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Error, tag,
+                "post-HF AO ERI is not available with a spherical basis "
+                "(basis_type spherical); use basis_type cartesian.");
+            eri_local.clear();
+            return eri_local;
+        }
+
         // Prefer the cached AO tensor when it is already present on the
         // calculator; only build into caller-owned storage when needed.
         if (!calc._eri.empty())

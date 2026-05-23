@@ -6,6 +6,7 @@
 #include "base/tables.h"
 #include "basis.h"
 #include "lookup/elements.h"
+#include "spherical.h"
 
 struct GbsPrimitive
 {
@@ -182,10 +183,10 @@ double HartreeFock::BasisFunctions::component_norm(int df)
 
 std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read_gbs_basis(const std::string file_name, const HartreeFock::Molecule &molecule, const HartreeFock::BasisType &basis_type)
 {
-    if (!(basis_type == HartreeFock::BasisType::Cartesian))
-    {
-        return std::unexpected("Spherical Harmonics are not supported. Only Cartesian basis functions are currently supported");
-    }
+    // Both Cartesian and Spherical are accepted. Shells are always built in the
+    // Cartesian basis (the integral engine works there); for Spherical we additionally
+    // build the block-diagonal Cartesian→spherical transform C at the end so the driver
+    // can map AO quantities into the (2L+1)-per-shell spherical basis.
 
     // Try the path as given first; if that fails, retry with the filename
     // component lowercased (supports both case-preserving names like
@@ -298,5 +299,19 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
             }
         }
     }
+
+    // For spherical mode, build the block-diagonal Cartesian→spherical transform from
+    // the shells just constructed. Shells and _basis_functions remain Cartesian; only
+    // the transform and the _spherical flag are added (additive — Cartesian path is
+    // unchanged). Errors here (e.g. an unsupported high-L shell) propagate to the caller.
+    if (basis_type == HartreeFock::BasisType::Spherical)
+    {
+        basis._spherical = true;
+        auto C = HartreeFock::BasisFunctions::build_cart_to_sph(basis);
+        if (!C)
+            return std::unexpected(C.error());
+        basis._cart_to_sph = std::move(*C);
+    }
+
     return basis;
 }

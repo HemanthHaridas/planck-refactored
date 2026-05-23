@@ -318,20 +318,46 @@ namespace HartreeFock
         std::deque<Shell> _shells;                   // Shells; deque keeps Shell* stable across push_back
         std::deque<ContractedView> _basis_functions; // Basis functions; deque keeps references stable across push_back
 
+        // Spherical-harmonic support (additive — the Cartesian path is untouched).
+        // When _spherical is true, _cart_to_sph holds the block-diagonal transform C
+        // [nbasis_sph × nbasis] that maps Cartesian AO quantities to the spherical
+        // (2L+1 per shell) basis. The integral engine still works in the Cartesian
+        // basis (nbasis()); the driver applies C to S/T/V/ERI before SCF. When false,
+        // _cart_to_sph is empty and nbasis_sph() == nbasis().
+        bool _spherical = false;
+        Eigen::MatrixXd _cart_to_sph;
+
         std::size_t nshells() const noexcept
         {
             return _shells.size();
         }
 
+        // Number of Cartesian basis functions ((L+1)(L+2)/2 per shell). This is the
+        // dimension the integral engine and all existing AO matrices use.
         std::size_t nbasis() const noexcept
         {
             return _basis_functions.size();
+        }
+
+        // Number of spherical basis functions (2L+1 per shell) when in spherical mode;
+        // identical to nbasis() in Cartesian mode. Derived from shell angular momenta
+        // so it stays consistent regardless of how _cart_to_sph was built.
+        std::size_t nbasis_sph() const noexcept
+        {
+            if (!_spherical)
+                return nbasis();
+            std::size_t n = 0;
+            for (const Shell &sh : _shells)
+                n += 2 * static_cast<std::size_t>(sh._shell) + 1;
+            return n;
         }
 
         void clear()
         {
             _shells.clear();
             _basis_functions.clear();
+            _spherical = false;
+            _cart_to_sph = Eigen::MatrixXd();
         }
     };
 
@@ -1080,6 +1106,16 @@ namespace HartreeFock
         double current_total_energy() const noexcept
         {
             return _have_correlated_total_energy ? _correlated_total_energy : _total_energy;
+        }
+
+        // Working AO dimension the SCF operates in: the spherical count (2L+1 per
+        // shell) when the basis is in spherical mode, else the Cartesian count. The
+        // integral engine always works in the Cartesian basis (_shells.nbasis()); the
+        // driver transforms S/H/ERI into the spherical basis, after which SCF must size
+        // everything off this value. Equals _shells.nbasis() in Cartesian mode.
+        std::size_t working_nbasis() const noexcept
+        {
+            return _shells.nbasis_sph();
         }
 
         std::expected<void, std::string> _compute_nuclear_repulsion()

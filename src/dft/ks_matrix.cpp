@@ -1,6 +1,11 @@
 #include "ks_matrix.h"
 
 #include <stdexcept>
+#include <vector>
+
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
 
 namespace DFT
 {
@@ -102,12 +107,35 @@ namespace DFT
 
         const bool polarized = xc_grid.density.polarized;
 
+        // Each thread accumulates into its own slot in these per-thread buffers,
+        // and the buffers are summed in fixed thread-index order *after* the
+        // parallel region. A prior `#pragma omp critical` reduction summed the
+        // thread-local matrices in non-deterministic completion order; because
+        // floating-point addition is non-associative, that made the XC matrix
+        // (and hence the converged DFT energy and TDDFT roots) vary at the
+        // ~1e-10 level run-to-run. Thread-index-ordered summation removes that
+        // jitter so results are bitwise reproducible at a fixed thread count.
+#ifdef USE_OPENMP
+        const int n_threads = omp_get_max_threads();
+#else
+        const int n_threads = 1;
+#endif
+        std::vector<Eigen::MatrixXd> alpha_partials(
+            n_threads, Eigen::MatrixXd::Zero(nbasis, nbasis));
+        std::vector<Eigen::MatrixXd> beta_partials(
+            n_threads, Eigen::MatrixXd::Zero(nbasis, nbasis));
+
 #ifdef USE_OPENMP
 #pragma omp parallel
 #endif
         {
-            Eigen::MatrixXd alpha_local = Eigen::MatrixXd::Zero(nbasis, nbasis);
-            Eigen::MatrixXd beta_local = Eigen::MatrixXd::Zero(nbasis, nbasis);
+#ifdef USE_OPENMP
+            const int thread_id = omp_get_thread_num();
+#else
+            const int thread_id = 0;
+#endif
+            Eigen::MatrixXd &alpha_local = alpha_partials[thread_id];
+            Eigen::MatrixXd &beta_local = beta_partials[thread_id];
             Eigen::VectorXd gradient_term_alpha = Eigen::VectorXd::Zero(nbasis);
             Eigen::VectorXd gradient_term_beta = Eigen::VectorXd::Zero(nbasis);
 
@@ -172,15 +200,15 @@ namespace DFT
                     phi,
                     gradient_term_beta);
             }
+        }
 
-#ifdef USE_OPENMP
-#pragma omp critical
-#endif
-            {
-                contribution.alpha.noalias() += alpha_local;
-                if (polarized)
-                    contribution.beta.noalias() += beta_local;
-            }
+        // Deterministic reduction: sum thread partials in fixed thread-index
+        // order rather than thread-completion order.
+        for (int thread_id = 0; thread_id < n_threads; ++thread_id)
+        {
+            contribution.alpha.noalias() += alpha_partials[thread_id];
+            if (polarized)
+                contribution.beta.noalias() += beta_partials[thread_id];
         }
 
         contribution.alpha = 0.5 * (contribution.alpha + contribution.alpha.transpose());
