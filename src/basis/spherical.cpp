@@ -1,4 +1,5 @@
 #include "spherical.h"
+#include "spherical_recurrence.h"
 
 #include <cmath>
 #include <cstddef>
@@ -12,6 +13,14 @@
 //
 // See spherical.h for the index conventions and spherical_recurrence.h for the
 // closed-form oracle used to cross-check these in tests/spherical_transform.cpp.
+//
+// L ≤ 5 use the hand-verified matrices below. L = 6 (I shells) delegates to the
+// general closed-form recurrence oracle (cart_to_sph_block_recurrence), which is
+// cross-validated against these hand-coded matrices for L ≤ 5 in
+// tests/spherical_transform.cpp — so the same code path that proves the oracle
+// correct is the one used in production for L = 6. The integral engines already
+// size their stack buffers off MAX_L = 6, so L = 6 needs no engine changes; L ≥ 7
+// would require raising MAX_L (and re-validating the recurrence buffers).
 std::expected<Eigen::MatrixXd, std::string> HartreeFock::BasisFunctions::cart_to_sph_block(int L)
 {
     if (L == 0)
@@ -182,9 +191,12 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::BasisFunctions::cart_to
         return T.completeOrthogonalDecomposition().pseudoInverse();
     }
 
+    if (L == 6)
+        return cart_to_sph_block_recurrence(L);
+
     return std::unexpected(
         "cart_to_sph_block: Cartesian→Spherical transform not implemented for L=" +
-        std::to_string(L) + " (max supported: L=5)");
+        std::to_string(L) + " (max supported: L=6)");
 }
 
 std::expected<Eigen::MatrixXd, std::string>

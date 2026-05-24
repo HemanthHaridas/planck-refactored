@@ -14,6 +14,8 @@ std::expected<HartreeFock::ShellType, std::string> HartreeFock::BasisFunctions::
         return HartreeFock::ShellType::G;
     if (label == "H")
         return HartreeFock::ShellType::H;
+    if (label == "I")
+        return HartreeFock::ShellType::I;
     return std::unexpected("Unknown shell label: " + label);
 }
 

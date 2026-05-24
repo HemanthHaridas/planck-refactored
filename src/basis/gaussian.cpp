@@ -39,7 +39,7 @@ static bool is_shell_label(const std::string &s)
 {
     return s == "S" || s == "P" || s == "D" ||
            s == "F" || s == "G" || s == "H" ||
-           s == "SP";
+           s == "I" || s == "SP";
 }
 
 // Replace D+ with E+

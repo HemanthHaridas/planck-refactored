@@ -197,16 +197,28 @@ int main()
     for (int L = 0; L <= 7; ++L)
         check_oracle_is_valid_harmonics(L, tol);
 
-    // Production: structural sanity for the shipped range, plus exact agreement with
-    // the oracle where production rows are pure harmonics (L ≤ 2).
-    for (int L = 0; L <= 5; ++L)
+    // Production: structural sanity for the shipped range (now through L = 6, I
+    // shells), plus exact agreement with the oracle where production rows are pure
+    // harmonics (L ≤ 2).
+    for (int L = 0; L <= 6; ++L)
         check_production_structural(L);
     for (int L = 0; L <= 2; ++L)
         check_production_matches_oracle_pure(L, tol);
 
-    // Production must still refuse L ≥ 6 (no input path reaches it today).
-    if (HartreeFock::BasisFunctions::cart_to_sph_block(6))
-        fail("production cart_to_sph_block(6) should error (max supported L=5)");
+    // L = 6 production delegates to the recurrence oracle, so the two must be
+    // byte-for-byte identical (not merely collinear).
+    {
+        auto prod = HartreeFock::BasisFunctions::cart_to_sph_block(6);
+        auto rec = HartreeFock::BasisFunctions::cart_to_sph_block_recurrence(6);
+        if (!prod || !rec)
+            fail("L=6: production or oracle transform failed to build");
+        else if ((*prod - *rec).cwiseAbs().maxCoeff() > tol)
+            fail("L=6: production (delegated) does not match the recurrence oracle");
+    }
+
+    // Production must still refuse L ≥ 7 (MAX_L = 6 bounds the integral buffers).
+    if (HartreeFock::BasisFunctions::cart_to_sph_block(7))
+        fail("production cart_to_sph_block(7) should error (max supported L=6)");
 
     if (g_ok)
         std::cout << "spherical_transform: all checks passed\n";
