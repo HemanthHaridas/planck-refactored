@@ -61,6 +61,25 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(
         coords_angstrom = bohr_coords * BOHR_TO_ANGSTROM;
     }
 
+    // ── Single atom → Kh ─────────────────────────────────────────────────────────
+    // A lone atom has the full spherical symmetry group Kh (K_h, the O(3) point
+    // group). libmsym returns C1 for it because its detection is operation-driven
+    // and a single point at the origin generates no finite symmetry operations
+    // (findSymmetrySpherical only emits an axis for an OFF-centre atom). We label it
+    // Kh directly. The molecule is placed at the origin (its own centre of mass) as
+    // the standard frame. No finite operation set is exposed, so the SAO-blocking
+    // and full-symmetry-ERI machinery treats Kh like the linear groups (skipped at
+    // the driver gates) — a one-atom system has no symmetry-equivalent atoms to
+    // reduce over anyway, so there is nothing to gain there.
+    if (molecule.natoms == 1)
+    {
+        molecule._point_group = "Kh";
+        Eigen::MatrixXd origin = Eigen::MatrixXd::Zero(1, 3);
+        molecule.set_standard_from_angstrom(origin);
+        molecule._symmetry = true;
+        return {};
+    }
+
     auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
     if (!ctx_result)
         return std::unexpected(ctx_result.error());

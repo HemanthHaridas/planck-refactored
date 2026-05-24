@@ -744,6 +744,7 @@ int main(int argc, const char *argv[])
     // ── SAO basis for symmetry-blocked Fock diagonalization ──────────────────
     if (calculator._molecule._symmetry &&
         calculator._molecule._point_group != "C1" &&
+        calculator._molecule._point_group != "Kh" &&
         calculator._molecule._point_group.find("inf") == std::string::npos)
     {
         auto sao = HartreeFock::Symmetry::build_sao_basis(calculator);
@@ -1512,6 +1513,7 @@ int main(int argc, const char *argv[])
 
             // Try SAO symmetry blocking
             if (calculator._molecule._point_group != "C1" &&
+                calculator._molecule._point_group != "Kh" &&
                 calculator._molecule._point_group.find("inf") == std::string::npos)
             {
                 auto sao = HartreeFock::Symmetry::build_sao_basis(calculator);
