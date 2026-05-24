@@ -1755,17 +1755,26 @@
       ]
     },
     {
-      "id": "water_spherical_symmetry_rejected",
-      "input": "tests/inputs/regression/spherical/water_spherical_symmetry_rejected.hfinp",
+      "id": "water_spherical_symmetry_c2v_631gd",
+      "input": "tests/inputs/regression/spherical/water_spherical_symmetry_c2v_631gd.hfinp",
       "tags": [
         "smoke",
         "core",
         "spherical"
       ],
-      "expected_exit_code": 1,
+      "expected_exit_code": 0,
       "contains": [
-        "Spherical Basis :",
-        "Symmetry / SAO blocking is not yet supported"
+        "Point Group :                 C2v",
+        "SAO Basis :                   A1(9)  A2(1)  B2(5)  B1(3)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
       ]
     },
     {

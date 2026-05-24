@@ -486,8 +486,11 @@ int main(int argc, const char *argv[])
         }
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             return reject("PCM solvation");
-        if (calculator._molecule._symmetry)
-            return reject("Symmetry / SAO blocking");
+        // Symmetry / SAO blocking is supported in the spherical basis: build_sao_basis
+        // rotates its Cartesian AO representation matrices into the spherical basis and
+        // returns a working_nbasis()-sized transform, and assign_mo_symmetry consumes
+        // the already-spherical MO coefficients directly. Linear groups (C∞v/D∞h) and
+        // C1 still short-circuit inside those functions, so no guard is needed here.
         // Checkpoint restart for spherical is wired only for the same-basis case
         // below; cross-basis Löwdin projection in the spherical basis is not yet
         // supported (the check is refined after the checkpoint header is read).
