@@ -485,6 +485,17 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
+    add_executable(planck-group-operations
+        ${CMAKE_SOURCE_DIR}/tests/group_operations.cpp
+        ${SRC_DIR}/symmetry/group_operations.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+    )
+
     target_include_directories(planck-casscf-internal PRIVATE
         ${SRC_DIR}
         ${MSYM_INSTALL_DIR}/include
@@ -519,6 +530,12 @@ if(BUILD_TESTING)
 
     target_include_directories(planck-cc-arbitrary-solver PRIVATE
         ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-group-operations PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
     )
 
@@ -575,6 +592,12 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-group-operations PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-multipole-integrals OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-multipole-integrals PRIVATE USE_OPENMP)
@@ -589,6 +612,11 @@ if(BUILD_TESTING)
         ${MSYM_INSTALL_DIR}/lib/libmsym.a
     )
     add_dependencies(planck-symmetry-units libmsym)
+
+    target_link_libraries(planck-group-operations
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-group-operations libmsym)
 
     target_link_libraries(planck-dft-functional-support
         ${LIBXC_INSTALL_DIR}/lib/libxc.a
@@ -633,6 +661,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-spherical-transform
         COMMAND planck-spherical-transform
+    )
+
+    add_test(
+        NAME planck-group-operations
+        COMMAND planck-group-operations
     )
 endif()
 
