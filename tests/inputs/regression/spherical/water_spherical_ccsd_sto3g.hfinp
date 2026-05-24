@@ -8,6 +8,8 @@
     scf_type    rhf
     correlation ccsd
     guess       hcore
+    tol_energy  1e-10
+    tol_density 1e-10
 %end_scf
 
 %begin_geom

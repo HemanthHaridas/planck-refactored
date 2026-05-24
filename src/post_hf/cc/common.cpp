@@ -521,7 +521,13 @@ namespace HartreeFock::Correlation::CC
             calculator._info._scf.is_uhf)
             return std::unexpected("build_rhf_reference: canonical RHF reference required.");
 
-        const int n_ao = static_cast<int>(calculator._shells.nbasis());
+        // working_nbasis() is the SCF working dimension: nbasis() in Cartesian mode,
+        // nbasis_sph() in spherical mode. The cached ERI (from ensure_eri) and the MO
+        // coefficients are both sized this way in spherical mode, so n_ao must match —
+        // it is the AO leg of the AO→MO transform_eri and the row dimension of the MO
+        // coefficient matrix. Using nbasis() here would mismatch the spherical ERI/MOs
+        // (caught loudly by the C.rows() != n_ao guard below).
+        const int n_ao = static_cast<int>(calculator.working_nbasis());
         const Eigen::MatrixXd &C = calculator._info._scf.alpha.mo_coefficients;
         const Eigen::VectorXd &eps = calculator._info._scf.alpha.mo_energies;
         const int n_electrons = count_electrons(calculator);
@@ -560,7 +566,9 @@ namespace HartreeFock::Correlation::CC
             !calculator._info._scf.is_uhf)
             return std::unexpected("build_uhf_reference: canonical UHF reference required.");
 
-        const int n_ao = static_cast<int>(calculator._shells.nbasis());
+        // See build_rhf_reference: n_ao is the SCF working dimension (spherical in
+        // spherical mode) so it matches the cached ERI and the spin MO coefficients.
+        const int n_ao = static_cast<int>(calculator.working_nbasis());
         const Eigen::MatrixXd &Ca = calculator._info._scf.alpha.mo_coefficients;
         const Eigen::VectorXd &epsa = calculator._info._scf.alpha.mo_energies;
         const Eigen::MatrixXd &Cb = calculator._info._scf.beta.mo_coefficients;

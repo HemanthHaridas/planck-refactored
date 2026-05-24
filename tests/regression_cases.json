@@ -1727,17 +1727,59 @@
       ]
     },
     {
-      "id": "water_spherical_cc_rejected",
-      "input": "tests/inputs/regression/spherical/water_spherical_cc_rejected.hfinp",
+      "id": "water_spherical_ccsd_sto3g",
+      "input": "tests/inputs/regression/spherical/water_spherical_ccsd_sto3g.hfinp",
       "tags": [
         "smoke",
         "core",
         "spherical"
       ],
-      "expected_exit_code": 1,
+      "expected_exit_code": 0,
       "contains": [
-        "Spherical Basis :",
-        "Coupled-cluster correlation is not yet supported"
+        "SCF Converged after",
+        "RCCSD :",
+        "Total RCCSD Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rccsd_total_energy",
+          "expected": -75.0123309822,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "rccsd_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "be_ccsd_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/be_ccsd_spherical_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "timeout_s": 300,
+      "contains": [
+        "SCF Converged after",
+        "RCCSD :",
+        "Total RCCSD Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rccsd_total_energy",
+          "expected": -14.6138647122,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "rccsd_total_energy",
+          "right": "rhf_total_energy"
+        }
       ]
     },
     {

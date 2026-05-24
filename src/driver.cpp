@@ -463,11 +463,12 @@ int main(int argc, const char *argv[])
             calculator._scf._scf != HartreeFock::SCFType::UHF &&
             calculator._scf._scf != HartreeFock::SCFType::ROHF)
             return reject("SCF type " + map_enum(calculator._scf._scf));
-        // Post-HF energy paths that consume only the SCF's spherical AO ERI and
-        // spherical MO coefficients are supported: the AO→MO transform is
-        // self-consistent in the spherical basis (no C needed), and every AO/MO
-        // dimension keys off working_nbasis(). Coupled-cluster energies are not yet
-        // audited for spherical sizing, so they stay gated.
+        // Post-HF energy paths consume only the SCF's spherical AO ERI and spherical
+        // MO coefficients: the AO→MO transform is self-consistent in the spherical
+        // basis (no C needed), and every AO/MO dimension keys off working_nbasis().
+        // Coupled cluster routes through build_{rhf,uhf}_reference (which now size n_ao
+        // off working_nbasis()) and ensure_eri (which returns the cached spherical
+        // tensor), so all five CC methods are supported in the spherical basis.
         switch (calculator._correlation)
         {
         case HartreeFock::PostHF::None:
@@ -476,13 +477,12 @@ int main(int argc, const char *argv[])
         case HartreeFock::PostHF::CASSCF:
         case HartreeFock::PostHF::RASSCF:
         case HartreeFock::PostHF::FCI:
-            break;
         case HartreeFock::PostHF::RCCSD:
         case HartreeFock::PostHF::UCCSD:
         case HartreeFock::PostHF::RCCSDT:
         case HartreeFock::PostHF::UCCSDT:
         case HartreeFock::PostHF::RCCSDTQ:
-            return reject("Coupled-cluster correlation");
+            break;
         }
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             return reject("PCM solvation");
