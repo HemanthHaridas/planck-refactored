@@ -1002,6 +1002,12 @@ std::expected<void, std::string> HartreeFock::Symmetry::assign_mo_symmetry(Hartr
     if (pg.find("inf") != std::string::npos)
         return assign_mo_symmetry_linear(calculator);
 
+    // Kh (a single atom) is the full spherical group; MO labels would be atomic
+    // term symbols, which this Abelian-subgroup machinery does not produce. Skip
+    // labeling — the libmsym rebuild below would only find C1 for one atom anyway.
+    if (pg == "Kh")
+        return {};
+
     // ── Rebuild msym context on the symmetrized coordinates ──────────────────
     // molecule.standard is in Angstrom (symmetrized, pre-alignment frame).
     // Basis function centers are consistent with this frame (via _standard = Bohr).

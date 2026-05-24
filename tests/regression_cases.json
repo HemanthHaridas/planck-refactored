@@ -2062,6 +2062,96 @@
           "atol": 1e-08
         }
       ]
+    },
+    {
+      "id": "water_c2v_fullsym_direct",
+      "input": "tests/inputs/regression/full_symmetry/water_c2v_fullsym_direct.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "Full Symmetry :",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 4)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9629507133,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "nh3_c3v_fullsym_direct",
+      "input": "tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C3v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 6)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -55.4545450615,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "ch4_td_fullsym_direct",
+      "input": "tests/inputs/regression/full_symmetry/ch4_td_fullsym_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 Td",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 24)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -39.7268091715,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "ch2_triplet_c2v_fullsym_uhf_direct",
+      "input": "tests/inputs/regression/full_symmetry/ch2_triplet_c2v_fullsym_uhf_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 4)",
+        "UHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -38.4354082998,
+          "atol": 5e-08
+        }
+      ]
     }
   ]
 }

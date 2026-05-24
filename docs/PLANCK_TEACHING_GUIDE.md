@@ -1058,63 +1058,152 @@ Solved via column-pivoted QR decomposition in Eigen. Implemented in the
 
 ### Point Group Detection
 
-The `detectSymmetry` function in `src/symmetry/symmetry.cpp` wraps the
-`libmsym` library to:
-
-1. Identify the molecular point group
-2. Reorient the molecule into the standard frame (principal axis along \(z\), etc.)
-3. Store the standard-orientation geometry in `molecule._standard` (Angstrom)
-   and `molecule._standard * ANGSTROM_TO_BOHR` (Bohr)
+Symmetry detection identifies the molecular point group from the nuclear geometry
+and reorients the molecule into a standard frame — the principal rotation axis
+along \(z\), secondary elements aligned by convention. All subsequent symmetry
+constructions (orbital adaptation, irrep labels, integral reduction) use this
+standard-orientation geometry so that the symmetry operations have their canonical
+matrix forms.
 
 ### Symmetry-Adapted Orbitals (SAO Basis)
 
-For non-trivial point groups, the Fock matrix is block-diagonal in the
-symmetry-adapted orbital (SAO) basis. `build_sao_basis` in
-`src/symmetry/mo_symmetry.cpp`:
+For a non-trivial point group the Fock matrix becomes block-diagonal when the AO
+basis is replaced by symmetry-adapted orbitals (SAOs) — fixed linear combinations
+of AOs that each transform as a single irreducible representation (irrep). Because
+the Fock operator is totally symmetric, it cannot couple SAOs of different irreps,
+so the matrix breaks into one block per irrep.
 
-1. Re-enters libmsym to obtain the character table and group operations
-2. For groups with multi-dimensional irreps, selects the **largest Abelian subgroup** with all-1D irreducible representations (at most D\(_{2h}\))
-3. Builds projection operators for each irrep \(\Gamma_g\):
-   \[
-   \hat P^{(\Gamma)} = \frac{d_\Gamma}{h} \sum_{R} \chi^{(\Gamma)}(R)^* \hat R
-   \]
-4. Applies these to each AO to generate SAO trial vectors; orthonormalizes via
-   modified Gram-Schmidt
+The SAOs are constructed with the irrep projection operator
+\[
+   \hat P^{(\Gamma)} = \frac{d_\Gamma}{h} \sum_{R} \chi^{(\Gamma)}(R)^* \,\hat R ,
+\]
+where \(h\) is the group order, \(d_\Gamma\) the dimension of irrep \(\Gamma\),
+and \(\chi^{(\Gamma)}(R)\) its character for operation \(R\). Applying
+\(\hat P^{(\Gamma)}\) to each AO yields trial vectors lying in the irrep-\(\Gamma\)
+subspace; orthonormalizing them (against the overlap metric) gives the SAOs of that
+irrep. Standard practice — adopted here — works in the largest **Abelian** subgroup
+with only one-dimensional irreps (at most D\(_{2h}\)), so every SAO carries a
+unique, unambiguous irrep label.
 
-The resulting unitary transformation \(\mathbf U\) (columns = SAOs) is stored
-in `calculator._sao_transform`. In the SAO basis, the Fock and overlap matrices
-block-diagonalize, and each block is diagonalized independently. This reduces
-the \(O(n_b^3)\) diagonalization cost to \(\sum_g O(n_g^3)\) where \(n_g\) is
-the number of SAOs in irrep \(g\).
+Collecting the SAOs as columns of a unitary transformation \(\mathbf U\) and
+transforming the Fock and overlap matrices into this basis block-diagonalizes both.
+Diagonalizing each block independently reduces the \(O(n_b^3)\) cost of a single
+\(n_b\)-dimensional diagonalization to \(\sum_g O(n_g^3)\), where \(n_g\) is the
+number of SAOs in irrep \(g\).
 
 ### MO Irrep Assignment
 
-After convergence, each MO is labeled by its irreducible representation.
-`assign_mo_symmetry` in `mo_symmetry.cpp` builds the AO representation matrix
-\(D_R\) for each group operation \(R\) — for the all-1D Abelian subgroups used,
-each Cartesian Gaussian transforms with a sign \(\pm 1\) under each operation,
-so \(D_R\) is diagonal. The irrep label of MO \(i\) is determined by finding
-the character pattern \(\chi_i(R) = \sum_\mu |C_{\mu i}|^2 D_R(\mu,\mu)\) and
-matching it against the character table.
+After convergence each molecular orbital is labeled by the irrep it transforms as.
+For each operation \(R\), how the AO basis maps onto itself defines an AO
+representation matrix \(\mathbf D_R\). In the one-dimensional Abelian groups used,
+each Cartesian Gaussian simply picks up a sign \(\pm 1\) under every operation, so
+\(\mathbf D_R\) is diagonal. The character an MO presents under \(R\) is then
+\[
+   \chi_i(R) = \sum_\mu |C_{\mu i}|^2 \,(\mathbf D_R)_{\mu\mu},
+\]
+and matching the pattern \(\{\chi_i(R)\}_R\) against the rows of the character table
+identifies the irrep of MO \(i\).
 
-### Integral Symmetry Reduction
+### Integral Symmetry Reduction (Coordinate-Axis Subgroup)
 
-The `update_integral_symmetry` function in `src/symmetry/integral_symmetry.cpp`
-finds which of the seven axis-sign-flip candidates
-\(\{(-1,1,1),(1,-1,1),(1,1,-1),(-1,-1,1),(-1,1,-1),(1,-1,-1),(-1,-1,-1)\}\)
-are true symmetry operations of the molecule. Each valid operation is stored as
-a `SignedAOSymOp` — a permutation `ao_map[mu] = nu` and sign `ao_sign[mu] = ±1`
-that maps each AO to its symmetry-equivalent partner.
+Symmetry can also cut the cost of building the two-electron integrals, not just the
+diagonalization. The simplest version exploits the coordinate-axis reflections of
+D\(_{2h}\): the seven sign-flip operations
+\(\{(-1,1,1),(1,-1,1),(1,1,-1),(-1,-1,1),(-1,1,-1),(1,-1,-1),(-1,-1,-1)\}\) that are
+genuine symmetries of the molecule. Under any such reflection a Cartesian Gaussian
+\(x^{l_x} y^{l_y} z^{l_z} e^{-\alpha r^2}\) maps to \(\pm 1\) times the
+corresponding Gaussian on the symmetry-equivalent atom — no mixing of Cartesian
+components occurs. Each operation is thus a *monomial* map of the AO basis: a
+permutation of basis functions together with a \(\pm 1\) phase, exact for every
+angular momentum.
 
-Since the Abelian subgroups used are subgroups of D\(_{2h}\), all operations
-are products of coordinate-axis reflections. Under any such reflection, a
-Cartesian Gaussian \(x^{l_x} y^{l_y} z^{l_z} e^{-\alpha r^2}\) maps to
-\(\pm 1\) times a Gaussian on the equivalent atom — no mixing of Cartesian
-components occurs. This means `ao_sign ∈ {+1, -1}` is always exact for all
-angular momenta.
+Two-electron integrals related by such an operation are equal, so only one member
+of each symmetry orbit need be computed and the rest filled in by permutation and
+sign. This is the lightest-weight integral reduction; its reach is exactly
+D\(_{2h}\), for the algebraic reason explained next.
 
-These operations are used to reduce integral work in the ERI loops (described
-further in the implementation plan).
+### Full Point-Group ERI Reduction
+
+The coordinate-axis-reflection scheme above is limited to D\(_{2h}\). The reason is
+algebraic: a reflection through a coordinate plane sends a Cartesian Gaussian
+\(x^{l_x}y^{l_y}z^{l_z}\) to \(\pm 1\) times the *same* function on an equivalent
+atom — a *monomial* map (one basis function to one basis function, with a sign).
+A general operation (\(C_3\), \(C_4\), a diagonal mirror \(\sigma_d\), \(S_4\),
+\(\dots\)) instead sends a Cartesian Gaussian to a *linear combination* of basis
+functions, which a single permutation-with-sign cannot express. Molecules of
+higher symmetry (\(C_{3v}\), \(D_{3h}\), \(T_d\), \(O_h\), \(\dots\)) therefore
+only realize their D\(_{2h}\) subgroup's worth of savings under the monomial
+scheme. The full point-group reduction removes this restriction. It rests on three
+ideas.
+
+**1. The AO representation of the group.** Each symmetry operation \(R\) acts on
+the AO basis as a linear map. Collecting its coefficients gives a dense
+\(n_b \times n_b\) matrix \(\mathbf O_R\),
+\[
+  \chi_\mu \;\xrightarrow{\;R\;}\; \sum_\nu (\mathbf O_R)_{\nu\mu}\,\chi_\nu ,
+\]
+which forms a (generally reducible) representation of the point group. Because the
+spatial operation is orthogonal and the basis is consistently normalized, each
+\(\mathbf O_R\) is orthogonal, \(\mathbf O_R^{\mathsf T}\mathbf O_R = \mathbf I\),
+and the set is closed under multiplication. For D\(_{2h}\) the \(\mathbf O_R\)
+happen to be signed permutations; for the full group they are genuinely dense — the
+single generalization that unlocks everything below.
+
+**2. The petite list.** The two-electron integrals \((\mu\nu|\lambda\sigma)\)
+inherit the group's symmetry: applying \(R\) to all four indices leaves the
+integral's value unchanged. Combined with the ordinary 8-fold permutational
+symmetry of \((\mu\nu|\lambda\sigma)\), this partitions all shell quartets into
+*orbits* of mutually equal integrals. Only one representative per orbit needs to be
+evaluated — the **petite list**. Choosing the lexicographically smallest member of
+each orbit as its representative gives a deterministic, non-overlapping selection.
+The representatives are a small fraction of all quartets, and this is where the
+integral *compute* is saved, by up to a factor of the group order \(|G|\).
+
+**3. Skeleton Fock and symmetrization.** Building a Fock matrix from the
+representatives alone gives a **skeleton** Fock \(\mathbf F_{\text{skel}}\) — it is
+missing the contributions of every skipped (symmetry-equivalent) quartet. Those are
+restored by *projecting onto the totally-symmetric component* of the group
+(the Dupuis–King construction):
+\[
+  \mathbf F \;=\; \frac{1}{|G|}\sum_{R}\mathbf O_R^{\mathsf T}\,
+                 \mathbf F_{\text{skel}}\,\mathbf O_R .
+\]
+This group average is a projector: it leaves a group-invariant matrix unchanged (a
+fixed point) and applying it twice gives the same result (idempotent). With the
+representative weighted by the size of its orbit, the projection reproduces the
+full Fock matrix exactly — the skipped integrals re-enter through the averaging
+rather than being recomputed.
+
+**The symmetry-adapted-density requirement.** The construction
+\(\mathbf F = \tfrac{1}{|G|}\sum_R \mathbf O_R^{\mathsf T}\mathbf F_{\text{skel}}\mathbf O_R\)
+reproduces \(\mathbf F(\mathbf P)\) **only when the density itself is
+symmetry-adapted**, i.e. invariant under the group,
+\(\mathbf O_R^{\mathsf T}\mathbf P\,\mathbf O_R = \mathbf P\). A symmetry-broken
+density would give the wrong Fock. Working in the symmetry-adapted orbital basis
+guarantees the requirement: every occupied MO is symmetry-pure, so the density
+\(\mathbf P = 2\,\mathbf C_{\text{occ}}\mathbf C_{\text{occ}}^{\mathsf T}\) is
+group-invariant by construction. The reduction is therefore used together with SAO
+blocking; a converged SCF in that basis stays in the symmetric subspace throughout.
+Because the full group contains its D\(_{2h}\) subgroup, this reduction subsumes —
+and replaces — the coordinate-axis scheme.
+
+The same petite-list and symmetrization arguments are independent of which integral
+recurrence evaluates the representative quartets, so they apply equally to the
+Obara–Saika and Rys engines.
+
+### A Single Atom Is K\(_h\)
+
+A lone atom has the full spherical symmetry group K\(_h\) (the three-dimensional
+rotation–reflection group \(O(3)\)). A point-group detector that derives the group
+from the geometry's symmetry operations cannot find this for a single atom: a lone
+point at the origin admits a continuum of operations and so generates no finite
+operation list, and many detectors report the trivial group \(C_1\) as a result.
+Planck recognizes the case directly — a single-atom system is labeled K\(_h\) and
+centered at the origin. K\(_h\) is a continuous group with no finite operation
+list, and a one-atom system has no symmetry-equivalent atoms to reduce integrals
+over, so — like the linear groups \(C_{\infty v}\) and \(D_{\infty h}\) — it is
+reported as the point group but is not used by the finite-group SAO-blocking or
+ERI-reduction machinery.
 
 ---
 
@@ -5303,6 +5392,9 @@ driver.cpp
 | RMP2 natural orbitals | `src/post_hf/mp2.cpp` | `compute_rmp2_natural_orbitals` |
 | AO symmetry representation | `src/symmetry/mo_symmetry.cpp` | `build_ao_transform`, `sop_to_matrix`, `angular_coeff` |
 | MO irrep labels | `src/symmetry/mo_symmetry.cpp` | `assign_mo_symmetry` |
+| Full point-group AO operations \(\mathbf O_R\) | `src/symmetry/group_operations.cpp` | `build_group_operations` |
+| Skeleton\(\to\)Fock symmetrization | `src/symmetry/fock_symmetrization.cpp` | `symmetrize_matrix` |
+| Full-symmetry direct Fock (petite list) | `src/symmetry/{os_symm,rys_symm}.cpp` | `_compute_2e_fock_symm`, `skeleton_eri.h` |
 
 ---
 
@@ -5320,6 +5412,7 @@ driver.cpp
 | Level shifting | Complete |
 | Point group detection and SAO blocking | Complete |
 | MO irrep labeling | Complete |
+| Full point-group ERI reduction (direct SCF, RHF/UHF) | Complete (Cartesian; petite list + skeleton-Fock symmetrization) |
 | RMP2 and UMP2 energy | Complete |
 | RCCSD single-point energy | Complete |
 | UCCSD single-point energy | Teaching-oriented small-system determinant-space prototype |

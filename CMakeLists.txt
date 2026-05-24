@@ -439,7 +439,10 @@ if(BUILD_TESTING)
         ${SYMM_SRC}
         # SYMM_SRC (mo_symmetry.cpp) now calls BasisFunctions::cart_to_sph_block,
         # defined in src/basis/spherical.cpp — link it (Eigen-only, no msym/xc dep).
+        # spherical.cpp in turn delegates L=6 to cart_to_sph_block_recurrence
+        # (spherical_recurrence.cpp), so that must be linked too.
         ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
     add_executable(planck-dft-grid-invariants
@@ -482,6 +485,44 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
+    add_executable(planck-group-operations
+        ${CMAKE_SOURCE_DIR}/tests/group_operations.cpp
+        ${SRC_DIR}/symmetry/group_operations.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+    )
+
+    add_executable(planck-fock-symmetrization
+        ${CMAKE_SOURCE_DIR}/tests/fock_symmetrization.cpp
+        ${SRC_DIR}/symmetry/fock_symmetrization.cpp
+        ${SRC_DIR}/symmetry/group_operations.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+    )
+
+    add_executable(planck-symm-fock-equivalence
+        ${CMAKE_SOURCE_DIR}/tests/symm_fock_equivalence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+        ${SRC_DIR}/symmetry/os_symm.cpp
+        ${SRC_DIR}/symmetry/rys_symm.cpp
+        ${SRC_DIR}/symmetry/fock_symmetrization.cpp
+        ${SRC_DIR}/symmetry/group_operations.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+    )
+
     target_include_directories(planck-casscf-internal PRIVATE
         ${SRC_DIR}
         ${MSYM_INSTALL_DIR}/include
@@ -516,6 +557,24 @@ if(BUILD_TESTING)
 
     target_include_directories(planck-cc-arbitrary-solver PRIVATE
         ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-group-operations PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-fock-symmetrization PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-symm-fock-equivalence PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
     )
 
@@ -572,6 +631,24 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-group-operations PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-fock-symmetrization PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-symm-fock-equivalence PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-multipole-integrals OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-multipole-integrals PRIVATE USE_OPENMP)
@@ -586,6 +663,25 @@ if(BUILD_TESTING)
         ${MSYM_INSTALL_DIR}/lib/libmsym.a
     )
     add_dependencies(planck-symmetry-units libmsym)
+
+    target_link_libraries(planck-group-operations
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-group-operations libmsym)
+
+    target_link_libraries(planck-fock-symmetrization
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-fock-symmetrization libmsym)
+
+    target_link_libraries(planck-symm-fock-equivalence
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-symm-fock-equivalence libmsym)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-symm-fock-equivalence OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-symm-fock-equivalence PRIVATE USE_OPENMP)
+    endif()
 
     target_link_libraries(planck-dft-functional-support
         ${LIBXC_INSTALL_DIR}/lib/libxc.a
@@ -630,6 +726,21 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-spherical-transform
         COMMAND planck-spherical-transform
+    )
+
+    add_test(
+        NAME planck-group-operations
+        COMMAND planck-group-operations
+    )
+
+    add_test(
+        NAME planck-fock-symmetrization
+        COMMAND planck-fock-symmetrization
+    )
+
+    add_test(
+        NAME planck-symm-fock-equivalence
+        COMMAND planck-symm-fock-equivalence
     )
 endif()
 
