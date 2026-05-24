@@ -834,6 +834,9 @@
       "tags": [
         "extended"
       ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_triplet_uhf_restart_seed.hfinp"
+      },
       "expected_exit_code": 0,
       "contains": [
         "Theory :                      UHF",
@@ -915,6 +918,9 @@
       "tags": [
         "extended"
       ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_radical_cation_rohf_restart_seed.hfinp"
+      },
       "expected_exit_code": 0,
       "contains": [
         "Theory :                      ROHF",
@@ -1047,6 +1053,9 @@
       "tags": [
         "extended"
       ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_geomopt_restart_seed.hfinp"
+      },
       "expected_exit_code": 0,
       "contains": [
         "Checkpoint :                  Restoring optimized geometry",
