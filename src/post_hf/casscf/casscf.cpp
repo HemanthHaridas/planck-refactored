@@ -266,7 +266,12 @@ namespace HartreeFock::Correlation::CASSCF
         if (as.nactele > 2 * as.nactorb)
             return std::unexpected(tag + ": nactele > 2*nactorb is impossible.");
 
-        const int nbasis = static_cast<int>(calc._shells.nbasis());
+        // Spherical mode: the orbital space (core + active + virtual) spans the
+        // spherical working basis (working_nbasis()), not the larger Cartesian
+        // nbasis(). Every downstream dimension — MO coeff size, Fock/gradient
+        // matrices, the ERI AO leg in transform_eri_internal — derives from this
+        // local, so flipping it here propagates the spherical sizing throughout.
+        const int nbasis = static_cast<int>(calc.working_nbasis());
         const int n_total_elec =
             static_cast<int>(calc._molecule.atomic_numbers.cast<int>().sum()) - calc._molecule.charge;
         if ((n_total_elec - as.nactele) % 2 != 0)

@@ -38,7 +38,7 @@ namespace HartreeFock::Correlation::detail
         if (!calculator._info._is_converged)
             return std::unexpected("resolve_rmp2_dims: SCF not converged.");
 
-        const int n_mo_full = static_cast<int>(calculator._shells.nbasis());
+        const int n_mo_full = static_cast<int>(calculator.working_nbasis());
         int n_electrons = 0;
         for (auto Z : calculator._molecule.atomic_numbers)
             n_electrons += static_cast<int>(Z);
@@ -78,7 +78,7 @@ namespace HartreeFock::Correlation::detail
         if (!calculator._info._is_converged)
             return std::unexpected("resolve_ump2_dims: SCF not converged.");
 
-        const int nb = static_cast<int>(calculator._shells.nbasis());
+        const int nb = static_cast<int>(calculator.working_nbasis());
         int n_electrons = 0;
         for (auto Z : calculator._molecule.atomic_numbers)
             n_electrons += static_cast<int>(Z);
@@ -121,7 +121,7 @@ namespace HartreeFock::Correlation::detail
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const RMP2Dims &dims)
     {
-        const int nb = static_cast<int>(calculator._shells.nbasis());
+        const int nb = static_cast<int>(calculator.working_nbasis());
         const Eigen::MatrixXd &C_full = calculator._info._scf.alpha.mo_coefficients;
         const Eigen::VectorXd &eps_full = calculator._info._scf.alpha.mo_energies;
 
@@ -156,7 +156,7 @@ namespace HartreeFock::Correlation::detail
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const UMP2Dims &dims)
     {
-        const int nb = static_cast<int>(calculator._shells.nbasis());
+        const int nb = static_cast<int>(calculator.working_nbasis());
         const Eigen::MatrixXd &Ca_full = calculator._info._scf.alpha.mo_coefficients;
         const Eigen::MatrixXd &Cb_full = calculator._info._scf.beta.mo_coefficients;
         const Eigen::VectorXd &epsa_full = calculator._info._scf.alpha.mo_energies;

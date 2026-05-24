@@ -1,15 +1,15 @@
 %begin_control
-    basis       sto-3g
+    basis       6-31g*
     calculation energy
     basis_type  spherical
 %end_control
 
 %begin_scf
-    scf_type    rhf
-    correlation casscf
-    guess       hcore
-    nactele     2
-    nactorb     2
+    scf_type    uhf
+    correlation ump2
+    guess       sad
+    tol_energy  1e-10
+    tol_density 1e-10
 %end_scf
 
 %begin_geom
@@ -20,7 +20,7 @@
 
 %begin_coords
 3
-0   1
+1   2
 O     0.000000     0.000000     0.117176
 H     0.000000     0.757200    -0.468704
 H     0.000000    -0.757200    -0.468704

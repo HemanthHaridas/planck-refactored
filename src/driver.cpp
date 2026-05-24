@@ -435,21 +435,25 @@ int main(int argc, const char *argv[])
     calculator._shells = std::move(*basis_res);
 
     // ── Spherical-harmonic basis: supported-feature gate (Phase 2, Step 2.0) ─────
-    // The spherical path currently covers only single-point Conventional RHF/UHF
-    // energies. Every other workflow still consumes Cartesian-dimensioned quantities
-    // (post-HF caches, gradients, DFT grid, checkpoint, PCM, SAO blocking), so we hard
-    // error here — naming the specific unsupported feature — rather than risk a silent
-    // wrong answer. Each guard is lifted independently as later phases wire spherical
-    // support through that consumer. The whole block is inert in Cartesian mode.
+    // The spherical path covers single-point RHF/UHF/ROHF energies (Conventional and
+    // Direct) plus the MP2/CASSCF/RASSCF/FCI post-HF energy methods, all of which
+    // consume only the SCF's self-consistent spherical ERI + MO coefficients.
+    // The remaining workflows still consume Cartesian-dimensioned quantities
+    // (coupled cluster, gradients, DFT grid, cross-basis checkpoint, PCM, SAO
+    // blocking), so we hard error here — naming the specific unsupported feature —
+    // rather than risk a silent wrong answer. Each guard is lifted independently as
+    // later phases wire spherical support through that consumer. The whole block is
+    // inert in Cartesian mode.
     if (calculator._shells._spherical)
     {
         auto reject = [&](const std::string &what) -> int {
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Error, "Spherical Basis :",
                 what + " is not yet supported with a spherical basis "
-                       "(basis_type spherical); currently only single-point "
-                       "Conventional RHF/UHF energies are available. Use "
-                       "basis_type cartesian for this calculation.");
+                       "(basis_type spherical); currently single-point RHF/UHF/ROHF "
+                       "energies (Conventional or Direct) with MP2, CASSCF/RASSCF, "
+                       "or FCI are available. Use basis_type cartesian for this "
+                       "calculation.");
             return EXIT_FAILURE;
         };
 
@@ -459,8 +463,27 @@ int main(int argc, const char *argv[])
             calculator._scf._scf != HartreeFock::SCFType::UHF &&
             calculator._scf._scf != HartreeFock::SCFType::ROHF)
             return reject("SCF type " + map_enum(calculator._scf._scf));
-        if (calculator._correlation != HartreeFock::PostHF::None)
-            return reject("The requested post-HF / correlated method");
+        // Post-HF energy paths that consume only the SCF's spherical AO ERI and
+        // spherical MO coefficients are supported: the AO→MO transform is
+        // self-consistent in the spherical basis (no C needed), and every AO/MO
+        // dimension keys off working_nbasis(). Coupled-cluster energies are not yet
+        // audited for spherical sizing, so they stay gated.
+        switch (calculator._correlation)
+        {
+        case HartreeFock::PostHF::None:
+        case HartreeFock::PostHF::RMP2:
+        case HartreeFock::PostHF::UMP2:
+        case HartreeFock::PostHF::CASSCF:
+        case HartreeFock::PostHF::RASSCF:
+        case HartreeFock::PostHF::FCI:
+            break;
+        case HartreeFock::PostHF::RCCSD:
+        case HartreeFock::PostHF::UCCSD:
+        case HartreeFock::PostHF::RCCSDT:
+        case HartreeFock::PostHF::UCCSDT:
+        case HartreeFock::PostHF::RCCSDTQ:
+            return reject("Coupled-cluster correlation");
+        }
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             return reject("PCM solvation");
         if (calculator._molecule._symmetry)

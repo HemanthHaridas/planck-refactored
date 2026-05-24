@@ -78,7 +78,11 @@ namespace HartreeFock::IO
             calc._scf._scf != HartreeFock::SCFType::ROHF)
             return std::unexpected(tag + " only RHF or ROHF references are supported.");
 
-        const int nbasis = static_cast<int>(calc._shells.nbasis());
+        // The MO-basis Hamiltonian spans the SCF working basis: in spherical mode
+        // that is the (2L+1)-per-shell spherical basis (working_nbasis()), and the
+        // MO coefficients, _hcore, and the cached ERI are all spherical to match.
+        // In Cartesian mode working_nbasis() == nbasis(), so this is a no-op there.
+        const int nbasis = static_cast<int>(calc.working_nbasis());
         if (nbasis <= 0)
             return std::unexpected(tag + " empty basis.");
 

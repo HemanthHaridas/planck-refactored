@@ -46,20 +46,25 @@ namespace HartreeFock::Correlation
         std::vector<double> &eri_local,
         const std::string &tag)
     {
-        // Defensive: in spherical mode the cached calc._eri is the SCF's spherical
-        // ERI (dimension nbasis_sph), but every post-HF consumer here indexes the
-        // tensor as Cartesian (nbasis). Post-HF is already gated off for spherical
-        // bases in the driver, so this branch should be unreachable — building a
-        // fresh Cartesian tensor below would *also* be wrong because the MO
-        // coefficients are spherical. Reuse of the cached tensor across the
-        // cart/sph boundary is the silent-wrong-answer trap, so refuse it explicitly
-        // rather than return a mismatched tensor.
+        // Spherical mode: the cached calc._eri is the SCF's spherical AO ERI
+        // (dimension working_nbasis() == nbasis_sph), and the MO coefficients the
+        // post-HF consumers slice are also spherical, so the cached tensor and the
+        // MO basis are self-consistent for the AO→MO transform — no C is needed
+        // here. Every post-HF AO-leg dimension keys off working_nbasis(), which
+        // matches this tensor. The one thing we must not do is rebuild a *fresh*
+        // tensor below: the integral engine only produces Cartesian ERIs, which
+        // would silently mismatch the spherical MO coefficients. So if the cached
+        // spherical tensor is somehow absent, refuse rather than fabricate a
+        // Cartesian one.
         if (calc._shells._spherical)
         {
+            if (!calc._eri.empty())
+                return calc._eri;
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Error, tag,
-                "post-HF AO ERI is not available with a spherical basis "
-                "(basis_type spherical); use basis_type cartesian.");
+                "spherical post-HF requires the SCF's cached spherical AO ERI, "
+                "but it is unavailable; a fresh AO tensor would be Cartesian and "
+                "inconsistent with the spherical MO coefficients.");
             eri_local.clear();
             return eri_local;
         }
