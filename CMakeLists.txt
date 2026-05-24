@@ -513,6 +513,7 @@ if(BUILD_TESTING)
         ${INT_SRC}
         ${LOOKUP_SRC}
         ${SRC_DIR}/symmetry/os_symm.cpp
+        ${SRC_DIR}/symmetry/rys_symm.cpp
         ${SRC_DIR}/symmetry/fock_symmetrization.cpp
         ${SRC_DIR}/symmetry/group_operations.cpp
         ${SRC_DIR}/symmetry/symmetry.cpp

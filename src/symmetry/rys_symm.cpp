@@ -1,30 +1,28 @@
-#include "symmetry/os_symm.h"
+#include "symmetry/rys_symm.h"
 
-#include "integrals/os.h"
+#include "integrals/rys.h"
 #include "symmetry/fock_symmetrization.h"
 #include "symmetry/skeleton_eri.h"
 
-// Full-symmetry direct Fock (Obara-Saika). The petite-list / multiplicity /
-// scatter / contraction logic is engine-agnostic and lives in skeleton_eri.h; this
-// file only supplies the OS contracted-ERI primitive. Kept separate from os.cpp so
-// the production D2h path is untouched and the two can be A/B benchmarked.
+// Full-symmetry direct Fock (Rys quadrature). Mirror of os_symm.cpp; only the
+// contracted-ERI primitive differs (RysQuad::_rys_contracted_eri). Shared skeleton
+// machinery in skeleton_eri.h. Separate from rys.cpp for A/B benchmarking.
 
 namespace
 {
-    // OS contracted ERI for one Cartesian-component shell quartet.
-    inline double os_eri(const HartreeFock::ShellPair &spAB,
+    inline double rys_eri(const HartreeFock::ShellPair &spAB,
                          const HartreeFock::ShellPair &spCD,
                          int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
                          int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
                          HartreeFock::ERIKernel kernel, double omega)
     {
-        return HartreeFock::ObaraSaika::_contracted_eri_elem(
+        return HartreeFock::RysQuad::_rys_contracted_eri(
             spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
             kernel, omega);
     }
 } // namespace
 
-namespace HartreeFock::ObaraSaika
+namespace HartreeFock::RysQuad
 {
     std::expected<Eigen::MatrixXd, std::string> _compute_2e_fock_symm(
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -45,13 +43,13 @@ namespace HartreeFock::ObaraSaika
             [&](const HartreeFock::ShellPair &ab, const HartreeFock::ShellPair &cd,
                 int ax, int ay, int az, int bx, int by, int bz,
                 int cx, int cy, int cz, int dx, int dy, int dz)
-            { return os_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); });
+            { return rys_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); });
         if (!eri)
             return std::unexpected(eri.error());
 
         Eigen::MatrixXd G = HartreeFock::Symmetry::contract_fock_rhf(*eri, nb, density);
         if (!use_sym)
-            return G; // skeleton == full Fock when no reduction is applied
+            return G;
         return HartreeFock::Symmetry::symmetrize_matrix(G, ops);
     }
 
@@ -76,7 +74,7 @@ namespace HartreeFock::ObaraSaika
             [&](const HartreeFock::ShellPair &ab, const HartreeFock::ShellPair &cd,
                 int ax, int ay, int az, int bx, int by, int bz,
                 int cx, int cy, int cz, int dx, int dy, int dz)
-            { return os_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); });
+            { return rys_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); });
         if (!eri)
             return std::unexpected(eri.error());
 
@@ -92,4 +90,4 @@ namespace HartreeFock::ObaraSaika
             return std::unexpected(Gb_s.error());
         return std::make_pair(*Ga_s, *Gb_s);
     }
-} // namespace HartreeFock::ObaraSaika
+} // namespace HartreeFock::RysQuad

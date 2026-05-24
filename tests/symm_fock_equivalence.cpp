@@ -12,7 +12,9 @@
 // gets the Cs subgroup but _symm uses the full group — the new capability).
 
 #include "integrals/os.h"
+#include "integrals/rys.h"
 #include "symmetry/os_symm.h"
+#include "symmetry/rys_symm.h"
 #include "integrals/shellpair.h"
 #include "symmetry/group_operations.h"
 #include "symmetry/fock_symmetrization.h"
@@ -167,6 +169,36 @@ namespace
         if (da > 1e-9 || db > 1e-9)
             fail(name + ": UHF symm Fock differs (da=" + std::to_string(da) +
                  ", db=" + std::to_string(db) + ")");
+
+        // ── Rys engine: same checks against the Rys production Fock ───────────────
+        const Eigen::MatrixXd Gr_ref =
+            HartreeFock::RysQuad::_compute_2e_fock(pairs, P, nb);
+        auto Gr_symm = HartreeFock::RysQuad::_compute_2e_fock_symm(
+            pairs, calc._shells, P, nb, *ops_res);
+        if (!Gr_symm)
+        {
+            fail(name + " (Rys): _compute_2e_fock_symm error: " + Gr_symm.error());
+            return;
+        }
+        if ((*Gr_symm - Gr_ref).cwiseAbs().maxCoeff() > 1e-9)
+        {
+            fail(name + " (Rys): symm Fock differs from production by " +
+                 std::to_string((*Gr_symm - Gr_ref).cwiseAbs().maxCoeff()));
+            return;
+        }
+
+        const auto [Gra_ref, Grb_ref] =
+            HartreeFock::RysQuad::_compute_2e_fock_uhf(pairs, Pa, Pb, nb);
+        auto ruhf = HartreeFock::RysQuad::_compute_2e_fock_uhf_symm(
+            pairs, calc._shells, Pa, Pb, nb, *ops_res);
+        if (!ruhf)
+        {
+            fail(name + " (Rys): _compute_2e_fock_uhf_symm error: " + ruhf.error());
+            return;
+        }
+        if ((ruhf->first - Gra_ref).cwiseAbs().maxCoeff() > 1e-9 ||
+            (ruhf->second - Grb_ref).cwiseAbs().maxCoeff() > 1e-9)
+            fail(name + " (Rys): UHF symm Fock differs from production");
     }
 } // namespace
 
