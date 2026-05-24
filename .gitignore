@@ -60,6 +60,7 @@ tests/*/__pycache__
 *.hfchk
 *.fcidump
 __pycache__
+Testing/
 RMP2_GRADIENT_FIX_SUMMARY.md
 docs/SPHERICAL_HANDOFF.md
 docs/FULL_SYMMETRY_ERI_DESIGN.md
