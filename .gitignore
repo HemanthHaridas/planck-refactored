@@ -62,3 +62,4 @@ tests/*/__pycache__
 __pycache__
 RMP2_GRADIENT_FIX_SUMMARY.md
 docs/SPHERICAL_HANDOFF.md
+docs/FULL_SYMMETRY_ERI_DESIGN.md
