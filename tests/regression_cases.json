@@ -834,6 +834,9 @@
       "tags": [
         "extended"
       ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_triplet_uhf_restart_seed.hfinp"
+      },
       "expected_exit_code": 0,
       "contains": [
         "Theory :                      UHF",
@@ -915,6 +918,9 @@
       "tags": [
         "extended"
       ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_radical_cation_rohf_restart_seed.hfinp"
+      },
       "expected_exit_code": 0,
       "contains": [
         "Theory :                      ROHF",
@@ -1047,6 +1053,9 @@
       "tags": [
         "extended"
       ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_geomopt_restart_seed.hfinp"
+      },
       "expected_exit_code": 0,
       "contains": [
         "Checkpoint :                  Restoring optimized geometry",
@@ -1727,17 +1736,59 @@
       ]
     },
     {
-      "id": "water_spherical_casscf_rejected",
-      "input": "tests/inputs/regression/spherical/water_spherical_casscf_rejected.hfinp",
+      "id": "water_spherical_ccsd_sto3g",
+      "input": "tests/inputs/regression/spherical/water_spherical_ccsd_sto3g.hfinp",
       "tags": [
         "smoke",
         "core",
         "spherical"
       ],
-      "expected_exit_code": 1,
+      "expected_exit_code": 0,
       "contains": [
-        "Spherical Basis :",
-        "post-HF / correlated method is not yet supported"
+        "SCF Converged after",
+        "RCCSD :",
+        "Total RCCSD Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rccsd_total_energy",
+          "expected": -75.0123309822,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "rccsd_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "be_ccsd_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/be_ccsd_spherical_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "timeout_s": 300,
+      "contains": [
+        "SCF Converged after",
+        "RCCSD :",
+        "Total RCCSD Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rccsd_total_energy",
+          "expected": -14.6138647122,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "rccsd_total_energy",
+          "right": "rhf_total_energy"
+        }
       ]
     },
     {
@@ -1755,17 +1806,26 @@
       ]
     },
     {
-      "id": "water_spherical_symmetry_rejected",
-      "input": "tests/inputs/regression/spherical/water_spherical_symmetry_rejected.hfinp",
+      "id": "water_spherical_symmetry_c2v_631gd",
+      "input": "tests/inputs/regression/spherical/water_spherical_symmetry_c2v_631gd.hfinp",
       "tags": [
         "smoke",
         "core",
         "spherical"
       ],
-      "expected_exit_code": 1,
+      "expected_exit_code": 0,
       "contains": [
-        "Spherical Basis :",
-        "Symmetry / SAO blocking is not yet supported"
+        "Point Group :                 C2v",
+        "SAO Basis :                   A1(9)  A2(1)  B2(5)  B1(3)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
       ]
     },
     {
@@ -1871,6 +1931,134 @@
           "type": "metric_close",
           "metric": "rhf_total_energy",
           "expected": -7.431235811,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/water_rmp2_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -76.19532147291,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "h2o_cation_ump2_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/h2o_cation_ump2_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "UHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -75.6104747767,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -75.747266982,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "water_casscf44_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/water_casscf44_spherical_631gd.hfinp",
+      "tags": [
+        "core",
+        "extended",
+        "spherical"
+      ],
+      "timeout_s": 180,
+      "expected_exit_code": 0,
+      "contains": [
+        "CASSCF :                      Converged."
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -76.06098305048,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "be_fci_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/be_fci_spherical_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "timeout_s": 300,
+      "expected_exit_code": 0,
+      "contains": [
+        "Full CI over 14 orbitals"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "fci_total_energy",
+          "expected": -14.613942530866,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "water_fcidump_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/water_fcidump_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Wrote 18 orbitals"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
           "atol": 1e-08
         }
       ]

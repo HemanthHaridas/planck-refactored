@@ -435,20 +435,25 @@ int main(int argc, const char *argv[])
     calculator._shells = std::move(*basis_res);
 
     // ── Spherical-harmonic basis: supported-feature gate (Phase 2, Step 2.0) ─────
-    // The spherical path currently covers only single-point Conventional RHF/UHF
-    // energies. Every other workflow still consumes Cartesian-dimensioned quantities
-    // (post-HF caches, gradients, DFT grid, checkpoint, PCM, SAO blocking), so we hard
-    // error here — naming the specific unsupported feature — rather than risk a silent
-    // wrong answer. Each guard is lifted independently as later phases wire spherical
-    // support through that consumer. The whole block is inert in Cartesian mode.
+    // The spherical path covers single-point RHF/UHF/ROHF energies (Conventional and
+    // Direct) plus the MP2/CASSCF/RASSCF/FCI post-HF energy methods, all of which
+    // consume only the SCF's self-consistent spherical ERI + MO coefficients.
+    // The remaining workflows still consume Cartesian-dimensioned quantities
+    // (coupled cluster, gradients, DFT grid, cross-basis checkpoint, PCM, SAO
+    // blocking), so we hard error here — naming the specific unsupported feature —
+    // rather than risk a silent wrong answer. Each guard is lifted independently as
+    // later phases wire spherical support through that consumer. The whole block is
+    // inert in Cartesian mode.
     if (calculator._shells._spherical)
     {
         auto reject = [&](const std::string &what) -> int {
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Error, "Spherical Basis :",
                 what + " is not yet supported with a spherical basis "
-                       "(basis_type spherical); currently only single-point "
-                       "Conventional RHF/UHF energies are available. Use "
+                       "(basis_type spherical); currently single-point RHF/UHF/ROHF "
+                       "energies (Conventional or Direct), with MP2, CASSCF/RASSCF, "
+                       "FCI, or coupled cluster (RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ), "
+                       "and point-group symmetry / SAO blocking are available. Use "
                        "basis_type cartesian for this calculation.");
             return EXIT_FAILURE;
         };
@@ -459,12 +464,34 @@ int main(int argc, const char *argv[])
             calculator._scf._scf != HartreeFock::SCFType::UHF &&
             calculator._scf._scf != HartreeFock::SCFType::ROHF)
             return reject("SCF type " + map_enum(calculator._scf._scf));
-        if (calculator._correlation != HartreeFock::PostHF::None)
-            return reject("The requested post-HF / correlated method");
+        // Post-HF energy paths consume only the SCF's spherical AO ERI and spherical
+        // MO coefficients: the AO→MO transform is self-consistent in the spherical
+        // basis (no C needed), and every AO/MO dimension keys off working_nbasis().
+        // Coupled cluster routes through build_{rhf,uhf}_reference (which now size n_ao
+        // off working_nbasis()) and ensure_eri (which returns the cached spherical
+        // tensor), so all five CC methods are supported in the spherical basis.
+        switch (calculator._correlation)
+        {
+        case HartreeFock::PostHF::None:
+        case HartreeFock::PostHF::RMP2:
+        case HartreeFock::PostHF::UMP2:
+        case HartreeFock::PostHF::CASSCF:
+        case HartreeFock::PostHF::RASSCF:
+        case HartreeFock::PostHF::FCI:
+        case HartreeFock::PostHF::RCCSD:
+        case HartreeFock::PostHF::UCCSD:
+        case HartreeFock::PostHF::RCCSDT:
+        case HartreeFock::PostHF::UCCSDT:
+        case HartreeFock::PostHF::RCCSDTQ:
+            break;
+        }
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             return reject("PCM solvation");
-        if (calculator._molecule._symmetry)
-            return reject("Symmetry / SAO blocking");
+        // Symmetry / SAO blocking is supported in the spherical basis: build_sao_basis
+        // rotates its Cartesian AO representation matrices into the spherical basis and
+        // returns a working_nbasis()-sized transform, and assign_mo_symmetry consumes
+        // the already-spherical MO coefficients directly. Linear groups (C∞v/D∞h) and
+        // C1 still short-circuit inside those functions, so no guard is needed here.
         // Checkpoint restart for spherical is wired only for the same-basis case
         // below; cross-basis Löwdin projection in the spherical basis is not yet
         // supported (the check is refined after the checkpoint header is read).

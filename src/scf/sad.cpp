@@ -53,7 +53,7 @@ namespace
     {
         return s == "S" || s == "P" || s == "D" ||
                s == "F" || s == "G" || s == "H" ||
-               s == "SP";
+               s == "I" || s == "SP";
     }
 
     static void normalize_fortran_exponents(std::string &line)

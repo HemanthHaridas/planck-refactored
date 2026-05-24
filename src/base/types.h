@@ -51,7 +51,8 @@ namespace HartreeFock
         D, // L = 2
         F, // L = 3
         G, // L = 4
-        H  // L = 5
+        H, // L = 5
+        I  // L = 6  (spectroscopic series skips "J")
     };
 
     enum class SCFType

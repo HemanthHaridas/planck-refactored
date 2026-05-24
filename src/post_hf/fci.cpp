@@ -41,7 +41,10 @@ namespace HartreeFock::Correlation
             calc._scf._scf != HartreeFock::SCFType::ROHF)
             return std::unexpected(tag + ": only RHF or ROHF references supported.");
 
-        const int nbasis = static_cast<int>(calc._shells.nbasis());
+        // Spherical mode: the CI active space is the full MO space, whose dimension
+        // is the spherical working basis (working_nbasis()), not the larger Cartesian
+        // nbasis(). The cached ERI and MO coefficients are both spherical.
+        const int nbasis = static_cast<int>(calc.working_nbasis());
         if (nbasis <= 0)
             return std::unexpected(tag + ": empty basis.");
 

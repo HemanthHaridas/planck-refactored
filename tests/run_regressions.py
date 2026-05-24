@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -162,6 +163,61 @@ def resolve_metric_expectation(
     return float(override["expected"]), float(override.get("atol", check.get("atol", 1e-9)))
 
 
+def checkpoint_path_for(input_path: Path) -> Path:
+    # Mirror the driver's rule (src/driver.cpp): parent_dir / stem + ".hfchk".
+    return input_path.with_suffix(".hfchk")
+
+
+def run_setup(
+    case: dict[str, Any],
+    repo_root: Path,
+    executable: Path,
+    timeout_s: int,
+) -> str | None:
+    """Run a case's optional 'setup' step to seed a checkpoint fixture.
+
+    A restart case uses `guess full`, which requires its checkpoint to already
+    exist on disk. Because the driver derives the checkpoint path from the input
+    stem, a separate producer case cannot write to the consumer's path. The setup
+    step bridges that gap on a clean checkout: it runs a `seed_input` (which writes
+    its own checkpoint via the default save-on-converge path) and then copies that
+    checkpoint to the consumer input's expected path. Returns an error string on
+    failure, or None on success.
+
+    Setup schema:
+      "setup": { "seed_input": "<path to a guess-sad/hcore input>" }
+    The seed input must describe the same system as the case input so the copied
+    checkpoint is valid for the `guess full` restart.
+    """
+    setup = case.get("setup")
+    if not setup:
+        return None
+
+    seed_input = repo_root / setup["seed_input"]
+    if not seed_input.exists():
+        return f"setup seed_input not found: {seed_input}"
+
+    proc = subprocess.run(
+        build_command(executable, seed_input),
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        timeout=timeout_s,
+    )
+    if proc.returncode != 0:
+        tail = (proc.stdout + proc.stderr).strip().splitlines()[-10:]
+        return "setup seed run failed:\n" + "\n".join(tail)
+
+    seed_chk = checkpoint_path_for(seed_input)
+    if not seed_chk.exists():
+        return f"setup seed did not produce a checkpoint at {seed_chk}"
+
+    target_chk = checkpoint_path_for(repo_root / case["input"])
+    if seed_chk != target_chk:
+        shutil.copyfile(seed_chk, target_chk)
+    return None
+
+
 def run_case(
     case: dict[str, Any],
     repo_root: Path,
@@ -175,6 +231,16 @@ def run_case(
     executable = resolve_executable(case, repo_root, build_dir, default_executable)
 
     start = time.perf_counter()
+
+    setup_error = run_setup(case, repo_root, executable, timeout_s)
+    if setup_error is not None:
+        return CaseResult(
+            case_id=case_id,
+            passed=False,
+            duration_s=time.perf_counter() - start,
+            details=[setup_error],
+        )
+
     try:
         proc = subprocess.run(
             build_command(executable, input_path),

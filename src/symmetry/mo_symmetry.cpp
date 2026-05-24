@@ -727,7 +727,14 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
     if (pg == "C1")
         return result;
 
-    const std::size_t nb = calculator._shells.nbasis();
+    // The SCF works in `working_nbasis()` dimensions: the Cartesian basis count in
+    // Cartesian mode, the (2L+1)-per-shell count in spherical mode. Every matrix the
+    // SAO transform U touches (overlap, Fock, MO coefficients) is sized this way, so
+    // U must be too. The AO representation matrices are still built in the Cartesian
+    // basis (build_ao_transform walks _cartesian exponents and _component_norm), then
+    // rotated into the spherical basis below when _spherical is set.
+    const bool spherical = calculator._shells._spherical;
+    const std::size_t nb = calculator.working_nbasis();
 
     // ── Rebuild libmsym context (NO axis alignment) ───────────────────────────
     auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
@@ -816,6 +823,24 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
     // ── Build AO representation matrices D_R for each group operation ─────────
     // ct->sops[c] = representative of conjugacy class c.  For Abelian groups
     // each class has exactly one element, so this gives all h operations.
+    //
+    // build_ao_transform returns the Cartesian representation D_cart [n_cart×n_cart].
+    // In spherical mode we rotate each into the spherical basis via the similarity
+    //   D_sph = C · D_cart · C⁺        (C = _cart_to_sph [n_sph×n_cart],
+    //                                   C⁺ = its Moore-Penrose right-inverse, C·C⁺ = I)
+    // so that D_sph acts on spherical AO coefficient vectors. The subsequent
+    // S-metric Gram-Schmidt uses the spherical overlap (calculator._overlap), which
+    // the driver already set to C·S_cart·Cᵀ, so the orthonormality target is correct.
+    Eigen::MatrixXd C_pinv; // only used in spherical mode
+    if (spherical)
+    {
+        const Eigen::MatrixXd &Cmat = calculator._shells._cart_to_sph;
+        if (static_cast<std::size_t>(Cmat.rows()) != nb)
+            return std::unexpected(
+                "build_sao_basis: spherical transform row count does not match working_nbasis()");
+        C_pinv = Cmat.completeOrthogonalDecomposition().pseudoInverse(); // [n_cart×n_sph]
+    }
+
     std::vector<Eigen::MatrixXd> D_ops(h);
     for (int c = 0; c < h; ++c)
     {
@@ -823,7 +848,11 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
         auto perm = build_permutation(M, calculator._molecule);
         if (!perm)
             return std::unexpected("build_sao_basis: " + perm.error());
-        D_ops[c] = build_ao_transform(M, *perm, calculator._shells);
+        Eigen::MatrixXd D_cart = build_ao_transform(M, *perm, calculator._shells);
+        if (spherical)
+            D_ops[c] = calculator._shells._cart_to_sph * D_cart * C_pinv;
+        else
+            D_ops[c] = std::move(D_cart);
     }
 
     // ── Project and S-orthonormalise SAOs for each irrep ──────────────────────
@@ -1138,17 +1167,26 @@ std::expected<void, std::string> HartreeFock::Symmetry::assign_mo_symmetry(Hartr
 
     // ── Classify MOs ─────────────────────────────────────────────────────────
     //
-    // For each MO column c_i (Cartesian AO coefficients):
-    //   1. Transform to spherical basis: d_i = T⁺ c_i
+    // For each MO column c_i:
+    //   1. Obtain its spherical AO coefficients d_i. In Cartesian mode the MO
+    //      coefficients are Cartesian, so d_i = T⁺ c_i. In spherical mode the SCF
+    //      already produced spherical MO coefficients (rows == n_sph_total), so we
+    //      consume them directly — applying T⁺ again would be wrong (and ill-sized).
     //   2. Reindex to internal libmsym ordering
     //   3. Call msymSymmetrySpeciesComponents → component weights per species
     //   4. Label = species with largest weight
+    const bool spherical = calculator._shells._spherical;
     auto classify = [&](const Eigen::MatrixXd &C, std::vector<std::string> &labels) -> std::expected<void, std::string>
     {
         const int n_mo = static_cast<int>(C.cols());
 
         // C_sph[n_sph_total × n_mo]
-        const Eigen::MatrixXd C_sph = T_cs * C;
+        if (spherical && C.rows() != n_sph_total)
+            return std::unexpected(
+                "assign_mo_symmetry: spherical MO coefficient row count (" +
+                std::to_string(C.rows()) + ") does not match n_sph_total (" +
+                std::to_string(n_sph_total) + ")");
+        const Eigen::MatrixXd C_sph = spherical ? C : (T_cs * C);
 
         labels.resize(n_mo);
         std::vector<double> wf(mbfsl, 0.0);

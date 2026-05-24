@@ -36,7 +36,6 @@ python/ccgen/__pycache__
 python/ccgen/*/__pycache__
 python/CCGEN_DEVELOPMENT_PLAN.md
 python/CCGEN_OPTIMIZATIONS.md
-.gitignore
 python/ccgen/_wickaccel.cpython-314-darwin.so
 python/ccgen.egg-info/dependency_links.txt
 python/ccgen.egg-info/entry_points.txt
@@ -45,7 +44,6 @@ python/ccgen.egg-info/requires.txt
 python/ccgen.egg-info/SOURCES.txt
 python/ccgen.egg-info/top_level.txt
 python/dist
-.gitignore
 CODE_REVIEW.md
 # Regression-test artifacts: SCF checkpoints and UV-vis spectra are
 # produced by the test runs themselves and should not be committed.
@@ -63,3 +61,4 @@ tests/*/__pycache__
 *.fcidump
 __pycache__
 RMP2_GRADIENT_FIX_SUMMARY.md
+docs/SPHERICAL_HANDOFF.md

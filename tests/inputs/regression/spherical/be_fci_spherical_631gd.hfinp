@@ -1,15 +1,17 @@
 %begin_control
-    basis       sto-3g
+    basis       6-31g*
     calculation energy
+    verbosity   normal
     basis_type  spherical
 %end_control
 
 %begin_scf
     scf_type    rhf
-    correlation casscf
+    correlation fci
+    use_diis    .true.
+    diis_dim    8
+    engine      os
     guess       hcore
-    nactele     2
-    nactorb     2
 %end_scf
 
 %begin_geom
@@ -19,9 +21,7 @@
 %end_geom
 
 %begin_coords
-3
+1
 0   1
-O     0.000000     0.000000     0.117176
-H     0.000000     0.757200    -0.468704
-H     0.000000    -0.757200    -0.468704
+Be    0.000000     0.000000     0.000000
 %end_coords
