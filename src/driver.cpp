@@ -451,9 +451,10 @@ int main(int argc, const char *argv[])
                 HartreeFock::LogLevel::Error, "Spherical Basis :",
                 what + " is not yet supported with a spherical basis "
                        "(basis_type spherical); currently single-point RHF/UHF/ROHF "
-                       "energies (Conventional or Direct) with MP2, CASSCF/RASSCF, "
-                       "or FCI are available. Use basis_type cartesian for this "
-                       "calculation.");
+                       "energies (Conventional or Direct), with MP2, CASSCF/RASSCF, "
+                       "FCI, or coupled cluster (RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ), "
+                       "and point-group symmetry / SAO blocking are available. Use "
+                       "basis_type cartesian for this calculation.");
             return EXIT_FAILURE;
         };
 
