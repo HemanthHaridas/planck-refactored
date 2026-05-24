@@ -439,7 +439,10 @@ if(BUILD_TESTING)
         ${SYMM_SRC}
         # SYMM_SRC (mo_symmetry.cpp) now calls BasisFunctions::cart_to_sph_block,
         # defined in src/basis/spherical.cpp — link it (Eigen-only, no msym/xc dep).
+        # spherical.cpp in turn delegates L=6 to cart_to_sph_block_recurrence
+        # (spherical_recurrence.cpp), so that must be linked too.
         ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
     add_executable(planck-dft-grid-invariants
