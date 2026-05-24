@@ -997,6 +997,40 @@ namespace HartreeFock
         std::vector<int8_t> ao_sign; // phase of the mapped Cartesian AO (+1 / -1)
     };
 
+    // ── Full point-group AO operation matrices (full-symmetry ERI reduction) ──────
+    // Defined here (not in symmetry/group_operations.h) so Calculator can hold a
+    // GroupOperations by value without a circular include. group_operations.h only
+    // declares build_group_operations(); see docs/FULL_SYMMETRY_ERI_DESIGN.md.
+    // Namespaced HartreeFock::Symmetry to keep the existing public type names.
+    //
+    // Unlike the D2h-only SignedAOSymOp (a monomial map: one AO → one AO with a ±1
+    // phase), O_R is a dense nb×nb matrix and so represents general operations
+    // (C3, C4, σ_d, S4, …) that the monomial scheme cannot.
+    namespace Symmetry
+    {
+        struct GroupOperation
+        {
+            std::string label;      // e.g. "E", "C3", "sigma_v", "S4", "i"
+            Eigen::MatrixXd matrix; // O_R [nb×nb], dense; orthogonal (O_Rᵀ O_R = I)
+
+            // Shell permutation induced by R: shell_perm[s] = t means shell s maps
+            // onto shell t (its atom maps under the nuclear permutation; the k-th
+            // shell of angular type L at the source atom maps to the k-th such shell
+            // at the image atom). Exact even though the within-shell mixing in
+            // `matrix` is dense. The shell-quartet petite list (os_symm/rys_symm)
+            // uses it to pick orbit representatives. Indexed by Basis::_shells pos.
+            std::vector<int> shell_perm;
+        };
+
+        struct GroupOperations
+        {
+            std::vector<GroupOperation> operations; // includes identity at [0]
+            std::string point_group;                // Mulliken name of the full group
+            int order = 0;                          // |G| == operations.size()
+            bool valid = false;                     // false ⇒ symmetry off / C1 / linear
+        };
+    } // namespace Symmetry
+
     struct MultipoleMatrices
     {
         std::array<Eigen::MatrixXd, 3> dipole;
@@ -1071,7 +1105,13 @@ namespace HartreeFock
         std::vector<std::string> _sao_irrep_names;         // Mulliken name per irrep index
         std::vector<int> _sao_block_sizes;                 // n_SAOs per irrep block
         std::vector<int> _sao_block_offsets;               // start offset per block in SAO ordering
-        std::vector<SignedAOSymOp> _integral_symmetry_ops; // signed AO permutations used to reduce integral work
+        std::vector<SignedAOSymOp> _integral_symmetry_ops; // signed AO permutations used to reduce integral work (D2h-only)
+
+        // Full point-group operation matrices for the direct-SCF full-symmetry ERI
+        // reduction (os_symm/rys_symm). Populated by build_group_operations() pre-SCF
+        // alongside build_sao_basis. Supersedes _integral_symmetry_ops (full group ⊇
+        // D2h) when _use_full_symmetry is true. See docs/FULL_SYMMETRY_ERI_DESIGN.md §8.
+        Symmetry::GroupOperations _group_operations;
 
         // Gradient and geometry optimization
         Eigen::MatrixXd _gradient;                // natoms×3, Ha/Bohr; set by compute_rhf/uhf_gradient()
@@ -1103,6 +1143,7 @@ namespace HartreeFock
         bool _have_ccsd_reference_energy = false;                    // Whether the cached CCSD correlation energy is valid
         bool _use_sao_blocking = false;
         bool _use_integral_symmetry = false;
+        bool _use_full_symmetry = false; // full point-group direct-Fock reduction (os_symm/rys_symm)
 
         double current_total_energy() const noexcept
         {

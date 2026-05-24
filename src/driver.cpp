@@ -30,6 +30,7 @@
 #include "scf/scf.h"
 #include "scf/stability.h"
 #include "solvation/pcm.h"
+#include "symmetry/group_operations.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/mo_symmetry.h"
 #include "symmetry/symmetry.h"
@@ -771,6 +772,32 @@ int main(int argc, const char *argv[])
             }
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "SAO Basis :", dist);
             HartreeFock::Logger::blank();
+
+            // ── Full point-group operation matrices for direct-SCF ERI reduction ──
+            // Only meaningful when SAO blocking is active (it guarantees the
+            // symmetry-adapted density the skeleton+symmetrization scheme requires)
+            // and the basis is Cartesian (spherical O_R is a later phase). The
+            // direct-vs-conventional decision is made in the SCF loop, so we build
+            // the operations whenever the prerequisites hold and let the loop choose.
+            if (!calculator._shells._spherical)
+            {
+                auto ops = HartreeFock::Symmetry::build_group_operations(calculator);
+                if (!ops)
+                {
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                                                 "Full Symmetry :", std::format("Skipped: {}", ops.error()));
+                }
+                else if (ops->valid)
+                {
+                    calculator._group_operations = std::move(*ops);
+                    calculator._use_full_symmetry = true;
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info, "Full Symmetry :",
+                        std::format("{} point-group operations enabled for direct-SCF ERI reduction (|G| = {})",
+                                    calculator._group_operations.order, calculator._group_operations.order));
+                    HartreeFock::Logger::blank();
+                }
+            }
         }
     }
 

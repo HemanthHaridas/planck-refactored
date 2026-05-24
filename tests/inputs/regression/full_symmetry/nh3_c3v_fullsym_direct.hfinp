@@ -1,0 +1,28 @@
+%begin_control
+    basis       sto-3g
+    calculation energy
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+    scf_mode    direct
+    tol_energy  1e-10
+    tol_density 1e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+4
+0   1
+N     0.0000    0.0000    0.1173
+H     0.0000    0.9377   -0.2738
+H     0.8121   -0.4689   -0.2738
+H    -0.8121   -0.4689   -0.2738
+%end_coords
