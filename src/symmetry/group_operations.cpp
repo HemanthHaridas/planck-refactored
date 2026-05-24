@@ -220,6 +220,54 @@ namespace
         return D;
     }
 
+    // Shell→shell permutation induced by the nuclear permutation `perm`: the k-th
+    // shell of angular type L at atom a maps to the k-th shell of type L at atom
+    // perm[a]. Same correspondence rule build_ao_transform uses, but tracked at the
+    // shell level for the petite-list representative test. Indexed by position in
+    // basis._shells. Returns std::nullopt-style error if any shell has no image
+    // (group/basis inconsistency — should not happen for a symmetric molecule).
+    static std::expected<std::vector<int>, std::string> build_shell_permutation(
+        const std::vector<int> &perm, const HartreeFock::Basis &basis)
+    {
+        const auto &shells = basis._shells;
+        const int nsh = static_cast<int>(shells.size());
+
+        // (atom, L) -> ordered list of shell indices at that atom of that type.
+        std::map<std::pair<int, int>, std::vector<int>> atom_l_shells;
+        for (int s = 0; s < nsh; ++s)
+        {
+            const int atm = static_cast<int>(shells[s]._atom_index);
+            const int l = static_cast<int>(shells[s]._shell);
+            atom_l_shells[{atm, l}].push_back(s);
+        }
+
+        std::vector<int> shell_perm(nsh, -1);
+        for (int s = 0; s < nsh; ++s)
+        {
+            const int atom_a = static_cast<int>(shells[s]._atom_index);
+            const int atom_b = perm[atom_a];
+            const int l = static_cast<int>(shells[s]._shell);
+
+            const auto &src_list = atom_l_shells.at({atom_a, l});
+            int k = -1;
+            for (int idx = 0; idx < static_cast<int>(src_list.size()); ++idx)
+                if (src_list[idx] == s)
+                {
+                    k = idx;
+                    break;
+                }
+
+            const auto tgt_it = atom_l_shells.find({atom_b, l});
+            if (k < 0 || tgt_it == atom_l_shells.end() ||
+                k >= static_cast<int>(tgt_it->second.size()))
+                return std::unexpected(
+                    "build_group_operations: shell " + std::to_string(s) +
+                    " has no image under this operation");
+            shell_perm[s] = tgt_it->second[k];
+        }
+        return shell_perm;
+    }
+
     // Human-readable label for a libmsym operation (diagnostics only).
     static std::string sop_label(const msym_symmetry_operation_t &sop)
     {
@@ -294,9 +342,14 @@ HartreeFock::Symmetry::build_group_operations(HartreeFock::Calculator &calculato
         if (!perm)
             return std::unexpected(perm.error());
 
+        auto shell_perm = build_shell_permutation(*perm, calculator._shells);
+        if (!shell_perm)
+            return std::unexpected(shell_perm.error());
+
         GroupOperation op;
         op.label = sop_label(sops[c]);
         op.matrix = build_ao_transform(M, *perm, calculator._shells);
+        op.shell_perm = std::move(*shell_perm);
         result.operations.push_back(std::move(op));
     }
 

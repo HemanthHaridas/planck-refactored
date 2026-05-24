@@ -38,6 +38,15 @@ namespace HartreeFock
         {
             std::string label;     // e.g. "E", "C3", "sigma_v", "S4", "i"
             Eigen::MatrixXd matrix; // O_R [nb×nb], dense
+
+            // Shell permutation induced by R: shell_perm[s] = t means shell s maps
+            // onto shell t (its atom maps under the nuclear permutation, and the
+            // k-th shell of angular type L at the source atom maps to the k-th such
+            // shell at the image atom). This is exact even though the within-shell
+            // angular mixing in `matrix` is dense. The shell-quartet petite list
+            // (os_symm/rys_symm) uses it to pick orbit representatives without
+            // inspecting the dense matrix. Indexed by position in Basis::_shells.
+            std::vector<int> shell_perm;
         };
 
         // The full set of AO operation matrices for the molecule's point group.
