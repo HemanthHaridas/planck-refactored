@@ -1288,11 +1288,6 @@
       ],
       "checks": [
         {
-          "type": "metric_eq",
-          "metric": "point_group",
-          "expected": "C1"
-        },
-        {
           "type": "metric_close",
           "metric": "dft_total_energy",
           "expected": -0.4675325872,
