@@ -258,8 +258,9 @@ static std::expected<void, std::string> read_spin_channel(
 
 static std::pair<int, int> current_spin_occupations(const HartreeFock::Calculator &calc)
 {
-    const int n_electrons = static_cast<int>(
-        calc._molecule.atomic_numbers.cast<int>().sum() - calc._molecule.charge);
+    // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise).
+    const int n_electrons =
+        calc._molecule.total_nuclear_charge() - calc._molecule.charge;
 
     if (calc._scf._scf == HartreeFock::SCFType::RHF)
         return {n_electrons / 2, n_electrons / 2};
@@ -457,7 +458,7 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
 
     // ── v6: CASSCF active-orbital range metadata for cube export ────────────
     const int n_total_elec =
-        static_cast<int>(calc._molecule.atomic_numbers.cast<int>().sum()) - calc._molecule.charge;
+        calc._molecule.total_nuclear_charge() - calc._molecule.charge;
     const bool has_valid_active_window =
         has_casscf_mos &&
         calc._active_space.nactorb > 0 &&

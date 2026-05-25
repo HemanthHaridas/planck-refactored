@@ -63,6 +63,51 @@ namespace HartreeFock::IO
         return line;
     }
 
+    // A coordinate-line atom token can mark a counterpoise ghost atom in any of
+    // three forms: "Gh(O)", "@O", or "O:". The ghost keeps the element's basis
+    // set but carries no nuclear charge or electrons. Returns the bare element
+    // symbol with the ghost decoration stripped, and reports whether it was a
+    // ghost. Case-insensitive on the "Gh" prefix.
+    struct ParsedAtomToken
+    {
+        std::string symbol;
+        bool is_ghost = false;
+    };
+
+    static ParsedAtomToken parse_atom_token(const std::string &token)
+    {
+        ParsedAtomToken parsed;
+
+        // "@O"
+        if (!token.empty() && token.front() == '@')
+        {
+            parsed.is_ghost = true;
+            parsed.symbol = token.substr(1);
+            return parsed;
+        }
+
+        // "O:"
+        if (!token.empty() && token.back() == ':')
+        {
+            parsed.is_ghost = true;
+            parsed.symbol = token.substr(0, token.size() - 1);
+            return parsed;
+        }
+
+        // "Gh(O)" / "gh(O)" / "GH(O)"
+        if (token.size() >= 4 && (token[2] == '(') && token.back() == ')' &&
+            std::tolower(static_cast<unsigned char>(token[0])) == 'g' &&
+            std::tolower(static_cast<unsigned char>(token[1])) == 'h')
+        {
+            parsed.is_ghost = true;
+            parsed.symbol = token.substr(3, token.size() - 4);
+            return parsed;
+        }
+
+        parsed.symbol = token;
+        return parsed;
+    }
+
     static std::expected<int, std::string> resolve_libxc_name_or_id(
         const std::string &value,
         const std::string &label)
@@ -1511,6 +1556,81 @@ namespace HartreeFock::IO
         return {};
     }
 
+    // Parse the optional %begin_bsse section for counterpoise / BSSE corrections.
+    //
+    //   fragment      1 2 3      — 1-based atom indices forming a fragment
+    //   fragment      4 5 6      — a second fragment (exactly two required)
+    //   charge        0 0        — optional per-fragment charges
+    //   multiplicity  1 1        — optional per-fragment multiplicities
+    //
+    // Atom indices are stored 0-based. Validation that the fragments partition
+    // the molecule is deferred to parse_input (where natoms is known).
+    std::expected<void, std::string>
+    _parse_bsse(const std::vector<std::string> &lines, HartreeFock::OptionsBSSE &bsse)
+    {
+        bsse._enabled = true;
+
+        for (const auto &raw : lines)
+        {
+            const std::string line = strip_inline_comment(raw);
+            if (line.empty())
+                continue;
+
+            std::istringstream iss(line);
+            std::string key;
+            iss >> key;
+            const std::string lkey = toLower(key);
+
+            if (lkey == "fragment")
+            {
+                std::vector<int> atoms;
+                int idx;
+                while (iss >> idx)
+                {
+                    if (idx < 1)
+                        return std::unexpected("bsse: fragment atom indices are 1-based and must be >= 1: " + line);
+                    atoms.push_back(idx - 1); // store 0-based
+                }
+                if (atoms.empty())
+                    return std::unexpected("bsse: 'fragment' needs at least one atom index: " + line);
+                bsse._fragments.push_back(std::move(atoms));
+            }
+            else if (lkey == "charge")
+            {
+                int c;
+                while (iss >> c)
+                    bsse._charges.push_back(c);
+            }
+            else if (lkey == "multiplicity")
+            {
+                int m;
+                while (iss >> m)
+                {
+                    if (m < 1)
+                        return std::unexpected("bsse: multiplicity must be >= 1: " + line);
+                    bsse._multiplicities.push_back(m);
+                }
+            }
+            else
+            {
+                return std::unexpected("bsse: unknown keyword '" + key + "': " + line);
+            }
+        }
+
+        if (bsse._fragments.size() != 2)
+            return std::unexpected("bsse: exactly two 'fragment' lines are required (dimer counterpoise); got " +
+                                   std::to_string(bsse._fragments.size()));
+
+        if (!bsse._charges.empty() && bsse._charges.size() != bsse._fragments.size())
+            return std::unexpected("bsse: 'charge' must list one value per fragment (" +
+                                   std::to_string(bsse._fragments.size()) + ")");
+        if (!bsse._multiplicities.empty() && bsse._multiplicities.size() != bsse._fragments.size())
+            return std::unexpected("bsse: 'multiplicity' must list one value per fragment (" +
+                                   std::to_string(bsse._fragments.size()) + ")");
+
+        return {};
+    }
+
     // Convert a Z-matrix row to Cartesian given already-placed atoms.
     // Uses the standard NeRF / Natural Extension Reference Frame algorithm.
     static Eigen::Vector3d zmat_to_cart(
@@ -1555,6 +1675,7 @@ namespace HartreeFock::IO
 
         molecule.atomic_numbers.resize(molecule.natoms);
         molecule.atomic_masses.resize(molecule.natoms);
+        molecule.is_ghost.assign(molecule.natoms, false);
         molecule.coordinates.resize(molecule.natoms, 3);
         molecule.standard.resize(molecule.natoms, 3);
         molecule._coordinates.resize(molecule.natoms, 3);
@@ -1572,11 +1693,15 @@ namespace HartreeFock::IO
             if (!(iss >> sym))
                 return std::unexpected("Invalid Z-matrix line: " + lines[i + 2]);
 
-            const auto el = element_from_symbol(sym);
+            // Strip any ghost decoration (Gh(O) / @O / O:) before element lookup.
+            const auto token = parse_atom_token(sym);
+
+            const auto el = element_from_symbol(token.symbol);
             if (!el)
                 return std::unexpected(el.error());
             molecule.atomic_numbers[i] = el->Z;
             molecule.atomic_masses[i] = el->mass;
+            molecule.is_ghost[i] = token.is_ghost;
 
             if (i == 0)
             {
@@ -1669,6 +1794,7 @@ namespace HartreeFock::IO
 
         molecule.atomic_numbers.resize(molecule.natoms);
         molecule.atomic_masses.resize(molecule.natoms);
+        molecule.is_ghost.assign(molecule.natoms, false);
 
         molecule.coordinates.resize(molecule.natoms, 3);
         molecule.standard.resize(molecule.natoms, 3);
@@ -1692,12 +1818,16 @@ namespace HartreeFock::IO
                 return std::unexpected("Invalid coordinate line: " + lines[i + 2]);
             }
 
+            // Strip any ghost decoration (Gh(O) / @O / O:) before element lookup.
+            const auto token = parse_atom_token(_atom);
+
             // Check if element is supported
-            const auto element = element_from_symbol(_atom);
+            const auto element = element_from_symbol(token.symbol);
             if (!element)
                 return std::unexpected(element.error());
             molecule.atomic_numbers[i] = element->Z;
             molecule.atomic_masses[i] = element->mass;
+            molecule.is_ghost[i] = token.is_ghost;
 
             molecule.coordinates(i, 0) = _x;
             molecule.coordinates(i, 1) = _y;
@@ -1789,6 +1919,34 @@ namespace HartreeFock::IO
         {
             if (auto res = _parse_constraints(it->second, calculator._constraints); !res)
                 return std::unexpected(res.error());
+        }
+
+        // bsse / counterpoise (optional)
+        if (auto it = _sections.find("bsse"); it != _sections.end())
+        {
+            if (auto res = _parse_bsse(it->second, calculator._bsse); !res)
+                return std::unexpected(res.error());
+
+            // Validate that the fragments partition the molecule: every atom in
+            // exactly one fragment, all indices in range. natoms is known now.
+            const int natoms = static_cast<int>(calculator._molecule.natoms);
+            std::vector<int> assigned(static_cast<std::size_t>(natoms), 0);
+            for (const auto &frag : calculator._bsse._fragments)
+            {
+                for (int a : frag)
+                {
+                    if (a < 0 || a >= natoms)
+                        return std::unexpected("bsse: fragment atom index " + std::to_string(a + 1) +
+                                               " is out of range (1.." + std::to_string(natoms) + ")");
+                    if (assigned[static_cast<std::size_t>(a)]++)
+                        return std::unexpected("bsse: atom " + std::to_string(a + 1) +
+                                               " appears in more than one fragment");
+                }
+            }
+            for (int a = 0; a < natoms; ++a)
+                if (!assigned[static_cast<std::size_t>(a)])
+                    return std::unexpected("bsse: atom " + std::to_string(a + 1) +
+                                           " is not assigned to any fragment");
         }
 
         if (auto res = validate_requested_methods(calculator); !res)

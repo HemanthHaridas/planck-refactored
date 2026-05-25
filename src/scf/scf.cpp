@@ -378,9 +378,11 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
     const std::size_t nbasis = calculator.working_nbasis();
     const std::size_t nbasis_cart = calculator._shells.nbasis();
 
-    // Number of occupied orbitals (closed shell singlet assumed)
-    const int n_electrons = static_cast<int>(
-        (calculator._molecule.atomic_numbers.cast<int>().sum()) - calculator._molecule.charge);
+    // Number of occupied orbitals (closed shell singlet assumed).
+    // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise), which
+    // carry basis functions but no electrons.
+    const int n_electrons =
+        calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
 
     if (n_electrons % 2 != 0)
         return std::unexpected("RHF requires an even number of electrons (closed shell)");
@@ -759,8 +761,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     const std::size_t nbasis = calculator.working_nbasis();
     const std::size_t nbasis_cart = calculator._shells.nbasis();
 
-    const int n_electrons = static_cast<int>(
-        calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
+    // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise).
+    const int n_electrons =
+        calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
 
     const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
 
@@ -1307,8 +1310,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
     const std::size_t nbasis = calculator.working_nbasis();
     const std::size_t nbasis_cart = calculator._shells.nbasis();
 
-    const int n_electrons = static_cast<int>(
-        calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
+    // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise).
+    const int n_electrons =
+        calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
     const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
 
     if (n_unpaired < 0 || n_unpaired > n_electrons)

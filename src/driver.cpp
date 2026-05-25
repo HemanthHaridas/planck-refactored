@@ -11,6 +11,7 @@
 
 #include "base/types.h"
 #include "basis/basis.h"
+#include "bsse/counterpoise.h"
 #include "freq/hessian.h"
 #include "gradient/gradient.h"
 #include "integrals/base.h"
@@ -281,6 +282,26 @@ int main(int argc, const char *argv[])
     // detection and basis reading, both of which need _coordinates in Bohr.
     calculator.prepare_coordinates();
 
+    // ── Counterpoise / BSSE: self-contained multi-SCF driver ────────────────────
+    // When a %begin_bsse section is present, run the Boys–Bernardi counterpoise
+    // procedure (dimer + monomers + ghosted monomers) and exit. It builds and runs
+    // its own sub-calculations off the parent Calculator, so it must precede the
+    // single-calculation checkpoint / symmetry / basis setup below. _coordinates
+    // are already in Bohr (prepare_coordinates above), which the CP sub-calc
+    // builder relies on.
+    if (calculator._bsse._enabled)
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Counterpoise :",
+                                     "BSSE counterpoise correction requested");
+        if (auto res = HartreeFock::BSSE::run_counterpoise(calculator); !res)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Counterpoise Failed :", res.error());
+            return EXIT_FAILURE;
+        }
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Counterpoise :", "Done");
+        return EXIT_SUCCESS;
+    }
+
     // ── guess full: restore geometry from checkpoint before symmetry/basis setup ─
     //
     // When the user requests guess full, the molecule geometry, charge, and
@@ -344,6 +365,17 @@ int main(int argc, const char *argv[])
     }
     HartreeFock::Logger::blank();
 
+    // Ghost atoms (BSSE counterpoise) break the point group that libmsym would
+    // detect from the real nuclei: a symmetry-adapted basis built for the full
+    // group would mix ghost and real centers and corrupt the ERI reduction.
+    // Force symmetry off whenever any ghost is present.
+    if (calculator._molecule.has_ghost_atoms() && calculator._geometry._use_symm)
+    {
+        calculator._geometry._use_symm = false;
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Symmetry Detection :",
+                                     "Disabled because ghost atoms are present (counterpoise / BSSE)");
+    }
+
     // Detect Symmetry
     if (preserve_checkpoint_ao_frame)
     {
@@ -397,6 +429,9 @@ int main(int argc, const char *argv[])
             oss << std::setw(10) << std::setprecision(3) << std::fixed << calculator._molecule.coordinates(index, cindex);
             cstr += oss.str();
         }
+        // Mark ghost atoms (BSSE counterpoise): basis-only centers, no nuclear charge.
+        if (index < calculator._molecule.is_ghost.size() && calculator._molecule.is_ghost[index])
+            cstr += "   (ghost)";
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "", cstr);
     }
 

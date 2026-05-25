@@ -212,6 +212,19 @@ After a converged run, `water.hfchk` is written automatically. Add `guess read` 
     ...
 ```
 
+### Guess selection note
+
+`guess sad` is often the better starting point for symmetric molecules and
+multibasin SCF problems, but there is one known exception in the current code:
+very small isolated closed-shell atoms can false-converge to the wrong RHF
+stationary point from the SAD guess. A concrete case is lone He/cc-pVDZ, where
+`guess sad` converges to the wrong energy while `guess hcore` matches the PySCF
+RHF reference. If you are running an isolated atom, or a workflow that creates
+isolated-atom-like sub-calculations, prefer `guess hcore`.
+
+This is also why Planck's BSSE / counterpoise driver forces `guess hcore` for
+its internal sub-calculations at the moment.
+
 
 ### 5. Analytic gradient and geometry optimization
 
@@ -1361,7 +1374,99 @@ Range-separated and double-hybrid functionals are currently implemented for
 single-point energies. Their gradient, optimization, frequency, and TDDFT
 workflows are still rejected with an explicit diagnostic.
 
-### 17. All input keywords at a glance
+### 17. BSSE / counterpoise correction
+
+Interaction energies computed with a finite basis are contaminated by **basis
+set superposition error (BSSE)**: in the dimer, each fragment borrows the other
+fragment's basis functions, artificially lowering the dimer energy. The
+**counterpoise (CP) correction** removes this by recomputing each monomer in the
+full dimer basis, using **ghost atoms** — centers that carry basis functions but
+no nuclear charge and no electrons.
+
+#### Ghost atoms in a single calculation
+
+A ghost is requested by decorating the element symbol with `Gh(...)`, a leading
+`@`, or a trailing `:` — all three are equivalent. This runs a one-helium RHF in
+the basis of two centers:
+
+```
+%begin_coords
+2
+0   1
+He        0.000000    0.000000    0.000000
+Gh(He)    0.000000    0.000000    3.000000
+%end_coords
+```
+
+Ghost atoms force symmetry off (a ghost breaks the point group of the real
+nuclei) and are labeled `(ghost)` in the geometry echo.
+
+#### Automated counterpoise run
+
+Add a `%begin_bsse` block listing the two fragments by 1-based atom index; the
+driver then runs all five SCF sub-calculations (dimer, two free monomers, two
+ghosted monomers) and reports the decomposition. He₂ at 3 Å in cc-pVDZ:
+
+```
+%begin_control
+    basis       cc-pVDZ
+    calculation energy
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    engine      os
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+He    0.000000    0.000000    0.000000
+He    0.000000    0.000000    3.000000
+%end_coords
+
+%begin_bsse
+    fragment      1
+    fragment      2
+    charge        0 0          # optional, per fragment (default 0)
+    multiplicity  1 1          # optional, per fragment (default 1)
+%end_bsse
+```
+
+Output:
+
+```
+E(AB)  dimer basis        :       -5.7103200891 Eh
+E(A)   monomer basis      :       -2.8551604772 Eh
+E(B)   monomer basis      :       -2.8551604772 Eh
+E(A)*  dimer basis (CP)   :       -2.8551710717 Eh
+E(B)*  dimer basis (CP)   :       -2.8551710717 Eh
+
+BSSE                      :       -0.0000211889 Eh =    -0.0133 kcal/mol
+Interaction (uncorrected) :        0.0000008654 Eh =     0.0005 kcal/mol
+Interaction (CP-corrected):        0.0000220543 Eh =     0.0138 kcal/mol
+```
+
+Notes:
+
+- Exactly **two** fragments are required, and together they must include every
+  atom exactly once (the parser validates this).
+- `charge` / `multiplicity` are optional; a fragment with `multiplicity > 1`
+  runs UHF. Use these for ion pairs or open-shell fragments.
+- The procedure is **SCF-level only** (RHF/UHF/ROHF energies) and frozen at the
+  input geometry; it corrects the basis, not the structure.
+- Larger BSSE shows up with small bases: the water dimer in STO-3G has
+  \(\sim4\) kcal/mol of BSSE, roughly half its raw interaction energy.
+
+### 18. All input keywords at a glance
 
 ```
 %begin_control
@@ -1441,6 +1546,7 @@ workflows are still rejected with an explicit diagnostic.
 <charge>  <multiplicity>
 # Cartesian (coord_type cartesian):
 <symbol>  <x>  <y>  <z>
+# Ghost atom (basis only, no charge/electrons): Gh(<symbol>) | @<symbol> | <symbol>:
 ...
 # Z-matrix (coord_type zmatrix):
 <symbol>
@@ -1457,4 +1563,12 @@ workflows are still rejected with an explicit diagnostic.
     d  i  j  k  l        # fix dihedral i-j-k-l
     f  i                 # freeze atom i (all Cartesian DOFs)
 %end_constraints
+
+# Optional: BSSE / counterpoise correction (runs 5 SCF sub-calculations)
+%begin_bsse
+    fragment      1 2 3            # 1-based atom indices, fragment A
+    fragment      4 5 6            # fragment B (exactly two; must cover all atoms)
+    charge        0 0              # optional, per fragment (default 0)
+    multiplicity  1 1              # optional, per fragment (default 1)
+%end_bsse
 ```
