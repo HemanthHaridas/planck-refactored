@@ -36,6 +36,21 @@ namespace HartreeFock
 {
     namespace ObaraSaika
     {
+        // Build ONLY the (orbit-weighted) skeleton ERI tensor — the density-independent
+        // first half of _compute_2e_fock_symm. Density-independent ⇒ can be built once
+        // and reused across SCF iterations (C1, docs/FULL_SYMMETRY_PERF_SCOPE.md). The
+        // tensor is sized `nbasis⁴` and is Cartesian in both Cartesian and spherical
+        // mode (pass nbasis_cart in spherical mode). `use_sym` is taken from `ops`
+        // (valid && |G|>1). Contract it with contract_symm_fock_* (skeleton_eri.h).
+        std::expected<std::vector<double>, std::string> _build_skeleton_eri_symm(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const HartreeFock::Basis &basis,
+            std::size_t nbasis,
+            const HartreeFock::Symmetry::GroupOperations &ops,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10);
+
         // RHF direct Fock G = J − ½K via the skeleton + symmetrization scheme.
         // `basis` supplies the shell ordering that ops.shell_perm is indexed by.
         std::expected<Eigen::MatrixXd, std::string> _compute_2e_fock_symm(
@@ -56,6 +71,35 @@ namespace HartreeFock
             const Eigen::MatrixXd &Pa,
             const Eigen::MatrixXd &Pb,
             std::size_t nbasis,
+            const HartreeFock::Symmetry::GroupOperations &ops,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10);
+
+        // Spherical-mode full-symmetry Fock (Step 2). Cartesian skeleton ERI, then
+        // transform to spherical, contract with the spherical density, symmetrize with
+        // the spherical O_R. `nbasis_cart` = Cartesian AO count; `cart_to_sph` = C
+        // [nb_sph × nb_cart]; `density`/result are spherical-sized. `ops` must be the
+        // spherical group operations. See docs/SPHERICAL_SYMMETRY_PHASE3_PLAN.md Step 2.
+        std::expected<Eigen::MatrixXd, std::string> _compute_2e_fock_symm_spherical(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const HartreeFock::Basis &basis,
+            const Eigen::MatrixXd &density,
+            std::size_t nbasis_cart,
+            const Eigen::MatrixXd &cart_to_sph,
+            const HartreeFock::Symmetry::GroupOperations &ops,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10);
+
+        std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+        _compute_2e_fock_uhf_symm_spherical(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const HartreeFock::Basis &basis,
+            const Eigen::MatrixXd &Pa,
+            const Eigen::MatrixXd &Pb,
+            std::size_t nbasis_cart,
+            const Eigen::MatrixXd &cart_to_sph,
             const HartreeFock::Symmetry::GroupOperations &ops,
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0,

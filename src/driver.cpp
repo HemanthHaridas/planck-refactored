@@ -439,12 +439,13 @@ int main(int argc, const char *argv[])
     // The spherical path covers single-point RHF/UHF/ROHF energies (Conventional and
     // Direct) plus the MP2/CASSCF/RASSCF/FCI post-HF energy methods, all of which
     // consume only the SCF's self-consistent spherical ERI + MO coefficients.
-    // The remaining workflows still consume Cartesian-dimensioned quantities
-    // (coupled cluster, gradients, DFT grid, cross-basis checkpoint, PCM, SAO
-    // blocking), so we hard error here — naming the specific unsupported feature —
-    // rather than risk a silent wrong answer. Each guard is lifted independently as
-    // later phases wire spherical support through that consumer. The whole block is
-    // inert in Cartesian mode.
+    // The remaining unsupported workflows still consume Cartesian-only quantities
+    // somewhere downstream (today: non-single-point calculations, DFT grid paths,
+    // cross-basis checkpoint projection, PCM, and related consumers), so we hard
+    // error here — naming the specific unsupported feature — rather than risk a
+    // silent wrong answer. Features graduate out of this gate one by one as their
+    // downstream consumers become spherical-aware. The whole block is inert in
+    // Cartesian mode.
     if (calculator._shells._spherical)
     {
         auto reject = [&](const std::string &what) -> int {
@@ -489,10 +490,11 @@ int main(int argc, const char *argv[])
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             return reject("PCM solvation");
         // Symmetry / SAO blocking is supported in the spherical basis: build_sao_basis
-        // rotates its Cartesian AO representation matrices into the spherical basis and
-        // returns a working_nbasis()-sized transform, and assign_mo_symmetry consumes
-        // the already-spherical MO coefficients directly. Linear groups (C∞v/D∞h) and
-        // C1 still short-circuit inside those functions, so no guard is needed here.
+        // now uses the same metric-correct spherical AO representation as the
+        // full-symmetry direct-SCF path and returns a working_nbasis()-sized
+        // transform; assign_mo_symmetry consumes the already-spherical MO
+        // coefficients directly. Linear groups (C∞v/D∞h) and C1 still short-circuit
+        // inside those functions, so no guard is needed here.
         // Checkpoint restart for spherical is wired only for the same-basis case
         // below; cross-basis Löwdin projection in the spherical basis is not yet
         // supported (the check is refined after the checkpoint header is read).
@@ -776,11 +778,12 @@ int main(int argc, const char *argv[])
 
             // ── Full point-group operation matrices for direct-SCF ERI reduction ──
             // Only meaningful when SAO blocking is active (it guarantees the
-            // symmetry-adapted density the skeleton+symmetrization scheme requires)
-            // and the basis is Cartesian (spherical O_R is a later phase). The
-            // direct-vs-conventional decision is made in the SCF loop, so we build
-            // the operations whenever the prerequisites hold and let the loop choose.
-            if (!calculator._shells._spherical)
+            // symmetry-adapted density the skeleton+symmetrization scheme requires).
+            // Works in BOTH Cartesian and spherical mode: build_group_operations emits
+            // the correct spherical O_R (= S_sph⁻¹ C S_cart O_cart Cᵀ) when the basis
+            // is spherical (Step 1'); the SCF loop dispatches to the spherical Fock
+            // pipeline (Step 2). The direct-vs-conventional decision is made in the
+            // SCF loop, so we build the operations whenever the prerequisites hold.
             {
                 auto ops = HartreeFock::Symmetry::build_group_operations(calculator);
                 if (!ops)

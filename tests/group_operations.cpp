@@ -20,6 +20,8 @@
 
 #include "symmetry/group_operations.h"
 #include "symmetry/symmetry.h"
+#include "integrals/os.h"
+#include "integrals/shellpair.h"
 #include "basis/basis.h"
 #include "base/basis.h"
 #include "base/types.h"
@@ -47,7 +49,8 @@ namespace
         const std::vector<int> &Z,
         const std::vector<std::array<double, 3>> &xyz_angstrom,
         int charge, int multiplicity,
-        const std::string &basis_name)
+        const std::string &basis_name,
+        HartreeFock::BasisType basis_type = HartreeFock::BasisType::Cartesian)
     {
         HartreeFock::Calculator calc;
         HartreeFock::Molecule &mol = calc._molecule;
@@ -68,7 +71,7 @@ namespace
             mol.coordinates(static_cast<Eigen::Index>(i), 2) = xyz_angstrom[i][2];
         }
 
-        calc._basis._basis = HartreeFock::BasisType::Cartesian;
+        calc._basis._basis = basis_type;
         calc.prepare_coordinates();
 
         if (auto r = HartreeFock::Symmetry::detectSymmetry(mol, HartreeFock::Units::Angstrom); !r)
@@ -99,11 +102,13 @@ namespace
                      int charge, int mult,
                      const std::string &basis_name,
                      const std::string &expected_pg,
-                     int expected_order)
+                     int expected_order,
+                     HartreeFock::BasisType basis_type = HartreeFock::BasisType::Cartesian)
     {
         constexpr double tol = 1e-9;
+        const bool spherical = (basis_type == HartreeFock::BasisType::Spherical);
 
-        auto calc_res = make_calculator(Z, xyz, charge, mult, basis_name);
+        auto calc_res = make_calculator(Z, xyz, charge, mult, basis_name, basis_type);
         if (!calc_res)
         {
             fail(name + ": setup failed: " + calc_res.error());
@@ -147,18 +152,43 @@ namespace
         if (n_identity != 1)
             fail(name + ": expected exactly one identity O_R, found " + std::to_string(n_identity));
 
-        // Every O_R orthogonal: O_R^T O_R == I.
         const Eigen::Index nb = ops.operations.front().matrix.rows();
         const Eigen::MatrixXd I = Eigen::MatrixXd::Identity(nb, nb);
-        for (const auto &op : ops.operations)
+
+        // ── The decisive PHYSICAL-representation check: the ACID test ──────────────
+        // A genuine AO representation must leave every symmetric one-electron operator
+        // invariant: O_Rᵀ M O_R = M for M = S (overlap) and M = T (kinetic). This is
+        // what distinguishes the TRUE rep from a merely-group-homomorphic one
+        // (orthogonality + closure pass for ANY unitary rep, even the wrong one — that
+        // is exactly how the first spherical attempt slipped through). In Cartesian
+        // mode, S=I for s,p so this reduces to ordinary orthogonality; in spherical
+        // mode the rep is metric-orthogonal, not plain-orthogonal, so we MUST test
+        // against S/T, not Oᵀ O = I. See docs/SPHERICAL_SYMMETRY_PHASE3_PLAN.md §1'.
         {
-            if (op.matrix.rows() != nb || op.matrix.cols() != nb)
+            const auto pairs = build_shellpairs(calc._shells);
+            auto [S_cart, T_cart] =
+                HartreeFock::ObaraSaika::_compute_1e(pairs, calc._shells.nbasis());
+            Eigen::MatrixXd S = S_cart, T = T_cart;
+            if (spherical)
             {
-                fail(name + ": O_R (" + op.label + ") wrong shape");
-                continue;
+                const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
+                S = C * S_cart * C.transpose();
+                T = C * T_cart * C.transpose();
             }
-            if ((op.matrix.transpose() * op.matrix - I).cwiseAbs().maxCoeff() > 1e-8)
-                fail(name + ": O_R (" + op.label + ") is not orthogonal");
+            for (const auto &op : ops.operations)
+            {
+                if (op.matrix.rows() != nb || op.matrix.cols() != nb)
+                {
+                    fail(name + ": O_R (" + op.label + ") wrong shape");
+                    continue;
+                }
+                const double dS = (op.matrix.transpose() * S * op.matrix - S).cwiseAbs().maxCoeff();
+                const double dT = (op.matrix.transpose() * T * op.matrix - T).cwiseAbs().maxCoeff();
+                if (dS > 1e-9 || dT > 1e-9)
+                    fail(name + ": O_R (" + op.label + ") fails the acid test " +
+                         "(|OᵀSO-S|=" + std::to_string(dS) + ", |OᵀTO-T|=" + std::to_string(dT) +
+                         ") — not the physical AO representation");
+            }
         }
 
         // Closure: for every pair (R,S) the product O_R O_S equals some O_T in the
@@ -209,6 +239,31 @@ int main()
          {{-0.6276, 0.6276, -0.6276}},
          {{0.6276, -0.6276, -0.6276}}},
         0, 1, "STO-3G", "Td", 24);
+
+    // ── Spherical-basis variants (Phase 3 / Step 1'): the O_R are corrected into the
+    //    spherical AO basis via O_sph = S_sph⁻¹ C S_cart O_cart Cᵀ. With d-shells
+    //    (6-31G*) under non-monomial operations (C3, S4), the within-shell mixing is
+    //    genuinely dense. The acid test (O_Rᵀ S O_R = S, O_Rᵀ T O_R = T) is what
+    //    actually validates the physical rep — orthogonality+closure alone passed even
+    //    for the earlier WRONG construction. These cases would have caught that bug.
+    check_group(
+        "NH3/C3v spherical 6-31G*",
+        {7, 1, 1, 1},
+        {{{0.0000, 0.0000, 0.1173}},
+         {{0.0000, 0.9377, -0.2738}},
+         {{0.8121, -0.4689, -0.2738}},
+         {{-0.8121, -0.4689, -0.2738}}},
+        0, 1, "6-31g*", "C3v", 6, HartreeFock::BasisType::Spherical);
+
+    check_group(
+        "CH4/Td spherical 6-31G*",
+        {6, 1, 1, 1, 1},
+        {{{0.0000, 0.0000, 0.0000}},
+         {{0.6276, 0.6276, 0.6276}},
+         {{-0.6276, -0.6276, 0.6276}},
+         {{-0.6276, 0.6276, -0.6276}},
+         {{0.6276, -0.6276, -0.6276}}},
+        0, 1, "6-31g*", "Td", 24, HartreeFock::BasisType::Spherical);
 
     if (g_ok)
         std::cout << "group_operations: all checks passed\n";

@@ -23,6 +23,18 @@ namespace HartreeFock
 {
     namespace RysQuad
     {
+        // Build ONLY the (orbit-weighted) skeleton ERI tensor — density-independent
+        // first half of _compute_2e_fock_symm; built once, reused across iterations
+        // (C1, docs/FULL_SYMMETRY_PERF_SCOPE.md). See ObaraSaika::_build_skeleton_eri_symm.
+        std::expected<std::vector<double>, std::string> _build_skeleton_eri_symm(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const HartreeFock::Basis &basis,
+            std::size_t nbasis,
+            const HartreeFock::Symmetry::GroupOperations &ops,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10);
+
         // RHF direct Fock G = J − ½K via the skeleton + symmetrization scheme.
         std::expected<Eigen::MatrixXd, std::string> _compute_2e_fock_symm(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -42,6 +54,31 @@ namespace HartreeFock
             const Eigen::MatrixXd &Pa,
             const Eigen::MatrixXd &Pb,
             std::size_t nbasis,
+            const HartreeFock::Symmetry::GroupOperations &ops,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10);
+
+        // Spherical-mode full-symmetry Fock (Step 2) — see os_symm.h for semantics.
+        std::expected<Eigen::MatrixXd, std::string> _compute_2e_fock_symm_spherical(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const HartreeFock::Basis &basis,
+            const Eigen::MatrixXd &density,
+            std::size_t nbasis_cart,
+            const Eigen::MatrixXd &cart_to_sph,
+            const HartreeFock::Symmetry::GroupOperations &ops,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10);
+
+        std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+        _compute_2e_fock_uhf_symm_spherical(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const HartreeFock::Basis &basis,
+            const Eigen::MatrixXd &Pa,
+            const Eigen::MatrixXd &Pb,
+            std::size_t nbasis_cart,
+            const Eigen::MatrixXd &cart_to_sph,
             const HartreeFock::Symmetry::GroupOperations &ops,
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0,

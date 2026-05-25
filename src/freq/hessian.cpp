@@ -253,6 +253,12 @@ void HartreeFock::Freq::vibrational_analysis(
             L_cart.col(c) /= norm;
     }
     result.normal_modes = std::move(L_cart);
+
+    // Symmetry labels are assigned after the translational/rotational projection and
+    // un-mass-weighting, so the classifier sees the same unit-norm Cartesian normal
+    // modes that are later printed/stored. For non-Abelian groups the labeling layer
+    // may intentionally fall back to an Abelian subgroup; assign_vibrational_symmetry
+    // logs that decision when it happens.
     auto mode_symmetry = HartreeFock::Symmetry::assign_vibrational_symmetry(
         calc, result.normal_modes);
     if (!mode_symmetry)

@@ -11,12 +11,23 @@ namespace HartreeFock
         // Assign irreducible representation labels to all converged MOs.
         // Fills calculator._info._scf.alpha.mo_symmetry (and beta for UHF).
         // No-op when symmetry is off or the point group is C1 or linear.
+        //
+        // Important: for non-Abelian groups this routine intentionally falls back
+        // to the largest Abelian all-1D subgroup so every MO gets a unique scalar
+        // Mulliken label. The labels are therefore subgroup labels in cases such
+        // as Td/Oh/D3d, even though the ERI/Fock symmetry path can use the full
+        // point group.
         std::expected<void, std::string> assign_mo_symmetry(HartreeFock::Calculator &calculator);
 
         // Symmetry-adapted orbital (SAO) basis data.
         // Columns of `transform` are SAOs expressed in the AO basis.
         // The SAO basis is orthonormal (U^T S U = I) and groups basis functions
         // by irreducible representation, making the Fock matrix block-diagonal.
+        //
+        // For non-Abelian groups, these blocks are built for the selected largest
+        // Abelian subgroup rather than the full point group, for the same reason
+        // assign_mo_symmetry() uses subgroup labels: the SCF blocking path expects
+        // 1D irreps with unambiguous scalar labels.
         struct SAOBasis
         {
             Eigen::MatrixXd transform;            // U [nb×nb]: col i = SAO i in AO basis

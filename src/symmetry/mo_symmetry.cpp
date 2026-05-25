@@ -7,8 +7,12 @@
 #include <numbers>
 #include <string>
 
+#include <Eigen/LU> // dense inverse for the spherical-overlap-corrected D_R
+
 #include "basis/spherical.h"
 #include "external/libmsym/install/include/libmsym/msym.h"
+#include "integrals/os.h"       // _compute_1e (Cartesian overlap for spherical D_R)
+#include "integrals/shellpair.h" // build_shellpairs
 #include "io/logging.h"
 #include "mo_symmetry.h"
 #include "wrapper.h"
@@ -697,6 +701,13 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
 // construction (modified Gram-Schmidt), so U^T S U = I and the Fock matrix
 // transformed to the SAO basis is block-diagonal.
 //
+// Important design choice: the SAO layer is intentionally an Abelian labeling /
+// blocking view of symmetry. For non-Abelian groups we reduce to the largest
+// all-1D Abelian subgroup before building blocks, because the SCF path wants one
+// scalar Mulliken label per block and one independent diagonalization per block.
+// The full-group symmetry machinery exists elsewhere (ERI/Fock reduction); this
+// file is the "make labels and blocks easy to use" layer.
+//
 // Algorithm (for a non-linear Abelian group):
 //   1. Rebuild libmsym context (same frame as assign_mo_symmetry — no axis align).
 //   2. Select largest Abelian subgroup if the full group is non-Abelian.
@@ -759,6 +770,9 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
         return std::unexpected("build_sao_basis: msymFindSymmetry failed");
 
     // ── Select largest Abelian subgroup if needed ─────────────────────────────
+    // This is the key policy choice for teachability and downstream simplicity:
+    // even if the molecule has full non-Abelian symmetry, the SAO blocks are built
+    // in a subgroup where every irrep is 1D and gets a unique scalar label.
     {
         msym_point_group_type_t pg_type;
         int pg_n = 0;
@@ -786,7 +800,8 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
     // ── Register minimal basis functions to initialise the character table ────
     // msymGetCharacterTable requires msymSetBasisFunctions to have been called.
     // We register one s-type spherical harmonic per atom (the minimal valid set).
-    // The character table is a group property and independent of this choice.
+    // The character table is a group/subgroup property and independent of this
+    // placeholder basis; we are only asking libmsym for symmetry metadata here.
     {
         int nelems = 0;
         msym_element_t *melems = nullptr;
@@ -821,24 +836,34 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
     const Eigen::MatrixXd &S = calculator._overlap;
 
     // ── Build AO representation matrices D_R for each group operation ─────────
-    // ct->sops[c] = representative of conjugacy class c.  For Abelian groups
-    // each class has exactly one element, so this gives all h operations.
+    // ct->sops[c] = representative of conjugacy class c. For the Abelian groups we
+    // intentionally reduce to here, each class has exactly one element, so this is
+    // the complete operation list for the active blocking/labeling group.
     //
     // build_ao_transform returns the Cartesian representation D_cart [n_cart×n_cart].
-    // In spherical mode we rotate each into the spherical basis via the similarity
-    //   D_sph = C · D_cart · C⁺        (C = _cart_to_sph [n_sph×n_cart],
-    //                                   C⁺ = its Moore-Penrose right-inverse, C·C⁺ = I)
-    // so that D_sph acts on spherical AO coefficient vectors. The subsequent
-    // S-metric Gram-Schmidt uses the spherical overlap (calculator._overlap), which
-    // the driver already set to C·S_cart·Cᵀ, so the orthonormality target is correct.
-    Eigen::MatrixXd C_pinv; // only used in spherical mode
+    // In spherical mode we map each into the spherical AO basis. The PHYSICAL spherical
+    // representation is
+    //   D_sph = S_sph⁻¹ · (C · S_cart · D_cart · Cᵀ)
+    // (the metric-correct construction; see group_operations.cpp / Step 1' in
+    // docs/SPHERICAL_SYMMETRY_PHASE3_PLAN.md). The naive C·D_cart·C⁺ is a DIFFERENT
+    // (incorrect) rep for d-and-higher shells — it fails D_sphᵀ S_sph D_sph = S_sph —
+    // and crucially is inconsistent with the full-symmetry ERI-reduction O_R, so the
+    // SAO density it produces would not satisfy that path's contract. Both reps agree
+    // for s,p and for sign-flip (Abelian-axis) operations, which is why the C2v
+    // spherical regression passed under the old form; C₃/S₄ on d-shells exposes the
+    // difference. S_cart is computed here from the Cartesian shells.
+    Eigen::MatrixXd C_mat, S_sph_inv, CS_cart; // spherical-only
     if (spherical)
     {
-        const Eigen::MatrixXd &Cmat = calculator._shells._cart_to_sph;
-        if (static_cast<std::size_t>(Cmat.rows()) != nb)
+        C_mat = calculator._shells._cart_to_sph; // [n_sph × n_cart]
+        if (static_cast<std::size_t>(C_mat.rows()) != nb)
             return std::unexpected(
                 "build_sao_basis: spherical transform row count does not match working_nbasis()");
-        C_pinv = Cmat.completeOrthogonalDecomposition().pseudoInverse(); // [n_cart×n_sph]
+        const auto shell_pairs = build_shellpairs(calculator._shells);
+        const Eigen::MatrixXd S_cart =
+            HartreeFock::ObaraSaika::_compute_1e(shell_pairs, calculator._shells.nbasis()).first;
+        S_sph_inv = (C_mat * S_cart * C_mat.transpose()).inverse();
+        CS_cart = C_mat * S_cart;
     }
 
     std::vector<Eigen::MatrixXd> D_ops(h);
@@ -850,7 +875,7 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
             return std::unexpected("build_sao_basis: " + perm.error());
         Eigen::MatrixXd D_cart = build_ao_transform(M, *perm, calculator._shells);
         if (spherical)
-            D_ops[c] = calculator._shells._cart_to_sph * D_cart * C_pinv;
+            D_ops[c] = S_sph_inv * (CS_cart * D_cart * C_mat.transpose());
         else
             D_ops[c] = std::move(D_cart);
     }
@@ -873,8 +898,8 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
         P /= static_cast<double>(h);
 
         // Apply P to each AO unit vector e_μ = μ-th column of the identity.
-        // Collect the non-zero images and build an S-orthonormal basis for the
-        // irrep-Γ subspace via modified Gram-Schmidt with the S-inner product.
+        // The projected columns span the Γ subspace but are heavily redundant; we
+        // keep only the linearly independent ones via S-metric Gram-Schmidt.
         Eigen::MatrixXd accepted(nb, nb);
         int n_accepted = 0;
 
@@ -1090,6 +1115,11 @@ std::expected<void, std::string> HartreeFock::Symmetry::assign_mo_symmetry(Hartr
     // The libmsym basis functions are ordered shell-by-shell, m = −L … +L.
     // The 'id' field of each BF stores its index in our ordering, so that after
     // msymGetBasisFunctions we can map internal → our ordering for wf reindexing.
+    //
+    // This is the bridge between the SCF basis and libmsym's classification basis:
+    // in Cartesian mode we convert MO coefficients with T⁺ before asking for
+    // symmetry species; in spherical mode the SCF already produced coefficients in
+    // that basis, so T⁺ would be redundant and dimensionally wrong.
 
     const auto &shells = calculator._shells._shells;
     const int n_cart_total = static_cast<int>(calculator._shells.nbasis());
@@ -1181,6 +1211,10 @@ std::expected<void, std::string> HartreeFock::Symmetry::assign_mo_symmetry(Hartr
     //   2. Reindex to internal libmsym ordering
     //   3. Call msymSymmetrySpeciesComponents → component weights per species
     //   4. Label = species with largest weight
+    //
+    // If the context was reduced to an Abelian subgroup above, then "species" here
+    // means subgroup irrep. That is intentional: the printed MO labels match the
+    // SAO blocking policy, not the full-group degeneracy structure.
     const bool spherical = calculator._shells._spherical;
     auto classify = [&](const Eigen::MatrixXd &C, std::vector<std::string> &labels) -> std::expected<void, std::string>
     {

@@ -1010,8 +1010,16 @@ namespace HartreeFock
     {
         struct GroupOperation
         {
-            std::string label;      // e.g. "E", "C3", "sigma_v", "S4", "i"
-            Eigen::MatrixXd matrix; // O_R [nb×nb], dense; orthogonal (O_Rᵀ O_R = I)
+            std::string label; // e.g. "E", "C3", "sigma_v", "S4", "i"
+            // O_R [nb×nb], dense AO representation of the operation. Metric-orthogonal
+            // (O_Rᵀ S O_R = S); plain-orthogonal (O_Rᵀ O_R = I) only when the basis is
+            // orthonormal — true for Cartesian s,p and for ALL spherical-harmonic
+            // shells, but NOT for Cartesian d and higher (those are a non-orthonormal,
+            // reducible set). In spherical mode the physical AO representation is the
+            // metric-correct O_R = S_sph⁻¹ (C S_cart O_cart Cᵀ), so it is again only
+            // metric-orthogonal in the general case. See docs/FULL_SYMMETRY_ERI_DESIGN.md
+            // §3.1/§4 and the covariant-vs-contravariant note in scf.cpp.
+            Eigen::MatrixXd matrix;
 
             // Shell permutation induced by R: shell_perm[s] = t means shell s maps
             // onto shell t (its atom maps under the nuclear permutation; the k-th
@@ -1020,6 +1028,21 @@ namespace HartreeFock
             // `matrix` is dense. The shell-quartet petite list (os_symm/rys_symm)
             // uses it to pick orbit representatives. Indexed by Basis::_shells pos.
             std::vector<int> shell_perm;
+
+            // ── Monomial fast path (Item A, docs/FULL_SYMMETRY_PERF_SCOPE.md) ────────
+            // Many O_R are MONOMIAL: each AO maps to exactly one AO with a ±1 phase
+            // (true for the D2h-subgroup operations on s,p shells; false for C3/C4/S4/
+            // σ_d and for any operation acting on Cartesian d⁺). When monomial, the
+            // symmetrization term O_Rᵀ M O_R is a row/column permute-with-signs, doable
+            // in O(nb²) instead of the dense O(nb³) matmul — see symmetrize_matrix.
+            // Classified once at build time (classify_monomial in group_operations.cpp).
+            // mono_map[mu] = nu, mono_sign[mu] = ±1 such that O_R(nu,mu) = sign, all
+            // other entries of column mu zero. Only valid when is_monomial; `matrix` is
+            // always populated and remains the source of truth (the monomial form is a
+            // derived accelerator, verified == matrix at build time).
+            bool is_monomial = false;
+            std::vector<int> mono_map;      // column mu -> the single nonzero row nu
+            std::vector<int8_t> mono_sign;  // sign of that nonzero entry (+1 / -1)
         };
 
         struct GroupOperations
@@ -1112,6 +1135,19 @@ namespace HartreeFock
         // alongside build_sao_basis. Supersedes _integral_symmetry_ops (full group ⊇
         // D2h) when _use_full_symmetry is true. See docs/FULL_SYMMETRY_ERI_DESIGN.md §8.
         Symmetry::GroupOperations _group_operations;
+
+        // Persisted (orbit-weighted) Cartesian skeleton ERI for the full-symmetry
+        // direct Fock (C1, docs/FULL_SYMMETRY_PERF_SCOPE.md). The skeleton is density-
+        // INDEPENDENT (geometry/basis/group only), so it is built ONCE before the SCF
+        // loop and contracted each iteration via contract_symm_fock_* — turning the
+        // _symm path from "rebuild nb⁴ every iteration" into "build once, contract
+        // each". Always Cartesian-sized (nbasis_cart⁴), even in spherical mode (the
+        // cart→sph transform stays in the per-iteration contraction). Empty ⇒ not
+        // persisted (memory gate off / above cap, or symmetry not active) → SCF falls
+        // back to the per-iteration build. MUST be cleared on any geometry change
+        // (geomopt step, frequency displacement) so a stale-geometry skeleton is never
+        // reused — see C1 Step 6.
+        std::vector<double> _symm_skeleton_eri;
 
         // Gradient and geometry optimization
         Eigen::MatrixXd _gradient;                // natoms×3, Ha/Bohr; set by compute_rhf/uhf_gradient()

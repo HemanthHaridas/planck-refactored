@@ -494,6 +494,14 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/lookup/elements.cpp
+        # group_operations.cpp now computes the Cartesian overlap to correct O_R into
+        # the spherical AO basis (Step 1', spherical full-symmetry), so it needs the
+        # integral engine.
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/boys.cpp
     )
 
     add_executable(planck-fock-symmetrization
@@ -506,6 +514,29 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/lookup/elements.cpp
+        # group_operations.cpp needs the integral engine (Cartesian overlap) for the
+        # spherical O_R correction (Step 1').
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    add_executable(planck-symm-fock-benchmark
+        ${CMAKE_SOURCE_DIR}/tests/symm_fock_benchmark.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+        ${SRC_DIR}/symmetry/os_symm.cpp
+        ${SRC_DIR}/symmetry/rys_symm.cpp
+        ${SRC_DIR}/symmetry/fock_symmetrization.cpp
+        ${SRC_DIR}/symmetry/group_operations.cpp
+        ${SRC_DIR}/symmetry/integral_symmetry.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
     add_executable(planck-symm-fock-equivalence
@@ -567,6 +598,12 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-fock-symmetrization PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-symm-fock-benchmark PRIVATE
         ${SRC_DIR}
         ${MSYM_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
@@ -673,6 +710,15 @@ if(BUILD_TESTING)
         ${MSYM_INSTALL_DIR}/lib/libmsym.a
     )
     add_dependencies(planck-fock-symmetrization libmsym)
+
+    target_link_libraries(planck-symm-fock-benchmark
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-symm-fock-benchmark libmsym)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-symm-fock-benchmark OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-symm-fock-benchmark PRIVATE USE_OPENMP)
+    endif()
 
     target_link_libraries(planck-symm-fock-equivalence
         ${MSYM_INSTALL_DIR}/lib/libmsym.a
