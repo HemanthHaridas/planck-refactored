@@ -166,6 +166,43 @@ namespace
         if (!proj || (*proj - Minv).cwiseAbs().maxCoeff() > 1e-8)
             fail(name + ": group-invariant matrix is not a fixed point of symmetrize");
 
+        // 5. Monomial fast path (Item A, docs/FULL_SYMMETRY_PERF_SCOPE.md). For every
+        //    op flagged is_monomial, the permute-with-signs form must reproduce the
+        //    dense O_Rᵀ M O_R term to ~1e-12 — the gate that the accelerator never
+        //    diverges from the source-of-truth matmul. Also confirm classification
+        //    actually fired (identity E is always monomial).
+        int n_monomial = 0;
+        for (const auto &op : ops.operations)
+        {
+            if (!op.is_monomial)
+                continue;
+            ++n_monomial;
+            if (static_cast<Eigen::Index>(op.mono_map.size()) != n ||
+                static_cast<Eigen::Index>(op.mono_sign.size()) != n)
+            {
+                fail(name + ": monomial op " + op.label + " has wrong-sized map/sign");
+                continue;
+            }
+            // Dense reference term and the monomial-form term, on the same M.
+            const Eigen::MatrixXd dense = op.matrix.transpose() * M * op.matrix;
+            Eigen::MatrixXd mono = Eigen::MatrixXd::Zero(n, n);
+            for (Eigen::Index mu = 0; mu < n; ++mu)
+                for (Eigen::Index nu = 0; nu < n; ++nu)
+                    mono(mu, nu) =
+                        static_cast<double>(op.mono_sign[static_cast<std::size_t>(mu)]) *
+                        static_cast<double>(op.mono_sign[static_cast<std::size_t>(nu)]) *
+                        M(op.mono_map[static_cast<std::size_t>(mu)],
+                          op.mono_map[static_cast<std::size_t>(nu)]);
+            const double d = (dense - mono).cwiseAbs().maxCoeff();
+            if (d > 1e-12)
+                fail(name + ": monomial op " + op.label +
+                     " term != dense matmul by " + std::to_string(d));
+        }
+        if (n_monomial == 0)
+            fail(name + ": no operation classified monomial (identity E should be)");
+        std::cout << "  " << name << ": " << n_monomial << "/" << ops.operations.size()
+                  << " ops monomial\n";
+
         (void)tol;
     }
 } // namespace
@@ -188,6 +225,18 @@ int main()
            {{-0.6276, 0.6276, -0.6276}},
            {{0.6276, -0.6276, -0.6276}}},
           0, 1, "STO-3G", "Td");
+
+    // d-shell case: 6-31G* puts Cartesian d on N. Under the non-monomial C3v ops the
+    // d-block of O_R is genuinely dense (a reducible 6-function set), so classification
+    // must NOT flag those ops monomial — the monomial==dense gate above would catch a
+    // false positive, and this case ensures that code path is exercised.
+    check("NH3/C3v [6-31G*]",
+          {7, 1, 1, 1},
+          {{{0.0000, 0.0000, 0.1173}},
+           {{0.0000, 0.9377, -0.2738}},
+           {{0.8121, -0.4689, -0.2738}},
+           {{-0.8121, -0.4689, -0.2738}}},
+          0, 1, "6-31g*", "C3v");
 
     if (g_ok)
         std::cout << "fock_symmetrization: all checks passed\n";

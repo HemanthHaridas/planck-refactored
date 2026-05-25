@@ -291,6 +291,49 @@ namespace
             return "?";
         }
     }
+
+    // Classify O_R as MONOMIAL (Item A, docs/FULL_SYMMETRY_PERF_SCOPE.md): exactly one
+    // nonzero per column, of magnitude 1 (±1). If so, populate op.mono_map/mono_sign so
+    // symmetrize_matrix can apply O_Rᵀ M O_R as an O(nb²) permute-with-signs instead of
+    // the dense O(nb³) matmul. The dense `op.matrix` stays the source of truth; this is
+    // a derived accelerator. Tol matches build_ao_transform's numerical cleanliness:
+    // entries are exact 0 / ±1 for monomial ops up to rounding, so 1e-10 is safe.
+    static void classify_monomial(HartreeFock::Symmetry::GroupOperation &op)
+    {
+        const Eigen::MatrixXd &O = op.matrix;
+        const Eigen::Index n = O.rows();
+        op.is_monomial = false;
+        if (O.cols() != n || n == 0)
+            return;
+
+        constexpr double zero_tol = 1e-10;  // |entry| below ⇒ treated as 0
+        constexpr double unit_tol = 1e-10;  // ||entry| − 1| above ⇒ not monomial
+
+        std::vector<int> map(static_cast<std::size_t>(n), -1);
+        std::vector<int8_t> sign(static_cast<std::size_t>(n), 0);
+        for (Eigen::Index mu = 0; mu < n; ++mu) // column mu = image of AO mu
+        {
+            int nz_row = -1;
+            for (Eigen::Index nu = 0; nu < n; ++nu)
+            {
+                const double v = O(nu, mu);
+                if (std::abs(v) <= zero_tol)
+                    continue;
+                if (nz_row != -1) // second nonzero in this column ⇒ not monomial
+                    return;
+                if (std::abs(std::abs(v) - 1.0) > unit_tol) // nonzero but not ±1
+                    return;
+                nz_row = static_cast<int>(nu);
+                sign[static_cast<std::size_t>(mu)] = (v > 0.0) ? int8_t{1} : int8_t{-1};
+            }
+            if (nz_row == -1) // an all-zero column ⇒ not a valid monomial map
+                return;
+            map[static_cast<std::size_t>(mu)] = nz_row;
+        }
+        op.mono_map = std::move(map);
+        op.mono_sign = std::move(sign);
+        op.is_monomial = true;
+    }
 } // namespace
 
 std::expected<HartreeFock::Symmetry::GroupOperations, std::string>
@@ -394,6 +437,7 @@ HartreeFock::Symmetry::build_group_operations(HartreeFock::Calculator &calculato
                         ? Eigen::MatrixXd(S_sph_inv * (CS_cart * O_cart * C.transpose()))
                         : std::move(O_cart);
         op.shell_perm = std::move(*shell_perm);
+        classify_monomial(op); // Item A: enable the O(nb²) symmetrization fast path
         result.operations.push_back(std::move(op));
     }
 

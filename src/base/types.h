@@ -1027,6 +1027,21 @@ namespace HartreeFock
             // `matrix` is dense. The shell-quartet petite list (os_symm/rys_symm)
             // uses it to pick orbit representatives. Indexed by Basis::_shells pos.
             std::vector<int> shell_perm;
+
+            // ── Monomial fast path (Item A, docs/FULL_SYMMETRY_PERF_SCOPE.md) ────────
+            // Many O_R are MONOMIAL: each AO maps to exactly one AO with a ±1 phase
+            // (true for the D2h-subgroup operations on s,p shells; false for C3/C4/S4/
+            // σ_d and for any operation acting on Cartesian d⁺). When monomial, the
+            // symmetrization term O_Rᵀ M O_R is a row/column permute-with-signs, doable
+            // in O(nb²) instead of the dense O(nb³) matmul — see symmetrize_matrix.
+            // Classified once at build time (classify_monomial in group_operations.cpp).
+            // mono_map[mu] = nu, mono_sign[mu] = ±1 such that O_R(nu,mu) = sign, all
+            // other entries of column mu zero. Only valid when is_monomial; `matrix` is
+            // always populated and remains the source of truth (the monomial form is a
+            // derived accelerator, verified == matrix at build time).
+            bool is_monomial = false;
+            std::vector<int> mono_map;      // column mu -> the single nonzero row nu
+            std::vector<int8_t> mono_sign;  // sign of that nonzero entry (+1 / -1)
         };
 
         struct GroupOperations
