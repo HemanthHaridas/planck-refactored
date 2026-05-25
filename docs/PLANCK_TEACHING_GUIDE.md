@@ -1232,6 +1232,62 @@ value-neutral — the Schwarz bound is symmetry-invariant, so screening a repres
 screens its whole orbit, and the orbit slots written by distinct representatives are
 disjoint, so the parallel scatter needs only same-value atomic stores.
 
+### The Spherical-Harmonic Basis Needs the Metric
+
+The reduction above is engine-Cartesian: the integral primitives, the petite list, and
+the skeleton ERI are all built in the Cartesian-Gaussian basis. In a spherical-harmonic
+run (§ "Spherical Harmonic Basis Functions") the SCF instead works in the
+real-spherical AO basis, related to the Cartesian one by the fixed block-diagonal
+transform \(\mathbf C\) (`_cart_to_sph`, shape \([n_{\text{sph}}\times n_{\text{cart}}]\),
+which also *discards* the \(r^2\)-contamination subspace of each \(L\ge 2\) shell). Two
+things must be expressed in that working basis: the operation matrices \(\mathbf O_R\),
+and the Fock build itself.
+
+**The operation matrices.** A natural-looking guess is the similarity
+\(\mathbf O_R^{\text{sph}} = \mathbf C\,\mathbf O_R^{\text{cart}}\,\mathbf C^{+}\) with
+\(\mathbf C^{+}\) the Moore–Penrose pseudoinverse (\(\mathbf C\,\mathbf C^{+}=\mathbf I\)).
+This is **wrong** for \(d\) and higher shells. It is a valid *abstract* group
+representation — it is closed under multiplication and is even orthogonal — so it
+passes orthogonality and closure checks, yet it is **not the physical AO transform**:
+it fails the acid test \(\mathbf O_R^{\mathsf T}\mathbf S_{\text{sph}}\mathbf O_R =
+\mathbf S_{\text{sph}}\) that every true representation of a symmetric one-electron
+operator must satisfy. The defect is the missing metric: \(\mathbf C^{+}\) satisfies
+\(\mathbf C\,\mathbf C^{+}=\mathbf I\) but \(\mathbf C^{+}\mathbf C\neq\mathbf I\), and a
+representation transform must respect the overlap, not the Euclidean inner product.
+
+Deriving the coefficients of a transformed spherical AO in a non-orthonormal basis
+(coefficients are \(\mathbf S^{-1}\langle\chi\,|\,\cdot\rangle\), and
+\(\langle\chi^{\text{sph}}_q\,|\,R\,\chi^{\text{sph}}_p\rangle =
+(\mathbf C\,\mathbf S_{\text{cart}}\,\mathbf O_R^{\text{cart}}\,\mathbf C^{\mathsf T})_{qp}\))
+gives the **metric-correct** spherical representation:
+\[
+  \mathbf O_R^{\text{sph}}
+  \;=\;
+  \mathbf S_{\text{sph}}^{-1}\,
+  \bigl(\mathbf C\,\mathbf S_{\text{cart}}\,\mathbf O_R^{\text{cart}}\,\mathbf C^{\mathsf T}\bigr),
+  \qquad
+  \mathbf S_{\text{sph}} = \mathbf C\,\mathbf S_{\text{cart}}\,\mathbf C^{\mathsf T},
+\]
+which passes the acid test to machine precision. Note that
+\(\mathbf O_R^{\text{sph}}\) is metric-orthogonal but **not** plain-orthogonal: even
+in the spherical basis the same-\(L\) shells of a contracted set are radially
+non-orthonormal, so the covariant/contravariant distinction (above) persists exactly
+as it does for Cartesian \(d\). The acid test — not orthogonality or closure — is the
+check that distinguishes the physical representation; the same construction is used for
+both the symmetry-adapted-orbital projector and the full-group ERI reduction so the two
+agree on what "symmetry-adapted" means.
+
+**The Fock build.** The skeleton ERI is still accumulated over Cartesian quartets (the
+engine is Cartesian); the resulting skeleton tensor is transformed to the spherical AO
+basis with \(\mathbf C\), contracted with the spherical density, and symmetrized with
+the spherical \(\mathbf O_R^{\text{sph}}\). For a converged SCF whose ground state is
+totally symmetric the spherical density satisfies the contravariant contract by
+construction, and the spherical Fock reproduces the no-symmetry spherical Fock to
+\(\sim 10^{-15}\). (Systems whose ground state genuinely breaks the point group via a
+partially-occupied degenerate frontier are outside this scheme's remit — forcing a
+symmetric density would select a higher, non-variational solution — and run on the
+ordinary path instead.)
+
 ### A Single Atom Is K\(_h\)
 
 A lone atom has the full spherical symmetry group K\(_h\) (the three-dimensional
@@ -5437,6 +5493,7 @@ driver.cpp
 | Full point-group AO operations \(\mathbf O_R\) | `src/symmetry/group_operations.cpp` | `build_group_operations` |
 | Skeleton\(\to\)Fock symmetrization | `src/symmetry/fock_symmetrization.cpp` | `symmetrize_matrix` |
 | Full-symmetry direct Fock (petite list) | `src/symmetry/{os_symm,rys_symm}.cpp` | `_compute_2e_fock_symm`, `skeleton_eri.h` |
+| Full-symmetry direct Fock, spherical basis | `src/symmetry/{os_symm,rys_symm}.cpp` | `_compute_2e_fock_symm_spherical`, `spherical_fock_*_from_skeleton` (`skeleton_eri.h`) |
 
 ---
 
@@ -5454,7 +5511,7 @@ driver.cpp
 | Level shifting | Complete |
 | Point group detection and SAO blocking | Complete |
 | MO irrep labeling | Complete |
-| Full point-group ERI reduction (direct SCF, RHF/UHF) | Complete (Cartesian; petite list + skeleton-Fock symmetrization; OpenMP + Schwarz screened; validated through \(d\)-shells) |
+| Full point-group ERI reduction (direct SCF, RHF/UHF) | Complete (Cartesian and spherical-harmonic basis; petite list + skeleton-Fock symmetrization; OpenMP + Schwarz screened; metric-correct spherical \(\mathbf O_R\); validated through \(d\)-shells, C2v→C3v→Td) |
 | RMP2 and UMP2 energy | Complete |
 | RCCSD single-point energy | Complete |
 | UCCSD single-point energy | Teaching-oriented small-system determinant-space prototype |
@@ -5483,7 +5540,7 @@ driver.cpp
 | Range-separated hybrid XC functionals (for example HSE06) | Complete for single-point energies |
 | Double-hybrid XC functionals (for example B2PLYP) | Complete for single-point energies |
 | Range-separated double hybrids (for example \(\omega\)B2PLYP) | Complete for single-point energies |
-| Spherical harmonic basis | Not supported (Cartesian only) |
+| Spherical harmonic basis | Complete (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF) |
 | C-PCM solvation (RHF/UHF/RKS/UKS, single-point energy) | Complete |
 | PCM gradients / geometry optimization / frequencies | Not implemented |
 | PCM coupling to post-HF (MP2, CC, CASSCF) | Not implemented |

@@ -17,6 +17,11 @@ Last updated: 2026-05-22
 - RHF, UHF, and ROHF SCF with DIIS (`src/scf/scf.cpp`)
 - SAD guess (commit 733fb31) and H_core guess
 - Symmetry detection + MO irrep labeling (libmsym)
+- Full point-group ERI reduction for the direct RHF/UHF Fock (petite list +
+  skeleton-Fock symmetrization, OpenMP + Schwarz screened) in BOTH the Cartesian and
+  real-spherical-harmonic basis. The spherical operation matrices use the metric-correct
+  representation `O_sph = S_sph⁻¹ (C S_cart O_cart Cᵀ)` (`src/symmetry/group_operations.cpp`,
+  `src/symmetry/{os_symm,rys_symm}.cpp`, `src/symmetry/skeleton_eri.h`)
 - Mulliken population analysis
 - Checkpoint system: same-basis restart + cross-basis Löwdin projection
 - Wavefunction stability analysis for RHF/UHF, plus optional instability following (`stability_check`, `stability_follow`)
