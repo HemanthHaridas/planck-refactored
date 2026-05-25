@@ -16,6 +16,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 - **RHF / ROHF / UHF** — closed-shell, restricted open-shell, and unrestricted Hartree-Fock; ROHF uses a Roothaan-type effective Fock construction with aufbau orbital reordering and DIIS convergence
 - **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, global hybrid, range-separated hybrid, and double-hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals by name or integer ID. Range-separated and double-hybrid functionals are currently implemented for single-point energies
 - **PCM solvation** — self-consistent conductor-like polarizable continuum model (C-PCM) for single-point RHF/UHF/RKS/UKS calculations with user-defined dielectric, named solvents, atom-centered cavities, and surface discretization controls
+- **BSSE / counterpoise correction** — ghost atoms (basis-only centers, requested as `Gh(X)`/`@X`/`X:`) and a two-fragment Boys-Bernardi counterpoise driver (`%begin_bsse`) that runs the dimer, isolated monomers, and ghosted monomers to report BSSE alongside the raw and CP-corrected interaction energies; SCF-level (RHF/UHF/ROHF) single points, PySCF-validated
 - **TDDFT / linear response** — full Casida and optional TDA excited-state roots on top of converged KS orbitals, with RKS singlet/triplet support, UKS spin-conserving response, semilocal XC kernels, transition dipoles, oscillator strengths, wavelengths, and Gaussian-broadened UV-Vis spectra
 - **Two integral engines** — Obara-Saika for low angular momentum; Rys quadrature for high angular momentum; automatic engine selection per shell quartet (`engine auto`)
 - **Electric multipole moments** — dipole and quadrupole moment analysis after SCF convergence for both `hartree-fock` and `planck-dft`
@@ -150,13 +151,17 @@ Input files use an INI-style block format with the extension `.hfinp`. Each sect
 %begin_coords
 <natoms>
 <charge>  <multiplicity>
-<symbol>  <x>  <y>  <z>
+<symbol>  <x>  <y>  <z>          # ghost atom: Gh(<symbol>) | @<symbol> | <symbol>:
 ...
 %end_coords
 
 %begin_constraints     (optional; IC geomopt only)
     ...
 %end_constraints
+
+%begin_bsse            (optional; runs counterpoise / BSSE correction)
+    ...
+%end_bsse
 ```
 
 ### Section: `%begin_control`
@@ -216,7 +221,7 @@ SCF procedure and convergence settings.
 | `scf_mode` | enum | `conventional`, `direct`, `auto` | `conventional` | ERI strategy. `conventional`: build the full ERI tensor once before the SCF loop (fast per-iteration, higher memory). `direct`: recompute ERIs every iteration (low memory, slower); with `use_symm .true.` this is the path that engages the full point-group ERI reduction. `auto`: selects based on system size. |
 | `tol_eri` | float | > 0 | `1e-10` | ERI screening threshold |
 | `threshold` | int | ≥ 1 | `100` | Basis function count cutoff used by `scf_mode auto` to decide between conventional and direct. |
-| `guess` | enum | `hcore`, `sad`, `density`, `full` | `hcore` | Initial density guess. `sad`: Superposition of Atomic Densities. `density`: load density matrix from checkpoint. `full`: restore geometry and density from checkpoint. Falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. |
+| `guess` | enum | `hcore`, `sad`, `density`, `full` | `hcore` | Initial density guess. `sad`: Superposition of Atomic Densities. `density`: load density matrix from checkpoint. `full`: restore geometry and density from checkpoint. Falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. Known limitation: `guess sad` can false-converge to the wrong RHF stationary point for some tiny isolated closed-shell atoms (for example lone He/cc-pVDZ), while `guess hcore` matches the PySCF RHF reference. The BSSE / counterpoise driver therefore forces `hcore` for its sub-calculations as a workaround. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.true.` | Write a `.hfchk` checkpoint file after successful convergence |
 | `stability_check` | bool | `.true.`, `.false.` | `.false.` | Run wavefunction stability analysis after SCF convergence. Builds the orbital Hessian in occupied-virtual MO space and reports the lowest eigenvalue of each channel (three RHF channels for closed-shell references, two UHF channels for unrestricted references). Negative eigenvalues indicate an orbital rotation that lowers the energy. Cost: \(O((n_v \cdot n_o)^2)\) memory per channel. |
 | `stability_follow` | bool | `.true.`, `.false.` | `.false.` | When an instability is detected, rotate the orbitals along the lowest unstable mode and re-run SCF. For external triplet RHF→UHF instabilities, Planck promotes the calculator to UHF and applies a two-step broken-symmetry guess (π/8 β HOMO–LUMO mix + adaptive ±step·R rotation). For internal instabilities, the rotation is applied within the same SCF type. Implies `stability_check`. |
@@ -364,6 +369,15 @@ Molecular geometry specification. The header lines are the same for both coordin
 Each subsequent line gives the element symbol and x, y, z coordinates in the units from `coord_units`.
 </p>
 
+<p align="justify">
+An element symbol may be marked as a <strong>ghost atom</strong> — a center that
+keeps its basis functions but carries no nuclear charge and no electrons — using
+any of <code>Gh(&lt;symbol&gt;)</code>, <code>@&lt;symbol&gt;</code>, or
+<code>&lt;symbol&gt;:</code>. Ghost atoms are used for basis-set superposition
+error studies and counterpoise corrections (see <code>%begin_bsse</code>). When
+any ghost atom is present, point-group symmetry is automatically disabled.
+</p>
+
 #### Z-matrix format (`coord_type zmatrix`)
 
 ```
@@ -394,6 +408,39 @@ O
 H  1  0.9572
 H  1  0.9572  2  104.52
 ```
+
+### Section: `%begin_bsse` (optional)
+
+<p align="justify">
+Requests a Boys-Bernardi counterpoise / BSSE correction. When present, the driver
+runs five SCF calculations — the dimer, each isolated monomer, and each monomer in
+the full dimer basis (the partner kept as ghost atoms) — and reports the BSSE
+together with the raw and counterpoise-corrected interaction energies. SCF-level
+only (RHF/UHF/ROHF energies), two fragments, frozen at the input geometry.
+</p>
+
+```
+%begin_bsse
+    fragment      1 2 3            # 1-based atom indices, fragment A
+    fragment      4 5 6            # fragment B
+    charge        0 0              # optional, per fragment (default 0)
+    multiplicity  1 1              # optional, per fragment (default 1)
+%end_bsse
+```
+
+<div align="justify">
+
+- **fragment** — one line per fragment listing its atoms by 1-based index. Exactly two `fragment` lines are required, and together they must include every atom exactly once.
+- **charge** — optional per-fragment charges for the monomer sub-calculations (one value per fragment). Defaults to 0 for each fragment.
+- **multiplicity** — optional per-fragment spin multiplicities (one value per fragment, ≥ 1). Defaults to 1. A fragment with multiplicity > 1 is run as UHF.
+
+</div>
+
+<p align="justify">
+The isolated-monomer sub-calculations use the <code>hcore</code> initial guess
+regardless of the parent <code>guess</code> setting; see the note on the
+<code>guess</code> keyword for why.
+</p>
 
 ### Basis Sets
 

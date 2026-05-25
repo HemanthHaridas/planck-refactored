@@ -1,10 +1,10 @@
-### Planck Teaching Guide
+# Planck Teaching Guide
 
 A complete theory-to-code walkthrough of the Planck quantum chemistry program.
 Intended for students learning Hartree-Fock and post-HF methods, contributors
 reading the source, and researchers auditing the implementation.
 
-### 1. What Planck Is
+## 1. What Planck Is
 
 Planck is a compact electronic structure program built around Gaussian-basis
 self-consistent field theory. It implements:
@@ -33,7 +33,7 @@ DFT calculation uses the separate entry point `src/dft/main.cpp` and the
 pipelines and carries all options, molecular data, basis data, SCF state, and
 results.
 
-### 2. Architecture Overview
+## 2. Architecture Overview
 
 ### Data Flow
 
@@ -73,7 +73,7 @@ Input file (.hfinp)
 | `src/dft` | Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, analytic KS gradients, KS driver |
 | `src/dft/base` | grid construction headers: radial (Treutler-Ahlrichs), angular (Lebedev), Becke partition, libxc wrapper |
 
-### 3. Core Data Structures
+## 3. Core Data Structures
 
 ### `Molecule`
 
@@ -243,10 +243,10 @@ where \(d_p\) are contraction coefficients, \(N_p\) is the primitive
 normalization, and \(N_c\) is the contracted normalization that ensures
 \(\langle \chi_\mu | \chi_\mu \rangle = 1\) for the \(s\)-type component.
 
-**Implementation note**: Planck folds \(N_c\) into `Shell._coefficients` during
-GBS reading (`shell._coefficients *= N_c`). Integral code therefore does not
-apply a separate \(N_c\) factor. The per-primitive normalization \(N_p\) is
-stored in `Shell._normalizations` and multiplied into `PrimitivePair.coeff_product`.
+**Practical note**: many Gaussian-basis implementations fold \(N_c\) into the
+contraction coefficients during basis-set setup, so later integral code only
+needs the primitive normalization \(N_p\) and the already-normalized contracted
+coefficients.
 
 ### Normalization of a Primitive
 
@@ -366,7 +366,7 @@ E_{UHF} = \frac{1}{2}\sum_{\mu\nu}
 
 ### Restricted Open-Shell Hartree-Fock (ROHF)
 
-ROHF describes open-shell systems (radicals, ground-state triplets, etc.) using a **single set of spatial orbitals** shared by both spin channels.  This is in contrast to UHF, which allows the alpha and beta MO sets to differ.  ROHF is invoked when `scf_type rohf` is set in the input file; it is implemented in `run_rohf` in `src/scf/scf.cpp`.
+ROHF describes open-shell systems (radicals, ground-state triplets, etc.) using a **single set of spatial orbitals** shared by both spin channels.  This is in contrast to UHF, which allows the alpha and beta MO sets to differ.
 
 #### Orbital Space Partition
 
@@ -416,7 +416,7 @@ A key challenge in ROHF is that the closed, open, and virtual blocks couple diff
 \langle o | F^\alpha | v \rangle = 0
 \]
 
-These three conditions cannot in general be satisfied simultaneously by either \(F^\alpha\) or \(F^\beta\) alone.  Planck uses the **Guest–Saunders effective Fock matrix** `_rohf_effective_fock`, which constructs a single pseudo-Fock matrix that, when diagonalized, satisfies all three coupling conditions.
+These three conditions cannot in general be satisfied simultaneously by either \(F^\alpha\) or \(F^\beta\) alone.  A standard practical construction is the **Guest–Saunders effective Fock matrix**, which builds a single pseudo-Fock matrix whose diagonalization satisfies the three coupling conditions.
 
 Defining the projectors onto the three subspaces via the density matrices and overlap:
 
@@ -438,7 +438,9 @@ F^{eff} = \mathbf P_c^T F_c \mathbf P_c
          + \text{transpose}
 \]
 
-This is symmetrised as `F + F.transpose()` in the code.  Diagonalizing \(F^{eff}\) yields a common MO set that simultaneously satisfies all three inter-block coupling conditions.
+The final effective matrix is symmetrized to preserve Hermiticity. Diagonalizing
+\(F^{eff}\) yields a common MO set that simultaneously satisfies all three
+inter-block coupling conditions.
 
 #### DIIS Error Vector
 
@@ -452,7 +454,7 @@ This is the same Pulay commutator as in RHF but with \(F^{eff}\) replacing the c
 
 #### Open-Shell Orbital Identification
 
-After diagonalizing \(F^{eff}\), the resulting MO energies are those of the pseudo-Fock and may not correctly order the open-shell orbitals relative to closed-shell and virtual ones.  The helper `_reorder_rohf_orbitals` corrects this:
+After diagonalizing \(F^{eff}\), the resulting MO energies are those of the pseudo-Fock and may not correctly order the open-shell orbitals relative to closed-shell and virtual ones.  A practical reordering step is therefore applied:
 
 1. Keep the first \(N_c\) eigenvectors (lowest \(F^{eff}\) eigenvalues) as closed orbitals.
 2. From the remaining candidates, select the \(N_o\) with the lowest **alpha** Fock diagonal energies \(\langle p | F^\alpha | p \rangle\) — these are the singly-occupied MOs.
@@ -462,13 +464,20 @@ This ensures that the "open-shell" label follows the physics (alpha spin binding
 
 #### Convergence and Output
 
-Convergence is tested on \(|\Delta E|\) and \(\|\Delta P\|\) identically to UHF.  Upon convergence, both `alpha.mo_coefficients` and `beta.mo_coefficients` are stored as the **same** \(C\) matrix, and `alpha.mo_energies` carries the \(F^{eff}\) eigenvalues while `beta.mo_energies` carries \(\langle p | F^\beta | p \rangle\).
+Convergence is tested on \(|\Delta E|\) and \(\|\Delta P\|\) identically to UHF.
+At convergence the alpha and beta channels share the same spatial-orbital
+coefficient matrix \(C\); the effective-Fock eigenvalues provide one canonical
+orbital-energy set, while spin-specific diagonal Fock expectations can still be
+used to characterize the singly occupied space.
 
 The spin-contamination diagnostic \(\langle S^2 \rangle\) is printed after convergence.  For a pure spin state ROHF always gives exactly \(\langle S^2\rangle = S(S+1)\) — unlike UHF, which can mix higher spin states.
 
-#### Limitations
+#### Practical limitation
 
-- Post-HF methods (MP2, CC, CASSCF) currently require RHF or UHF reference; ROHF converged orbitals can be used as a warm-start checkpoint for a subsequent UHF calculation.
+Many correlated and response methods require dedicated ROHF working equations
+rather than a simple RHF or UHF reuse, so ROHF often remains a distinct
+reference class in electronic-structure programs even when the SCF itself is
+well behaved.
 
 ---
 
@@ -502,7 +511,10 @@ The AO-basis MO coefficients are recovered by:
 \mathbf C = \mathbf X \mathbf C'
 \]
 
-Implemented in `build_orthogonalizer` in `src/scf/scf.cpp`.
+#### Planck Implementation Note
+
+Planck constructs this orthogonalizer in `build_orthogonalizer`
+(`src/scf/scf.cpp`).
 
 ### Initial Density Guess
 
@@ -513,18 +525,44 @@ completely neglecting electron-electron repulsion in the initial guess.
 
 ### SAD Guess
 
-Planck also supports a **superposition of atomic densities** (SAD) initial
-guess through `SCFGuess::SAD`. The implementation lives in `src/scf/sad.cpp`
-with the public entry points declared in `src/scf/sad.h`:
+The **superposition of atomic densities** (SAD) guess starts from a simple
+physical idea: instead of guessing the molecular density from the one-electron
+core Hamiltonian, first solve each atom in isolation, then add those atomic
+densities together in the molecular AO basis. This usually produces a more
+chemically reasonable starting point for stretched bonds, heteronuclear
+systems, and open-shell cases.
+
+For RHF, the reconstruction step is
+
+\[
+\bar P = X^T P_{\mathrm{raw}} X, \qquad X = S^{-1/2}
+\]
+
+followed by diagonalization of \(\bar P\), keeping the top
+\(n_{\mathrm{occ}} = N_e/2\) natural orbitals, and rebuilding
+
+\[
+P = 2 C_{\mathrm{occ}} C_{\mathrm{occ}}^T.
+\]
+
+For open-shell SAD, the same projection is performed separately for the alpha
+and beta raw densities, occupying the top \(n_\alpha\) and \(n_\beta\) natural
+orbitals with unit occupancy in each spin channel.
+
+This projection step matters because the literal block-summed atomic density is
+generally **not idempotent** and does not exactly correspond to a single Slater
+determinant in the molecular AO space. The projection turns it into the
+nearest proper SCF starting density while preserving the overall electron count
+to within the overlap-thresholding tolerance.
+
+#### Planck's SAD Construction
+
+Planck also supports a SAD initial guess through `SCFGuess::SAD`. The
+implementation lives in `src/scf/sad.cpp` with the public entry points
+declared in `src/scf/sad.h`:
 
 - `compute_sad_guess_rhf(calc)` for closed-shell RHF
 - `compute_sad_guess_open_shell(calc, n_alpha, n_beta)` for UHF and ROHF
-
-The guiding idea is simple: instead of guessing the molecular density from the
-one-electron core Hamiltonian, first solve each atom in isolation, then add
-those atomic densities together in the molecular AO basis. This usually
-produces a more chemically reasonable starting point for stretched bonds,
-heteronuclear systems, and open-shell cases.
 
 Planck builds that guess in four stages:
 
@@ -545,29 +583,6 @@ Planck builds that guess in four stages:
    diagonalized, and reconstructed from the leading natural orbitals so the
    final guess has the correct RHF or spin-resolved UHF/ROHF occupations.
 
-For RHF, the reconstruction step is
-
-\[
-\bar P = X^T P_{\mathrm{raw}} X, \qquad X = S^{-1/2}
-\]
-
-followed by diagonalization of \(\bar P\), keeping the top
-\(n_{\mathrm{occ}} = N_e/2\) natural orbitals, and rebuilding
-
-\[
-P = 2 C_{\mathrm{occ}} C_{\mathrm{occ}}^T.
-\]
-
-For open-shell SAD, Planck performs the same projection separately for the
-alpha and beta raw densities and occupies the top \(n_\alpha\) and \(n_\beta\)
-natural orbitals with unit occupancy in each spin channel.
-
-This projection step matters because the literal block-summed atomic density is
-generally **not idempotent** and does not exactly correspond to a single Slater
-determinant in the molecular AO space. The projection turns it into the
-nearest proper SCF starting density while preserving the overall electron count
-to within the overlap-thresholding tolerance.
-
 In `src/scf/scf.cpp`, the SAD path is selected before the usual HCore/SAO
 guess construction:
 
@@ -577,7 +592,7 @@ guess construction:
 
 So SAD is available for all three SCF flavors currently implemented by Planck.
 
-### When the Guess Matters: A Case Study
+### When the Guess Matters
 
 Different initial guesses can converge to **different SCF stationary points**.
 This is not a bug. SCF does not minimize the energy directly; it solves the
@@ -587,6 +602,12 @@ minimum is one such fixed point, but for a symmetric molecule there can be
 others — broken-symmetry stationary points where the density localizes
 asymmetrically across equivalent atoms. DIIS converges to whichever fixed
 point lies in the same basin as the initial guess.
+
+The two subsections below switch from this general SCF lesson to Planck-
+specific material: first a concrete validation case, then a current SAD
+caveat.
+
+#### Case Study: Planar Ethylene Without Symmetry
 
 A clean illustration is RHF/3-21G on planar ethylene with `use_symm false`:
 
@@ -655,6 +676,22 @@ dissociation. Treat HCore as a fine guess for asymmetric molecules and
 small clusters, but reach for SAD or `use_symm true` whenever the molecule
 has equivalent atoms.
 
+#### Current Planck Caveat: Isolated-Atom SAD
+
+There is one known exception that runs the *other* way. For a small **isolated
+closed-shell atom** the SAD guess can itself false-converge to a wrong SCF
+stationary point: a lone helium atom in cc-pVDZ settles at \(-2.85515\) Eh from
+SAD but at the correct \(-2.85516\) Eh (matching PySCF to \(10^{-10}\)) from
+HCore, each "converging" in five iterations at a different HOMO energy. The SAD
+atomic-density seed apparently lands in the wrong basin for a single small atom.
+This matters directly for the isolated-monomer references in a counterpoise
+calculation ([§22](#22-basis-set-superposition-error-and-the-counterpoise-correction)),
+where a core-Hamiltonian guess is the safer choice for those small fragments. The
+lesson is not that one guess is universally safer — it is that the converged SCF
+solution should be sanity-checked (symmetry of degenerate orbitals, dipole of a
+centrosymmetric system, agreement across guesses) rather than trusted because the
+iteration count looked reasonable.
+
 ### Wavefunction Stability Analysis
 
 The case study above raises a concrete question: how can the SCF tell
@@ -664,6 +701,8 @@ analysis** — diagonalizing the orbital Hessian (the second variation of the
 HF energy with respect to occupied-virtual orbital rotations) and checking
 its lowest eigenvalues. Negative eigenvalues mean an orbital rotation
 exists that lowers the energy.
+
+#### Planck Interface
 
 Planck implements this in [src/scf/stability.cpp](../src/scf/stability.cpp),
 gated by the input keywords
@@ -749,9 +788,10 @@ are reported:
 
 #### Following an Unstable Mode
 
-When a check fires and `stability_follow .true.`, Planck rotates the
-orbitals along the lowest unstable eigenvector and re-runs SCF. The
-rotation is built from the eigenvector \(R_{ai}\) (reshaped \(n_v \times
+When a check fires, one can rotate the orbitals along the lowest unstable
+eigenvector and re-run SCF. Planck exposes this through
+`stability_follow .true.` and implements the
+rotation with the eigenvector \(R_{ai}\) (reshaped \(n_v \times
 n_o\)) by the standard SVD trick: writing \(R = U_R \Sigma V_R^T\),
 
 \[
@@ -763,7 +803,7 @@ n_o\)) by the standard SVD trick: writing \(R = U_R \Sigma V_R^T\),
 
 This is exactly unitary at any step size, so the orbitals stay orthonormal.
 
-Two follow modes:
+Two follow modes are implemented in Planck:
 
 - **RHF → UHF (triplet external)** — the most common case. Planck promotes
   the calculator to UHF using a two-step broken-symmetry guess:
@@ -803,7 +843,7 @@ biradical solution — real, but unphysical for closed-shell ethylene at
 equilibrium. Larger basis sets and more correlation eliminate this
 spurious low UHF.
 
-#### Case Study: Twisted Ethylene, Guess Sensitivity, and the STO-3G Pathology
+#### Planck Validation Note: Twisted Ethylene, Guess Sensitivity, and the STO-3G Pathology
 
 A clean illustration of how guess choice, basis flexibility, and the follow
 machinery interact comes from running 90°-twisted ethylene
@@ -1003,7 +1043,7 @@ F'_{ab} \leftarrow F'_{ab} + \Delta
 
 This increases the HOMO-LUMO gap and prevents the SCF from alternating between
 states with different orbital occupations, at the cost of slower convergence
-near the solution. Level shift is applied in `run_rhf` and `run_uhf`.
+near the solution.
 
 ---
 
@@ -1048,13 +1088,20 @@ minimizes \(\|\sum_k c_k \mathbf e_k\|^2\). Using a Lagrange multiplier
 
 where \(B_{ij} = \mathrm{Tr}(\mathbf e_i^T \mathbf e_j)\).
 
-Solved via column-pivoted QR decomposition in Eigen. Implemented in the
-`DIISState::extrapolate()` method in `src/base/types.h`. Subspace is capped at
-`_DIIS_dim` (default 8) vectors, evicting the oldest on overflow.
+In practice this constrained linear system is solved with a numerically stable
+factorization of the augmented matrix. The DIIS subspace is typically capped at
+a small fixed dimension, with the oldest vectors discarded when the subspace
+fills.
 
 ---
 
 ## 8. Symmetry
+
+This chapter mixes two scopes. The basic point-group and projection-operator
+ideas are general quantum-chemistry theory. The later sections on monomial D2h
+screening, full-group petite lists, metric-correct spherical operation
+matrices, and the exact density covariance requirement describe the particular
+symmetry machinery used in Planck's integral and direct-SCF implementations.
 
 ### Point Group Detection
 
@@ -1122,7 +1169,7 @@ of each symmetry orbit need be computed and the rest filled in by permutation an
 sign. This is the lightest-weight integral reduction; its reach is exactly
 D\(_{2h}\), for the algebraic reason explained next.
 
-### Full Point-Group ERI Reduction
+### Planck's Full Point-Group ERI Reduction
 
 The coordinate-axis-reflection scheme above is limited to D\(_{2h}\). The reason is
 algebraic: a reflection through a coordinate plane sends a Cartesian Gaussian
@@ -1232,7 +1279,7 @@ value-neutral — the Schwarz bound is symmetry-invariant, so screening a repres
 screens its whole orbit, and the orbit slots written by distinct representatives are
 disjoint, so the parallel scatter needs only same-value atomic stores.
 
-### The Spherical-Harmonic Basis Needs the Metric
+### Planck's Spherical-Harmonic Full-Symmetry Path
 
 The reduction above is engine-Cartesian: the integral primitives, the petite list, and
 the skeleton ERI are all built in the Cartesian-Gaussian basis. In a spherical-harmonic
@@ -1288,7 +1335,7 @@ partially-occupied degenerate frontier are outside this scheme's remit — forci
 symmetric density would select a higher, non-variational solution — and run on the
 ordinary path instead.)
 
-### A Single Atom Is K\(_h\)
+### Planck Convention: A Single Atom Is K\(_h\)
 
 A lone atom has the full spherical symmetry group K\(_h\) (the three-dimensional
 rotation–reflection group \(O(3)\)). A point-group detector that derives the group
@@ -1306,12 +1353,13 @@ ERI-reduction machinery.
 
 ## 9. The Obara-Saika Integral Engine
 
-The default integral engine in Planck is the Obara-Saika (OS) recursion.
-One-electron overlap, kinetic, nuclear-attraction, multipole, and derivative
-integrals are all built through the OS path. Two-electron integrals can also
-use the Rys quadrature backend or the `Auto` hybrid mode, but the OS engine
-remains the reference implementation and supplies the low-angular-momentum path
-used by `Auto`.
+The Obara-Saika (OS) recursion is a standard workhorse for Gaussian-basis
+integrals. One-electron overlap, kinetic, nuclear-attraction, multipole, and
+derivative integrals are all naturally expressed in this framework, and
+two-electron integrals can also be built with OS recurrences. In hybrid
+integral engines it commonly serves as the low-angular-momentum path, with
+alternative schemes such as Rys quadrature taking over for higher angular
+momentum.
 
 ### Overlap Integral
 
@@ -1354,12 +1402,8 @@ S(l_A,\,l_B+1) = (P_x - B_x)\,S(l_A,\,l_B)
 
 The two recursions differ only in the first term (\(P_x - A_x\) vs
 \(P_x - B_x\)); the remainder terms are identical. The 3D overlap is a product
-of three independent 1D tables.
-
-In `os.cpp`, `_os_1d` evaluates the three-phase table for one Cartesian
-direction.
-`_compute_3d_overlap_kinetic` builds the overlap and kinetic energy for one
-`ShellPair` using this recursion and the kinetic energy relation:
+of three independent 1D tables. One-electron kinetic integrals are built from
+the same recurrence data through the kinetic-energy relation:
 
 \[
 T(l_A, l_B) = \frac{\beta(2l_B+3)}{1}\,S(l_A,l_B)
@@ -1367,9 +1411,8 @@ T(l_A, l_B) = \frac{\beta(2l_B+3)}{1}\,S(l_A,l_B)
             - \frac{l_B(l_B-1)}{2}\,S(l_A, l_B-2)
 \]
 
-The final overlap and kinetic integrals are assembled by `_compute_1e`, which
-loops over all `ShellPair` entries and places results into the \(n_b \times n_b\)
-matrices \(S\) and \(T\) using `sp.A._index` and `sp.B._index`.
+The final overlap and kinetic integrals are then assembled shell-pair by
+shell-pair into the \(n_b \times n_b\) matrices \(S\) and \(T\).
 
 ### Nuclear Attraction Integral
 
@@ -1394,8 +1437,8 @@ F_m(t) = \int_0^1 u^{2m} e^{-t u^2}\, du
 
 For large \(t\), the Boys function is computed via the asymptotic expansion
 \(F_m(t) \approx (2m-1)!!/(2t)^{m+1}\sqrt{\pi/t}\). For small \(t\), a
-Taylor series or Horner-scheme polynomial is used. Planck stores precomputed
-Boys function tables in `src/lookup/`.
+Taylor series, polynomial approximation, or tabulated interpolation is
+typically used.
 
 The vertical recursion for nuclear attraction auxiliary integrals:
 
@@ -1481,23 +1524,13 @@ and the symmetric ket transfer (C→D):
 (ab\,|\,c\,d) = (ab\,|\,c+1_i\,d-1_i) + (C_i - D_i)\,(ab\,|\,c\,d-1_i)
 \]
 
-In the implementation the same three-phase sweeping routine (`_nuclear_hrr`) is
-reused for both transfers; the C→D pass operates on the fixed A-side slice
-extracted after the A→B pass completes.
+Efficient implementations usually reuse the same underlying HRR machinery for
+both transfers, applying it first on the bra side and then on the ket side.
 
-**Thread-local dynamic scratch**. The VRR and HRR accumulators are large
-temporary tensors, but the current OS implementation no longer preallocates the
-worst-case arrays for every OpenMP thread. Instead, `_os_eri_primitive` uses a
-thread-local `EriScratch` object whose `vrr` and `hrr` vectors are resized to
-the actual angular-momentum extents of the current quartet:
-
-```text
-vrr size = (lABx+1)(lABy+1)(lABz+1)(lCDx+1)(lCDy+1)(lCDz+1)(mmax+1)
-hrr size = (lABx+1)(lABy+1)(lABz+1)(lCDx+1)(lCDy+1)(lCDz+1)
-```
-
-This preserves per-thread scratch ownership under OpenMP while avoiding the
-former fixed, worst-case gigabyte-scale VRR buffer for ordinary quartets.
+**Scratch storage.** The VRR and HRR accumulators are large temporary tensors,
+so practical implementations almost always use reusable scratch storage sized
+to the angular-momentum extents of the current quartet rather than
+preallocating worst-case arrays for every thread.
 
 ### Schwarz Screening
 
@@ -1507,19 +1540,17 @@ Before evaluating a quartet, the Schwarz inequality provides an upper bound:
 |(\mu\nu|\lambda\sigma)| \le \sqrt{(\mu\nu|\mu\nu)}\,\sqrt{(\lambda\sigma|\lambda\sigma)}
 \]
 
-Planck precomputes the Schwarz table \(Q(i,j) = \sqrt{|(ij|ij)|}\) for all
-unique diagonal pairs and skips any quartet where:
+One typically precomputes the Schwarz table \(Q(i,j) = \sqrt{|(ij|ij)|}\) for
+all unique diagonal pairs and skips any quartet where:
 
 \[
 Q(i,j) \cdot Q(k,l) < \epsilon_{ERI}
 \]
 
-This screening is applied in `_compute_2e`, `_compute_2e_fock`, and
-`_compute_2e_fock_uhf` in `os.cpp`, and in the full point-group reduction's shared
-skeleton build (`skeleton_eri.h`, used by both engines). The Schwarz table itself
-also honors integral symmetry operations: a representative pair is evaluated once and
-then the same bound is assigned across its AO symmetry orbit. The gradient code uses
-the same Schwarz criterion for ERI derivative contractions.
+The same criterion can be used in stored-ERI builds, direct Fock builders,
+symmetry-reduced quartet loops, and derivative-integral contractions. When
+symmetry is exploited, the Schwarz bound is constant across each quartet orbit,
+so screening one representative screens the whole orbit.
 
 ### Permutation Symmetry of the ERI Tensor
 
@@ -1530,19 +1561,13 @@ The ERI tensor has 8-fold permutation symmetry:
 = (\nu\mu|\sigma\lambda) = (\lambda\sigma|\mu\nu) = \cdots
 \]
 
-Planck iterates only over AO pair quartets with pair index \(p \le q\) and
-fills all 8 equivalent tensor slots after each computation. In the OpenMP
-stored-ERI builders (`_compute_2e`, `_compute_2e_fock`, and the UHF variant),
-the fill step goes through `write_eri_permutations(...)`, which uses OpenMP
-atomic writes for each tensor slot. The atomics are intentionally conservative:
-different canonical quartets can scatter the same mathematically identical
-permutation slot, so the shared tensor stores must still be race-free.
-
-When integral symmetry operations are active, the OS loop first builds the AO
-symmetry orbit of a pair or quartet and computes only its canonical
-representative. Forced-zero or non-representative quartets are skipped; accepted
-representatives are written back to every orbit element with the appropriate
-AO-sign factor.
+Practical stored-ERI implementations usually iterate only over canonical pair
+quartets and scatter each computed value into all permutation-equivalent tensor
+slots. In parallel codes those writes must still be race-free because different
+canonical quartets can map onto the same physical tensor entry. If point-group
+symmetry is also used, one computes only the canonical representative of each
+symmetry orbit and writes the value back to the remaining orbit elements with
+the appropriate phase factors.
 
 ---
 
@@ -1757,7 +1782,7 @@ and the total energy is identical whether one transforms the integrals up front
 discards the contamination at the end — because the contamination subspace does
 not couple to the harmonic subspace through the Hamiltonian.
 
-### Direct Fock Builds and the Projector Identity
+### Implementation Note: Direct Fock Builds and the Projector Identity
 
 There is a subtlety when the two-electron contribution is built *on the fly*
 (direct SCF) rather than from a stored, pre-transformed tensor. The on-the-fly
@@ -1823,6 +1848,10 @@ downstream.
 
 ## 11. Rys Quadrature
 
+This chapter starts with method-level theory. The implementation-file table and
+backend-selection discussion later in the section describe Planck's current
+integral stack.
+
 ### The Basic Idea
 
 The Obara-Saika VRR builds an \((L+1)\)-deep stack of auxiliary integrals at
@@ -1850,8 +1879,9 @@ exact number of Rys roots required is:
 n = \left\lfloor \frac{L}{2} \right\rfloor + 1
 \]
 
-Planck supports up to \(n = 11\) roots (`RYS_MAX_ROOTS`), corresponding to
-\(L \le 20\) (two H-shells). For S, P, D, F, G shells the root counts are:
+Implementations commonly tabulate or support roots up through the angular
+momenta relevant to their target basis sets. For S, P, D, F, G shells the root
+counts are:
 
 | Shell quartet | L | Roots |
 |---|---|---|
@@ -1867,11 +1897,9 @@ Planck supports up to \(n = 11\) roots (`RYS_MAX_ROOTS`), corresponding to
 ### Root Finding
 
 Computing the roots and weights for a given \(T\) is the central numerical
-challenge. Planck uses two strategies, selected by `rys_roots_weights` in
-`src/integrals/rys_roots.cpp`:
+challenge. A common strategy is:
 
-**One-root case**: For \(n = 1\), `rys_roots_weights(...)` uses the exact
-closed-form `rys_1pt(...)` path.
+**One-root case**: For \(n = 1\), use the exact closed-form one-point rule.
 
 **General case (Stieltjes-Jacobi procedure)**: For \(n > 1\), the Rys
 measure is \(e^{-Tt^2} dt\) on \([0,1]\). The roots and weights are obtained by
@@ -1880,14 +1908,14 @@ family with respect to this measure. The algorithm:
 
 1. Compute \(2n+1\) Boys moments
    \(F_m(T) = \int_0^1 t^{2m} e^{-Tt^2} dt\) in long double precision.
-   `_boys_moment(...)` returns the exact Gauss-Legendre-limit moment
-   \(1/(2m+1)\) when \(T\) is effectively zero, uses a convergent power series
-   for small nonzero \(T < 1\), and uses upward Boys recursion for larger \(T\).
+   In the \(T \to 0\) limit this reduces to the Gauss-Legendre moment
+   \(1/(2m+1)\); for small nonzero \(T\) a convergent power series is used, and
+   for larger \(T\) one switches to upward Boys recursion.
 2. Construct orthonormal polynomials via the Gram-Schmidt Stieltjes procedure,
    recording the diagonal (\(\alpha_k\)) and sub-diagonal (\(\beta_k\)) entries
    of the symmetric \(n \times n\) Jacobi matrix \(\mathbf J\).
-3. Diagonalize \(\mathbf J\) using Eigen's `SelfAdjointEigenSolver`. The
-   eigenvalues are the Rys roots \(t_r^2\); the weight for root \(r\) is
+3. Diagonalize \(\mathbf J\) with a symmetric eigensolver. The eigenvalues are
+   the Rys roots \(t_r^2\); the weight for root \(r\) is
    \(w_r = F_0(T) \cdot V_{0r}^2\) where \(V_{0r}\) is the first component of
    the \(r\)-th eigenvector. This is the Golub–Welsch formula.
 4. If the Gram-Schmidt procedure encounters a degenerate norm or the Jacobi
@@ -1932,13 +1960,13 @@ D_{00} = (Q_q - C_q) + u\,(W_q - Q_q)
 where \(\delta = \zeta + \eta\), \(\mathbf W = (\zeta\mathbf P + \eta\mathbf Q)/\delta\) is the
 weighted Gaussian product center, and \(q\) is the Cartesian direction. As
 \(u \to 0\) the root sits at the A-center (\(C_{00} \to P_q - A_q\)); as
-\(u \to 1\) the root sits at the W-center. These recurrences are implemented
-in `_rys_vrr_1d` in `src/integrals/rys.cpp`.
+\(u \to 1\) the root sits at the W-center. These recurrences are then evaluated
+independently for the \(x\), \(y\), and \(z\) directions.
 
 ### 6D Accumulation and HRR
 
-After running `_rys_vrr_1d` for all three Cartesian directions, the 3D outer
-product is accumulated into a six-index buffer:
+After running the 1D recurrence for all three Cartesian directions, the 3D
+outer product is accumulated into a six-index buffer:
 
 \[
 W[a_x][a_y][a_z][c_x][c_y][c_z]
@@ -1947,30 +1975,21 @@ W[a_x][a_y][a_z][c_x][c_y][c_z]
 
 This sum runs over all \(n\) roots. After the root loop the buffer holds
 \((a\,0\,|\,c\,0)\) intermediates analogous to those produced by the OS VRR.
-The thread-local six-index array `_rys_sum_buf[13][13][13][13][13][13]`
-stores this accumulated Rys intermediate. Unlike the current OS kernel, the
-Rys implementation still uses this fixed-size per-thread buffer because it only
-needs the 6D root-summed spatial slice, not the extra auxiliary-order \(m\)
-dimension that made the old OS VRR scratch so large.
+A practical implementation stores this accumulated Rys intermediate in a
+reusable six-index work buffer. Because the root sum needs only the spatial
+slice and not the extra auxiliary-order dimension of OS, the scratch pattern is
+typically simpler than in a deep VRR stack.
 
 Angular momentum is then transferred to the second center of each shell pair
-using the same HRR as the OS path:
-
-- **AB-HRR** (`_rys_hrr_ab`): \((a+1_i\,b-1_i\,|\,c\,d) + (A_i - B_i)(a\,b-1_i\,|\,c\,d)\)
-- **CD-HRR** (`_rys_hrr_cd`): operates on the 3D slice extracted at \((l_A, l_A, l_A)\)
-  after the AB sweep.
-
-The contracted ERI is obtained by summing the primitive results over all
-\((\alpha, \beta)\) and \((\gamma, \delta)\) primitive pairs inside
-`_rys_contracted_eri`.
+using the same HRR as the OS path, first on the bra pair and then on the ket
+pair. The contracted ERI is obtained by summing the primitive results over all
+\((\alpha, \beta)\) and \((\gamma, \delta)\) primitive pairs.
 
 ### Auto-Dispatch: OS vs. Rys Cost Model
 
-Planck's `auto` engine mode selects OS or Rys per contracted shell quartet using
-an analytic operation-count estimate (`_auto_prefers_rys` in `rys.cpp`). The
-dispatch happens inside `_auto_contracted_eri(...)`, which calls
-`RysQuad::_rys_contracted_eri(...)` when the estimate favors Rys and
-`ObaraSaika::_contracted_eri_elem(...)` otherwise.
+Hybrid integral engines often select OS or Rys per contracted shell quartet
+using an analytic operation-count estimate, dispatching to whichever scheme is
+predicted to be cheaper for that quartet.
 
 Define:
 
@@ -1997,22 +2016,12 @@ where \(n = \lfloor L/2 \rfloor + 1\) is the number of Rys roots and the
 constant 24 accounts for the per-root overhead of root finding and 1D
 coefficient computation. Rys is preferred when \(W_{\text{Rys}} < W_{\text{OS}}\).
 
-For a (dd|dd) quartet: \(L = 8\), \(n = 5\),
-\(\text{six\_d} = 3^4 \cdot 3^4 = \ldots\), and the Rys path wins because the
-OS stack grows as \(L+1 = 9\) deep while Rys only needs 5 root evaluations.
-For (ss|ss) through (sp|sp) the OS path is cheaper. The public constant
-`RYS_CROSSOVER_L = 4` documents the intended high-angular-momentum crossover,
-but the current `Auto` decision is the cost model above rather than a hard
-threshold-only branch.
-
-The Rys stored-ERI builders mirror the OS loop shape: build a Schwarz table,
-iterate pair quartets with \(p \le q\), skip screened quartets, compute a
-contracted ERI, and scatter the eight permutation-equivalent tensor slots. The
-Rys Fock builders then contract the stored tensor in the same row-owned
-OpenMP loops used by the OS path. A current implementation difference is that
-the `sym_ops` argument is accepted by the Rys public API for signature parity
-but is not applied inside the Rys quartet loops; symmetry-aware quartet-orbit
-pruning is currently an OS-only optimization.
+For a (dd|dd) quartet the Rys path is often favored because the OS stack grows
+with auxiliary order while Rys needs only a modest number of quadrature roots.
+For very low angular momentum, OS is usually cheaper. Stored-ERI and direct-Fock
+variants of the two schemes then differ mainly in how the contracted quartet
+value is produced; the surrounding Schwarz screening, canonical-quartet
+iteration, and tensor/Fock contraction patterns are often the same.
 
 ### Implementation Files
 
@@ -2059,9 +2068,11 @@ transformation:
 (ia|jb) = \sum_{\mu\nu\lambda\sigma} C_{\mu i} C_{\nu a} (\mu\nu|\lambda\sigma) C_{\lambda j} C_{\sigma b}
 \]
 
-Planck performs this transformation via a sequence of half-transformations
-(AO→MO in bra, then AO→MO in ket) to reduce the \(O(n^8)\) naive cost to
-\(O(n^5)\). Implemented in `src/post_hf/integrals.cpp`.
+Performing this contraction as written would cost \(O(n^8)\). The standard trick
+is to transform one index at a time — a sequence of quarter-transformations
+(AO→MO in the bra pair, then AO→MO in the ket pair) — so that each step is a
+matrix multiplication over a single index and the overall cost drops to
+\(O(n^5)\).
 
 ### UMP2 (Open-Shell)
 
@@ -2080,11 +2091,16 @@ E_{UMP2}^{OS} = -\sum_{i^\alpha j^\beta a^\alpha b^\beta}
 {\varepsilon_{i^\alpha} + \varepsilon_{j^\beta} - \varepsilon_{a^\alpha} - \varepsilon_{b^\beta}}
 \]
 
-Implemented in `run_ump2` in `src/post_hf/mp2.cpp`.
+The same-spin channels use antisymmetrized integrals (only \(\alpha\alpha\) and
+\(\beta\beta\) excitations contribute), while the opposite-spin channel sums over
+mixed \(\alpha\beta\) excitations with the bare Coulomb integral. The total
+correlation energy is \(E_{UMP2} = E_{UMP2}^{SS} + E_{UMP2}^{OS}\); reporting the
+two contributions separately is useful because spin-component-scaled variants
+(SCS-MP2) reweight them independently.
 
 ### RMP2 Natural Orbitals
 
-After the correlation energy is computed, Planck diagonalizes the unrelaxed RMP2 one-particle density matrix to produce **natural orbitals** (NOs) and their occupation numbers. The unrelaxed density is block-diagonal in the canonical MO basis:
+Once the correlation energy is in hand, the unrelaxed RMP2 one-particle density matrix can be diagonalized to produce **natural orbitals** (NOs) and their occupation numbers. The unrelaxed density is block-diagonal in the canonical MO basis:
 
 \[
 \gamma^{MP2}_{pq} = \begin{cases}
@@ -2094,13 +2110,15 @@ P^{virt}_{ab} + P^{virt}_{ba} & p,q \in \text{virtual} \\
 \end{cases}
 \]
 
-where \(P^{occ}\) and \(P^{virt}\) are the occupied-occupied and virtual-virtual MP2 density corrections assembled in `build_rmp2_unrelaxed_density`. The symmetrized matrix is diagonalized by `compute_rmp2_natural_orbitals` in `src/post_hf/mp2.cpp` using Eigen's `SelfAdjointEigenSolver`. Eigenvalues are sorted in descending order; eigenvectors give the canonical-MO → natural-orbital rotation. The AO-basis coefficients are obtained by left-multiplying with the HF MO coefficient matrix:
+where \(P^{occ}\) and \(P^{virt}\) are the occupied-occupied and virtual-virtual MP2 density corrections. The "unrelaxed" qualifier means the occupied-virtual block (which would require solving the coupled-perturbed HF equations, see [§14](#14-coupled-perturbed-hf-and-the-mp2-gradient)) is set to zero — this density gives natural orbitals cheaply but is not the fully relaxed density used for properties like the dipole.
+
+Diagonalizing the symmetrized density (a real symmetric eigenproblem) gives eigenvalues sorted in descending order and eigenvectors \(\mathbf U\) that define the canonical-MO → natural-orbital rotation. The AO-basis natural-orbital coefficients follow by left-multiplying with the HF MO coefficient matrix:
 
 \[
 \mathbf C^{NO}_{AO} = \mathbf C^{HF}_{AO} \cdot \mathbf U^{MO \to NO}
 \]
 
-The result struct `RMP2NaturalOrbitals` carries three fields: `occupations` (descending eigenvalues), `coefficients_mo` (the rotation \(\mathbf U\)), and `coefficients_ao`. Occupation numbers near 2 indicate strongly occupied HF-like NOs; values of 0.01–0.1 indicate correlation-driven virtual occupation. These can guide active-space selection for a subsequent CASSCF calculation.
+The eigenvalues are the natural-orbital occupation numbers. Values near 2 indicate strongly occupied, HF-like orbitals; values of roughly 0.01–0.1 mark correlation-driven occupation of nominally virtual orbitals. Because those fractionally occupied NOs are exactly the orbitals where a single determinant is inadequate, the occupation spectrum is a practical guide for selecting an active space for a subsequent CASSCF calculation.
 
 ---
 
@@ -2337,6 +2355,10 @@ own geometry dependence.
 
 #### Code Mapping
 
+This subsection is intentionally implementation-specific. The gradient formulas
+above are general; the file and function map below explains how Planck
+organizes them today.
+
 Planck’s implementation follows the decomposition above:
 
 - `src/dft/base/grid.h` stores the owner atom, unpartitioned atomic weight, and
@@ -2383,15 +2405,14 @@ The relaxed density is obtained from the Z-vector equation:
 \]
 
 where \(\mathbf A\) is the orbital Hessian (also the CPHF matrix) and
-\(\mathbf L\) is the MP2 Lagrangian source term. `build_rhf_cphf_matrix` in
-`src/post_hf/rhf_response.cpp` builds \(\mathbf A\). The final gradient is then
+\(\mathbf L\) is the MP2 Lagrangian source term. The final gradient is then
 assembled from the relaxed density and the appropriate derivative integrals.
 
 ### UMP2 Gradient Intermediates
 
 The UMP2 gradient starts from canonical UHF orbitals and keeps the MP2
-correction spin-resolved. `build_ump2_gradient_intermediates` in
-`src/post_hf/mp2_gradient.cpp` builds three MO integral blocks:
+correction spin-resolved. A convenient organization is to build three MO
+integral blocks:
 
 - \((i^\alpha a^\alpha|j^\alpha b^\alpha)\) for alpha-alpha same-spin pairs
 - \((i^\beta a^\beta|j^\beta b^\beta)\) for beta-beta same-spin pairs
@@ -2418,10 +2439,9 @@ t^{ab}_{ij,\alpha\beta} =
 These amplitudes populate spin-specific occupied/virtual 1-PDM corrections
 \(D^\alpha\) and \(D^\beta\), an AO-space spin-summed energy-weighted density
 \(W\), and an explicit AO pair-density correction \(\Gamma^{MP2}\). The final
-driver entry point, `compute_ump2_gradient` in `src/gradient/gradient.cpp`,
-combines those objects with the UHF reference two-particle density expression
-and reuses the same derivative-integral contraction infrastructure as the RHF,
-UHF, and RMP2 gradients.
+gradient combines those objects with the UHF reference two-particle density
+expression and reuses the same derivative-integral contraction infrastructure
+as the RHF, UHF, and RMP2 gradients.
 
 ---
 
@@ -3464,7 +3484,7 @@ molecule in cc-pVDZ (\(K=24\)) gives \(\binom{24}{5}^2 \approx 1.8\times 10^9\) 
 already intractable by dense diagonalization. FCI is thus an exact method that is
 only *affordable* for small molecules in small bases, which is precisely why it
 serves as a benchmark rather than a production method, and why any practical
-implementation must cap the allowed determinant count.
+practical computations must cap the allowed determinant count.
 
 Because the alpha and beta strings are independent, the CI coefficient vector has
 the natural structure of a matrix \(c_{I_\alpha I_\beta}\). This factorization is
@@ -4108,6 +4128,9 @@ by projecting each normal mode onto the SAO blocks and determining its irrep.
 
 ## 20. Kohn-Sham Density Functional Theory
 
+Most of this chapter is general KS-DFT theory. The explicit grid presets,
+supported-functional notes, and code maps are Planck-specific documentation.
+
 ### The Kohn-Sham Equations
 
 Kohn-Sham DFT maps the interacting many-electron problem onto a fictitious system of non-interacting electrons moving in an effective potential \(v_s(\mathbf r)\) that yields the same ground-state density as the real system. The total electronic energy is:
@@ -4122,15 +4145,15 @@ where \(T_s\) is the non-interacting kinetic energy, \(V_{ne}\) is the electron-
 F^{KS}_{\mu\nu} = h_{\mu\nu} + J_{\mu\nu} + V^{xc}_{\mu\nu}
 \]
 
-This is identical in structure to the HF Fock matrix, with the HF exchange matrix \(K\) replaced by the XC potential matrix \(V^{xc}\). Planck reuses the HF SCF loop for KS-DFT: the only structural difference is how the two-electron contribution to the Fock matrix is assembled (Coulomb only, no exchange, plus \(V^{xc}\) from numerical integration).
+This is identical in structure to the HF Fock matrix, with the HF exchange matrix \(K\) replaced by the XC potential matrix \(V^{xc}\). In a Gaussian-basis implementation the KS and HF SCF loops therefore look very similar: the main structural difference is how the two-electron contribution to the Fock matrix is assembled (Coulomb only, no exchange, plus \(V^{xc}\) from numerical integration).
 
-For semilocal functionals this statement is literal. For hybrids, Planck adds
-the exact-exchange part back explicitly. Global hybrids use a scaled full-range
-exchange matrix. Range-separated hybrids and range-separated double hybrids use
-the screened-ERI path introduced in the integral engines: the KS build forms
-\(\alpha K^{\text{full}} + \beta K^{\text{SR}}(\omega)\), where \(\alpha\),
-\(\beta\), and \(\omega\) come from libxc's CAM metadata. Double hybrids then
-add a post-KS MP2-like correction scaled by the libxc PT2 coefficient.
+For semilocal functionals this statement is literal. For hybrids one adds
+exact exchange back explicitly. Global hybrids use a scaled full-range exchange
+matrix. Range-separated hybrids and range-separated double hybrids split the
+exchange into full-range and short-range pieces, so the KS build forms
+\(\alpha K^{\text{full}} + \beta K^{\text{SR}}(\omega)\), with coefficients
+set by the chosen functional. Double hybrids then add a post-KS MP2-like
+correction scaled by the functional's perturbative coefficient.
 
 ### Exchange-Correlation Functional Families
 
@@ -4142,7 +4165,7 @@ The XC energy depends only on the local electron density \(\rho(\mathbf r)\):
 E_{xc}^{LDA}[\rho] = \int \rho(\mathbf r)\, \varepsilon_{xc}^{LDA}(\rho(\mathbf r))\, d\mathbf r
 \]
 
-Planck's LDA components:
+Common LDA components include:
 - **Slater exchange** (`lda_x` in libxc): the Dirac expression \(\varepsilon_x = -\tfrac{3}{4}\left(\tfrac{3}{\pi}\right)^{1/3}\rho^{1/3}\)
 - **VWN5 correlation** (`lda_c_vwn_5`): Vosko-Wilk-Nusair parametrisation of the uniform electron gas correlation energy (the most common LDA correlation functional)
 
@@ -4156,7 +4179,7 @@ The XC energy also depends on the density gradient:
 E_{xc}^{GGA}[\rho] = \int f(\rho(\mathbf r),\, |\nabla\rho(\mathbf r)|^2)\, d\mathbf r
 \]
 
-GGA functionals satisfy more exact constraints than LDA and generally give better geometries and energies. Planck's GGA components and their common pairings:
+GGA functionals satisfy more exact constraints than LDA and generally give better geometries and energies. Common exchange-correlation pairings include:
 
 | Exchange | Correlation | Combination name |
 |---|---|---|
@@ -4183,7 +4206,7 @@ short-range pieces,
 \]
 
 and then apply different exact-exchange fractions to the two pieces. In
-Planck's current libxc-driven notation the implemented KS exchange build is
+A convenient parameterization of the exact-exchange contribution is
 
 \[
 K^{xc}_{exact} = \alpha K^{full} + \beta K^{SR}(\omega).
@@ -4199,10 +4222,9 @@ Double hybrids extend the hybrid idea once more:
 E^{DH} = E^{KS-hyb} + c_{PT2} E^{(2)}.
 \]
 
-In Planck the converged KS reference is followed by an RHF/UHF-based MP2-like
-correction from `src/post_hf/mp2.cpp`, scaled by the libxc PT2 coefficient.
-For B2PLYP, for example, libxc supplies \(a_x = 0.53\) and
-\(c_{PT2} = 0.27\).
+In a double hybrid, the converged KS reference is followed by an RHF/UHF-based
+MP2-like correction scaled by the functional's PT2 coefficient. For B2PLYP,
+for example, one commonly uses \(a_x = 0.53\) and \(c_{PT2} = 0.27\).
 
 ### Numerical Integration: Molecular Grid
 
@@ -4213,19 +4235,20 @@ V^{xc}_{\mu\nu} = \int \phi_\mu(\mathbf r)\, v_{xc}(\mathbf r)\, \phi_\nu(\mathb
 \approx \sum_g w_g\, \phi_\mu(\mathbf r_g)\, v_{xc}(\mathbf r_g)\, \phi_\nu(\mathbf r_g)
 \]
 
-The sum runs over quadrature grid points \(\{\mathbf r_g, w_g\}\). Planck builds the molecular grid from three layers:
+The sum runs over quadrature grid points \(\{\mathbf r_g, w_g\}\). A standard
+molecular grid is built from three layers:
 
 #### Radial grid — Treutler-Ahlrichs M4
 
-Each atom's radial shells are placed according to the Treutler-Ahlrichs M4 mapping, which concentrates points near the nucleus (where \(\rho\) varies rapidly) and uses element-specific radii (`treutler_radius(Z)` in `src/dft/base/radial.h`). The number of radial shells is an increasing function of both the grid quality preset and the row of the periodic table.
+Each atom's radial shells are placed according to the Treutler-Ahlrichs M4 mapping, which concentrates points near the nucleus (where \(\rho\) varies rapidly) and uses element-specific radii. The number of radial shells is an increasing function of both the grid quality preset and the row of the periodic table.
 
 #### Angular grid — Lebedev quadrature
 
-At each radial shell, angular integration is performed using a Lebedev grid of order \(N_\Omega\) (`MakeLebedevGrid(N)` in `src/dft/base/angular.h`). Lebedev grids integrate polynomials in \((x, y, z)\) exactly up to a maximum degree that grows with \(N_\Omega\). Planck uses five angular shell sizes arranged in five radial regions (pruning).
+At each radial shell, angular integration is performed using a Lebedev grid of order \(N_\Omega\). Lebedev grids integrate polynomials in \((x, y, z)\) exactly up to a maximum degree that grows with \(N_\Omega\). Many practical grids use five angular shell sizes arranged in five radial regions (pruning).
 
 #### Five-region pruning
 
-To reduce cost without sacrificing accuracy, the molecular grid is pruned: regions far from and very close to the nucleus use coarser angular grids, while the valence shell region uses the finest grid. The five regions and their shell sizes are controlled by `angular_shells_for_scheme` in `src/dft/base/grid.h`.
+To reduce cost without sacrificing accuracy, the molecular grid is pruned: regions far from and very close to the nucleus use coarser angular grids, while the valence shell region uses the finest grid.
 
 #### Becke partitioning
 
@@ -4235,7 +4258,7 @@ A single-centre quadrature cannot integrate the full molecular density accuratel
 \mu_{ij} = \frac{|\mathbf r - \mathbf R_i| - |\mathbf r - \mathbf R_j|}{|\mathbf R_i - \mathbf R_j|}
 \]
 
-Three applications of the Hermite switch \(f_k(\mu) = \tfrac{3}{2}\mu - \tfrac{1}{2}\mu^3\) smooth the partition. Planck uses Treutler-Becke size-adjusted partitioning (`treutler_becke_adjustment` in `src/dft/base/grid.h`), which accounts for the different atomic radii of unlike atom pairs. The effective grid weight at point \(\mathbf r\) on atom \(i\) is:
+Three applications of the Hermite switch \(f_k(\mu) = \tfrac{3}{2}\mu - \tfrac{1}{2}\mu^3\) smooth the partition. A common refinement is Treutler-Becke size-adjusted partitioning, which accounts for the different atomic radii of unlike atom pairs. The effective grid weight at point \(\mathbf r\) on atom \(i\) is:
 
 \[
 w_i(\mathbf r) = \frac{P_i(\mathbf r)}{\sum_k P_k(\mathbf r)} \cdot w_i^{radial-angular}
@@ -4251,19 +4274,16 @@ w_i(\mathbf r) = \frac{P_i(\mathbf r)}{\sum_k P_k(\mathbf r)} \cdot w_i^{radial-
 | `UltraFine` | 6 | 50 / 302 / 434 / 590 / 434 |
 
 The practical lesson from cross-code benchmarking is that the choice of grid
-matters as much as the SCF convergence threshold. Planck's molecular grids are
-ORCA-like Treutler-Ahlrichs + pruned Lebedev grids; PySCF's `grids.level`
-presets are different quadrature families. On the current H\(_2\)/STO-3G DFT
-fixtures, coarse-grid Planck-vs-PySCF comparisons differ by about
-\(10^{-3}\) Eh even for ordinary B3LYP, while `fine` and `ultrafine` grids
-reduce the gap back to \(10^{-6}\) to \(10^{-7}\) Eh. This is why the PySCF
-equivalence scripts in `tests/pyscf/` force `fine` grids for the DFT cases.
+matters as much as the SCF convergence threshold. Different programs often use
+different radial maps, pruning schemes, and angular shell families, so
+cross-code comparisons should align grid quality carefully before interpreting
+small energy differences as functional or implementation errors.
 
 ### AO Evaluation on the Grid
 
-`AOGridEvaluation` (declared in `src/dft/ao_grid.h`) stores the AO values and
-gradients at every grid point in a matrix of shape `(N_grid, N_AO)`. These are
-computed once before the KS iteration begins. For each grid point and each AO
+The AO values and gradients at every grid point are typically stored in arrays
+of shape `(N_grid, N_AO)`. These are computed once before the KS iteration
+begins. For each grid point and each AO
 \(\phi_\mu\), the value and Cartesian gradient components are evaluated from the
 contracted shell data in the `Basis` object.
 
@@ -4275,9 +4295,9 @@ Given the density matrix \(P_{\mu\nu}\), the electron density at grid point \(g\
 \rho(\mathbf r_g) = \sum_{\mu\nu} P_{\mu\nu}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\mathbf r_g)
 \]
 
-For GGA functionals, the gradient \(\nabla\rho\) and the reduced gradient invariant \(\sigma = |\nabla\rho|^2\) are also needed. Both are assembled in `evaluate_density_on_grid` (`src/dft/xc_grid.cpp`).
+For GGA functionals, the gradient \(\nabla\rho\) and the reduced gradient invariant \(\sigma = |\nabla\rho|^2\) are also needed.
 
-The libxc library (`src/dft/base/wrapper.h`) is then called with the density (and gradient for GGA) arrays to return the XC energy density \(\varepsilon_{xc}(\rho)\) and the potential derivatives \(v_\rho = \partial(\rho\varepsilon_{xc})/\partial\rho\) and \(v_\sigma = \partial(\rho\varepsilon_{xc})/\partial\sigma\). The XC energy is:
+An XC library such as libxc is then called with the density (and gradient for GGA) arrays to return the XC energy density \(\varepsilon_{xc}(\rho)\) and the potential derivatives \(v_\rho = \partial(\rho\varepsilon_{xc})/\partial\rho\) and \(v_\sigma = \partial(\rho\varepsilon_{xc})/\partial\sigma\). The XC energy is:
 
 \[
 E_{xc} = \sum_g w_g\, \rho(\mathbf r_g)\, \varepsilon_{xc}(\mathbf r_g)
@@ -4292,11 +4312,11 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 + 2\sum_g w_g\, \mathbf v_{\sigma,g} \cdot \nabla\rho_g \cdot \left[\phi_\mu \nabla\phi_\nu + \phi_\nu \nabla\phi_\mu\right]_g
 \]
 
-The second term (present only for GGA) involves the density gradient and the AO gradients on the grid. Both terms are assembled in `assemble_xc_matrix` (`src/dft/ks_matrix.cpp`).
+The second term (present only for GGA) involves the density gradient and the AO gradients on the grid.
 
 ### KS-DFT SCF Loop
 
-The KS SCF loop in `DFT::Driver::run` follows the same outer structure as the HF loop:
+The KS SCF loop follows the same outer structure as the HF loop:
 
 1. Compute 1e integrals (\(S\), \(T\), \(V_{ne}\)), build orthogonalizer, form initial guess
 2. At each iteration:
@@ -4307,7 +4327,7 @@ The KS SCF loop in `DFT::Driver::run` follows the same outer structure as the HF
    e. Form the KS Fock matrix \(F^{KS} = h + J + V^{xc}\)
    f. Solve the KS secular equation, update \(P\), check convergence
 
-The `KSPotentialMatrices` struct holds the Coulomb, XC-alpha, and XC-beta matrices and their sum (the full KS two-electron+XC potential). For RKS the alpha and beta components are identical; for UKS they differ because \(\rho_\alpha \neq \rho_\beta\).
+For RKS the alpha and beta XC contributions are identical; for UKS they differ because \(\rho_\alpha \neq \rho_\beta\).
 
 ### DFT Code Map
 
@@ -4676,6 +4696,10 @@ the dielectric; the polarized dielectric back-polarizes the solute via a
 *reaction field*, which is added self-consistently to the Fock or Kohn-Sham
 matrix during the SCF iterations.
 
+The electrostatic model and self-consistent coupling described below are
+general PCM ideas. The implementation-file list, input syntax, and current
+limitations remain Planck-specific.
+
 Implementation files:
 
 - `src/solvation/pcm.{h,cpp}` — cavity construction, surface-charge solver,
@@ -4784,17 +4808,17 @@ D_{ii} = k\,\sqrt{\frac{4\pi}{a_i}},
 \]
 
 which is the Coulomb self-energy of a uniformly charged disc of area \(a_i\)
-up to a small numerical factor. Planck uses
+up to a small numerical factor. A common practical choice is
 
 \[
 k = 1.07 \quad (\texttt{ISWIG\_DIAGONAL\_SCALE} \text{ in } \texttt{pcm.cpp}),
 \]
 
 the empirical correction of Pascual-Ahuir, Silla and Tuñon (the "ISWIG"
-prescription) that gives accurate solvation free energies for a range of
+prescription), which gives accurate solvation free energies for a range of
 solvents. The matrix \(\mathbf{D}\) is dense, symmetric, and positive-definite,
-which is why a Cholesky-class factorization (`Eigen::LDLT`) is used to solve
-for the apparent charges.
+which is why a Cholesky-class factorization is a natural way to solve for the
+apparent charges.
 
 ### Total Solute Potential at the Surface
 
@@ -4809,16 +4833,16 @@ an electronic piece:
 \Bigr],
 \]
 
-where the sign convention used in `pcm.cpp` folds the electron sign into the
+where one may choose a sign convention that folds the electron sign into the
 integral matrix \(\mathbf{V}^{(i)}\). The matrices \(\mathbf{V}^{(i)}\) are
 *independent of the density*: each is just the AO matrix of a unit point
-charge placed at \(\mathbf{s}_i\), and is computed exactly once during
-`build_pcm_state` via `_compute_external_charge_attraction(... unit_charge ...)`.
-The cost of one cavity build is therefore \(N_{\text{tess}}\) one-electron
-nuclear-attraction builds, each cheap relative to the two-electron problem.
+charge placed at \(\mathbf{s}_i\), and is computed exactly once during the
+cavity build. The cost of one cavity build is therefore \(N_{\text{tess}}\)
+one-electron nuclear-attraction builds, each cheap relative to the two-electron
+problem.
 
 The nuclear potential \(\phi^{\text{nuc}}_i\) is also density-independent and
-is cached up front in `state.nuclear_potential`. During the SCF loop, the only
+is cached up front. During the SCF loop, the only
 \(O(N_{\text{tess}})\) work that depends on the current density is the
 contraction
 
@@ -4830,16 +4854,13 @@ contraction
 
 ### Apparent Charges and the Reaction-Field Operator
 
-With the precomputed pieces in hand, each SCF iteration in
-`evaluate_pcm_reaction_field` does:
+With the precomputed pieces in hand, each SCF iteration does:
 
 1. **Total potential at the surface:**
    \(\phi^{\text{tot}}_i = \phi^{\text{nuc}}_i + \sum_{\mu\nu} P_{\mu\nu}\,V^{(i)}_{\mu\nu}\).
 2. **Solve C-PCM linear system:**
    \(\mathbf{D}\,\mathbf{q} = -f(\varepsilon)\,\boldsymbol{\phi}^{\text{tot}}\)
-   via the Cholesky-class `Eigen::LDLT` factorization built once and re-solved
-   each iteration. (The factorization could be cached across iterations; it is
-   recomputed for clarity.)
+   via a Cholesky-class factorization built once and re-solved each iteration.
 3. **Reaction-field operator in AO basis:**
    \(V^{\text{rxn}}_{\mu\nu} = \sum_i q_i \, V^{(i)}_{\mu\nu}\)
    — a linear combination of the precomputed unit-charge matrices.
@@ -4853,7 +4874,7 @@ every SCF iteration alongside the Coulomb and exchange terms.
 
 ### Coupling to the SCF / KS-DFT Loop
 
-For RHF (`run_rhf` in `scf.cpp`) the working Fock matrix becomes
+For RHF the working Fock matrix becomes
 
 \[
 \mathbf{F} = \mathbf{F}^{\text{gas}} + \mathbf{V}^{\text{rxn}},
@@ -4869,8 +4890,7 @@ where \(E^{\text{gas}}_{\text{elec}}\) is the standard
 \(\tfrac{1}{2}\mathrm{tr}[\mathbf{P}(\mathbf{H}^{\text{core}} + \mathbf{F}^{\text{gas}})]\)
 formed *before* PCM is added.
 
-For UHF (`run_uhf` in `scf.cpp`) the same reaction-field operator is added to
-*both* spin Fock matrices,
+For UHF the same reaction-field operator is added to *both* spin Fock matrices,
 
 \[
 \mathbf{F}_\alpha = \mathbf{F}_\alpha^{\text{gas}} + \mathbf{V}^{\text{rxn}}, \qquad
@@ -4879,17 +4899,17 @@ For UHF (`run_uhf` in `scf.cpp`) the same reaction-field operator is added to
 
 because \(V^{\text{rxn}}\) is built from the *total* density
 \(\mathbf{P} = \mathbf{P}_\alpha + \mathbf{P}_\beta\) and is spin-independent.
-The same pattern is used in the KS-DFT driver (`src/dft/driver.cpp`): RKS adds
-\(\mathbf{V}^{\text{rxn}}\) to the single Fock matrix; UKS adds the same
+The same pattern is used in KS-DFT: RKS adds \(\mathbf{V}^{\text{rxn}}\) to
+the single Fock matrix; UKS adds the same
 operator to both spin channels. In every case the solvation energy
 \(G^{\text{rxn}}\) is added to the electronic part of the total energy *once*,
 not twice — the \(\tfrac{1}{2}\) prefactor in \(G^{\text{rxn}}\) is exactly the
 factor that prevents double counting when the reaction-field operator is also
 inside \(\mathbf{F}\).
 
-The DFT driver further reports the converged solvation energy separately as
-"PCM Solvation Energy : … Eh" so the user can see the dielectric stabilization
-distinct from the gas-phase total.
+Many program outputs also report the converged solvation energy separately so
+the user can see the dielectric stabilization distinct from the gas-phase
+total.
 
 ### Input Format and Solvent Library
 
@@ -4966,7 +4986,142 @@ reaction-field operator) are not implemented.
 
 ---
 
-## 22. Molecular Properties
+## 22. Basis Set Superposition Error and the Counterpoise Correction
+
+When you compute the interaction energy of a dimer \(A\cdots B\) as
+
+\[
+\Delta E_{\text{raw}} = E_{AB} - E_A - E_B,
+\]
+
+the answer is contaminated by an artifact called **basis set superposition
+error (BSSE)**. In the dimer calculation, the basis functions centered on
+\(B\) are available to help describe the electrons of \(A\) (and vice versa).
+In the isolated-monomer calculations, each monomer has only its own basis
+functions. The dimer is therefore described in a *larger* effective basis than
+the sum of the monomers, so \(E_{AB}\) is artificially lowered relative to
+\(E_A + E_B\). The result is a spurious *over*-binding that vanishes only at the
+complete-basis-set limit. With small bases it can be large — for the water
+dimer in STO-3G it is roughly half of the total interaction energy.
+
+### Ghost atoms
+
+The fix, due to Boys and Bernardi, is the **counterpoise (CP) correction**.
+The idea: recompute each monomer *in the full dimer basis*, so it too enjoys
+the extra basis functions, and subtract that lowering out. The device that
+makes this possible is the **ghost atom** — a center that carries basis
+functions but no nuclear charge and no electrons.
+
+A ghost atom keeps its element identity, so the appropriate basis shells are
+placed at its position, but it contributes **zero** to every physical quantity
+of the wavefunction:
+
+- it adds **no electrons** (the electron count is \(\sum_A Z_A - q\) summed over
+  *real* nuclei only),
+- it adds **no nuclear repulsion**, since \(Z_{\text{ghost}} = 0\) makes every
+  \(Z_A Z_{\text{ghost}} / R\) term vanish,
+- it adds **no electron-nucleus attraction**, since the \(-Z_{\text{ghost}}/r\)
+  term it would place in \(\mathbf V_{ne}\) is zero.
+
+What the ghost *does* contribute is its basis functions: they enlarge the AO
+space, enter the overlap \(\mathbf S\), the kinetic matrix \(\mathbf T\), and
+the two-electron integrals exactly as ordinary functions, and so they are
+available to the real electrons. A single helium atom placed in the AO basis of
+an absent partner 3 Å away is still a 2-electron RHF problem, but it variationally
+exploits the extra functions and lands slightly below isolated helium in its own
+basis — that lowering *is* the basis-set extension energy that BSSE is made of.
+
+A practical note: a ghost breaks whatever point-group symmetry the *real* nuclei
+possess (a ghost at one site of an otherwise-symmetric dimer is not equivalent
+to the real atom it shadows), so symmetry-adapted machinery must be disabled
+whenever ghosts are present.
+
+### The five counterpoise energies
+
+For a dimer with fragments \(A\) and \(B\), the CP procedure runs five SCF
+calculations:
+
+| Calculation | Geometry | Basis | System |
+|-------------|----------|-------|--------|
+| \(E_{AB}\)   | dimer | dimer basis | full dimer |
+| \(E_A\)      | \(A\) in place | \(A\)'s basis only | monomer \(A\) |
+| \(E_B\)      | \(B\) in place | \(B\)'s basis only | monomer \(B\) |
+| \(E_A^{*}\)  | \(A\) in place | dimer basis (\(B\) ghosted) | monomer \(A\) |
+| \(E_B^{*}\)  | \(B\) in place | dimer basis (\(A\) ghosted) | monomer \(B\) |
+
+For the *free* monomers the partner atoms are absent entirely (true monomer
+basis); for the *starred* monomers the partner atoms are present as ghosts (full
+dimer basis). All geometries are frozen at the dimer geometry — CP corrects the
+basis, not the structure.
+
+The derived quantities are
+
+\[
+\text{BSSE} = (E_A^{*} - E_A) + (E_B^{*} - E_B) \le 0,
+\]
+\[
+\Delta E_{\text{raw}} = E_{AB} - E_A - E_B, \qquad
+\Delta E_{\text{CP}} = E_{AB} - E_A^{*} - E_B^{*} = \Delta E_{\text{raw}} - \text{BSSE}.
+\]
+
+Each starred monomer is *lower* than its free counterpart — more basis functions
+can only lower a variational energy — so the BSSE is always non-positive and the
+CP correction always makes the interaction *less* binding.
+
+### Two worked examples
+
+**He\(_2\) / cc-pVDZ at 3 Å.** The five energies (Hartree) are
+
+\[
+\begin{aligned}
+E_{AB} &= -5.71032009, & E_A = E_B &= -2.85516048, \\
+E_A^{*} = E_B^{*} &= -2.85517107.
+\end{aligned}
+\]
+
+Then \(\text{BSSE} = 2(E_A^{*}-E_A) = -2.1\times10^{-5}\) Eh \(= -0.013\)
+kcal/mol, \(\Delta E_{\text{raw}} = +0.0005\) kcal/mol, and
+\(\Delta E_{\text{CP}} = \Delta E_{\text{raw}} - \text{BSSE} = +0.014\) kcal/mol.
+Hartree-Fock has no dispersion, so He\(_2\) is genuinely unbound. The raw number
+shows a spurious whisper of binding; removing the BSSE restores the correct
+sign — a small repulsion. This is the diagnostic value of CP: it tells you how
+much of an apparent interaction is real and how much is the basis cheating.
+
+**Water dimer / STO-3G.** Here the raw interaction is \(-5.53\) kcal/mol, the
+BSSE is \(-4.13\) kcal/mol, and the CP-corrected interaction is \(-1.40\)
+kcal/mol. With a minimal basis the superposition error is roughly *half* of the
+apparent binding — a vivid warning that small-basis interaction energies are not
+to be trusted uncorrected.
+
+### Implementation Note: the initial guess and the monomer references
+
+The monomer reference energies \(E_A, E_B\) must be the *true* SCF minima, or the
+BSSE is meaningless. This is a place where the choice of initial guess
+([§6, "When the Guess Matters"](#6-scf-algorithm)) bites. The superposition-of-
+atomic-densities (SAD) guess, normally the more robust choice for molecules with
+equivalent atoms, can itself **false-converge for a small isolated closed-shell
+atom**: a lone helium atom in cc-pVDZ settles at \(-2.85515\) Eh from SAD but at
+the correct \(-2.85516\) Eh from a core-Hamiltonian guess, each reporting
+convergence in five iterations at a different HOMO energy. A counterpoise study
+of small fragments should therefore verify its monomer references against a
+second guess (or a reference program) rather than trust the iteration count —
+the same "sanity-check the converged solution, do not trust the loop" lesson from
+the broken-symmetry case study in §6, now cutting the other way.
+
+### Scope and generality
+
+The counterpoise method as described handles a **dimer** (two fragments) at the
+**SCF level**. The same construction extends naturally — though with more
+bookkeeping — to the site-site (Valiron-Mayer) \(N\)-body counterpoise for
+clusters, to correlated methods (one simply uses the correlated monomer and dimer
+energies in the same five-term expression), and to gradients (where the ghost
+basis functions also contribute Pulay terms). The ghost-atom primitive itself is
+more general than counterpoise: placing ghosts in any single calculation lets you
+probe basis-set extension effects, build mixed-basis descriptions, or study how
+much a neighbor's functions improve a fragment — all without changing the
+physical system.
+
+## 23. Molecular Properties
 
 After SCF convergence Planck can compute several molecular properties from the
 converged density matrix. Dipole and quadrupole moments are printed
@@ -5324,7 +5479,11 @@ If \(T^+\) is correct, the inner product \(\mathbf C_{sph}^\top \mathbf C_{sph}\
 
 ---
 
-## 23. Checkpoint and Restart
+## 24. Checkpoint and Restart
+
+This chapter mixes a general restart idea with concrete file-format details.
+The projection concept below is broadly applicable; the checkpoint layout is
+Planck-specific.
 
 ### Binary Checkpoint Format
 
@@ -5337,7 +5496,7 @@ The checkpoint file (`*.hfchk`) stores:
 - Total SCF energy
 - Optional geometry optimization metadata
 
-### Cross-Basis Löwdin Projection
+### Cross-Basis Density Projection
 
 When restarting from a checkpoint computed with a smaller basis
 (e.g., STO-3G) to a larger basis (e.g., 6-31G*), the stored density matrix
@@ -5348,7 +5507,7 @@ using the cross-overlap matrix:
 S^{cross}_{\mu\nu} = \langle \chi^{large}_\mu | \chi^{small}_\nu \rangle
 \]
 
-computed by `_compute_cross_overlap` in `os.cpp`. The projection is then:
+The projection is then:
 
 \[
 P^{large}_{\mu\nu} = \sum_{\lambda\sigma}
@@ -5357,14 +5516,15 @@ P^{small}_{\lambda'\sigma'}\, (S^{cross})^T_{\sigma'\mu}\,
 (S^{LL})^{-1}_{\mu\nu}
 \]
 
-implemented via a singular value decomposition (Löwdin SVD) of the
-cross-overlap in `src/io/checkpoint.cpp`. This provides a physically motivated
-initial density for the new basis, significantly reducing the number of SCF
-iterations required.
+This is a Löwdin-style cross-basis projection. In Planck, the required
+cross-overlap matrix is computed by `_compute_cross_overlap` in `os.cpp`, and
+the projection itself is implemented in `src/io/checkpoint.cpp` via an SVD of
+the cross-overlap. This provides a physically motivated initial density for the
+new basis, significantly reducing the number of SCF iterations required.
 
 ---
 
-## 24. Execution Flow of a Typical Run
+## 25. Execution Flow of a Typical Run
 
 ```
 driver.cpp
@@ -5442,7 +5602,7 @@ driver.cpp
 
 ---
 
-## 25. Theory-to-Code Map
+## 26. Theory-to-Code Map
 
 | Theory concept | Primary file(s) | Key function(s) |
 |---|---|---|
@@ -5509,6 +5669,9 @@ driver.cpp
 | C-PCM reaction-field operator | `src/solvation/pcm.cpp` | `evaluate_pcm_reaction_field` |
 | External-charge AO matrices (PCM unit potentials) | `src/integrals/os.cpp` | `_compute_external_charge_attraction` |
 | PCM input parsing + solvent table | `src/io/io.cpp` | `_parse_pcm`, `dielectric_from_solvent_name` |
+| Ghost atoms (BSSE) | `src/base/types.h` | `Molecule::is_ghost`, `nuclear_charge`, `total_nuclear_charge` |
+| Counterpoise driver | `src/bsse/counterpoise.cpp` | `run_counterpoise` |
+| Ghost / `%begin_bsse` parsing | `src/io/io.cpp` | `parse_atom_token`, `_parse_bsse` |
 | Mulliken population analysis | `src/scf/population.cpp` | `mulliken_population_analysis`, `gross_ao_population` |
 | Löwdin population analysis | `src/scf/population.cpp` | `lowdin_population_analysis`, `symmetric_overlap_sqrt` |
 | Mayer bond orders | `src/scf/population.cpp` | `mayer_bond_order_analysis` |
@@ -5524,7 +5687,7 @@ driver.cpp
 
 ---
 
-## 26. Current Implementation Status
+## 27. Current Implementation Status
 
 | Feature | Status |
 |---|---|
@@ -5571,10 +5734,13 @@ driver.cpp
 | C-PCM solvation (RHF/UHF/RKS/UKS, single-point energy) | Complete |
 | PCM gradients / geometry optimization / frequencies | Not implemented |
 | PCM coupling to post-HF (MP2, CC, CASSCF) | Not implemented |
+| Ghost atoms (basis-only centers; `Gh()`/`@`/`:` syntax) | Complete |
+| Counterpoise / BSSE correction (two-fragment dimer, RHF/UHF/ROHF energy) | Complete (PySCF-validated to \(4\times10^{-11}\) Eh) |
+| BSSE for DFT / N-body / gradients / post-HF references | Not implemented |
 
 ---
 
-## 27. How to Study This Codebase
+## 28. How to Study This Codebase
 
 Recommended reading order for the HF/post-HF pipeline:
 
