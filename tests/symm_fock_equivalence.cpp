@@ -18,6 +18,7 @@
 #include "integrals/shellpair.h"
 #include "symmetry/group_operations.h"
 #include "symmetry/fock_symmetrization.h"
+#include "symmetry/skeleton_eri.h" // contract_symm_fock_* (C1 split-equivalence check)
 #include "symmetry/symmetry.h"
 #include "basis/basis.h"
 #include "base/basis.h"
@@ -199,6 +200,51 @@ namespace
         if ((ruhf->first - Gra_ref).cwiseAbs().maxCoeff() > 1e-9 ||
             (ruhf->second - Grb_ref).cwiseAbs().maxCoeff() > 1e-9)
             fail(name + " (Rys): UHF symm Fock differs from production");
+
+        // ── C1 split equivalence: build-once skeleton + contract-only must reproduce
+        //    the bundled _compute_2e_fock_symm bit-for-bit (docs/FULL_SYMMETRY_PERF_
+        //    SCOPE.md C1 Step 2). This is the algebraic gate for persisting the
+        //    skeleton across SCF iterations. The split is exact (same code, build
+        //    hoisted), so the tolerance is tight: ~1e-12. RHF + UHF, both engines.
+        const bool use_sym = ops_res->valid && ops_res->operations.size() > 1;
+        {
+            auto skel = HartreeFock::ObaraSaika::_build_skeleton_eri_symm(
+                pairs, calc._shells, nb, *ops_res);
+            if (!skel)
+            {
+                fail(name + " (split): OS _build_skeleton_eri_symm error: " + skel.error());
+                return;
+            }
+            const Eigen::MatrixXd G_split =
+                HartreeFock::Symmetry::contract_symm_fock_rhf(*skel, nb, P, *ops_res, use_sym);
+            if ((G_split - *G_symm).cwiseAbs().maxCoeff() > 1e-12)
+                fail(name + " (split): OS RHF contract-only != bundled by " +
+                     std::to_string((G_split - *G_symm).cwiseAbs().maxCoeff()));
+            auto [Ga_split, Gb_split] =
+                HartreeFock::Symmetry::contract_symm_fock_uhf(*skel, nb, Pa, Pb, *ops_res, use_sym);
+            if ((Ga_split - uhf->first).cwiseAbs().maxCoeff() > 1e-12 ||
+                (Gb_split - uhf->second).cwiseAbs().maxCoeff() > 1e-12)
+                fail(name + " (split): OS UHF contract-only != bundled");
+        }
+        {
+            auto skel = HartreeFock::RysQuad::_build_skeleton_eri_symm(
+                pairs, calc._shells, nb, *ops_res);
+            if (!skel)
+            {
+                fail(name + " (split): Rys _build_skeleton_eri_symm error: " + skel.error());
+                return;
+            }
+            const Eigen::MatrixXd Gr_split =
+                HartreeFock::Symmetry::contract_symm_fock_rhf(*skel, nb, P, *ops_res, use_sym);
+            if ((Gr_split - *Gr_symm).cwiseAbs().maxCoeff() > 1e-12)
+                fail(name + " (split): Rys RHF contract-only != bundled by " +
+                     std::to_string((Gr_split - *Gr_symm).cwiseAbs().maxCoeff()));
+            auto [Gra_split, Grb_split] =
+                HartreeFock::Symmetry::contract_symm_fock_uhf(*skel, nb, Pa, Pb, *ops_res, use_sym);
+            if ((Gra_split - ruhf->first).cwiseAbs().maxCoeff() > 1e-12 ||
+                (Grb_split - ruhf->second).cwiseAbs().maxCoeff() > 1e-12)
+                fail(name + " (split): Rys UHF contract-only != bundled");
+        }
     }
 } // namespace
 

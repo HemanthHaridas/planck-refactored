@@ -2213,6 +2213,29 @@
           "atol": 5e-08
         }
       ]
+    },
+    {
+      "id": "nh3_c3v_fullsym_geomopt_direct",
+      "input": "tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_geomopt_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C3v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 6)",
+        "skeleton ERI persisted across SCF iterations",
+        "Geometry Optimization :       Converged"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -55.4554197897,
+          "atol": 1e-07
+        }
+      ]
     }
   ]
 }

@@ -26,6 +26,25 @@ namespace
 
 namespace HartreeFock::ObaraSaika
 {
+    std::expected<std::vector<double>, std::string> _build_skeleton_eri_symm(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const HartreeFock::Basis &basis,
+        std::size_t nbasis,
+        const HartreeFock::Symmetry::GroupOperations &ops,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        double tol_eri)
+    {
+        const bool use_sym = ops.valid && ops.operations.size() > 1;
+        return HartreeFock::Symmetry::build_skeleton_eri(
+            shell_pairs, basis, nbasis, ops, use_sym,
+            [&](const HartreeFock::ShellPair &ab, const HartreeFock::ShellPair &cd,
+                int ax, int ay, int az, int bx, int by, int bz,
+                int cx, int cy, int cz, int dx, int dy, int dz)
+            { return os_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); },
+            tol_eri);
+    }
+
     std::expected<Eigen::MatrixXd, std::string> _compute_2e_fock_symm(
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const HartreeFock::Basis &basis,

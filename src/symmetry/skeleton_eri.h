@@ -319,6 +319,66 @@ namespace HartreeFock
                 return std::unexpected(Gb_s.error());
             return std::make_pair(*Ga_s, *Gb_s);
         }
+
+        // ── Contract-only entries for a PERSISTED skeleton (C1, FULL_SYMMETRY_PERF_
+        //    SCOPE.md) ──────────────────────────────────────────────────────────────
+        //
+        // The skeleton ERI is density-independent (it depends only on geometry, basis,
+        // group), so it can be built once and reused across SCF iterations. These
+        // helpers take an ALREADY-BUILT skeleton and do only the density-dependent
+        // second half (contract + symmetrize) — they are the bodies of the engine
+        // `_compute_2e_fock_symm*` functions with the build elided. Engine-agnostic
+        // (they touch only the contraction, which does not depend on OS vs Rys), so a
+        // single copy serves both engines. `use_sym` must match what the skeleton was
+        // built with: true ⇒ orbit-weighted skeleton, symmetrize the contracted Fock;
+        // false ⇒ skeleton is the full tensor, return the bare contraction.
+        inline Eigen::MatrixXd contract_symm_fock_rhf(
+            const std::vector<double> &eri, std::size_t nb,
+            const Eigen::MatrixXd &density,
+            const GroupOperations &ops, bool use_sym)
+        {
+            Eigen::MatrixXd G = contract_fock_rhf(eri, nb, density);
+            if (!use_sym)
+                return G;
+            // symmetrize_matrix returns expected; on a valid persisted-skeleton path
+            // ops is valid by construction (use_sym ⇒ ops.valid), so unwrap.
+            auto S = symmetrize_matrix(G, ops);
+            return S ? *S : G;
+        }
+
+        inline std::pair<Eigen::MatrixXd, Eigen::MatrixXd> contract_symm_fock_uhf(
+            const std::vector<double> &eri, std::size_t nb,
+            const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb,
+            const GroupOperations &ops, bool use_sym)
+        {
+            auto [Ga, Gb] = contract_fock_uhf(eri, nb, Pa, Pb);
+            if (!use_sym)
+                return {Ga, Gb};
+            auto Ga_s = symmetrize_matrix(Ga, ops);
+            auto Gb_s = symmetrize_matrix(Gb, ops);
+            return {Ga_s ? *Ga_s : Ga, Gb_s ? *Gb_s : Gb};
+        }
+
+        // Spherical contract-only: the persisted skeleton is Cartesian (built over
+        // Cartesian quartets), so these are thin aliases of the *_from_skeleton helpers
+        // above — named for symmetry with the RHF/UHF Cartesian pair so the SCF call
+        // site reads uniformly.
+        inline std::expected<Eigen::MatrixXd, std::string> contract_symm_fock_rhf_spherical(
+            const std::vector<double> &eri_cart, std::size_t nb_cart,
+            const Eigen::MatrixXd &C, const Eigen::MatrixXd &density_sph,
+            const GroupOperations &ops, bool use_sym)
+        {
+            return spherical_fock_rhf_from_skeleton(eri_cart, nb_cart, C, density_sph, ops, use_sym);
+        }
+
+        inline std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+        contract_symm_fock_uhf_spherical(
+            const std::vector<double> &eri_cart, std::size_t nb_cart,
+            const Eigen::MatrixXd &C, const Eigen::MatrixXd &Pa_sph,
+            const Eigen::MatrixXd &Pb_sph, const GroupOperations &ops, bool use_sym)
+        {
+            return spherical_fock_uhf_from_skeleton(eri_cart, nb_cart, C, Pa_sph, Pb_sph, ops, use_sym);
+        }
     } // namespace Symmetry
 } // namespace HartreeFock
 

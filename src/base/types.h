@@ -1120,6 +1120,19 @@ namespace HartreeFock
         // D2h) when _use_full_symmetry is true. See docs/FULL_SYMMETRY_ERI_DESIGN.md §8.
         Symmetry::GroupOperations _group_operations;
 
+        // Persisted (orbit-weighted) Cartesian skeleton ERI for the full-symmetry
+        // direct Fock (C1, docs/FULL_SYMMETRY_PERF_SCOPE.md). The skeleton is density-
+        // INDEPENDENT (geometry/basis/group only), so it is built ONCE before the SCF
+        // loop and contracted each iteration via contract_symm_fock_* — turning the
+        // _symm path from "rebuild nb⁴ every iteration" into "build once, contract
+        // each". Always Cartesian-sized (nbasis_cart⁴), even in spherical mode (the
+        // cart→sph transform stays in the per-iteration contraction). Empty ⇒ not
+        // persisted (memory gate off / above cap, or symmetry not active) → SCF falls
+        // back to the per-iteration build. MUST be cleared on any geometry change
+        // (geomopt step, frequency displacement) so a stale-geometry skeleton is never
+        // reused — see C1 Step 6.
+        std::vector<double> _symm_skeleton_eri;
+
         // Gradient and geometry optimization
         Eigen::MatrixXd _gradient;                // natoms×3, Ha/Bohr; set by compute_rhf/uhf_gradient()
         std::vector<GeomConstraint> _constraints; // from %begin_constraints section
