@@ -2215,6 +2215,62 @@
       ]
     },
     {
+      "id": "ch2_triplet_c2v_fullsym_rohf_direct",
+      "input": "tests/inputs/regression/full_symmetry/ch2_triplet_c2v_fullsym_rohf_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 4)",
+        "skeleton ERI persisted across SCF iterations",
+        "ROHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -38.9163096600,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "ch2_triplet_c2v_fullsym_rohf_spherical_direct",
+      "input": "tests/inputs/regression/full_symmetry/ch2_triplet_c2v_fullsym_rohf_spherical_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 4)",
+        "skeleton ERI persisted across SCF iterations",
+        "ROHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -38.9161284632,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
       "id": "nh3_c3v_fullsym_geomopt_direct",
       "input": "tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_geomopt_direct.hfinp",
       "tags": [

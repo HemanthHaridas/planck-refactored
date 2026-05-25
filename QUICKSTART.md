@@ -938,6 +938,173 @@ For large systems set `scf_mode direct` or lower `threshold`:
     ...
 ```
 
+#### Symmetry path cookbook
+
+Planck selects the symmetry reduction path from three knobs:
+
+- `basis_type cartesian` vs `basis_type spherical`
+- `use_symm .true.` in `%begin_geom`
+- `scf_mode direct` when you want the full point-group direct-SCF path
+
+Use the following concrete templates as starting points.
+
+**1. Cartesian D2h-style symmetry path**
+
+This is the regular symmetry-enabled Cartesian path. It is the right default for
+Abelian/D2h-subgroup cases such as water in `C2v`.
+
+```text
+%begin_control
+    basis       sto-3g
+    calculation energy
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    engine      os
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords
+```
+
+Closest checked example:
+`tests/inputs/regression/hf/water_rhf_os_symm.hfinp`
+
+**2. Cartesian full-symmetry direct-SCF path**
+
+Use this when you want the full point-group direct-SCF reduction rather than
+just the D2h-subgroup sign/permute path. The practical trigger is:
+`basis_type cartesian` + `use_symm .true.` + `scf_mode direct`, on a molecule
+whose detected point group has non-D2h operations. Ammonia (`C3v`) is the
+smallest clean example.
+
+```text
+%begin_control
+    basis       sto-3g
+    calculation energy
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+    scf_mode    direct
+    tol_energy  1e-10
+    tol_density 1e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+4
+0   1
+N     0.0000    0.0000    0.1173
+H     0.0000    0.9377   -0.2738
+H     0.8121   -0.4689   -0.2738
+H    -0.8121   -0.4689   -0.2738
+%end_coords
+```
+
+Checked examples:
+`tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_direct.hfinp`
+`tests/inputs/regression/full_symmetry/ch4_td_fullsym_direct.hfinp`
+
+**3. Spherical D2h-style symmetry path**
+
+This is the spherical-basis analogue of the regular symmetry-enabled path:
+switch to `basis_type spherical`, keep `use_symm .true.`, and do not rely on a
+non-D2h full-group case. Water in `C2v` with `6-31g*` is the standard example.
+
+```text
+%begin_control
+    basis       6-31g*
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+    tol_energy  1e-10
+    tol_density 1e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.117176
+H     0.000000     0.757200    -0.468704
+H     0.000000    -0.757200    -0.468704
+%end_coords
+```
+
+Checked example:
+`tests/inputs/regression/spherical/water_spherical_symmetry_c2v_631gd.hfinp`
+
+**4. Spherical full-symmetry direct-SCF path**
+
+This is the spherical-basis version of the full point-group direct-SCF path:
+`basis_type spherical` + `use_symm .true.` + `scf_mode direct`, again on a
+molecule whose point group includes non-D2h operations. Ammonia (`C3v`) and
+methane (`Td`) are the reference examples in the regression suite.
+
+```text
+%begin_control
+    basis       6-31g*
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+    scf_mode    direct
+    tol_energy  1e-10
+    tol_density 1e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+4
+0   1
+N     0.0000    0.0000    0.1173
+H     0.0000    0.9377   -0.2738
+H     0.8121   -0.4689   -0.2738
+H    -0.8121   -0.4689   -0.2738
+%end_coords
+```
+
+Checked examples:
+`tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_631gd_spherical_direct.hfinp`
+`tests/inputs/regression/full_symmetry/ch4_td_fullsym_631gd_spherical_direct.hfinp`
 
 ### 14. Basis sets
 
