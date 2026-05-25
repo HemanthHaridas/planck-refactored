@@ -1010,8 +1010,15 @@ namespace HartreeFock
     {
         struct GroupOperation
         {
-            std::string label;      // e.g. "E", "C3", "sigma_v", "S4", "i"
-            Eigen::MatrixXd matrix; // O_R [nb×nb], dense; orthogonal (O_Rᵀ O_R = I)
+            std::string label; // e.g. "E", "C3", "sigma_v", "S4", "i"
+            // O_R [nb×nb], dense AO representation of the operation. Metric-orthogonal
+            // (O_Rᵀ S O_R = S); plain-orthogonal (O_Rᵀ O_R = I) only when the basis is
+            // orthonormal — true for Cartesian s,p and for ALL spherical-harmonic
+            // shells, but NOT for Cartesian d and higher (those are a non-orthonormal,
+            // reducible set). In spherical mode this is the spherical O_R = C·O_cart·C⁺
+            // and is genuinely orthogonal. See docs/FULL_SYMMETRY_ERI_DESIGN.md §3.1/§4
+            // and the covariant-vs-contravariant note in scf.cpp.
+            Eigen::MatrixXd matrix;
 
             // Shell permutation induced by R: shell_perm[s] = t means shell s maps
             // onto shell t (its atom maps under the nuclear permutation; the k-th

@@ -48,7 +48,24 @@ namespace
         const HartreeFock::Calculator &calc,
         const Eigen::MatrixXd &P, std::size_t nbasis, double tol_eri)
     {
-        if (calc._integral._engine == HartreeFock::IntegralMethod::RysQuadrature)
+        const bool rys = (calc._integral._engine == HartreeFock::IntegralMethod::RysQuadrature);
+        if (calc._shells._spherical)
+        {
+            // Spherical mode (Step 2): skeleton built over Cartesian quartets, the
+            // tensor transformed to spherical, contracted with the spherical density P,
+            // symmetrized with the spherical O_R. `nbasis` here is the spherical AO
+            // count; the engine needs the Cartesian count separately.
+            const std::size_t nbasis_cart = calc._shells.nbasis();
+            const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
+            if (rys)
+                return HartreeFock::RysQuad::_compute_2e_fock_symm_spherical(
+                    shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+            return HartreeFock::ObaraSaika::_compute_2e_fock_symm_spherical(
+                shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        }
+        if (rys)
             return HartreeFock::RysQuad::_compute_2e_fock_symm(
                 shell_pairs, calc._shells, P, nbasis, calc._group_operations,
                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
@@ -64,7 +81,20 @@ namespace
         const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb,
         std::size_t nbasis, double tol_eri)
     {
-        if (calc._integral._engine == HartreeFock::IntegralMethod::RysQuadrature)
+        const bool rys = (calc._integral._engine == HartreeFock::IntegralMethod::RysQuadrature);
+        if (calc._shells._spherical)
+        {
+            const std::size_t nbasis_cart = calc._shells.nbasis();
+            const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
+            if (rys)
+                return HartreeFock::RysQuad::_compute_2e_fock_uhf_symm_spherical(
+                    shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+            return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_symm_spherical(
+                shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        }
+        if (rys)
             return HartreeFock::RysQuad::_compute_2e_fock_uhf_symm(
                 shell_pairs, calc._shells, Pa, Pb, nbasis, calc._group_operations,
                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
@@ -80,9 +110,13 @@ namespace
     // for orthogonal O_R (s,p shells); for Cartesian d (and higher) under a non-
     // monomial operation (C₃, S₄, …) O_R is not orthogonal and the laws differ —
     // checking the covariant law there falsely rejects a perfectly symmetric SCF
-    // density. SAO blocking guarantees the contravariant invariance; this is a cheap
-    // loud check (run once, iteration 1) so any real violation fails visibly instead
-    // of silently corrupting the energy. Returns max deviation max_R ‖O_R P O_Rᵀ − P‖.
+    // density. Returns max deviation max_R ‖O_R P O_Rᵀ − P‖.
+    //
+    // The SAO basis (built in build_sao_basis with the correct AO representation —
+    // metric-corrected in spherical mode) yields a density satisfying this contract
+    // for the molecules whose ground state is fully symmetric. Used as a cheap loud
+    // iteration-1 check so any violation fails visibly instead of silently corrupting
+    // the energy.
     double density_symmetry_deviation(const Eigen::MatrixXd &P,
                                       const HartreeFock::Symmetry::GroupOperations &ops)
     {
@@ -98,6 +132,7 @@ namespace
         }
         return dev;
     }
+
 } // namespace
 
 // ─── Orthogonalization ────────────────────────────────────────────────────────
@@ -396,22 +431,17 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         {
             G = HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis);
         }
-        else if (calculator._shells._spherical)
-        {
-            G = spherical_direct_fock(
-                calculator._shells._cart_to_sph, P,
-                [&](const Eigen::MatrixXd &P_cart) {
-                    return _compute_2e_fock(shell_pairs, P_cart, nbasis_cart,
-                                            calculator._integral._engine,
-                                            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
-                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-                });
-        }
         else if (calculator._use_full_symmetry && sao_active)
         {
             // Full point-group ERI reduction (supersedes the D2h sign-flip path:
             // full group ⊇ D2h, so the D2h ops are NOT also applied). Requires a
-            // symmetry-adapted density, which SAO blocking guarantees; verify once.
+            // symmetry-adapted density (contravariant: O P O^T = P); the SAO basis
+            // (built with the correct AO representation, Cartesian or spherical)
+            // produces one. Works in BOTH Cartesian and spherical mode —
+            // full_symmetry_fock_rhf dispatches to the spherical pipeline (skeleton →
+            // cart→sph transform → contract → spherical symmetrize) when
+            // _shells._spherical (Step 2). The iteration-1 assertion fails loudly if
+            // the contract is ever violated rather than corrupting the energy.
             if (iter == 1)
             {
                 const double dev = density_symmetry_deviation(P, calculator._group_operations);
@@ -425,6 +455,17 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
             if (!G_res)
                 return std::unexpected(G_res.error());
             G = std::move(*G_res);
+        }
+        else if (calculator._shells._spherical)
+        {
+            G = spherical_direct_fock(
+                calculator._shells._cart_to_sph, P,
+                [&](const Eigen::MatrixXd &P_cart) {
+                    return _compute_2e_fock(shell_pairs, P_cart, nbasis_cart,
+                                            calculator._integral._engine,
+                                            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                });
         }
         else
         {
@@ -758,24 +799,12 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         {
             std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
         }
-        else if (calculator._shells._spherical)
-        {
-            const Eigen::MatrixXd &C = calculator._shells._cart_to_sph;
-            const Eigen::MatrixXd Pa_cart = C.transpose() * Pa * C;
-            const Eigen::MatrixXd Pb_cart = C.transpose() * Pb * C;
-            auto [Ga_cart, Gb_cart] =
-                _compute_2e_fock_uhf(shell_pairs, Pa_cart, Pb_cart, nbasis_cart,
-                                     calculator._integral._engine,
-                                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
-                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-            Ga = C * Ga_cart * C.transpose();
-            Gb = C * Gb_cart * C.transpose();
-        }
         else if (calculator._use_full_symmetry && sao_active_uhf)
         {
             // Full point-group ERI reduction (supersedes the D2h sign-flip path).
-            // Both spin densities must be symmetry-adapted; SAO blocking guarantees
-            // it, verified once on the total density.
+            // Both spin densities must be symmetry-adapted (contravariant); SAO
+            // blocking guarantees it, verified once on the total density. Dispatches
+            // to the spherical pipeline when _shells._spherical (Step 2).
             if (iter == 1)
             {
                 const double dev = density_symmetry_deviation(Pa + Pb, calculator._group_operations);
@@ -789,6 +818,19 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             if (!G_res)
                 return std::unexpected(G_res.error());
             std::tie(Ga, Gb) = std::move(*G_res);
+        }
+        else if (calculator._shells._spherical)
+        {
+            const Eigen::MatrixXd &C = calculator._shells._cart_to_sph;
+            const Eigen::MatrixXd Pa_cart = C.transpose() * Pa * C;
+            const Eigen::MatrixXd Pb_cart = C.transpose() * Pb * C;
+            auto [Ga_cart, Gb_cart] =
+                _compute_2e_fock_uhf(shell_pairs, Pa_cart, Pb_cart, nbasis_cart,
+                                     calculator._integral._engine,
+                                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+            Ga = C * Ga_cart * C.transpose();
+            Gb = C * Gb_cart * C.transpose();
         }
         else
         {

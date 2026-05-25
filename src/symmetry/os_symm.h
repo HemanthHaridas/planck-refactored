@@ -60,6 +60,35 @@ namespace HartreeFock
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0,
             double tol_eri = 1e-10);
+
+        // Spherical-mode full-symmetry Fock (Step 2). Cartesian skeleton ERI, then
+        // transform to spherical, contract with the spherical density, symmetrize with
+        // the spherical O_R. `nbasis_cart` = Cartesian AO count; `cart_to_sph` = C
+        // [nb_sph × nb_cart]; `density`/result are spherical-sized. `ops` must be the
+        // spherical group operations. See docs/SPHERICAL_SYMMETRY_PHASE3_PLAN.md Step 2.
+        std::expected<Eigen::MatrixXd, std::string> _compute_2e_fock_symm_spherical(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const HartreeFock::Basis &basis,
+            const Eigen::MatrixXd &density,
+            std::size_t nbasis_cart,
+            const Eigen::MatrixXd &cart_to_sph,
+            const HartreeFock::Symmetry::GroupOperations &ops,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10);
+
+        std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+        _compute_2e_fock_uhf_symm_spherical(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const HartreeFock::Basis &basis,
+            const Eigen::MatrixXd &Pa,
+            const Eigen::MatrixXd &Pb,
+            std::size_t nbasis_cart,
+            const Eigen::MatrixXd &cart_to_sph,
+            const HartreeFock::Symmetry::GroupOperations &ops,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10);
     } // namespace ObaraSaika
 } // namespace HartreeFock
 

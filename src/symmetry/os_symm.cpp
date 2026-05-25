@@ -92,4 +92,61 @@ namespace HartreeFock::ObaraSaika
             return std::unexpected(Gb_s.error());
         return std::make_pair(*Ga_s, *Gb_s);
     }
+
+    // ── Spherical-mode full-symmetry Fock (Step 2) ─────────────────────────────────
+    // Cartesian skeleton ERI (petite list over Cartesian shell quartets), then the
+    // tensor is transformed to spherical, contracted with the spherical density, and
+    // symmetrized with the spherical O_R. `cart_to_sph` is C [nb_sph × nb_cart];
+    // `nbasis_cart` is the Cartesian AO count. `density`/result are spherical-sized.
+    std::expected<Eigen::MatrixXd, std::string> _compute_2e_fock_symm_spherical(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const HartreeFock::Basis &basis,
+        const Eigen::MatrixXd &density,
+        std::size_t nbasis_cart,
+        const Eigen::MatrixXd &cart_to_sph,
+        const HartreeFock::Symmetry::GroupOperations &ops,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        double tol_eri)
+    {
+        const bool use_sym = ops.valid && ops.operations.size() > 1;
+        auto eri = HartreeFock::Symmetry::build_skeleton_eri(
+            shell_pairs, basis, nbasis_cart, ops, use_sym,
+            [&](const HartreeFock::ShellPair &ab, const HartreeFock::ShellPair &cd,
+                int ax, int ay, int az, int bx, int by, int bz,
+                int cx, int cy, int cz, int dx, int dy, int dz)
+            { return os_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); },
+            tol_eri);
+        if (!eri)
+            return std::unexpected(eri.error());
+        return HartreeFock::Symmetry::spherical_fock_rhf_from_skeleton(
+            *eri, nbasis_cart, cart_to_sph, density, ops, use_sym);
+    }
+
+    std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+    _compute_2e_fock_uhf_symm_spherical(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const HartreeFock::Basis &basis,
+        const Eigen::MatrixXd &Pa,
+        const Eigen::MatrixXd &Pb,
+        std::size_t nbasis_cart,
+        const Eigen::MatrixXd &cart_to_sph,
+        const HartreeFock::Symmetry::GroupOperations &ops,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        double tol_eri)
+    {
+        const bool use_sym = ops.valid && ops.operations.size() > 1;
+        auto eri = HartreeFock::Symmetry::build_skeleton_eri(
+            shell_pairs, basis, nbasis_cart, ops, use_sym,
+            [&](const HartreeFock::ShellPair &ab, const HartreeFock::ShellPair &cd,
+                int ax, int ay, int az, int bx, int by, int bz,
+                int cx, int cy, int cz, int dx, int dy, int dz)
+            { return os_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); },
+            tol_eri);
+        if (!eri)
+            return std::unexpected(eri.error());
+        return HartreeFock::Symmetry::spherical_fock_uhf_from_skeleton(
+            *eri, nbasis_cart, cart_to_sph, Pa, Pb, ops, use_sym);
+    }
 } // namespace HartreeFock::ObaraSaika

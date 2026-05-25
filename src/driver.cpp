@@ -776,11 +776,12 @@ int main(int argc, const char *argv[])
 
             // ── Full point-group operation matrices for direct-SCF ERI reduction ──
             // Only meaningful when SAO blocking is active (it guarantees the
-            // symmetry-adapted density the skeleton+symmetrization scheme requires)
-            // and the basis is Cartesian (spherical O_R is a later phase). The
-            // direct-vs-conventional decision is made in the SCF loop, so we build
-            // the operations whenever the prerequisites hold and let the loop choose.
-            if (!calculator._shells._spherical)
+            // symmetry-adapted density the skeleton+symmetrization scheme requires).
+            // Works in BOTH Cartesian and spherical mode: build_group_operations emits
+            // the correct spherical O_R (= S_sph⁻¹ C S_cart O_cart Cᵀ) when the basis
+            // is spherical (Step 1'); the SCF loop dispatches to the spherical Fock
+            // pipeline (Step 2). The direct-vs-conventional decision is made in the
+            // SCF loop, so we build the operations whenever the prerequisites hold.
             {
                 auto ops = HartreeFock::Symmetry::build_group_operations(calculator);
                 if (!ops)

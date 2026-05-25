@@ -2127,6 +2127,50 @@
       ]
     },
     {
+      "id": "nh3_c3v_fullsym_631gd_spherical_direct",
+      "input": "tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_631gd_spherical_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C3v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 6)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -56.1832391283,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "ch4_td_fullsym_631gd_spherical_direct",
+      "input": "tests/inputs/regression/full_symmetry/ch4_td_fullsym_631gd_spherical_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 Td",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 24)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -40.1948103195,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
       "id": "ch4_td_fullsym_direct",
       "input": "tests/inputs/regression/full_symmetry/ch4_td_fullsym_direct.hfinp",
       "tags": [

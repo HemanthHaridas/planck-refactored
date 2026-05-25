@@ -7,8 +7,12 @@
 #include <numbers>
 #include <string>
 
+#include <Eigen/LU> // dense inverse for the spherical-overlap-corrected D_R
+
 #include "basis/spherical.h"
 #include "external/libmsym/install/include/libmsym/msym.h"
+#include "integrals/os.h"       // _compute_1e (Cartesian overlap for spherical D_R)
+#include "integrals/shellpair.h" // build_shellpairs
 #include "io/logging.h"
 #include "mo_symmetry.h"
 #include "wrapper.h"
@@ -825,20 +829,29 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
     // each class has exactly one element, so this gives all h operations.
     //
     // build_ao_transform returns the Cartesian representation D_cart [n_cart×n_cart].
-    // In spherical mode we rotate each into the spherical basis via the similarity
-    //   D_sph = C · D_cart · C⁺        (C = _cart_to_sph [n_sph×n_cart],
-    //                                   C⁺ = its Moore-Penrose right-inverse, C·C⁺ = I)
-    // so that D_sph acts on spherical AO coefficient vectors. The subsequent
-    // S-metric Gram-Schmidt uses the spherical overlap (calculator._overlap), which
-    // the driver already set to C·S_cart·Cᵀ, so the orthonormality target is correct.
-    Eigen::MatrixXd C_pinv; // only used in spherical mode
+    // In spherical mode we map each into the spherical AO basis. The PHYSICAL spherical
+    // representation is
+    //   D_sph = S_sph⁻¹ · (C · S_cart · D_cart · Cᵀ)
+    // (the metric-correct construction; see group_operations.cpp / Step 1' in
+    // docs/SPHERICAL_SYMMETRY_PHASE3_PLAN.md). The naive C·D_cart·C⁺ is a DIFFERENT
+    // (incorrect) rep for d-and-higher shells — it fails D_sphᵀ S_sph D_sph = S_sph —
+    // and crucially is inconsistent with the full-symmetry ERI-reduction O_R, so the
+    // SAO density it produces would not satisfy that path's contract. Both reps agree
+    // for s,p and for sign-flip (Abelian-axis) operations, which is why the C2v
+    // spherical regression passed under the old form; C₃/S₄ on d-shells exposes the
+    // difference. S_cart is computed here from the Cartesian shells.
+    Eigen::MatrixXd C_mat, S_sph_inv, CS_cart; // spherical-only
     if (spherical)
     {
-        const Eigen::MatrixXd &Cmat = calculator._shells._cart_to_sph;
-        if (static_cast<std::size_t>(Cmat.rows()) != nb)
+        C_mat = calculator._shells._cart_to_sph; // [n_sph × n_cart]
+        if (static_cast<std::size_t>(C_mat.rows()) != nb)
             return std::unexpected(
                 "build_sao_basis: spherical transform row count does not match working_nbasis()");
-        C_pinv = Cmat.completeOrthogonalDecomposition().pseudoInverse(); // [n_cart×n_sph]
+        const auto shell_pairs = build_shellpairs(calculator._shells);
+        const Eigen::MatrixXd S_cart =
+            HartreeFock::ObaraSaika::_compute_1e(shell_pairs, calculator._shells.nbasis()).first;
+        S_sph_inv = (C_mat * S_cart * C_mat.transpose()).inverse();
+        CS_cart = C_mat * S_cart;
     }
 
     std::vector<Eigen::MatrixXd> D_ops(h);
@@ -850,7 +863,7 @@ std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetr
             return std::unexpected("build_sao_basis: " + perm.error());
         Eigen::MatrixXd D_cart = build_ao_transform(M, *perm, calculator._shells);
         if (spherical)
-            D_ops[c] = calculator._shells._cart_to_sph * D_cart * C_pinv;
+            D_ops[c] = S_sph_inv * (CS_cart * D_cart * C_mat.transpose());
         else
             D_ops[c] = std::move(D_cart);
     }

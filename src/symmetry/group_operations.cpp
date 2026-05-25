@@ -6,7 +6,11 @@
 #include <numbers>
 #include <utility>
 
+#include <Eigen/LU> // dense inverse for the spherical-overlap correction
+
 #include "external/libmsym/install/include/libmsym/msym.h"
+#include "integrals/os.h"
+#include "integrals/shellpair.h"
 #include "wrapper.h"
 
 // The 3×3-operation, angular-coefficient, nuclear-permutation, and AO-transform
@@ -334,6 +338,42 @@ HartreeFock::Symmetry::build_group_operations(HartreeFock::Calculator &calculato
     if (sopsl <= 0)
         return result;
 
+    // ── Spherical mode: correct the Cartesian O_cart into the spherical AO basis ────
+    //
+    //   O_sph = S_sph⁻¹ · (C · S_cart · O_cart · Cᵀ)        (Step 1' construction)
+    //
+    // Derivation: in a non-orthonormal basis a function's coefficients are
+    // S⁻¹⟨χ|f⟩, and ⟨χ_sph,q | R χ_sph,p⟩ = (C S_cart O_cart Cᵀ)_qp. The naive
+    // C·O_cart·C⁺ is WRONG (it uses the Euclidean pseudoinverse; the rep needs the
+    // metric S) — see docs/SPHERICAL_SYMMETRY_PHASE3_PLAN.md Step 1' for the full
+    // analysis and validation (acid test O_sph^T S_sph O_sph = S_sph to ~1e-15).
+    //
+    // NOTE: the resulting O_sph is metric-orthogonal (O_sph^T S_sph O_sph = S_sph) but
+    // NOT plain-orthogonal — same-L shells are radially non-orthonormal — so the
+    // density contract stays contravariant (O P Oᵀ = P), as for Cartesian d.
+    //
+    // S_cart is not available at the (driver) call site, so compute it here from the
+    // Cartesian shells. This is why this TU depends on the integral engine.
+    const bool spherical = calculator._shells._spherical;
+    Eigen::MatrixXd C, S_sph_inv, CS_cart; // spherical-only
+    if (spherical)
+    {
+        const std::size_t n_cart = calculator._shells.nbasis();
+        C = calculator._shells._cart_to_sph; // [n_sph × n_cart]
+        if (static_cast<std::size_t>(C.rows()) != calculator._shells.nbasis_sph() ||
+            static_cast<std::size_t>(C.cols()) != n_cart)
+            return std::unexpected(
+                "build_group_operations: spherical transform shape does not match "
+                "nbasis_sph()×nbasis()");
+
+        const auto shell_pairs = build_shellpairs(calculator._shells);
+        const Eigen::MatrixXd S_cart =
+            HartreeFock::ObaraSaika::_compute_1e(shell_pairs, n_cart).first;
+        const Eigen::MatrixXd S_sph = C * S_cart * C.transpose();
+        S_sph_inv = S_sph.inverse();
+        CS_cart = C * S_cart; // [n_sph × n_cart], reused per operation
+    }
+
     result.operations.reserve(static_cast<std::size_t>(sopsl));
     for (int c = 0; c < sopsl; ++c)
     {
@@ -346,9 +386,13 @@ HartreeFock::Symmetry::build_group_operations(HartreeFock::Calculator &calculato
         if (!shell_perm)
             return std::unexpected(shell_perm.error());
 
+        Eigen::MatrixXd O_cart = build_ao_transform(M, *perm, calculator._shells);
+
         GroupOperation op;
         op.label = sop_label(sops[c]);
-        op.matrix = build_ao_transform(M, *perm, calculator._shells);
+        op.matrix = spherical
+                        ? Eigen::MatrixXd(S_sph_inv * (CS_cart * O_cart * C.transpose()))
+                        : std::move(O_cart);
         op.shell_perm = std::move(*shell_perm);
         result.operations.push_back(std::move(op));
     }

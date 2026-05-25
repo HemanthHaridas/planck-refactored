@@ -494,6 +494,14 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/lookup/elements.cpp
+        # group_operations.cpp now computes the Cartesian overlap to correct O_R into
+        # the spherical AO basis (Step 1', spherical full-symmetry), so it needs the
+        # integral engine.
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/boys.cpp
     )
 
     add_executable(planck-fock-symmetrization
@@ -506,6 +514,13 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/lookup/elements.cpp
+        # group_operations.cpp needs the integral engine (Cartesian overlap) for the
+        # spherical O_R correction (Step 1').
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/boys.cpp
     )
 
     add_executable(planck-symm-fock-benchmark

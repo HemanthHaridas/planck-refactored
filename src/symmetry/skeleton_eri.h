@@ -13,7 +13,9 @@
 #include <Eigen/Core>
 
 #include "base/types.h"
+#include "basis/spherical.h" // transform_eri_cart_to_sph (spherical full-symmetry Fock)
 #include "integrals/shellpair.h"
+#include "symmetry/fock_symmetrization.h"
 #include "symmetry/group_operations.h"
 
 // ─── Engine-agnostic skeleton ERI build for the full-symmetry direct Fock ───────
@@ -262,6 +264,60 @@ namespace HartreeFock
                             Gb(mu, nu) += Pt(lam, sig) * coulomb - Pb(lam, sig) * exch;
                         }
             return {Ga, Gb};
+        }
+
+        // ── Spherical full-symmetry Fock from a Cartesian skeleton ERI ─────────────
+        //
+        // docs/SPHERICAL_SYMMETRY_PHASE3_PLAN.md Step 2 (validated end-to-end by the
+        // Step-G probe to ~1e-15). The petite list / skeleton ERI is built in the
+        // Cartesian basis (the engine is Cartesian); for spherical mode we transform
+        // the skeleton ERI tensor to the spherical AO basis, contract with the
+        // spherical density, then symmetrize with the SPHERICAL group operations.
+        //
+        //   `eri_cart`  : orbit-weighted skeleton ERI [nb_cart⁴] from build_skeleton_eri
+        //   `C`         : Cartesian→spherical transform [nb_sph × nb_cart] (_cart_to_sph)
+        //   `ops`       : the SPHERICAL O_R (build_group_operations in spherical mode)
+        //
+        // Requires a spherical-adapted density (O_sph P O_sphᵀ = P); the SCF SAO path
+        // guarantees it. With use_sym=false the skeleton is the full tensor and no
+        // symmetrization is applied (result == the conventional spherical Fock).
+        inline std::expected<Eigen::MatrixXd, std::string> spherical_fock_rhf_from_skeleton(
+            const std::vector<double> &eri_cart, std::size_t nb_cart,
+            const Eigen::MatrixXd &C, const Eigen::MatrixXd &density_sph,
+            const GroupOperations &ops, bool use_sym)
+        {
+            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+                eri_cart, C, nb_cart);
+            if (!eri_sph)
+                return std::unexpected(eri_sph.error());
+            const std::size_t nb_sph = static_cast<std::size_t>(C.rows());
+            Eigen::MatrixXd G = contract_fock_rhf(*eri_sph, nb_sph, density_sph);
+            if (!use_sym)
+                return G;
+            return symmetrize_matrix(G, ops);
+        }
+
+        inline std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+        spherical_fock_uhf_from_skeleton(
+            const std::vector<double> &eri_cart, std::size_t nb_cart,
+            const Eigen::MatrixXd &C, const Eigen::MatrixXd &Pa_sph,
+            const Eigen::MatrixXd &Pb_sph, const GroupOperations &ops, bool use_sym)
+        {
+            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+                eri_cart, C, nb_cart);
+            if (!eri_sph)
+                return std::unexpected(eri_sph.error());
+            const std::size_t nb_sph = static_cast<std::size_t>(C.rows());
+            auto [Ga, Gb] = contract_fock_uhf(*eri_sph, nb_sph, Pa_sph, Pb_sph);
+            if (!use_sym)
+                return std::make_pair(Ga, Gb);
+            auto Ga_s = symmetrize_matrix(Ga, ops);
+            if (!Ga_s)
+                return std::unexpected(Ga_s.error());
+            auto Gb_s = symmetrize_matrix(Gb, ops);
+            if (!Gb_s)
+                return std::unexpected(Gb_s.error());
+            return std::make_pair(*Ga_s, *Gb_s);
         }
     } // namespace Symmetry
 } // namespace HartreeFock
