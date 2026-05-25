@@ -1461,6 +1461,25 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
     const double tol_eri = calculator._integral._tol_eri;
     double E_prev = 0.0;
 
+    // ── C1: build the full-symmetry skeleton ONCE (docs/FULL_SYMMETRY_PERF_SCOPE.md) ─
+    // ROHF's two-electron build is the UHF (Ga, Gb) = f(Pa, Pb) path — all the Roothaan-
+    // specific coupling happens downstream of the Fock build — so it reuses the same
+    // density-independent skeleton: built before the loop, contracted each iteration.
+    // Same memory gate (nbasis_cart ≤ _threshold). Empty ⇒ per-iteration rebuild.
+    calculator._symm_skeleton_eri.clear();
+    if (!use_conventional && calculator._use_full_symmetry && sao_active &&
+        calculator._shells.nbasis() <= static_cast<std::size_t>(calculator._scf._threshold))
+    {
+        auto skel = full_symmetry_build_skeleton(shell_pairs, calculator, tol_eri);
+        if (!skel)
+            return std::unexpected(skel.error());
+        calculator._symm_skeleton_eri = std::move(*skel);
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "Full Symmetry :",
+            std::format("skeleton ERI persisted across SCF iterations ({:.1f} MB)",
+                        full_symmetry_skeleton_doubles(calculator) * 8.0 / 1e6));
+    }
+
     HartreeFock::Logger::scf_header();
 
     for (unsigned int iter = 1; iter <= max_iter; ++iter)
@@ -1474,6 +1493,32 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
         if (use_conventional)
         {
             std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
+        }
+        else if (calculator._use_full_symmetry && sao_active)
+        {
+            // Full point-group ERI reduction, reusing the UHF (Ga, Gb) machinery —
+            // ROHF differs from UHF only AFTER the Fock build (the Roothaan effective
+            // Fock below). Both spin densities must be symmetry-adapted (contravariant:
+            // O P O^T = P); SAO blocking guarantees it, verified once on the total
+            // density. A partially-occupied degenerate open shell breaks this and is
+            // refused here rather than silently corrupting the energy.
+            if (iter == 1)
+            {
+                const double dev = density_symmetry_deviation(Pa + Pb, calculator._group_operations);
+                if (dev > 1e-8)
+                    return std::unexpected(std::format(
+                        "Full-symmetry ROHF: initial density is not symmetry-adapted "
+                        "(max |O P O^T - P| = {:.3e}); SAO blocking should guarantee this "
+                        "unless a degenerate open shell is partially occupied",
+                        dev));
+            }
+            // C1: contract the persisted skeleton if built; else rebuild per-iteration.
+            auto G_res = calculator._symm_skeleton_eri.empty()
+                             ? full_symmetry_fock_uhf(shell_pairs, calculator, Pa, Pb, nbasis, tol_eri)
+                             : full_symmetry_contract_uhf(calculator._symm_skeleton_eri, calculator, Pa, Pb, nbasis);
+            if (!G_res)
+                return std::unexpected(G_res.error());
+            std::tie(Ga, Gb) = std::move(*G_res);
         }
         else if (calculator._shells._spherical)
         {
