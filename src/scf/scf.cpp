@@ -73,17 +73,30 @@ namespace
             HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
     }
 
-    // Verify a density is symmetry-adapted (O_Rᵀ P O_R == P) — the contract the
-    // skeleton+symmetrization Fock requires. SAO blocking guarantees it; this is a
-    // cheap loud check (run once, iteration 1) so any violation fails visibly
-    // instead of silently corrupting the energy. Returns max deviation.
+    // Verify a density is symmetry-adapted — the contract the skeleton+symmetrization
+    // Fock requires. The density is a CONTRAVARIANT object in the (non-orthonormal)
+    // AO basis, so the correct invariance is O_R P O_Rᵀ == P, NOT O_Rᵀ P O_R == P
+    // (the covariant/operator law symmetrize_matrix applies). The two coincide only
+    // for orthogonal O_R (s,p shells); for Cartesian d (and higher) under a non-
+    // monomial operation (C₃, S₄, …) O_R is not orthogonal and the laws differ —
+    // checking the covariant law there falsely rejects a perfectly symmetric SCF
+    // density. SAO blocking guarantees the contravariant invariance; this is a cheap
+    // loud check (run once, iteration 1) so any real violation fails visibly instead
+    // of silently corrupting the energy. Returns max deviation max_R ‖O_R P O_Rᵀ − P‖.
     double density_symmetry_deviation(const Eigen::MatrixXd &P,
                                       const HartreeFock::Symmetry::GroupOperations &ops)
     {
-        auto Psym = HartreeFock::Symmetry::symmetrize_matrix(P, ops);
-        if (!Psym)
+        if (!ops.valid || ops.operations.empty())
             return std::numeric_limits<double>::infinity();
-        return (*Psym - P).cwiseAbs().maxCoeff();
+        double dev = 0.0;
+        for (const auto &op : ops.operations)
+        {
+            if (op.matrix.rows() != P.rows() || op.matrix.cols() != P.cols())
+                return std::numeric_limits<double>::infinity();
+            dev = std::max(dev,
+                           (op.matrix * P * op.matrix.transpose() - P).cwiseAbs().maxCoeff());
+        }
+        return dev;
     }
 } // namespace
 
@@ -405,7 +418,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
                 if (dev > 1e-8)
                     return std::unexpected(std::format(
                         "Full-symmetry SCF: initial density is not symmetry-adapted "
-                        "(max |O^T P O - P| = {:.3e}); SAO blocking should guarantee this",
+                        "(max |O P O^T - P| = {:.3e}); SAO blocking should guarantee this",
                         dev));
             }
             auto G_res = full_symmetry_fock_rhf(shell_pairs, calculator, P, nbasis, tol_eri);
@@ -769,7 +782,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                 if (dev > 1e-8)
                     return std::unexpected(std::format(
                         "Full-symmetry UHF: initial density is not symmetry-adapted "
-                        "(max |O^T P O - P| = {:.3e}); SAO blocking should guarantee this",
+                        "(max |O P O^T - P| = {:.3e}); SAO blocking should guarantee this",
                         dev));
             }
             auto G_res = full_symmetry_fock_uhf(shell_pairs, calculator, Pa, Pb, nbasis, tol_eri);

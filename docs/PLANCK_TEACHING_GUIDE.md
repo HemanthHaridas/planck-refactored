@@ -1142,12 +1142,24 @@ the AO basis as a linear map. Collecting its coefficients gives a dense
 \[
   \chi_\mu \;\xrightarrow{\;R\;}\; \sum_\nu (\mathbf O_R)_{\nu\mu}\,\chi_\nu ,
 \]
-which forms a (generally reducible) representation of the point group. Because the
-spatial operation is orthogonal and the basis is consistently normalized, each
-\(\mathbf O_R\) is orthogonal, \(\mathbf O_R^{\mathsf T}\mathbf O_R = \mathbf I\),
-and the set is closed under multiplication. For D\(_{2h}\) the \(\mathbf O_R\)
-happen to be signed permutations; for the full group they are genuinely dense — the
-single generalization that unlocks everything below.
+which forms a (generally reducible) representation of the point group, closed under
+multiplication. For D\(_{2h}\) the \(\mathbf O_R\) happen to be signed permutations;
+for the full group they are genuinely dense — the single generalization that unlocks
+everything below.
+
+A subtlety that matters in the Cartesian basis: \(\mathbf O_R\) is **metric-orthogonal**
+but not, in general, plain-orthogonal. The spatial operation is orthogonal, so it
+preserves overlaps, which is the statement
+\(\mathbf O_R^{\mathsf T}\mathbf S\,\mathbf O_R = \mathbf S\) (with \(\mathbf S\) the AO
+overlap). Only when the basis is *orthonormal* (\(\mathbf S = \mathbf I\)) does this
+reduce to \(\mathbf O_R^{\mathsf T}\mathbf O_R = \mathbf I\). Cartesian \(s\) and \(p\)
+functions are effectively orthonormal within a shell, so their \(\mathbf O_R\) *is*
+orthogonal; but Cartesian \(d\) and higher functions are a non-orthonormal, reducible
+set (e.g. \(\langle x^2|y^2\rangle \neq 0\); the trace \(x^2+y^2+z^2\) is an \(s\)-like
+contaminant), so a genuine rotation mixes them with a non-identity metric and
+\(\mathbf O_R^{\mathsf T}\mathbf O_R \neq \mathbf I\). Keeping the distinction between
+the metric-orthogonal and plain-orthogonal cases is essential below — assuming plain
+orthogonality silently corrupts the density contract for \(d\)-and-higher bases.
 
 **2. The petite list.** The two-electron integrals \((\mu\nu|\lambda\sigma)\)
 inherit the group's symmetry: applying \(R\) to all four indices leaves the
@@ -1174,22 +1186,51 @@ representative weighted by the size of its orbit, the projection reproduces the
 full Fock matrix exactly — the skipped integrals re-enter through the averaging
 rather than being recomputed.
 
-**The symmetry-adapted-density requirement.** The construction
+**The symmetry-adapted-density requirement (covariant vs contravariant).** The
+construction
 \(\mathbf F = \tfrac{1}{|G|}\sum_R \mathbf O_R^{\mathsf T}\mathbf F_{\text{skel}}\mathbf O_R\)
 reproduces \(\mathbf F(\mathbf P)\) **only when the density itself is
-symmetry-adapted**, i.e. invariant under the group,
-\(\mathbf O_R^{\mathsf T}\mathbf P\,\mathbf O_R = \mathbf P\). A symmetry-broken
-density would give the wrong Fock. Working in the symmetry-adapted orbital basis
-guarantees the requirement: every occupied MO is symmetry-pure, so the density
-\(\mathbf P = 2\,\mathbf C_{\text{occ}}\mathbf C_{\text{occ}}^{\mathsf T}\) is
-group-invariant by construction. The reduction is therefore used together with SAO
-blocking; a converged SCF in that basis stays in the symmetric subspace throughout.
-Because the full group contains its D\(_{2h}\) subgroup, this reduction subsumes —
-and replaces — the coordinate-axis scheme.
+symmetry-adapted**. But "symmetry-adapted" means different things for an operator and
+for a density, and the difference is invisible until \(d\) functions appear. A matrix
+of a symmetric *operator* — the overlap \(\mathbf S\), the core Hamiltonian, the Fock
+\(\mathbf F\) — is **covariant**: it transforms as
+\(\mathbf O_R^{\mathsf T}\mathbf F\,\mathbf O_R = \mathbf F\). The **density**
+\(\mathbf P\), which contracts against integrals as
+\(\sum_{\lambda\sigma}\mathbf P_{\lambda\sigma}(\mu\nu|\lambda\sigma)\), is the dual
+object and transforms **contravariantly**:
+\[
+  \mathbf O_R\,\mathbf P\,\mathbf O_R^{\mathsf T} \;=\; \mathbf P .
+\]
+For orthogonal \(\mathbf O_R\) (i.e. \(s,p\) shells) \(\mathbf O_R^{\mathsf T}=\mathbf O_R^{-1}\)
+and the two laws coincide, which is why the distinction never surfaces in an
+\(s,p\) basis. For Cartesian \(d\) and higher under a non-monomial operation
+(\(C_3\), \(S_4\), \(\dots\)) the two laws genuinely differ, and only the
+contravariant one is the correct density contract — checking or projecting a density
+with the covariant operator law there wrongly rejects a perfectly symmetric density.
+
+Working in the symmetry-adapted orbital basis guarantees the (contravariant)
+requirement: every occupied MO is symmetry-pure, so the density
+\(\mathbf P = 2\,\mathbf C_{\text{occ}}\mathbf C_{\text{occ}}^{\mathsf T}\) satisfies
+\(\mathbf O_R\,\mathbf P\,\mathbf O_R^{\mathsf T}=\mathbf P\) by construction. Given
+such a \(\mathbf P\), the Coulomb/exchange build is a symmetric operator, so the
+skeleton Fock obeys the covariant law and the
+\(\tfrac{1}{|G|}\sum_R\mathbf O_R^{\mathsf T}(\cdot)\mathbf O_R\) projection restores
+it exactly. The reduction is therefore used together with SAO blocking; a converged
+SCF in that basis stays in the symmetric subspace throughout. Because the full group
+contains its D\(_{2h}\) subgroup, this reduction subsumes — and replaces — the
+coordinate-axis scheme.
 
 The same petite-list and symmetrization arguments are independent of which integral
 recurrence evaluates the representative quartets, so they apply equally to the
 Obara–Saika and Rys engines.
+
+The petite-list loop carries the same two performance optimizations as the ordinary
+direct Fock build: it is parallelized over the representative pair-quartets with
+OpenMP, and each surviving quartet is Schwarz-screened
+(\(Q(i,j)\,Q(k,l) < \epsilon_{ERI}\), §9) before its integral is evaluated. Both are
+value-neutral — the Schwarz bound is symmetry-invariant, so screening a representative
+screens its whole orbit, and the orbit slots written by distinct representatives are
+disjoint, so the parallel scatter needs only same-value atomic stores.
 
 ### A Single Atom Is K\(_h\)
 
@@ -1418,9 +1459,10 @@ Q(i,j) \cdot Q(k,l) < \epsilon_{ERI}
 \]
 
 This screening is applied in `_compute_2e`, `_compute_2e_fock`, and
-`_compute_2e_fock_uhf` in `os.cpp`. The Schwarz table itself also honors
-integral symmetry operations: a representative pair is evaluated once and then
-the same bound is assigned across its AO symmetry orbit. The gradient code uses
+`_compute_2e_fock_uhf` in `os.cpp`, and in the full point-group reduction's shared
+skeleton build (`skeleton_eri.h`, used by both engines). The Schwarz table itself
+also honors integral symmetry operations: a representative pair is evaluated once and
+then the same bound is assigned across its AO symmetry orbit. The gradient code uses
 the same Schwarz criterion for ERI derivative contractions.
 
 ### Permutation Symmetry of the ERI Tensor
@@ -5412,7 +5454,7 @@ driver.cpp
 | Level shifting | Complete |
 | Point group detection and SAO blocking | Complete |
 | MO irrep labeling | Complete |
-| Full point-group ERI reduction (direct SCF, RHF/UHF) | Complete (Cartesian; petite list + skeleton-Fock symmetrization) |
+| Full point-group ERI reduction (direct SCF, RHF/UHF) | Complete (Cartesian; petite list + skeleton-Fock symmetrization; OpenMP + Schwarz screened; validated through \(d\)-shells) |
 | RMP2 and UMP2 energy | Complete |
 | RCCSD single-point energy | Complete |
 | UCCSD single-point energy | Teaching-oriented small-system determinant-space prototype |

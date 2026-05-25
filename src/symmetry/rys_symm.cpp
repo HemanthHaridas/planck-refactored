@@ -34,7 +34,6 @@ namespace HartreeFock::RysQuad
         double omega,
         double tol_eri)
     {
-        (void)tol_eri;
         const std::size_t nb = nbasis;
         const bool use_sym = ops.valid && ops.operations.size() > 1;
 
@@ -43,7 +42,8 @@ namespace HartreeFock::RysQuad
             [&](const HartreeFock::ShellPair &ab, const HartreeFock::ShellPair &cd,
                 int ax, int ay, int az, int bx, int by, int bz,
                 int cx, int cy, int cz, int dx, int dy, int dz)
-            { return rys_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); });
+            { return rys_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); },
+            tol_eri);
         if (!eri)
             return std::unexpected(eri.error());
 
@@ -65,7 +65,6 @@ namespace HartreeFock::RysQuad
         double omega,
         double tol_eri)
     {
-        (void)tol_eri;
         const std::size_t nb = nbasis;
         const bool use_sym = ops.valid && ops.operations.size() > 1;
 
@@ -74,7 +73,8 @@ namespace HartreeFock::RysQuad
             [&](const HartreeFock::ShellPair &ab, const HartreeFock::ShellPair &cd,
                 int ax, int ay, int az, int bx, int by, int bz,
                 int cx, int cy, int cz, int dx, int dy, int dz)
-            { return rys_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); });
+            { return rys_eri(ab, cd, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kernel, omega); },
+            tol_eri);
         if (!eri)
             return std::unexpected(eri.error());
 
