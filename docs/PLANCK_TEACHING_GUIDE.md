@@ -1597,6 +1597,33 @@ plus \(5\) d-like and \(1\) s-like contaminants hidden inside degree-4
 polynomials (\(r^2\) times a d, \(r^4\) times an s). The spherical basis keeps
 only the pure-\(L\) part and discards the contamination.
 
+### Why Spherical Usually Gives a Higher Energy
+
+A direct consequence of the counting above: for any shell with \(L \ge 2\), the
+Cartesian basis spans the spherical basis **plus** the contaminating lower-\(L\)
+functions. The spherical variational space is therefore a strict *subspace* of
+the Cartesian one (same primitives, fewer angular combinations).
+
+Hartree-Fock is variational — it returns the lowest energy reachable inside the
+span of the basis. Minimizing over a larger space can only do as well or better,
+so
+
+\[
+E_{\text{cart}} \;\le\; E_{\text{sph}} .
+\]
+
+The spherical energy is (weakly) *higher* not because spherical is "worse" but
+because the extra Cartesian functions are additional variational freedom: the
+\(r^2\)-type contaminants act as extra, redundant \(s\)/\(d\) character on the
+atom and lower the energy slightly by filling in space the pure harmonics omit.
+The gap is purely the energy these spurious functions buy; it vanishes for an
+s/p-only basis (where the two bases coincide) and grows with the angular
+momentum present. Crucially this lower Cartesian number is **not** more accurate
+— it is the energy of a *different, larger* basis than the one the set was
+parameterized for, which is exactly why standard references (and Planck, in
+`basis_type spherical`) report the spherical value. See *Why Use Spherical
+Harmonics at All* below.
+
 ### The Real Solid Harmonics
 
 The pure angular functions are the **real solid harmonics** \(S_{L,m}(\mathbf r)\),

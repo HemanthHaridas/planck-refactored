@@ -207,6 +207,7 @@
 <li class="toc-level-3"><a href="#permutation-symmetry-of-the-eri-tensor">Permutation Symmetry of the ERI Tensor</a></li>
 <li class="toc-level-2"><a href="#10-spherical-harmonic-basis-functions">10. Spherical Harmonic Basis Functions</a></li>
 <li class="toc-level-3"><a href="#why-cartesian-and-spherical-differ">Why Cartesian and Spherical Differ</a></li>
+<li class="toc-level-3"><a href="#why-spherical-usually-gives-a-higher-energy">Why Spherical Usually Gives a Higher Energy</a></li>
 <li class="toc-level-3"><a href="#the-real-solid-harmonics">The Real Solid Harmonics</a></li>
 <li class="toc-level-3"><a href="#the-transform-matrix">The Transform Matrix</a></li>
 <li class="toc-level-3"><a href="#a-normalization-subtlety">A Normalization Subtlety</a></li>
@@ -1111,6 +1112,13 @@ n_{\text{cart}} \;=\; \underbrace{(2L+1)}_{\text{pure }L}
 \;+\; \underbrace{(2(L-4)+1)}_{\text{contaminating }L-4} \;+\; \cdots
 \]</span></p>
 <p>so a Cartesian g-shell (15 functions) is <span class="math-inline">\(9 = 2\cdot4{+}1\)</span> true g-functions, plus <span class="math-inline">\(5\)</span> d-like and <span class="math-inline">\(1\)</span> s-like contaminants hidden inside degree-4 polynomials (<span class="math-inline">\(r^2\)</span> times a d, <span class="math-inline">\(r^4\)</span> times an s). The spherical basis keeps only the pure-<span class="math-inline">\(L\)</span> part and discards the contamination.</p>
+<h3 id="why-spherical-usually-gives-a-higher-energy">Why Spherical Usually Gives a Higher Energy</h3>
+<p>A direct consequence of the counting above: for any shell with <span class="math-inline">\(L \ge 2\)</span>, the Cartesian basis spans the spherical basis <strong>plus</strong> the contaminating lower-<span class="math-inline">\(L\)</span> functions. The spherical variational space is therefore a strict <em>subspace</em> of the Cartesian one (same primitives, fewer angular combinations).</p>
+<p>Hartree-Fock is variational — it returns the lowest energy reachable inside the span of the basis. Minimizing over a larger space can only do as well or better, so</p>
+<p><span class="math-display">\[
+E_{\text{cart}} \;\le\; E_{\text{sph}} .
+\]</span></p>
+<p>The spherical energy is (weakly) <em>higher</em> not because spherical is &quot;worse&quot; but because the extra Cartesian functions are additional variational freedom: the <span class="math-inline">\(r^2\)</span>-type contaminants act as extra, redundant <span class="math-inline">\(s\)</span>/<span class="math-inline">\(d\)</span> character on the atom and lower the energy slightly by filling in space the pure harmonics omit. The gap is purely the energy these spurious functions buy; it vanishes for an s/p-only basis (where the two bases coincide) and grows with the angular momentum present. Crucially this lower Cartesian number is <strong>not</strong> more accurate — it is the energy of a <em>different, larger</em> basis than the one the set was parameterized for, which is exactly why standard references (and Planck, in <code>basis_type spherical</code>) report the spherical value. See <em>Why Use Spherical Harmonics at All</em> below.</p>
 <h3 id="the-real-solid-harmonics">The Real Solid Harmonics</h3>
 <p>The pure angular functions are the <strong>real solid harmonics</strong> <span class="math-inline">\(S_{L,m}(\mathbf r)\)</span>, <span class="math-inline">\(m = -L, \dots, +L\)</span>. They are the unique (up to sign and scale) degree-<span class="math-inline">\(L\)</span> homogeneous polynomials that are <em>harmonic</em>, i.e. annihilated by the Laplacian:</p>
 <p><span class="math-display">\[
