@@ -1015,9 +1015,10 @@ namespace HartreeFock
             // (O_Rᵀ S O_R = S); plain-orthogonal (O_Rᵀ O_R = I) only when the basis is
             // orthonormal — true for Cartesian s,p and for ALL spherical-harmonic
             // shells, but NOT for Cartesian d and higher (those are a non-orthonormal,
-            // reducible set). In spherical mode this is the spherical O_R = C·O_cart·C⁺
-            // and is genuinely orthogonal. See docs/FULL_SYMMETRY_ERI_DESIGN.md §3.1/§4
-            // and the covariant-vs-contravariant note in scf.cpp.
+            // reducible set). In spherical mode the physical AO representation is the
+            // metric-correct O_R = S_sph⁻¹ (C S_cart O_cart Cᵀ), so it is again only
+            // metric-orthogonal in the general case. See docs/FULL_SYMMETRY_ERI_DESIGN.md
+            // §3.1/§4 and the covariant-vs-contravariant note in scf.cpp.
             Eigen::MatrixXd matrix;
 
             // Shell permutation induced by R: shell_perm[s] = t means shell s maps

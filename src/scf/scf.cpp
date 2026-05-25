@@ -40,10 +40,11 @@ namespace
         return C * G_cart * C.transpose();
     }
 
-    // ── Full-symmetry direct Fock dispatch (Cartesian, SAO-blocked SCF only) ──────
+    // ── Full-symmetry direct Fock dispatch (SAO-blocked direct SCF) ───────────────
     // Routes the RHF / UHF skeleton+symmetrization Fock to the requested engine
     // (os_symm / rys_symm). See docs/FULL_SYMMETRY_ERI_DESIGN.md §8. The caller
-    // gates on calculator._use_full_symmetry && sao_active && !spherical && direct.
+    // gates on calculator._use_full_symmetry && sao_active && direct; this helper
+    // then dispatches internally to the Cartesian or spherical full-symmetry path.
     std::expected<Eigen::MatrixXd, std::string> full_symmetry_fock_rhf(
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const HartreeFock::Calculator &calc,

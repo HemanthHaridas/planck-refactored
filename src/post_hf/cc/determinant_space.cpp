@@ -129,6 +129,10 @@ namespace
         return std::sqrt(vec.squaredNorm() / static_cast<double>(vec.size()));
     }
 
+    // Apply a normal-ordered excitation a^†_a ... a_i ... to a determinant in the
+    // same occupied-then-virtual spin-orbital convention the excitation list uses.
+    // We annihilate occupied orbitals first, then create virtuals in reverse so the
+    // net fermionic phase matches the ordered operator string.
     DeterminantOpResult apply_excitation_operator(
         CIString determinant,
         const std::vector<int> &occupied,
@@ -170,6 +174,9 @@ namespace
                             kMaxSpinOrbitals, system.n_spin_orb));
 
         DeterminantSpace space;
+        // Enumerate the full N-electron determinant basis in the spin-orbital space.
+        // This is the exact FCI-like Hilbert space the teaching CC prototype uses as
+        // its similarity-transform playground.
         space.determinants = generate_strings(system.n_spin_orb, system.n_electrons);
         if (space.determinants.empty())
             return std::unexpected("build_determinant_space: failed to enumerate determinants.");
@@ -200,10 +207,16 @@ namespace
         const int dim = static_cast<int>(space.determinants.size());
         Eigen::MatrixXd hamiltonian = Eigen::MatrixXd::Zero(dim, dim);
 
+        // Assemble the exact second-quantized Hamiltonian in the determinant basis:
+        //   H = sum_pq h_pq a†_p a_q + 1/4 sum_pqrs g_pqrs a†_p a†_q a_s a_r
+        // The CI-string helpers carry the fermionic phase bookkeeping for each
+        // operator application; the lookup map turns the resulting determinant back
+        // into a dense matrix row index.
         for (int ket_idx = 0; ket_idx < dim; ++ket_idx)
         {
             const CIString ket = space.determinants[static_cast<std::size_t>(ket_idx)];
 
+            // One-electron term: a†_p a_q |ket>.
             for (int q = 0; q < system.n_spin_orb; ++q)
                 for (int p = 0; p < system.n_spin_orb; ++p)
                 {
@@ -226,6 +239,9 @@ namespace
                         hpq * annihilated.phase * created.phase;
                 }
 
+            // Two-electron term in chemists' spin-orbital notation:
+            // a†_p a†_q a_s a_r |ket>, with the standard 1/4 prefactor because g2
+            // stores the antisymmetrized <pq||rs> combination.
             for (int r = 0; r < system.n_spin_orb; ++r)
                 for (int s = 0; s < system.n_spin_orb; ++s)
                     for (int p = 0; p < system.n_spin_orb; ++p)
@@ -271,6 +287,9 @@ namespace
 
         std::vector<Excitation> excitations;
 
+        // Build the excitation manifold once, relative to the HF reference.
+        // Each entry records both the target determinant index and the orbital-energy
+        // denominator used by the Jacobi-style amplitude update later on.
         const auto append_excitation =
             [&](int rank, std::vector<int> occupied, std::vector<int> virtuals)
             -> std::expected<void, std::string>
@@ -304,6 +323,7 @@ namespace
             return {};
         };
 
+        // Singles: i -> a.
         for (int i = 0; i < system.n_occ; ++i)
             for (int a = system.n_occ; a < system.n_spin_orb; ++a)
             {
@@ -314,6 +334,7 @@ namespace
 
         if (max_rank >= 2)
         {
+            // Doubles: ij -> ab with strictly ordered indices to avoid duplicates.
             for (int i = 0; i < system.n_occ; ++i)
                 for (int j = i + 1; j < system.n_occ; ++j)
                     for (int a = system.n_occ; a < system.n_spin_orb; ++a)
@@ -327,6 +348,7 @@ namespace
 
         if (max_rank >= 3)
         {
+            // Triples: ijk -> abc, again in lexicographic order for a unique basis.
             for (int i = 0; i < system.n_occ; ++i)
                 for (int j = i + 1; j < system.n_occ; ++j)
                     for (int k = j + 1; k < system.n_occ; ++k)
@@ -350,6 +372,9 @@ namespace
         Eigen::VectorXd amplitudes = Eigen::VectorXd::Zero(
             static_cast<Eigen::Index>(excitations.size()));
 
+        // MP2-style seed: only doubles have a non-zero first-order value in the
+        // canonical RHF/UHF reference used by this prototype. Singles/triples start
+        // from zero unless a warm start is supplied.
         for (Eigen::Index idx = 0; idx < amplitudes.size(); ++idx)
         {
             const Excitation &exc = excitations[static_cast<std::size_t>(idx)];
@@ -369,6 +394,8 @@ namespace
         const std::vector<Excitation> &excitations,
         const DeterminantCCSpinOrbitalSeed &seed)
     {
+        // Start from the MP2-like default and selectively overwrite whatever the
+        // staged tensor backend has already prepared for this spin-orbital manifold.
         Eigen::VectorXd amplitudes = build_initial_guess(system, excitations);
 
         for (Eigen::Index idx = 0; idx < amplitudes.size(); ++idx)
@@ -412,6 +439,9 @@ namespace
         const int dim = static_cast<int>(space.determinants.size());
         Eigen::MatrixXd cluster = Eigen::MatrixXd::Zero(dim, dim);
 
+        // Materialize the truncated cluster operator T in the determinant basis.
+        // Column j corresponds to acting on determinant |j>; each non-zero entry is
+        // the signed amplitude that connects it to an excited determinant.
         for (Eigen::Index mu = 0; mu < amplitudes.size(); ++mu)
         {
             const double t_mu = amplitudes(mu);
@@ -448,6 +478,9 @@ namespace
         Eigen::VectorXd output = input;
         Eigen::VectorXd term = input;
 
+        // Apply exp(±T) by a short Taylor series. T is nilpotent in a finite
+        // determinant space, so using the electron count as the expansion cap is a
+        // safe upper bound for these small teaching systems.
         for (int order = 1; order <= max_order; ++order)
         {
             term = (sign / static_cast<double>(order)) * (cluster * term);
@@ -465,6 +498,9 @@ namespace
     {
         Eigen::VectorXd residuals = Eigen::VectorXd::Zero(
             static_cast<Eigen::Index>(excitations.size()));
+        // Project e^{-T} H e^{T} |Phi0> onto each excited determinant in the
+        // excitation basis. The stored reference phase aligns the determinant-space
+        // matrix element with the excitation-operator convention used for amplitudes.
         for (Eigen::Index idx = 0; idx < residuals.size(); ++idx)
         {
             const Excitation &exc = excitations[static_cast<std::size_t>(idx)];
@@ -482,6 +518,9 @@ namespace HartreeFock::Correlation::CC
         const MOBlockCache &mo_blocks)
     {
         SpinOrbitalSystem system;
+        // Expand a spatial-orbital RHF reference into the doubled spin-orbital view
+        // used by the determinant solver: alpha/beta partners are interleaved as
+        // (0α,0β,1α,1β,...) via spatial_index()/same_spin().
         system.n_occ = 2 * reference.n_occ;
         system.n_virt = 2 * reference.n_virt;
         system.n_electrons = system.n_occ;
@@ -502,11 +541,16 @@ namespace HartreeFock::Correlation::CC
         C_full.rightCols(reference.n_virt) = reference.C_virt;
 
         const Eigen::MatrixXd h_mo = C_full.transpose() * calculator._hcore * C_full;
+        // The one-electron spin-orbital Hamiltonian is block-diagonal in spin for an
+        // RHF reference: identical alpha/alpha and beta/beta copies, zero spin-flip
+        // blocks.
         for (int p = 0; p < system.n_spin_orb; ++p)
             for (int q = 0; q < system.n_spin_orb; ++q)
                 if (same_spin(p, q))
                     system.h1(p, q) = h_mo(spatial_index(p), spatial_index(q));
 
+        // Lift spatial MO integrals into antisymmetrized spin-orbital integrals:
+        // <pq||rs> = (pr|qs) δσpσr δσqσs - (ps|qr) δσpσs δσqσr.
         for (int p = 0; p < system.n_spin_orb; ++p)
             for (int q = 0; q < system.n_spin_orb; ++q)
                 for (int r = 0; r < system.n_spin_orb; ++r)
@@ -559,6 +603,10 @@ namespace HartreeFock::Correlation::CC
             .n_virt_beta = reference.n_virt_beta,
         };
 
+        // The determinant solver expects occupied spin orbitals first, then
+        // virtuals, with alpha and beta packed into separate contiguous ranges.
+        // UHFSpinOrbitalMap translates that logical ordering back to the per-spin MO
+        // indices used by the transformed integral blocks.
         for (int i = 0; i < reference.n_occ_alpha; ++i)
             system.eps_occ(i) = reference.eps_alpha(i);
         for (int i = 0; i < reference.n_occ_beta; ++i)
@@ -599,6 +647,9 @@ namespace HartreeFock::Correlation::CC
                     reference.C_beta, reference.C_beta,
                     reference.C_beta, reference.C_beta));
 
+            // Select the correctly spin-blocked MO integral tensor for a given pair
+            // of bra/ket spin channels. The outer loops still impose the Kronecker
+            // deltas needed to assemble <pq||rs>.
             const auto mo_eri = [&](SpinLabel left_spin, SpinLabel right_spin,
                                     int p, int r, int q, int s) -> double
             {
@@ -719,10 +770,18 @@ namespace HartreeFock::Correlation::CC
         AmplitudeDIIS diis(static_cast<int>(std::max(2u, calculator._scf._DIIS_dim)));
         double previous_corr_energy = std::numeric_limits<double>::quiet_NaN();
 
+        // Simple Jacobi/DIIS fixed-point solve for the projected CC equations:
+        //   R_mu(t) = <Phi_mu| e^{-T} H e^{T} |Phi0> = 0
+        // Residuals are divided by orbital-energy denominators as a lightweight
+        // preconditioner, then optionally DIIS-extrapolated.
         for (unsigned int iter = 1; iter <= max_iter; ++iter)
         {
             const auto iter_start = std::chrono::steady_clock::now();
 
+            // Similarity-transform action in determinant space:
+            //   psi      = e^{T} |Phi0>
+            //   sigma    = H psi
+            //   bar_h_ref = e^{-T} sigma
             const Eigen::MatrixXd cluster = build_cluster_matrix(det_space, excitations, amplitudes);
             const Eigen::VectorXd psi = apply_exponential(cluster, reference_vector, +1.0, system.n_electrons);
             const Eigen::VectorXd sigma = det_space.hamiltonian * psi;
@@ -741,6 +800,9 @@ namespace HartreeFock::Correlation::CC
 
             const double update_rms = rms_norm(updated - amplitudes);
 
+            // DIIS acts on the preconditioned amplitudes/residuals, mirroring the
+            // tensor CC backends: keep the inexpensive Jacobi step as the base update,
+            // then extrapolate once a small history has accumulated.
             diis.push(updated, residuals);
             if (use_diis && diis.ready())
             {
