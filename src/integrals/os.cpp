@@ -628,13 +628,18 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_nuclear_attraction(
     charges.reserve(molecule.natoms);
     for (std::size_t a = 0; a < molecule.natoms; ++a)
     {
+        // Ghost atoms (BSSE counterpoise) have zero nuclear charge and so add
+        // nothing to the electron–nucleus attraction; skip them.
+        const double Z = molecule.nuclear_charge(a);
+        if (Z == 0.0)
+            continue;
         charges.push_back(
             HartreeFock::ExternalCharge{
                 .position = Eigen::Vector3d(
                     molecule._standard(a, 0),
                     molecule._standard(a, 1),
                     molecule._standard(a, 2)),
-                .charge = static_cast<double>(molecule.atomic_numbers[a])});
+                .charge = Z});
     }
 
     return ::compute_external_charge_attraction_impl(shell_pairs, nbasis, charges, sym_ops);

@@ -61,6 +61,12 @@
       "allowed_statuses": ["PASS"]
     },
     {
+      "id": "he2_bsse_ccpvdz",
+      "script": "tests/pyscf/he2_bsse_ccpvdz.py",
+      "kind": "bsse",
+      "allowed_statuses": ["PASS"]
+    },
+    {
       "id": "lih_cas22_sto3g",
       "script": "tests/pyscf/lih_cas22_sto3g.py",
       "kind": "casscf",

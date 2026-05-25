@@ -203,6 +203,43 @@ namespace HartreeFock
         Eigen::VectorXi atomic_numbers = {}; // Atomic numbers
         Eigen::VectorXd atomic_masses = {};  // Atomic masses
 
+        // Per-atom ghost mask for counterpoise / BSSE corrections. A ghost atom
+        // keeps its real atomic number (so the basis-set lookup in gaussian.cpp
+        // still loads its shells) but contributes ZERO nuclear charge: it adds no
+        // electrons, no nuclear repulsion, and no nuclear-attraction potential.
+        // Empty or false => ordinary physical atom. Always kept the same length as
+        // natoms once the molecule is parsed. Read nuclear charge through
+        // nuclear_charge(a), never atomic_numbers[a], for any physical quantity.
+        std::vector<bool> is_ghost = {};
+
+        // Effective nuclear charge of atom a: 0 for ghosts, else its atomic number.
+        double nuclear_charge(std::size_t a) const noexcept
+        {
+            if (a < is_ghost.size() && is_ghost[a])
+                return 0.0;
+            return static_cast<double>(atomic_numbers[static_cast<Eigen::Index>(a)]);
+        }
+
+        // True if any atom is a ghost (i.e. this is a counterpoise sub-calculation).
+        bool has_ghost_atoms() const noexcept
+        {
+            for (bool g : is_ghost)
+                if (g)
+                    return true;
+            return false;
+        }
+
+        // Sum of effective nuclear charges (ghosts excluded). This is the total
+        // positive charge that electrons see; electron count is this minus the
+        // molecular charge. Equals atomic_numbers.sum() when no ghosts are present.
+        int total_nuclear_charge() const noexcept
+        {
+            int total = 0;
+            for (std::size_t a = 0; a < natoms; ++a)
+                total += static_cast<int>(nuclear_charge(a));
+            return total;
+        }
+
         Eigen::MatrixXd coordinates;  // natoms × 3, in Angstrom
         Eigen::MatrixXd _coordinates; // natoms × 3, in Bohr (internal use)
 
@@ -244,6 +281,7 @@ namespace HartreeFock
 
             atomic_numbers.resize(0);
             atomic_masses.resize(0);
+            is_ghost.clear();
 
             coordinates.resize(0, 3);
             standard.resize(0, 3);
@@ -440,6 +478,25 @@ namespace HartreeFock
         Units _units = Units::Angstrom;         // Coordinate units (Default is Angstrom)
         CoordType _type = CoordType::Cartesian; // Coordinate type (Default is Cartesian)
         bool _use_symm = true;                  // Detect point group symmetry
+    };
+
+    // ── Counterpoise / BSSE specification (%begin_bsse) ──────────────────────
+    // When _enabled, the driver runs the Boys–Bernardi counterpoise procedure
+    // instead of a single SCF: the dimer, each isolated monomer, and each
+    // monomer in the full dimer basis (partner atoms kept as ghosts). SCF-level
+    // only (RHF/UHF/ROHF energies). See src/bsse/counterpoise.cpp.
+    struct OptionsBSSE
+    {
+        bool _enabled = false;
+        // One entry per fragment; each holds the 0-based atom indices of that
+        // fragment (parser converts from the 1-based input indices). Exactly two
+        // fragments are supported (dimer counterpoise).
+        std::vector<std::vector<int>> _fragments;
+        // Optional per-fragment charge / multiplicity for the monomer sub-calcs.
+        // Empty => 0 / 1 for every fragment. When non-empty, length must equal
+        // the number of fragments (validated in the parser).
+        std::vector<int> _charges;
+        std::vector<int> _multiplicities;
     };
 
     struct OptionsIntegral
@@ -1081,6 +1138,7 @@ namespace HartreeFock
         OptionsIntegral _integral;
         OptionsDFT _dft;
         OptionsSolvation _solvation;
+        OptionsBSSE _bsse;
         OptionsOutput _output;
         InfoSCF _info;
         Molecule _molecule;
@@ -1208,8 +1266,10 @@ namespace HartreeFock
             {
                 for (std::size_t b = a + 1; b < N; b++)
                 {
-                    const double Za = static_cast<double>(_molecule.atomic_numbers[a]);
-                    const double Zb = static_cast<double>(_molecule.atomic_numbers[b]);
+                    // nuclear_charge() returns 0 for ghost atoms, so ghost centers
+                    // contribute nothing to nuclear repulsion (BSSE counterpoise).
+                    const double Za = _molecule.nuclear_charge(a);
+                    const double Zb = _molecule.nuclear_charge(b);
                     const double dx = _molecule._standard(a, 0) - _molecule._standard(b, 0);
                     const double dy = _molecule._standard(a, 1) - _molecule._standard(b, 1);
                     const double dz = _molecule._standard(a, 2) - _molecule._standard(b, 2);

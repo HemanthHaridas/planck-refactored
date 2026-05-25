@@ -231,6 +231,11 @@ file(GLOB SOLVATION_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/solvation/*.cpp
 )
 
+file(GLOB BSSE_SRC CONFIGURE_DEPENDS
+    ${SRC_DIR}/bsse/*.h
+    ${SRC_DIR}/bsse/*.cpp
+)
+
 set(HF_MAIN_SRC
     ${SRC_DIR}/driver.cpp
 )
@@ -263,6 +268,7 @@ add_executable(hartree-fock
     ${IO_SRC}
     ${SCF_SRC}
     ${SOLVATION_SRC}
+    ${BSSE_SRC}
     ${POPULATIONS_SRC}
     ${POSTHF_SRC}
     ${GRADIENT_SRC}

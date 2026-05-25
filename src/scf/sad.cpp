@@ -446,6 +446,11 @@ namespace
 
         for (std::size_t A = 0; A < calc._molecule.natoms; ++A)
         {
+            // Ghost atoms (BSSE counterpoise) carry basis functions but no
+            // electrons, so their AO block of the SAD density stays zero.
+            if (A < calc._molecule.is_ghost.size() && calc._molecule.is_ghost[A])
+                continue;
+
             auto element = element_from_z(static_cast<uint64_t>(
                 calc._molecule.atomic_numbers[static_cast<Eigen::Index>(A)]));
             if (!element)
@@ -609,8 +614,9 @@ namespace HartreeFock
         std::expected<Eigen::MatrixXd, std::string> compute_sad_guess_rhf(
             const HartreeFock::Calculator &calc)
         {
-            const int n_electrons = static_cast<int>(
-                calc._molecule.atomic_numbers.cast<int>().sum() - calc._molecule.charge);
+            // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise).
+            const int n_electrons =
+                calc._molecule.total_nuclear_charge() - calc._molecule.charge;
 
             if (n_electrons % 2 != 0)
                 return std::unexpected("SAD: RHF requires an even number of electrons");
