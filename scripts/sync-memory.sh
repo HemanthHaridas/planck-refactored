@@ -10,7 +10,11 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve repo root via git rather than $(dirname $0)/.., because git invokes
+# this script through the .git/hooks/post-commit symlink — $0 there is
+# ".git/hooks/post-commit", so dirname/.. yields ".git/" instead of the real
+# repo root. git rev-parse always returns the worktree's top-level.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 CASSCF_COMPLETION="${REPO_ROOT}/vault/Status/Completion.md"
 CASSCF_OPEN_WORK="${REPO_ROOT}/vault/Status/Open Work.md"
 VAULT_SCRIPT="${REPO_ROOT}/scripts/vault_to_claude.py"
