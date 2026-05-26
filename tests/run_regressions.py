@@ -39,6 +39,31 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "casscf_max_root_gnorm": re.compile(r"max_root_g=([-+0-9Ee\.]+)"),
     "gradient_max": re.compile(r"Gradient max\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
     "gradient_rms": re.compile(r"Gradient rms\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
+    # Post-geomopt converged force from the "Final max|g|" summary line. Distinct
+    # from gradient_max (which catches the per-step "Gradient max|g|" prints; for
+    # a geomopt run, last-match is still the step-0 value because subsequent
+    # steps print only "Opt Step N : ... max|g| = ..." without the full prefix).
+    "geomopt_final_gradient_max": re.compile(r"Final max\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
+    # Vibrational frequencies from the freq table. The freq output is emitted
+    # through the logger so each row carries an "[INF]" prefix; the MO energy
+    # table (also indexed N) does NOT carry that prefix, so requiring it here
+    # disambiguates the two. The freq table has two formats: 2-col
+    # "  N         freq" (no symmetry) and 3-col "  N  Irrep  freq" (with
+    # symmetry, e.g. inside a geomopt+freq run); the optional irrep group
+    # tolerates both.
+    "vib_freq_1": re.compile(
+        r"^\[INF\]\s+1\s+(?:[A-Za-z][A-Za-z0-9_'\"]*\s+)?([-+0-9Ee\.]+)\s*$",
+        re.MULTILINE,
+    ),
+    "vib_freq_2": re.compile(
+        r"^\[INF\]\s+2\s+(?:[A-Za-z][A-Za-z0-9_'\"]*\s+)?([-+0-9Ee\.]+)\s*$",
+        re.MULTILINE,
+    ),
+    "vib_freq_3": re.compile(
+        r"^\[INF\]\s+3\s+(?:[A-Za-z][A-Za-z0-9_'\"]*\s+)?([-+0-9Ee\.]+)\s*$",
+        re.MULTILINE,
+    ),
+    "zero_point_energy_eh": re.compile(r"Zero-point energy\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
     "point_group": re.compile(r"(?:Point Group\s*:\s*|Detected point group\s+)([A-Za-z0-9_+\-]+)"),
     "stability_real_internal": re.compile(
         r"RHF -> RHF \(real, internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
@@ -124,6 +149,15 @@ def extract_metrics(output: str) -> dict[str, Any]:
         metrics["homo_lumo_gap"] = float(lumo_matches[-1]) - float(homo_matches[-1])
 
     return metrics
+
+
+def decode_stream(value: Any) -> str:
+    """Return value as str; tolerates None and bytes (from TimeoutExpired)."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def approx_equal(a: float, b: float, atol: float) -> bool:
@@ -252,7 +286,9 @@ def run_case(
     except subprocess.TimeoutExpired as exc:
         duration_s = time.perf_counter() - start
         detail_lines = [f"timed out after {timeout_s}s"]
-        partial_output = ((exc.stdout or "") + (exc.stderr or "")).strip()
+        # TimeoutExpired.stdout/stderr come back as bytes even when subprocess.run
+        # was called with text=True; decode_stream() handles that uniformly.
+        partial_output = (decode_stream(exc.stdout) + decode_stream(exc.stderr)).strip()
         if partial_output:
             detail_lines.append("---- captured output ----")
             detail_lines.extend(partial_output.splitlines()[-40:])

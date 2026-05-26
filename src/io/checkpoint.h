@@ -26,6 +26,7 @@
 //  [natoms × 3 × 8] coordinates_bohr: double[] (row-major: x0y0z0 x1y1z1 ...)
 //                    → always the final (possibly optimized) geometry in standard frame
 //  [4 + len]        basis name: uint32 length + chars (no null terminator)
+//  [1]              basis_type: uint8 (0 = cartesian, 1 = spherical) [version 7+]
 //  [1]              has_opt_coords: uint8 (1 if coordinates came from a converged geomopt)
 //
 //  Then for each spin channel (alpha always, beta only when is_uhf):
@@ -63,6 +64,10 @@
 //    [1]              has_casscf_active_orbitals: uint8
 //    [4]              casscf_active_start: int32 (0-based MO index) when flag is 1
 //    [4]              casscf_active_count: int32 when flag is 1
+//
+//  Version 7 adds basis_type metadata to the fixed molecule header so restart
+//  paths can distinguish Cartesian and spherical checkpoints even when the
+//  working AO dimension happens to match.
 //
 // Restart semantics:
 //   guess density — load() fills _overlap, _hcore, _info._scf.{alpha,beta},
@@ -114,6 +119,8 @@ namespace HartreeFock
             unsigned int multiplicity;
             Eigen::VectorXi atomic_numbers;
             Eigen::MatrixXd coords_bohr; // natoms × 3, standard frame, Bohr
+            HartreeFock::BasisType basis_type = HartreeFock::BasisType::Cartesian;
+            bool has_basis_type = false;
             bool has_opt_coords;         // true if from a converged geomopt
         };
 
@@ -131,6 +138,8 @@ namespace HartreeFock
             std::size_t nbasis; // nbasis of the checkpoint's basis
             bool is_uhf;
             std::string basis_name;   // basis name stored in the checkpoint
+            HartreeFock::BasisType basis_type = HartreeFock::BasisType::Cartesian;
+            bool has_basis_type = false;
             Eigen::MatrixXd C_alpha;  // all alpha MO columns (nbasis × nbasis)
             Eigen::MatrixXd C_beta;   // beta MOs if is_uhf
             Eigen::MatrixXd C_casscf; // converged CASSCF MOs if present

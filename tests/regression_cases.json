@@ -1787,8 +1787,49 @@
       ]
     },
     {
-      "id": "water_spherical_gradient_rejected",
-      "input": "tests/inputs/regression/spherical/water_spherical_gradient_rejected.hfinp",
+      "id": "water_rhf_spherical_gradient_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_gradient_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Computing analytic nuclear gradient",
+        "Nuclear Gradient (Ha/Bohr) :"
+      ],
+      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water at the input geometry: E=-76.009125642007 Eh, gradient max|g|=1.47293665e-2 Ha/Bohr, rms|g|=6.9308072e-3 Ha/Bohr. Reference computed by tests/pyscf-style script; per-component values: O z = +0.0147293665, H y = ±0.0073107264, H z = -0.0073646832 Ha/Bohr.",
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642007,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_close",
+          "metric": "gradient_max",
+          "expected": 0.0147293665,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "gradient_rms",
+          "expected": 0.0069308072,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_eq",
+          "metric": "gradient_atom_lines",
+          "expected": 3
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_spherical_gradient_rejected",
+      "input": "tests/inputs/regression/spherical/water_rmp2_spherical_gradient_rejected.hfinp",
       "tags": [
         "smoke",
         "core",
@@ -1797,7 +1838,165 @@
       "expected_exit_code": 1,
       "contains": [
         "Spherical Basis :",
-        "Analytic Gradient is not yet supported"
+        "MP2 analytic gradient is not yet supported"
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_geomopt_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_geomopt_631gd.hfinp",
+      "tags": [
+        "core",
+        "spherical"
+      ],
+      "timeout_s": 300,
+      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water optimized with pyscf.geomopt.geometric_solver: E_opt=-76.0093412836 Eh. Planck IC-BFGS converges to the same well within shared force-tolerance; per-component geometries agree to ~4e-4 A.",
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Geometry Optimization",
+        "Final Energy",
+        "Optimized Geometry"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.0093412836,
+          "atol": 1e-7
+        },
+        {
+          "type": "metric_present",
+          "metric": "geomopt_final_gradient_max"
+        },
+        {
+          "type": "metric_le",
+          "metric": "geomopt_final_gradient_max",
+          "value": 5e-4
+        },
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_freq_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_freq_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "timeout_s": 600,
+      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), analytic Hessian via pyscf.hessian + thermo.harmonic_analysis at the input (slightly off-eq) geometry: E=-76.009125642007 Eh, freqs (cm^-1) = 1859.21 (bend), 3924.38 (sym str), 4031.92 (asym str). Planck semi-numerical Hessian (FD of analytic gradients, delta=0.001 Bohr) reproduces these to <0.1 cm^-1.",
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Vibrational Frequencies",
+        "vibrational modes",
+        "Zero-point energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642007,
+          "atol": 1e-8
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_1",
+          "expected": 1859.21,
+          "atol": 1.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_2",
+          "expected": 3924.38,
+          "atol": 1.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_3",
+          "expected": 4031.92,
+          "atol": 1.0
+        },
+        {
+          "type": "metric_present",
+          "metric": "zero_point_energy_eh"
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_geomoptfreq_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_geomoptfreq_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "timeout_s": 900,
+      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), optimized via pyscf.geomopt.geometric_solver then analytic Hessian via pyscf.hessian + thermo.harmonic_analysis: E_opt=-76.0093412836 Eh, freqs at optimum (cm^-1) = 1825.98 (bend), 4055.49 (sym str), 4173.85 (asym str). Frequencies differ from the unoptimized-geometry case because the Hessian is now at a stationary point.",
+      "expected_exit_code": 0,
+      "contains": [
+        "Geometry Optimization",
+        "Final Energy",
+        "Vibrational Frequencies",
+        "vibrational modes",
+        "Zero-point energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.0093412836,
+          "atol": 1e-7
+        },
+        {
+          "type": "metric_present",
+          "metric": "geomopt_final_gradient_max"
+        },
+        {
+          "type": "metric_le",
+          "metric": "geomopt_final_gradient_max",
+          "value": 5e-4
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_1",
+          "expected": 1825.98,
+          "atol": 2.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_2",
+          "expected": 4055.49,
+          "atol": 2.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_3",
+          "expected": 4173.85,
+          "atol": 2.0
+        },
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_spherical_geomopt_rejected",
+      "input": "tests/inputs/regression/spherical/water_rmp2_spherical_geomopt_rejected.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 1,
+      "contains": [
+        "Spherical Basis :",
+        "MP2 analytic gradient is not yet supported"
       ]
     },
     {
@@ -1835,6 +2034,56 @@
       "contains": [
         "SCF Converged after",
         "|mu|                    0.872741          0.000000          0.872741  2.218286"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_full_restart_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_full_restart_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_rhf_spherical_restart_seed_631gd.hfinp"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Checkpoint :                  Restoring input geometry",
+        "Checkpoint :                  Loaded from",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_projected_restart_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_projected_restart_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_rhf_spherical_projection_seed_sto3g.hfinp"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Basis change detected (sto-3g",
+        "Density projection successful",
+        "SCF Converged after"
       ],
       "checks": [
         {

@@ -491,6 +491,33 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
+    add_executable(planck-spherical-density-lift
+        ${CMAKE_SOURCE_DIR}/tests/spherical_density_lift.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+    )
+
+    # Contract test for the working-state rebuild helper that will drive
+    # spherical geomopt and freq in Phase 3. Currently the helper has no live
+    # caller (the driver keeps its inline copy for ordering reasons around the
+    # checkpoint path); this test is the contract that pins its behavior.
+    add_executable(planck-working-state-rebuild
+        ${CMAKE_SOURCE_DIR}/tests/working_state_rebuild.cpp
+        ${SRC_DIR}/scf/working_state.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/symmetry/integral_symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
     add_executable(planck-group-operations
         ${CMAKE_SOURCE_DIR}/tests/group_operations.cpp
         ${SRC_DIR}/symmetry/group_operations.cpp
@@ -626,6 +653,17 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-spherical-density-lift PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-working-state-rebuild PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
     set_target_properties(planck-casscf-internal PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -674,6 +712,18 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-spherical-density-lift PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-working-state-rebuild PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-group-operations PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -711,6 +761,11 @@ if(BUILD_TESTING)
         ${MSYM_INSTALL_DIR}/lib/libmsym.a
     )
     add_dependencies(planck-group-operations libmsym)
+
+    target_link_libraries(planck-working-state-rebuild
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-working-state-rebuild libmsym)
 
     target_link_libraries(planck-fock-symmetrization
         ${MSYM_INSTALL_DIR}/lib/libmsym.a
@@ -778,6 +833,16 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-spherical-transform
         COMMAND planck-spherical-transform
+    )
+
+    add_test(
+        NAME planck-spherical-density-lift
+        COMMAND planck-spherical-density-lift
+    )
+
+    add_test(
+        NAME planck-working-state-rebuild
+        COMMAND planck-working-state-rebuild
     )
 
     add_test(

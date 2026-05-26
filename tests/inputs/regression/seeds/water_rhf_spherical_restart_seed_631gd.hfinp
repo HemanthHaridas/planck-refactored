@@ -1,0 +1,27 @@
+%begin_control
+    basis       6-31g*
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+    tol_energy  1e-10
+    tol_density 1e-10
+    save_checkpoint .true.
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.117176
+H     0.000000     0.757200    -0.468704
+H     0.000000    -0.757200    -0.468704
+%end_coords

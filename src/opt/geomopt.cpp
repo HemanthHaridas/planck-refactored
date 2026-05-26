@@ -16,6 +16,7 @@
 #include "io/logging.h"
 #include "post_hf/mp2.h"
 #include "scf/scf.h"
+#include "scf/working_state.h"
 #include "symmetry/integral_symmetry.h"
 
 // ─── Single-point helper ─────────────────────────────────────────────────────
@@ -46,10 +47,14 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     const Eigen::MatrixXd prev_beta = calc._info._scf.beta.density;
     const bool have_prev_density = (prev_alpha.size() > 0);
 
-    // Reset SCF data structures
+    // Reset SCF data structures. Use working_nbasis() — equals nbasis() in
+    // Cartesian mode, equals nbasis_sph() in spherical mode (the dimension SCF
+    // actually allocates density/Fock matrices at). Passing nbasis() in
+    // spherical mode would size the SCF state wrong and corrupt the inner-loop
+    // Fock build.
     calc._info._scf = HartreeFock::DataSCF(calc._scf._scf != HartreeFock::SCFType::RHF);
-    calc._info._scf.initialize(calc._shells.nbasis());
-    calc._scf.set_scf_mode_auto(calc._shells.nbasis());
+    calc._info._scf.initialize(calc.working_nbasis());
+    calc._scf.set_scf_mode_auto(calc.working_nbasis());
     calc._info._is_converged = false;
     calc._correlated_total_energy = 0.0;
     calc._have_correlated_total_energy = false;
@@ -58,6 +63,8 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     // Restore the saved density and tell SCF to use it as the initial guess.
     // Save and restore _scf._guess so this warm-start doesn't leak into subsequent
     // operations (e.g. Hessian SCF calls, post-opt symmetry SCF).
+    // The saved density's dimension matches working_nbasis() in either basis
+    // mode, since the molecule and basis set are unchanged across geomopt steps.
     const auto saved_guess = calc._scf._guess;
     if (have_prev_density)
     {
@@ -71,18 +78,16 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     if (auto nuclear_repulsion = calc.recompute_nuclear_repulsion(); !nuclear_repulsion)
         return std::unexpected("Geometry optimization failed: " + nuclear_repulsion.error());
 
-    // Shell pairs
-    auto shell_pairs = build_shellpairs(calc._shells);
-    HartreeFock::Symmetry::update_integral_symmetry(calc);
-
-    // 1e integrals
-    auto [S, T] = _compute_1e(shell_pairs, calc._shells.nbasis(), calc._integral._engine,
-                              calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
-    auto V = _compute_nuclear_attraction(shell_pairs, calc._shells.nbasis(),
-                                         calc._molecule, calc._integral._engine,
-                                         calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
-    calc._overlap = S;
-    calc._hcore = T + V;
+    // Rebuild the geometry-derived working state (shell pairs, integral-symmetry
+    // ops, _overlap and _hcore in the working basis). The helper is the
+    // spherical-aware version of the inline block the driver runs once at
+    // startup; calling it here at every geomopt step keeps the inner loop in
+    // lockstep with the driver's spherical setup. See src/scf/working_state.h
+    // for the contract.
+    auto shell_pairs_res = HartreeFock::SCF::rebuild_basis_dependent_state(calc);
+    if (!shell_pairs_res)
+        return std::unexpected("GeomOpt working-state rebuild failed: " + shell_pairs_res.error());
+    std::vector<HartreeFock::ShellPair> shell_pairs = std::move(*shell_pairs_res);
 
     // SCF
     std::expected<void, std::string> scf_res;

@@ -1,12 +1,15 @@
 %begin_control
     basis       sto-3g
-    calculation gradient
+    calculation energy
     basis_type  spherical
 %end_control
 
 %begin_scf
     scf_type    rhf
     guess       hcore
+    tol_energy  1e-10
+    tol_density 1e-10
+    save_checkpoint .true.
 %end_scf
 
 %begin_geom

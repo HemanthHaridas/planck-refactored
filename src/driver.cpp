@@ -29,6 +29,7 @@
 #include "post_hf/fci.h"
 #include "post_hf/mp2.h"
 #include "scf/scf.h"
+#include "scf/working_state.h"
 #include "scf/stability.h"
 #include "solvation/pcm.h"
 #include "symmetry/group_operations.h"
@@ -476,7 +477,7 @@ int main(int argc, const char *argv[])
     // consume only the SCF's self-consistent spherical ERI + MO coefficients.
     // The remaining unsupported workflows still consume Cartesian-only quantities
     // somewhere downstream (today: non-single-point calculations, DFT grid paths,
-    // cross-basis checkpoint projection, PCM, and related consumers), so we hard
+    // PCM, and related consumers), so we hard
     // error here — naming the specific unsupported feature — rather than risk a
     // silent wrong answer. Features graduate out of this gate one by one as their
     // downstream consumers become spherical-aware. The whole block is inert in
@@ -490,17 +491,51 @@ int main(int argc, const char *argv[])
                        "(basis_type spherical); currently single-point RHF/UHF/ROHF "
                        "energies (Conventional or Direct), with MP2, CASSCF/RASSCF, "
                        "FCI, or coupled cluster (RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ), "
+                       "RHF/UHF analytic gradients, RHF/UHF geometry optimization, "
+                       "frequencies, geomopt+freq, and imaginary-mode following, "
                        "and point-group symmetry / SAO blocking are available. Use "
                        "basis_type cartesian for this calculation.");
             return EXIT_FAILURE;
         };
 
-        if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+        // Spherical Phase 3: SinglePoint, analytic Gradient, and the
+        // gradient-consuming workflows (GeomOpt / Frequency / GeomOptFrequency /
+        // ImaginaryFollow) for RHF/UHF. The geomopt and freq inner loops now
+        // call SCF::rebuild_basis_dependent_state per step, so the spherical
+        // _cart_to_sph normalization and the C·(T+V)·Cᵀ working-basis lift
+        // re-run at every displaced geometry (src/scf/working_state.{h,cpp}).
+        if (calculator._calculation != HartreeFock::CalculationType::SinglePoint &&
+            calculator._calculation != HartreeFock::CalculationType::Gradient &&
+            calculator._calculation != HartreeFock::CalculationType::GeomOpt &&
+            calculator._calculation != HartreeFock::CalculationType::Frequency &&
+            calculator._calculation != HartreeFock::CalculationType::GeomOptFrequency &&
+            calculator._calculation != HartreeFock::CalculationType::ImaginaryFollow)
             return reject("Calculation type " + map_enum(calculator._calculation));
         if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
             calculator._scf._scf != HartreeFock::SCFType::UHF &&
             calculator._scf._scf != HartreeFock::SCFType::ROHF)
             return reject("SCF type " + map_enum(calculator._scf._scf));
+        // Every gradient-consuming workflow inherits the gradient-side
+        // restrictions: ROHF analytic gradients are unimplemented Cartesian-side
+        // too, and RMP2/UMP2 gradients still need the response-machinery audit
+        // before the spherical lift is wired in (Phase 2). Reject those
+        // combinations explicitly so a user that asks for `correlation rmp2 /
+        // calculation geomopt` in spherical mode gets a clear message instead
+        // of a wrong number.
+        const bool needs_gradient =
+            calculator._calculation == HartreeFock::CalculationType::Gradient ||
+            calculator._calculation == HartreeFock::CalculationType::GeomOpt ||
+            calculator._calculation == HartreeFock::CalculationType::Frequency ||
+            calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
+            calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
+        if (needs_gradient)
+        {
+            if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+                return reject("ROHF analytic gradient");
+            if (calculator._correlation == HartreeFock::PostHF::RMP2 ||
+                calculator._correlation == HartreeFock::PostHF::UMP2)
+                return reject("MP2 analytic gradient");
+        }
         // Post-HF energy paths consume only the SCF's spherical AO ERI and spherical
         // MO coefficients: the AO→MO transform is self-consistent in the spherical
         // basis (no C needed), and every AO/MO dimension keys off working_nbasis().
@@ -530,9 +565,9 @@ int main(int argc, const char *argv[])
         // transform; assign_mo_symmetry consumes the already-spherical MO
         // coefficients directly. Linear groups (C∞v/D∞h) and C1 still short-circuit
         // inside those functions, so no guard is needed here.
-        // Checkpoint restart for spherical is wired only for the same-basis case
-        // below; cross-basis Löwdin projection in the spherical basis is not yet
-        // supported (the check is refined after the checkpoint header is read).
+        // Checkpoint restart for spherical is supported both for the same-basis
+        // case and, when the checkpoint carries spherical basis_type metadata,
+        // for cross-basis density projection in the spherical working basis.
     }
 
     // Now initialize SCF data structures
@@ -603,29 +638,16 @@ int main(int argc, const char *argv[])
             // ── Cross-basis projection path ────────────────────────────────────
             auto mos_res = HartreeFock::Checkpoint::load_mos(calculator._checkpoint_path);
 
-            // Cross-basis Löwdin projection is not yet wired for spherical bases:
-            // the projection below builds Cartesian integrals and cross-overlaps and
-            // would be inconsistent with the spherical working basis. Same-basis
-            // spherical restart is supported (handled by the matching-nbasis branch
-            // above); cross-basis spherical is rejected here.
-            if (calculator._shells._spherical && mos_res &&
-                mos_res->nbasis != calculator._shells.nbasis_sph())
-            {
-                HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Error, "Spherical Basis :",
-                    "cross-basis checkpoint projection is not supported with a spherical "
-                    "basis (basis_type spherical); restart with the same basis, or use "
-                    "basis_type cartesian for cross-basis projection.");
-                return EXIT_FAILURE;
-            }
-
-            if (mos_res && mos_res->nbasis != calculator._shells.nbasis())
+            if (mos_res && mos_res->nbasis != calculator.working_nbasis())
             {
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :",
                                              std::format("Basis change detected ({} → {}); projecting density",
                                                          mos_res->basis_name, calculator._basis._basis_name));
 
-                // 1e integrals must be computed in the large (current) basis
+                // 1e integrals must be computed in the large (current) basis.
+                // In spherical mode the engine still produces Cartesian one-electron
+                // matrices, so we transform them into the spherical working basis
+                // before building the orthogonalizer and projection density.
                 const std::size_t large_nb = calculator._shells.nbasis();
                 HartreeFock::Symmetry::update_integral_symmetry(calculator);
 
@@ -638,15 +660,16 @@ int main(int argc, const char *argv[])
                                                                 calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
                 HartreeFock::Logger::blank();
 
+                const Eigen::MatrixXd H_cart = T + V;
                 calculator._overlap = S;
-                calculator._hcore = T + V;
+                calculator._hcore = H_cart;
                 loaded_from_checkpoint = true; // skip the unconditional 1e block below
 
                 // Re-read the small basis for cross-overlap
                 std::filesystem::path small_gbs =
                     calculator._basis._basis_path + "/" + mos_res->basis_name;
 
-                bool projection_ok = false;
+                    bool projection_ok = true;
                 auto small_shells_res =
                     HartreeFock::BasisFunctions::read_gbs_basis(
                         small_gbs.string(), calculator._molecule, calculator._basis._basis);
@@ -654,22 +677,112 @@ int main(int argc, const char *argv[])
                 {
                     HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
                                                  std::format("Projection failed: {} — using H_core guess", small_shells_res.error()));
+                    projection_ok = false;
                 }
                 else
                 {
                     const HartreeFock::Basis &small_shells = *small_shells_res;
-                    auto X_res = HartreeFock::SCF::build_orthogonalizer(S);
-                    if (X_res)
+                    auto normalize_cart_to_sph =
+                        [](const HartreeFock::Basis &basis,
+                           const Eigen::MatrixXd &S_cart,
+                           const std::string &label)
+                        -> std::expected<Eigen::MatrixXd, std::string>
                     {
-                        const Eigen::MatrixXd S_cross =
+                        if (!basis._spherical)
+                            return std::unexpected(label + " basis is not spherical");
+
+                        Eigen::MatrixXd C = basis._cart_to_sph;
+                        if (static_cast<std::size_t>(C.rows()) != basis.nbasis_sph() ||
+                            static_cast<std::size_t>(C.cols()) != basis.nbasis())
+                        {
+                            return std::unexpected(
+                                label + " spherical transform shape does not match nbasis_sph() x nbasis()");
+                        }
+
+                        const Eigen::MatrixXd CS = C * S_cart;
+                        for (Eigen::Index m = 0; m < C.rows(); ++m)
+                        {
+                            const double norm2 = CS.row(m).dot(C.row(m));
+                            if (norm2 > 0.0)
+                                C.row(m) /= std::sqrt(norm2);
+                        }
+                        return C;
+                    };
+
+                    Eigen::MatrixXd S_proj = S;
+                    Eigen::MatrixXd H_proj = H_cart;
+                    Eigen::MatrixXd S_cross;
+
+                    if (calculator._shells._spherical)
+                    {
+                        if (!mos_res->has_basis_type)
+                        {
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Warning, "Checkpoint :",
+                                "Projection failed: checkpoint lacks basis_type metadata needed for spherical cross-basis restart — using H_core guess");
+                            projection_ok = false;
+                        }
+                        else if (mos_res->basis_type != HartreeFock::BasisType::Spherical)
+                        {
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Warning, "Checkpoint :",
+                                "Projection failed: spherical cross-basis restart requires a spherical checkpoint — using H_core guess");
+                            projection_ok = false;
+                        }
+                        else if (!small_shells._spherical ||
+                                 small_shells.nbasis_sph() != mos_res->nbasis)
+                        {
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Warning, "Checkpoint :",
+                                "Projection failed: checkpoint MO dimension does not match the re-read spherical small basis — using H_core guess");
+                            projection_ok = false;
+                        }
+                        else
+                        {
+                            const Eigen::MatrixXd &C_large = calculator._shells._cart_to_sph;
+                            auto small_shellpairs = build_shellpairs(small_shells);
+                            const auto [S_small_cart, T_small_unused] =
+                                _compute_1e(small_shellpairs, small_shells.nbasis(),
+                                            calculator._integral._engine, nullptr);
+                            (void)T_small_unused;
+                            auto C_small_res =
+                                normalize_cart_to_sph(small_shells, S_small_cart, "checkpoint projection");
+                            if (!C_small_res)
+                            {
+                                HartreeFock::Logger::logging(
+                                    HartreeFock::LogLevel::Warning, "Checkpoint :",
+                                    std::format("Projection failed: {} — using H_core guess", C_small_res.error()));
+                                projection_ok = false;
+                            }
+                            else
+                            {
+                                S_proj = C_large * S * C_large.transpose();
+                                H_proj = C_large * H_cart * C_large.transpose();
+                                const Eigen::MatrixXd S_cross_cart =
+                                    HartreeFock::ObaraSaika::_compute_cross_overlap(
+                                        calculator._shells, small_shells);
+                                S_cross = C_large * S_cross_cart * C_small_res->transpose();
+                                calculator._overlap = S_proj;
+                                calculator._hcore = H_proj;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        S_cross =
                             HartreeFock::ObaraSaika::_compute_cross_overlap(
                                 calculator._shells, small_shells);
+                    }
 
+                    auto X_res = projection_ok
+                                     ? HartreeFock::SCF::build_orthogonalizer(calculator._overlap)
+                                     : std::expected<Eigen::MatrixXd, std::string>(
+                                           std::unexpected("projection preconditions failed"));
+                    if (projection_ok && X_res)
+                    {
                         // Derive occupations from current molecule
-                        int n_elec = 0;
-                        for (auto z : calculator._molecule.atomic_numbers)
-                            n_elec += z;
-                        n_elec -= calculator._molecule.charge;
+                        const int n_elec =
+                            calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
                         const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
                         const int n_alpha = (n_elec + n_unpaired) / 2;
                         const int n_beta = (n_elec - n_unpaired) / 2;
@@ -716,7 +829,7 @@ int main(int argc, const char *argv[])
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Checkpoint :", "Density projection successful");
                         HartreeFock::Logger::blank();
                     }
-                    else
+                    else if (projection_ok)
                     {
                         HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
                                                      std::format("Orthogonalizer failed: {} — using H_core guess", X_res.error()));
@@ -1520,11 +1633,13 @@ int main(int argc, const char *argv[])
             }
             calculator._shells = std::move(*sym_basis_res);
 
-            // Reset SCF state
+            // Reset SCF state. Use working_nbasis() — in Cartesian mode this
+            // equals nbasis(); in spherical mode it is nbasis_sph(), the
+            // dimension SCF actually allocates density/Fock matrices at.
             calculator._info._scf = HartreeFock::DataSCF(
                 calculator._scf._scf != HartreeFock::SCFType::RHF);
-            calculator._info._scf.initialize(calculator._shells.nbasis());
-            calculator._scf.set_scf_mode_auto(calculator._shells.nbasis());
+            calculator._info._scf.initialize(calculator.working_nbasis());
+            calculator._scf.set_scf_mode_auto(calculator.working_nbasis());
             calculator._info._is_converged = false;
             calculator._use_sao_blocking = false;
 
@@ -1537,17 +1652,19 @@ int main(int argc, const char *argv[])
                 goto skip_final_symmetry_scf;
             }
 
-            auto sp_sym = build_shellpairs(calculator._shells);
-            HartreeFock::Symmetry::update_integral_symmetry(calculator);
-            auto [S_sym, T_sym] = _compute_1e(sp_sym, calculator._shells.nbasis(),
-                                              calculator._integral._engine,
-                                              calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-            auto V_sym = _compute_nuclear_attraction(sp_sym, calculator._shells.nbasis(),
-                                                     calculator._molecule,
-                                                     calculator._integral._engine,
-                                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-            calculator._overlap = S_sym;
-            calculator._hcore = T_sym + V_sym;
+            // Rebuild the geometry-derived working state via the spherical-aware
+            // helper (renormalizes _cart_to_sph, writes _overlap/_hcore in the
+            // working basis). Same call shape as the geomopt/freq inner loops.
+            auto sp_sym_res = HartreeFock::SCF::rebuild_basis_dependent_state(calculator);
+            if (!sp_sym_res)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "Final Symmetry SCF :",
+                    std::format("Working-state rebuild failed: {}", sp_sym_res.error()));
+                goto skip_final_symmetry_scf;
+            }
+            std::vector<HartreeFock::ShellPair> sp_sym = std::move(*sp_sym_res);
 
             // Try SAO symmetry blocking
             if (calculator._molecule._point_group != "C1" &&

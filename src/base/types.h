@@ -620,7 +620,8 @@ namespace HartreeFock
         // downhill move (model-trust filter), and convergence additionally
         // requires the maximum per-root orbital gradient to be small. Useful
         // for cases where the SA-weighted gradient vanishes while individual
-        // roots are still far from stationary (see docs/CASSCF_STATUS.md P3).
+        // roots are still far from stationary; the uphill-enabled SAD-start
+        // validation case is tracked in vault/Status/Completion.md.
         bool mcscf_accept_uphill = false;
         // When mcscf_accept_uphill is on, this caps the largest uphill ΔE
         // (Hartree) the model-trust filter will tolerate per macro step.

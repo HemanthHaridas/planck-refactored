@@ -6,7 +6,8 @@ Tolerance: 1e-5 Eh.
 
 Last updated: 2026-04-08. Current status: **11/11 passing**.
 
-See `docs/CASSCF_STATUS.md` for full implementation status and remaining work.
+See `vault/Status/Completion.md` and `vault/Status/Open Work.md` for the live
+implementation status and remaining work.
 
 ---
 
@@ -47,7 +48,8 @@ PySCF references use the hcore-start converged values (both codes start from
 the same RHF after the d2d branch-preservation fix, commit 46aa199).
 The PySCF SAD-start minimum for water SA-2 (−74.7877865139 Eh) is now matched
 within 3.6e-08 Eh by Planck when `mcscf_accept_uphill .true.` is enabled in the
-SAD-guess companion input. See `docs/CASSCF_STATUS.md` item P3.
+SAD-guess companion input. See `vault/Status/Completion.md` for the live gate
+summary and `vault/Status/Open Work.md` for remaining optimizer follow-up.
 
 ### Water SA-2
 Both codes converge from `guess hcore` to −74.7751378 Eh. For `guess sad`,

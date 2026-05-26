@@ -92,7 +92,7 @@ namespace HartreeFock::IO
 
         // ── Electron count and spin ────────────────────────────────────────────
         const int n_total_elec =
-            static_cast<int>(calc._molecule.atomic_numbers.cast<int>().sum()) - calc._molecule.charge;
+            calc._molecule.total_nuclear_charge() - calc._molecule.charge;
         if (n_total_elec <= 0)
             return std::unexpected(tag + " non-positive electron count.");
         const int multiplicity = static_cast<int>(calc._molecule.multiplicity);

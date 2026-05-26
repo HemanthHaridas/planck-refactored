@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "basis/basis.h"
+#include "basis/spherical.h"
 #include "integrals/base.h"
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
@@ -16,6 +17,24 @@
 #include "symmetry/integral_symmetry.h"
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// In spherical mode, the density / energy-weighted density that SCF produces
+// live in the (2L+1)-per-shell spherical AO basis, but the derivative integral
+// engine (integrals/os.cpp) emits Cartesian shell-pair blocks indexed by
+// shell offsets. To keep the gradient kernel basis-agnostic, lift any AO matrix
+// from the spherical basis back to the Cartesian one via M_cart = Cᵀ · M_sph · C.
+// In Cartesian mode this is a no-op pass-through.
+//
+// See basis/spherical.h::lift_density_sph_to_cart for the energy-invariance
+// contract that justifies this lift.
+static std::expected<Eigen::MatrixXd, std::string> lift_ao_matrix_if_spherical(
+    const HartreeFock::Calculator &calc, const Eigen::MatrixXd &M)
+{
+    if (!calc._shells._spherical)
+        return M;
+    return HartreeFock::BasisFunctions::lift_density_sph_to_cart(
+        M, calc._shells._cart_to_sph);
+}
 
 // Build a map: shell index in _shells._shells → atom index in _molecule.
 // Matches shell._center ≈ _molecule._standard.row(a) within 1e-6 Bohr.
@@ -353,7 +372,15 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rhf_g
     const HartreeFock::Calculator &calc,
     const std::vector<HartreeFock::ShellPair> &shell_pairs)
 {
-    const Eigen::MatrixXd &P = calc._info._scf.alpha.density; // already has factor 2
+    // In spherical mode the stored density lives in the (2L+1)-per-shell
+    // spherical AO basis; lift it back to the Cartesian basis (Cᵀ P_sph C) so
+    // the Cartesian derivative-integral kernel below can contract against it
+    // with shell-pair offsets. In Cartesian mode this is a value copy of P.
+    auto P_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.alpha.density);
+    if (!P_lifted)
+        return std::unexpected(P_lifted.error());
+    const Eigen::MatrixXd P = std::move(*P_lifted); // already has factor 2
+
     int n_elec = 0;
     for (std::size_t a = 0; a < calc._molecule.natoms; ++a)
         n_elec += calc._molecule.atomic_numbers[a];
@@ -362,7 +389,15 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rhf_g
 
     const Eigen::MatrixXd C_occ = calc._info._scf.alpha.mo_coefficients.leftCols(n_occ);
     const Eigen::VectorXd eps = calc._info._scf.alpha.mo_energies.head(n_occ);
-    const Eigen::MatrixXd W = 2.0 * C_occ * eps.asDiagonal() * C_occ.transpose();
+    // W is assembled from MO coefficients, so it inherits whichever AO basis
+    // the stored MOs use (spherical when _spherical, Cartesian otherwise); the
+    // same Cartesian lift applies.
+    const Eigen::MatrixXd W_native = 2.0 * C_occ * eps.asDiagonal() * C_occ.transpose();
+    auto W_lifted = lift_ao_matrix_if_spherical(calc, W_native);
+    if (!W_lifted)
+        return std::unexpected(W_lifted.error());
+    const Eigen::MatrixXd W = std::move(*W_lifted);
+
     auto gamma_fn = [&P](std::size_t ii, std::size_t jj, std::size_t kk, std::size_t ll) -> double
     {
         return 2.0 * P(ii, jj) * P(kk, ll) - P(ii, kk) * P(jj, ll);
@@ -402,11 +437,23 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
     const auto &mol = calc._molecule;
     const auto &basis = calc._shells;
     const std::size_t natoms = mol.natoms;
+    // nb is the Cartesian basis-function count (sized off shells), which is what
+    // schwarz_q, bf_shell, and the derivative integral blocks are indexed by —
+    // even in spherical mode, where the densities themselves are lifted below.
     const std::size_t nb = basis.nbasis();
 
-    // UHF densities (already without factor 2)
-    const Eigen::MatrixXd &P_a = calc._info._scf.alpha.density;
-    const Eigen::MatrixXd &P_b = calc._info._scf.beta.density;
+    // UHF densities (already without factor 2). In spherical mode these come
+    // from SCF in the (2L+1)-per-shell basis; lift each spin block back to the
+    // Cartesian basis (Cᵀ P_sph C) so the Cartesian derivative kernel indexing
+    // (sp.A._index, sp.B._index) lines up. In Cartesian mode the lift is a copy.
+    auto Pa_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.alpha.density);
+    if (!Pa_lifted)
+        return std::unexpected(Pa_lifted.error());
+    auto Pb_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.beta.density);
+    if (!Pb_lifted)
+        return std::unexpected(Pb_lifted.error());
+    const Eigen::MatrixXd P_a = std::move(*Pa_lifted);
+    const Eigen::MatrixXd P_b = std::move(*Pb_lifted);
     const Eigen::MatrixXd P_t = P_a + P_b; // total density
 
     // Electron counts
@@ -423,8 +470,13 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
     const Eigen::MatrixXd Cb_occ = calc._info._scf.beta.mo_coefficients.leftCols(n_beta);
     const Eigen::VectorXd eb = calc._info._scf.beta.mo_energies.head(n_beta);
 
-    // Energy-weighted density (no factor 2 for UHF)
-    const Eigen::MatrixXd W = Ca_occ * ea.asDiagonal() * Ca_occ.transpose() + Cb_occ * eb.asDiagonal() * Cb_occ.transpose();
+    // Energy-weighted density (no factor 2 for UHF). Built from MOs in whichever
+    // basis SCF used (spherical or Cartesian); lifted the same way as P_a/P_b.
+    const Eigen::MatrixXd W_native = Ca_occ * ea.asDiagonal() * Ca_occ.transpose() + Cb_occ * eb.asDiagonal() * Cb_occ.transpose();
+    auto W_lifted = lift_ao_matrix_if_spherical(calc, W_native);
+    if (!W_lifted)
+        return std::unexpected(W_lifted.error());
+    const Eigen::MatrixXd W = std::move(*W_lifted);
 
     Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(natoms, 3);
 
