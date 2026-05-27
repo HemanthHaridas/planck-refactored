@@ -269,6 +269,11 @@
 <li class="toc-level-3"><a href="#rasscf-extensions">RASSCF Extensions</a></li>
 <li class="toc-level-2"><a href="#18-geometry-optimization">18. Geometry Optimization</a></li>
 <li class="toc-level-3"><a href="#l-bfgs-cartesian-coordinates">L-BFGS (Cartesian Coordinates)</a></li>
+<li class="toc-level-3"><a href="#z-matrices-and-internal-coordinates">Z-Matrices and Internal Coordinates</a></li>
+<li class="toc-level-3"><a href="#wilson-s-b-matrix">Wilson&#x27;s B-Matrix</a></li>
+<li class="toc-level-3"><a href="#cartesian-z-matrix-conversion">Cartesian ↔ Z-Matrix Conversion</a></li>
+<li class="toc-level-3"><a href="#planck-specific-note-generalized-internal-coordinates-for-optimization">Planck-Specific Note: Generalized Internal Coordinates for Optimization</a></li>
+<li class="toc-level-3"><a href="#planck-specific-note-permutation-invariance-of-the-ic-representation">Planck-Specific Note: Permutation Invariance of the IC Representation</a></li>
 <li class="toc-level-3"><a href="#internal-coordinate-optimization-bfgs">Internal Coordinate Optimization (BFGS)</a></li>
 <li class="toc-level-2"><a href="#19-vibrational-analysis">19. Vibrational Analysis</a></li>
 <li class="toc-level-3"><a href="#semi-numerical-hessian">Semi-Numerical Hessian</a></li>
@@ -1169,6 +1174,29 @@ M^{\text{sph}}_{pq} = \sum_{\mu\nu} C_{p\mu}\,M^{\text{cart}}_{\mu\nu}\,C_{q\nu}
 \]</span></p>
 <p>Carrying this out as one giant sum would scale as <span class="math-inline">\(N^8\)</span>; instead it is done as four successive single-index contractions (transform the first index, then the second, and so on), each an <span class="math-inline">\(N^4 \times N\)</span> operation. This is the identical &quot;quarter transformation&quot; structure used for the AO→MO integral transform in MP2 and coupled cluster, applied here with <span class="math-inline">\(\mathbf C\)</span> in place of the MO coefficients. The result is the spherical ERI tensor, dimension <span class="math-inline">\(N_{\text{sph}}^4\)</span> rather than <span class="math-inline">\(N_{\text{cart}}^4\)</span>.</p>
 <p><strong>Energies and densities</strong> then live entirely in the spherical basis: the SCF builds its Fock matrix, density, and orbitals at dimension <span class="math-inline">\(N_{\text{sph}}\)</span>, and the total energy is identical whether one transforms the integrals up front (and runs SCF in the spherical basis) or runs SCF in the Cartesian basis and discards the contamination at the end — because the contamination subspace does not couple to the harmonic subspace through the Hamiltonian.</p>
+<p><strong>An aside on covariant vs. contravariant objects.</strong> The two transformation patterns above — <span class="math-inline">\(\mathbf C\)</span> on one side and <span class="math-inline">\(\mathbf C^{\dagger}\)</span> on the other for matrices, four <span class="math-inline">\(\mathbf C\)</span>s contracting all four indices for the ERI tensor — are not chosen by convention. They are forced by what kind of geometric object each quantity is under the Cartesian → spherical change of basis <span class="math-inline">\(\chi^{\text{sph}}_p = \sum_\mu C_{p\mu}\,\chi^{\text{cart}}_\mu\)</span>:</p>
+<ul>
+<li><strong>Contravariant indices</strong> are those that follow the basis. The expansion coefficients of a vector in the basis (e.g. MO coefficients <span class="math-inline">\(C^{\text{MO}}_\mu\)</span> in the AO basis, or density-matrix indices) transform the <em>opposite</em> way the basis functions do, picking up factors of <span class="math-inline">\(\mathbf C^{\dagger}\)</span> when going Cartesian → spherical. In index notation we write them with the index <em>up</em>: <span class="math-inline">\(P^{\mu\nu}\)</span>.</li>
+<li><strong>Covariant indices</strong> are those that act <em>on</em> the basis. Matrix elements of an operator, <span class="math-inline">\(M_{\mu\nu} = \langle \chi_\mu | \hat O | \chi_\nu \rangle\)</span>, inherit one factor of the basis-function transform on each side, so they pick up <span class="math-inline">\(\mathbf C\)</span> on each Cartesian index when going to the spherical basis. Index <em>down</em>: <span class="math-inline">\(M_{\mu\nu}\)</span>. Bra/ket angle-bracket notation already encodes this distinction — the bra side is covariant, the ket side contravariant.</li>
+<li><strong>Scalars</strong> like total energies and traces have no free indices and are basis-invariant by construction; one can check that <span class="math-inline">\(\operatorname{tr}(\mathbf P^{\text{sph}}\mathbf H^{\text{sph}}) =
+  \operatorname{tr}(\mathbf P^{\text{cart}}\mathbf H^{\text{cart}})\)</span> once the density and the Hamiltonian are transformed with the correct laws, because each contracted pair has matching up/down indices.</li>
+</ul>
+<p>Concretely:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Quantity</th>
+<th>Indices</th>
+<th>Cart → sph rule</th>
+</tr></thead>
+<tbody>
+<tr><td>Basis function itself <span class="math-inline">\(\chi^{\text{sph}}_p\)</span></td><td>one contravariant</td><td><span class="math-inline">\(\sum_\mu C_{p\mu}\,\chi^{\text{cart}}_\mu\)</span></td></tr>
+<tr><td>One-electron operator matrix <span class="math-inline">\(M^{\text{sph}}_{pq}\)</span></td><td>two covariant</td><td><span class="math-inline">\(\mathbf C\,\mathbf M^{\text{cart}}\,\mathbf C^{\dagger}\)</span></td></tr>
+<tr><td>Density matrix <span class="math-inline">\(P^{\text{sph}}_{pq}\)</span></td><td>two contravariant</td><td><span class="math-inline">\(\mathbf C^{\dagger}{}^{-?}\,\dots\)</span> — see below</td></tr>
+<tr><td>ERI tensor <span class="math-inline">\((pq\,\vert\,rs)^{\text{sph}}\)</span></td><td>four covariant</td><td>one <span class="math-inline">\(\mathbf C\)</span> contracted on each AO index</td></tr>
+<tr><td>Total energy <span class="math-inline">\(E\)</span></td><td>scalar</td><td>basis-invariant</td></tr>
+</tbody></table></div>
+<p>The density-matrix entry is the subtle one. In an <em>orthonormal</em> basis the distinction between up and down indices collapses (the metric is the identity), so <span class="math-inline">\(\mathbf P\)</span> and <span class="math-inline">\(\mathbf F\)</span> appear to transform the same way. The Cartesian basis is <em>not</em> orthonormal — its overlap matrix <span class="math-inline">\(\mathbf S^{\text{cart}}\)</span> plays the role of the metric — and the density matrix lives on the contravariant side, so the back-projection in the next subsection uses <span class="math-inline">\(\mathbf C^{\dagger}\)</span> on the <em>outside</em> (<span class="math-inline">\(\mathbf P^{\text{cart}} =
+\mathbf C^{\dagger}\mathbf P^{\text{sph}}\mathbf C\)</span>) rather than the <span class="math-inline">\(\mathbf C \dots \mathbf C^{\dagger}\)</span> sandwich that operator matrices use. The placement of daggers in §&quot;Direct Fock Builds&quot; below is not stylistic; it is the up/down index pattern made explicit. The same logic is what makes the quarter-transformation rule for the ERI tensor unique: four covariant AO indices, one <span class="math-inline">\(\mathbf C\)</span> each, no <span class="math-inline">\(\mathbf C^{\dagger}\)</span> anywhere.</p>
 <h3 id="implementation-note-direct-fock-builds-and-the-projector-identity">Implementation Note: Direct Fock Builds and the Projector Identity</h3>
 <p>There is a subtlety when the two-electron contribution is built <em>on the fly</em> (direct SCF) rather than from a stored, pre-transformed tensor. The on-the-fly builder naturally produces a Cartesian Fock contribution <span class="math-inline">\(\mathbf G\)</span> from a Cartesian density. To use it in a spherical calculation, the spherical density <span class="math-inline">\(\mathbf P^{\text{sph}}\)</span> is pushed back to the Cartesian space, the Cartesian <span class="math-inline">\(\mathbf G\)</span> is built, and the result is pulled forward again:</p>
 <p><span class="math-display">\[
@@ -2286,17 +2314,144 @@ E(\mathbf x_k + \alpha_k \mathbf p_k) \le E(\mathbf x_k) + c_1 \alpha_k \mathbf 
 \quad \text{and} \quad
 |\mathbf g(\mathbf x_k + \alpha_k \mathbf p_k)^T \mathbf p_k| \le c_2 |\mathbf g_k^T \mathbf p_k|
 \]</span></p>
+<h3 id="z-matrices-and-internal-coordinates">Z-Matrices and Internal Coordinates</h3>
+<p>Cartesian coordinates describe a molecule by listing one <span class="math-inline">\((x, y, z)\)</span> triple per atom. They are easy to read into a program but a poor representation for optimization. The total energy depends only on the <em>internal</em> arrangement of the nuclei — bond distances, valence angles, and torsions — and is invariant under any rigid translation or rotation of the whole molecule. Cartesian coordinates carry six redundant degrees of freedom (three translations + three rotations) that the energy is flat in, and they couple every chemically meaningful change to several Cartesian components at once.</p>
+<p>A <strong>Z-matrix</strong> is the classical alternative. It defines each atom relative to atoms that have already been placed, using up to three primitive internal coordinates:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Atom index</th>
+<th>Reference 1</th>
+<th><span class="math-inline">\(R\)</span></th>
+<th>Reference 2</th>
+<th><span class="math-inline">\(\theta\)</span></th>
+<th>Reference 3</th>
+<th><span class="math-inline">\(\phi\)</span></th>
+</tr></thead>
+<tbody>
+<tr><td>1</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td>2</td><td>1</td><td><span class="math-inline">\(R_{12}\)</span></td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td>3</td><td>1</td><td><span class="math-inline">\(R_{13}\)</span></td><td>2</td><td><span class="math-inline">\(\theta_{213}\)</span></td><td>—</td><td>—</td></tr>
+<tr><td>4</td><td>1</td><td><span class="math-inline">\(R_{14}\)</span></td><td>2</td><td><span class="math-inline">\(\theta_{214}\)</span></td><td>3</td><td><span class="math-inline">\(\phi_{3214}\)</span></td></tr>
+</tbody></table></div>
+<p>Each non-first row contributes one bond, one angle, and one torsion. An <span class="math-inline">\(N\)</span>-atom Z-matrix therefore uses exactly <span class="math-inline">\(3N - 6\)</span> primitives for <span class="math-inline">\(N \ge 3\)</span> (and <span class="math-inline">\(3N - 5\)</span> for linear molecules), matching the number of true vibrational degrees of freedom.</p>
+<p>Three reasons internal coordinates are preferred for optimization:</p>
+<ol>
+<li><strong>Curvature is more diagonal.</strong> Bond stretches, valence bends, and torsions are nearly independent in a way that Cartesians are not. A diagonal model Hessian in internal coordinates is already a good approximation; the equivalent statement in Cartesians is dramatically worse.</li>
+<li><strong>Translation and rotation are removed by construction.</strong> No six-mode flat subspace polluting the Hessian, no need to project Eckart vectors out at every step.</li>
+<li><strong>Step sizes are physically meaningful.</strong> A 0.01 Bohr bond step and a 1° angle step have units that match chemical intuition; a 0.01 Bohr step on a single Cartesian component does not.</li>
+</ol>
+<p>The cost is a transformation layer: the SCF and the gradient still live in Cartesians, so the optimizer must move information between the two representations every iteration.</p>
+<h3 id="wilson-s-b-matrix">Wilson&#x27;s B-Matrix</h3>
+<p>Let <span class="math-inline">\(\mathbf x \in \mathbb{R}^{3N}\)</span> be the flat Cartesian coordinate vector and <span class="math-inline">\(\mathbf q \in \mathbb{R}^{n_q}\)</span> be a chosen set of internal coordinates (stretches, bends, torsions, …). The <strong>Wilson B-matrix</strong> is the Jacobian:</p>
+<p><span class="math-display">\[
+B_{ki} \;=\; \frac{\partial q_k}{\partial x_i},
+\qquad
+d\mathbf q \;=\; \mathbf B \, d\mathbf x.
+\]</span></p>
+<p><span class="math-inline">\(\mathbf B\)</span> is <span class="math-inline">\(n_q \times 3N\)</span>. Each row <span class="math-inline">\(\mathbf B_k\)</span> lives in the Cartesian space and depends on the current geometry — <span class="math-inline">\(\mathbf B\)</span> must be rebuilt at every step. For a stretch <span class="math-inline">\(R_{AB}\)</span>:</p>
+<p><span class="math-display">\[
+\frac{\partial R_{AB}}{\partial \mathbf r_A} = \hat{\mathbf e}_{AB},
+\qquad
+\frac{\partial R_{AB}}{\partial \mathbf r_B} = -\hat{\mathbf e}_{AB},
+\]</span></p>
+<p>with <span class="math-inline">\(\hat{\mathbf e}_{AB} = (\mathbf r_A - \mathbf r_B)/|\mathbf r_A -
+\mathbf r_B|\)</span>. For a bend <span class="math-inline">\(\theta_{ABC}\)</span> and a torsion <span class="math-inline">\(\phi_{ABCD}\)</span> the expressions are the standard Pulay/Bakken–Helgaker s-vectors.</p>
+<p><strong>Transforming the gradient.</strong> By the chain rule <span class="math-inline">\(\mathbf g^{\text{Cart}} = \mathbf B^T \mathbf g^{\text{int}}\)</span>, so the gradient transforms <em>against</em> the Jacobian. When <span class="math-inline">\(\mathbf B\)</span> is square and invertible we could read off <span class="math-inline">\(\mathbf g^{\text{int}}\)</span> directly. In the redundant case (<span class="math-inline">\(n_q > 3N - 6\)</span>) <span class="math-inline">\(\mathbf B\)</span> has more rows than columns and is rank-deficient; the correct expression goes through the <strong>Wilson G-matrix</strong></p>
+<p><span class="math-display">\[
+\mathbf G \;=\; \mathbf B \mathbf B^T \in \mathbb{R}^{n_q \times n_q},
+\]</span></p>
+<p>which is symmetric positive semi-definite. Its Moore–Penrose pseudoinverse <span class="math-inline">\(\mathbf G^{+}\)</span> projects onto the non-redundant subspace, and the internal-coordinate gradient is</p>
+<p><span class="math-display">\[
+\mathbf g^{\text{int}} \;=\; \mathbf G^{+} \mathbf B \, \mathbf g^{\text{Cart}}.
+\]</span></p>
+<p><strong>Transforming the Hessian.</strong> Going from Cartesian to internal:</p>
+<p><span class="math-display">\[
+\mathbf H^{\text{int}}
+\;=\; \mathbf G^{+} \mathbf B
+\bigl(\mathbf H^{\text{Cart}} - \mathbf K\bigr)
+\mathbf B^T \mathbf G^{+},
+\qquad
+\mathbf K \;=\; \sum_k g^{\text{int}}_k \, \frac{\partial^2 q_k}{\partial \mathbf x\, \partial \mathbf x},
+\]</span></p>
+<p>where the second-derivative correction <span class="math-inline">\(\mathbf K\)</span> vanishes at a stationary point. The reverse direction <span class="math-inline">\(\mathbf H^{\text{Cart}} = \mathbf B^T
+\mathbf H^{\text{int}} \mathbf B + \mathbf K'\)</span> is used to seed Cartesian solvers from a known internal-coordinate Hessian. A quasi-Newton optimizer that maintains <span class="math-inline">\(\mathbf H^{\text{int}}\)</span> directly across iterations does not need either transformation explicitly.</p>
+<h3 id="cartesian-z-matrix-conversion">Cartesian ↔ Z-Matrix Conversion</h3>
+<p><strong>Cartesian → Z-matrix (forward).</strong> This direction is closed-form. Given Cartesian coordinates and a chosen reference ordering, every Z-matrix entry follows from one bond length, one valence angle, and one signed dihedral:</p>
+<p><span class="math-display">\[
+R_{ij} = |\mathbf r_i - \mathbf r_j|,
+\quad
+\cos\theta_{ijk} = \frac{(\mathbf r_i - \mathbf r_j)\cdot(\mathbf r_k - \mathbf r_j)}
+{|\mathbf r_i - \mathbf r_j|\,|\mathbf r_k - \mathbf r_j|},
+\]</span></p>
+<p><span class="math-display">\[
+\phi_{ijkl} \;=\; \operatorname{atan2}\!\Bigl(
+\bigl[(\mathbf m \times \mathbf n)\cdot \hat{\mathbf b}_2\bigr],\;
+\mathbf m \cdot \mathbf n
+\Bigr),
+\]</span></p>
+<p>with <span class="math-inline">\(\mathbf b_1 = \mathbf r_j - \mathbf r_i\)</span>, <span class="math-inline">\(\mathbf b_2 =
+\mathbf r_k - \mathbf r_j\)</span>, <span class="math-inline">\(\mathbf b_3 = \mathbf r_l - \mathbf r_k\)</span>, <span class="math-inline">\(\mathbf m = \mathbf b_1 \times \mathbf b_2\)</span>, <span class="math-inline">\(\mathbf n = \mathbf b_2
+\times \mathbf b_3\)</span>.</p>
+<p><strong>Cartesian ↔ internal (forward, redundant).</strong> Same primitives as above, but the <em>set</em> of internal coordinates is over-determined: a system with <span class="math-inline">\(N\)</span> atoms has <span class="math-inline">\(3N - 6\)</span> vibrational degrees of freedom, while a chemically complete redundant set typically has many more bonds, angles, and torsions. The forward direction is still trivial — apply the primitive value formulas to each row.</p>
+<p><strong>Internal → Cartesian (back-transform).</strong> This is the nontrivial direction. Given a target <span class="math-inline">\(\mathbf q_{\text{target}} = \mathbf q_0 + \Delta\mathbf q\)</span> we need a Cartesian geometry <span class="math-inline">\(\mathbf x\)</span> such that <span class="math-inline">\(\mathbf q(\mathbf x)
+= \mathbf q_{\text{target}}\)</span>. The relationship <span class="math-inline">\(\Delta\mathbf q \approx
+\mathbf B\,\Delta\mathbf x\)</span> is only linear to first order. A first-order step</p>
+<p><span class="math-display">\[
+\Delta\mathbf x^{(0)} \;=\; \mathbf B^T \mathbf G^{+}\,\Delta\mathbf q
+\]</span></p>
+<p>(the minimum-norm Cartesian step consistent with the requested IC change) is the natural starting guess. After applying it, the actual IC change <span class="math-inline">\(\mathbf q(\mathbf x_0 + \Delta\mathbf x^{(0)}) - \mathbf q_0\)</span> generally differs from <span class="math-inline">\(\Delta\mathbf q\)</span> by a residual that grows with the curvature of the IC system (bends and torsions are nonlinear in Cartesians).</p>
+<p>The standard fix is <strong>Schlegel-style microiterations</strong> (Schlegel, 1984): at iteration <span class="math-inline">\(m\)</span>, evaluate the residual <span class="math-inline">\(\mathbf r^{(m)} = \Delta\mathbf q -
+\bigl[\mathbf q(\mathbf x^{(m)}) - \mathbf q_0\bigr]\)</span>, build a fresh <span class="math-inline">\(\mathbf B(\mathbf x^{(m)})\)</span>, and apply the correction</p>
+<p><span class="math-display">\[
+\mathbf x^{(m+1)} \;=\; \mathbf x^{(m)} + \mathbf B(\mathbf x^{(m)})^T
+\,\mathbf G^{+}(\mathbf x^{(m)})\, \mathbf r^{(m)}.
+\]</span></p>
+<p>Torsion residuals are wrapped into <span class="math-inline">\([-\pi, \pi]\)</span> so that crossing the branch cut does not appear as a spurious large displacement. Large IC steps that fall outside the linear regime can fail to converge in microiterations; the standard remedy is a smaller trust radius on <span class="math-inline">\(\Delta\mathbf q\)</span> supplied by the outer optimizer.</p>
+<h3 id="planck-specific-note-generalized-internal-coordinates-for-optimization">Planck-Specific Note: Generalized Internal Coordinates for Optimization</h3>
+<p>Planck uses <strong>redundant primitive internal coordinates</strong> with a Moore–Penrose pseudoinverse, not <em>delocalized</em> internal coordinates. There is no SVD or eigendecomposition of <span class="math-inline">\(\mathbf G = \mathbf B\mathbf B^T\)</span> into a non-redundant basis of <span class="math-inline">\(3N - 6\)</span> eigenvector-combined coordinates (the Baker / Bakken–Helgaker &quot;delocalized internals&quot; construction). Redundancy is handled directly at the gradient-transformation step.</p>
+<p>The coordinate system is built once at the start of <code>run_geomopt_ic</code> (<code>src/opt/geomopt.cpp:506-507</code>) by <code>IntCoordSystem::build</code> (<code>src/opt/intcoords.cpp:267-345</code>), which:</p>
+<ol>
+<li><strong>Detects bonds</strong> by a covalent-radius criterion. A pair <span class="math-inline">\((i, j)\)</span> is bonded if <span class="math-inline">\(|\mathbf r_i - \mathbf r_j| < 1.3\,(r_{\text{cov}}(Z_i) +
+   r_{\text{cov}}(Z_j))\)</span>. Covalent radii come from Alvarez (2008), hard-coded for <span class="math-inline">\(Z \in [1, 36]\)</span> with a 1.5 Å fallback above Kr (<code>covalent_radius_ang</code>, <code>src/opt/intcoords.cpp:13-58</code>).</li>
+<li><strong>Adds one stretch per bond</strong>.</li>
+<li><strong>Adds every valence bend</strong> A–B–C with B central and both A–B and B–C bonded, skipping near-linear angles outside <span class="math-inline">\([5°, 175°]\)</span>.</li>
+<li><strong>Adds every proper torsion</strong> A–B–C–D about each bond B–C, with A bonded to B, D bonded to C, and both intermediate bends in <span class="math-inline">\([5°, 175°]\)</span>.</li>
+</ol>
+<p>No out-of-plane bends, no lattice/cell coordinates, no auxiliary &quot;fragment connection&quot; bonds for disconnected systems. The result is typically larger than <span class="math-inline">\(3N - 6\)</span>; the pseudoinverse handles the redundancy.</p>
+<p>The optimizer then maintains a BFGS Hessian directly in this redundant IC space, so neither the Cartesian→internal nor the internal→Cartesian Hessian transformation from §&quot;Wilson&#x27;s B-Matrix&quot; is computed explicitly. Geometry constraints (<code>%begin_geomopt</code> Bond/Angle/Torsion constraints and frozen atoms) are added through <code>IntCoordSystem::add_coord</code> (which deduplicates against forward and reverse atom orderings), then enforced by zeroing the constrained IC components of the gradient before the BFGS step (<code>src/opt/geomopt.cpp:532-595</code>).</p>
+<p>If the connectivity scan returns zero primitives — for example, a single atom or an unbonded fragment pair too far apart for the covalent-radius cutoff — the driver logs a warning and falls back to the Cartesian L-BFGS optimizer (<code>src/opt/geomopt.cpp:510-515</code>).</p>
+<p><strong>Code map for the IC machinery.</strong></p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Concept (general theory)</th>
+<th>Planck implementation</th>
+</tr></thead>
+<tbody>
+<tr><td>Primitive value formulas (§Cartesian ↔ Z-matrix)</td><td><code>stretch_value</code>, <code>bend_value</code>, <code>torsion_value</code> — <code>src/opt/intcoords.cpp:68-164</code></td></tr>
+<tr><td>Full <span class="math-inline">\(\mathbf q\)</span> at current geometry</td><td><code>IntCoordSystem::values</code></td></tr>
+<tr><td>Wilson s-vectors (B-matrix rows)</td><td>anonymous-namespace <code>stretch_brow</code>, <code>bend_brow</code>, <code>torsion_brow</code> in <code>src/opt/intcoords.cpp</code></td></tr>
+<tr><td>Full B-matrix</td><td><code>IntCoordSystem::bmatrix</code></td></tr>
+<tr><td><span class="math-inline">\(\mathbf g^{\text{int}} = \mathbf G^{+} \mathbf B \mathbf g^{\text{Cart}}\)</span></td><td><code>IntCoordSystem::cart_to_ic_grad</code> — <code>src/opt/intcoords.cpp:419-425</code></td></tr>
+<tr><td>Moore–Penrose pseudoinverse</td><td><code>pinv_sym</code> — Jacobi SVD with relative tolerance <span class="math-inline">\(10^{-8}\)</span> times the largest singular value</td></tr>
+<tr><td>Schlegel back-transform (first-order step + microiterations)</td><td><code>IntCoordSystem::ic_to_cart_step</code> — <code>src/opt/intcoords.cpp:434-480</code>; up to 25 microiterations, early exit at residual norm <span class="math-inline">\(< 10^{-10}\)</span></td></tr>
+</tbody></table></div>
+<h3 id="planck-specific-note-permutation-invariance-of-the-ic-representation">Planck-Specific Note: Permutation Invariance of the IC Representation</h3>
+<p>*<em>As a </em>set<em> of primitives, yes. As an </em>ordered vector<em> <span class="math-inline">\(\mathbf q\)</span>, no.</em>*</p>
+<p>The set of bonds, bends, and torsions that <code>IntCoordSystem::build</code> produces depends only on geometry and on the covalent-radius bond criterion, both of which are permutation-invariant: relabelling atoms shuffles which index points where but does not change which pairs are within the bonding cutoff, which bend triples have a bonded central atom, or which torsion quadruples exist around a given bond. Each primitive&#x27;s <em>value</em> is also invariant under its own internal symmetry — stretches under <span class="math-inline">\(A \leftrightarrow B\)</span>, bends under <span class="math-inline">\(A \leftrightarrow C\)</span>, torsions under the full reversal <span class="math-inline">\(ABCD \leftrightarrow DCBA\)</span> (the cross products that define <span class="math-inline">\(\mathbf m\)</span> and <span class="math-inline">\(\mathbf n\)</span> and the orientation axis <span class="math-inline">\(\mathbf b_2\)</span> all flip sign together, leaving <span class="math-inline">\(\phi\)</span> unchanged). So as a <em>multiset of (primitive type, value)</em> pairs, the IC representation is permutation-invariant.</p>
+<p>The <em>ordering</em> of <code>IntCoordSystem::coords</code> is <strong>not</strong>, and Planck does not canonicalize it. Two failures of strict invariance:</p>
+<ol>
+<li><strong>Outer loop order.</strong> Bonds are appended in the order produced by <code>for (i; ...; ++i) for (j = i+1; ...; ++j)</code> over the input atom indices (<code>src/opt/intcoords.cpp:283-295</code>). Bends are appended in the order produced by iterating <code>adj[B]</code> (<code>src/opt/intcoords.cpp:305-319</code>), and <code>adj[B]</code> itself is built by appending neighbors as the outer i,j scan discovers them. Torsions follow the same pattern over <code>adj[B]</code> and <code>adj[C]</code>. Permuting the input atoms therefore permutes the rows of <span class="math-inline">\(\mathbf q\)</span> and the rows of <span class="math-inline">\(\mathbf B\)</span> — even though the underlying set is the same.</li>
+<li><strong>Per-primitive atom ordering.</strong> A stretch is stored as <code>{i, j}</code> with <span class="math-inline">\(i < j\)</span> (a side effect of the upper-triangular bond scan), so bond orientation <em>is</em> canonical. A bend is stored as <code>{A, B, C}</code> with A and C in the order they appear in <code>adj[B]</code>; a torsion is stored as <code>{A, B, C, D}</code> with A from <code>adj[B]</code> and D from <code>adj[C]</code> in discovery order. The IC value is invariant under the legal reversals, so the <em>gradient</em> row <span class="math-inline">\(\mathbf g^{\text{int}}_k\)</span> is invariant; only the row position changes.</li>
+</ol>
+<p>The downstream consequences are mild but real:</p>
+<ul>
+<li>The BFGS Hessian <span class="math-inline">\(\mathbf H^{\text{int}}\)</span> is a permutation of itself under input reordering — equivalent up to a permutation similarity <span class="math-inline">\(\mathbf P \mathbf H^{\text{int}} \mathbf P^T\)</span>, not bitwise identical.</li>
+<li>The pseudoinverse <span class="math-inline">\(\mathbf G^{+} = (\mathbf B \mathbf B^T)^{+}\)</span> is computed via Jacobi SVD with a relative tolerance, so different row orderings can pick slightly different null-space cuts when singular values are at the tolerance boundary. In practice this produces energy-equivalent steps that differ by single-precision noise, not qualitatively different trajectories.</li>
+<li>The optimizer transcript (which IC was step-largest, which was the tightest converging primitive) depends on input atom order.</li>
+</ul>
+<p>If bit-reproducible optimization trajectories across re-orderings are required, the IC list would need a canonicalization pass — for example, sorting bonds, bends, and torsions by a tuple of (type, sorted atom-index tuple). Planck does not currently do this; the <code>add_coord</code> deduplicator exists only to merge user-supplied constraint coordinates with the automatically built set, not to canonicalize the build output.</p>
 <h3 id="internal-coordinate-optimization-bfgs">Internal Coordinate Optimization (BFGS)</h3>
-<p>Internal coordinates (bond distances, valence angles, dihedral angles) are more natural for describing molecular geometry changes. The Wilson <strong>B matrix</strong> relates infinitesimal changes in internal coordinates <span class="math-inline">\(\mathbf q\)</span> to Cartesian displacements <span class="math-inline">\(\mathbf x\)</span>:</p>
-<p><span class="math-display">\[
-d\mathbf q = \mathbf B\, d\mathbf x, \quad B_{kl} = \frac{\partial q_k}{\partial x_l}
-\]</span></p>
-<p>The gradient in internal coordinates is:</p>
-<p><span class="math-display">\[
-\mathbf g^{int} = (\mathbf B \mathbf B^T)^{-1} \mathbf B\, \mathbf g^{Cart}
-\]</span></p>
-<p>A BFGS Hessian update is performed in internal coordinate space. The back-transformation from internal to Cartesian steps uses iterative microiterations that converge <span class="math-inline">\(\Delta \mathbf q\)</span> for a given <span class="math-inline">\(\Delta \mathbf x\)</span>.</p>
-<p>Geometry constraints (fixed bonds, angles, dihedrals, frozen atoms) are enforced by projecting out the constrained internal coordinate contributions from the gradient before the BFGS step.</p>
+<p>A BFGS Hessian update is performed in the redundant internal-coordinate space described above. The back-transformation from internal to Cartesian steps uses the Schlegel microiterations of <code>ic_to_cart_step</code>. Geometry constraints (fixed bonds, angles, dihedrals, frozen atoms) are enforced by projecting out the constrained internal-coordinate contributions from the gradient before the BFGS step.</p>
 <p>Convergence criterion: maximum absolute gradient element <span class="math-inline">\(\max_i |\partial E / \partial X_i| < \epsilon_{grad}\)</span> (default <span class="math-inline">\(3 \times 10^{-4}\)</span> Ha/Bohr).</p>
 <hr>
 <h2 id="19-vibrational-analysis">19. Vibrational Analysis</h2>
@@ -3323,11 +3478,11 @@ driver.cpp
 <tr><td>GGA XC functionals (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation)</td><td>Complete</td></tr>
 <tr><td>Arbitrary libxc functionals via integer ID or libxc name</td><td>Complete within the currently supported single-point KS subset; unsupported workflow/family combinations still error explicitly</td></tr>
 <tr><td>Molecular grid (Treutler-Ahlrichs + Lebedev + Becke)</td><td>Complete</td></tr>
-<tr><td>Analytic KS-DFT gradient (RKS/UKS, LDA/GGA/global hybrid)</td><td>Complete</td></tr>
+<tr><td>Analytic KS-DFT gradient (RKS/UKS, LDA/GGA/global hybrid, range-separated hybrid)</td><td>Complete</td></tr>
 <tr><td>TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels)</td><td>Complete</td></tr>
 <tr><td>DFT geometry optimization / gradients</td><td>Complete</td></tr>
 <tr><td>Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs)</td><td>Complete</td></tr>
-<tr><td>Range-separated hybrid XC functionals (for example HSE06)</td><td>Complete for single-point energies</td></tr>
+<tr><td>Range-separated hybrid XC functionals (for example HSE06)</td><td>Complete for single-point, gradient, geometry optimization, frequency, and geomopt+frequency workflows</td></tr>
 <tr><td>Double-hybrid XC functionals (for example B2PLYP)</td><td>Complete for single-point energies</td></tr>
 <tr><td>Range-separated double hybrids (for example <span class="math-inline">\(\omega\)</span>B2PLYP)</td><td>Complete for single-point energies</td></tr>
 <tr><td>Spherical harmonic basis</td><td>Complete (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF)</td></tr>
