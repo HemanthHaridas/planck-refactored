@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-05-26
+Last updated: 2026-05-27
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -110,13 +110,21 @@ historical design context, but they are no longer the source of truth for
 
 - RKS and UKS
 - LDA, GGA, global hybrids, and arbitrary libxc functional selection
-- Range-separated and double-hybrid libxc functionals for single-point energies
+- Range-separated libxc functionals for single-point, analytic-gradient,
+  geometry-optimization, frequency, and geomopt+frequency workflows
+- Double-hybrid libxc functionals for single-point energies
 - Treutler-Ahlrichs radial grid, Lebedev angular grid, and Becke partitioning
 - Grid quality levels: Coarse, Normal, Fine, UltraFine
 - Single-point PCM solvation for RKS/UKS
 - Linear-response TDDFT / Casida and TDA excited states
 - DFT single-point, gradient, geometry optimization, frequency, and geomopt+frequency workflows
 - DFT checkpoint/restart and symmetry+SAO blocking
+- Symmetry-enabled DFT gradient/frame handling fixed by synchronizing
+  `_coordinates` to the symmetry-standardized frame before grid construction;
+  covered by the `water_dft_hse06_gradient_symm_ultrafine_fd` regression
+- HSE06 analytic-gradient validation against both finite differences and PySCF,
+  including the long-range exchange contribution and a symmetry-on ultrafine
+  finite-difference regression for water
 
 ### BSSE / counterpoise
 

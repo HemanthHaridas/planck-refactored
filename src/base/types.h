@@ -245,6 +245,7 @@ namespace HartreeFock
 
         Eigen::MatrixXd standard;  // reoriented coordinates in Angstrom
         Eigen::MatrixXd _standard; // reoriented coordinates in Bohr
+        Eigen::Matrix3d _symmetry_alignment_transform = Eigen::Matrix3d::Identity(); // input-frame -> standard-frame rotation/reflection
 
         std::string _point_group = "C1"; // Point group symmetry
 
@@ -294,6 +295,7 @@ namespace HartreeFock
             _is_bohr = false;
             standard_is_angstrom = false;
             _standard_is_bohr = false;
+            _symmetry_alignment_transform.setIdentity();
         }
     };
 

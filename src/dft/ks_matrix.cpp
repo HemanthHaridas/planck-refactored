@@ -211,10 +211,16 @@ namespace DFT
                 contribution.beta.noalias() += beta_partials[thread_id];
         }
 
-        contribution.alpha = 0.5 * (contribution.alpha + contribution.alpha.transpose());
+        {
+            Eigen::MatrixXd symmetrized_alpha = contribution.alpha + contribution.alpha.transpose();
+            symmetrized_alpha *= 0.5;
+            contribution.alpha = symmetrized_alpha;
+        }
         if (contribution.polarized)
         {
-            contribution.beta = 0.5 * (contribution.beta + contribution.beta.transpose());
+            Eigen::MatrixXd symmetrized_beta = contribution.beta + contribution.beta.transpose();
+            symmetrized_beta *= 0.5;
+            contribution.beta = symmetrized_beta;
         }
         else
         {
@@ -248,9 +254,10 @@ namespace DFT
         potential.exact_exchange_coefficient = exact_exchange_coefficient;
         potential.exact_exchange_energy = exact_exchange_energy;
         potential.alpha = coulomb + xc_matrix.alpha + potential.exact_exchange_alpha;
-        potential.beta = xc_matrix.polarized
-                             ? (coulomb + xc_matrix.beta + potential.exact_exchange_beta)
-                             : potential.alpha;
+        if (xc_matrix.polarized)
+            potential.beta = coulomb + xc_matrix.beta + potential.exact_exchange_beta;
+        else
+            potential.beta = potential.alpha;
         return potential;
     }
 

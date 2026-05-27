@@ -29,6 +29,7 @@ Quantum chemistry engine in C++23. Main binaries: `hartree-fock` (HF/post-HF) an
 
 ### Gotchas
 - [[Coordinate Units]] — Angstrom vs Bohr pitfalls
+- [[DFT Symmetry Frames]] — symmetry reorientation must keep grid and derivatives in the same frame
 - [[Shell Pair Indexing]] — row-major ordering trap
 - [[Norm Factors]] — contracted norm folded into coefficients
 - [[Error Handling Pattern]] — std::expected throughout

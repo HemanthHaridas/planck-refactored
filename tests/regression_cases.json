@@ -580,6 +580,20 @@
       ]
     },
     {
+      "id": "water_dft_hse06_gradient_symm_ultrafine_fd",
+      "input": "tests/inputs/regression/dft/water_dft_hse06_gradient_symm_ultrafine.hfinp",
+      "executable": "tests/dft_gradient_fd.py",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
       "id": "water_radical_cation_ump2_gradient_smoke",
       "input": "tests/inputs/regression/open_shell/water_radical_cation_uhf_ump2_gradient_sto3g.hfinp",
       "tags": [

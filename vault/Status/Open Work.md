@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-05-26
+Last updated: 2026-05-27
 
 This is the canonical open-work document for the repository.
 Use it with `vault/Status/Completion.md`. Older status snapshots and handoff
@@ -56,10 +56,17 @@ truth for what remains.
 
 ## DFT and response-method gaps
 
-- Range-separated and double-hybrid functionals remain single-point only; DFT gradients, geometry optimization, frequencies, and TDDFT for those functionals are not implemented
+- Double-hybrid functionals remain single-point only; analytic gradients,
+  geometry optimization, frequencies, and TDDFT are still unimplemented there
+- For range-separated functionals, `ImaginaryFollow` and `LinearResponse`
+  (TDDFT) remain gated / unvalidated even though gradient-driven workflows are
+  now landed
 - Analytic Hessian remains unimplemented; frequencies are currently semi-numerical
 - DFT imaginary-mode following is not implemented
 - DFT-side Coulomb and exchange contractions still lack a stable parallel implementation
+- Coarse/low-quality DFT grids can still show noticeable orientation sensitivity
+  under symmetry reorientation; the validated symmetry-on gradient regression is
+  intentionally pinned to `grid ultrafine`
 
 ## SCF, post-HF, and workflow gaps
 

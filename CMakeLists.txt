@@ -459,6 +459,20 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dft_functional_support.cpp
     )
 
+    add_executable(planck-eri-derivative-kernels
+        ${CMAKE_SOURCE_DIR}/tests/eri_derivative_kernels.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
     add_executable(planck-multipole-integrals
         ${CMAKE_SOURCE_DIR}/tests/multipole_integrals.cpp
         ${INT_SRC}
@@ -603,6 +617,11 @@ if(BUILD_TESTING)
         ${LIBXC_INSTALL_DIR}/include
     )
 
+    target_include_directories(planck-eri-derivative-kernels PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-multipole-integrals PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -677,6 +696,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-functional-support PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-eri-derivative-kernels PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -808,6 +833,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-functional-support
         COMMAND planck-dft-functional-support
+    )
+
+    add_test(
+        NAME planck-eri-derivative-kernels
+        COMMAND planck-eri-derivative-kernels
     )
 
     add_test(

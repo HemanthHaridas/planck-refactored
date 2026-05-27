@@ -5723,11 +5723,11 @@ driver.cpp
 | GGA XC functionals (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation) | Complete |
 | Arbitrary libxc functionals via integer ID or libxc name | Complete within the currently supported single-point KS subset; unsupported workflow/family combinations still error explicitly |
 | Molecular grid (Treutler-Ahlrichs + Lebedev + Becke) | Complete |
-| Analytic KS-DFT gradient (RKS/UKS, LDA/GGA/global hybrid) | Complete |
+| Analytic KS-DFT gradient (RKS/UKS, LDA/GGA/global hybrid, range-separated hybrid) | Complete |
 | TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels) | Complete |
 | DFT geometry optimization / gradients | Complete |
 | Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs) | Complete |
-| Range-separated hybrid XC functionals (for example HSE06) | Complete for single-point energies |
+| Range-separated hybrid XC functionals (for example HSE06) | Complete for single-point, gradient, geometry optimization, frequency, and geomopt+frequency workflows |
 | Double-hybrid XC functionals (for example B2PLYP) | Complete for single-point energies |
 | Range-separated double hybrids (for example \(\omega\)B2PLYP) | Complete for single-point energies |
 | Spherical harmonic basis | Complete (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF) |

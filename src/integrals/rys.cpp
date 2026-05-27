@@ -438,8 +438,14 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const double Wz = (zeta * Pz + eta * Qz) * inv_delta;
 
     // WP = W - P,  WQ = W - Q
-    const double WPx = Wx - Px, WPy = Wy - Py, WPz = Wz - Pz;
-    const double WQx = Wx - Qx, WQy = Wy - Qy, WQz = Wz - Qz;
+    const double wpwq_scale =
+        (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
+    const double WPx = (Wx - Px) * wpwq_scale;
+    const double WPy = (Wy - Py) * wpwq_scale;
+    const double WPz = (Wz - Pz) * wpwq_scale;
+    const double WQx = (Wx - Qx) * wpwq_scale;
+    const double WQy = (Wy - Qy) * wpwq_scale;
+    const double WQz = (Wz - Qz) * wpwq_scale;
 
     // Overall prefactor: K_AB * K_CD * 2*sqrt(rho/pi)
     const double prefac =
@@ -472,7 +478,9 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
         const double wr = w[r];
 
         // Root-dependent scalars (same for all axes)
-        const double B00 = 0.5 * inv_delta * u;
+        const double B00 =
+            0.5 * inv_delta * u *
+            ((kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale);
         const double B10 = 0.5 * ppAB.inv_zeta * (1.0 - rho_over_zeta * u);
         const double B01 = 0.5 * ppCD.inv_zeta * (1.0 - rho_over_eta * u);
 
