@@ -10,6 +10,10 @@ namespace HartreeFock::Correlation
         HartreeFock::Calculator &calculator,
         const RMP2Result &result)
     {
+        // The driver keeps one canonical MP2 "result slot" on Calculator even
+        // though RHF and UHF store amplitudes differently. This helper is the
+        // normalization point that copies the RHF view in and clears any stale
+        // unrestricted tensors from prior jobs.
         calculator._correlation_energy = result.e_corr;
         calculator._mp2_e_corr_ss = result.e_corr_ss;
         calculator._mp2_e_corr_os = result.e_corr_os;
@@ -29,6 +33,8 @@ namespace HartreeFock::Correlation
         HartreeFock::Calculator &calculator,
         const UMP2Result &result)
     {
+        // UMP2 mirrors the same Calculator-level bookkeeping, but its amplitudes
+        // live in aa/ab/bb spin blocks instead of a single RHF t2 tensor.
         calculator._correlation_energy = result.e_corr;
         calculator._mp2_e_corr_ss = result.e_corr_ss;
         calculator._mp2_e_corr_os = result.e_corr_os;
@@ -50,6 +56,9 @@ namespace HartreeFock::Correlation
     std::expected<RMP2NaturalOrbitals, std::string> rmp2_make_natural_orbitals(
         const RMP2Result &result)
     {
+        // Natural orbitals are eigenvectors of the correlated one-particle
+        // density, expressed first in the active MO space and then rotated back
+        // to AO coefficients for downstream printing or export.
         auto rdm1_res = rmp2_make_rdm1(result, false);
         if (!rdm1_res)
             return std::unexpected("rmp2_make_natural_orbitals: " + rdm1_res.error());

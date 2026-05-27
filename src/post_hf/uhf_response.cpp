@@ -36,6 +36,9 @@ namespace HartreeFock::Correlation
 
         const int nova = nva * nocc_alpha;
         const int novb = nvb * nocc_beta;
+        // The unrestricted response problem is one coupled alpha/beta linear
+        // system. We lay it out as a single dense matrix so the block structure
+        // stays visible in a debugger or when cross-checking with reference code.
         Eigen::MatrixXd A = Eigen::MatrixXd::Zero(nova + novb, nova + novb);
 
         for (int a = 0; a < nva; ++a)
@@ -59,6 +62,10 @@ namespace HartreeFock::Correlation
                 xb(local / nocc_beta, local % nocc_beta) = 1.0;
             }
 
+            // Apply one trial orbital rotation, form the AO density response,
+            // and ask the integral layer for the induced Coulomb/exchange
+            // response. This mirrors the matrix-free view of CPHF, but here we
+            // materialize the full Jacobian column by column for transparency.
             const Eigen::MatrixXd dm1a = Ca_virt * xa * Ca_occ.transpose();
             const Eigen::MatrixXd dm1b = Cb_virt * xb * Cb_occ.transpose();
             const auto [va_ao, vb_ao] = _compute_2e_fock_uhf(

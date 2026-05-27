@@ -38,6 +38,9 @@ namespace
         e_ss = 0.0;
         e_os = 0.0;
 
+        // UMP2 splits naturally into aa, ab, and bb channels. The mixed-spin
+        // block has no exchange partner, so it contributes only to the
+        // opposite-spin correlation energy.
         for (int i = 0; i < nocca; ++i)
             for (int j = 0; j < nocca; ++j)
                 for (int a = 0; a < nvira; ++a)
@@ -145,6 +148,8 @@ namespace HartreeFock::Correlation
         Eigen::MatrixXd dvva = Eigen::MatrixXd::Zero(result.nvira, result.nvira);
         Eigen::MatrixXd dvvb = Eigen::MatrixXd::Zero(result.nvirb, result.nvirb);
 
+        // Build the occupied and virtual one-particle-density corrections for
+        // each spin block separately, then combine them into alpha/beta 1-RDMs.
         for (int i = 0; i < result.nocca; ++i)
             for (int j = 0; j < result.nocca; ++j)
                 for (int m = 0; m < result.nocca; ++m)
@@ -232,6 +237,9 @@ namespace HartreeFock::Correlation
         const int nmob = result.noccb + result.nvirb;
         Eigen::MatrixXd dm1a = Eigen::MatrixXd::Zero(nmoa, nmoa);
         Eigen::MatrixXd dm1b = Eigen::MatrixXd::Zero(nmob, nmob);
+        // Unlike RHF, the unrestricted reference starts from one occupied
+        // electron per occupied spin orbital, so the identity contribution is
+        // spin-resolved from the start.
         dm1a.topLeftCorner(result.nocca, result.nocca) =
             Eigen::MatrixXd::Identity(result.nocca, result.nocca) + dooa;
         dm1a.bottomRightCorner(result.nvira, result.nvira) = dvva;

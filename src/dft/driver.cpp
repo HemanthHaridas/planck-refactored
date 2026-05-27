@@ -3323,6 +3323,9 @@ namespace DFT::Driver
                 .short_range_exchange_coefficient = xc_grid->short_range_exchange_coefficient,
                 .range_separation_omega = xc_grid->range_separation_omega};
 
+            // Assemble the KS gradient as HF-like derivative terms plus the XC
+            // grid derivative. Range separation only changes the exchange-kernel
+            // metadata passed into the HF-like piece.
             auto wf_grad =
                 calculator._scf._scf == HartreeFock::SCFType::UHF
                     ? HartreeFock::Gradient::compute_uks_gradient(calculator, prepared.shell_pairs, exchange_kernel)
@@ -3508,6 +3511,9 @@ namespace DFT::Driver
     std::expected<PreparedSystem, std::string>
     prepare(HartreeFock::Calculator &calculator, const Options &options)
     {
+        // Central DFT rebuild path for a given geometry/orientation.
+        // Everything that depends on nuclear positions is refreshed here before
+        // any KS iterations begin.
         const GridLevel grid_level = to_grid_level(calculator._dft._grid);
         calculator.prepare_coordinates();
         calculator._eri.clear();

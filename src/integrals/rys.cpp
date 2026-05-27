@@ -64,6 +64,10 @@ namespace
         HartreeFock::ERIKernel kernel,
         double omega) noexcept
     {
+        // Range-separated kernels are implemented by replacing the Coulomb rho
+        // parameter, prefactor, and Boys-function argument with their screened
+        // equivalents. Keeping that map in one helper lets OS and Rys share the
+        // same physics-level interpretation.
         if (kernel == HartreeFock::ERIKernel::Coulomb)
             return ScreenedKernelData{.rho = rho, .prefactor_scale = 1.0, .boys_scale = 1.0};
 
@@ -138,6 +142,8 @@ namespace
     static std::pair<std::vector<PairOrbitElem>, bool> build_pair_orbit(
         std::size_t i, std::size_t j, const SymOps &sym_ops)
     {
+        // Symmetry replication is shared with the OS engine: identify the
+        // canonical pair once, then reuse it across the whole symmetry orbit.
         std::vector<PairOrbitElem> orbit;
         orbit.reserve(sym_ops.size());
 
@@ -167,6 +173,8 @@ namespace
         std::size_t k, std::size_t l,
         const SymOps &sym_ops)
     {
+        // A sign conflict inside the orbit means the quartet vanishes by
+        // symmetry, so the caller can skip the expensive recurrence entirely.
         std::vector<QuartetOrbitElem> orbit;
         orbit.reserve(sym_ops.size());
 

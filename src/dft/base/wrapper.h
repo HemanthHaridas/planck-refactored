@@ -186,6 +186,9 @@ namespace DFT
 
             CAMCoefficients cam_coefficients() const noexcept
             {
+                // Collapse libxc's hybrid-term table into the three quantities
+                // the rest of Planck actually needs for range-separated
+                // functionals.
                 CAMCoefficients coefficients;
                 if (func_.hyb_type == nullptr || func_.hyb_coeff == nullptr || func_.hyb_omega == nullptr)
                     return coefficients;
@@ -389,6 +392,8 @@ namespace DFT
                 });
 
             std::vector<std::string> candidates = {normalized};
+            // Be forgiving about user-facing names and try the common libxc
+            // prefixes before declaring the functional unknown.
             const auto starts_with = [&normalized](std::string_view prefix)
             {
                 return normalized.rfind(prefix, 0) == 0;

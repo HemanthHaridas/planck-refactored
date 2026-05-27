@@ -12,6 +12,10 @@ namespace HartreeFock
     {
         struct ExchangeGradientKernel
         {
+            // Shared descriptor for the HF-like exchange part of KS gradients.
+            // Global hybrids populate only the full-range coefficient; range-
+            // separated hybrids additionally use the short-range coefficient
+            // and omega.
             double full_range_exchange_coefficient = 0.0;
             double short_range_exchange_coefficient = 0.0;
             double range_separation_omega = 0.0;
@@ -44,18 +48,17 @@ namespace HartreeFock
             const HartreeFock::Calculator &calc,
             const std::vector<HartreeFock::ShellPair> &shell_pairs);
 
-        // Restricted Kohn-Sham (RKS): same Pulay/Coulomb/exchange skeleton as RHF.
-        // Step 1 carries only the full-range exchange coefficient through this
-        // descriptor; short-range exchange and omega are staged for the
-        // range-separated follow-up and are currently ignored here.
+        // Restricted Kohn-Sham (RKS): same Pulay/Coulomb/exchange skeleton as
+        // RHF, but with hybrid/range-separated exchange scaling carried by the
+        // exchange-kernel descriptor.
         std::expected<Eigen::MatrixXd, std::string> compute_rks_gradient(
             const HartreeFock::Calculator &calc,
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const ExchangeGradientKernel &exchange_kernel);
 
         // Unrestricted Kohn-Sham (UKS): UHF-like Coulomb/exchange derivatives
-        // with hybrid scaling on same-spin exchange contractions. As in the RKS
-        // path, only the full-range coefficient is consumed in Step 1.
+        // with hybrid/range-separated scaling applied to the same-spin
+        // exchange contractions.
         std::expected<Eigen::MatrixXd, std::string> compute_uks_gradient(
             const HartreeFock::Calculator &calc,
             const std::vector<HartreeFock::ShellPair> &shell_pairs,

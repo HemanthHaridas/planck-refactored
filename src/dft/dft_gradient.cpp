@@ -13,6 +13,9 @@ namespace DFT::Gradient
 
         std::expected<std::vector<int>, std::string> build_bf_shell_map(const HartreeFock::Basis &basis)
         {
+            // The moving-grid terms are organized atom-by-atom, but the AO
+            // objects arrive as a flat basis-function list. Recover the shell
+            // membership first so we can then map shells back to atoms.
             const auto &shells = basis._shells;
             const auto &bfs = basis._basis_functions;
             const std::size_t nb = basis.nbasis();
@@ -192,6 +195,9 @@ namespace DFT::Gradient
             const HartreeFock::Molecule &mol,
             Eigen::Index ip)
         {
+            // Differentiate the owner atom's Becke partition weight with
+            // respect to every nuclear Cartesian. This is the core moving-grid
+            // correction needed for analytic DFT gradients.
             const Eigen::Index natoms = static_cast<Eigen::Index>(mol.natoms);
             if (grid.owner.size() != grid.points.rows())
                 return std::unexpected("molecular grid owner array does not match point count");
@@ -374,6 +380,8 @@ namespace DFT::Gradient
 
             if (!gga)
             {
+                // LDA depends only on rho, so the AO derivative contribution is
+                // first-order in the AO gradients.
                 const Eigen::VectorXd aow = phi * (w * vrho);
                 vtmp[0].noalias() += gx * aow.transpose();
                 vtmp[1].noalias() += gy * aow.transpose();
@@ -381,6 +389,8 @@ namespace DFT::Gradient
             }
             else
             {
+                // GGA depends on grad(rho) as well, so the moving-grid term
+                // needs AO Hessians in addition to AO values and gradients.
                 const double vs = xc.vsigma(ip, 0);
                 const Eigen::Vector3d coeff =
                     2.0 * vs * Eigen::Vector3d(xc.density.total.grad_x(ip), xc.density.total.grad_y(ip), xc.density.total.grad_z(ip));

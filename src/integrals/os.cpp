@@ -85,6 +85,9 @@ namespace
     static std::pair<std::vector<PairOrbitElem>, bool> build_pair_orbit(
         std::size_t i, std::size_t j, const SymOps &sym_ops)
     {
+        // Each AO symmetry operation maps one requested pair into an equivalent
+        // representative. If the same canonical pair is reached with opposite
+        // sign, the whole orbit cancels and the integral is symmetry-forbidden.
         std::vector<PairOrbitElem> orbit;
         orbit.reserve(sym_ops.size());
 
@@ -110,6 +113,9 @@ namespace
         std::size_t i, std::size_t j, std::size_t k, std::size_t l,
         const SymOps &sym_ops)
     {
+        // The four-index orbit plays the same role for ERIs: compute one
+        // canonical quartet, then scatter the value across all symmetry-related
+        // permutations with the accumulated AO sign.
         std::vector<QuartetOrbitElem> orbit;
         orbit.reserve(sym_ops.size());
 
@@ -187,6 +193,9 @@ namespace
             int lCDx, int lCDy, int lCDz,
             int mmax)
         {
+            // Reuse one per-thread scratch object for the whole quartet so the
+            // recurrence code can index dense contiguous buffers instead of
+            // allocating nested vectors in the hot integral loops.
             ax_dim = lABx + 1;
             ay_dim = lABy + 1;
             az_dim = lABz + 1;

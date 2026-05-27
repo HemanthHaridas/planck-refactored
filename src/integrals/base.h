@@ -7,6 +7,10 @@
 #include "os.h"
 #include "rys.h"
 
+// Thin dispatch layer shared by SCF, DFT, gradients, and post-HF code. Callers
+// ask for "the integral" they need and choose an engine policy here, while the
+// concrete OS/Rys implementations stay behind one stable interface.
+
 inline std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_1e(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const std::size_t nbasis,
@@ -45,6 +49,9 @@ inline std::vector<double> _compute_2e(
     double tol_eri = 1e-10,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
 {
+    // Rys handles the higher-angular-momentum and range-separated paths more
+    // robustly, while OS remains the default explicit recurrence engine. Auto
+    // keeps that choice centralized instead of scattered across callers.
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
@@ -65,6 +72,8 @@ inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair
                                         double tol_eri = 1e-10,
                                         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
 {
+    // The Fock-build wrappers follow the same dispatch policy as the raw ERI
+    // tensor path so higher layers can swap engines without changing algebra.
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
@@ -87,6 +96,8 @@ _compute_2e_fock_uhf(const std::vector<HartreeFock::ShellPair> &shell_pairs,
                      double tol_eri = 1e-10,
                      const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
 {
+    // UHF reuses the same engine selection, but returns separate alpha/beta
+    // effective Fock contributions from one spin-coupled density pair.
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:

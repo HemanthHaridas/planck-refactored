@@ -144,6 +144,9 @@ static void accumulate_eri_gradient_permutations(
     int atom_C,
     int atom_D)
 {
+    // A shell-pair ERI derivative arrives in one canonical ordering. Fold the
+    // AB/CD exchange-related permutations back in here so the higher-level
+    // gradient builders only need to provide the effective Gamma contraction.
     const auto accumulate_perm = [&](double gamma,
                                      bool swap_ab,
                                      bool swap_cd)
@@ -198,6 +201,9 @@ static void accumulate_shell_pair_eri_gradient(
 
     if (assume_pair_exchange_symmetry)
     {
+        // Most closed-shell and hybrid contractions keep the usual (ij|kl) =
+        // (ji|kl) = (ij|lk) symmetry, so we can iterate only over the stored
+        // shell-pair list and recover the missing permutations analytically.
         for (const auto &spAB : shell_pairs)
         {
             const std::size_t ii = spAB.A._index;
@@ -234,6 +240,9 @@ static void accumulate_shell_pair_eri_gradient(
         return;
     }
 
+    // Some unrestricted/range-separated exchange corrections are easier to
+    // express without assuming pair-exchange symmetry. Fall back to the full
+    // ordered pair list in that case.
     std::vector<HartreeFock::ShellPair> all_pairs;
     all_pairs.reserve(nb * nb);
     for (std::size_t ii = 0; ii < nb; ++ii)
@@ -284,6 +293,9 @@ static std::expected<Eigen::MatrixXd, std::string> compute_two_electron_kernel_g
     double omega = 0.0,
     bool assume_pair_exchange_symmetry = true)
 {
+    // Shared "differentiate and contract ERIs" helper used by RHF/UHF and the
+    // HF-like parts of RKS/UKS. The caller supplies only the effective Gamma
+    // tensor element through gamma_fn.
     const auto &basis = calc._shells;
     const std::size_t nb = basis.nbasis();
     Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(calc._molecule.natoms, 3);
@@ -327,6 +339,9 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
     bool assume_pair_exchange_symmetry = true,
     HartreeFock::Gradient::WavefunctionGradientBreakdown *breakdown = nullptr)
 {
+    // Shared restricted-reference gradient builder:
+    //   core/Pulay + nucleus-position attraction + 2e contraction + Vnn.
+    // RHF and RKS differ only in the Gamma contraction used for the 2e term.
     const auto &mol = calc._molecule;
     const auto &basis = calc._shells;
     const std::size_t natoms = mol.natoms;
@@ -442,6 +457,9 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_exchange
     HartreeFock::ERIKernel kernel,
     double omega)
 {
+    // Isolate one exchange-only kernel contribution so RKS can add the
+    // long-range correction term on top of the already-assembled full-range
+    // closed-shell gradient.
     auto gamma_fn = [&P, exchange_coefficient](std::size_t ii, std::size_t jj,
                                                std::size_t kk, std::size_t ll) -> double
     {
@@ -520,6 +538,10 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_g
     const double cx_total =
         exchange_kernel.full_range_exchange_coefficient +
         exchange_kernel.short_range_exchange_coefficient;
+    // The base restricted KS build treats the full-range and short-range exact
+    // exchange fractions as one combined exchange scale. If a short-range term
+    // is present we add back the explicit long-range correction immediately
+    // afterward.
     auto gamma_fn = [&P, cx_total](std::size_t ii, std::size_t jj, std::size_t kk, std::size_t ll) -> double
     {
         return 2.0 * P(ii, jj) * P(kk, ll) - cx_total * P(ii, kk) * P(jj, ll);
@@ -873,6 +895,9 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
     const double cx_total =
         exchange_kernel.full_range_exchange_coefficient +
         exchange_kernel.short_range_exchange_coefficient;
+    // UKS follows the UHF partitioning: Coulomb sees the total density, while
+    // exchange remains same-spin and is scaled by the hybrid/range-separated
+    // exchange coefficients.
     auto gamma_fn = [&P_t, &P_a, &P_b, cx_total](std::size_t ii, std::size_t jj,
                                                  std::size_t kk, std::size_t ll) -> double
     {

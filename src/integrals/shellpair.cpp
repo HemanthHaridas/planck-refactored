@@ -10,6 +10,8 @@ std::vector<HartreeFock::ShellPair> build_shellpairs(const HartreeFock::Basis &b
     std::vector<HartreeFock::ShellPair> shell_pairs{}; // Shellpair container
     shell_pairs.reserve(n_shells * (n_shells + 1) / 2);
 
+    // Precompute only the upper-triangular shell pairs. Every integral engine
+    // later expands the remaining permutations from shell and AO symmetry.
     for (std::size_t ia = 0; ia < n_shells; ia++)
     {
         for (std::size_t ib = ia; ib < n_shells; ib++)
