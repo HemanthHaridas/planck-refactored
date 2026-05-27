@@ -1,6 +1,6 @@
 ### Planck
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19478938.svg)](https://doi.org/10.5281/zenodo.19478938)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20415504.svg)](https://doi.org/10.5281/zenodo.20415504)
 [![Mirror to GitLab](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/main.yml/badge.svg)](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/main.yml)
 [![CodeQL](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/github-code-scanning/codeql)
 [![pages-build-deployment](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/pages/pages-build-deployment)
