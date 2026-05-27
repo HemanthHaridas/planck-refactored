@@ -16,7 +16,7 @@ Demonstrates that:
 Re-run this whenever the Planck SA optimizer changes to check whether the
 deeper basin becomes reachable.
 
-Reference: docs/CASSCF_STATUS.md item P3.
+Reference: vault/Status/Completion.md and vault/Status/Open Work.md.
 """
 
 import numpy as np

@@ -14,7 +14,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 <div align="justify">
 
 - **RHF / ROHF / UHF** — closed-shell, restricted open-shell, and unrestricted Hartree-Fock; ROHF uses a Roothaan-type effective Fock construction with aufbau orbital reordering and DIIS convergence
-- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, global hybrid, range-separated hybrid, and double-hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals by name or integer ID. Range-separated and double-hybrid functionals are currently implemented for single-point energies
+- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, global hybrid, range-separated hybrid, and double-hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals by name or integer ID. Range-separated hybrids are implemented for single-point, gradient, geometry-optimization, frequency, and geomopt+frequency workflows; double hybrids remain single-point only
 - **PCM solvation** — self-consistent conductor-like polarizable continuum model (C-PCM) for single-point RHF/UHF/RKS/UKS calculations with user-defined dielectric, named solvents, atom-centered cavities, and surface discretization controls
 - **BSSE / counterpoise correction** — ghost atoms (basis-only centers, requested as `Gh(X)`/`@X`/`X:`) and a two-fragment Boys-Bernardi counterpoise driver (`%begin_bsse`) that runs the dimer, isolated monomers, and ghosted monomers to report BSSE alongside the raw and CP-corrected interaction energies; SCF-level (RHF/UHF/ROHF) single points, PySCF-validated
 - **TDDFT / linear response** — full Casida and optional TDA excited-state roots on top of converged KS orbitals, with RKS singlet/triplet support, UKS spin-conserving response, semilocal XC kernels, transition dipoles, oscillator strengths, wavelengths, and Gaussian-broadened UV-Vis spectra
@@ -248,10 +248,11 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.false.` | Write a `.dftchk` checkpoint file after successful convergence. |
 
 <p align="justify">
-Range-separated hybrids and double hybrids are currently supported for
-single-point energies. Analytic gradients, geometry optimization, frequencies,
-and TDDFT remain limited to the existing LDA/GGA/global-hybrid path and still
-error explicitly for the newer non-global cases.
+Range-separated hybrids are supported for single-point energies, analytic
+gradients, geometry optimization, frequencies, and geomopt+frequency. Double
+hybrids remain single-point only. TDDFT / linear response and
+`imagfollow` remain limited to the existing semilocal/global-hybrid path and
+still error explicitly for unsupported range-separated or double-hybrid cases.
 </p>
 
 ### Section: `%begin_pcm`

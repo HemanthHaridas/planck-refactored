@@ -109,7 +109,9 @@ namespace HartreeFock
         // Layout: [cen*3 + dir], cen∈{0=A,1=B,2=C,3=D}, dir∈{0,1,2}
         std::array<double, 12> _compute_eri_deriv_elem(
             const HartreeFock::ShellPair &spAB,
-            const HartreeFock::ShellPair &spCD);
+            const HartreeFock::ShellPair &spCD,
+            const HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0);
 
         // Compute the cross-overlap matrix S_cross(μ, ν) = <χ_μ^large | χ_ν^small>
         // between two basis sets centered on the same molecule.

@@ -64,6 +64,10 @@ namespace
         HartreeFock::ERIKernel kernel,
         double omega) noexcept
     {
+        // Range-separated kernels are implemented by replacing the Coulomb rho
+        // parameter, prefactor, and Boys-function argument with their screened
+        // equivalents. Keeping that map in one helper lets OS and Rys share the
+        // same physics-level interpretation.
         if (kernel == HartreeFock::ERIKernel::Coulomb)
             return ScreenedKernelData{.rho = rho, .prefactor_scale = 1.0, .boys_scale = 1.0};
 
@@ -138,6 +142,8 @@ namespace
     static std::pair<std::vector<PairOrbitElem>, bool> build_pair_orbit(
         std::size_t i, std::size_t j, const SymOps &sym_ops)
     {
+        // Symmetry replication is shared with the OS engine: identify the
+        // canonical pair once, then reuse it across the whole symmetry orbit.
         std::vector<PairOrbitElem> orbit;
         orbit.reserve(sym_ops.size());
 
@@ -167,6 +173,8 @@ namespace
         std::size_t k, std::size_t l,
         const SymOps &sym_ops)
     {
+        // A sign conflict inside the orbit means the quartet vanishes by
+        // symmetry, so the caller can skip the expensive recurrence entirely.
         std::vector<QuartetOrbitElem> orbit;
         orbit.reserve(sym_ops.size());
 
@@ -438,8 +446,14 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const double Wz = (zeta * Pz + eta * Qz) * inv_delta;
 
     // WP = W - P,  WQ = W - Q
-    const double WPx = Wx - Px, WPy = Wy - Py, WPz = Wz - Pz;
-    const double WQx = Wx - Qx, WQy = Wy - Qy, WQz = Wz - Qz;
+    const double wpwq_scale =
+        (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
+    const double WPx = (Wx - Px) * wpwq_scale;
+    const double WPy = (Wy - Py) * wpwq_scale;
+    const double WPz = (Wz - Pz) * wpwq_scale;
+    const double WQx = (Wx - Qx) * wpwq_scale;
+    const double WQy = (Wy - Qy) * wpwq_scale;
+    const double WQz = (Wz - Qz) * wpwq_scale;
 
     // Overall prefactor: K_AB * K_CD * 2*sqrt(rho/pi)
     const double prefac =
@@ -472,7 +486,9 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
         const double wr = w[r];
 
         // Root-dependent scalars (same for all axes)
-        const double B00 = 0.5 * inv_delta * u;
+        const double B00 =
+            0.5 * inv_delta * u *
+            ((kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale);
         const double B10 = 0.5 * ppAB.inv_zeta * (1.0 - rho_over_zeta * u);
         const double B01 = 0.5 * ppCD.inv_zeta * (1.0 - rho_over_eta * u);
 

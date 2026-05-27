@@ -75,6 +75,8 @@ namespace DFT
         double exchange_energy = 0.0;
         double correlation_energy = 0.0;
         double total_energy = 0.0;
+        // Shared metadata consumed later by both KS matrix assembly and the
+        // analytic gradient path.
         double exact_exchange_coefficient = 0.0;
         double full_range_exchange_coefficient = 0.0;
         double short_range_exchange_coefficient = 0.0;

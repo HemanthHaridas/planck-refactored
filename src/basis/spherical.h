@@ -64,6 +64,33 @@ namespace HartreeFock
             std::size_t n_cart,
             std::size_t max_n_cart = 150);
 
+        // ── Density / energy-weighted density: spherical → Cartesian lift ─────────
+        //
+        // Given an AO-basis matrix M_sph defined in the spherical (2L+1 per shell)
+        // basis (typically a density P_sph or an energy-weighted density W_sph
+        // produced by the spherical SCF), returns the equivalent Cartesian-basis
+        // representation
+        //     M_cart = Cᵀ · M_sph · C            [n_cart × n_cart]
+        // so that for any Cartesian AO operator X_cart whose matrix elements are
+        // emitted by the integral engine (one-electron operators, ERI derivatives,
+        // …) the energy contractions agree:
+        //     tr(M_sph · X_sph) = tr(M_sph · C X_cart Cᵀ) = tr(M_cart · X_cart).
+        //
+        // C is the [n_sph × n_cart] block-diagonal transform from build_cart_to_sph
+        // (or Basis::_cart_to_sph). This is the inverse direction of the lowering
+        // C · X · Cᵀ used at the energy skin. Because C is a partial isometry
+        // (rows span the kept harmonic subspace, dropping the r²-contamination
+        // subspace for L ≥ 2), CᵀC is the projector onto that kept subspace, not
+        // the identity — so this lift is exact for matrices already living in the
+        // kept subspace (true for SCF density and W) but is *not* a round-trip
+        // inverse of an arbitrary Cartesian matrix.
+        //
+        // The shape checks mirror transform_eri_cart_to_sph for consistent error
+        // messages at the gradient skin.
+        std::expected<Eigen::MatrixXd, std::string> lift_density_sph_to_cart(
+            const Eigen::MatrixXd &M_sph,
+            const Eigen::MatrixXd &C);
+
     } // namespace BasisFunctions
 } // namespace HartreeFock
 

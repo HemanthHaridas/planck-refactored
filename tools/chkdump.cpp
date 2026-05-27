@@ -538,10 +538,10 @@ int main(int argc, char* argv[])
     }
 
     const uint32_t version = read_pod<uint32_t>(in);
-    if (version < 2 || version > 6)
+    if (version < 2 || version > 7)
     {
         std::cerr << "chkdump: unsupported checkpoint version " << version
-                  << " (expected 2–6)\n";
+                  << " (expected 2–7)\n";
         return EXIT_FAILURE;
     }
 
@@ -565,6 +565,8 @@ int main(int argc, char* argv[])
         coords[static_cast<std::size_t>(i)] = read_pod<double>(in);
 
     const std::string basis_name = read_string(in);
+    if (version >= 7)
+        (void)read_pod<uint8_t>(in); // basis_type: 0 = cartesian, 1 = spherical
     const uint8_t has_opt_coords = read_pod<uint8_t>(in);
 
     const Matrix overlap = read_matrix(in);

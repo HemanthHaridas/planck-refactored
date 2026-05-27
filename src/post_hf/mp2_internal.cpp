@@ -8,6 +8,9 @@ namespace
 {
     std::vector<bool> build_active_mask(const std::vector<int> &frozen, int n_mo_full)
     {
+        // MP2 freezing accepts either "freeze the first n orbitals" or an
+        // explicit list of MO indices. Everything else stays in the active
+        // transformed ERI space to keep the downstream kernels simple.
         std::vector<bool> active(static_cast<std::size_t>(n_mo_full), true);
         if (frozen.empty())
             return active;
@@ -52,6 +55,8 @@ namespace HartreeFock::Correlation::detail
         RMP2Dims dims;
         dims.n_mo_full = n_mo_full;
         dims.n_occ_full = n_occ_full;
+        // Compress the full RHF orbital list down to the active occupied/virtual
+        // blocks that the canonical MP2 formulas expect.
         dims.active_mo.reserve(static_cast<std::size_t>(n_mo_full));
         for (int p = 0; p < n_mo_full; ++p)
         {
@@ -92,6 +97,9 @@ namespace HartreeFock::Correlation::detail
         dims.noccb_full = (n_electrons - n_unpaired) / 2;
 
         const auto active_mask = build_active_mask(options.frozen, nb);
+        // UMP2 tracks alpha and beta active spaces separately even when they
+        // share the same frozen-orbital policy, because the occupied counts can
+        // differ for open-shell references.
         dims.active_a.reserve(static_cast<std::size_t>(nb));
         dims.active_b.reserve(static_cast<std::size_t>(nb));
         for (int p = 0; p < nb; ++p)
@@ -143,6 +151,8 @@ namespace HartreeFock::Correlation::detail
         const Eigen::MatrixXd C_occ = C_act.leftCols(dims.n_occ);
         const Eigen::MatrixXd C_virt = C_act.middleCols(dims.n_occ, dims.n_virt);
 
+        // Canonical RHF MP2 only needs the occupied-virtual-occupied-virtual
+        // block in chemists' notation, so we transform directly into ovov.
         std::vector<double> eri_local;
         const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
             calculator, shell_pairs, eri_local, "RMP2 :");
@@ -192,6 +202,9 @@ namespace HartreeFock::Correlation::detail
         const Eigen::MatrixXd Cb_occ = Cb.leftCols(dims.noccb);
         const Eigen::MatrixXd Cb_virt = Cb.middleCols(dims.noccb, dims.nvirb);
 
+        // Unrestricted MP2 needs three spin blocks: alpha-alpha, beta-beta, and
+        // alpha-beta. Keeping them separate makes the later spin-resolved energy
+        // formulas read much closer to the textbook expressions.
         std::vector<double> eri_local;
         const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
             calculator, shell_pairs, eri_local, "UMP2 :");

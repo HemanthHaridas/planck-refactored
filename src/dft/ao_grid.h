@@ -33,6 +33,9 @@ namespace DFT
             Eigen::Ref<Eigen::VectorXd> grad_y,
             Eigen::Ref<Eigen::VectorXd> grad_z)
         {
+            // Evaluate one Cartesian contracted AO and its first derivatives on
+            // every quadrature point. The DFT stack reuses this same object for
+            // density assembly, KS matrix construction, and analytic XC terms.
             const Eigen::Vector3d center = basis_function.center();
             const int lx = basis_function._cartesian.x();
             const int ly = basis_function._cartesian.y();
@@ -326,6 +329,9 @@ namespace DFT
         const HartreeFock::Basis &basis,
         const MolecularGrid &molecular_grid)
     {
+        // Point-major storage (rows = grid points, cols = AOs) keeps the later
+        // rho/Vxc contractions simple because those routines work one
+        // quadrature point at a time.
         if (molecular_grid.points.cols() != 4)
             return std::unexpected("AO grid evaluation requires molecular grid points with 4 columns");
 

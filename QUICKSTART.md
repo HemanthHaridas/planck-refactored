@@ -111,6 +111,12 @@ Add a `%begin_dft` block to switch on DFT. For example, PBE/STO-3G:
 
 `scf_type rhf` gives an RKS reference and `scf_type uhf` gives a UKS reference.
 
+Range-separated hybrids such as `hse06` are supported for single-point,
+gradient, geometry-optimization, and frequency workflows. If you validate a
+symmetry-enabled DFT gradient or frequency job against finite differences, use
+at least `grid ultrafine`; coarse grids can show noticeable orientation
+sensitivity after symmetry standardization.
+
 ### 3. Open-shell calculation (UHF)
 
 For open-shell systems set `scf_type uhf` and the correct multiplicity. Triplet water (M=3):
@@ -259,6 +265,11 @@ H     0.800000     0.000000    -0.500000
 H    -0.800000     0.000000    -0.500000
 %end_coords
 ```
+
+For DFT gradients, `use_symm .false.` is the simplest starting point while
+you are setting up a workflow. Symmetry-enabled DFT gradients are supported,
+but validation is currently pinned to `grid ultrafine` because low-quality
+grids are more orientation-sensitive.
 
 Expected output (abbreviated):
 

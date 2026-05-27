@@ -326,3 +326,22 @@ HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
 
     return out;
 }
+
+std::expected<Eigen::MatrixXd, std::string>
+HartreeFock::BasisFunctions::lift_density_sph_to_cart(
+    const Eigen::MatrixXd &M_sph,
+    const Eigen::MatrixXd &C)
+{
+    // C is [n_sph × n_cart]; M_sph must be [n_sph × n_sph].
+    const Eigen::Index n_sph = C.rows();
+    const Eigen::Index n_cart = C.cols();
+
+    if (M_sph.rows() != n_sph || M_sph.cols() != n_sph)
+        return std::unexpected(
+            "lift_density_sph_to_cart: M_sph is " +
+            std::to_string(M_sph.rows()) + "×" + std::to_string(M_sph.cols()) +
+            " but C has " + std::to_string(n_sph) + " spherical rows");
+
+    // M_cart = Cᵀ · M_sph · C   →   [n_cart × n_cart]
+    return Eigen::MatrixXd(C.transpose() * M_sph * C);
+}

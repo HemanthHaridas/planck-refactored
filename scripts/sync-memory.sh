@@ -5,13 +5,18 @@
 #
 # Generates:
 #   CLAUDE.md                               — aggregated from vault/ notes via vault_to_claude.py
-#   notes/validation/CASSCF_Gate_Table.md   — live gate table from docs/CASSCF_STATUS.md
-#   notes/roadmap/CASSCF_Remaining_Work.md  — live remaining work from docs/CASSCF_STATUS.md
+#   notes/validation/CASSCF_Gate_Table.md   — live gate table from vault/Status/Completion.md
+#   notes/roadmap/CASSCF_Remaining_Work.md  — live remaining work from vault/Status/Open Work.md
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CASSCF_STATUS="${REPO_ROOT}/docs/CASSCF_STATUS.md"
+# Resolve repo root via git rather than $(dirname $0)/.., because git invokes
+# this script through the .git/hooks/post-commit symlink — $0 there is
+# ".git/hooks/post-commit", so dirname/.. yields ".git/" instead of the real
+# repo root. git rev-parse always returns the worktree's top-level.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+CASSCF_COMPLETION="${REPO_ROOT}/vault/Status/Completion.md"
+CASSCF_OPEN_WORK="${REPO_ROOT}/vault/Status/Open Work.md"
 VAULT_SCRIPT="${REPO_ROOT}/scripts/vault_to_claude.py"
 
 # ---------------------------------------------------------------------------
@@ -24,8 +29,8 @@ else
     echo "[sync-memory] WARNING: scripts/vault_to_claude.py not found — CLAUDE.md not regenerated." >&2
 fi
 
-if [[ ! -f "$CASSCF_STATUS" ]]; then
-    echo "[sync-memory] docs/CASSCF_STATUS.md not found — skipping CASSCF notes." >&2
+if [[ ! -f "$CASSCF_COMPLETION" || ! -f "$CASSCF_OPEN_WORK" ]]; then
+    echo "[sync-memory] canonical status docs not found — skipping CASSCF notes." >&2
     exit 0
 fi
 
@@ -37,22 +42,22 @@ mkdir -p "${REPO_ROOT}/notes/roadmap"
 # ---------------------------------------------------------------------------
 GATE_OUT="${REPO_ROOT}/notes/validation/CASSCF_Gate_Table.md"
 
-SUITE_STATUS="$(grep -m1 'Suite status:' "$CASSCF_STATUS" \
-    | sed 's/.*\*\*Suite status:\*\* //' | tr -d '\r')"
+SUITE_STATUS="$(grep -m1 'Suite status:' "$CASSCF_COMPLETION" \
+    | sed 's/.*Suite status: \*\*//' | sed 's/\*\*.*$//' | tr -d '\r')"
 
 {
     echo "# CASSCF PySCF Gate Table"
     echo ""
-    echo "Source: \`docs/CASSCF_STATUS.md\`  "
+    echo "Source: \`vault/Status/Completion.md\`  "
     echo "**Suite status:** ${SUITE_STATUS:-unknown}  "
     echo "Last synced: $(date '+%Y-%m-%d %H:%M')"
     echo ""
     awk '
-        /^## PySCF Gate Table/  { found=1; next }
+        /^## CASSCF PySCF Gate Table/  { found=1; next }
         found && /^## /         { exit }
         found && /^\|/          { intable=1; print; next }
         found && intable && /^[^|[:space:]]/  { exit }
-    ' "$CASSCF_STATUS"
+    ' "$CASSCF_COMPLETION"
 } > "$GATE_OUT"
 
 # ---------------------------------------------------------------------------
@@ -63,21 +68,14 @@ WORK_OUT="${REPO_ROOT}/notes/roadmap/CASSCF_Remaining_Work.md"
 {
     echo "# CASSCF Remaining Work"
     echo ""
-    echo "Source: \`docs/CASSCF_STATUS.md\`  "
+    echo "Source: \`vault/Status/Open Work.md\`  "
     echo "Last synced: $(date '+%Y-%m-%d %H:%M')"
     echo ""
     awk '
-        /^## Remaining Work/    { found=1; print; next }
-        found && /^## What Not To Do/ { found=0 }
-        found                   { print }
-    ' "$CASSCF_STATUS"
-    echo ""
-    echo "---"
-    awk '
-        /^## What Not To Do/    { found=1; print; next }
+        /^## CASSCF/            { found=1; next }
         found && /^## /         { exit }
         found                   { print }
-    ' "$CASSCF_STATUS"
+    ' "$CASSCF_OPEN_WORK"
 } > "$WORK_OUT"
 
 echo "[sync-memory] CASSCF notes updated (suite: ${SUITE_STATUS:-unknown})"

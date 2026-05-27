@@ -343,7 +343,33 @@ static std::expected<void, std::string> adapt_restart_spin_state(
 // IEEE-754 `double` layout. MAGIC/VERSION let us reject incompatible files
 // explicitly rather than silently interpreting foreign-endian data.
 static constexpr char MAGIC[8] = {'P', 'L', 'N', 'K', 'C', 'H', 'K', '\0'};
-static constexpr uint32_t VERSION = 6;
+static constexpr uint32_t VERSION = 7;
+
+static uint8_t encode_basis_type(HartreeFock::BasisType basis_type)
+{
+    switch (basis_type)
+    {
+    case HartreeFock::BasisType::Cartesian:
+        return 0u;
+    case HartreeFock::BasisType::Spherical:
+        return 1u;
+    }
+    return 0u;
+}
+
+static std::expected<HartreeFock::BasisType, std::string> decode_basis_type(uint8_t raw)
+{
+    switch (raw)
+    {
+    case 0u:
+        return HartreeFock::BasisType::Cartesian;
+    case 1u:
+        return HartreeFock::BasisType::Spherical;
+    default:
+        return std::unexpected(std::format(
+            "Checkpoint basis_type tag {} is not recognized", raw));
+    }
+}
 
 std::expected<void, std::string> HartreeFock::Checkpoint::save(
     const HartreeFock::Calculator &calc,
@@ -383,6 +409,7 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
 
     // Basis name for informational validation
     write_string(out, calc._basis._basis_name);
+    write_pod<uint8_t>(out, encode_basis_type(calc._basis._basis));
 
     // has_opt_coords: 1 if these coordinates came from a converged geometry optimization
     const bool is_opt = ((calc._calculation == HartreeFock::CalculationType::GeomOpt ||
@@ -567,6 +594,23 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
     auto chk_basis = read_string(in);
     if (!chk_basis)
         return std::unexpected(chk_basis.error());
+    if (*version >= 7)
+    {
+        auto chk_basis_type_raw = read_pod<uint8_t>(in);
+        if (!chk_basis_type_raw)
+            return std::unexpected(chk_basis_type_raw.error());
+        auto chk_basis_type = decode_basis_type(*chk_basis_type_raw);
+        if (!chk_basis_type)
+            return std::unexpected(chk_basis_type.error());
+        if (*chk_basis_type != calc._basis._basis)
+        {
+            return std::unexpected(std::format(
+                "Checkpoint basis_type does not match current run "
+                "(checkpoint={}, current={}); use the same basis_type or regenerate the checkpoint.",
+                *chk_basis_type == HartreeFock::BasisType::Spherical ? "spherical" : "cartesian",
+                calc._basis._basis == HartreeFock::BasisType::Spherical ? "spherical" : "cartesian"));
+        }
+    }
     if (*chk_basis != calc._basis._basis_name)
     {
         // Warn but do not abort — the user may have intentionally changed the basis
@@ -744,6 +788,17 @@ HartreeFock::Checkpoint::load_mos(const std::string &path)
     if (!basis_name)
         return std::unexpected(basis_name.error());
     result.basis_name = std::move(*basis_name);
+    if (*version >= 7)
+    {
+        auto basis_type_raw = read_pod<uint8_t>(in);
+        if (!basis_type_raw)
+            return std::unexpected(basis_type_raw.error());
+        auto basis_type = decode_basis_type(*basis_type_raw);
+        if (!basis_type)
+            return std::unexpected(basis_type.error());
+        result.basis_type = *basis_type;
+        result.has_basis_type = true;
+    }
     auto opt_coords = read_pod<uint8_t>(in);
     if (!opt_coords)
         return std::unexpected(opt_coords.error());
@@ -889,6 +944,17 @@ HartreeFock::Checkpoint::load_geometry(const std::string &path)
     auto basis_name = read_string(in);
     if (!basis_name)
         return std::unexpected(basis_name.error());
+    if (*version >= 7)
+    {
+        auto basis_type_raw = read_pod<uint8_t>(in);
+        if (!basis_type_raw)
+            return std::unexpected(basis_type_raw.error());
+        auto basis_type = decode_basis_type(*basis_type_raw);
+        if (!basis_type)
+            return std::unexpected(basis_type.error());
+        geo.basis_type = *basis_type;
+        geo.has_basis_type = true;
+    }
 
     auto has_opt_coords = read_pod<uint8_t>(in);
     if (!has_opt_coords)

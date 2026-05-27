@@ -245,6 +245,7 @@ namespace HartreeFock
 
         Eigen::MatrixXd standard;  // reoriented coordinates in Angstrom
         Eigen::MatrixXd _standard; // reoriented coordinates in Bohr
+        Eigen::Matrix3d _symmetry_alignment_transform = Eigen::Matrix3d::Identity(); // input-frame -> standard-frame rotation/reflection
 
         std::string _point_group = "C1"; // Point group symmetry
 
@@ -294,6 +295,7 @@ namespace HartreeFock
             _is_bohr = false;
             standard_is_angstrom = false;
             _standard_is_bohr = false;
+            _symmetry_alignment_transform.setIdentity();
         }
     };
 
@@ -620,7 +622,8 @@ namespace HartreeFock
         // downhill move (model-trust filter), and convergence additionally
         // requires the maximum per-root orbital gradient to be small. Useful
         // for cases where the SA-weighted gradient vanishes while individual
-        // roots are still far from stationary (see docs/CASSCF_STATUS.md P3).
+        // roots are still far from stationary; the uphill-enabled SAD-start
+        // validation case is tracked in vault/Status/Completion.md.
         bool mcscf_accept_uphill = false;
         // When mcscf_accept_uphill is on, this caps the largest uphill ΔE
         // (Hartree) the model-trust filter will tolerate per macro step.

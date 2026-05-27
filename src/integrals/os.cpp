@@ -85,6 +85,9 @@ namespace
     static std::pair<std::vector<PairOrbitElem>, bool> build_pair_orbit(
         std::size_t i, std::size_t j, const SymOps &sym_ops)
     {
+        // Each AO symmetry operation maps one requested pair into an equivalent
+        // representative. If the same canonical pair is reached with opposite
+        // sign, the whole orbit cancels and the integral is symmetry-forbidden.
         std::vector<PairOrbitElem> orbit;
         orbit.reserve(sym_ops.size());
 
@@ -110,6 +113,9 @@ namespace
         std::size_t i, std::size_t j, std::size_t k, std::size_t l,
         const SymOps &sym_ops)
     {
+        // The four-index orbit plays the same role for ERIs: compute one
+        // canonical quartet, then scatter the value across all symmetry-related
+        // permutations with the accumulated AO sign.
         std::vector<QuartetOrbitElem> orbit;
         orbit.reserve(sym_ops.size());
 
@@ -187,6 +193,9 @@ namespace
             int lCDx, int lCDy, int lCDz,
             int mmax)
         {
+            // Reuse one per-thread scratch object for the whole quartet so the
+            // recurrence code can index dense contiguous buffers instead of
+            // allocating nested vectors in the hot integral loops.
             ax_dim = lABx + 1;
             ay_dim = lABy + 1;
             az_dim = lABz + 1;
@@ -686,7 +695,9 @@ static void _eri_vrr(
 
     const double inv_2_zetaAB = 0.5 / zetaAB;
     const double inv_2_zetaCD = 0.5 / zetaCD;
-    const double inv_2_delta = 0.5 / delta;
+    const double inv_2_delta =
+        (0.5 / delta) *
+        ((kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale);
     const double rho_over_zetaAB = effective_rho / zetaAB;
     const double rho_over_zetaCD = effective_rho / zetaCD;
 
@@ -699,8 +710,14 @@ static void _eri_vrr(
     const double Wz = (zetaAB * P[2] + zetaCD * Q[2]) / delta;
 
     // WP = W - P,  WQ = W - Q
-    const double WPx = Wx - P[0], WPy = Wy - P[1], WPz = Wz - P[2];
-    const double WQx = Wx - Q[0], WQy = Wy - Q[1], WQz = Wz - Q[2];
+    const double wpwq_scale =
+        (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
+    const double WPx = (Wx - P[0]) * wpwq_scale;
+    const double WPy = (Wy - P[1]) * wpwq_scale;
+    const double WPz = (Wz - P[2]) * wpwq_scale;
+    const double WQx = (Wx - Q[0]) * wpwq_scale;
+    const double WQy = (Wy - Q[1]) * wpwq_scale;
+    const double WQz = (Wz - Q[2]) * wpwq_scale;
 
     // PA = P - A = ppAB.pA;  QC = Q - C = ppCD.pA (since ppCD.A is shell C)
     const double PAx = ppAB.pA[0], PAy = ppAB.pA[1], PAz = ppAB.pA[2];
@@ -1381,7 +1398,9 @@ double HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
 // result[cen*3 + dir], cen∈{0=A,1=B,2=C,3=D}, dir∈{0,1,2}
 std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
     const HartreeFock::ShellPair &spAB,
-    const HartreeFock::ShellPair &spCD)
+    const HartreeFock::ShellPair &spCD,
+    const HartreeFock::ERIKernel kernel,
+    double omega)
 {
     const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
     const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
@@ -1401,10 +1420,26 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += (2.0 * ppAB.alpha) * ppAB.coeff_product * ppCD.coeff_product * _os_eri_primitive(
-                    ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
-                    ABx, ABy, ABz, CDx, CDy, CDz,
-                    HartreeFock::ERIKernel::Coulomb, 0.0);
+            {
+                const auto primitive_value = [&]() -> double
+                {
+                    const double full = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::Coulomb, 0.0);
+                    if (kernel == HartreeFock::ERIKernel::Coulomb)
+                        return full;
+
+                    const double long_range = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::LongRange, omega);
+                    return kernel == HartreeFock::ERIKernel::LongRange
+                               ? long_range
+                               : (full - long_range);
+                }();
+                eri += (2.0 * ppAB.alpha) * ppAB.coeff_product * ppCD.coeff_product * primitive_value;
+            }
         return eri;
     };
 
@@ -1414,10 +1449,26 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += ppAB.coeff_product * (2.0 * ppAB.beta) * ppCD.coeff_product * _os_eri_primitive(
-                    ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
-                    ABx, ABy, ABz, CDx, CDy, CDz,
-                    HartreeFock::ERIKernel::Coulomb, 0.0);
+            {
+                const auto primitive_value = [&]() -> double
+                {
+                    const double full = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::Coulomb, 0.0);
+                    if (kernel == HartreeFock::ERIKernel::Coulomb)
+                        return full;
+
+                    const double long_range = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::LongRange, omega);
+                    return kernel == HartreeFock::ERIKernel::LongRange
+                               ? long_range
+                               : (full - long_range);
+                }();
+                eri += ppAB.coeff_product * (2.0 * ppAB.beta) * ppCD.coeff_product * primitive_value;
+            }
         return eri;
     };
 
@@ -1427,10 +1478,26 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += ppAB.coeff_product * (2.0 * ppCD.alpha) * ppCD.coeff_product * _os_eri_primitive(
-                    ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
-                    ABx, ABy, ABz, CDx, CDy, CDz,
-                    HartreeFock::ERIKernel::Coulomb, 0.0);
+            {
+                const auto primitive_value = [&]() -> double
+                {
+                    const double full = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::Coulomb, 0.0);
+                    if (kernel == HartreeFock::ERIKernel::Coulomb)
+                        return full;
+
+                    const double long_range = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::LongRange, omega);
+                    return kernel == HartreeFock::ERIKernel::LongRange
+                               ? long_range
+                               : (full - long_range);
+                }();
+                eri += ppAB.coeff_product * (2.0 * ppCD.alpha) * ppCD.coeff_product * primitive_value;
+            }
         return eri;
     };
 
@@ -1440,10 +1507,26 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += ppAB.coeff_product * ppCD.coeff_product * (2.0 * ppCD.beta) * _os_eri_primitive(
-                    ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
-                    ABx, ABy, ABz, CDx, CDy, CDz,
-                    HartreeFock::ERIKernel::Coulomb, 0.0);
+            {
+                const auto primitive_value = [&]() -> double
+                {
+                    const double full = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::Coulomb, 0.0);
+                    if (kernel == HartreeFock::ERIKernel::Coulomb)
+                        return full;
+
+                    const double long_range = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::LongRange, omega);
+                    return kernel == HartreeFock::ERIKernel::LongRange
+                               ? long_range
+                               : (full - long_range);
+                }();
+                eri += ppAB.coeff_product * ppCD.coeff_product * (2.0 * ppCD.beta) * primitive_value;
+            }
         return eri;
     };
 
@@ -1453,7 +1536,7 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         return _contracted_eri(spAB, spCD,
                                ax, ay, az, bx, by, bz,
                                cx, cy, cz, dx, dy, dz,
-                               HartreeFock::ERIKernel::Coulomb, 0.0);
+                               kernel, omega);
     };
 
     for (int q = 0; q < 3; ++q)

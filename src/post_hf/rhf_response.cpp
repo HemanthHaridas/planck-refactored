@@ -55,6 +55,8 @@ namespace HartreeFock::Correlation
         const int n_occ = n_electrons / 2;
         const int n_virt = nb - n_occ;
 
+        // RHF CPHF/Z-vector equations live in the occupied-virtual rotation
+        // space, so each (a,i) pair is flattened into one linear response index.
         auto idx_ai = [n_occ](int a, int i) -> int
         {
             return a * n_occ + i;
@@ -75,6 +77,9 @@ namespace HartreeFock::Correlation
             C,
             C);
 
+        // Build the explicit RHF orbital-Hessian matrix once. This is less
+        // memory-efficient than a matrix-free solver, but much easier to inspect
+        // and compare against textbook CPHF formulas.
         Eigen::MatrixXd A = Eigen::MatrixXd::Zero(n_virt * n_occ, n_virt * n_occ);
         for (int a = 0; a < n_virt; ++a)
             for (int i = 0; i < n_occ; ++i)
@@ -132,6 +137,9 @@ namespace HartreeFock::Correlation
             for (int i = 0; i < n_occ; ++i)
                 rhs_vec(a * n_occ + i) = -rhs(a, i);
 
+        // MP2 gradients use the conventional A z = -rhs form; reshaping back to
+        // a virtual-by-occupied matrix keeps the result aligned with the rest of
+        // the relaxed-density code.
         maybe_print_rhf_response_matrix("rhs", rhs);
         maybe_print_rhf_response_matrix("rhs_vec", Eigen::Map<const Eigen::MatrixXd>(rhs_vec.data(), rhs_vec.size(), 1));
 

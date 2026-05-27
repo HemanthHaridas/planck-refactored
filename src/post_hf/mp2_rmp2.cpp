@@ -26,6 +26,9 @@ namespace
         if (with_t2)
             t2.assign(static_cast<std::size_t>(n_occ) * n_occ * n_virt * n_virt, 0.0);
 
+        // Canonical RHF MP2 can be evaluated directly from the transformed ovov
+        // integrals. We keep the same-spin and opposite-spin pieces separate so
+        // the teaching output can report the familiar SCS-style decomposition.
         for (int i = 0; i < n_occ; ++i)
             for (int j = 0; j < n_occ; ++j)
                 for (int a = 0; a < n_virt; ++a)
@@ -92,6 +95,10 @@ namespace HartreeFock::Correlation
         Eigen::MatrixXd doo = Eigen::MatrixXd::Zero(result.n_occ, result.n_occ);
         Eigen::MatrixXd dvv = Eigen::MatrixXd::Zero(result.n_virt, result.n_virt);
 
+        // These occupied-occupied and virtual-virtual blocks are the standard
+        // MP2 one-particle density intermediates. The relaxed occupied block is
+        // returned with a minus sign because correlation depletes the reference
+        // occupations.
         for (int i = 0; i < result.n_occ; ++i)
             for (int j = 0; j < result.n_occ; ++j)
                 for (int a = 0; a < result.n_virt; ++a)
@@ -126,6 +133,8 @@ namespace HartreeFock::Correlation
 
         const int nmo = result.n_occ + result.n_virt;
         Eigen::MatrixXd dm1 = Eigen::MatrixXd::Zero(nmo, nmo);
+        // Closed-shell MP2 starts from a doubly occupied RHF reference, then
+        // adds the correlated occupied/virtual corrections symmetrically.
         dm1.topLeftCorner(result.n_occ, result.n_occ) =
             2.0 * Eigen::MatrixXd::Identity(result.n_occ, result.n_occ) + doo + doo.transpose();
         dm1.bottomRightCorner(result.n_virt, result.n_virt) = dvv + dvv.transpose();
@@ -151,6 +160,9 @@ namespace HartreeFock::Correlation
         };
 
         std::vector<double> dm2(N * N * N * N, 0.0);
+        // The explicit ovov block carries the genuine MP2 pair-correlation
+        // contribution; the later loops fold in the disconnected reference and
+        // one-particle-density terms to form a full spin-summed 2-RDM.
         for (int i = 0; i < nocc; ++i)
             for (int a = 0; a < nvirt; ++a)
                 for (int j = 0; j < nocc; ++j)

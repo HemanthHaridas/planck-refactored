@@ -77,6 +77,7 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(
         Eigen::MatrixXd origin = Eigen::MatrixXd::Zero(1, 3);
         molecule.set_standard_from_angstrom(origin);
         molecule._symmetry = true;
+        molecule._symmetry_alignment_transform.setIdentity();
         return {};
     }
 
@@ -118,6 +119,7 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(
         molecule._point_group = "C1";
         molecule.set_standard_from_bohr(bohr_coords);
         molecule._symmetry = false;
+        molecule._symmetry_alignment_transform.setIdentity();
         return {};
     }
 
@@ -146,6 +148,12 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(
         return std::unexpected("Unable to get symmetry elements.");
     }
 
+    double alignment_transform[3][3];
+    if (MSYM_SUCCESS != msymGetAlignmentTransform(ctx.get(), alignment_transform))
+    {
+        return std::unexpected("Unable to get alignment transform.");
+    }
+
     if (MSYM_SUCCESS != msymAlignAxes(ctx.get()))
     {
         return std::unexpected("Unable to align symmetry axes.");
@@ -162,6 +170,9 @@ std::expected<void, std::string> HartreeFock::Symmetry::detectSymmetry(
     }
     molecule.set_standard_from_angstrom(standard_coords);
     molecule._symmetry = true;
+    for (int row = 0; row < 3; ++row)
+        for (int col = 0; col < 3; ++col)
+            molecule._symmetry_alignment_transform(row, col) = alignment_transform[row][col];
 
     return {};
 }

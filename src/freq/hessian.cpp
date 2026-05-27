@@ -17,6 +17,7 @@
 #include "io/logging.h"
 #include "lookup/elements.h"
 #include "scf/scf.h"
+#include "scf/working_state.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/vibrational_symmetry.h"
 
@@ -51,28 +52,32 @@ static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(Hart
         return std::unexpected("Hessian basis rebuild failed: " + basis_res.error());
     calc._shells = std::move(*basis_res);
 
-    // Reset SCF state (no SAO blocking during finite-difference steps)
+    // Reset SCF state (no SAO blocking during finite-difference steps).
+    // Use working_nbasis() — in Cartesian mode this equals nbasis(); in spherical
+    // mode it is nbasis_sph(), which is the dimension SCF actually allocates
+    // density/Fock matrices at. Passing nbasis() (Cartesian count) in spherical
+    // mode would size the SCF state to the wrong dimension and corrupt every
+    // downstream Fock build.
     calc._info._scf = HartreeFock::DataSCF(
         calc._scf._scf != HartreeFock::SCFType::RHF);
-    calc._info._scf.initialize(calc._shells.nbasis());
-    calc._scf.set_scf_mode_auto(calc._shells.nbasis());
+    calc._info._scf.initialize(calc.working_nbasis());
+    calc._scf.set_scf_mode_auto(calc.working_nbasis());
     calc._info._is_converged = false;
     calc._use_sao_blocking = false;
 
     if (auto nuclear_repulsion = calc.recompute_nuclear_repulsion(); !nuclear_repulsion)
         return std::unexpected("Hessian geometry rebuild failed: " + nuclear_repulsion.error());
 
-    auto shell_pairs = build_shellpairs(calc._shells);
-    HartreeFock::Symmetry::update_integral_symmetry(calc);
-
-    auto [S, T] = _compute_1e(shell_pairs, calc._shells.nbasis(),
-                              calc._integral._engine,
-                              calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
-    auto V = _compute_nuclear_attraction(shell_pairs, calc._shells.nbasis(),
-                                         calc._molecule, calc._integral._engine,
-                                         calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
-    calc._overlap = S;
-    calc._hcore = T + V;
+    // Rebuild the geometry-derived working state (shell pairs, integral-symmetry
+    // ops, _overlap and _hcore in the working basis). The helper is the
+    // spherical-aware version of the inline block the driver runs once at
+    // startup; calling it here at every displaced geometry keeps the freq
+    // inner loop in lockstep with the driver's spherical setup. See
+    // src/scf/working_state.{h,cpp} for the contract.
+    auto shell_pairs_res = HartreeFock::SCF::rebuild_basis_dependent_state(calc);
+    if (!shell_pairs_res)
+        return std::unexpected("Hessian working-state rebuild failed: " + shell_pairs_res.error());
+    std::vector<HartreeFock::ShellPair> shell_pairs = std::move(*shell_pairs_res);
 
     std::expected<void, std::string> scf_res;
     if (calc._scf._scf == HartreeFock::SCFType::UHF)
