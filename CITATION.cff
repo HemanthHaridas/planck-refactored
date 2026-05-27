@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use Planck in your research, please cite it using the metadata below."
+title: "Planck: A quantum chemistry program for Hartree-Fock and Kohn-Sham DFT"
+abstract: >-
+  Planck is a quantum chemistry program implementing Hartree-Fock (RHF/UHF/ROHF)
+  and Kohn-Sham density functional theory (RKS/UKS), with MP2, coupled cluster
+  (RCCSD/UCCSD through RCCSDTQ and arbitrary-order RCC via generated residuals),
+  CASSCF/SA-CASSCF/RASSCF, FCI, TDDFT, analytic gradients, geometry optimization
+  in redundant internal coordinates, semi-numerical frequencies, PCM solvation,
+  ghost-atom counterpoise corrections, and full point-group symmetry reduction
+  of the ERI tensor in both Cartesian and spherical-harmonic bases.
+authors:
+  - family-names: Haridas
+    given-names: Hemanth
+    email: hemanth.h@alumni.iitgn.ac.in
+    affiliation: University of Utah
+    orcid: "https://orcid.org/0000-0002-2681-5238"
+version: 4.1.0
+date-released: 2026-05-27
+license: BSD-3-Clause
+repository-code: "https://github.com/HemanthHaridas/planck-refactored"
+type: software
+keywords:
+  - quantum chemistry
+  - Hartree-Fock
+  - density functional theory
+  - coupled cluster
+  - CASSCF
+  - MP2
+  - TDDFT
+  - analytic gradients
+  - geometry optimization
+  - PCM solvation
+  - point group symmetry
