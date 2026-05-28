@@ -658,42 +658,6 @@ namespace
                         static_cast<std::size_t>(lCz)];
     }
 
-    // Step 1 shim: behaviour-preserving wrapper that still runs HRR inside
-    // the primitive loop. Step 3 will hoist HRR outside the loop by calling
-    // the two helpers directly from _contracted_eri_elem.
-    static double hgp_eri_primitive(
-        const HartreeFock::PrimitivePair &ppAB,
-        const HartreeFock::PrimitivePair &ppCD,
-        const int lAx, const int lAy, const int lAz,
-        const int lBx, const int lBy, const int lBz,
-        const int lCx, const int lCy, const int lCz,
-        const int lDx, const int lDy, const int lDz,
-        const double ABx, const double ABy, const double ABz,
-        const double CDx, const double CDy, const double CDz,
-        HartreeFock::ERIKernel kernel,
-        double omega)
-    {
-        const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
-        const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
-        const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
-
-        EriScratch &scratch = g_hgp_scratch;
-        // Resize first so the scratch.hrr_data pointer captured below is
-        // stable for the VRR call (which would otherwise potentially
-        // reallocate the underlying vector mid-flight).
-        scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
-
-        hgp_eri_primitive_vrr_only(
-            ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
-            scratch, scratch.hrr_data, kernel, omega);
-
-        return hgp_hrr_finalize(
-            scratch,
-            lAx, lAy, lAz, lBx, lBy, lBz,
-            lCx, lCy, lCz, lDx, lDy, lDz,
-            ABx, ABy, ABz, CDx, CDy, CDz);
-    }
-
     static std::vector<double> hgp_schwarz_table(
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         std::size_t nbasis,
