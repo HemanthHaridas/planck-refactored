@@ -10,6 +10,7 @@
 #include "basis/basis.h"
 #include "basis/spherical.h"
 #include "integrals/base.h"
+#include "integrals/hgp.h"
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
 #include "post_hf/mp2.h"
@@ -183,6 +184,23 @@ static void accumulate_eri_gradient_permutations(
         accumulate_perm(gamma_fn(jj, ii, ll, kk), true, true);
 }
 
+static std::array<double, 12> compute_eri_deriv_dispatch(
+    const HartreeFock::Calculator &calc,
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    if (calc._integral._engine == HartreeFock::IntegralMethod::HeadGordonPople)
+    {
+        return HartreeFock::HeadGordonPople::_compute_eri_deriv_elem(
+            spAB, spCD, kernel, omega);
+    }
+
+    return HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
+        spAB, spCD, kernel, omega);
+}
+
 template <typename GammaFn>
 static void accumulate_shell_pair_eri_gradient(
     const HartreeFock::Calculator &calc,
@@ -221,8 +239,8 @@ static void accumulate_shell_pair_eri_gradient(
                 if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
                     continue;
 
-                const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
-                    spAB, spCD, kernel, omega);
+                const auto dI = compute_eri_deriv_dispatch(
+                    calc, spAB, spCD, kernel, omega);
                 accumulate_eri_gradient_permutations(
                     grad,
                     dI,
@@ -270,8 +288,8 @@ static void accumulate_shell_pair_eri_gradient(
             if (std::abs(gamma) < 1e-14)
                 continue;
 
-            const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
-                spAB, spCD, kernel, omega);
+            const auto dI = compute_eri_deriv_dispatch(
+                calc, spAB, spCD, kernel, omega);
             const double fac = 0.25 * gamma;
             for (int q = 0; q < 3; ++q)
             {
@@ -743,7 +761,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
             if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
                 continue;
 
-            const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
+            const auto dI = compute_eri_deriv_dispatch(
+                calc, spAB, spCD, HartreeFock::ERIKernel::Coulomb, 0.0);
             accumulate_eri_gradient_permutations(
                 grad,
                 dI,

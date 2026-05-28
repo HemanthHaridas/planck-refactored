@@ -5,10 +5,12 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <tuple>
 
 #include "base/basis.h"
 #include "base/types.h"
+#include "integrals/hgp.h"
 #include "basis/basis.h"
 #include "integrals/os.h"
 #include "integrals/rys.h"
@@ -99,15 +101,6 @@ namespace
         return nullptr;
     }
 
-    std::string cart_label(const Eigen::Vector3i &am)
-    {
-        std::string label;
-        label.append(static_cast<std::size_t>(am[0]), 'x');
-        label.append(static_cast<std::size_t>(am[1]), 'y');
-        label.append(static_cast<std::size_t>(am[2]), 'z');
-        return label.empty() ? "s" : label;
-    }
-
     struct QuartetSelection
     {
         std::size_t ab_pair = 0;
@@ -183,6 +176,153 @@ namespace
             sp_cd.A._cartesian[0], sp_cd.A._cartesian[1], sp_cd.A._cartesian[2],
             sp_cd.B._cartesian[0], sp_cd.B._cartesian[1], sp_cd.B._cartesian[2],
             kernel, omega);
+    }
+
+    double hgp_contracted_quartet_value(
+        const HartreeFock::ShellPair &sp_ab,
+        const HartreeFock::ShellPair &sp_cd,
+        const HartreeFock::ERIKernel kernel,
+        const double omega)
+    {
+        return HartreeFock::HeadGordonPople::_contracted_eri_elem(
+            sp_ab, sp_cd,
+            sp_ab.A._cartesian[0], sp_ab.A._cartesian[1], sp_ab.A._cartesian[2],
+            sp_ab.B._cartesian[0], sp_ab.B._cartesian[1], sp_ab.B._cartesian[2],
+            sp_cd.A._cartesian[0], sp_cd.A._cartesian[1], sp_cd.A._cartesian[2],
+            sp_cd.B._cartesian[0], sp_cd.B._cartesian[1], sp_cd.B._cartesian[2],
+            kernel, omega);
+    }
+
+    double hgp_contracted_quartet_value_native(
+        const HartreeFock::ShellPair &sp_ab,
+        const HartreeFock::ShellPair &sp_cd,
+        const HartreeFock::ERIKernel kernel,
+        const double omega)
+    {
+        return HartreeFock::HeadGordonPople::_contracted_eri_elem_native_test(
+            sp_ab, sp_cd,
+            sp_ab.A._cartesian[0], sp_ab.A._cartesian[1], sp_ab.A._cartesian[2],
+            sp_ab.B._cartesian[0], sp_ab.B._cartesian[1], sp_ab.B._cartesian[2],
+            sp_cd.A._cartesian[0], sp_cd.A._cartesian[1], sp_cd.A._cartesian[2],
+            sp_cd.B._cartesian[0], sp_cd.B._cartesian[1], sp_cd.B._cartesian[2],
+            kernel, omega);
+    }
+
+    void print_screened_derivative_term_breakdown(
+        const HartreeFock::ShellPair &sp_ab,
+        const HartreeFock::ShellPair &sp_cd,
+        const HartreeFock::ERIKernel kernel,
+        const double omega)
+    {
+        const int lAx = sp_ab.A._cartesian[0], lAy = sp_ab.A._cartesian[1], lAz = sp_ab.A._cartesian[2];
+        const int lBx = sp_ab.B._cartesian[0], lBy = sp_ab.B._cartesian[1], lBz = sp_ab.B._cartesian[2];
+        const int lCx = sp_cd.A._cartesian[0], lCy = sp_cd.A._cartesian[1], lCz = sp_cd.A._cartesian[2];
+        const int lDx = sp_cd.B._cartesian[0], lDy = sp_cd.B._cartesian[1], lDz = sp_cd.B._cartesian[2];
+
+        std::cerr << "constituent breakdown for screened quartet (" << sp_ab.A._index << "," << sp_ab.B._index
+                  << "|" << sp_cd.A._index << "," << sp_cd.B._index << ")\n";
+        for (int center = 0; center < 4; ++center)
+        {
+            for (int q = 0; q < 3; ++q)
+            {
+                const int axp = lAx + (q == 0), ayp = lAy + (q == 1), azp = lAz + (q == 2);
+                const int bxp = lBx + (q == 0), byp = lBy + (q == 1), bzp = lBz + (q == 2);
+                const int cxp = lCx + (q == 0), cyp = lCy + (q == 1), czp = lCz + (q == 2);
+                const int dxp = lDx + (q == 0), dyp = lDy + (q == 1), dzp = lDz + (q == 2);
+
+                double os_weighted = 0.0;
+                double hgp_weighted = 0.0;
+                double os_lower = 0.0;
+                double hgp_lower = 0.0;
+                int lq = 0;
+
+                if (center == 0)
+                {
+                    os_weighted = HartreeFock::ObaraSaika::_contracted_eri_elem_weighted_test(
+                        sp_ab, sp_cd, axp, ayp, azp, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, center, kernel, omega);
+                    hgp_weighted = HartreeFock::HeadGordonPople::_contracted_eri_elem_weighted_native_test(
+                        sp_ab, sp_cd, axp, ayp, azp, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, center, kernel, omega);
+                    lq = sp_ab.A._cartesian[q];
+                    if (lq > 0)
+                    {
+                        os_lower = static_cast<double>(lq) * HartreeFock::ObaraSaika::_contracted_eri_elem(
+                            sp_ab, sp_cd,
+                            lAx - (q == 0), lAy - (q == 1), lAz - (q == 2), lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+                            kernel, omega);
+                        hgp_lower = static_cast<double>(lq) * HartreeFock::HeadGordonPople::_contracted_eri_elem_native_test(
+                            sp_ab, sp_cd,
+                            lAx - (q == 0), lAy - (q == 1), lAz - (q == 2), lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+                            kernel, omega);
+                    }
+                }
+                else if (center == 1)
+                {
+                    os_weighted = HartreeFock::ObaraSaika::_contracted_eri_elem_weighted_test(
+                        sp_ab, sp_cd, lAx, lAy, lAz, bxp, byp, bzp, lCx, lCy, lCz, lDx, lDy, lDz, center, kernel, omega);
+                    hgp_weighted = HartreeFock::HeadGordonPople::_contracted_eri_elem_weighted_native_test(
+                        sp_ab, sp_cd, lAx, lAy, lAz, bxp, byp, bzp, lCx, lCy, lCz, lDx, lDy, lDz, center, kernel, omega);
+                    lq = sp_ab.B._cartesian[q];
+                    if (lq > 0)
+                    {
+                        os_lower = static_cast<double>(lq) * HartreeFock::ObaraSaika::_contracted_eri_elem(
+                            sp_ab, sp_cd,
+                            lAx, lAy, lAz, lBx - (q == 0), lBy - (q == 1), lBz - (q == 2), lCx, lCy, lCz, lDx, lDy, lDz,
+                            kernel, omega);
+                        hgp_lower = static_cast<double>(lq) * HartreeFock::HeadGordonPople::_contracted_eri_elem_native_test(
+                            sp_ab, sp_cd,
+                            lAx, lAy, lAz, lBx - (q == 0), lBy - (q == 1), lBz - (q == 2), lCx, lCy, lCz, lDx, lDy, lDz,
+                            kernel, omega);
+                    }
+                }
+                else if (center == 2)
+                {
+                    os_weighted = HartreeFock::ObaraSaika::_contracted_eri_elem_weighted_test(
+                        sp_ab, sp_cd, lAx, lAy, lAz, lBx, lBy, lBz, cxp, cyp, czp, lDx, lDy, lDz, center, kernel, omega);
+                    hgp_weighted = HartreeFock::HeadGordonPople::_contracted_eri_elem_weighted_native_test(
+                        sp_ab, sp_cd, lAx, lAy, lAz, lBx, lBy, lBz, cxp, cyp, czp, lDx, lDy, lDz, center, kernel, omega);
+                    lq = sp_cd.A._cartesian[q];
+                    if (lq > 0)
+                    {
+                        os_lower = static_cast<double>(lq) * HartreeFock::ObaraSaika::_contracted_eri_elem(
+                            sp_ab, sp_cd,
+                            lAx, lAy, lAz, lBx, lBy, lBz, lCx - (q == 0), lCy - (q == 1), lCz - (q == 2), lDx, lDy, lDz,
+                            kernel, omega);
+                        hgp_lower = static_cast<double>(lq) * HartreeFock::HeadGordonPople::_contracted_eri_elem_native_test(
+                            sp_ab, sp_cd,
+                            lAx, lAy, lAz, lBx, lBy, lBz, lCx - (q == 0), lCy - (q == 1), lCz - (q == 2), lDx, lDy, lDz,
+                            kernel, omega);
+                    }
+                }
+                else
+                {
+                    os_weighted = HartreeFock::ObaraSaika::_contracted_eri_elem_weighted_test(
+                        sp_ab, sp_cd, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, dxp, dyp, dzp, center, kernel, omega);
+                    hgp_weighted = HartreeFock::HeadGordonPople::_contracted_eri_elem_weighted_native_test(
+                        sp_ab, sp_cd, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, dxp, dyp, dzp, center, kernel, omega);
+                    lq = sp_cd.B._cartesian[q];
+                    if (lq > 0)
+                    {
+                        os_lower = static_cast<double>(lq) * HartreeFock::ObaraSaika::_contracted_eri_elem(
+                            sp_ab, sp_cd,
+                            lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx - (q == 0), lDy - (q == 1), lDz - (q == 2),
+                            kernel, omega);
+                        hgp_lower = static_cast<double>(lq) * HartreeFock::HeadGordonPople::_contracted_eri_elem_native_test(
+                            sp_ab, sp_cd,
+                            lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx - (q == 0), lDy - (q == 1), lDz - (q == 2),
+                            kernel, omega);
+                    }
+                }
+
+                std::cerr << "  center=" << center << " dir=" << q
+                          << " os_weighted=" << std::setprecision(16) << os_weighted
+                          << " hgp_weighted=" << hgp_weighted
+                          << " os_lower=" << os_lower
+                          << " hgp_lower=" << hgp_lower
+                          << " os_total=" << (os_weighted - os_lower)
+                          << " hgp_total=" << (hgp_weighted - hgp_lower)
+                          << '\n';
+            }
+        }
     }
 
     double rys_weighted_quartet_value_a(
@@ -401,7 +541,10 @@ namespace
                     sp_ab, sp_cd, HartreeFock::ERIKernel::LongRange, omega);
                 const auto short_range = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
                     sp_ab, sp_cd, HartreeFock::ERIKernel::ShortRange, omega);
-
+                const auto hgp_coulomb_default = HartreeFock::HeadGordonPople::_compute_eri_deriv_elem(
+                    sp_ab, sp_cd);
+                const auto hgp_coulomb = HartreeFock::HeadGordonPople::_compute_eri_deriv_elem(
+                    sp_ab, sp_cd, HartreeFock::ERIKernel::Coulomb, 0.0);
                 if (max_abs(coulomb) > 1e-8)
                     saw_nontrivial = true;
                 if (max_abs_diff(coulomb_default, coulomb) > 1e-13)
@@ -415,6 +558,16 @@ namespace
                 if (max_abs_diff(coulomb, reconstructed) > 1e-8)
                 {
                     fail("screened ERI derivative kernels no longer reconstruct the Coulomb derivative");
+                    return;
+                }
+                if (max_abs_diff(hgp_coulomb_default, hgp_coulomb) > 1e-13)
+                {
+                    fail("HGP default ERI derivative kernel no longer matches the explicit Coulomb path");
+                    return;
+                }
+                if (max_abs_diff(coulomb, hgp_coulomb) > 1e-8)
+                {
+                    fail("HGP Coulomb ERI derivatives no longer match the OS reference");
                     return;
                 }
                 if (max_abs_diff(coulomb, long_range) > 1e-8 ||
@@ -497,18 +650,29 @@ namespace
             sp_ab, sp_cd, HartreeFock::ERIKernel::LongRange, omega);
         const auto analytic_coulomb = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
             sp_ab, sp_cd, HartreeFock::ERIKernel::Coulomb, 0.0);
+        const auto analytic_hgp_coulomb = HartreeFock::HeadGordonPople::_compute_eri_deriv_elem(
+            sp_ab, sp_cd, HartreeFock::ERIKernel::Coulomb, 0.0);
         const double base_os = contracted_quartet_value(
             sp_ab, sp_cd, HartreeFock::ERIKernel::LongRange, omega);
         const double base_rys = rys_contracted_quartet_value(
             sp_ab, sp_cd, HartreeFock::ERIKernel::LongRange, omega);
         const double base_coulomb = contracted_quartet_value(
             sp_ab, sp_cd, HartreeFock::ERIKernel::Coulomb, 0.0);
+        const double base_hgp_coulomb = HartreeFock::HeadGordonPople::_contracted_eri_elem(
+            sp_ab, sp_cd,
+            sp_ab.A._cartesian[0], sp_ab.A._cartesian[1], sp_ab.A._cartesian[2],
+            sp_ab.B._cartesian[0], sp_ab.B._cartesian[1], sp_ab.B._cartesian[2],
+            sp_cd.A._cartesian[0], sp_cd.A._cartesian[1], sp_cd.A._cartesian[2],
+            sp_cd.B._cartesian[0], sp_cd.B._cartesian[1], sp_cd.B._cartesian[2],
+            HartreeFock::ERIKernel::Coulomb, 0.0);
 
         std::array<double, 12> finite_difference{};
         std::array<double, 12> finite_difference_rys{};
         std::array<double, 12> finite_difference_coulomb{};
+        std::array<double, 12> finite_difference_hgp_coulomb{};
         double max_error = 0.0;
         double max_error_coulomb = 0.0;
+        double max_error_hgp_coulomb = 0.0;
         double max_os_rys_fd_gap = 0.0;
 
         for (int center = 0; center < 4; ++center)
@@ -548,12 +712,32 @@ namespace
                 const double minus_value_coulomb = contracted_quartet_value(
                     *minus_ab, *minus_cd, HartreeFock::ERIKernel::Coulomb, 0.0);
                 const double fd_value_coulomb = (plus_value_coulomb - minus_value_coulomb) / (2.0 * step);
+                const double plus_value_hgp_coulomb = HartreeFock::HeadGordonPople::_contracted_eri_elem(
+                    *plus_ab, *plus_cd,
+                    plus_ab->A._cartesian[0], plus_ab->A._cartesian[1], plus_ab->A._cartesian[2],
+                    plus_ab->B._cartesian[0], plus_ab->B._cartesian[1], plus_ab->B._cartesian[2],
+                    plus_cd->A._cartesian[0], plus_cd->A._cartesian[1], plus_cd->A._cartesian[2],
+                    plus_cd->B._cartesian[0], plus_cd->B._cartesian[1], plus_cd->B._cartesian[2],
+                    HartreeFock::ERIKernel::Coulomb, 0.0);
+                const double minus_value_hgp_coulomb = HartreeFock::HeadGordonPople::_contracted_eri_elem(
+                    *minus_ab, *minus_cd,
+                    minus_ab->A._cartesian[0], minus_ab->A._cartesian[1], minus_ab->A._cartesian[2],
+                    minus_ab->B._cartesian[0], minus_ab->B._cartesian[1], minus_ab->B._cartesian[2],
+                    minus_cd->A._cartesian[0], minus_cd->A._cartesian[1], minus_cd->A._cartesian[2],
+                    minus_cd->B._cartesian[0], minus_cd->B._cartesian[1], minus_cd->B._cartesian[2],
+                    HartreeFock::ERIKernel::Coulomb, 0.0);
+                const double fd_value_hgp_coulomb =
+                    (plus_value_hgp_coulomb - minus_value_hgp_coulomb) / (2.0 * step);
                 const std::size_t slot = static_cast<std::size_t>(center * 3 + direction);
                 finite_difference[slot] = fd_value;
                 finite_difference_rys[slot] = fd_value_rys;
                 finite_difference_coulomb[slot] = fd_value_coulomb;
+                finite_difference_hgp_coulomb[slot] = fd_value_hgp_coulomb;
                 max_error = std::max(max_error, std::abs(fd_value - analytic[slot]));
                 max_error_coulomb = std::max(max_error_coulomb, std::abs(fd_value_coulomb - analytic_coulomb[slot]));
+                max_error_hgp_coulomb = std::max(
+                    max_error_hgp_coulomb,
+                    std::abs(fd_value_hgp_coulomb - analytic_hgp_coulomb[slot]));
                 max_os_rys_fd_gap = std::max(max_os_rys_fd_gap, std::abs(fd_value - fd_value_rys));
             }
         }
@@ -570,6 +754,7 @@ namespace
         std::cout << "  base_os=" << base_os
                   << " base_rys=" << base_rys
                   << " base_coulomb=" << base_coulomb
+                  << " base_hgp_coulomb=" << base_hgp_coulomb
                   << " diff=" << (base_os - base_rys) << '\n';
         for (int center = 0; center < 4; ++center)
         {
@@ -602,6 +787,7 @@ namespace
                   << " coulomb_fd=" << (finite_difference_coulomb[2] + finite_difference_coulomb[5] + finite_difference_coulomb[8] + finite_difference_coulomb[11]) << '\n';
         std::cout << "  max |fd_os-fd_rys|=" << max_os_rys_fd_gap << '\n';
         std::cout << "  max |coulomb analytic-fd|=" << max_error_coulomb << '\n';
+        std::cout << "  max |hgp coulomb analytic-fd|=" << max_error_hgp_coulomb << '\n';
         std::cout << "  coulomb center derivatives:\n";
         for (int center = 0; center < 4; ++center)
         {
@@ -609,6 +795,14 @@ namespace
                       << " (" << analytic_coulomb[center * 3 + 0]
                       << ", " << analytic_coulomb[center * 3 + 1]
                       << ", " << analytic_coulomb[center * 3 + 2] << ")\n";
+        }
+        std::cout << "  hgp coulomb center derivatives:\n";
+        for (int center = 0; center < 4; ++center)
+        {
+            std::cout << "    c" << center
+                      << " (" << analytic_hgp_coulomb[center * 3 + 0]
+                      << ", " << analytic_hgp_coulomb[center * 3 + 1]
+                      << ", " << analytic_hgp_coulomb[center * 3 + 2] << ")\n";
         }
         std::cout << "  omega sweep (Planck long-range quartet energy):\n";
         for (double sweep_omega : {0.01, 0.05, 0.11, 0.2, 0.5, 1.0})
@@ -664,268 +858,291 @@ namespace
             std::cerr << "diagnostic: long-range quartet derivative failed direct finite-difference validation; "
                       << "max |analytic-fd| = " << max_error << '\n';
         }
+        if (max_abs_diff(analytic_coulomb, analytic_hgp_coulomb) > 1e-8)
+        {
+            fail("HGP Coulomb quartet derivatives no longer match the OS reference on the finite-difference diagnostic quartet");
+            return;
+        }
+        if (max_error_hgp_coulomb > tolerance)
+        {
+            fail("HGP Coulomb quartet derivatives failed direct finite-difference validation");
+            return;
+        }
     }
 
-    void test_d_shell_long_range_quartets()
+    void test_hgp_screened_quartet_derivatives_s_p()
     {
-        auto calc_res = make_water_calculator("6-31g*");
+        auto calc_res = make_water_calculator();
         if (!calc_res)
         {
-            fail("6-31g* setup failed: " + calc_res.error());
+            fail("setup failed: " + calc_res.error());
             return;
         }
 
-        const auto &basis = calc_res->_shells;
-        const auto shell_pairs = build_shellpairs(basis);
+        const auto shell_pairs = build_shellpairs(calc_res->_shells);
         constexpr double omega = 0.11;
-        constexpr double energy_tol = 1e-8;
-        constexpr double deriv_tol = 2e-8;
-        constexpr double fd_step = 1e-5;
+        constexpr double fd_step = 1e-4;
+        constexpr double deriv_tol = 5e-7;
+        constexpr double identity_tol = 1e-10;
 
-        std::cout << "d-shell AO labels (water / 6-31g*):\n";
-        for (std::size_t idx = 9; idx <= 14; ++idx)
+        const auto *ssss_ab = find_shell_pair(shell_pairs, 1, 5);
+        const auto *ssss_cd = find_shell_pair(shell_pairs, 0, 6);
+        const auto *psss_ab = find_shell_pair(shell_pairs, 3, 5);
+        const auto *psss_cd = find_shell_pair(shell_pairs, 0, 1);
+        const auto *ssps_ab = find_shell_pair(shell_pairs, 1, 5);
+        const auto *ssps_cd = find_shell_pair(shell_pairs, 3, 6);
+        if (!ssss_ab || !ssss_cd || !psss_ab || !psss_cd || !ssps_ab || !ssps_cd)
         {
-            const auto &bf = basis._basis_functions[idx];
-            const auto *diag_pair = find_shell_pair(shell_pairs, idx, idx);
-            const double overlap_diag = diag_pair
-                                            ? std::get<0>(HartreeFock::ObaraSaika::_compute_3d_overlap_kinetic(*diag_pair))
-                                            : -1.0;
-            std::cout << "  ao " << idx
-                      << " cart=(" << bf._cartesian[0] << "," << bf._cartesian[1] << "," << bf._cartesian[2] << ")"
-                      << " label=" << cart_label(bf._cartesian)
-                      << " component_norm=" << bf._component_norm
-                      << " overlap_diag=" << std::setprecision(12) << overlap_diag
-                      << '\n';
-        }
-
-        struct FamilySweep
-        {
-            const char *name;
-            std::size_t i;
-            std::size_t j;
-            std::size_t k;
-            std::size_t l;
-            std::array<double, 6> pyscf_lr;
-            std::array<double, 6> pyscf_coulomb;
-        };
-
-        const std::array<FamilySweep, 4> family_sweeps{{
-            {"same_center_ket", 1, 15, 0, 9,
-             {0.0016311796523281429, 0.0, 0.0, 0.0016311844063704958, -3.6784182959942555e-09, 0.0016311824984872967},
-             {0.01269706381838066, 0.0, 0.0, 0.01303286612473238, -0.0002598254823631071, 0.012898102584369697}},
-            {"same_center_bra", 1, 9, 0, 15,
-             {0.0037463354754034488, 0.0, 0.0, 0.003746337153391111, -1.2983351977712677e-09, 0.003746336479984307},
-             {0.02945919436371374, 0.0, 0.0, 0.02969404660770994, -0.00018171583823625937, 0.029599796153605258}},
-            {"d_s_s_s", 9, 15, 0, 1,
-             {0.007616813811113749, 0.0, 0.0, 0.018665270501053485, -0.008548692294640642, 0.014231324959534327},
-             {0.046809804226248454, 0.0, 0.0, 0.1039928244554318, -0.04424509758567612, 0.08104424396937564}},
-            {"s_s_d_s", 1, 15, 9, 17,
-             {0.00806584202864128, 0.0, 0.0, 0.01971263895461429, 0.009051075916381674, 0.015099859414167515},
-             {0.040237969270862955, 0.0, 0.0, 0.08405322345380006, 0.03879436813915374, 0.07819162099464037}},
-        }};
-
-        std::cout << "d-shell family sweeps (water / 6-31g* / omega=0.11):\n";
-        for (const auto &family : family_sweeps)
-        {
-            std::cout << "  " << family.name << '\n';
-            for (std::size_t offset = 0; offset < 6; ++offset)
-            {
-                const std::size_t d = 9 + offset;
-                const auto *ab = find_shell_pair(shell_pairs,
-                                                 family.i == 9 ? d : family.i,
-                                                 family.j == 9 ? d : family.j);
-                const auto *cd = find_shell_pair(shell_pairs,
-                                                 family.k == 9 ? d : family.k,
-                                                 family.l == 9 ? d : family.l);
-                if (!ab || !cd)
-                {
-                    fail(std::string("failed to locate d-shell family sweep quartet for ") + family.name);
-                    return;
-                }
-                const auto &bf = basis._basis_functions[d];
-                const double planck_lr = contracted_quartet_value(*ab, *cd, HartreeFock::ERIKernel::LongRange, omega);
-                const double planck_c = contracted_quartet_value(*ab, *cd, HartreeFock::ERIKernel::Coulomb, 0.0);
-                std::cout << "    ao " << d
-                          << " " << cart_label(bf._cartesian)
-                          << " planck_lr=" << planck_lr
-                          << " pyscf_lr=" << family.pyscf_lr[offset]
-                          << " planck_c=" << planck_c
-                          << " pyscf_c=" << family.pyscf_coulomb[offset]
-                          << '\n';
-            }
-        }
-
-        struct PairRef
-        {
-            std::size_t i;
-            std::size_t j;
-            double pyscf_overlap;
-            double pyscf_kinetic;
-        };
-        const std::array<PairRef, 6> one_e_refs{{
-            {9, 15, 0.2653552918427907, -0.13365613628669032},
-            {12, 15, 0.6512735891333278, 0.5202286183987239},
-            {13, 15, -0.2986024987012413, -0.5059403064911389},
-            {14, 15, 0.496397594984739, 0.25781283725666465},
-            {9, 17, 0.2653552918427907, -0.13365613628669032},
-            {13, 17, 0.2986024987012413, 0.5059403064911389},
-        }};
-        std::cout << "d-shell one-electron pair checks (water / 6-31g*):\n";
-        for (const auto &ref : one_e_refs)
-        {
-            const auto *pair = find_shell_pair(shell_pairs, ref.i, ref.j);
-            if (!pair)
-            {
-                fail("failed to locate d-shell one-electron pair");
-                return;
-            }
-            const auto [planck_overlap, planck_kinetic] = HartreeFock::ObaraSaika::_compute_3d_overlap_kinetic(*pair);
-            std::cout << "  (" << ref.i << "," << ref.j << ")"
-                      << " overlap=" << planck_overlap
-                      << " pyscf_overlap=" << ref.pyscf_overlap
-                      << " kinetic=" << planck_kinetic
-                      << " pyscf_kinetic=" << ref.pyscf_kinetic
-                      << '\n';
-        }
-
-        struct QuartetRef
-        {
-            const char *name;
-            std::size_t i;
-            std::size_t j;
-            std::size_t k;
-            std::size_t l;
-            double pyscf_lr;
-        };
-
-        const std::array<QuartetRef, 5> refs{{
-            {"same_center_ket_d", 1, 15, 0, 9, 0.0016311796523281429},
-            {"same_center_bra_d", 1, 9, 0, 15, 0.0037463354754034488},
-            {"d_s_s_s", 9, 15, 0, 1, 0.007616813811113749},
-            {"s_s_d_s", 1, 15, 9, 17, 0.00806584202864128},
-            {"triple_same_center_d", 0, 9, 9, 15, 0.001731908542963683},
-        }};
-
-        std::cout << "d-shell long-range quartet checks (water / 6-31g* / omega=0.11):\n";
-        double max_energy_err = 0.0;
-        for (const auto &ref : refs)
-        {
-            const auto *ab = find_shell_pair(shell_pairs, ref.i, ref.j);
-            const auto *cd = find_shell_pair(shell_pairs, ref.k, ref.l);
-            if (!ab || !cd)
-            {
-                fail(std::string("failed to locate d-shell quartet ") + ref.name);
-                return;
-            }
-            const double planck_lr = contracted_quartet_value(*ab, *cd, HartreeFock::ERIKernel::LongRange, omega);
-            const double err = std::abs(planck_lr - ref.pyscf_lr);
-            std::cout << "  " << ref.name
-                      << " (" << ref.i << "," << ref.j << "|" << ref.k << "," << ref.l << ")"
-                      << " planck=" << planck_lr
-                      << " pyscf=" << ref.pyscf_lr
-                      << " diff=" << (planck_lr - ref.pyscf_lr) << '\n';
-            max_energy_err = std::max(max_energy_err, err);
-        }
-        std::cout << "d-shell Coulomb quartet checks (water / 6-31g*):\n";
-        for (const auto &ref : refs)
-        {
-            const auto *ab_ref = find_shell_pair(shell_pairs, ref.i, ref.j);
-            const auto *cd_ref = find_shell_pair(shell_pairs, ref.k, ref.l);
-            const double planck_coulomb = contracted_quartet_value(
-                *ab_ref, *cd_ref, HartreeFock::ERIKernel::Coulomb, 0.0);
-            std::cout << "  " << ref.name
-                      << " (" << ref.i << "," << ref.j << "|" << ref.k << "," << ref.l << ")"
-                      << " planck_coulomb=" << planck_coulomb << '\n';
-        }
-
-        const auto *ab = find_shell_pair(shell_pairs, 0, 9);
-        const auto *cd = find_shell_pair(shell_pairs, 1, 15);
-        if (!ab || !cd)
-        {
-            fail("failed to locate d-shell derivative quartet (0,9|1,15)");
+            fail("failed to locate fixed s/p screened-derivative diagnostic quartets");
             return;
         }
 
-        const auto analytic = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
-            *ab, *cd, HartreeFock::ERIKernel::LongRange, omega);
-        const std::array<double, 12> pyscf{
-            -0.0, 7.179632724047326e-06, -5.555207633867998e-06,
-            -0.0, 8.397820302306878e-07, -6.497774641726828e-07,
-            -0.0, 0.001906641761466277, -0.0014752552498783179,
-            -0.0, -0.0019146611762205547, 0.0014814602349763582,
-        };
-        std::array<double, 12> fd{};
-        std::array<std::size_t, 4> shell_indices{
-            shell_index_for_view(calc_res->_shells, ab->A),
-            shell_index_for_view(calc_res->_shells, ab->B),
-            shell_index_for_view(calc_res->_shells, cd->A),
-            shell_index_for_view(calc_res->_shells, cd->B),
-        };
-        double max_analytic_pyscf = 0.0;
-        double max_analytic_fd = 0.0;
-        for (int center = 0; center < 4; ++center)
+        struct QuartetCase
         {
-            for (int direction = 0; direction < 3; ++direction)
-            {
-                const std::size_t shell_index = shell_indices[center];
-                const auto plus_calc = make_displaced_water_calculator("6-31g*", shell_index, direction, fd_step);
-                const auto minus_calc = make_displaced_water_calculator("6-31g*", shell_index, direction, -fd_step);
-                const auto plus_pairs = build_shellpairs(plus_calc._shells);
-                const auto minus_pairs = build_shellpairs(minus_calc._shells);
-                const auto *plus_ab = find_shell_pair(plus_pairs, 0, 9);
-                const auto *plus_cd = find_shell_pair(plus_pairs, 1, 15);
-                const auto *minus_ab = find_shell_pair(minus_pairs, 0, 9);
-                const auto *minus_cd = find_shell_pair(minus_pairs, 1, 15);
-                if (!plus_ab || !plus_cd || !minus_ab || !minus_cd)
-                {
-                    fail("failed to recover displaced d-shell derivative quartet");
-                    return;
-                }
-                const double plus_val = contracted_quartet_value(*plus_ab, *plus_cd, HartreeFock::ERIKernel::LongRange, omega);
-                const double minus_val = contracted_quartet_value(*minus_ab, *minus_cd, HartreeFock::ERIKernel::LongRange, omega);
-                const std::size_t slot = static_cast<std::size_t>(center * 3 + direction);
-                fd[slot] = (plus_val - minus_val) / (2.0 * fd_step);
-                max_analytic_pyscf = std::max(max_analytic_pyscf, std::abs(analytic[slot] - pyscf[slot]));
-                max_analytic_fd = std::max(max_analytic_fd, std::abs(analytic[slot] - fd[slot]));
-            }
-        }
+            const char *name;
+            const HartreeFock::ShellPair *ab;
+            const HartreeFock::ShellPair *cd;
+        };
 
-        std::cout << "  d-shell derivative quartet (0,9|1,15):\n";
-        for (int center = 0; center < 4; ++center)
+        const std::array<QuartetCase, 3> cases{{
+            {"s-s-s-s", ssss_ab, ssss_cd},
+            {"p-s-s-s", psss_ab, psss_cd},
+            {"s-s-p-s", ssps_ab, ssps_cd},
+        }};
+
+        for (const auto &quartet : cases)
         {
-            for (int direction = 0; direction < 3; ++direction)
+            const auto os_coulomb = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
+                *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::Coulomb, 0.0);
+            const auto os_long_range = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
+                *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::LongRange, omega);
+            const auto os_short_range = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
+                *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::ShortRange, omega);
+
+            const auto hgp_coulomb = HartreeFock::HeadGordonPople::_compute_eri_deriv_elem(
+                *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::Coulomb, 0.0);
+            const auto hgp_long_range = HartreeFock::HeadGordonPople::_compute_eri_deriv_elem_native_test(
+                *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::LongRange, omega);
+            const auto hgp_short_range = HartreeFock::HeadGordonPople::_compute_eri_deriv_elem_native_test(
+                *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::ShortRange, omega);
+            const double os_value_long_range = contracted_quartet_value(
+                *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::LongRange, omega);
+            const double hgp_value_long_range = hgp_contracted_quartet_value_native(
+                *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::LongRange, omega);
+            const double os_value_short_range = contracted_quartet_value(
+                *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::ShortRange, omega);
+            const double hgp_value_short_range = hgp_contracted_quartet_value_native(
+                *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::ShortRange, omega);
+
+            if (max_abs_diff(os_coulomb, hgp_coulomb) > 1e-8)
             {
-                const std::size_t slot = static_cast<std::size_t>(center * 3 + direction);
-                std::cout << "    c" << center << " d" << direction
-                          << " analytic=" << analytic[slot]
-                          << " pyscf=" << pyscf[slot]
-                          << " fd=" << fd[slot]
-                          << " d(planck-pyscf)=" << (analytic[slot] - pyscf[slot])
-                          << " d(planck-fd)=" << (analytic[slot] - fd[slot]) << '\n';
+                fail(std::string("HGP Coulomb screened-quartet baseline diverged from OS on ") + quartet.name);
+                return;
             }
-        }
-        if (max_energy_err > energy_tol)
-        {
-            std::cerr << "diagnostic: d-shell quartet mismatch vs PySCF; max |planck-pyscf| = "
-                      << max_energy_err << '\n';
-        }
-        if (max_analytic_pyscf > deriv_tol)
-        {
-            std::cerr << "diagnostic: d-shell derivative mismatch vs PySCF; max |analytic-pyscf| = "
-                      << max_analytic_pyscf << '\n';
-        }
-        if (max_analytic_fd > deriv_tol)
-        {
-            std::cerr << "diagnostic: d-shell derivative mismatch vs FD; max |analytic-fd| = "
-                      << max_analytic_fd << '\n';
+            if (max_abs_diff(os_long_range, hgp_long_range) > 1e-8)
+            {
+                if (std::string_view(quartet.name) == "p-s-s-s")
+                    print_screened_derivative_term_breakdown(
+                        *quartet.ab, *quartet.cd, HartreeFock::ERIKernel::LongRange, omega);
+                fail(std::string("HGP long-range ERI derivatives no longer match OS on ") + quartet.name);
+                return;
+            }
+            if (max_abs_diff(os_short_range, hgp_short_range) > 1e-8)
+            {
+                fail(std::string("HGP short-range ERI derivatives no longer match OS on ") + quartet.name);
+                return;
+            }
+
+            std::array<double, 12> hgp_reconstructed{};
+            for (std::size_t i = 0; i < hgp_reconstructed.size(); ++i)
+                hgp_reconstructed[i] = hgp_coulomb[i] - hgp_long_range[i];
+            if (max_abs_diff(hgp_reconstructed, hgp_short_range) > identity_tol)
+            {
+                fail(std::string("HGP short-range derivative no longer equals Coulomb - LongRange on ") + quartet.name);
+                return;
+            }
+            if (std::abs(os_value_long_range - hgp_value_long_range) > 1e-10)
+            {
+                fail(std::string("HGP long-range quartet value no longer matches OS on ") + quartet.name);
+                return;
+            }
+            if (std::abs(os_value_short_range - hgp_value_short_range) > 1e-10)
+            {
+                fail(std::string("HGP short-range quartet value no longer matches OS on ") + quartet.name);
+                return;
+            }
+
+            const std::array<std::size_t, 4> shell_indices{
+                shell_index_for_view(calc_res->_shells, quartet.ab->A),
+                shell_index_for_view(calc_res->_shells, quartet.ab->B),
+                shell_index_for_view(calc_res->_shells, quartet.cd->A),
+                shell_index_for_view(calc_res->_shells, quartet.cd->B),
+            };
+
+            std::array<double, 12> fd_long_range{};
+            std::array<double, 12> fd_short_range{};
+            for (int center = 0; center < 4; ++center)
+            {
+                for (int direction = 0; direction < 3; ++direction)
+                {
+                    const std::size_t shell_index = shell_indices[center];
+                    const auto plus_calc =
+                        make_displaced_water_calculator("sto-3g", shell_index, direction, fd_step);
+                    const auto minus_calc =
+                        make_displaced_water_calculator("sto-3g", shell_index, direction, -fd_step);
+                    const auto plus_pairs = build_shellpairs(plus_calc._shells);
+                    const auto minus_pairs = build_shellpairs(minus_calc._shells);
+
+                    const auto *plus_ab = find_shell_pair(
+                        plus_pairs, quartet.ab->A._index, quartet.ab->B._index);
+                    const auto *plus_cd = find_shell_pair(
+                        plus_pairs, quartet.cd->A._index, quartet.cd->B._index);
+                    const auto *minus_ab = find_shell_pair(
+                        minus_pairs, quartet.ab->A._index, quartet.ab->B._index);
+                    const auto *minus_cd = find_shell_pair(
+                        minus_pairs, quartet.cd->A._index, quartet.cd->B._index);
+                    if (!plus_ab || !plus_cd || !minus_ab || !minus_cd)
+                    {
+                        fail(std::string("failed to recover displaced screened quartet for ") + quartet.name);
+                        return;
+                    }
+
+                    const std::size_t slot = static_cast<std::size_t>(center * 3 + direction);
+                    const double plus_lr = hgp_contracted_quartet_value_native(
+                        *plus_ab, *plus_cd, HartreeFock::ERIKernel::LongRange, omega);
+                    const double minus_lr = hgp_contracted_quartet_value_native(
+                        *minus_ab, *minus_cd, HartreeFock::ERIKernel::LongRange, omega);
+                    fd_long_range[slot] = (plus_lr - minus_lr) / (2.0 * fd_step);
+
+                    const double plus_sr = hgp_contracted_quartet_value_native(
+                        *plus_ab, *plus_cd, HartreeFock::ERIKernel::ShortRange, omega);
+                    const double minus_sr = hgp_contracted_quartet_value_native(
+                        *minus_ab, *minus_cd, HartreeFock::ERIKernel::ShortRange, omega);
+                    fd_short_range[slot] = (plus_sr - minus_sr) / (2.0 * fd_step);
+                }
+            }
+
+            if (max_abs_diff(hgp_long_range, fd_long_range) > deriv_tol)
+            {
+                fail(std::string("HGP long-range ERI derivatives failed finite-difference validation on ") + quartet.name);
+                return;
+            }
+            if (max_abs_diff(hgp_short_range, fd_short_range) > deriv_tol)
+            {
+                fail(std::string("HGP short-range ERI derivatives failed finite-difference validation on ") + quartet.name);
+                return;
+            }
         }
     }
+
+    // Exercises the cases the inv_2_delta fix was suspected of affecting on the
+    // *unweighted* path (no derivative): screened HGP _contracted_eri_elem must
+    // match OS on s-s-s-s, p-s-s-s with ket s/s, and the (p|s|p|s) mixed-bra-ket
+    // pattern that the inv_2_delta cross-coupling term governs.
+    void test_hgp_unweighted_screened_eri_against_os()
+    {
+        auto calc_res = make_water_calculator();
+        if (!calc_res)
+        {
+            fail("setup failed: " + calc_res.error());
+            return;
+        }
+
+        const auto shell_pairs = build_shellpairs(calc_res->_shells);
+        constexpr double omega = 0.11;
+        constexpr double tol = 1e-10;
+
+        // Cases the user asked to gate explicitly.
+        const auto *ssss_ab = find_shell_pair(shell_pairs, 1, 5);
+        const auto *ssss_cd = find_shell_pair(shell_pairs, 0, 6);
+        const auto *psss_ab = find_shell_pair(shell_pairs, 3, 5);
+        const auto *psss_cd = find_shell_pair(shell_pairs, 0, 1);
+        // (p,s|p,s): same p-shell on the bra and ket, both ket components are
+        // s-shells so the only mixed-AM coupling comes through inv_2_delta.
+        const auto *psps_ab = psss_ab;
+        const auto *psps_cd = find_shell_pair(shell_pairs, 3, 6);
+        if (!ssss_ab || !ssss_cd || !psss_ab || !psss_cd || !psps_ab || !psps_cd)
+        {
+            fail("unweighted screened-ERI gate: missing fixture shell pairs");
+            return;
+        }
+
+        struct UnweightedCase
+        {
+            const char *name;
+            const HartreeFock::ShellPair *ab;
+            const HartreeFock::ShellPair *cd;
+        };
+        const std::array<UnweightedCase, 3> targeted{{
+            {"s-s-s-s", ssss_ab, ssss_cd},
+            {"p-s-s-s (no ket raise)", psss_ab, psss_cd},
+            {"p-s-p-s (mixed bra/ket AM)", psps_ab, psps_cd},
+        }};
+
+        for (const auto &k : targeted)
+        {
+            for (const auto kernel : {HartreeFock::ERIKernel::Coulomb,
+                                      HartreeFock::ERIKernel::LongRange,
+                                      HartreeFock::ERIKernel::ShortRange})
+            {
+                const double os_val = contracted_quartet_value(*k.ab, *k.cd, kernel, omega);
+                const double hgp_val = hgp_contracted_quartet_value_native(*k.ab, *k.cd, kernel, omega);
+                const double diff = std::abs(os_val - hgp_val);
+                const int k_int = static_cast<int>(kernel);
+                std::cout << "unweighted gate " << k.name << " kernel=" << k_int
+                          << " os=" << std::setprecision(12) << os_val
+                          << " hgp=" << hgp_val << " diff=" << diff << '\n';
+                if (diff > tol)
+                {
+                    fail(std::string("HGP unweighted screened ERI no longer matches OS on ") +
+                         k.name + " (kernel=" + std::to_string(k_int) + ")");
+                    return;
+                }
+            }
+        }
+
+        // Broader sweep: every quartet of stored shell pairs, three kernels.
+        // Catches any AM combination the targeted gate above missed.
+        double sweep_max_diff = 0.0;
+        std::size_t sweep_count = 0;
+        for (const auto &sp_ab : shell_pairs)
+        {
+            for (const auto &sp_cd : shell_pairs)
+            {
+                for (const auto kernel : {HartreeFock::ERIKernel::Coulomb,
+                                          HartreeFock::ERIKernel::LongRange,
+                                          HartreeFock::ERIKernel::ShortRange})
+                {
+                    const double os_val = contracted_quartet_value(sp_ab, sp_cd, kernel, omega);
+                    const double hgp_val = hgp_contracted_quartet_value_native(sp_ab, sp_cd, kernel, omega);
+                    const double diff = std::abs(os_val - hgp_val);
+                    sweep_max_diff = std::max(sweep_max_diff, diff);
+                    ++sweep_count;
+                    if (diff > tol)
+                    {
+                        std::cerr << "sweep mismatch ab=("
+                                  << sp_ab.A._index << "," << sp_ab.B._index
+                                  << ") cd=(" << sp_cd.A._index << "," << sp_cd.B._index
+                                  << ") kernel=" << static_cast<int>(kernel)
+                                  << " os=" << std::setprecision(15) << os_val
+                                  << " hgp=" << hgp_val << " diff=" << diff << '\n';
+                        fail("HGP unweighted screened ERI sweep diverged from OS");
+                        return;
+                    }
+                }
+            }
+        }
+        std::cout << "unweighted screened sweep: " << sweep_count
+                  << " quartets, max |OS-HGP| = " << sweep_max_diff << '\n';
+    }
+
 } // namespace
 
 int main()
 {
     test_kernel_entry_points();
     test_long_range_quartet_derivative_against_finite_difference();
-    test_d_shell_long_range_quartets();
+    test_hgp_screened_quartet_derivatives_s_p();
+    test_hgp_unweighted_screened_eri_against_os();
     return g_ok ? 0 : 1;
 }

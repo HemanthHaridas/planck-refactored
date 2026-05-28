@@ -10,7 +10,7 @@
     guess       sad
     use_diis    .true.
     diis_dim    8
-    engine      os
+    engine      hgp
     level_shift 0.3
 %end_scf
 

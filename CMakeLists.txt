@@ -465,6 +465,7 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
         ${SRC_DIR}/integrals/os.cpp
         ${SRC_DIR}/integrals/rys.cpp
         ${SRC_DIR}/integrals/rys_roots.cpp
