@@ -2357,7 +2357,7 @@ higher \(L\) once HGP is the low-L path.
 | File | Role |
 |---|---|
 | `src/integrals/hgp.h` | Public API: `_contracted_eri_elem`, `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf` |
-| `src/integrals/hgp.cpp` | Primitive VRR (`hgp_vrr`, `hgp_eri_primitive_vrr_only`), HRR passes (`hgp_hrr_ab`, `hgp_hrr_cd`, `hgp_hrr_finalize`), reusable `EriScratch` with separate VRR / per-pair / contracted (`a0c0_accum`) buffers, Schwarz table, Fock builders. `_contracted_eri_elem` accumulates per-primitive-pair VRR results into the contracted `(a 0 | c 0)` block and runs `hgp_hrr_finalize` once per shell quartet, matching the HRR-outside-the-primitive-loop algorithm described above. |
+| `src/integrals/hgp.cpp` | Primitive VRR (`hgp_vrr`, `hgp_eri_primitive_vrr_only`), HRR passes (`hgp_hrr_ab`, `hgp_hrr_cd`, `hgp_hrr_finalize`), reusable `EriScratch` with separate VRR / per-pair / contracted (`a0c0_accum`) buffers, Schwarz table, Fock builders. `_contracted_eri_elem` accumulates per-primitive-pair VRR results into the contracted `(a0 c0)` block and runs `hgp_hrr_finalize` once per shell quartet, matching the HRR-outside-the-primitive-loop algorithm described above. |
 | `src/symmetry/hgp_symm.h` | Public API: `_build_skeleton_eri_symm`, `_compute_2e_fock_symm`, `_compute_2e_fock_uhf_symm`, plus spherical-basis variants |
 | `src/symmetry/hgp_symm.cpp` | Petite-list contracted-ERI walk, skeleton-Fock symmetrization, signed AO orbits |
 
