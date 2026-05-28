@@ -2273,30 +2273,30 @@ the symmetry walker change.
 
 | Molecule / basis | nbasis | Engine | nosym ms | d2h ms | full ms |
 |---|---|---|---|---|---|
-| H₂O / STO-3G (C2v) | 7 | OS | 9.06 | 4.83 | 7.42 |
-| H₂O / STO-3G (C2v) | 7 | Rys | 42.46 | 23.61 | 37.16 |
-| H₂O / STO-3G (C2v) | 7 | **HGP** | **9.95** | 5.26 | 7.85 |
-| NH₃ / STO-3G (C3v) | 8 | OS | 13.05 | 9.14 | 9.55 |
-| NH₃ / STO-3G (C3v) | 8 | Rys | 54.95 | 36.72 | 38.65 |
-| NH₃ / STO-3G (C3v) | 8 | **HGP** | 15.21 | 9.51 | **8.76** |
-| CH₄ / STO-3G (Td) | 9 | OS | 18.97 | 7.70 | 9.21 |
-| CH₄ / STO-3G (Td) | 9 | Rys | 69.54 | 29.21 | 40.98 |
-| CH₄ / STO-3G (Td) | 9 | **HGP** | 21.26 | 8.56 | 9.88 |
-| H₂O / `6-31G**` (C2v) | 25 | OS | 146.67 | 58.61 | 109.87 |
-| H₂O / `6-31G**` (C2v) | 25 | Rys | 730.40 | 245.41 | 497.36 |
-| H₂O / `6-31G**` (C2v) | 25 | **HGP** | **126.96** | **52.44** | **95.20** |
-| NH₃ / 6-31G (C3v) | 15 | OS | 47.86 | 28.85 | 26.60 |
-| NH₃ / 6-31G (C3v) | 15 | Rys | 163.54 | 92.90 | 97.76 |
-| NH₃ / 6-31G (C3v) | 15 | **HGP** | 50.34 | 32.14 | 28.80 |
-| NH₃ / `6-31G*` (C3v) | 21 | OS | 107.32 | 65.60 | 69.36 |
-| NH₃ / `6-31G*` (C3v) | 21 | Rys | 504.90 | 290.34 | 321.69 |
-| NH₃ / `6-31G*` (C3v) | 21 | **HGP** | **99.40** | **61.46** | **61.88** |
-| NH₃ / `6-31G**` (C3v) | 30 | OS | 244.65 | 151.37 | 136.34 |
-| NH₃ / `6-31G**` (C3v) | 30 | Rys | 1213.81 | 660.87 | 535.46 |
-| NH₃ / `6-31G**` (C3v) | 30 | **HGP** | 246.72 | **143.90** | **115.05** |
-| CH₄ / `6-31G**` (Td) | 35 | OS | 421.77 | 193.24 | 192.21 |
-| CH₄ / `6-31G**` (Td) | 35 | Rys | 2025.48 | 654.36 | 587.94 |
-| CH₄ / `6-31G**` (Td) | 35 | **HGP** | **376.11** | **155.18** | **154.70** |
+| H₂O / STO-3G (C2v) | 7 | OS | 9.15 | 4.85 | 7.52 |
+| H₂O / STO-3G (C2v) | 7 | Rys | 45.62 | 24.03 | 37.09 |
+| H₂O / STO-3G (C2v) | 7 | **HGP** | 9.89 | 5.34 | 7.94 |
+| NH₃ / STO-3G (C3v) | 8 | OS | 14.10 | 9.20 | 8.74 |
+| NH₃ / STO-3G (C3v) | 8 | Rys | 59.68 | 39.69 | 40.52 |
+| NH₃ / STO-3G (C3v) | 8 | **HGP** | 14.53 | 9.52 | **8.34** |
+| CH₄ / STO-3G (Td) | 9 | OS | 19.81 | 8.20 | 9.31 |
+| CH₄ / STO-3G (Td) | 9 | Rys | 74.08 | 30.83 | 41.63 |
+| CH₄ / STO-3G (Td) | 9 | **HGP** | 21.26 | 8.77 | 10.12 |
+| H₂O / `6-31G**` (C2v) | 25 | OS | 151.83 | 59.96 | 110.62 |
+| H₂O / `6-31G**` (C2v) | 25 | Rys | 765.67 | 256.41 | 543.82 |
+| H₂O / `6-31G**` (C2v) | 25 | **HGP** | **127.51** | **53.09** | **96.17** |
+| NH₃ / 6-31G (C3v) | 15 | OS | 46.74 | 29.72 | 26.95 |
+| NH₃ / 6-31G (C3v) | 15 | Rys | 156.86 | 96.01 | 98.32 |
+| NH₃ / 6-31G (C3v) | 15 | **HGP** | 48.59 | 30.80 | 27.73 |
+| NH₃ / `6-31G*` (C3v) | 21 | OS | 110.02 | 69.97 | 72.77 |
+| NH₃ / `6-31G*` (C3v) | 21 | Rys | 523.28 | 301.60 | 333.01 |
+| NH₃ / `6-31G*` (C3v) | 21 | **HGP** | **99.07** | **59.50** | **59.68** |
+| NH₃ / `6-31G**` (C3v) | 30 | OS | 257.73 | 172.02 | 149.70 |
+| NH₃ / `6-31G**` (C3v) | 30 | Rys | 1292.21 | 697.55 | 562.52 |
+| NH₃ / `6-31G**` (C3v) | 30 | **HGP** | **220.70** | **139.82** | **109.05** |
+| CH₄ / `6-31G**` (Td) | 35 | OS | 428.22 | 167.49 | 173.35 |
+| CH₄ / `6-31G**` (Td) | 35 | Rys | 2051.40 | 625.61 | 628.48 |
+| CH₄ / `6-31G**` (Td) | 35 | **HGP** | **364.14** | 167.68 | **159.49** |
 
 Reading the table, three patterns repeat consistently.
 
@@ -2319,26 +2319,28 @@ contractions, HGP starts to win outright:
 
 | Case | OS `nosym` | HGP `nosym` | HGP / OS |
 |---|---|---|---|
-| H₂O / `6-31G**` | 146.67 | 126.96 | 0.87 |
-| NH₃ / `6-31G*` | 107.32 | 99.40 | 0.93 |
-| CH₄ / `6-31G**` | 421.77 | 376.11 | 0.89 |
+| H₂O / `6-31G**` | 151.83 | 127.51 | 0.84 |
+| NH₃ / `6-31G*` | 110.02 | 99.07 | 0.90 |
+| CH₄ / `6-31G**` | 428.22 | 364.14 | 0.85 |
 
 That is exactly the regime where the HGP analysis predicts wins: the HRR is
 removed from the \(K^4\) primitive loop, and at the same time the larger
 \((a0|c0)\) reduced block being VRR'd inside the loop avoids materializing the
 full \((ab|cd)\) tensor at every primitive step.
 
-**3. HGP cooperates with symmetry better than OS, especially in `full` mode.**
-On CH₄ / 6-31G(d,p) (Td, |G|=24), the OS engine drops from 421.8 ms to 192.2 ms
-under full-symmetry reduction (a 2.19× win), while HGP drops from 376.1 ms to
-154.7 ms (a 2.43× win) — and the absolute HGP time is \(\sim\)20% lower than
-OS in the symmetric run. The reason is that the per-quartet kernel cost is
-*lower* for HGP, so the petite-list amortization (fewer evaluated quartets, the
-same scatter overhead) tilts the balance further in HGP's favor: HGP has less
-to amortize *over*, so the fixed overhead of the orbit walk becomes a smaller
-fraction of the total. The same trend shows up on NH₃ / 6-31G(d,p) in C3v
-(`full` HGP at 115 ms vs OS at 136 ms; 1.18× faster) and on H₂O / 6-31G(d,p)
-(`full` HGP at 95.2 ms vs OS at 109.9 ms; 1.15× faster).
+**3. HGP cooperates with symmetry well, with the largest wins on the bigger
+polarized bases.** On NH₃ / 6-31G(d,p) (C3v, |G|=6), HGP drops from 220.7 ms
+to 109.0 ms under full-symmetry reduction (a 2.02× win) while OS drops from
+257.7 ms to 149.7 ms (a 1.72× win) — HGP is \(\sim\)27% faster than OS in
+the symmetric run there. The same trend shows up on H₂O / 6-31G(d,p) under
+C2v (`full` HGP at 96.2 ms vs OS at 110.6 ms; 1.15× faster). On CH₄ / 6-31G(d,p)
+(Td, |G|=24) the HGP and OS `full`-symmetry times are closer — 159.5 ms vs
+173.4 ms, HGP \(\sim\)8% faster — because the Td orbit walk already amortizes
+the per-quartet kernel cost over a large group, leaving less of the total
+spend in the per-quartet HGP/OS gap. The general pattern still holds: the
+cheaper HGP kernel makes the petite-list scatter overhead a larger fraction
+of the total, so the relative HGP win shrinks slightly under heavy symmetry
+even as the absolute time stays lowest.
 
 Putting these together: **for the routine quantum-chemistry case — Pople-style
 contracted bases up through 6-31G(d,p) and similar valence-double/triple-zeta
@@ -2355,7 +2357,7 @@ higher \(L\) once HGP is the low-L path.
 | File | Role |
 |---|---|
 | `src/integrals/hgp.h` | Public API: `_contracted_eri_elem`, `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf` |
-| `src/integrals/hgp.cpp` | Primitive VRR (`hgp_vrr`), HRR passes (`hgp_hrr_ab`, `hgp_hrr_cd`), reusable `EriScratch`, Schwarz table, Fock builders |
+| `src/integrals/hgp.cpp` | Primitive VRR (`hgp_vrr`, `hgp_eri_primitive_vrr_only`), HRR passes (`hgp_hrr_ab`, `hgp_hrr_cd`, `hgp_hrr_finalize`), reusable `EriScratch` with separate VRR / per-pair / contracted (`a0c0_accum`) buffers, Schwarz table, Fock builders. `_contracted_eri_elem` accumulates per-primitive-pair VRR results into the contracted `(a 0 | c 0)` block and runs `hgp_hrr_finalize` once per shell quartet, matching the HRR-outside-the-primitive-loop algorithm described above. |
 | `src/symmetry/hgp_symm.h` | Public API: `_build_skeleton_eri_symm`, `_compute_2e_fock_symm`, `_compute_2e_fock_uhf_symm`, plus spherical-basis variants |
 | `src/symmetry/hgp_symm.cpp` | Petite-list contracted-ERI walk, skeleton-Fock symmetrization, signed AO orbits |
 

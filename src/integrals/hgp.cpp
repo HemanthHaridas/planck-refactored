@@ -186,8 +186,10 @@ namespace
         std::size_t spatial_size = 0;
         std::vector<double> vrr;
         std::vector<double> hrr;
+        std::vector<double> a0c0_accum;
         double *vrr_data = nullptr;
         double *hrr_data = nullptr;
+        double *a0c0_data = nullptr;
 
         void resize_for_quartet(
             int lABx, int lABy, int lABz,
@@ -218,8 +220,12 @@ namespace
             std::fill(vrr.begin(), vrr.end(), 0.0);
             if (hrr.size() != spatial_size)
                 hrr.resize(spatial_size);
+            if (a0c0_accum.size() != spatial_size)
+                a0c0_accum.resize(spatial_size);
+            std::fill(a0c0_accum.begin(), a0c0_accum.end(), 0.0);
             vrr_data = vrr.data();
             hrr_data = hrr.data();
+            a0c0_data = a0c0_accum.data();
         }
 
         std::size_t spatial_index(
@@ -603,29 +609,42 @@ namespace
         }
     }
 
-    static double hgp_eri_primitive(
+    // Runs VRR for one primitive pair and writes the m=0 (a0|c0) slice into
+    // out_a0c0 (length scratch.spatial_size). Assumes scratch has already
+    // been sized via resize_for_quartet so that out_a0c0 (typically pointing
+    // into scratch storage) is not invalidated mid-call.
+    // Does not touch scratch.hrr_data, so the same scratch can be reused
+    // across primitive pairs for an outside-the-loop HRR.
+    static void hgp_eri_primitive_vrr_only(
         const HartreeFock::PrimitivePair &ppAB,
         const HartreeFock::PrimitivePair &ppCD,
+        const int lABx, const int lABy, const int lABz,
+        const int lCDx, const int lCDy, const int lCDz,
+        EriScratch &scratch,
+        double *out_a0c0,
+        HartreeFock::ERIKernel kernel,
+        double omega)
+    {
+        hgp_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
+
+        const std::size_t m_stride = static_cast<std::size_t>(scratch.m_dim);
+        for (std::size_t idx = 0; idx < scratch.spatial_size; ++idx)
+            out_a0c0[idx] = scratch.vrr_data[idx * m_stride];
+    }
+
+    // Runs both HRR passes on scratch.hrr_data (which the caller has already
+    // populated with the contracted (a0|c0; m=0) block) and returns the
+    // scalar (ab|cd) ERI at the requested cartesian indices.
+    static double hgp_hrr_finalize(
+        EriScratch &scratch,
         const int lAx, const int lAy, const int lAz,
         const int lBx, const int lBy, const int lBz,
         const int lCx, const int lCy, const int lCz,
         const int lDx, const int lDy, const int lDz,
         const double ABx, const double ABy, const double ABz,
-        const double CDx, const double CDy, const double CDz,
-        HartreeFock::ERIKernel kernel,
-        double omega)
+        const double CDx, const double CDy, const double CDz)
     {
-        const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
         const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
-        const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
-
-        EriScratch &scratch = g_hgp_scratch;
-        scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
-        hgp_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
-
-        // Collapse the VRR table to its m=0 slice before the two HRR passes.
-        for (std::size_t idx = 0; idx < scratch.spatial_size; ++idx)
-            scratch.hrr_data[idx] = scratch.vrr_data[idx * static_cast<std::size_t>(scratch.m_dim)];
 
         hgp_hrr_ab(scratch, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
 
@@ -707,22 +726,46 @@ double HartreeFock::HeadGordonPople::_contracted_eri_elem(
     HartreeFock::ERIKernel kernel,
     double omega)
 {
+    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+    const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
+
+    // HGP loop reorder: contract VRR results across all primitive pairs into a
+    // single (a0|c0) block, then run the two HRR passes once per shell quartet
+    // instead of once per primitive pair. VRR is linear in the primitive
+    // coefficients and HRR is linear in its input block, so summing-then-HRR
+    // equals HRR-each-then-summing — only the loop order changes.
+    EriScratch &scratch = g_hgp_scratch;
+    scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
+
+    // hrr_data is only read inside hgp_hrr_finalize, which runs after the
+    // accumulation loop completes — safe to use as per-pair VRR scratch in
+    // the meantime, avoiding a per-quartet allocation.
+    double *a0c0_pair = scratch.hrr_data;
+    for (const auto &ppAB : spAB.primitive_pairs)
+    {
+        for (const auto &ppCD : spCD.primitive_pairs)
+        {
+            hgp_eri_primitive_vrr_only(
+                ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                scratch, a0c0_pair, kernel, omega);
+            const double w = ppAB.coeff_product * ppCD.coeff_product;
+            for (std::size_t n = 0; n < scratch.spatial_size; ++n)
+                scratch.a0c0_data[n] += w * a0c0_pair[n];
+        }
+    }
+
+    std::copy(scratch.a0c0_data,
+              scratch.a0c0_data + scratch.spatial_size,
+              scratch.hrr_data);
+
     const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
     const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
-
-    // Contract over primitive pairs after the primitive recurrence so the
-    // caller sees the same shell-quartet interface as OS and Rys.
-    double eri = 0.0;
-    for (const auto &ppAB : spAB.primitive_pairs)
-        for (const auto &ppCD : spCD.primitive_pairs)
-            eri += ppAB.coeff_product * ppCD.coeff_product *
-                   hgp_eri_primitive(
-                       ppAB, ppCD,
-                       lAx, lAy, lAz, lBx, lBy, lBz,
-                       lCx, lCy, lCz, lDx, lDy, lDz,
-                       ABx, ABy, ABz, CDx, CDy, CDz,
-                       kernel, omega);
-    return eri;
+    return hgp_hrr_finalize(
+        scratch,
+        lAx, lAy, lAz, lBx, lBy, lBz,
+        lCx, lCy, lCz, lDx, lDy, lDz,
+        ABx, ABy, ABz, CDx, CDy, CDz);
 }
 
 std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
