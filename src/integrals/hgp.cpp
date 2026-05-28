@@ -762,22 +762,43 @@ double HartreeFock::HeadGordonPople::_contracted_eri_elem(
     HartreeFock::ERIKernel kernel,
     double omega)
 {
+    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+    const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
+
+    // HGP loop reorder: contract VRR results across all primitive pairs into a
+    // single (a0|c0) block, then run the two HRR passes once per shell quartet
+    // instead of once per primitive pair. VRR is linear in the primitive
+    // coefficients and HRR is linear in its input block, so summing-then-HRR
+    // equals HRR-each-then-summing — only the loop order changes.
+    EriScratch &scratch = g_hgp_scratch;
+    scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
+
+    std::vector<double> a0c0_pair(scratch.spatial_size);
+    for (const auto &ppAB : spAB.primitive_pairs)
+    {
+        for (const auto &ppCD : spCD.primitive_pairs)
+        {
+            hgp_eri_primitive_vrr_only(
+                ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                scratch, a0c0_pair.data(), kernel, omega);
+            const double w = ppAB.coeff_product * ppCD.coeff_product;
+            for (std::size_t n = 0; n < scratch.spatial_size; ++n)
+                scratch.a0c0_data[n] += w * a0c0_pair[n];
+        }
+    }
+
+    std::copy(scratch.a0c0_data,
+              scratch.a0c0_data + scratch.spatial_size,
+              scratch.hrr_data);
+
     const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
     const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
-
-    // Contract over primitive pairs after the primitive recurrence so the
-    // caller sees the same shell-quartet interface as OS and Rys.
-    double eri = 0.0;
-    for (const auto &ppAB : spAB.primitive_pairs)
-        for (const auto &ppCD : spCD.primitive_pairs)
-            eri += ppAB.coeff_product * ppCD.coeff_product *
-                   hgp_eri_primitive(
-                       ppAB, ppCD,
-                       lAx, lAy, lAz, lBx, lBy, lBz,
-                       lCx, lCy, lCz, lDx, lDy, lDz,
-                       ABx, ABy, ABz, CDx, CDy, CDz,
-                       kernel, omega);
-    return eri;
+    return hgp_hrr_finalize(
+        scratch,
+        lAx, lAy, lAz, lBx, lBy, lBz,
+        lCx, lCy, lCz, lDx, lDy, lDz,
+        ABx, ABy, ABz, CDx, CDy, CDz);
 }
 
 std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
