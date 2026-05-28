@@ -2098,11 +2098,6 @@ small-to-medium angular momentum, HGP is typically the fastest practical
 analytic scheme for general contracted Gaussians and is the path most modern
 codes default to for low-to-medium \(L\).
 
-Planck implements HGP in `src/integrals/hgp.cpp` (with a full-symmetry direct
-Fock variant in `src/symmetry/hgp_symm.cpp`). The public interface mirrors the
-OS and Rys engines so the three schemes can be swapped or cross-validated
-without touching callers.
-
 ### Why HGP and not just Obara-Saika
 
 In the plain OS treatment of an ERI block \([ab|cd]\), every recurrence step —
@@ -2139,7 +2134,7 @@ The practical consequences are:
 - The VRR table built inside the primitive loop is much smaller, which keeps
   scratch storage and memory traffic low.
 
-For deeply contracted bases (e.g. STO-3G, 6-31G\*, cc-pVXZ) the HGP rearrangement
+For deeply contracted bases (e.g. STO-3G, 6-31G(d), cc-pVXZ) the HGP rearrangement
 is a substantial speedup over a "naive" OS implementation, while remaining
 numerically equivalent.
 
@@ -2180,7 +2175,7 @@ three phases:
    (ab\,|\,cd{+}1_i) = (ab\,|\,c{+}1_i\,d) + (C_i - D_i)\,(ab\,|\,cd).
    \]
    The Cartesian displacements \(A - B\) and \(C - D\) are stored once per
-   shell pair (Planck keeps them in `ShellPair::R`).
+   shell pair as static geometric data.
 
 The pseudo-code is:
 
@@ -2223,9 +2218,10 @@ several-hundred-fold reduction on HRR alone.
 
 HGP and OS are mathematically the same recurrence; HGP is a *factorization*
 (VRR-inside, HRR-outside) of OS that is essentially always preferable to the
-"both-inside" arrangement for contracted Gaussians. Planck's `os.cpp` engine is
-implemented in the same VRR-then-HRR spirit, so the HGP path in `hgp.cpp` can
-be read as a more explicit / refactored production of the same identity.
+"both-inside" arrangement for contracted Gaussians. Any implementation already
+written in a VRR-then-HRR style can be viewed as performing the same identity;
+HGP simply makes the partition between contraction-inside and contraction-outside
+work explicit.
 
 HGP and Rys quadrature *are* genuinely different schemes. For high total angular
 momentum the OS/HGP scratch buffers grow as the product of all six VRR
@@ -2241,33 +2237,34 @@ HGP retains the OS structure of the Boys-function seed, so range-separated
 operators (\(\mathrm{erfc}(\omega r_{12})/r_{12}\), \(\mathrm{erf}(\omega
 r_{12})/r_{12}\)) drop in exactly as in OS: the long-range damping enters as a
 single multiplicative scaling on \(\rho\), on the \(W - P\) and \(W - Q\)
-shift vectors, and on the Boys argument. In Planck's HGP path this is
-handled by `screened_kernel_data` in `src/integrals/hgp.cpp`, which returns
-a `{rho, prefactor_scale, boys_scale}` triple consumed by the VRR seed.
+shift vectors, and on the Boys argument. In practice this is bundled as a
+\(\{\rho_{\mathrm{eff}}, \text{prefactor scale}, \text{Boys-argument scale}\}\)
+triple consumed by the VRR seed, with the unscreened Coulomb kernel as the
+identity case.
 
 The same Schwarz inequality
 \(|(\mu\nu|\lambda\sigma)| \le \sqrt{(\mu\nu|\mu\nu)}\sqrt{(\lambda\sigma|\lambda\sigma)}\)
-applies; HGP precomputes the Schwarz table by calling the same contracted
+applies; the Schwarz table is precomputed by calling the same contracted
 ERI kernel on diagonal pairs \((ij|ij)\).
 
 ### Symmetry-Reduced HGP
 
-The companion module `src/symmetry/hgp_symm.cpp` wraps the HGP contracted-ERI
-kernel in the petite-list / skeleton-Fock symmetrization scheme described in
-§8. The pair- and quartet-orbit construction (`build_pair_orbit`,
-`build_quartet_orbit`) is shared in spirit with the OS and Rys symmetry paths:
-only the canonical representative of each AO-orbit is evaluated, and the
-phase-weighted scatter writes the value back to the orbit's other quartets.
-The same `SignedAOSymOp` infrastructure is used for both Cartesian and
-spherical-harmonic bases, with the spherical path adding a `cart_to_sph`
-transform on the contracted block as in the OS/Rys spherical variants.
+The HGP contracted-ERI kernel composes cleanly with the petite-list /
+skeleton-Fock symmetrization scheme described in §8. Pair- and quartet-orbits
+under the molecular point group are built once and tagged with their AO
+permutation phases; only the canonical representative of each orbit is
+evaluated, and the phase-weighted result is then scattered to the orbit's
+other quartets. The same signed-AO permutation infrastructure works in both
+Cartesian and spherical-harmonic bases — the spherical path inserts the
+\(C\)-to-spherical transform on the contracted block just before the scatter,
+exactly as in the OS and Rys symmetry-reduced variants.
 
 ### Why HGP Wins in Practice — Measured Timings
 
 The theoretical argument above (HRR factored *outside* the primitive contraction
 loops, smaller VRR scratch than Rys at low-to-medium \(L\)) is confirmed by a
-direct head-to-head benchmark of all three engines in Planck on the same
-molecules and bases. The table below reports wall-clock time per ERI build (in
+direct head-to-head benchmark of all three engines (OS, Rys, HGP) on the same
+molecules and bases inside this codebase. The table below reports wall-clock time per ERI build (in
 milliseconds, lower is better) for the three engines, in three modes: no
 symmetry (`nosym`), the legacy D2h coordinate-axis reduction (`d2h`), and the
 full point-group reduction (`full`). All runs use the same shell-pair list,
@@ -2285,46 +2282,46 @@ the symmetry walker change.
 | CH₄ / STO-3G (Td) | 9 | OS | 18.97 | 7.70 | 9.21 |
 | CH₄ / STO-3G (Td) | 9 | Rys | 69.54 | 29.21 | 40.98 |
 | CH₄ / STO-3G (Td) | 9 | **HGP** | 21.26 | 8.56 | 9.88 |
-| H₂O / 6-31G\*\* (C2v) | 25 | OS | 146.67 | 58.61 | 109.87 |
-| H₂O / 6-31G\*\* (C2v) | 25 | Rys | 730.40 | 245.41 | 497.36 |
-| H₂O / 6-31G\*\* (C2v) | 25 | **HGP** | **126.96** | **52.44** | **95.20** |
+| H₂O / `6-31G**` (C2v) | 25 | OS | 146.67 | 58.61 | 109.87 |
+| H₂O / `6-31G**` (C2v) | 25 | Rys | 730.40 | 245.41 | 497.36 |
+| H₂O / `6-31G**` (C2v) | 25 | **HGP** | **126.96** | **52.44** | **95.20** |
 | NH₃ / 6-31G (C3v) | 15 | OS | 47.86 | 28.85 | 26.60 |
 | NH₃ / 6-31G (C3v) | 15 | Rys | 163.54 | 92.90 | 97.76 |
 | NH₃ / 6-31G (C3v) | 15 | **HGP** | 50.34 | 32.14 | 28.80 |
-| NH₃ / 6-31G\* (C3v) | 21 | OS | 107.32 | 65.60 | 69.36 |
-| NH₃ / 6-31G\* (C3v) | 21 | Rys | 504.90 | 290.34 | 321.69 |
-| NH₃ / 6-31G\* (C3v) | 21 | **HGP** | **99.40** | **61.46** | **61.88** |
-| NH₃ / 6-31G\*\* (C3v) | 30 | OS | 244.65 | 151.37 | 136.34 |
-| NH₃ / 6-31G\*\* (C3v) | 30 | Rys | 1213.81 | 660.87 | 535.46 |
-| NH₃ / 6-31G\*\* (C3v) | 30 | **HGP** | 246.72 | **143.90** | **115.05** |
-| CH₄ / 6-31G\*\* (Td) | 35 | OS | 421.77 | 193.24 | 192.21 |
-| CH₄ / 6-31G\*\* (Td) | 35 | Rys | 2025.48 | 654.36 | 587.94 |
-| CH₄ / 6-31G\*\* (Td) | 35 | **HGP** | **376.11** | **155.18** | **154.70** |
+| NH₃ / `6-31G*` (C3v) | 21 | OS | 107.32 | 65.60 | 69.36 |
+| NH₃ / `6-31G*` (C3v) | 21 | Rys | 504.90 | 290.34 | 321.69 |
+| NH₃ / `6-31G*` (C3v) | 21 | **HGP** | **99.40** | **61.46** | **61.88** |
+| NH₃ / `6-31G**` (C3v) | 30 | OS | 244.65 | 151.37 | 136.34 |
+| NH₃ / `6-31G**` (C3v) | 30 | Rys | 1213.81 | 660.87 | 535.46 |
+| NH₃ / `6-31G**` (C3v) | 30 | **HGP** | 246.72 | **143.90** | **115.05** |
+| CH₄ / `6-31G**` (Td) | 35 | OS | 421.77 | 193.24 | 192.21 |
+| CH₄ / `6-31G**` (Td) | 35 | Rys | 2025.48 | 654.36 | 587.94 |
+| CH₄ / `6-31G**` (Td) | 35 | **HGP** | **376.11** | **155.18** | **154.70** |
 
 Reading the table, three patterns repeat consistently.
 
 **1. Rys is dominated by both HGP and OS at every basis tested here.** This is
-the expected regime: STO-3G through 6-31G\*\* puts maximum angular momentum at
+the expected regime: STO-3G through 6-31G(d,p) puts maximum angular momentum at
 \(d\), which sits squarely in the low-to-medium-\(L\) window where the OS/HGP
-flop count is smaller than the Rys-quadrature flop count. On 6-31G\*\* / CH₄
+flop count is smaller than the Rys-quadrature flop count. On 6-31G(d,p) / CH₄
 (Td) the spread reaches \(\sim\)5× on `nosym` and \(\sim\)4× on `d2h`; Rys is
 not really a competitor here, and the auto-dispatch model in §11 would only
 prefer Rys at higher \(L\) where the OS/HGP scratch buffers blow up faster than
-Rys's fixed root count. Rys's role in Planck is to dominate the *high-L tail*,
-not the bulk of routine basis sets.
+Rys's fixed root count. Rys's natural niche is the high-\(L\) tail, not the
+bulk of routine basis sets.
 
 **2. HGP pulls away from OS as the basis (and contraction depth) grows.** On
 STO-3G, HGP and OS are within \(\sim\)5–10% of each other in any of the three
 symmetry modes — STO-3G has \(K = 3\) primitives per contraction and only
 \(s/p\) shells, so neither the HRR-outside factorization nor the smaller VRR
-scratch produces much headroom. Moving to 6-31G\*\* with d-functions and deeper
+scratch produces much headroom. Moving to 6-31G(d,p) with d-functions and deeper
 contractions, HGP starts to win outright:
 
 | Case | OS `nosym` | HGP `nosym` | HGP / OS |
 |---|---|---|---|
-| H₂O / 6-31G\*\* | 146.67 | 126.96 | 0.87 |
-| NH₃ / 6-31G\* | 107.32 | 99.40 | 0.93 |
-| CH₄ / 6-31G\*\* | 421.77 | 376.11 | 0.89 |
+| H₂O / `6-31G**` | 146.67 | 126.96 | 0.87 |
+| NH₃ / `6-31G*` | 107.32 | 99.40 | 0.93 |
+| CH₄ / `6-31G**` | 421.77 | 376.11 | 0.89 |
 
 That is exactly the regime where the HGP analysis predicts wins: the HRR is
 removed from the \(K^4\) primitive loop, and at the same time the larger
@@ -2332,19 +2329,19 @@ removed from the \(K^4\) primitive loop, and at the same time the larger
 full \((ab|cd)\) tensor at every primitive step.
 
 **3. HGP cooperates with symmetry better than OS, especially in `full` mode.**
-On CH₄ / 6-31G\*\* (Td, |G|=24), the OS engine drops from 421.8 ms to 192.2 ms
+On CH₄ / 6-31G(d,p) (Td, |G|=24), the OS engine drops from 421.8 ms to 192.2 ms
 under full-symmetry reduction (a 2.19× win), while HGP drops from 376.1 ms to
 154.7 ms (a 2.43× win) — and the absolute HGP time is \(\sim\)20% lower than
 OS in the symmetric run. The reason is that the per-quartet kernel cost is
 *lower* for HGP, so the petite-list amortization (fewer evaluated quartets, the
 same scatter overhead) tilts the balance further in HGP's favor: HGP has less
 to amortize *over*, so the fixed overhead of the orbit walk becomes a smaller
-fraction of the total. The same trend shows up on NH₃ / 6-31G\*\* in C3v
-(`full` HGP at 115 ms vs OS at 136 ms; 1.18× faster) and on H₂O / 6-31G\*\*
+fraction of the total. The same trend shows up on NH₃ / 6-31G(d,p) in C3v
+(`full` HGP at 115 ms vs OS at 136 ms; 1.18× faster) and on H₂O / 6-31G(d,p)
 (`full` HGP at 95.2 ms vs OS at 109.9 ms; 1.15× faster).
 
 Putting these together: **for the routine quantum-chemistry case — Pople-style
-contracted bases up through 6-31G\*\* and similar valence-double/triple-zeta
+contracted bases up through 6-31G(d,p) and similar valence-double/triple-zeta
 sets with d polarization — HGP is the engine to default to.** OS is the right
 fallback for tiny, lightly contracted bases where the HGP/OS gap closes, and
 Rys is reserved for high-\(L\) work (f/g/h) where the OS-and-HGP recurrence
@@ -2367,7 +2364,7 @@ higher \(L\) once HGP is the low-L path.
 T. Head-Gordon and J. A. Pople, *A method for two-electron Gaussian integral
 and integral derivative evaluation using recurrence relations*, J. Chem. Phys.
 **89**, 5777 (1988). The factorization argument and the HRR-outside-contraction
-identity are due to that paper; Planck's implementation follows it directly.
+identity are due to that paper.
 
 ---
 
