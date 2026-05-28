@@ -661,6 +661,8 @@ namespace HartreeFock::IO
                 {"os", HartreeFock::IntegralMethod::ObaraSaika},
                 {"rys", HartreeFock::IntegralMethod::RysQuadrature},
                 {"rys-quadrature", HartreeFock::IntegralMethod::RysQuadrature},
+                {"head-gordon-pople", HartreeFock::IntegralMethod::HeadGordonPople},
+                {"hgp", HartreeFock::IntegralMethod::HeadGordonPople},
                 {"auto", HartreeFock::IntegralMethod::Auto},
             };
 

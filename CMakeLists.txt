@@ -480,6 +480,36 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    add_executable(planck-hgp-engine-smoke
+        ${CMAKE_SOURCE_DIR}/tests/hgp_engine_smoke.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-hgp-quartet-validation
+        ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-hgp-benchmark
+        ${CMAKE_SOURCE_DIR}/tests/hgp_benchmark.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     add_executable(planck-population-analysis
         ${CMAKE_SOURCE_DIR}/tests/population_analysis.cpp
         ${POPULATIONS_SRC}
@@ -574,6 +604,7 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/symm_fock_benchmark.cpp
         ${INT_SRC}
         ${LOOKUP_SRC}
+        ${SRC_DIR}/symmetry/hgp_symm.cpp
         ${SRC_DIR}/symmetry/os_symm.cpp
         ${SRC_DIR}/symmetry/rys_symm.cpp
         ${SRC_DIR}/symmetry/fock_symmetrization.cpp
@@ -623,6 +654,21 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-multipole-integrals PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-hgp-engine-smoke PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-hgp-quartet-validation PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-hgp-benchmark PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -713,6 +759,24 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-hgp-engine-smoke PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-hgp-quartet-validation PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-hgp-benchmark PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-population-analysis PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -770,6 +834,18 @@ if(BUILD_TESTING)
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-multipole-integrals OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-multipole-integrals PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-hgp-engine-smoke OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-hgp-engine-smoke PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-hgp-quartet-validation OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-hgp-quartet-validation PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-hgp-benchmark OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-hgp-benchmark PRIVATE USE_OPENMP)
     endif()
 
     target_link_libraries(planck-casscf-internal
@@ -843,6 +919,16 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-multipole-integrals
         COMMAND planck-multipole-integrals
+    )
+
+    add_test(
+        NAME planck-hgp-engine-smoke
+        COMMAND planck-hgp-engine-smoke
+    )
+
+    add_test(
+        NAME planck-hgp-quartet-validation
+        COMMAND planck-hgp-quartet-validation
     )
 
     add_test(

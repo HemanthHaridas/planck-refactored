@@ -8,7 +8,7 @@
 // -----------
 // We time the *2e Fock build only* — not a full SCF — so the comparison isolates
 // the ERI-reduction cost from convergence-path / iteration-count differences. For
-// each molecule and each engine (OS, Rys) we time three Fock builds on the SAME
+// each molecule and each engine (OS, Rys, HGP) we time three Fock builds on the SAME
 // symmetry-adapted density P:
 //
 //   1. nosym   — production _compute_2e_fock with sym_ops = nullptr
@@ -30,6 +30,8 @@
 
 #include "integrals/os.h"
 #include "integrals/rys.h"
+#include "integrals/hgp.h"
+#include "symmetry/hgp_symm.h"
 #include "symmetry/os_symm.h"
 #include "symmetry/rys_symm.h"
 #include "symmetry/integral_symmetry.h"
@@ -170,21 +172,24 @@ namespace
             P.noalias() += op.matrix * P_raw * op.matrix.transpose();
         P /= static_cast<double>(ops_res->operations.size());
 
-        // Correctness guard: _symm must equal production (both engines) on this P,
+        // Correctness guard: _symm must equal production (all engines) on this P,
         // or the timing would be meaningless. After the contravariant-density fix
         // this holds to ~1e-12 even for d-shells (was 0.07 with a covariant P).
         const Eigen::MatrixXd ref = HartreeFock::ObaraSaika::_compute_2e_fock(pairs, P, nb);
         auto chk = HartreeFock::ObaraSaika::_compute_2e_fock_symm(pairs, calc._shells, P, nb, *ops_res);
         const Eigen::MatrixXd ref_r = HartreeFock::RysQuad::_compute_2e_fock(pairs, P, nb);
         auto chk_r = HartreeFock::RysQuad::_compute_2e_fock_symm(pairs, calc._shells, P, nb, *ops_res);
+        const Eigen::MatrixXd ref_h = HartreeFock::HeadGordonPople::_compute_2e_fock(pairs, P, nb);
+        auto chk_h = HartreeFock::HeadGordonPople::_compute_2e_fock_symm(pairs, calc._shells, P, nb, *ops_res);
         const double diff_os = chk ? (*chk - ref).cwiseAbs().maxCoeff() : 1e9;
         const double diff_rys = chk_r ? (*chk_r - ref_r).cwiseAbs().maxCoeff() : 1e9;
-        if (diff_os > 1e-9 || diff_rys > 1e-9)
+        const double diff_hgp = chk_h ? (*chk_h - ref_h).cwiseAbs().maxCoeff() : 1e9;
+        if (diff_os > 1e-9 || diff_rys > 1e-9 || diff_hgp > 1e-9)
         {
             std::printf("\n[FAIL] %s  (%s, |G|=%d, nbasis=%zu): _symm disagrees with "
-                        "production (OS=%.2e, Rys=%.2e) — benchmark skipped\n",
+                        "production (OS=%.2e, Rys=%.2e, HGP=%.2e) — benchmark skipped\n",
                         name.c_str(), calc._molecule._point_group.c_str(), gorder, nb,
-                        diff_os, diff_rys);
+                        diff_os, diff_rys, diff_hgp);
             g_ok = false;
             return;
         }
@@ -205,6 +210,14 @@ namespace
         const double ry_full = time_ms(reps, [&]
                                        { auto g = HartreeFock::RysQuad::_compute_2e_fock_symm(pairs, calc._shells, P, nb, *ops_res); volatile double s = (*g)(0, 0); (void)s; });
 
+        // ── HGP engine ───────────────────────────────────────────────────────────
+        const double hg_nosym = time_ms(reps, [&]
+                                        { volatile double s = HartreeFock::HeadGordonPople::_compute_2e_fock(pairs, P, nb)(0, 0); (void)s; });
+        const double hg_d2h = time_ms(reps, [&]
+                                      { volatile double s = HartreeFock::HeadGordonPople::_compute_2e_fock(pairs, P, nb, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10, d2h)(0, 0); (void)s; });
+        const double hg_full = time_ms(reps, [&]
+                                       { auto g = HartreeFock::HeadGordonPople::_compute_2e_fock_symm(pairs, calc._shells, P, nb, *ops_res); volatile double s = (*g)(0, 0); (void)s; });
+
         std::printf("\n%s  (%s, |G|=%d, D2h ops=%zu, nbasis=%zu)\n",
                     name.c_str(), calc._molecule._point_group.c_str(),
                     gorder, d2h_ops, nb);
@@ -216,6 +229,9 @@ namespace
         std::printf("  %-5s  %10.3f  %10.3f  %10.3f   %7.2fx  %7.2fx\n",
                     "Rys", ry_nosym, ry_d2h, ry_full,
                     ry_nosym / ry_d2h, ry_nosym / ry_full);
+        std::printf("  %-5s  %10.3f  %10.3f  %10.3f   %7.2fx  %7.2fx\n",
+                    "HGP", hg_nosym, hg_d2h, hg_full,
+                    hg_nosym / hg_d2h, hg_nosym / hg_full);
     }
 } // namespace
 

@@ -97,9 +97,10 @@ namespace HartreeFock
 
     enum class IntegralMethod
     {
-        ObaraSaika,    // Obara-Saika recursion (default)
-        RysQuadrature, // Rys quadrature for all quartets
-        Auto           // OS for L<4, Rys for L>=4 per quartet
+        ObaraSaika,       // Obara-Saika recursion (default)
+        RysQuadrature,    // Rys quadrature for all quartets
+        HeadGordonPople,  // Head-Gordon-Pople recurrence engine
+        Auto              // OS for L<4, Rys for L>=4 per quartet
     };
 
     enum class ERIKernel
