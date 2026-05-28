@@ -603,6 +603,58 @@ namespace
         }
     }
 
+    // Runs VRR for one primitive pair and writes the m=0 (a0|c0) slice into
+    // out_a0c0 (length scratch.spatial_size). Assumes scratch has already
+    // been sized via resize_for_quartet so that out_a0c0 (typically pointing
+    // into scratch storage) is not invalidated mid-call.
+    // Does not touch scratch.hrr_data, so the same scratch can be reused
+    // across primitive pairs for an outside-the-loop HRR.
+    static void hgp_eri_primitive_vrr_only(
+        const HartreeFock::PrimitivePair &ppAB,
+        const HartreeFock::PrimitivePair &ppCD,
+        const int lABx, const int lABy, const int lABz,
+        const int lCDx, const int lCDy, const int lCDz,
+        EriScratch &scratch,
+        double *out_a0c0,
+        HartreeFock::ERIKernel kernel,
+        double omega)
+    {
+        hgp_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
+
+        const std::size_t m_stride = static_cast<std::size_t>(scratch.m_dim);
+        for (std::size_t idx = 0; idx < scratch.spatial_size; ++idx)
+            out_a0c0[idx] = scratch.vrr_data[idx * m_stride];
+    }
+
+    // Runs both HRR passes on scratch.hrr_data (which the caller has already
+    // populated with the contracted (a0|c0; m=0) block) and returns the
+    // scalar (ab|cd) ERI at the requested cartesian indices.
+    static double hgp_hrr_finalize(
+        EriScratch &scratch,
+        const int lAx, const int lAy, const int lAz,
+        const int lBx, const int lBy, const int lBz,
+        const int lCx, const int lCy, const int lCz,
+        const int lDx, const int lDy, const int lDz,
+        const double ABx, const double ABy, const double ABz,
+        const double CDx, const double CDy, const double CDz)
+    {
+        const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+        hgp_hrr_ab(scratch, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
+
+        double *cd_block = scratch.h_block_ptr(lAx, lAy, lAz);
+        hgp_hrr_cd(
+            cd_block, lCDx + 1, lCDy + 1, lCDz + 1,
+            lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+        return cd_block[(static_cast<std::size_t>(lCx) * static_cast<std::size_t>(lCDy + 1) +
+                         static_cast<std::size_t>(lCy)) *
+                            static_cast<std::size_t>(lCDz + 1) +
+                        static_cast<std::size_t>(lCz)];
+    }
+
+    // Step 1 shim: behaviour-preserving wrapper that still runs HRR inside
+    // the primitive loop. Step 3 will hoist HRR outside the loop by calling
+    // the two helpers directly from _contracted_eri_elem.
     static double hgp_eri_primitive(
         const HartreeFock::PrimitivePair &ppAB,
         const HartreeFock::PrimitivePair &ppCD,
@@ -620,23 +672,20 @@ namespace
         const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
 
         EriScratch &scratch = g_hgp_scratch;
+        // Resize first so the scratch.hrr_data pointer captured below is
+        // stable for the VRR call (which would otherwise potentially
+        // reallocate the underlying vector mid-flight).
         scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
-        hgp_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
 
-        // Collapse the VRR table to its m=0 slice before the two HRR passes.
-        for (std::size_t idx = 0; idx < scratch.spatial_size; ++idx)
-            scratch.hrr_data[idx] = scratch.vrr_data[idx * static_cast<std::size_t>(scratch.m_dim)];
+        hgp_eri_primitive_vrr_only(
+            ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+            scratch, scratch.hrr_data, kernel, omega);
 
-        hgp_hrr_ab(scratch, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
-
-        double *cd_block = scratch.h_block_ptr(lAx, lAy, lAz);
-        hgp_hrr_cd(
-            cd_block, lCDx + 1, lCDy + 1, lCDz + 1,
-            lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
-        return cd_block[(static_cast<std::size_t>(lCx) * static_cast<std::size_t>(lCDy + 1) +
-                         static_cast<std::size_t>(lCy)) *
-                            static_cast<std::size_t>(lCDz + 1) +
-                        static_cast<std::size_t>(lCz)];
+        return hgp_hrr_finalize(
+            scratch,
+            lAx, lAy, lAz, lBx, lBy, lBz,
+            lCx, lCy, lCz, lDx, lDy, lDz,
+            ABx, ABy, ABz, CDx, CDy, CDz);
     }
 
     static std::vector<double> hgp_schwarz_table(
