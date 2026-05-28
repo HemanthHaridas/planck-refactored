@@ -24,7 +24,7 @@ Quantum chemistry engine in C++23. Main binaries: `hartree-fock` (HF/post-HF) an
 - [[CASSCF and SA-CASSCF]] — CASSCF/SA-CASSCF/RASSCF details
 - [[Coupled Cluster]] — RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ + arbitrary-order
 - [[DFT]] — KS-DFT, TDDFT, PCM, libxc hybrids/range separation
-- [[Integral Engine]] — Obara-Saika / Rys ERI, shell pairs
+- [[Integral Engine]] — Obara-Saika / Rys / HGP ERI, shell pairs, dispatch
 - [[Gradients and GeomOpt]] — analytic gradients (RHF/UHF/RMP2/UMP2), L-BFGS, IC-BFGS
 
 ### Gotchas
@@ -33,6 +33,7 @@ Quantum chemistry engine in C++23. Main binaries: `hartree-fock` (HF/post-HF) an
 - [[Shell Pair Indexing]] — row-major ordering trap
 - [[Norm Factors]] — contracted norm folded into coefficients
 - [[Error Handling Pattern]] — std::expected throughout
+- [[HGP Screened inv_2_delta]] — HGP VRR coupling term must scale by boys_scale for screened kernels
 
 ### Status
 - [[Completion]] — what is done and validated
@@ -46,7 +47,7 @@ Quantum chemistry engine in C++23. Main binaries: `hartree-fock` (HF/post-HF) an
 | Entry point | `src/driver.cpp` |
 | Input parser | `src/io/io.cpp` |
 | Checkpoint I/O | `src/io/checkpoint.cpp` |
-| ERI engine | `src/integrals/os.cpp` |
+| ERI engines | `src/integrals/{os,rys,hgp}.cpp`; dispatch in `src/integrals/base.h` |
 | PCM solvation | `src/solvation/pcm.cpp` |
 | CASSCF main loop | `src/post_hf/casscf/casscf.cpp` (`run_mcscf_loop`) |
 | CC tensor backend | `src/post_hf/cc/tensor_backend.cpp` |

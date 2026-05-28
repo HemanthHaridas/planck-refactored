@@ -1,19 +1,22 @@
 ---
 name: Integral Engine
-description: Obara-Saika and Rys quadrature ERI engines, shell pairs, dispatch
+description: Obara-Saika, Rys, and HGP ERI engines, shell pairs, dispatch
 type: implementation
 priority: high
 include_in_claude: true
-tags: [integrals, obara-saika, rys, eri, shell-pairs]
+tags: [integrals, obara-saika, rys, hgp, eri, shell-pairs]
 ---
 
 # Integral Engine
 
 ## Overview
 
-Two ERI engines, selected via `IntegralMethod`:
+Three ERI engines, selected via `IntegralMethod`:
 - `ObaraSaika` — Obara-Saika horizontal/vertical recurrences
 - `RysQuadrature` — Rys quadrature (alternative)
+- `HeadGordonPople` — HGP variant with VRR built once per primitive pair and
+  HRR hoisted to the contracted shell-quartet level (`hgp` / `head-gordon-pople`
+  in input)
 - `Auto` — dispatch based on angular momenta (picks faster engine per shell quartet)
 
 ## Shell Pairs
@@ -46,6 +49,63 @@ Standard OS scheme:
 
 OpenMP parallelized over shell-pair loops when `USE_OPENMP` is defined.
 
+## HGP Engine (`src/integrals/hgp.cpp`)
+
+The HGP engine implements the Head-Gordon-Pople rearrangement of the OS
+recurrences: VRR runs per primitive pair to build the `(a0|c0; m)` block,
+those blocks are contracted across primitives into a single `(a0|c0)`
+accumulator, and the two HRR passes (CD then AB transfer) run **once per
+contracted shell quartet** instead of once per primitive pair. Same final
+ERI value as OS — the savings come from amortizing HRR over the primitive
+loop. Thread-local scratch (`g_hgp_scratch`) is resized per quartet and
+reused.
+
+Public entry points mirror OS one-for-one:
+
+- `_compute_2e` (full ERI tensor) and `_compute_2e_fock` / `_fock_uhf`
+  (direct SCF builds)
+- `_contracted_eri_elem` (single contracted quartet, used by Fock builders
+  and the gradient lowering term)
+- `_compute_eri_deriv_elem` (12-component derivative, used by the gradient
+  dispatcher)
+- `_build_skeleton_eri_symm` and `_compute_2e_fock_{symm,symm_spherical}` in
+  `src/symmetry/hgp_symm.cpp` — full-point-group direct SCF, same Cartesian-
+  skin pattern OS and Rys use
+
+### Screened kernels (LongRange / ShortRange)
+
+HGP serves screened kernels natively for all three entry points (no OS
+detour). The screened scaling is applied inside `hgp_vrr`:
+
+- Boys-argument scale `T = boys_scale · rho · |P-Q|²`
+- WP/WQ vectors scaled by `wpwq_scale = screen.rho / rho`
+- Prefactor scaled by `screen.prefactor_scale`
+- C-VRR bra/ket coupling term `inv_2_delta` scaled by `boys_scale` for
+  non-Coulomb kernels — see [[HGP Screened inv_2_delta]] for the bug this
+  fixed
+
+### Dispatcher
+
+- SCF Fock builds dispatch through `src/integrals/base.h`:
+  `engine == HeadGordonPople` routes to the HGP entries.
+- Full-symmetry direct SCF dispatches through `src/scf/scf.cpp`
+  (`full_symmetry_fock_{rhf,uhf}` and `full_symmetry_build_skeleton`).
+- Analytic gradient dispatches through `compute_eri_deriv_dispatch` in
+  `src/gradient/gradient.cpp` — engine-agnostic for all kernels (Coulomb,
+  LongRange, ShortRange).
+- MP2 / UMP2 analytic gradient (`src/post_hf/mp2_gradient.cpp`) calls
+  `ObaraSaika::_compute_eri_deriv_elem` directly; bypasses the dispatcher,
+  so HGP is not used for the MP2 gradient response intermediates even when
+  the engine is selected. Not a correctness bug (values match OS to ~1e-15)
+  but a latent asymmetry.
+
+### Test hooks retained for historical gates
+
+`_contracted_eri_elem_native_test` and `_compute_eri_deriv_elem_native_test`
+are now thin aliases of the production entries. They predate the screened-
+guard lift, when the test hooks were the only way to exercise the native
+path. Kept so existing test code links unchanged.
+
 ## Index Placement
 
 After computing a block of ERIs for shell quartet (μν|λσ), the result is placed at:
@@ -58,4 +118,9 @@ This requires `ContractedView._index` to be correctly set. **Never use `invert_p
 
 - `src/integrals/os.cpp` + `os.h` — Obara-Saika ERI
 - `src/integrals/rys.cpp` — Rys quadrature ERI
+- `src/integrals/hgp.cpp` + `hgp.h` — HGP ERI (VRR-per-pair + HRR-outside)
+- `src/integrals/base.h` — engine-dispatch wrappers for `_compute_2e` /
+  `_compute_2e_fock` / `_compute_2e_fock_uhf`
+- `src/symmetry/{os,rys,hgp}_symm.cpp` — full-point-group skeleton + Fock
+  for each engine; SCF dispatches through `src/scf/scf.cpp`
 - `src/integrals/shellpair.cpp` + `shellpair.h` — shell pair data and construction
