@@ -774,14 +774,17 @@ double HartreeFock::HeadGordonPople::_contracted_eri_elem(
     EriScratch &scratch = g_hgp_scratch;
     scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
 
-    std::vector<double> a0c0_pair(scratch.spatial_size);
+    // hrr_data is only read inside hgp_hrr_finalize, which runs after the
+    // accumulation loop completes — safe to use as per-pair VRR scratch in
+    // the meantime, avoiding a per-quartet allocation.
+    double *a0c0_pair = scratch.hrr_data;
     for (const auto &ppAB : spAB.primitive_pairs)
     {
         for (const auto &ppCD : spCD.primitive_pairs)
         {
             hgp_eri_primitive_vrr_only(
                 ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
-                scratch, a0c0_pair.data(), kernel, omega);
+                scratch, a0c0_pair, kernel, omega);
             const double w = ppAB.coeff_product * ppCD.coeff_product;
             for (std::size_t n = 0; n < scratch.spatial_size; ++n)
                 scratch.a0c0_data[n] += w * a0c0_pair[n];
