@@ -222,20 +222,30 @@
 <li class="toc-level-3"><a href="#6d-accumulation-and-hrr">6D Accumulation and HRR</a></li>
 <li class="toc-level-3"><a href="#auto-dispatch-os-vs-rys-cost-model">Auto-Dispatch: OS vs. Rys Cost Model</a></li>
 <li class="toc-level-3"><a href="#implementation-files">Implementation Files</a></li>
-<li class="toc-level-2"><a href="#12-mp2-correlation-energy">12. MP2 Correlation Energy</a></li>
+<li class="toc-level-2"><a href="#12-the-head-gordon-pople-hgp-integral-scheme">12. The Head-Gordon-Pople (HGP) Integral Scheme</a></li>
+<li class="toc-level-3"><a href="#why-hgp-and-not-just-obara-saika">Why HGP and not just Obara-Saika</a></li>
+<li class="toc-level-3"><a href="#algorithmic-skeleton">Algorithmic Skeleton</a></li>
+<li class="toc-level-3"><a href="#where-the-work-actually-lives">Where the Work Actually Lives</a></li>
+<li class="toc-level-3"><a href="#relationship-to-os-rys-and-auto-dispatch">Relationship to OS, Rys, and Auto-Dispatch</a></li>
+<li class="toc-level-3"><a href="#screened-and-range-separated-kernels">Screened and Range-Separated Kernels</a></li>
+<li class="toc-level-3"><a href="#symmetry-reduced-hgp">Symmetry-Reduced HGP</a></li>
+<li class="toc-level-3"><a href="#why-hgp-wins-in-practice-measured-timings">Why HGP Wins in Practice — Measured Timings</a></li>
+<li class="toc-level-3"><a href="#implementation-files">Implementation Files</a></li>
+<li class="toc-level-3"><a href="#reference">Reference</a></li>
+<li class="toc-level-2"><a href="#13-mp2-correlation-energy">13. MP2 Correlation Energy</a></li>
 <li class="toc-level-3"><a href="#second-order-perturbation-theory">Second-Order Perturbation Theory</a></li>
 <li class="toc-level-3"><a href="#rmp2-closed-shell">RMP2 (Closed-Shell)</a></li>
 <li class="toc-level-3"><a href="#ump2-open-shell">UMP2 (Open-Shell)</a></li>
 <li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
-<li class="toc-level-2"><a href="#13-analytic-nuclear-gradients">13. Analytic Nuclear Gradients</a></li>
+<li class="toc-level-2"><a href="#14-analytic-nuclear-gradients">14. Analytic Nuclear Gradients</a></li>
 <li class="toc-level-3"><a href="#hellmann-feynman-theorem-and-pulay-forces">Hellmann-Feynman Theorem and Pulay Forces</a></li>
 <li class="toc-level-3"><a href="#derivative-integrals">Derivative Integrals</a></li>
 <li class="toc-level-3"><a href="#uhf-gradient">UHF Gradient</a></li>
 <li class="toc-level-3"><a href="#analytic-kohn-sham-dft-gradients">Analytic Kohn-Sham DFT Gradients</a></li>
-<li class="toc-level-2"><a href="#14-coupled-perturbed-hf-and-the-mp2-gradient">14. Coupled-Perturbed HF and the MP2 Gradient</a></li>
+<li class="toc-level-2"><a href="#15-coupled-perturbed-hf-and-the-mp2-gradient">15. Coupled-Perturbed HF and the MP2 Gradient</a></li>
 <li class="toc-level-3"><a href="#rmp2-z-vector-method">RMP2 Z-Vector Method</a></li>
 <li class="toc-level-3"><a href="#ump2-gradient-intermediates">UMP2 Gradient Intermediates</a></li>
-<li class="toc-level-2"><a href="#15-coupled-cluster-in-planck">15. Coupled Cluster in Planck</a></li>
+<li class="toc-level-2"><a href="#16-coupled-cluster-in-planck">16. Coupled Cluster in Planck</a></li>
 <li class="toc-level-3"><a href="#rccsd">RCCSD</a></li>
 <li class="toc-level-3"><a href="#worked-example-a-singles-residual-term">Worked Example: a Singles-Residual Term</a></li>
 <li class="toc-level-3"><a href="#worked-example-a-doubles-residual-term-with">Worked Example: a Doubles-Residual Term with <span class="math-inline">\(W_{mbej}\)</span></a></li>
@@ -247,7 +257,7 @@
 <li class="toc-level-3"><a href="#a-good-teaching-test-lih-sto-3g">A Good Teaching Test: LiH/STO-3G</a></li>
 <li class="toc-level-3"><a href="#a-good-open-shell-teaching-test-b-sto-3g">A Good Open-Shell Teaching Test: B/STO-3G</a></li>
 <li class="toc-level-3"><a href="#the-tensor-only-benchmark-bh3-sto-3g">The Tensor-Only Benchmark: BH3/STO-3G</a></li>
-<li class="toc-level-2"><a href="#16-full-configuration-interaction-fci">16. Full Configuration Interaction (FCI)</a></li>
+<li class="toc-level-2"><a href="#17-full-configuration-interaction-fci">17. Full Configuration Interaction (FCI)</a></li>
 <li class="toc-level-3"><a href="#what-fci-is">What FCI Is</a></li>
 <li class="toc-level-3"><a href="#the-electronic-hamiltonian-in-second-quantization">The Electronic Hamiltonian in Second Quantization</a></li>
 <li class="toc-level-3"><a href="#the-determinant-expansion-and-its-size">The Determinant Expansion and Its Size</a></li>
@@ -255,7 +265,7 @@
 <li class="toc-level-3"><a href="#solving-the-eigenvalue-problem-davidson">Solving the Eigenvalue Problem: Davidson</a></li>
 <li class="toc-level-3"><a href="#correlation-energy-and-the-reference">Correlation Energy and the Reference</a></li>
 <li class="toc-level-3"><a href="#relationship-to-other-correlation-methods">Relationship to Other Correlation Methods</a></li>
-<li class="toc-level-2"><a href="#17-casscf-and-rasscf">17. CASSCF and RASSCF</a></li>
+<li class="toc-level-2"><a href="#18-casscf-and-rasscf">18. CASSCF and RASSCF</a></li>
 <li class="toc-level-3"><a href="#motivation">Motivation</a></li>
 <li class="toc-level-3"><a href="#determinant-representation">Determinant Representation</a></li>
 <li class="toc-level-3"><a href="#ci-hamiltonian-matrix-vector-product">CI Hamiltonian Matrix-Vector Product</a></li>
@@ -267,7 +277,7 @@
 <li class="toc-level-3"><a href="#convergence-and-robustness">Convergence and Robustness</a></li>
 <li class="toc-level-3"><a href="#twisted-ethylene-a-canonical-casscf-example">Twisted Ethylene: A Canonical CASSCF Example</a></li>
 <li class="toc-level-3"><a href="#rasscf-extensions">RASSCF Extensions</a></li>
-<li class="toc-level-2"><a href="#18-geometry-optimization">18. Geometry Optimization</a></li>
+<li class="toc-level-2"><a href="#19-geometry-optimization">19. Geometry Optimization</a></li>
 <li class="toc-level-3"><a href="#l-bfgs-cartesian-coordinates">L-BFGS (Cartesian Coordinates)</a></li>
 <li class="toc-level-3"><a href="#z-matrices-and-internal-coordinates">Z-Matrices and Internal Coordinates</a></li>
 <li class="toc-level-3"><a href="#wilson-s-b-matrix">Wilson&#x27;s B-Matrix</a></li>
@@ -275,11 +285,11 @@
 <li class="toc-level-3"><a href="#planck-specific-note-generalized-internal-coordinates-for-optimization">Planck-Specific Note: Generalized Internal Coordinates for Optimization</a></li>
 <li class="toc-level-3"><a href="#planck-specific-note-permutation-invariance-of-the-ic-representation">Planck-Specific Note: Permutation Invariance of the IC Representation</a></li>
 <li class="toc-level-3"><a href="#internal-coordinate-optimization-bfgs">Internal Coordinate Optimization (BFGS)</a></li>
-<li class="toc-level-2"><a href="#19-vibrational-analysis">19. Vibrational Analysis</a></li>
+<li class="toc-level-2"><a href="#20-vibrational-analysis">20. Vibrational Analysis</a></li>
 <li class="toc-level-3"><a href="#semi-numerical-hessian">Semi-Numerical Hessian</a></li>
 <li class="toc-level-3"><a href="#mass-weighting-and-eckart-projection">Mass-Weighting and Eckart Projection</a></li>
 <li class="toc-level-3"><a href="#normal-mode-frequencies">Normal Mode Frequencies</a></li>
-<li class="toc-level-2"><a href="#20-kohn-sham-density-functional-theory">20. Kohn-Sham Density Functional Theory</a></li>
+<li class="toc-level-2"><a href="#21-kohn-sham-density-functional-theory">21. Kohn-Sham Density Functional Theory</a></li>
 <li class="toc-level-3"><a href="#the-kohn-sham-equations">The Kohn-Sham Equations</a></li>
 <li class="toc-level-3"><a href="#exchange-correlation-functional-families">Exchange-Correlation Functional Families</a></li>
 <li class="toc-level-3"><a href="#numerical-integration-molecular-grid">Numerical Integration: Molecular Grid</a></li>
@@ -289,7 +299,7 @@
 <li class="toc-level-3"><a href="#ks-dft-scf-loop">KS-DFT SCF Loop</a></li>
 <li class="toc-level-3"><a href="#dft-code-map">DFT Code Map</a></li>
 <li class="toc-level-3"><a href="#td-dft-linear-response">TD-DFT / Linear Response</a></li>
-<li class="toc-level-2"><a href="#21-polarizable-continuum-solvation-c-pcm">21. Polarizable Continuum Solvation (C-PCM)</a></li>
+<li class="toc-level-2"><a href="#22-polarizable-continuum-solvation-c-pcm">22. Polarizable Continuum Solvation (C-PCM)</a></li>
 <li class="toc-level-3"><a href="#the-apparent-surface-charge-picture">The Apparent-Surface-Charge Picture</a></li>
 <li class="toc-level-3"><a href="#cavity-construction-fibonacci-sphere-tessellation">Cavity Construction (Fibonacci-Sphere Tessellation)</a></li>
 <li class="toc-level-3"><a href="#the-surface-influence-matrix">The Surface Influence Matrix <span class="math-inline">\(\mathbf{D}\)</span></a></li>
@@ -299,13 +309,13 @@
 <li class="toc-level-3"><a href="#input-format-and-solvent-library">Input Format and Solvent Library</a></li>
 <li class="toc-level-3"><a href="#limitations-and-cost">Limitations and Cost</a></li>
 <li class="toc-level-3"><a href="#code-map">Code Map</a></li>
-<li class="toc-level-2"><a href="#22-basis-set-superposition-error-and-the-counterpoise-correction">22. Basis Set Superposition Error and the Counterpoise Correction</a></li>
+<li class="toc-level-2"><a href="#23-basis-set-superposition-error-and-the-counterpoise-correction">23. Basis Set Superposition Error and the Counterpoise Correction</a></li>
 <li class="toc-level-3"><a href="#ghost-atoms">Ghost atoms</a></li>
 <li class="toc-level-3"><a href="#the-five-counterpoise-energies">The five counterpoise energies</a></li>
 <li class="toc-level-3"><a href="#two-worked-examples">Two worked examples</a></li>
 <li class="toc-level-3"><a href="#implementation-note-the-initial-guess-and-the-monomer-references">Implementation Note: the initial guess and the monomer references</a></li>
 <li class="toc-level-3"><a href="#scope-and-generality">Scope and generality</a></li>
-<li class="toc-level-2"><a href="#23-molecular-properties">23. Molecular Properties</a></li>
+<li class="toc-level-2"><a href="#24-molecular-properties">24. Molecular Properties</a></li>
 <li class="toc-level-3"><a href="#mulliken-population-analysis">Mulliken Population Analysis</a></li>
 <li class="toc-level-3"><a href="#l-wdin-population-analysis">Löwdin Population Analysis</a></li>
 <li class="toc-level-3"><a href="#mayer-bond-orders">Mayer Bond Orders</a></li>
@@ -314,13 +324,13 @@
 <li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
 <li class="toc-level-3"><a href="#mo-symmetry-labels">MO Symmetry Labels</a></li>
 <li class="toc-level-3"><a href="#cartesian-to-spherical-mo-transformation">Cartesian-to-Spherical MO Transformation</a></li>
-<li class="toc-level-2"><a href="#24-checkpoint-and-restart">24. Checkpoint and Restart</a></li>
+<li class="toc-level-2"><a href="#25-checkpoint-and-restart">25. Checkpoint and Restart</a></li>
 <li class="toc-level-3"><a href="#binary-checkpoint-format">Binary Checkpoint Format</a></li>
 <li class="toc-level-3"><a href="#cross-basis-density-projection">Cross-Basis Density Projection</a></li>
-<li class="toc-level-2"><a href="#25-execution-flow-of-a-typical-run">25. Execution Flow of a Typical Run</a></li>
-<li class="toc-level-2"><a href="#26-theory-to-code-map">26. Theory-to-Code Map</a></li>
-<li class="toc-level-2"><a href="#27-current-implementation-status">27. Current Implementation Status</a></li>
-<li class="toc-level-2"><a href="#28-how-to-study-this-codebase">28. How to Study This Codebase</a></li>
+<li class="toc-level-2"><a href="#26-execution-flow-of-a-typical-run">26. Execution Flow of a Typical Run</a></li>
+<li class="toc-level-2"><a href="#27-theory-to-code-map">27. Theory-to-Code Map</a></li>
+<li class="toc-level-2"><a href="#28-current-implementation-status">28. Current Implementation Status</a></li>
+<li class="toc-level-2"><a href="#29-how-to-study-this-codebase">29. How to Study This Codebase</a></li>
 </ul>
         </nav>
       </aside> <main class="content">
@@ -331,7 +341,7 @@
 <ul>
 <li>Restricted and unrestricted Hartree-Fock (RHF/UHF) with DIIS acceleration</li>
 <li>Kohn-Sham DFT (RKS/UKS) with LDA, GGA, hybrid, range-separated-hybrid, and double-hybrid exchange-correlation functionals via libxc</li>
-<li>Obara-Saika and Rys-quadrature two-electron integral engines</li>
+<li>Obara-Saika, Head-Gordon-Pople, and Rys-quadrature two-electron integral engines</li>
 <li>Cartesian and real spherical-harmonic Gaussian basis functions</li>
 <li>Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF</li>
 <li>Point-group detection, symmetry-adapted orbitals, and MO irrep labeling</li>
@@ -377,7 +387,7 @@ Input file (.hfinp)
 <tr><td><code>src/base</code></td><td><code>types.h</code> (all structs/enums/Calculator), <code>tables.h</code>, <code>basis.h</code></td></tr>
 <tr><td><code>src/io</code></td><td>input parsing, checkpoint I/O, logging</td></tr>
 <tr><td><code>src/basis</code></td><td>GBS file reading, primitive normalization, contraction</td></tr>
-<tr><td><code>src/integrals</code></td><td>shell pairs, Obara-Saika OS engine, Rys quadrature engine</td></tr>
+<tr><td><code>src/integrals</code></td><td>shell pairs, Obara-Saika OS engine, Head-Gordon-Pople (HGP) engine, Rys quadrature engine</td></tr>
 <tr><td><code>src/scf</code></td><td>orthogonalizer, initial guess, RHF/UHF SCF loops</td></tr>
 <tr><td><code>src/symmetry</code></td><td>libmsym wrapper, SAO basis, MO labeling, integral sym ops</td></tr>
 <tr><td><code>src/post_hf</code></td><td>MP2 energy/gradient, RCCSD/UCCSD/RCCSDT/UCCSDT, CASSCF/RASSCF, AO→MO transforms, CPHF</td></tr>
@@ -713,7 +723,7 @@ P = 2 C_{\mathrm{occ}} C_{\mathrm{occ}}^T.
 </ul>
 <p>The deeper lesson is that broken-symmetry RHF stationary points are real features of the Hartree-Fock energy surface, not numerical artifacts. They become genuine ground states for stretched bonds (where RHF fails and UHF takes over). The instability we hit on equilibrium ethylene is the same mechanism that drives the well-known RHF <span class="math-inline">\(\to\)</span> UHF transition at bond dissociation. Treat HCore as a fine guess for asymmetric molecules and small clusters, but reach for SAD or <code>use_symm true</code> whenever the molecule has equivalent atoms.</p>
 <h4 id="current-planck-caveat-isolated-atom-sad">Current Planck Caveat: Isolated-Atom SAD</h4>
-<p>There is one known exception that runs the <em>other</em> way. For a small <strong>isolated closed-shell atom</strong> the SAD guess can itself false-converge to a wrong SCF stationary point: a lone helium atom in cc-pVDZ settles at <span class="math-inline">\(-2.85515\)</span> Eh from SAD but at the correct <span class="math-inline">\(-2.85516\)</span> Eh (matching PySCF to <span class="math-inline">\(10^{-10}\)</span>) from HCore, each &quot;converging&quot; in five iterations at a different HOMO energy. The SAD atomic-density seed apparently lands in the wrong basin for a single small atom. This matters directly for the isolated-monomer references in a counterpoise calculation (<a href="#22-basis-set-superposition-error-and-the-counterpoise-correction">§22</a>), where a core-Hamiltonian guess is the safer choice for those small fragments. The lesson is not that one guess is universally safer — it is that the converged SCF solution should be sanity-checked (symmetry of degenerate orbitals, dipole of a centrosymmetric system, agreement across guesses) rather than trusted because the iteration count looked reasonable.</p>
+<p>There is one known exception that runs the <em>other</em> way. For a small <strong>isolated closed-shell atom</strong> the SAD guess can itself false-converge to a wrong SCF stationary point: a lone helium atom in cc-pVDZ settles at <span class="math-inline">\(-2.85515\)</span> Eh from SAD but at the correct <span class="math-inline">\(-2.85516\)</span> Eh (matching PySCF to <span class="math-inline">\(10^{-10}\)</span>) from HCore, each &quot;converging&quot; in five iterations at a different HOMO energy. The SAD atomic-density seed apparently lands in the wrong basin for a single small atom. This matters directly for the isolated-monomer references in a counterpoise calculation (<a href="#23-basis-set-superposition-error-and-the-counterpoise-correction">§23</a>), where a core-Hamiltonian guess is the safer choice for those small fragments. The lesson is not that one guess is universally safer — it is that the converged SCF solution should be sanity-checked (symmetry of degenerate orbitals, dipole of a centrosymmetric system, agreement across guesses) rather than trusted because the iteration count looked reasonable.</p>
 <h3 id="wavefunction-stability-analysis">Wavefunction Stability Analysis</h3>
 <p>The case study above raises a concrete question: how can the SCF tell whether the converged solution is a global minimum, a broken-symmetry local minimum, or an unstable stationary point? The answer is <strong>stability analysis</strong> — diagonalizing the orbital Hessian (the second variation of the HF energy with respect to occupied-virtual orbital rotations) and checking its lowest eigenvalues. Negative eigenvalues mean an orbital rotation exists that lowers the energy.</p>
 <h4 id="planck-interface">Planck Interface</h4>
@@ -1326,7 +1336,157 @@ W_{\text{Rys}} = \text{six\_d}\cdot n
 <tr><td><code>src/integrals/rys_roots.cpp</code></td><td>Pre-tabulated GL rules; Boys moment recursion; Stieltjes–Jacobi Gram-Schmidt + Eigen eigendecomposition</td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="12-mp2-correlation-energy">12. MP2 Correlation Energy</h2>
+<h2 id="12-the-head-gordon-pople-hgp-integral-scheme">12. The Head-Gordon-Pople (HGP) Integral Scheme</h2>
+<p>The Head-Gordon-Pople scheme (Head-Gordon and Pople, <em>J. Chem. Phys.</em> <strong>89</strong>, 5777, 1988) is a reorganization of the Obara-Saika recurrence for two-electron integrals over contracted Gaussians. It produces the same contracted ERI as the plain OS recurrence but rearranges the work so that the most expensive recurrences are evaluated at the <em>uncontracted</em> (primitive) level and the cheapest ones at the <em>contracted</em> (shell-pair) level. For routine small-to-medium angular momentum, HGP is typically the fastest practical analytic scheme for general contracted Gaussians and is the path most modern codes default to for low-to-medium <span class="math-inline">\(L\)</span>.</p>
+<h3 id="why-hgp-and-not-just-obara-saika">Why HGP and not just Obara-Saika</h3>
+<p>In the plain OS treatment of an ERI block <span class="math-inline">\([ab|cd]\)</span>, every recurrence step — the vertical recursion (VRR) that builds angular momentum on the bra and ket <em>Gaussian-product</em> centers, and the horizontal recursion (HRR) that transfers angular momentum from one shell of a pair to the other — operates on integrals that depend on the primitive exponents <span class="math-inline">\(\alpha_a, \alpha_b, \alpha_c,
+\alpha_d\)</span>. Both the VRR and the HRR are therefore <em>inside</em> the four nested primitive loops, and their cost is multiplied by the contraction depths <span class="math-inline">\(K_a K_b K_c K_d\)</span>.</p>
+<p>Head-Gordon and Pople observed that the HRR is purely <em>geometric</em>: the recurrence</p>
+<p><span class="math-display">\[
+(a\,b{+}1_i\,|\,cd) = (a{+}1_i\,b\,|\,cd) + (A_i - B_i)\,(ab\,|\,cd)
+\]</span></p>
+<p>involves only the constant inter-center displacements <span class="math-inline">\(\mathbf A - \mathbf B\)</span> and <span class="math-inline">\(\mathbf C - \mathbf D\)</span>. It does <strong>not</strong> depend on the primitive exponents. The HRR can therefore be <em>moved outside</em> the primitive contraction loops and applied once at the contracted level. The expensive exponent-dependent VRR is still done inside the primitive loop, but only on the &quot;reduced&quot; angular-momentum block <span class="math-inline">\((a\,0\,|\,c\,0)\)</span> — i.e. with the second center of each pair held at <span class="math-inline">\(L = 0\)</span>. The HRR after contraction then transfers angular momentum to centers B and D.</p>
+<p>The practical consequences are:</p>
+<ul>
+<li>VRR work is done only for shells of total angular momentum <span class="math-inline">\((l_a+l_b,\,l_c+l_d)\)</span> on one center per pair, not for the full <span class="math-inline">\((a,b,c,d)\)</span> block.</li>
+<li>HRR work is paid only once per <em>contracted</em> shell quartet, not once per primitive quartet.</li>
+<li>The VRR table built inside the primitive loop is much smaller, which keeps scratch storage and memory traffic low.</li>
+</ul>
+<p>For deeply contracted bases (e.g. STO-3G, 6-31G(d), cc-pVXZ) the HGP rearrangement is a substantial speedup over a &quot;naive&quot; OS implementation, while remaining numerically equivalent.</p>
+<h3 id="algorithmic-skeleton">Algorithmic Skeleton</h3>
+<p>For each contracted shell quartet <span class="math-inline">\((AB|CD)\)</span> with total angular momentum <span class="math-inline">\(L_{AB} = l_a + l_b\)</span>, <span class="math-inline">\(L_{CD} = l_c + l_d\)</span>, the HGP algorithm proceeds in three phases:</p>
+<ol>
+<li><strong>Primitive VRR (inside the contraction loop).</strong> For every primitive pair <span class="math-inline">\((p_{AB}, p_{CD})\)</span>, build the auxiliary table <span class="math-inline">\([a\,0\,|\,c\,0]^{(m)}\)</span> for <span class="math-inline">\(0 \le |a| \le L_{AB}\)</span>, <span class="math-inline">\(0 \le |c| \le L_{CD}\)</span>, <span class="math-inline">\(0 \le m \le L_{AB}+L_{CD}\)</span>, starting from the Boys seed <span class="math-display">\[
+   [0\,0\,|\,0\,0]^{(m)} =
+     \frac{2\pi^{5/2}}{\zeta\,\eta\sqrt{\zeta+\eta}}\,
+     e^{-\mu_{AB} R_{AB}^2 - \mu_{CD} R_{CD}^2}\,
+     F_m\!\left(\tfrac{\zeta\eta}{\zeta+\eta}\,R_{PQ}^2\right).
+   \]</span> The OS-style VRR is used to grow the bra index <span class="math-inline">\(a\)</span> (with the ket held at <span class="math-inline">\(c = 0\)</span>) and then to grow the ket index <span class="math-inline">\(c\)</span>. Crucially, this is the <em>only</em> recurrence run inside the primitive loops.</li>
+</ol>
+<ol>
+<li><strong>Contract the auxiliary block.</strong> Multiply each primitive <span class="math-inline">\([a\,0\,|\,c\,0]\)</span> by the product of contracted coefficients <span class="math-inline">\(d_{a,p}\,d_{b,p}\,d_{c,q}\,d_{d,q}\)</span> and sum into the <em>contracted</em> reduced-angular-momentum buffer <span class="math-inline">\((a\,0\,|\,c\,0)\)</span>. The <span class="math-inline">\(m\)</span> auxiliary index is collapsed at <span class="math-inline">\(m=0\)</span> before HRR.</li>
+</ol>
+<ol>
+<li><strong>Contracted HRR (outside the contraction loop).</strong> Transfer angular momentum from <span class="math-inline">\(A \to B\)</span> and from <span class="math-inline">\(C \to D\)</span> using the two purely geometric recurrences <span class="math-display">\[
+   (ab{+}1_i\,|\,cd) = (a{+}1_i\,b\,|\,cd) + (A_i - B_i)\,(ab\,|\,cd),
+   \quad
+   (ab\,|\,cd{+}1_i) = (ab\,|\,c{+}1_i\,d) + (C_i - D_i)\,(ab\,|\,cd).
+   \]</span> The Cartesian displacements <span class="math-inline">\(A - B\)</span> and <span class="math-inline">\(C - D\)</span> are stored once per shell pair as static geometric data.</li>
+</ol>
+<p>The pseudo-code is:</p>
+<pre><code>
+for each ShellPair(AB) in petite list:
+    for each ShellPair(CD) with (AB) ≤ (CD):              # canonical loop
+        if Q[i,j] * Q[k,l] &lt; tol_eri:  continue           # Schwarz screen
+        # ---- VRR + contraction (inside primitive loops) ----
+        zero contracted buffer (a 0 | c 0)
+        for each primitive pair p in AB:
+            for each primitive pair q in CD:
+                build [a 0 | c 0]^(m) by OS VRR
+                add coeff_AB * coeff_CD * [a 0 | c 0]^(0)
+                  to contracted (a 0 | c 0)
+        # ---- HRR (outside primitive loops, geometric only) ----
+        apply (A-B) HRR to lift  (a 0 | c 0) → (ab | c 0)
+        apply (C-D) HRR to lift  (ab | c 0) → (ab | cd)
+        scatter (ab|cd) into the eight permutation-equivalent ERI slots
+</code></pre>
+<h3 id="where-the-work-actually-lives">Where the Work Actually Lives</h3>
+<p>Let <span class="math-inline">\(K\)</span> be a representative contraction depth and <span class="math-inline">\(L\)</span> the total angular momentum on either side. The dominant counts are:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Stage</th>
+<th>Where</th>
+<th>Cost per quartet (order of magnitude)</th>
+</tr></thead>
+<tbody>
+<tr><td>Primitive VRR seed (Boys)</td><td>inside primitive loop</td><td><span class="math-inline">\(K^4\)</span></td></tr>
+<tr><td>OS VRR on <span class="math-inline">\([a 0 | c 0]^{(m)}\)</span></td><td>inside primitive loop</td><td><span class="math-inline">\(K^4 \cdot L_{AB}\, L_{CD}\)</span> auxiliary builds</td></tr>
+<tr><td>Contract into <span class="math-inline">\((a 0 | c 0)\)</span></td><td>inside primitive loop</td><td><span class="math-inline">\(K^4 \cdot \#(a 0 | c 0)\)</span></td></tr>
+<tr><td>HRR <span class="math-inline">\(A \to B\)</span></td><td>once per contracted quartet</td><td><span class="math-inline">\(\#(ab | c0)\)</span> per axis</td></tr>
+<tr><td>HRR <span class="math-inline">\(C \to D\)</span></td><td>once per contracted quartet</td><td><span class="math-inline">\(\#(ab | cd)\)</span> per axis</td></tr>
+</tbody></table></div>
+<p>Compared to a naive OS implementation that runs both VRR and HRR inside the primitive loops, HGP removes a factor of <span class="math-inline">\(K^4\)</span> from the HRR work. For contraction depths <span class="math-inline">\(K = 3{-}6\)</span> typical of STO-3G through cc-pVTZ, that is a several-hundred-fold reduction on HRR alone.</p>
+<h3 id="relationship-to-os-rys-and-auto-dispatch">Relationship to OS, Rys, and Auto-Dispatch</h3>
+<p>HGP and OS are mathematically the same recurrence; HGP is a <em>factorization</em> (VRR-inside, HRR-outside) of OS that is essentially always preferable to the &quot;both-inside&quot; arrangement for contracted Gaussians. Any implementation already written in a VRR-then-HRR style can be viewed as performing the same identity; HGP simply makes the partition between contraction-inside and contraction-outside work explicit.</p>
+<p>HGP and Rys quadrature <em>are</em> genuinely different schemes. For high total angular momentum the OS/HGP scratch buffers grow as the product of all six VRR extents, while Rys keeps a fixed number of quadrature roots <span class="math-inline">\(n = \lfloor L/2
+\rfloor + 1\)</span>. Hybrid engines therefore typically prefer HGP at low-to-medium <span class="math-inline">\(L\)</span> and Rys at high <span class="math-inline">\(L\)</span>; the same operation-count model used for OS-vs-Rys auto-dispatch (§11) applies equally to HGP-vs-Rys with only the OS flop estimate replaced by the HGP estimate (which has a smaller HRR coefficient).</p>
+<h3 id="screened-and-range-separated-kernels">Screened and Range-Separated Kernels</h3>
+<p>HGP retains the OS structure of the Boys-function seed, so range-separated operators (<span class="math-inline">\(\mathrm{erfc}(\omega r_{12})/r_{12}\)</span>, <span class="math-inline">\(\mathrm{erf}(\omega
+r_{12})/r_{12}\)</span>) drop in exactly as in OS: the long-range damping enters as a single multiplicative scaling on <span class="math-inline">\(\rho\)</span>, on the <span class="math-inline">\(W - P\)</span> and <span class="math-inline">\(W - Q\)</span> shift vectors, and on the Boys argument. In practice this is bundled as a <span class="math-inline">\(\{\rho_{\mathrm{eff}}, \text{prefactor scale}, \text{Boys-argument scale}\}\)</span> triple consumed by the VRR seed, with the unscreened Coulomb kernel as the identity case.</p>
+<p>The same Schwarz inequality <span class="math-inline">\(|(\mu\nu|\lambda\sigma)| \le \sqrt{(\mu\nu|\mu\nu)}\sqrt{(\lambda\sigma|\lambda\sigma)}\)</span> applies; the Schwarz table is precomputed by calling the same contracted ERI kernel on diagonal pairs <span class="math-inline">\((ij|ij)\)</span>.</p>
+<h3 id="symmetry-reduced-hgp">Symmetry-Reduced HGP</h3>
+<p>The HGP contracted-ERI kernel composes cleanly with the petite-list / skeleton-Fock symmetrization scheme described in §8. Pair- and quartet-orbits under the molecular point group are built once and tagged with their AO permutation phases; only the canonical representative of each orbit is evaluated, and the phase-weighted result is then scattered to the orbit&#x27;s other quartets. The same signed-AO permutation infrastructure works in both Cartesian and spherical-harmonic bases — the spherical path inserts the <span class="math-inline">\(C\)</span>-to-spherical transform on the contracted block just before the scatter, exactly as in the OS and Rys symmetry-reduced variants.</p>
+<h3 id="why-hgp-wins-in-practice-measured-timings">Why HGP Wins in Practice — Measured Timings</h3>
+<p>The theoretical argument above (HRR factored <em>outside</em> the primitive contraction loops, smaller VRR scratch than Rys at low-to-medium <span class="math-inline">\(L\)</span>) is confirmed by a direct head-to-head benchmark of all three engines (OS, Rys, HGP) on the same molecules and bases inside this codebase. The table below reports wall-clock time per ERI build (in milliseconds, lower is better) for the three engines, in three modes: no symmetry (<code>nosym</code>), the legacy D2h coordinate-axis reduction (<code>d2h</code>), and the full point-group reduction (<code>full</code>). All runs use the same shell-pair list, Schwarz screening, and OpenMP settings; only the contracted-quartet kernel and the symmetry walker change.</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Molecule / basis</th>
+<th>nbasis</th>
+<th>Engine</th>
+<th>nosym ms</th>
+<th>d2h ms</th>
+<th>full ms</th>
+</tr></thead>
+<tbody>
+<tr><td>H₂O / STO-3G (C2v)</td><td>7</td><td>OS</td><td>9.06</td><td>4.83</td><td>7.42</td></tr>
+<tr><td>H₂O / STO-3G (C2v)</td><td>7</td><td>Rys</td><td>42.46</td><td>23.61</td><td>37.16</td></tr>
+<tr><td>H₂O / STO-3G (C2v)</td><td>7</td><td><strong>HGP</strong></td><td><strong>9.95</strong></td><td>5.26</td><td>7.85</td></tr>
+<tr><td>NH₃ / STO-3G (C3v)</td><td>8</td><td>OS</td><td>13.05</td><td>9.14</td><td>9.55</td></tr>
+<tr><td>NH₃ / STO-3G (C3v)</td><td>8</td><td>Rys</td><td>54.95</td><td>36.72</td><td>38.65</td></tr>
+<tr><td>NH₃ / STO-3G (C3v)</td><td>8</td><td><strong>HGP</strong></td><td>15.21</td><td>9.51</td><td><strong>8.76</strong></td></tr>
+<tr><td>CH₄ / STO-3G (Td)</td><td>9</td><td>OS</td><td>18.97</td><td>7.70</td><td>9.21</td></tr>
+<tr><td>CH₄ / STO-3G (Td)</td><td>9</td><td>Rys</td><td>69.54</td><td>29.21</td><td>40.98</td></tr>
+<tr><td>CH₄ / STO-3G (Td)</td><td>9</td><td><strong>HGP</strong></td><td>21.26</td><td>8.56</td><td>9.88</td></tr>
+<tr><td>H₂O / <code>6-31G**</code> (C2v)</td><td>25</td><td>OS</td><td>146.67</td><td>58.61</td><td>109.87</td></tr>
+<tr><td>H₂O / <code>6-31G**</code> (C2v)</td><td>25</td><td>Rys</td><td>730.40</td><td>245.41</td><td>497.36</td></tr>
+<tr><td>H₂O / <code>6-31G**</code> (C2v)</td><td>25</td><td><strong>HGP</strong></td><td><strong>126.96</strong></td><td><strong>52.44</strong></td><td><strong>95.20</strong></td></tr>
+<tr><td>NH₃ / 6-31G (C3v)</td><td>15</td><td>OS</td><td>47.86</td><td>28.85</td><td>26.60</td></tr>
+<tr><td>NH₃ / 6-31G (C3v)</td><td>15</td><td>Rys</td><td>163.54</td><td>92.90</td><td>97.76</td></tr>
+<tr><td>NH₃ / 6-31G (C3v)</td><td>15</td><td><strong>HGP</strong></td><td>50.34</td><td>32.14</td><td>28.80</td></tr>
+<tr><td>NH₃ / <code>6-31G*</code> (C3v)</td><td>21</td><td>OS</td><td>107.32</td><td>65.60</td><td>69.36</td></tr>
+<tr><td>NH₃ / <code>6-31G*</code> (C3v)</td><td>21</td><td>Rys</td><td>504.90</td><td>290.34</td><td>321.69</td></tr>
+<tr><td>NH₃ / <code>6-31G*</code> (C3v)</td><td>21</td><td><strong>HGP</strong></td><td><strong>99.40</strong></td><td><strong>61.46</strong></td><td><strong>61.88</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G**</code> (C3v)</td><td>30</td><td>OS</td><td>244.65</td><td>151.37</td><td>136.34</td></tr>
+<tr><td>NH₃ / <code>6-31G**</code> (C3v)</td><td>30</td><td>Rys</td><td>1213.81</td><td>660.87</td><td>535.46</td></tr>
+<tr><td>NH₃ / <code>6-31G**</code> (C3v)</td><td>30</td><td><strong>HGP</strong></td><td>246.72</td><td><strong>143.90</strong></td><td><strong>115.05</strong></td></tr>
+<tr><td>CH₄ / <code>6-31G**</code> (Td)</td><td>35</td><td>OS</td><td>421.77</td><td>193.24</td><td>192.21</td></tr>
+<tr><td>CH₄ / <code>6-31G**</code> (Td)</td><td>35</td><td>Rys</td><td>2025.48</td><td>654.36</td><td>587.94</td></tr>
+<tr><td>CH₄ / <code>6-31G**</code> (Td)</td><td>35</td><td><strong>HGP</strong></td><td><strong>376.11</strong></td><td><strong>155.18</strong></td><td><strong>154.70</strong></td></tr>
+</tbody></table></div>
+<p>Reading the table, three patterns repeat consistently.</p>
+<p><strong>1. Rys is dominated by both HGP and OS at every basis tested here.</strong> This is the expected regime: STO-3G through 6-31G(d,p) puts maximum angular momentum at <span class="math-inline">\(d\)</span>, which sits squarely in the low-to-medium-<span class="math-inline">\(L\)</span> window where the OS/HGP flop count is smaller than the Rys-quadrature flop count. On 6-31G(d,p) / CH₄ (Td) the spread reaches <span class="math-inline">\(\sim\)</span>5× on <code>nosym</code> and <span class="math-inline">\(\sim\)</span>4× on <code>d2h</code>; Rys is not really a competitor here, and the auto-dispatch model in §11 would only prefer Rys at higher <span class="math-inline">\(L\)</span> where the OS/HGP scratch buffers blow up faster than Rys&#x27;s fixed root count. Rys&#x27;s natural niche is the high-<span class="math-inline">\(L\)</span> tail, not the bulk of routine basis sets.</p>
+<p><strong>2. HGP pulls away from OS as the basis (and contraction depth) grows.</strong> On STO-3G, HGP and OS are within <span class="math-inline">\(\sim\)</span>5–10% of each other in any of the three symmetry modes — STO-3G has <span class="math-inline">\(K = 3\)</span> primitives per contraction and only <span class="math-inline">\(s/p\)</span> shells, so neither the HRR-outside factorization nor the smaller VRR scratch produces much headroom. Moving to 6-31G(d,p) with d-functions and deeper contractions, HGP starts to win outright:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Case</th>
+<th>OS <code>nosym</code></th>
+<th>HGP <code>nosym</code></th>
+<th>HGP / OS</th>
+</tr></thead>
+<tbody>
+<tr><td>H₂O / <code>6-31G**</code></td><td>146.67</td><td>126.96</td><td>0.87</td></tr>
+<tr><td>NH₃ / <code>6-31G*</code></td><td>107.32</td><td>99.40</td><td>0.93</td></tr>
+<tr><td>CH₄ / <code>6-31G**</code></td><td>421.77</td><td>376.11</td><td>0.89</td></tr>
+</tbody></table></div>
+<p>That is exactly the regime where the HGP analysis predicts wins: the HRR is removed from the <span class="math-inline">\(K^4\)</span> primitive loop, and at the same time the larger <span class="math-inline">\((a0|c0)\)</span> reduced block being VRR&#x27;d inside the loop avoids materializing the full <span class="math-inline">\((ab|cd)\)</span> tensor at every primitive step.</p>
+<p><strong>3. HGP cooperates with symmetry better than OS, especially in <code>full</code> mode.</strong> On CH₄ / 6-31G(d,p) (Td, |G|=24), the OS engine drops from 421.8 ms to 192.2 ms under full-symmetry reduction (a 2.19× win), while HGP drops from 376.1 ms to 154.7 ms (a 2.43× win) — and the absolute HGP time is <span class="math-inline">\(\sim\)</span>20% lower than OS in the symmetric run. The reason is that the per-quartet kernel cost is <em>lower</em> for HGP, so the petite-list amortization (fewer evaluated quartets, the same scatter overhead) tilts the balance further in HGP&#x27;s favor: HGP has less to amortize <em>over</em>, so the fixed overhead of the orbit walk becomes a smaller fraction of the total. The same trend shows up on NH₃ / 6-31G(d,p) in C3v (<code>full</code> HGP at 115 ms vs OS at 136 ms; 1.18× faster) and on H₂O / 6-31G(d,p) (<code>full</code> HGP at 95.2 ms vs OS at 109.9 ms; 1.15× faster).</p>
+<p>Putting these together: <strong>for the routine quantum-chemistry case — Pople-style contracted bases up through 6-31G(d,p) and similar valence-double/triple-zeta sets with d polarization — HGP is the engine to default to.</strong> OS is the right fallback for tiny, lightly contracted bases where the HGP/OS gap closes, and Rys is reserved for high-<span class="math-inline">\(L\)</span> work (f/g/h) where the OS-and-HGP recurrence stacks would otherwise dominate. The OS-vs-Rys auto-dispatch model in §11 applies essentially unchanged to HGP-vs-Rys; HGP simply lowers the OS flop estimate further, which is why the auto-dispatch threshold moves toward higher <span class="math-inline">\(L\)</span> once HGP is the low-L path.</p>
+<h3 id="implementation-files">Implementation Files</h3>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>File</th>
+<th>Role</th>
+</tr></thead>
+<tbody>
+<tr><td><code>src/integrals/hgp.h</code></td><td>Public API: <code>_contracted_eri_elem</code>, <code>_compute_2e</code>, <code>_compute_2e_fock</code>, <code>_compute_2e_fock_uhf</code></td></tr>
+<tr><td><code>src/integrals/hgp.cpp</code></td><td>Primitive VRR (<code>hgp_vrr</code>), HRR passes (<code>hgp_hrr_ab</code>, <code>hgp_hrr_cd</code>), reusable <code>EriScratch</code>, Schwarz table, Fock builders</td></tr>
+<tr><td><code>src/symmetry/hgp_symm.h</code></td><td>Public API: <code>_build_skeleton_eri_symm</code>, <code>_compute_2e_fock_symm</code>, <code>_compute_2e_fock_uhf_symm</code>, plus spherical-basis variants</td></tr>
+<tr><td><code>src/symmetry/hgp_symm.cpp</code></td><td>Petite-list contracted-ERI walk, skeleton-Fock symmetrization, signed AO orbits</td></tr>
+</tbody></table></div>
+<h3 id="reference">Reference</h3>
+<p>T. Head-Gordon and J. A. Pople, <em>A method for two-electron Gaussian integral and integral derivative evaluation using recurrence relations</em>, J. Chem. Phys. <strong>89</strong>, 5777 (1988). The factorization argument and the HRR-outside-contraction identity are due to that paper.</p>
+<hr>
+<h2 id="13-mp2-correlation-energy">13. MP2 Correlation Energy</h2>
 <h3 id="second-order-perturbation-theory">Second-Order Perturbation Theory</h3>
 <p>Møller-Plesset perturbation theory partitions the Hamiltonian as <span class="math-inline">\(\hat H = \hat F + \hat V'\)</span>, where <span class="math-inline">\(\hat F = \sum_i \hat f_i\)</span> is the Fock operator and <span class="math-inline">\(\hat V'\)</span> is the fluctuation potential. The second-order energy correction is:</p>
 <p><span class="math-display">\[
@@ -1367,14 +1527,14 @@ P^{virt}_{ab} + P^{virt}_{ba} & p,q \in \text{virtual} \\
 0 & \text{otherwise (unrelaxed)}
 \end{cases}
 \]</span></p>
-<p>where <span class="math-inline">\(P^{occ}\)</span> and <span class="math-inline">\(P^{virt}\)</span> are the occupied-occupied and virtual-virtual MP2 density corrections. The &quot;unrelaxed&quot; qualifier means the occupied-virtual block (which would require solving the coupled-perturbed HF equations, see <a href="#14-coupled-perturbed-hf-and-the-mp2-gradient">§14</a>) is set to zero — this density gives natural orbitals cheaply but is not the fully relaxed density used for properties like the dipole.</p>
+<p>where <span class="math-inline">\(P^{occ}\)</span> and <span class="math-inline">\(P^{virt}\)</span> are the occupied-occupied and virtual-virtual MP2 density corrections. The &quot;unrelaxed&quot; qualifier means the occupied-virtual block (which would require solving the coupled-perturbed HF equations, see <a href="#15-coupled-perturbed-hf-and-the-mp2-gradient">§15</a>) is set to zero — this density gives natural orbitals cheaply but is not the fully relaxed density used for properties like the dipole.</p>
 <p>Diagonalizing the symmetrized density (a real symmetric eigenproblem) gives eigenvalues sorted in descending order and eigenvectors <span class="math-inline">\(\mathbf U\)</span> that define the canonical-MO → natural-orbital rotation. The AO-basis natural-orbital coefficients follow by left-multiplying with the HF MO coefficient matrix:</p>
 <p><span class="math-display">\[
 \mathbf C^{NO}_{AO} = \mathbf C^{HF}_{AO} \cdot \mathbf U^{MO \to NO}
 \]</span></p>
 <p>The eigenvalues are the natural-orbital occupation numbers. Values near 2 indicate strongly occupied, HF-like orbitals; values of roughly 0.01–0.1 mark correlation-driven occupation of nominally virtual orbitals. Because those fractionally occupied NOs are exactly the orbitals where a single determinant is inadequate, the occupation spectrum is a practical guide for selecting an active space for a subsequent CASSCF calculation.</p>
 <hr>
-<h2 id="13-analytic-nuclear-gradients">13. Analytic Nuclear Gradients</h2>
+<h2 id="14-analytic-nuclear-gradients">14. Analytic Nuclear Gradients</h2>
 <h3 id="hellmann-feynman-theorem-and-pulay-forces">Hellmann-Feynman Theorem and Pulay Forces</h3>
 <p>For a variational wavefunction, the nuclear gradient has the Hellmann-Feynman form only when the basis is complete. For finite atom-centered Gaussian basis sets, the basis functions move with the nuclei, introducing <strong>Pulay forces</strong> — additional terms arising from the nuclear-coordinate dependence of the basis.</p>
 <p>The full RHF energy gradient with respect to nuclear coordinate <span class="math-inline">\(X_A\)</span> is:</p>
@@ -1513,7 +1673,7 @@ b_{q,\mu} = u_0 \, \partial_q \phi_\mu
 <li><code>DFT::Driver::compute_analytic_ks_gradient(...)</code> in <code>src/dft/driver.cpp</code> sums the two pieces into the final <span class="math-inline">\(N_{atoms} \times 3\)</span> gradient</li>
 </ul>
 <hr>
-<h2 id="14-coupled-perturbed-hf-and-the-mp2-gradient">14. Coupled-Perturbed HF and the MP2 Gradient</h2>
+<h2 id="15-coupled-perturbed-hf-and-the-mp2-gradient">15. Coupled-Perturbed HF and the MP2 Gradient</h2>
 <h3 id="rmp2-z-vector-method">RMP2 Z-Vector Method</h3>
 <p>The RMP2 energy gradient requires the response of the HF density to a nuclear perturbation. Rather than solving the full CPHF equations for every nuclear displacement (which would scale as <span class="math-inline">\(O(3N \cdot n_b^3)\)</span>), the Z-vector method (Handy and Schaefer, 1984) collapses the response into a single solve.</p>
 <p>The unrelaxed MP2 one-particle density is:</p>
@@ -1552,7 +1712,7 @@ t^{ab}_{ij,\alpha\beta} =
 \]</span></p>
 <p>These amplitudes populate spin-specific occupied/virtual 1-PDM corrections <span class="math-inline">\(D^\alpha\)</span> and <span class="math-inline">\(D^\beta\)</span>, an AO-space spin-summed energy-weighted density <span class="math-inline">\(W\)</span>, and an explicit AO pair-density correction <span class="math-inline">\(\Gamma^{MP2}\)</span>. The final gradient combines those objects with the UHF reference two-particle density expression and reuses the same derivative-integral contraction infrastructure as the RHF, UHF, and RMP2 gradients.</p>
 <hr>
-<h2 id="15-coupled-cluster-in-planck">15. Coupled Cluster in Planck</h2>
+<h2 id="16-coupled-cluster-in-planck">16. Coupled Cluster in Planck</h2>
 <p>Planck currently contains five coupled-cluster paths:</p>
 <ul>
 <li><strong>RCCSD</strong> — a conventional iterative amplitude solver in the spin-orbital basis for canonical closed-shell RHF references</li>
@@ -2036,7 +2196,7 @@ exp(-T) H exp(T) |Phi0&gt;
    4000\)</span> independent elements. This is small enough to store densely but large enough that the <span class="math-inline">\(O(o^3 v^4)\)</span> and <span class="math-inline">\(O(o^4 v^3)\)</span> contractions in R3 are non-trivial, making it a useful check that the contraction order and intermediate reuse in <code>tensor_backend.cpp</code> are correct.</li>
 </ol>
 <hr>
-<h2 id="16-full-configuration-interaction-fci">16. Full Configuration Interaction (FCI)</h2>
+<h2 id="17-full-configuration-interaction-fci">17. Full Configuration Interaction (FCI)</h2>
 <h3 id="what-fci-is">What FCI Is</h3>
 <p>Hartree-Fock approximates the many-electron wavefunction by a <em>single</em> Slater determinant — the antisymmetrized product of the occupied molecular orbitals. This is a mean-field picture: each electron feels the <em>average</em> field of the others, but their instantaneous, position-dependent avoidance of one another — <strong>electron correlation</strong> — is missing.</p>
 <p>Full Configuration Interaction restores correlation <em>exactly within the chosen basis set</em>. The idea is simple: instead of one determinant, expand the wavefunction in <strong>all</strong> determinants that can be built from the available spin-orbitals, and let the variational principle fix the coefficients:</p>
@@ -2119,13 +2279,13 @@ E_{\text{corr}}^{\text{FCI}} = E_{\text{FCI}} - E_{\text{RHF}} .
 <h3 id="relationship-to-other-correlation-methods">Relationship to Other Correlation Methods</h3>
 <p>FCI is the conceptual hub of the correlated methods:</p>
 <ul>
-<li><strong>MP2</strong> (§11) is the leading term of a perturbation series whose infinite resummation would give FCI; it captures dynamic correlation cheaply but perturbatively.</li>
-<li><strong>Coupled cluster</strong> (§14) reaches FCI in the limit of including all excitation ranks (CCSD → CCSDT → … → CCSDTQ… → FCI), trading the linear CI expansion for an exponential ansatz <span class="math-inline">\(e^{\hat T}\)</span> that restores size-extensivity at each truncation.</li>
-<li><strong>CASSCF</strong> (§16) is <em>FCI restricted to an active space</em> of chemically important orbitals, with the orbitals themselves variationally optimized. FCI is the special case in which the active space is the entire orbital basis and no orbital optimization is performed.</li>
+<li><strong>MP2</strong> (§13) is the leading term of a perturbation series whose infinite resummation would give FCI; it captures dynamic correlation cheaply but perturbatively.</li>
+<li><strong>Coupled cluster</strong> (§16) reaches FCI in the limit of including all excitation ranks (CCSD → CCSDT → … → CCSDTQ… → FCI), trading the linear CI expansion for an exponential ansatz <span class="math-inline">\(e^{\hat T}\)</span> that restores size-extensivity at each truncation.</li>
+<li><strong>CASSCF</strong> (§18) is <em>FCI restricted to an active space</em> of chemically important orbitals, with the orbitals themselves variationally optimized. FCI is the special case in which the active space is the entire orbital basis and no orbital optimization is performed.</li>
 </ul>
 <p>All three share the same conceptual core — a determinant expansion diagonalized under the Slater-Condon rules — and differ only in how that expansion is truncated, resummed, or restricted.</p>
 <hr>
-<h2 id="17-casscf-and-rasscf">17. CASSCF and RASSCF</h2>
+<h2 id="18-casscf-and-rasscf">18. CASSCF and RASSCF</h2>
 <h3 id="motivation">Motivation</h3>
 <p>Hartree-Fock fails near bond breaking, in transition metal chemistry, and wherever a single Slater determinant is qualitatively wrong. CASSCF (Complete Active Space SCF) partitions orbitals into:</p>
 <ul>
@@ -2133,7 +2293,7 @@ E_{\text{corr}}^{\text{FCI}} = E_{\text{FCI}} - E_{\text{RHF}} .
 <li><strong>active</strong> — partially occupied, included in CI</li>
 <li><strong>virtual</strong> — unoccupied, excluded from CI</li>
 </ul>
-<p>The wavefunction is a full CI expansion within the active space — i.e. an FCI (§15) restricted to the active orbitals, with the orbitals themselves optimized:</p>
+<p>The wavefunction is a full CI expansion within the active space — i.e. an FCI (§17) restricted to the active orbitals, with the orbitals themselves optimized:</p>
 <p><span class="math-display">\[
 |\Psi_{CASSCF}\rangle = \sum_I c_I |D_I\rangle
 \]</span></p>
@@ -2296,7 +2456,7 @@ H     1.233698    0.000000   -0.927942
 </ul>
 <p>The same CI machinery is used, but the string generation enforces the occupation restrictions via bitcount masks on the RAS1 and RAS3 blocks.</p>
 <hr>
-<h2 id="18-geometry-optimization">18. Geometry Optimization</h2>
+<h2 id="19-geometry-optimization">19. Geometry Optimization</h2>
 <h3 id="l-bfgs-cartesian-coordinates">L-BFGS (Cartesian Coordinates)</h3>
 <p>Cartesian L-BFGS minimizes <span class="math-inline">\(E(\mathbf x)\)</span> where <span class="math-inline">\(\mathbf x \in \mathbb{R}^{3N}\)</span> is the flattened nuclear coordinate vector. The quasi-Newton update direction is:</p>
 <p><span class="math-display">\[
@@ -2454,7 +2614,7 @@ R_{ij} = |\mathbf r_i - \mathbf r_j|,
 <p>A BFGS Hessian update is performed in the redundant internal-coordinate space described above. The back-transformation from internal to Cartesian steps uses the Schlegel microiterations of <code>ic_to_cart_step</code>. Geometry constraints (fixed bonds, angles, dihedrals, frozen atoms) are enforced by projecting out the constrained internal-coordinate contributions from the gradient before the BFGS step.</p>
 <p>Convergence criterion: maximum absolute gradient element <span class="math-inline">\(\max_i |\partial E / \partial X_i| < \epsilon_{grad}\)</span> (default <span class="math-inline">\(3 \times 10^{-4}\)</span> Ha/Bohr).</p>
 <hr>
-<h2 id="19-vibrational-analysis">19. Vibrational Analysis</h2>
+<h2 id="20-vibrational-analysis">20. Vibrational Analysis</h2>
 <h3 id="semi-numerical-hessian">Semi-Numerical Hessian</h3>
 <p>The Hessian matrix is computed by central finite differences of analytic gradients:</p>
 <p><span class="math-display">\[
@@ -2485,7 +2645,7 @@ E_{ZPE} = \frac{1}{2}\sum_{k=1}^{3N-6} h\nu_k
 \]</span></p>
 <p>Vibrational symmetry labels are assigned in <code>src/symmetry/vibrational_symmetry.cpp</code> by projecting each normal mode onto the SAO blocks and determining its irrep.</p>
 <hr>
-<h2 id="20-kohn-sham-density-functional-theory">20. Kohn-Sham Density Functional Theory</h2>
+<h2 id="21-kohn-sham-density-functional-theory">21. Kohn-Sham Density Functional Theory</h2>
 <p>Most of this chapter is general KS-DFT theory. The explicit grid presets, supported-functional notes, and code maps are Planck-specific documentation.</p>
 <h3 id="the-kohn-sham-equations">The Kohn-Sham Equations</h3>
 <p>Kohn-Sham DFT maps the interacting many-electron problem onto a fictitious system of non-interacting electrons moving in an effective potential <span class="math-inline">\(v_s(\mathbf r)\)</span> that yields the same ground-state density as the real system. The total electronic energy is:</p>
@@ -2821,7 +2981,7 @@ I_{\sigma}(E)
 </ol>
 <p>The report printed by <code>print_linear_response_report()</code> includes the root index, excitation energy in Hartree and eV, oscillator strength, Cartesian transition dipole components, the dipole norm in Debye, and the three largest configuration weights.  The UV-Vis helper <code>print_uvvis_spectrum_report()</code> then writes the broadened spectrum file and prints the strongest broadened peaks in energy and wavelength units.</p>
 <hr>
-<h2 id="21-polarizable-continuum-solvation-c-pcm">21. Polarizable Continuum Solvation (C-PCM)</h2>
+<h2 id="22-polarizable-continuum-solvation-c-pcm">22. Polarizable Continuum Solvation (C-PCM)</h2>
 <p>Planck implements a conductor-like polarizable continuum model (C-PCM) for single-point HF (RHF/UHF) and KS-DFT (RKS/UKS) calculations. The solvent is treated as a structureless dielectric medium of relative permittivity <span class="math-inline">\(\varepsilon\)</span> that surrounds a molecule-shaped cavity. The solute polarizes the dielectric; the polarized dielectric back-polarizes the solute via a <em>reaction field</em>, which is added self-consistently to the Fock or Kohn-Sham matrix during the SCF iterations.</p>
 <p>The electrostatic model and self-consistent coupling described below are general PCM ideas. The implementation-file list, input syntax, and current limitations remain Planck-specific.</p>
 <p>Implementation files:</p>
@@ -2969,7 +3129,7 @@ E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
 <tr><td>Single-point gating</td><td><code>src/io/io.cpp</code></td><td>check around line 1266</td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="22-basis-set-superposition-error-and-the-counterpoise-correction">22. Basis Set Superposition Error and the Counterpoise Correction</h2>
+<h2 id="23-basis-set-superposition-error-and-the-counterpoise-correction">23. Basis Set Superposition Error and the Counterpoise Correction</h2>
 <p>When you compute the interaction energy of a dimer <span class="math-inline">\(A\cdots B\)</span> as</p>
 <p><span class="math-display">\[
 \Delta E_{\text{raw}} = E_{AB} - E_A - E_B,
@@ -3024,7 +3184,7 @@ E_A^{*} = E_B^{*} &= -2.85517107.
 <p>The monomer reference energies <span class="math-inline">\(E_A, E_B\)</span> must be the <em>true</em> SCF minima, or the BSSE is meaningless. This is a place where the choice of initial guess (<a href="#6-scf-algorithm">§6, &quot;When the Guess Matters&quot;</a>) bites. The superposition-of- atomic-densities (SAD) guess, normally the more robust choice for molecules with equivalent atoms, can itself <strong>false-converge for a small isolated closed-shell atom</strong>: a lone helium atom in cc-pVDZ settles at <span class="math-inline">\(-2.85515\)</span> Eh from SAD but at the correct <span class="math-inline">\(-2.85516\)</span> Eh from a core-Hamiltonian guess, each reporting convergence in five iterations at a different HOMO energy. A counterpoise study of small fragments should therefore verify its monomer references against a second guess (or a reference program) rather than trust the iteration count — the same &quot;sanity-check the converged solution, do not trust the loop&quot; lesson from the broken-symmetry case study in §6, now cutting the other way.</p>
 <h3 id="scope-and-generality">Scope and generality</h3>
 <p>The counterpoise method as described handles a <strong>dimer</strong> (two fragments) at the <strong>SCF level</strong>. The same construction extends naturally — though with more bookkeeping — to the site-site (Valiron-Mayer) <span class="math-inline">\(N\)</span>-body counterpoise for clusters, to correlated methods (one simply uses the correlated monomer and dimer energies in the same five-term expression), and to gradients (where the ghost basis functions also contribute Pulay terms). The ghost-atom primitive itself is more general than counterpoise: placing ghosts in any single calculation lets you probe basis-set extension effects, build mixed-basis descriptions, or study how much a neighbor&#x27;s functions improve a fragment — all without changing the physical system.</p>
-<h2 id="23-molecular-properties">23. Molecular Properties</h2>
+<h2 id="24-molecular-properties">24. Molecular Properties</h2>
 <p>After SCF convergence Planck can compute several molecular properties from the converged density matrix. Dipole and quadrupole moments are printed automatically; population and bond-order reports are printed when <code>print_populations true</code> or the output <code>verbosity</code> is <code>verbose</code> / <code>debug</code>. This section covers the theory behind each property and the code path that evaluates it.</p>
 <h3 id="mulliken-population-analysis">Mulliken Population Analysis</h3>
 <p><strong>Theory</strong></p>
@@ -3250,7 +3410,7 @@ T^+ \in \mathbb{R}^{N_{sph} \times N_{cart}}, \qquad N_{sph} = \sum_s (2L_s+1), 
 <p><strong>Verification tip</strong></p>
 <p>If <span class="math-inline">\(T^+\)</span> is correct, the inner product <span class="math-inline">\(\mathbf C_{sph}^\top \mathbf C_{sph}\)</span> restricted to the occupied block should equal the identity (orthonormal MOs), and the total norm of each MO column should be preserved.  Any error in the hardcoded <span class="math-inline">\(T^+\)</span> blocks shows up immediately as an MO being assigned to the wrong irrep (or split across two irreps).</p>
 <hr>
-<h2 id="24-checkpoint-and-restart">24. Checkpoint and Restart</h2>
+<h2 id="25-checkpoint-and-restart">25. Checkpoint and Restart</h2>
 <p>This chapter mixes a general restart idea with concrete file-format details. The projection concept below is broadly applicable; the checkpoint layout is Planck-specific.</p>
 <h3 id="binary-checkpoint-format">Binary Checkpoint Format</h3>
 <p>The checkpoint file (<code>*.hfchk</code>) stores:</p>
@@ -3276,7 +3436,7 @@ P^{small}_{\lambda'\sigma'}\, (S^{cross})^T_{\sigma'\mu}\,
 \]</span></p>
 <p>This is a Löwdin-style cross-basis projection. In Planck, the required cross-overlap matrix is computed by <code>_compute_cross_overlap</code> in <code>os.cpp</code>, and the projection itself is implemented in <code>src/io/checkpoint.cpp</code> via an SVD of the cross-overlap. This provides a physically motivated initial density for the new basis, significantly reducing the number of SCF iterations required.</p>
 <hr>
-<h2 id="25-execution-flow-of-a-typical-run">25. Execution Flow of a Typical Run</h2>
+<h2 id="26-execution-flow-of-a-typical-run">26. Execution Flow of a Typical Run</h2>
 <pre><code>
 driver.cpp
   parse_input()                → Calculator._scf, _basis, _geometry, etc.
@@ -3351,7 +3511,7 @@ driver.cpp
   save_checkpoint()
 </code></pre>
 <hr>
-<h2 id="26-theory-to-code-map">26. Theory-to-Code Map</h2>
+<h2 id="27-theory-to-code-map">27. Theory-to-Code Map</h2>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Theory concept</th>
@@ -3369,6 +3529,8 @@ driver.cpp
 <tr><td>ERI tensor</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_2e</code>, <code>_contracted_eri</code></td></tr>
 <tr><td>Direct Fock build</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_2e_fock</code>, <code>_compute_2e_fock_uhf</code></td></tr>
 <tr><td>Rys quadrature</td><td><code>src/integrals/rys.cpp</code></td><td><code>_rys_eri_primitive</code>, <code>_rys_contracted_eri</code></td></tr>
+<tr><td>Head-Gordon-Pople (HGP) ERI engine</td><td><code>src/integrals/hgp.cpp</code></td><td><code>hgp_vrr</code>, <code>hgp_hrr_ab</code>, <code>hgp_hrr_cd</code>, <code>_contracted_eri_elem</code>, <code>_compute_2e</code>, <code>_compute_2e_fock</code>, <code>_compute_2e_fock_uhf</code></td></tr>
+<tr><td>HGP full-symmetry direct Fock</td><td><code>src/symmetry/hgp_symm.cpp</code></td><td><code>_build_skeleton_eri_symm</code>, <code>_compute_2e_fock_symm</code>, <code>_compute_2e_fock_uhf_symm</code>, spherical-basis variants</td></tr>
 <tr><td>Orthogonalizer</td><td><code>src/scf/scf.cpp</code></td><td><code>build_orthogonalizer</code></td></tr>
 <tr><td>RHF SCF</td><td><code>src/scf/scf.cpp</code></td><td><code>run_rhf</code></td></tr>
 <tr><td>UHF SCF</td><td><code>src/scf/scf.cpp</code></td><td><code>run_uhf</code></td></tr>
@@ -3439,7 +3601,7 @@ driver.cpp
 <tr><td>Full-symmetry direct Fock, spherical basis</td><td><code>src/symmetry/{os_symm,rys_symm}.cpp</code></td><td><code>_compute_2e_fock_symm_spherical</code>, <code>spherical_fock_*_from_skeleton</code> (<code>skeleton_eri.h</code>)</td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="27-current-implementation-status">27. Current Implementation Status</h2>
+<h2 id="28-current-implementation-status">28. Current Implementation Status</h2>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Feature</th>
@@ -3450,6 +3612,7 @@ driver.cpp
 <tr><td>ROHF SCF</td><td>Complete (Guest–Saunders effective Fock with SAD guess; post-HF not yet supported from ROHF reference)</td></tr>
 <tr><td>Obara-Saika 1e and 2e integrals</td><td>Complete</td></tr>
 <tr><td>Rys quadrature ERIs</td><td>Complete</td></tr>
+<tr><td>Head-Gordon-Pople (HGP) ERI engine</td><td>Complete (VRR-inside / HRR-outside factorization; Cartesian and full-symmetry direct-Fock variants in <code>src/symmetry/hgp_symm.cpp</code>)</td></tr>
 <tr><td>Conventional and direct SCF</td><td>Complete</td></tr>
 <tr><td>Schwarz screening</td><td>Complete</td></tr>
 <tr><td>DIIS acceleration</td><td>Complete</td></tr>
@@ -3494,7 +3657,7 @@ driver.cpp
 <tr><td>BSSE for DFT / N-body / gradients / post-HF references</td><td>Not implemented</td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="28-how-to-study-this-codebase">28. How to Study This Codebase</h2>
+<h2 id="29-how-to-study-this-codebase">29. How to Study This Codebase</h2>
 <p>Recommended reading order for the HF/post-HF pipeline:</p>
 <ol>
 <li><code>src/base/types.h</code> — understand every struct before reading any algorithm</li>

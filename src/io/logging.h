@@ -536,6 +536,8 @@ const inline std::string map_enum<HartreeFock::IntegralMethod>(HartreeFock::Inte
         return "Obara-Saika";
     case HartreeFock::IntegralMethod::RysQuadrature:
         return "Rys Quadrature";
+    case HartreeFock::IntegralMethod::HeadGordonPople:
+        return "Head-Gordon-Pople";
     case HartreeFock::IntegralMethod::Auto:
         return "Auto";
     }

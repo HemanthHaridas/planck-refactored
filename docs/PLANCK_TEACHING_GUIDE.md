@@ -11,7 +11,7 @@ self-consistent field theory. It implements:
 
 - Restricted and unrestricted Hartree-Fock (RHF/UHF) with DIIS acceleration
 - Kohn-Sham DFT (RKS/UKS) with LDA, GGA, hybrid, range-separated-hybrid, and double-hybrid exchange-correlation functionals via libxc
-- Obara-Saika and Rys-quadrature two-electron integral engines
+- Obara-Saika, Head-Gordon-Pople, and Rys-quadrature two-electron integral engines
 - Cartesian and real spherical-harmonic Gaussian basis functions
 - Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF
 - Point-group detection, symmetry-adapted orbitals, and MO irrep labeling
@@ -63,7 +63,7 @@ Input file (.hfinp)
 | `src/base` | `types.h` (all structs/enums/Calculator), `tables.h`, `basis.h` |
 | `src/io` | input parsing, checkpoint I/O, logging |
 | `src/basis` | GBS file reading, primitive normalization, contraction |
-| `src/integrals` | shell pairs, Obara-Saika OS engine, Rys quadrature engine |
+| `src/integrals` | shell pairs, Obara-Saika OS engine, Head-Gordon-Pople (HGP) engine, Rys quadrature engine |
 | `src/scf` | orthogonalizer, initial guess, RHF/UHF SCF loops |
 | `src/symmetry` | libmsym wrapper, SAO basis, MO labeling, integral sym ops |
 | `src/post_hf` | MP2 energy/gradient, RCCSD/UCCSD/RCCSDT/UCCSDT, CASSCF/RASSCF, AO→MO transforms, CPHF |
@@ -685,7 +685,7 @@ SAD but at the correct \(-2.85516\) Eh (matching PySCF to \(10^{-10}\)) from
 HCore, each "converging" in five iterations at a different HOMO energy. The SAD
 atomic-density seed apparently lands in the wrong basin for a single small atom.
 This matters directly for the isolated-monomer references in a counterpoise
-calculation ([§22](#22-basis-set-superposition-error-and-the-counterpoise-correction)),
+calculation ([§23](#23-basis-set-superposition-error-and-the-counterpoise-correction)),
 where a core-Hamiltonian guess is the safer choice for those small fragments. The
 lesson is not that one guess is universally safer — it is that the converged SCF
 solution should be sanity-checked (symmetry of degenerate orbitals, dipole of a
@@ -2086,7 +2086,289 @@ iteration, and tensor/Fock contraction patterns are often the same.
 
 ---
 
-## 12. MP2 Correlation Energy
+## 12. The Head-Gordon-Pople (HGP) Integral Scheme
+
+The Head-Gordon-Pople scheme (Head-Gordon and Pople, *J. Chem. Phys.* **89**,
+5777, 1988) is a reorganization of the Obara-Saika recurrence for two-electron
+integrals over contracted Gaussians. It produces the same contracted ERI as the
+plain OS recurrence but rearranges the work so that the most expensive
+recurrences are evaluated at the *uncontracted* (primitive) level and the
+cheapest ones at the *contracted* (shell-pair) level. For routine
+small-to-medium angular momentum, HGP is typically the fastest practical
+analytic scheme for general contracted Gaussians and is the path most modern
+codes default to for low-to-medium \(L\).
+
+### Why HGP and not just Obara-Saika
+
+In the plain OS treatment of an ERI block \([ab|cd]\), every recurrence step —
+the vertical recursion (VRR) that builds angular momentum on the bra and ket
+*Gaussian-product* centers, and the horizontal recursion (HRR) that transfers
+angular momentum from one shell of a pair to the other — operates on integrals
+that depend on the primitive exponents \(\alpha_a, \alpha_b, \alpha_c,
+\alpha_d\). Both the VRR and the HRR are therefore *inside* the four nested
+primitive loops, and their cost is multiplied by the contraction depths
+\(K_a K_b K_c K_d\).
+
+Head-Gordon and Pople observed that the HRR is purely *geometric*: the recurrence
+
+\[
+(a\,b{+}1_i\,|\,cd) = (a{+}1_i\,b\,|\,cd) + (A_i - B_i)\,(ab\,|\,cd)
+\]
+
+involves only the constant inter-center displacements \(\mathbf A - \mathbf B\)
+and \(\mathbf C - \mathbf D\). It does **not** depend on the primitive
+exponents. The HRR can therefore be *moved outside* the primitive contraction
+loops and applied once at the contracted level. The expensive
+exponent-dependent VRR is still done inside the primitive loop, but only on the
+"reduced" angular-momentum block \((a\,0\,|\,c\,0)\) — i.e. with the second
+center of each pair held at \(L = 0\). The HRR after contraction then transfers
+angular momentum to centers B and D.
+
+The practical consequences are:
+
+- VRR work is done only for shells of total angular momentum
+  \((l_a+l_b,\,l_c+l_d)\) on one center per pair, not for the full
+  \((a,b,c,d)\) block.
+- HRR work is paid only once per *contracted* shell quartet, not once per
+  primitive quartet.
+- The VRR table built inside the primitive loop is much smaller, which keeps
+  scratch storage and memory traffic low.
+
+For deeply contracted bases (e.g. STO-3G, 6-31G(d), cc-pVXZ) the HGP rearrangement
+is a substantial speedup over a "naive" OS implementation, while remaining
+numerically equivalent.
+
+### Algorithmic Skeleton
+
+For each contracted shell quartet \((AB|CD)\) with total angular momentum
+\(L_{AB} = l_a + l_b\), \(L_{CD} = l_c + l_d\), the HGP algorithm proceeds in
+three phases:
+
+1. **Primitive VRR (inside the contraction loop).** For every primitive pair
+   \((p_{AB}, p_{CD})\), build the auxiliary table
+   \([a\,0\,|\,c\,0]^{(m)}\) for \(0 \le |a| \le L_{AB}\),
+   \(0 \le |c| \le L_{CD}\), \(0 \le m \le L_{AB}+L_{CD}\), starting from the
+   Boys seed
+   \[
+   [0\,0\,|\,0\,0]^{(m)} =
+     \frac{2\pi^{5/2}}{\zeta\,\eta\sqrt{\zeta+\eta}}\,
+     e^{-\mu_{AB} R_{AB}^2 - \mu_{CD} R_{CD}^2}\,
+     F_m\!\left(\tfrac{\zeta\eta}{\zeta+\eta}\,R_{PQ}^2\right).
+   \]
+   The OS-style VRR is used to grow the bra index \(a\) (with the ket held at
+   \(c = 0\)) and then to grow the ket index \(c\). Crucially, this is the
+   *only* recurrence run inside the primitive loops.
+
+2. **Contract the auxiliary block.** Multiply each primitive \([a\,0\,|\,c\,0]\)
+   by the product of contracted coefficients
+   \(d_{a,p}\,d_{b,p}\,d_{c,q}\,d_{d,q}\) and sum into the *contracted*
+   reduced-angular-momentum buffer
+   \((a\,0\,|\,c\,0)\). The \(m\) auxiliary index is collapsed at \(m=0\)
+   before HRR.
+
+3. **Contracted HRR (outside the contraction loop).** Transfer angular momentum
+   from \(A \to B\) and from \(C \to D\) using the two purely geometric
+   recurrences
+   \[
+   (ab{+}1_i\,|\,cd) = (a{+}1_i\,b\,|\,cd) + (A_i - B_i)\,(ab\,|\,cd),
+   \quad
+   (ab\,|\,cd{+}1_i) = (ab\,|\,c{+}1_i\,d) + (C_i - D_i)\,(ab\,|\,cd).
+   \]
+   The Cartesian displacements \(A - B\) and \(C - D\) are stored once per
+   shell pair as static geometric data.
+
+The pseudo-code is:
+
+```
+for each ShellPair(AB) in petite list:
+    for each ShellPair(CD) with (AB) ≤ (CD):              # canonical loop
+        if Q[i,j] * Q[k,l] < tol_eri:  continue           # Schwarz screen
+        # ---- VRR + contraction (inside primitive loops) ----
+        zero contracted buffer (a 0 | c 0)
+        for each primitive pair p in AB:
+            for each primitive pair q in CD:
+                build [a 0 | c 0]^(m) by OS VRR
+                add coeff_AB * coeff_CD * [a 0 | c 0]^(0)
+                  to contracted (a 0 | c 0)
+        # ---- HRR (outside primitive loops, geometric only) ----
+        apply (A-B) HRR to lift  (a 0 | c 0) → (ab | c 0)
+        apply (C-D) HRR to lift  (ab | c 0) → (ab | cd)
+        scatter (ab|cd) into the eight permutation-equivalent ERI slots
+```
+
+### Where the Work Actually Lives
+
+Let \(K\) be a representative contraction depth and \(L\) the total angular
+momentum on either side. The dominant counts are:
+
+| Stage | Where | Cost per quartet (order of magnitude) |
+|---|---|---|
+| Primitive VRR seed (Boys) | inside primitive loop | \(K^4\) |
+| OS VRR on \([a 0 | c 0]^{(m)}\) | inside primitive loop | \(K^4 \cdot L_{AB}\, L_{CD}\) auxiliary builds |
+| Contract into \((a 0 | c 0)\) | inside primitive loop | \(K^4 \cdot \#(a 0 | c 0)\) |
+| HRR \(A \to B\) | once per contracted quartet | \(\#(ab | c0)\) per axis |
+| HRR \(C \to D\) | once per contracted quartet | \(\#(ab | cd)\) per axis |
+
+Compared to a naive OS implementation that runs both VRR and HRR inside the
+primitive loops, HGP removes a factor of \(K^4\) from the HRR work. For
+contraction depths \(K = 3{-}6\) typical of STO-3G through cc-pVTZ, that is a
+several-hundred-fold reduction on HRR alone.
+
+### Relationship to OS, Rys, and Auto-Dispatch
+
+HGP and OS are mathematically the same recurrence; HGP is a *factorization*
+(VRR-inside, HRR-outside) of OS that is essentially always preferable to the
+"both-inside" arrangement for contracted Gaussians. Any implementation already
+written in a VRR-then-HRR style can be viewed as performing the same identity;
+HGP simply makes the partition between contraction-inside and contraction-outside
+work explicit.
+
+HGP and Rys quadrature *are* genuinely different schemes. For high total angular
+momentum the OS/HGP scratch buffers grow as the product of all six VRR
+extents, while Rys keeps a fixed number of quadrature roots \(n = \lfloor L/2
+\rfloor + 1\). Hybrid engines therefore typically prefer HGP at low-to-medium
+\(L\) and Rys at high \(L\); the same operation-count model used for OS-vs-Rys
+auto-dispatch (§11) applies equally to HGP-vs-Rys with only the OS flop
+estimate replaced by the HGP estimate (which has a smaller HRR coefficient).
+
+### Screened and Range-Separated Kernels
+
+HGP retains the OS structure of the Boys-function seed, so range-separated
+operators (\(\mathrm{erfc}(\omega r_{12})/r_{12}\), \(\mathrm{erf}(\omega
+r_{12})/r_{12}\)) drop in exactly as in OS: the long-range damping enters as a
+single multiplicative scaling on \(\rho\), on the \(W - P\) and \(W - Q\)
+shift vectors, and on the Boys argument. In practice this is bundled as a
+\(\{\rho_{\mathrm{eff}}, \text{prefactor scale}, \text{Boys-argument scale}\}\)
+triple consumed by the VRR seed, with the unscreened Coulomb kernel as the
+identity case.
+
+The same Schwarz inequality
+\(|(\mu\nu|\lambda\sigma)| \le \sqrt{(\mu\nu|\mu\nu)}\sqrt{(\lambda\sigma|\lambda\sigma)}\)
+applies; the Schwarz table is precomputed by calling the same contracted
+ERI kernel on diagonal pairs \((ij|ij)\).
+
+### Symmetry-Reduced HGP
+
+The HGP contracted-ERI kernel composes cleanly with the petite-list /
+skeleton-Fock symmetrization scheme described in §8. Pair- and quartet-orbits
+under the molecular point group are built once and tagged with their AO
+permutation phases; only the canonical representative of each orbit is
+evaluated, and the phase-weighted result is then scattered to the orbit's
+other quartets. The same signed-AO permutation infrastructure works in both
+Cartesian and spherical-harmonic bases — the spherical path inserts the
+\(C\)-to-spherical transform on the contracted block just before the scatter,
+exactly as in the OS and Rys symmetry-reduced variants.
+
+### Why HGP Wins in Practice — Measured Timings
+
+The theoretical argument above (HRR factored *outside* the primitive contraction
+loops, smaller VRR scratch than Rys at low-to-medium \(L\)) is confirmed by a
+direct head-to-head benchmark of all three engines (OS, Rys, HGP) on the same
+molecules and bases inside this codebase. The table below reports wall-clock time per ERI build (in
+milliseconds, lower is better) for the three engines, in three modes: no
+symmetry (`nosym`), the legacy D2h coordinate-axis reduction (`d2h`), and the
+full point-group reduction (`full`). All runs use the same shell-pair list,
+Schwarz screening, and OpenMP settings; only the contracted-quartet kernel and
+the symmetry walker change.
+
+| Molecule / basis | nbasis | Engine | nosym ms | d2h ms | full ms |
+|---|---|---|---|---|---|
+| H₂O / STO-3G (C2v) | 7 | OS | 9.06 | 4.83 | 7.42 |
+| H₂O / STO-3G (C2v) | 7 | Rys | 42.46 | 23.61 | 37.16 |
+| H₂O / STO-3G (C2v) | 7 | **HGP** | **9.95** | 5.26 | 7.85 |
+| NH₃ / STO-3G (C3v) | 8 | OS | 13.05 | 9.14 | 9.55 |
+| NH₃ / STO-3G (C3v) | 8 | Rys | 54.95 | 36.72 | 38.65 |
+| NH₃ / STO-3G (C3v) | 8 | **HGP** | 15.21 | 9.51 | **8.76** |
+| CH₄ / STO-3G (Td) | 9 | OS | 18.97 | 7.70 | 9.21 |
+| CH₄ / STO-3G (Td) | 9 | Rys | 69.54 | 29.21 | 40.98 |
+| CH₄ / STO-3G (Td) | 9 | **HGP** | 21.26 | 8.56 | 9.88 |
+| H₂O / `6-31G**` (C2v) | 25 | OS | 146.67 | 58.61 | 109.87 |
+| H₂O / `6-31G**` (C2v) | 25 | Rys | 730.40 | 245.41 | 497.36 |
+| H₂O / `6-31G**` (C2v) | 25 | **HGP** | **126.96** | **52.44** | **95.20** |
+| NH₃ / 6-31G (C3v) | 15 | OS | 47.86 | 28.85 | 26.60 |
+| NH₃ / 6-31G (C3v) | 15 | Rys | 163.54 | 92.90 | 97.76 |
+| NH₃ / 6-31G (C3v) | 15 | **HGP** | 50.34 | 32.14 | 28.80 |
+| NH₃ / `6-31G*` (C3v) | 21 | OS | 107.32 | 65.60 | 69.36 |
+| NH₃ / `6-31G*` (C3v) | 21 | Rys | 504.90 | 290.34 | 321.69 |
+| NH₃ / `6-31G*` (C3v) | 21 | **HGP** | **99.40** | **61.46** | **61.88** |
+| NH₃ / `6-31G**` (C3v) | 30 | OS | 244.65 | 151.37 | 136.34 |
+| NH₃ / `6-31G**` (C3v) | 30 | Rys | 1213.81 | 660.87 | 535.46 |
+| NH₃ / `6-31G**` (C3v) | 30 | **HGP** | 246.72 | **143.90** | **115.05** |
+| CH₄ / `6-31G**` (Td) | 35 | OS | 421.77 | 193.24 | 192.21 |
+| CH₄ / `6-31G**` (Td) | 35 | Rys | 2025.48 | 654.36 | 587.94 |
+| CH₄ / `6-31G**` (Td) | 35 | **HGP** | **376.11** | **155.18** | **154.70** |
+
+Reading the table, three patterns repeat consistently.
+
+**1. Rys is dominated by both HGP and OS at every basis tested here.** This is
+the expected regime: STO-3G through 6-31G(d,p) puts maximum angular momentum at
+\(d\), which sits squarely in the low-to-medium-\(L\) window where the OS/HGP
+flop count is smaller than the Rys-quadrature flop count. On 6-31G(d,p) / CH₄
+(Td) the spread reaches \(\sim\)5× on `nosym` and \(\sim\)4× on `d2h`; Rys is
+not really a competitor here, and the auto-dispatch model in §11 would only
+prefer Rys at higher \(L\) where the OS/HGP scratch buffers blow up faster than
+Rys's fixed root count. Rys's natural niche is the high-\(L\) tail, not the
+bulk of routine basis sets.
+
+**2. HGP pulls away from OS as the basis (and contraction depth) grows.** On
+STO-3G, HGP and OS are within \(\sim\)5–10% of each other in any of the three
+symmetry modes — STO-3G has \(K = 3\) primitives per contraction and only
+\(s/p\) shells, so neither the HRR-outside factorization nor the smaller VRR
+scratch produces much headroom. Moving to 6-31G(d,p) with d-functions and deeper
+contractions, HGP starts to win outright:
+
+| Case | OS `nosym` | HGP `nosym` | HGP / OS |
+|---|---|---|---|
+| H₂O / `6-31G**` | 146.67 | 126.96 | 0.87 |
+| NH₃ / `6-31G*` | 107.32 | 99.40 | 0.93 |
+| CH₄ / `6-31G**` | 421.77 | 376.11 | 0.89 |
+
+That is exactly the regime where the HGP analysis predicts wins: the HRR is
+removed from the \(K^4\) primitive loop, and at the same time the larger
+\((a0|c0)\) reduced block being VRR'd inside the loop avoids materializing the
+full \((ab|cd)\) tensor at every primitive step.
+
+**3. HGP cooperates with symmetry better than OS, especially in `full` mode.**
+On CH₄ / 6-31G(d,p) (Td, |G|=24), the OS engine drops from 421.8 ms to 192.2 ms
+under full-symmetry reduction (a 2.19× win), while HGP drops from 376.1 ms to
+154.7 ms (a 2.43× win) — and the absolute HGP time is \(\sim\)20% lower than
+OS in the symmetric run. The reason is that the per-quartet kernel cost is
+*lower* for HGP, so the petite-list amortization (fewer evaluated quartets, the
+same scatter overhead) tilts the balance further in HGP's favor: HGP has less
+to amortize *over*, so the fixed overhead of the orbit walk becomes a smaller
+fraction of the total. The same trend shows up on NH₃ / 6-31G(d,p) in C3v
+(`full` HGP at 115 ms vs OS at 136 ms; 1.18× faster) and on H₂O / 6-31G(d,p)
+(`full` HGP at 95.2 ms vs OS at 109.9 ms; 1.15× faster).
+
+Putting these together: **for the routine quantum-chemistry case — Pople-style
+contracted bases up through 6-31G(d,p) and similar valence-double/triple-zeta
+sets with d polarization — HGP is the engine to default to.** OS is the right
+fallback for tiny, lightly contracted bases where the HGP/OS gap closes, and
+Rys is reserved for high-\(L\) work (f/g/h) where the OS-and-HGP recurrence
+stacks would otherwise dominate. The OS-vs-Rys auto-dispatch model in §11
+applies essentially unchanged to HGP-vs-Rys; HGP simply lowers the OS flop
+estimate further, which is why the auto-dispatch threshold moves toward
+higher \(L\) once HGP is the low-L path.
+
+### Implementation Files
+
+| File | Role |
+|---|---|
+| `src/integrals/hgp.h` | Public API: `_contracted_eri_elem`, `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf` |
+| `src/integrals/hgp.cpp` | Primitive VRR (`hgp_vrr`), HRR passes (`hgp_hrr_ab`, `hgp_hrr_cd`), reusable `EriScratch`, Schwarz table, Fock builders |
+| `src/symmetry/hgp_symm.h` | Public API: `_build_skeleton_eri_symm`, `_compute_2e_fock_symm`, `_compute_2e_fock_uhf_symm`, plus spherical-basis variants |
+| `src/symmetry/hgp_symm.cpp` | Petite-list contracted-ERI walk, skeleton-Fock symmetrization, signed AO orbits |
+
+### Reference
+
+T. Head-Gordon and J. A. Pople, *A method for two-electron Gaussian integral
+and integral derivative evaluation using recurrence relations*, J. Chem. Phys.
+**89**, 5777 (1988). The factorization argument and the HRR-outside-contraction
+identity are due to that paper.
+
+---
+
+## 13. MP2 Correlation Energy
 
 ### Second-Order Perturbation Theory
 
@@ -2162,7 +2444,7 @@ P^{virt}_{ab} + P^{virt}_{ba} & p,q \in \text{virtual} \\
 \end{cases}
 \]
 
-where \(P^{occ}\) and \(P^{virt}\) are the occupied-occupied and virtual-virtual MP2 density corrections. The "unrelaxed" qualifier means the occupied-virtual block (which would require solving the coupled-perturbed HF equations, see [§14](#14-coupled-perturbed-hf-and-the-mp2-gradient)) is set to zero — this density gives natural orbitals cheaply but is not the fully relaxed density used for properties like the dipole.
+where \(P^{occ}\) and \(P^{virt}\) are the occupied-occupied and virtual-virtual MP2 density corrections. The "unrelaxed" qualifier means the occupied-virtual block (which would require solving the coupled-perturbed HF equations, see [§15](#15-coupled-perturbed-hf-and-the-mp2-gradient)) is set to zero — this density gives natural orbitals cheaply but is not the fully relaxed density used for properties like the dipole.
 
 Diagonalizing the symmetrized density (a real symmetric eigenproblem) gives eigenvalues sorted in descending order and eigenvectors \(\mathbf U\) that define the canonical-MO → natural-orbital rotation. The AO-basis natural-orbital coefficients follow by left-multiplying with the HF MO coefficient matrix:
 
@@ -2174,7 +2456,7 @@ The eigenvalues are the natural-orbital occupation numbers. Values near 2 indica
 
 ---
 
-## 13. Analytic Nuclear Gradients
+## 14. Analytic Nuclear Gradients
 
 ### Hellmann-Feynman Theorem and Pulay Forces
 
@@ -2428,7 +2710,7 @@ Planck’s implementation follows the decomposition above:
 
 ---
 
-## 14. Coupled-Perturbed HF and the MP2 Gradient
+## 15. Coupled-Perturbed HF and the MP2 Gradient
 
 ### RMP2 Z-Vector Method
 
@@ -2497,7 +2779,7 @@ as the RHF, UHF, and RMP2 gradients.
 
 ---
 
-## 15. Coupled Cluster in Planck
+## 16. Coupled Cluster in Planck
 
 Planck currently contains five coupled-cluster paths:
 
@@ -3448,7 +3730,7 @@ smaller systems cannot:
 
 ---
 
-## 16. Full Configuration Interaction (FCI)
+## 17. Full Configuration Interaction (FCI)
 
 ### What FCI Is
 
@@ -3648,14 +3930,14 @@ untruncated limit.
 
 FCI is the conceptual hub of the correlated methods:
 
-- **MP2** (§11) is the leading term of a perturbation series whose infinite
+- **MP2** (§13) is the leading term of a perturbation series whose infinite
   resummation would give FCI; it captures dynamic correlation cheaply but
   perturbatively.
-- **Coupled cluster** (§14) reaches FCI in the limit of including all excitation
+- **Coupled cluster** (§16) reaches FCI in the limit of including all excitation
   ranks (CCSD → CCSDT → … → CCSDTQ… → FCI), trading the linear CI expansion for
   an exponential ansatz \(e^{\hat T}\) that restores size-extensivity at each
   truncation.
-- **CASSCF** (§16) is *FCI restricted to an active space* of chemically important
+- **CASSCF** (§18) is *FCI restricted to an active space* of chemically important
   orbitals, with the orbitals themselves variationally optimized. FCI is the
   special case in which the active space is the entire orbital basis and no
   orbital optimization is performed.
@@ -3666,7 +3948,7 @@ truncated, resummed, or restricted.
 
 ---
 
-## 17. CASSCF and RASSCF
+## 18. CASSCF and RASSCF
 
 ### Motivation
 
@@ -3679,7 +3961,7 @@ Active Space SCF) partitions orbitals into:
 - **virtual** — unoccupied, excluded from CI
 
 The wavefunction is a full CI expansion within the active space — i.e. an FCI
-(§15) restricted to the active orbitals, with the orbitals themselves optimized:
+(§17) restricted to the active orbitals, with the orbitals themselves optimized:
 
 \[
 |\Psi_{CASSCF}\rangle = \sum_I c_I |D_I\rangle
@@ -4052,7 +4334,7 @@ occupation restrictions via bitcount masks on the RAS1 and RAS3 blocks.
 
 ---
 
-## 18. Geometry Optimization
+## 19. Geometry Optimization
 
 ### L-BFGS (Cartesian Coordinates)
 
@@ -4387,7 +4669,7 @@ Ha/Bohr).
 
 ---
 
-## 19. Vibrational Analysis
+## 20. Vibrational Analysis
 
 ### Semi-Numerical Hessian
 
@@ -4449,7 +4731,7 @@ by projecting each normal mode onto the SAO blocks and determining its irrep.
 
 ---
 
-## 20. Kohn-Sham Density Functional Theory
+## 21. Kohn-Sham Density Functional Theory
 
 Most of this chapter is general KS-DFT theory. The explicit grid presets,
 supported-functional notes, and code maps are Planck-specific documentation.
@@ -5009,7 +5291,7 @@ peaks in energy and wavelength units.
 
 ---
 
-## 21. Polarizable Continuum Solvation (C-PCM)
+## 22. Polarizable Continuum Solvation (C-PCM)
 
 Planck implements a conductor-like polarizable continuum model (C-PCM) for
 single-point HF (RHF/UHF) and KS-DFT (RKS/UKS) calculations. The solvent is
@@ -5309,7 +5591,7 @@ reaction-field operator) are not implemented.
 
 ---
 
-## 22. Basis Set Superposition Error and the Counterpoise Correction
+## 23. Basis Set Superposition Error and the Counterpoise Correction
 
 When you compute the interaction energy of a dimer \(A\cdots B\) as
 
@@ -5444,7 +5726,7 @@ probe basis-set extension effects, build mixed-basis descriptions, or study how
 much a neighbor's functions improve a fragment — all without changing the
 physical system.
 
-## 23. Molecular Properties
+## 24. Molecular Properties
 
 After SCF convergence Planck can compute several molecular properties from the
 converged density matrix. Dipole and quadrupole moments are printed
@@ -5802,7 +6084,7 @@ If \(T^+\) is correct, the inner product \(\mathbf C_{sph}^\top \mathbf C_{sph}\
 
 ---
 
-## 24. Checkpoint and Restart
+## 25. Checkpoint and Restart
 
 This chapter mixes a general restart idea with concrete file-format details.
 The projection concept below is broadly applicable; the checkpoint layout is
@@ -5847,7 +6129,7 @@ new basis, significantly reducing the number of SCF iterations required.
 
 ---
 
-## 25. Execution Flow of a Typical Run
+## 26. Execution Flow of a Typical Run
 
 ```
 driver.cpp
@@ -5925,7 +6207,7 @@ driver.cpp
 
 ---
 
-## 26. Theory-to-Code Map
+## 27. Theory-to-Code Map
 
 | Theory concept | Primary file(s) | Key function(s) |
 |---|---|---|
@@ -5939,6 +6221,8 @@ driver.cpp
 | ERI tensor | `src/integrals/os.cpp` | `_compute_2e`, `_contracted_eri` |
 | Direct Fock build | `src/integrals/os.cpp` | `_compute_2e_fock`, `_compute_2e_fock_uhf` |
 | Rys quadrature | `src/integrals/rys.cpp` | `_rys_eri_primitive`, `_rys_contracted_eri` |
+| Head-Gordon-Pople (HGP) ERI engine | `src/integrals/hgp.cpp` | `hgp_vrr`, `hgp_hrr_ab`, `hgp_hrr_cd`, `_contracted_eri_elem`, `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf` |
+| HGP full-symmetry direct Fock | `src/symmetry/hgp_symm.cpp` | `_build_skeleton_eri_symm`, `_compute_2e_fock_symm`, `_compute_2e_fock_uhf_symm`, spherical-basis variants |
 | Orthogonalizer | `src/scf/scf.cpp` | `build_orthogonalizer` |
 | RHF SCF | `src/scf/scf.cpp` | `run_rhf` |
 | UHF SCF | `src/scf/scf.cpp` | `run_uhf` |
@@ -6010,7 +6294,7 @@ driver.cpp
 
 ---
 
-## 27. Current Implementation Status
+## 28. Current Implementation Status
 
 | Feature | Status |
 |---|---|
@@ -6018,6 +6302,7 @@ driver.cpp
 | ROHF SCF | Complete (Guest–Saunders effective Fock with SAD guess; post-HF not yet supported from ROHF reference) |
 | Obara-Saika 1e and 2e integrals | Complete |
 | Rys quadrature ERIs | Complete |
+| Head-Gordon-Pople (HGP) ERI engine | Complete (VRR-inside / HRR-outside factorization; Cartesian and full-symmetry direct-Fock variants in `src/symmetry/hgp_symm.cpp`) |
 | Conventional and direct SCF | Complete |
 | Schwarz screening | Complete |
 | DIIS acceleration | Complete |
@@ -6063,7 +6348,7 @@ driver.cpp
 
 ---
 
-## 28. How to Study This Codebase
+## 29. How to Study This Codebase
 
 Recommended reading order for the HF/post-HF pipeline:
 

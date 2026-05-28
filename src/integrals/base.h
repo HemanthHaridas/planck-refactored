@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "base/types.h"
+#include "hgp.h"
 #include "os.h"
 #include "rys.h"
 
@@ -56,6 +57,8 @@ inline std::vector<double> _compute_2e(
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
         return HartreeFock::RysQuad::_compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
+    case HartreeFock::IntegralMethod::HeadGordonPople:
+        return HartreeFock::HeadGordonPople::_compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::Auto:
         return HartreeFock::RysQuad::_compute_2e_auto(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
     default:
@@ -78,6 +81,8 @@ inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
         return HartreeFock::RysQuad::_compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+    case HartreeFock::IntegralMethod::HeadGordonPople:
+        return HartreeFock::HeadGordonPople::_compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::Auto:
         return HartreeFock::RysQuad::_compute_2e_fock_auto(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     default:
@@ -102,6 +107,8 @@ _compute_2e_fock_uhf(const std::vector<HartreeFock::ShellPair> &shell_pairs,
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
         return HartreeFock::RysQuad::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+    case HartreeFock::IntegralMethod::HeadGordonPople:
+        return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::Auto:
         return HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     default:

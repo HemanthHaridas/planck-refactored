@@ -9,8 +9,8 @@ authors:
     email: hemanth.h@alumni.iitgn.ac.in
     affiliation: University of Utah
     orcid: "https://orcid.org/0000-0002-2681-5238"
-version: 4.1.0
-date-released: 2026-05-27
+version: "4.1.0"
+date-released: "2026-05-27"
 license: BSD-3-Clause
 repository-code: "https://github.com/HemanthHaridas/planck-refactored"
 type: software

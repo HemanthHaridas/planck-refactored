@@ -12,6 +12,7 @@
 #include "sad.h"
 #include "scf.h"
 #include "symmetry/fock_symmetrization.h"
+#include "symmetry/hgp_symm.h"
 #include "symmetry/os_symm.h"
 #include "symmetry/rys_symm.h"
 #include "symmetry/skeleton_eri.h" // contract_symm_fock_* (C1 persisted-skeleton path)
@@ -50,7 +51,7 @@ namespace
         const HartreeFock::Calculator &calc,
         const Eigen::MatrixXd &P, std::size_t nbasis, double tol_eri)
     {
-        const bool rys = (calc._integral._engine == HartreeFock::IntegralMethod::RysQuadrature);
+        const auto engine = calc._integral._engine;
         if (calc._shells._spherical)
         {
             // Spherical mode (Step 2): skeleton built over Cartesian quartets, the
@@ -59,16 +60,24 @@ namespace
             // count; the engine needs the Cartesian count separately.
             const std::size_t nbasis_cart = calc._shells.nbasis();
             const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
-            if (rys)
+            if (engine == HartreeFock::IntegralMethod::RysQuadrature)
                 return HartreeFock::RysQuad::_compute_2e_fock_symm_spherical(
+                    shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+            if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
+                return HartreeFock::HeadGordonPople::_compute_2e_fock_symm_spherical(
                     shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
             return HartreeFock::ObaraSaika::_compute_2e_fock_symm_spherical(
                 shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
         }
-        if (rys)
+        if (engine == HartreeFock::IntegralMethod::RysQuadrature)
             return HartreeFock::RysQuad::_compute_2e_fock_symm(
+                shell_pairs, calc._shells, P, nbasis, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
+            return HartreeFock::HeadGordonPople::_compute_2e_fock_symm(
                 shell_pairs, calc._shells, P, nbasis, calc._group_operations,
                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
         return HartreeFock::ObaraSaika::_compute_2e_fock_symm(
@@ -83,21 +92,29 @@ namespace
         const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb,
         std::size_t nbasis, double tol_eri)
     {
-        const bool rys = (calc._integral._engine == HartreeFock::IntegralMethod::RysQuadrature);
+        const auto engine = calc._integral._engine;
         if (calc._shells._spherical)
         {
             const std::size_t nbasis_cart = calc._shells.nbasis();
             const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
-            if (rys)
+            if (engine == HartreeFock::IntegralMethod::RysQuadrature)
                 return HartreeFock::RysQuad::_compute_2e_fock_uhf_symm_spherical(
+                    shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+            if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
+                return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_symm_spherical(
                     shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
             return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_symm_spherical(
                 shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
         }
-        if (rys)
+        if (engine == HartreeFock::IntegralMethod::RysQuadrature)
             return HartreeFock::RysQuad::_compute_2e_fock_uhf_symm(
+                shell_pairs, calc._shells, Pa, Pb, nbasis, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
+            return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_symm(
                 shell_pairs, calc._shells, Pa, Pb, nbasis, calc._group_operations,
                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
         return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_symm(
@@ -125,10 +142,14 @@ namespace
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const HartreeFock::Calculator &calc, double tol_eri)
     {
-        const bool rys = (calc._integral._engine == HartreeFock::IntegralMethod::RysQuadrature);
+        const auto engine = calc._integral._engine;
         const std::size_t nbasis_cart = calc._shells.nbasis();
-        if (rys)
+        if (engine == HartreeFock::IntegralMethod::RysQuadrature)
             return HartreeFock::RysQuad::_build_skeleton_eri_symm(
+                shell_pairs, calc._shells, nbasis_cart, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
+            return HartreeFock::HeadGordonPople::_build_skeleton_eri_symm(
                 shell_pairs, calc._shells, nbasis_cart, calc._group_operations,
                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
         return HartreeFock::ObaraSaika::_build_skeleton_eri_symm(
