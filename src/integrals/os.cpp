@@ -1597,6 +1597,64 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
     return result;
 }
 
+double HartreeFock::ObaraSaika::_contracted_eri_elem_weighted_test(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    int lAx, int lAy, int lAz,
+    int lBx, int lBy, int lBz,
+    int lCx, int lCy, int lCz,
+    int lDx, int lDy, int lDz,
+    int weight_center,
+    const HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
+    const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
+
+    auto primitive_value = [&](const HartreeFock::PrimitivePair &ppAB,
+                               const HartreeFock::PrimitivePair &ppCD) -> double
+    {
+        const double full = _os_eri_primitive(
+            ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+            ABx, ABy, ABz, CDx, CDy, CDz,
+            HartreeFock::ERIKernel::Coulomb, 0.0);
+        if (kernel == HartreeFock::ERIKernel::Coulomb)
+            return full;
+
+        const double long_range = _os_eri_primitive(
+            ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+            ABx, ABy, ABz, CDx, CDy, CDz,
+            HartreeFock::ERIKernel::LongRange, omega);
+        return kernel == HartreeFock::ERIKernel::LongRange ? long_range : (full - long_range);
+    };
+
+    double eri = 0.0;
+    for (const auto &ppAB : spAB.primitive_pairs)
+        for (const auto &ppCD : spCD.primitive_pairs)
+        {
+            const double value = primitive_value(ppAB, ppCD);
+            switch (weight_center)
+            {
+                case 0:
+                    eri += (2.0 * ppAB.alpha) * ppAB.coeff_product * ppCD.coeff_product * value;
+                    break;
+                case 1:
+                    eri += ppAB.coeff_product * (2.0 * ppAB.beta) * ppCD.coeff_product * value;
+                    break;
+                case 2:
+                    eri += ppAB.coeff_product * (2.0 * ppCD.alpha) * ppCD.coeff_product * value;
+                    break;
+                case 3:
+                    eri += ppAB.coeff_product * ppCD.coeff_product * (2.0 * ppCD.beta) * value;
+                    break;
+                default:
+                    throw std::runtime_error("invalid weighted centre for OS ERI derivative test hook");
+            }
+        }
+
+    return eri;
+}
+
 // Forward declaration — defined later in this file before _compute_2e.
 static Eigen::MatrixXd _compute_schwarz_table(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,

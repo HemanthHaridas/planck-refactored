@@ -15,11 +15,50 @@ tags: [gradient, geomopt, lbfgs, hessian, frequency]
 
 Components:
 - One-electron gradient: ∂H_core/∂R (kinetic + nuclear attraction derivatives)
-- Two-electron gradient: ∂ERI/∂R (Obara-Saika derivative integrals)
+- Two-electron gradient: ∂ERI/∂R, dispatched per engine
 - Nuclear repulsion gradient: ∂V_nn/∂R
 - Orbital response (Pulay terms): couples density matrix response to basis function derivatives
 
 For MP2: requires orbital response (Z-vector / coupled-perturbed HF) to handle the response of the HF orbitals to the nuclear displacement.
+
+### Derivative-ERI engine dispatch
+
+`compute_eri_deriv_dispatch` in `src/gradient/gradient.cpp` selects the
+derivative engine off `calc._integral._engine` and is **engine-agnostic for
+every kernel** (Coulomb, LongRange, ShortRange):
+
+- `IntegralMethod::HeadGordonPople` → `HeadGordonPople::_compute_eri_deriv_elem`
+- everything else → `ObaraSaika::_compute_eri_deriv_elem`
+
+The 1-electron derivative integrals (`_compute_1e_deriv_A`,
+`_compute_nuclear_deriv_A_elem`, `_compute_nuclear_deriv_C_elem`) live only
+in `src/integrals/os.cpp`; HGP has no separate implementation for them and
+always uses OS. They are cheap relative to the 2e term, so this is not a
+performance gap.
+
+The MP2 / UMP2 gradient code in `src/post_hf/mp2_gradient.cpp` calls
+`ObaraSaika::_compute_eri_deriv_elem` directly at three sites; it bypasses
+`compute_eri_deriv_dispatch`, so the HGP engine is not used for MP2 gradient
+response intermediates even when selected. Values agree with the OS path to
+~1e-15; the asymmetry is performance/coverage, not correctness.
+
+### Cross-engine validation
+
+Engine-agnostic gradient correctness is gated by four regression cases that
+run the same input twice (engine os, engine hgp) and compare:
+
+| ID | What it tests |
+|---|---|
+| `water_rhf_gradient_engine_os_vs_hgp` | RHF/STO-3G analytic gradient |
+| `water_b3lyp_gradient_engine_os_vs_hgp` | B3LYP/STO-3G gradient (HF-like Coulomb path) |
+| `water_hse06_gradient_engine_os_vs_hgp` | HSE06/STO-3G gradient — exercises the LongRange derivative dispatch |
+| `water_rhf_geomopt_engine_os_vs_hgp` | RHF/STO-3G geomopt: |ΔE| ≤ 1e-8 Eh and geom RMSD ≤ 1e-5 Å |
+
+Drivers: `tests/engine_gradient_compare.py` and
+`tests/engine_geomopt_compare.py`. Binary (`hartree-fock` vs `planck-dft`)
+is auto-selected from the presence of `%begin_dft` in the input. Per-
+component tolerance on the gradient cases is 1e-7 Ha/Bohr (limited by the
+8-decimal print precision of `Atom N:` lines).
 
 ## UMP2 Gradient (commit 22c0645)
 

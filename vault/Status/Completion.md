@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-05-27
+Last updated: 2026-05-28
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -30,7 +30,7 @@ historical design context, but they are no longer the source of truth for
 
 ### Direct SCF and full point-group symmetry
 
-- Obara-Saika and Rys direct Fock engines, with auto-dispatch by angular momentum
+- Obara-Saika, Rys, and HGP direct Fock engines, with auto-dispatch by angular momentum
 - Full point-group ERI reduction for direct RHF/UHF in the Cartesian basis
 - Full point-group ERI reduction for direct RHF/UHF in the spherical-harmonic basis
 - Metric-correct spherical group operators
@@ -141,6 +141,16 @@ historical design context, but they are no longer the source of truth for
 - BSSE / ghost-atom infrastructure and CP driver
 - Full-symmetry direct-SCF performance improvements: persisted skeleton ERI and
   monomial-group-operator fast path
+- HGP screened-derivative correctness: `hgp_vrr` now scales the C-VRR
+  `inv_2_delta` cross-coupling term by `screen.boys_scale` for non-Coulomb
+  kernels, matching OS. The screened-kernel OS fallback inside HGP
+  `_contracted_eri_elem` is removed, and the gradient dispatcher's
+  Coulomb-only HGP guard is lifted. Net effect: range-separated DFT
+  gradients (HSE06 etc.) now run natively through HGP when the engine is
+  selected. Gated by a 2352-quartet OS↔HGP sweep on water/STO-3G (max diff
+  ~4e-15) plus four end-to-end cross-engine comparison regressions:
+  `water_{rhf,b3lyp,hse06}_gradient_engine_os_vs_hgp` and
+  `water_rhf_geomopt_engine_os_vs_hgp`. See [[HGP Screened inv_2_delta]].
 
 ## CASSCF PySCF Gate Table
 

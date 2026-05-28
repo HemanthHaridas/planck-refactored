@@ -6,24 +6,23 @@
 %end_control
 
 %begin_scf
-    scf_type    uhf
-    guess       sad
+    scf_type    rhf
     use_diis    .true.
     diis_dim    8
-    engine      os
-    level_shift 0.3
+    engine      hgp
+    guess       hcore
 %end_scf
 
 %begin_geom
     coord_type  cartesian
     coord_units angstrom
-    use_symm    .true.
+    use_symm    .false.
 %end_geom
 
 %begin_coords
 3
-0   3
-O     0.000000     0.000000     0.117176
-H     0.000000     0.756950    -0.468703
-H     0.000000    -0.756950    -0.468703
+0   1
+O     0.000000     0.000000     0.000000
+H     0.758602     0.000000     0.504284
+H    -0.758602     0.000000     0.504284
 %end_coords

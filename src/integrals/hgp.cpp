@@ -1,6 +1,7 @@
 #include "hgp.h"
 
 #include "boys.h"
+#include "os.h"
 
 #include <algorithm>
 #include <array>
@@ -285,6 +286,15 @@ namespace
         double boys_scale = 1.0;
     };
 
+    enum class PrimitiveWeightCenter
+    {
+        None,
+        A,
+        B,
+        C,
+        D,
+    };
+
     static ScreenedKernelData screened_kernel_data(
         double rho,
         HartreeFock::ERIKernel kernel,
@@ -415,12 +425,15 @@ namespace
         const double delta = zetaAB + zetaCD;
         const double inv_2_zetaAB = 0.5 / zetaAB;
         const double inv_2_zetaCD = 0.5 / zetaCD;
-        const double inv_2_delta = 0.5 / delta;
         const double rho = zetaAB * zetaCD / delta;
-        const double rho_over_zetaAB = rho / zetaAB;
-        const double rho_over_zetaCD = rho / zetaCD;
-
         const auto screen = screened_kernel_data(rho, kernel, omega);
+        // C-VRR bra/ket coupling term carries a λ = boys_scale factor for
+        // screened kernels (OS matches: src/integrals/os.cpp inv_2_delta).
+        const double inv_2_delta =
+            (0.5 / delta) *
+            ((kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale);
+        const double rho_over_zetaAB = screen.rho / zetaAB;
+        const double rho_over_zetaCD = screen.rho / zetaCD;
         const double wpwq_scale = screen.rho / rho;
 
         const Eigen::Vector3d W = (zetaAB * P + zetaCD * Q) / delta;
@@ -714,6 +727,111 @@ namespace
 
         return Q;
     }
+    static double hgp_contracted_eri_weighted_base(
+        const HartreeFock::ShellPair &spAB,
+        const HartreeFock::ShellPair &spCD,
+        int lAx, int lAy, int lAz,
+        int lBx, int lBy, int lBz,
+        int lCx, int lCy, int lCz,
+        int lDx, int lDy, int lDz,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        PrimitiveWeightCenter weight_center)
+    {
+        const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+        const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+        const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
+
+        // HGP loop reorder: contract VRR results across all primitive pairs into a
+        // single (a0|c0) block, then run the two HRR passes once per shell quartet
+        // instead of once per primitive pair. Derivative-weighted contractions keep
+        // the same structure and only change the primitive prefactor per center.
+        EriScratch &scratch = g_hgp_scratch;
+        scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
+
+        // hrr_data is only read inside hgp_hrr_finalize, which runs after the
+        // accumulation loop completes — safe to use as per-pair VRR scratch in
+        // the meantime, avoiding a per-quartet allocation.
+        double *a0c0_pair = scratch.hrr_data;
+        for (const auto &ppAB : spAB.primitive_pairs)
+        {
+            for (const auto &ppCD : spCD.primitive_pairs)
+            {
+                hgp_eri_primitive_vrr_only(
+                    ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                    scratch, a0c0_pair, kernel, omega);
+
+                double w = ppAB.coeff_product * ppCD.coeff_product;
+                switch (weight_center)
+                {
+                case PrimitiveWeightCenter::None:
+                    break;
+                case PrimitiveWeightCenter::A:
+                    w *= 2.0 * ppAB.alpha;
+                    break;
+                case PrimitiveWeightCenter::B:
+                    w *= 2.0 * ppAB.beta;
+                    break;
+                case PrimitiveWeightCenter::C:
+                    w *= 2.0 * ppCD.alpha;
+                    break;
+                case PrimitiveWeightCenter::D:
+                    w *= 2.0 * ppCD.beta;
+                    break;
+                }
+
+                for (std::size_t n = 0; n < scratch.spatial_size; ++n)
+                    scratch.a0c0_data[n] += w * a0c0_pair[n];
+            }
+        }
+
+        std::copy(scratch.a0c0_data,
+                  scratch.a0c0_data + scratch.spatial_size,
+                  scratch.hrr_data);
+
+        const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
+        const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
+        return hgp_hrr_finalize(
+            scratch,
+            lAx, lAy, lAz, lBx, lBy, lBz,
+            lCx, lCy, lCz, lDx, lDy, lDz,
+            ABx, ABy, ABz, CDx, CDy, CDz);
+    }
+
+    static double hgp_contracted_eri_weighted(
+        const HartreeFock::ShellPair &spAB,
+        const HartreeFock::ShellPair &spCD,
+        int lAx, int lAy, int lAz,
+        int lBx, int lBy, int lBz,
+        int lCx, int lCy, int lCz,
+        int lDx, int lDy, int lDz,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        PrimitiveWeightCenter weight_center)
+    {
+        if (kernel != HartreeFock::ERIKernel::ShortRange)
+        {
+            return hgp_contracted_eri_weighted_base(
+                spAB, spCD,
+                lAx, lAy, lAz, lBx, lBy, lBz,
+                lCx, lCy, lCz, lDx, lDy, lDz,
+                kernel, omega, weight_center);
+        }
+
+        if (omega <= 0.0)
+            return 0.0;
+
+        return hgp_contracted_eri_weighted_base(
+                   spAB, spCD,
+                   lAx, lAy, lAz, lBx, lBy, lBz,
+                   lCx, lCy, lCz, lDx, lDy, lDz,
+                   HartreeFock::ERIKernel::Coulomb, 0.0, weight_center) -
+               hgp_contracted_eri_weighted_base(
+                   spAB, spCD,
+                   lAx, lAy, lAz, lBx, lBy, lBz,
+                   lCx, lCy, lCz, lDx, lDy, lDz,
+                   HartreeFock::ERIKernel::LongRange, omega, weight_center);
+    }
 } // namespace
 
 double HartreeFock::HeadGordonPople::_contracted_eri_elem(
@@ -726,46 +844,63 @@ double HartreeFock::HeadGordonPople::_contracted_eri_elem(
     HartreeFock::ERIKernel kernel,
     double omega)
 {
-    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
-    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
-    const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
-
-    // HGP loop reorder: contract VRR results across all primitive pairs into a
-    // single (a0|c0) block, then run the two HRR passes once per shell quartet
-    // instead of once per primitive pair. VRR is linear in the primitive
-    // coefficients and HRR is linear in its input block, so summing-then-HRR
-    // equals HRR-each-then-summing — only the loop order changes.
-    EriScratch &scratch = g_hgp_scratch;
-    scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
-
-    // hrr_data is only read inside hgp_hrr_finalize, which runs after the
-    // accumulation loop completes — safe to use as per-pair VRR scratch in
-    // the meantime, avoiding a per-quartet allocation.
-    double *a0c0_pair = scratch.hrr_data;
-    for (const auto &ppAB : spAB.primitive_pairs)
-    {
-        for (const auto &ppCD : spCD.primitive_pairs)
-        {
-            hgp_eri_primitive_vrr_only(
-                ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
-                scratch, a0c0_pair, kernel, omega);
-            const double w = ppAB.coeff_product * ppCD.coeff_product;
-            for (std::size_t n = 0; n < scratch.spatial_size; ++n)
-                scratch.a0c0_data[n] += w * a0c0_pair[n];
-        }
-    }
-
-    std::copy(scratch.a0c0_data,
-              scratch.a0c0_data + scratch.spatial_size,
-              scratch.hrr_data);
-
-    const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
-    const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
-    return hgp_hrr_finalize(
-        scratch,
+    return hgp_contracted_eri_weighted(
+        spAB, spCD,
         lAx, lAy, lAz, lBx, lBy, lBz,
         lCx, lCy, lCz, lDx, lDy, lDz,
-        ABx, ABy, ABz, CDx, CDy, CDz);
+        kernel, omega, PrimitiveWeightCenter::None);
+}
+
+double HartreeFock::HeadGordonPople::_contracted_eri_elem_native_test(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    int lAx, int lAy, int lAz,
+    int lBx, int lBy, int lBz,
+    int lCx, int lCy, int lCz,
+    int lDx, int lDy, int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    return hgp_contracted_eri_weighted(
+        spAB, spCD,
+        lAx, lAy, lAz, lBx, lBy, lBz,
+        lCx, lCy, lCz, lDx, lDy, lDz,
+        kernel, omega, PrimitiveWeightCenter::None);
+}
+
+double HartreeFock::HeadGordonPople::_contracted_eri_elem_weighted_native_test(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    int lAx, int lAy, int lAz,
+    int lBx, int lBy, int lBz,
+    int lCx, int lCy, int lCz,
+    int lDx, int lDy, int lDz,
+    int weight_center,
+    HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    const auto center = [&]() -> PrimitiveWeightCenter
+    {
+        switch (weight_center)
+        {
+            case 0:
+                return PrimitiveWeightCenter::A;
+            case 1:
+                return PrimitiveWeightCenter::B;
+            case 2:
+                return PrimitiveWeightCenter::C;
+            case 3:
+                return PrimitiveWeightCenter::D;
+            default:
+                throw std::runtime_error("invalid weighted centre for HGP ERI derivative test hook");
+        }
+    }();
+
+    return hgp_contracted_eri_weighted(
+        spAB, spCD,
+        lAx, lAy, lAz, lBx, lBy, lBz,
+        lCx, lCy, lCz, lDx, lDy, lDz,
+        kernel, omega, center);
 }
 
 std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
@@ -776,6 +911,12 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
+    if (kernel != HartreeFock::ERIKernel::Coulomb)
+    {
+        return HartreeFock::ObaraSaika::_compute_2e(
+            shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
+    }
+
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
@@ -853,6 +994,12 @@ Eigen::MatrixXd HartreeFock::HeadGordonPople::_compute_2e_fock(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
+    if (kernel != HartreeFock::ERIKernel::Coulomb)
+    {
+        return HartreeFock::ObaraSaika::_compute_2e_fock(
+            shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+    }
+
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
@@ -881,6 +1028,12 @@ HartreeFock::HeadGordonPople::_compute_2e_fock_uhf(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
+    if (kernel != HartreeFock::ERIKernel::Coulomb)
+    {
+        return HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
+            shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+    }
+
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
@@ -902,4 +1055,167 @@ HartreeFock::HeadGordonPople::_compute_2e_fock_uhf(
                 }
 
     return {Ga, Gb};
+}
+
+std::array<double, 12> HartreeFock::HeadGordonPople::_compute_eri_deriv_elem(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    const HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
+    const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+    const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+    const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+
+    std::array<double, 12> result{};
+    for (int q = 0; q < 3; ++q)
+    {
+        const int axp = lAx + (q == 0), ayp = lAy + (q == 1), azp = lAz + (q == 2);
+        const int bxp = lBx + (q == 0), byp = lBy + (q == 1), bzp = lBz + (q == 2);
+        const int cxp = lCx + (q == 0), cyp = lCy + (q == 1), czp = lCz + (q == 2);
+        const int dxp = lDx + (q == 0), dyp = lDy + (q == 1), dzp = lDz + (q == 2);
+
+        result[q] += hgp_contracted_eri_weighted(
+            spAB, spCD,
+            axp, ayp, azp, lBx, lBy, lBz,
+            lCx, lCy, lCz, lDx, lDy, lDz,
+            kernel, omega, PrimitiveWeightCenter::A);
+        result[3 + q] += hgp_contracted_eri_weighted(
+            spAB, spCD,
+            lAx, lAy, lAz, bxp, byp, bzp,
+            lCx, lCy, lCz, lDx, lDy, lDz,
+            kernel, omega, PrimitiveWeightCenter::B);
+        result[6 + q] += hgp_contracted_eri_weighted(
+            spAB, spCD,
+            lAx, lAy, lAz, lBx, lBy, lBz,
+            cxp, cyp, czp, lDx, lDy, lDz,
+            kernel, omega, PrimitiveWeightCenter::C);
+        result[9 + q] += hgp_contracted_eri_weighted(
+            spAB, spCD,
+            lAx, lAy, lAz, lBx, lBy, lBz,
+            lCx, lCy, lCz, dxp, dyp, dzp,
+            kernel, omega, PrimitiveWeightCenter::D);
+
+        const int lAq = spAB.A._cartesian[q];
+        const int lBq = spAB.B._cartesian[q];
+        const int lCq = spCD.A._cartesian[q];
+        const int lDq = spCD.B._cartesian[q];
+        if (lAq > 0)
+        {
+            const int axm = lAx - (q == 0), aym = lAy - (q == 1), azm = lAz - (q == 2);
+            result[q] -= static_cast<double>(lAq) *
+                         _contracted_eri_elem(
+                             spAB, spCD,
+                             axm, aym, azm, lBx, lBy, lBz,
+                             lCx, lCy, lCz, lDx, lDy, lDz,
+                             kernel, omega);
+        }
+        if (lBq > 0)
+        {
+            const int bxm = lBx - (q == 0), bym = lBy - (q == 1), bzm = lBz - (q == 2);
+            result[3 + q] -= static_cast<double>(lBq) *
+                             _contracted_eri_elem(
+                                 spAB, spCD,
+                                 lAx, lAy, lAz, bxm, bym, bzm,
+                                 lCx, lCy, lCz, lDx, lDy, lDz,
+                                 kernel, omega);
+        }
+        if (lCq > 0)
+        {
+            const int cxm = lCx - (q == 0), cym = lCy - (q == 1), czm = lCz - (q == 2);
+            result[6 + q] -= static_cast<double>(lCq) *
+                             _contracted_eri_elem(
+                                 spAB, spCD,
+                                 lAx, lAy, lAz, lBx, lBy, lBz,
+                                 cxm, cym, czm, lDx, lDy, lDz,
+                                 kernel, omega);
+        }
+        if (lDq > 0)
+        {
+            const int dxm = lDx - (q == 0), dym = lDy - (q == 1), dzm = lDz - (q == 2);
+            result[9 + q] -= static_cast<double>(lDq) *
+                             _contracted_eri_elem(
+                                 spAB, spCD,
+                                 lAx, lAy, lAz, lBx, lBy, lBz,
+                                 lCx, lCy, lCz, dxm, dym, dzm,
+                                 kernel, omega);
+        }
+    }
+
+    return result;
+}
+
+std::array<double, 12> HartreeFock::HeadGordonPople::_compute_eri_deriv_elem_native_test(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    const HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
+    const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+    const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+    const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+
+    std::array<double, 12> result{};
+    for (int q = 0; q < 3; ++q)
+    {
+        const int axp = lAx + (q == 0), ayp = lAy + (q == 1), azp = lAz + (q == 2);
+        const int bxp = lBx + (q == 0), byp = lBy + (q == 1), bzp = lBz + (q == 2);
+        const int cxp = lCx + (q == 0), cyp = lCy + (q == 1), czp = lCz + (q == 2);
+        const int dxp = lDx + (q == 0), dyp = lDy + (q == 1), dzp = lDz + (q == 2);
+
+        result[q] += hgp_contracted_eri_weighted(
+            spAB, spCD,
+            axp, ayp, azp, lBx, lBy, lBz,
+            lCx, lCy, lCz, lDx, lDy, lDz,
+            kernel, omega, PrimitiveWeightCenter::A);
+        result[3 + q] += hgp_contracted_eri_weighted(
+            spAB, spCD,
+            lAx, lAy, lAz, bxp, byp, bzp,
+            lCx, lCy, lCz, lDx, lDy, lDz,
+            kernel, omega, PrimitiveWeightCenter::B);
+        result[6 + q] += hgp_contracted_eri_weighted(
+            spAB, spCD,
+            lAx, lAy, lAz, lBx, lBy, lBz,
+            cxp, cyp, czp, lDx, lDy, lDz,
+            kernel, omega, PrimitiveWeightCenter::C);
+        result[9 + q] += hgp_contracted_eri_weighted(
+            spAB, spCD,
+            lAx, lAy, lAz, lBx, lBy, lBz,
+            lCx, lCy, lCz, dxp, dyp, dzp,
+            kernel, omega, PrimitiveWeightCenter::D);
+
+        const int lAq = spAB.A._cartesian[q];
+        const int lBq = spAB.B._cartesian[q];
+        const int lCq = spCD.A._cartesian[q];
+        const int lDq = spCD.B._cartesian[q];
+
+        if (lAq > 0)
+            result[q] -= lAq * _contracted_eri_elem_native_test(
+                spAB, spCD,
+                lAx - (q == 0), lAy - (q == 1), lAz - (q == 2), lBx, lBy, lBz,
+                lCx, lCy, lCz, lDx, lDy, lDz,
+                kernel, omega);
+        if (lBq > 0)
+            result[3 + q] -= lBq * _contracted_eri_elem_native_test(
+                spAB, spCD,
+                lAx, lAy, lAz, lBx - (q == 0), lBy - (q == 1), lBz - (q == 2),
+                lCx, lCy, lCz, lDx, lDy, lDz,
+                kernel, omega);
+        if (lCq > 0)
+            result[6 + q] -= lCq * _contracted_eri_elem_native_test(
+                spAB, spCD,
+                lAx, lAy, lAz, lBx, lBy, lBz,
+                lCx - (q == 0), lCy - (q == 1), lCz - (q == 2), lDx, lDy, lDz,
+                kernel, omega);
+        if (lDq > 0)
+            result[9 + q] -= lDq * _contracted_eri_elem_native_test(
+                spAB, spCD,
+                lAx, lAy, lAz, lBx, lBy, lBz,
+                lCx, lCy, lCz, lDx - (q == 0), lDy - (q == 1), lDz - (q == 2),
+                kernel, omega);
+    }
+
+    return result;
 }

@@ -113,6 +113,19 @@ namespace HartreeFock
             const HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0);
 
+        // Test hook: return the weighted AM-raising term used by the ERI
+        // derivative assembly for one specified centre (0=A, 1=B, 2=C, 3=D).
+        double _contracted_eri_elem_weighted_test(
+            const HartreeFock::ShellPair &spAB,
+            const HartreeFock::ShellPair &spCD,
+            int lAx, int lAy, int lAz,
+            int lBx, int lBy, int lBz,
+            int lCx, int lCy, int lCz,
+            int lDx, int lDy, int lDz,
+            int weight_center,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0);
+
         // Compute the cross-overlap matrix S_cross(μ, ν) = <χ_μ^large | χ_ν^small>
         // between two basis sets centered on the same molecule.
         // Result has dimensions nbasis_large × nbasis_small.

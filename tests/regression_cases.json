@@ -514,6 +514,81 @@
       ]
     },
     {
+      "id": "water_rhf_gradient_hgp_core",
+      "input": "tests/inputs/regression/geometry/water_rhf_gradient_hgp.hfinp",
+      "executable": "tests/hf_gradient_fd.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_rhf_gradient_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/geometry/water_rhf_gradient.hfinp",
+      "executable": "tests/engine_gradient_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "OS gradient (Ha/Bohr):",
+        "HGP gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_b3lyp_gradient_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/dft/water_dft_b3lyp_gradient.hfinp",
+      "executable": "tests/engine_gradient_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "OS gradient (Ha/Bohr):",
+        "HGP gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_hse06_gradient_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/dft/water_dft_hse06_gradient.hfinp",
+      "executable": "tests/engine_gradient_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "OS gradient (Ha/Bohr):",
+        "HGP gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_rhf_geomopt_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/geometry/water_rhf_geomopt_engine_compare.hfinp",
+      "executable": "tests/engine_geomopt_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Final Energy (OS)",
+        "Final Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
       "id": "h2_rmp2_gradient_smoke",
       "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
       "tags": [
@@ -924,6 +999,21 @@
           "metric": "gradient_max",
           "value": 0.5
         }
+      ]
+    },
+    {
+      "id": "water_triplet_uhf_gradient_hgp_core",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_gradient_hgp_sto3g.hfinp",
+      "executable": "tests/hf_gradient_fd.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
       ]
     },
     {
