@@ -186,8 +186,10 @@ namespace
         std::size_t spatial_size = 0;
         std::vector<double> vrr;
         std::vector<double> hrr;
+        std::vector<double> a0c0_accum;
         double *vrr_data = nullptr;
         double *hrr_data = nullptr;
+        double *a0c0_data = nullptr;
 
         void resize_for_quartet(
             int lABx, int lABy, int lABz,
@@ -218,8 +220,12 @@ namespace
             std::fill(vrr.begin(), vrr.end(), 0.0);
             if (hrr.size() != spatial_size)
                 hrr.resize(spatial_size);
+            if (a0c0_accum.size() != spatial_size)
+                a0c0_accum.resize(spatial_size);
+            std::fill(a0c0_accum.begin(), a0c0_accum.end(), 0.0);
             vrr_data = vrr.data();
             hrr_data = hrr.data();
+            a0c0_data = a0c0_accum.data();
         }
 
         std::size_t spatial_index(
