@@ -74,8 +74,16 @@ Public entry points mirror OS one-for-one:
 
 ### Screened kernels (LongRange / ShortRange)
 
-HGP serves screened kernels natively for all three entry points (no OS
-detour). The screened scaling is applied inside `hgp_vrr`:
+HGP serves screened kernels natively across every public entry — per-quartet
+`_contracted_eri_elem`, derivative `_compute_eri_deriv_elem`, full-tensor
+`_compute_2e`, and direct-SCF Fock builds `_compute_2e_fock` /
+`_compute_2e_fock_uhf`. No OS detour anywhere. The earlier Fock-side
+fallbacks that delegated screened kernels to OS were lifted once the
+per-quartet sweep + end-to-end SCF-energy comparator validated the native
+path; see the regression IDs `water_{rhf,hse06,uhf_triplet,uks_hse06,
+hse06_symm}_scf_energy_engine_os_vs_hgp`.
+
+The screened scaling is applied inside `hgp_vrr`:
 
 - Boys-argument scale `T = boys_scale · rho · |P-Q|²`
 - WP/WQ vectors scaled by `wpwq_scale = screen.rho / rho`

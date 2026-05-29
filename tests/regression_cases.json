@@ -589,6 +589,81 @@
       ]
     },
     {
+      "id": "water_rhf_scf_energy_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/hf/water_rhf_energy_engine_compare.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_hse06_scf_energy_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/dft/water_dft_hse06_energy.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_uhf_triplet_scf_energy_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_uks_hse06_scf_energy_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/dft/water_triplet_uks_hse06_sto3g.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_hse06_symm_scf_energy_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/dft/water_dft_hse06_energy_symm.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
       "id": "h2_rmp2_gradient_smoke",
       "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
       "tags": [

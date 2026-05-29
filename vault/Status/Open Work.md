@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-05-28
+Last updated: 2026-05-29
 
 This is the canonical open-work document for the repository.
 Use it with `vault/Status/Completion.md`. Older status snapshots and handoff
@@ -124,10 +124,3 @@ Gate:
   `ObaraSaika::_compute_eri_deriv_elem`. Today the MP2 response
   intermediates always use OS even when the user picked HGP — values agree
   to ~1e-15 so this is performance/coverage, not correctness.
-- HGP screened-Fock and screened-`_compute_2e` paths are now natively wired
-  (the screened guard in `_contracted_eri_elem` was lifted) and validated
-  at the quartet level against OS for water/STO-3G. An end-to-end
-  screened-DFT SCF *energy* regression that selects `engine hgp` on a
-  range-separated functional (HSE06 / ωB97X) would gate the Fock-side use
-  of the screened HGP path more strongly than the current per-quartet
-  sweep does.
