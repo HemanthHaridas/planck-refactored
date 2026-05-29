@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Cross-engine SCF total-energy validation.
 
-Runs the supplied .hfinp twice (engine os, engine hgp), parses the final
-`Total Energy` line from each output, and fails if the two energies
-disagree by more than --atol.
+Runs the supplied .hfinp four times (engine os, hgp, rys, auto), parses
+the final `Total Energy` line from each output, and fails if any of
+hgp / rys / auto disagree with the OS reference by more than --atol.
 
 Binary (`hartree-fock` vs `planck-dft`) is auto-selected from the
 presence of `%begin_dft` in the input. Default tolerance 5e-9 Eh leaves
@@ -116,8 +116,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.keep_tmp:
         tmp._finalizer.detach()  # type: ignore[attr-defined]
 
+    engines = ("os", "hgp", "rys", "auto")
     energies: dict[str, float] = {}
-    for engine in ("os", "hgp"):
+    for engine in engines:
         rendered = render_with_engine(template, engine)
         path = workdir / f"{engine}.hfinp"
         path.write_text(rendered, encoding="utf-8")
@@ -125,16 +126,24 @@ def main(argv: Iterable[str] | None = None) -> int:
         (workdir / f"{engine}.log").write_text(output, encoding="utf-8")
         energies[engine] = parse_total_energy(output)
 
-    print(f"Total Energy (OS)  : {energies['os']:.10f} Eh")
-    print(f"Total Energy (HGP) : {energies['hgp']:.10f} Eh")
-    delta = abs(energies["os"] - energies["hgp"])
-    print(f"|delta E|          : {delta:.3e} Eh (tol {args.atol:.3e})")
+    # Label format matches the 2-engine comparator the regression manifest
+    # still pins on: `Total Energy (OS)`, `Total Energy (HGP)`. Newer engines
+    # use the same uppercase convention.
+    for engine in engines:
+        print(f"Total Energy ({engine.upper()}) : {energies[engine]:.10f} Eh")
+    e_ref = energies["os"]
+    deltas = {e: abs(energies[e] - e_ref) for e in engines if e != "os"}
+    for e, d in deltas.items():
+        print(f"|delta E ({e.upper()} - OS)| : {d:.3e} Eh (tol {args.atol:.3e})")
 
     if args.keep_tmp:
         print(f"work directory kept at: {workdir}")
 
-    if delta > args.atol:
-        print("FAIL: HGP SCF total energy diverges from OS reference")
+    failures = [e for e, d in deltas.items() if d > args.atol]
+    if failures:
+        print(
+            f"FAIL: {', '.join(failures)} SCF total energy diverges from OS reference"
+        )
         return 1
     print("PASS")
     return 0

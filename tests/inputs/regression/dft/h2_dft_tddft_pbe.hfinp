@@ -17,7 +17,7 @@
 %end_scf
 
 %begin_dft
-    grid                coarse
+    grid                ultrafine
     exchange            pbe
     correlation         pbe
     lr_nstates          1

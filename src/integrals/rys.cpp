@@ -1,6 +1,7 @@
 #include "rys.h"
-#include "os.h" // for _compute_2e_fock (Auto path falls back to OS)
+#include "hgp.h"       // Auto path picks between HGP and Rys per quartet.
 #include "rys_roots.h"
+#include "screening.h" // Shared HGP-based Schwarz table for the Auto path.
 
 #include <algorithm>
 #include <cmath>
@@ -231,31 +232,32 @@ namespace
 
 } // namespace
 
-static bool _auto_prefers_rys(const HartreeFock::ShellPair &spAB,
-                              const HartreeFock::ShellPair &spCD) noexcept
+// Auto-dispatch predicate. HGP-default with a Rys tail at the bottom.
+//
+// Calibrated against the per-(L_AB, L_CD) benchmark in
+// tests/auto_dispatch_benchmark.cpp; the fit artifact is
+// docs/auto_dispatch_fit.json and the cost curves are
+// docs/auto_dispatch_curves.svg. 238 buckets across water at
+// STO-3G / 6-31G(d) / cc-pVDZ / cc-pVTZ and helium at cc-pVQZ / cc-pV5Z
+// agree unanimously on the rule:
+//
+//   pick Rys when (L_AB + L_CD) <= 1; pick HGP otherwise.
+//
+// At those low-L buckets — (ss|ss), (ss|sp), (sp|ss) — Rys runs
+// roots-of-1-or-2 quadrature and beats the HGP HRR-outside path by
+// ~2.1-2.7x. Everywhere else HGP wins, by factors of 2.5x at the high-L
+// helium tail to 12x at the d-shell sweet spot.
+//
+// OS is intentionally not in the auto menu anymore. Users who want OS
+// must select it explicitly with `engine os`.
+static inline bool _auto_prefers_rys(const HartreeFock::ShellPair &spAB,
+                                     const HartreeFock::ShellPair &spCD) noexcept
 {
-    const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
-    const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
-    const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-    const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-
-    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
-    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
-    const int L = lABx + lABy + lABz + lCDx + lCDy + lCDz;
-    const int nroots = L / 2 + 1;
-
-    const double six_d = static_cast<double>(lABx + 1) * static_cast<double>(lABy + 1) *
-                         static_cast<double>(lABz + 1) * static_cast<double>(lCDx + 1) *
-                         static_cast<double>(lCDy + 1) * static_cast<double>(lCDz + 1);
-    const double os_work =
-        six_d * static_cast<double>(L + 1) +
-        static_cast<double>((lBx + lBy + lBz + lDx + lDy + lDz) + 1) * six_d * 0.25;
-    const double rys_work =
-        six_d * static_cast<double>(nroots) +
-        static_cast<double>((lBx + lBy + lBz + lDx + lDy + lDz) + 1) * six_d * 0.20 +
-        24.0 * static_cast<double>(nroots);
-
-    return rys_work < os_work;
+    const int L_AB = spAB.A._cartesian[0] + spAB.A._cartesian[1] + spAB.A._cartesian[2] +
+                     spAB.B._cartesian[0] + spAB.B._cartesian[1] + spAB.B._cartesian[2];
+    const int L_CD = spCD.A._cartesian[0] + spCD.A._cartesian[1] + spCD.A._cartesian[2] +
+                     spCD.B._cartesian[0] + spCD.B._cartesian[1] + spCD.B._cartesian[2];
+    return (L_AB + L_CD) <= 1;
 }
 
 static double _auto_contracted_eri(
@@ -272,7 +274,7 @@ static double _auto_contracted_eri(
         return HartreeFock::RysQuad::_rys_contracted_eri(
             spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
 
-    return HartreeFock::ObaraSaika::_contracted_eri_elem(
+    return HartreeFock::HeadGordonPople::_contracted_eri_elem(
         spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
 }
 
@@ -717,7 +719,12 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
     const std::size_t nb3 = nb * nb * nb;
     const bool use_sym = use_symmetry_ops(sym_ops);
 
-    const Eigen::MatrixXd Q = _rys_schwarz_table(shell_pairs, nb, sym_ops);
+    // Use the shared HGP Schwarz table instead of _rys_schwarz_table:
+    // profiling showed the Rys variant was 4-5x slower and accounted for
+    // the entire Auto-vs-HGP Fock-build gap. The Schwarz bound is
+    // engine-independent at the value level, so this is a pure speed swap.
+    const std::vector<double> Q = HartreeFock::Screening::schwarz_table_hgp(
+        shell_pairs, nb, sym_ops);
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
 
     const std::size_t npairs = shell_pairs.size();
@@ -736,7 +743,7 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
             const std::size_t k = spCD.A._index;
             const std::size_t l = spCD.B._index;
             std::vector<QuartetOrbitElem> orbit;
-            if (Q(i, j) * Q(k, l) < tol_eri)
+            if (Q[i * nb + j] * Q[k * nb + l] < tol_eri)
                 continue;
 
             if (use_sym)
@@ -847,12 +854,10 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf(
 
 // ─── Auto-dispatch variants ───────────────────────────────────────────────────
 //
-// Per-quartet: if L = la+lb+lc+ld >= RYS_CROSSOVER_L use Rys, else OS.
-// The _contracted_eri from OS is a static function in os.cpp, so we cannot call
-// it directly. Instead, the Auto path builds the full Fock matrix using a
-// hybrid loop: call _rys_contracted_eri for all quartets (since the crossover
-// only matters for performance, not correctness).  A future revision will link
-// in the OS contracted ERI for the low-L path once os.cpp exposes it.
+// Per-quartet HGP/Rys selection (see `_auto_prefers_rys` above). Both
+// engines are reachable from the auto path; OS is not. The Fock-auto
+// entries reuse `_compute_2e_auto` so they pick up the same per-quartet
+// dispatch.
 
 Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,

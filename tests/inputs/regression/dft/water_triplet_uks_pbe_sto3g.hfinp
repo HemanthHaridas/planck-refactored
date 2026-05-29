@@ -18,7 +18,7 @@
 %end_scf
 
 %begin_dft
-    grid                coarse
+    grid                ultrafine
     exchange            pbe
     correlation         pbe
     print_grid_summary  .false.

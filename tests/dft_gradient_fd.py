@@ -174,8 +174,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         help="directory containing planck-dft binary (default: ./build)",
     )
     parser.add_argument(
-        "--input",
+        "input",
         type=Path,
+        nargs="?",
         default=Path(__file__).resolve().parent
         / "inputs" / "regression" / "dft" / "h2_dft_pbe_gradient.hfinp",
         help="base .hfinp; calculation field will be replaced as needed",

@@ -29,6 +29,7 @@ scripts/*
 # Explicitly tracked scripts
 !scripts/vault_to_claude.py
 !scripts/sync-memory.sh
+!scripts/fit_auto_dispatch.py
 notes
 src/base/basis.h
 # ccgen files
