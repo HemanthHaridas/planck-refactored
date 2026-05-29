@@ -2,6 +2,7 @@
 
 #include "boys.h"
 #include "os.h"
+#include "screening.h"
 
 #include <algorithm>
 #include <array>
@@ -671,62 +672,6 @@ namespace
                         static_cast<std::size_t>(lCz)];
     }
 
-    static std::vector<double> hgp_schwarz_table(
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        std::size_t nbasis,
-        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
-    {
-        const std::size_t nb = nbasis;
-        std::vector<double> Q(nb * nb, 0.0);
-        const bool use_sym = use_symmetry_ops(sym_ops);
-
-        // Keep Schwarz-table setup cheap: unlike the full ERI build, this is a
-        // single diagonal bound per shell pair, so the extra OpenMP scheduling
-        // and four-index orbit bookkeeping can dominate on small/medium cases.
-        for (const auto &sp : shell_pairs)
-        {
-            const std::size_t i = sp.A._index;
-            const std::size_t j = sp.B._index;
-            std::vector<PairOrbitElem> orbit;
-
-            if (use_sym)
-            {
-                auto [orb, forced_zero] = build_pair_orbit(i, j, *sym_ops);
-                orbit = std::move(orb);
-                // Q(i,j) = sqrt((ij|ij)) is a diagonal two-electron bound; any
-                // AO phase cancels between bra and ket, so an "odd" pair orbit
-                // is still valid here and must not be screened away.
-                (void)forced_zero;
-                if (orbit.front().i != i || orbit.front().j != j)
-                    continue;
-            }
-
-            const double value =
-                HartreeFock::HeadGordonPople::_contracted_eri_elem(
-                    sp, sp,
-                    sp.A._cartesian[0], sp.A._cartesian[1], sp.A._cartesian[2],
-                    sp.B._cartesian[0], sp.B._cartesian[1], sp.B._cartesian[2],
-                    sp.A._cartesian[0], sp.A._cartesian[1], sp.A._cartesian[2],
-                    sp.B._cartesian[0], sp.B._cartesian[1], sp.B._cartesian[2],
-                    HartreeFock::ERIKernel::Coulomb, 0.0);
-            const double q = std::sqrt(std::abs(value));
-
-            if (!use_sym)
-            {
-                Q[i * nb + j] = q;
-                Q[j * nb + i] = q;
-                continue;
-            }
-
-            for (const auto &elem : orbit)
-            {
-                Q[elem.i * nb + elem.j] = q;
-                Q[elem.j * nb + elem.i] = q;
-            }
-        }
-
-        return Q;
-    }
     static double hgp_contracted_eri_weighted_base(
         const HartreeFock::ShellPair &spAB,
         const HartreeFock::ShellPair &spCD,
@@ -916,9 +861,11 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
     const std::size_t nb3 = nb * nb * nb;
     const bool use_sym = use_symmetry_ops(sym_ops);
 
-    // Keep screening and permutation scatter behavior aligned with the other
-    // engines so numerical comparisons isolate the quartet kernel itself.
-    const std::vector<double> Q = hgp_schwarz_table(shell_pairs, nb, sym_ops);
+    // Shared HGP-based Schwarz table; lives in src/integrals/screening.cpp
+    // so that other engines (notably the Auto path) can share the cheap
+    // implementation without duplicating it here.
+    const std::vector<double> Q = HartreeFock::Screening::schwarz_table_hgp(
+        shell_pairs, nb, sym_ops);
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
 
     const std::size_t npairs = shell_pairs.size();

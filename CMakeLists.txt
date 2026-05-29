@@ -469,6 +469,7 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/os.cpp
         ${SRC_DIR}/integrals/rys.cpp
         ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
         ${SRC_DIR}/lookup/elements.cpp
         ${SRC_DIR}/lookup/boys.cpp
@@ -503,6 +504,16 @@ if(BUILD_TESTING)
 
     add_executable(planck-hgp-benchmark
         ${CMAKE_SOURCE_DIR}/tests/hgp_benchmark.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-auto-dispatch-benchmark
+        ${CMAKE_SOURCE_DIR}/tests/auto_dispatch_benchmark.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/spherical.cpp
@@ -556,8 +567,10 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
         ${SRC_DIR}/integrals/rys.cpp
         ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
         ${SRC_DIR}/lookup/elements.cpp
         ${SRC_DIR}/lookup/boys.cpp
@@ -576,8 +589,10 @@ if(BUILD_TESTING)
         # the spherical AO basis (Step 1', spherical full-symmetry), so it needs the
         # integral engine.
         ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
         ${SRC_DIR}/integrals/rys.cpp
         ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
         ${SRC_DIR}/lookup/boys.cpp
     )
@@ -595,8 +610,10 @@ if(BUILD_TESTING)
         # group_operations.cpp needs the integral engine (Cartesian overlap) for the
         # spherical O_R correction (Step 1').
         ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
         ${SRC_DIR}/integrals/rys.cpp
         ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
         ${SRC_DIR}/lookup/boys.cpp
     )
@@ -670,6 +687,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-hgp-benchmark PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-auto-dispatch-benchmark PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -778,6 +800,12 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-auto-dispatch-benchmark PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-population-analysis PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -847,6 +875,10 @@ if(BUILD_TESTING)
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-hgp-benchmark OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-hgp-benchmark PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-auto-dispatch-benchmark OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-auto-dispatch-benchmark PRIVATE USE_OPENMP)
     endif()
 
     target_link_libraries(planck-casscf-internal

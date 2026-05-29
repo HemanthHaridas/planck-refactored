@@ -218,6 +218,21 @@ namespace
         const double hg_full = time_ms(reps, [&]
                                        { auto g = HartreeFock::HeadGordonPople::_compute_2e_fock_symm(pairs, calc._shells, P, nb, *ops_res); volatile double s = (*g)(0, 0); (void)s; });
 
+        // ── Auto-dispatch (HGP for L_AB+L_CD>=2, Rys for the (ss|ss)/(sp|ss)/(ss|sp) tail) ──
+        //
+        // Auto routes through RysQuad::_compute_2e_fock_auto, which builds the
+        // ERI tensor via the per-quartet HGP/Rys predicate (see
+        // src/integrals/rys.cpp::_auto_prefers_rys). No symmetry-reduced
+        // variant of the auto Fock build exists today, so the d2h and full
+        // columns here delegate back to HGP — they exist only to keep the
+        // table column-aligned with the per-engine rows.
+        const double au_nosym = time_ms(reps, [&]
+                                        { volatile double s = HartreeFock::RysQuad::_compute_2e_fock_auto(pairs, P, nb)(0, 0); (void)s; });
+        const double au_d2h = time_ms(reps, [&]
+                                      { volatile double s = HartreeFock::RysQuad::_compute_2e_fock_auto(pairs, P, nb, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10, d2h)(0, 0); (void)s; });
+        // No native auto-symm path — reuse HGP-symm so the column has a value.
+        const double au_full = hg_full;
+
         std::printf("\n%s  (%s, |G|=%d, D2h ops=%zu, nbasis=%zu)\n",
                     name.c_str(), calc._molecule._point_group.c_str(),
                     gorder, d2h_ops, nb);
@@ -232,6 +247,9 @@ namespace
         std::printf("  %-5s  %10.3f  %10.3f  %10.3f   %7.2fx  %7.2fx\n",
                     "HGP", hg_nosym, hg_d2h, hg_full,
                     hg_nosym / hg_d2h, hg_nosym / hg_full);
+        std::printf("  %-5s  %10.3f  %10.3f  %10.3f   %7.2fx  %7.2fx\n",
+                    "Auto", au_nosym, au_d2h, au_full,
+                    au_nosym / au_d2h, au_nosym / au_full);
     }
 } // namespace
 

@@ -13,9 +13,6 @@ namespace HartreeFock
     namespace RysQuad
     {
 
-        // L threshold: use Rys when (la+lb+lc+ld) >= this value.
-        static constexpr int RYS_CROSSOVER_L = 4;
-
         // ── Primitive-level ───────────────────────────────────────────────────────
         //
         // Compute a single primitive (uncontracted) ERI (ab|cd) using Rys quadrature.
@@ -79,8 +76,10 @@ namespace HartreeFock
 
         // ── Auto-dispatch variant ──────────────────────────────────────────────────
         //
-        // Selects OS for L < RYS_CROSSOVER_L, Rys for L >= RYS_CROSSOVER_L,
-        // at the contracted shell-quartet level.
+        // Per-quartet HGP / Rys selection. Rule: pick Rys when
+        // (L_AB + L_CD) <= 1, HGP otherwise. Calibrated against
+        // tests/auto_dispatch_benchmark.cpp; see docs/auto_dispatch_fit.json.
+        // OS is not in the auto menu.
 
         std::vector<double> _compute_2e_auto(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,

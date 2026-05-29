@@ -1750,6 +1750,13 @@ namespace DFT::Driver
                 {
                     return ((static_cast<std::size_t>(i) * space.n_virt + a) * space.n_occ + j) * space.n_virt + b;
                 };
+                // j_b / k_b are transform_eri(...,C_virt,C_occ) so they have shape
+                // (nocc, nv, nv, nocc); index (i,a,b,j) uses nv as the third stride
+                // and nocc as the fourth.
+                auto idx_j_b = [&](int i, int a, int b, int j) -> std::size_t
+                {
+                    return ((static_cast<std::size_t>(i) * space.n_virt + a) * space.n_virt + b) * space.n_occ + j;
+                };
                 auto idx_k = [&](int i, int j, int a, int b) -> std::size_t
                 {
                     return ((static_cast<std::size_t>(i) * space.n_occ + j) * space.n_virt + a) * space.n_virt + b;
@@ -1764,9 +1771,9 @@ namespace DFT::Driver
                             {
                                 const int jb = space.mo_offset + space.flat_index(j, b);
                                 A(ia, jb) += coulomb_factor * j_a[idx_j(i, a, j, b)];
-                                B(ia, jb) += coulomb_factor * j_b[idx_j(i, a, b, j)];
+                                B(ia, jb) += coulomb_factor * j_b[idx_j_b(i, a, b, j)];
                                 A(ia, jb) -= exact_exchange_coefficient * k_a[idx_k(i, j, a, b)];
-                                B(ia, jb) -= exact_exchange_coefficient * k_b[idx_j(i, a, b, j)];
+                                B(ia, jb) -= exact_exchange_coefficient * k_b[idx_j_b(i, a, b, j)];
                                 A(ia, jb) += kxc(space.flat_index(i, a), space.flat_index(j, b));
                                 B(ia, jb) += kxc(space.flat_index(i, a), space.flat_index(j, b));
                             }
@@ -1832,6 +1839,13 @@ namespace DFT::Driver
                         {
                             return ((static_cast<std::size_t>(i) * target_space.n_virt + a) * source_space.n_occ + j) * source_space.n_virt + b;
                         };
+                        // j_b is transform_eri(C_occ_t, C_virt_t, C_virt_s, C_occ_s)
+                        // so its shape is (nocc_t, nv_t, nv_s, nocc_s); index (i,a,b,j)
+                        // uses nv_s as the third stride and nocc_s as the fourth.
+                        auto idx_j_b = [&](int i, int a, int b, int j) -> std::size_t
+                        {
+                            return ((static_cast<std::size_t>(i) * target_space.n_virt + a) * source_space.n_virt + b) * source_space.n_occ + j;
+                        };
                         auto idx_k = [&](int i, int j, int a, int b) -> std::size_t
                         {
                             return ((static_cast<std::size_t>(i) * source_space.n_occ + j) * target_space.n_virt + a) * source_space.n_virt + b;
@@ -1846,11 +1860,11 @@ namespace DFT::Driver
                                     {
                                         const int jb = source_space.mo_offset + source_space.flat_index(j, b);
                                         A(ia, jb) += j_a[idx_j(i, a, j, b)];
-                                        B(ia, jb) += j_b[idx_j(i, a, b, j)];
+                                        B(ia, jb) += j_b[idx_j_b(i, a, b, j)];
                                         if (target == source)
                                         {
                                             A(ia, jb) -= exact_exchange_coefficient * k_a[idx_k(i, j, a, b)];
-                                            B(ia, jb) -= exact_exchange_coefficient * k_b[idx_j(i, a, b, j)];
+                                            B(ia, jb) -= exact_exchange_coefficient * k_b[idx_j_b(i, a, b, j)];
                                         }
                                         A(ia, jb) += (*kxc_blocks)[static_cast<std::size_t>(target)][static_cast<std::size_t>(source)](
                                             target_space.flat_index(i, a),
