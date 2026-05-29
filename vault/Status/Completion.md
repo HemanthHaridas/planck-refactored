@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-05-28
+Last updated: 2026-05-29
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -151,6 +151,15 @@ historical design context, but they are no longer the source of truth for
   ~4e-15) plus four end-to-end cross-engine comparison regressions:
   `water_{rhf,b3lyp,hse06}_gradient_engine_os_vs_hgp` and
   `water_rhf_geomopt_engine_os_vs_hgp`. See [[HGP Screened inv_2_delta]].
+- HGP screened Fock builds: the three OS fallbacks in
+  `HeadGordonPople::_compute_2e{,_fock,_fock_uhf}` (lines 914 / 997 / 1031
+  pre-lift) are removed. Screened-kernel SCF Fock builds — closed-shell
+  and unrestricted, conventional and direct, C1 and full-symmetry —
+  now run native HGP end-to-end when `engine hgp` is selected. Gated by
+  five end-to-end SCF-energy regressions
+  (`water_{rhf,hse06,uhf_triplet,uks_hse06,hse06_symm}_scf_energy_engine_os_vs_hgp`),
+  each comparing the OS and HGP `Total Energy` / `DFT Energy` to ≤ 5e-9 Eh.
+  Comparator: `tests/engine_scf_energy_compare.py`.
 
 ## CASSCF PySCF Gate Table
 

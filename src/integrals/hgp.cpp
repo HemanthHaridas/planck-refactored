@@ -911,12 +911,6 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    if (kernel != HartreeFock::ERIKernel::Coulomb)
-    {
-        return HartreeFock::ObaraSaika::_compute_2e(
-            shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
-    }
-
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
@@ -994,12 +988,6 @@ Eigen::MatrixXd HartreeFock::HeadGordonPople::_compute_2e_fock(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    if (kernel != HartreeFock::ERIKernel::Coulomb)
-    {
-        return HartreeFock::ObaraSaika::_compute_2e_fock(
-            shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
-    }
-
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
@@ -1028,12 +1016,6 @@ HartreeFock::HeadGordonPople::_compute_2e_fock_uhf(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    if (kernel != HartreeFock::ERIKernel::Coulomb)
-    {
-        return HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
-            shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
-    }
-
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
