@@ -70,6 +70,11 @@ namespace DFT
                 coefficient.z() * ao_grid.grad_z.row(point).transpose();
         }
 
+        // Accumulates the local XC potential contribution into the lower triangle
+        // of `matrix` using BLAS-2 symmetric updates (dsyr / dsyr2) — no temporaries.
+        // The caller mirrors the lower triangle to the upper after the parallel
+        // region, which is also where the existing thread-partial reduction
+        // already does its post-processing.
         template <typename PhiDerived, typename GradDerived>
         void accumulate_local_potential(
             Eigen::Ref<Eigen::MatrixXd> matrix,
@@ -81,9 +86,10 @@ namespace DFT
             if (weight == 0.0)
                 return;
 
-            matrix.noalias() += weight * vrho * (phi * phi.transpose());
+            auto lower = matrix.template selfadjointView<Eigen::Lower>();
+            lower.rankUpdate(phi, weight * vrho);
             if (gradient_term.size() == phi.size())
-                matrix.noalias() += weight * (phi * gradient_term.transpose() + gradient_term * phi.transpose());
+                lower.rankUpdate(phi, gradient_term, weight);
         }
 
     } // namespace
@@ -203,24 +209,21 @@ namespace DFT
         }
 
         // Deterministic reduction: sum thread partials in fixed thread-index
-        // order rather than thread-completion order.
+        // order rather than thread-completion order. Each partial holds only
+        // the lower triangle (selfadjointView rankUpdate writes that side).
         for (int thread_id = 0; thread_id < n_threads; ++thread_id)
         {
-            contribution.alpha.noalias() += alpha_partials[thread_id];
+            contribution.alpha.template triangularView<Eigen::Lower>() += alpha_partials[thread_id];
             if (polarized)
-                contribution.beta.noalias() += beta_partials[thread_id];
+                contribution.beta.template triangularView<Eigen::Lower>() += beta_partials[thread_id];
         }
 
-        {
-            Eigen::MatrixXd symmetrized_alpha = contribution.alpha + contribution.alpha.transpose();
-            symmetrized_alpha *= 0.5;
-            contribution.alpha = symmetrized_alpha;
-        }
+        contribution.alpha.template triangularView<Eigen::StrictlyUpper>() =
+            contribution.alpha.transpose();
         if (contribution.polarized)
         {
-            Eigen::MatrixXd symmetrized_beta = contribution.beta + contribution.beta.transpose();
-            symmetrized_beta *= 0.5;
-            contribution.beta = symmetrized_beta;
+            contribution.beta.template triangularView<Eigen::StrictlyUpper>() =
+                contribution.beta.transpose();
         }
         else
         {
