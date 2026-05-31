@@ -110,8 +110,19 @@ namespace
                 const double trial_merit =
                     trial.E_cas + merit_weight * trial.gnorm * trial.gnorm;
                 const bool merit_improved = trial_merit < selection.merit - 1e-10;
+                // Require trials to clear a noise-floor band before claiming
+                // "gradient reduced": at sa_gnorm ~ 1e-10 the FP-reordering
+                // spread of the sa-coupled solver's output across compiler
+                // optimization levels is ~10% relative, so a tight 1e-12
+                // absolute window let later candidates displace earlier ones
+                // based on numerical noise — flipping which basin the
+                // SA-CASSCF macro cascade reaches under different -O levels.
+                // The relative term (10% of sel_gnorm) dominates above ~1e-11;
+                // the 1e-12 floor only kicks in if the gradient has genuinely
+                // vanished, preserving prior strict-improvement semantics there.
                 const bool sa_gradient_reduced =
-                    trial.gnorm < selection.sa_gnorm - 1e-12;
+                    trial.gnorm < selection.sa_gnorm -
+                                      std::max(0.1 * selection.sa_gnorm, 1.0e-12);
                 const double sa_worsen_window =
                     std::max(0.05 * std::max(selection.sa_gnorm, 1e-8), 1e-6);
                 const bool energy_improved = trial.E_cas < selection.energy - 1e-10;
