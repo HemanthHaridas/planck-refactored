@@ -8,6 +8,12 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Default to -O3 when no CMAKE_BUILD_TYPE is set. Debug/RelWithDebInfo/etc.
+# keep their standard flags so debugging and profiling builds aren't clobbered.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-O3>)
+endif()
+
 message(STATUS "Building on : ${CMAKE_SYSTEM_NAME} using following compiler flags : ${CMAKE_CXX_FLAGS}")
 message(STATUS "CMAKE_INSTALL_PREFIX : ${CMAKE_INSTALL_PREFIX}")
 

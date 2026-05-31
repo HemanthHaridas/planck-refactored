@@ -214,10 +214,16 @@ namespace
                 static_cast<std::size_t>(ax_dim) * ay_dim * az_dim *
                 cx_dim * cy_dim * cz_dim;
             const std::size_t vrr_size = spatial * static_cast<std::size_t>(m_dim);
-            if (vrr.size() != vrr_size)
+            // `_eri_vrr` overwrites every cell it later reads (the seed writes
+            // (0,0,0,0,0,0,m), then each VRR step *assigns* before any read
+            // pulls the new cell back). The HRR `h` buffer is fully overwritten
+            // by the (ax,ay,az,cx,cy,cz)-loop extraction in `_os_eri_primitive`.
+            // No zero-init is required for either buffer — skipping it removes
+            // the largest memset hotspot in the ERI engine profile.
+            if (vrr.size() < vrr_size)
                 vrr.resize(vrr_size);
-            std::fill(vrr.begin(), vrr.end(), 0.0);
-            hrr.resize(spatial);
+            if (hrr.size() < spatial)
+                hrr.resize(spatial);
             vrr_data = vrr.data();
             hrr_data = hrr.data();
         }
@@ -990,8 +996,11 @@ static double _os_eri_primitive(
     // A→B HRR: modifies the quartet-sized HRR scratch in-place.
     _eri_hrr_ab(scratch, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
 
-    // Extract C-side slice at (lAx, lAy, lAz) for C→D HRR
-    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM] = {};
+    // Extract C-side slice at (lAx, lAy, lAz) for C→D HRR.
+    // `_nuclear_hrr` only reads V0_CD[ix][iy][iz] for ix ≤ lCx+lDx = lCDx,
+    // etc., which is exactly the range filled below, so no zero-init is
+    // needed for the unused tail of the stack array.
+    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM];
     for (int cx = 0; cx <= lCDx; ++cx)
         for (int cy = 0; cy <= lCDy; ++cy)
             for (int cz = 0; cz <= lCDz; ++cz)

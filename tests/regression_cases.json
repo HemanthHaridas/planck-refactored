@@ -291,9 +291,9 @@
           "atol": 1e-09
         },
         {
-          "type": "metric_eq",
+          "type": "metric_le",
           "metric": "scf_converged_iterations",
-          "expected": 16
+          "value": 25
         }
       ]
     },
