@@ -2109,26 +2109,26 @@ bucket; lower is faster):
 
 | \(L_{AB}, L_{CD}\) | HGP / µs | Rys / µs | OS / µs | Per-bucket winner |
 |---|---:|---:|---:|---|
-| 0, 0 | 74.3 | **33.6** | 65.1 | Rys |
-| 0, 1 / 1, 0 | 59.4 / 60.5 | **22.9 / 29.3** | 50.1 / 52.3 | Rys |
-| 0, 2 / 1, 1 / 2, 0 | 36.5 / 32.9 / 43.8 | 208 / 188 / 211 | **33.2 / 31.4 / 40.4** | OS (tie with HGP) |
-| 1, 2 / 2, 1 / 2, 2 | 20.8 / 21.1 / 13.9 | 110 / 110 / 140 | 22.5 / 23.3 / 18.5 | HGP |
-| 3, 3 | 7.7 | 73.6 | 16.4 | HGP |
-| 4, 4 | 7.2 | 37.9 | 16.0 | HGP |
-| 5, 5 | 10.8 | 54.3 | 37.7 | HGP |
-| 6, 6 | 20.9 | 76.8 | 84.7 | HGP |
-| 7, 7 | 41.4 | 116.3 | 185.7 | HGP |
-| 8, 8 | 83.1 | 174.2 | 360.5 | HGP |
+| 0, 0 | 67.0 | **23.5** | 50.9 | Rys |
+| 0, 1 / 1, 0 | 59.3 / 59.9 | **22.4 / 22.5** | 48.3 / 49.5 | Rys |
+| 0, 2 / 1, 1 / 2, 0 | 36.2 / 31.1 / 37.8 | 219 / 185 / 223 | **34.8 / 29.3 / 34.1** | OS (tie with HGP) |
+| 1, 2 / 2, 1 / 2, 2 | **20.4 / 20.7** / 14.1 | 112 / 114 / 144 | 21.9 / 21.8 / 18.6 | HGP |
+| 3, 3 | 7.2 | 73.6 | 16.1 | HGP |
+| 4, 4 | 5.3 | 38.1 | 14.5 | HGP |
+| 5, 5 | 10.0 | 53.7 | 35.9 | HGP |
+| 6, 6 | 20.3 | 76.0 | 82.2 | HGP |
+| 7, 7 | 30.4 | 107.0 | 135.0 | HGP |
+| 8, 8 | 81.5 | 170.7 | 354.0 | HGP |
 
 Three things to notice in the table and curves:
 
 1. **Rys owns only the bottom band**, \(L_{AB} + L_{CD} \le 1\). At
-   \((0,0)\) Rys is roughly 2.2× faster than HGP because the entire 6D OS
+   \((0,0)\) Rys is roughly 2.9× faster than HGP because the entire 6D OS
    stack is overkill for \((ss|ss)\); the one Rys root plus its weight
    delivers the same value with less arithmetic. By \((0,2)\) / \((1,1)\)
    the second Rys root has to fire and the per-root overhead (root finding
    + 1D coefficient build) buries the savings — Rys loses to both HGP and
-   OS by 5–8×.
+   OS by 6–7×.
 2. **The OS-wins band is one bucket wide** and the margin over HGP is in
    single-µs territory (HGP within ~10% of OS at \((0,2)\)/(1,1)/(2,0)).
    Because Lsum = 2 there is no clean integer separator between an "OS
@@ -2139,7 +2139,7 @@ Three things to notice in the table and curves:
    the OS / HGP gap at Lsum = 2 is within the noise of repeated benchmark
    runs.
 3. **For Lsum \(\ge\) 3, HGP wins by a wide and growing margin**. At Lsum
-   = 6 (so e.g. \((3,3)\)) HGP is \(\sim\)10× faster than Rys and \(\sim\)2×
+   = 6 (so e.g. \((3,3)\)) HGP is \(\sim\)10× faster than Rys and \(\sim\)2.2×
    faster than OS; at the high-L helium tail (Lsum = 16, \((8,8)\) on
    cc-pV5Z) HGP is \(\sim\)2.1× faster than Rys and \(\sim\)4.3× faster
    than OS. The HRR-outside-the-primitive-loop factorization compounds
@@ -2381,40 +2381,48 @@ full point-group reduction (`full`). All runs use the same shell-pair list,
 Schwarz screening, and OpenMP settings; only the contracted-quartet kernel and
 the symmetry walker change.
 
+The numbers below are the median of 7 repetitions per configuration, from a
+**`-O3`-compiled, OpenMP-enabled** binary; `nbasis` is the number of basis
+functions, `|G|` the full point-group order, and "D2h ops" the number of those
+operations the legacy coordinate-axis reduction can actually use. An earlier
+version of this section was timed from a **`-O0` (unoptimized) serial** build;
+the engine *ordering* differs between the two — see pattern 2 below — so these
+numbers should not be compared directly against that older run.
+
 | Molecule / basis | nbasis | Engine | nosym ms | d2h ms | full ms |
 |---|---|---|---|---|---|
-| H₂O / STO-3G (C2v) | 7 | OS | 9.40 | 5.05 | 7.57 |
-| H₂O / STO-3G (C2v) | 7 | Rys | 44.52 | 24.74 | 39.03 |
-| H₂O / STO-3G (C2v) | 7 | **HGP** | 9.62 | 5.07 | 7.49 |
-| H₂O / STO-3G (C2v) | 7 | Auto | 19.41 | 15.04 | **7.49** |
-| NH₃ / STO-3G (C3v) | 8 | OS | 13.56 | 9.09 | 8.50 |
-| NH₃ / STO-3G (C3v) | 8 | Rys | 56.74 | 38.38 | 39.60 |
-| NH₃ / STO-3G (C3v) | 8 | **HGP** | 13.89 | 9.10 | 8.51 |
-| NH₃ / STO-3G (C3v) | 8 | Auto | 23.40 | 18.59 | **8.51** |
-| CH₄ / STO-3G (Td) | 9 | OS | 18.74 | 7.61 | 9.34 |
-| CH₄ / STO-3G (Td) | 9 | Rys | 70.07 | 33.53 | 42.34 |
-| CH₄ / STO-3G (Td) | 9 | **HGP** | 19.80 | 7.86 | 9.37 |
-| CH₄ / STO-3G (Td) | 9 | Auto | 28.63 | 16.34 | **9.37** |
-| H₂O / `6-31G**` (C2v) | 25 | OS | 143.85 | 58.75 | 106.71 |
-| H₂O / `6-31G**` (C2v) | 25 | Rys | 746.63 | 247.51 | 517.99 |
-| H₂O / `6-31G**` (C2v) | 25 | **HGP** | **121.33** | **52.11** | **89.19** |
-| H₂O / `6-31G**` (C2v) | 25 | Auto | 146.79 | 78.17 | **89.19** |
-| NH₃ / 6-31G (C3v) | 15 | OS | 43.68 | 28.30 | 25.79 |
-| NH₃ / 6-31G (C3v) | 15 | Rys | 153.44 | 96.16 | 97.47 |
-| NH₃ / 6-31G (C3v) | 15 | **HGP** | 46.49 | 29.87 | 27.20 |
-| NH₃ / 6-31G (C3v) | 15 | Auto | 52.33 | 39.33 | **27.20** |
-| NH₃ / `6-31G*` (C3v) | 21 | OS | 106.20 | 65.86 | 71.19 |
-| NH₃ / `6-31G*` (C3v) | 21 | Rys | 534.84 | 299.01 | 332.54 |
-| NH₃ / `6-31G*` (C3v) | 21 | **HGP** | **95.65** | **59.12** | **59.68** |
-| NH₃ / `6-31G*` (C3v) | 21 | Auto | 112.21 | 80.80 | **59.68** |
-| NH₃ / `6-31G**` (C3v) | 30 | OS | **247.32** | **154.81** | 124.24 |
-| NH₃ / `6-31G**` (C3v) | 30 | Rys | 1259.08 | 688.02 | 555.16 |
-| NH₃ / `6-31G**` (C3v) | 30 | HGP | 338.01 | 210.33 | 168.25 |
-| NH₃ / `6-31G**` (C3v) | 30 | Auto | 362.03 | 220.94 | 168.25 |
-| CH₄ / `6-31G**` (Td) | 35 | OS | 446.69 | 185.21 | 186.83 |
-| CH₄ / `6-31G**` (Td) | 35 | Rys | 2076.66 | 573.86 | 583.78 |
-| CH₄ / `6-31G**` (Td) | 35 | **HGP** | **348.04** | **144.99** | **146.34** |
-| CH₄ / `6-31G**` (Td) | 35 | Auto | 397.18 | 187.77 | **146.34** |
+| H₂O / STO-3G (C2v, \|G\|=4) | 7 | OS | 0.739 | 0.381 | 0.531 |
+| H₂O / STO-3G (C2v, \|G\|=4) | 7 | Rys | 3.034 | 1.502 | 2.394 |
+| H₂O / STO-3G (C2v, \|G\|=4) | 7 | **HGP** | **0.376** | **0.239** | **0.322** |
+| H₂O / STO-3G (C2v, \|G\|=4) | 7 | Auto | 0.455 | 0.284 | **0.322** |
+| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | OS | 0.833 | 0.573 | 0.530 |
+| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | Rys | 3.999 | 2.569 | 2.683 |
+| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | **HGP** | **0.473** | **0.354** | **0.346** |
+| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | Auto | 0.684 | 0.471 | **0.346** |
+| CH₄ / STO-3G (Td, \|G\|=24) | 9 | OS | 1.134 | 0.506 | 0.575 |
+| CH₄ / STO-3G (Td, \|G\|=24) | 9 | Rys | 5.474 | 2.045 | 2.782 |
+| CH₄ / STO-3G (Td, \|G\|=24) | 9 | **HGP** | **0.620** | **0.316** | **0.361** |
+| CH₄ / STO-3G (Td, \|G\|=24) | 9 | Auto | 0.983 | 0.437 | **0.361** |
+| H₂O / `6-31G**` (C2v, \|G\|=4) | 25 | OS | 8.837 | 4.010 | 6.711 |
+| H₂O / `6-31G**` (C2v, \|G\|=4) | 25 | Rys | 53.027 | 17.695 | 37.180 |
+| H₂O / `6-31G**` (C2v, \|G\|=4) | 25 | **HGP** | **6.214** | **2.996** | **4.437** |
+| H₂O / `6-31G**` (C2v, \|G\|=4) | 25 | Auto | 6.345 | 3.176 | **4.437** |
+| NH₃ / 6-31G (C3v, \|G\|=6) | 15 | OS | 2.688 | 1.790 | 1.619 |
+| NH₃ / 6-31G (C3v, \|G\|=6) | 15 | Rys | 13.176 | 7.788 | 7.377 |
+| NH₃ / 6-31G (C3v, \|G\|=6) | 15 | **HGP** | **1.270** | **0.946** | **0.836** |
+| NH₃ / 6-31G (C3v, \|G\|=6) | 15 | Auto | 2.226 | 1.510 | **0.836** |
+| NH₃ / `6-31G*` (C3v, \|G\|=6) | 21 | OS | 6.393 | 4.161 | 4.135 |
+| NH₃ / `6-31G*` (C3v, \|G\|=6) | 21 | Rys | 38.083 | 23.032 | 22.801 |
+| NH₃ / `6-31G*` (C3v, \|G\|=6) | 21 | **HGP** | **3.697** | **2.558** | **2.532** |
+| NH₃ / `6-31G*` (C3v, \|G\|=6) | 21 | Auto | 4.673 | 3.079 | **2.532** |
+| NH₃ / `6-31G**` (C3v, \|G\|=6) | 30 | OS | 14.494 | 9.490 | 7.127 |
+| NH₃ / `6-31G**` (C3v, \|G\|=6) | 30 | Rys | 97.369 | 53.524 | 39.379 |
+| NH₃ / `6-31G**` (C3v, \|G\|=6) | 30 | **HGP** | **9.274** | **6.879** | **4.753** |
+| NH₃ / `6-31G**` (C3v, \|G\|=6) | 30 | Auto | 10.637 | 7.660 | **4.753** |
+| CH₄ / `6-31G**` (Td, \|G\|=24) | 35 | OS | 22.981 | 10.391 | 8.160 |
+| CH₄ / `6-31G**` (Td, \|G\|=24) | 35 | Rys | 155.936 | 44.731 | 40.797 |
+| CH₄ / `6-31G**` (Td, \|G\|=24) | 35 | **HGP** | **14.824** | **8.572** | **5.871** |
+| CH₄ / `6-31G**` (Td, \|G\|=24) | 35 | Auto | 17.490 | 8.749 | **5.871** |
 
 Reading the table, four patterns stand out.
 
@@ -2422,71 +2430,82 @@ Reading the table, four patterns stand out.
 the expected regime: STO-3G through 6-31G(d,p) puts maximum angular momentum at
 \(d\), which sits squarely in the low-to-medium-\(L\) window where the OS/HGP
 flop count is smaller than the Rys-quadrature flop count. On 6-31G(d,p) / CH₄
-(Td) the spread reaches \(\sim\)4.7× on `nosym` and \(\sim\)3.1× on `d2h`; Rys is
-not really a competitor here, and the auto-dispatch model in §11 would only
-prefer Rys at higher \(L\) where the OS/HGP scratch buffers blow up faster than
-Rys's fixed root count. Rys's natural niche is the high-\(L\) tail, not the
-bulk of routine basis sets.
+(Td) the spread reaches \(\sim\)10.5× over HGP on `nosym` and \(\sim\)5.2× on
+`d2h`; Rys is not really a competitor here, and the auto-dispatch model in §11
+would only prefer Rys at higher \(L\) where the OS/HGP scratch buffers blow up
+faster than Rys's fixed root count. Rys's natural niche is the high-\(L\) tail,
+not the bulk of routine basis sets.
 
-**2. HGP wins outright on most polarized bases, but the spread is not uniform.**
-On STO-3G, HGP and OS are within \(\sim\)1–6% of each other in any of the three
-symmetry modes — STO-3G has \(K = 3\) primitives per contraction and only
-\(s/p\) shells, so neither the HRR-outside factorization nor the smaller VRR
-scratch produces much headroom. Moving to 6-31G(d,p) with d-functions and
-deeper contractions, HGP starts to win outright on most cases:
+**2. HGP is the fastest engine on every case in the table.** Unlike an earlier
+`-O0` serial run of this same benchmark — where HGP and OS were within a few
+percent of each other on STO-3G and OS actually edged ahead on the larger
+NH₃ basis — the `-O3` build here puts HGP clearly in front everywhere, by
+roughly 1.4–2.0× over OS on `nosym`. The optimization level matters because
+HGP's hot loop is the tight per-primitive VRR into a small \((a0|c0)\) block
+with the HRR hoisted out; `-O3` vectorizes and unrolls that kernel
+aggressively, whereas OS's larger per-primitive scratch traffic leaves less
+on the table. At `-O0` those advantages are masked, which is why the ordering
+flips:
 
-| Case | OS `nosym` | HGP `nosym` | HGP / OS |
+| Case | OS `nosym` | HGP `nosym` | OS / HGP |
 |---|---|---|---|
-| H₂O / `6-31G**` | 143.85 | 121.33 | 0.84 |
-| NH₃ / `6-31G*` | 106.20 | 95.65 | 0.90 |
-| CH₄ / `6-31G**` | 446.69 | 348.04 | 0.78 |
+| H₂O / STO-3G | 0.739 | 0.376 | 1.97× |
+| CH₄ / STO-3G | 1.134 | 0.620 | 1.83× |
+| H₂O / `6-31G**` | 8.837 | 6.214 | 1.42× |
+| NH₃ / `6-31G*` | 6.393 | 3.697 | 1.73× |
+| NH₃ / `6-31G**` | 14.494 | 9.274 | 1.56× |
+| CH₄ / `6-31G**` | 22.981 | 14.824 | 1.55× |
 
 That is exactly the regime where the HGP analysis predicts wins: the HRR is
 removed from the \(K^4\) primitive loop, and at the same time the larger
 \((a0|c0)\) reduced block being VRR'd inside the loop avoids materializing the
-full \((ab|cd)\) tensor at every primitive step.
+full \((ab|cd)\) tensor at every primitive step. The win even holds on STO-3G
+(\(K = 3\) primitives, \(s/p\) only), where the earlier `-O0` serial
+measurement had shown essentially no gap.
 
-**3. NH₃ / 6-31G(d,p) is the working outlier.** On NH₃ with the larger Pople
-polarized basis (30 functions, C3v), HGP is \(\sim\)37% **slower** than OS in
-every symmetry mode (`nosym` 338.0 vs 247.3, `d2h` 210.3 vs 154.8, `full` 168.2
-vs 124.2 ms). The same molecule with the smaller `6-31G*` (21 functions) flips
-the ordering back: HGP is the fastest engine across all three modes. So the
-slowdown is not "NH₃" or "6-31G(d,p)" in isolation — it shows up specifically
-where the per-quartet HGP cost in the current implementation overcomes the
-HRR-outside savings on NH₃'s shell composition once \(p\)-functions on H and
-\(d\)-functions on N are both present. The case is worth keeping pinned as a
-counter-example: HGP is the right default, but the assumption "HGP \(\leq\) OS
-everywhere" is empirically false on this codebase today.
+**3. The NH₃ / 6-31G(d,p) "OS beats HGP" outlier is gone — but read the build
+flags first.** A prior `-O0` serial version of this benchmark recorded HGP as
+\(\sim\)37% *slower* than OS on NH₃ / 6-31G(d,p) in every symmetry mode, and the
+guide kept that case pinned as a counter-example to "HGP \(\leq\) OS everywhere."
+On the current `-O3` build HGP is the fastest engine on that case in all three
+modes (`nosym` 9.274 vs 14.494, `d2h` 6.879 vs 9.490, `full` 4.753 vs 7.127 ms).
+So the counter-example did not vanish because the kernel changed — it vanished
+because the optimizer closed the gap that the unoptimized build had exposed. The
+honest takeaway is that "HGP at least matches OS" holds across this benchmark set
+**when compiled `-O3`**; at `-O0` the ordering is implementation-traffic-bound
+and can reverse, so the engine default should be reasoned about on optimized
+builds only.
 
 **4. HGP cooperates with symmetry well, with the largest absolute wins on the
 biggest polarized bases.** On CH₄ / 6-31G(d,p) under Td (\(|G|=24\)), HGP `full`
-runs at 146.3 ms vs OS `full` at 186.8 ms (a 1.28× HGP-over-OS win), and the
-within-engine symmetry speedup is 2.38× for HGP and 2.39× for OS — the
-two engines amortize the orbit walk equally well, so the kernel-level HGP
-advantage shows through to the final time. On H₂O / 6-31G(d,p) under C2v the
-same pattern holds (HGP `full` 89.2 ms vs OS `full` 106.7 ms; 1.20× faster).
-The NH₃ / 6-31G(d,p) regression survives under symmetry too (HGP `full` 168.2
-ms vs OS `full` 124.2 ms), confirming it is a per-quartet HGP/OS cost issue
-rather than a symmetry-machinery issue.
+runs at 5.871 ms vs OS `full` at 8.160 ms (a 1.39× HGP-over-OS win), and the
+within-engine symmetry speedup (`nosym`→`full`) is 2.52× for HGP and 2.82× for
+OS — both engines amortize the orbit walk well, and the kernel-level HGP
+advantage carries through to the final time. On H₂O / 6-31G(d,p) under C2v the
+same pattern holds (HGP `full` 4.437 ms vs OS `full` 6.711 ms; 1.51× faster).
+NH₃ / 6-31G(d,p) now agrees: HGP `full` 4.753 ms vs OS `full` 7.127 ms, a 1.50×
+HGP win that tracks the `nosym` ordering rather than reversing it.
 
 Auto-dispatch follows HGP exactly under `full` symmetry — for every case in
 the table the `Auto full` column matches `HGP full` to the millisecond, because
 the dispatch logic in §11 picks HGP for the low-to-medium-\(L\) blocks that
 dominate these bases. Without symmetry, `Auto` is consistently slower than
-HGP alone (e.g. H₂O / 6-31G(d,p) `nosym`: Auto 146.8 vs HGP 121.3 ms): the
-dispatch overhead is real, and it pays off only once the orbit walk amortizes
-it across the symmetry-reduced quartet set.
+HGP alone (e.g. H₂O / 6-31G(d,p) `nosym`: Auto 6.345 vs HGP 6.214 ms; CH₄ /
+6-31G(d,p) `nosym`: Auto 17.490 vs HGP 14.824 ms): the dispatch overhead is
+real, and it pays off only once the orbit walk amortizes it across the
+symmetry-reduced quartet set.
 
 Putting these together: **for the routine quantum-chemistry case — Pople-style
 contracted bases up through 6-31G(d,p) and similar valence-double/triple-zeta
-sets with d polarization — HGP is still the engine to default to**, with the
-caveat that NH₃ / 6-31G(d,p) is a measured counter-example to "HGP is never
-slower than OS." OS is the right fallback for tiny, lightly contracted bases
-where the HGP/OS gap closes (and for the NH₃ / 6-31G(d,p) family), and Rys is
-reserved for high-\(L\) work (f/g/h) where the OS-and-HGP recurrence stacks
-would otherwise dominate. The OS-vs-Rys auto-dispatch model in §11 applies
-essentially unchanged to HGP-vs-Rys; HGP simply lowers the OS flop estimate
-further, which is why the auto-dispatch threshold moves toward higher \(L\)
+sets with d polarization — HGP is the engine to default to**, and on this
+`-O3` build it is the fastest engine on every case in the table, including the
+tiny STO-3G systems where the `-O0` gap had been negligible. OS remains a
+reasonable fallback for tiny, lightly contracted bases where the HGP/OS gap
+narrows, and Rys is reserved for high-\(L\) work (f/g/h) where the OS-and-HGP
+recurrence stacks would otherwise dominate. The OS-vs-Rys auto-dispatch model
+in §11 applies essentially unchanged to HGP-vs-Rys; HGP simply lowers the OS
+flop estimate further, which is why the auto-dispatch threshold moves toward
+higher \(L\)
 once HGP is the low-L path.
 
 ### Implementation Files
