@@ -469,6 +469,7 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/eri_derivative_kernels.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/integrals/hgp.cpp
@@ -492,6 +493,7 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/hgp_engine_smoke.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${INT_SRC}
@@ -502,6 +504,7 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${INT_SRC}
@@ -512,6 +515,7 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/hgp_benchmark.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${INT_SRC}
@@ -522,6 +526,7 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/auto_dispatch_benchmark.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${INT_SRC}
@@ -559,6 +564,17 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
+    # Structural test for the RI auxiliary basis loader (no PySCF reference
+    # values — this is the file-I/O and shell-construction gate, not a
+    # validation against any specific shipped aux basis).
+    add_executable(planck-aux-basis-load
+        ${CMAKE_SOURCE_DIR}/tests/aux_basis_load.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+    )
+
     # Contract test for the working-state rebuild helper that will drive
     # spherical geomopt and freq in Phase 3. Currently the helper has no live
     # caller (the driver keeps its inline copy for ordering reasons around the
@@ -570,6 +586,7 @@ if(BUILD_TESTING)
         ${SRC_DIR}/symmetry/integral_symmetry.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/integrals/os.cpp
@@ -588,6 +605,7 @@ if(BUILD_TESTING)
         ${SRC_DIR}/symmetry/symmetry.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/lookup/elements.cpp
@@ -610,6 +628,7 @@ if(BUILD_TESTING)
         ${SRC_DIR}/symmetry/symmetry.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
         ${SRC_DIR}/lookup/elements.cpp
@@ -637,6 +656,7 @@ if(BUILD_TESTING)
         ${SRC_DIR}/symmetry/symmetry.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
@@ -652,6 +672,7 @@ if(BUILD_TESTING)
         ${SRC_DIR}/symmetry/symmetry.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
@@ -752,6 +773,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-aux-basis-load PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-working-state-rebuild PRIVATE
         ${SRC_DIR}
         ${MSYM_INSTALL_DIR}/include
@@ -837,6 +863,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-spherical-density-lift PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-aux-basis-load PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -993,6 +1025,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-spherical-density-lift
         COMMAND planck-spherical-density-lift
+    )
+
+    add_test(
+        NAME planck-aux-basis-load
+        COMMAND planck-aux-basis-load
     )
 
     add_test(
