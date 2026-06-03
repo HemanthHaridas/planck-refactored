@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "post_hf/integrals.h"
+#include "post_hf/ri/ri_eri.h"
 
 namespace
 {
@@ -27,6 +28,74 @@ namespace
             if (idx >= 0 && idx < n_mo_full)
                 active[static_cast<std::size_t>(idx)] = false;
         return active;
+    }
+
+    Eigen::MatrixXd build_ri_pair_factors(const HartreeFock::Calculator &calculator)
+    {
+        const Eigen::MatrixXd &j3c = calculator._ri_j3c;
+        const auto &metric = *calculator._ri_metric_factor;
+
+        if (metric.method == HartreeFock::Correlation::RI::MetricFactorization::Method::Eigen)
+            return j3c * metric.transform.transpose();
+
+        const Eigen::MatrixXd &L = metric.transform;
+        Eigen::MatrixXd pair_factors_t = j3c.transpose();
+        pair_factors_t =
+            L.triangularView<Eigen::Lower>().solve(pair_factors_t);
+        return pair_factors_t.transpose();
+    }
+
+    Eigen::MatrixXd unpack_pair_column(
+        const Eigen::VectorXd &packed,
+        const int nb)
+    {
+        Eigen::MatrixXd full = Eigen::MatrixXd::Zero(nb, nb);
+        std::size_t row = 0;
+        for (int mu = 0; mu < nb; ++mu)
+            for (int nu = 0; nu <= mu; ++nu, ++row)
+            {
+                const double value = packed(static_cast<Eigen::Index>(row));
+                full(mu, nu) = value;
+                full(nu, mu) = value;
+            }
+        return full;
+    }
+
+    std::vector<double> build_ri_ovov(
+        const Eigen::MatrixXd &pair_factors,
+        const Eigen::MatrixXd &C_occ,
+        const Eigen::MatrixXd &C_virt)
+    {
+        const int nb = static_cast<int>(C_occ.rows());
+        const int nocc = static_cast<int>(C_occ.cols());
+        const int nvirt = static_cast<int>(C_virt.cols());
+        const int nfit = static_cast<int>(pair_factors.cols());
+        const int nov = nocc * nvirt;
+
+        Eigen::MatrixXd b_ov = Eigen::MatrixXd::Zero(nov, nfit);
+        for (int q = 0; q < nfit; ++q)
+        {
+            const Eigen::MatrixXd ao_block =
+                unpack_pair_column(pair_factors.col(q), nb);
+            const Eigen::MatrixXd mo_block =
+                C_occ.transpose() * ao_block * C_virt;
+
+            int ia = 0;
+            for (int i = 0; i < nocc; ++i)
+                for (int a = 0; a < nvirt; ++a, ++ia)
+                    b_ov(ia, q) = mo_block(i, a);
+        }
+
+        const Eigen::MatrixXd gram = b_ov * b_ov.transpose();
+        std::vector<double> ovov(static_cast<std::size_t>(nov) * nov);
+        for (int i = 0; i < nocc; ++i)
+            for (int a = 0; a < nvirt; ++a)
+                for (int j = 0; j < nocc; ++j)
+                    for (int b = 0; b < nvirt; ++b)
+                        ovov[HartreeFock::Correlation::detail::idx_ovov(
+                            i, a, j, b, nocc, nvirt)] =
+                            gram(i * nvirt + a, j * nvirt + b);
+        return ovov;
     }
 }
 
@@ -150,6 +219,19 @@ namespace HartreeFock::Correlation::detail
 
         const Eigen::MatrixXd C_occ = C_act.leftCols(dims.n_occ);
         const Eigen::MatrixXd C_virt = C_act.middleCols(dims.n_occ, dims.n_virt);
+
+        if (calculator._mp2.use_ri)
+        {
+            auto ri_ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator);
+            if (!ri_ready)
+                return std::unexpected("make_eris_rmp2: " + ri_ready.error());
+            if (!calculator._ri_metric_factor)
+                return std::unexpected("make_eris_rmp2: RI metric factorization is missing.");
+
+            const Eigen::MatrixXd pair_factors = build_ri_pair_factors(calculator);
+            out.ovov = build_ri_ovov(pair_factors, C_occ, C_virt);
+            return out;
+        }
 
         // Canonical RHF MP2 only needs the occupied-virtual-occupied-virtual
         // block in chemists' notation, so we transform directly into ovov.
