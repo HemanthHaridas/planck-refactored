@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "post_hf/integrals.h"
+#include "post_hf/ri/ri_eri.h"
 
 namespace
 {
@@ -27,6 +28,101 @@ namespace
             if (idx >= 0 && idx < n_mo_full)
                 active[static_cast<std::size_t>(idx)] = false;
         return active;
+    }
+
+    Eigen::MatrixXd build_ri_pair_factors(const HartreeFock::Calculator &calculator)
+    {
+        const Eigen::MatrixXd &j3c = calculator._ri_j3c;
+        const auto &metric = *calculator._ri_metric_factor;
+
+        if (metric.method == HartreeFock::Correlation::RI::MetricFactorization::Method::Eigen)
+            return j3c * metric.transform.transpose();
+
+        const Eigen::MatrixXd &L = metric.transform;
+        Eigen::MatrixXd pair_factors_t = j3c.transpose();
+        pair_factors_t =
+            L.triangularView<Eigen::Lower>().solve(pair_factors_t);
+        return pair_factors_t.transpose();
+    }
+
+    Eigen::MatrixXd build_ri_ov_block(
+        const Eigen::MatrixXd &pair_factors,
+        const Eigen::MatrixXd &C_occ,
+        const Eigen::MatrixXd &C_virt)
+    {
+        const int nocc = static_cast<int>(C_occ.cols());
+        const int nvirt = static_cast<int>(C_virt.cols());
+        const int nfit = static_cast<int>(pair_factors.cols());
+        const int nov = nocc * nvirt;
+
+        Eigen::MatrixXd b_ov = Eigen::MatrixXd::Zero(nov, nfit);
+        std::size_t pair_row = 0;
+        for (Eigen::Index mu = 0; mu < C_occ.rows(); ++mu)
+        {
+            const Eigen::RowVectorXd occ_mu = C_occ.row(mu);
+            const Eigen::RowVectorXd virt_mu = C_virt.row(mu);
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
+            {
+                const Eigen::RowVectorXd factors =
+                    pair_factors.row(static_cast<Eigen::Index>(pair_row));
+                const Eigen::RowVectorXd occ_nu = C_occ.row(nu);
+                const Eigen::RowVectorXd virt_nu = C_virt.row(nu);
+
+                int ia = 0;
+                for (int i = 0; i < nocc; ++i)
+                {
+                    const double cmi = occ_mu(i);
+                    const double cni = occ_nu(i);
+                    for (int a = 0; a < nvirt; ++a, ++ia)
+                    {
+                        double weight = cmi * virt_nu(a);
+                        if (mu != nu)
+                            weight += cni * virt_mu(a);
+                        if (weight != 0.0)
+                            b_ov.row(ia).noalias() += weight * factors;
+                    }
+                }
+            }
+        }
+        return b_ov;
+    }
+
+    std::vector<double> ov_block_to_ovov(const Eigen::MatrixXd &b_ov, int nocc, int nvirt)
+    {
+        const Eigen::MatrixXd gram = b_ov * b_ov.transpose();
+        const int nov = nocc * nvirt;
+        std::vector<double> ovov(static_cast<std::size_t>(nov) * nov);
+        for (int i = 0; i < nocc; ++i)
+            for (int a = 0; a < nvirt; ++a)
+                for (int j = 0; j < nocc; ++j)
+                    for (int b = 0; b < nvirt; ++b)
+                        ovov[HartreeFock::Correlation::detail::idx_ovov(
+                            i, a, j, b, nocc, nvirt)] =
+                            gram(i * nvirt + a, j * nvirt + b);
+        return ovov;
+    }
+
+    std::vector<double> ov_block_cross_to_ovov(
+        const Eigen::MatrixXd &left_b_ov,
+        const Eigen::MatrixXd &right_b_ov,
+        int left_nocc,
+        int right_nocc,
+        int left_nvirt,
+        int right_nvirt)
+    {
+        const Eigen::MatrixXd gram = left_b_ov * right_b_ov.transpose();
+        const int left_nov = left_nocc * left_nvirt;
+        const int right_nov = right_nocc * right_nvirt;
+
+        std::vector<double> ovov(static_cast<std::size_t>(left_nov) * right_nov);
+        for (int i = 0; i < left_nocc; ++i)
+            for (int a = 0; a < left_nvirt; ++a)
+                for (int j = 0; j < right_nocc; ++j)
+                    for (int b = 0; b < right_nvirt; ++b)
+                        ovov[HartreeFock::Correlation::detail::idx_ovOV(
+                            i, a, j, b, left_nocc, right_nocc, left_nvirt, right_nvirt)] =
+                            gram(i * left_nvirt + a, j * right_nvirt + b);
+        return ovov;
     }
 }
 
@@ -151,6 +247,20 @@ namespace HartreeFock::Correlation::detail
         const Eigen::MatrixXd C_occ = C_act.leftCols(dims.n_occ);
         const Eigen::MatrixXd C_virt = C_act.middleCols(dims.n_occ, dims.n_virt);
 
+        if (calculator._mp2.use_ri)
+        {
+            auto ri_ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator);
+            if (!ri_ready)
+                return std::unexpected("make_eris_rmp2: " + ri_ready.error());
+            if (!calculator._ri_metric_factor)
+                return std::unexpected("make_eris_rmp2: RI metric factorization is missing.");
+
+            const Eigen::MatrixXd pair_factors = build_ri_pair_factors(calculator);
+            const Eigen::MatrixXd b_ov = build_ri_ov_block(pair_factors, C_occ, C_virt);
+            out.ovov = ov_block_to_ovov(b_ov, dims.n_occ, dims.n_virt);
+            return out;
+        }
+
         // Canonical RHF MP2 only needs the occupied-virtual-occupied-virtual
         // block in chemists' notation, so we transform directly into ovov.
         std::vector<double> eri_local;
@@ -201,6 +311,28 @@ namespace HartreeFock::Correlation::detail
         const Eigen::MatrixXd Ca_virt = Ca.middleCols(dims.nocca, dims.nvira);
         const Eigen::MatrixXd Cb_occ = Cb.leftCols(dims.noccb);
         const Eigen::MatrixXd Cb_virt = Cb.middleCols(dims.noccb, dims.nvirb);
+
+        if (calculator._mp2.use_ri)
+        {
+            auto ri_ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator);
+            if (!ri_ready)
+                return std::unexpected("make_eris_ump2: " + ri_ready.error());
+            if (!calculator._ri_metric_factor)
+                return std::unexpected("make_eris_ump2: RI metric factorization is missing.");
+
+            const Eigen::MatrixXd pair_factors = build_ri_pair_factors(calculator);
+
+            // The fitted AO-pair factors are spin-independent; the unrestricted
+            // split only enters when we project them into alpha/beta occupied
+            // and virtual MO blocks.
+            const Eigen::MatrixXd b_ov_a = build_ri_ov_block(pair_factors, Ca_occ, Ca_virt);
+            const Eigen::MatrixXd b_ov_b = build_ri_ov_block(pair_factors, Cb_occ, Cb_virt);
+            out.ovov = ov_block_to_ovov(b_ov_a, dims.nocca, dims.nvira);
+            out.OVOV = ov_block_to_ovov(b_ov_b, dims.noccb, dims.nvirb);
+            out.ovOV = ov_block_cross_to_ovov(
+                b_ov_a, b_ov_b, dims.nocca, dims.noccb, dims.nvira, dims.nvirb);
+            return out;
+        }
 
         // Unrestricted MP2 needs three spin blocks: alpha-alpha, beta-beta, and
         // alpha-beta. Keeping them separate makes the later spin-resolved energy

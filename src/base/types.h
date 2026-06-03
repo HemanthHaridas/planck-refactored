@@ -10,6 +10,7 @@
 #include <deque>
 #include <expected>
 #include <limits>
+#include <memory>
 #include <numbers>
 #include <span>
 #include <stdexcept>
@@ -24,6 +25,12 @@ constexpr int MAX_L = 6;
 
 namespace HartreeFock
 {
+    struct AuxBasis;
+    namespace Correlation::RI
+    {
+        struct MetricFactorization;
+    }
+
     using index_t = Eigen::Index;
 
     enum class BasisType
@@ -650,6 +657,14 @@ namespace HartreeFock
         int max_cycle = 50;             // maximum iterative MP2 cycles
         int diis_space = 6;             // DIIS subspace size for iterative MP2
         bool with_t2 = true;            // store T2 amplitudes (gradient/RDM consumers need them)
+
+        // Optional RI-MP2 front-end. When use_ri is true, the MP2 builder will
+        // source its auxiliary basis from ri_basis_name/ri_basis_path instead of
+        // the conventional AO ERI tensor once the RI path is wired through.
+        bool use_ri = false;
+        std::string ri_basis_name = "";
+        std::string ri_basis_path = get_basis_path();
+        double ri_lindep = 1e-7;        // PySCF-style drop threshold for near-dependent aux modes
     };
 
     struct OptionsOutput
@@ -1180,6 +1195,14 @@ namespace HartreeFock
         Eigen::MatrixXd _overlap; // Overlap matrix S
         Eigen::MatrixXd _hcore;   // Core Hamiltonian H = T + V
         std::vector<double> _eri; // ERI
+
+        // RI / density-fitting caches. The auxiliary basis and the 2-center
+        // metric live separately from the orbital AO basis so later RI-MP2
+        // work can prepare them once and reuse them across transforms.
+        std::shared_ptr<AuxBasis> _ri_aux_basis;
+        Eigen::MatrixXd _ri_j2c; // raw 2-center Coulomb metric (P|Q)
+        Eigen::MatrixXd _ri_j3c; // packed 3-center tensor (AO-pair × aux), in working AO basis
+        std::shared_ptr<Correlation::RI::MetricFactorization> _ri_metric_factor;
 
         std::string _checkpoint_path; // Path to checkpoint file (set by driver)
 

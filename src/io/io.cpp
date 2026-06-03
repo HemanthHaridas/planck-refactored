@@ -753,6 +753,23 @@ namespace HartreeFock::IO
                      scf._cc_max_memory_gb = std::stod(value);
                      return std::expected<void, std::string>{};
                  }},
+                {"mp2_ri_basis", [&mp2](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     mp2.ri_basis_name = value;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_ri_basis_path", [&mp2](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     mp2.ri_basis_path = value;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_ri_lindep", [&mp2](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     mp2.ri_lindep = std::stod(value);
+                     if (!(mp2.ri_lindep > 0.0))
+                         return std::unexpected("mp2_ri_lindep must be positive");
+                     return std::expected<void, std::string>{};
+                 }},
                 {"diis_restart", [&scf](const std::string &value) -> std::expected<void, std::string>
                  {
                      scf._diis_restart_factor = std::stod(value);
@@ -976,7 +993,7 @@ namespace HartreeFock::IO
                 key == "mcscf_debug_numeric_newton" || key == "mcscf_debug_commutator_rhs" ||
                 key == "mcscf_accept_uphill" ||
                 key == "stability_check" || key == "stability_follow" ||
-                key == "mp2_with_t2")
+                key == "mp2_with_t2" || key == "mp2_use_ri")
             {
                 if (!(_iss >> value))
                     return std::unexpected("Missing value for scf keyword: " + key);
@@ -999,6 +1016,8 @@ namespace HartreeFock::IO
                     scf._stability_check = *parsed;
                 else if (key == "stability_follow")
                     scf._stability_follow = *parsed;
+                else if (key == "mp2_use_ri")
+                    mp2.use_ri = *parsed;
                 else
                     mp2.with_t2 = *parsed;
                 continue;

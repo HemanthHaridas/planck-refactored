@@ -64,6 +64,32 @@
       }
     },
     {
+      "id": "water_rimp2_ccpvdz",
+      "mode": "script",
+      "script": "tests/benchmarks/mp2/pyscf_reference/ri_water_ccpvdz.py",
+      "parse_labels": {
+        "rhf_total_energy": "PYSCF_RHF_TOTAL_ENERGY",
+        "mp2_total_energy": "PYSCF_MP2_TOTAL_ENERGY"
+      },
+      "tolerances": {
+        "rhf_total_energy": 5e-8,
+        "mp2_total_energy": 5e-8
+      }
+    },
+    {
+      "id": "water_cation_rimp2_ccpvdz",
+      "mode": "script",
+      "script": "tests/benchmarks/mp2/pyscf_reference/ri_water_cation_ccpvdz_ump2.py",
+      "parse_labels": {
+        "rhf_total_energy": "PYSCF_UHF_TOTAL_ENERGY",
+        "mp2_total_energy": "PYSCF_MP2_TOTAL_ENERGY"
+      },
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
       "id": "h2_rccsdt_sto3g",
       "mode": "input",
       "input": "tests/inputs/regression/post_hf/h2_rccsdt_sto3g.hfinp",
