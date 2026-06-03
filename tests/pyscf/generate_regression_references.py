@@ -19,6 +19,9 @@ DEFAULT_OUTPUT = REPO_ROOT / "tests" / "pyscf" / "regression_references.json"
 
 LABEL_PATTERNS = {
     "CASSCF_ENERGY": re.compile(r"^CASSCF_ENERGY:\s*([-+0-9Ee.]+)", re.MULTILINE),
+    "PYSCF_RHF_TOTAL_ENERGY": re.compile(r"^PYSCF_RHF_TOTAL_ENERGY\s+([-+0-9Ee.]+)", re.MULTILINE),
+    "PYSCF_UHF_TOTAL_ENERGY": re.compile(r"^PYSCF_UHF_TOTAL_ENERGY\s+([-+0-9Ee.]+)", re.MULTILINE),
+    "PYSCF_MP2_TOTAL_ENERGY": re.compile(r"^PYSCF_MP2_TOTAL_ENERGY\s+([-+0-9Ee.]+)", re.MULTILINE),
 }
 
 

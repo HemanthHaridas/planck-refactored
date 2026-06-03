@@ -158,6 +158,38 @@
       ]
     },
     {
+      "id": "water_cation_rimp2_ccpvdz",
+      "input": "tests/inputs/regression/ri/water_cation_rimp2_ccpvdz.hfinp",
+      "tags": [
+        "ri",
+        "open_shell"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -75.6320628070,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -75.7888422433,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
       "id": "nh3_rmp2_sto3g",
       "input": "inputs/examples/hf/mp2_validation/val_nh3.hfinp",
       "tags": [

@@ -2391,38 +2391,38 @@ numbers should not be compared directly against that older run.
 
 | Molecule / basis | nbasis | Engine | nosym ms | d2h ms | full ms |
 |---|---|---|---|---|---|
-| H₂O / STO-3G (C2v, \|G\|=4) | 7 | OS | 0.739 | 0.381 | 0.531 |
-| H₂O / STO-3G (C2v, \|G\|=4) | 7 | Rys | 3.034 | 1.502 | 2.394 |
-| H₂O / STO-3G (C2v, \|G\|=4) | 7 | **HGP** | **0.376** | **0.239** | **0.322** |
-| H₂O / STO-3G (C2v, \|G\|=4) | 7 | Auto | 0.455 | 0.284 | **0.322** |
-| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | OS | 0.833 | 0.573 | 0.530 |
-| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | Rys | 3.999 | 2.569 | 2.683 |
-| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | **HGP** | **0.473** | **0.354** | **0.346** |
-| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | Auto | 0.684 | 0.471 | **0.346** |
-| CH₄ / STO-3G (Td, \|G\|=24) | 9 | OS | 1.134 | 0.506 | 0.575 |
-| CH₄ / STO-3G (Td, \|G\|=24) | 9 | Rys | 5.474 | 2.045 | 2.782 |
-| CH₄ / STO-3G (Td, \|G\|=24) | 9 | **HGP** | **0.620** | **0.316** | **0.361** |
-| CH₄ / STO-3G (Td, \|G\|=24) | 9 | Auto | 0.983 | 0.437 | **0.361** |
-| H₂O / `6-31G**` (C2v, \|G\|=4) | 25 | OS | 8.837 | 4.010 | 6.711 |
-| H₂O / `6-31G**` (C2v, \|G\|=4) | 25 | Rys | 53.027 | 17.695 | 37.180 |
-| H₂O / `6-31G**` (C2v, \|G\|=4) | 25 | **HGP** | **6.214** | **2.996** | **4.437** |
-| H₂O / `6-31G**` (C2v, \|G\|=4) | 25 | Auto | 6.345 | 3.176 | **4.437** |
-| NH₃ / 6-31G (C3v, \|G\|=6) | 15 | OS | 2.688 | 1.790 | 1.619 |
-| NH₃ / 6-31G (C3v, \|G\|=6) | 15 | Rys | 13.176 | 7.788 | 7.377 |
-| NH₃ / 6-31G (C3v, \|G\|=6) | 15 | **HGP** | **1.270** | **0.946** | **0.836** |
-| NH₃ / 6-31G (C3v, \|G\|=6) | 15 | Auto | 2.226 | 1.510 | **0.836** |
-| NH₃ / `6-31G*` (C3v, \|G\|=6) | 21 | OS | 6.393 | 4.161 | 4.135 |
-| NH₃ / `6-31G*` (C3v, \|G\|=6) | 21 | Rys | 38.083 | 23.032 | 22.801 |
-| NH₃ / `6-31G*` (C3v, \|G\|=6) | 21 | **HGP** | **3.697** | **2.558** | **2.532** |
-| NH₃ / `6-31G*` (C3v, \|G\|=6) | 21 | Auto | 4.673 | 3.079 | **2.532** |
-| NH₃ / `6-31G**` (C3v, \|G\|=6) | 30 | OS | 14.494 | 9.490 | 7.127 |
-| NH₃ / `6-31G**` (C3v, \|G\|=6) | 30 | Rys | 97.369 | 53.524 | 39.379 |
-| NH₃ / `6-31G**` (C3v, \|G\|=6) | 30 | **HGP** | **9.274** | **6.879** | **4.753** |
-| NH₃ / `6-31G**` (C3v, \|G\|=6) | 30 | Auto | 10.637 | 7.660 | **4.753** |
-| CH₄ / `6-31G**` (Td, \|G\|=24) | 35 | OS | 22.981 | 10.391 | 8.160 |
-| CH₄ / `6-31G**` (Td, \|G\|=24) | 35 | Rys | 155.936 | 44.731 | 40.797 |
-| CH₄ / `6-31G**` (Td, \|G\|=24) | 35 | **HGP** | **14.824** | **8.572** | **5.871** |
-| CH₄ / `6-31G**` (Td, \|G\|=24) | 35 | Auto | 17.490 | 8.749 | **5.871** |
+| H₂O / STO-3G (C2v, order(G)=4) | 7 | OS | 0.739 | 0.381 | 0.531 |
+| H₂O / STO-3G (C2v, order(G)=4) | 7 | Rys | 3.034 | 1.502 | 2.394 |
+| H₂O / STO-3G (C2v, order(G)=4) | 7 | **HGP** | **0.376** | **0.239** | **0.322** |
+| H₂O / STO-3G (C2v, order(G)=4) | 7 | Auto | 0.455 | 0.284 | **0.322** |
+| NH₃ / STO-3G (C3v, order(G)=6) | 8 | OS | 0.833 | 0.573 | 0.530 |
+| NH₃ / STO-3G (C3v, order(G)=6) | 8 | Rys | 3.999 | 2.569 | 2.683 |
+| NH₃ / STO-3G (C3v, order(G)=6) | 8 | **HGP** | **0.473** | **0.354** | **0.346** |
+| NH₃ / STO-3G (C3v, order(G)=6) | 8 | Auto | 0.684 | 0.471 | **0.346** |
+| CH₄ / STO-3G (Td, order(G)=24) | 9 | OS | 1.134 | 0.506 | 0.575 |
+| CH₄ / STO-3G (Td, order(G)=24) | 9 | Rys | 5.474 | 2.045 | 2.782 |
+| CH₄ / STO-3G (Td, order(G)=24) | 9 | **HGP** | **0.620** | **0.316** | **0.361** |
+| CH₄ / STO-3G (Td, order(G)=24) | 9 | Auto | 0.983 | 0.437 | **0.361** |
+| H₂O / `6-31G**` (C2v, order(G)=4) | 25 | OS | 8.837 | 4.010 | 6.711 |
+| H₂O / `6-31G**` (C2v, order(G)=4) | 25 | Rys | 53.027 | 17.695 | 37.180 |
+| H₂O / `6-31G**` (C2v, order(G)=4) | 25 | **HGP** | **6.214** | **2.996** | **4.437** |
+| H₂O / `6-31G**` (C2v, order(G)=4) | 25 | Auto | 6.345 | 3.176 | **4.437** |
+| NH₃ / 6-31G (C3v, order(G)=6) | 15 | OS | 2.688 | 1.790 | 1.619 |
+| NH₃ / 6-31G (C3v, order(G)=6) | 15 | Rys | 13.176 | 7.788 | 7.377 |
+| NH₃ / 6-31G (C3v, order(G)=6) | 15 | **HGP** | **1.270** | **0.946** | **0.836** |
+| NH₃ / 6-31G (C3v, order(G)=6) | 15 | Auto | 2.226 | 1.510 | **0.836** |
+| NH₃ / `6-31G*` (C3v, order(G)=6) | 21 | OS | 6.393 | 4.161 | 4.135 |
+| NH₃ / `6-31G*` (C3v, order(G)=6) | 21 | Rys | 38.083 | 23.032 | 22.801 |
+| NH₃ / `6-31G*` (C3v, order(G)=6) | 21 | **HGP** | **3.697** | **2.558** | **2.532** |
+| NH₃ / `6-31G*` (C3v, order(G)=6) | 21 | Auto | 4.673 | 3.079 | **2.532** |
+| NH₃ / `6-31G**` (C3v, order(G)=6) | 30 | OS | 14.494 | 9.490 | 7.127 |
+| NH₃ / `6-31G**` (C3v, order(G)=6) | 30 | Rys | 97.369 | 53.524 | 39.379 |
+| NH₃ / `6-31G**` (C3v, order(G)=6) | 30 | **HGP** | **9.274** | **6.879** | **4.753** |
+| NH₃ / `6-31G**` (C3v, order(G)=6) | 30 | Auto | 10.637 | 7.660 | **4.753** |
+| CH₄ / `6-31G**` (Td, order(G)=24) | 35 | OS | 22.981 | 10.391 | 8.160 |
+| CH₄ / `6-31G**` (Td, order(G)=24) | 35 | Rys | 155.936 | 44.731 | 40.797 |
+| CH₄ / `6-31G**` (Td, order(G)=24) | 35 | **HGP** | **14.824** | **8.572** | **5.871** |
+| CH₄ / `6-31G**` (Td, order(G)=24) | 35 | Auto | 17.490 | 8.749 | **5.871** |
 
 Reading the table, four patterns stand out.
 
@@ -2589,6 +2589,153 @@ mixed \(\alpha\beta\) excitations with the bare Coulomb integral. The total
 correlation energy is \(E_{UMP2} = E_{UMP2}^{SS} + E_{UMP2}^{OS}\); reporting the
 two contributions separately is useful because spin-component-scaled variants
 (SCS-MP2) reweight them independently.
+
+### Resolution-of-the-Identity MP2 (RI-MP2 / DF-MP2)
+
+The bottleneck in conventional MP2 is not the final denominator formula, but
+the need to form or contract four-index electron-repulsion integrals in the MO
+basis. Resolution-of-the-identity (RI), also called density fitting (DF),
+avoids this by expanding products of two AO basis functions in an **auxiliary
+basis** \(\{P,Q,\dots\}\):
+
+\[
+\phi_\mu(\mathbf r)\phi_\nu(\mathbf r)
+\approx \sum_P C_{\mu\nu}^{P}\,\chi_P(\mathbf r)
+\]
+
+The fitting coefficients are chosen in the Coulomb metric. Define the
+two-center auxiliary metric and the three-center Coulomb tensor
+
+\[
+J_{PQ} = (P|Q)
+\]
+
+\[
+B_{\mu\nu}^{P} = (\mu\nu|P)
+\]
+
+where
+
+\[
+(\mu\nu|P) =
+\iint \phi_\mu(\mathbf r_1)\phi_\nu(\mathbf r_1)
+\frac{1}{r_{12}}
+\chi_P(\mathbf r_2)\,d\mathbf r_1\,d\mathbf r_2
+\]
+
+Then the four-center AO ERI is approximated as
+
+\[
+(\mu\nu|\lambda\sigma)
+\approx
+\sum_{PQ}
+(\mu\nu|P)\,(J^{-1})_{PQ}\,(Q|\lambda\sigma)
+\]
+
+This is the central RI factorization: instead of one rank-4 object, the
+problem is split into a rank-2 auxiliary metric and rank-3 three-center
+integrals.
+
+#### Metric factorization
+
+In practice one does not form \(J^{-1}\) explicitly. Instead, factorize the
+positive-semidefinite metric as either
+
+\[
+\mathbf J = \mathbf L \mathbf L^T
+\]
+
+via Cholesky, or
+
+\[
+\mathbf J = \mathbf U \boldsymbol\Lambda \mathbf U^T
+\]
+
+via eigendecomposition when linear dependencies are present. The working fitted
+pair factors are then built as
+
+\[
+\widetilde B_{\mu\nu}^{Q}
+=
+\sum_P (\mu\nu|P)\,X_{PQ}
+\]
+
+with \(X = L^{-T}\) in the Cholesky case or
+\(X = U \Lambda^{-1/2}\) after discarding tiny eigenmodes in the eigen fallback.
+This is numerically safer than constructing \(J^{-1}\) by itself.
+
+#### RI-MP2 in the MO basis
+
+Once the fitted AO-pair factors \(\widetilde B_{\mu\nu}^{Q}\) are available,
+the occupied-virtual MO factors are
+
+\[
+\widetilde B_{ia}^{Q}
+=
+\sum_{\mu\nu} C_{\mu i} C_{\nu a}\,\widetilde B_{\mu\nu}^{Q}
+\]
+
+and the four-index MO ERI is approximated by a Gram product:
+
+\[
+(ia|jb) \approx \sum_Q \widetilde B_{ia}^{Q}\widetilde B_{jb}^{Q}
+\]
+
+So the MP2 energy uses the same formulas as conventional MP2, but with these
+fitted \((ia|jb)\) values. The asymptotic cost drops because the expensive
+four-index AO tensor is never built; storage moves from \(O(N^4)\) toward
+\(O(N^2 N_{\text{aux}})\).
+
+#### Closed-shell and open-shell views
+
+For RHF references, RI-RMP2 simply replaces each transformed \((ia|jb)\) in the
+usual RMP2 expression by its auxiliary-space Gram form. For UHF references, the
+same idea is applied separately to the \(\alpha\alpha\), \(\beta\beta\), and
+\(\alpha\beta\) channels:
+
+\[
+(i^\alpha a^\alpha|j^\alpha b^\alpha)
+\approx \sum_Q \widetilde B_{i^\alpha a^\alpha}^{Q}\widetilde B_{j^\alpha b^\alpha}^{Q}
+\]
+
+\[
+(i^\beta a^\beta|j^\beta b^\beta)
+\approx \sum_Q \widetilde B_{i^\beta a^\beta}^{Q}\widetilde B_{j^\beta b^\beta}^{Q}
+\]
+
+\[
+(i^\alpha a^\alpha|j^\beta b^\beta)
+\approx \sum_Q \widetilde B_{i^\alpha a^\alpha}^{Q}\widetilde B_{j^\beta b^\beta}^{Q}
+\]
+
+The same-spin / opposite-spin decomposition of UMP2 is unchanged; RI only
+changes how the underlying two-electron quantities are assembled.
+
+#### What Planck builds natively
+
+Planck's RI-MP2 path constructs:
+
+1. the auxiliary basis \(\{\chi_P\}\),
+2. the two-center metric \((P|Q)\),
+3. the packed three-center tensor \((\mu\nu|P)\),
+4. a metric factorization with linear-dependence filtering,
+5. fitted occupied-virtual factors \(\widetilde B_{ia}^{Q}\),
+6. and finally the conventional MP2 energy expressions using the fitted
+   \(ovov\) blocks.
+
+So the theory-to-code map is:
+
+\[
+(\mu\nu|P),\ (P|Q)
+\;\longrightarrow\;
+\widetilde B_{\mu\nu}^{Q}
+\;\longrightarrow\;
+\widetilde B_{ia}^{Q}
+\;\longrightarrow\;
+(ia|jb)_{\text{RI}}
+\;\longrightarrow\;
+E_{MP2}
+\]
 
 ### RMP2 Natural Orbitals
 
@@ -6393,6 +6540,9 @@ driver.cpp
 | AO→MO transform | `src/post_hf/integrals.cpp` | half-transformation functions |
 | RMP2 energy | `src/post_hf/mp2.cpp` | `run_rmp2` |
 | UMP2 energy | `src/post_hf/mp2.cpp` | `run_ump2` |
+| RI auxiliary-basis loader | `src/basis/rifit.cpp` | `read_ri_basis` |
+| RI 2c / 3c integrals + metric factorization | `src/post_hf/ri/ri_eri.cpp` | `compute_2c_eri`, `compute_3c_eri`, `factorize_2c_metric`, `ensure_ri_3c_ready` |
+| RI-backed MP2 ERI builders | `src/post_hf/mp2_internal.cpp` | `build_ri_pair_factors`, `build_ri_ov_block`, `make_eris_rmp2`, `make_eris_ump2` |
 | MP2 amplitudes | `src/post_hf/mp2.cpp` | `build_rmp2_amplitudes` |
 | RCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_rccsd`, `run_rccsd` |
 | UCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_uccsd`, `run_uccsd` |

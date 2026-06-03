@@ -102,6 +102,16 @@
         "expected": -76.0440109036
       }
     },
+    "water_cation_rimp2_ccpvdz": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -75.78884224328257
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -75.63206280701094
+      }
+    },
     "water_radical_cation_uhf_ump2_sto3g": {
       "mp2_total_energy": {
         "atol": 1e-06,
@@ -130,6 +140,16 @@
       "rhf_total_energy": {
         "atol": 1e-07,
         "expected": -74.94588076098961
+      }
+    },
+    "water_rimp2_ccpvdz": {
+      "mp2_total_energy": {
+        "atol": 5e-08,
+        "expected": -76.22700454147314
+      },
+      "rhf_total_energy": {
+        "atol": 5e-08,
+        "expected": -76.02313693477348
       }
     }
   }

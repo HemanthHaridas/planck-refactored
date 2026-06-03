@@ -236,6 +236,7 @@
 <li class="toc-level-3"><a href="#second-order-perturbation-theory">Second-Order Perturbation Theory</a></li>
 <li class="toc-level-3"><a href="#rmp2-closed-shell">RMP2 (Closed-Shell)</a></li>
 <li class="toc-level-3"><a href="#ump2-open-shell">UMP2 (Open-Shell)</a></li>
+<li class="toc-level-3"><a href="#resolution-of-the-identity-mp2-ri-mp2-df-mp2">Resolution-of-the-Identity MP2 (RI-MP2 / DF-MP2)</a></li>
 <li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
 <li class="toc-level-2"><a href="#14-analytic-nuclear-gradients">14. Analytic Nuclear Gradients</a></li>
 <li class="toc-level-3"><a href="#hellmann-feynman-theorem-and-pulay-forces">Hellmann-Feynman Theorem and Pulay Forces</a></li>
@@ -1500,38 +1501,38 @@ r_{12})/r_{12}\)</span>) drop in exactly as in OS: the long-range damping enters
 <th>full ms</th>
 </tr></thead>
 <tbody>
-<tr><td>H₂O / STO-3G (C2v, \</td><td>G\</td><td>=4)</td><td>7</td><td>OS</td><td>0.739</td><td>0.381</td><td>0.531</td></tr>
-<tr><td>H₂O / STO-3G (C2v, \</td><td>G\</td><td>=4)</td><td>7</td><td>Rys</td><td>3.034</td><td>1.502</td><td>2.394</td></tr>
-<tr><td>H₂O / STO-3G (C2v, \</td><td>G\</td><td>=4)</td><td>7</td><td><strong>HGP</strong></td><td><strong>0.376</strong></td><td><strong>0.239</strong></td><td><strong>0.322</strong></td></tr>
-<tr><td>H₂O / STO-3G (C2v, \</td><td>G\</td><td>=4)</td><td>7</td><td>Auto</td><td>0.455</td><td>0.284</td><td><strong>0.322</strong></td></tr>
-<tr><td>NH₃ / STO-3G (C3v, \</td><td>G\</td><td>=6)</td><td>8</td><td>OS</td><td>0.833</td><td>0.573</td><td>0.530</td></tr>
-<tr><td>NH₃ / STO-3G (C3v, \</td><td>G\</td><td>=6)</td><td>8</td><td>Rys</td><td>3.999</td><td>2.569</td><td>2.683</td></tr>
-<tr><td>NH₃ / STO-3G (C3v, \</td><td>G\</td><td>=6)</td><td>8</td><td><strong>HGP</strong></td><td><strong>0.473</strong></td><td><strong>0.354</strong></td><td><strong>0.346</strong></td></tr>
-<tr><td>NH₃ / STO-3G (C3v, \</td><td>G\</td><td>=6)</td><td>8</td><td>Auto</td><td>0.684</td><td>0.471</td><td><strong>0.346</strong></td></tr>
-<tr><td>CH₄ / STO-3G (Td, \</td><td>G\</td><td>=24)</td><td>9</td><td>OS</td><td>1.134</td><td>0.506</td><td>0.575</td></tr>
-<tr><td>CH₄ / STO-3G (Td, \</td><td>G\</td><td>=24)</td><td>9</td><td>Rys</td><td>5.474</td><td>2.045</td><td>2.782</td></tr>
-<tr><td>CH₄ / STO-3G (Td, \</td><td>G\</td><td>=24)</td><td>9</td><td><strong>HGP</strong></td><td><strong>0.620</strong></td><td><strong>0.316</strong></td><td><strong>0.361</strong></td></tr>
-<tr><td>CH₄ / STO-3G (Td, \</td><td>G\</td><td>=24)</td><td>9</td><td>Auto</td><td>0.983</td><td>0.437</td><td><strong>0.361</strong></td></tr>
-<tr><td>H₂O / <code>6-31G**</code> (C2v, \</td><td>G\</td><td>=4)</td><td>25</td><td>OS</td><td>8.837</td><td>4.010</td><td>6.711</td></tr>
-<tr><td>H₂O / <code>6-31G**</code> (C2v, \</td><td>G\</td><td>=4)</td><td>25</td><td>Rys</td><td>53.027</td><td>17.695</td><td>37.180</td></tr>
-<tr><td>H₂O / <code>6-31G**</code> (C2v, \</td><td>G\</td><td>=4)</td><td>25</td><td><strong>HGP</strong></td><td><strong>6.214</strong></td><td><strong>2.996</strong></td><td><strong>4.437</strong></td></tr>
-<tr><td>H₂O / <code>6-31G**</code> (C2v, \</td><td>G\</td><td>=4)</td><td>25</td><td>Auto</td><td>6.345</td><td>3.176</td><td><strong>4.437</strong></td></tr>
-<tr><td>NH₃ / 6-31G (C3v, \</td><td>G\</td><td>=6)</td><td>15</td><td>OS</td><td>2.688</td><td>1.790</td><td>1.619</td></tr>
-<tr><td>NH₃ / 6-31G (C3v, \</td><td>G\</td><td>=6)</td><td>15</td><td>Rys</td><td>13.176</td><td>7.788</td><td>7.377</td></tr>
-<tr><td>NH₃ / 6-31G (C3v, \</td><td>G\</td><td>=6)</td><td>15</td><td><strong>HGP</strong></td><td><strong>1.270</strong></td><td><strong>0.946</strong></td><td><strong>0.836</strong></td></tr>
-<tr><td>NH₃ / 6-31G (C3v, \</td><td>G\</td><td>=6)</td><td>15</td><td>Auto</td><td>2.226</td><td>1.510</td><td><strong>0.836</strong></td></tr>
-<tr><td>NH₃ / <code>6-31G*</code> (C3v, \</td><td>G\</td><td>=6)</td><td>21</td><td>OS</td><td>6.393</td><td>4.161</td><td>4.135</td></tr>
-<tr><td>NH₃ / <code>6-31G*</code> (C3v, \</td><td>G\</td><td>=6)</td><td>21</td><td>Rys</td><td>38.083</td><td>23.032</td><td>22.801</td></tr>
-<tr><td>NH₃ / <code>6-31G*</code> (C3v, \</td><td>G\</td><td>=6)</td><td>21</td><td><strong>HGP</strong></td><td><strong>3.697</strong></td><td><strong>2.558</strong></td><td><strong>2.532</strong></td></tr>
-<tr><td>NH₃ / <code>6-31G*</code> (C3v, \</td><td>G\</td><td>=6)</td><td>21</td><td>Auto</td><td>4.673</td><td>3.079</td><td><strong>2.532</strong></td></tr>
-<tr><td>NH₃ / <code>6-31G**</code> (C3v, \</td><td>G\</td><td>=6)</td><td>30</td><td>OS</td><td>14.494</td><td>9.490</td><td>7.127</td></tr>
-<tr><td>NH₃ / <code>6-31G**</code> (C3v, \</td><td>G\</td><td>=6)</td><td>30</td><td>Rys</td><td>97.369</td><td>53.524</td><td>39.379</td></tr>
-<tr><td>NH₃ / <code>6-31G**</code> (C3v, \</td><td>G\</td><td>=6)</td><td>30</td><td><strong>HGP</strong></td><td><strong>9.274</strong></td><td><strong>6.879</strong></td><td><strong>4.753</strong></td></tr>
-<tr><td>NH₃ / <code>6-31G**</code> (C3v, \</td><td>G\</td><td>=6)</td><td>30</td><td>Auto</td><td>10.637</td><td>7.660</td><td><strong>4.753</strong></td></tr>
-<tr><td>CH₄ / <code>6-31G**</code> (Td, \</td><td>G\</td><td>=24)</td><td>35</td><td>OS</td><td>22.981</td><td>10.391</td><td>8.160</td></tr>
-<tr><td>CH₄ / <code>6-31G**</code> (Td, \</td><td>G\</td><td>=24)</td><td>35</td><td>Rys</td><td>155.936</td><td>44.731</td><td>40.797</td></tr>
-<tr><td>CH₄ / <code>6-31G**</code> (Td, \</td><td>G\</td><td>=24)</td><td>35</td><td><strong>HGP</strong></td><td><strong>14.824</strong></td><td><strong>8.572</strong></td><td><strong>5.871</strong></td></tr>
-<tr><td>CH₄ / <code>6-31G**</code> (Td, \</td><td>G\</td><td>=24)</td><td>35</td><td>Auto</td><td>17.490</td><td>8.749</td><td><strong>5.871</strong></td></tr>
+<tr><td>H₂O / STO-3G (C2v, order(G)=4)</td><td>7</td><td>OS</td><td>0.739</td><td>0.381</td><td>0.531</td></tr>
+<tr><td>H₂O / STO-3G (C2v, order(G)=4)</td><td>7</td><td>Rys</td><td>3.034</td><td>1.502</td><td>2.394</td></tr>
+<tr><td>H₂O / STO-3G (C2v, order(G)=4)</td><td>7</td><td><strong>HGP</strong></td><td><strong>0.376</strong></td><td><strong>0.239</strong></td><td><strong>0.322</strong></td></tr>
+<tr><td>H₂O / STO-3G (C2v, order(G)=4)</td><td>7</td><td>Auto</td><td>0.455</td><td>0.284</td><td><strong>0.322</strong></td></tr>
+<tr><td>NH₃ / STO-3G (C3v, order(G)=6)</td><td>8</td><td>OS</td><td>0.833</td><td>0.573</td><td>0.530</td></tr>
+<tr><td>NH₃ / STO-3G (C3v, order(G)=6)</td><td>8</td><td>Rys</td><td>3.999</td><td>2.569</td><td>2.683</td></tr>
+<tr><td>NH₃ / STO-3G (C3v, order(G)=6)</td><td>8</td><td><strong>HGP</strong></td><td><strong>0.473</strong></td><td><strong>0.354</strong></td><td><strong>0.346</strong></td></tr>
+<tr><td>NH₃ / STO-3G (C3v, order(G)=6)</td><td>8</td><td>Auto</td><td>0.684</td><td>0.471</td><td><strong>0.346</strong></td></tr>
+<tr><td>CH₄ / STO-3G (Td, order(G)=24)</td><td>9</td><td>OS</td><td>1.134</td><td>0.506</td><td>0.575</td></tr>
+<tr><td>CH₄ / STO-3G (Td, order(G)=24)</td><td>9</td><td>Rys</td><td>5.474</td><td>2.045</td><td>2.782</td></tr>
+<tr><td>CH₄ / STO-3G (Td, order(G)=24)</td><td>9</td><td><strong>HGP</strong></td><td><strong>0.620</strong></td><td><strong>0.316</strong></td><td><strong>0.361</strong></td></tr>
+<tr><td>CH₄ / STO-3G (Td, order(G)=24)</td><td>9</td><td>Auto</td><td>0.983</td><td>0.437</td><td><strong>0.361</strong></td></tr>
+<tr><td>H₂O / <code>6-31G**</code> (C2v, order(G)=4)</td><td>25</td><td>OS</td><td>8.837</td><td>4.010</td><td>6.711</td></tr>
+<tr><td>H₂O / <code>6-31G**</code> (C2v, order(G)=4)</td><td>25</td><td>Rys</td><td>53.027</td><td>17.695</td><td>37.180</td></tr>
+<tr><td>H₂O / <code>6-31G**</code> (C2v, order(G)=4)</td><td>25</td><td><strong>HGP</strong></td><td><strong>6.214</strong></td><td><strong>2.996</strong></td><td><strong>4.437</strong></td></tr>
+<tr><td>H₂O / <code>6-31G**</code> (C2v, order(G)=4)</td><td>25</td><td>Auto</td><td>6.345</td><td>3.176</td><td><strong>4.437</strong></td></tr>
+<tr><td>NH₃ / 6-31G (C3v, order(G)=6)</td><td>15</td><td>OS</td><td>2.688</td><td>1.790</td><td>1.619</td></tr>
+<tr><td>NH₃ / 6-31G (C3v, order(G)=6)</td><td>15</td><td>Rys</td><td>13.176</td><td>7.788</td><td>7.377</td></tr>
+<tr><td>NH₃ / 6-31G (C3v, order(G)=6)</td><td>15</td><td><strong>HGP</strong></td><td><strong>1.270</strong></td><td><strong>0.946</strong></td><td><strong>0.836</strong></td></tr>
+<tr><td>NH₃ / 6-31G (C3v, order(G)=6)</td><td>15</td><td>Auto</td><td>2.226</td><td>1.510</td><td><strong>0.836</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G*</code> (C3v, order(G)=6)</td><td>21</td><td>OS</td><td>6.393</td><td>4.161</td><td>4.135</td></tr>
+<tr><td>NH₃ / <code>6-31G*</code> (C3v, order(G)=6)</td><td>21</td><td>Rys</td><td>38.083</td><td>23.032</td><td>22.801</td></tr>
+<tr><td>NH₃ / <code>6-31G*</code> (C3v, order(G)=6)</td><td>21</td><td><strong>HGP</strong></td><td><strong>3.697</strong></td><td><strong>2.558</strong></td><td><strong>2.532</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G*</code> (C3v, order(G)=6)</td><td>21</td><td>Auto</td><td>4.673</td><td>3.079</td><td><strong>2.532</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G**</code> (C3v, order(G)=6)</td><td>30</td><td>OS</td><td>14.494</td><td>9.490</td><td>7.127</td></tr>
+<tr><td>NH₃ / <code>6-31G**</code> (C3v, order(G)=6)</td><td>30</td><td>Rys</td><td>97.369</td><td>53.524</td><td>39.379</td></tr>
+<tr><td>NH₃ / <code>6-31G**</code> (C3v, order(G)=6)</td><td>30</td><td><strong>HGP</strong></td><td><strong>9.274</strong></td><td><strong>6.879</strong></td><td><strong>4.753</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G**</code> (C3v, order(G)=6)</td><td>30</td><td>Auto</td><td>10.637</td><td>7.660</td><td><strong>4.753</strong></td></tr>
+<tr><td>CH₄ / <code>6-31G**</code> (Td, order(G)=24)</td><td>35</td><td>OS</td><td>22.981</td><td>10.391</td><td>8.160</td></tr>
+<tr><td>CH₄ / <code>6-31G**</code> (Td, order(G)=24)</td><td>35</td><td>Rys</td><td>155.936</td><td>44.731</td><td>40.797</td></tr>
+<tr><td>CH₄ / <code>6-31G**</code> (Td, order(G)=24)</td><td>35</td><td><strong>HGP</strong></td><td><strong>14.824</strong></td><td><strong>8.572</strong></td><td><strong>5.871</strong></td></tr>
+<tr><td>CH₄ / <code>6-31G**</code> (Td, order(G)=24)</td><td>35</td><td>Auto</td><td>17.490</td><td>8.749</td><td><strong>5.871</strong></td></tr>
 </tbody></table></div>
 <p>Reading the table, four patterns stand out.</p>
 <p><strong>1. Rys is dominated by both HGP and OS at every basis tested here.</strong> This is the expected regime: STO-3G through 6-31G(d,p) puts maximum angular momentum at <span class="math-inline">\(d\)</span>, which sits squarely in the low-to-medium-<span class="math-inline">\(L\)</span> window where the OS/HGP flop count is smaller than the Rys-quadrature flop count. On 6-31G(d,p) / CH₄ (Td) the spread reaches <span class="math-inline">\(\sim\)</span>10.5× over HGP on <code>nosym</code> and <span class="math-inline">\(\sim\)</span>5.2× on <code>d2h</code>; Rys is not really a competitor here, and the auto-dispatch model in §11 would only prefer Rys at higher <span class="math-inline">\(L\)</span> where the OS/HGP scratch buffers blow up faster than Rys&#x27;s fixed root count. Rys&#x27;s natural niche is the high-<span class="math-inline">\(L\)</span> tail, not the bulk of routine basis sets.</p>
@@ -1603,6 +1604,99 @@ E_{UMP2}^{OS} = -\sum_{i^\alpha j^\beta a^\alpha b^\beta}
 {\varepsilon_{i^\alpha} + \varepsilon_{j^\beta} - \varepsilon_{a^\alpha} - \varepsilon_{b^\beta}}
 \]</span></p>
 <p>The same-spin channels use antisymmetrized integrals (only <span class="math-inline">\(\alpha\alpha\)</span> and <span class="math-inline">\(\beta\beta\)</span> excitations contribute), while the opposite-spin channel sums over mixed <span class="math-inline">\(\alpha\beta\)</span> excitations with the bare Coulomb integral. The total correlation energy is <span class="math-inline">\(E_{UMP2} = E_{UMP2}^{SS} + E_{UMP2}^{OS}\)</span>; reporting the two contributions separately is useful because spin-component-scaled variants (SCS-MP2) reweight them independently.</p>
+<h3 id="resolution-of-the-identity-mp2-ri-mp2-df-mp2">Resolution-of-the-Identity MP2 (RI-MP2 / DF-MP2)</h3>
+<p>The bottleneck in conventional MP2 is not the final denominator formula, but the need to form or contract four-index electron-repulsion integrals in the MO basis. Resolution-of-the-identity (RI), also called density fitting (DF), avoids this by expanding products of two AO basis functions in an <strong>auxiliary basis</strong> <span class="math-inline">\(\{P,Q,\dots\}\)</span>:</p>
+<p><span class="math-display">\[
+\phi_\mu(\mathbf r)\phi_\nu(\mathbf r)
+\approx \sum_P C_{\mu\nu}^{P}\,\chi_P(\mathbf r)
+\]</span></p>
+<p>The fitting coefficients are chosen in the Coulomb metric. Define the two-center auxiliary metric and the three-center Coulomb tensor</p>
+<p><span class="math-display">\[
+J_{PQ} = (P|Q)
+\]</span></p>
+<p><span class="math-display">\[
+B_{\mu\nu}^{P} = (\mu\nu|P)
+\]</span></p>
+<p>where</p>
+<p><span class="math-display">\[
+(\mu\nu|P) =
+\iint \phi_\mu(\mathbf r_1)\phi_\nu(\mathbf r_1)
+\frac{1}{r_{12}}
+\chi_P(\mathbf r_2)\,d\mathbf r_1\,d\mathbf r_2
+\]</span></p>
+<p>Then the four-center AO ERI is approximated as</p>
+<p><span class="math-display">\[
+(\mu\nu|\lambda\sigma)
+\approx
+\sum_{PQ}
+(\mu\nu|P)\,(J^{-1})_{PQ}\,(Q|\lambda\sigma)
+\]</span></p>
+<p>This is the central RI factorization: instead of one rank-4 object, the problem is split into a rank-2 auxiliary metric and rank-3 three-center integrals.</p>
+<h4 id="metric-factorization">Metric factorization</h4>
+<p>In practice one does not form <span class="math-inline">\(J^{-1}\)</span> explicitly. Instead, factorize the positive-semidefinite metric as either</p>
+<p><span class="math-display">\[
+\mathbf J = \mathbf L \mathbf L^T
+\]</span></p>
+<p>via Cholesky, or</p>
+<p><span class="math-display">\[
+\mathbf J = \mathbf U \boldsymbol\Lambda \mathbf U^T
+\]</span></p>
+<p>via eigendecomposition when linear dependencies are present. The working fitted pair factors are then built as</p>
+<p><span class="math-display">\[
+\widetilde B_{\mu\nu}^{Q}
+=
+\sum_P (\mu\nu|P)\,X_{PQ}
+\]</span></p>
+<p>with <span class="math-inline">\(X = L^{-T}\)</span> in the Cholesky case or <span class="math-inline">\(X = U \Lambda^{-1/2}\)</span> after discarding tiny eigenmodes in the eigen fallback. This is numerically safer than constructing <span class="math-inline">\(J^{-1}\)</span> by itself.</p>
+<h4 id="ri-mp2-in-the-mo-basis">RI-MP2 in the MO basis</h4>
+<p>Once the fitted AO-pair factors <span class="math-inline">\(\widetilde B_{\mu\nu}^{Q}\)</span> are available, the occupied-virtual MO factors are</p>
+<p><span class="math-display">\[
+\widetilde B_{ia}^{Q}
+=
+\sum_{\mu\nu} C_{\mu i} C_{\nu a}\,\widetilde B_{\mu\nu}^{Q}
+\]</span></p>
+<p>and the four-index MO ERI is approximated by a Gram product:</p>
+<p><span class="math-display">\[
+(ia|jb) \approx \sum_Q \widetilde B_{ia}^{Q}\widetilde B_{jb}^{Q}
+\]</span></p>
+<p>So the MP2 energy uses the same formulas as conventional MP2, but with these fitted <span class="math-inline">\((ia|jb)\)</span> values. The asymptotic cost drops because the expensive four-index AO tensor is never built; storage moves from <span class="math-inline">\(O(N^4)\)</span> toward <span class="math-inline">\(O(N^2 N_{\text{aux}})\)</span>.</p>
+<h4 id="closed-shell-and-open-shell-views">Closed-shell and open-shell views</h4>
+<p>For RHF references, RI-RMP2 simply replaces each transformed <span class="math-inline">\((ia|jb)\)</span> in the usual RMP2 expression by its auxiliary-space Gram form. For UHF references, the same idea is applied separately to the <span class="math-inline">\(\alpha\alpha\)</span>, <span class="math-inline">\(\beta\beta\)</span>, and <span class="math-inline">\(\alpha\beta\)</span> channels:</p>
+<p><span class="math-display">\[
+(i^\alpha a^\alpha|j^\alpha b^\alpha)
+\approx \sum_Q \widetilde B_{i^\alpha a^\alpha}^{Q}\widetilde B_{j^\alpha b^\alpha}^{Q}
+\]</span></p>
+<p><span class="math-display">\[
+(i^\beta a^\beta|j^\beta b^\beta)
+\approx \sum_Q \widetilde B_{i^\beta a^\beta}^{Q}\widetilde B_{j^\beta b^\beta}^{Q}
+\]</span></p>
+<p><span class="math-display">\[
+(i^\alpha a^\alpha|j^\beta b^\beta)
+\approx \sum_Q \widetilde B_{i^\alpha a^\alpha}^{Q}\widetilde B_{j^\beta b^\beta}^{Q}
+\]</span></p>
+<p>The same-spin / opposite-spin decomposition of UMP2 is unchanged; RI only changes how the underlying two-electron quantities are assembled.</p>
+<h4 id="what-planck-builds-natively">What Planck builds natively</h4>
+<p>Planck&#x27;s RI-MP2 path constructs:</p>
+<ol>
+<li>the auxiliary basis <span class="math-inline">\(\{\chi_P\}\)</span>,</li>
+<li>the two-center metric <span class="math-inline">\((P|Q)\)</span>,</li>
+<li>the packed three-center tensor <span class="math-inline">\((\mu\nu|P)\)</span>,</li>
+<li>a metric factorization with linear-dependence filtering,</li>
+<li>fitted occupied-virtual factors <span class="math-inline">\(\widetilde B_{ia}^{Q}\)</span>,</li>
+<li>and finally the conventional MP2 energy expressions using the fitted <span class="math-inline">\(ovov\)</span> blocks.</li>
+</ol>
+<p>So the theory-to-code map is:</p>
+<p><span class="math-display">\[
+(\mu\nu|P),\ (P|Q)
+\;\longrightarrow\;
+\widetilde B_{\mu\nu}^{Q}
+\;\longrightarrow\;
+\widetilde B_{ia}^{Q}
+\;\longrightarrow\;
+(ia|jb)_{\text{RI}}
+\;\longrightarrow\;
+E_{MP2}
+\]</span></p>
 <h3 id="rmp2-natural-orbitals">RMP2 Natural Orbitals</h3>
 <p>Once the correlation energy is in hand, the unrelaxed RMP2 one-particle density matrix can be diagonalized to produce <strong>natural orbitals</strong> (NOs) and their occupation numbers. The unrelaxed density is block-diagonal in the canonical MO basis:</p>
 <p><span class="math-display">\[
@@ -3628,6 +3722,9 @@ driver.cpp
 <tr><td>AO→MO transform</td><td><code>src/post_hf/integrals.cpp</code></td><td>half-transformation functions</td></tr>
 <tr><td>RMP2 energy</td><td><code>src/post_hf/mp2.cpp</code></td><td><code>run_rmp2</code></td></tr>
 <tr><td>UMP2 energy</td><td><code>src/post_hf/mp2.cpp</code></td><td><code>run_ump2</code></td></tr>
+<tr><td>RI auxiliary-basis loader</td><td><code>src/basis/rifit.cpp</code></td><td><code>read_ri_basis</code></td></tr>
+<tr><td>RI 2c / 3c integrals + metric factorization</td><td><code>src/post_hf/ri/ri_eri.cpp</code></td><td><code>compute_2c_eri</code>, <code>compute_3c_eri</code>, <code>factorize_2c_metric</code>, <code>ensure_ri_3c_ready</code></td></tr>
+<tr><td>RI-backed MP2 ERI builders</td><td><code>src/post_hf/mp2_internal.cpp</code></td><td><code>build_ri_pair_factors</code>, <code>build_ri_ov_block</code>, <code>make_eris_rmp2</code>, <code>make_eris_ump2</code></td></tr>
 <tr><td>MP2 amplitudes</td><td><code>src/post_hf/mp2.cpp</code></td><td><code>build_rmp2_amplitudes</code></td></tr>
 <tr><td>RCCSD setup/solve</td><td><code>src/post_hf/cc/ccsd.cpp</code></td><td><code>prepare_rccsd</code>, <code>run_rccsd</code></td></tr>
 <tr><td>UCCSD setup/solve</td><td><code>src/post_hf/cc/ccsd.cpp</code></td><td><code>prepare_uccsd</code>, <code>run_uccsd</code></td></tr>
