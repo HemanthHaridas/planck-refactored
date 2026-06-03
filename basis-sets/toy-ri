@@ -1,0 +1,25 @@
+!----------------------------------------------------------------------
+! Toy auxiliary (RI) basis used by the rifit loader's unit test.
+! Not a production basis — exists only to exercise the .gbs parser and
+! the AuxBasis loader on shells with multiple angular momenta and
+! multiple primitives. Real cc-pVDZ-RI / def2-universal-jkfit aux basis
+! files come from the Basis Set Exchange and are not auto-shipped.
+!----------------------------------------------------------------------
+
+
+H     0
+S    1   1.00
+      1.00000000             1.00000000
+P    1   1.00
+      0.50000000             1.00000000
+****
+He     0
+S    1   1.00
+      2.00000000             1.00000000
+S    1   1.00
+      0.40000000             1.00000000
+P    1   1.00
+      0.80000000             1.00000000
+D    1   1.00
+      0.30000000             1.00000000
+****
