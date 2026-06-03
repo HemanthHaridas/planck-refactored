@@ -30,6 +30,7 @@ scripts/*
 !scripts/vault_to_claude.py
 !scripts/sync-memory.sh
 !scripts/fit_auto_dispatch.py
+!scripts/rebuild_teaching_site_if_changed.py
 notes
 src/base/basis.h
 # ccgen files
