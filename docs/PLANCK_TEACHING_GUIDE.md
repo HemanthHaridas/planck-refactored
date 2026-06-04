@@ -4275,6 +4275,43 @@ The wavefunction is a full CI expansion within the active space — i.e. an FCI
 where \(|D_I\rangle\) ranges over all Slater determinants formed by distributing
 the active electrons among the active orbitals.
 
+### Reference Choice: RHF or ROHF
+
+The MCSCF loop is launched from a converged SCF reference and reads its MO
+coefficients directly. Planck accepts **either an RHF or an ROHF reference**.
+The key observation is that ROHF stores a *single* common set of spatial
+orbitals shared by both spin channels (`alpha.mo_coefficients ==
+beta.mo_coefficients`), exactly like RHF — so the active-space integral
+transform and the CI engine consume it unchanged. The reference type only
+decides *which* orbitals seed the optimization, not the structure of the
+determinant space.
+
+There is one physical condition. The inactive core is treated as **closed,
+doubly occupied** (its density enters the core Fock as \(2\,\mathbf C_{core}
+\mathbf C_{core}^\top\) in `build_inactive_fock_mo`, and `compute_core_energy`
+assumes paired occupation). For an open-shell molecule this means **all
+unpaired electrons must lie inside the active space**, so the inactive block
+carries no net spin. Planck enforces this with a parity check: the number of
+non-active electrons, \(n_{elec} - n_{act\,elec}\), must be even. When it is, the
+core is genuinely paired and the closed-shell core machinery is exact; when it
+is not, the run is rejected rather than silently using a wrong core.
+
+All spin polarization is then carried by the active space. The requested
+multiplicity fixes the active-space \(S_z\) sector through
+
+\[
+n_\alpha^{act} = \frac{n_{act\,elec} + (2S)}{2}, \qquad
+n_\beta^{act} = n_{act\,elec} - n_\alpha^{act},
+\]
+
+so \(n_\alpha^{act} - n_\beta^{act} = 2S = \text{mult} - 1\). Because the active
+CI is a *full* CI, it spans every spin state reachable in that \(S_z\) sector and
+returns the variationally lowest root there. A spin-polarized (open) inactive
+core — distinct \(\alpha\)/\(\beta\) core orbitals — is **not** supported and stays
+rejected; that would require a genuinely unrestricted core Fock and core-energy
+treatment. RASSCF shares all of this reference handling, since its RAS
+constraints act only on the active-space determinant strings.
+
 ### Determinant Representation
 
 Each determinant is stored as a pair of 64-bit integers (one per spin), where

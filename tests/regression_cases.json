@@ -190,6 +190,68 @@
       ]
     },
     {
+      "id": "cn_anion_rimp2_ccpvdz",
+      "input": "tests/inputs/regression/ri/cn_anion_rimp2_ccpvdz.hfinp",
+      "tags": [
+        "ri"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -92.2994720562,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -92.5834015696,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "cn_radical_rimp2_ccpvdz",
+      "input": "tests/inputs/regression/ri/cn_radical_rimp2_ccpvdz.hfinp",
+      "tags": [
+        "ri",
+        "open_shell"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -92.2133553633,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -92.4451428697,
+          "atol": 1e-06
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
       "id": "nh3_rmp2_sto3g",
       "input": "inputs/examples/hf/mp2_validation/val_nh3.hfinp",
       "tags": [
@@ -248,6 +310,166 @@
           "type": "metric_lt_metric",
           "left": "mp2_total_energy",
           "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_engine_os_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_os_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807610,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -74.9767773288,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_engine_hgp_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_hgp_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807610,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -74.9767773288,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "rhf_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "mp2_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_engine_rys_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_rys_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807610,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -74.9767773288,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "rhf_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "mp2_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_engine_auto_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_auto_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807610,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -74.9767773288,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "rhf_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "mp2_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
         }
       ]
     },
@@ -2001,6 +2223,60 @@
           "type": "metric_lt_metric",
           "left": "fci_total_energy",
           "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "o2_casscf_rohf_sto3g",
+      "input": "tests/inputs/regression/post_hf/o2_casscf_rohf_sto3g.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "ROHF Converged",
+        "CASSCF :                      Converged."
+      ],
+      "timeout_s": 120,
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -147.7376186328,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_le",
+          "metric": "casscf_sa_gnorm",
+          "value": 1e-05
+        }
+      ]
+    },
+    {
+      "id": "oh_casscf_rohf_sto3g",
+      "input": "tests/inputs/regression/post_hf/oh_casscf_rohf_sto3g.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "ROHF Converged",
+        "CASSCF :                      Converged."
+      ],
+      "timeout_s": 120,
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -74.3854276959,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_le",
+          "metric": "casscf_sa_gnorm",
+          "value": 1e-05
         }
       ]
     },

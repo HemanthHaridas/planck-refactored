@@ -2,7 +2,7 @@
 
 <div align="justify">
 
-Planck is a C++23 quantum chemistry engine implementing Hartree-Fock SCF, post-HF correlation, and Kohn-Sham DFT from first principles. The codebase is organized around two standalone binaries — `hartree-fock` and `planck-dft` — that share a common library of integrals, basis-set handling, symmetry, I/O, and geometry optimization. Every public interface propagates errors through `std::expected<T, std::string>` rather than exceptions, making failure paths explicit and composable throughout the call graph.
+Planck is a C++23 quantum chemistry engine implementing Hartree-Fock SCF, post-HF correlation, and Kohn-Sham DFT from first principles. The codebase is organized around two standalone binaries — `hartree-fock` and `planck-dft` — that share a common library of integrals, basis-set handling, symmetry, I/O, and geometry optimization. The dominant architecture is a `Calculator`-centric pipeline with subsystem namespaces (`SCF`, `Correlation`, `DFT`, etc.), but a few larger subsystems such as coupled cluster and CASSCF also use method-local state objects and backend dispatch layers. Most recoverable failures propagate through `std::expected<T, std::string>`; a smaller number of debug invariants still use `assert(...)`, and a few narrow test-hook / guard paths still throw exceptions.
 
 </div>
 
@@ -38,7 +38,7 @@ Source files are collected with `file(GLOB ...)` per module directory (`BASE_SRC
 
 <div align="justify">
 
-`types.h` is the single header that every other module includes. It defines all data-carrying structs and enums in the `HartreeFock` namespace. No business logic lives here — only data layout and a handful of trivial invariant-maintaining methods.
+`types.h` is the single header that every other module includes. It defines the shared data-carrying structs and enums in the `HartreeFock` namespace, plus a small number of lightweight stateful helpers that are used across subsystems (for example the SCF DIIS containers). Most business logic still lives in the subsystem modules.
 
 </div>
 
@@ -52,12 +52,12 @@ All user-visible options are encoded as scoped enums, preventing accidental inte
 
 | Enum | Values |
 |---|---|
-| `ShellType` | `S(0)`, `P(1)`, `D(2)`, `F(3)`, `G(4)`, `H(5)` |
-| `SCFType` | `RHF`, `UHF` |
-| `PostHF` | `None`, `RMP2`, `UMP2`, `RCCSD`, `UCCSD`, `RCCSDT`, `UCCSDT`, `RCCSDTQ`, `CASSCF`, `RASSCF` |
-| `CalculationType` | `SinglePoint`, `Gradient`, `GeomOpt`, `Frequency`, `GeomOptFrequency`, `ImaginaryFollow` |
+| `ShellType` | `S(0)`, `P(1)`, `D(2)`, `F(3)`, `G(4)`, `H(5)`, `I(6)` |
+| `SCFType` | `RHF`, `ROHF`, `UHF` |
+| `PostHF` | `None`, `RMP2`, `UMP2`, `RCCSD`, `UCCSD`, `RCCSDT`, `UCCSDT`, `RCCSDTQ`, `CASSCF`, `RASSCF`, `FCI` |
+| `CalculationType` | `SinglePoint`, `Gradient`, `GeomOpt`, `Frequency`, `GeomOptFrequency`, `ImaginaryFollow`, `LinearResponse` |
 | `SCFMode` | `Conventional`, `Direct`, `Auto` |
-| `IntegralMethod` | `ObaraSaika`, `RysQuadrature`, `Auto` |
+| `IntegralMethod` | `ObaraSaika`, `RysQuadrature`, `HeadGordonPople`, `Auto` |
 | `SCFGuess` | `HCore`, `SAD`, `ReadDensity`, `ReadFull` |
 | `OptCoords` | `Cartesian`, `Internal` |
 | `DFTGridQuality` | `Coarse`, `Normal`, `Fine`, `UltraFine` |
@@ -142,7 +142,7 @@ The root aggregate. Every module receives a `Calculator &` and reads/writes its 
 
 <div align="justify">
 
-The input format is section-based. `_split_into_sections()` reads the file and builds a `SectionMap` (`unordered_map<string, vector<string>>`) keyed on section headers (`%begin_control`, `%begin_scf`, etc.). Each section parser receives its corresponding line vector and writes into the appropriate `Options*` struct. All section parsers return `std::expected<void, std::string>`, propagating errors to `parse_input()` which assembles the complete `Calculator`. Constraints are parsed from an optional `%begin_constraints` block into `vector<GeomConstraint>`.
+The input format is section-based. `_split_into_sections()` reads the file and builds a `SectionMap` (`unordered_map<string, vector<string>>`) keyed on section headers (`%begin_control`, `%begin_scf`, etc.). Each section parser receives its corresponding line vector and writes into the appropriate `Options*` struct. The parser stack uses `std::expected<void, std::string>` for recoverable input failures, propagating errors to `parse_input()` which assembles the complete `Calculator`. Constraints are parsed from an optional `%begin_constraints` block into `vector<GeomConstraint>`.
 
 **Design trade-off:** A single flat section map is simpler than a recursive grammar but requires every section name to be globally unique. This is acceptable for the modest vocabulary of a quantum chemistry input file.
 
@@ -286,7 +286,7 @@ The Rys stored-ERI builders mirror the OS loop shape: build a Schwarz table, ite
 
 <div align="justify">
 
-`IntegralMethod` selects `ObaraSaika`, `RysQuadrature`, or `Auto` in `integrals/base.h`. `Auto` dispatches at the contracted quartet level through `_auto_contracted_eri(...)`: it estimates OS and Rys work in `_auto_prefers_rys(...)` and chooses Rys only when the Rys estimate is cheaper. The public `RYS_CROSSOVER_L = 4` constant documents the intended high-angular-momentum crossover, but the actual `Auto` branch is cost-model based rather than a hard `L >= 4` rule. In practice, `ObaraSaika` remains the default engine and reference path.
+`IntegralMethod` selects `ObaraSaika`, `RysQuadrature`, `HeadGordonPople`, or `Auto` in `integrals/base.h`. `Auto` dispatches at the contracted quartet level through `_auto_contracted_eri(...)`: it estimates OS and Rys work in `_auto_prefers_rys(...)` and chooses Rys only when the Rys estimate is cheaper. `HeadGordonPople` is also available as an explicit user-selected engine and is favored in the documented low-to-medium-angular-momentum contracted regime because it factors HRR outside the primitive contraction loop. The public `RYS_CROSSOVER_L = 4` constant documents the intended high-angular-momentum crossover, but the actual `Auto` branch is cost-model based rather than a hard `L >= 4` rule.
 
 </div>
 

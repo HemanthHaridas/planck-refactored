@@ -106,6 +106,7 @@ class CaseResult:
     passed: bool
     duration_s: float
     details: list[str]
+    metrics: dict[str, Any]
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -275,6 +276,7 @@ def run_case(
             passed=False,
             duration_s=time.perf_counter() - start,
             details=[setup_error],
+            metrics={},
         )
 
     try:
@@ -299,6 +301,7 @@ def run_case(
             passed=False,
             duration_s=duration_s,
             details=detail_lines,
+            metrics={},
         )
     duration_s = time.perf_counter() - start
 
@@ -385,6 +388,11 @@ def run_case(
                 passed = False
                 details.append(f"{metric} mismatch: expected {expected}, got {actual}")
 
+        elif ctype == "metric_close_case":
+            # Resolved after all selected cases have run so we can compare
+            # against the referenced case's extracted metrics.
+            continue
+
         else:
             passed = False
             details.append(f"unknown check type: {ctype}")
@@ -393,7 +401,36 @@ def run_case(
         details.append("---- captured output ----")
         details.extend(output.strip().splitlines()[-40:])
 
-    return CaseResult(case_id=case_id, passed=passed, duration_s=duration_s, details=details)
+    return CaseResult(case_id=case_id, passed=passed, duration_s=duration_s, details=details, metrics=metrics)
+
+
+def apply_cross_case_checks(
+    results: list[CaseResult],
+    chosen_cases: list[dict[str, Any]],
+) -> None:
+    results_by_id = {result.case_id: result for result in results}
+
+    for case in chosen_cases:
+        result = results_by_id[case["id"]]
+        for check in case.get("checks", []):
+            if check["type"] != "metric_close_case":
+                continue
+
+            metric = check["metric"]
+            other_case_id = check["case"]
+            other_metric = check.get("other_metric", metric)
+            atol = float(check.get("atol", 1e-9))
+
+            actual = result.metrics.get(metric)
+            other_result = results_by_id.get(other_case_id)
+            other_value = None if other_result is None else other_result.metrics.get(other_metric)
+
+            if actual is None or other_value is None or not approx_equal(float(actual), float(other_value), atol):
+                result.passed = False
+                result.details.append(
+                    f"{metric} mismatch vs {other_case_id}.{other_metric}: "
+                    f"expected {other_value} +/- {atol:.2e}, got {actual}"
+                )
 
 
 def should_run(case: dict[str, Any], suite: str, selected_cases: set[str]) -> bool:
@@ -441,9 +478,15 @@ def main() -> int:
     print(f"Running {len(chosen)} regression case(s) from {manifest_path}")
     failures = 0
     total_start = time.perf_counter()
+    results: list[CaseResult] = []
 
     for case in chosen:
         result = run_case(case, repo_root, args.build_dir, executable, pyscf_references)
+        results.append(result)
+
+    apply_cross_case_checks(results, chosen)
+
+    for result in results:
         status = "PASS" if result.passed else "FAIL"
         print(f"[{status}] {result.case_id} ({result.duration_s:.2f}s)")
         for line in result.details:

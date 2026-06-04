@@ -1191,12 +1191,17 @@ int main(int argc, const char *argv[])
 
         if (calculator._scf._scf == HartreeFock::SCFType::ROHF &&
             calculator._correlation != HartreeFock::PostHF::None &&
-            calculator._correlation != HartreeFock::PostHF::FCI)
+            calculator._correlation != HartreeFock::PostHF::FCI &&
+            calculator._correlation != HartreeFock::PostHF::CASSCF &&
+            calculator._correlation != HartreeFock::PostHF::RASSCF)
         {
-            // FCI is exempt: it diagonalizes the full determinant space, which is
-            // reference-invariant, and ROHF supplies a single common spatial-orbital
-            // set the restricted CI engine can consume directly. Other ROHF post-HF
-            // methods remain unimplemented.
+            // FCI, CASSCF, and RASSCF are exempt: they consume the common
+            // spatial-orbital set ROHF stores in the alpha channel directly. FCI
+            // diagonalizes the full determinant space (reference-invariant); the
+            // MCSCF methods carry open-shell occupation in the active-space spin
+            // split and require the inactive core to stay closed-shell (gated by
+            // the parity check in run_mcscf_loop). Other ROHF post-HF methods
+            // remain unimplemented.
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error,
                                          "Post-HF :", "ROHF post-HF references are not implemented");
             return EXIT_FAILURE;

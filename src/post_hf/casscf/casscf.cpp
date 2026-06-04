@@ -265,9 +265,16 @@ namespace HartreeFock::Correlation::CASSCF
         using HartreeFock::Logger::logging;
 
         if (!calc._info._is_converged)
-            return std::unexpected(tag + ": requires a converged RHF reference.");
-        if (calc._scf._scf != HartreeFock::SCFType::RHF)
-            return std::unexpected(tag + ": only RHF reference supported.");
+            return std::unexpected(tag + ": requires a converged RHF or ROHF reference.");
+        // ROHF stores a single common spatial-orbital set in the alpha channel
+        // (alpha.mo_coefficients == beta.mo_coefficients), so the MCSCF loop can
+        // consume it exactly like RHF. Open-shell occupation is carried entirely
+        // by the active-space spin split (n_alpha_act / n_beta_act); the inactive
+        // core is required to stay closed-shell (enforced by the parity guard
+        // below). Spin-polarized / open inactive cores remain unsupported.
+        if (calc._scf._scf != HartreeFock::SCFType::RHF &&
+            calc._scf._scf != HartreeFock::SCFType::ROHF)
+            return std::unexpected(tag + ": only RHF or ROHF references supported.");
 
         const auto &as = calc._active_space;
         if (as.nactele <= 0)
@@ -285,8 +292,18 @@ namespace HartreeFock::Correlation::CASSCF
         const int nbasis = static_cast<int>(calc.working_nbasis());
         const int n_total_elec =
             static_cast<int>(calc._molecule.atomic_numbers.cast<int>().sum()) - calc._molecule.charge;
+        // The non-active electrons must form a closed, doubly-occupied inactive
+        // core: build_inactive_fock_mo / compute_core_energy assume the core
+        // density is 2 * C_core C_core^T. An odd (n_elec - nactele) cannot pair
+        // up, which would require a spin-polarized open inactive core (separate
+        // alpha/beta core orbitals) — not supported, including for ROHF. For an
+        // open-shell ROHF reference the unpaired electrons must all live inside
+        // the active space so this difference stays even.
         if ((n_total_elec - as.nactele) % 2 != 0)
-            return std::unexpected(tag + ": (n_elec - nactele) must be even for RHF-based CASSCF.");
+            return std::unexpected(
+                tag + ": (n_elec - nactele) must be even — the non-active electrons must form a "
+                      "closed, doubly-occupied inactive core (a spin-polarized open inactive core "
+                      "is not supported).");
 
         const int n_core = (n_total_elec - as.nactele) / 2;
         const int n_act = as.nactorb;
@@ -306,6 +323,12 @@ namespace HartreeFock::Correlation::CASSCF
         if (ras.active && ras.nras1 + ras.nras2 + ras.nras3 != n_act)
             return std::unexpected(tag + ": nras1 + nras2 + nras3 must equal nactorb.");
 
+        // The inactive core is closed-shell (Sz = 0, enforced by the parity guard
+        // above), so all spin polarization is carried by the active space: the
+        // (multiplicity - 1) unpaired electrons set the active-space Sz sector via
+        // n_alpha_act - n_beta_act = multiplicity - 1. The CASSCF CI is a full CI
+        // within the active space, so it spans every spin state reachable in that
+        // Sz sector and returns the variationally lowest root there.
         const int multiplicity = static_cast<int>(calc._molecule.multiplicity);
         const int n_alpha_act = (as.nactele + (multiplicity - 1)) / 2;
         const int n_beta_act = as.nactele - n_alpha_act;
