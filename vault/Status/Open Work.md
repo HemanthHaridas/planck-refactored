@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-05-29
+Last updated: 2026-06-04
 
 This is the canonical open-work document for the repository.
 Use it with `vault/Status/Completion.md`. Older status snapshots and handoff
@@ -70,7 +70,12 @@ truth for what remains.
 
 ## SCF, post-HF, and workflow gaps
 
-- ROHF post-HF beyond FCI remains incomplete
+- ROHF post-HF: FCI, CASSCF, and RASSCF now accept ROHF references; RMP2/UMP2
+  and the coupled-cluster paths remain RHF/UHF only for ROHF inputs
+- ROHF CASSCF/RASSCF only support a closed, doubly-occupied inactive core; a
+  spin-polarized open inactive core (distinct alpha/beta core orbitals, with the
+  unrestricted core Fock, core energy, and response-block changes it implies)
+  is out of scope and stays rejected by the parity guard
 - ROHF analytic gradients, stability analysis, and PCM remain incomplete
 - The ccgen `TensorOptimized` RCCSDT backend is still treated in-tree as an experimental / phase-4 path
 - The triplet UHF state-selection / convergence gap noted during the UMP2 gradient check is still open as an SCF issue

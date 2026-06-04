@@ -93,3 +93,4 @@ docs/wiki/Testing.md
 build-profile
 build-test
 tests/avrr_x_simd_prototype.cpp
+ROHF_CASSCF_HANDOFF.md

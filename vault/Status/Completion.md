@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-05-29
+Last updated: 2026-06-04
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -81,7 +81,10 @@ historical design context, but they are no longer the source of truth for
 - RMP2 and UMP2 correlation energies
 - Analytic RHF, UHF, RMP2, and UMP2 gradients
 - FCI over the full MO space for small RHF/ROHF references
-- CASSCF, SA-CASSCF, and RASSCF
+- CASSCF, SA-CASSCF, and RASSCF from RHF or ROHF references (open-shell
+  supported when the unpaired electrons live in the active space, so the
+  inactive core stays closed-shell; PySCF-gated by `o2_casscf_rohf_sto3g` and
+  `oh_casscf_rohf_sto3g`)
 - Coupled-cluster support for RCCSD, UCCSD, RCCSDT, UCCSDT, RCCSDTQ
 - Arbitrary-order RCC solver via ccgen-generated residuals
 - Tensor-backed and determinant-space coupled-cluster paths, including the
@@ -135,6 +138,16 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- ROHF references enabled for CASSCF and RASSCF. ROHF stores a single common
+  spatial-orbital set in the alpha channel, so the MCSCF loop and CI engine
+  consume it unchanged; the work was a guard relaxation in `src/driver.cpp` and
+  `src/post_hf/casscf/casscf.cpp`, not new MCSCF machinery. Open-shell systems
+  are supported when all unpaired electrons sit inside the active space (closed,
+  doubly-occupied inactive core), enforced by the existing
+  `(n_elec - nactele)` parity guard; a spin-polarized open inactive core stays
+  rejected. PySCF-gated to ~1e-8 Eh by `o2_casscf_rohf_sto3g` (triplet O2
+  CAS(8,6)) and `oh_casscf_rohf_sto3g` (doublet OH CAS(5,4)); the RHF CASSCF
+  gate suite is unchanged. See [[CASSCF and SA-CASSCF]].
 - RMP2 analytic gradient response-path fix, validated against finite differences
   and PySCF
 - UMP2 gradient cross-check on the radical-cation path, with no code fix required
@@ -185,6 +198,9 @@ Cartesian-basis references. Tolerance: `1e-5 Eh`.
 ### CASSCF validation notes
 
 - The committed gate suite is still the clearest validation point for the CASSCF stack.
+- Two ROHF CASSCF cases are gated alongside the RHF table: `o2_casscf_rohf_sto3g`
+  (triplet O2 CAS(8,6), Δ ~9e-9 Eh) and `oh_casscf_rohf_sto3g` (doublet OH
+  CAS(5,4), Δ ~1.6e-8 Eh), both vs PySCF 2.13.0 with `mol.cart = True`.
 - The water SA-2 SAD-start uphill-enabled case reaches the PySCF SAD-start basin
   within `3.6e-08 Eh`.
 - The baseline monotone SAD-start landing is also intentionally preserved as a
