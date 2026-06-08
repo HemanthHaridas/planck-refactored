@@ -568,6 +568,29 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
+    # Characterization test for the whole-ERI Cartesian→spherical transform.
+    # Links only the spherical transform sources (lightweight).
+    add_executable(planck-transform-eri-sph
+        ${CMAKE_SOURCE_DIR}/tests/transform_eri_sph_unit.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+    )
+
+    # Characterization test for the AO→MO four-index transform (transform_eri).
+    # Pulls the integral sources because integrals.cpp shares a TU with
+    # ensure_eri/_compute_2e; only transform_eri is exercised by the test.
+    add_executable(planck-transform-eri
+        ${CMAKE_SOURCE_DIR}/tests/transform_eri_unit.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     # Structural test for the RI auxiliary basis loader (no PySCF reference
     # values — this is the file-I/O and shell-construction gate, not a
     # validation against any specific shipped aux basis).
@@ -816,6 +839,16 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-transform-eri-sph PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-transform-eri PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-aux-basis-load PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -921,6 +954,18 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-transform-eri-sph PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-transform-eri PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-aux-basis-load PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -976,6 +1021,10 @@ if(BUILD_TESTING)
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-auto-dispatch-benchmark OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-auto-dispatch-benchmark PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-transform-eri OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-transform-eri PRIVATE USE_OPENMP)
     endif()
 
     target_link_libraries(planck-casscf-internal
@@ -1084,6 +1133,16 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-spherical-density-lift
         COMMAND planck-spherical-density-lift
+    )
+
+    add_test(
+        NAME planck-transform-eri-sph
+        COMMAND planck-transform-eri-sph
+    )
+
+    add_test(
+        NAME planck-transform-eri
+        COMMAND planck-transform-eri
     )
 
     add_test(
