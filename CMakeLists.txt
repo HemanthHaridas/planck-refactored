@@ -1026,6 +1026,10 @@ if(BUILD_TESTING)
         target_link_libraries(planck-transform-eri OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-transform-eri PRIVATE USE_OPENMP)
     endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-transform-eri-sph OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-transform-eri-sph PRIVATE USE_OPENMP)
+    endif()
 
     target_link_libraries(planck-casscf-internal
         ${MSYM_INSTALL_DIR}/lib/libmsym.a
