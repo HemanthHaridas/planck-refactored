@@ -185,6 +185,31 @@ int main()
         check_golden(eri, nb);
     }
 
+    // Cross-engine tensor agreement. The Rys and Rys-Auto _compute_2e share the
+    // same flattened-triangle distribution as OS; a flattening bug in either
+    // (dropped/duplicated quartet) would diverge from the OS tensor here. OS and
+    // Rys compute the same integral by different recurrences, so they agree to
+    // ~1e-12 rather than bit-for-bit (same tolerance hgp_engine_smoke uses).
+    auto compare_engine = [&](HartreeFock::IntegralMethod method, const char *name)
+    {
+        const auto other = _compute_2e(shell_pairs, nb, method);
+        if (other.size() != eri.size())
+        {
+            fail(std::string(name) + " tensor size mismatch vs OS");
+            return;
+        }
+        double max_diff = 0.0;
+        for (std::size_t idx = 0; idx < eri.size(); ++idx)
+            max_diff = std::max(max_diff, std::abs(eri[idx] - other[idx]));
+        std::cout << "[INFO] _compute_2e " << name << " vs OS max|Δ| = "
+                  << std::setprecision(4) << max_diff << '\n';
+        if (max_diff > 1e-12)
+            fail(std::string(name) + " _compute_2e differs from OS by " +
+                 std::to_string(max_diff));
+    };
+    compare_engine(HartreeFock::IntegralMethod::RysQuadrature, "Rys");
+    compare_engine(HartreeFock::IntegralMethod::Auto, "Rys-Auto");
+
     if (g_ok)
     {
         std::cout << "compute_2e_unit: OK\n";
