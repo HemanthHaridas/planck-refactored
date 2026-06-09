@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 
+#include "gradient/gradient.h"
 #include "integrals/base.h"
 #include "post_hf/integrals.h"
 #include "post_hf/mp2_internal.h"
@@ -368,7 +369,7 @@ namespace HartreeFock::Correlation
                         {
                             const HartreeFock::ShellPair spAB(bfs[p], bfs[q]);
                             const HartreeFock::ShellPair spCD(bfs[r], bfs[s]);
-                            const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
+                            const auto dI = HartreeFock::Gradient::compute_eri_deriv_dispatch(calculator, spAB, spCD);
                             // PySCF contracts the pair density with the ERI derivative
                             // with an overall factor of 2 (grad/mp2.py: de -= ... * 2);
                             // dm2buf_full carries only one bra-derivative permutation here.
@@ -522,7 +523,7 @@ namespace HartreeFock::Correlation
                         {
                             const HartreeFock::ShellPair spAB(bfs[p], bfs[q]);
                             const HartreeFock::ShellPair spCD(bfs[r], bfs[s]);
-                            const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
+                            const auto dI = HartreeFock::Gradient::compute_eri_deriv_dispatch(calculator, spAB, spCD);
                             for (int comp = 0; comp < 3; ++comp)
                             {
                                 vhf1_rs_terms(atom, comp) += dI[comp] * hf_dm1(p, q) * dm1p(r, s);
@@ -723,7 +724,7 @@ namespace HartreeFock::Correlation
 
                             const HartreeFock::ShellPair spAB(bfs[p], bfs[q]);
                             const HartreeFock::ShellPair spCD(bfs[r], bfs[s]);
-                            const auto dI = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(spAB, spCD);
+                            const auto dI = HartreeFock::Gradient::compute_eri_deriv_dispatch(calculator, spAB, spCD);
                             for (int comp = 0; comp < 3; ++comp)
                                 electronic(atom, comp) += dI[comp] * (dm2a + dm2b);
 

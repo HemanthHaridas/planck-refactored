@@ -859,6 +859,21 @@
       ]
     },
     {
+      "id": "water_rmp2_gradient_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_gradient_sto3g.hfinp",
+      "executable": "tests/engine_gradient_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "OS gradient (Ha/Bohr):",
+        "HGP gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
       "id": "water_rhf_geomopt_engine_os_vs_hgp",
       "input": "tests/inputs/regression/geometry/water_rhf_geomopt_engine_compare.hfinp",
       "executable": "tests/engine_geomopt_compare.py",

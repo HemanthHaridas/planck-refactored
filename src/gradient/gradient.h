@@ -2,6 +2,7 @@
 #define HF_GRADIENT_H
 
 #include <Eigen/Core>
+#include <array>
 #include <optional>
 
 #include "base/types.h"
@@ -34,6 +35,19 @@ namespace HartreeFock
         };
 
         const std::optional<WavefunctionGradientBreakdown> &last_wavefunction_gradient_breakdown();
+
+        // Engine-agnostic 12-component ERI derivative for a shell-pair quartet.
+        // Routes to the HGP derivative kernel when the selected integral engine
+        // is HeadGordonPople, otherwise to Obara-Saika. Shared by the SCF/KS
+        // gradient assembly and the MP2/UMP2 gradient response intermediates so
+        // both honor the user's engine selection. kernel/omega default to the
+        // plain Coulomb operator.
+        std::array<double, 12> compute_eri_deriv_dispatch(
+            const HartreeFock::Calculator &calc,
+            const HartreeFock::ShellPair &spAB,
+            const HartreeFock::ShellPair &spCD,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0);
 
         // Analytic RHF nuclear gradient.
         // Returns natoms×3 matrix in Ha/Bohr.

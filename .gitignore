@@ -32,7 +32,6 @@ scripts/*
 !scripts/fit_auto_dispatch.py
 !scripts/rebuild_teaching_site_if_changed.py
 notes
-src/base/basis.h
 # ccgen files
 python/ccgen/__pycache__
 python/ccgen/*/__pycache__

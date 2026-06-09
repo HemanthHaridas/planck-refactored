@@ -36,15 +36,16 @@ in `src/integrals/os.cpp`; HGP has no separate implementation for them and
 always uses OS. They are cheap relative to the 2e term, so this is not a
 performance gap.
 
-The MP2 / UMP2 gradient code in `src/post_hf/mp2_gradient.cpp` calls
-`ObaraSaika::_compute_eri_deriv_elem` directly at three sites; it bypasses
-`compute_eri_deriv_dispatch`, so the HGP engine is not used for MP2 gradient
-response intermediates even when selected. Values agree with the OS path to
-~1e-15; the asymmetry is performance/coverage, not correctness.
+The MP2 / UMP2 gradient code in `src/post_hf/mp2_gradient.cpp` routes its
+three derivative-ERI sites through `HartreeFock::Gradient::compute_eri_deriv_dispatch`
+(now a public entry in `gradient.h`), so the HGP engine is used for MP2/UMP2
+gradient response intermediates when selected, matching the rest of the
+gradient path. The dispatcher is engine-agnostic; the previous OS-only
+hardcoding is gone.
 
 ### Cross-engine validation
 
-Engine-agnostic gradient correctness is gated by four regression cases that
+Engine-agnostic gradient correctness is gated by five regression cases that
 run the same input twice (engine os, engine hgp) and compare:
 
 | ID | What it tests |
@@ -53,6 +54,7 @@ run the same input twice (engine os, engine hgp) and compare:
 | `water_b3lyp_gradient_engine_os_vs_hgp` | B3LYP/STO-3G gradient (HF-like Coulomb path) |
 | `water_hse06_gradient_engine_os_vs_hgp` | HSE06/STO-3G gradient — exercises the LongRange derivative dispatch |
 | `water_rhf_geomopt_engine_os_vs_hgp` | RHF/STO-3G geomopt: |ΔE| ≤ 1e-8 Eh and geom RMSD ≤ 1e-5 Å |
+| `water_rmp2_gradient_engine_os_vs_hgp` | RMP2/STO-3G analytic gradient — exercises the MP2 response-intermediate derivative-ERI dispatch |
 
 Drivers: `tests/engine_gradient_compare.py` and
 `tests/engine_geomopt_compare.py`. Binary (`hartree-fock` vs `planck-dft`)
