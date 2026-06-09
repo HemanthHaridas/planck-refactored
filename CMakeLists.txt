@@ -504,6 +504,20 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # Characterization test for the one-shot full ERI tensor build
+    # (ObaraSaika::_compute_2e), ahead of flattening its triangular parallel
+    # loop. Pins permutational symmetry + golden checksum/elements.
+    add_executable(planck-compute-2e
+        ${CMAKE_SOURCE_DIR}/tests/compute_2e_unit.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     add_executable(planck-hgp-quartet-validation
         ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
         ${SRC_DIR}/basis/basis.cpp
@@ -774,6 +788,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-compute-2e PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-hgp-quartet-validation PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -906,6 +925,12 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-compute-2e PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-hgp-quartet-validation PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -1011,6 +1036,10 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-hgp-engine-smoke PRIVATE USE_OPENMP)
     endif()
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-compute-2e OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-compute-2e PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-hgp-quartet-validation OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-hgp-quartet-validation PRIVATE USE_OPENMP)
     endif()
@@ -1107,6 +1136,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-hgp-engine-smoke
         COMMAND planck-hgp-engine-smoke
+    )
+
+    add_test(
+        NAME planck-compute-2e
+        COMMAND planck-compute-2e
     )
 
     add_test(
