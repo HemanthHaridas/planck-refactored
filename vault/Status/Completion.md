@@ -135,6 +135,17 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- ERI / transform parallelization pass (profiled, all bitwise-verified):
+  the two serial 4-index transforms (`Correlation::transform_eri`,
+  `BasisFunctions::transform_eri_cart_to_sph`) are now parallel; the one-shot
+  triangular `_compute_2e` loop is flattened + `schedule(dynamic)` across all
+  four engines (OS / HGP / Rys / Rys-auto); and the DFT `build_coulomb_from_eri`
+  / `build_exchange_from_eri` KS builds are parallel. Idle-wait on the profiled
+  cases dropped from ~72%→~7% (spherical RHF), ~72%→~0% (MP2), and 60%→12%
+  (B3LYP), with all energies unchanged. New gates: `planck-transform-eri`,
+  `planck-transform-eri-sph`, `planck-compute-2e`. The DFT J/K builds were
+  confirmed thread-count-invariant (no repeat of the grid-reduction jitter).
+  See the Integral Engine and DFT implementation notes.
 - RMP2 analytic gradient response-path fix, validated against finite differences
   and PySCF
 - UMP2 gradient cross-check on the radical-cation path, with no code fix required

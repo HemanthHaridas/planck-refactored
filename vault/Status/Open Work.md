@@ -63,7 +63,13 @@ truth for what remains.
   now landed
 - Analytic Hessian remains unimplemented; frequencies are currently semi-numerical
 - DFT imaginary-mode following is not implemented
-- DFT-side Coulomb and exchange contractions still lack a stable parallel implementation
+- DFT grid-layer loops (`evaluate_density_on_grid` and the `xc_grid.cpp`
+  density/XC evaluation) are still serial. Parallelizing them is the residual
+  DFT load-imbalance win (~12% idle after the J/K-build parallelization), but it
+  means adding the first parallel region to the grid layer, which is exactly
+  where the historical XC-reduction jitter lived (see DFT XC Reduction
+  Determinism) — any reduction there must use fixed thread-index order, not
+  `omp critical`. Deferred for that reason.
 - Coarse/low-quality DFT grids can still show noticeable orientation sensitivity
   under symmetry reorientation; the validated symmetry-on gradient regression is
   intentionally pinned to `grid ultrafine`
@@ -113,7 +119,10 @@ Gate:
 
 ## Performance and maintenance opportunities
 
-- Parallelize or redesign the DFT Coulomb/exchange contractions without perturbing tight regression outputs
+- The DFT Coulomb/exchange (`build_coulomb_from_eri` / `build_exchange_from_eri`)
+  contractions are now parallel and verified thread-count-invariant (see the
+  Integral Engine note). The remaining DFT parallelization target is the grid
+  layer, tracked above under the DFT gaps.
 - Rework shell-pair construction to operate at shell granularity rather than per Cartesian AO component
 - Eliminate remaining reversed-shell-pair reconstruction churn in gradient paths outside the already-fixed RHF path
 - Deduplicate the full-group AO-transform machinery that still exists in both `group_operations.cpp` and `mo_symmetry.cpp`

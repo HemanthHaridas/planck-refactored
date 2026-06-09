@@ -122,6 +122,56 @@ After computing a block of ERIs for shell quartet (μν|λσ), the result is pla
 
 This requires `ContractedView._index` to be correctly set. **Never use `invert_pair_index`** to recover (ii, jj) — use `sp.A._index` / `sp.B._index` directly.
 
+## Parallelization and Load Balance
+
+### Flattened triangular `_compute_2e` loop
+
+The one-shot full-tensor `_compute_2e` in all four engines (`ObaraSaika`,
+`HeadGordonPople`, `RysQuad::_compute_2e`, and `RysQuad::_compute_2e_auto`)
+iterates the upper triangle of shell-pair quartets `q >= p`. Parallelizing
+`#pragma omp parallel for` over `p` alone is badly load-imbalanced: thread 0
+gets a full triangle row (`npairs` quartets) while the last thread gets one, so
+the long rows starve the others at the barrier — this was the dominant idle in
+the conventional-SCF / MP2 / post-HF ERI build.
+
+Each engine now flattens the triangle into a single linear index
+`t ∈ [0, npairs(npairs+1)/2)` and distributes **that** with
+`schedule(dynamic, 64)`. `(p,q)` is recovered from `t` by closed-form inversion
+of the row-major triangle (row `p` starts at `p*npairs - p(p-1)/2`), with
+`while`-guards that absorb `sqrt` drift (verified exact through the real
+8515-pair case). This `t → (p,q)` map is used **only** to assign work to threads
+— AO placement still uses `sp.A._index` / `sp.B._index`, so the
+"never `invert_pair_index` for placement" rule above is intact.
+
+The output is bitwise-identical to the serial-row form because the scatter
+(`write_eri_permutations`) is **store-only** (`#pragma omp atomic write`, every
+writer storing the same canonical value), so the tensor is independent of the
+order in which `(p,q)` pairs are visited. Gated by `planck-compute-2e` (golden
+checksum + 8-fold permutational symmetry + Rys/Auto-vs-OS cross-check) and
+`planck-hgp-engine-smoke` (OS↔HGP to 1e-12).
+
+The per-iteration `_compute_2e_fock{,_uhf}` Fock builds were left on the simpler
+`parallel for` over `p`: they run every SCF iteration, so the triangular
+imbalance amortizes across iterations (direct SCF profiled at ~1% idle).
+
+### Parallel 4-index transforms
+
+The two dense 4-index transforms were serial hotspots that stalled every other
+thread:
+- `Correlation::transform_eri` (`src/post_hf/integrals.cpp`) — AO→MO transform
+  used by MP2, CC, CASSCF, stability, and hybrid-DFT exchange.
+- `BasisFunctions::transform_eri_cart_to_sph` (`src/basis/spherical.cpp`) — the
+  whole-system `n_cart⁴` Cartesian→spherical transform run once per conventional
+  spherical SCF.
+
+Both are now parallelized with `#pragma omp parallel for schedule(static)` over
+the leading index of each quarter transform, which strides whole disjoint output
+slabs (no shared writes, no reduction, inner accumulation order unchanged →
+bitwise-identical). Neither is ever called from inside an OpenMP region, and the
+project disables nesting by default, so there is no over-subscription risk.
+Gated by `planck-transform-eri` and `planck-transform-eri-sph` (golden +
+brute-force oracle, multi- and single-threaded).
+
 ## Key Files
 
 - `src/integrals/os.cpp` + `os.h` — Obara-Saika ERI
