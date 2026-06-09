@@ -76,6 +76,35 @@ Default mode: `ResponseRHSMode::ExactOrbitalDerivative` — exact CI-response RH
 
 `matrix_free_hessian_action` in `orbital.cpp` delegates to `delta_g_sa_action`: full finite-difference fixed-CI Hessian-vector product (rotates MOs by ±ε·R, central-difference of `fixed_ci_orbital_gradient`). Falls back to diagonal energy-denominator model (M3) only when `OrbitalHessianContext` is incomplete.
 
+## Reference: RHF or ROHF
+
+`run_mcscf_loop` accepts either a converged RHF or a converged ROHF reference.
+ROHF stores a single common set of spatial orbitals shared by both spin
+channels (`alpha.mo_coefficients == beta.mo_coefficients`), exactly like RHF, so
+the active-space integral transform and the CI engine consume it unchanged — the
+reference type only seeds the optimization. This mirrors the FCI path
+(`src/post_hf/fci.cpp`). The driver-level blanket ROHF post-HF rejection in
+`src/driver.cpp` exempts CASSCF and RASSCF alongside FCI.
+
+The inactive core is treated as closed and doubly occupied: it enters the core
+Fock as `2·C_core C_coreᵀ` (`build_inactive_fock_mo`) and `compute_core_energy`
+assumes paired occupation. For an open-shell ROHF reference this means **all
+unpaired electrons must live inside the active space**. The existing parity
+guard — `(n_elec - nactele)` must be even — is the gate: when it passes the core
+is genuinely paired and the closed-shell core machinery is exact; otherwise the
+run is rejected with a message naming the constraint. A spin-polarized open
+inactive core (distinct alpha/beta core orbitals) is out of scope.
+
+All spin polarization is carried by the active space. The multiplicity fixes the
+active-space Sz sector via `n_alpha_act - n_beta_act = mult - 1`, and because the
+active CI is a full CI it spans every spin state reachable in that sector and
+returns the lowest root there. RASSCF inherits all of this since its RAS
+constraints act only on the active-space determinant strings.
+
+PySCF-gated by `o2_casscf_rohf_sto3g` (triplet O2 CAS(8,6), Δ ~9e-9 Eh) and
+`oh_casscf_rohf_sto3g` (doublet OH CAS(5,4), Δ ~1.6e-8 Eh). The repo-root
+`ROHF_CASSCF_HANDOFF.md` carries the same architecture summary.
+
 ## Active Space Setup
 
 `select_active_orbitals` in `strings.cpp`:

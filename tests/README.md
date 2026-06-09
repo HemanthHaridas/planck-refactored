@@ -42,6 +42,7 @@ The runner supports:
 - expected process exit code
 - exact-ish numerical checks with absolute tolerances
 - inequality checks between extracted metrics
+- cross-case equality checks between extracted metrics
 - expected string metrics such as point group
 - expected counts such as the number of printed gradient atom lines
 - per-case executable selection via the `executable` field

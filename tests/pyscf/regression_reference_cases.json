@@ -90,6 +90,68 @@
       }
     },
     {
+      "id": "cn_anion_rimp2_ccpvdz",
+      "mode": "script",
+      "script": "tests/benchmarks/mp2/pyscf_reference/ri_cn_anion_ccpvdz.py",
+      "parse_labels": {
+        "rhf_total_energy": "PYSCF_RHF_TOTAL_ENERGY",
+        "mp2_total_energy": "PYSCF_MP2_TOTAL_ENERGY"
+      },
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "cn_radical_rimp2_ccpvdz",
+      "mode": "script",
+      "script": "tests/benchmarks/mp2/pyscf_reference/ri_cn_radical_ccpvdz_ump2.py",
+      "parse_labels": {
+        "rhf_total_energy": "PYSCF_UHF_TOTAL_ENERGY",
+        "mp2_total_energy": "PYSCF_MP2_TOTAL_ENERGY"
+      },
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-6
+      }
+    },
+    {
+      "id": "water_rmp2_engine_os_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_os_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_rmp2_engine_hgp_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_hgp_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_rmp2_engine_rys_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_rys_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_rmp2_engine_auto_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_auto_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
       "id": "h2_rccsdt_sto3g",
       "mode": "input",
       "input": "tests/inputs/regression/post_hf/h2_rccsdt_sto3g.hfinp",

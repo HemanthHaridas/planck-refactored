@@ -30,6 +30,26 @@
         "expected": -39.72674332479202
       }
     },
+    "cn_anion_rimp2_ccpvdz": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -92.58340156957716
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -92.29947205623236
+      }
+    },
+    "cn_radical_rimp2_ccpvdz": {
+      "mp2_total_energy": {
+        "atol": 1e-06,
+        "expected": -92.44514286968108
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -92.21335536331001
+      }
+    },
     "h2_rccsdt_sto3g": {
       "rccsdt_total_energy": {
         "atol": 3e-07,
@@ -132,7 +152,37 @@
         "expected": -74.9629916147492
       }
     },
-    "water_rmp2_sto3g": {
+    "water_rimp2_ccpvdz": {
+      "mp2_total_energy": {
+        "atol": 5e-08,
+        "expected": -76.22700454147314
+      },
+      "rhf_total_energy": {
+        "atol": 5e-08,
+        "expected": -76.02313693477348
+      }
+    },
+    "water_rmp2_engine_auto_sto3g": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -74.9767773288321
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -74.9458807609896
+      }
+    },
+    "water_rmp2_engine_hgp_sto3g": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -74.97677732883209
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -74.94588076098958
+      }
+    },
+    "water_rmp2_engine_os_sto3g": {
       "mp2_total_energy": {
         "atol": 1e-07,
         "expected": -74.97677732883211
@@ -142,14 +192,24 @@
         "expected": -74.94588076098961
       }
     },
-    "water_rimp2_ccpvdz": {
+    "water_rmp2_engine_rys_sto3g": {
       "mp2_total_energy": {
-        "atol": 5e-08,
-        "expected": -76.22700454147314
+        "atol": 1e-07,
+        "expected": -74.9767773288321
       },
       "rhf_total_energy": {
-        "atol": 5e-08,
-        "expected": -76.02313693477348
+        "atol": 1e-07,
+        "expected": -74.9458807609896
+      }
+    },
+    "water_rmp2_sto3g": {
+      "mp2_total_energy": {
+        "atol": 1e-07,
+        "expected": -74.97677732883211
+      },
+      "rhf_total_energy": {
+        "atol": 1e-07,
+        "expected": -74.94588076098961
       }
     }
   }

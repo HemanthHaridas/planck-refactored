@@ -268,6 +268,7 @@
 <li class="toc-level-3"><a href="#relationship-to-other-correlation-methods">Relationship to Other Correlation Methods</a></li>
 <li class="toc-level-2"><a href="#18-casscf-and-rasscf">18. CASSCF and RASSCF</a></li>
 <li class="toc-level-3"><a href="#motivation">Motivation</a></li>
+<li class="toc-level-3"><a href="#reference-choice-rhf-or-rohf">Reference Choice: RHF or ROHF</a></li>
 <li class="toc-level-3"><a href="#determinant-representation">Determinant Representation</a></li>
 <li class="toc-level-3"><a href="#ci-hamiltonian-matrix-vector-product">CI Hamiltonian Matrix-Vector Product</a></li>
 <li class="toc-level-3"><a href="#reduced-density-matrices">Reduced Density Matrices</a></li>
@@ -2477,6 +2478,16 @@ E_{\text{corr}}^{\text{FCI}} = E_{\text{FCI}} - E_{\text{RHF}} .
 |\Psi_{CASSCF}\rangle = \sum_I c_I |D_I\rangle
 \]</span></p>
 <p>where <span class="math-inline">\(|D_I\rangle\)</span> ranges over all Slater determinants formed by distributing the active electrons among the active orbitals.</p>
+<h3 id="reference-choice-rhf-or-rohf">Reference Choice: RHF or ROHF</h3>
+<p>The MCSCF loop is launched from a converged SCF reference and reads its MO coefficients directly. Planck accepts <strong>either an RHF or an ROHF reference</strong>. The key observation is that ROHF stores a <em>single</em> common set of spatial orbitals shared by both spin channels (<code>alpha.mo_coefficients == beta.mo_coefficients</code>), exactly like RHF — so the active-space integral transform and the CI engine consume it unchanged. The reference type only decides <em>which</em> orbitals seed the optimization, not the structure of the determinant space.</p>
+<p>There is one physical condition. The inactive core is treated as <strong>closed, doubly occupied</strong> (its density enters the core Fock as <span class="math-inline">\(2\,\mathbf C_{core}
+\mathbf C_{core}^\top\)</span> in <code>build_inactive_fock_mo</code>, and <code>compute_core_energy</code> assumes paired occupation). For an open-shell molecule this means <strong>all unpaired electrons must lie inside the active space</strong>, so the inactive block carries no net spin. Planck enforces this with a parity check: the number of non-active electrons, <span class="math-inline">\(n_{elec} - n_{act\,elec}\)</span>, must be even. When it is, the core is genuinely paired and the closed-shell core machinery is exact; when it is not, the run is rejected rather than silently using a wrong core.</p>
+<p>All spin polarization is then carried by the active space. The requested multiplicity fixes the active-space <span class="math-inline">\(S_z\)</span> sector through</p>
+<p><span class="math-display">\[
+n_\alpha^{act} = \frac{n_{act\,elec} + (2S)}{2}, \qquad
+n_\beta^{act} = n_{act\,elec} - n_\alpha^{act},
+\]</span></p>
+<p>so <span class="math-inline">\(n_\alpha^{act} - n_\beta^{act} = 2S = \text{mult} - 1\)</span>. Because the active CI is a <em>full</em> CI, it spans every spin state reachable in that <span class="math-inline">\(S_z\)</span> sector and returns the variationally lowest root there. A spin-polarized (open) inactive core — distinct <span class="math-inline">\(\alpha\)</span>/<span class="math-inline">\(\beta\)</span> core orbitals — is <strong>not</strong> supported and stays rejected; that would require a genuinely unrestricted core Fock and core-energy treatment. RASSCF shares all of this reference handling, since its RAS constraints act only on the active-space determinant strings.</p>
 <h3 id="determinant-representation">Determinant Representation</h3>
 <p>Each determinant is stored as a pair of 64-bit integers (one per spin), where bit <span class="math-inline">\(k\)</span> indicates occupation of active orbital <span class="math-inline">\(k\)</span>. These <code>CIString = uint64_t</code> bitmasks allow efficient generation of all <span class="math-inline">\(\binom{n_{act}}{n_\alpha}\)</span> alpha strings and <span class="math-inline">\(\binom{n_{act}}{n_\beta}\)</span> beta strings via Gosper&#x27;s algorithm (which enumerates all integers with exactly <span class="math-inline">\(k\)</span> set bits in ascending order).</p>
 <h3 id="ci-hamiltonian-matrix-vector-product">CI Hamiltonian Matrix-Vector Product</h3>
