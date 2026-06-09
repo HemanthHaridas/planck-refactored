@@ -504,6 +504,20 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # Characterization test for the one-shot full ERI tensor build
+    # (ObaraSaika::_compute_2e), ahead of flattening its triangular parallel
+    # loop. Pins permutational symmetry + golden checksum/elements.
+    add_executable(planck-compute-2e
+        ${CMAKE_SOURCE_DIR}/tests/compute_2e_unit.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     add_executable(planck-hgp-quartet-validation
         ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
         ${SRC_DIR}/basis/basis.cpp
@@ -566,6 +580,29 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/spherical_density_lift.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
+    )
+
+    # Characterization test for the whole-ERI Cartesian→spherical transform.
+    # Links only the spherical transform sources (lightweight).
+    add_executable(planck-transform-eri-sph
+        ${CMAKE_SOURCE_DIR}/tests/transform_eri_sph_unit.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+    )
+
+    # Characterization test for the AO→MO four-index transform (transform_eri).
+    # Pulls the integral sources because integrals.cpp shares a TU with
+    # ensure_eri/_compute_2e; only transform_eri is exercised by the test.
+    add_executable(planck-transform-eri
+        ${CMAKE_SOURCE_DIR}/tests/transform_eri_unit.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
     )
 
     # Structural test for the RI auxiliary basis loader (no PySCF reference
@@ -751,6 +788,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-compute-2e PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-hgp-quartet-validation PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -816,6 +858,16 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-transform-eri-sph PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-transform-eri PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-aux-basis-load PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -873,6 +925,12 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-compute-2e PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-hgp-quartet-validation PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -916,6 +974,18 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-spherical-density-lift PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-transform-eri-sph PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-transform-eri PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -966,6 +1036,10 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-hgp-engine-smoke PRIVATE USE_OPENMP)
     endif()
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-compute-2e OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-compute-2e PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-hgp-quartet-validation OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-hgp-quartet-validation PRIVATE USE_OPENMP)
     endif()
@@ -976,6 +1050,14 @@ if(BUILD_TESTING)
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-auto-dispatch-benchmark OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-auto-dispatch-benchmark PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-transform-eri OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-transform-eri PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-transform-eri-sph OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-transform-eri-sph PRIVATE USE_OPENMP)
     endif()
 
     target_link_libraries(planck-casscf-internal
@@ -1057,6 +1139,11 @@ if(BUILD_TESTING)
     )
 
     add_test(
+        NAME planck-compute-2e
+        COMMAND planck-compute-2e
+    )
+
+    add_test(
         NAME planck-hgp-quartet-validation
         COMMAND planck-hgp-quartet-validation
     )
@@ -1084,6 +1171,16 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-spherical-density-lift
         COMMAND planck-spherical-density-lift
+    )
+
+    add_test(
+        NAME planck-transform-eri-sph
+        COMMAND planck-transform-eri-sph
+    )
+
+    add_test(
+        NAME planck-transform-eri
+        COMMAND planck-transform-eri
     )
 
     add_test(

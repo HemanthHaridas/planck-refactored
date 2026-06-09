@@ -262,7 +262,17 @@ HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
     };
 
     // Step 1: t1[p,ν,λ,σ] = Σ_μ C[p,μ] eri[μ,ν,λ,σ]   shape ns·nc·nc·nc
+    //
+    // Each step is parallelized over its outermost index, which owns a disjoint
+    // output slab (t1[p*...], t2[(p,q)*...], t3[(pq,r)*...], out[pqr*...]). No
+    // thread shares a write target and the inner accumulation order is
+    // unchanged, so the result is bitwise-identical to the serial version — a
+    // scheduling change only. This transform is never called from inside an
+    // OpenMP parallel region, so there is no nesting / over-subscription risk.
     std::vector<double> t1(ns * nc * nc * nc, 0.0);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (std::size_t p = 0; p < ns; ++p)
         for (std::size_t mu = 0; mu < nc; ++mu)
         {
@@ -277,6 +287,9 @@ HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
 
     // Step 2: t2[p,q,λ,σ] = Σ_ν C[q,ν] t1[p,ν,λ,σ]   shape ns·ns·nc·nc
     std::vector<double> t2(ns * ns * nc * nc, 0.0);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (std::size_t p = 0; p < ns; ++p)
         for (std::size_t q = 0; q < ns; ++q)
             for (std::size_t nu = 0; nu < nc; ++nu)
@@ -294,6 +307,9 @@ HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
 
     // Step 3: t3[p,q,r,σ] = Σ_λ C[r,λ] t2[p,q,λ,σ]   shape ns·ns·ns·nc
     std::vector<double> t3(ns * ns * ns * nc, 0.0);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (std::size_t pq = 0; pq < ns * ns; ++pq)
         for (std::size_t r = 0; r < ns; ++r)
             for (std::size_t lam = 0; lam < nc; ++lam)
@@ -311,6 +327,9 @@ HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
 
     // Step 4: out[p,q,r,s] = Σ_σ C[s,σ] t3[p,q,r,σ]   shape ns⁴
     std::vector<double> out(ns * ns * ns * ns, 0.0);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (std::size_t pqr = 0; pqr < ns * ns * ns; ++pqr)
     {
         const double *src = &t3[pqr * nc];

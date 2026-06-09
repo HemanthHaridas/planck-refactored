@@ -56,6 +56,32 @@ Grid quality levels (`DFTGridQuality`):
 - V_xc from grid integration
 - Symmetry + SAO blocking supported
 
+### J / K build parallelism (and why it does not jitter)
+
+`build_coulomb_from_eri` and `build_exchange_from_eri` in
+`src/dft/driver.cpp` are the per-iteration `nb⁴` AO contractions for the KS
+Coulomb and exact-exchange (hybrid / range-separated) matrices. They were
+fully serial — the dominant DFT load-imbalance (B3LYP profiled at ~60% of
+samples idle at the barrier) — and are now `#pragma omp parallel for
+schedule(static)` over the outer `mu`, mirroring
+`HartreeFock::ObaraSaika::_compute_fock_rhf`.
+
+Crucially this is **not** the kind of change that caused the historical DFT
+jitter (see DFT XC Reduction Determinism). That jitter came from a
+**cross-thread reduction** summed in non-deterministic completion order. The
+J/K builds have **no cross-thread summation**: each thread owns a disjoint set
+of output rows `coulomb(mu,·)` / `exchange(mu,·)` and computes them entirely
+itself, with the inner `lam`/`sig` accumulation order unchanged. Verified
+**bitwise-identical across `OMP_NUM_THREADS` = 1/2/4/8** (water-dimer/cc-pVTZ
+B3LYP `-152.9317586225` to all digits), unlike the grid XC reduction which
+still drifts ~1e-10 across thread counts.
+
+The DFT **grid layer** (`evaluate_density_on_grid`, the `xc_grid.cpp`
+density/XC loops) remains serial and is the residual DFT parallelization
+target (~12% idle after the J/K change). It is deliberately deferred: adding a
+parallel region there re-enters the grid-reduction jitter territory, so any
+reduction must use fixed thread-index order.
+
 ## PCM Solvation
 
 `planck-dft` can add a self-consistent C-PCM reaction field for single-point RKS/UKS calculations. The DFT driver builds a reusable `PCMState` once, then adds the reaction potential and solvation energy during each SCF iteration.

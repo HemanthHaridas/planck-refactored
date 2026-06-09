@@ -104,7 +104,18 @@ namespace HartreeFock::Correlation
         const std::size_t nb3 = nb * nb2;
 
         // T1[i,ν,λ,σ] = Σ_μ C1(μ,i) * eri[μνλσ]   shape: n1 × nb × nb × nb
+        //
+        // Each quarter transform is parallelized over its leading index, which
+        // strides whole disjoint output slices (T1[i*...], T2[i*...], ...). No
+        // thread shares a write target and the inner accumulation order is
+        // unchanged, so the result is identical to the serial version — this is
+        // a scheduling change only. transform_eri is never called from inside an
+        // OpenMP parallel region (all call sites are serial), so there is no
+        // nesting / over-subscription concern.
         std::vector<double> T1(n1 * nb * nb * nb, 0.0);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t nu = 0; nu < nb; ++nu)
                 for (std::size_t lam = 0; lam < nb; ++lam)
@@ -115,6 +126,9 @@ namespace HartreeFock::Correlation
 
         // T2[i,a,λ,σ] = Σ_ν C2(ν,a) * T1[i,ν,λ,σ]   shape: n1 × n2 × nb × nb
         std::vector<double> T2(n1 * n2 * nb * nb, 0.0);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
                 for (std::size_t lam = 0; lam < nb; ++lam)
@@ -128,6 +142,9 @@ namespace HartreeFock::Correlation
 
         // T3[i,a,j,σ] = Σ_λ C3(λ,j) * T2[i,a,λ,σ]   shape: n1 × n2 × n3 × nb
         std::vector<double> T3(n1 * n2 * n3 * nb, 0.0);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
                 for (std::size_t j = 0; j < n3; ++j)
@@ -141,6 +158,9 @@ namespace HartreeFock::Correlation
 
         // out[i,a,j,b] = Σ_σ C4(σ,b) * T3[i,a,j,σ]   shape: n1 × n2 × n3 × n4
         std::vector<double> out(n1 * n2 * n3 * n4, 0.0);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
                 for (std::size_t j = 0; j < n3; ++j)

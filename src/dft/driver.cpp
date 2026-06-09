@@ -730,6 +730,14 @@ namespace DFT::Driver
                 static_cast<Eigen::Index>(nb),
                 static_cast<Eigen::Index>(nb));
 
+            // Parallelize over the outer mu, which strides whole disjoint output
+            // rows: no shared writes, no reduction, inner accumulation order
+            // unchanged, so the result is identical to the serial version. This
+            // mirrors HartreeFock::ObaraSaika::_compute_fock_rhf and runs once
+            // per KS-SCF iteration; leaving it serial idled all but one thread.
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
             for (std::size_t mu = 0; mu < nb; ++mu)
                 for (std::size_t nu = 0; nu < nb; ++nu)
                     for (std::size_t lam = 0; lam < nb; ++lam)
@@ -752,6 +760,11 @@ namespace DFT::Driver
                 static_cast<Eigen::Index>(nb),
                 static_cast<Eigen::Index>(nb));
 
+            // Parallel over the outer mu (disjoint output rows); see
+            // build_coulomb_from_eri. Bitwise-identical to the serial version.
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
             for (std::size_t mu = 0; mu < nb; ++mu)
                 for (std::size_t nu = 0; nu < nb; ++nu)
                     for (std::size_t lam = 0; lam < nb; ++lam)
