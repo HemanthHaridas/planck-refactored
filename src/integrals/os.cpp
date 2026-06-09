@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <numbers>
 #include <vector>
@@ -2028,56 +2029,89 @@ std::vector<double> HartreeFock::ObaraSaika::_compute_2e(
     // permutation scattering only mirrors one computed integral into symmetry-
     // related slots via atomic writes. These are plain stores of the same value,
     // not `+=` reductions, so `atomic update` is intentionally not used here.
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; ++p)
+    //
+    // Load balance: the (p,q) pairs form the upper triangle q >= p, so a plain
+    // `parallel for` over p hands one thread a full triangle row (npairs
+    // quartets) while another gets a single quartet — the long row starves the
+    // others at the barrier. Instead we flatten the triangle into a single
+    // linear index t in [0, ntri) with ntri = npairs(npairs+1)/2 and distribute
+    // *that* with schedule(dynamic), so every thread pulls evenly sized quartet
+    // batches. The output is unchanged: the scatter is store-only, so the tensor
+    // is independent of the order in which (p,q) pairs are visited.
+    //
+    // (p,q) is recovered from t by closed-form inversion of the row-major upper
+    // triangle (row p starts at tri_base(p) = p*npairs - p(p-1)/2); the
+    // while-guards absorb any floating-point drift in the sqrt. This indexing is
+    // used ONLY to distribute work across threads — AO matrix placement still
+    // comes from spAB.A._index / spCD.A._index, never from this t->(p,q) map.
+    const std::size_t ntri = npairs * (npairs + 1) / 2;
+    const auto tri_base = [npairs](std::size_t r) -> std::size_t
+    { return r * npairs - r * (r - 1) / 2; };
+
+#pragma omp parallel for schedule(dynamic, 64)
+    for (std::size_t t = 0; t < ntri; ++t)
     {
+        // Recover (p, q) with q >= p from the flat triangle index t.
+        long long pp = static_cast<long long>(std::floor(
+            (static_cast<double>(2 * npairs + 1) -
+             std::sqrt(static_cast<double>(2 * npairs + 1) *
+                           static_cast<double>(2 * npairs + 1) -
+                       8.0 * static_cast<double>(t))) /
+            2.0));
+        if (pp < 0)
+            pp = 0;
+        while (pp > 0 && tri_base(static_cast<std::size_t>(pp)) > t)
+            --pp;
+        while (static_cast<std::size_t>(pp) + 1 < npairs &&
+               tri_base(static_cast<std::size_t>(pp) + 1) <= t)
+            ++pp;
+        const std::size_t p = static_cast<std::size_t>(pp);
+        const std::size_t q = p + (t - tri_base(p));
+
         const auto &spAB = shell_pairs[p];
         const std::size_t i = spAB.A._index;
         const std::size_t j = spAB.B._index;
         const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
         const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
 
-        for (std::size_t q = p; q < npairs; ++q)
+        const auto &spCD = shell_pairs[q];
+        const std::size_t k = spCD.A._index;
+        const std::size_t l = spCD.B._index;
+        std::vector<QuartetOrbitElem> orbit;
+
+        // Schwarz screening: |(ij|kl)| ≤ Q(i,j)·Q(k,l)
+        if (Q(i, j) * Q(k, l) < tol_eri)
+            continue;
+
+        if (use_sym)
         {
-            const auto &spCD = shell_pairs[q];
-            const std::size_t k = spCD.A._index;
-            const std::size_t l = spCD.B._index;
-            std::vector<QuartetOrbitElem> orbit;
-
-            // Schwarz screening: |(ij|kl)| ≤ Q(i,j)·Q(k,l)
-            if (Q(i, j) * Q(k, l) < tol_eri)
+            auto [orb, forced_zero] = build_quartet_orbit(i, j, k, l, *sym_ops);
+            if (forced_zero)
                 continue;
-
-            if (use_sym)
-            {
-                auto [orb, forced_zero] = build_quartet_orbit(i, j, k, l, *sym_ops);
-                if (forced_zero)
-                    continue;
-                orbit = std::move(orb);
-                if (orbit.front().i != i || orbit.front().j != j ||
-                    orbit.front().k != k || orbit.front().l != l)
-                    continue;
-            }
-
-            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-
-            const double val = _contracted_eri(spAB, spCD,
-                                               lAx, lAy, lAz, lBx, lBy, lBz,
-                                               lCx, lCy, lCz, lDx, lDy, lDz,
-                                               kernel, omega);
-
-            if (!use_sym)
-            {
-                write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+            orbit = std::move(orb);
+            if (orbit.front().i != i || orbit.front().j != j ||
+                orbit.front().k != k || orbit.front().l != l)
                 continue;
-            }
-
-            for (const auto &elem : orbit)
-                write_eri_permutations(eri, nb, nb2, nb3,
-                                       elem.i, elem.j, elem.k, elem.l,
-                                       static_cast<double>(elem.sign) * val);
         }
+
+        const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+        const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+
+        const double val = _contracted_eri(spAB, spCD,
+                                           lAx, lAy, lAz, lBx, lBy, lBz,
+                                           lCx, lCy, lCz, lDx, lDy, lDz,
+                                           kernel, omega);
+
+        if (!use_sym)
+        {
+            write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+            continue;
+        }
+
+        for (const auto &elem : orbit)
+            write_eri_permutations(eri, nb, nb2, nb3,
+                                   elem.i, elem.j, elem.k, elem.l,
+                                   static_cast<double>(elem.sign) * val);
     }
 
     return eri;
