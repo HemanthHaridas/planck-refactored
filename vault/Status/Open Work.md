@@ -18,7 +18,21 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
-- Replace the large thread-local Rys scratch allocation with a size-aware heap or lighter scratch strategy
+- Replace the large thread-local Rys scratch allocation with a size-aware
+  heap or lighter scratch strategy. `_rys_sum_buf` in `src/integrals/rys.cpp`
+  is a thread-local `double[2·MAX_L+1]^6 = [13]^6 = 38.5 MB` sized off the
+  global `MAX_L=6` (H shells), but the highest-L basis in the test/benchmark
+  suite is cc-pVTZ, which tops out at **g (L=4)**; nothing exercises h. The
+  6D buffer's per-axis index runs `0 … 2·L_max`, so a `2·4+1 = 9` dimension
+  (`9^6 = 4.3 MB`, ~9× cut) covers every benchmarked basis. `MAX_L` is global
+  (8 files) so it must not move; `VRR_DIM` is local to `rys.cpp` and is the
+  only knob. Plan (each step bitwise-gated by `planck-compute-2e` +
+  `planck-hgp-engine-smoke`): (1) introduce a local `RYS_VRR_DIM` rename, no
+  value change; (2) lower only the 6D `_rys_sum_buf` + the matching
+  `_rys_hrr_ab` parameter to a `2·4+1` bound, with a loud rejection guard for
+  any quartet exceeding it (preserves the `std::expected` contract; an H-shell
+  basis fails cleanly rather than corrupting); (3) optional/deferred — true
+  per-quartet dynamic `std::vector` scratch to remove the ceiling entirely.
 - Resolve the ROHF MO-energy bookkeeping inconsistency between effective, alpha, and beta eigenvalue sets
 
 ## Verification and regression gaps
