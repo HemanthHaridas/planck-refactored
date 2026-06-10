@@ -2,6 +2,7 @@
 #define HF_TYPES_H
 
 #include <Eigen/Core>
+#include <Eigen/Eigenvalues>
 #include <Eigen/QR>
 #include <array>
 #include <cassert>
@@ -886,6 +887,110 @@ namespace HartreeFock
         DataSCF _scf;                  // SCF Data for current step
     };
 
+    // ── Shared DIIS coefficient solve with conditioning guard ─────────────────
+    //
+    // Pulay's DIIS solves the bordered linear system
+    //   [ G  -1 ] [ c   ]   [ 0 ]
+    //   [-1   0 ] [ lam ] = [-1 ]
+    // where G_{ij} = <e_i, e_j> is the m×m error-overlap (Gram) block.
+    //
+    // Important: G is *expected* to be extremely ill-conditioned near
+    // convergence — the error matrices shrink toward zero and become nearly
+    // parallel, so the smallest Gram eigenvalue routinely reaches ~1e-29 while
+    // G stays positive-definite. The bare colPivHouseholderQr solve handles that
+    // gracefully (the tiny, near-degenerate coefficients are harmless because all
+    // stored Fock matrices are nearly identical there), so a condition-number
+    // threshold is the WRONG trigger — it would fire on healthy SCF and perturb
+    // the convergence path. Instead this guard intervenes only on genuine
+    // numerical breakdown:
+    //   - the active Gram block is indefinite (a real negative eigenvalue, beyond
+    //     a relative noise floor), or
+    //   - the solved coefficients are non-finite or explosively large.
+    // In either case it drops the OLDEST vector (least representative of the
+    // current point) and retries, always keeping at least the two newest
+    // vectors. On well-behaved SCF none of these fire, so the result is bitwise
+    // identical to the previous bare solve.
+    //
+    // The returned coefficient vector has one entry per input error matrix;
+    // entries for dropped (oldest) vectors are exactly zero, so callers keep
+    // combining over their full history unchanged.
+    inline Eigen::VectorXd solve_diis_coefficients(
+        const std::vector<const Eigen::MatrixXd *> &errors,
+        double max_coeff_magnitude = 1e8)
+    {
+        const std::size_t m = errors.size();
+        Eigen::VectorXd coeffs = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(m));
+        if (m == 0)
+            return coeffs;
+
+        // Full m×m Gram block; sub-blocks are taken as trailing (newest) corners.
+        Eigen::MatrixXd G_full(static_cast<Eigen::Index>(m), static_cast<Eigen::Index>(m));
+        for (std::size_t i = 0; i < m; ++i)
+            for (std::size_t j = i; j < m; ++j)
+            {
+                const double gij = (errors[i]->array() * errors[j]->array()).sum();
+                G_full(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = gij;
+                G_full(static_cast<Eigen::Index>(j), static_cast<Eigen::Index>(i)) = gij;
+            }
+
+        // `offset` is how many of the oldest vectors we have dropped. The active
+        // block is the trailing (m-offset)×(m-offset) corner, i.e. the newest
+        // vectors. Keep at least 2.
+        std::size_t offset = 0;
+        while (true)
+        {
+            const std::size_t k = m - offset; // active subspace size
+            const Eigen::Index ki = static_cast<Eigen::Index>(k);
+            const Eigen::MatrixXd G = G_full.bottomRightCorner(ki, ki);
+
+            bool acceptable = true;
+            if (k > 2)
+            {
+                // Reject only a genuinely indefinite Gram block: a negative
+                // eigenvalue below -noise·λ_max signals numerical corruption,
+                // not the benign smallness of a converging subspace.
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(G);
+                if (es.info() != Eigen::Success)
+                    acceptable = false;
+                else
+                {
+                    const double lo = es.eigenvalues()(0);
+                    const double hi = es.eigenvalues()(ki - 1);
+                    if (lo < -1e-12 * std::max(hi, 1.0))
+                        acceptable = false;
+                }
+            }
+
+            if (acceptable || k <= 2)
+            {
+                // Solve the bordered system on the active block.
+                Eigen::MatrixXd B = Eigen::MatrixXd::Zero(ki + 1, ki + 1);
+                B.topLeftCorner(ki, ki) = G;
+                for (Eigen::Index i = 0; i < ki; ++i)
+                {
+                    B(i, ki) = -1.0;
+                    B(ki, i) = -1.0;
+                }
+                Eigen::VectorXd rhs = Eigen::VectorXd::Zero(ki + 1);
+                rhs(ki) = -1.0;
+                const Eigen::VectorXd sol = B.colPivHouseholderQr().solve(rhs);
+
+                // Accept unless the solve itself produced something unusable.
+                const bool usable =
+                    sol.allFinite() &&
+                    (k <= 2 || sol.head(ki).cwiseAbs().maxCoeff() <= max_coeff_magnitude);
+                if (usable || k <= 2)
+                {
+                    for (Eigen::Index i = 0; i < ki; ++i)
+                        coeffs(static_cast<Eigen::Index>(offset) + i) = sol(i);
+                    return coeffs;
+                }
+            }
+
+            ++offset; // drop one more of the oldest vectors and retry
+        }
+    }
+
     // ── DIIS working state for one spin channel ───────────────────────────────
     //
     // Implements Pulay's DIIS for SCF convergence acceleration.
@@ -932,32 +1037,19 @@ namespace HartreeFock
         {
             const std::size_t m = size();
 
-            // B_{ij} = Tr( e_i^T e_j )
-            // Augmented system (Lagrange multiplier for sum(c)=1):
-            //   [ B  -1 ] [ c   ]   [ 0 ]
-            //   [-1   0 ] [ lam ] = [-1 ]
-            Eigen::MatrixXd B = Eigen::MatrixXd::Zero(m + 1, m + 1);
+            // Solve the augmented DIIS system with the shared conditioning guard.
+            // The Gram block G_{ij} = <e_i, e_j> is bordered with the Lagrange
+            // row/column for sum(c)=1; ill-conditioned subspaces drop oldest
+            // vectors before solving (those get coefficient 0 below).
+            std::vector<const Eigen::MatrixXd *> errors(m);
             for (std::size_t i = 0; i < m; ++i)
-            {
-                for (std::size_t j = i; j < m; ++j)
-                {
-                    const double bij = (error_history[i].array() * error_history[j].array()).sum();
-                    B(i, j) = bij;
-                    B(j, i) = bij;
-                }
-                B(i, m) = -1.0;
-                B(m, i) = -1.0;
-            }
-
-            Eigen::VectorXd rhs = Eigen::VectorXd::Zero(m + 1);
-            rhs(m) = -1.0;
-
-            const Eigen::VectorXd c = B.colPivHouseholderQr().solve(rhs);
+                errors[i] = &error_history[i];
+            const Eigen::VectorXd c = solve_diis_coefficients(errors);
 
             Eigen::MatrixXd F_extrap = Eigen::MatrixXd::Zero(fock_history[0].rows(),
                                                              fock_history[0].cols());
             for (std::size_t i = 0; i < m; ++i)
-                F_extrap += c(i) * fock_history[i];
+                F_extrap += c(static_cast<Eigen::Index>(i)) * fock_history[i];
 
             return F_extrap;
         }
@@ -1017,24 +1109,26 @@ namespace HartreeFock
         std::pair<Eigen::MatrixXd, Eigen::MatrixXd> extrapolate() const
         {
             const std::size_t m = size();
-            Eigen::MatrixXd B = Eigen::MatrixXd::Zero(m + 1, m + 1);
+
+            // The UHF Gram element is the spin-summed overlap
+            //   G_{ij} = <e_a,i, e_a,j> + <e_b,i, e_b,j>,
+            // which is exactly <[e_a;e_b]_i, [e_a;e_b]_j>. Stack each iteration's
+            // alpha/beta error matrices into one combined matrix and reuse the
+            // shared conditioning-guarded solve. (Stacking column-wise keeps the
+            // element-wise dot product the helper computes equal to the sum.)
+            std::vector<Eigen::MatrixXd> stacked(m);
+            std::vector<const Eigen::MatrixXd *> errors(m);
             for (std::size_t i = 0; i < m; ++i)
             {
-                for (std::size_t j = i; j < m; ++j)
-                {
-                    const double bij =
-                        (error_a_history[i].array() * error_a_history[j].array()).sum() +
-                        (error_b_history[i].array() * error_b_history[j].array()).sum();
-                    B(i, j) = bij;
-                    B(j, i) = bij;
-                }
-                B(i, m) = -1.0;
-                B(m, i) = -1.0;
+                const auto &ea = error_a_history[i];
+                const auto &eb = error_b_history[i];
+                Eigen::MatrixXd s(ea.rows(), ea.cols() + eb.cols());
+                s.leftCols(ea.cols()) = ea;
+                s.rightCols(eb.cols()) = eb;
+                stacked[i] = std::move(s);
+                errors[i] = &stacked[i];
             }
-
-            Eigen::VectorXd rhs = Eigen::VectorXd::Zero(m + 1);
-            rhs(m) = -1.0;
-            const Eigen::VectorXd c = B.colPivHouseholderQr().solve(rhs);
+            const Eigen::VectorXd c = solve_diis_coefficients(errors);
 
             Eigen::MatrixXd Fa = Eigen::MatrixXd::Zero(fock_a_history[0].rows(), fock_a_history[0].cols());
             Eigen::MatrixXd Fb = Eigen::MatrixXd::Zero(fock_b_history[0].rows(), fock_b_history[0].cols());

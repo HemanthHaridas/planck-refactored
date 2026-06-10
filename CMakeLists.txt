@@ -561,6 +561,10 @@ if(BUILD_TESTING)
         ${SRC_DIR}/symmetry/symmetry.cpp
     )
 
+    add_executable(planck-diis-conditioning
+        ${CMAKE_SOURCE_DIR}/tests/diis_conditioning.cpp
+    )
+
     add_executable(planck-cc-arbitrary-solver
         ${CMAKE_SOURCE_DIR}/tests/cc_arbitrary_solver.cpp
         ${SRC_DIR}/post_hf/cc/common.cpp
@@ -819,6 +823,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-diis-conditioning PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-cc-arbitrary-solver PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -950,6 +959,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-population-analysis PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-diis-conditioning PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -1151,6 +1166,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-population-analysis
         COMMAND planck-population-analysis
+    )
+
+    add_test(
+        NAME planck-diis-conditioning
+        COMMAND planck-diis-conditioning
     )
 
     add_test(
