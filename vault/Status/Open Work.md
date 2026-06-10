@@ -20,7 +20,6 @@ truth for what remains.
 
 - Replace the large thread-local Rys scratch allocation with a size-aware heap or lighter scratch strategy
 - Add a real stationarity guard to the CASSCF plateau-escape convergence path
-- Add DIIS rank/conditioning guards shared across RHF, UHF, and ROHF
 - Resolve the ROHF MO-energy bookkeeping inconsistency between effective, alpha, and beta eigenvalue sets
 
 ## Verification and regression gaps
