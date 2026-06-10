@@ -1203,14 +1203,19 @@ if(BUILD_TESTING)
         COMMAND planck-transform-eri
     )
 
+    # These two read RI auxiliary basis files via the relative path
+    # `basis-sets/...`, which only resolves from the repository root, so run
+    # them from there (matching the regression tests below).
     add_test(
         NAME planck-aux-basis-load
         COMMAND planck-aux-basis-load
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
     add_test(
         NAME planck-ri-2c-eri
         COMMAND planck-ri-2c-eri
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
     add_test(

@@ -190,7 +190,7 @@
       ],
       "expected_exit_code": 0,
       "contains": [
-        "SCF Converged after",
+        "UHF Converged",
         "Total MP2 Energy"
       ],
       "checks": [
