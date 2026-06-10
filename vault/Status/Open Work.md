@@ -21,9 +21,19 @@ truth for what remains.
 - Replace the large thread-local Rys scratch allocation with a size-aware
   heap or lighter scratch strategy. `_rys_sum_buf` in `src/integrals/rys.cpp`
   is a thread-local `double[2·MAX_L+1]^6 = [13]^6 = 38.5 MB` sized off the
-  global `MAX_L=6` (H shells). The reachable angular momentum is far lower than
-  that, and is bounded by **which quartets actually reach the Rys buffer**, not
-  by the basis:
+  global `MAX_L=6` (H shells). Allocation semantics (g++-15 / emulated TLS on
+  this build): the buffer is **not** allocated at engine selection; only a
+  small `___emutls_v.` control descriptor sits in `__DATA`, and
+  `__emutls_get_address` `calloc`s the full 38.5 MB lazily the first time each
+  thread *accesses* the symbol — i.e. the first time that thread runs the Rys
+  primitive kernel. So `engine os` / `engine hgp` never pay it. But under
+  `engine auto` every basis has s-shells → (ss|ss) quartets always reach Rys,
+  so every multithreaded SCF worker thread does `calloc(38.5 MB)` once and
+  reuses it; emutls allocates the whole declared size (no lazy page-commit
+  rescue). So the per-Rys-thread cost is real for both `auto` (common) and
+  explicit `rys`. The reachable angular momentum is far lower than the
+  declared size, and is bounded by **which quartets actually reach the Rys
+  buffer**, not by the basis:
   - Auto dispatch (`_auto_prefers_rys`, `rys.cpp`) sends a quartet to Rys only
     when `L_AB + L_CD <= 1` — i.e. (ss|ss)/(ss|sp)/(sp|ss); everything else
     goes to HGP. So under Auto the per-axis index never exceeds 1.
