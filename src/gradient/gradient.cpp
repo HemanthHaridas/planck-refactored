@@ -184,7 +184,7 @@ static void accumulate_eri_gradient_permutations(
         accumulate_perm(gamma_fn(jj, ii, ll, kk), true, true);
 }
 
-static std::array<double, 12> compute_eri_deriv_dispatch(
+std::array<double, 12> HartreeFock::Gradient::compute_eri_deriv_dispatch(
     const HartreeFock::Calculator &calc,
     const HartreeFock::ShellPair &spAB,
     const HartreeFock::ShellPair &spCD,
@@ -200,6 +200,10 @@ static std::array<double, 12> compute_eri_deriv_dispatch(
     return HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         spAB, spCD, kernel, omega);
 }
+
+// File-scope alias so the SCF/KS gradient assembly below can keep calling the
+// dispatcher unqualified.
+using HartreeFock::Gradient::compute_eri_deriv_dispatch;
 
 template <typename GammaFn>
 static void accumulate_shell_pair_eri_gradient(

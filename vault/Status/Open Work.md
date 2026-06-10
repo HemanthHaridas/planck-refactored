@@ -18,11 +18,8 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
-- Remove the committed developer-specific absolute basis path from `src/base/basis.h`
-- Fix the Mayer bond-order convention mismatch between closed-shell and unrestricted paths
 - Replace the large thread-local Rys scratch allocation with a size-aware heap or lighter scratch strategy
 - Add a real stationarity guard to the CASSCF plateau-escape convergence path
-- Add warning or fallback behavior when the CASSCF orbital-action solver heavily clamps negative curvature
 - Add DIIS rank/conditioning guards shared across RHF, UHF, and ROHF
 - Resolve the ROHF MO-energy bookkeeping inconsistency between effective, alpha, and beta eigenvalue sets
 
@@ -132,9 +129,3 @@ Gate:
 - Eliminate remaining reversed-shell-pair reconstruction churn in gradient paths outside the already-fixed RHF path
 - Deduplicate the full-group AO-transform machinery that still exists in both `group_operations.cpp` and `mo_symmetry.cpp`
 - Refactor `Calculator` only where it buys real safety or clarity: the leading candidates are grouping the loose MP2/UMP2 result cache and introducing a geometry-derived working-state object with a single invalidation point
-- Route MP2 / UMP2 gradient derivative-ERI calls in
-  `src/post_hf/mp2_gradient.cpp` (lines 371, 525, 726) through
-  `compute_eri_deriv_dispatch` instead of hardcoding
-  `ObaraSaika::_compute_eri_deriv_elem`. Today the MP2 response
-  intermediates always use OS even when the user picked HGP — values agree
-  to ~1e-15 so this is performance/coverage, not correctness.

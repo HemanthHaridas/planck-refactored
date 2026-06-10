@@ -128,12 +128,28 @@ int main()
                  "Mayer bond-order analysis should accept compatible molecule, basis, overlap, and spin densities");
     if (mayer)
     {
-        ok &= expect(near(mayer->bond_orders(0, 1), 0.2474, 1e-12),
-                     "Mayer bond order should be the sum of alpha and beta (P S) cross products for the atom pair");
-        ok &= expect(near(mayer->bond_orders(1, 0), 0.2474, 1e-12),
+        ok &= expect(near(mayer->bond_orders(0, 1), 0.4948, 1e-12),
+                     "Mayer bond order should be 2·Σ[(P^α S)(P^α S) + (P^β S)(P^β S)] over the atom pair");
+        ok &= expect(near(mayer->bond_orders(1, 0), 0.4948, 1e-12),
                      "Mayer bond-order matrix should be symmetric");
         ok &= expect(near(mayer->bond_orders(0, 0), 0.0),
                      "Mayer bond-order diagonal should remain zero");
+    }
+
+    // Closed-shell path (no spin densities): B_AB = Σ (P_total S)(P_total S)
+    // with no prefactor, because total_density is the full P_total. For this
+    // toy case PS = [[1.1, 0.7], [0.7, 1.1]], so B(0,1) = 0.7 · 0.7 = 0.49.
+    // This must equal the factor-of-2 open-shell form when α=β=P_total/2.
+    const auto mayer_closed =
+        HartreeFock::SCF::mayer_bond_order_analysis(molecule, basis, S, P, nullptr, nullptr);
+    ok &= expect(static_cast<bool>(mayer_closed),
+                 "Mayer bond-order analysis should accept a closed-shell total density with no spin split");
+    if (mayer_closed)
+    {
+        ok &= expect(near(mayer_closed->bond_orders(0, 1), 0.49, 1e-12),
+                     "closed-shell Mayer bond order is Σ (P_total S)(P_total S) with no prefactor");
+        ok &= expect(near(mayer_closed->bond_orders(1, 0), 0.49, 1e-12),
+                     "closed-shell Mayer bond-order matrix should be symmetric");
     }
 
     const Eigen::MatrixXd bad_density = Eigen::MatrixXd::Identity(3, 3);

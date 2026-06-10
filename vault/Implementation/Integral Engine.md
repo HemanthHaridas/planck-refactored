@@ -98,14 +98,17 @@ The screened scaling is applied inside `hgp_vrr`:
   `engine == HeadGordonPople` routes to the HGP entries.
 - Full-symmetry direct SCF dispatches through `src/scf/scf.cpp`
   (`full_symmetry_fock_{rhf,uhf}` and `full_symmetry_build_skeleton`).
-- Analytic gradient dispatches through `compute_eri_deriv_dispatch` in
-  `src/gradient/gradient.cpp` — engine-agnostic for all kernels (Coulomb,
-  LongRange, ShortRange).
-- MP2 / UMP2 analytic gradient (`src/post_hf/mp2_gradient.cpp`) calls
-  `ObaraSaika::_compute_eri_deriv_elem` directly; bypasses the dispatcher,
-  so HGP is not used for the MP2 gradient response intermediates even when
-  the engine is selected. Not a correctness bug (values match OS to ~1e-15)
-  but a latent asymmetry.
+- Analytic gradient dispatches through `compute_eri_deriv_dispatch`, now a
+  public entry in `HartreeFock::Gradient` (`src/gradient/gradient.{h,cpp}`) —
+  engine-agnostic for all kernels (Coulomb, LongRange, ShortRange).
+- MP2 / UMP2 analytic gradient (`src/post_hf/mp2_gradient.cpp`) now routes its
+  three derivative-ERI sites through the same
+  `HartreeFock::Gradient::compute_eri_deriv_dispatch`, so the MP2/UMP2 gradient
+  response intermediates honor the selected engine (HGP when `engine hgp`)
+  rather than always using OS. Cross-engine equality is gated by
+  `water_rmp2_gradient_engine_os_vs_hgp` (OS↔HGP RMP2 gradient identical to the
+  8-decimal print precision); the UMP2 radical-cation input shares the same
+  routing and matches to `0.000e+00` when compared manually.
 
 ### Test hooks retained for historical gates
 

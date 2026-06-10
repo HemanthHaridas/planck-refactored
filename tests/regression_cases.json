@@ -33,6 +33,30 @@
       ]
     },
     {
+      "id": "h2_rhf_mayer_bond_order_sto3g",
+      "input": "tests/inputs/regression/scf/h2_rhf_mayer_sto3g.hfinp",
+      "tags": [
+        "core"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Mayer Bond Orders :",
+        "1       2         H         H        1.00000000"
+      ]
+    },
+    {
+      "id": "h2o_cation_uhf_mayer_bond_order_sto3g",
+      "input": "tests/inputs/regression/scf/h2o_cation_uhf_mayer_sto3g.hfinp",
+      "tags": [
+        "core"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Mayer Bond Orders :",
+        "1       2         O         H        0.76017799"
+      ]
+    },
+    {
       "id": "lih_rmp2_sto3g",
       "input": "inputs/examples/hf/mp2_validation/val_lih.hfinp",
       "tags": [
@@ -166,7 +190,7 @@
       ],
       "expected_exit_code": 0,
       "contains": [
-        "SCF Converged after",
+        "UHF Converged",
         "Total MP2 Energy"
       ],
       "checks": [
@@ -846,6 +870,21 @@
     {
       "id": "water_hse06_gradient_engine_os_vs_hgp",
       "input": "tests/inputs/regression/dft/water_dft_hse06_gradient.hfinp",
+      "executable": "tests/engine_gradient_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "OS gradient (Ha/Bohr):",
+        "HGP gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_rmp2_gradient_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_gradient_sto3g.hfinp",
       "executable": "tests/engine_gradient_compare.py",
       "tags": [
         "core",
