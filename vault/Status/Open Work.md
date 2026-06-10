@@ -19,7 +19,6 @@ truth for what remains.
 ## Highest-priority correctness and robustness work
 
 - Replace the large thread-local Rys scratch allocation with a size-aware heap or lighter scratch strategy
-- Add a real stationarity guard to the CASSCF plateau-escape convergence path
 - Resolve the ROHF MO-energy bookkeeping inconsistency between effective, alpha, and beta eigenvalue sets
 
 ## Verification and regression gaps
@@ -115,7 +114,27 @@ Gate:
 
 ### Future hardening
 
-- Consider adding a regression assertion that state-averaged runs do not declare convergence through the plateau-escape warning path unless that behavior is explicitly intended
+- Plateau-escape convergence path (`casscf.cpp`, the `Treating the stationary
+  orbital plateau as converged` branch) is **correct and load-bearing**, not a
+  hack to retire. It is the only exit for a genuinely converged
+  state-averaged solution: at an SA stationary point the gating quantity
+  `sa_g = Σ_I w_I g_I` goes to ~1e-10 while the per-root screens
+  (`root_screen_g` / `max_root_g`) plateau at an O(1e-2) nonzero value, because
+  state-averaging makes only the *weighted* gradient stationary, not each
+  individual root. With `mcscf_accept_uphill` the per-root convergence screen
+  then never passes, so the plateau branch is the correct way to recognize "SA
+  gradient converged, energy and step flat → done." This is exercised by
+  `water_casscf_sa2_sto3g_sad_guess_uphill` (the only one of the four SA-2
+  cases that uses it; the other three converge through the normal gate at
+  `sa_g < 1e-5`).
+- Narrow hardening worth doing (NOT a correctness fix): replace the literal
+  `reported_gnorm < 100·tol_mcscf_grad` screen in the plateau branch with an
+  explicit `sa_g`-stationarity assertion (the uphill case already satisfies it
+  at ~1e-10, so this only tightens against a future regression where the branch
+  could fire while `sa_g` is not actually small), and add a
+  `casscf_converged_via_plateau` diagnostic the runner asserts is `false` for
+  the three normal SA-2 cases and `true` only for the SAD-uphill case. Keep the
+  uphill SA-2 case green as the acceptance gate.
 - Keep the two water SA-2 SAD-start regressions, because they intentionally protect two distinct optimizer policies
 
 ## Performance and maintenance opportunities
