@@ -138,6 +138,22 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- Mayer bond-order open-shell factor-of-2 fix. The unrestricted branch of
+  `mayer_bond_order_analysis` (`src/populations/bond-order.cpp`) was missing
+  the leading `2` on the spin-resolved `(P^α S)² + (P^β S)²` contraction, so
+  every open-shell bond order came out at half its correct value; the
+  closed-shell total-density branch was already correct. PySCF-anchored
+  (H2 RHF B(H–H)=1.0, H2O+ UHF B(O–H)=0.76017799 vs 0.76017810). New gates:
+  `h2_rhf_mayer_bond_order_sto3g`, `h2o_cation_uhf_mayer_bond_order_sto3g`,
+  plus a closed-shell unit assertion that was previously absent. See the
+  Mayer Bond Order Density Convention gotcha.
+- Two previously-open robustness items were verified already-resolved in the
+  tree (no new work, doc was stale): the developer-specific absolute basis
+  path is not committed (`src/base/basis.h` is git-ignored; the tracked
+  `basis.h.in` template uses `@BASIS_INSTALL_PATH@` + `$BASIS_PATH`), and the
+  CASSCF orbital-action solver already warns and falls back to the diagonal
+  preconditioner when >20% of orbital-Hessian eigenvalues are clamped
+  (`src/post_hf/casscf/response.cpp`).
 - ERI / transform parallelization pass (profiled, all bitwise-verified):
   the two serial 4-index transforms (`Correlation::transform_eri`,
   `BasisFunctions::transform_eri_cart_to_sph`) are now parallel; the one-shot
