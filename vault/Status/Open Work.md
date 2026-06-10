@@ -19,7 +19,6 @@ truth for what remains.
 ## Highest-priority correctness and robustness work
 
 - Remove the committed developer-specific absolute basis path from `src/base/basis.h`
-- Fix the Mayer bond-order convention mismatch between closed-shell and unrestricted paths
 - Replace the large thread-local Rys scratch allocation with a size-aware heap or lighter scratch strategy
 - Add a real stationarity guard to the CASSCF plateau-escape convergence path
 - Add warning or fallback behavior when the CASSCF orbital-action solver heavily clamps negative curvature

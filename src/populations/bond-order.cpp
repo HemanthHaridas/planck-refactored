@@ -55,14 +55,24 @@ namespace HartreeFock::SCF
                 // without materializing explicit submatrices. We only fill the
                 // upper triangle and mirror it because Mayer bond orders are
                 // symmetric by construction.
+                // Mayer bond order. The canonical closed-shell form uses the
+                // total density directly with no prefactor:
+                //   B_AB = Σ_{μ∈A,ν∈B} (P_total S)_μν (P_total S)_νμ,
+                // which gives B(H–H) = 1 for H2. The spin-resolved form that
+                // reduces to this same value carries an explicit factor of 2:
+                //   B_AB = 2·Σ [ (P^α S)_μν (P^α S)_νμ + (P^β S)_μν (P^β S)_νμ ],
+                // since for a closed shell P^α = P^β = P_total/2 and
+                //   2·[2·(½ P_total S)²] = (P_total S)². The open-shell branch
+                // below must keep that factor of 2 — without it every open-shell
+                // bond order comes out half its correct value.
                 double bond_order = 0.0;
                 for (const int mu : (*atom_to_aos)[atom_a])
                     for (const int nu : (*atom_to_aos)[atom_b])
                     {
                         if (alpha_density != nullptr && beta_density != nullptr)
                         {
-                            bond_order += PS_alpha(mu, nu) * PS_alpha(nu, mu);
-                            bond_order += PS_beta(mu, nu) * PS_beta(nu, mu);
+                            bond_order += 2.0 * PS_alpha(mu, nu) * PS_alpha(nu, mu);
+                            bond_order += 2.0 * PS_beta(mu, nu) * PS_beta(nu, mu);
                         }
                         else
                         {
