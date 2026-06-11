@@ -12,15 +12,84 @@
 // ─── Scratch buffer dimensions ────────────────────────────────────────────────
 //
 // VRR_DIM = 2*MAX_L+1 = 13  (per-axis, matches os.cpp convention)
-// Per-root 1D VRR table: _rys_1d[3][VRR_DIM][VRR_DIM] — stack allocated per call.
-// Accumulated 6D sum: _rys_sum_buf[VRR_DIM]^6 — thread-local (37 MB, same as _hrr_buf).
+// The compact 1D VRR tables (Ix/Iy/Iz, [VRR_DIM]^2) and the 3D CD-HRR slice
+// (V0_CD/W, [VRR_DIM]^3) are small stack arrays kept at the fixed bound. The
+// large 6D accumulator is sized per quartet in RysScratch below (was a fixed
+// [VRR_DIM]^6 = 38.5 MB/thread).
 
-static constexpr int VRR_DIM = 2 * MAX_L + 1; // 13
+static constexpr int VRR_DIM = 2 * MAX_L + 1; // 13; per-axis bound for the compact 1D/3D stack helpers
 
-// Accumulated Rys 6D intermediate: sum_{roots} w_r * Ix[ax][cx] * Iy[ay][cy] * Iz[az][cz]
-// Same footprint as the _hrr_buf in os.cpp.
-static thread_local double _rys_sum_buf[VRR_DIM][VRR_DIM][VRR_DIM]
-                                       [VRR_DIM][VRR_DIM][VRR_DIM];
+// Accumulated Rys 6D intermediate: sum_{roots} w_r * Ix[ax][cx] * Iy[ay][cy] * Iz[az][cz].
+//
+// The 6D accumulator is the only large Rys scratch buffer. A fixed
+// [VRR_DIM]^6 = [13]^6 array would be 38.5 MB/thread (sized off the global
+// MAX_L=6), almost all of it unused: under Auto only L_AB+L_CD<=1 quartets
+// reach Rys, and even explicit `engine rys` tops out at F in practice. Instead
+// size it per quartet, mirroring the HGP/OS EriScratch pattern: a thread-local
+// std::vector grown only when the active (lAB*+1)x(lCD*+1) dimensions change,
+// reused across quartets. Under Auto the dimension is constant so it resizes
+// once per thread then pure-reuses. Index layout matches the old C array,
+// [ax][ay][az][cx][cy][cz] row-major, so the recurrence reads/writes are
+// unchanged bit-for-bit.
+namespace
+{
+    struct RysScratch
+    {
+        int ax_dim = 0, ay_dim = 0, az_dim = 0;
+        int cx_dim = 0, cy_dim = 0, cz_dim = 0;
+        std::size_t ax_stride = 0, ay_stride = 0, az_stride = 0;
+        std::size_t cx_stride = 0, cy_stride = 0, cz_stride = 0;
+        std::size_t size = 0;
+        std::vector<double> buf;
+        double *data = nullptr;
+
+        // Size the 6D accumulator for one quartet. Dimensions are the total
+        // bra/ket angular momentum per axis plus one (indices run 0..lAB*,
+        // 0..lCD*). HRR reads one cell beyond the active index along the swept
+        // axis, which stays within [0, lAB*] / [0, lCD*], so these dims suffice.
+        void resize_for_quartet(
+            int lABx, int lABy, int lABz,
+            int lCDx, int lCDy, int lCDz)
+        {
+            ax_dim = lABx + 1;
+            ay_dim = lABy + 1;
+            az_dim = lABz + 1;
+            cx_dim = lCDx + 1;
+            cy_dim = lCDy + 1;
+            cz_dim = lCDz + 1;
+            cz_stride = 1;
+            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
+            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
+            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
+            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
+            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
+            const std::size_t needed =
+                static_cast<std::size_t>(ax_dim) * ay_dim * az_dim *
+                cx_dim * cy_dim * cz_dim;
+            if (buf.size() != needed)
+                buf.resize(needed);
+            size = needed;
+            data = buf.data();
+        }
+
+        std::size_t index(int ax, int ay, int az, int cx, int cy, int cz) const noexcept
+        {
+            return static_cast<std::size_t>(ax) * ax_stride +
+                   static_cast<std::size_t>(ay) * ay_stride +
+                   static_cast<std::size_t>(az) * az_stride +
+                   static_cast<std::size_t>(cx) * cx_stride +
+                   static_cast<std::size_t>(cy) * cy_stride +
+                   static_cast<std::size_t>(cz) * cz_stride;
+        }
+
+        double &at(int ax, int ay, int az, int cx, int cy, int cz) noexcept
+        {
+            return data[index(ax, ay, az, cx, cy, cz)];
+        }
+    };
+
+    thread_local RysScratch g_rys_scratch;
+} // namespace
 
 // ─── Schwarz screening table ──────────────────────────────────────────────────
 //
@@ -334,7 +403,7 @@ static void _rys_vrr_1d(
 // _eri_hrr_ab function.
 
 static void _rys_hrr_ab(
-    double W[VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM],
+    RysScratch &W,
     const int lAx, const int lAy, const int lAz,
     const int lBx, const int lBy, const int lBz,
     const int lCDx, const int lCDy, const int lCDz,
@@ -347,8 +416,8 @@ static void _rys_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax][ay][az + 1][cx][cy][cz] + ABz * W[ax][ay][az][cx][cy][cz];
+                                W.at(ax, ay, az, cx, cy, cz) =
+                                    W.at(ax, ay, az + 1, cx, cy, cz) + ABz * W.at(ax, ay, az, cx, cy, cz);
 
     for (int ky = 0; ky < lBy; ++ky)
         for (int ax = 0; ax <= lAx + lBx; ++ax)
@@ -357,8 +426,8 @@ static void _rys_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax][ay + 1][az][cx][cy][cz] + ABy * W[ax][ay][az][cx][cy][cz];
+                                W.at(ax, ay, az, cx, cy, cz) =
+                                    W.at(ax, ay + 1, az, cx, cy, cz) + ABy * W.at(ax, ay, az, cx, cy, cz);
 
     for (int kx = 0; kx < lBx; ++kx)
         for (int ax = 0; ax <= lAx + lBx - kx - 1; ++ax)
@@ -367,8 +436,8 @@ static void _rys_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax + 1][ay][az][cx][cy][cz] + ABx * W[ax][ay][az][cx][cy][cz];
+                                W.at(ax, ay, az, cx, cy, cz) =
+                                    W.at(ax + 1, ay, az, cx, cy, cz) + ABx * W.at(ax, ay, az, cx, cy, cz);
 }
 
 // CD-HRR: transfer C→D using a 3D slice V0[cx][cy][cz].
@@ -472,14 +541,12 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     double w[HartreeFock::Rys::RYS_MAX_ROOTS];
     HartreeFock::Rys::rys_roots_weights(n, T, t2, w);
 
-    // Zero the 6D accumulation buffer for the active slice
-    for (int ax = 0; ax <= lABx; ++ax)
-        for (int ay = 0; ay <= lABy; ++ay)
-            for (int az = 0; az <= lABz; ++az)
-                for (int cx = 0; cx <= lCDx; ++cx)
-                    for (int cy = 0; cy <= lCDy; ++cy)
-                        for (int cz = 0; cz <= lCDz; ++cz)
-                            _rys_sum_buf[ax][ay][az][cx][cy][cz] = 0.0;
+    // Size the per-quartet 6D accumulator (dims = lAB*+1, lCD*+1). The buffer
+    // is exactly the active region, so a single fill zeroes precisely the cells
+    // the old explicit nested-loop zeroed — same set, same final values.
+    RysScratch &sum = g_rys_scratch;
+    sum.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz);
+    std::fill(sum.buf.begin(), sum.buf.end(), 0.0);
 
     // Per-root VRR + accumulation
     for (int r = 0; r < n; ++r)
@@ -503,14 +570,14 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
         _rys_vrr_1d(Iy, lABy, lCDy, PAy + u * WPy, QCy + u * WQy, B00, B10, B01);
         _rys_vrr_1d(Iz, lABz, lCDz, PAz + u * WPz, QCz + u * WQz, B00, B10, B01);
 
-        // Accumulate outer product into _rys_sum_buf
+        // Accumulate outer product into the 6D buffer
         for (int ax = 0; ax <= lABx; ++ax)
             for (int ay = 0; ay <= lABy; ++ay)
                 for (int az = 0; az <= lABz; ++az)
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                _rys_sum_buf[ax][ay][az][cx][cy][cz] +=
+                                sum.at(ax, ay, az, cx, cy, cz) +=
                                     wr * Ix[ax][cx] * Iy[ay][cy] * Iz[az][cz];
     }
 
@@ -521,10 +588,10 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
                 for (int cx = 0; cx <= lCDx; ++cx)
                     for (int cy = 0; cy <= lCDy; ++cy)
                         for (int cz = 0; cz <= lCDz; ++cz)
-                            _rys_sum_buf[ax][ay][az][cx][cy][cz] *= prefac;
+                            sum.at(ax, ay, az, cx, cy, cz) *= prefac;
 
-    // AB-HRR (in-place on _rys_sum_buf)
-    _rys_hrr_ab(_rys_sum_buf,
+    // AB-HRR (in-place on the 6D buffer)
+    _rys_hrr_ab(sum,
                 lAx, lAy, lAz, lBx, lBy, lBz,
                 lCDx, lCDy, lCDz,
                 ABx, ABy, ABz);
@@ -534,7 +601,7 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     for (int cx = 0; cx <= lCDx; ++cx)
         for (int cy = 0; cy <= lCDy; ++cy)
             for (int cz = 0; cz <= lCDz; ++cz)
-                V0_CD[cx][cy][cz] = _rys_sum_buf[lAx][lAy][lAz][cx][cy][cz];
+                V0_CD[cx][cy][cz] = sum.at(lAx, lAy, lAz, cx, cy, cz);
 
     // CD-HRR
     return _rys_hrr_cd(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
