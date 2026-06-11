@@ -138,6 +138,23 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- Rys 6D ERI accumulator sized per quartet (PR #126). `_rys_sum_buf` in
+  `src/integrals/rys.cpp` was a thread-local `double[2·MAX_L+1]^6 = [13]^6 =
+  38.5 MB` sized off the global `MAX_L=6`; on the g++-15 / emulated-TLS build
+  emutls `calloc`s the full block on each thread's first Rys-kernel access, so
+  every Rys-active worker thread paid 38.5 MB despite the reachable angular
+  momentum being far lower (Auto only routes `L_AB+L_CD≤1` to Rys; explicit
+  `engine rys` tops out at F in the suite). Replaced with a thread-local
+  `RysScratch` struct sized per quartet via `resize_for_quartet` with flat
+  `index()`/`at()` accessors, reused across quartets — mirroring the HGP/OS
+  `EriScratch` pattern but minimal (spatial-only, no Boys `m` axis). No L
+  ceiling and no rejection guard: explicit `engine rys` at g/h just sizes the
+  vector larger. Footprint ~KB/thread under Auto, ≤0.94 MB at the explicit-rys
+  F worst case. Index layout unchanged, so bitwise-identical — gated by
+  `planck-compute-2e` + `planck-hgp-engine-smoke` and the full extended
+  regression suite (RYS/OS/Auto engine comparisons). `MAX_L` and `os.cpp`
+  untouched. Follow-up (Open Work): factor the shared 6-axis spatial layout out
+  of the OS/HGP/Rys scratch structs.
 - DIIS coefficient-solve conditioning guard (shared across RHF/ROHF and UHF).
   Both `extrapolate()` paths now route through
   `HartreeFock::solve_diis_coefficients` (`src/base/types.h`), which drops the
