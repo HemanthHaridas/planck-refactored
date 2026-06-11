@@ -42,18 +42,26 @@ truth for what remains.
     (which has g) is only in the auto-dispatch benchmark, where g quartets go
     to HGP, never to the Rys buffer.
 
-  So the real worst case reaching `_rys_sum_buf` is F+F → per-axis index
-  `2·3 = 6` → a `2·3+1 = 7` dimension (`7^6 = 0.94 MB`, **~41× cut**). `MAX_L`
-  is global (8 files) so it must not move; `VRR_DIM` is local to `rys.cpp` and
-  is the only knob. Plan (each step bitwise-gated by `planck-compute-2e` +
-  `planck-hgp-engine-smoke`): (1) introduce a local `RYS_VRR_DIM` rename, no
-  value change; (2) lower only the 6D `_rys_sum_buf` + the matching
-  `_rys_hrr_ab` parameter to the `2·L_RYS_MAX+1` bound with `L_RYS_MAX = 3`,
-  plus a loud per-quartet rejection guard (preserves the `std::expected`
-  contract; an explicit `engine rys` run on a g/h basis fails cleanly with a
-  message pointing the user to HGP — which is faster there anyway — rather than
-  corrupting memory); (3) optional/deferred — true per-quartet dynamic
-  `std::vector` scratch to remove the ceiling entirely.
+  So even the explicit-rys worst case (F+F, per-axis index `2·3 = 6`) needs
+  only a `7^6 = 0.94 MB` slice, and the common `auto` path needs `~[2]^6 ≈ 64`
+  doubles. `MAX_L` is global (8 files) so it must not move; the fix is local to
+  `rys.cpp`.
+
+  **Design: mirror the HGP `EriScratch` model** (`src/integrals/hgp.cpp`),
+  which already solves exactly this — a thread-local struct of
+  `std::vector<double>` with `resize_for_quartet(lAB*, lCD*, …)` and flat
+  `spatial_index()` accessors, reused across quartets and only reallocated when
+  the dimension actually changes (`if (vrr.size() != needed) resize()`). Replace
+  the fixed `[13]^6` `_rys_sum_buf` with a `RysScratch` struct sized per
+  quartet, and rewrite `_rys_hrr_ab` to take the flat buffer + strides instead
+  of the `double[VRR_DIM]^6` array parameter. This is strictly better than a
+  fixed `[7]^6` bound: no L ceiling (explicit `engine rys` keeps working at g/h,
+  just allocates more), no rejection guard, and the `auto` path allocates ~KB
+  not MB. Under `auto` the dimension is constant (`L_AB+L_CD≤1`) so it resizes
+  once per thread then pure-reuses — no hot-path allocation churn, same as HGP.
+  Bitwise-gated by `planck-compute-2e` + `planck-hgp-engine-smoke`; spot-check
+  that `auto` allocates ~KB/thread and that explicit rys on cc-pVTZ (g) now
+  succeeds instead of relying on the oversized fixed buffer.
 - Resolve the ROHF MO-energy bookkeeping inconsistency between effective, alpha, and beta eigenvalue sets
 
 ## Verification and regression gaps
