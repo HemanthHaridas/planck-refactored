@@ -18,9 +18,67 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
-- Replace the large thread-local Rys scratch allocation with a size-aware heap or lighter scratch strategy
-- Add a real stationarity guard to the CASSCF plateau-escape convergence path
-- Add DIIS rank/conditioning guards shared across RHF, UHF, and ROHF
+- Replace the large thread-local Rys scratch allocation with a size-aware
+  heap or lighter scratch strategy. `_rys_sum_buf` in `src/integrals/rys.cpp`
+  is a thread-local `double[2·MAX_L+1]^6 = [13]^6 = 38.5 MB` sized off the
+  global `MAX_L=6` (H shells). Allocation semantics (g++-15 / emulated TLS on
+  this build): the buffer is **not** allocated at engine selection; only a
+  small `___emutls_v.` control descriptor sits in `__DATA`, and
+  `__emutls_get_address` `calloc`s the full 38.5 MB lazily the first time each
+  thread *accesses* the symbol — i.e. the first time that thread runs the Rys
+  primitive kernel. So `engine os` / `engine hgp` never pay it. But under
+  `engine auto` every basis has s-shells → (ss|ss) quartets always reach Rys,
+  so every multithreaded SCF worker thread does `calloc(38.5 MB)` once and
+  reuses it; emutls allocates the whole declared size (no lazy page-commit
+  rescue). So the per-Rys-thread cost is real for both `auto` (common) and
+  explicit `rys`. The reachable angular momentum is far lower than the
+  declared size, and is bounded by **which quartets actually reach the Rys
+  buffer**, not by the basis:
+  - Auto dispatch (`_auto_prefers_rys`, `rys.cpp`) sends a quartet to Rys only
+    when `L_AB + L_CD <= 1` — i.e. (ss|ss)/(ss|sp)/(sp|ss); everything else
+    goes to HGP. So under Auto the per-axis index never exceeds 1.
+  - Explicit `engine rys` routes every quartet through Rys, but the highest-L
+    basis used with explicit Rys in the suite is cc-pVDZ (**F, L=3**). cc-pVTZ
+    (which has g) is only in the auto-dispatch benchmark, where g quartets go
+    to HGP, never to the Rys buffer.
+
+  So even the explicit-rys worst case (F+F, per-axis index `2·3 = 6`) needs
+  only a `7^6 = 0.94 MB` slice, and the common `auto` path needs `~[2]^6 ≈ 64`
+  doubles. `MAX_L` is global (8 files) so it must not move; the fix is local to
+  `rys.cpp`.
+
+  **Design: mirror the HGP `EriScratch` model** (`src/integrals/hgp.cpp`),
+  which already solves exactly this — a thread-local struct of
+  `std::vector<double>` with `resize_for_quartet(lAB*, lCD*, …)` and flat
+  `spatial_index()` accessors, reused across quartets and only reallocated when
+  the dimension actually changes (`if (vrr.size() != needed) resize()`). Replace
+  the fixed `[13]^6` `_rys_sum_buf` with a `RysScratch` struct sized per
+  quartet, and rewrite `_rys_hrr_ab` to take the flat buffer + strides instead
+  of the `double[VRR_DIM]^6` array parameter. This is strictly better than a
+  fixed `[7]^6` bound: no L ceiling (explicit `engine rys` keeps working at g/h,
+  just allocates more), no rejection guard, and the `auto` path allocates ~KB
+  not MB. Under `auto` the dimension is constant (`L_AB+L_CD≤1`) so it resizes
+  once per thread then pure-reuses — no hot-path allocation churn, same as HGP.
+  Bitwise-gated by `planck-compute-2e` + `planck-hgp-engine-smoke`; spot-check
+  that `auto` allocates ~KB/thread and that explicit rys on cc-pVTZ (g) now
+  succeeds instead of relying on the oversized fixed buffer.
+
+  Note on sharing: OS (`src/integrals/os.cpp`) and HGP each already carry a
+  near-duplicate `EriScratch` struct (same 6-axis spatial dims/strides,
+  `resize_for_quartet`, `spatial_index`); Rys would be a third copy. The
+  genuinely shared part is the 6-axis *spatial layout* (dims + strides +
+  `spatial_index` + resize). What sits on top is engine-specific and not
+  shareable: OS/HGP `vrr` carries an extra Boys-order `m` axis that Rys lacks
+  (Rys does angular dependence via quadrature roots, not an m recurrence), HGP
+  adds an `a0c0_accum`, OS deliberately skips zero-init as a profiled hotspot
+  fix, and the accessor flavors differ (`v(...,m)` vs `v_ptr` vs
+  `h_block_ptr`). So do **not** force a single monolithic shared struct.
+  Sequencing: land the Rys dynamic scratch first (its own minimal,
+  spatial-only struct, no `m` axis), then as a separate maintenance item
+  extract a shared `SpatialQuartetLayout` (dims/strides/index/resize) and
+  retrofit all three engines onto it — which also removes the existing OS↔HGP
+  duplication, not just avoids a third. Tracked below under Performance and
+  maintenance.
 - Resolve the ROHF MO-energy bookkeeping inconsistency between effective, alpha, and beta eigenvalue sets
 
 ## Verification and regression gaps
@@ -116,7 +174,27 @@ Gate:
 
 ### Future hardening
 
-- Consider adding a regression assertion that state-averaged runs do not declare convergence through the plateau-escape warning path unless that behavior is explicitly intended
+- Plateau-escape convergence path (`casscf.cpp`, the `Treating the stationary
+  orbital plateau as converged` branch) is **correct and load-bearing**, not a
+  hack to retire. It is the only exit for a genuinely converged
+  state-averaged solution: at an SA stationary point the gating quantity
+  `sa_g = Σ_I w_I g_I` goes to ~1e-10 while the per-root screens
+  (`root_screen_g` / `max_root_g`) plateau at an O(1e-2) nonzero value, because
+  state-averaging makes only the *weighted* gradient stationary, not each
+  individual root. With `mcscf_accept_uphill` the per-root convergence screen
+  then never passes, so the plateau branch is the correct way to recognize "SA
+  gradient converged, energy and step flat → done." This is exercised by
+  `water_casscf_sa2_sto3g_sad_guess_uphill` (the only one of the four SA-2
+  cases that uses it; the other three converge through the normal gate at
+  `sa_g < 1e-5`).
+- Narrow hardening worth doing (NOT a correctness fix): replace the literal
+  `reported_gnorm < 100·tol_mcscf_grad` screen in the plateau branch with an
+  explicit `sa_g`-stationarity assertion (the uphill case already satisfies it
+  at ~1e-10, so this only tightens against a future regression where the branch
+  could fire while `sa_g` is not actually small), and add a
+  `casscf_converged_via_plateau` diagnostic the runner asserts is `false` for
+  the three normal SA-2 cases and `true` only for the SAD-uphill case. Keep the
+  uphill SA-2 case green as the acceptance gate.
 - Keep the two water SA-2 SAD-start regressions, because they intentionally protect two distinct optimizer policies
 
 ## Performance and maintenance opportunities
@@ -128,4 +206,14 @@ Gate:
 - Rework shell-pair construction to operate at shell granularity rather than per Cartesian AO component
 - Eliminate remaining reversed-shell-pair reconstruction churn in gradient paths outside the already-fixed RHF path
 - Deduplicate the full-group AO-transform machinery that still exists in both `group_operations.cpp` and `mo_symmetry.cpp`
+- Extract a shared `SpatialQuartetLayout` (6-axis dims + strides +
+  `spatial_index` + `resize_for_quartet`) and retrofit the OS, HGP, and Rys
+  per-quartet scratch onto it. OS and HGP already carry near-duplicate
+  `EriScratch` structs and the Rys footprint fix adds a third; only the
+  spatial-layout core is common (the Boys `m` axis, HGP's `a0c0_accum`, OS's
+  no-zero-init policy, and the differing accessors stay engine-specific). Do
+  this *after* the Rys dynamic-scratch lands, so the shared interface is shaped
+  by three concrete call sites rather than speculation. Bitwise-gate across all
+  three engines (`planck-compute-2e`, `planck-hgp-engine-smoke`, plus the OS
+  path via the existing ERI gates).
 - Refactor `Calculator` only where it buys real safety or clarity: the leading candidates are grouping the loose MP2/UMP2 result cache and introducing a geometry-derived working-state object with a single invalidation point

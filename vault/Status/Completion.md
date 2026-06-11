@@ -138,6 +138,16 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- DIIS coefficient-solve conditioning guard (shared across RHF/ROHF and UHF).
+  Both `extrapolate()` paths now route through
+  `HartreeFock::solve_diis_coefficients` (`src/base/types.h`), which drops the
+  oldest vector and retries only on genuine numerical breakdown — an indefinite
+  error-overlap (Gram) block or non-finite/explosive coefficients — rather than
+  on the Gram condition number, since healthy near-converged SCF routinely has
+  ~1e-29 smallest Gram eigenvalues while staying positive-definite. It is a
+  no-op on well-behaved SCF (energies and iteration counts unchanged). Gated by
+  the `planck-diis-conditioning` unit test (well-conditioned / benign near-
+  converged / singular-Gram). Merged via PR #124.
 - Mayer bond-order open-shell factor-of-2 fix. The unrestricted branch of
   `mayer_bond_order_analysis` (`src/populations/bond-order.cpp`) was missing
   the leading `2` on the spin-resolved `(P^α S)² + (P^β S)²` contraction, so

@@ -58,7 +58,19 @@ binding (water SA-2 from sad/hcore takes `step_norm ≤ 0.11` even when
 optimizer reaches, since the search direction comes from a local-Newton
 step that points into the local well regardless of step size.
 
-**Plateau escape**: if stagnation_streak ≥ 2 and both energy and step are flat, convergence is declared with a `[WRN]` line.
+**Plateau escape**: if `stagnation_streak ≥ 2`, the energy and accepted
+orbital step are flat, **and the SA gating gradient `sa_g` is already small**
+(`reported_gnorm < 100·tol_mcscf_grad`), convergence is declared with a `[WRN]`
+line. This is correct and load-bearing for state-averaged runs, not a hack: at
+an SA stationary point `sa_g = Σ_I w_I g_I` goes to ~1e-10 while the per-root
+screens (`root_screen_g` / `max_root_g`) plateau at an O(1e-2) nonzero value,
+because state-averaging makes only the weighted gradient stationary, not each
+individual root. Under `mcscf_accept_uphill` the per-root convergence screen
+then never passes, so this branch is the intended exit. Exercised by
+`water_casscf_sa2_sto3g_sad_guess_uphill` (the other three SA-2 cases converge
+through the normal gate at `sa_g < 1e-5`). See `vault/Status/Open Work.md` for
+the narrow hardening still worth doing (an explicit `sa_g` assertion plus a
+`casscf_converged_via_plateau` diagnostic).
 
 ## Shared-κ SA Coupled Solve
 
