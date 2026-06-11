@@ -62,6 +62,23 @@ truth for what remains.
   Bitwise-gated by `planck-compute-2e` + `planck-hgp-engine-smoke`; spot-check
   that `auto` allocates ~KB/thread and that explicit rys on cc-pVTZ (g) now
   succeeds instead of relying on the oversized fixed buffer.
+
+  Note on sharing: OS (`src/integrals/os.cpp`) and HGP each already carry a
+  near-duplicate `EriScratch` struct (same 6-axis spatial dims/strides,
+  `resize_for_quartet`, `spatial_index`); Rys would be a third copy. The
+  genuinely shared part is the 6-axis *spatial layout* (dims + strides +
+  `spatial_index` + resize). What sits on top is engine-specific and not
+  shareable: OS/HGP `vrr` carries an extra Boys-order `m` axis that Rys lacks
+  (Rys does angular dependence via quadrature roots, not an m recurrence), HGP
+  adds an `a0c0_accum`, OS deliberately skips zero-init as a profiled hotspot
+  fix, and the accessor flavors differ (`v(...,m)` vs `v_ptr` vs
+  `h_block_ptr`). So do **not** force a single monolithic shared struct.
+  Sequencing: land the Rys dynamic scratch first (its own minimal,
+  spatial-only struct, no `m` axis), then as a separate maintenance item
+  extract a shared `SpatialQuartetLayout` (dims/strides/index/resize) and
+  retrofit all three engines onto it — which also removes the existing OS↔HGP
+  duplication, not just avoids a third. Tracked below under Performance and
+  maintenance.
 - Resolve the ROHF MO-energy bookkeeping inconsistency between effective, alpha, and beta eigenvalue sets
 
 ## Verification and regression gaps
@@ -189,4 +206,14 @@ Gate:
 - Rework shell-pair construction to operate at shell granularity rather than per Cartesian AO component
 - Eliminate remaining reversed-shell-pair reconstruction churn in gradient paths outside the already-fixed RHF path
 - Deduplicate the full-group AO-transform machinery that still exists in both `group_operations.cpp` and `mo_symmetry.cpp`
+- Extract a shared `SpatialQuartetLayout` (6-axis dims + strides +
+  `spatial_index` + `resize_for_quartet`) and retrofit the OS, HGP, and Rys
+  per-quartet scratch onto it. OS and HGP already carry near-duplicate
+  `EriScratch` structs and the Rys footprint fix adds a third; only the
+  spatial-layout core is common (the Boys `m` axis, HGP's `a0c0_accum`, OS's
+  no-zero-init policy, and the differing accessors stay engine-specific). Do
+  this *after* the Rys dynamic-scratch lands, so the shared interface is shaped
+  by three concrete call sites rather than speculation. Bitwise-gate across all
+  three engines (`planck-compute-2e`, `planck-hgp-engine-smoke`, plus the OS
+  path via the existing ERI gates).
 - Refactor `Calculator` only where it buys real safety or clarity: the leading candidates are grouping the loose MP2/UMP2 result cache and introducing a geometry-derived working-state object with a single invalidation point
