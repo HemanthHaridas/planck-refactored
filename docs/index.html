@@ -1482,7 +1482,7 @@ for each ShellPair(AB) in petite list:
 <h3 id="relationship-to-os-rys-and-auto-dispatch">Relationship to OS, Rys, and Auto-Dispatch</h3>
 <p>HGP and OS are mathematically the same recurrence; HGP is a <em>factorization</em> (VRR-inside, HRR-outside) of OS that is essentially always preferable to the &quot;both-inside&quot; arrangement for contracted Gaussians. Any implementation already written in a VRR-then-HRR style can be viewed as performing the same identity; HGP simply makes the partition between contraction-inside and contraction-outside work explicit.</p>
 <p>HGP and Rys quadrature <em>are</em> genuinely different schemes. For high total angular momentum the OS/HGP scratch buffers grow as the product of all six VRR extents, while Rys keeps a fixed number of quadrature roots <span class="math-inline">\(n = \lfloor L/2
-\rfloor + 1\)</span>. Hybrid engines therefore typically prefer HGP at low-to-medium <span class="math-inline">\(L\)</span> and Rys at high <span class="math-inline">\(L\)</span>; the same operation-count model used for OS-vs-Rys auto-dispatch (§11) applies equally to HGP-vs-Rys with only the OS flop estimate replaced by the HGP estimate (which has a smaller HRR coefficient).</p>
+\rfloor + 1\)</span>. The textbook expectation is therefore that hybrid engines prefer HGP at low-to-medium <span class="math-inline">\(L\)</span> and Rys at high <span class="math-inline">\(L\)</span>. Planck&#x27;s <em>measured</em> calibration (§11) tells a more specific story for the angular momenta that shipped bases actually reach: it picks Rys only at the very bottom (<span class="math-inline">\(L_{AB}+L_{CD}\le 1\)</span>) and HGP everywhere above, because the asymptotic high-<span class="math-inline">\(L\)</span> crossover sits past those bases. The same per-bucket operation-count sweep used for the OS-vs-Rys decision applies equally to HGP-vs-Rys, with the OS flop estimate replaced by the HGP estimate (which has a smaller HRR coefficient).</p>
 <h3 id="screened-and-range-separated-kernels">Screened and Range-Separated Kernels</h3>
 <p>HGP retains the OS structure of the Boys-function seed, so range-separated operators (<span class="math-inline">\(\mathrm{erfc}(\omega r_{12})/r_{12}\)</span>, <span class="math-inline">\(\mathrm{erf}(\omega
 r_{12})/r_{12}\)</span>) drop in exactly as in OS: the long-range damping enters as a single multiplicative scaling on <span class="math-inline">\(\rho\)</span>, on the <span class="math-inline">\(W - P\)</span> and <span class="math-inline">\(W - Q\)</span> shift vectors, and on the Boys argument. In practice this is bundled as a <span class="math-inline">\(\{\rho_{\mathrm{eff}}, \text{prefactor scale}, \text{Boys-argument scale}\}\)</span> triple consumed by the VRR seed, with the unscreened Coulomb kernel as the identity case.</p>
@@ -1536,7 +1536,7 @@ r_{12})/r_{12}\)</span>) drop in exactly as in OS: the long-range damping enters
 <tr><td>CH₄ / <code>6-31G**</code> (Td, order(G)=24)</td><td>35</td><td>Auto</td><td>17.490</td><td>8.749</td><td><strong>5.871</strong></td></tr>
 </tbody></table></div>
 <p>Reading the table, four patterns stand out.</p>
-<p><strong>1. Rys is dominated by both HGP and OS at every basis tested here.</strong> This is the expected regime: STO-3G through 6-31G(d,p) puts maximum angular momentum at <span class="math-inline">\(d\)</span>, which sits squarely in the low-to-medium-<span class="math-inline">\(L\)</span> window where the OS/HGP flop count is smaller than the Rys-quadrature flop count. On 6-31G(d,p) / CH₄ (Td) the spread reaches <span class="math-inline">\(\sim\)</span>10.5× over HGP on <code>nosym</code> and <span class="math-inline">\(\sim\)</span>5.2× on <code>d2h</code>; Rys is not really a competitor here, and the auto-dispatch model in §11 would only prefer Rys at higher <span class="math-inline">\(L\)</span> where the OS/HGP scratch buffers blow up faster than Rys&#x27;s fixed root count. Rys&#x27;s natural niche is the high-<span class="math-inline">\(L\)</span> tail, not the bulk of routine basis sets.</p>
+<p><strong>1. Rys is dominated by both HGP and OS across the bulk of these bases.</strong> On 6-31G(d,p) / CH₄ (Td) the spread reaches <span class="math-inline">\(\sim\)</span>10.5× over HGP on <code>nosym</code> and <span class="math-inline">\(\sim\)</span>5.2× on <code>d2h</code>; Rys is not a competitor across the medium-<span class="math-inline">\(L\)</span> bulk. Note that Planck&#x27;s <em>calibrated</em> auto-dispatch (§11) does <strong>not</strong> match the textbook &quot;Rys wins at high <span class="math-inline">\(L\)</span>&quot; intuition: the measured per-bucket sweep picks Rys only at the very bottom, <span class="math-inline">\(L_{AB}+L_{CD} \le 1\)</span> (the <span class="math-inline">\((ss|ss)\)</span>/<span class="math-inline">\((ss|sp)\)</span> buckets), where Rys&#x27;s 1–2 roots undercut HGP&#x27;s HRR-outside setup cost; everywhere above that HGP wins. So in this codebase Rys&#x27;s empirical niche is the low-<span class="math-inline">\(L\)</span> corner, not the high-<span class="math-inline">\(L\)</span> tail — see §11 and <code>_auto_prefers_rys</code>. (The asymptotic flop-count argument that Rys&#x27;s fixed root count eventually beats the growing OS/HGP scratch extents is still true in the limit, but that crossover sits beyond the angular momenta any shipped basis reaches, so it does not drive the dispatch decision in practice.)</p>
 <p><strong>2. HGP is the fastest engine on every case in the table.</strong> Unlike an earlier <code>-O0</code> serial run of this same benchmark — where HGP and OS were within a few percent of each other on STO-3G and OS actually edged ahead on the larger NH₃ basis — the <code>-O3</code> build here puts HGP clearly in front everywhere, by roughly 1.4–2.0× over OS on <code>nosym</code>. The optimization level matters because HGP&#x27;s hot loop is the tight per-primitive VRR into a small <span class="math-inline">\((a0|c0)\)</span> block with the HRR hoisted out; <code>-O3</code> vectorizes and unrolls that kernel aggressively, whereas OS&#x27;s larger per-primitive scratch traffic leaves less on the table. At <code>-O0</code> those advantages are masked, which is why the ordering flips:</p>
 <div class="table-wrap"><table>
 <thead><tr>
@@ -3395,7 +3395,7 @@ Q_A = Z_A - N_A
 S_A = \sum_{\mu \in A} \sum_\nu \Delta P_{\mu\nu} S_{\mu\nu}
 \]</span></p>
 <p><strong>Code path</strong></p>
-<p><code>src/scf/population.cpp</code> — <code>mulliken_population_analysis()</code></p>
+<p><code>src/populations/mulliken.cpp</code> — <code>mulliken_population_analysis()</code></p>
 <p>The gross AO population vector is computed as a row-sum of the Hadamard product <span class="math-inline">\(P \circ S\)</span>:</p>
 <pre><code class="language-cpp">
 Eigen::VectorXd gross = (density.array() * overlap.array()).rowwise().sum();
@@ -3428,7 +3428,7 @@ N_A^{\mathrm{L\ddot owdin}} = \sum_{\mu \in A} \widetilde P_{\mu\mu}
 \]</span></p>
 <p>and the atomic spin population is the sum of the diagonal entries belonging to that atom.</p>
 <p><strong>Code path</strong></p>
-<p><code>src/scf/population.cpp</code> — <code>lowdin_population_analysis()</code></p>
+<p><code>src/populations/lodwin.cpp</code> — <code>lowdin_population_analysis()</code></p>
 <p>The implementation diagonalizes the AO overlap with <code>Eigen::SelfAdjointEigenSolver</code>, clips tiny eigenvalues with a numerical threshold, reconstructs the symmetric square root <span class="math-inline">\(\mathbf S^{1/2}\)</span>, and forms the orthogonalized density and spin-density matrices.  The atomic accumulation step is then shared with Mulliken analysis through <code>accumulate_atomic_populations()</code>, so the printed report has the same table layout: per-atom electron population, net charge, and optional spin population.</p>
 <h3 id="mayer-bond-orders">Mayer Bond Orders</h3>
 <p><strong>Theory</strong></p>
@@ -3443,19 +3443,21 @@ B_{AB}^{\mathrm{Mayer}} =
 (\mathbf{PS})_{\mu\nu}(\mathbf{PS})_{\nu\mu}
 \]</span></p>
 <p>This measures how strongly the AO subspaces on atoms <span class="math-inline">\(A\)</span> and <span class="math-inline">\(B\)</span> mix through the occupied density in a non-orthogonal basis.</p>
-<p>For open-shell references Planck uses the spin-resolved form, summing separate <span class="math-inline">\(\alpha\)</span> and <span class="math-inline">\(\beta\)</span> contributions:</p>
+<p>For open-shell references Planck uses the spin-resolved form, summing separate <span class="math-inline">\(\alpha\)</span> and <span class="math-inline">\(\beta\)</span> contributions with a leading factor of 2:</p>
 <p><span class="math-display">\[
 B_{AB}^{\mathrm{Mayer}} =
-\sum_{\mu \in A}\sum_{\nu \in B}
+2\sum_{\mu \in A}\sum_{\nu \in B}
 \left[
 (\mathbf P^\alpha \mathbf S)_{\mu\nu}(\mathbf P^\alpha \mathbf S)_{\nu\mu}
 +
 (\mathbf P^\beta \mathbf S)_{\mu\nu}(\mathbf P^\beta \mathbf S)_{\nu\mu}
 \right]
 \]</span></p>
+<p>The factor of 2 is what makes the spin-resolved form reduce to the closed-shell expression above: <span class="math-inline">\(\mathbf P\)</span> there is the <em>total</em> density <span class="math-inline">\(\mathbf P =
+2\,\mathbf C_{\mathrm{occ}}\mathbf C_{\mathrm{occ}}^\top\)</span>, so for a closed shell <span class="math-inline">\(\mathbf P^\alpha = \mathbf P^\beta = \mathbf P/2\)</span> and <span class="math-inline">\(2[2\,(\tfrac12\mathbf P\mathbf S)^2] = (\mathbf P\mathbf S)^2\)</span>. Dropping the 2 halves every open-shell bond order (e.g. H–H would print <span class="math-inline">\(\approx 0.5\)</span> instead of 1); this was a real bug, fixed and PySCF-anchored (H₂ RHF <span class="math-inline">\(B(\mathrm{H\text{-}H})=1\)</span>, H₂O⁺ UHF <span class="math-inline">\(B(\mathrm{O\text{-}H})=0.760\)</span>).</p>
 <p>The diagonal <span class="math-inline">\(B_{AA}\)</span> is left at zero in the printed matrix, and the off-diagonal matrix is symmetrized.</p>
 <p><strong>Code path</strong></p>
-<p><code>src/scf/population.cpp</code> — <code>mayer_bond_order_analysis()</code></p>
+<p><code>src/populations/bond-order.cpp</code> — <code>mayer_bond_order_analysis()</code></p>
 <p>The routine first validates the density dimensions and builds the AO lists for each atom.  It then forms either <span class="math-inline">\(\mathbf P\mathbf S\)</span> or the spin-resolved <span class="math-inline">\(\mathbf P^\alpha\mathbf S\)</span> / <span class="math-inline">\(\mathbf P^\beta\mathbf S\)</span> products and loops over atom pairs <span class="math-inline">\(A < B\)</span>.  For each AO pair <span class="math-inline">\(\mu \in A\)</span>, <span class="math-inline">\(\nu \in B\)</span> it accumulates the appropriate product into a dense <code>natoms × natoms</code> bond-order matrix.  <code>src/driver.cpp</code> prints the final matrix below the Mulliken and Löwdin tables whenever population reporting is enabled.</p>
 <h3 id="electric-dipole-moment">Electric Dipole Moment</h3>
 <p><strong>Theory</strong></p>
@@ -3780,9 +3782,9 @@ driver.cpp
 <tr><td>Ghost atoms (BSSE)</td><td><code>src/base/types.h</code></td><td><code>Molecule::is_ghost</code>, <code>nuclear_charge</code>, <code>total_nuclear_charge</code></td></tr>
 <tr><td>Counterpoise driver</td><td><code>src/bsse/counterpoise.cpp</code></td><td><code>run_counterpoise</code></td></tr>
 <tr><td>Ghost / <code>%begin_bsse</code> parsing</td><td><code>src/io/io.cpp</code></td><td><code>parse_atom_token</code>, <code>_parse_bsse</code></td></tr>
-<tr><td>Mulliken population analysis</td><td><code>src/scf/population.cpp</code></td><td><code>mulliken_population_analysis</code>, <code>gross_ao_population</code></td></tr>
-<tr><td>Löwdin population analysis</td><td><code>src/scf/population.cpp</code></td><td><code>lowdin_population_analysis</code>, <code>symmetric_overlap_sqrt</code></td></tr>
-<tr><td>Mayer bond orders</td><td><code>src/scf/population.cpp</code></td><td><code>mayer_bond_order_analysis</code></td></tr>
+<tr><td>Mulliken population analysis</td><td><code>src/populations/mulliken.cpp</code></td><td><code>mulliken_population_analysis</code>, <code>gross_ao_population</code></td></tr>
+<tr><td>Löwdin population analysis</td><td><code>src/populations/lodwin.cpp</code></td><td><code>lowdin_population_analysis</code>, <code>symmetric_overlap_sqrt</code></td></tr>
+<tr><td>Mayer bond orders</td><td><code>src/populations/bond-order.cpp</code></td><td><code>mayer_bond_order_analysis</code></td></tr>
 <tr><td>Dipole / quadrupole AO integrals</td><td><code>src/integrals/os.cpp</code></td><td><code>_os_1d_moments</code>, <code>_compute_multipole_matrices</code></td></tr>
 <tr><td>Multipole moments (traceless)</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_multipole_moments</code></td></tr>
 <tr><td>RMP2 natural orbitals</td><td><code>src/post_hf/mp2.cpp</code></td><td><code>compute_rmp2_natural_orbitals</code></td></tr>

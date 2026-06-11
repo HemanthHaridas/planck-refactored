@@ -178,7 +178,14 @@ brute-force oracle, multi- and single-threaded).
 ## Key Files
 
 - `src/integrals/os.cpp` + `os.h` — Obara-Saika ERI
-- `src/integrals/rys.cpp` — Rys quadrature ERI
+- `src/integrals/rys.cpp` — Rys quadrature ERI. The 6D accumulator is a
+  thread-local `RysScratch` sized per quartet (`resize_for_quartet` + flat
+  `index()`/`at()`), reused across quartets — the same per-quartet scratch
+  model as HGP's `g_hgp_scratch`/OS's `_eri_scratch`, but minimal (spatial-only,
+  no Boys `m` axis, since Rys gets its angular dependence from quadrature
+  roots). Replaced a fixed `[2·MAX_L+1]^6 = 38.5 MB`/thread buffer; see
+  Completion. The small 1D VRR tables and 3D CD-HRR slice stay as fixed
+  `VRR_DIM` stack arrays.
 - `src/integrals/hgp.cpp` + `hgp.h` — HGP ERI (VRR-per-pair + HRR-outside)
 - `src/integrals/base.h` — engine-dispatch wrappers for `_compute_2e` /
   `_compute_2e_fock` / `_compute_2e_fock_uhf`
