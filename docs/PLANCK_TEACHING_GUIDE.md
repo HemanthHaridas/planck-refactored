@@ -2336,10 +2336,15 @@ work explicit.
 HGP and Rys quadrature *are* genuinely different schemes. For high total angular
 momentum the OS/HGP scratch buffers grow as the product of all six VRR
 extents, while Rys keeps a fixed number of quadrature roots \(n = \lfloor L/2
-\rfloor + 1\). Hybrid engines therefore typically prefer HGP at low-to-medium
-\(L\) and Rys at high \(L\); the same operation-count model used for OS-vs-Rys
-auto-dispatch (§11) applies equally to HGP-vs-Rys with only the OS flop
-estimate replaced by the HGP estimate (which has a smaller HRR coefficient).
+\rfloor + 1\). The textbook expectation is therefore that hybrid engines prefer
+HGP at low-to-medium \(L\) and Rys at high \(L\). Planck's *measured*
+calibration (§11) tells a more specific story for the angular momenta that
+shipped bases actually reach: it picks Rys only at the very bottom
+(\(L_{AB}+L_{CD}\le 1\)) and HGP everywhere above, because the asymptotic
+high-\(L\) crossover sits past those bases. The same per-bucket operation-count
+sweep used for the OS-vs-Rys decision applies equally to HGP-vs-Rys, with the
+OS flop estimate replaced by the HGP estimate (which has a smaller HRR
+coefficient).
 
 ### Screened and Range-Separated Kernels
 
@@ -2426,15 +2431,19 @@ numbers should not be compared directly against that older run.
 
 Reading the table, four patterns stand out.
 
-**1. Rys is dominated by both HGP and OS at every basis tested here.** This is
-the expected regime: STO-3G through 6-31G(d,p) puts maximum angular momentum at
-\(d\), which sits squarely in the low-to-medium-\(L\) window where the OS/HGP
-flop count is smaller than the Rys-quadrature flop count. On 6-31G(d,p) / CH₄
-(Td) the spread reaches \(\sim\)10.5× over HGP on `nosym` and \(\sim\)5.2× on
-`d2h`; Rys is not really a competitor here, and the auto-dispatch model in §11
-would only prefer Rys at higher \(L\) where the OS/HGP scratch buffers blow up
-faster than Rys's fixed root count. Rys's natural niche is the high-\(L\) tail,
-not the bulk of routine basis sets.
+**1. Rys is dominated by both HGP and OS across the bulk of these bases.** On
+6-31G(d,p) / CH₄ (Td) the spread reaches \(\sim\)10.5× over HGP on `nosym` and
+\(\sim\)5.2× on `d2h`; Rys is not a competitor across the medium-\(L\) bulk.
+Note that Planck's *calibrated* auto-dispatch (§11) does **not** match the
+textbook "Rys wins at high \(L\)" intuition: the measured per-bucket sweep
+picks Rys only at the very bottom, \(L_{AB}+L_{CD} \le 1\) (the
+\((ss|ss)\)/\((ss|sp)\) buckets), where Rys's 1–2 roots undercut HGP's
+HRR-outside setup cost; everywhere above that HGP wins. So in this codebase
+Rys's empirical niche is the low-\(L\) corner, not the high-\(L\) tail — see
+§11 and `_auto_prefers_rys`. (The asymptotic flop-count argument that Rys's
+fixed root count eventually beats the growing OS/HGP scratch extents is still
+true in the limit, but that crossover sits beyond the angular momenta any
+shipped basis reaches, so it does not drive the dispatch decision in practice.)
 
 **2. HGP is the fastest engine on every case in the table.** Unlike an earlier
 `-O0` serial run of this same benchmark — where HGP and OS were within a few
@@ -6107,7 +6116,7 @@ S_A = \sum_{\mu \in A} \sum_\nu \Delta P_{\mu\nu} S_{\mu\nu}
 
 **Code path**
 
-`src/scf/population.cpp` — `mulliken_population_analysis()`
+`src/populations/mulliken.cpp` — `mulliken_population_analysis()`
 
 The gross AO population vector is computed as a row-sum of the Hadamard product \(P \circ S\):
 
@@ -6164,7 +6173,7 @@ that atom.
 
 **Code path**
 
-`src/scf/population.cpp` — `lowdin_population_analysis()`
+`src/populations/lodwin.cpp` — `lowdin_population_analysis()`
 
 The implementation diagonalizes the AO overlap with
 `Eigen::SelfAdjointEigenSolver`, clips tiny eigenvalues with a numerical
@@ -6196,11 +6205,11 @@ This measures how strongly the AO subspaces on atoms \(A\) and \(B\) mix
 through the occupied density in a non-orthogonal basis.
 
 For open-shell references Planck uses the spin-resolved form, summing separate
-\(\alpha\) and \(\beta\) contributions:
+\(\alpha\) and \(\beta\) contributions with a leading factor of 2:
 
 \[
 B_{AB}^{\mathrm{Mayer}} =
-\sum_{\mu \in A}\sum_{\nu \in B}
+2\sum_{\mu \in A}\sum_{\nu \in B}
 \left[
 (\mathbf P^\alpha \mathbf S)_{\mu\nu}(\mathbf P^\alpha \mathbf S)_{\nu\mu}
 +
@@ -6208,12 +6217,21 @@ B_{AB}^{\mathrm{Mayer}} =
 \right]
 \]
 
+The factor of 2 is what makes the spin-resolved form reduce to the closed-shell
+expression above: \(\mathbf P\) there is the *total* density \(\mathbf P =
+2\,\mathbf C_{\mathrm{occ}}\mathbf C_{\mathrm{occ}}^\top\), so for a closed shell
+\(\mathbf P^\alpha = \mathbf P^\beta = \mathbf P/2\) and
+\(2[2\,(\tfrac12\mathbf P\mathbf S)^2] = (\mathbf P\mathbf S)^2\). Dropping the
+2 halves every open-shell bond order (e.g. H–H would print \(\approx 0.5\)
+instead of 1); this was a real bug, fixed and PySCF-anchored (H₂ RHF
+\(B(\mathrm{H\text{-}H})=1\), H₂O⁺ UHF \(B(\mathrm{O\text{-}H})=0.760\)).
+
 The diagonal \(B_{AA}\) is left at zero in the printed matrix, and the
 off-diagonal matrix is symmetrized.
 
 **Code path**
 
-`src/scf/population.cpp` — `mayer_bond_order_analysis()`
+`src/populations/bond-order.cpp` — `mayer_bond_order_analysis()`
 
 The routine first validates the density dimensions and builds the AO lists for
 each atom.  It then forms either \(\mathbf P\mathbf S\) or the spin-resolved
@@ -6624,9 +6642,9 @@ driver.cpp
 | Ghost atoms (BSSE) | `src/base/types.h` | `Molecule::is_ghost`, `nuclear_charge`, `total_nuclear_charge` |
 | Counterpoise driver | `src/bsse/counterpoise.cpp` | `run_counterpoise` |
 | Ghost / `%begin_bsse` parsing | `src/io/io.cpp` | `parse_atom_token`, `_parse_bsse` |
-| Mulliken population analysis | `src/scf/population.cpp` | `mulliken_population_analysis`, `gross_ao_population` |
-| Löwdin population analysis | `src/scf/population.cpp` | `lowdin_population_analysis`, `symmetric_overlap_sqrt` |
-| Mayer bond orders | `src/scf/population.cpp` | `mayer_bond_order_analysis` |
+| Mulliken population analysis | `src/populations/mulliken.cpp` | `mulliken_population_analysis`, `gross_ao_population` |
+| Löwdin population analysis | `src/populations/lodwin.cpp` | `lowdin_population_analysis`, `symmetric_overlap_sqrt` |
+| Mayer bond orders | `src/populations/bond-order.cpp` | `mayer_bond_order_analysis` |
 | Dipole / quadrupole AO integrals | `src/integrals/os.cpp` | `_os_1d_moments`, `_compute_multipole_matrices` |
 | Multipole moments (traceless) | `src/integrals/os.cpp` | `_compute_multipole_moments` |
 | RMP2 natural orbitals | `src/post_hf/mp2.cpp` | `compute_rmp2_natural_orbitals` |
