@@ -570,6 +570,31 @@ int main(int argc, const char *argv[])
         // for cross-basis density projection in the spherical working basis.
     }
 
+    // ── RI-MP2 workflow gate: single-point energies only ─────────────────────────
+    // The RI front-end caches the auxiliary basis, the 2-center Coulomb metric,
+    // and the packed 3-center tensor on the Calculator (_ri_aux_basis / _ri_j2c /
+    // _ri_j3c). ensure_ri_3c_ready reuses them whenever their dimensions match,
+    // and those dimensions (npair × naux) key only off atom count and basis — not
+    // geometry. Any workflow that re-runs the energy at a displaced geometry on
+    // the same Calculator (GeomOpt, the finite-difference Frequency/GeomOptFreq/
+    // ImaginaryFollow Hessian, an analytic Gradient response build) would silently
+    // reuse the stale first-geometry integrals. There is no geometry-keyed
+    // invalidation today, so restrict RI-MP2 to a single point and name the
+    // constraint rather than risk a wrong number. Basis-agnostic: applies in both
+    // Cartesian and spherical mode.
+    if (calculator._mp2.use_ri &&
+        calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Error, "RI-MP2 :",
+            "RI-MP2 (mp2_use_ri) is only supported for single-point energies; "
+            "the auxiliary-basis / 2-center-metric / 3-center caches are not "
+            "invalidated when the geometry changes, so geometry-moving workflows "
+            "would reuse stale integrals. Set calculation singlepoint, or disable "
+            "RI (mp2_use_ri false) for " + map_enum(calculator._calculation) + ".");
+        return EXIT_FAILURE;
+    }
+
     // Now initialize SCF data structures
     calculator.initialize();
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis Construction :", std::format("Generated {} Shells and {} contracted functions", calculator._shells.nshells(), calculator._shells.nbasis()));
