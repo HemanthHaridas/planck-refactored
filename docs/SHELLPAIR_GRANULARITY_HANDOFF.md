@@ -1,8 +1,8 @@
 # Shell-pair granularity (H-10) — handoff
 
 Status as of this note: **steps 1, 2a–2c, A1–A3, A4-0 landed and gated; A4-1
-attempted and reverted (design blocker, see §A4).** Branch
-`perf/shellpair-granularity`.
+attempted and reverted (design blocker, see §A4); A4-pre and A4-1′ landed and
+gated (see §5).** Branch `perf/shellpair-granularity`.
 
 This note is the source of truth for the H-10 refactor ("ERI shell pairs are
 built per Cartesian AO, not per shell"). It records what landed, the A4
@@ -135,31 +135,93 @@ reorganization A4 was scoped as.
 Prerequisite **A4-pre** is new; A4-1′/A4-2/A4-3 are the original A4-1/A4-2/A4-3
 rebased onto it.
 
-**A4-pre — triangular VRR/HRR scratch, validated bitwise against the dense path.**
-Add a triangular variant of `EriScratch` + `hgp_vrr` (or a `max_total_am` guard
-on the existing rectangular fill that skips cells with `ax+ay+az > L_A+L_B` or
-`cx+cy+cz > L_C+L_D`) so a single build covers every component's needs without
-computing the unreachable cube corners. Keep the dense per-component path
-untouched. Gate: a unit test that the triangular build's value at every
-component's `(a0|c0)` sub-block equals the dense per-component
-`hgp_contract_a0c0` build, bitwise, on (dd|dd)/(ff|ff if a basis is added).
-Revert = delete the triangular variant. **This is the load-bearing, riskiest
-piece; it lands first, in isolation, with the dense build as its oracle.**
+**A4-pre — box-size invariance of the (a0|c0) contraction, validated bitwise.
+LANDED (commit on branch).**
 
-**A4-1′ — hoisted block on the triangular build.** Re-introduce
-`_contracted_eri_block_hoisted` (the reverted A4-1 code is a starting point; it
-already handled the norm-free contraction + per-component norm scaling and the
-ShortRange `Coulomb − LongRange` split), but contract **once** via A4-pre's
-triangular build instead of the dense cube. Gate: extend `planck-os-block-kernel`
-with hoisted-vs-A1 bitwise comparison on 6-31g\* (Coulomb/LongRange/ShortRange) +
-sto-3g — the exact gate that caught A4-1. Revert = delete routine + test hunk.
+The §4 conclusion that A4 needs a *triangular* VRR/scratch rework turned out to
+be stronger than necessary for the contraction itself. The A4-pre gate
+established empirically that the existing dense-rectangular `hgp_contract_a0c0`
+is **already box-size invariant**: contracting the `(a0|c0)` block once at the
+max AM box (`lAB = L_A+L_B`, `lCD = L_C+L_D` per axis) gives, at every Cartesian
+component's `(a0|c0)` sub-block, **bitwise** the same value as a contraction
+sized to exactly that component's AM. This holds because `hgp_vrr` is strictly
+bottom-up — a larger box only *adds* higher-AM cells (the unreachable cube
+corners), and those extra cells are never read by any lower coordinate, so they
+cannot corrupt the cells a real component needs. The dense-cube corners being
+garbage/zero is therefore harmless *for the contraction*; the §4 NaN came from
+A4-1's **HRR readout** sweeping those corner cells, not from the contraction.
+
+So A4-pre did **not** need a triangular variant. What landed:
+- a test-only hook `HeadGordonPople::_contract_a0c0_at_native_test(spAB, spCD,
+  lABx..lCDz, ax..cz, kernel, omega)` (`src/integrals/hgp.{cpp,h}`) that runs
+  `hgp_contract_a0c0` at a caller-given AM box and returns the accumulated
+  `(a0|c0)` value at a caller-given logical coordinate. ShortRange returns
+  `Coulomb − LongRange`, matching production. No production code path changed.
+- `tests/hgp_triangular_contract.cpp` → `planck-hgp-triangular-contract`. For
+  every shell quartet of water it holds the ShellPair fixed at the component-0
+  views (so the folded `_component_norm` is constant and cannot confound the
+  comparison — see §3.2), then asserts the max-AM build equals the
+  per-component-AM build, **bitwise**, at every coordinate inside each
+  component's box. Green on 6-31g\* (d-shells; the (dd|dd) quartets that NaN'd
+  A4-1) for Coulomb / LongRange / ShortRange (1,990,921 coords each) and sto-3g
+  (9,409 coords). Revert = delete the hook + test + CMake hunk.
+
+**Implication for A4-1′:** the hoisted block can contract once at the max AM box
+using the *unmodified* `hgp_contract_a0c0`, then read each component's
+`(a0|c0)` sub-block out of `a0c0_data` via `spatial_index(...)` and HRR **only
+that component's box** (`0..lABx_comp`, `0..lCDx_comp`). The triangular VRR
+rework from the original §4/§5 is **not** required, because the readout never
+needs to touch the cube corners — it HRRs a per-component sub-box, not the full
+max-AM cube (that was A4-1's mistake). A norm-free contraction + per-component
+`normA·normB·normC·normD` at readout (§3.2) is still required, since the single
+shared contraction cannot carry per-component norms.
+
+**A4-1′ — hoisted block. LANDED (commit on branch).**
+`HeadGordonPople::_contracted_eri_block_hoisted` (`src/integrals/hgp.{cpp,h}`):
+contracts the `(a0|c0)` block **once** per shell quartet at the max AM box using
+the *unmodified* dense `hgp_contract_a0c0` (no triangular rework needed — A4-pre
+showed the dense build is already box-size invariant), snapshots the
+accumulator, then for each Cartesian component gathers its `(a0|c0)` sub-box into
+a second thread-local scratch (`g_hgp_hoist_comp_scratch`) and HRRs **only that
+component's box** (`hgp_hoist_readout_component`). The HRR never touches the
+unreachable max-AM cube corners that NaN'd the original A4-1 — that was A4-1's
+actual bug, not the contraction. ShortRange is the `Coulomb − LongRange` split
+(two snapshots, combined per component). Output layout matches
+`_contracted_eri_block` (`[a][b][c][d]`, d fastest).
+
+The contraction is **norm-free** (component-0 views with `_component_norm`
+forced to 1; helper `normfree_view`) and each readout is multiplied by
+`normA·normB·normC·normD` — §3.2's required factoring, since one shared
+contraction serves components with different norms.
+
+Gate: `planck-os-block-kernel` extended with a hoisted-vs-per-component check on
+6-31g\* (Coulomb/LongRange/ShortRange) + sto-3g — the exact gate that caught
+A4-1.
+
+> **Bitwise → tight-tolerance, deliberately.** The original A4-1′ spec said
+> *bitwise*. That is **not achievable for a correct norm-free hoist** and the
+> spec was wrong on this point: the per-component path folds `_component_norm`
+> into each primitive's `coeff_product` *before* contraction, while the hoist
+> applies the norm *after* HRR. `Σ(wᵢ·n)·vᵢ` vs `(Σwᵢ·vᵢ)·n` are mathematically
+> equal but round differently, so d-shell components (norm ≠ 1) drift at the
+> last FP bit. The contraction *itself* is bitwise box-invariant (A4-pre), and
+> sto-3g (all norms = 1) is bitwise here too; only the post-HRR norm multiply
+> introduces the drift. The gate therefore checks the hoisted path at relative
+> tolerance **1e-13** (the standard ERI cross-validation bar; cf.
+> `planck-compute-2e` ~1e-12). Observed worst case on 6-31g\*: **~9.6e-16**
+> (Coulomb 7.4e-16, LongRange 4.4e-16, ShortRange 9.6e-16). The per-component
+> OS/HGP blocks still gate at exact 0. Revert = delete routine + test hunk.
 
 **A4-2 — wire into HGP `_compute_2e`.** Replace the per-component
 `_contracted_eri_elem` call in the A2 inner loops with one
 `_contracted_eri_block_hoisted` per shell quartet; run the existing
 Schwarz/orbit/scatter per component reading `block[component]`. Gate:
-`planck-compute-2e` (golden **exactly** equal), 5× `*_scf_energy_engine_os_vs_hgp`,
-smoke/core/extended. Revert = restore per-component call.
+`planck-compute-2e` — note this becomes a **tight-tolerance** cross-check, not
+golden-exact, for the same norm-scaling reason as A4-1′ (the golden checksum
+asserts exact equality today; once HGP `_compute_2e` routes through the hoist it
+will differ at ~1e-15, so the HGP arm of the comparison needs a ~1e-12 tol while
+OS/Rys stay exact). Plus 5× `*_scf_energy_engine_os_vs_hgp` (already ≤5e-9 Eh,
+unaffected) and smoke/core/extended. Revert = restore per-component call.
 
 **A4-3 — wire into the Auto path.** Route HGP-chosen quartets in
 `_compute_2e_auto` through the hoisted block (Rys-chosen quartets stay per-
@@ -215,9 +277,11 @@ These were scoped earlier and remain open; none are blocking A4.
 
 ```
 # from build/
-./planck-compute-2e            # golden checksum + 8-fold symmetry + Rys/Auto-vs-OS
-./planck-os-block-kernel       # OS + HGP block == per-component (max|diff|=0)
-./planck-hgp-engine-smoke      # OS <-> HGP to 1e-12
+./planck-compute-2e               # golden checksum + 8-fold symmetry + Rys/Auto-vs-OS
+./planck-os-block-kernel          # OS/HGP block == per-component (exact); A4-1′
+                                  #   hoisted HGP block == per-component (≤1e-13 rel)
+./planck-hgp-engine-smoke         # OS <-> HGP to 1e-12
+./planck-hgp-triangular-contract  # A4-pre: max-AM (a0|c0) == per-component, bitwise
 # from repo root
 python3 tests/run_regressions.py --suite smoke     # 35/35
 python3 tests/run_regressions.py --suite core      # 64/64

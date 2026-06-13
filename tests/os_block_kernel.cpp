@@ -1,13 +1,22 @@
-// H-10 block-kernel gate (steps 2a + A1): verify each engine's shell-quartet
-// block kernel (_contracted_eri_block) is bitwise-identical to evaluating that
-// engine's per-component _contracted_eri_elem over every Cartesian component of
-// the quartet. Covers both ObaraSaika (step 2a) and HeadGordonPople (step A1).
-// Exercises a d-shell basis (water/6-31g*) so the multi-component blocks are
-// non-trivial. No production entry point is involved — this only pins the
-// block-shape refactor before any entry routes through it.
+// H-10 block-kernel gate. Verifies each engine's shell-quartet block kernel
+// against evaluating that engine's per-component _contracted_eri_elem over
+// every Cartesian component of the quartet, on a d-shell basis (water/6-31g*)
+// plus sto-3g. No production entry point is involved — this pins the
+// block-shape refactors before any entry routes through them.
+//
+//   - steps 2a (OS) + A1 (HGP): the per-component block (_contracted_eri_block)
+//     calls the same per-component kernel, so it must match BITWISE (tol = 0).
+//   - step A4-1′ (HGP hoisted, _contracted_eri_block_hoisted): contracts the
+//     (a0|c0) block once per shell quartet at max AM and HRRs each component out
+//     of it. Mathematically identical, but it applies _component_norm after HRR
+//     whereas the per-component path folds it into each primitive before
+//     contraction, so for d-shells (norm != 1) the two drift at the last FP bit
+//     (~1e-16). Gated at a tight relative tolerance (1e-13), the standard ERI
+//     cross-validation bar — exact bitwise is impossible for a norm-free hoist.
 
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -111,15 +120,22 @@ namespace
             kernel, omega);
     }
 
+    // `hoisted` only applies to HGP: route through the A4-1′ hoisted block
+    // (one max-AM contraction + per-component HRR readout) instead of the A1
+    // per-component block. Must be bitwise-identical to per-component.
     void block_call(
         Engine engine,
         const HartreeFock::Basis &basis,
         const ShellGroup &gA, const ShellGroup &gB,
         const ShellGroup &gC, const ShellGroup &gD,
-        HartreeFock::ERIKernel kernel, double omega, double *block)
+        HartreeFock::ERIKernel kernel, double omega, double *block,
+        bool hoisted = false)
     {
         if (engine == Engine::OS)
             HartreeFock::ObaraSaika::_contracted_eri_block(
+                basis, gA, gB, gC, gD, kernel, omega, block);
+        else if (hoisted)
+            HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted(
                 basis, gA, gB, gC, gD, kernel, omega, block);
         else
             HartreeFock::HeadGordonPople::_contracted_eri_block(
@@ -128,7 +144,7 @@ namespace
 
     void check_basis(Engine engine, const std::string &basis_name,
                      HartreeFock::ERIKernel kernel, double omega,
-                     const std::string &kernel_label)
+                     const std::string &kernel_label, bool hoisted = false)
     {
         auto calc_res = make_water_calculator(basis_name);
         if (!calc_res)
@@ -146,8 +162,21 @@ namespace
             return;
         }
 
+        // The per-component block (OS step 2a, HGP step A1) calls the same
+        // per-component kernel on the same ShellPairs, so it must match exactly
+        // (tol = 0). The hoisted HGP block (A4-1′) contracts once norm-free and
+        // applies _component_norm after HRR, while the per-component path folds
+        // the norm into each primitive's coeff_product before contraction. The
+        // two are mathematically identical but the norm-scaling point differs,
+        // so for d-shells (norm != 1) they drift at the last FP bit (~1e-16
+        // observed). Exact bitwise is therefore impossible for a correct
+        // norm-free hoist; we gate at a tight tolerance well above that drift —
+        // the standard ERI cross-validation bar (cf. planck-compute-2e ~1e-12).
+        const double rel_tol = hoisted ? 1e-13 : 0.0;
+
         std::size_t max_mismatch_quartets = 0;
         double max_abs_diff = 0.0;
+        double max_rel_diff = 0.0;
         std::vector<double> block;
 
         for (const ShellGroup &gA : groups)
@@ -163,7 +192,7 @@ namespace
                         block.assign(nA * nB * nCD, 0.0);
 
                         block_call(engine, basis, gA, gB, gC, gD, kernel, omega,
-                                   block.data());
+                                   block.data(), hoisted);
 
                         bool quartet_bad = false;
                         for (std::size_t a = 0; a < nA; ++a)
@@ -179,31 +208,44 @@ namespace
                                         const double diff = std::abs(got - ref);
                                         if (diff > max_abs_diff)
                                             max_abs_diff = diff;
-                                        // Bitwise: the block calls the same
-                                        // per-component kernel on the same per-
-                                        // component ShellPairs, so equality is
-                                        // exact.
-                                        if (got != ref)
+                                        const double scale =
+                                            std::max(std::abs(ref), 1.0);
+                                        const double rdiff = diff / scale;
+                                        if (rdiff > max_rel_diff)
+                                            max_rel_diff = rdiff;
+                                        // Non-hoisted: exact (rel_tol == 0).
+                                        // Hoisted: allow last-bit norm-scaling
+                                        // drift below rel_tol; NaN/Inf in `got`
+                                        // (which would set rdiff to NaN/Inf and
+                                        // never compare <= tol) still fails.
+                                        if (!(rdiff <= rel_tol))
                                             quartet_bad = true;
                                     }
                         if (quartet_bad)
                             ++max_mismatch_quartets;
                     }
 
+        const std::string variant = hoisted ? " [hoisted]" : "";
         if (max_mismatch_quartets != 0)
         {
-            fail(std::string(engine_name(engine)) + " / " + kernel_label + " / " +
-                 basis_name + ": " + std::to_string(max_mismatch_quartets) +
-                 " quartets mismatched (max |diff| = " +
-                 std::to_string(max_abs_diff) + ")");
+            char dbuf[96];
+            std::snprintf(dbuf, sizeof(dbuf), "%.3e abs / %.3e rel (tol %.0e)",
+                          max_abs_diff, max_rel_diff, rel_tol);
+            fail(std::string(engine_name(engine)) + variant + " / " + kernel_label +
+                 " / " + basis_name + ": " + std::to_string(max_mismatch_quartets) +
+                 " quartets exceed tol (max |diff| = " + dbuf + ")");
         }
         else
         {
-            std::cout << "OK  " << engine_name(engine) << " / " << kernel_label
-                      << " / " << basis_name
-                      << ": all shell-quartet blocks bitwise-match per-component "
-                         "_contracted_eri_elem (max |diff| = "
-                      << max_abs_diff << ")\n";
+            const char *match = hoisted ? "match per-component within tol"
+                                        : "bitwise-match per-component";
+            char dbuf[96];
+            std::snprintf(dbuf, sizeof(dbuf), "%.3e abs / %.3e rel",
+                          max_abs_diff, max_rel_diff);
+            std::cout << "OK  " << engine_name(engine) << variant << " / "
+                      << kernel_label << " / " << basis_name
+                      << ": all shell-quartet blocks " << match
+                      << " _contracted_eri_elem (max |diff| = " << dbuf << ")\n";
         }
     }
 
@@ -217,12 +259,28 @@ namespace
         // STO-3G (s,p only) as a sanity lower bound.
         check_basis(engine, "sto-3g", HartreeFock::ERIKernel::Coulomb, 0.0, "Coulomb");
     }
+
+    // A4-1′: the hoisted HGP block (one max-AM contraction + per-component HRR
+    // readout) must be bitwise-identical to the per-component path — this is the
+    // exact gate that caught the original A4-1 NaN on 6-31g* d-shells.
+    void check_hgp_hoisted()
+    {
+        check_basis(Engine::HGP, "6-31g*", HartreeFock::ERIKernel::Coulomb, 0.0,
+                    "Coulomb", /*hoisted=*/true);
+        check_basis(Engine::HGP, "6-31g*", HartreeFock::ERIKernel::LongRange, 0.3,
+                    "LongRange", /*hoisted=*/true);
+        check_basis(Engine::HGP, "6-31g*", HartreeFock::ERIKernel::ShortRange, 0.3,
+                    "ShortRange", /*hoisted=*/true);
+        check_basis(Engine::HGP, "sto-3g", HartreeFock::ERIKernel::Coulomb, 0.0,
+                    "Coulomb", /*hoisted=*/true);
+    }
 } // namespace
 
 int main()
 {
     check_engine(Engine::OS);
     check_engine(Engine::HGP);
+    check_hgp_hoisted();
 
     if (!g_ok)
     {

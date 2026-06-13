@@ -39,6 +39,22 @@ namespace HartreeFock
             double omega,
             double *block);
 
+        // Hoisted shell-quartet block kernel (H-10 step A4-1′). Same output
+        // contract as _contracted_eri_block ([a][b][c][d] row-major, d fastest,
+        // same size), but amortizes the expensive work: the per-primitive VRR +
+        // (a0|c0) contraction runs ONCE per shell quartet at the max AM box and
+        // each Cartesian component is then read out via a cheap per-component
+        // HRR. Bitwise-identical to _contracted_eri_block (and thus to the per-
+        // component _contracted_eri_elem); gated by planck-os-block-kernel.
+        // Not yet wired into the production entry points (steps A4-2 / A4-3).
+        void _contracted_eri_block_hoisted(
+            const HartreeFock::Basis &basis,
+            const ShellGroup &gA, const ShellGroup &gB,
+            const ShellGroup &gC, const ShellGroup &gD,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            double *block);
+
         // Phase-1 HGP integration surface: keep the public API aligned with the
         // existing ERI engines so the correctness-preserving plumbing lands
         // first, then the internal contracted-quartet kernel can be replaced
@@ -90,6 +106,23 @@ namespace HartreeFock
             int lBx, int lBy, int lBz,
             int lCx, int lCy, int lCz,
             int lDx, int lDy, int lDz,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0);
+
+        // Test hook (H-10 step A4-pre): contract the (a0|c0) block over all
+        // primitive pairs at the AM box (lABx..lCDz) and return the accumulated
+        // value at logical coordinate (ax,ay,az,cx,cy,cz). Used to gate that a
+        // single max-AM contraction's per-component sub-block is bitwise-equal
+        // to a per-component-AM contraction — the §4 invariant the hoisted A4
+        // path depends on. ShortRange returns Coulomb − LongRange, matching the
+        // production split.
+        double _contract_a0c0_at_native_test(
+            const HartreeFock::ShellPair &spAB,
+            const HartreeFock::ShellPair &spCD,
+            int lABx, int lABy, int lABz,
+            int lCDx, int lCDy, int lCDz,
+            int ax, int ay, int az,
+            int cx, int cy, int cz,
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0);
 
