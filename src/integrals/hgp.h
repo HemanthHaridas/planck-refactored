@@ -23,6 +23,22 @@ namespace HartreeFock
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0);
 
+        // Shell-quartet block kernel (H-10 phase A, step A1). Fills `block`
+        // with every Cartesian-component ERI of the quartet (A B | C D) in
+        // [a][b][c][d] row-major order (d fastest). `block` must hold at least
+        // gA.n_components * gB.n_components * gC.n_components * gD.n_components
+        // doubles. Bitwise-identical to per-component _contracted_eri_elem; it
+        // still calls the per-component kernel once per component (the once-per-
+        // shell-quartet VRR/HRR readout is step A4). Not yet wired into the
+        // production entry points (see hgp.cpp).
+        void _contracted_eri_block(
+            const HartreeFock::Basis &basis,
+            const ShellGroup &gA, const ShellGroup &gB,
+            const ShellGroup &gC, const ShellGroup &gD,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            double *block);
+
         // Phase-1 HGP integration surface: keep the public API aligned with the
         // existing ERI engines so the correctness-preserving plumbing lands
         // first, then the internal contracted-quartet kernel can be replaced

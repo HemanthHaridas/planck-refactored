@@ -1,9 +1,10 @@
-// H-10 step 2a gate: verify the OS shell-quartet block kernel
-// (_contracted_eri_block) is bitwise-identical to evaluating the existing
-// per-component _contracted_eri_elem over every Cartesian component of the
-// quartet. Exercises a d-shell basis (water/6-31g*) so the multi-component
-// blocks are non-trivial. No production entry point is involved — this only
-// pins the block-shape refactor before any entry routes through it.
+// H-10 block-kernel gate (steps 2a + A1): verify each engine's shell-quartet
+// block kernel (_contracted_eri_block) is bitwise-identical to evaluating that
+// engine's per-component _contracted_eri_elem over every Cartesian component of
+// the quartet. Covers both ObaraSaika (step 2a) and HeadGordonPople (step A1).
+// Exercises a d-shell basis (water/6-31g*) so the multi-component blocks are
+// non-trivial. No production entry point is involved — this only pins the
+// block-shape refactor before any entry routes through it.
 
 #include <cmath>
 #include <cstddef>
@@ -15,6 +16,7 @@
 #include "base/basis.h"
 #include "base/types.h"
 #include "basis/basis.h"
+#include "integrals/hgp.h"
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
 
@@ -62,9 +64,22 @@ namespace
         return calc;
     }
 
-    // Reference per-component value: construct the component ShellPairs exactly
-    // as build_shellpairs does and call the public per-component entry.
+    enum class Engine
+    {
+        OS,
+        HGP
+    };
+
+    const char *engine_name(Engine e)
+    {
+        return e == Engine::OS ? "OS" : "HGP";
+    }
+
+    // Reference per-component value for the given engine: construct the
+    // component ShellPairs exactly as build_shellpairs does and call that
+    // engine's public per-component entry.
     double reference_elem(
+        Engine engine,
         const HartreeFock::Basis &basis,
         const ShellGroup &gA, const ShellGroup &gB,
         const ShellGroup &gC, const ShellGroup &gD,
@@ -79,7 +94,15 @@ namespace
         const HartreeFock::ShellPair spAB(cvA, cvB);
         const HartreeFock::ShellPair spCD(cvC, cvD);
 
-        return HartreeFock::ObaraSaika::_contracted_eri_elem(
+        if (engine == Engine::OS)
+            return HartreeFock::ObaraSaika::_contracted_eri_elem(
+                spAB, spCD,
+                cvA._cartesian[0], cvA._cartesian[1], cvA._cartesian[2],
+                cvB._cartesian[0], cvB._cartesian[1], cvB._cartesian[2],
+                cvC._cartesian[0], cvC._cartesian[1], cvC._cartesian[2],
+                cvD._cartesian[0], cvD._cartesian[1], cvD._cartesian[2],
+                kernel, omega);
+        return HartreeFock::HeadGordonPople::_contracted_eri_elem(
             spAB, spCD,
             cvA._cartesian[0], cvA._cartesian[1], cvA._cartesian[2],
             cvB._cartesian[0], cvB._cartesian[1], cvB._cartesian[2],
@@ -88,8 +111,24 @@ namespace
             kernel, omega);
     }
 
-    void check_basis(const std::string &basis_name, HartreeFock::ERIKernel kernel,
-                     double omega, const std::string &kernel_label)
+    void block_call(
+        Engine engine,
+        const HartreeFock::Basis &basis,
+        const ShellGroup &gA, const ShellGroup &gB,
+        const ShellGroup &gC, const ShellGroup &gD,
+        HartreeFock::ERIKernel kernel, double omega, double *block)
+    {
+        if (engine == Engine::OS)
+            HartreeFock::ObaraSaika::_contracted_eri_block(
+                basis, gA, gB, gC, gD, kernel, omega, block);
+        else
+            HartreeFock::HeadGordonPople::_contracted_eri_block(
+                basis, gA, gB, gC, gD, kernel, omega, block);
+    }
+
+    void check_basis(Engine engine, const std::string &basis_name,
+                     HartreeFock::ERIKernel kernel, double omega,
+                     const std::string &kernel_label)
     {
         auto calc_res = make_water_calculator(basis_name);
         if (!calc_res)
@@ -123,8 +162,8 @@ namespace
                         const std::size_t nCD = nC * nD;
                         block.assign(nA * nB * nCD, 0.0);
 
-                        HartreeFock::ObaraSaika::_contracted_eri_block(
-                            basis, gA, gB, gC, gD, kernel, omega, block.data());
+                        block_call(engine, basis, gA, gB, gC, gD, kernel, omega,
+                                   block.data());
 
                         bool quartet_bad = false;
                         for (std::size_t a = 0; a < nA; ++a)
@@ -135,13 +174,13 @@ namespace
                                         const double got =
                                             block[(a * nB + b) * nCD + (c * nD + d)];
                                         const double ref = reference_elem(
-                                            basis, gA, gB, gC, gD, a, b, c, d,
+                                            engine, basis, gA, gB, gC, gD, a, b, c, d,
                                             kernel, omega);
                                         const double diff = std::abs(got - ref);
                                         if (diff > max_abs_diff)
                                             max_abs_diff = diff;
                                         // Bitwise: the block calls the same
-                                        // _contracted_eri on the same per-
+                                        // per-component kernel on the same per-
                                         // component ShellPairs, so equality is
                                         // exact.
                                         if (got != ref)
@@ -153,36 +192,43 @@ namespace
 
         if (max_mismatch_quartets != 0)
         {
-            fail(kernel_label + " / " + basis_name + ": " +
-                 std::to_string(max_mismatch_quartets) +
+            fail(std::string(engine_name(engine)) + " / " + kernel_label + " / " +
+                 basis_name + ": " + std::to_string(max_mismatch_quartets) +
                  " quartets mismatched (max |diff| = " +
                  std::to_string(max_abs_diff) + ")");
         }
         else
         {
-            std::cout << "OK  " << kernel_label << " / " << basis_name
+            std::cout << "OK  " << engine_name(engine) << " / " << kernel_label
+                      << " / " << basis_name
                       << ": all shell-quartet blocks bitwise-match per-component "
                          "_contracted_eri_elem (max |diff| = "
                       << max_abs_diff << ")\n";
         }
     }
+
+    void check_engine(Engine engine)
+    {
+        // Coulomb on a d-shell basis is the primary case.
+        check_basis(engine, "6-31g*", HartreeFock::ERIKernel::Coulomb, 0.0, "Coulomb");
+        // A screened kernel exercises the omega path through the same block.
+        check_basis(engine, "6-31g*", HartreeFock::ERIKernel::LongRange, 0.3, "LongRange");
+        check_basis(engine, "6-31g*", HartreeFock::ERIKernel::ShortRange, 0.3, "ShortRange");
+        // STO-3G (s,p only) as a sanity lower bound.
+        check_basis(engine, "sto-3g", HartreeFock::ERIKernel::Coulomb, 0.0, "Coulomb");
+    }
 } // namespace
 
 int main()
 {
-    // Coulomb on a d-shell basis is the primary case.
-    check_basis("6-31g*", HartreeFock::ERIKernel::Coulomb, 0.0, "Coulomb");
-    // A screened kernel exercises the omega path through the same block.
-    check_basis("6-31g*", HartreeFock::ERIKernel::LongRange, 0.3, "LongRange");
-    check_basis("6-31g*", HartreeFock::ERIKernel::ShortRange, 0.3, "ShortRange");
-    // STO-3G (s,p only) as a sanity lower bound.
-    check_basis("sto-3g", HartreeFock::ERIKernel::Coulomb, 0.0, "Coulomb");
+    check_engine(Engine::OS);
+    check_engine(Engine::HGP);
 
     if (!g_ok)
     {
-        std::cerr << "FAILED: OS block kernel deviates from per-component path\n";
+        std::cerr << "FAILED: a block kernel deviates from its per-component path\n";
         return 1;
     }
-    std::cout << "PASSED: OS block kernel matches per-component path\n";
+    std::cout << "PASSED: OS and HGP block kernels match their per-component paths\n";
     return 0;
 }
