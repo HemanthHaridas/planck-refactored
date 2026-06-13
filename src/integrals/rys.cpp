@@ -161,6 +161,54 @@ namespace
         return sym_ops != nullptr && sym_ops->size() > 1;
     }
 
+    // ─── Shell-quartet iteration support (H-10 step A3, Auto path) ───────────
+    //
+    // Reconstruct the shell grouping from the per-AO shell_pairs list so the
+    // Auto _compute_2e_auto build can iterate at shell-quartet granularity.
+    // build_shellpairs emits every diagonal pair (i,i), so each AO i appears as
+    // some pair's A side with A._index == i; runs of AOs sharing the same Shell*
+    // (contiguous by construction) form the groups. Mirrors the OS/HGP
+    // shell_groups_from_pairs; engine-local because the helpers live in this
+    // translation unit's anonymous namespace.
+    struct RysShellGroup
+    {
+        std::size_t first_ao = 0;     // _index of component 0
+        std::size_t n_components = 0; // (L+1)(L+2)/2
+    };
+
+    static std::vector<RysShellGroup> shell_groups_from_pairs(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nbasis,
+        std::vector<const HartreeFock::ContractedView *> &ao_views)
+    {
+        ao_views.assign(nbasis, nullptr);
+        for (const auto &sp : shell_pairs)
+        {
+            if (sp.A._index < nbasis)
+                ao_views[sp.A._index] = &sp.A;
+            if (sp.B._index < nbasis)
+                ao_views[sp.B._index] = &sp.B;
+        }
+
+        std::vector<RysShellGroup> groups;
+        const HartreeFock::Shell *current = nullptr;
+        for (std::size_t ao = 0; ao < nbasis; ++ao)
+        {
+            const HartreeFock::ContractedView *view = ao_views[ao];
+            const HartreeFock::Shell *shell = view ? view->_shell : nullptr;
+            if (groups.empty() || shell != current)
+            {
+                groups.push_back(RysShellGroup{ao, 1});
+                current = shell;
+            }
+            else
+            {
+                ++groups.back().n_components;
+            }
+        }
+        return groups;
+    }
+
     static void canonicalize_pair(std::size_t &i, std::size_t &j)
     {
         if (i > j)
@@ -816,79 +864,121 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
         shell_pairs, nb, sym_ops);
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
 
-    const std::size_t npairs = shell_pairs.size();
+    // H-10 step A3: iterate the default Auto path at *shell-quartet* granularity
+    // instead of per Cartesian-AO. Reconstruct the shell grouping from the
+    // per-AO shell_pairs list and form the upper triangle of *shell* pairs. The
+    // per-component Schwarz screening, symmetry orbit, per-quartet Rys/HGP
+    // dispatch (_auto_contracted_eri), and 8-fold store-only scatter are
+    // unchanged — they now run in the inner component loops. Bitwise-identical
+    // to the per-AO build: same _auto_contracted_eri on the same per-component
+    // ShellPair (the Rys/HGP choice keys on shell-level total L, identical for
+    // every component of the quartet), store-only scatter, so independent of
+    // visitation order. The per-component (k,l) >=_lex (i,j) check reproduces
+    // the old flat-pair q >= p ordering exactly.
+    std::vector<const HartreeFock::ContractedView *> ao_views;
+    const std::vector<RysShellGroup> groups =
+        shell_groups_from_pairs(shell_pairs, nb, ao_views);
+    const std::size_t ngroups = groups.size();
 
-    // Flatten the upper-triangle (p,q) iteration space for load balance; see
-    // ObaraSaika::_compute_2e for the rationale and the closed-form t->(p,q)
-    // inversion. The scatter is store-only, so the tensor is independent of
-    // visitation order and this stays bitwise-identical to the serial-row form.
-    const std::size_t ntri = npairs * (npairs + 1) / 2;
-    const auto tri_base = [npairs](std::size_t r) -> std::size_t
-    { return r * npairs - r * (r - 1) / 2; };
-
-#pragma omp parallel for schedule(dynamic, 64)
-    for (std::size_t t = 0; t < ntri; ++t)
+    struct GroupPair
     {
-        long long pp = static_cast<long long>(std::floor(
-            (static_cast<double>(2 * npairs + 1) -
-             std::sqrt(static_cast<double>(2 * npairs + 1) *
-                           static_cast<double>(2 * npairs + 1) -
-                       8.0 * static_cast<double>(t))) /
-            2.0));
-        if (pp < 0)
-            pp = 0;
-        while (pp > 0 && tri_base(static_cast<std::size_t>(pp)) > t)
-            --pp;
-        while (static_cast<std::size_t>(pp) + 1 < npairs &&
-               tri_base(static_cast<std::size_t>(pp) + 1) <= t)
-            ++pp;
-        const std::size_t p = static_cast<std::size_t>(pp);
-        const std::size_t q = p + (t - tri_base(p));
+        std::size_t a;
+        std::size_t b;
+    };
+    std::vector<GroupPair> group_pairs;
+    group_pairs.reserve(ngroups * (ngroups + 1) / 2);
+    for (std::size_t sa = 0; sa < ngroups; ++sa)
+        for (std::size_t sb = sa; sb < ngroups; ++sb)
+            group_pairs.push_back({sa, sb});
 
-        const auto &spAB = shell_pairs[p];
-        const std::size_t i = spAB.A._index;
-        const std::size_t j = spAB.B._index;
-        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
-        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+    const std::size_t ngp = group_pairs.size();
 
-        const auto &spCD = shell_pairs[q];
-        const std::size_t k = spCD.A._index;
-        const std::size_t l = spCD.B._index;
-        std::vector<QuartetOrbitElem> orbit;
-        if (Q[i * nb + j] * Q[k * nb + l] < tol_eri)
-            continue;
+#pragma omp parallel for schedule(dynamic, 8)
+    for (std::size_t bra = 0; bra < ngp; ++bra)
+    {
+        const RysShellGroup &gA = groups[group_pairs[bra].a];
+        const RysShellGroup &gB = groups[group_pairs[bra].b];
 
-        if (use_sym)
+        // Iterate every ket shell pair; the per-component bra-ket canonical
+        // check ((k,l) >=_lex (i,j)) is the exact filter, so we must not prune
+        // ket shell pairs by their flat index.
+        for (std::size_t ket = 0; ket < ngp; ++ket)
         {
-            auto [orb, forced_zero] =
-                build_quartet_orbit(i, j, k, l, *sym_ops);
-            if (forced_zero)
-                continue;
-            orbit = std::move(orb);
-            if (orbit.front().i != i || orbit.front().j != j ||
-                orbit.front().k != k || orbit.front().l != l)
-                continue;
-        }
+            const RysShellGroup &gC = groups[group_pairs[ket].a];
+            const RysShellGroup &gD = groups[group_pairs[ket].b];
 
-        const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-        const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-        const double val = _auto_contracted_eri(spAB, spCD,
-                                                lAx, lAy, lAz, lBx, lBy, lBz,
-                                                lCx, lCy, lCz, lDx, lDy, lDz,
-                                                kernel, omega);
+            for (std::size_t ca = 0; ca < gA.n_components; ++ca)
+            {
+                const HartreeFock::ContractedView &cvA = *ao_views[gA.first_ao + ca];
+                const std::size_t i = cvA._index;
+                const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
 
-        if (!use_sym)
-        {
-            write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
-            continue;
-        }
+                for (std::size_t cb = 0; cb < gB.n_components; ++cb)
+                {
+                    const HartreeFock::ContractedView &cvB = *ao_views[gB.first_ao + cb];
+                    const std::size_t j = cvB._index;
+                    if (j < i) // bra upper triangle: j >= i
+                        continue;
+                    const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
 
-        for (const auto &elem : orbit)
-        {
-            write_eri_permutations(
-                eri, nb, nb2, nb3,
-                elem.i, elem.j, elem.k, elem.l,
-                static_cast<double>(elem.sign) * val);
+                    const HartreeFock::ShellPair spAB(cvA, cvB);
+
+                    for (std::size_t cc = 0; cc < gC.n_components; ++cc)
+                    {
+                        const HartreeFock::ContractedView &cvC = *ao_views[gC.first_ao + cc];
+                        const std::size_t k = cvC._index;
+                        const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+
+                        for (std::size_t cd = 0; cd < gD.n_components; ++cd)
+                        {
+                            const HartreeFock::ContractedView &cvD = *ao_views[gD.first_ao + cd];
+                            const std::size_t l = cvD._index;
+                            if (l < k) // ket upper triangle: l >= k
+                                continue;
+                            // bra-ket canonical: (k,l) >=_lex (i,j)
+                            if (k < i || (k == i && l < j))
+                                continue;
+
+                            const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
+
+                            if (Q[i * nb + j] * Q[k * nb + l] < tol_eri)
+                                continue;
+
+                            std::vector<QuartetOrbitElem> orbit;
+                            if (use_sym)
+                            {
+                                auto [orb, forced_zero] =
+                                    build_quartet_orbit(i, j, k, l, *sym_ops);
+                                if (forced_zero)
+                                    continue;
+                                orbit = std::move(orb);
+                                if (orbit.front().i != i || orbit.front().j != j ||
+                                    orbit.front().k != k || orbit.front().l != l)
+                                    continue;
+                            }
+
+                            const HartreeFock::ShellPair spCD(cvC, cvD);
+                            const double val = _auto_contracted_eri(
+                                spAB, spCD,
+                                lAx, lAy, lAz, lBx, lBy, lBz,
+                                lCx, lCy, lCz, lDx, lDy, lDz,
+                                kernel, omega);
+
+                            if (!use_sym)
+                            {
+                                write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+                                continue;
+                            }
+
+                            for (const auto &elem : orbit)
+                                write_eri_permutations(
+                                    eri, nb, nb2, nb3,
+                                    elem.i, elem.j, elem.k, elem.l,
+                                    static_cast<double>(elem.sign) * val);
+                        }
+                    }
+                }
+            }
         }
     }
 
