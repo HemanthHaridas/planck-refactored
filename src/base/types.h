@@ -512,8 +512,15 @@ namespace HartreeFock
 
     struct OptionsIntegral
     {
-        double _tol_eri = 1E-10;                             // ERI tolerance for Schwarz screening
-        IntegralMethod _engine = IntegralMethod::ObaraSaika; // Integral Engine
+        double _tol_eri = 1E-10;                       // ERI tolerance for Schwarz screening
+        // Default to Auto: the SCF ERI/Fock builds dispatch per shell quartet
+        // through HGP, with a Rys tail for the lowest-angular-momentum quartets
+        // (L_AB+L_CD <= 1), which is faster across the mix than any single fixed
+        // engine. Gradient/geomopt/freq derivative ERIs do not recognize Auto and
+        // fall back to OS (see Gradient::compute_eri_deriv_dispatch); both engines
+        // are validated, so the fallback is correct, just not uniform within a
+        // gradient run. Set `engine os/rys/hgp` explicitly to override.
+        IntegralMethod _engine = IntegralMethod::Auto; // Integral Engine
     };
 
     struct OptionsDFT
