@@ -1,8 +1,10 @@
 # Shell-pair granularity (H-10) — handoff
 
 Status as of this note: **steps 1, 2a–2c, A1–A3, A4-0 landed and gated; A4-1
-attempted and reverted (design blocker, see §A4); A4-pre and A4-1′ landed and
-gated (see §5).** Branch `perf/shellpair-granularity`.
+attempted and reverted (design blocker, see §A4); A4-pre, A4-1′, and A4-2 landed
+and gated (see §5).** Branch `perf/shellpair-granularity`. A4-2 is the first
+step where HGP `_compute_2e` actually amortizes the primitive work; A4-3 (the
+default Auto path) is the remaining wiring.
 
 This note is the source of truth for the H-10 refactor ("ERI shell pairs are
 built per Cartesian AO, not per shell"). It records what landed, the A4
@@ -40,12 +42,17 @@ step 1) stays in the tree throughout, so any engine can be reverted to per-AO.
 | A2 | HGP `_compute_2e` iterates shell-quartets (same conversion as 2b). HGP's own `_compute_2e_fock{,_uhf}` already delegate phase-1 to `_compute_2e`, so they came along for free | `src/integrals/hgp.cpp` | `planck-hgp-engine-smoke`, cross-engine |
 | A3 | `RysQuad::_compute_2e_auto` (the **default** Auto path's tensor + Fock builds) iterates shell-quartets; per-quartet Rys/HGP dispatch unchanged | `src/integrals/rys.cpp` | `planck-compute-2e` Rys-Auto, suites |
 | A4-0 | Extract HGP's per-primitive VRR-contract accumulation into shared `hgp_contract_a0c0`; per-component path routes through it (bitwise no-op) | `src/integrals/hgp.cpp` | `planck-os-block-kernel`, smoke/core |
+| A4-pre | Establish dense `hgp_contract_a0c0` is box-size invariant; test hook `_contract_a0c0_at_native_test` | `src/integrals/hgp.{cpp,h}` | `planck-hgp-triangular-contract` (bitwise, 6-31g\* d-shells) |
+| A4-1′ | Hoisted block `_contracted_eri_block_hoisted` (+ `HoistedQuartet`/`MaxBoxLayout`): one max-AM contraction per quartet, per-component HRR readout, norm-free + per-component norm | `src/integrals/hgp.{cpp,h}` | `planck-os-block-kernel` hoisted arm (≤1e-13 rel) |
+| A4-2 | HGP `_compute_2e` routes through `HoistedQuartet` (one shared contraction per shell quartet, built lazily on first surviving component; cheap per-component HRR readout). `_compute_2e_fock{,_uhf}` inherit it via their existing delegation to `_compute_2e` | `src/integrals/hgp.cpp` | `planck-hgp-engine-smoke`, 5× `*_scf_energy_engine_os_vs_hgp`, smoke/core/extended |
 
 **Net structural result:** OS, HGP, and the default Auto path all iterate ERI
-work at shell-quartet granularity. **No speedup yet** — every path still calls
-the per-component kernel once per component (the per-primitive seed work is *not*
-yet amortized). A4 is the step that converts the iteration shape into a
-performance win, and it is **not done** (see §A4).
+work at shell-quartet granularity. **As of A4-2, HGP `_compute_2e` (and the Fock
+builds that delegate to it) amortize the per-primitive VRR + (a0|c0) contraction
+across a shell quartet's components** — the first actual primitive-work saving.
+The remaining wiring is **A4-3**: route the *default Auto path*
+(`RysQuad::_compute_2e_auto`) HGP-chosen quartets through the hoist so the win
+lands on the default engine.
 
 Commits (top of branch first):
 ```
@@ -212,30 +219,46 @@ A4-1.
 > (Coulomb 7.4e-16, LongRange 4.4e-16, ShortRange 9.6e-16). The per-component
 > OS/HGP blocks still gate at exact 0. Revert = delete routine + test hunk.
 
-**A4-2 — wire into HGP `_compute_2e`.** Replace the per-component
-`_contracted_eri_elem` call in the A2 inner loops with one
-`_contracted_eri_block_hoisted` per shell quartet; run the existing
-Schwarz/orbit/scatter per component reading `block[component]`. Gate:
-`planck-compute-2e` — note this becomes a **tight-tolerance** cross-check, not
-golden-exact, for the same norm-scaling reason as A4-1′ (the golden checksum
-asserts exact equality today; once HGP `_compute_2e` routes through the hoist it
-will differ at ~1e-15, so the HGP arm of the comparison needs a ~1e-12 tol while
-OS/Rys stay exact). Plus 5× `*_scf_energy_engine_os_vs_hgp` (already ≤5e-9 Eh,
-unaffected) and smoke/core/extended. Revert = restore per-component call.
+**A4-2 — wire into HGP `_compute_2e`. LANDED (commit on branch).**
+Rather than the standalone `_contracted_eri_block_hoisted` (which computes every
+component unconditionally), `_compute_2e` constructs a `HoistedQuartet` once per
+`(gA,gB,gC,gD)` shell quartet, just inside the `ket` loop. Its contraction is
+**deferred to the first surviving component** (`prepare()` runs on the first
+`readout()`), so a fully Schwarz/orbit-screened quartet pays nothing — this is
+strictly better than the standalone block and preserves the per-component
+screening that A2 already had. Each surviving component then reads its ERI via a
+cheap per-component HRR (`HoistedQuartet::readout`, applying the per-component
+norm product). The existing per-component Schwarz, symmetry orbit-front check,
+and 8-fold store-only scatter are unchanged. `_compute_2e_fock{,_uhf}` inherit
+the hoist for free via their existing delegation to `_compute_2e`.
+
+`HoistedQuartet` and the lightweight `MaxBoxLayout` (max-AM strides, avoids
+copying the whole `EriScratch` per quartet) were extracted in the same change;
+`_contracted_eri_block_hoisted` was refactored to share them.
+
+Gate: `planck-hgp-engine-smoke` (OS↔HGP `_compute_2e` on sto-3g — bitwise there
+since all norms = 1; already at 1e-12 tol which absorbs d-shell drift), 5×
+`*_scf_energy_engine_os_vs_hgp` (all PASS, incl. HSE06 LongRange/ShortRange and
+the symmetry case), smoke/core/extended. Note: `planck-compute-2e` does **not**
+route HGP through its golden checksum (golden is OS on sto-3g; cross-checks are
+Rys/Rys-Auto), so it is unaffected — the earlier worry that A4-2 would force a
+golden-tolerance change was wrong. Revert = restore the per-component
+`_contracted_eri_elem` call + `spAB`/`spCD` construction in the inner loops.
 
 **A4-3 — wire into the Auto path.** Route HGP-chosen quartets in
-`_compute_2e_auto` through the hoisted block (Rys-chosen quartets stay per-
-component; Rys hoisting is Phase B, out of A4). This delivers the win on the
-**default** engine. Gate: `planck-compute-2e` Rys-Auto, suites. Revert = restore
+`_compute_2e_auto` through the hoist (Rys-chosen quartets stay per-component;
+Rys hoisting is Phase B, out of A4). This delivers the win on the **default**
+engine. Gate: `planck-compute-2e` Rys-Auto, suites. Revert = restore
 per-component `_auto_contracted_eri`.
 
-### Open screening subtlety (applies to A4-2/A4-3, same as OS-2d would have had)
-Schwarz screening and the symmetry orbit-front check are **per component** and
-may skip individual components. Computing the full block first wastes work on
-skipped components. This is acceptable (correctness-first) and stays bitwise. A
-shell-quartet-level Schwarz prescreen (skip the whole block when the max bound is
-below tol) is a **screening-policy** change — it alters the screened set, so it
-is **not** bitwise and is out of A4's scope.
+### Screening note (A4-2 done; applies to A4-3 too)
+Schwarz screening and the symmetry orbit-front check are **per component**. A4-2
+handles this with `HoistedQuartet`'s lazy `prepare()`: the shared contraction is
+built only when the first component survives both screens, so screened-out
+quartets cost nothing and surviving quartets pay the contraction once. A
+shell-quartet-level Schwarz *prescreen* (skip the whole quartet when the max
+bound is below tol) is a **screening-policy** change — it alters the screened
+set, so it is **not** equivalence-preserving and is out of A4's scope.
 
 ---
 

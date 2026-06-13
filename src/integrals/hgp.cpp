@@ -1014,8 +1014,39 @@ namespace
     // (laid out with `dst` strides, already sized to the component AM box), then
     // run both HRR passes and return the component ERI. `dst` is the per-thread
     // component scratch; `src` is the shared max-AM scratch.
+    // Strides of the shared max-AM (a0|c0) accumulator, kept lightweight so the
+    // readout can index a snapshot vector without copying the whole EriScratch.
+    // Must match EriScratch::resize_for_quartet's stride convention exactly.
+    struct MaxBoxLayout
+    {
+        std::size_t ax_stride = 0, ay_stride = 0, az_stride = 0;
+        std::size_t cx_stride = 0, cy_stride = 0, cz_stride = 0;
+
+        MaxBoxLayout() = default;
+        MaxBoxLayout(int lABx, int lABy, int lABz, int lCDx, int lCDy, int lCDz)
+        {
+            const int ax_dim = lABx + 1, ay_dim = lABy + 1, az_dim = lABz + 1;
+            const int cx_dim = lCDx + 1, cy_dim = lCDy + 1, cz_dim = lCDz + 1;
+            cz_stride = 1;
+            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
+            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
+            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
+            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
+            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
+        }
+        std::size_t index(int ax, int ay, int az, int cx, int cy, int cz) const
+        {
+            return static_cast<std::size_t>(ax) * ax_stride +
+                   static_cast<std::size_t>(ay) * ay_stride +
+                   static_cast<std::size_t>(az) * az_stride +
+                   static_cast<std::size_t>(cx) * cx_stride +
+                   static_cast<std::size_t>(cy) * cy_stride +
+                   static_cast<std::size_t>(cz) * cz_stride;
+        }
+    };
+
     static double hgp_hoist_readout_component(
-        const EriScratch &src, const double *src_a0c0,
+        const MaxBoxLayout &src, const double *src_a0c0,
         EriScratch &dst,
         int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
         int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
@@ -1037,7 +1068,7 @@ namespace
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
                                 dst.hrr_data[dst.spatial_index(ax, ay, az, cx, cy, cz)] =
-                                    src_a0c0[src.spatial_index(ax, ay, az, cx, cy, cz)];
+                                    src_a0c0[src.index(ax, ay, az, cx, cy, cz)];
 
         return hgp_hrr_finalize(
             dst,
@@ -1057,6 +1088,107 @@ namespace
         out._component_norm = 1.0;
         return out;
     }
+
+    // Holds the once-per-shell-quartet shared (a0|c0) contraction(s) so any
+    // surviving Cartesian component can read its ERI out cheaply. Built norm-
+    // free at the max AM box (invariants (1)/(2) above); component readout
+    // applies normA·normB·normC·normD. Used by both _contracted_eri_block_hoisted
+    // and _compute_2e (A4-2). The contraction is deferred to the first prepare()
+    // call so a fully screened-out quartet pays nothing.
+    struct HoistedQuartet
+    {
+        // Norm-free views must outlive spAB/spCD (which hold references).
+        HartreeFock::ContractedView nfA, nfB, nfC, nfD;
+        HartreeFock::ShellPair spAB, spCD;
+        double ABx, ABy, ABz, CDx, CDy, CDz;
+        int maxAB, maxCD;
+        bool short_range;
+        bool zero;        // ShortRange with omega<=0: identically zero
+        bool prepared = false;
+        std::vector<double> a0c0_primary;   // Coulomb (ShortRange) or `kernel`
+        std::vector<double> a0c0_secondary; // LongRange (ShortRange only)
+        std::size_t spatial_size = 0;
+        // Max-AM stride layout so readout can index either snapshot independent
+        // of the shared scratch's later per-component resizes.
+        MaxBoxLayout layout;
+
+        HoistedQuartet(
+            const HartreeFock::ContractedView &cvA0,
+            const HartreeFock::ContractedView &cvB0,
+            const HartreeFock::ContractedView &cvC0,
+            const HartreeFock::ContractedView &cvD0,
+            HartreeFock::ERIKernel kernel, double omega)
+            : nfA(normfree_view(cvA0)), nfB(normfree_view(cvB0)),
+              nfC(normfree_view(cvC0)), nfD(normfree_view(cvD0)),
+              spAB(nfA, nfB), spCD(nfC, nfD)
+        {
+            ABx = spAB.R[0]; ABy = spAB.R[1]; ABz = spAB.R[2];
+            CDx = spCD.R[0]; CDy = spCD.R[1]; CDz = spCD.R[2];
+            const int LA = static_cast<int>(cvA0._shell->_shell);
+            const int LB = static_cast<int>(cvB0._shell->_shell);
+            const int LC = static_cast<int>(cvC0._shell->_shell);
+            const int LD = static_cast<int>(cvD0._shell->_shell);
+            maxAB = LA + LB;
+            maxCD = LC + LD;
+            short_range = (kernel == HartreeFock::ERIKernel::ShortRange);
+            zero = (short_range && omega <= 0.0);
+            kernel_ = kernel;
+            omega_ = omega;
+        }
+
+        void prepare()
+        {
+            if (prepared || zero)
+                return;
+            prepared = true;
+            EriScratch &shared = g_hgp_scratch;
+            const HartreeFock::ERIKernel primary =
+                short_range ? HartreeFock::ERIKernel::Coulomb : kernel_;
+            hgp_contract_a0c0(spAB, spCD, shared,
+                              maxAB, maxAB, maxAB, maxCD, maxCD, maxCD,
+                              primary, omega_, PrimitiveWeightCenter::None);
+            spatial_size = shared.spatial_size;
+            layout = MaxBoxLayout(maxAB, maxAB, maxAB, maxCD, maxCD, maxCD);
+            a0c0_primary.assign(shared.a0c0_data, shared.a0c0_data + spatial_size);
+            if (short_range)
+            {
+                hgp_contract_a0c0(spAB, spCD, shared,
+                                  maxAB, maxAB, maxAB, maxCD, maxCD, maxCD,
+                                  HartreeFock::ERIKernel::LongRange, omega_,
+                                  PrimitiveWeightCenter::None);
+                a0c0_secondary.assign(shared.a0c0_data,
+                                      shared.a0c0_data + spatial_size);
+            }
+        }
+
+        // ERI for one Cartesian component (norm applied by caller's `norm`).
+        double readout(
+            int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+            int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+            double norm)
+        {
+            if (zero)
+                return 0.0;
+            prepare();
+            EriScratch &comp = g_hgp_hoist_comp_scratch;
+            double value = hgp_hoist_readout_component(
+                layout, a0c0_primary.data(), comp,
+                lAx, lAy, lAz, lBx, lBy, lBz,
+                lCx, lCy, lCz, lDx, lDy, lDz,
+                ABx, ABy, ABz, CDx, CDy, CDz);
+            if (short_range)
+                value -= hgp_hoist_readout_component(
+                    layout, a0c0_secondary.data(), comp,
+                    lAx, lAy, lAz, lBx, lBy, lBz,
+                    lCx, lCy, lCz, lDx, lDy, lDz,
+                    ABx, ABy, ABz, CDx, CDy, CDz);
+            return value * norm;
+        }
+
+    private:
+        HartreeFock::ERIKernel kernel_;
+        double omega_;
+    };
 } // namespace
 
 void HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted(
@@ -1073,63 +1205,13 @@ void HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted(
     const std::size_t nD = gD.n_components;
     const std::size_t nCD = nC * nD;
 
-    // Norm-free representative pair for the shared contraction (uses component 0
-    // of each group for the shell data; norm forced to 1 — see invariant (2)).
-    const HartreeFock::ContractedView nfA = normfree_view(basis._basis_functions[gA.first_ao]);
-    const HartreeFock::ContractedView nfB = normfree_view(basis._basis_functions[gB.first_ao]);
-    const HartreeFock::ContractedView nfC = normfree_view(basis._basis_functions[gC.first_ao]);
-    const HartreeFock::ContractedView nfD = normfree_view(basis._basis_functions[gD.first_ao]);
-    const HartreeFock::ShellPair spAB(nfA, nfB);
-    const HartreeFock::ShellPair spCD(nfC, nfD);
+    // One shared norm-free contraction at max AM for the whole quartet (uses
+    // component 0 of each group for the shell data — see invariants (1)/(2)).
+    HoistedQuartet quartet(
+        basis._basis_functions[gA.first_ao], basis._basis_functions[gB.first_ao],
+        basis._basis_functions[gC.first_ao], basis._basis_functions[gD.first_ao],
+        kernel, omega);
 
-    const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
-    const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
-
-    // Max AM box for the shared contraction.
-    const int LA = static_cast<int>(basis._basis_functions[gA.first_ao]._shell->_shell);
-    const int LB = static_cast<int>(basis._basis_functions[gB.first_ao]._shell->_shell);
-    const int LC = static_cast<int>(basis._basis_functions[gC.first_ao]._shell->_shell);
-    const int LD = static_cast<int>(basis._basis_functions[gD.first_ao]._shell->_shell);
-    const int maxAB = LA + LB;
-    const int maxCD = LC + LD;
-
-    EriScratch &shared = g_hgp_scratch;
-    EriScratch &comp = g_hgp_hoist_comp_scratch;
-
-    // ShortRange = Coulomb − LongRange (matches the production split in
-    // hgp_contracted_eri_weighted). We contract each sub-kernel once at max AM,
-    // snapshot its accumulator, then combine per component at readout.
-    const bool short_range = (kernel == HartreeFock::ERIKernel::ShortRange);
-    if (short_range && omega <= 0.0)
-    {
-        std::fill(block, block + nA * nB * nCD, 0.0);
-        return;
-    }
-
-    // Contract the primary kernel (Coulomb for ShortRange, else `kernel`) once.
-    const HartreeFock::ERIKernel primary =
-        short_range ? HartreeFock::ERIKernel::Coulomb : kernel;
-    hgp_contract_a0c0(spAB, spCD, shared,
-                      maxAB, maxAB, maxAB, maxCD, maxCD, maxCD,
-                      primary, omega, PrimitiveWeightCenter::None);
-    std::vector<double> a0c0_primary(shared.a0c0_data,
-                                     shared.a0c0_data + shared.spatial_size);
-
-    // For ShortRange, contract the LongRange piece into a second snapshot.
-    std::vector<double> a0c0_secondary;
-    if (short_range)
-    {
-        hgp_contract_a0c0(spAB, spCD, shared,
-                          maxAB, maxAB, maxAB, maxCD, maxCD, maxCD,
-                          HartreeFock::ERIKernel::LongRange, omega,
-                          PrimitiveWeightCenter::None);
-        a0c0_secondary.assign(shared.a0c0_data,
-                              shared.a0c0_data + shared.spatial_size);
-    }
-
-    // The shared scratch's stride layout (`shared`) is fixed by the max-AM
-    // resize above; both snapshots share it, so spatial_index over `shared`
-    // addresses either snapshot correctly.
     for (std::size_t a = 0; a < nA; ++a)
     {
         const HartreeFock::ContractedView &cvA = basis._basis_functions[gA.first_ao + a];
@@ -1150,19 +1232,9 @@ void HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted(
                     const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
                     const double norm = normAB * cvC._component_norm * cvD._component_norm;
 
-                    double value = hgp_hoist_readout_component(
-                        shared, a0c0_primary.data(), comp,
+                    block[(a * nB + b) * nCD + (c * nD + d)] = quartet.readout(
                         lAx, lAy, lAz, lBx, lBy, lBz,
-                        lCx, lCy, lCz, lDx, lDy, lDz,
-                        ABx, ABy, ABz, CDx, CDy, CDz);
-                    if (short_range)
-                        value -= hgp_hoist_readout_component(
-                            shared, a0c0_secondary.data(), comp,
-                            lAx, lAy, lAz, lBx, lBy, lBz,
-                            lCx, lCy, lCz, lDx, lDy, lDz,
-                            ABx, ABy, ABz, CDx, CDy, CDz);
-
-                    block[(a * nB + b) * nCD + (c * nD + d)] = value * norm;
+                        lCx, lCy, lCz, lDx, lDy, lDz, norm);
                 }
             }
         }
@@ -1241,14 +1313,20 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
         shell_pairs, nb, sym_ops);
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
 
-    // H-10 step A2: iterate at *shell-quartet* granularity instead of per
+    // H-10 step A2/A4-2: iterate at *shell-quartet* granularity instead of per
     // Cartesian-AO. Reconstruct the shell grouping from the per-AO shell_pairs
-    // list and form the upper triangle of *shell* pairs. The per-component
-    // Schwarz screening, symmetry orbit, contracted-ERI evaluation, and 8-fold
-    // store-only scatter are unchanged — they now run in the inner component
-    // loops. Bitwise-identical to the per-AO build (same _contracted_eri_elem
-    // on the same per-component ShellPair; store-only scatter). The once-per-
-    // shell-quartet VRR/HRR readout is step A4.
+    // list and form the upper triangle of *shell* pairs. Per-component Schwarz
+    // screening, symmetry orbit, and the 8-fold store-only scatter run in the
+    // inner component loops unchanged. A4-2: the per-component
+    // _contracted_eri_elem (which re-ran the per-primitive VRR + (a0|c0)
+    // contraction every component) is replaced by one shared HoistedQuartet
+    // contraction per shell quartet + a cheap per-component HRR readout. This is
+    // NOT bitwise vs the per-AO build for d-shells: the hoist applies
+    // _component_norm after HRR while the old path folded it into coeff_product
+    // before contraction, so the two round differently at the last FP bit
+    // (~1e-15). Gated at tight tolerance by planck-os-block-kernel (hoisted arm)
+    // and planck-compute-2e (HGP-vs-OS). Store-only scatter keeps the tensor
+    // independent of visitation order.
     std::vector<const HartreeFock::ContractedView *> ao_views;
     const std::vector<HgpShellGroup> groups =
         shell_groups_from_pairs(shell_pairs, nb, ao_views);
@@ -1286,11 +1364,21 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
             const HgpShellGroup &gC = groups[group_pairs[ket].a];
             const HgpShellGroup &gD = groups[group_pairs[ket].b];
 
+            // A4-2: one shared norm-free (a0|c0) contraction per shell quartet,
+            // built lazily on the first surviving component (so a fully screened
+            // quartet pays nothing). Each surviving component reads its ERI out
+            // via a cheap per-component HRR + norm scaling.
+            HoistedQuartet quartet(
+                *ao_views[gA.first_ao], *ao_views[gB.first_ao],
+                *ao_views[gC.first_ao], *ao_views[gD.first_ao],
+                kernel, omega);
+
             for (std::size_t ca = 0; ca < gA.n_components; ++ca)
             {
                 const HartreeFock::ContractedView &cvA = *ao_views[gA.first_ao + ca];
                 const std::size_t i = cvA._index;
                 const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
+                const double normA = cvA._component_norm;
 
                 for (std::size_t cb = 0; cb < gB.n_components; ++cb)
                 {
@@ -1299,14 +1387,14 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
                     if (j < i) // bra upper triangle: j >= i
                         continue;
                     const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
-
-                    const HartreeFock::ShellPair spAB(cvA, cvB);
+                    const double normAB = normA * cvB._component_norm;
 
                     for (std::size_t cc = 0; cc < gC.n_components; ++cc)
                     {
                         const HartreeFock::ContractedView &cvC = *ao_views[gC.first_ao + cc];
                         const std::size_t k = cvC._index;
                         const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+                        const double normABC = normAB * cvC._component_norm;
 
                         for (std::size_t cd = 0; cd < gD.n_components; ++cd)
                         {
@@ -1336,13 +1424,10 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
                                     continue;
                             }
 
-                            const HartreeFock::ShellPair spCD(cvC, cvD);
-                            const double val =
-                                HartreeFock::HeadGordonPople::_contracted_eri_elem(
-                                    spAB, spCD,
-                                    lAx, lAy, lAz, lBx, lBy, lBz,
-                                    lCx, lCy, lCz, lDx, lDy, lDz,
-                                    kernel, omega);
+                            const double norm = normABC * cvD._component_norm;
+                            const double val = quartet.readout(
+                                lAx, lAy, lAz, lBx, lBy, lBz,
+                                lCx, lCy, lCz, lDx, lDy, lDz, norm);
 
                             if (!use_sym)
                             {
