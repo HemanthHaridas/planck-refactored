@@ -722,31 +722,30 @@ namespace
                         static_cast<std::size_t>(lCz)];
     }
 
-    static double hgp_contracted_eri_weighted_base(
+    // Contract the per-primitive VRR (a0|c0; m=0) slices across all primitive
+    // pairs into `scratch.a0c0_data`, at the AM ranges (lABx..lCDz) the caller
+    // sized `scratch` to. This is the shared accumulation phase used by both the
+    // per-component kernel (component AM ranges) and the H-10 step A4 hoisted
+    // path (max AM ranges = L_A+L_B, L_C+L_D per axis). Because hgp_vrr is
+    // strictly bottom-up, building at a larger max-AM box leaves every lower-AM
+    // sub-block of a0c0_data bitwise-identical, and the primitive accumulation
+    // order is unchanged — so a max-AM contraction's sub-block equals the
+    // corresponding component-AM contraction exactly.
+    static void hgp_contract_a0c0(
         const HartreeFock::ShellPair &spAB,
         const HartreeFock::ShellPair &spCD,
-        int lAx, int lAy, int lAz,
-        int lBx, int lBy, int lBz,
-        int lCx, int lCy, int lCz,
-        int lDx, int lDy, int lDz,
+        EriScratch &scratch,
+        int lABx, int lABy, int lABz,
+        int lCDx, int lCDy, int lCDz,
         HartreeFock::ERIKernel kernel,
         double omega,
         PrimitiveWeightCenter weight_center)
     {
-        const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
-        const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
         const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
-
-        // HGP loop reorder: contract VRR results across all primitive pairs into a
-        // single (a0|c0) block, then run the two HRR passes once per shell quartet
-        // instead of once per primitive pair. Derivative-weighted contractions keep
-        // the same structure and only change the primitive prefactor per center.
-        EriScratch &scratch = g_hgp_scratch;
         scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
 
-        // hrr_data is only read inside hgp_hrr_finalize, which runs after the
-        // accumulation loop completes — safe to use as per-pair VRR scratch in
-        // the meantime, avoiding a per-quartet allocation.
+        // hrr_data is only read after the accumulation loop, so it doubles as
+        // the per-pair VRR scratch in the meantime (avoids a second buffer).
         double *a0c0_pair = scratch.hrr_data;
         for (const auto &ppAB : spAB.primitive_pairs)
         {
@@ -779,6 +778,29 @@ namespace
                     scratch.a0c0_data[n] += w * a0c0_pair[n];
             }
         }
+    }
+
+    static double hgp_contracted_eri_weighted_base(
+        const HartreeFock::ShellPair &spAB,
+        const HartreeFock::ShellPair &spCD,
+        int lAx, int lAy, int lAz,
+        int lBx, int lBy, int lBz,
+        int lCx, int lCy, int lCz,
+        int lDx, int lDy, int lDz,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        PrimitiveWeightCenter weight_center)
+    {
+        const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+        const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+        // HGP loop reorder: contract VRR results across all primitive pairs into
+        // a single (a0|c0) block, then run the two HRR passes once per shell
+        // quartet instead of once per primitive pair.
+        EriScratch &scratch = g_hgp_scratch;
+        hgp_contract_a0c0(spAB, spCD, scratch,
+                          lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                          kernel, omega, weight_center);
 
         std::copy(scratch.a0c0_data,
                   scratch.a0c0_data + scratch.spatial_size,
