@@ -1199,35 +1199,62 @@ void HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted(
     double omega,
     double *block)
 {
-    const std::size_t nA = gA.n_components;
-    const std::size_t nB = gB.n_components;
-    const std::size_t nC = gC.n_components;
-    const std::size_t nD = gD.n_components;
+    // Basis stores components contiguously, so build per-shell pointer arrays
+    // into _basis_functions and delegate to the pointer-array core (which the
+    // Auto path also feeds, from its non-contiguous ao_views table).
+    std::vector<const HartreeFock::ContractedView *> pA(gA.n_components);
+    std::vector<const HartreeFock::ContractedView *> pB(gB.n_components);
+    std::vector<const HartreeFock::ContractedView *> pC(gC.n_components);
+    std::vector<const HartreeFock::ContractedView *> pD(gD.n_components);
+    for (std::size_t a = 0; a < gA.n_components; ++a)
+        pA[a] = &basis._basis_functions[gA.first_ao + a];
+    for (std::size_t b = 0; b < gB.n_components; ++b)
+        pB[b] = &basis._basis_functions[gB.first_ao + b];
+    for (std::size_t c = 0; c < gC.n_components; ++c)
+        pC[c] = &basis._basis_functions[gC.first_ao + c];
+    for (std::size_t d = 0; d < gD.n_components; ++d)
+        pD[d] = &basis._basis_functions[gD.first_ao + d];
+
+    HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted_views(
+        pA.data(), gA.n_components, pB.data(), gB.n_components,
+        pC.data(), gC.n_components, pD.data(), gD.n_components,
+        kernel, omega, block);
+}
+
+void HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted_views(
+    const HartreeFock::ContractedView *const *viewsA, std::size_t nA,
+    const HartreeFock::ContractedView *const *viewsB, std::size_t nB,
+    const HartreeFock::ContractedView *const *viewsC, std::size_t nC,
+    const HartreeFock::ContractedView *const *viewsD, std::size_t nD,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    double *block)
+{
     const std::size_t nCD = nC * nD;
 
     // One shared norm-free contraction at max AM for the whole quartet (uses
-    // component 0 of each group for the shell data — see invariants (1)/(2)).
-    HoistedQuartet quartet(
-        basis._basis_functions[gA.first_ao], basis._basis_functions[gB.first_ao],
-        basis._basis_functions[gC.first_ao], basis._basis_functions[gD.first_ao],
-        kernel, omega);
+    // component 0 of each shell for the shell data — see invariants (1)/(2)).
+    // Contraction is deferred to the first readout(), so this is cheap if the
+    // caller only ends up needing a subset.
+    HoistedQuartet quartet(*viewsA[0], *viewsB[0], *viewsC[0], *viewsD[0],
+                           kernel, omega);
 
     for (std::size_t a = 0; a < nA; ++a)
     {
-        const HartreeFock::ContractedView &cvA = basis._basis_functions[gA.first_ao + a];
+        const HartreeFock::ContractedView &cvA = *viewsA[a];
         for (std::size_t b = 0; b < nB; ++b)
         {
-            const HartreeFock::ContractedView &cvB = basis._basis_functions[gB.first_ao + b];
+            const HartreeFock::ContractedView &cvB = *viewsB[b];
             const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
             const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
             const double normAB = cvA._component_norm * cvB._component_norm;
 
             for (std::size_t c = 0; c < nC; ++c)
             {
-                const HartreeFock::ContractedView &cvC = basis._basis_functions[gC.first_ao + c];
+                const HartreeFock::ContractedView &cvC = *viewsC[c];
                 for (std::size_t d = 0; d < nD; ++d)
                 {
-                    const HartreeFock::ContractedView &cvD = basis._basis_functions[gD.first_ao + d];
+                    const HartreeFock::ContractedView &cvD = *viewsD[d];
                     const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
                     const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
                     const double norm = normAB * cvC._component_norm * cvD._component_norm;

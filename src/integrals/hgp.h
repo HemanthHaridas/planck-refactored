@@ -55,6 +55,22 @@ namespace HartreeFock
             double omega,
             double *block);
 
+        // Pointer-array form of _contracted_eri_block_hoisted (H-10 step A4-3).
+        // Each viewsX[i] points at the i-th Cartesian component of shell X; the
+        // components need not be contiguous in memory (the Auto path in rys.cpp
+        // feeds its non-contiguous ao_views table here). Same output contract,
+        // same tight-tolerance (not bitwise) equivalence to the per-component
+        // path. The shared contraction is built lazily on the first component
+        // read, so a caller that fills the whole block pays one contraction.
+        void _contracted_eri_block_hoisted_views(
+            const HartreeFock::ContractedView *const *viewsA, std::size_t nA,
+            const HartreeFock::ContractedView *const *viewsB, std::size_t nB,
+            const HartreeFock::ContractedView *const *viewsC, std::size_t nC,
+            const HartreeFock::ContractedView *const *viewsD, std::size_t nD,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            double *block);
+
         // Phase-1 HGP integration surface: keep the public API aligned with the
         // existing ERI engines so the correctness-preserving plumbing lands
         // first, then the internal contracted-quartet kernel can be replaced
