@@ -303,16 +303,57 @@ None of these block the landed work.
     `_rys_eri_build_sum` now takes `n_roots` explicitly. Revert: delete hook +
     test + CMake hunk; inline the build's `n` derivation.
 
-  - **B-2 — `RysHoistedQuartet` (standalone, off the hot path).** A struct that,
-    given a shell quartet, runs `_rys_eri_prep` once per primitive pair and
-    `_rys_eri_build_sum` once at `(n_max, max box)` accumulated over primitive
-    pairs into one `RysScratch`, then a `readout(component)` that gathers the
-    component's sub-box and runs `_rys_eri_hrr_to_eri`. Not yet wired into any
-    entry point; exercised only by extending `planck-compute-2e`/a unit test to
-    compare its per-component readouts against `_rys_contracted_eri`
-    (Coulomb/LongRange/ShortRange, on g shells). ShortRange = two builds
-    (Coulomb, LongRange) combined per component, as in OS/HGP. Revert: delete the
-    struct + test arm.
+  - **B-2 — `RysHoistedQuartet` (standalone, off the hot path).** Mirror HGP's
+    `HoistedQuartet`/A4-2: a struct that contracts the 6D `sum` **once per shell
+    quartet** at `(max box, n_max roots)`, snapshots it, and reads each Cartesian
+    component out via a per-component HRR. Not wired into any entry point in B-2
+    — validated only against `_rys_contracted_eri`. Four sub-steps, each gated
+    and revertible:
+
+    - **B-2a — contract-over-primitives at a fixed box.** Add a static
+      `_rys_contract_sum(spAB, spCD, box, n_roots, kernel, omega, RysScratch&)`
+      that loops primitive pairs calling `_rys_eri_prep` + `_rys_eri_build_sum`
+      and **accumulates** each pair's 6D `sum` (weighted by
+      `coeff_product`) into one buffer. This is the Rys analog of HGP's
+      `hgp_contract_a0c0`. Refactor `_rys_contracted_eri` to call it (per-
+      component box, n_comp) then `_rys_eri_hrr_to_eri` — bitwise no-op, since it
+      is the same per-pair build + HRR, only the accumulation is factored out.
+      Gate: `planck-compute-2e`, engine equality on sto-3g/6-31g\*/Ne; bitwise.
+      Revert: inline the loop back.
+
+    - **B-2b — norm-free contraction + per-component norm.** Like HGP (invariant
+      2), the single shared contraction can't carry per-component norms. Add a
+      Rys `normfree_view` (sets `_component_norm = 1`), contract once from the
+      component-0 norm-free views, and apply `normA·normB·normC·normD` at the
+      readout. Validate via a `_rys_contract_sum`-from-normfree + per-component
+      HRR + norm against `_rys_contracted_eri` for one quartet — tight tolerance
+      (B-1: ≤4e-16, the root-count drift), not bitwise. No production wiring.
+      Revert: delete the normfree path.
+
+    - **B-2c — snapshot layout + per-component readout.** Add a small max-box
+      stride helper (the 6-axis `idx` from `tests/rys_box_invariance.cpp`,
+      promoted to a `RysMaxBoxLayout`) so a component's sub-box can be gathered
+      from the n_max snapshot into a component-sized `RysScratch` and HRR'd,
+      independent of the shared scratch's later resizes. Rys analog of HGP's
+      `MaxBoxLayout` + `hgp_hoist_readout_component`. Gate: a unit-test arm
+      gathering+HRR a known component matches `_rys_eri_hrr_to_eri` on a fresh
+      per-component build. Revert: delete helper + test arm.
+
+    - **B-2d — assemble `RysHoistedQuartet` + standalone block entry.** Compose
+      B-2a–c into the struct (ctor takes the four component-0 views + kernel/
+      omega; lazy `prepare()` contracts both kernel snapshots for ShortRange —
+      Coulomb and LongRange — into `a0c0_primary`/`a0c0_secondary`;
+      `readout(component, norm)` HRRs each and combines). Add
+      `_rys_contracted_eri_block_hoisted_views` (pointer-array form, so B-3's
+      non-contiguous `ao_views` can feed it). Gate: extend
+      `planck-rys-box-invariance` (or a sibling) to compare the struct's
+      per-component readouts against `_rys_contracted_eri` for every component of
+      water/6-31g\* and Ne/cc-pVQZ Lq≥7, Coulomb/LongRange/ShortRange, at the
+      1e-13 bar. Revert: delete struct + entry + test arm.
+
+    Net B-2: the hoisted path exists and is proven equal to the per-component
+    path, but nothing in production calls it yet (that is B-3). ShortRange = two
+    snapshots combined per component, as in OS/HGP.
 
   - **B-3 — wire into the Auto path (the actual win).** In `_compute_2e_auto`'s
     Rys-chosen branch, build a `RysHoistedQuartet` once per `(gA,gB,gC,gD)` shell
