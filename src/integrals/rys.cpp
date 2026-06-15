@@ -641,17 +641,24 @@ namespace
     }
 
     // Roots + per-root 1D VRR + 6D outer-product accumulation + prefactor scale,
-    // at the box (lABx..lCDz). The root count keys on the box's total L: in B-0
-    // the box is the component's own AM, so `n` is unchanged from the original.
-    // `sum` is sized and zero-filled here.
+    // at the box (lABx..lCDz) using `n_roots` Rys roots. `sum` is sized and
+    // zero-filled here.
+    //
+    // The root count is an explicit parameter, NOT derived from the box: the box
+    // is per-axis (lABx..lCDz) but the Rys quadrature degree depends on the
+    // quartet's *total* L = (L_A+L_B)+(L_C+L_D), capped per axis. Deriving n from
+    // the summed per-axis box would over-count badly (a g max-box sums to L=48 ->
+    // n=25, past RYS_MAX_ROOTS=11), so the caller passes the correct n. Per-
+    // component, n = L_comp/2+1; the hoist passes the quartet n_max (Gauss
+    // over-integration makes n_max >= n_comp exact for every component).
     static void _rys_eri_build_sum(
         const RysPrimGeom &g,
         const int lABx, const int lABy, const int lABz,
         const int lCDx, const int lCDy, const int lCDz,
+        const int n_roots,
         RysScratch &sum) noexcept
     {
-        const int L = lABx + lABy + lABz + lCDx + lCDy + lCDz;
-        const int n = L / 2 + 1;
+        const int n = n_roots;
         double t2[HartreeFock::Rys::RYS_MAX_ROOTS];
         double w[HartreeFock::Rys::RYS_MAX_ROOTS];
         HartreeFock::Rys::rys_roots_weights(n, g.T, t2, w);
@@ -738,11 +745,12 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
 {
     const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
     const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+    const int n = (lABx + lABy + lABz + lCDx + lCDy + lCDz) / 2 + 1;
 
     const RysPrimGeom geom = _rys_eri_prep(ppAB, ppCD, kernel, omega);
 
     RysScratch &sum = g_rys_scratch;
-    _rys_eri_build_sum(geom, lABx, lABy, lABz, lCDx, lCDy, lCDz, sum);
+    _rys_eri_build_sum(geom, lABx, lABy, lABz, lCDx, lCDy, lCDz, n, sum);
 
     return _rys_eri_hrr_to_eri(sum,
                                lAx, lAy, lAz, lBx, lBy, lBz,
@@ -789,6 +797,56 @@ double HartreeFock::RysQuad::_rys_contracted_eri(
             eri += ppAB.coeff_product * ppCD.coeff_product * value;
         }
     return eri;
+}
+
+// ─── Test hook (Phase B / B-1): box-size invariance of the 6D sum ────────────
+//
+// Fills `out` with the full per-primitive-pair 6D Rys `sum` buffer (row-major
+// in RysScratch's stride convention: index = ((((ax*ay_dim+ay)*az_dim+az)*
+// cx_dim+cx)*cy_dim+cy)*cz_dim+cz, with each *_dim = box+1), at a caller-given
+// box and root count, BEFORE HRR. Filling the whole buffer once lets the caller
+// read every coordinate from one build instead of rebuilding per cell.
+//
+// The root count is explicit (not box-derived) because it is the quartet's
+// quadrature degree n = (L_AB_total + L_CD_total)/2 + 1 — the summed per-axis
+// box would over-count (g max-box sums to L=48 -> n=25, past RYS_MAX_ROOTS). B-1
+// builds twice per quartet/component: the max box with n_max and the component
+// box with n_comp; box-invariance + Gauss over-integration require the two to
+// agree at every component coordinate. ShortRange = Coulomb − LongRange,
+// matching production. No production path calls this; it exists for
+// tests/rys_box_invariance.cpp.
+void HartreeFock::RysQuad::_build_sum_native_test(
+    const HartreeFock::PrimitivePair &ppAB,
+    const HartreeFock::PrimitivePair &ppCD,
+    int lABx, int lABy, int lABz,
+    int lCDx, int lCDy, int lCDz,
+    int n_roots,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    std::vector<double> &out) noexcept
+{
+    RysScratch &sum = g_rys_scratch;
+
+    if (kernel == HartreeFock::ERIKernel::ShortRange)
+    {
+        // Build Coulomb, snapshot, then LongRange, and combine cell-wise
+        // (matching production's full − long_range).
+        const RysPrimGeom gc = _rys_eri_prep(ppAB, ppCD, HartreeFock::ERIKernel::Coulomb, 0.0);
+        _rys_eri_build_sum(gc, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+        std::vector<double> coulomb(sum.buf.begin(), sum.buf.begin() + sum.size);
+
+        const RysPrimGeom gl = _rys_eri_prep(ppAB, ppCD, HartreeFock::ERIKernel::LongRange, omega);
+        _rys_eri_build_sum(gl, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+
+        out.assign(sum.size, 0.0);
+        for (std::size_t i = 0; i < sum.size; ++i)
+            out[i] = coulomb[i] - sum.buf[i];
+        return;
+    }
+
+    const RysPrimGeom geom = _rys_eri_prep(ppAB, ppCD, kernel, omega);
+    _rys_eri_build_sum(geom, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+    out.assign(sum.buf.begin(), sum.buf.begin() + sum.size);
 }
 
 // ─── Schwarz screening (mirrors os.cpp _compute_schwarz_table) ────────────────

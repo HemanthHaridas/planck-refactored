@@ -228,17 +228,22 @@ None of these block the landed work.
      `(8,8)` vs a component box `(3,4)` agree to `max|diff| = 0`).
   2. **Gauss over-integration is exact.** A component cell of total degree `d`
      needs `⌈(d+1)/2⌉` roots; evaluating it with the quartet's *max* root count
-     `n_max = L_max/2+1 ≥ n_comp` is still exact (an `n`-point Gauss rule
-     integrates any polynomial of degree `≤ 2n−1` exactly). So using `n_max`
-     roots for every component reproduces each component's value exactly — the
-     non-nestedness is irrelevant once everyone uses the *largest* count.
+     `n_max = (L_AB+L_CD)/2+1 ≥ n_comp` is still *mathematically* exact (an
+     `n`-point Gauss rule integrates any polynomial of degree `≤ 2n−1` exactly).
+     So using `n_max` roots for every component reproduces each component's value
+     — the non-nestedness is irrelevant once everyone uses the *largest* count.
+     **Crucially `n_max` is the quartet quadrature degree, NOT the summed per-axis
+     box** (that would give n=25 for a g max-box, past `RYS_MAX_ROOTS=11`); the
+     build takes `n_roots` explicitly (B-1).
 
-  Therefore the shared phase is built **once** per shell quartet at
-  `(n_max, max-axis box)`, and every component reads its 6D `sum` sub-block out of
-  it exactly — bitwise, including d/g shells (unlike the HGP/OS hoist, which is
-  only bitwise where norms are 1; Rys folds no per-component norm, so there is no
-  norm-drift caveat here). The cost paid is that low-L components carry a few
-  extra (exact) roots — negligible against the per-component rebuild it removes.
+  Therefore the shared phase is built **once** per shell quartet at the max-axis
+  box with `n_max` roots, and every component reads its 6D `sum` sub-block out of
+  it. This is **tight-tolerance, not bitwise** wherever `n_max > n_comp`: summing
+  `n_max` weighted roots vs `n_comp` rounds at the last FP bit (the Rys analogue
+  of the HGP/OS norm-reorder drift). B-1 measured rel ≤ 4e-16 on d-shells and
+  exactly 0 where `n_max==n_comp` — well inside the 1e-13 ERI bar. The cost paid
+  is that low-L components carry a few extra roots — negligible against the
+  per-component rebuild it removes.
 
   **Option B (minimal, rejected):** hoist only the primitive geometry (a). That is
   the cheap part; the dominant cost (roots + 1D VRR + 6D sweep) stays per
@@ -274,14 +279,29 @@ None of these block the landed work.
     the high-L Rys path), and `planck-compute-2e` (golden checksum + Rys-vs-OS
     7.78e-14 unchanged + Rys-Auto-vs-OS 0). Revert: inline the three back.
 
-  - **B-1 — `RysScratch` max-box accessor + box-invariance gate.** Add a
-    test-only hook (analog of HGP's `_contract_a0c0_at_native_test`) that runs
-    `_rys_eri_build_sum` at a caller-given `(n_roots, max-axis box)` and returns
-    the `sum` cell at a caller-given component coordinate. New unit test
-    `planck-rys-box-invariance`: for water/6-31g\* and a g-shell quartet, assert
-    the max-box build (using `n_max` roots) equals the per-component-box build
-    **bitwise** at every component coordinate (the two facts above; this is the
-    load-bearing invariant before any wiring). Revert: delete hook + test.
+  - **B-1 — box-invariance gate. LANDED (commit on branch).** Test hook
+    `RysQuad::_build_sum_native_test` (`src/integrals/rys.{h,cpp}`) fills the full
+    6D `sum` buffer for a fixed primitive pair at a caller-given `(box, n_roots)`,
+    before HRR. Unit test `planck-rys-box-invariance`
+    (`tests/rys_box_invariance.cpp`, ctest #11) asserts, for every shell quartet,
+    that the max-box build (n_max roots) equals the per-component-box build
+    (n_comp roots) at every component coordinate, within the 1e-13 ERI bar.
+
+    **Correction to the scope's "bitwise" claim:** it is **tight-tolerance, not
+    bitwise**, wherever `n_max > n_comp`. The two builds sum a different number of
+    weighted roots (Gauss over-integration: mathematically equal, but the term
+    count rounds differently at the last FP bit), exactly analogous to the
+    HGP/OS norm-reorder drift (invariant 2). Observed: water/6-31g\*
+    (d-shells, n_max>n_comp for most components) **rel ≤ 3.96e-16** over 1.99M
+    coords/kernel (Coulomb/LongRange/ShortRange); Ne/cc-pVQZ (g-shells, Lq≥7 —
+    the (7,8)/(8,8) buckets, where the checked components have n_max==n_comp)
+    **exactly 0.0** over 4.77e9 coords/kernel. So: bitwise where n_max==n_comp,
+    ≤4e-16 where n_max>n_comp; either way well inside the 1e-13 gate. The key
+    discovery from the crash that preceded this: the root count must be the
+    quartet quadrature degree `(L_AB+L_CD)/2+1`, NOT derived from the summed
+    per-axis box (which gives n=25 for a g max-box, past RYS_MAX_ROOTS=11) —
+    `_rys_eri_build_sum` now takes `n_roots` explicitly. Revert: delete hook +
+    test + CMake hunk; inline the build's `n` derivation.
 
   - **B-2 — `RysHoistedQuartet` (standalone, off the hot path).** A struct that,
     given a shell quartet, runs `_rys_eri_prep` once per primitive pair and
@@ -309,11 +329,14 @@ None of these block the landed work.
     `engine rys` is rare), so defer unless explicitly wanted. Gate:
     `planck-hgp-engine-smoke`-style Rys self-consistency on g shells.
 
-  The bitwise property (B-1) means B-2/B-3 are gated at **exact 0** against the
-  per-component path even on g shells — stricter than the HGP/OS hoist's `1e-13`,
-  because Rys carries no per-component norm to reorder. `RysScratch` growing the
-  max-box variant is the natural place to fold in the shared `SpatialQuartetLayout`
-  (below).
+  B-1 established the readout property B-2/B-3 rely on: the max-box build equals
+  the per-component build at every component coordinate to ≤4e-16 (bitwise where
+  n_max==n_comp, last-bit under Gauss over-integration otherwise). So B-2/B-3 are
+  gated at the `1e-13` ERI bar against the per-component path — like the HGP/OS
+  hoist, not stricter (the earlier "exact 0 on g shells" expectation was wrong:
+  Rys carries no per-component *norm* to reorder, but the differing *root count*
+  reorders the sum instead). `RysScratch` growing the max-box variant is the
+  natural place to fold in the shared `SpatialQuartetLayout` (below).
 - **Phase C — symmetry direct-SCF skeletons** (`os_symm`/`hgp_symm`/`rys_symm`):
   still per-AO. Convert to shell-quartet carrying the signed-AO orbit per
   component (same pattern as 2b's `sym_ops` branch). Needs the block kernels.

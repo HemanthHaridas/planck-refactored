@@ -551,6 +551,17 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    add_executable(planck-rys-box-invariance
+        ${CMAKE_SOURCE_DIR}/tests/rys_box_invariance.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     add_executable(planck-hgp-benchmark
         ${CMAKE_SOURCE_DIR}/tests/hgp_benchmark.cpp
         ${SRC_DIR}/basis/basis.cpp
@@ -834,6 +845,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-rys-box-invariance PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-hgp-benchmark PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -990,6 +1006,12 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-rys-box-invariance PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-hgp-benchmark PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -1111,6 +1133,10 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-hgp-triangular-contract PRIVATE USE_OPENMP)
     endif()
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-rys-box-invariance OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-rys-box-invariance PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-hgp-benchmark OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-hgp-benchmark PRIVATE USE_OPENMP)
     endif()
@@ -1223,6 +1249,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-hgp-triangular-contract
         COMMAND planck-hgp-triangular-contract
+    )
+
+    add_test(
+        NAME planck-rys-box-invariance
+        COMMAND planck-rys-box-invariance
     )
 
     add_test(

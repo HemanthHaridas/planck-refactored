@@ -76,10 +76,10 @@ namespace HartreeFock
 
         // ── Auto-dispatch variant ──────────────────────────────────────────────────
         //
-        // Per-quartet HGP / Rys selection. Rule: pick Rys when
-        // (L_AB + L_CD) <= 1, HGP otherwise. Calibrated against
-        // tests/auto_dispatch_benchmark.cpp; see docs/auto_dispatch_fit.json.
-        // OS is not in the auto menu.
+        // Per-quartet three-way OS / HGP / Rys selection, keyed on the
+        // (L_AB, L_CD) bucket via the data-derived kAutoEngine table (see
+        // _auto_engine in rys.cpp and docs/auto_dispatch_fit.json). Rys is
+        // selected only at the extreme high-L tail (7,8)/(8,8).
 
         std::vector<double> _compute_2e_auto(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -108,6 +108,26 @@ namespace HartreeFock
             double omega = 0.0,
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
+        // ── Test hook (Phase B / B-1): box-size invariance of the 6D sum ───────────
+        //
+        // Fills `out` with the full per-primitive-pair 6D Rys `sum` buffer at a
+        // caller-given box (lABx..lCDz) and explicit root count `n_roots`, BEFORE
+        // HRR. The buffer is row-major in RysScratch's stride convention with each
+        // dim = box+1. The root count is explicit (it is the quartet quadrature
+        // degree, not the summed per-axis box); B-1 builds the max box with n_max
+        // and the component box with n_comp and requires them equal at every
+        // component coordinate. ShortRange = Coulomb − LongRange. Used only by
+        // tests/rys_box_invariance.cpp; no production path calls it.
+        void _build_sum_native_test(
+            const HartreeFock::PrimitivePair &ppAB,
+            const HartreeFock::PrimitivePair &ppCD,
+            int lABx, int lABy, int lABz,
+            int lCDx, int lCDy, int lCDz,
+            int n_roots,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            std::vector<double> &out) noexcept;
 
     } // namespace RysQuad
 } // namespace HartreeFock
