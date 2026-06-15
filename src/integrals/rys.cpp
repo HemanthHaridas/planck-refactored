@@ -1,5 +1,6 @@
 #include "rys.h"
-#include "hgp.h"       // Auto path picks between HGP and Rys per quartet.
+#include "hgp.h"       // Auto path picks between OS, HGP and Rys per quartet.
+#include "os.h"        // Auto path OS branch (high-L corner).
 #include "rys_roots.h"
 #include "screening.h" // Shared HGP-based Schwarz table for the Auto path.
 
@@ -349,32 +350,53 @@ namespace
 
 } // namespace
 
-// Auto-dispatch predicate. HGP-default with a Rys tail at the bottom.
+// Auto-dispatch engine selection: three-way OS / HGP / Rys, keyed on the
+// quartet's angular-momentum bucket (L_AB, L_CD).
 //
-// Calibrated against the per-(L_AB, L_CD) benchmark in
-// tests/auto_dispatch_benchmark.cpp; the fit artifact is
-// docs/auto_dispatch_fit.json and the cost curves are
-// docs/auto_dispatch_curves.svg. 238 buckets across water at
-// STO-3G / 6-31G(d) / cc-pVDZ / cc-pVTZ and helium at cc-pVQZ / cc-pV5Z
-// agree unanimously on the rule:
+// The region table below is the calibration result emitted by
+// scripts/fit_auto_dispatch.py (the `region_table` / generated C++ in
+// docs/auto_dispatch_fit.json), derived as "pick the engine with the lowest
+// cross-case median per-quartet time in that bucket" over the benchmark in
+// tests/auto_dispatch_benchmark.cpp. It is a dense lookup, not a hand-fitted
+// inequality, because the OS/HGP/Rys boundaries are irregular and move when the
+// engines are optimized — keeping the table verbatim from the fitter avoids
+// drift. After re-benchmarking and re-running the fitter, regenerate this table
+// from docs/auto_dispatch_fit.json's `rule_in_code`.
 //
-//   pick Rys when (L_AB + L_CD) <= 1; pick HGP otherwise.
-//
-// At those low-L buckets — (ss|ss), (ss|sp), (sp|ss) — Rys runs
-// roots-of-1-or-2 quadrature and beats the HGP HRR-outside path by
-// ~2.1-2.7x. Everywhere else HGP wins, by factors of 2.5x at the high-L
-// helium tail to 12x at the d-shell sweet spot.
-//
-// OS is intentionally not in the auto menu anymore. Users who want OS
-// must select it explicitly with `engine os`.
-static inline bool _auto_prefers_rys(const HartreeFock::ShellPair &spAB,
-                                     const HartreeFock::ShellPair &spCD) noexcept
+// Current shape (median of 9 runs, post HGP-A4 and OS-A4 HRR hoists):
+//   - HGP wins the low/mid-L bulk (incl. the L_AB+L_CD<=1 corner).
+//   - OS wins a high-L corner where HGP's per-quartet HRR overhead overtakes
+//     its primitive-loop savings.
+//   - Rys wins only the extreme tail (7,8) and (8,8).
+static constexpr int kAutoMaxL = 8;
+static constexpr HartreeFock::IntegralMethod
+    kAutoEngine[kAutoMaxL + 1][kAutoMaxL + 1] = {
+        // L_CD =  0    1    2    3    4    5    6    7    8
+        /*L_AB=0*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople},
+        /*L_AB=1*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople},
+        /*L_AB=2*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople},
+        /*L_AB=3*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika},
+        /*L_AB=4*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika},
+        /*L_AB=5*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika},
+        /*L_AB=6*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika},
+        /*L_AB=7*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::RysQuadrature},
+        /*L_AB=8*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::RysQuadrature},
+};
+
+// Look up the calibrated engine for a quartet bucket. L beyond the benchmarked
+// reach (kAutoMaxL) is clamped to the table edge; the table edges already
+// capture the asymptotic high-L preference.
+static inline HartreeFock::IntegralMethod _auto_engine(int L_AB, int L_CD) noexcept
 {
-    const int L_AB = spAB.A._cartesian[0] + spAB.A._cartesian[1] + spAB.A._cartesian[2] +
-                     spAB.B._cartesian[0] + spAB.B._cartesian[1] + spAB.B._cartesian[2];
-    const int L_CD = spCD.A._cartesian[0] + spCD.A._cartesian[1] + spCD.A._cartesian[2] +
-                     spCD.B._cartesian[0] + spCD.B._cartesian[1] + spCD.B._cartesian[2];
-    return (L_AB + L_CD) <= 1;
+    if (L_AB < 0)
+        L_AB = 0;
+    if (L_CD < 0)
+        L_CD = 0;
+    if (L_AB > kAutoMaxL)
+        L_AB = kAutoMaxL;
+    if (L_CD > kAutoMaxL)
+        L_CD = kAutoMaxL;
+    return kAutoEngine[L_AB][L_CD];
 }
 
 static double _auto_contracted_eri(
@@ -387,12 +409,23 @@ static double _auto_contracted_eri(
     HartreeFock::ERIKernel kernel,
     double omega) noexcept
 {
-    if (_auto_prefers_rys(spAB, spCD))
+    const int L_AB = spAB.A._cartesian[0] + spAB.A._cartesian[1] + spAB.A._cartesian[2] +
+                     spAB.B._cartesian[0] + spAB.B._cartesian[1] + spAB.B._cartesian[2];
+    const int L_CD = spCD.A._cartesian[0] + spCD.A._cartesian[1] + spCD.A._cartesian[2] +
+                     spCD.B._cartesian[0] + spCD.B._cartesian[1] + spCD.B._cartesian[2];
+
+    switch (_auto_engine(L_AB, L_CD))
+    {
+    case HartreeFock::IntegralMethod::RysQuadrature:
         return HartreeFock::RysQuad::_rys_contracted_eri(
             spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
-
-    return HartreeFock::HeadGordonPople::_contracted_eri_elem(
-        spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
+    case HartreeFock::IntegralMethod::ObaraSaika:
+        return HartreeFock::ObaraSaika::_contracted_eri_elem(
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
+    default:
+        return HartreeFock::HeadGordonPople::_contracted_eri_elem(
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
+    }
 }
 
 // ─── 1D Rys VRR ───────────────────────────────────────────────────────────────
@@ -522,7 +555,174 @@ static double _rys_hrr_cd(
     return W[lCx][lCy][lCz];
 }
 
-// ─── Primitive ERI ────────────────────────────────────────────────────────────
+// ─── Primitive ERI: B-0 seam (Phase B) ──────────────────────────────────────
+//
+// `_rys_eri_primitive` is split into three statics so the Rys shell-quartet
+// hoist (Phase B) can later build the per-primitive-pair geometry once and the
+// 6D `sum` once per shell quartet, then read each component's HRR out of it.
+// In B-0 the three are simply called in sequence by `_rys_eri_primitive`, so
+// the result is bitwise-identical to the previous single-function form (same
+// arithmetic, same order).
+//
+//   _rys_eri_prep        — per-primitive-pair geometry (kernel-screened),
+//                          independent of the Cartesian component split
+//   _rys_eri_build_sum   — roots + per-root 1D VRR + 6D outer-product
+//                          accumulation + prefactor scale, at a given box
+//   _rys_eri_hrr_to_eri  — AB-HRR then CD-HRR readout to the scalar ERI
+
+namespace
+{
+    struct RysPrimGeom
+    {
+        double PAx, PAy, PAz;
+        double QCx, QCy, QCz;
+        double WPx, WPy, WPz;
+        double WQx, WQy, WQz;
+        double T;
+        double prefac;
+        double inv_delta;
+        double inv_zetaAB; // ppAB.inv_zeta
+        double inv_zetaCD; // ppCD.inv_zeta
+        double rho_over_zeta;
+        double rho_over_eta;
+        double b00_scale; // 1 for Coulomb, screen.boys_scale otherwise
+    };
+
+    // Per-primitive-pair derived quantities. Independent of how the bra/ket
+    // angular momentum splits between A/B and C/D, so it is computed once per
+    // primitive pair (component-independent).
+    static RysPrimGeom _rys_eri_prep(
+        const HartreeFock::PrimitivePair &ppAB,
+        const HartreeFock::PrimitivePair &ppCD,
+        HartreeFock::ERIKernel kernel,
+        double omega) noexcept
+    {
+        const double zeta = ppAB.zeta;
+        const double eta = ppCD.zeta;
+        const double delta = zeta + eta;
+        const double inv_delta = 1.0 / delta;
+        const double rho = zeta * eta * inv_delta;
+        const ScreenedKernelData screen = screened_kernel_data(rho, kernel, omega);
+        const double effective_rho = screen.rho;
+
+        const double Px = ppAB.center[0], Py = ppAB.center[1], Pz = ppAB.center[2];
+        const double Qx = ppCD.center[0], Qy = ppCD.center[1], Qz = ppCD.center[2];
+
+        const double PQx = Px - Qx, PQy = Py - Qy, PQz = Pz - Qz;
+
+        const double Wx = (zeta * Px + eta * Qx) * inv_delta;
+        const double Wy = (zeta * Py + eta * Qy) * inv_delta;
+        const double Wz = (zeta * Pz + eta * Qz) * inv_delta;
+
+        const double wpwq_scale =
+            (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
+        const double b00_scale =
+            (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
+
+        return RysPrimGeom{
+            .PAx = ppAB.pA[0], .PAy = ppAB.pA[1], .PAz = ppAB.pA[2],
+            .QCx = ppCD.pA[0], .QCy = ppCD.pA[1], .QCz = ppCD.pA[2],
+            .WPx = (Wx - Px) * wpwq_scale,
+            .WPy = (Wy - Py) * wpwq_scale,
+            .WPz = (Wz - Pz) * wpwq_scale,
+            .WQx = (Wx - Qx) * wpwq_scale,
+            .WQy = (Wy - Qy) * wpwq_scale,
+            .WQz = (Wz - Qz) * wpwq_scale,
+            .T = screen.boys_scale * rho * (PQx * PQx + PQy * PQy + PQz * PQz),
+            .prefac = ppAB.prefactor * ppCD.prefactor * 2.0 *
+                      std::sqrt(rho / std::numbers::pi) * screen.prefactor_scale,
+            .inv_delta = inv_delta,
+            .inv_zetaAB = ppAB.inv_zeta,
+            .inv_zetaCD = ppCD.inv_zeta,
+            .rho_over_zeta = effective_rho * ppAB.inv_zeta,
+            .rho_over_eta = effective_rho * ppCD.inv_zeta,
+            .b00_scale = b00_scale,
+        };
+    }
+
+    // Roots + per-root 1D VRR + 6D outer-product accumulation + prefactor scale,
+    // at the box (lABx..lCDz). The root count keys on the box's total L: in B-0
+    // the box is the component's own AM, so `n` is unchanged from the original.
+    // `sum` is sized and zero-filled here.
+    static void _rys_eri_build_sum(
+        const RysPrimGeom &g,
+        const int lABx, const int lABy, const int lABz,
+        const int lCDx, const int lCDy, const int lCDz,
+        RysScratch &sum) noexcept
+    {
+        const int L = lABx + lABy + lABz + lCDx + lCDy + lCDz;
+        const int n = L / 2 + 1;
+        double t2[HartreeFock::Rys::RYS_MAX_ROOTS];
+        double w[HartreeFock::Rys::RYS_MAX_ROOTS];
+        HartreeFock::Rys::rys_roots_weights(n, g.T, t2, w);
+
+        sum.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz);
+        std::fill(sum.buf.begin(), sum.buf.end(), 0.0);
+
+        for (int r = 0; r < n; ++r)
+        {
+            const double u = t2[r];
+            const double wr = w[r];
+
+            const double B00 = 0.5 * g.inv_delta * u * g.b00_scale;
+            const double B10 = 0.5 * g.inv_zetaAB * (1.0 - g.rho_over_zeta * u);
+            const double B01 = 0.5 * g.inv_zetaCD * (1.0 - g.rho_over_eta * u);
+
+            double Ix[VRR_DIM][VRR_DIM];
+            double Iy[VRR_DIM][VRR_DIM];
+            double Iz[VRR_DIM][VRR_DIM];
+
+            _rys_vrr_1d(Ix, lABx, lCDx, g.PAx + u * g.WPx, g.QCx + u * g.WQx, B00, B10, B01);
+            _rys_vrr_1d(Iy, lABy, lCDy, g.PAy + u * g.WPy, g.QCy + u * g.WQy, B00, B10, B01);
+            _rys_vrr_1d(Iz, lABz, lCDz, g.PAz + u * g.WPz, g.QCz + u * g.WQz, B00, B10, B01);
+
+            for (int ax = 0; ax <= lABx; ++ax)
+                for (int ay = 0; ay <= lABy; ++ay)
+                    for (int az = 0; az <= lABz; ++az)
+                        for (int cx = 0; cx <= lCDx; ++cx)
+                            for (int cy = 0; cy <= lCDy; ++cy)
+                                for (int cz = 0; cz <= lCDz; ++cz)
+                                    sum.at(ax, ay, az, cx, cy, cz) +=
+                                        wr * Ix[ax][cx] * Iy[ay][cy] * Iz[az][cz];
+        }
+
+        for (int ax = 0; ax <= lABx; ++ax)
+            for (int ay = 0; ay <= lABy; ++ay)
+                for (int az = 0; az <= lABz; ++az)
+                    for (int cx = 0; cx <= lCDx; ++cx)
+                        for (int cy = 0; cy <= lCDy; ++cy)
+                            for (int cz = 0; cz <= lCDz; ++cz)
+                                sum.at(ax, ay, az, cx, cy, cz) *= g.prefac;
+    }
+
+    // AB-HRR (in place on `sum`) then CD-HRR readout to the scalar ERI for the
+    // component (lA*,lB*,lC*,lD*). `sum` must already hold the contracted
+    // (built) block at a box that covers this component (lAB* = lA*+lB*, etc.).
+    static double _rys_eri_hrr_to_eri(
+        RysScratch &sum,
+        const int lAx, const int lAy, const int lAz,
+        const int lBx, const int lBy, const int lBz,
+        const int lCx, const int lCy, const int lCz,
+        const int lDx, const int lDy, const int lDz,
+        const double ABx, const double ABy, const double ABz,
+        const double CDx, const double CDy, const double CDz) noexcept
+    {
+        const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+        _rys_hrr_ab(sum,
+                    lAx, lAy, lAz, lBx, lBy, lBz,
+                    lCDx, lCDy, lCDz,
+                    ABx, ABy, ABz);
+
+        double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM];
+        for (int cx = 0; cx <= lCDx; ++cx)
+            for (int cy = 0; cy <= lCDy; ++cy)
+                for (int cz = 0; cz <= lCDz; ++cz)
+                    V0_CD[cx][cy][cz] = sum.at(lAx, lAy, lAz, cx, cy, cz);
+
+        return _rys_hrr_cd(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+    }
+} // namespace
 
 double HartreeFock::RysQuad::_rys_eri_primitive(
     const HartreeFock::PrimitivePair &ppAB,
@@ -536,123 +736,18 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     HartreeFock::ERIKernel kernel,
     double omega) noexcept
 {
-    // Derived quantities
-    const double zeta = ppAB.zeta;
-    const double eta = ppCD.zeta;
-    const double delta = zeta + eta;
-    const double inv_delta = 1.0 / delta;
-    const double rho = zeta * eta * inv_delta;
-    const ScreenedKernelData screen = screened_kernel_data(rho, kernel, omega);
-    const double effective_rho = screen.rho;
-    const double rho_over_zeta = effective_rho * ppAB.inv_zeta;
-    const double rho_over_eta = effective_rho * ppCD.inv_zeta;
-
-    // Gaussian product centers P and Q
-    const double Px = ppAB.center[0], Py = ppAB.center[1], Pz = ppAB.center[2];
-    const double Qx = ppCD.center[0], Qy = ppCD.center[1], Qz = ppCD.center[2];
-
-    // PQ displacement and Boys argument T = rho * |PQ|^2
-    const double PQx = Px - Qx, PQy = Py - Qy, PQz = Pz - Qz;
-    const double T = screen.boys_scale * rho * (PQx * PQx + PQy * PQy + PQz * PQz);
-
-    // PA and QC vectors (stored in PrimitivePair.pA)
-    const double PAx = ppAB.pA[0], PAy = ppAB.pA[1], PAz = ppAB.pA[2];
-    const double QCx = ppCD.pA[0], QCy = ppCD.pA[1], QCz = ppCD.pA[2];
-
-    // W = (zeta*P + eta*Q) / delta
-    const double Wx = (zeta * Px + eta * Qx) * inv_delta;
-    const double Wy = (zeta * Py + eta * Qy) * inv_delta;
-    const double Wz = (zeta * Pz + eta * Qz) * inv_delta;
-
-    // WP = W - P,  WQ = W - Q
-    const double wpwq_scale =
-        (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
-    const double WPx = (Wx - Px) * wpwq_scale;
-    const double WPy = (Wy - Py) * wpwq_scale;
-    const double WPz = (Wz - Pz) * wpwq_scale;
-    const double WQx = (Wx - Qx) * wpwq_scale;
-    const double WQy = (Wy - Qy) * wpwq_scale;
-    const double WQz = (Wz - Qz) * wpwq_scale;
-
-    // Overall prefactor: K_AB * K_CD * 2*sqrt(rho/pi)
-    const double prefac =
-        ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / std::numbers::pi) *
-        screen.prefactor_scale;
-
-    // Number of Rys roots
     const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
     const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
-    const int L = lABx + lABy + lABz + lCDx + lCDy + lCDz;
-    const int n = L / 2 + 1;
-    // Fetch Rys roots and weights
-    double t2[HartreeFock::Rys::RYS_MAX_ROOTS];
-    double w[HartreeFock::Rys::RYS_MAX_ROOTS];
-    HartreeFock::Rys::rys_roots_weights(n, T, t2, w);
 
-    // Size the per-quartet 6D accumulator (dims = lAB*+1, lCD*+1). The buffer
-    // is exactly the active region, so a single fill zeroes precisely the cells
-    // the old explicit nested-loop zeroed — same set, same final values.
+    const RysPrimGeom geom = _rys_eri_prep(ppAB, ppCD, kernel, omega);
+
     RysScratch &sum = g_rys_scratch;
-    sum.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz);
-    std::fill(sum.buf.begin(), sum.buf.end(), 0.0);
+    _rys_eri_build_sum(geom, lABx, lABy, lABz, lCDx, lCDy, lCDz, sum);
 
-    // Per-root VRR + accumulation
-    for (int r = 0; r < n; ++r)
-    {
-        const double u = t2[r];
-        const double wr = w[r];
-
-        // Root-dependent scalars (same for all axes)
-        const double B00 =
-            0.5 * inv_delta * u *
-            ((kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale);
-        const double B10 = 0.5 * ppAB.inv_zeta * (1.0 - rho_over_zeta * u);
-        const double B01 = 0.5 * ppCD.inv_zeta * (1.0 - rho_over_eta * u);
-
-        // 1D VRR tables for each Cartesian component
-        double Ix[VRR_DIM][VRR_DIM];
-        double Iy[VRR_DIM][VRR_DIM];
-        double Iz[VRR_DIM][VRR_DIM];
-
-        _rys_vrr_1d(Ix, lABx, lCDx, PAx + u * WPx, QCx + u * WQx, B00, B10, B01);
-        _rys_vrr_1d(Iy, lABy, lCDy, PAy + u * WPy, QCy + u * WQy, B00, B10, B01);
-        _rys_vrr_1d(Iz, lABz, lCDz, PAz + u * WPz, QCz + u * WQz, B00, B10, B01);
-
-        // Accumulate outer product into the 6D buffer
-        for (int ax = 0; ax <= lABx; ++ax)
-            for (int ay = 0; ay <= lABy; ++ay)
-                for (int az = 0; az <= lABz; ++az)
-                    for (int cx = 0; cx <= lCDx; ++cx)
-                        for (int cy = 0; cy <= lCDy; ++cy)
-                            for (int cz = 0; cz <= lCDz; ++cz)
-                                sum.at(ax, ay, az, cx, cy, cz) +=
-                                    wr * Ix[ax][cx] * Iy[ay][cy] * Iz[az][cz];
-    }
-
-    // Scale by overall prefactor
-    for (int ax = 0; ax <= lABx; ++ax)
-        for (int ay = 0; ay <= lABy; ++ay)
-            for (int az = 0; az <= lABz; ++az)
-                for (int cx = 0; cx <= lCDx; ++cx)
-                    for (int cy = 0; cy <= lCDy; ++cy)
-                        for (int cz = 0; cz <= lCDz; ++cz)
-                            sum.at(ax, ay, az, cx, cy, cz) *= prefac;
-
-    // AB-HRR (in-place on the 6D buffer)
-    _rys_hrr_ab(sum,
-                lAx, lAy, lAz, lBx, lBy, lBz,
-                lCDx, lCDy, lCDz,
-                ABx, ABy, ABz);
-
-    // Extract CD slice at (lAx, lAy, lAz)
-    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM];
-    for (int cx = 0; cx <= lCDx; ++cx)
-        for (int cy = 0; cy <= lCDy; ++cy)
-            for (int cz = 0; cz <= lCDz; ++cz)
-                V0_CD[cx][cy][cz] = sum.at(lAx, lAy, lAz, cx, cy, cz);
-
-    // CD-HRR
-    return _rys_hrr_cd(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+    return _rys_eri_hrr_to_eri(sum,
+                               lAx, lAy, lAz, lBx, lBy, lBz,
+                               lCx, lCy, lCz, lDx, lDy, lDz,
+                               ABx, ABy, ABz, CDx, CDy, CDz);
 }
 
 // ─── Contracted ERI ───────────────────────────────────────────────────────────
@@ -918,20 +1013,22 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
             const RysShellGroup &gC = groups[group_pairs[ket].a];
             const RysShellGroup &gD = groups[group_pairs[ket].b];
 
-            // The Rys/HGP choice is constant across the quartet's components
+            // The engine choice is constant across the quartet's components
             // (it keys on shell-level total L), so decide once here off the
             // component-0 views — cheaply, without building ShellPairs. The
             // shell's total L is the component-0 cartesian sum (component 0 of an
-            // L-shell carries all L on one axis), so this matches
-            // _auto_prefers_rys exactly. HGP-chosen quartets fill a hoisted block
-            // lazily (one shared contraction); Rys-chosen stay per-component.
+            // L-shell carries all L on one axis), so this matches _auto_engine
+            // exactly. Only HGP-chosen quartets use the hoisted block fast path
+            // (one shared contraction); OS- and Rys-chosen quartets fall to the
+            // per-component path, which re-dispatches through _auto_contracted_eri.
             const auto total_L = [](const HartreeFock::ContractedView &v)
             {
                 return v._cartesian[0] + v._cartesian[1] + v._cartesian[2];
             };
             const int L_AB = total_L(*ao_views[gA.first_ao]) + total_L(*ao_views[gB.first_ao]);
             const int L_CD = total_L(*ao_views[gC.first_ao]) + total_L(*ao_views[gD.first_ao]);
-            const bool quartet_uses_hgp = (L_AB + L_CD) > 1;
+            const bool quartet_uses_hgp =
+                _auto_engine(L_AB, L_CD) == HartreeFock::IntegralMethod::HeadGordonPople;
 
             const std::size_t nCq = gC.n_components;
             const std::size_t nDq = gD.n_components;
@@ -1114,10 +1211,9 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf(
 
 // ─── Auto-dispatch variants ───────────────────────────────────────────────────
 //
-// Per-quartet HGP/Rys selection (see `_auto_prefers_rys` above). Both
-// engines are reachable from the auto path; OS is not. The Fock-auto
-// entries reuse `_compute_2e_auto` so they pick up the same per-quartet
-// dispatch.
+// Per-quartet three-way engine selection (see `_auto_engine` above). OS, HGP
+// and Rys are all reachable from the auto path. The Fock-auto entries reuse
+// `_compute_2e_auto` so they pick up the same per-quartet dispatch.
 
 Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
