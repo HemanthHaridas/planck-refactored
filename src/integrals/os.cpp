@@ -239,8 +239,15 @@ namespace
         std::size_t cz_stride = 0;
         std::vector<double> vrr;
         std::vector<double> hrr;
+        // Primitive-contracted (a0|c0) accumulator (OS-A4-1), mirroring HGP's
+        // EriScratch::a0c0_accum. `_contracted_eri` sums each primitive pair's
+        // (a0|c0) block here, then HRRs once per shell quartet instead of once
+        // per primitive pair. Zeroed in resize_for_quartet.
+        std::vector<double> a0c0_accum;
+        std::size_t spatial_size = 0;
         double *vrr_data = nullptr;
         double *hrr_data = nullptr;
+        double *a0c0_data = nullptr;
 
         void resize_for_quartet(
             int lABx, int lABy, int lABz,
@@ -278,8 +285,16 @@ namespace
                 vrr.resize(vrr_size);
             if (hrr.size() < spatial)
                 hrr.resize(spatial);
+            spatial_size = spatial;
+            // The (a0|c0) accumulator is summed into across primitive pairs, so
+            // it must start zeroed for this quartet (unlike vrr/hrr, which are
+            // fully overwritten before being read). Matches HGP's a0c0_accum.
+            if (a0c0_accum.size() < spatial)
+                a0c0_accum.resize(spatial);
+            std::fill(a0c0_accum.begin(), a0c0_accum.begin() + spatial, 0.0);
             vrr_data = vrr.data();
             hrr_data = hrr.data();
+            a0c0_data = a0c0_accum.data();
         }
 
         std::size_t spatial_index(
@@ -1014,6 +1029,76 @@ static void _eri_hrr_ab(
                                     ABx * scratch.h(ax, ay, az, cx, cy, cz);
 }
 
+// ─── 4-center ERI: (a0|c0) block for one primitive quartet (OS-A4-0) ─────────
+//
+// Builds the contracted-shell `(a0|c0)^{m=0}` block for a single primitive
+// pair and writes it into `scratch.h` (the m=0 slice of the VRR table). This
+// is the per-primitive half of the OS ERI: VRR + m=0 extraction, with no HRR.
+//
+// Extracted from `_os_eri_primitive` with no behavior change. It is the seam
+// the A4-1 hoist will exploit: instead of running HRR per primitive pair, the
+// contracted driver will sum these `(a0|c0)` blocks across primitives (into a
+// quartet-level accumulator) and run HRR once per shell quartet. The caller
+// is responsible for `scratch.resize_for_quartet(...)` beforehand.
+static void _os_eri_build_a0c0(
+    const HartreeFock::PrimitivePair &ppAB,
+    const HartreeFock::PrimitivePair &ppCD,
+    const int lABx, const int lABy, const int lABz,
+    const int lCDx, const int lCDy, const int lCDz,
+    EriScratch &scratch,
+    HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    // Build the quartet-sized VRR table in thread-local dynamic scratch.
+    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
+
+    // Extract m=0 slice into the HRR buffer (the (a0|c0) block).
+    for (int ax = 0; ax <= lABx; ++ax)
+        for (int ay = 0; ay <= lABy; ++ay)
+            for (int az = 0; az <= lABz; ++az)
+                for (int cx = 0; cx <= lCDx; ++cx)
+                    for (int cy = 0; cy <= lCDy; ++cy)
+                        for (int cz = 0; cz <= lCDz; ++cz)
+                            scratch.h(ax, ay, az, cx, cy, cz) =
+                                scratch.v(ax, ay, az, cx, cy, cz, 0);
+}
+
+// ─── 4-center ERI: HRR an (a0|c0) block down to one component ERI (OS-A4-0) ──
+//
+// Consumes a filled `(a0|c0)` block in `scratch.h` (either from a single
+// primitive pair or, after A4-1, the primitive-contracted accumulator) and
+// runs the two HRR passes (A→B then C→D) to produce the final
+// (lA lB | lC lD) Cartesian-component ERI. Modifies `scratch.h` in place.
+//
+// Extracted from `_os_eri_primitive` with no behavior change.
+static double _os_eri_hrr_to_eri(
+    EriScratch &scratch,
+    const int lAx, const int lAy, const int lAz,
+    const int lBx, const int lBy, const int lBz,
+    const int lCx, const int lCy, const int lCz,
+    const int lDx, const int lDy, const int lDz,
+    const double ABx, const double ABy, const double ABz,
+    const double CDx, const double CDy, const double CDz)
+{
+    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+    // A→B HRR: modifies the quartet-sized HRR scratch in-place.
+    _eri_hrr_ab(scratch, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
+
+    // Extract C-side slice at (lAx, lAy, lAz) for C→D HRR.
+    // `_nuclear_hrr` only reads V0_CD[ix][iy][iz] for ix ≤ lCx+lDx = lCDx,
+    // etc., which is exactly the range filled below, so no zero-init is
+    // needed for the unused tail of the stack array.
+    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM];
+    for (int cx = 0; cx <= lCDx; ++cx)
+        for (int cy = 0; cy <= lCDy; ++cy)
+            for (int cz = 0; cz <= lCDz; ++cz)
+                V0_CD[cx][cy][cz] = scratch.h(lAx, lAy, lAz, cx, cy, cz);
+
+    // C→D HRR reusing the existing _nuclear_hrr (same 3-phase sweep)
+    return _nuclear_hrr(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+}
+
 // ─── 4-center ERI: single primitive quartet ──────────────────────────────────
 static double _os_eri_primitive(
     const HartreeFock::PrimitivePair &ppAB,
@@ -1034,34 +1119,13 @@ static double _os_eri_primitive(
     EriScratch &scratch = _eri_scratch;
     scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
 
-    // Build the quartet-sized VRR table in thread-local dynamic scratch.
-    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
+    _os_eri_build_a0c0(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                       scratch, kernel, omega);
 
-    // Extract m=0 slice into HRR buffer and zero unused entries
-    for (int ax = 0; ax <= lABx; ++ax)
-        for (int ay = 0; ay <= lABy; ++ay)
-            for (int az = 0; az <= lABz; ++az)
-                for (int cx = 0; cx <= lCDx; ++cx)
-                    for (int cy = 0; cy <= lCDy; ++cy)
-                        for (int cz = 0; cz <= lCDz; ++cz)
-                            scratch.h(ax, ay, az, cx, cy, cz) =
-                                scratch.v(ax, ay, az, cx, cy, cz, 0);
-
-    // A→B HRR: modifies the quartet-sized HRR scratch in-place.
-    _eri_hrr_ab(scratch, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
-
-    // Extract C-side slice at (lAx, lAy, lAz) for C→D HRR.
-    // `_nuclear_hrr` only reads V0_CD[ix][iy][iz] for ix ≤ lCx+lDx = lCDx,
-    // etc., which is exactly the range filled below, so no zero-init is
-    // needed for the unused tail of the stack array.
-    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM];
-    for (int cx = 0; cx <= lCDx; ++cx)
-        for (int cy = 0; cy <= lCDy; ++cy)
-            for (int cz = 0; cz <= lCDz; ++cz)
-                V0_CD[cx][cy][cz] = scratch.h(lAx, lAy, lAz, cx, cy, cz);
-
-    // C→D HRR reusing the existing _nuclear_hrr (same 3-phase sweep)
-    return _nuclear_hrr(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+    return _os_eri_hrr_to_eri(scratch,
+                              lAx, lAy, lAz, lBx, lBy, lBz,
+                              lCx, lCy, lCz, lDx, lDy, lDz,
+                              ABx, ABy, ABz, CDx, CDy, CDz);
 }
 
 static Eigen::MatrixXd compute_external_charge_attraction_impl(
@@ -1131,7 +1195,77 @@ static Eigen::MatrixXd compute_external_charge_attraction_impl(
     return V;
 }
 
+// Contract the per-primitive (a0|c0; m=0) blocks across all primitive pairs
+// into `scratch.a0c0_data`, mirroring HGP's `hgp_contract_a0c0`. The caller's
+// `scratch` is (re)sized and the accumulator zeroed by resize_for_quartet, so a
+// single fresh contraction lands here. `_os_eri_build_a0c0` writes each pair's
+// block into `scratch.h` (the hrr buffer doubles as per-pair VRR scratch — it
+// is only read after the accumulation loop), and we sum it in flat over
+// `spatial_size`, exactly the contiguous accumulation order HGP uses.
+static void _os_contract_a0c0(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    EriScratch &scratch,
+    const int lABx, const int lABy, const int lABz,
+    const int lCDx, const int lCDy, const int lCDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
+    scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
+
+    for (const auto &ppAB : spAB.primitive_pairs)
+        for (const auto &ppCD : spCD.primitive_pairs)
+        {
+            _os_eri_build_a0c0(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                               scratch, kernel, omega);
+            const double w = ppAB.coeff_product * ppCD.coeff_product;
+            for (std::size_t n = 0; n < scratch.spatial_size; ++n)
+                scratch.a0c0_data[n] += w * scratch.hrr_data[n];
+        }
+}
+
+// ─── 4-center ERI: contracted shell quartet, one kernel (OS-A4-1) ─────────────
+//
+// Hoisted base: contract (a0|c0) across all primitive pairs, copy the
+// accumulator into the HRR buffer, then run both HRR passes ONCE per shell
+// quartet instead of once per primitive pair. Algebraically identical to the
+// per-pair form because HRR is linear in the (a0|c0) block (same argument and
+// structure as HGP's hgp_contracted_eri_weighted_base).
+static double _contracted_eri_base(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    const int lAx, const int lAy, const int lAz,
+    const int lBx, const int lBy, const int lBz,
+    const int lCx, const int lCy, const int lCz,
+    const int lDx, const int lDy, const int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+    EriScratch &scratch = _eri_scratch;
+    _os_contract_a0c0(spAB, spCD, scratch, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                      kernel, omega);
+
+    // Move the contracted accumulator into the HRR working buffer.
+    std::copy(scratch.a0c0_data, scratch.a0c0_data + scratch.spatial_size,
+              scratch.hrr_data);
+
+    const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
+    const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
+    return _os_eri_hrr_to_eri(scratch,
+                              lAx, lAy, lAz, lBx, lBy, lBz,
+                              lCx, lCy, lCz, lDx, lDy, lDz,
+                              ABx, ABy, ABz, CDx, CDy, CDz);
+}
+
 // ─── 4-center ERI: contracted shell quartet ──────────────────────────────────
+//
+// Kernel dispatch mirroring HGP's hgp_contracted_eri_weighted: Coulomb and
+// LongRange run a single hoisted contraction; ShortRange is the linear
+// combination (full − long_range), each computed with its own hoisted pass.
 static double _contracted_eri(
     const HartreeFock::ShellPair &spAB,
     const HartreeFock::ShellPair &spCD,
@@ -1142,33 +1276,23 @@ static double _contracted_eri(
     HartreeFock::ERIKernel kernel,
     double omega)
 {
-    const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
-    const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
+    if (kernel != HartreeFock::ERIKernel::ShortRange)
+        return _contracted_eri_base(spAB, spCD,
+                                    lAx, lAy, lAz, lBx, lBy, lBz,
+                                    lCx, lCy, lCz, lDx, lDy, lDz,
+                                    kernel, omega);
 
-    double eri = 0.0;
-    for (const auto &ppAB : spAB.primitive_pairs)
-        for (const auto &ppCD : spCD.primitive_pairs)
-        {
-            const double full =
-                _os_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
-                                  lCx, lCy, lCz, lDx, lDy, lDz,
-                                  ABx, ABy, ABz, CDx, CDy, CDz,
-                                  HartreeFock::ERIKernel::Coulomb, 0.0);
+    if (omega <= 0.0)
+        return 0.0;
 
-            double value = full;
-            if (kernel != HartreeFock::ERIKernel::Coulomb)
-            {
-                const double long_range =
-                    _os_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
-                                      lCx, lCy, lCz, lDx, lDy, lDz,
-                                      ABx, ABy, ABz, CDx, CDy, CDz,
-                                      HartreeFock::ERIKernel::LongRange, omega);
-                value = (kernel == HartreeFock::ERIKernel::LongRange) ? long_range : (full - long_range);
-            }
-
-            eri += ppAB.coeff_product * ppCD.coeff_product * value;
-        }
-    return eri;
+    return _contracted_eri_base(spAB, spCD,
+                                lAx, lAy, lAz, lBx, lBy, lBz,
+                                lCx, lCy, lCz, lDx, lDy, lDz,
+                                HartreeFock::ERIKernel::Coulomb, 0.0) -
+           _contracted_eri_base(spAB, spCD,
+                                lAx, lAy, lAz, lBx, lBy, lBz,
+                                lCx, lCy, lCz, lDx, lDy, lDz,
+                                HartreeFock::ERIKernel::LongRange, omega);
 }
 
 double HartreeFock::ObaraSaika::_contracted_eri_elem(
