@@ -3153,6 +3153,42 @@
           "atol": 1e-07
         }
       ]
+    },
+    {
+      "id": "ne_rhf_ccpvqz_highL_pyscf",
+      "input": "tests/inputs/regression/integrals/ne_rhf_ccpvqz_highL.hfinp",
+      "executable": "hartree-fock",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -128.5435344972,
+          "atol": 1e-07
+        }
+      ],
+      "_pyscf_reference": "PySCF 2.x RHF cc-pVQZ (cart, no symmetry) Ne atom: SCF = -128.5435344972 Eh. Planck (engine os/rys/hgp/auto) matches to 0.0e+00. This is the only suite case whose g-shell quartets reach the L_AB+L_CD=(7,8)/(8,8) buckets that Auto routes to Rys; it guards that otherwise-untested high-L Rys path (see docs/SHELLPAIR_GRANULARITY_HANDOFF.md Phase B)."
+    },
+    {
+      "id": "ne_rhf_ccpvqz_highL_engine_os_vs_rys",
+      "input": "tests/inputs/regression/integrals/ne_rhf_ccpvqz_highL.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (RYS)",
+        "Total Energy (AUTO)",
+        "PASS"
+      ]
     }
   ]
 }

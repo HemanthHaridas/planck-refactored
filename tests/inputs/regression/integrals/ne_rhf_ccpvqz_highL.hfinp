@@ -1,0 +1,29 @@
+%begin_control
+    basis       cc-pVQZ
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+    max_cycles  100
+    tol_energy  1.0e-9
+    tol_density 1.0e-9
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+1
+0   1
+Ne    0.000000     0.000000     0.000000
+%end_coords
