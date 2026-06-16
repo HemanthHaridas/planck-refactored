@@ -20,23 +20,28 @@ namespace HartreeFock
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const std::size_t nbasis,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
-        HartreeFock::MultipoleMatrices _compute_multipole_matrices(
-            const std::vector<HartreeFock::ShellPair> &shell_pairs,
-            std::size_t nbasis,
-            const Eigen::Vector3d &origin = Eigen::Vector3d::Zero());
-        std::expected<HartreeFock::MultipoleMoments, std::string> _compute_multipole_moments(
-            const HartreeFock::Calculator &calculator,
-            const std::vector<HartreeFock::ShellPair> &shell_pairs,
-            const Eigen::Vector3d &origin = Eigen::Vector3d::Zero());
         Eigen::MatrixXd _compute_nuclear_attraction(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const std::size_t nbasis,
             const HartreeFock::Molecule &molecule,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+        // Build the AO matrix V_munu = -sum_c q_c <mu | 1/|r - r_c| | nu>
+        // for an arbitrary list of point charges. Same Obara-Saika kernel
+        // as _compute_nuclear_attraction; nuclear attraction is in fact a
+        // thin wrapper that builds the charge list from the molecule and
+        // calls into this routine. Used by the C-PCM module to assemble
+        // one matrix per cavity tessera (see src/solvation/pcm.cpp).
+        Eigen::MatrixXd _compute_external_charge_attraction(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const std::size_t nbasis,
+            const std::vector<HartreeFock::ExternalCharge> &charges,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
         // Build the full AO ERI tensor. Applies Schwarz screening:
         // quartets with Q(i,j)·Q(k,l) < tol_eri are skipped.
         std::vector<double> _compute_2e(const std::vector<HartreeFock::ShellPair> &shell_pairs,
                                         std::size_t nbasis,
+                                        HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+                                        double omega = 0.0,
                                         double tol_eri = 1e-10,
                                         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
@@ -47,7 +52,9 @@ namespace HartreeFock
             int lAx, int lAy, int lAz,
             int lBx, int lBy, int lBz,
             int lCx, int lCy, int lCz,
-            int lDx, int lDy, int lDz);
+            int lDx, int lDy, int lDz,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0);
 
         Eigen::MatrixXd _compute_fock_rhf(const std::vector<double> &_eri,
                                           const Eigen::MatrixXd &density,
@@ -63,6 +70,8 @@ namespace HartreeFock
         Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair> &shell_pairs,
                                          const Eigen::MatrixXd &density,
                                          std::size_t nbasis,
+                                         HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+                                         double omega = 0.0,
                                          double tol_eri = 1e-10,
                                          const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
@@ -73,6 +82,8 @@ namespace HartreeFock
                              const Eigen::MatrixXd &Pa,
                              const Eigen::MatrixXd &Pb,
                              std::size_t nbasis,
+                             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+                             double omega = 0.0,
                              double tol_eri = 1e-10,
                              const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
@@ -98,7 +109,22 @@ namespace HartreeFock
         // Layout: [cen*3 + dir], cen∈{0=A,1=B,2=C,3=D}, dir∈{0,1,2}
         std::array<double, 12> _compute_eri_deriv_elem(
             const HartreeFock::ShellPair &spAB,
-            const HartreeFock::ShellPair &spCD);
+            const HartreeFock::ShellPair &spCD,
+            const HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0);
+
+        // Test hook: return the weighted AM-raising term used by the ERI
+        // derivative assembly for one specified centre (0=A, 1=B, 2=C, 3=D).
+        double _contracted_eri_elem_weighted_test(
+            const HartreeFock::ShellPair &spAB,
+            const HartreeFock::ShellPair &spCD,
+            int lAx, int lAy, int lAz,
+            int lBx, int lBy, int lBz,
+            int lCx, int lCy, int lCz,
+            int lDx, int lDy, int lDz,
+            int weight_center,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0);
 
         // Compute the cross-overlap matrix S_cross(μ, ν) = <χ_μ^large | χ_ν^small>
         // between two basis sets centered on the same molecule.

@@ -44,6 +44,10 @@ namespace DFT
             const AOGridEvaluation &ao_grid,
             const Eigen::Ref<const Eigen::MatrixXd> &density)
         {
+            // The density matrix is symmetrized defensively before grid
+            // contraction so tiny SCF asymmetries do not leak into rho or its
+            // gradient.  `density_times_values` is reused across rho and all
+            // gradient components to keep the AO-grid contractions compact.
             const Eigen::MatrixXd symmetric_density = 0.5 * (density + density.transpose());
             const Eigen::MatrixXd density_times_values = ao_grid.values * symmetric_density;
 
@@ -60,6 +64,9 @@ namespace DFT
             const Eigen::Index npoints = density.npoints();
             std::vector<double> rho(static_cast<std::size_t>(npoints * (density.polarized ? 2 : 1)));
 
+            // libxc expects point-major arrays:
+            //   unpolarized: [rho(point0), rho(point1), ...]
+            //   polarized:   [rho_a(point0), rho_b(point0), rho_a(point1), ...]
             if (!density.polarized)
             {
                 for (Eigen::Index point = 0; point < npoints; ++point)
@@ -92,6 +99,9 @@ namespace DFT
 
             const Eigen::VectorXd sigma_aa = density.alpha.gradient_squared();
             const Eigen::VectorXd sigma_bb = density.beta.gradient_squared();
+            // libxc's polarized GGA interface uses the conventional ordering
+            // (sigma_aa, sigma_ab, sigma_bb) at each grid point rather than a
+            // full 2x2 spin-gradient matrix.
             const Eigen::VectorXd sigma_ab =
                 (density.alpha.grad_x.array() * density.beta.grad_x.array() + density.alpha.grad_y.array() * density.beta.grad_y.array() + density.alpha.grad_z.array() * density.beta.grad_z.array()).matrix();
 
@@ -111,6 +121,9 @@ namespace DFT
             Eigen::Index npoints,
             Eigen::Index ncols)
         {
+            // libxc returns derivatives in the same point-major layout that its
+            // evaluation routines consume.  Convert back to an Eigen matrix with
+            // one row per grid point so later AO assembly code can stay vectorized.
             Eigen::MatrixXd matrix(npoints, ncols);
             for (Eigen::Index point = 0; point < npoints; ++point)
             {
@@ -173,6 +186,9 @@ namespace DFT
             std::vector<double> vrho;
             std::vector<double> vsigma;
 
+            // The grid layer currently supports semilocal functionals only.
+            // LDA depends on rho alone, while GGA additionally consumes sigma =
+            // grad(rho)·grad(rho) spin invariants.
             if (functional.is_lda_like())
             {
                 if (auto eval = functional.evaluate_lda_exc_vxc(rho, static_cast<int>(npoints), exc, vrho); !eval)
@@ -205,9 +221,32 @@ namespace DFT
             else
                 result.vsigma = unpack_point_major(vsigma, npoints, functional.sigma_components());
 
+            // The XC energy density stored here is the quadrature-ready
+            // integrand rho(r) * eps_xc(r).  The actual scalar XC contribution
+            // is obtained only after multiplying by the molecular grid weights.
             result.energy_density =
                 (density.total.rho.array() * result.exc.array()).matrix();
             result.energy = molecular_grid.points.col(3).dot(result.energy_density);
+            return result;
+        }
+
+        XCFunctionalGridResult zero_functional_result(
+            const DensityOnGrid &density,
+            const std::string &name)
+        {
+            const Eigen::Index npoints = density.npoints();
+            const Eigen::Index spin_components = density.polarized ? 2 : 1;
+
+            XCFunctionalGridResult result;
+            result.name = name;
+            result.family = XC_FAMILY_UNKNOWN;
+            result.polarized = density.polarized;
+            result.uses_gradients = false;
+            result.exc = Eigen::VectorXd::Zero(npoints);
+            result.vrho = Eigen::MatrixXd::Zero(npoints, spin_components);
+            result.vsigma.resize(npoints, 0);
+            result.energy_density = Eigen::VectorXd::Zero(npoints);
+            result.energy = 0.0;
             return result;
         }
 
@@ -234,18 +273,24 @@ namespace DFT
         return (grad_x.array().square() + grad_y.array().square() + grad_z.array().square()).matrix();
     }
 
-    double DensityChannelOnGrid::integrated_density(const MolecularGrid &molecular_grid) const
+    std::expected<double, std::string> DensityChannelOnGrid::integrated_density(const MolecularGrid &molecular_grid) const
     {
         if (molecular_grid.points.cols() != 4)
-            throw std::invalid_argument("integrated_density requires a molecular grid with quadrature weights");
+        {
+            return std::unexpected(
+                "integrated_density requires a molecular grid with quadrature weights");
+        }
 
         if (molecular_grid.points.rows() != npoints())
-            throw std::invalid_argument("integrated_density received inconsistent density/grid sizes");
+        {
+            return std::unexpected(
+                "integrated_density received inconsistent density/grid sizes");
+        }
 
         return molecular_grid.points.col(3).dot(rho);
     }
 
-    double DensityOnGrid::integrated_electrons(const MolecularGrid &molecular_grid) const
+    std::expected<double, std::string> DensityOnGrid::integrated_electrons(const MolecularGrid &molecular_grid) const
     {
         return total.integrated_density(molecular_grid);
     }
@@ -323,11 +368,15 @@ namespace DFT
         if (!exchange)
             return std::unexpected(exchange.error());
 
-        auto correlation = evaluate_functional_on_grid(
-            molecular_grid,
-            density,
-            correlation_functional,
-            "correlation");
+        std::expected<XCFunctionalGridResult, std::string> correlation =
+            exchange_functional.is_combined_exchange_correlation()
+                ? std::expected<XCFunctionalGridResult, std::string>(
+                      zero_functional_result(density, "included in " + exchange->name))
+                : evaluate_functional_on_grid(
+                      molecular_grid,
+                      density,
+                      correlation_functional,
+                      "correlation");
         if (!correlation)
             return std::unexpected(correlation.error());
 
@@ -349,7 +398,15 @@ namespace DFT
         evaluation.exchange_energy = evaluation.exchange.energy;
         evaluation.correlation_energy = evaluation.correlation.energy;
         evaluation.total_energy = evaluation.exchange_energy + evaluation.correlation_energy;
-        evaluation.integrated_electrons = density.integrated_electrons(molecular_grid);
+        evaluation.full_range_exchange_coefficient = exchange_functional.fock_exchange_coefficient();
+        evaluation.short_range_exchange_coefficient = exchange_functional.short_range_exchange_coefficient();
+        evaluation.range_separation_omega = exchange_functional.range_separation_omega();
+        evaluation.exact_exchange_coefficient =
+            evaluation.full_range_exchange_coefficient + evaluation.short_range_exchange_coefficient;
+        auto integrated_electrons = density.integrated_electrons(molecular_grid);
+        if (!integrated_electrons)
+            return std::unexpected(integrated_electrons.error());
+        evaluation.integrated_electrons = *integrated_electrons;
         return evaluation;
     }
 

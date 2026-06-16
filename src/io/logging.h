@@ -1,6 +1,7 @@
 #ifndef HF_LOGGING_H
 #define HF_LOGGING_H
 
+#include <format>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -13,6 +14,7 @@ namespace HartreeFock
 {
     enum LogLevel
     {
+        Debug,
         Info,
         Warning,
         Error,
@@ -58,7 +60,8 @@ namespace HartreeFock
             std::ostream &out_stream =
                 (level == Info || level == Error) ? std::cout : std::cerr;
 
-            const char *prefix = (level == Info)    ? "[INF] "
+            const char *prefix = (level == Debug)     ? "[DBG] "
+                                 : (level == Info)    ? "[INF] "
                                  : (level == Warning) ? "[WRN] "
                                                       : "[ERR] ";
 
@@ -259,7 +262,8 @@ namespace HartreeFock
                       << std::string(LW + VW * 3, '-') << "\n";
         }
 
-        inline void correlation_energy(const double E_scf, const double E_corr)
+        inline void correlation_energy(const double E_scf, const double E_corr,
+                                       const std::string &method_label = "Correlated")
         {
             if (is_silenced())
                 return;
@@ -275,10 +279,49 @@ namespace HartreeFock
                       << std::setw(VW) << std::right << E_corr * HARTREE_TO_KCALMOL
                       << "\n"
                       << std::string(LW + VW * 3, '-') << "\n"
-                      << std::setw(LW) << std::left << "  Total MP2 Energy"
+                      << std::setw(LW) << std::left << ("  Total " + method_label + " Energy")
                       << std::setw(VW) << std::right << E_total
                       << std::setw(VW) << std::right << E_total * HARTREE_TO_EV
                       << std::setw(VW) << std::right << E_total * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::string(LW + VW * 3, '-') << "\n";
+        }
+
+        inline void ccsdt_energy_summary(const double E_hf,
+                                         const double E_ccsd_corr,
+                                         const double E_ccsdt_corr,
+                                         const std::string &ccsd_label = "CCSD",
+                                         const std::string &ccsdt_label = "CCSDT")
+        {
+            if (is_silenced())
+                return;
+
+            std::lock_guard<std::mutex> lock(log_mutex);
+            constexpr int LW = 32;
+            constexpr int VW = 20;
+            const double E_ccsd = E_hf + E_ccsd_corr;
+            const double E_ccsdt = E_hf + E_ccsdt_corr;
+
+            std::cout << std::setw(LW) << std::left << "[INF]  HF Energy"
+                      << std::fixed << std::setprecision(10)
+                      << std::setw(VW) << std::right << E_hf
+                      << std::setw(VW) << std::right << E_hf * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_hf * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::setw(LW) << std::left << ("[INF]  " + ccsd_label + " Energy")
+                      << std::setw(VW) << std::right << E_ccsd
+                      << std::setw(VW) << std::right << E_ccsd * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_ccsd * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::setw(LW) << std::left << ("[INF]  " + ccsdt_label + " Energy")
+                      << std::setw(VW) << std::right << E_ccsdt
+                      << std::setw(VW) << std::right << E_ccsdt * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_ccsdt * HARTREE_TO_KCALMOL
+                      << "\n"
+                      << std::setw(LW) << std::left << ("[INF]  " + ccsdt_label + " Correlation")
+                      << std::setw(VW) << std::right << E_ccsdt_corr
+                      << std::setw(VW) << std::right << E_ccsdt_corr * HARTREE_TO_EV
+                      << std::setw(VW) << std::right << E_ccsdt_corr * HARTREE_TO_KCALMOL
                       << "\n"
                       << std::string(LW + VW * 3, '-') << "\n";
         }
@@ -493,6 +536,8 @@ const inline std::string map_enum<HartreeFock::IntegralMethod>(HartreeFock::Inte
         return "Obara-Saika";
     case HartreeFock::IntegralMethod::RysQuadrature:
         return "Rys Quadrature";
+    case HartreeFock::IntegralMethod::HeadGordonPople:
+        return "Head-Gordon-Pople";
     case HartreeFock::IntegralMethod::Auto:
         return "Auto";
     }
@@ -517,6 +562,8 @@ const inline std::string map_enum<HartreeFock::CalculationType>(HartreeFock::Cal
         return "Geometry Optimization + Frequency";
     case HartreeFock::CalculationType::ImaginaryFollow:
         return "Imaginary Mode Follow";
+    case HartreeFock::CalculationType::LinearResponse:
+        return "TDDFT / Linear Response";
     }
     return "Unknown";
 }
@@ -529,6 +576,8 @@ const inline std::string map_enum<HartreeFock::SCFType>(HartreeFock::SCFType s)
     {
     case HartreeFock::SCFType::RHF:
         return "RHF";
+    case HartreeFock::SCFType::ROHF:
+        return "ROHF";
     case HartreeFock::SCFType::UHF:
         return "UHF";
     }
@@ -583,6 +632,10 @@ const inline std::string map_enum<HartreeFock::XCExchangeFunctional>(HartreeFock
         return "PW91";
     case HartreeFock::XCExchangeFunctional::PBE:
         return "PBE";
+    case HartreeFock::XCExchangeFunctional::B3LYP:
+        return "B3LYP";
+    case HartreeFock::XCExchangeFunctional::PBE0:
+        return "PBE0";
     }
     return "Unknown";
 }

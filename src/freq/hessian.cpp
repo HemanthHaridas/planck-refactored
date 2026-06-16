@@ -1,8 +1,8 @@
 #include "hessian.h"
 
 #include <cmath>
+#include <expected>
 #include <format>
-#include <stdexcept>
 
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
@@ -17,6 +17,7 @@
 #include "io/logging.h"
 #include "lookup/elements.h"
 #include "scf/scf.h"
+#include "scf/working_state.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/vibrational_symmetry.h"
 
@@ -37,54 +38,77 @@ static constexpr double CM_INV_TO_HARTREE = 4.5563352527e-6;
 // calc._molecule._standard; then computes the analytic gradient.
 // Returns the gradient as a natoms×3 matrix (atom-major).
 
-static Eigen::MatrixXd _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
+static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(HartreeFock::Calculator &calc)
 {
     // Sync coordinate frames
-    calc._molecule._coordinates = calc._molecule._standard;
-    calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
+    calc.sync_coordinate_frames_from_standard();
 
     // Rebuild basis
     const std::string gbs_path =
         calc._basis._basis_path + "/" + calc._basis._basis_name;
-    calc._shells = HartreeFock::BasisFunctions::read_gbs_basis(
+    auto basis_res = HartreeFock::BasisFunctions::read_gbs_basis(
         gbs_path, calc._molecule, calc._basis._basis);
+    if (!basis_res)
+        return std::unexpected("Hessian basis rebuild failed: " + basis_res.error());
+    calc._shells = std::move(*basis_res);
 
-    // Reset SCF state (no SAO blocking during finite-difference steps)
+    // Reset SCF state (no SAO blocking during finite-difference steps).
+    // Use working_nbasis() — in Cartesian mode this equals nbasis(); in spherical
+    // mode it is nbasis_sph(), which is the dimension SCF actually allocates
+    // density/Fock matrices at. Passing nbasis() (Cartesian count) in spherical
+    // mode would size the SCF state to the wrong dimension and corrupt every
+    // downstream Fock build.
     calc._info._scf = HartreeFock::DataSCF(
-        calc._scf._scf == HartreeFock::SCFType::UHF);
-    calc._info._scf.initialize(calc._shells.nbasis());
-    calc._scf.set_scf_mode_auto(calc._shells.nbasis());
+        calc._scf._scf != HartreeFock::SCFType::RHF);
+    calc._info._scf.initialize(calc.working_nbasis());
+    calc._scf.set_scf_mode_auto(calc.working_nbasis());
     calc._info._is_converged = false;
     calc._use_sao_blocking = false;
 
-    calc._compute_nuclear_repulsion();
+    if (auto nuclear_repulsion = calc.recompute_nuclear_repulsion(); !nuclear_repulsion)
+        return std::unexpected("Hessian geometry rebuild failed: " + nuclear_repulsion.error());
 
-    auto shell_pairs = build_shellpairs(calc._shells);
-    HartreeFock::Symmetry::update_integral_symmetry(calc);
-
-    auto [S, T] = _compute_1e(shell_pairs, calc._shells.nbasis(),
-                              calc._integral._engine,
-                              calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
-    auto V = _compute_nuclear_attraction(shell_pairs, calc._shells.nbasis(),
-                                         calc._molecule, calc._integral._engine,
-                                         calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
-    calc._overlap = S;
-    calc._hcore = T + V;
+    // Rebuild the geometry-derived working state (shell pairs, integral-symmetry
+    // ops, _overlap and _hcore in the working basis). The helper is the
+    // spherical-aware version of the inline block the driver runs once at
+    // startup; calling it here at every displaced geometry keeps the freq
+    // inner loop in lockstep with the driver's spherical setup. See
+    // src/scf/working_state.{h,cpp} for the contract.
+    auto shell_pairs_res = HartreeFock::SCF::rebuild_basis_dependent_state(calc);
+    if (!shell_pairs_res)
+        return std::unexpected("Hessian working-state rebuild failed: " + shell_pairs_res.error());
+    std::vector<HartreeFock::ShellPair> shell_pairs = std::move(*shell_pairs_res);
 
     std::expected<void, std::string> scf_res;
     if (calc._scf._scf == HartreeFock::SCFType::UHF)
         scf_res = HartreeFock::SCF::run_uhf(calc, shell_pairs);
+    else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
+        scf_res = HartreeFock::SCF::run_rohf(calc, shell_pairs);
     else
         scf_res = HartreeFock::SCF::run_rhf(calc, shell_pairs);
 
     if (!scf_res)
-        throw std::runtime_error("Hessian SCF failed: " + scf_res.error());
+        return std::unexpected("Hessian SCF failed: " + scf_res.error());
 
     Eigen::MatrixXd grad;
     if (calc._scf._scf == HartreeFock::SCFType::UHF)
-        grad = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
+    {
+        auto grad_res = HartreeFock::Gradient::compute_uhf_gradient(calc, shell_pairs);
+        if (!grad_res)
+            return std::unexpected("Hessian UHF gradient failed: " + grad_res.error());
+        grad = std::move(*grad_res);
+    }
+    else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
+    {
+        return std::unexpected("Hessian ROHF gradient is not implemented");
+    }
     else
-        grad = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
+    {
+        auto grad_res = HartreeFock::Gradient::compute_rhf_gradient(calc, shell_pairs);
+        if (!grad_res)
+            return std::unexpected("Hessian RHF gradient failed: " + grad_res.error());
+        grad = std::move(*grad_res);
+    }
 
     calc._gradient = grad;
     return grad;
@@ -108,9 +132,7 @@ static Eigen::MatrixXd _eckart_basis(const HartreeFock::Calculator &calc)
     Eigen::VectorXd m(N), sq(N);
     for (std::size_t a = 0; a < N; ++a)
     {
-        m[a] = element_from_z(static_cast<uint64_t>(
-                                  calc._molecule.atomic_numbers[a]))
-                   .mass;
+        m[a] = calc._molecule.atomic_masses[a];
         sq[a] = std::sqrt(m[a]);
     }
 
@@ -177,9 +199,7 @@ void HartreeFock::Freq::vibrational_analysis(
     Eigen::VectorXd mass_vec(n3);
     for (std::size_t a = 0; a < N; ++a)
     {
-        const double m = element_from_z(static_cast<uint64_t>(
-                                            calc._molecule.atomic_numbers[a]))
-                             .mass;
+        const double m = calc._molecule.atomic_masses[a];
         mass_vec[static_cast<int>(a) * 3 + 0] = m;
         mass_vec[static_cast<int>(a) * 3 + 1] = m;
         mass_vec[static_cast<int>(a) * 3 + 2] = m;
@@ -238,8 +258,26 @@ void HartreeFock::Freq::vibrational_analysis(
             L_cart.col(c) /= norm;
     }
     result.normal_modes = std::move(L_cart);
-    result.mode_symmetry = HartreeFock::Symmetry::assign_vibrational_symmetry(
+
+    // Symmetry labels are assigned after the translational/rotational projection and
+    // un-mass-weighting, so the classifier sees the same unit-norm Cartesian normal
+    // modes that are later printed/stored. For non-Abelian groups the labeling layer
+    // may intentionally fall back to an Abelian subgroup; assign_vibrational_symmetry
+    // logs that decision when it happens.
+    auto mode_symmetry = HartreeFock::Symmetry::assign_vibrational_symmetry(
         calc, result.normal_modes);
+    if (!mode_symmetry)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Vibrational Symmetry :",
+            "Unavailable: " + mode_symmetry.error());
+        result.mode_symmetry.clear();
+    }
+    else
+    {
+        result.mode_symmetry = std::move(*mode_symmetry);
+    }
 
     // Zero-point energy (sum over real modes only)
     result.zpe = 0.0;
@@ -255,13 +293,13 @@ void HartreeFock::Freq::vibrational_analysis(
 
 // ─── Compute semi-numerical Hessian ──────────────────────────────────────────
 
-HartreeFock::Freq::HessianResult
+std::expected<HartreeFock::Freq::HessianResult, std::string>
 HartreeFock::Freq::compute_hessian(HartreeFock::Calculator &calc)
 {
     return compute_hessian(calc, _run_sp_gradient_freq_hf);
 }
 
-HartreeFock::Freq::HessianResult
+std::expected<HartreeFock::Freq::HessianResult, std::string>
 HartreeFock::Freq::compute_hessian(
     HartreeFock::Calculator &calc,
     const GradientMatrixRunner &gradient_runner)
@@ -286,11 +324,17 @@ HartreeFock::Freq::compute_hessian(
 
         // Forward displacement
         calc._molecule._standard(atom, dir) = x_orig + h;
-        Eigen::MatrixXd g_fwd = gradient_runner(calc);
+        auto g_fwd_res = gradient_runner(calc);
+        if (!g_fwd_res)
+            return std::unexpected(g_fwd_res.error());
+        Eigen::MatrixXd g_fwd = std::move(*g_fwd_res);
 
         // Backward displacement
         calc._molecule._standard(atom, dir) = x_orig - h;
-        Eigen::MatrixXd g_bck = gradient_runner(calc);
+        auto g_bck_res = gradient_runner(calc);
+        if (!g_bck_res)
+            return std::unexpected(g_bck_res.error());
+        Eigen::MatrixXd g_bck = std::move(*g_bck_res);
 
         // Restore
         calc._molecule._standard(atom, dir) = x_orig;
@@ -312,8 +356,7 @@ HartreeFock::Freq::compute_hessian(
 
     // Restore the calculator's SCF state to the undisplaced geometry so
     // the energy / density printed after the hessian block is consistent.
-    calc._molecule._coordinates = calc._molecule._standard;
-    calc._molecule.coordinates = calc._molecule._standard / ANGSTROM_TO_BOHR;
+    calc.sync_coordinate_frames_from_standard();
 
     // Run vibrational analysis
     vibrational_analysis(result, calc);

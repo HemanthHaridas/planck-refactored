@@ -2,6 +2,7 @@
 #define DFT_DRIVER_H
 
 #include <expected>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include "base/wrapper.h"
 #include "integrals/shellpair.h"
 #include "ks_matrix.h"
+#include "solvation/pcm.h"
 #include "xc_grid.h"
 
 namespace DFT::Driver
@@ -32,6 +34,9 @@ namespace DFT::Driver
         MolecularGrid molecular_grid;
         AOGridEvaluation ao_grid;
         GridPreset grid_preset;
+        std::optional<HartreeFock::Solvation::PCMState> pcm;
+        mutable std::vector<double> short_range_eri;
+        mutable double short_range_eri_omega = -1.0;
     };
 
     struct Result
@@ -39,6 +44,7 @@ namespace DFT::Driver
         double total_energy = 0.0;
         double xc_energy = 0.0;
         double integrated_electrons = 0.0;
+        double solvation_energy = 0.0;
         bool converged = false;
     };
 
@@ -52,7 +58,7 @@ namespace DFT::Driver
     std::expected<KSPotentialMatrices, std::string>
     assemble_current_ks_potential(
         HartreeFock::Calculator &calculator,
-        const PreparedSystem &prepared,
+        PreparedSystem &prepared,
         const XCGridEvaluation &xc_grid);
 
     std::expected<PreparedSystem, std::string>

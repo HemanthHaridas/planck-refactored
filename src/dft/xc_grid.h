@@ -27,7 +27,7 @@ namespace DFT
 
         [[nodiscard]] Eigen::VectorXd gradient_squared() const;
 
-        [[nodiscard]] double integrated_density(const MolecularGrid &molecular_grid) const;
+        [[nodiscard]] std::expected<double, std::string> integrated_density(const MolecularGrid &molecular_grid) const;
     };
 
     struct DensityOnGrid
@@ -42,7 +42,7 @@ namespace DFT
             return total.npoints();
         }
 
-        [[nodiscard]] double integrated_electrons(const MolecularGrid &molecular_grid) const;
+        [[nodiscard]] std::expected<double, std::string> integrated_electrons(const MolecularGrid &molecular_grid) const;
     };
 
     struct XCFunctionalGridResult
@@ -75,6 +75,12 @@ namespace DFT
         double exchange_energy = 0.0;
         double correlation_energy = 0.0;
         double total_energy = 0.0;
+        // Shared metadata consumed later by both KS matrix assembly and the
+        // analytic gradient path.
+        double exact_exchange_coefficient = 0.0;
+        double full_range_exchange_coefficient = 0.0;
+        double short_range_exchange_coefficient = 0.0;
+        double range_separation_omega = 0.0;
         double integrated_electrons = 0.0;
     };
 

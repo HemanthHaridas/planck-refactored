@@ -1,0 +1,222 @@
+{
+  "cases": [
+    {
+      "id": "h2_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_h2.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "lih_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_lih.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "hf_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_hf.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_water.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "nh3_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_nh3.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "ch4_rmp2_sto3g",
+      "mode": "input",
+      "input": "inputs/examples/hf/mp2_validation/val_ch4.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_radical_cation_uhf_ump2_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_uhf_ump2_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-6
+      }
+    },
+    {
+      "id": "water_rimp2_ccpvdz",
+      "mode": "script",
+      "script": "tests/benchmarks/mp2/pyscf_reference/ri_water_ccpvdz.py",
+      "parse_labels": {
+        "rhf_total_energy": "PYSCF_RHF_TOTAL_ENERGY",
+        "mp2_total_energy": "PYSCF_MP2_TOTAL_ENERGY"
+      },
+      "tolerances": {
+        "rhf_total_energy": 5e-8,
+        "mp2_total_energy": 5e-8
+      }
+    },
+    {
+      "id": "water_cation_rimp2_ccpvdz",
+      "mode": "script",
+      "script": "tests/benchmarks/mp2/pyscf_reference/ri_water_cation_ccpvdz_ump2.py",
+      "parse_labels": {
+        "rhf_total_energy": "PYSCF_UHF_TOTAL_ENERGY",
+        "mp2_total_energy": "PYSCF_MP2_TOTAL_ENERGY"
+      },
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "cn_anion_rimp2_ccpvdz",
+      "mode": "script",
+      "script": "tests/benchmarks/mp2/pyscf_reference/ri_cn_anion_ccpvdz.py",
+      "parse_labels": {
+        "rhf_total_energy": "PYSCF_RHF_TOTAL_ENERGY",
+        "mp2_total_energy": "PYSCF_MP2_TOTAL_ENERGY"
+      },
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "cn_radical_rimp2_ccpvdz",
+      "mode": "script",
+      "script": "tests/benchmarks/mp2/pyscf_reference/ri_cn_radical_ccpvdz_ump2.py",
+      "parse_labels": {
+        "rhf_total_energy": "PYSCF_UHF_TOTAL_ENERGY",
+        "mp2_total_energy": "PYSCF_MP2_TOTAL_ENERGY"
+      },
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-6
+      }
+    },
+    {
+      "id": "water_rmp2_engine_os_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_os_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_rmp2_engine_hgp_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_hgp_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_rmp2_engine_rys_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_rys_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_rmp2_engine_auto_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_auto_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "mp2_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "h2_rccsdt_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/h2_rccsdt_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 5e-8,
+        "rccsdt_total_energy": 3e-7
+      }
+    },
+    {
+      "id": "lih_rccsdt_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/lih_rccsdt_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 5e-8,
+        "rccsdt_total_energy": 1e-7
+      }
+    },
+    {
+      "id": "water_rccsdt_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/water_rccsdt_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 5e-8,
+        "rccsdt_total_energy": 1e-6
+      }
+    },
+    {
+      "id": "b_uccsd_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/b_uccsd_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "uccsd_total_energy": 1e-6
+      }
+    },
+    {
+      "id": "b_uccsdt_sto3g",
+      "mode": "input",
+      "input": "tests/inputs/regression/post_hf/b_uccsdt_sto3g.hfinp",
+      "tolerances": {
+        "rhf_total_energy": 1e-7,
+        "uccsdt_total_energy": 1e-6
+      }
+    },
+    {
+      "id": "water_casscf_c2v_b1",
+      "mode": "script",
+      "script": "tests/pyscf/water_cas44_b1.py",
+      "parse_labels": {
+        "casscf_total_energy": "CASSCF_ENERGY"
+      },
+      "tolerances": {
+        "casscf_total_energy": 1e-5
+      }
+    },
+    {
+      "id": "water_casscf_ccpvdz_a1",
+      "mode": "script",
+      "script": "tests/pyscf/water_cas44_ccpvdz.py",
+      "parse_labels": {
+        "casscf_total_energy": "CASSCF_ENERGY"
+      },
+      "tolerances": {
+        "casscf_total_energy": 1e-5
+      }
+    }
+  ]
+}

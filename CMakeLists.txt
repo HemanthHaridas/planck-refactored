@@ -8,11 +8,45 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Default to -O3 when no CMAKE_BUILD_TYPE is set. Debug/RelWithDebInfo/etc.
+# keep their standard flags so debugging and profiling builds aren't clobbered.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-O3>)
+endif()
+
 message(STATUS "Building on : ${CMAKE_SYSTEM_NAME} using following compiler flags : ${CMAKE_CXX_FLAGS}")
 message(STATUS "CMAKE_INSTALL_PREFIX : ${CMAKE_INSTALL_PREFIX}")
 
 # GPU / CUDA acceleration (disabled by default; enable with -DUSE_CUDA=ON)
 option(USE_CUDA "Enable CUDA GPU acceleration (requires CUDA toolkit)" OFF)
+
+# Coupled-cluster kernel generation via ccgen.
+# PLANCK_CC_MAXORDER sets the highest excitation rank to emit Planck-compatible
+# kernels for at build time. All CC methods from CCSD up to the requested
+# truncation are generated (e.g. MAXORDER=4 emits ccsd, ccsdt, ccsdtq).
+# Valid range: 2..6. Override from the command line:
+#   cmake .. -DPLANCK_CC_MAXORDER=4
+set(PLANCK_CC_MAXORDER "3" CACHE STRING
+    "Max CC excitation rank to generate Planck kernels for (2=CCSD, 3=CCSDT, 4=CCSDTQ, 5=CC5, 6=CC6)")
+option(PLANCK_CC_INCLUDE_INTERMEDIATES
+    "Emit ccgen intermediate builders in generated CC kernels" ON)
+set(PLANCK_CC_INTERMEDIATE_THRESHOLD "5" CACHE STRING
+    "Min usage count for extracted ccgen intermediates")
+
+if(NOT PLANCK_CC_MAXORDER MATCHES "^[2-6]$")
+    message(FATAL_ERROR
+        "PLANCK_CC_MAXORDER must be an integer in [2, 6]; got '${PLANCK_CC_MAXORDER}'")
+endif()
+
+# Build the ccgen method list up to PLANCK_CC_MAXORDER.
+# Rank -> method name mapping follows ccgen's standard CC level strings.
+set(_planck_cc_method_by_rank "ccsd" "ccsdt" "ccsdtq" "cc5" "cc6")
+set(PLANCK_CC_METHODS "")
+math(EXPR _planck_cc_method_count "${PLANCK_CC_MAXORDER} - 2")
+foreach(_rank_index RANGE 0 ${_planck_cc_method_count})
+    list(GET _planck_cc_method_by_rank ${_rank_index} _planck_cc_method)
+    list(APPEND PLANCK_CC_METHODS ${_planck_cc_method})
+endforeach()
 
 # OpenMP support (enabled by default; pass -DUSE_OPENMP=OFF to disable)
 option(USE_OPENMP "Enable OpenMP parallelism" ON)
@@ -29,6 +63,8 @@ endif()
 
 include(FetchContent)
 set(FETCHCONTENT_QUIET TRUE)
+
+find_package(Python3 COMPONENTS Interpreter)
 
 # Source directory
 set(SRC_DIR ${CMAKE_SOURCE_DIR}/src)
@@ -79,6 +115,7 @@ externalproject_add(
     PREFIX ${SRC_DIR}/external/libxc
     GIT_REPOSITORY https://github.com/ElectronicStructureLibrary/libxc.git
     UPDATE_DISCONNECTED TRUE
+    GIT_PROGRESS TRUE
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=${LIBXC_INSTALL_DIR}
         -DBUILD_SHARED_LIBS:BOOL=OFF
@@ -90,69 +127,123 @@ externalproject_add(
 )
 
 # Collect sources automatically
-file(GLOB BASE_SRC
+file(GLOB BASE_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/base/*.h
     ${SRC_DIR}/base/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB IO_SRC
+file(GLOB IO_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/io/*.h
     ${SRC_DIR}/io/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB LOOKUP_SRC
+file(GLOB LOOKUP_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/lookup/*.h
     ${SRC_DIR}/lookup/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB SYMM_SRC
+file(GLOB SYMM_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/symmetry/*.h
     ${SRC_DIR}/symmetry/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB BASIS_SRC
+file(GLOB BASIS_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/basis/*.h
     ${SRC_DIR}/basis/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB INT_SRC
+file(GLOB INT_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/integrals/*.h
     ${SRC_DIR}/integrals/*.cpp
 )
 
 # Collect sources automatically
-file(GLOB SCF_SRC
+file(GLOB SCF_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/scf/*.h
     ${SRC_DIR}/scf/*.cpp
 )
 
+file(GLOB POPULATIONS_SRC CONFIGURE_DEPENDS
+    ${SRC_DIR}/populations/*.h
+    ${SRC_DIR}/populations/*.cpp
+)
+
 # Collect sources automatically
-file(GLOB POSTHF_SRC
+file(GLOB POSTHF_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/post_hf/*.h
     ${SRC_DIR}/post_hf/*.cpp
+    ${SRC_DIR}/post_hf/cc/*.h
+    ${SRC_DIR}/post_hf/cc/*.cpp
     ${SRC_DIR}/post_hf/casscf/*.h
     ${SRC_DIR}/post_hf/casscf/*.cpp
+    ${SRC_DIR}/post_hf/ci/*.h
+    ${SRC_DIR}/post_hf/ci/*.cpp
+    ${SRC_DIR}/post_hf/ri/*.h
+    ${SRC_DIR}/post_hf/ri/*.cpp
 )
 list(REMOVE_ITEM POSTHF_SRC ${SRC_DIR}/post_hf/casscf.cpp)
 
-file(GLOB GRADIENT_SRC
+# planck-dft only needs a subset of post_hf:
+#   integrals.cpp        — AO-ERI / AO→MO transforms used for hybrid-XC exact
+#                          exchange (dft/driver.cpp) and stability analysis
+#                          (scf/stability.cpp)
+#   mp2.cpp              — MP2 driver entry points
+#   mp2_internal.cpp     — shared ChemistsERIs / frozen-orbital helpers
+#   mp2_rmp2.cpp         — RMP2 kernel + RDM builders
+#   mp2_ump2.cpp         — UMP2 kernel + RDM builders
+#   mp2_gradient.cpp     — RMP2/UMP2 gradient intermediates, referenced from
+#                          gradient/gradient.cpp
+#   rhf_response.cpp     — solve_rhf_cphf, used by mp2_gradient.cpp
+# CASSCF, RASSCF, and coupled-cluster sources are intentionally excluded.
+set(POSTHF_DFT_SRC
+    ${SRC_DIR}/post_hf/integrals.h
+    ${SRC_DIR}/post_hf/integrals.cpp
+    ${SRC_DIR}/post_hf/mp2.h
+    ${SRC_DIR}/post_hf/mp2.cpp
+    ${SRC_DIR}/post_hf/mp2_internal.h
+    ${SRC_DIR}/post_hf/mp2_internal.cpp
+    ${SRC_DIR}/post_hf/mp2_rmp2.cpp
+    ${SRC_DIR}/post_hf/mp2_ump2.cpp
+    ${SRC_DIR}/post_hf/mp2_gradient.h
+    ${SRC_DIR}/post_hf/mp2_gradient.cpp
+    ${SRC_DIR}/post_hf/ri/ri_eri.h
+    ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+    ${SRC_DIR}/post_hf/cc/diis.h
+    ${SRC_DIR}/post_hf/cc/diis.cpp
+    ${SRC_DIR}/post_hf/rhf_response.h
+    ${SRC_DIR}/post_hf/rhf_response.cpp
+    ${SRC_DIR}/post_hf/uhf_response.h
+    ${SRC_DIR}/post_hf/uhf_response.cpp
+)
+
+file(GLOB GRADIENT_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/gradient/*.h
     ${SRC_DIR}/gradient/*.cpp
 )
 
-file(GLOB OPT_SRC
+file(GLOB OPT_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/opt/*.h
     ${SRC_DIR}/opt/*.cpp
 )
 
-file(GLOB FREQ_SRC
+file(GLOB FREQ_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/freq/*.h
     ${SRC_DIR}/freq/*.cpp
+)
+
+file(GLOB SOLVATION_SRC CONFIGURE_DEPENDS
+    ${SRC_DIR}/solvation/*.h
+    ${SRC_DIR}/solvation/*.cpp
+)
+
+file(GLOB BSSE_SRC CONFIGURE_DEPENDS
+    ${SRC_DIR}/bsse/*.h
+    ${SRC_DIR}/bsse/*.cpp
 )
 
 set(HF_MAIN_SRC
@@ -162,6 +253,8 @@ set(HF_MAIN_SRC
 set(DFT_SRC
     ${SRC_DIR}/dft/main.cpp
     ${SRC_DIR}/dft/ao_grid.h
+    ${SRC_DIR}/dft/dft_gradient.cpp
+    ${SRC_DIR}/dft/dft_gradient.h
     ${SRC_DIR}/dft/driver.cpp
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
@@ -184,6 +277,9 @@ add_executable(hartree-fock
     ${INT_SRC}
     ${IO_SRC}
     ${SCF_SRC}
+    ${SOLVATION_SRC}
+    ${BSSE_SRC}
+    ${POPULATIONS_SRC}
     ${POSTHF_SRC}
     ${GRADIENT_SRC}
     ${OPT_SRC}
@@ -192,6 +288,7 @@ add_executable(hartree-fock
 
 target_include_directories(hartree-fock PUBLIC
     ${SRC_DIR}
+    ${CMAKE_BINARY_DIR}
     ${MSYM_INSTALL_DIR}/include
     ${eigen_SOURCE_DIR}
 )
@@ -207,6 +304,7 @@ if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(hartree-fock OpenMP::OpenMP_CXX)
     target_compile_definitions(hartree-fock PRIVATE USE_OPENMP)
 endif()
+target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
 
 add_executable(planck-dft
     ${BASE_SRC}
@@ -217,14 +315,66 @@ add_executable(planck-dft
     ${INT_SRC}
     ${IO_SRC}
     ${SCF_SRC}
-    ${POSTHF_SRC}
+    ${SOLVATION_SRC}
+    ${POPULATIONS_SRC}
+    ${POSTHF_DFT_SRC}
     ${GRADIENT_SRC}
     ${OPT_SRC}
     ${FREQ_SRC}
 )
 
+if(Python3_Interpreter_FOUND)
+    set(CCGEN_SPINORBITAL_WARM_START_INC
+        ${CMAKE_BINARY_DIR}/generated/cc/ccsd_spinorbital_warm_start.inc)
+
+    add_custom_command(
+        OUTPUT ${CCGEN_SPINORBITAL_WARM_START_INC}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/generate_spinorbital_ccsd_warm_start.py
+                --output ${CCGEN_SPINORBITAL_WARM_START_INC}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        DEPENDS
+            ${CMAKE_SOURCE_DIR}/python/generate_spinorbital_ccsd_warm_start.py
+            ${CMAKE_SOURCE_DIR}/python/ccgen/generate.py
+            ${CMAKE_SOURCE_DIR}/python/ccgen/project.py
+            ${CMAKE_SOURCE_DIR}/python/ccgen/wick.py
+        COMMENT "Generating spin-orbital CCSD warm-start kernels with ccgen"
+    )
+
+    add_custom_target(ccgen-spinorbital-warm-start
+        DEPENDS ${CCGEN_SPINORBITAL_WARM_START_INC}
+    )
+
+    set(_ccgen_planck_kernel_args
+        --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+        --methods ${PLANCK_CC_METHODS}
+        --intermediate-threshold ${PLANCK_CC_INTERMEDIATE_THRESHOLD}
+    )
+    if(PLANCK_CC_INCLUDE_INTERMEDIATES)
+        list(APPEND _ccgen_planck_kernel_args --include-intermediates)
+    endif()
+
+    add_custom_target(ccgen-planck-kernels
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                ${_ccgen_planck_kernel_args}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${PLANCK_CC_METHODS})"
+    )
+
+    message(STATUS "ccgen     : emitting Planck CC kernels up to rank ${PLANCK_CC_MAXORDER} [${PLANCK_CC_METHODS}]")
+endif()
+
+if(Python3_Interpreter_FOUND)
+    add_dependencies(hartree-fock ccgen-spinorbital-warm-start)
+    add_dependencies(hartree-fock ccgen-planck-kernels)
+endif()
+
 target_include_directories(planck-dft PUBLIC
     ${SRC_DIR}
+    ${CMAKE_BINARY_DIR}
     ${MSYM_INSTALL_DIR}/include
     ${LIBXC_INSTALL_DIR}/include
     ${eigen_SOURCE_DIR}
@@ -236,7 +386,11 @@ target_link_libraries(planck-dft
 )
 
 add_dependencies(planck-dft libmsym libxc)
-target_compile_definitions(planck-dft PRIVATE USING_Libxc)
+if(Python3_Interpreter_FOUND)
+    add_dependencies(planck-dft ccgen-spinorbital-warm-start)
+    add_dependencies(planck-dft ccgen-planck-kernels)
+endif()
+target_compile_definitions(planck-dft PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
 
 if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(planck-dft OpenMP::OpenMP_CXX)
@@ -290,25 +444,321 @@ find_package(Python3 COMPONENTS Interpreter)
 if(BUILD_TESTING)
     add_executable(planck-casscf-internal
         ${CMAKE_SOURCE_DIR}/tests/casscf_internal.cpp
-        ${SRC_DIR}/post_hf/casscf/ci.cpp
+        ${SRC_DIR}/post_hf/ci/ci.cpp
         ${SRC_DIR}/post_hf/casscf/orbital.cpp
-        ${SRC_DIR}/post_hf/casscf/rdm.cpp
+        ${SRC_DIR}/post_hf/ci/rdm.cpp
         ${SRC_DIR}/post_hf/casscf/response.cpp
-        ${SRC_DIR}/post_hf/casscf/strings.cpp
+        ${SRC_DIR}/post_hf/ci/strings.cpp
         ${SRC_DIR}/post_hf/integrals.cpp
         ${INT_SRC}
         ${LOOKUP_SRC}
         ${SYMM_SRC}
+        # SYMM_SRC (mo_symmetry.cpp) now calls BasisFunctions::cart_to_sph_block,
+        # defined in src/basis/spherical.cpp — link it (Eigen-only, no msym/xc dep).
+        # spherical.cpp in turn delegates L=6 to cart_to_sph_block_recurrence
+        # (spherical_recurrence.cpp), so that must be linked too.
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
     add_executable(planck-dft-grid-invariants
         ${CMAKE_SOURCE_DIR}/tests/dft_grid_invariants.cpp
     )
 
+    add_executable(planck-dft-functional-support
+        ${CMAKE_SOURCE_DIR}/tests/dft_functional_support.cpp
+    )
+
+    add_executable(planck-eri-derivative-kernels
+        ${CMAKE_SOURCE_DIR}/tests/eri_derivative_kernels.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
     add_executable(planck-multipole-integrals
         ${CMAKE_SOURCE_DIR}/tests/multipole_integrals.cpp
         ${INT_SRC}
+        ${POPULATIONS_SRC}
         ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-hgp-engine-smoke
+        ${CMAKE_SOURCE_DIR}/tests/hgp_engine_smoke.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    # Characterization test for the one-shot full ERI tensor build
+    # (ObaraSaika::_compute_2e), ahead of flattening its triangular parallel
+    # loop. Pins permutational symmetry + golden checksum/elements.
+    add_executable(planck-compute-2e
+        ${CMAKE_SOURCE_DIR}/tests/compute_2e_unit.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-hgp-quartet-validation
+        ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-hgp-benchmark
+        ${CMAKE_SOURCE_DIR}/tests/hgp_benchmark.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-auto-dispatch-benchmark
+        ${CMAKE_SOURCE_DIR}/tests/auto_dispatch_benchmark.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-population-analysis
+        ${CMAKE_SOURCE_DIR}/tests/population_analysis.cpp
+        ${POPULATIONS_SRC}
+    )
+
+    add_executable(planck-symmetry-units
+        ${CMAKE_SOURCE_DIR}/tests/symmetry_units.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+    )
+
+    add_executable(planck-diis-conditioning
+        ${CMAKE_SOURCE_DIR}/tests/diis_conditioning.cpp
+    )
+
+    add_executable(planck-cc-arbitrary-solver
+        ${CMAKE_SOURCE_DIR}/tests/cc_arbitrary_solver.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+        ${SRC_DIR}/post_hf/cc/amplitudes.cpp
+        ${SRC_DIR}/post_hf/cc/diis.cpp
+        ${SRC_DIR}/post_hf/cc/generated_arbitrary_runtime.cpp
+        ${SRC_DIR}/post_hf/cc/solver_arbitrary.cpp
+    )
+
+    add_executable(planck-spherical-transform
+        ${CMAKE_SOURCE_DIR}/tests/spherical_transform.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+    )
+
+    add_executable(planck-spherical-density-lift
+        ${CMAKE_SOURCE_DIR}/tests/spherical_density_lift.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+    )
+
+    # Characterization test for the whole-ERI Cartesian→spherical transform.
+    # Links only the spherical transform sources (lightweight).
+    add_executable(planck-transform-eri-sph
+        ${CMAKE_SOURCE_DIR}/tests/transform_eri_sph_unit.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+    )
+
+    # Characterization test for the AO→MO four-index transform (transform_eri).
+    # Pulls the integral sources because integrals.cpp shares a TU with
+    # ensure_eri/_compute_2e; only transform_eri is exercised by the test.
+    add_executable(planck-transform-eri
+        ${CMAKE_SOURCE_DIR}/tests/transform_eri_unit.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    # Structural test for the RI auxiliary basis loader (no PySCF reference
+    # values — this is the file-I/O and shell-construction gate, not a
+    # validation against any specific shipped aux basis).
+    add_executable(planck-aux-basis-load
+        ${CMAKE_SOURCE_DIR}/tests/aux_basis_load.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+    )
+
+    # Analytical + structural test for the RI 2-center Coulomb metric (P|Q).
+    # Validates against closed-form s-Gaussian integrals plus symmetry /
+    # positive-definiteness on the shipped cc-pVDZ-RIFIT aux basis.
+    add_executable(planck-ri-2c-eri
+        ${CMAKE_SOURCE_DIR}/tests/ri_2c_eri.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    # Native RI 3-center (mu nu | P) gate, validated against local PySCF.
+    add_executable(planck-ri-3c-eri
+        ${CMAKE_SOURCE_DIR}/tests/ri_3c_eri.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    # Contract test for the working-state rebuild helper that will drive
+    # spherical geomopt and freq in Phase 3. Currently the helper has no live
+    # caller (the driver keeps its inline copy for ordering reasons around the
+    # checkpoint path); this test is the contract that pins its behavior.
+    add_executable(planck-working-state-rebuild
+        ${CMAKE_SOURCE_DIR}/tests/working_state_rebuild.cpp
+        ${SRC_DIR}/scf/working_state.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/symmetry/integral_symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    add_executable(planck-group-operations
+        ${CMAKE_SOURCE_DIR}/tests/group_operations.cpp
+        ${SRC_DIR}/symmetry/group_operations.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        # group_operations.cpp now computes the Cartesian overlap to correct O_R into
+        # the spherical AO basis (Step 1', spherical full-symmetry), so it needs the
+        # integral engine.
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    add_executable(planck-fock-symmetrization
+        ${CMAKE_SOURCE_DIR}/tests/fock_symmetrization.cpp
+        ${SRC_DIR}/symmetry/fock_symmetrization.cpp
+        ${SRC_DIR}/symmetry/group_operations.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        # group_operations.cpp needs the integral engine (Cartesian overlap) for the
+        # spherical O_R correction (Step 1').
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    add_executable(planck-symm-fock-benchmark
+        ${CMAKE_SOURCE_DIR}/tests/symm_fock_benchmark.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+        ${SRC_DIR}/symmetry/hgp_symm.cpp
+        ${SRC_DIR}/symmetry/os_symm.cpp
+        ${SRC_DIR}/symmetry/rys_symm.cpp
+        ${SRC_DIR}/symmetry/fock_symmetrization.cpp
+        ${SRC_DIR}/symmetry/group_operations.cpp
+        ${SRC_DIR}/symmetry/integral_symmetry.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+    )
+
+    add_executable(planck-symm-fock-equivalence
+        ${CMAKE_SOURCE_DIR}/tests/symm_fock_equivalence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+        ${SRC_DIR}/symmetry/os_symm.cpp
+        ${SRC_DIR}/symmetry/rys_symm.cpp
+        ${SRC_DIR}/symmetry/fock_symmetrization.cpp
+        ${SRC_DIR}/symmetry/group_operations.cpp
+        ${SRC_DIR}/symmetry/symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
     target_include_directories(planck-casscf-internal PRIVATE
@@ -322,8 +772,129 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-dft-functional-support PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+    )
+
+    target_include_directories(planck-eri-derivative-kernels PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-multipole-integrals PRIVATE
         ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-hgp-engine-smoke PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-compute-2e PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-hgp-quartet-validation PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-hgp-benchmark PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-auto-dispatch-benchmark PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-population-analysis PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-symmetry-units PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-diis-conditioning PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-cc-arbitrary-solver PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-group-operations PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-fock-symmetrization PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-symm-fock-benchmark PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-symm-fock-equivalence PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-spherical-transform PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-spherical-density-lift PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-transform-eri-sph PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-transform-eri PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-aux-basis-load PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-2c-eri PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-3c-eri PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-working-state-rebuild PRIVATE
+        ${SRC_DIR}
+        ${MSYM_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
     )
 
@@ -339,7 +910,133 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-dft-functional-support PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-eri-derivative-kernels PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-multipole-integrals PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-hgp-engine-smoke PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-compute-2e PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-hgp-quartet-validation PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-hgp-benchmark PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-auto-dispatch-benchmark PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-population-analysis PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-diis-conditioning PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-symmetry-units PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-arbitrary-solver PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-spherical-transform PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-spherical-density-lift PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-transform-eri-sph PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-transform-eri PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-aux-basis-load PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-ri-2c-eri PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-working-state-rebuild PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-group-operations PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-fock-symmetrization PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-symm-fock-equivalence PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -349,11 +1046,82 @@ if(BUILD_TESTING)
         target_link_libraries(planck-multipole-integrals OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-multipole-integrals PRIVATE USE_OPENMP)
     endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-hgp-engine-smoke OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-hgp-engine-smoke PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-compute-2e OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-compute-2e PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-hgp-quartet-validation OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-hgp-quartet-validation PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-hgp-benchmark OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-hgp-benchmark PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-auto-dispatch-benchmark OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-auto-dispatch-benchmark PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-transform-eri OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-transform-eri PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-transform-eri-sph OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-transform-eri-sph PRIVATE USE_OPENMP)
+    endif()
 
     target_link_libraries(planck-casscf-internal
         ${MSYM_INSTALL_DIR}/lib/libmsym.a
     )
     add_dependencies(planck-casscf-internal libmsym)
+
+    target_link_libraries(planck-symmetry-units
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-symmetry-units libmsym)
+
+    target_link_libraries(planck-group-operations
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-group-operations libmsym)
+
+    target_link_libraries(planck-working-state-rebuild
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-working-state-rebuild libmsym)
+
+    target_link_libraries(planck-fock-symmetrization
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-fock-symmetrization libmsym)
+
+    target_link_libraries(planck-symm-fock-benchmark
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-symm-fock-benchmark libmsym)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-symm-fock-benchmark OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-symm-fock-benchmark PRIVATE USE_OPENMP)
+    endif()
+
+    target_link_libraries(planck-symm-fock-equivalence
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+    )
+    add_dependencies(planck-symm-fock-equivalence libmsym)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-symm-fock-equivalence OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-symm-fock-equivalence PRIVATE USE_OPENMP)
+    endif()
+
+    target_link_libraries(planck-dft-functional-support
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-functional-support libxc)
 
     add_test(
         NAME planck-casscf-internal
@@ -366,18 +1134,143 @@ if(BUILD_TESTING)
     )
 
     add_test(
+        NAME planck-dft-functional-support
+        COMMAND planck-dft-functional-support
+    )
+
+    add_test(
+        NAME planck-eri-derivative-kernels
+        COMMAND planck-eri-derivative-kernels
+    )
+
+    add_test(
         NAME planck-multipole-integrals
         COMMAND planck-multipole-integrals
+    )
+
+    add_test(
+        NAME planck-hgp-engine-smoke
+        COMMAND planck-hgp-engine-smoke
+    )
+
+    add_test(
+        NAME planck-compute-2e
+        COMMAND planck-compute-2e
+    )
+
+    add_test(
+        NAME planck-hgp-quartet-validation
+        COMMAND planck-hgp-quartet-validation
+    )
+
+    add_test(
+        NAME planck-population-analysis
+        COMMAND planck-population-analysis
+    )
+
+    add_test(
+        NAME planck-diis-conditioning
+        COMMAND planck-diis-conditioning
+    )
+
+    add_test(
+        NAME planck-symmetry-units
+        COMMAND planck-symmetry-units
+    )
+
+    add_test(
+        NAME planck-cc-arbitrary-solver
+        COMMAND planck-cc-arbitrary-solver
+    )
+
+    add_test(
+        NAME planck-spherical-transform
+        COMMAND planck-spherical-transform
+    )
+
+    add_test(
+        NAME planck-spherical-density-lift
+        COMMAND planck-spherical-density-lift
+    )
+
+    add_test(
+        NAME planck-transform-eri-sph
+        COMMAND planck-transform-eri-sph
+    )
+
+    add_test(
+        NAME planck-transform-eri
+        COMMAND planck-transform-eri
+    )
+
+    # These two read RI auxiliary basis files via the relative path
+    # `basis-sets/...`, which only resolves from the repository root, so run
+    # them from there (matching the regression tests below).
+    add_test(
+        NAME planck-aux-basis-load
+        COMMAND planck-aux-basis-load
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-ri-2c-eri
+        COMMAND planck-ri-2c-eri
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-working-state-rebuild
+        COMMAND planck-working-state-rebuild
+    )
+
+    add_test(
+        NAME planck-group-operations
+        COMMAND planck-group-operations
+    )
+
+    add_test(
+        NAME planck-fock-symmetrization
+        COMMAND planck-fock-symmetrization
+    )
+
+    add_test(
+        NAME planck-symm-fock-equivalence
+        COMMAND planck-symm-fock-equivalence
     )
 endif()
 
 if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+    set(PLANCK_PYSCF_PYTHON "" CACHE FILEPATH
+        "Python interpreter with PySCF installed for tests/pyscf")
+    set(_planck_pyscf_default "${CMAKE_SOURCE_DIR}/tests/pyscf/.venv/bin/python")
+    if(NOT PLANCK_PYSCF_PYTHON)
+        if(EXISTS "${_planck_pyscf_default}")
+            set(PLANCK_PYSCF_PYTHON "${_planck_pyscf_default}")
+        else()
+            set(PLANCK_PYSCF_PYTHON "${Python3_EXECUTABLE}")
+        endif()
+    endif()
+
+    execute_process(
+        COMMAND ${PLANCK_PYSCF_PYTHON} -c "import pyscf"
+        RESULT_VARIABLE PLANCK_PYSCF_IMPORT_RESULT
+        OUTPUT_QUIET
+        ERROR_QUIET
+    )
+
     add_test(
         NAME planck-regression-smoke
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/run_regressions.py
                 --build-dir ${CMAKE_BINARY_DIR}
                 --suite smoke
+    )
+
+    add_test(
+        NAME planck-dft-gradient-fd
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/dft_gradient_fd.py
+                --build-dir ${CMAKE_BINARY_DIR}
     )
 
     add_test(
@@ -432,6 +1325,27 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         USES_TERMINAL
     )
+
+    if(PLANCK_PYSCF_IMPORT_RESULT EQUAL 0)
+        add_test(
+            NAME planck-pyscf-equivalence
+            COMMAND ${PLANCK_PYSCF_PYTHON}
+                    ${CMAKE_SOURCE_DIR}/tests/pyscf/run_all.py
+                    --python ${PLANCK_PYSCF_PYTHON}
+        )
+
+        add_custom_target(pyscf-equivalence
+            COMMAND ${PLANCK_PYSCF_PYTHON}
+                    ${CMAKE_SOURCE_DIR}/tests/pyscf/run_all.py
+                    --python ${PLANCK_PYSCF_PYTHON}
+            DEPENDS hartree-fock
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            USES_TERMINAL
+        )
+    else()
+        message(STATUS
+            "PySCF tests : skipped (set PLANCK_PYSCF_PYTHON to a Python with PySCF installed)")
+    endif()
 endif()
 
 # ── Basis set fetcher ─────────────────────────────────────────────────────────

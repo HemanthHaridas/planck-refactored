@@ -1,6 +1,11 @@
 #include "ks_matrix.h"
 
 #include <stdexcept>
+#include <vector>
+
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
 
 namespace DFT
 {
@@ -53,27 +58,38 @@ namespace DFT
                 density.grad_z(point)};
         }
 
-        Eigen::VectorXd gradient_projection(
+        void gradient_projection(
             const AOGridEvaluation &ao_grid,
             Eigen::Index point,
-            const Eigen::Vector3d &coefficient)
+            const Eigen::Vector3d &coefficient,
+            Eigen::Ref<Eigen::VectorXd> output)
         {
-            return (coefficient.x() * ao_grid.grad_x.row(point).transpose() + coefficient.y() * ao_grid.grad_y.row(point).transpose() + coefficient.z() * ao_grid.grad_z.row(point).transpose()).eval();
+            output.noalias() =
+                coefficient.x() * ao_grid.grad_x.row(point).transpose() +
+                coefficient.y() * ao_grid.grad_y.row(point).transpose() +
+                coefficient.z() * ao_grid.grad_z.row(point).transpose();
         }
 
+        // Accumulates the local XC potential contribution into the lower triangle
+        // of `matrix` using BLAS-2 symmetric updates (dsyr / dsyr2) — no temporaries.
+        // The caller mirrors the lower triangle to the upper after the parallel
+        // region, which is also where the existing thread-partial reduction
+        // already does its post-processing.
+        template <typename PhiDerived, typename GradDerived>
         void accumulate_local_potential(
             Eigen::Ref<Eigen::MatrixXd> matrix,
             double weight,
             double vrho,
-            const Eigen::VectorXd &phi,
-            const Eigen::VectorXd &gradient_term)
+            const Eigen::MatrixBase<PhiDerived> &phi,
+            const Eigen::MatrixBase<GradDerived> &gradient_term)
         {
             if (weight == 0.0)
                 return;
 
-            matrix.noalias() += weight * vrho * (phi * phi.transpose());
+            auto lower = matrix.template selfadjointView<Eigen::Lower>();
+            lower.rankUpdate(phi, weight * vrho);
             if (gradient_term.size() == phi.size())
-                matrix.noalias() += weight * (phi * gradient_term.transpose() + gradient_term * phi.transpose());
+                lower.rankUpdate(phi, gradient_term, weight);
         }
 
     } // namespace
@@ -95,69 +111,119 @@ namespace DFT
         contribution.alpha = Eigen::MatrixXd::Zero(nbasis, nbasis);
         contribution.beta = Eigen::MatrixXd::Zero(nbasis, nbasis);
 
-        for (Eigen::Index point = 0; point < npoints; ++point)
+        const bool polarized = xc_grid.density.polarized;
+
+        // Each thread accumulates into its own slot in these per-thread buffers,
+        // and the buffers are summed in fixed thread-index order *after* the
+        // parallel region. A prior `#pragma omp critical` reduction summed the
+        // thread-local matrices in non-deterministic completion order; because
+        // floating-point addition is non-associative, that made the XC matrix
+        // (and hence the converged DFT energy and TDDFT roots) vary at the
+        // ~1e-10 level run-to-run. Thread-index-ordered summation removes that
+        // jitter so results are bitwise reproducible at a fixed thread count.
+#ifdef USE_OPENMP
+        const int n_threads = omp_get_max_threads();
+#else
+        const int n_threads = 1;
+#endif
+        std::vector<Eigen::MatrixXd> alpha_partials(
+            n_threads, Eigen::MatrixXd::Zero(nbasis, nbasis));
+        std::vector<Eigen::MatrixXd> beta_partials(
+            n_threads, Eigen::MatrixXd::Zero(nbasis, nbasis));
+
+#ifdef USE_OPENMP
+#pragma omp parallel
+#endif
         {
-            const double weight = molecular_grid.points(point, 3);
-            if (weight == 0.0)
-                continue;
-
-            const Eigen::VectorXd phi = ao_grid.values.row(point).transpose();
-
-            if (!xc_grid.density.polarized)
-            {
-                Eigen::VectorXd gradient_term = Eigen::VectorXd::Zero(nbasis);
-                if (xc_grid.vsigma.cols() == 1)
-                {
-                    const Eigen::Vector3d coefficient =
-                        2.0 * xc_grid.vsigma(point, 0) *
-                        density_gradient_at(xc_grid.density.total, point);
-                    gradient_term = gradient_projection(ao_grid, point, coefficient);
-                }
-
-                accumulate_local_potential(
-                    contribution.alpha,
-                    weight,
-                    xc_grid.vrho(point, 0),
-                    phi,
-                    gradient_term);
-                continue;
-            }
-
+#ifdef USE_OPENMP
+            const int thread_id = omp_get_thread_num();
+#else
+            const int thread_id = 0;
+#endif
+            Eigen::MatrixXd &alpha_local = alpha_partials[thread_id];
+            Eigen::MatrixXd &beta_local = beta_partials[thread_id];
             Eigen::VectorXd gradient_term_alpha = Eigen::VectorXd::Zero(nbasis);
             Eigen::VectorXd gradient_term_beta = Eigen::VectorXd::Zero(nbasis);
 
-            if (xc_grid.vsigma.cols() == 3)
+#ifdef USE_OPENMP
+#pragma omp for nowait schedule(static)
+#endif
+            for (Eigen::Index point = 0; point < npoints; ++point)
             {
-                const Eigen::Vector3d grad_alpha = density_gradient_at(xc_grid.density.alpha, point);
-                const Eigen::Vector3d grad_beta = density_gradient_at(xc_grid.density.beta, point);
+                const double weight = molecular_grid.points(point, 3);
+                if (weight == 0.0)
+                    continue;
 
-                const Eigen::Vector3d coefficient_alpha =
-                    2.0 * xc_grid.vsigma(point, 0) * grad_alpha + xc_grid.vsigma(point, 1) * grad_beta;
-                const Eigen::Vector3d coefficient_beta =
-                    xc_grid.vsigma(point, 1) * grad_alpha + 2.0 * xc_grid.vsigma(point, 2) * grad_beta;
+                const auto phi = ao_grid.values.row(point).transpose();
 
-                gradient_term_alpha = gradient_projection(ao_grid, point, coefficient_alpha);
-                gradient_term_beta = gradient_projection(ao_grid, point, coefficient_beta);
+                if (!polarized)
+                {
+                    gradient_term_alpha.setZero();
+                    if (xc_grid.vsigma.cols() == 1)
+                    {
+                        const Eigen::Vector3d coefficient =
+                            2.0 * xc_grid.vsigma(point, 0) *
+                            density_gradient_at(xc_grid.density.total, point);
+                        gradient_projection(ao_grid, point, coefficient, gradient_term_alpha);
+                    }
+
+                    accumulate_local_potential(
+                        alpha_local,
+                        weight,
+                        xc_grid.vrho(point, 0),
+                        phi,
+                        gradient_term_alpha);
+                    continue;
+                }
+
+                gradient_term_alpha.setZero();
+                gradient_term_beta.setZero();
+
+                if (xc_grid.vsigma.cols() == 3)
+                {
+                    const Eigen::Vector3d grad_alpha = density_gradient_at(xc_grid.density.alpha, point);
+                    const Eigen::Vector3d grad_beta = density_gradient_at(xc_grid.density.beta, point);
+
+                    const Eigen::Vector3d coefficient_alpha =
+                        2.0 * xc_grid.vsigma(point, 0) * grad_alpha + xc_grid.vsigma(point, 1) * grad_beta;
+                    const Eigen::Vector3d coefficient_beta =
+                        xc_grid.vsigma(point, 1) * grad_alpha + 2.0 * xc_grid.vsigma(point, 2) * grad_beta;
+
+                    gradient_projection(ao_grid, point, coefficient_alpha, gradient_term_alpha);
+                    gradient_projection(ao_grid, point, coefficient_beta, gradient_term_beta);
+                }
+
+                accumulate_local_potential(
+                    alpha_local,
+                    weight,
+                    xc_grid.vrho(point, 0),
+                    phi,
+                    gradient_term_alpha);
+                accumulate_local_potential(
+                    beta_local,
+                    weight,
+                    xc_grid.vrho(point, 1),
+                    phi,
+                    gradient_term_beta);
             }
-
-            accumulate_local_potential(
-                contribution.alpha,
-                weight,
-                xc_grid.vrho(point, 0),
-                phi,
-                gradient_term_alpha);
-            accumulate_local_potential(
-                contribution.beta,
-                weight,
-                xc_grid.vrho(point, 1),
-                phi,
-                gradient_term_beta);
         }
 
-        contribution.alpha = 0.5 * (contribution.alpha + contribution.alpha.transpose());
+        // Deterministic reduction: sum thread partials in fixed thread-index
+        // order rather than thread-completion order. Each partial holds only
+        // the lower triangle (selfadjointView rankUpdate writes that side).
+        for (int thread_id = 0; thread_id < n_threads; ++thread_id)
+        {
+            contribution.alpha.template triangularView<Eigen::Lower>() += alpha_partials[thread_id];
+            if (polarized)
+                contribution.beta.template triangularView<Eigen::Lower>() += beta_partials[thread_id];
+        }
+
+        contribution.alpha.template triangularView<Eigen::StrictlyUpper>() =
+            contribution.alpha.transpose();
         if (contribution.polarized)
         {
-            contribution.beta = 0.5 * (contribution.beta + contribution.beta.transpose());
+            contribution.beta.template triangularView<Eigen::StrictlyUpper>() =
+                contribution.beta.transpose();
         }
         else
         {
@@ -169,17 +235,32 @@ namespace DFT
 
     KSPotentialMatrices combine_ks_potential(
         const Eigen::Ref<const Eigen::MatrixXd> &coulomb,
-        const XCMatrixContribution &xc_matrix)
+        const XCMatrixContribution &xc_matrix,
+        double exact_exchange_coefficient,
+        const Eigen::MatrixXd &exact_exchange_alpha,
+        const Eigen::MatrixXd &exact_exchange_beta,
+        double exact_exchange_energy)
     {
         KSPotentialMatrices potential;
         potential.polarized = xc_matrix.polarized;
         potential.coulomb = coulomb;
         potential.xc_alpha = xc_matrix.alpha;
         potential.xc_beta = xc_matrix.beta;
-        potential.alpha = coulomb + xc_matrix.alpha;
-        potential.beta = xc_matrix.polarized
-                             ? (coulomb + xc_matrix.beta)
-                             : potential.alpha;
+        potential.exact_exchange_alpha =
+            exact_exchange_alpha.size() == 0
+                ? Eigen::MatrixXd::Zero(coulomb.rows(), coulomb.cols())
+                : exact_exchange_alpha;
+        potential.exact_exchange_beta =
+            exact_exchange_beta.size() == 0
+                ? potential.exact_exchange_alpha
+                : exact_exchange_beta;
+        potential.exact_exchange_coefficient = exact_exchange_coefficient;
+        potential.exact_exchange_energy = exact_exchange_energy;
+        potential.alpha = coulomb + xc_matrix.alpha + potential.exact_exchange_alpha;
+        if (xc_matrix.polarized)
+            potential.beta = coulomb + xc_matrix.beta + potential.exact_exchange_beta;
+        else
+            potential.beta = potential.alpha;
         return potential;
     }
 

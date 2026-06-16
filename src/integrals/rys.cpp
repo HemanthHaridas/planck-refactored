@@ -1,22 +1,95 @@
 #include "rys.h"
-#include "os.h" // for _compute_2e_fock (Auto path falls back to OS)
+#include "hgp.h"       // Auto path picks between HGP and Rys per quartet.
 #include "rys_roots.h"
+#include "screening.h" // Shared HGP-based Schwarz table for the Auto path.
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <numbers>
+#include <tuple>
 
 // ─── Scratch buffer dimensions ────────────────────────────────────────────────
 //
 // VRR_DIM = 2*MAX_L+1 = 13  (per-axis, matches os.cpp convention)
-// Per-root 1D VRR table: _rys_1d[3][VRR_DIM][VRR_DIM] — stack allocated per call.
-// Accumulated 6D sum: _rys_sum_buf[VRR_DIM]^6 — thread-local (37 MB, same as _hrr_buf).
+// The compact 1D VRR tables (Ix/Iy/Iz, [VRR_DIM]^2) and the 3D CD-HRR slice
+// (V0_CD/W, [VRR_DIM]^3) are small stack arrays kept at the fixed bound. The
+// large 6D accumulator is sized per quartet in RysScratch below (was a fixed
+// [VRR_DIM]^6 = 38.5 MB/thread).
 
-static constexpr int VRR_DIM = 2 * MAX_L + 1; // 13
+static constexpr int VRR_DIM = 2 * MAX_L + 1; // 13; per-axis bound for the compact 1D/3D stack helpers
 
-// Accumulated Rys 6D intermediate: sum_{roots} w_r * Ix[ax][cx] * Iy[ay][cy] * Iz[az][cz]
-// Same footprint as the _hrr_buf in os.cpp.
-static thread_local double _rys_sum_buf[VRR_DIM][VRR_DIM][VRR_DIM]
-                                       [VRR_DIM][VRR_DIM][VRR_DIM];
+// Accumulated Rys 6D intermediate: sum_{roots} w_r * Ix[ax][cx] * Iy[ay][cy] * Iz[az][cz].
+//
+// The 6D accumulator is the only large Rys scratch buffer. A fixed
+// [VRR_DIM]^6 = [13]^6 array would be 38.5 MB/thread (sized off the global
+// MAX_L=6), almost all of it unused: under Auto only L_AB+L_CD<=1 quartets
+// reach Rys, and even explicit `engine rys` tops out at F in practice. Instead
+// size it per quartet, mirroring the HGP/OS EriScratch pattern: a thread-local
+// std::vector grown only when the active (lAB*+1)x(lCD*+1) dimensions change,
+// reused across quartets. Under Auto the dimension is constant so it resizes
+// once per thread then pure-reuses. Index layout matches the old C array,
+// [ax][ay][az][cx][cy][cz] row-major, so the recurrence reads/writes are
+// unchanged bit-for-bit.
+namespace
+{
+    struct RysScratch
+    {
+        int ax_dim = 0, ay_dim = 0, az_dim = 0;
+        int cx_dim = 0, cy_dim = 0, cz_dim = 0;
+        std::size_t ax_stride = 0, ay_stride = 0, az_stride = 0;
+        std::size_t cx_stride = 0, cy_stride = 0, cz_stride = 0;
+        std::size_t size = 0;
+        std::vector<double> buf;
+        double *data = nullptr;
+
+        // Size the 6D accumulator for one quartet. Dimensions are the total
+        // bra/ket angular momentum per axis plus one (indices run 0..lAB*,
+        // 0..lCD*). HRR reads one cell beyond the active index along the swept
+        // axis, which stays within [0, lAB*] / [0, lCD*], so these dims suffice.
+        void resize_for_quartet(
+            int lABx, int lABy, int lABz,
+            int lCDx, int lCDy, int lCDz)
+        {
+            ax_dim = lABx + 1;
+            ay_dim = lABy + 1;
+            az_dim = lABz + 1;
+            cx_dim = lCDx + 1;
+            cy_dim = lCDy + 1;
+            cz_dim = lCDz + 1;
+            cz_stride = 1;
+            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
+            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
+            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
+            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
+            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
+            const std::size_t needed =
+                static_cast<std::size_t>(ax_dim) * ay_dim * az_dim *
+                cx_dim * cy_dim * cz_dim;
+            if (buf.size() != needed)
+                buf.resize(needed);
+            size = needed;
+            data = buf.data();
+        }
+
+        std::size_t index(int ax, int ay, int az, int cx, int cy, int cz) const noexcept
+        {
+            return static_cast<std::size_t>(ax) * ax_stride +
+                   static_cast<std::size_t>(ay) * ay_stride +
+                   static_cast<std::size_t>(az) * az_stride +
+                   static_cast<std::size_t>(cx) * cx_stride +
+                   static_cast<std::size_t>(cy) * cy_stride +
+                   static_cast<std::size_t>(cz) * cz_stride;
+        }
+
+        double &at(int ax, int ay, int az, int cx, int cy, int cz) noexcept
+        {
+            return data[index(ax, ay, az, cx, cy, cz)];
+        }
+    };
+
+    thread_local RysScratch g_rys_scratch;
+} // namespace
 
 // ─── Schwarz screening table ──────────────────────────────────────────────────
 //
@@ -26,33 +99,234 @@ static thread_local double _rys_sum_buf[VRR_DIM][VRR_DIM][VRR_DIM]
 
 static Eigen::MatrixXd _rys_schwarz_table(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
-    std::size_t nbasis);
+    std::size_t nbasis,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops);
 
-static bool _auto_prefers_rys(const HartreeFock::ShellPair &spAB,
-                              const HartreeFock::ShellPair &spCD) noexcept
+namespace
 {
-    const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
-    const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
-    const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-    const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+    using SymOps = std::vector<HartreeFock::SignedAOSymOp>;
 
-    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
-    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
-    const int L = lABx + lABy + lABz + lCDx + lCDy + lCDz;
-    const int nroots = L / 2 + 1;
+    struct PairOrbitElem
+    {
+        std::size_t i = 0;
+        std::size_t j = 0;
+        int sign = 1;
+    };
 
-    const double six_d = static_cast<double>(lABx + 1) * static_cast<double>(lABy + 1) *
-                         static_cast<double>(lABz + 1) * static_cast<double>(lCDx + 1) *
-                         static_cast<double>(lCDy + 1) * static_cast<double>(lCDz + 1);
-    const double os_work =
-        six_d * static_cast<double>(L + 1) +
-        static_cast<double>((lBx + lBy + lBz + lDx + lDy + lDz) + 1) * six_d * 0.25;
-    const double rys_work =
-        six_d * static_cast<double>(nroots) +
-        static_cast<double>((lBx + lBy + lBz + lDx + lDy + lDz) + 1) * six_d * 0.20 +
-        24.0 * static_cast<double>(nroots);
+    struct QuartetOrbitElem
+    {
+        std::size_t i = 0;
+        std::size_t j = 0;
+        std::size_t k = 0;
+        std::size_t l = 0;
+        int sign = 1;
+    };
 
-    return rys_work < os_work;
+    struct ScreenedKernelData
+    {
+        double rho = 0.0;
+        double prefactor_scale = 1.0;
+        double boys_scale = 1.0;
+    };
+
+    static ScreenedKernelData screened_kernel_data(
+        double rho,
+        HartreeFock::ERIKernel kernel,
+        double omega) noexcept
+    {
+        // Range-separated kernels are implemented by replacing the Coulomb rho
+        // parameter, prefactor, and Boys-function argument with their screened
+        // equivalents. Keeping that map in one helper lets OS and Rys share the
+        // same physics-level interpretation.
+        if (kernel == HartreeFock::ERIKernel::Coulomb)
+            return ScreenedKernelData{.rho = rho, .prefactor_scale = 1.0, .boys_scale = 1.0};
+
+        if (omega <= 0.0)
+        {
+            return kernel == HartreeFock::ERIKernel::LongRange
+                       ? ScreenedKernelData{.rho = 0.0, .prefactor_scale = 0.0, .boys_scale = 0.0}
+                       : ScreenedKernelData{.rho = rho, .prefactor_scale = 1.0, .boys_scale = 1.0};
+        }
+
+        const double omega2 = omega * omega;
+        const double lambda = omega2 / (omega2 + rho);
+        return ScreenedKernelData{
+            .rho = lambda * rho,
+            .prefactor_scale = std::sqrt(lambda),
+            .boys_scale = lambda};
+    }
+
+    static bool use_symmetry_ops(const SymOps *sym_ops)
+    {
+        return sym_ops != nullptr && sym_ops->size() > 1;
+    }
+
+    static void canonicalize_pair(std::size_t &i, std::size_t &j)
+    {
+        if (i > j)
+            std::swap(i, j);
+    }
+
+    static void canonicalize_quartet(
+        std::size_t &i, std::size_t &j,
+        std::size_t &k, std::size_t &l)
+    {
+        canonicalize_pair(i, j);
+        canonicalize_pair(k, l);
+        if (std::tie(i, j) > std::tie(k, l))
+        {
+            std::swap(i, k);
+            std::swap(j, l);
+        }
+    }
+
+    static bool append_pair_orbit(
+        std::vector<PairOrbitElem> &orbit,
+        std::size_t i, std::size_t j, int sign)
+    {
+        for (const auto &elem : orbit)
+        {
+            if (elem.i == i && elem.j == j)
+                return elem.sign == sign;
+        }
+        orbit.push_back({i, j, sign});
+        return true;
+    }
+
+    static bool append_quartet_orbit(
+        std::vector<QuartetOrbitElem> &orbit,
+        std::size_t i, std::size_t j,
+        std::size_t k, std::size_t l,
+        int sign)
+    {
+        for (const auto &elem : orbit)
+        {
+            if (elem.i == i && elem.j == j &&
+                elem.k == k && elem.l == l)
+                return elem.sign == sign;
+        }
+        orbit.push_back({i, j, k, l, sign});
+        return true;
+    }
+
+    static std::pair<std::vector<PairOrbitElem>, bool> build_pair_orbit(
+        std::size_t i, std::size_t j, const SymOps &sym_ops)
+    {
+        // Symmetry replication is shared with the OS engine: identify the
+        // canonical pair once, then reuse it across the whole symmetry orbit.
+        std::vector<PairOrbitElem> orbit;
+        orbit.reserve(sym_ops.size());
+
+        for (const auto &op : sym_ops)
+        {
+            std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
+            std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
+            const int sign =
+                static_cast<int>(op.ao_sign[i]) *
+                static_cast<int>(op.ao_sign[j]);
+            canonicalize_pair(ii, jj);
+            if (!append_pair_orbit(orbit, ii, jj, sign))
+                return {orbit, true};
+        }
+
+        std::sort(
+            orbit.begin(), orbit.end(),
+            [](const PairOrbitElem &a, const PairOrbitElem &b)
+            {
+                return std::tie(a.i, a.j) < std::tie(b.i, b.j);
+            });
+        return {orbit, false};
+    }
+
+    static std::pair<std::vector<QuartetOrbitElem>, bool> build_quartet_orbit(
+        std::size_t i, std::size_t j,
+        std::size_t k, std::size_t l,
+        const SymOps &sym_ops)
+    {
+        // A sign conflict inside the orbit means the quartet vanishes by
+        // symmetry, so the caller can skip the expensive recurrence entirely.
+        std::vector<QuartetOrbitElem> orbit;
+        orbit.reserve(sym_ops.size());
+
+        for (const auto &op : sym_ops)
+        {
+            std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
+            std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
+            std::size_t kk = static_cast<std::size_t>(op.ao_map[k]);
+            std::size_t ll = static_cast<std::size_t>(op.ao_map[l]);
+            const int sign =
+                static_cast<int>(op.ao_sign[i]) *
+                static_cast<int>(op.ao_sign[j]) *
+                static_cast<int>(op.ao_sign[k]) *
+                static_cast<int>(op.ao_sign[l]);
+            canonicalize_quartet(ii, jj, kk, ll);
+            if (!append_quartet_orbit(orbit, ii, jj, kk, ll, sign))
+                return {orbit, true};
+        }
+
+        std::sort(
+            orbit.begin(), orbit.end(),
+            [](const QuartetOrbitElem &a, const QuartetOrbitElem &b)
+            {
+                return std::tie(a.i, a.j, a.k, a.l) <
+                       std::tie(b.i, b.j, b.k, b.l);
+            });
+        return {orbit, false};
+    }
+
+    static void write_eri_permutations(
+        std::vector<double> &eri,
+        std::size_t nb, std::size_t nb2, std::size_t nb3,
+        std::size_t i, std::size_t j,
+        std::size_t k, std::size_t l,
+        double val)
+    {
+        auto write_slot = [&](std::size_t idx)
+        {
+#ifdef USE_OPENMP
+#pragma omp atomic write
+#endif
+            eri[idx] = val;
+        };
+
+        write_slot(i * nb3 + j * nb2 + k * nb + l);
+        write_slot(j * nb3 + i * nb2 + k * nb + l);
+        write_slot(i * nb3 + j * nb2 + l * nb + k);
+        write_slot(j * nb3 + i * nb2 + l * nb + k);
+        write_slot(k * nb3 + l * nb2 + i * nb + j);
+        write_slot(l * nb3 + k * nb2 + i * nb + j);
+        write_slot(k * nb3 + l * nb2 + j * nb + i);
+        write_slot(l * nb3 + k * nb2 + j * nb + i);
+    }
+
+} // namespace
+
+// Auto-dispatch predicate. HGP-default with a Rys tail at the bottom.
+//
+// Calibrated against the per-(L_AB, L_CD) benchmark in
+// tests/auto_dispatch_benchmark.cpp; the fit artifact is
+// docs/auto_dispatch_fit.json and the cost curves are
+// docs/auto_dispatch_curves.svg. 238 buckets across water at
+// STO-3G / 6-31G(d) / cc-pVDZ / cc-pVTZ and helium at cc-pVQZ / cc-pV5Z
+// agree unanimously on the rule:
+//
+//   pick Rys when (L_AB + L_CD) <= 1; pick HGP otherwise.
+//
+// At those low-L buckets — (ss|ss), (ss|sp), (sp|ss) — Rys runs
+// roots-of-1-or-2 quadrature and beats the HGP HRR-outside path by
+// ~2.1-2.7x. Everywhere else HGP wins, by factors of 2.5x at the high-L
+// helium tail to 12x at the d-shell sweet spot.
+//
+// OS is intentionally not in the auto menu anymore. Users who want OS
+// must select it explicitly with `engine os`.
+static inline bool _auto_prefers_rys(const HartreeFock::ShellPair &spAB,
+                                     const HartreeFock::ShellPair &spCD) noexcept
+{
+    const int L_AB = spAB.A._cartesian[0] + spAB.A._cartesian[1] + spAB.A._cartesian[2] +
+                     spAB.B._cartesian[0] + spAB.B._cartesian[1] + spAB.B._cartesian[2];
+    const int L_CD = spCD.A._cartesian[0] + spCD.A._cartesian[1] + spCD.A._cartesian[2] +
+                     spCD.B._cartesian[0] + spCD.B._cartesian[1] + spCD.B._cartesian[2];
+    return (L_AB + L_CD) <= 1;
 }
 
 static double _auto_contracted_eri(
@@ -61,14 +335,16 @@ static double _auto_contracted_eri(
     int lAx, int lAy, int lAz,
     int lBx, int lBy, int lBz,
     int lCx, int lCy, int lCz,
-    int lDx, int lDy, int lDz) noexcept
+    int lDx, int lDy, int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega) noexcept
 {
     if (_auto_prefers_rys(spAB, spCD))
         return HartreeFock::RysQuad::_rys_contracted_eri(
-            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz);
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
 
-    return HartreeFock::ObaraSaika::_contracted_eri_elem(
-        spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz);
+    return HartreeFock::HeadGordonPople::_contracted_eri_elem(
+        spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
 }
 
 // ─── 1D Rys VRR ───────────────────────────────────────────────────────────────
@@ -127,7 +403,7 @@ static void _rys_vrr_1d(
 // _eri_hrr_ab function.
 
 static void _rys_hrr_ab(
-    double W[VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM],
+    RysScratch &W,
     const int lAx, const int lAy, const int lAz,
     const int lBx, const int lBy, const int lBz,
     const int lCDx, const int lCDy, const int lCDz,
@@ -140,8 +416,8 @@ static void _rys_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax][ay][az + 1][cx][cy][cz] + ABz * W[ax][ay][az][cx][cy][cz];
+                                W.at(ax, ay, az, cx, cy, cz) =
+                                    W.at(ax, ay, az + 1, cx, cy, cz) + ABz * W.at(ax, ay, az, cx, cy, cz);
 
     for (int ky = 0; ky < lBy; ++ky)
         for (int ax = 0; ax <= lAx + lBx; ++ax)
@@ -150,8 +426,8 @@ static void _rys_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax][ay + 1][az][cx][cy][cz] + ABy * W[ax][ay][az][cx][cy][cz];
+                                W.at(ax, ay, az, cx, cy, cz) =
+                                    W.at(ax, ay + 1, az, cx, cy, cz) + ABy * W.at(ax, ay, az, cx, cy, cz);
 
     for (int kx = 0; kx < lBx; ++kx)
         for (int ax = 0; ax <= lAx + lBx - kx - 1; ++ax)
@@ -160,8 +436,8 @@ static void _rys_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax + 1][ay][az][cx][cy][cz] + ABx * W[ax][ay][az][cx][cy][cz];
+                                W.at(ax, ay, az, cx, cy, cz) =
+                                    W.at(ax + 1, ay, az, cx, cy, cz) + ABx * W.at(ax, ay, az, cx, cy, cz);
 }
 
 // CD-HRR: transfer C→D using a 3D slice V0[cx][cy][cz].
@@ -208,7 +484,9 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const int lCx, const int lCy, const int lCz,
     const int lDx, const int lDy, const int lDz,
     const double ABx, const double ABy, const double ABz,
-    const double CDx, const double CDy, const double CDz) noexcept
+    const double CDx, const double CDy, const double CDz,
+    HartreeFock::ERIKernel kernel,
+    double omega) noexcept
 {
     // Derived quantities
     const double zeta = ppAB.zeta;
@@ -216,8 +494,10 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const double delta = zeta + eta;
     const double inv_delta = 1.0 / delta;
     const double rho = zeta * eta * inv_delta;
-    const double rho_over_zeta = rho * ppAB.inv_zeta;
-    const double rho_over_eta = rho * ppCD.inv_zeta;
+    const ScreenedKernelData screen = screened_kernel_data(rho, kernel, omega);
+    const double effective_rho = screen.rho;
+    const double rho_over_zeta = effective_rho * ppAB.inv_zeta;
+    const double rho_over_eta = effective_rho * ppCD.inv_zeta;
 
     // Gaussian product centers P and Q
     const double Px = ppAB.center[0], Py = ppAB.center[1], Pz = ppAB.center[2];
@@ -225,7 +505,7 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
 
     // PQ displacement and Boys argument T = rho * |PQ|^2
     const double PQx = Px - Qx, PQy = Py - Qy, PQz = Pz - Qz;
-    const double T = rho * (PQx * PQx + PQy * PQy + PQz * PQz);
+    const double T = screen.boys_scale * rho * (PQx * PQx + PQy * PQy + PQz * PQz);
 
     // PA and QC vectors (stored in PrimitivePair.pA)
     const double PAx = ppAB.pA[0], PAy = ppAB.pA[1], PAz = ppAB.pA[2];
@@ -237,31 +517,36 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     const double Wz = (zeta * Pz + eta * Qz) * inv_delta;
 
     // WP = W - P,  WQ = W - Q
-    const double WPx = Wx - Px, WPy = Wy - Py, WPz = Wz - Pz;
-    const double WQx = Wx - Qx, WQy = Wy - Qy, WQz = Wz - Qz;
+    const double wpwq_scale =
+        (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
+    const double WPx = (Wx - Px) * wpwq_scale;
+    const double WPy = (Wy - Py) * wpwq_scale;
+    const double WPz = (Wz - Pz) * wpwq_scale;
+    const double WQx = (Wx - Qx) * wpwq_scale;
+    const double WQy = (Wy - Qy) * wpwq_scale;
+    const double WQz = (Wz - Qz) * wpwq_scale;
 
     // Overall prefactor: K_AB * K_CD * 2*sqrt(rho/pi)
-    const double prefac = ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / M_PI);
+    const double prefac =
+        ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / std::numbers::pi) *
+        screen.prefactor_scale;
 
     // Number of Rys roots
     const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
     const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
     const int L = lABx + lABy + lABz + lCDx + lCDy + lCDz;
     const int n = L / 2 + 1;
-
     // Fetch Rys roots and weights
     double t2[HartreeFock::Rys::RYS_MAX_ROOTS];
     double w[HartreeFock::Rys::RYS_MAX_ROOTS];
     HartreeFock::Rys::rys_roots_weights(n, T, t2, w);
 
-    // Zero the 6D accumulation buffer for the active slice
-    for (int ax = 0; ax <= lABx; ++ax)
-        for (int ay = 0; ay <= lABy; ++ay)
-            for (int az = 0; az <= lABz; ++az)
-                for (int cx = 0; cx <= lCDx; ++cx)
-                    for (int cy = 0; cy <= lCDy; ++cy)
-                        for (int cz = 0; cz <= lCDz; ++cz)
-                            _rys_sum_buf[ax][ay][az][cx][cy][cz] = 0.0;
+    // Size the per-quartet 6D accumulator (dims = lAB*+1, lCD*+1). The buffer
+    // is exactly the active region, so a single fill zeroes precisely the cells
+    // the old explicit nested-loop zeroed — same set, same final values.
+    RysScratch &sum = g_rys_scratch;
+    sum.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz);
+    std::fill(sum.buf.begin(), sum.buf.end(), 0.0);
 
     // Per-root VRR + accumulation
     for (int r = 0; r < n; ++r)
@@ -270,7 +555,9 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
         const double wr = w[r];
 
         // Root-dependent scalars (same for all axes)
-        const double B00 = 0.5 * inv_delta * u;
+        const double B00 =
+            0.5 * inv_delta * u *
+            ((kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale);
         const double B10 = 0.5 * ppAB.inv_zeta * (1.0 - rho_over_zeta * u);
         const double B01 = 0.5 * ppCD.inv_zeta * (1.0 - rho_over_eta * u);
 
@@ -283,14 +570,14 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
         _rys_vrr_1d(Iy, lABy, lCDy, PAy + u * WPy, QCy + u * WQy, B00, B10, B01);
         _rys_vrr_1d(Iz, lABz, lCDz, PAz + u * WPz, QCz + u * WQz, B00, B10, B01);
 
-        // Accumulate outer product into _rys_sum_buf
+        // Accumulate outer product into the 6D buffer
         for (int ax = 0; ax <= lABx; ++ax)
             for (int ay = 0; ay <= lABy; ++ay)
                 for (int az = 0; az <= lABz; ++az)
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                _rys_sum_buf[ax][ay][az][cx][cy][cz] +=
+                                sum.at(ax, ay, az, cx, cy, cz) +=
                                     wr * Ix[ax][cx] * Iy[ay][cy] * Iz[az][cz];
     }
 
@@ -301,10 +588,10 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
                 for (int cx = 0; cx <= lCDx; ++cx)
                     for (int cy = 0; cy <= lCDy; ++cy)
                         for (int cz = 0; cz <= lCDz; ++cz)
-                            _rys_sum_buf[ax][ay][az][cx][cy][cz] *= prefac;
+                            sum.at(ax, ay, az, cx, cy, cz) *= prefac;
 
-    // AB-HRR (in-place on _rys_sum_buf)
-    _rys_hrr_ab(_rys_sum_buf,
+    // AB-HRR (in-place on the 6D buffer)
+    _rys_hrr_ab(sum,
                 lAx, lAy, lAz, lBx, lBy, lBz,
                 lCDx, lCDy, lCDz,
                 ABx, ABy, ABz);
@@ -314,7 +601,7 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     for (int cx = 0; cx <= lCDx; ++cx)
         for (int cy = 0; cy <= lCDy; ++cy)
             for (int cz = 0; cz <= lCDz; ++cz)
-                V0_CD[cx][cy][cz] = _rys_sum_buf[lAx][lAy][lAz][cx][cy][cz];
+                V0_CD[cx][cy][cz] = sum.at(lAx, lAy, lAz, cx, cy, cz);
 
     // CD-HRR
     return _rys_hrr_cd(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
@@ -328,7 +615,9 @@ double HartreeFock::RysQuad::_rys_contracted_eri(
     const int lAx, const int lAy, const int lAz,
     const int lBx, const int lBy, const int lBz,
     const int lCx, const int lCy, const int lCz,
-    const int lDx, const int lDy, const int lDz) noexcept
+    const int lDx, const int lDy, const int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega) noexcept
 {
     const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
     const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
@@ -336,7 +625,26 @@ double HartreeFock::RysQuad::_rys_contracted_eri(
     double eri = 0.0;
     for (const auto &ppAB : spAB.primitive_pairs)
         for (const auto &ppCD : spCD.primitive_pairs)
-            eri += ppAB.coeff_product * ppCD.coeff_product * _rys_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, ABx, ABy, ABz, CDx, CDy, CDz);
+        {
+            const double full =
+                _rys_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                   lCx, lCy, lCz, lDx, lDy, lDz,
+                                   ABx, ABy, ABz, CDx, CDy, CDz,
+                                   HartreeFock::ERIKernel::Coulomb, 0.0);
+
+            double value = full;
+            if (kernel != HartreeFock::ERIKernel::Coulomb)
+            {
+                const double long_range =
+                    _rys_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                       lCx, lCy, lCz, lDx, lDy, lDz,
+                                       ABx, ABy, ABz, CDx, CDy, CDz,
+                                       HartreeFock::ERIKernel::LongRange, omega);
+                value = (kernel == HartreeFock::ERIKernel::LongRange) ? long_range : (full - long_range);
+            }
+
+            eri += ppAB.coeff_product * ppCD.coeff_product * value;
+        }
     return eri;
 }
 
@@ -344,21 +652,49 @@ double HartreeFock::RysQuad::_rys_contracted_eri(
 
 static Eigen::MatrixXd _rys_schwarz_table(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
-    const std::size_t nbasis)
+    const std::size_t nbasis,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(nbasis, nbasis);
+    const bool use_sym = use_symmetry_ops(sym_ops);
 
     for (const auto &sp : shell_pairs)
     {
         const std::size_t i = sp.A._index;
         const std::size_t j = sp.B._index;
+        std::vector<PairOrbitElem> orbit;
+
+        if (use_sym)
+        {
+            auto [orb, forced_zero] = build_pair_orbit(i, j, *sym_ops);
+            orbit = std::move(orb);
+            // Q(i,j) = sqrt((ij|ij)) is a diagonal two-electron bound, so the
+            // pair phase cancels between bra and ket. A pair that looks odd for
+            // one-electron matrices is still valid here and must not be
+            // screened out.
+            (void)forced_zero;
+            if (orbit.front().i != i || orbit.front().j != j)
+                continue;
+        }
+
         const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
         const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
 
         const double val = HartreeFock::RysQuad::_rys_contracted_eri(
             sp, sp, lAx, lAy, lAz, lBx, lBy, lBz, lAx, lAy, lAz, lBx, lBy, lBz);
 
-        Q(i, j) = Q(j, i) = std::sqrt(std::abs(val));
+        const double q = std::sqrt(std::abs(val));
+        if (!use_sym)
+        {
+            Q(i, j) = Q(j, i) = q;
+            continue;
+        }
+
+        for (const auto &elem : orbit)
+        {
+            Q(elem.i, elem.j) = q;
+            Q(elem.j, elem.i) = q;
+        }
     }
     return Q;
 }
@@ -366,49 +702,93 @@ static Eigen::MatrixXd _rys_schwarz_table(
 std::vector<double> HartreeFock::RysQuad::_compute_2e(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp> *)
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
+    const bool use_sym = use_symmetry_ops(sym_ops);
 
-    const Eigen::MatrixXd Q = _rys_schwarz_table(shell_pairs, nb);
+    const Eigen::MatrixXd Q = _rys_schwarz_table(shell_pairs, nb, sym_ops);
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
 
     const std::size_t npairs = shell_pairs.size();
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; ++p)
+
+    // Flatten the upper-triangle (p,q) iteration space for load balance; see
+    // ObaraSaika::_compute_2e for the rationale and the closed-form t->(p,q)
+    // inversion. The scatter is store-only, so the tensor is independent of
+    // visitation order and this stays bitwise-identical to the serial-row form.
+    const std::size_t ntri = npairs * (npairs + 1) / 2;
+    const auto tri_base = [npairs](std::size_t r) -> std::size_t
+    { return r * npairs - r * (r - 1) / 2; };
+
+#pragma omp parallel for schedule(dynamic, 64)
+    for (std::size_t t = 0; t < ntri; ++t)
     {
+        long long pp = static_cast<long long>(std::floor(
+            (static_cast<double>(2 * npairs + 1) -
+             std::sqrt(static_cast<double>(2 * npairs + 1) *
+                           static_cast<double>(2 * npairs + 1) -
+                       8.0 * static_cast<double>(t))) /
+            2.0));
+        if (pp < 0)
+            pp = 0;
+        while (pp > 0 && tri_base(static_cast<std::size_t>(pp)) > t)
+            --pp;
+        while (static_cast<std::size_t>(pp) + 1 < npairs &&
+               tri_base(static_cast<std::size_t>(pp) + 1) <= t)
+            ++pp;
+        const std::size_t p = static_cast<std::size_t>(pp);
+        const std::size_t q = p + (t - tri_base(p));
+
         const auto &spAB = shell_pairs[p];
         const std::size_t i = spAB.A._index;
         const std::size_t j = spAB.B._index;
         const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
         const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
 
-        for (std::size_t q = p; q < npairs; ++q)
+        const auto &spCD = shell_pairs[q];
+        const std::size_t k = spCD.A._index;
+        const std::size_t l = spCD.B._index;
+        std::vector<QuartetOrbitElem> orbit;
+        if (Q(i, j) * Q(k, l) < tol_eri)
+            continue;
+
+        if (use_sym)
         {
-            const auto &spCD = shell_pairs[q];
-            const std::size_t k = spCD.A._index;
-            const std::size_t l = spCD.B._index;
-            if (Q(i, j) * Q(k, l) < tol_eri)
+            auto [orb, forced_zero] =
+                build_quartet_orbit(i, j, k, l, *sym_ops);
+            if (forced_zero)
                 continue;
+            orbit = std::move(orb);
+            if (orbit.front().i != i || orbit.front().j != j ||
+                orbit.front().k != k || orbit.front().l != l)
+                continue;
+        }
 
-            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-            const double val = HartreeFock::RysQuad::_rys_contracted_eri(
-                spAB, spCD,
-                lAx, lAy, lAz, lBx, lBy, lBz,
-                lCx, lCy, lCz, lDx, lDy, lDz);
+        const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+        const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+        const double val = HartreeFock::RysQuad::_rys_contracted_eri(
+            spAB, spCD,
+            lAx, lAy, lAz, lBx, lBy, lBz,
+            lCx, lCy, lCz, lDx, lDy, lDz,
+            kernel, omega);
 
-            eri[i * nb3 + j * nb2 + k * nb + l] = val;
-            eri[j * nb3 + i * nb2 + k * nb + l] = val;
-            eri[i * nb3 + j * nb2 + l * nb + k] = val;
-            eri[j * nb3 + i * nb2 + l * nb + k] = val;
-            eri[k * nb3 + l * nb2 + i * nb + j] = val;
-            eri[l * nb3 + k * nb2 + i * nb + j] = val;
-            eri[k * nb3 + l * nb2 + j * nb + i] = val;
-            eri[l * nb3 + k * nb2 + j * nb + i] = val;
+        if (!use_sym)
+        {
+            write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+            continue;
+        }
+
+        for (const auto &elem : orbit)
+        {
+            write_eri_permutations(
+                eri, nb, nb2, nb3,
+                elem.i, elem.j, elem.k, elem.l,
+                static_cast<double>(elem.sign) * val);
         }
     }
 
@@ -418,48 +798,97 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e(
 std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp> *)
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
+    const bool use_sym = use_symmetry_ops(sym_ops);
 
-    const Eigen::MatrixXd Q = _rys_schwarz_table(shell_pairs, nb);
+    // Use the shared HGP Schwarz table instead of _rys_schwarz_table:
+    // profiling showed the Rys variant was 4-5x slower and accounted for
+    // the entire Auto-vs-HGP Fock-build gap. The Schwarz bound is
+    // engine-independent at the value level, so this is a pure speed swap.
+    const std::vector<double> Q = HartreeFock::Screening::schwarz_table_hgp(
+        shell_pairs, nb, sym_ops);
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
 
     const std::size_t npairs = shell_pairs.size();
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; ++p)
+
+    // Flatten the upper-triangle (p,q) iteration space for load balance; see
+    // ObaraSaika::_compute_2e for the rationale and the closed-form t->(p,q)
+    // inversion. The scatter is store-only, so the tensor is independent of
+    // visitation order and this stays bitwise-identical to the serial-row form.
+    const std::size_t ntri = npairs * (npairs + 1) / 2;
+    const auto tri_base = [npairs](std::size_t r) -> std::size_t
+    { return r * npairs - r * (r - 1) / 2; };
+
+#pragma omp parallel for schedule(dynamic, 64)
+    for (std::size_t t = 0; t < ntri; ++t)
     {
+        long long pp = static_cast<long long>(std::floor(
+            (static_cast<double>(2 * npairs + 1) -
+             std::sqrt(static_cast<double>(2 * npairs + 1) *
+                           static_cast<double>(2 * npairs + 1) -
+                       8.0 * static_cast<double>(t))) /
+            2.0));
+        if (pp < 0)
+            pp = 0;
+        while (pp > 0 && tri_base(static_cast<std::size_t>(pp)) > t)
+            --pp;
+        while (static_cast<std::size_t>(pp) + 1 < npairs &&
+               tri_base(static_cast<std::size_t>(pp) + 1) <= t)
+            ++pp;
+        const std::size_t p = static_cast<std::size_t>(pp);
+        const std::size_t q = p + (t - tri_base(p));
+
         const auto &spAB = shell_pairs[p];
         const std::size_t i = spAB.A._index;
         const std::size_t j = spAB.B._index;
         const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
         const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
 
-        for (std::size_t q = p; q < npairs; ++q)
+        const auto &spCD = shell_pairs[q];
+        const std::size_t k = spCD.A._index;
+        const std::size_t l = spCD.B._index;
+        std::vector<QuartetOrbitElem> orbit;
+        if (Q[i * nb + j] * Q[k * nb + l] < tol_eri)
+            continue;
+
+        if (use_sym)
         {
-            const auto &spCD = shell_pairs[q];
-            const std::size_t k = spCD.A._index;
-            const std::size_t l = spCD.B._index;
-            if (Q(i, j) * Q(k, l) < tol_eri)
+            auto [orb, forced_zero] =
+                build_quartet_orbit(i, j, k, l, *sym_ops);
+            if (forced_zero)
                 continue;
+            orbit = std::move(orb);
+            if (orbit.front().i != i || orbit.front().j != j ||
+                orbit.front().k != k || orbit.front().l != l)
+                continue;
+        }
 
-            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-            const double val = _auto_contracted_eri(spAB, spCD,
-                                                    lAx, lAy, lAz, lBx, lBy, lBz,
-                                                    lCx, lCy, lCz, lDx, lDy, lDz);
+        const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+        const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+        const double val = _auto_contracted_eri(spAB, spCD,
+                                                lAx, lAy, lAz, lBx, lBy, lBz,
+                                                lCx, lCy, lCz, lDx, lDy, lDz,
+                                                kernel, omega);
 
-            eri[i * nb3 + j * nb2 + k * nb + l] = val;
-            eri[j * nb3 + i * nb2 + k * nb + l] = val;
-            eri[i * nb3 + j * nb2 + l * nb + k] = val;
-            eri[j * nb3 + i * nb2 + l * nb + k] = val;
-            eri[k * nb3 + l * nb2 + i * nb + j] = val;
-            eri[l * nb3 + k * nb2 + i * nb + j] = val;
-            eri[k * nb3 + l * nb2 + j * nb + i] = val;
-            eri[l * nb3 + k * nb2 + j * nb + i] = val;
+        if (!use_sym)
+        {
+            write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+            continue;
+        }
+
+        for (const auto &elem : orbit)
+        {
+            write_eri_permutations(
+                eri, nb, nb2, nb3,
+                elem.i, elem.j, elem.k, elem.l,
+                static_cast<double>(elem.sign) * val);
         }
     }
 
@@ -472,14 +901,16 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &density,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp> *)
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
 
-    std::vector<double> eri = _compute_2e(shell_pairs, nbasis, tol_eri);
+    std::vector<double> eri = _compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
 
     Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
 
@@ -502,15 +933,17 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf(
     const Eigen::MatrixXd &Pa,
     const Eigen::MatrixXd &Pb,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp> *)
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
 
     const Eigen::MatrixXd Pt = Pa + Pb;
-    std::vector<double> eri = _compute_2e(shell_pairs, nbasis, tol_eri);
+    std::vector<double> eri = _compute_2e(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
 
     Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
     Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
@@ -532,24 +965,24 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf(
 
 // ─── Auto-dispatch variants ───────────────────────────────────────────────────
 //
-// Per-quartet: if L = la+lb+lc+ld >= RYS_CROSSOVER_L use Rys, else OS.
-// The _contracted_eri from OS is a static function in os.cpp, so we cannot call
-// it directly. Instead, the Auto path builds the full Fock matrix using a
-// hybrid loop: call _rys_contracted_eri for all quartets (since the crossover
-// only matters for performance, not correctness).  A future revision will link
-// in the OS contracted ERI for the low-L path once os.cpp exposes it.
+// Per-quartet HGP/Rys selection (see `_auto_prefers_rys` above). Both
+// engines are reachable from the auto path; OS is not. The Fock-auto
+// entries reuse `_compute_2e_auto` so they pick up the same per-quartet
+// dispatch.
 
 Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &density,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
-    std::vector<double> eri = _compute_2e_auto(shell_pairs, nbasis, tol_eri, sym_ops);
+    std::vector<double> eri = _compute_2e_auto(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
     Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
 
 #pragma omp parallel for schedule(static)
@@ -568,6 +1001,8 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(
     const Eigen::MatrixXd &Pa,
     const Eigen::MatrixXd &Pb,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -575,7 +1010,7 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
     const Eigen::MatrixXd Pt = Pa + Pb;
-    std::vector<double> eri = _compute_2e_auto(shell_pairs, nbasis, tol_eri, sym_ops);
+    std::vector<double> eri = _compute_2e_auto(shell_pairs, nbasis, kernel, omega, tol_eri, sym_ops);
     Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
     Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
 

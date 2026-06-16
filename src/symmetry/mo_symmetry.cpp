@@ -1,12 +1,18 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <expected>
 #include <map>
 #include <memory>
-#include <stdexcept>
+#include <numbers>
 #include <string>
 
+#include <Eigen/LU> // dense inverse for the spherical-overlap-corrected D_R
+
+#include "basis/spherical.h"
 #include "external/libmsym/install/include/libmsym/msym.h"
+#include "integrals/os.h"       // _compute_1e (Cartesian overlap for spherical D_R)
+#include "integrals/shellpair.h" // build_shellpairs
 #include "io/logging.h"
 #include "mo_symmetry.h"
 #include "wrapper.h"
@@ -68,7 +74,7 @@ namespace
         {
             V3d v(sop.v[0], sop.v[1], sop.v[2]);
             v.normalize();
-            const double angle = 2.0 * M_PI * sop.power / sop.order;
+            const double angle = 2.0 * std::numbers::pi * sop.power / sop.order;
             const double c = std::cos(angle), s = std::sin(angle);
             M3d K;
             K << 0, -v.z(), v.y(),
@@ -81,7 +87,7 @@ namespace
         {
             V3d v(sop.v[0], sop.v[1], sop.v[2]);
             v.normalize();
-            const double angle = 2.0 * M_PI * sop.power / sop.order;
+            const double angle = 2.0 * std::numbers::pi * sop.power / sop.order;
             const double c = std::cos(angle), s = std::sin(angle);
             M3d K;
             K << 0, -v.z(), v.y(),
@@ -148,9 +154,9 @@ namespace
     //
     // Positions are taken from molecule.standard (Angstrom, symmetrized frame).
     // tol: distance threshold in Angstrom.
-    static std::vector<int> build_permutation(const Eigen::Matrix3d &M,
-                                              const HartreeFock::Molecule &mol,
-                                              double tol = 0.25)
+    static std::expected<std::vector<int>, std::string> build_permutation(const Eigen::Matrix3d &M,
+                                                                          const HartreeFock::Molecule &mol,
+                                                                          double tol = 0.25)
     {
         const int N = static_cast<int>(mol.natoms);
         std::vector<int> perm(N, -1);
@@ -169,7 +175,7 @@ namespace
                 }
             }
             if (perm[a] == -1)
-                throw std::runtime_error(
+                return std::unexpected(
                     "MO symmetry: atom " + std::to_string(a) +
                     " has no permutation image under this operation");
         }
@@ -339,7 +345,7 @@ namespace
     //
     // Builds the five operator matrices (two rotations, σv, optionally i) and
     // calls assign_for_linear for alpha (and beta for UHF).
-    static void assign_mo_symmetry_linear(HartreeFock::Calculator &calc)
+    static std::expected<void, std::string> assign_mo_symmetry_linear(HartreeFock::Calculator &calc)
     {
         const HartreeFock::Molecule &mol = calc._molecule;
         const HartreeFock::Basis &bs = calc._shells;
@@ -353,10 +359,12 @@ namespace
         // σv through xz-plane leaves each atom fixed,
         // inversion maps (0,0,z_a) → (0,0,−z_a) (finds the paired image atom).
 
-        auto build_SD = [&](const Eigen::Matrix3d &M) -> Eigen::MatrixXd
+        auto build_SD = [&](const Eigen::Matrix3d &M) -> std::expected<Eigen::MatrixXd, std::string>
         {
-            const std::vector<int> perm = build_permutation(M, mol);
-            const Eigen::MatrixXd D = build_ao_transform(M, perm, bs);
+            auto perm = build_permutation(M, mol);
+            if (!perm)
+                return std::unexpected(perm.error());
+            const Eigen::MatrixXd D = build_ao_transform(M, *perm, bs);
             return S * D;
         };
 
@@ -371,23 +379,33 @@ namespace
             return R;
         };
 
-        const Eigen::MatrixXd SD_pi2 = build_SD(rot_z(M_PI / 2.0));
-        const Eigen::MatrixXd SD_pi3 = build_SD(rot_z(M_PI / 3.0));
+        auto SD_pi2 = build_SD(rot_z(std::numbers::pi / 2.0));
+        if (!SD_pi2)
+            return std::unexpected(SD_pi2.error());
+        auto SD_pi3 = build_SD(rot_z(std::numbers::pi / 3.0));
+        if (!SD_pi3)
+            return std::unexpected(SD_pi3.error());
 
         // σv through xz-plane: flip y → diag(1, -1, 1)
         Eigen::Matrix3d R_sv = Eigen::Matrix3d::Identity();
         R_sv(1, 1) = -1.0;
-        const Eigen::MatrixXd SD_sv = build_SD(R_sv);
+        auto SD_sv = build_SD(R_sv);
+        if (!SD_sv)
+            return std::unexpected(SD_sv.error());
 
         // Inversion for D∞h
         std::unique_ptr<Eigen::MatrixXd> SD_inv_ptr;
         if (is_Dinfh)
-            SD_inv_ptr = std::make_unique<Eigen::MatrixXd>(
-                build_SD(-Eigen::Matrix3d::Identity()));
+        {
+            auto SD_inv = build_SD(-Eigen::Matrix3d::Identity());
+            if (!SD_inv)
+                return std::unexpected(SD_inv.error());
+            SD_inv_ptr = std::make_unique<Eigen::MatrixXd>(std::move(*SD_inv));
+        }
 
         auto classify = [&](const Eigen::MatrixXd &C, std::vector<std::string> &lbl)
         {
-            assign_for_linear(C, SD_pi2, SD_pi3, SD_sv, SD_inv_ptr.get(), lbl);
+            assign_for_linear(C, *SD_pi2, *SD_pi3, *SD_sv, SD_inv_ptr.get(), lbl);
         };
 
         classify(calc._info._scf.alpha.mo_coefficients,
@@ -399,6 +417,8 @@ namespace
             classify(calc._info._scf.beta.mo_coefficients,
                      calc._info._scf.beta.mo_symmetry);
         }
+
+        return {};
     }
 
     // ── Strip redundant E-type subscript "1" when no higher E exists ─────────────
@@ -483,193 +503,12 @@ namespace
         }
     }
 
-    // ── Per-shell Cartesian→Spherical pseudoinverse T⁺  [n_sph × n_cart] ─────────
-    //
-    // Cartesian order follows _cartesian_shell_order(L): lx descending, then ly.
-    // Spherical order: m = −L, −L+1, …, 0, …, +L  (libmsym convention).
-    //
-    // Libmsym convention (from msym.h comment):
-    //   pz = m=0,  px = m=+1,  py = m=-1
-    //   dz2 = m=0, dxz = m=+1, dyz = m=-1, dx2y2 = m=+2, dxy = m=-2
-    //
-    // T [n_cart × n_sph]:  column m = coefficients of φ_sph_m in the
-    //   component-norm-weighted Cartesian basis.
-    // T⁺ = (TᵀT)⁻¹ Tᵀ  [n_sph × n_cart]:  maps Cartesian AO coefficients
-    //   to spherical AO coefficients (discards the r²-contamination subspace for L≥2).
-    static Eigen::MatrixXd cart_to_sph_block(int L)
-    {
-        if (L == 0)
-            return Eigen::MatrixXd::Identity(1, 1);
-
-        if (L == 1)
-        {
-            // Cartesian order: px(1,0,0)=col0, py(0,1,0)=col1, pz(0,0,1)=col2
-            // Spherical order: m=-1=py, m=0=pz, m=+1=px
-            // T is a 3×3 permutation → T⁺ = Tᵀ
-            Eigen::MatrixXd T = Eigen::MatrixXd::Zero(3, 3);
-            T(0, 1) = 1.0; // m=-1 ← py
-            T(1, 2) = 1.0; // m= 0 ← pz
-            T(2, 0) = 1.0; // m=+1 ← px
-            return T;
-        }
-
-        if (L == 2)
-        {
-            // Cartesian order: xx=0, xy=1, xz=2, yy=3, yz=4, zz=5
-            // Spherical order: m=-2=dxy, m=-1=dyz, m=0=dz2, m=+1=dxz, m=+2=dx2y2
-            //
-            // T (6×5):
-            //   col m=-2: T[xy,m=-2] = 1
-            //   col m=-1: T[yz,m=-1] = 1
-            //   col m= 0: T[xx,m=0]=-1/2, T[yy,m=0]=-1/2, T[zz,m=0]=1
-            //   col m=+1: T[xz,m=+1] = 1
-            //   col m=+2: T[xx,m=+2]=√3/2, T[yy,m=+2]=-√3/2
-            //
-            // TᵀT = diag(1, 1, 3/2, 1, 3/2)  →  (TᵀT)⁻¹ = diag(1,1,2/3,1,2/3)
-            // T⁺ (5×6) = (TᵀT)⁻¹ Tᵀ:
-            //   row m=-2:  [0,    1,  0,    0,    0,   0   ]
-            //   row m=-1:  [0,    0,  0,    0,    1,   0   ]
-            //   row m= 0:  [-1/3, 0,  0,   -1/3,  0,  2/3 ]
-            //   row m=+1:  [0,    0,  1,    0,    0,   0   ]
-            //   row m=+2:  [1/√3, 0,  0,  -1/√3,  0,   0  ]
-            const double s3 = std::sqrt(3.0);
-            Eigen::MatrixXd T = Eigen::MatrixXd::Zero(5, 6);
-            //            xx      xy  xz    yy      yz  zz
-            T(0, 1) = 1.0; // m=-2: dxy
-            T(1, 4) = 1.0; // m=-1: dyz
-            T(2, 0) = -1.0 / 3.0;
-            T(2, 3) = -1.0 / 3.0;
-            T(2, 5) = 2.0 / 3.0; // m=0: dz2
-            T(3, 2) = 1.0;       // m=+1: dxz
-            T(4, 0) = 1.0 / s3;
-            T(4, 3) = -1.0 / s3; // m=+2: dx2y2
-            return T;
-        }
-
-        if (L == 3)
-        {
-            // n_cart=10, n_sph=7
-            // Cartesian: xxx=0 xxy=1 xxz=2 xyy=3 xyz=4 xzz=5 yyy=6 yyz=7 yzz=8 zzz=9
-            // Spherical: m=-3..+3 → cols 0..6
-            Eigen::MatrixXd T = Eigen::MatrixXd::Zero(10, 7);
-            T(1, 0) = 3;
-            T(6, 0) = -1; // m=-3: y(3x²-y²)
-            T(4, 1) = 1;  // m=-2: xyz
-            T(8, 2) = 4;
-            T(1, 2) = -1;
-            T(6, 2) = -1; // m=-1: y(4z²-x²-y²)
-            T(9, 3) = 2;
-            T(2, 3) = -3;
-            T(7, 3) = -3; // m= 0: z(2z²-3x²-3y²)
-            T(5, 4) = 4;
-            T(0, 4) = -1;
-            T(3, 4) = -1; // m=+1: x(4z²-x²-y²)
-            T(2, 5) = 1;
-            T(7, 5) = -1; // m=+2: z(x²-y²)
-            T(0, 6) = 1;
-            T(3, 6) = -3; // m=+3: x(x²-3y²)
-            return T.completeOrthogonalDecomposition().pseudoInverse();
-        }
-
-        if (L == 4)
-        {
-            // n_cart=15, n_sph=9
-            // Cartesian: x⁴=0 x³y=1 x³z=2 x²y²=3 x²yz=4 x²z²=5 xy³=6 xy²z=7 xyz²=8
-            //            xz³=9 y⁴=10 y³z=11 y²z²=12 yz³=13 z⁴=14
-            // Spherical: m=-4..+4 → cols 0..8
-            Eigen::MatrixXd T = Eigen::MatrixXd::Zero(15, 9);
-            T(1, 0) = 1;
-            T(6, 0) = -1; // m=-4: xy(x²-y²)
-            T(4, 1) = 3;
-            T(11, 1) = -1; // m=-3: yz(3x²-y²)
-            T(8, 2) = 6;
-            T(1, 2) = -1;
-            T(6, 2) = -1; // m=-2: xy(6z²-x²-y²)
-            T(13, 3) = 4;
-            T(4, 3) = -3;
-            T(11, 3) = -3; // m=-1: yz(4z²-3x²-3y²)
-            T(0, 4) = 3;
-            T(3, 4) = 6;
-            T(5, 4) = -24; // m= 0: 3x⁴+6x²y²-24x²z²
-            T(10, 4) = 3;
-            T(12, 4) = -24;
-            T(14, 4) = 8; //       +3y⁴-24y²z²+8z⁴
-            T(9, 5) = 4;
-            T(2, 5) = -3;
-            T(7, 5) = -3; // m=+1: xz(4z²-3x²-3y²)
-            T(0, 6) = -1;
-            T(10, 6) = 1;
-            T(5, 6) = 6;
-            T(12, 6) = -6; // m=+2: (x²-y²)(6z²-x²-y²)
-            T(2, 7) = 1;
-            T(7, 7) = -3; // m=+3: xz(x²-3y²)
-            T(0, 8) = 1;
-            T(3, 8) = -6;
-            T(10, 8) = 1; // m=+4: x⁴-6x²y²+y⁴
-            return T.completeOrthogonalDecomposition().pseudoInverse();
-        }
-
-        if (L == 5)
-        {
-            // n_cart=21, n_sph=11
-            // Cartesian: x⁵=0 x⁴y=1 x⁴z=2 x³y²=3 x³yz=4 x³z²=5 x²y³=6 x²y²z=7 x²yz²=8 x²z³=9
-            //            xy⁴=10 xy³z=11 xy²z²=12 xyz³=13 xz⁴=14
-            //            y⁵=15 y⁴z=16 y³z²=17 y²z³=18 yz⁴=19 z⁵=20
-            // Spherical: m=-5..+5 → cols 0..10
-            Eigen::MatrixXd T = Eigen::MatrixXd::Zero(21, 11);
-            T(1, 0) = 5;
-            T(6, 0) = -10;
-            T(15, 0) = 1; // m=-5: y(5x⁴-10x²y²+y⁴)
-            T(4, 1) = 4;
-            T(11, 1) = -4; // m=-4: 4xyz(x²-y²)
-            T(8, 2) = 24;
-            T(1, 2) = -3;
-            T(6, 2) = -2; // m=-3: y(3x²-y²)(8z²-x²-y²)
-            T(17, 2) = -8;
-            T(15, 2) = 1;
-            T(13, 3) = 2;
-            T(4, 3) = -1;
-            T(11, 3) = -1; // m=-2: xyz(2z²-x²-y²)
-            T(1, 4) = 1;
-            T(6, 4) = 2;
-            T(15, 4) = 1; // m=-1: y(x⁴+2x²y²+y⁴+8z⁴-12x²z²-12y²z²)
-            T(19, 4) = 8;
-            T(8, 4) = -12;
-            T(17, 4) = -12;
-            T(20, 5) = 8;
-            T(9, 5) = -40;
-            T(18, 5) = -40; // m= 0: z(8z⁴-40x²z²-40y²z²+15x⁴+30x²y²+15y⁴)
-            T(2, 5) = 15;
-            T(7, 5) = 30;
-            T(16, 5) = 15;
-            T(0, 6) = 1;
-            T(3, 6) = 2;
-            T(10, 6) = 1; // m=+1: x(x⁴+2x²y²+y⁴+8z⁴-12x³z²-12xy²z²)
-            T(14, 6) = 8;
-            T(5, 6) = -12;
-            T(12, 6) = -12;
-            T(9, 7) = 2;
-            T(2, 7) = -1;
-            T(16, 7) = 1;
-            T(18, 7) = -2; // m=+2: z(x²-y²)(2z²-x²-y²)
-            T(0, 8) = -1;
-            T(3, 8) = 2;
-            T(10, 8) = 3; // m=+3: x(x²-3y²)(8z²-x²-y²)
-            T(5, 8) = 8;
-            T(12, 8) = -24;
-            T(2, 9) = 1;
-            T(7, 9) = -6;
-            T(16, 9) = 1; // m=+4: z(x⁴-6x²y²+y⁴)
-            T(0, 10) = 1;
-            T(3, 10) = -10;
-            T(10, 10) = 5; // m=+5: x(x⁴-10x²y²+5y⁴)
-            return T.completeOrthogonalDecomposition().pseudoInverse();
-        }
-
-        throw std::runtime_error(
-            "assign_mo_symmetry: Cartesian→Spherical transform not implemented for L=" +
-            std::to_string(L) + " (max supported: L=5)");
-    }
+    // Per-shell Cartesian→Spherical pseudoinverse T⁺  [n_sph × n_cart].
+    // The hand-verified matrices now live in the shared basis module
+    // (src/basis/spherical.{h,cpp}); we alias the production entry point here so
+    // the call site below is unchanged. See spherical.h for index conventions and
+    // spherical_recurrence.h for the independent closed-form oracle.
+    using HartreeFock::BasisFunctions::cart_to_sph_block;
 
     // ── Does a point group have only 1D real irreps? ─────────────────────────────
     //
@@ -751,7 +590,7 @@ namespace
 
 } // anonymous namespace
 
-HartreeFock::Symmetry::AbelianIrrepProductTable
+std::expected<HartreeFock::Symmetry::AbelianIrrepProductTable, std::string>
 HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator &calculator)
 {
     AbelianIrrepProductTable result;
@@ -763,7 +602,10 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
     if (pg == "C1" || pg.find("inf") != std::string::npos)
         return result;
 
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected("build_abelian_irrep_product_table: " + ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
 
     for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)
@@ -776,21 +618,21 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
     }
 
     if (MSYM_SUCCESS != msymSetElements(ctx.get(), atoms.size(), atoms.data()))
-        throw std::runtime_error("build_abelian_irrep_product_table: msymSetElements failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymSetElements failed");
     if (MSYM_SUCCESS != msymFindSymmetry(ctx.get()))
-        throw std::runtime_error("build_abelian_irrep_product_table: msymFindSymmetry failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymFindSymmetry failed");
 
     msym_point_group_type_t pg_type;
     int pg_n = 0;
     if (MSYM_SUCCESS != msymGetPointGroupType(ctx.get(), &pg_type, &pg_n))
-        throw std::runtime_error("build_abelian_irrep_product_table: msymGetPointGroupType failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymGetPointGroupType failed");
     if (!is_all_1d_irreps(pg_type, pg_n))
         return result;
 
     int nelems = 0;
     msym_element_t *melems = nullptr;
     if (MSYM_SUCCESS != msymGetElements(ctx.get(), &nelems, &melems))
-        throw std::runtime_error("build_abelian_irrep_product_table: msymGetElements failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymGetElements failed");
 
     std::vector<msym_basis_function_t> bfs(nelems);
     std::memset(bfs.data(), 0, nelems * sizeof(msym_basis_function_t));
@@ -802,11 +644,11 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
         bfs[i].f.rsh.m = 0;
     }
     if (MSYM_SUCCESS != msymSetBasisFunctions(ctx.get(), nelems, bfs.data()))
-        throw std::runtime_error("build_abelian_irrep_product_table: msymSetBasisFunctions failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymSetBasisFunctions failed");
 
     const msym_character_table_t *ct = nullptr;
     if (MSYM_SUCCESS != msymGetCharacterTable(ctx.get(), &ct) || ct == nullptr)
-        throw std::runtime_error("build_abelian_irrep_product_table: msymGetCharacterTable failed");
+        return std::unexpected("build_abelian_irrep_product_table: msymGetCharacterTable failed");
 
     const int h = ct->d;
     const double *ctable = static_cast<const double *>(ct->table);
@@ -859,6 +701,13 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
 // construction (modified Gram-Schmidt), so U^T S U = I and the Fock matrix
 // transformed to the SAO basis is block-diagonal.
 //
+// Important design choice: the SAO layer is intentionally an Abelian labeling /
+// blocking view of symmetry. For non-Abelian groups we reduce to the largest
+// all-1D Abelian subgroup before building blocks, because the SCF path wants one
+// scalar Mulliken label per block and one independent diagonalization per block.
+// The full-group symmetry machinery exists elsewhere (ERI/Fock reduction); this
+// file is the "make labels and blocks easy to use" layer.
+//
 // Algorithm (for a non-linear Abelian group):
 //   1. Rebuild libmsym context (same frame as assign_mo_symmetry — no axis align).
 //   2. Select largest Abelian subgroup if the full group is non-Abelian.
@@ -872,7 +721,7 @@ HartreeFock::Symmetry::build_abelian_irrep_product_table(HartreeFock::Calculator
 //   7. Assemble U, fill metadata (block_sizes, block_offsets, irrep_names).
 //   8. Apply the same B1/B2 and E-label normalisations as assign_mo_symmetry.
 
-HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFock::Calculator &calculator)
+std::expected<HartreeFock::Symmetry::SAOBasis, std::string> HartreeFock::Symmetry::build_sao_basis(HartreeFock::Calculator &calculator)
 {
     SAOBasis result; // valid = false by default
 
@@ -889,10 +738,20 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
     if (pg == "C1")
         return result;
 
-    const std::size_t nb = calculator._shells.nbasis();
+    // The SCF works in `working_nbasis()` dimensions: the Cartesian basis count in
+    // Cartesian mode, the (2L+1)-per-shell count in spherical mode. Every matrix the
+    // SAO transform U touches (overlap, Fock, MO coefficients) is sized this way, so
+    // U must be too. The AO representation matrices are still built in the Cartesian
+    // basis (build_ao_transform walks _cartesian exponents and _component_norm), then
+    // rotated into the spherical basis below when _spherical is set.
+    const bool spherical = calculator._shells._spherical;
+    const std::size_t nb = calculator.working_nbasis();
 
     // ── Rebuild libmsym context (NO axis alignment) ───────────────────────────
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected("build_sao_basis: " + ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
 
     for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)
@@ -905,24 +764,27 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
     }
 
     if (MSYM_SUCCESS != msymSetElements(ctx.get(), atoms.size(), atoms.data()))
-        throw std::runtime_error("build_sao_basis: msymSetElements failed");
+        return std::unexpected("build_sao_basis: msymSetElements failed");
 
     if (MSYM_SUCCESS != msymFindSymmetry(ctx.get()))
-        throw std::runtime_error("build_sao_basis: msymFindSymmetry failed");
+        return std::unexpected("build_sao_basis: msymFindSymmetry failed");
 
     // ── Select largest Abelian subgroup if needed ─────────────────────────────
+    // This is the key policy choice for teachability and downstream simplicity:
+    // even if the molecule has full non-Abelian symmetry, the SAO blocks are built
+    // in a subgroup where every irrep is 1D and gets a unique scalar label.
     {
         msym_point_group_type_t pg_type;
         int pg_n = 0;
         if (MSYM_SUCCESS != msymGetPointGroupType(ctx.get(), &pg_type, &pg_n))
-            throw std::runtime_error("build_sao_basis: msymGetPointGroupType failed");
+            return std::unexpected("build_sao_basis: msymGetPointGroupType failed");
 
         if (!is_all_1d_irreps(pg_type, pg_n))
         {
             int nsg = 0;
             const msym_subgroup_t *sgs = nullptr;
             if (MSYM_SUCCESS != msymGetSubgroups(ctx.get(), &nsg, &sgs))
-                throw std::runtime_error("build_sao_basis: msymGetSubgroups failed");
+                return std::unexpected("build_sao_basis: msymGetSubgroups failed");
 
             const msym_subgroup_t *best = select_preferred_abelian_subgroup(nsg, sgs);
             if (best == nullptr)
@@ -931,19 +793,20 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
                 return result;
             }
             if (MSYM_SUCCESS != msymSelectSubgroup(ctx.get(), best))
-                throw std::runtime_error("build_sao_basis: msymSelectSubgroup failed");
+                return std::unexpected("build_sao_basis: msymSelectSubgroup failed");
         }
     }
 
     // ── Register minimal basis functions to initialise the character table ────
     // msymGetCharacterTable requires msymSetBasisFunctions to have been called.
     // We register one s-type spherical harmonic per atom (the minimal valid set).
-    // The character table is a group property and independent of this choice.
+    // The character table is a group/subgroup property and independent of this
+    // placeholder basis; we are only asking libmsym for symmetry metadata here.
     {
         int nelems = 0;
         msym_element_t *melems = nullptr;
         if (MSYM_SUCCESS != msymGetElements(ctx.get(), &nelems, &melems))
-            throw std::runtime_error("build_sao_basis: msymGetElements failed");
+            return std::unexpected("build_sao_basis: msymGetElements failed");
 
         std::vector<msym_basis_function_t> bfs(nelems);
         std::memset(bfs.data(), 0, nelems * sizeof(msym_basis_function_t));
@@ -956,13 +819,13 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
             // type = 0 = MSYM_BASIS_TYPE_REAL_SPHERICAL_HARMONIC (already zeroed)
         }
         if (MSYM_SUCCESS != msymSetBasisFunctions(ctx.get(), nelems, bfs.data()))
-            throw std::runtime_error("build_sao_basis: msymSetBasisFunctions failed");
+            return std::unexpected("build_sao_basis: msymSetBasisFunctions failed");
     }
 
     // ── Get character table ───────────────────────────────────────────────────
     const msym_character_table_t *ct = nullptr;
     if (MSYM_SUCCESS != msymGetCharacterTable(ctx.get(), &ct) || ct == nullptr)
-        throw std::runtime_error("build_sao_basis: msymGetCharacterTable failed");
+        return std::unexpected("build_sao_basis: msymGetCharacterTable failed");
 
     // For an Abelian group the number of irreps == group order h.
     const int h = ct->d;
@@ -973,14 +836,48 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
     const Eigen::MatrixXd &S = calculator._overlap;
 
     // ── Build AO representation matrices D_R for each group operation ─────────
-    // ct->sops[c] = representative of conjugacy class c.  For Abelian groups
-    // each class has exactly one element, so this gives all h operations.
+    // ct->sops[c] = representative of conjugacy class c. For the Abelian groups we
+    // intentionally reduce to here, each class has exactly one element, so this is
+    // the complete operation list for the active blocking/labeling group.
+    //
+    // build_ao_transform returns the Cartesian representation D_cart [n_cart×n_cart].
+    // In spherical mode we map each into the spherical AO basis. The PHYSICAL spherical
+    // representation is
+    //   D_sph = S_sph⁻¹ · (C · S_cart · D_cart · Cᵀ)
+    // (the metric-correct construction; see group_operations.cpp / Step 1' in
+    // docs/SPHERICAL_SYMMETRY_PHASE3_PLAN.md). The naive C·D_cart·C⁺ is a DIFFERENT
+    // (incorrect) rep for d-and-higher shells — it fails D_sphᵀ S_sph D_sph = S_sph —
+    // and crucially is inconsistent with the full-symmetry ERI-reduction O_R, so the
+    // SAO density it produces would not satisfy that path's contract. Both reps agree
+    // for s,p and for sign-flip (Abelian-axis) operations, which is why the C2v
+    // spherical regression passed under the old form; C₃/S₄ on d-shells exposes the
+    // difference. S_cart is computed here from the Cartesian shells.
+    Eigen::MatrixXd C_mat, S_sph_inv, CS_cart; // spherical-only
+    if (spherical)
+    {
+        C_mat = calculator._shells._cart_to_sph; // [n_sph × n_cart]
+        if (static_cast<std::size_t>(C_mat.rows()) != nb)
+            return std::unexpected(
+                "build_sao_basis: spherical transform row count does not match working_nbasis()");
+        const auto shell_pairs = build_shellpairs(calculator._shells);
+        const Eigen::MatrixXd S_cart =
+            HartreeFock::ObaraSaika::_compute_1e(shell_pairs, calculator._shells.nbasis()).first;
+        S_sph_inv = (C_mat * S_cart * C_mat.transpose()).inverse();
+        CS_cart = C_mat * S_cart;
+    }
+
     std::vector<Eigen::MatrixXd> D_ops(h);
     for (int c = 0; c < h; ++c)
     {
         const Eigen::Matrix3d M = sop_to_matrix(*ct->sops[c]);
-        const std::vector<int> perm = build_permutation(M, calculator._molecule);
-        D_ops[c] = build_ao_transform(M, perm, calculator._shells);
+        auto perm = build_permutation(M, calculator._molecule);
+        if (!perm)
+            return std::unexpected("build_sao_basis: " + perm.error());
+        Eigen::MatrixXd D_cart = build_ao_transform(M, *perm, calculator._shells);
+        if (spherical)
+            D_ops[c] = S_sph_inv * (CS_cart * D_cart * C_mat.transpose());
+        else
+            D_ops[c] = std::move(D_cart);
     }
 
     // ── Project and S-orthonormalise SAOs for each irrep ──────────────────────
@@ -1001,8 +898,8 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
         P /= static_cast<double>(h);
 
         // Apply P to each AO unit vector e_μ = μ-th column of the identity.
-        // Collect the non-zero images and build an S-orthonormal basis for the
-        // irrep-Γ subspace via modified Gram-Schmidt with the S-inner product.
+        // The projected columns span the Γ subspace but are heavily redundant; we
+        // keep only the linearly independent ones via S-metric Gram-Schmidt.
         Eigen::MatrixXd accepted(nb, nb);
         int n_accepted = 0;
 
@@ -1037,7 +934,7 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
     for (int g = 0; g < n_irreps; ++g)
         total += block_sizes[g];
     if (total != static_cast<int>(nb))
-        throw std::runtime_error(
+        return std::unexpected(
             "build_sao_basis: SAO count mismatch: got " + std::to_string(total) +
             ", expected " + std::to_string(nb));
 
@@ -1118,25 +1015,31 @@ HartreeFock::Symmetry::SAOBasis HartreeFock::Symmetry::build_sao_basis(HartreeFo
 
 // ─── Public entry point ───────────────────────────────────────────────────────
 
-void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculator)
+std::expected<void, std::string> HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculator)
 {
     if (!calculator._molecule._symmetry)
-        return;
+        return {};
     if (!calculator._info._is_converged)
-        return;
+        return {};
 
     // Linear molecules (C∞v / D∞h) use a dedicated handler.
     const std::string &pg = calculator._molecule._point_group;
     if (pg.find("inf") != std::string::npos)
-    {
-        assign_mo_symmetry_linear(calculator);
-        return;
-    }
+        return assign_mo_symmetry_linear(calculator);
+
+    // Kh (a single atom) is the full spherical group; MO labels would be atomic
+    // term symbols, which this Abelian-subgroup machinery does not produce. Skip
+    // labeling — the libmsym rebuild below would only find C1 for one atom anyway.
+    if (pg == "Kh")
+        return {};
 
     // ── Rebuild msym context on the symmetrized coordinates ──────────────────
     // molecule.standard is in Angstrom (symmetrized, pre-alignment frame).
     // Basis function centers are consistent with this frame (via _standard = Bohr).
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected("assign_mo_symmetry: " + ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calculator._molecule.natoms);
 
     for (std::size_t i = 0; i < calculator._molecule.natoms; ++i)
@@ -1149,11 +1052,11 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
     }
 
     if (MSYM_SUCCESS != msymSetElements(ctx.get(), atoms.size(), atoms.data()))
-        throw std::runtime_error("assign_mo_symmetry: msymSetElements failed");
+        return std::unexpected("assign_mo_symmetry: msymSetElements failed");
 
     // Re-detect symmetry (do NOT align axes — keep same frame as basis centers)
     if (MSYM_SUCCESS != msymFindSymmetry(ctx.get()))
-        throw std::runtime_error("assign_mo_symmetry: msymFindSymmetry failed");
+        return std::unexpected("assign_mo_symmetry: msymFindSymmetry failed");
 
     // ── Select largest Abelian subgroup if the full group is non-Abelian ─────
     //
@@ -1164,14 +1067,14 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
         msym_point_group_type_t pg_type;
         int pg_n = 0;
         if (MSYM_SUCCESS != msymGetPointGroupType(ctx.get(), &pg_type, &pg_n))
-            throw std::runtime_error("assign_mo_symmetry: msymGetPointGroupType failed");
+            return std::unexpected("assign_mo_symmetry: msymGetPointGroupType failed");
 
         if (!is_all_1d_irreps(pg_type, pg_n))
         {
             int nsg = 0;
             const msym_subgroup_t *sgs = nullptr;
             if (MSYM_SUCCESS != msymGetSubgroups(ctx.get(), &nsg, &sgs))
-                throw std::runtime_error("assign_mo_symmetry: msymGetSubgroups failed");
+                return std::unexpected("assign_mo_symmetry: msymGetSubgroups failed");
 
             const msym_subgroup_t *best = select_preferred_abelian_subgroup(nsg, sgs);
 
@@ -1181,7 +1084,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
                 const std::string sg_name = best->name;
 
                 if (MSYM_SUCCESS != msymSelectSubgroup(ctx.get(), best))
-                    throw std::runtime_error("assign_mo_symmetry: msymSelectSubgroup failed");
+                    return std::unexpected("assign_mo_symmetry: msymSelectSubgroup failed");
 
                 HartreeFock::Logger::logging(
                     HartreeFock::LogLevel::Info,
@@ -1204,7 +1107,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
     int nelems = 0;
     msym_element_t *melems = nullptr;
     if (MSYM_SUCCESS != msymGetElements(ctx.get(), &nelems, &melems))
-        throw std::runtime_error("assign_mo_symmetry: msymGetElements failed");
+        return std::unexpected("assign_mo_symmetry: msymGetElements failed");
 
     // ── Build Cart→Sph transform T⁺ and libmsym basis function array ─────────
     //
@@ -1212,6 +1115,11 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
     // The libmsym basis functions are ordered shell-by-shell, m = −L … +L.
     // The 'id' field of each BF stores its index in our ordering, so that after
     // msymGetBasisFunctions we can map internal → our ordering for wf reindexing.
+    //
+    // This is the bridge between the SCF basis and libmsym's classification basis:
+    // in Cartesian mode we convert MO coefficients with T⁺ before asking for
+    // symmetry species; in spherical mode the SCF already produced coefficients in
+    // that basis, so T⁺ would be redundant and dimensionally wrong.
 
     const auto &shells = calculator._shells._shells;
     const int n_cart_total = static_cast<int>(calculator._shells.nbasis());
@@ -1246,7 +1154,10 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
         const int shell_n = ++shell_n_counter[{atom, L}];
 
         // Place the per-shell T⁺ block
-        T_cs.block(sph_row, cart_col, n_sph, n_cart) = cart_to_sph_block(L);
+        auto T_shell = cart_to_sph_block(L);
+        if (!T_shell)
+            return std::unexpected(T_shell.error());
+        T_cs.block(sph_row, cart_col, n_sph, n_cart) = *T_shell;
 
         // Fill libmsym BFs for this shell (m: −L … +L)
         for (int m = -L; m <= L; ++m, ++bf_idx)
@@ -1265,12 +1176,12 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
 
     // ── Register basis functions ──────────────────────────────────────────────
     if (MSYM_SUCCESS != msymSetBasisFunctions(ctx.get(), n_sph_total, bfs.data()))
-        throw std::runtime_error("assign_mo_symmetry: msymSetBasisFunctions failed");
+        return std::unexpected("assign_mo_symmetry: msymSetBasisFunctions failed");
 
     // ── Obtain character table ────────────────────────────────────────────────
     const msym_character_table_t *ct = nullptr;
     if (MSYM_SUCCESS != msymGetCharacterTable(ctx.get(), &ct) || ct == nullptr)
-        throw std::runtime_error("assign_mo_symmetry: msymGetCharacterTable failed");
+        return std::unexpected("assign_mo_symmetry: msymGetCharacterTable failed");
     const int n_species = ct->d;
 
     // ── Build reindex map: our_bf_idx → internal_bf_idx ──────────────────────
@@ -1279,7 +1190,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
     int mbfsl = 0;
     msym_basis_function_t *mbfs = nullptr;
     if (MSYM_SUCCESS != msymGetBasisFunctions(ctx.get(), &mbfsl, &mbfs))
-        throw std::runtime_error("assign_mo_symmetry: msymGetBasisFunctions failed");
+        return std::unexpected("assign_mo_symmetry: msymGetBasisFunctions failed");
 
     // to_internal[our_idx] = internal_idx
     std::vector<int> to_internal(n_sph_total);
@@ -1292,17 +1203,30 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
 
     // ── Classify MOs ─────────────────────────────────────────────────────────
     //
-    // For each MO column c_i (Cartesian AO coefficients):
-    //   1. Transform to spherical basis: d_i = T⁺ c_i
+    // For each MO column c_i:
+    //   1. Obtain its spherical AO coefficients d_i. In Cartesian mode the MO
+    //      coefficients are Cartesian, so d_i = T⁺ c_i. In spherical mode the SCF
+    //      already produced spherical MO coefficients (rows == n_sph_total), so we
+    //      consume them directly — applying T⁺ again would be wrong (and ill-sized).
     //   2. Reindex to internal libmsym ordering
     //   3. Call msymSymmetrySpeciesComponents → component weights per species
     //   4. Label = species with largest weight
-    auto classify = [&](const Eigen::MatrixXd &C, std::vector<std::string> &labels)
+    //
+    // If the context was reduced to an Abelian subgroup above, then "species" here
+    // means subgroup irrep. That is intentional: the printed MO labels match the
+    // SAO blocking policy, not the full-group degeneracy structure.
+    const bool spherical = calculator._shells._spherical;
+    auto classify = [&](const Eigen::MatrixXd &C, std::vector<std::string> &labels) -> std::expected<void, std::string>
     {
         const int n_mo = static_cast<int>(C.cols());
 
         // C_sph[n_sph_total × n_mo]
-        const Eigen::MatrixXd C_sph = T_cs * C;
+        if (spherical && C.rows() != n_sph_total)
+            return std::unexpected(
+                "assign_mo_symmetry: spherical MO coefficient row count (" +
+                std::to_string(C.rows()) + ") does not match n_sph_total (" +
+                std::to_string(n_sph_total) + ")");
+        const Eigen::MatrixXd C_sph = spherical ? C : (T_cs * C);
 
         labels.resize(n_mo);
         std::vector<double> wf(mbfsl, 0.0);
@@ -1316,7 +1240,7 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
 
             if (MSYM_SUCCESS != msymSymmetrySpeciesComponents(
                                     ctx.get(), mbfsl, wf.data(), n_species, comp.data()))
-                throw std::runtime_error(
+                return std::unexpected(
                     "assign_mo_symmetry: msymSymmetrySpeciesComponents failed for MO " +
                     std::to_string(i));
 
@@ -1324,19 +1248,26 @@ void HartreeFock::Symmetry::assign_mo_symmetry(HartreeFock::Calculator &calculat
                 std::max_element(comp.begin(), comp.end()) - comp.begin());
             labels[i] = ct->s[best].name;
         }
+        return {};
     };
 
-    classify(calculator._info._scf.alpha.mo_coefficients,
-             calculator._info._scf.alpha.mo_symmetry);
+    if (auto res = classify(calculator._info._scf.alpha.mo_coefficients,
+                            calculator._info._scf.alpha.mo_symmetry);
+        !res)
+        return res;
     normalize_e_labels(ct, calculator._info._scf.alpha.mo_symmetry);
     fix_b1b2_convention(ct, calculator._info._scf.alpha.mo_symmetry);
 
     if (calculator._info._scf.is_uhf &&
         calculator._info._scf.beta.mo_coefficients.cols() > 0)
     {
-        classify(calculator._info._scf.beta.mo_coefficients,
-                 calculator._info._scf.beta.mo_symmetry);
+        if (auto res = classify(calculator._info._scf.beta.mo_coefficients,
+                                calculator._info._scf.beta.mo_symmetry);
+            !res)
+            return res;
         normalize_e_labels(ct, calculator._info._scf.beta.mo_symmetry);
         fix_b1b2_convention(ct, calculator._info._scf.beta.mo_symmetry);
     }
+
+    return {};
 }

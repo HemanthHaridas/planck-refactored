@@ -1,27 +1,49 @@
 #include "rhf_response.h"
 
+#include <cstdlib>
 #include <format>
+#include <iostream>
+#include <iomanip>
+#include <string_view>
 
 #include "post_hf/integrals.h"
 
 namespace HartreeFock::Correlation
 {
+    namespace
+    {
+        void maybe_print_rhf_response_matrix(const char *name, const Eigen::MatrixXd &mat)
+        {
+            const char *enabled = std::getenv("PLANCK_DEBUG_RHF_RESPONSE");
+            if (enabled == nullptr || std::string_view(enabled) != "1")
+                return;
+
+            std::cout << "PLANCK_RHF_RESPONSE " << name << " " << mat.rows() << " " << mat.cols() << "\n";
+            std::cout << std::setprecision(16);
+            for (Eigen::Index row = 0; row < mat.rows(); ++row)
+                for (Eigen::Index col = 0; col < mat.cols(); ++col)
+                    std::cout << "PLANCK_RHF_RESPONSE_ELEM "
+                              << name << " "
+                              << row << " "
+                              << col << " "
+                              << mat(row, col) << "\n";
+        }
+    }
 
     std::expected<Eigen::MatrixXd, std::string> build_rhf_cphf_matrix(
         HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &mo_coeff,
+        const Eigen::VectorXd &mo_energy)
     {
-        // Reject anything except a converged closed-shell RHF reference; the
-        // response matrix below is only defined in that setting.
         if (!calculator._info._is_converged)
             return std::unexpected("build_rhf_cphf_matrix: SCF not converged.");
-        if (calculator._scf._scf != HartreeFock::SCFType::RHF ||
-            calculator._info._scf.is_uhf)
+        if (calculator._scf._scf != HartreeFock::SCFType::RHF || calculator._info._scf.is_uhf)
             return std::unexpected("build_rhf_cphf_matrix: RHF reference required.");
 
-        const std::size_t nb = calculator._shells.nbasis();
-        const Eigen::MatrixXd &C = calculator._info._scf.alpha.mo_coefficients;
-        const Eigen::VectorXd &eps = calculator._info._scf.alpha.mo_energies;
+        const int nb = static_cast<int>(calculator._shells.nbasis());
+        const Eigen::MatrixXd &C = mo_coeff;
+        const Eigen::VectorXd &eps = mo_energy;
 
         int n_electrons = 0;
         for (auto Z : calculator._molecule.atomic_numbers)
@@ -31,86 +53,78 @@ namespace HartreeFock::Correlation
             return std::unexpected("build_rhf_cphf_matrix: closed-shell RHF reference required.");
 
         const int n_occ = n_electrons / 2;
-        const int n_virt = static_cast<int>(nb) - n_occ;
-        if (n_occ <= 0 || n_virt <= 0)
-            return std::unexpected("build_rhf_cphf_matrix: no occupied or virtual orbitals.");
+        const int n_virt = nb - n_occ;
 
-        std::vector<double> eri_local;
-        const std::vector<double> &eri = ensure_eri(
-            calculator, shell_pairs, eri_local, "RHF Response :");
-
-        const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
-        const Eigen::MatrixXd C_virt = C.middleCols(n_occ, n_virt);
-
-        // (a i | b j)
-        const auto mo_ai_bj = transform_eri(eri, nb, C_virt, C_occ, C_virt, C_occ);
-        // (a b | i j)
-        const auto mo_ab_ij = transform_eri(eri, nb, C_virt, C_virt, C_occ, C_occ);
-
-        const int nov = n_occ * n_virt;
-        Eigen::MatrixXd A = Eigen::MatrixXd::Zero(nov, nov);
-
-        // Flatten the `(a,i)` response space in row-major order so the dense
-        // matrix lines up with the vectorized solver interface.
+        // RHF CPHF/Z-vector equations live in the occupied-virtual rotation
+        // space, so each (a,i) pair is flattened into one linear response index.
         auto idx_ai = [n_occ](int a, int i) -> int
         {
             return a * n_occ + i;
         };
-        auto idx_ai_bj = [n_occ, n_virt](int a, int i, int b, int j) -> std::size_t
+        auto idx_eri = [nb](int p, int q, int r, int s) -> std::size_t
         {
-            return ((static_cast<std::size_t>(a) * n_occ + i) * n_virt + b) * n_occ + j;
-        };
-        auto idx_ab_ij = [n_virt, n_occ](int a, int b, int i, int j) -> std::size_t
-        {
-            return ((static_cast<std::size_t>(a) * n_virt + b) * n_occ + i) * n_occ + j;
+            return ((static_cast<std::size_t>(p) * nb + q) * nb + r) * nb + s;
         };
 
+        std::vector<double> eri_local;
+        const std::vector<double> &eri_ao = ensure_eri(
+            calculator, shell_pairs, eri_local, "RHF CPHF :");
+        const std::vector<double> eri_mo = transform_eri(
+            eri_ao,
+            static_cast<std::size_t>(nb),
+            C,
+            C,
+            C,
+            C);
+
+        // Build the explicit RHF orbital-Hessian matrix once. This is less
+        // memory-efficient than a matrix-free solver, but much easier to inspect
+        // and compare against textbook CPHF formulas.
+        Eigen::MatrixXd A = Eigen::MatrixXd::Zero(n_virt * n_occ, n_virt * n_occ);
         for (int a = 0; a < n_virt; ++a)
             for (int i = 0; i < n_occ; ++i)
             {
                 const int ai = idx_ai(a, i);
+                const int aa = n_occ + a;
+                A(ai, ai) += eps(aa) - eps(i);
+
                 for (int b = 0; b < n_virt; ++b)
                     for (int j = 0; j < n_occ; ++j)
                     {
-                        const int bj = idx_ai(b, j);
-                        double val = 0.0;
-                        if (a == b && i == j)
-                            val += eps(n_occ + a) - eps(i);
-
-                        // RHF response is the orbital-energy gap plus the usual three
-                        // two-electron couplings from the CPHF/Z-vector equations.
-                        const double ai_bj = mo_ai_bj[idx_ai_bj(a, i, b, j)];
-                        const double ab_ij = mo_ab_ij[idx_ab_ij(a, b, i, j)];
-                        const double aj_bi = mo_ai_bj[idx_ai_bj(a, j, b, i)];
-
-                        val += 4.0 * ai_bj - ab_ij - aj_bi;
-                        A(ai, bj) = val;
+                        const int bb = n_occ + b;
+                        const double ai_jb = eri_mo[idx_eri(aa, i, j, bb)];
+                        const double ab_ji = eri_mo[idx_eri(aa, bb, j, i)];
+                        const double aj_bi = eri_mo[idx_eri(aa, j, bb, i)];
+                        // Standard RHF CPHF coupling: A_{ai,bj} = (e_a-e_i)d + [4(ai|jb)-(ab|ji)-(aj|bi)].
+                        // The coupling adds (matching PySCF cphf.solve's fvind operator).
+                        // solve_rhf_cphf solves A z = -rhs; the overall sign on z is chosen
+                        // so the resulting vo block is phase-consistent with the doo/dvv
+                        // blocks of the MP2 relaxed density (see mp2_gradient.cpp).
+                        A(idx_ai(b, j), ai) += 4.0 * ai_jb - ab_ji - aj_bi;
                     }
             }
-
+        maybe_print_rhf_response_matrix("A", A);
         return A;
     }
 
     std::expected<Eigen::MatrixXd, std::string> solve_rhf_cphf(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &mo_coeff,
+        const Eigen::VectorXd &mo_energy,
         const Eigen::MatrixXd &rhs)
     {
-        // Build the response matrix once, then solve in the flattened
-        // occupied-virtual space and reshape back into matrix form.
-        auto A_res = build_rhf_cphf_matrix(calculator, shell_pairs);
+        auto A_res = build_rhf_cphf_matrix(calculator, shell_pairs, mo_coeff, mo_energy);
         if (!A_res)
             return std::unexpected(A_res.error());
-
-        const Eigen::MatrixXd &A = *A_res;
 
         int n_electrons = 0;
         for (auto Z : calculator._molecule.atomic_numbers)
             n_electrons += static_cast<int>(Z);
         n_electrons -= calculator._molecule.charge;
-
         const int n_occ = n_electrons / 2;
         const int n_virt = static_cast<int>(calculator._shells.nbasis()) - n_occ;
+
         if (rhs.rows() != n_virt || rhs.cols() != n_occ)
         {
             return std::unexpected(std::format(
@@ -118,14 +132,23 @@ namespace HartreeFock::Correlation
                 n_virt, n_occ, rhs.rows(), rhs.cols()));
         }
 
-        // Eigen's dense solver expects a vector, so map the 2-D response field
-        // into the same `(a,i)` ordering used by the matrix builder.
-        Eigen::VectorXd rhs_vec(Eigen::Map<const Eigen::VectorXd>(rhs.data(), rhs.size()));
-        Eigen::VectorXd z_vec = A.colPivHouseholderQr().solve(rhs_vec);
+        Eigen::VectorXd rhs_vec(n_virt * n_occ);
+        for (int a = 0; a < n_virt; ++a)
+            for (int i = 0; i < n_occ; ++i)
+                rhs_vec(a * n_occ + i) = -rhs(a, i);
 
-        // Restore the natural virtual-by-occupied layout for the caller.
-        Eigen::MatrixXd z = Eigen::Map<const Eigen::MatrixXd>(z_vec.data(), n_virt, n_occ);
+        // MP2 gradients use the conventional A z = -rhs form; reshaping back to
+        // a virtual-by-occupied matrix keeps the result aligned with the rest of
+        // the relaxed-density code.
+        maybe_print_rhf_response_matrix("rhs", rhs);
+        maybe_print_rhf_response_matrix("rhs_vec", Eigen::Map<const Eigen::MatrixXd>(rhs_vec.data(), rhs_vec.size(), 1));
+
+        const Eigen::VectorXd sol = A_res->colPivHouseholderQr().solve(rhs_vec);
+        Eigen::MatrixXd z = Eigen::MatrixXd::Zero(n_virt, n_occ);
+        for (int a = 0; a < n_virt; ++a)
+            for (int i = 0; i < n_occ; ++i)
+                z(a, i) = sol(a * n_occ + i);
+        maybe_print_rhf_response_matrix("z", z);
         return z;
     }
-
 } // namespace HartreeFock::Correlation

@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -18,14 +19,66 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "rhf_total_energy": re.compile(r"^\s*Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "mp2_corr_energy": re.compile(r"^\s*Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "mp2_total_energy": re.compile(r"^\s*Total MP2 Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "rccsd_total_energy": re.compile(r"^\s*Total RCCSD Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "uccsd_total_energy": re.compile(r"^\s*Total UCCSD Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "rccsdt_total_energy": re.compile(
+        r"^\s*(?:Total RCCSDT Energy|\[INF\]\s+CCSDT Energy)\s+([-+0-9Ee\.]+)",
+        re.MULTILINE,
+    ),
+    "uccsdt_total_energy": re.compile(
+        r"^\s*(?:Total UCCSDT Energy|\[INF\]\s+UCCSDT Energy)\s+([-+0-9Ee\.]+)",
+        re.MULTILINE,
+    ),
     "casscf_corr_energy": re.compile(r"^\s*CASSCF Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_total_energy": re.compile(r"^\s*CASSCF Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "fci_total_energy": re.compile(r"^\s*Total FCI Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),
+    "lr_root1_energy_ev": re.compile(r"^\s*1\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
+    "lr_root2_energy_ev": re.compile(r"^\s*2\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
+    "lr_root3_energy_ev": re.compile(r"^\s*3\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
     "casscf_sa_gnorm": re.compile(r"sa_g=([-+0-9Ee\.]+)"),
     "casscf_root_screen_gnorm": re.compile(r"root_screen_g=([-+0-9Ee\.]+)"),
     "casscf_max_root_gnorm": re.compile(r"max_root_g=([-+0-9Ee\.]+)"),
     "gradient_max": re.compile(r"Gradient max\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
     "gradient_rms": re.compile(r"Gradient rms\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
-    "point_group": re.compile(r"Point Group\s*:\s*([A-Za-z0-9_+\-]+)"),
+    # Post-geomopt converged force from the "Final max|g|" summary line. Distinct
+    # from gradient_max (which catches the per-step "Gradient max|g|" prints; for
+    # a geomopt run, last-match is still the step-0 value because subsequent
+    # steps print only "Opt Step N : ... max|g| = ..." without the full prefix).
+    "geomopt_final_gradient_max": re.compile(r"Final max\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
+    # Vibrational frequencies from the freq table. The freq output is emitted
+    # through the logger so each row carries an "[INF]" prefix; the MO energy
+    # table (also indexed N) does NOT carry that prefix, so requiring it here
+    # disambiguates the two. The freq table has two formats: 2-col
+    # "  N         freq" (no symmetry) and 3-col "  N  Irrep  freq" (with
+    # symmetry, e.g. inside a geomopt+freq run); the optional irrep group
+    # tolerates both.
+    "vib_freq_1": re.compile(
+        r"^\[INF\]\s+1\s+(?:[A-Za-z][A-Za-z0-9_'\"]*\s+)?([-+0-9Ee\.]+)\s*$",
+        re.MULTILINE,
+    ),
+    "vib_freq_2": re.compile(
+        r"^\[INF\]\s+2\s+(?:[A-Za-z][A-Za-z0-9_'\"]*\s+)?([-+0-9Ee\.]+)\s*$",
+        re.MULTILINE,
+    ),
+    "vib_freq_3": re.compile(
+        r"^\[INF\]\s+3\s+(?:[A-Za-z][A-Za-z0-9_'\"]*\s+)?([-+0-9Ee\.]+)\s*$",
+        re.MULTILINE,
+    ),
+    "zero_point_energy_eh": re.compile(r"Zero-point energy\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
+    "point_group": re.compile(r"(?:Point Group\s*:\s*|Detected point group\s+)([A-Za-z0-9_+\-]+)"),
+    "stability_real_internal": re.compile(
+        r"RHF -> RHF \(real, internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
+    "stability_complex_internal": re.compile(
+        r"RHF -> complex RHF \(internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
+    "stability_triplet_external": re.compile(
+        r"RHF -> UHF \(triplet, external\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
+    "stability_uhf_internal": re.compile(
+        r"UHF -> UHF \(spin-conserving, internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
 }
 
 COUNT_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -53,11 +106,20 @@ class CaseResult:
     passed: bool
     duration_s: float
     details: list[str]
+    metrics: dict[str, Any]
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def load_pyscf_references(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    return payload.get("cases", {})
 
 
 def extract_metrics(output: str) -> dict[str, Any]:
@@ -92,23 +154,155 @@ def extract_metrics(output: str) -> dict[str, Any]:
     return metrics
 
 
+def decode_stream(value: Any) -> str:
+    """Return value as str; tolerates None and bytes (from TimeoutExpired)."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def approx_equal(a: float, b: float, atol: float) -> bool:
     return math.isfinite(a) and math.isfinite(b) and abs(a - b) <= atol
 
 
-def run_case(case: dict[str, Any], repo_root: Path, executable: Path) -> CaseResult:
-    case_id = case["id"]
-    input_path = repo_root / case["input"]
-    timeout_s = int(case.get("timeout_s", 120))
+def resolve_executable(case: dict[str, Any], repo_root: Path, build_dir: str, default_executable: Path) -> Path:
+    executable_value = case.get("executable")
+    if executable_value is None:
+        return default_executable
 
-    start = time.perf_counter()
+    executable_path = Path(str(executable_value))
+    if executable_path.is_absolute():
+        return executable_path
+
+    if executable_path.parent == Path("."):
+        return repo_root / build_dir / executable_path.name
+
+    return repo_root / executable_path
+
+
+def build_command(executable: Path, input_path: Path) -> list[str]:
+    if executable.suffix == ".py":
+        return [sys.executable, str(executable), str(input_path)]
+    return [str(executable), str(input_path)]
+
+
+def resolve_metric_expectation(
+    case_id: str,
+    metric: str,
+    check: dict[str, Any],
+    pyscf_references: dict[str, Any],
+) -> tuple[float, float]:
+    override = pyscf_references.get(case_id, {}).get(metric)
+    if override is None:
+        return float(check["expected"]), float(check.get("atol", 1e-9))
+    return float(override["expected"]), float(override.get("atol", check.get("atol", 1e-9)))
+
+
+def checkpoint_path_for(input_path: Path) -> Path:
+    # Mirror the driver's rule (src/driver.cpp): parent_dir / stem + ".hfchk".
+    return input_path.with_suffix(".hfchk")
+
+
+def run_setup(
+    case: dict[str, Any],
+    repo_root: Path,
+    executable: Path,
+    timeout_s: int,
+) -> str | None:
+    """Run a case's optional 'setup' step to seed a checkpoint fixture.
+
+    A restart case uses `guess full`, which requires its checkpoint to already
+    exist on disk. Because the driver derives the checkpoint path from the input
+    stem, a separate producer case cannot write to the consumer's path. The setup
+    step bridges that gap on a clean checkout: it runs a `seed_input` (which writes
+    its own checkpoint via the default save-on-converge path) and then copies that
+    checkpoint to the consumer input's expected path. Returns an error string on
+    failure, or None on success.
+
+    Setup schema:
+      "setup": { "seed_input": "<path to a guess-sad/hcore input>" }
+    The seed input must describe the same system as the case input so the copied
+    checkpoint is valid for the `guess full` restart.
+    """
+    setup = case.get("setup")
+    if not setup:
+        return None
+
+    seed_input = repo_root / setup["seed_input"]
+    if not seed_input.exists():
+        return f"setup seed_input not found: {seed_input}"
+
     proc = subprocess.run(
-        [str(executable), str(input_path)],
+        build_command(executable, seed_input),
         cwd=repo_root,
         text=True,
         capture_output=True,
         timeout=timeout_s,
     )
+    if proc.returncode != 0:
+        tail = (proc.stdout + proc.stderr).strip().splitlines()[-10:]
+        return "setup seed run failed:\n" + "\n".join(tail)
+
+    seed_chk = checkpoint_path_for(seed_input)
+    if not seed_chk.exists():
+        return f"setup seed did not produce a checkpoint at {seed_chk}"
+
+    target_chk = checkpoint_path_for(repo_root / case["input"])
+    if seed_chk != target_chk:
+        shutil.copyfile(seed_chk, target_chk)
+    return None
+
+
+def run_case(
+    case: dict[str, Any],
+    repo_root: Path,
+    build_dir: str,
+    default_executable: Path,
+    pyscf_references: dict[str, Any],
+) -> CaseResult:
+    case_id = case["id"]
+    input_path = repo_root / case["input"]
+    timeout_s = int(case.get("timeout_s", 120))
+    executable = resolve_executable(case, repo_root, build_dir, default_executable)
+
+    start = time.perf_counter()
+
+    setup_error = run_setup(case, repo_root, executable, timeout_s)
+    if setup_error is not None:
+        return CaseResult(
+            case_id=case_id,
+            passed=False,
+            duration_s=time.perf_counter() - start,
+            details=[setup_error],
+            metrics={},
+        )
+
+    try:
+        proc = subprocess.run(
+            build_command(executable, input_path),
+            cwd=repo_root,
+            text=True,
+            capture_output=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        duration_s = time.perf_counter() - start
+        detail_lines = [f"timed out after {timeout_s}s"]
+        # TimeoutExpired.stdout/stderr come back as bytes even when subprocess.run
+        # was called with text=True; decode_stream() handles that uniformly.
+        partial_output = (decode_stream(exc.stdout) + decode_stream(exc.stderr)).strip()
+        if partial_output:
+            detail_lines.append("---- captured output ----")
+            detail_lines.extend(partial_output.splitlines()[-40:])
+        return CaseResult(
+            case_id=case_id,
+            passed=False,
+            duration_s=duration_s,
+            details=detail_lines,
+            metrics={},
+        )
     duration_s = time.perf_counter() - start
 
     output = proc.stdout + proc.stderr
@@ -144,8 +338,7 @@ def run_case(case: dict[str, Any], repo_root: Path, executable: Path) -> CaseRes
 
         elif ctype == "metric_close":
             metric = check["metric"]
-            expected = float(check["expected"])
-            atol = float(check.get("atol", 1e-9))
+            expected, atol = resolve_metric_expectation(case_id, metric, check, pyscf_references)
             actual = metrics.get(metric)
             if actual is None or not approx_equal(float(actual), expected, atol):
                 passed = False
@@ -195,6 +388,11 @@ def run_case(case: dict[str, Any], repo_root: Path, executable: Path) -> CaseRes
                 passed = False
                 details.append(f"{metric} mismatch: expected {expected}, got {actual}")
 
+        elif ctype == "metric_close_case":
+            # Resolved after all selected cases have run so we can compare
+            # against the referenced case's extracted metrics.
+            continue
+
         else:
             passed = False
             details.append(f"unknown check type: {ctype}")
@@ -203,7 +401,36 @@ def run_case(case: dict[str, Any], repo_root: Path, executable: Path) -> CaseRes
         details.append("---- captured output ----")
         details.extend(output.strip().splitlines()[-40:])
 
-    return CaseResult(case_id=case_id, passed=passed, duration_s=duration_s, details=details)
+    return CaseResult(case_id=case_id, passed=passed, duration_s=duration_s, details=details, metrics=metrics)
+
+
+def apply_cross_case_checks(
+    results: list[CaseResult],
+    chosen_cases: list[dict[str, Any]],
+) -> None:
+    results_by_id = {result.case_id: result for result in results}
+
+    for case in chosen_cases:
+        result = results_by_id[case["id"]]
+        for check in case.get("checks", []):
+            if check["type"] != "metric_close_case":
+                continue
+
+            metric = check["metric"]
+            other_case_id = check["case"]
+            other_metric = check.get("other_metric", metric)
+            atol = float(check.get("atol", 1e-9))
+
+            actual = result.metrics.get(metric)
+            other_result = results_by_id.get(other_case_id)
+            other_value = None if other_result is None else other_result.metrics.get(other_metric)
+
+            if actual is None or other_value is None or not approx_equal(float(actual), float(other_value), atol):
+                result.passed = False
+                result.details.append(
+                    f"{metric} mismatch vs {other_case_id}.{other_metric}: "
+                    f"expected {other_value} +/- {atol:.2e}, got {actual}"
+                )
 
 
 def should_run(case: dict[str, Any], suite: str, selected_cases: set[str]) -> bool:
@@ -217,6 +444,7 @@ def should_run(case: dict[str, Any], suite: str, selected_cases: set[str]) -> bo
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Planck regression tests")
     parser.add_argument("--manifest", default="tests/regression_cases.json")
+    parser.add_argument("--pyscf-refs", default="tests/pyscf/regression_references.json")
     parser.add_argument("--build-dir", default="build")
     parser.add_argument("--executable", default=None)
     parser.add_argument("--suite", default="core", choices=["smoke", "core", "extended", "all"])
@@ -227,6 +455,7 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     manifest_path = repo_root / args.manifest
     manifest = load_manifest(manifest_path)
+    pyscf_references = load_pyscf_references(repo_root / args.pyscf_refs if args.pyscf_refs else None)
     cases = manifest["cases"]
 
     if args.list:
@@ -249,9 +478,15 @@ def main() -> int:
     print(f"Running {len(chosen)} regression case(s) from {manifest_path}")
     failures = 0
     total_start = time.perf_counter()
+    results: list[CaseResult] = []
 
     for case in chosen:
-        result = run_case(case, repo_root, executable)
+        result = run_case(case, repo_root, args.build_dir, executable, pyscf_references)
+        results.append(result)
+
+    apply_cross_case_checks(results, chosen)
+
+    for result in results:
         status = "PASS" if result.passed else "FAIL"
         print(f"[{status}] {result.case_id} ({result.duration_s:.2f}s)")
         for line in result.details:

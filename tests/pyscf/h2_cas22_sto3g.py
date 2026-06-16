@@ -1,6 +1,6 @@
 """
 PySCF reference: H2 CAS(2,2)/STO-3G
-Matches Planck input: tests/inputs/casscf_tests/h2_cas22_sto3g.hfinp
+Matches Planck input: tests/benchmarks/casscf/pyscf_reference/h2_cas22_sto3g.hfinp
 
 Geometry: H-H at 0.740 Angstrom (Planck input geometry)
 Active space: CAS(2e, 2o) — sigma_g, sigma_u* (HOMO + LUMO)

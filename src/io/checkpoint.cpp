@@ -1,7 +1,12 @@
 #include <cstdint>
 #include <cstring>
+#include <expected>
 #include <format>
 #include <fstream>
+#include <limits>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
 
 #include <Eigen/SVD>
 
@@ -10,6 +15,9 @@
 // ─── Low-level binary helpers ─────────────────────────────────────────────────
 
 // Primitive scalar write/read helpers
+// The checkpoint payload is currently host-endian and assumes IEEE-754 doubles.
+// The magic/version banner below is used to reject incompatible or stale files
+// explicitly rather than silently mis-decoding them.
 
 template <typename T>
 static void write_pod(std::ostream &out, T val)
@@ -18,11 +26,89 @@ static void write_pod(std::ostream &out, T val)
 }
 
 template <typename T>
-static T read_pod(std::istream &in)
+static std::expected<T, std::string> read_pod(std::istream &in)
 {
     T val{};
     in.read(reinterpret_cast<char *>(&val), sizeof(T));
+    if (!in)
+    {
+        return std::unexpected(
+            std::format("Checkpoint truncated while reading {} bytes", sizeof(T)));
+    }
     return val;
+}
+
+static std::expected<void, std::string> read_exact(
+    std::istream &in,
+    char *data,
+    std::size_t bytes,
+    std::string_view label)
+{
+    in.read(data, static_cast<std::streamsize>(bytes));
+    if (!in)
+        return std::unexpected(std::format("Checkpoint truncated while reading {}", label));
+    return {};
+}
+
+static constexpr std::uint32_t MAX_CHECKPOINT_STRING_BYTES = 4096;
+static constexpr std::uint64_t MAX_CHECKPOINT_NATOMS = 1'000'000;
+
+static std::expected<int, std::string> checked_atom_count(std::uint64_t natoms, std::string_view label)
+{
+    if (natoms > MAX_CHECKPOINT_NATOMS)
+    {
+        return std::unexpected(std::format(
+            "Checkpoint {} atom count {} exceeds supported limit {}",
+            label,
+            natoms,
+            MAX_CHECKPOINT_NATOMS));
+    }
+    if (natoms > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+    {
+        return std::unexpected(std::format(
+            "Checkpoint {} atom count {} exceeds Eigen int indexing limit {}",
+            label,
+            natoms,
+            std::numeric_limits<int>::max()));
+    }
+    return static_cast<int>(natoms);
+}
+
+static std::expected<std::uint64_t, std::string> checked_element_count(
+    std::int64_t rows,
+    std::int64_t cols,
+    std::uint64_t max_dimension,
+    std::string_view label)
+{
+    if (rows < 0 || cols < 0)
+        return std::unexpected(std::format("Checkpoint {} has negative dimensions", label));
+
+    const auto urows = static_cast<std::uint64_t>(rows);
+    const auto ucols = static_cast<std::uint64_t>(cols);
+    if (urows > max_dimension || ucols > max_dimension)
+    {
+        return std::unexpected(std::format(
+            "Checkpoint {} dimensions {}x{} exceed supported limit {}",
+            label,
+            rows,
+            cols,
+            max_dimension));
+    }
+
+    if (urows != 0 && ucols > std::numeric_limits<std::uint64_t>::max() / urows)
+        return std::unexpected(std::format("Checkpoint {} dimensions overflow", label));
+
+    const std::uint64_t count = urows * ucols;
+    if (count > max_dimension * max_dimension)
+    {
+        return std::unexpected(std::format(
+            "Checkpoint {} element count {} exceeds supported limit {}",
+            label,
+            count,
+            max_dimension * max_dimension));
+    }
+
+    return count;
 }
 
 // Eigen::MatrixXd (column-major storage → write as-is)
@@ -35,13 +121,31 @@ static void write_matrix(std::ostream &out, const Eigen::MatrixXd &m)
     out.write(reinterpret_cast<const char *>(m.data()), rows * cols * sizeof(double));
 }
 
-static Eigen::MatrixXd read_matrix(std::istream &in)
+static std::expected<Eigen::MatrixXd, std::string> read_matrix(
+    std::istream &in,
+    std::uint64_t max_dimension,
+    std::string_view label)
 {
     int64_t rows = 0, cols = 0;
-    in.read(reinterpret_cast<char *>(&rows), 8);
-    in.read(reinterpret_cast<char *>(&cols), 8);
+    auto row_read = read_exact(in, reinterpret_cast<char *>(&rows), 8, std::format("{} row count", label));
+    if (!row_read)
+        return std::unexpected(row_read.error());
+    auto col_read = read_exact(in, reinterpret_cast<char *>(&cols), 8, std::format("{} column count", label));
+    if (!col_read)
+        return std::unexpected(col_read.error());
+    auto count = checked_element_count(rows, cols, max_dimension, label);
+    if (!count)
+        return std::unexpected(count.error());
     Eigen::MatrixXd m(rows, cols);
-    in.read(reinterpret_cast<char *>(m.data()), rows * cols * sizeof(double));
+    if (*count > 0)
+    {
+        auto data_read = read_exact(in,
+                                    reinterpret_cast<char *>(m.data()),
+                                    static_cast<std::size_t>(*count) * sizeof(double),
+                                    std::format("{} data", label));
+        if (!data_read)
+            return std::unexpected(data_read.error());
+    }
     return m;
 }
 
@@ -55,13 +159,33 @@ static void write_vector(std::ostream &out, const Eigen::VectorXd &v)
     out.write(reinterpret_cast<const char *>(v.data()), rows * sizeof(double));
 }
 
-static Eigen::VectorXd read_vector(std::istream &in)
+static std::expected<Eigen::VectorXd, std::string> read_vector(
+    std::istream &in,
+    std::uint64_t max_dimension,
+    std::string_view label)
 {
     int64_t rows = 0, cols = 0;
-    in.read(reinterpret_cast<char *>(&rows), 8);
-    in.read(reinterpret_cast<char *>(&cols), 8);
+    auto row_read = read_exact(in, reinterpret_cast<char *>(&rows), 8, std::format("{} row count", label));
+    if (!row_read)
+        return std::unexpected(row_read.error());
+    auto col_read = read_exact(in, reinterpret_cast<char *>(&cols), 8, std::format("{} column count", label));
+    if (!col_read)
+        return std::unexpected(col_read.error());
+    if (cols != 1)
+        return std::unexpected(std::format("Checkpoint {} is not stored as an n x 1 vector", label));
+    auto count = checked_element_count(rows, cols, max_dimension, label);
+    if (!count)
+        return std::unexpected(count.error());
     Eigen::VectorXd v(rows);
-    in.read(reinterpret_cast<char *>(v.data()), rows * sizeof(double));
+    if (*count > 0)
+    {
+        auto data_read = read_exact(in,
+                                    reinterpret_cast<char *>(v.data()),
+                                    static_cast<std::size_t>(*count) * sizeof(double),
+                                    std::format("{} data", label));
+        if (!data_read)
+            return std::unexpected(data_read.error());
+    }
     return v;
 }
 
@@ -73,12 +197,26 @@ static void write_string(std::ostream &out, const std::string &s)
     out.write(s.data(), len);
 }
 
-static std::string read_string(std::istream &in)
+static std::expected<std::string, std::string> read_string(std::istream &in)
 {
     uint32_t len = 0;
-    in.read(reinterpret_cast<char *>(&len), 4);
+    auto len_read = read_exact(in, reinterpret_cast<char *>(&len), 4, "string length");
+    if (!len_read)
+        return std::unexpected(len_read.error());
+    if (len > MAX_CHECKPOINT_STRING_BYTES)
+    {
+        return std::unexpected(std::format(
+            "Checkpoint string length {} exceeds supported limit {}",
+            len,
+            MAX_CHECKPOINT_STRING_BYTES));
+    }
     std::string s(len, '\0');
-    in.read(s.data(), len);
+    if (len > 0)
+    {
+        auto data_read = read_exact(in, s.data(), len, "string data");
+        if (!data_read)
+            return std::unexpected(data_read.error());
+    }
     return s;
 }
 
@@ -92,18 +230,146 @@ static void write_spin_channel(std::ostream &out, const HartreeFock::SpinChannel
 }
 
 // Read into a SpinChannel
-static void read_spin_channel(std::istream &in, HartreeFock::SpinChannel &ch)
+static std::expected<void, std::string> read_spin_channel(
+    std::istream &in,
+    HartreeFock::SpinChannel &ch,
+    std::uint64_t max_dimension,
+    std::string_view label)
 {
-    ch.density = read_matrix(in);
-    ch.fock = read_matrix(in);
-    ch.mo_energies = read_vector(in);
-    ch.mo_coefficients = read_matrix(in);
+    auto density = read_matrix(in, max_dimension, std::format("{} density", label));
+    if (!density)
+        return std::unexpected(density.error());
+    auto fock = read_matrix(in, max_dimension, std::format("{} fock", label));
+    if (!fock)
+        return std::unexpected(fock.error());
+    auto orbital_energies = read_vector(in, max_dimension, std::format("{} orbital energies", label));
+    if (!orbital_energies)
+        return std::unexpected(orbital_energies.error());
+    auto mo_coefficients = read_matrix(in, max_dimension, std::format("{} MO coefficients", label));
+    if (!mo_coefficients)
+        return std::unexpected(mo_coefficients.error());
+
+    ch.density = std::move(*density);
+    ch.fock = std::move(*fock);
+    ch.mo_energies = std::move(*orbital_energies);
+    ch.mo_coefficients = std::move(*mo_coefficients);
+    return {};
+}
+
+static std::pair<int, int> current_spin_occupations(const HartreeFock::Calculator &calc)
+{
+    // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise).
+    const int n_electrons =
+        calc._molecule.total_nuclear_charge() - calc._molecule.charge;
+
+    if (calc._scf._scf == HartreeFock::SCFType::RHF)
+        return {n_electrons / 2, n_electrons / 2};
+
+    const int n_unpaired = static_cast<int>(calc._molecule.multiplicity) - 1;
+    return {
+        (n_electrons + n_unpaired) / 2,
+        (n_electrons - n_unpaired) / 2};
+}
+
+static std::expected<Eigen::MatrixXd, std::string> density_from_mos(
+    const Eigen::MatrixXd &coefficients,
+    int n_occ,
+    double factor)
+{
+    if (n_occ <= 0 || coefficients.rows() == 0 || coefficients.cols() == 0)
+        return Eigen::MatrixXd::Zero(coefficients.rows(), coefficients.rows());
+
+    const Eigen::Index n_cols = coefficients.cols();
+    const Eigen::Index n_occ_eigen = static_cast<Eigen::Index>(n_occ);
+    if (n_occ_eigen > n_cols)
+    {
+        return std::unexpected(std::format(
+            "Checkpoint orbital block has {} columns but {} occupied orbitals are required",
+            n_cols,
+            n_occ));
+    }
+
+    const Eigen::MatrixXd occ = coefficients.leftCols(n_occ_eigen);
+    return factor * occ * occ.transpose();
+}
+
+static std::expected<void, std::string> adapt_restart_spin_state(
+    HartreeFock::Calculator &calc,
+    bool checkpoint_spin_resolved,
+    const HartreeFock::SpinChannel &stored_alpha,
+    const HartreeFock::SpinChannel &stored_beta)
+{
+    const bool target_spin_resolved = (calc._scf._scf != HartreeFock::SCFType::RHF);
+    const auto [n_alpha, n_beta] = current_spin_occupations(calc);
+
+    if (checkpoint_spin_resolved)
+    {
+        if (target_spin_resolved)
+        {
+            calc._info._scf.alpha = stored_alpha;
+            calc._info._scf.beta = stored_beta;
+            return {};
+        }
+
+        calc._info._scf.alpha = stored_alpha;
+        calc._info._scf.alpha.density = stored_alpha.density + stored_beta.density;
+        calc._info._scf.alpha.fock = 0.5 * (stored_alpha.fock + stored_beta.fock);
+        return {};
+    }
+
+    if (!target_spin_resolved)
+    {
+        calc._info._scf.alpha = stored_alpha;
+        return {};
+    }
+
+    auto alpha_density = density_from_mos(stored_alpha.mo_coefficients, n_alpha, 1.0);
+    if (!alpha_density)
+        return std::unexpected(alpha_density.error());
+    auto beta_density = density_from_mos(stored_alpha.mo_coefficients, n_beta, 1.0);
+    if (!beta_density)
+        return std::unexpected(beta_density.error());
+
+    calc._info._scf.alpha = stored_alpha;
+    calc._info._scf.beta = stored_alpha;
+    calc._info._scf.alpha.density = std::move(*alpha_density);
+    calc._info._scf.beta.density = std::move(*beta_density);
+    return {};
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+// Checkpoint payloads are written in native host byte order and with native
+// IEEE-754 `double` layout. MAGIC/VERSION let us reject incompatible files
+// explicitly rather than silently interpreting foreign-endian data.
 static constexpr char MAGIC[8] = {'P', 'L', 'N', 'K', 'C', 'H', 'K', '\0'};
-static constexpr uint32_t VERSION = 6;
+static constexpr uint32_t VERSION = 7;
+
+static uint8_t encode_basis_type(HartreeFock::BasisType basis_type)
+{
+    switch (basis_type)
+    {
+    case HartreeFock::BasisType::Cartesian:
+        return 0u;
+    case HartreeFock::BasisType::Spherical:
+        return 1u;
+    }
+    return 0u;
+}
+
+static std::expected<HartreeFock::BasisType, std::string> decode_basis_type(uint8_t raw)
+{
+    switch (raw)
+    {
+    case 0u:
+        return HartreeFock::BasisType::Cartesian;
+    case 1u:
+        return HartreeFock::BasisType::Spherical;
+    default:
+        return std::unexpected(std::format(
+            "Checkpoint basis_type tag {} is not recognized", raw));
+    }
+}
 
 std::expected<void, std::string> HartreeFock::Checkpoint::save(
     const HartreeFock::Calculator &calc,
@@ -143,6 +409,7 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
 
     // Basis name for informational validation
     write_string(out, calc._basis._basis_name);
+    write_pod<uint8_t>(out, encode_basis_type(calc._basis._basis));
 
     // has_opt_coords: 1 if these coordinates came from a converged geometry optimization
     const bool is_opt = ((calc._calculation == HartreeFock::CalculationType::GeomOpt ||
@@ -191,9 +458,18 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
 
     write_pod<uint64_t>(out, static_cast<uint64_t>(bfs.size()));
 
+    std::unordered_map<const HartreeFock::Shell *, uint64_t> shell_indices;
+    shell_indices.reserve(shells.size());
+    uint64_t shell_index = 0;
+    for (const auto &sh : shells)
+        shell_indices.emplace(&sh, shell_index++);
+
     for (const auto &bf : bfs)
     {
-        const uint64_t shell_idx = static_cast<uint64_t>(bf._shell - shells.data());
+        const auto it = shell_indices.find(bf._shell);
+        if (it == shell_indices.end())
+            return std::unexpected("Checkpoint save failed: basis function references an unknown shell");
+        const uint64_t shell_idx = it->second;
         write_pod<uint64_t>(out, shell_idx);
         write_pod<int32_t>(out, bf._cartesian.x());
         write_pod<int32_t>(out, bf._cartesian.y());
@@ -209,7 +485,7 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
 
     // ── v6: CASSCF active-orbital range metadata for cube export ────────────
     const int n_total_elec =
-        static_cast<int>(calc._molecule.atomic_numbers.cast<int>().sum()) - calc._molecule.charge;
+        calc._molecule.total_nuclear_charge() - calc._molecule.charge;
     const bool has_valid_active_window =
         has_casscf_mos &&
         calc._active_space.nactorb > 0 &&
@@ -247,88 +523,185 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
     if (!in)
         return std::unexpected(std::format("Cannot open checkpoint file: {}", path));
 
-    // ── Validate header ───────────────────────────────────────────────────────
+    // ── Validate header ───────────────────────────────────────────────────
     char magic[8] = {};
-    in.read(magic, 8);
+    auto magic_read = read_exact(in, magic, 8, "magic");
+    if (!magic_read)
+        return std::unexpected(magic_read.error());
     if (std::memcmp(magic, MAGIC, 8) != 0)
         return std::unexpected("Not a valid Planck checkpoint file (bad magic)");
 
-    const uint32_t version = read_pod<uint32_t>(in);
-    if (version < 2 || version > VERSION)
+    auto version = read_pod<uint32_t>(in);
+    if (!version)
+        return std::unexpected(version.error());
+    if (*version < 2 || *version > VERSION)
         return std::unexpected(
-            std::format("Checkpoint version mismatch: file={}, expected={}", version, VERSION));
+            std::format("Checkpoint version mismatch: file={}, expected={}", *version, VERSION));
 
-    const uint64_t chk_nb = read_pod<uint64_t>(in);
-    const uint8_t chk_uhf = read_pod<uint8_t>(in);
-    const uint8_t chk_conv = read_pod<uint8_t>(in);
-    const uint32_t chk_iters = read_pod<uint32_t>(in);
-    const double tot_e = read_pod<double>(in);
-    const double nuc_e = read_pod<double>(in);
+    auto chk_nb = read_pod<uint64_t>(in);
+    if (!chk_nb)
+        return std::unexpected(chk_nb.error());
+    auto chk_uhf = read_pod<uint8_t>(in);
+    if (!chk_uhf)
+        return std::unexpected(chk_uhf.error());
+    auto chk_conv = read_pod<uint8_t>(in);
+    if (!chk_conv)
+        return std::unexpected(chk_conv.error());
+    auto chk_iters = read_pod<uint32_t>(in);
+    if (!chk_iters)
+        return std::unexpected(chk_iters.error());
+    [[maybe_unused]] const uint32_t chk_iters_value = *chk_iters; // informational only
+    auto tot_e = read_pod<double>(in);
+    if (!tot_e)
+        return std::unexpected(tot_e.error());
+    auto nuc_e = read_pod<double>(in);
+    if (!nuc_e)
+        return std::unexpected(nuc_e.error());
 
-    (void)chk_iters; // informational only
+    // ── Molecule ──────────────────────────────────────────────────────────
+    auto natoms = read_pod<uint64_t>(in);
+    if (!natoms)
+        return std::unexpected(natoms.error());
+    auto natoms_checked = checked_atom_count(*natoms, "geometry block");
+    if (!natoms_checked)
+        return std::unexpected(natoms_checked.error());
+    auto chk_charge = read_pod<int32_t>(in);
+    if (!chk_charge)
+        return std::unexpected(chk_charge.error());
+    [[maybe_unused]] const int32_t chk_charge_value = *chk_charge;
+    auto chk_mult = read_pod<uint32_t>(in);
+    if (!chk_mult)
+        return std::unexpected(chk_mult.error());
+    [[maybe_unused]] const uint32_t chk_mult_value = *chk_mult;
 
-    // ── Molecule ──────────────────────────────────────────────────────────────
-    const uint64_t natoms = read_pod<uint64_t>(in);
-    const int32_t chk_charge = read_pod<int32_t>(in);
-    const uint32_t chk_mult = read_pod<uint32_t>(in);
+    for (uint64_t i = 0; i < *natoms; ++i)
+    {
+        auto atomic_number = read_pod<int32_t>(in);
+        if (!atomic_number)
+            return std::unexpected(atomic_number.error());
+    }
 
-    (void)chk_charge;
-    (void)chk_mult; // user input takes precedence; just skip
+    for (uint64_t i = 0; i < *natoms; ++i)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            auto coordinate = read_pod<double>(in);
+            if (!coordinate)
+                return std::unexpected(coordinate.error());
+        }
+    }
 
-    for (uint64_t i = 0; i < natoms; ++i)
-        read_pod<int32_t>(in); // skip stored atomic numbers
-
-    for (uint64_t i = 0; i < natoms * 3; ++i)
-        read_pod<double>(in); // skip stored coordinates
-
-    const std::string chk_basis = read_string(in);
-    if (chk_basis != calc._basis._basis_name)
+    auto chk_basis = read_string(in);
+    if (!chk_basis)
+        return std::unexpected(chk_basis.error());
+    if (*version >= 7)
+    {
+        auto chk_basis_type_raw = read_pod<uint8_t>(in);
+        if (!chk_basis_type_raw)
+            return std::unexpected(chk_basis_type_raw.error());
+        auto chk_basis_type = decode_basis_type(*chk_basis_type_raw);
+        if (!chk_basis_type)
+            return std::unexpected(chk_basis_type.error());
+        if (*chk_basis_type != calc._basis._basis)
+        {
+            return std::unexpected(std::format(
+                "Checkpoint basis_type does not match current run "
+                "(checkpoint={}, current={}); use the same basis_type or regenerate the checkpoint.",
+                *chk_basis_type == HartreeFock::BasisType::Spherical ? "spherical" : "cartesian",
+                calc._basis._basis == HartreeFock::BasisType::Spherical ? "spherical" : "cartesian"));
+        }
+    }
+    if (*chk_basis != calc._basis._basis_name)
     {
         // Warn but do not abort — the user may have intentionally changed the basis
         // (e.g., converging in a small basis and reusing the density in a larger one).
         // The nbasis check below will catch incompatible sizes.
     }
 
-    read_pod<uint8_t>(in); // has_opt_coords (informational; geometry handled by load_geometry)
+    auto has_opt_coords = read_pod<uint8_t>(in);
+    if (!has_opt_coords)
+        return std::unexpected(has_opt_coords.error());
+    [[maybe_unused]] const uint8_t has_opt_coords_value = *has_opt_coords;
 
-    // ── Validate basis size ───────────────────────────────────────────────────
-    const std::size_t cur_nb = calc._shells.nbasis();
-    if (chk_nb != static_cast<uint64_t>(cur_nb))
+    // ── Validate basis size ───────────────────────────────────────────────
+    // The stored nb is _overlap.rows(): the spherical AO count in spherical mode,
+    // Cartesian otherwise. Compare against working_nbasis() so same-basis spherical
+    // restart matches, and a Cartesian-vs-spherical mismatch (same basis name, but
+    // different basis_type than the checkpoint) is correctly rejected here.
+    const std::size_t cur_nb = calc.working_nbasis();
+    if (*chk_nb != static_cast<uint64_t>(cur_nb))
         return std::unexpected(
-            std::format("Checkpoint nbasis ({}) does not match current nbasis ({}); "
-                        "use the same basis set or remove the checkpoint file.",
-                        chk_nb, cur_nb));
+            std::format("Checkpoint nbasis ({}) does not match current working nbasis ({}); "
+                        "use the same basis set and basis_type, or remove the checkpoint file.",
+                        *chk_nb, cur_nb));
 
-    // ── One-electron matrices ─────────────────────────────────────────────────
+    // ── One-electron matrices ─────────────────────────────────────────────
     // Only apply when the stored geometry matches current geometry (guess full).
     // For guess density the caller recomputes fresh integrals; skip the matrices.
     if (load_1e_matrices)
     {
-        calc._overlap = read_matrix(in);
-        calc._hcore = read_matrix(in);
+        auto overlap = read_matrix(in, *chk_nb, "overlap matrix");
+        if (!overlap)
+            return std::unexpected(overlap.error());
+        auto hcore = read_matrix(in, *chk_nb, "core Hamiltonian");
+        if (!hcore)
+            return std::unexpected(hcore.error());
+        calc._overlap = std::move(*overlap);
+        calc._hcore = std::move(*hcore);
     }
     else
     {
-        read_matrix(in); // overlap — discard
-        read_matrix(in); // hcore   — discard
+        auto overlap = read_matrix(in, *chk_nb, "overlap matrix");
+        if (!overlap)
+            return std::unexpected(overlap.error());
+        auto hcore = read_matrix(in, *chk_nb, "core Hamiltonian");
+        if (!hcore)
+            return std::unexpected(hcore.error());
     }
 
-    // ── SCF results ───────────────────────────────────────────────────────────
-    read_spin_channel(in, calc._info._scf.alpha);
-    if (chk_uhf)
-        read_spin_channel(in, calc._info._scf.beta);
+    // ── SCF results ───────────────────────────────────────────────────────
+    HartreeFock::SpinChannel stored_alpha;
+    HartreeFock::SpinChannel stored_beta;
+
+    auto alpha_read = read_spin_channel(in, stored_alpha, *chk_nb, "alpha");
+    if (!alpha_read)
+        return std::unexpected(alpha_read.error());
+    if (*chk_uhf)
+    {
+        auto beta_read = read_spin_channel(in, stored_beta, *chk_nb, "beta");
+        if (!beta_read)
+            return std::unexpected(beta_read.error());
+    }
+
+    auto adapted = adapt_restart_spin_state(
+        calc,
+        static_cast<bool>(*chk_uhf),
+        stored_alpha,
+        stored_beta);
+    if (!adapted)
+        return std::unexpected(adapted.error());
 
     calc._cas_mo_coefficients.resize(0, 0);
-    if (version >= 3)
+    if (*version >= 3)
     {
-        const bool has_casscf_mos = (read_pod<uint8_t>(in) != 0);
-        if (has_casscf_mos)
-            calc._cas_mo_coefficients = read_matrix(in);
+        auto has_casscf_mos = read_pod<uint8_t>(in);
+        if (!has_casscf_mos)
+            return std::unexpected(has_casscf_mos.error());
+        if (*has_casscf_mos != 0)
+        {
+            auto casscf_mos = read_matrix(in, *chk_nb, "CASSCF MO coefficients");
+            if (!casscf_mos)
+                return std::unexpected(casscf_mos.error());
+            calc._cas_mo_coefficients = std::move(*casscf_mos);
+        }
     }
 
-    calc._total_energy = tot_e;
-    calc._nuclear_repulsion = nuc_e;
-    calc._info._is_converged = static_cast<bool>(chk_conv);
+    calc._total_energy = *tot_e;
+    calc._correlated_total_energy = 0.0;
+    calc._have_correlated_total_energy = false;
+    if (load_1e_matrices)
+        calc._nuclear_repulsion = *nuc_e;
+    calc._info._is_converged = static_cast<bool>(*chk_conv);
 
     if (!in)
         return std::unexpected(std::format("I/O error while reading checkpoint: {}", path));
@@ -343,66 +716,144 @@ HartreeFock::Checkpoint::load_mos(const std::string &path)
     if (!in)
         return std::unexpected(std::format("Cannot open checkpoint file: {}", path));
 
-    // ── Validate magic and version ─────────────────────────────────────────────
+    // ── Validate magic and version ─────────────────────────────────────────
     char magic[8] = {};
-    in.read(magic, 8);
+    auto magic_read = read_exact(in, magic, 8, "magic");
+    if (!magic_read)
+        return std::unexpected(magic_read.error());
     if (std::memcmp(magic, MAGIC, 8) != 0)
         return std::unexpected("Not a valid Planck checkpoint file (bad magic)");
 
-    const uint32_t version = read_pod<uint32_t>(in);
-    if (version < 2 || version > VERSION)
+    auto version = read_pod<uint32_t>(in);
+    if (!version)
+        return std::unexpected(version.error());
+    if (*version < 2 || *version > VERSION)
         return std::unexpected(
-            std::format("Checkpoint version mismatch: file={}, expected={}", version, VERSION));
+            std::format("Checkpoint version mismatch: file={}, expected={}", *version, VERSION));
 
     MOData result;
-    result.nbasis = static_cast<std::size_t>(read_pod<uint64_t>(in));
-    result.is_uhf = static_cast<bool>(read_pod<uint8_t>(in));
+    auto nbasis = read_pod<uint64_t>(in);
+    if (!nbasis)
+        return std::unexpected(nbasis.error());
+    result.nbasis = static_cast<std::size_t>(*nbasis);
+    auto is_uhf = read_pod<uint8_t>(in);
+    if (!is_uhf)
+        return std::unexpected(is_uhf.error());
+    result.is_uhf = static_cast<bool>(*is_uhf);
 
-    // Skip: is_converged, last_iter, total_energy, nuclear_repulsion
-    read_pod<uint8_t>(in);  // is_converged
-    read_pod<uint32_t>(in); // last_iter
-    read_pod<double>(in);   // total_energy
-    read_pod<double>(in);   // nuclear_repulsion
+    auto converged = read_pod<uint8_t>(in);
+    if (!converged)
+        return std::unexpected(converged.error());
+    auto last_iter = read_pod<uint32_t>(in);
+    if (!last_iter)
+        return std::unexpected(last_iter.error());
+    auto total_energy = read_pod<double>(in);
+    if (!total_energy)
+        return std::unexpected(total_energy.error());
+    auto nuclear_repulsion = read_pod<double>(in);
+    if (!nuclear_repulsion)
+        return std::unexpected(nuclear_repulsion.error());
 
-    // ── Skip molecule ──────────────────────────────────────────────────────────
-    const uint64_t natoms = read_pod<uint64_t>(in);
-    read_pod<int32_t>(in);  // charge
-    read_pod<uint32_t>(in); // multiplicity
+    auto natoms = read_pod<uint64_t>(in);
+    if (!natoms)
+        return std::unexpected(natoms.error());
+    auto natoms_checked = checked_atom_count(*natoms, "geometry block");
+    if (!natoms_checked)
+        return std::unexpected(natoms_checked.error());
+    auto charge = read_pod<int32_t>(in);
+    if (!charge)
+        return std::unexpected(charge.error());
+    auto multiplicity = read_pod<uint32_t>(in);
+    if (!multiplicity)
+        return std::unexpected(multiplicity.error());
 
-    for (uint64_t i = 0; i < natoms; ++i)
-        read_pod<int32_t>(in); // atomic_numbers
+    for (uint64_t i = 0; i < *natoms; ++i)
+    {
+        auto atomic_number = read_pod<int32_t>(in);
+        if (!atomic_number)
+            return std::unexpected(atomic_number.error());
+    }
 
-    for (uint64_t i = 0; i < natoms * 3; ++i)
-        read_pod<double>(in); // coordinates
+    for (uint64_t i = 0; i < *natoms; ++i)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            auto coordinate = read_pod<double>(in);
+            if (!coordinate)
+                return std::unexpected(coordinate.error());
+        }
+    }
 
-    result.basis_name = read_string(in);
-    read_pod<uint8_t>(in); // has_opt_coords
+    auto basis_name = read_string(in);
+    if (!basis_name)
+        return std::unexpected(basis_name.error());
+    result.basis_name = std::move(*basis_name);
+    if (*version >= 7)
+    {
+        auto basis_type_raw = read_pod<uint8_t>(in);
+        if (!basis_type_raw)
+            return std::unexpected(basis_type_raw.error());
+        auto basis_type = decode_basis_type(*basis_type_raw);
+        if (!basis_type)
+            return std::unexpected(basis_type.error());
+        result.basis_type = *basis_type;
+        result.has_basis_type = true;
+    }
+    auto opt_coords = read_pod<uint8_t>(in);
+    if (!opt_coords)
+        return std::unexpected(opt_coords.error());
 
-    // ── Skip 1e matrices ───────────────────────────────────────────────────────
-    read_matrix(in); // overlap
-    read_matrix(in); // hcore
+    auto overlap = read_matrix(in, result.nbasis, "overlap matrix");
+    if (!overlap)
+        return std::unexpected(overlap.error());
+    auto core_hamiltonian = read_matrix(in, result.nbasis, "core Hamiltonian");
+    if (!core_hamiltonian)
+        return std::unexpected(core_hamiltonian.error());
 
-    // ── Read alpha MO coefficients ─────────────────────────────────────────────
-    read_matrix(in); // density  (discard)
-    read_matrix(in); // fock     (discard)
-    read_vector(in); // mo_energies (discard)
-    result.C_alpha = read_matrix(in);
+    auto alpha_density = read_matrix(in, result.nbasis, "alpha density");
+    if (!alpha_density)
+        return std::unexpected(alpha_density.error());
+    auto alpha_fock = read_matrix(in, result.nbasis, "alpha fock");
+    if (!alpha_fock)
+        return std::unexpected(alpha_fock.error());
+    auto alpha_orbital_energies = read_vector(in, result.nbasis, "alpha orbital energies");
+    if (!alpha_orbital_energies)
+        return std::unexpected(alpha_orbital_energies.error());
+    auto alpha_coefficients = read_matrix(in, result.nbasis, "alpha MO coefficients");
+    if (!alpha_coefficients)
+        return std::unexpected(alpha_coefficients.error());
+    result.C_alpha = std::move(*alpha_coefficients);
 
-    // ── Read beta MO coefficients if UHF ──────────────────────────────────────
     if (result.is_uhf)
     {
-        read_matrix(in); // density  (discard)
-        read_matrix(in); // fock     (discard)
-        read_vector(in); // mo_energies (discard)
-        result.C_beta = read_matrix(in);
+        auto beta_density = read_matrix(in, result.nbasis, "beta density");
+        if (!beta_density)
+            return std::unexpected(beta_density.error());
+        auto beta_fock = read_matrix(in, result.nbasis, "beta fock");
+        if (!beta_fock)
+            return std::unexpected(beta_fock.error());
+        auto beta_orbital_energies = read_vector(in, result.nbasis, "beta orbital energies");
+        if (!beta_orbital_energies)
+            return std::unexpected(beta_orbital_energies.error());
+        auto beta_coefficients = read_matrix(in, result.nbasis, "beta MO coefficients");
+        if (!beta_coefficients)
+            return std::unexpected(beta_coefficients.error());
+        result.C_beta = std::move(*beta_coefficients);
     }
 
     result.C_casscf.resize(0, 0);
-    if (version >= 3)
+    if (*version >= 3)
     {
-        const bool has_casscf_mos = (read_pod<uint8_t>(in) != 0);
-        if (has_casscf_mos)
-            result.C_casscf = read_matrix(in);
+        auto has_casscf_mos = read_pod<uint8_t>(in);
+        if (!has_casscf_mos)
+            return std::unexpected(has_casscf_mos.error());
+        if (*has_casscf_mos != 0)
+        {
+            auto casscf_mos = read_matrix(in, result.nbasis, "CASSCF MO coefficients");
+            if (!casscf_mos)
+                return std::unexpected(casscf_mos.error());
+            result.C_casscf = std::move(*casscf_mos);
+        }
     }
 
     if (!in)
@@ -420,40 +871,95 @@ HartreeFock::Checkpoint::load_geometry(const std::string &path)
         return std::unexpected(std::format("Cannot open checkpoint file: {}", path));
 
     char magic[8] = {};
-    in.read(magic, 8);
+    auto magic_read = read_exact(in, magic, 8, "magic");
+    if (!magic_read)
+        return std::unexpected(magic_read.error());
     if (std::memcmp(magic, MAGIC, 8) != 0)
         return std::unexpected("Not a valid Planck checkpoint file (bad magic)");
 
-    const uint32_t version = read_pod<uint32_t>(in);
-    if (version < 2 || version > VERSION)
+    auto version = read_pod<uint32_t>(in);
+    if (!version)
+        return std::unexpected(version.error());
+    if (*version < 2 || *version > VERSION)
         return std::unexpected(
-            std::format("Checkpoint version mismatch: file={}, expected={}", version, VERSION));
+            std::format("Checkpoint version mismatch: file={}, expected={}", *version, VERSION));
 
-    // Skip: nbasis, is_uhf, is_converged, last_iter, total_energy, nuclear_repulsion
-    read_pod<uint64_t>(in); // nbasis
-    read_pod<uint8_t>(in);  // is_uhf
-    read_pod<uint8_t>(in);  // is_converged
-    read_pod<uint32_t>(in); // last_iter
-    read_pod<double>(in);   // total_energy
-    read_pod<double>(in);   // nuclear_repulsion
+    auto nbasis = read_pod<uint64_t>(in);
+    if (!nbasis)
+        return std::unexpected(nbasis.error());
+    auto is_uhf = read_pod<uint8_t>(in);
+    if (!is_uhf)
+        return std::unexpected(is_uhf.error());
+    auto is_converged = read_pod<uint8_t>(in);
+    if (!is_converged)
+        return std::unexpected(is_converged.error());
+    auto last_iter = read_pod<uint32_t>(in);
+    if (!last_iter)
+        return std::unexpected(last_iter.error());
+    auto total_energy = read_pod<double>(in);
+    if (!total_energy)
+        return std::unexpected(total_energy.error());
+    auto nuclear_repulsion = read_pod<double>(in);
+    if (!nuclear_repulsion)
+        return std::unexpected(nuclear_repulsion.error());
 
     GeometryData geo;
-    geo.natoms = static_cast<std::size_t>(read_pod<uint64_t>(in));
-    geo.charge = static_cast<int>(read_pod<int32_t>(in));
-    geo.multiplicity = static_cast<unsigned int>(read_pod<uint32_t>(in));
+    auto natoms = read_pod<uint64_t>(in);
+    if (!natoms)
+        return std::unexpected(natoms.error());
+    auto natoms_int = checked_atom_count(*natoms, "geometry block");
+    if (!natoms_int)
+        return std::unexpected(natoms_int.error());
+    geo.natoms = static_cast<std::size_t>(*natoms_int);
+    auto charge = read_pod<int32_t>(in);
+    if (!charge)
+        return std::unexpected(charge.error());
+    geo.charge = static_cast<int>(*charge);
+    auto multiplicity = read_pod<uint32_t>(in);
+    if (!multiplicity)
+        return std::unexpected(multiplicity.error());
+    geo.multiplicity = static_cast<unsigned int>(*multiplicity);
 
-    geo.atomic_numbers.resize(static_cast<int>(geo.natoms));
+    geo.atomic_numbers.resize(*natoms_int);
     for (std::size_t i = 0; i < geo.natoms; ++i)
-        geo.atomic_numbers[static_cast<int>(i)] = read_pod<int32_t>(in);
+    {
+        auto atomic_number = read_pod<int32_t>(in);
+        if (!atomic_number)
+            return std::unexpected(atomic_number.error());
+        geo.atomic_numbers[static_cast<int>(i)] = *atomic_number;
+    }
 
-    geo.coords_bohr.resize(static_cast<int>(geo.natoms), 3);
+    geo.coords_bohr.resize(*natoms_int, 3);
     for (std::size_t i = 0; i < geo.natoms; ++i)
+    {
         for (int k = 0; k < 3; ++k)
-            geo.coords_bohr(static_cast<int>(i), k) = read_pod<double>(in);
+        {
+            auto coordinate = read_pod<double>(in);
+            if (!coordinate)
+                return std::unexpected(coordinate.error());
+            geo.coords_bohr(static_cast<int>(i), k) = *coordinate;
+        }
+    }
 
-    read_string(in); // basis_name (not needed here)
+    auto basis_name = read_string(in);
+    if (!basis_name)
+        return std::unexpected(basis_name.error());
+    if (*version >= 7)
+    {
+        auto basis_type_raw = read_pod<uint8_t>(in);
+        if (!basis_type_raw)
+            return std::unexpected(basis_type_raw.error());
+        auto basis_type = decode_basis_type(*basis_type_raw);
+        if (!basis_type)
+            return std::unexpected(basis_type.error());
+        geo.basis_type = *basis_type;
+        geo.has_basis_type = true;
+    }
 
-    geo.has_opt_coords = (read_pod<uint8_t>(in) != 0);
+    auto has_opt_coords = read_pod<uint8_t>(in);
+    if (!has_opt_coords)
+        return std::unexpected(has_opt_coords.error());
+    geo.has_opt_coords = (*has_opt_coords != 0);
 
     if (!in)
         return std::unexpected(

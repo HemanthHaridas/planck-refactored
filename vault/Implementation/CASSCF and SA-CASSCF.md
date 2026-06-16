@@ -1,0 +1,139 @@
+---
+name: CASSCF and SA-CASSCF
+description: Full CASSCF/SA-CASSCF/RASSCF implementation details, optimizer, validation
+type: implementation
+priority: high
+include_in_claude: true
+tags: [casscf, sa-casscf, rasscf, mcscf, ci, active-space]
+---
+
+# CASSCF / SA-CASSCF / RASSCF
+
+## Status: 11/11 PySCF gate cases passing (2026-04-08)
+
+## Key Files
+
+| File | Responsibility |
+|------|---------------|
+| `src/post_hf/casscf/casscf.cpp` | Top-level macro-iteration loop (`run_mcscf_loop`), convergence gating, output |
+| `src/post_hf/casscf/casscf_driver_internal.cpp` + `.h` | Root-tracking, `StateSpecificData`/`McscfState`, weighted-gradient utilities, probe + candidate-step assembly (commit ff56d66) |
+| `src/post_hf/casscf/casscf_utils.h` | Shared utilities for the driver/internal split |
+| `src/post_hf/casscf/ci.cpp` | FCI / CI diagonalization (direct-sigma) |
+| `src/post_hf/casscf/orbital.cpp` | Orbital rotation, `matrix_free_hessian_action` |
+| `src/post_hf/casscf/rdm.cpp` | 1-RDM and 2-RDM computation |
+| `src/post_hf/casscf/response.cpp` | SA coupled solve (`solve_sa_coupled_orbital_ci_step`) |
+| `src/post_hf/casscf/strings.cpp` | Active space setup, `select_active_orbitals`, `IrrepCount` |
+
+### 2026-04-23 Refactor (ff56d66)
+
+`casscf.cpp` was split from 1581 → 1134 lines by extracting the root-tracking and state-averaging helper layer into the new private `casscf_driver_internal.{h,cpp}` pair. `run_mcscf_loop()` remains in `casscf.cpp` as the top-level macroiteration driver so the remaining file reads around control flow rather than the support machinery.
+
+## Convergence Gating
+
+Convergence gated on `‖g_SA‖∞ < tol` where `g_SA = Σ_I w_I g_I` (weighted sum of per-root orbital gradients). Not per-root. Function: `build_weighted_root_orbital_gradient`.
+
+Iteration table prints:
+- "SA Grad": the gating quantity
+- "MaxRootG": diagnostic (max over roots, not used for convergence)
+
+## Macro-Optimizer Cascade
+
+**Normal iteration:**
+1. `sa-coupled` — shared-κ SA coupled solve (primary)
+2. `sa-grad-fallback` — diagonal gradient step backup
+
+**Under stagnation** (`stagnation_streak ≥ 2`):
+3. `numeric-newton` — exact FD Hessian (only when npairs ≤ 64)
+4. `sa-diag-fallback`, per-root candidates, single-pair probes
+
+**Step scales tried**: `{1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625}`
+**Merit function**: `E_cas + 0.1·‖g_orb‖²` (lowest wins)
+
+**Trust region**: every macro orbital step κ is capped element-wise at
+`mcscf_max_rot` (default `0.20`, settable in `[scf]`) and Frobenius-norm
+at `4 × mcscf_max_rot`. Per-pair single-direction probe steps under
+stagnation also use ±`mcscf_max_rot`. Empirically the cap is rarely
+binding (water SA-2 from sad/hcore takes `step_norm ≤ 0.11` even when
+`mcscf_max_rot = 10`); larger values do not change which basin the
+optimizer reaches, since the search direction comes from a local-Newton
+step that points into the local well regardless of step size.
+
+**Plateau escape**: if `stagnation_streak ≥ 2`, the energy and accepted
+orbital step are flat, **and the SA gating gradient `sa_g` is already small**
+(`reported_gnorm < 100·tol_mcscf_grad`), convergence is declared with a `[WRN]`
+line. This is correct and load-bearing for state-averaged runs, not a hack: at
+an SA stationary point `sa_g = Σ_I w_I g_I` goes to ~1e-10 while the per-root
+screens (`root_screen_g` / `max_root_g`) plateau at an O(1e-2) nonzero value,
+because state-averaging makes only the weighted gradient stationary, not each
+individual root. Under `mcscf_accept_uphill` the per-root convergence screen
+then never passes, so this branch is the intended exit. Exercised by
+`water_casscf_sa2_sto3g_sad_guess_uphill` (the other three SA-2 cases converge
+through the normal gate at `sa_g < 1e-5`). See `vault/Status/Open Work.md` for
+the narrow hardening still worth doing (an explicit `sa_g` assertion plus a
+`casscf_converged_via_plateau` diagnostic).
+
+## Shared-κ SA Coupled Solve
+
+`solve_sa_coupled_orbital_ci_step` in `response.cpp`:
+- Holds one orbital step κ shared across all state-averaged roots
+- Solves each root's CI response to that shared κ
+- Iterates on SA orbital residual: `g_SA + H_oo κ + Σ_I w_I G_oc c1_I(κ)`
+- Acceptance merit uses `trial.gnorm` (SA gradient norm), not per-root screens
+
+## CI Response RHS
+
+Default mode: `ResponseRHSMode::ExactOrbitalDerivative` — exact CI-response RHS from orbital derivative. Debug/shortcut: `mcscf_debug_commutator_rhs` keyword switches to commutator-only approximation.
+
+## Orbital Hessian
+
+`matrix_free_hessian_action` in `orbital.cpp` delegates to `delta_g_sa_action`: full finite-difference fixed-CI Hessian-vector product (rotates MOs by ±ε·R, central-difference of `fixed_ci_orbital_gradient`). Falls back to diagonal energy-denominator model (M3) only when `OrbitalHessianContext` is incomplete.
+
+## Reference: RHF or ROHF
+
+`run_mcscf_loop` accepts either a converged RHF or a converged ROHF reference.
+ROHF stores a single common set of spatial orbitals shared by both spin
+channels (`alpha.mo_coefficients == beta.mo_coefficients`), exactly like RHF, so
+the active-space integral transform and the CI engine consume it unchanged — the
+reference type only seeds the optimization. This mirrors the FCI path
+(`src/post_hf/fci.cpp`). The driver-level blanket ROHF post-HF rejection in
+`src/driver.cpp` exempts CASSCF and RASSCF alongside FCI.
+
+The inactive core is treated as closed and doubly occupied: it enters the core
+Fock as `2·C_core C_coreᵀ` (`build_inactive_fock_mo`) and `compute_core_energy`
+assumes paired occupation. For an open-shell ROHF reference this means **all
+unpaired electrons must live inside the active space**. The existing parity
+guard — `(n_elec - nactele)` must be even — is the gate: when it passes the core
+is genuinely paired and the closed-shell core machinery is exact; otherwise the
+run is rejected with a message naming the constraint. A spin-polarized open
+inactive core (distinct alpha/beta core orbitals) is out of scope.
+
+All spin polarization is carried by the active space. The multiplicity fixes the
+active-space Sz sector via `n_alpha_act - n_beta_act = mult - 1`, and because the
+active CI is a full CI it spans every spin state reachable in that sector and
+returns the lowest root there. RASSCF inherits all of this since its RAS
+constraints act only on the active-space determinant strings.
+
+PySCF-gated by `o2_casscf_rohf_sto3g` (triplet O2 CAS(8,6), Δ ~9e-9 Eh) and
+`oh_casscf_rohf_sto3g` (doublet OH CAS(5,4), Δ ~1.6e-8 Eh). The repo-root
+`ROHF_CASSCF_HANDOFF.md` carries the same architecture summary.
+
+## Active Space Setup
+
+`select_active_orbitals` in `strings.cpp`:
+- Reads explicit `core_irrep_counts` / `active_irrep_counts` / `mo_permutation` keywords
+- Falls back to energy-sorted inference
+- Identity fallback when symmetry is absent
+`reorder_mo_coefficients` applies the permutation before the MCSCF loop.
+
+## Historical Bugs Fixed
+
+- **Reversed Cayley sign** (`apply_orbital_rotation`): was applying `exp(-κ)` instead of `exp(+κ)`. Caused line search to test uphill directions and reject every candidate. Now fixed.
+- **`guess hcore` + `use_symm true` → wrong RHF**: d2d RHF branch preservation fix (commit 46aa199).
+
+## Regression Coverage
+
+- SA stationarity is gated by `metric_le` checks on `casscf_sa_gnorm` (≤ 1e-5) in `tests/regression_cases.json` for `water_casscf_sa2_sto3g` and `ethylene_casscf_sa2_sto3g`, alongside `casscf_total_energy` matches against the PySCF reference table.
+
+## RASSCF
+
+Active space partitioned into RAS1 (hole excitations allowed), RAS2 (full CAS), RAS3 (particle excitations allowed). Built on top of CASSCF orbital machinery with modified CI string generation.

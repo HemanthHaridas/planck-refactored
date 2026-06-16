@@ -13,7 +13,9 @@ namespace HartreeFock
 {
     namespace Symmetry
     {
-        std::expected<void, std::string> detectSymmetry(HartreeFock::Molecule &molecule);
+        std::expected<void, std::string> detectSymmetry(
+            HartreeFock::Molecule &molecule,
+            HartreeFock::Units input_units);
     }
 } // namespace HartreeFock
 

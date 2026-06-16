@@ -4,8 +4,8 @@
 #include <cstdlib>
 #include <expected>
 #include <memory>
-#include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "external/libmsym/install/include/libmsym/msym.h"
 
@@ -16,14 +16,12 @@ namespace HartreeFock
         class SymmetryContext
         {
         public:
-            // Constructor
-            SymmetryContext()
+            static std::expected<SymmetryContext, std::string> create()
             {
-                _ctx = msymCreateContext();
-                if (!_ctx)
-                {
-                    throw std::runtime_error("Failed to create msym_context");
-                }
+                msym_context ctx = msymCreateContext();
+                if (!ctx)
+                    return std::unexpected("Failed to create msym_context");
+                return SymmetryContext(ctx);
             }
 
             ~SymmetryContext()
@@ -62,26 +60,18 @@ namespace HartreeFock
             }
 
         private:
-            msym_context _ctx;
+            explicit SymmetryContext(msym_context ctx) noexcept : _ctx(ctx)
+            {
+            }
+
+            msym_context _ctx = nullptr;
         };
 
         class SymmetryElements
         {
         public:
-            explicit SymmetryElements(size_t n_atoms)
+            explicit SymmetryElements(size_t n_atoms) : elems_(n_atoms)
             {
-                elems_ = static_cast<msym_element_t *>(malloc(n_atoms * sizeof(msym_element_t)));
-                if (!elems_)
-                {
-                    throw std::bad_alloc();
-                }
-                memset(elems_, 0, n_atoms * sizeof(msym_element_t));
-                n_atoms_ = n_atoms;
-            }
-
-            ~SymmetryElements()
-            {
-                free(elems_);
             }
 
             // Non-copyable
@@ -89,36 +79,25 @@ namespace HartreeFock
             SymmetryElements &operator=(const SymmetryElements &) = delete;
 
             // Movable
-            SymmetryElements(SymmetryElements &&other) noexcept : elems_(other.elems_), n_atoms_(other.n_atoms_)
-            {
-                other.elems_ = nullptr;
-                other.n_atoms_ = 0;
-            }
+            SymmetryElements(SymmetryElements &&other) noexcept = default;
             SymmetryElements &operator=(SymmetryElements &&other) noexcept
             {
                 if (this != &other)
-                {
-                    free(elems_);
-                    elems_ = other.elems_;
-                    n_atoms_ = other.n_atoms_;
-                    other.elems_ = nullptr;
-                    other.n_atoms_ = 0;
-                }
+                    elems_ = std::move(other.elems_);
                 return *this;
             }
 
             msym_element_t *data()
             {
-                return elems_;
+                return elems_.data();
             }
             size_t size() const
             {
-                return n_atoms_;
+                return elems_.size();
             }
 
         private:
-            msym_element_t *elems_;
-            size_t n_atoms_;
+            std::vector<msym_element_t> elems_;
         };
     } // namespace Symmetry
 } // namespace HartreeFock

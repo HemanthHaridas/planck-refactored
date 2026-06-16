@@ -2,15 +2,21 @@
 #define HF_TYPES_H
 
 #include <Eigen/Core>
+#include <Eigen/Eigenvalues>
 #include <Eigen/QR>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <deque>
 #include <expected>
+#include <limits>
+#include <memory>
+#include <numbers>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "basis.h"
@@ -20,6 +26,14 @@ constexpr int MAX_L = 6;
 
 namespace HartreeFock
 {
+    struct AuxBasis;
+    namespace Correlation::RI
+    {
+        struct MetricFactorization;
+    }
+
+    using index_t = Eigen::Index;
+
     enum class BasisType
     {
         Cartesian, // Cartesian gaussians
@@ -45,22 +59,30 @@ namespace HartreeFock
         D, // L = 2
         F, // L = 3
         G, // L = 4
-        H  // L = 5
+        H, // L = 5
+        I  // L = 6  (spectroscopic series skips "J")
     };
 
     enum class SCFType
     {
-        RHF, // Restricted Hartee-Fock
-        UHF  // Unrestricted Hartree-Fock
+        RHF,  // Restricted Hartree-Fock
+        ROHF, // Restricted open-shell Hartree-Fock
+        UHF   // Unrestricted Hartree-Fock
     };
 
     enum class PostHF
     {
-        None,   // No Post-HF corrections
-        RMP2,   // Restricted MP2
-        UMP2,   // Unrestricted MP2
-        CASSCF, // Complete active space SCF
-        RASSCF  // Restricted active space SCF
+        None,    // No Post-HF corrections
+        RMP2,    // Restricted MP2
+        UMP2,    // Unrestricted MP2
+        RCCSD,   // Restricted CCSD
+        UCCSD,   // Unrestricted CCSD
+        RCCSDT,  // Restricted CCSDT
+        UCCSDT,  // Unrestricted CCSDT
+        RCCSDTQ, // Restricted CCSDTQ
+        CASSCF,  // Complete active space SCF
+        RASSCF,  // Restricted active space SCF
+        FCI      // Full configuration interaction (whole MO space, RHF reference)
     };
 
     enum class CalculationType
@@ -70,7 +92,8 @@ namespace HartreeFock
         GeomOpt,          // Geometry Optimization
         Frequency,        // Frequency Calculation
         GeomOptFrequency, // Geometry optimization followed by frequency calculation
-        ImaginaryFollow   // Freq → displace along largest imaginary mode → geomopt
+        ImaginaryFollow,  // Freq → displace along largest imaginary mode → geomopt
+        LinearResponse    // TDDFT / linear-response excited states
     };
 
     enum class SCFMode
@@ -82,9 +105,17 @@ namespace HartreeFock
 
     enum class IntegralMethod
     {
-        ObaraSaika,    // Obara-Saika recursion (default)
-        RysQuadrature, // Rys quadrature for all quartets
-        Auto           // OS for L<4, Rys for L>=4 per quartet
+        ObaraSaika,       // Obara-Saika recursion (default)
+        RysQuadrature,    // Rys quadrature for all quartets
+        HeadGordonPople,  // Head-Gordon-Pople recurrence engine
+        Auto              // OS for L<4, Rys for L>=4 per quartet
+    };
+
+    enum class ERIKernel
+    {
+        Coulomb,   // 1 / r12
+        LongRange, // erf(omega r12) / r12
+        ShortRange // erfc(omega r12) / r12
     };
 
     enum class DFTGridQuality
@@ -101,7 +132,9 @@ namespace HartreeFock
         Slater,
         B88,
         PW91,
-        PBE
+        PBE,
+        B3LYP,
+        PBE0
     };
 
     enum class XCCorrelationFunctional
@@ -112,6 +145,29 @@ namespace HartreeFock
         P86,
         PW91,
         PBE
+    };
+
+    enum class LinearResponseMethod
+    {
+        TDA,
+        Casida
+    };
+
+    enum class LinearResponseSpin
+    {
+        Auto,
+        Singlet,
+        Triplet,
+        SpinConserving
+    };
+
+    // Implicit solvation model selection. Only the conductor-like
+    // polarizable continuum model (C-PCM) is currently implemented; the
+    // input parser also accepts "cpcm" as an alias for "pcm".
+    enum class SolvationModel
+    {
+        None,
+        PCM
     };
 
     enum class OptCoords
@@ -156,21 +212,76 @@ namespace HartreeFock
         Eigen::VectorXi atomic_numbers = {}; // Atomic numbers
         Eigen::VectorXd atomic_masses = {};  // Atomic masses
 
+        // Per-atom ghost mask for counterpoise / BSSE corrections. A ghost atom
+        // keeps its real atomic number (so the basis-set lookup in gaussian.cpp
+        // still loads its shells) but contributes ZERO nuclear charge: it adds no
+        // electrons, no nuclear repulsion, and no nuclear-attraction potential.
+        // Empty or false => ordinary physical atom. Always kept the same length as
+        // natoms once the molecule is parsed. Read nuclear charge through
+        // nuclear_charge(a), never atomic_numbers[a], for any physical quantity.
+        std::vector<bool> is_ghost = {};
+
+        // Effective nuclear charge of atom a: 0 for ghosts, else its atomic number.
+        double nuclear_charge(std::size_t a) const noexcept
+        {
+            if (a < is_ghost.size() && is_ghost[a])
+                return 0.0;
+            return static_cast<double>(atomic_numbers[static_cast<Eigen::Index>(a)]);
+        }
+
+        // True if any atom is a ghost (i.e. this is a counterpoise sub-calculation).
+        bool has_ghost_atoms() const noexcept
+        {
+            for (bool g : is_ghost)
+                if (g)
+                    return true;
+            return false;
+        }
+
+        // Sum of effective nuclear charges (ghosts excluded). This is the total
+        // positive charge that electrons see; electron count is this minus the
+        // molecular charge. Equals atomic_numbers.sum() when no ghosts are present.
+        int total_nuclear_charge() const noexcept
+        {
+            int total = 0;
+            for (std::size_t a = 0; a < natoms; ++a)
+                total += static_cast<int>(nuclear_charge(a));
+            return total;
+        }
+
         Eigen::MatrixXd coordinates;  // natoms × 3, in Angstrom
         Eigen::MatrixXd _coordinates; // natoms × 3, in Bohr (internal use)
 
         Eigen::MatrixXd standard;  // reoriented coordinates in Angstrom
         Eigen::MatrixXd _standard; // reoriented coordinates in Bohr
+        Eigen::Matrix3d _symmetry_alignment_transform = Eigen::Matrix3d::Identity(); // input-frame -> standard-frame rotation/reflection
 
         std::string _point_group = "C1"; // Point group symmetry
 
         std::size_t natoms = 0;        // Number of atoms
         unsigned int multiplicity = 1; // Spin multiplicity
-        unsigned int nelectrons = 0;   // Number of electrons
         signed int charge = 0;         // Molecular charge
 
         bool _symmetry = false; // Symmetry flag
         bool _is_bohr = false;
+        bool standard_is_angstrom = false;
+        bool _standard_is_bohr = false;
+
+        void set_standard_from_angstrom(const Eigen::MatrixXd &coords_angstrom) noexcept
+        {
+            standard = coords_angstrom;
+            _standard = coords_angstrom * ANGSTROM_TO_BOHR;
+            standard_is_angstrom = true;
+            _standard_is_bohr = true;
+        }
+
+        void set_standard_from_bohr(const Eigen::MatrixXd &coords_bohr) noexcept
+        {
+            _standard = coords_bohr;
+            standard = coords_bohr * BOHR_TO_ANGSTROM;
+            standard_is_angstrom = true;
+            _standard_is_bohr = true;
+        }
 
         void clear() noexcept
         {
@@ -180,6 +291,7 @@ namespace HartreeFock
 
             atomic_numbers.resize(0);
             atomic_masses.resize(0);
+            is_ghost.clear();
 
             coordinates.resize(0, 3);
             standard.resize(0, 3);
@@ -190,7 +302,21 @@ namespace HartreeFock
             _point_group = "C1";
             _symmetry = false;
             _is_bohr = false;
+            standard_is_angstrom = false;
+            _standard_is_bohr = false;
+            _symmetry_alignment_transform.setIdentity();
         }
+    };
+
+    // Generic point charge in space — used both for QM/MM-style external
+    // charges and for the unit charges placed at PCM cavity tesserae when
+    // the reaction-field operator is assembled (see src/solvation/pcm.cpp).
+    // _compute_external_charge_attraction in the OS engine consumes a list
+    // of these and returns the matching AO matrix.
+    struct ExternalCharge
+    {
+        Eigen::Vector3d position = Eigen::Vector3d::Zero(); // Bohr
+        double charge = 0.0;                                // Atomic units (e)
     };
 
     struct Shell
@@ -239,23 +365,49 @@ namespace HartreeFock
 
     struct Basis
     {
-        std::vector<Shell> _shells;                   // Shells
-        std::vector<ContractedView> _basis_functions; // Basis functions
+        std::deque<Shell> _shells;                   // Shells; deque keeps Shell* stable across push_back
+        std::deque<ContractedView> _basis_functions; // Basis functions; deque keeps references stable across push_back
+
+        // Spherical-harmonic support (additive — the Cartesian path is untouched).
+        // When _spherical is true, _cart_to_sph holds the block-diagonal transform C
+        // [nbasis_sph × nbasis] that maps Cartesian AO quantities to the spherical
+        // (2L+1 per shell) basis. The integral engine still works in the Cartesian
+        // basis (nbasis()); the driver applies C to S/T/V/ERI before SCF. When false,
+        // _cart_to_sph is empty and nbasis_sph() == nbasis().
+        bool _spherical = false;
+        Eigen::MatrixXd _cart_to_sph;
 
         std::size_t nshells() const noexcept
         {
             return _shells.size();
         }
 
+        // Number of Cartesian basis functions ((L+1)(L+2)/2 per shell). This is the
+        // dimension the integral engine and all existing AO matrices use.
         std::size_t nbasis() const noexcept
         {
             return _basis_functions.size();
+        }
+
+        // Number of spherical basis functions (2L+1 per shell) when in spherical mode;
+        // identical to nbasis() in Cartesian mode. Derived from shell angular momenta
+        // so it stays consistent regardless of how _cart_to_sph was built.
+        std::size_t nbasis_sph() const noexcept
+        {
+            if (!_spherical)
+                return nbasis();
+            std::size_t n = 0;
+            for (const Shell &sh : _shells)
+                n += 2 * static_cast<std::size_t>(sh._shell) + 1;
+            return n;
         }
 
         void clear()
         {
             _shells.clear();
             _basis_functions.clear();
+            _spherical = false;
+            _cart_to_sph = Eigen::MatrixXd();
         }
     };
 
@@ -273,6 +425,8 @@ namespace HartreeFock
         double _tol_density = 1E-10;       // Density tolerance
         double _level_shift = 0.0;         // Virtual orbital level shift in Hartree (0 = off)
         double _diis_restart_factor = 2.0; // Restart DIIS when error grows by this factor (0 = off)
+        double _cc_damping = 0.8;          // Coupled-cluster damping factor for tensor CC iterations
+        double _cc_max_memory_gb = 4.0;    // Soft cap for large tensor-CC intermediates (0 = off)
 
         SCFType _scf = SCFType::RHF;           // SCF Type (Default is RHF)
         SCFMode _mode = SCFMode::Conventional; // SCF Mode (Default is Conventional)
@@ -282,16 +436,22 @@ namespace HartreeFock
         unsigned int _threshold = 100; // Threshold before switching to Direct mode (Default is 100)
         unsigned int _DIIS_dim = 8;    // Dimension of DIIS Error Vector (Default is 8)
 
-        bool _use_DIIS = true;        // Use DIIS (Default is true)
-        bool _save_checkpoint = true; // Save checkpoint after convergence
+        bool _use_DIIS = true;          // Use DIIS (Default is true)
+        bool _save_checkpoint = true;   // Save checkpoint after convergence
+        bool _stability_check = false;  // Run wavefunction stability analysis after SCF
+        bool _stability_follow = false; // If unstable, rotate along the unstable mode and re-run SCF
+
+        static unsigned int max_cycles_for_nbasis(std::size_t nbasis) noexcept
+        {
+            return (nbasis > 1000) ? 300 : (nbasis > 500) ? 200
+                                       : (nbasis > 250)   ? 100
+                                                          : 50;
+        }
 
         // Automatic setter based on system size
         void set_max_cycles_auto(std::size_t nbasis) noexcept
         {
-            _max_cycles =
-                (nbasis > 1000) ? 300 : (nbasis > 500) ? 200
-                                    : (nbasis > 250)   ? 100
-                                                       : 50;
+            _max_cycles = max_cycles_for_nbasis(nbasis);
         }
 
         // Getter (auto fallback if still 0)
@@ -300,9 +460,7 @@ namespace HartreeFock
             if (_max_cycles != 0)
                 return _max_cycles;
 
-            return (nbasis > 1000) ? 300 : (nbasis > 500) ? 200
-                                       : (nbasis > 250)   ? 150
-                                                          : 50;
+            return max_cycles_for_nbasis(nbasis);
         }
 
         // Resolve Auto mode based on system size; explicit Conventional/Direct are left unchanged.
@@ -333,9 +491,28 @@ namespace HartreeFock
         bool _use_symm = true;                  // Detect point group symmetry
     };
 
+    // ── Counterpoise / BSSE specification (%begin_bsse) ──────────────────────
+    // When _enabled, the driver runs the Boys–Bernardi counterpoise procedure
+    // instead of a single SCF: the dimer, each isolated monomer, and each
+    // monomer in the full dimer basis (partner atoms kept as ghosts). SCF-level
+    // only (RHF/UHF/ROHF energies). See src/bsse/counterpoise.cpp.
+    struct OptionsBSSE
+    {
+        bool _enabled = false;
+        // One entry per fragment; each holds the 0-based atom indices of that
+        // fragment (parser converts from the 1-based input indices). Exactly two
+        // fragments are supported (dimer counterpoise).
+        std::vector<std::vector<int>> _fragments;
+        // Optional per-fragment charge / multiplicity for the monomer sub-calcs.
+        // Empty => 0 / 1 for every fragment. When non-empty, length must equal
+        // the number of fragments (validated in the parser).
+        std::vector<int> _charges;
+        std::vector<int> _multiplicities;
+    };
+
     struct OptionsIntegral
     {
-        double _tol_eri = 1E-10;                             // ERI tolerance for Shwartz screening
+        double _tol_eri = 1E-10;                             // ERI tolerance for Schwarz screening
         IntegralMethod _engine = IntegralMethod::ObaraSaika; // Integral Engine
     };
 
@@ -346,9 +523,40 @@ namespace HartreeFock
         XCCorrelationFunctional _correlation = XCCorrelationFunctional::PBE;
         int _exchange_id = 0;    // 0 => resolve from _exchange through libxc
         int _correlation_id = 0; // 0 => resolve from _correlation through libxc
+        int _lr_nstates = 5;
+        int _lr_root = 0; // 0 => report all solved roots; otherwise select 1-based root index
+        LinearResponseMethod _lr_method = LinearResponseMethod::Casida;
+        LinearResponseSpin _lr_spin = LinearResponseSpin::Auto;
         bool _use_sao_blocking = true;
         bool _print_grid_summary = true;
         bool _save_checkpoint = false;
+    };
+
+    // User-controllable knobs for the polarizable continuum model. Currently
+    // only C-PCM is implemented (see src/solvation/pcm.cpp); the model field
+    // is kept as an enum so additional flavours (IEF-PCM, SS(V)PE) can be
+    // dropped in without breaking the input format.
+    //
+    //   _model                    — None disables solvation entirely.
+    //   _solvent                  — Optional named solvent (sets _dielectric
+    //                               from a built-in table in src/io/io.cpp);
+    //                               left empty when the user passes a raw
+    //                               dielectric instead.
+    //   _dielectric               — eps_r of the continuum. Default 1.0
+    //                               (vacuum) means f(eps) = 0 and PCM is
+    //                               effectively off even when _model = PCM.
+    //   _cavity_scale             — Multiplier on each atom's vdW radius
+    //                               when forming the cavity sphere. 1.2 is
+    //                               the standard Bondi-radius PCM choice.
+    //   _surface_points_per_atom  — Fibonacci-sphere tesserae per atom
+    //                               BEFORE bury-test pruning. Minimum 6.
+    struct OptionsSolvation
+    {
+        SolvationModel _model = SolvationModel::None;
+        std::string _solvent = "";
+        double _dielectric = 1.0;
+        double _cavity_scale = 1.2;
+        int _surface_points_per_atom = 60;
     };
 
     // Optional symmetry-aware orbital selection metadata for active-space setup.
@@ -370,6 +578,13 @@ namespace HartreeFock
         // Empty string → use the totally-symmetric irrep of the detected point group.
         std::string target_irrep = "";
 
+        // FCIDUMP export. When non-empty, the driver writes the MO-basis
+        // one- and two-electron integrals (plus nuclear repulsion and, when
+        // symmetry is available, per-orbital ORBSYM labels) to this path in the
+        // standard MOLPRO FCIDUMP format so the Hamiltonian can be handed to an
+        // external FCI/DMRG/selected-CI solver. Empty → no dump.
+        std::string fcidump_path = "";
+
         // Optional symmetry-aware MO selection. If present, the parser records
         // explicit irrep quotas for the core and active blocks, and an optional
         // full MO permutation can override the automatic picker.
@@ -380,6 +595,13 @@ namespace HartreeFock
         // MCSCF convergence tolerances
         double tol_mcscf_energy = 1e-8;
         double tol_mcscf_grad = 1e-5;
+
+        // MCSCF orbital trust region. mcscf_max_rot caps the largest
+        // element of κ in each macro step (default 0.20). The Frobenius
+        // norm cap is held at 4× this value. Larger values let the
+        // optimizer take larger core-active rotations and may reach
+        // deeper SA basins; smaller values are more conservative.
+        double mcscf_max_rot = 0.20;
 
         // CASSCF / SA-CASSCF
         int nactele = 0; // number of active electrons
@@ -400,6 +622,50 @@ namespace HartreeFock
 
         bool mcscf_debug_numeric_newton = false; // debug-only numeric Newton fallback
         bool mcscf_debug_commutator_rhs = false; // debug-only approximate commutator-only CI-response RHS
+
+        // Opt-in CIAH-style uphill step acceptance for SA-CASSCF basin escape.
+        // When false (default), the candidate selector is strictly monotone on
+        // (energy, merit, gradient) and convergence is gated on the SA gradient
+        // alone — bit-identical to historical behavior. When true, the selector
+        // additionally accepts trial steps whose quadratic model predicts a
+        // downhill move (model-trust filter), and convergence additionally
+        // requires the maximum per-root orbital gradient to be small. Useful
+        // for cases where the SA-weighted gradient vanishes while individual
+        // roots are still far from stationary; the uphill-enabled SAD-start
+        // validation case is tracked in vault/Status/Completion.md.
+        bool mcscf_accept_uphill = false;
+        // When mcscf_accept_uphill is on, this caps the largest uphill ΔE
+        // (Hartree) the model-trust filter will tolerate per macro step.
+        double mcscf_uphill_max_eh = 5e-3;
+    };
+
+    // MP2 options. Mirrors PySCF's mp.MP2Base attributes (frozen, level_shift,
+    // max_cycle, conv_tol, conv_tol_normt, diis_space, with_t2). Defaults match
+    // PySCF so behavior is unchanged when none of the keywords are supplied.
+    struct OptionsMP2
+    {
+        // Frozen orbitals. Empty list means "no frozen orbitals". A list of
+        // length 1 with a non-negative value is treated as the PySCF "freeze
+        // the lowest N orbitals" shortcut. Otherwise it is a list of explicit
+        // 0-based MO indices to freeze (alpha-channel indices for UMP2; the
+        // same set is applied to both spin channels, matching PySCF when a
+        // flat list is given).
+        std::vector<int> frozen;
+
+        double level_shift = 0.0;       // virtual-orbital level shift in iterative MP2
+        double conv_tol = 1e-7;         // |ΔE| threshold for iterative MP2
+        double conv_tol_normt = 1e-5;   // ‖ΔT2‖ threshold for iterative MP2
+        int max_cycle = 50;             // maximum iterative MP2 cycles
+        int diis_space = 6;             // DIIS subspace size for iterative MP2
+        bool with_t2 = true;            // store T2 amplitudes (gradient/RDM consumers need them)
+
+        // Optional RI-MP2 front-end. When use_ri is true, the MP2 builder will
+        // source its auxiliary basis from ri_basis_name/ri_basis_path instead of
+        // the conventional AO ERI tensor once the RI path is wired through.
+        bool use_ri = false;
+        std::string ri_basis_name = "";
+        std::string ri_basis_path = get_basis_path();
+        double ri_lindep = 1e-7;        // PySCF-style drop threshold for near-dependent aux modes
     };
 
     struct OptionsOutput
@@ -475,8 +741,6 @@ namespace HartreeFock
                 _write_cube = false;
                 break;
             }
-            default:
-                throw std::runtime_error("Unknown verbosity level");
             }
         }
     };
@@ -512,6 +776,7 @@ namespace HartreeFock
             R = A._shell->_center - B._shell->_center;
             R2 = R.squaredNorm();
             Rnorm = std::sqrt(R2);
+            screening = 0.0;
 
             const std::size_t nA = A._shell->nprimitives();
             const std::size_t nB = B._shell->nprimitives();
@@ -538,7 +803,7 @@ namespace HartreeFock
                     pp.zeta = zeta;
                     pp.inv_zeta = inv_zeta;
                     pp.coeff_product = cA * cB * A._shell->_normalizations[i] * B._shell->_normalizations[j] * A._component_norm * B._component_norm;
-                    pp.prefactor = std::pow(M_PI * inv_zeta, 1.5) * std::exp(-alpha_beta_over_zeta * R2);
+                    pp.prefactor = std::pow(std::numbers::pi * inv_zeta, 1.5) * std::exp(-alpha_beta_over_zeta * R2);
 
                     // Gaussian product center
                     pp.center = (alpha * A._shell->_center + beta * B._shell->_center) * inv_zeta;
@@ -622,6 +887,110 @@ namespace HartreeFock
         DataSCF _scf;                  // SCF Data for current step
     };
 
+    // ── Shared DIIS coefficient solve with conditioning guard ─────────────────
+    //
+    // Pulay's DIIS solves the bordered linear system
+    //   [ G  -1 ] [ c   ]   [ 0 ]
+    //   [-1   0 ] [ lam ] = [-1 ]
+    // where G_{ij} = <e_i, e_j> is the m×m error-overlap (Gram) block.
+    //
+    // Important: G is *expected* to be extremely ill-conditioned near
+    // convergence — the error matrices shrink toward zero and become nearly
+    // parallel, so the smallest Gram eigenvalue routinely reaches ~1e-29 while
+    // G stays positive-definite. The bare colPivHouseholderQr solve handles that
+    // gracefully (the tiny, near-degenerate coefficients are harmless because all
+    // stored Fock matrices are nearly identical there), so a condition-number
+    // threshold is the WRONG trigger — it would fire on healthy SCF and perturb
+    // the convergence path. Instead this guard intervenes only on genuine
+    // numerical breakdown:
+    //   - the active Gram block is indefinite (a real negative eigenvalue, beyond
+    //     a relative noise floor), or
+    //   - the solved coefficients are non-finite or explosively large.
+    // In either case it drops the OLDEST vector (least representative of the
+    // current point) and retries, always keeping at least the two newest
+    // vectors. On well-behaved SCF none of these fire, so the result is bitwise
+    // identical to the previous bare solve.
+    //
+    // The returned coefficient vector has one entry per input error matrix;
+    // entries for dropped (oldest) vectors are exactly zero, so callers keep
+    // combining over their full history unchanged.
+    inline Eigen::VectorXd solve_diis_coefficients(
+        const std::vector<const Eigen::MatrixXd *> &errors,
+        double max_coeff_magnitude = 1e8)
+    {
+        const std::size_t m = errors.size();
+        Eigen::VectorXd coeffs = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(m));
+        if (m == 0)
+            return coeffs;
+
+        // Full m×m Gram block; sub-blocks are taken as trailing (newest) corners.
+        Eigen::MatrixXd G_full(static_cast<Eigen::Index>(m), static_cast<Eigen::Index>(m));
+        for (std::size_t i = 0; i < m; ++i)
+            for (std::size_t j = i; j < m; ++j)
+            {
+                const double gij = (errors[i]->array() * errors[j]->array()).sum();
+                G_full(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = gij;
+                G_full(static_cast<Eigen::Index>(j), static_cast<Eigen::Index>(i)) = gij;
+            }
+
+        // `offset` is how many of the oldest vectors we have dropped. The active
+        // block is the trailing (m-offset)×(m-offset) corner, i.e. the newest
+        // vectors. Keep at least 2.
+        std::size_t offset = 0;
+        while (true)
+        {
+            const std::size_t k = m - offset; // active subspace size
+            const Eigen::Index ki = static_cast<Eigen::Index>(k);
+            const Eigen::MatrixXd G = G_full.bottomRightCorner(ki, ki);
+
+            bool acceptable = true;
+            if (k > 2)
+            {
+                // Reject only a genuinely indefinite Gram block: a negative
+                // eigenvalue below -noise·λ_max signals numerical corruption,
+                // not the benign smallness of a converging subspace.
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(G);
+                if (es.info() != Eigen::Success)
+                    acceptable = false;
+                else
+                {
+                    const double lo = es.eigenvalues()(0);
+                    const double hi = es.eigenvalues()(ki - 1);
+                    if (lo < -1e-12 * std::max(hi, 1.0))
+                        acceptable = false;
+                }
+            }
+
+            if (acceptable || k <= 2)
+            {
+                // Solve the bordered system on the active block.
+                Eigen::MatrixXd B = Eigen::MatrixXd::Zero(ki + 1, ki + 1);
+                B.topLeftCorner(ki, ki) = G;
+                for (Eigen::Index i = 0; i < ki; ++i)
+                {
+                    B(i, ki) = -1.0;
+                    B(ki, i) = -1.0;
+                }
+                Eigen::VectorXd rhs = Eigen::VectorXd::Zero(ki + 1);
+                rhs(ki) = -1.0;
+                const Eigen::VectorXd sol = B.colPivHouseholderQr().solve(rhs);
+
+                // Accept unless the solve itself produced something unusable.
+                const bool usable =
+                    sol.allFinite() &&
+                    (k <= 2 || sol.head(ki).cwiseAbs().maxCoeff() <= max_coeff_magnitude);
+                if (usable || k <= 2)
+                {
+                    for (Eigen::Index i = 0; i < ki; ++i)
+                        coeffs(static_cast<Eigen::Index>(offset) + i) = sol(i);
+                    return coeffs;
+                }
+            }
+
+            ++offset; // drop one more of the oldest vectors and retry
+        }
+    }
+
     // ── DIIS working state for one spin channel ───────────────────────────────
     //
     // Implements Pulay's DIIS for SCF convergence acceleration.
@@ -668,32 +1037,19 @@ namespace HartreeFock
         {
             const std::size_t m = size();
 
-            // B_{ij} = Tr( e_i^T e_j )
-            // Augmented system (Lagrange multiplier for sum(c)=1):
-            //   [ B  -1 ] [ c   ]   [ 0 ]
-            //   [-1   0 ] [ lam ] = [-1 ]
-            Eigen::MatrixXd B = Eigen::MatrixXd::Zero(m + 1, m + 1);
+            // Solve the augmented DIIS system with the shared conditioning guard.
+            // The Gram block G_{ij} = <e_i, e_j> is bordered with the Lagrange
+            // row/column for sum(c)=1; ill-conditioned subspaces drop oldest
+            // vectors before solving (those get coefficient 0 below).
+            std::vector<const Eigen::MatrixXd *> errors(m);
             for (std::size_t i = 0; i < m; ++i)
-            {
-                for (std::size_t j = i; j < m; ++j)
-                {
-                    const double bij = (error_history[i].array() * error_history[j].array()).sum();
-                    B(i, j) = bij;
-                    B(j, i) = bij;
-                }
-                B(i, m) = -1.0;
-                B(m, i) = -1.0;
-            }
-
-            Eigen::VectorXd rhs = Eigen::VectorXd::Zero(m + 1);
-            rhs(m) = -1.0;
-
-            const Eigen::VectorXd c = B.colPivHouseholderQr().solve(rhs);
+                errors[i] = &error_history[i];
+            const Eigen::VectorXd c = solve_diis_coefficients(errors);
 
             Eigen::MatrixXd F_extrap = Eigen::MatrixXd::Zero(fock_history[0].rows(),
                                                              fock_history[0].cols());
             for (std::size_t i = 0; i < m; ++i)
-                F_extrap += c(i) * fock_history[i];
+                F_extrap += c(static_cast<Eigen::Index>(i)) * fock_history[i];
 
             return F_extrap;
         }
@@ -714,11 +1070,159 @@ namespace HartreeFock
         }
     };
 
+    // Combined-spin DIIS for UHF.  Alpha and beta Fock matrices are coupled
+    // through the shared Coulomb term, so they MUST be extrapolated with a single
+    // set of coefficients.  This stores the (Fa, Fb) pair per iteration and builds
+    // one B matrix from the stacked error e = [e_a; e_b]:
+    //   B_{ij} = Tr(e_a,i^T e_a,j) + Tr(e_b,i^T e_b,j).
+    // Extrapolating each spin separately (two independent DIISState objects)
+    // produces a mutually inconsistent (Fa, Fb) pair and can stall convergence.
+    struct UHFDIISState
+    {
+        std::deque<Eigen::MatrixXd> fock_a_history;
+        std::deque<Eigen::MatrixXd> fock_b_history;
+        std::deque<Eigen::MatrixXd> error_a_history;
+        std::deque<Eigen::MatrixXd> error_b_history;
+        std::size_t max_vecs = 8;
+
+        void push(const Eigen::MatrixXd &Fa, const Eigen::MatrixXd &Fb,
+                  const Eigen::MatrixXd &ea, const Eigen::MatrixXd &eb)
+        {
+            fock_a_history.push_back(Fa);
+            fock_b_history.push_back(Fb);
+            error_a_history.push_back(ea);
+            error_b_history.push_back(eb);
+            if (fock_a_history.size() > max_vecs)
+            {
+                fock_a_history.pop_front();
+                fock_b_history.pop_front();
+                error_a_history.pop_front();
+                error_b_history.pop_front();
+            }
+        }
+
+        std::size_t size() const noexcept { return fock_a_history.size(); }
+        bool ready() const noexcept { return size() >= 2; }
+
+        // Solve the augmented DIIS system for one shared coefficient vector and
+        // return the extrapolated (Fa, Fb) pair.  Requires ready() == true.
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd> extrapolate() const
+        {
+            const std::size_t m = size();
+
+            // The UHF Gram element is the spin-summed overlap
+            //   G_{ij} = <e_a,i, e_a,j> + <e_b,i, e_b,j>,
+            // which is exactly <[e_a;e_b]_i, [e_a;e_b]_j>. Stack each iteration's
+            // alpha/beta error matrices into one combined matrix and reuse the
+            // shared conditioning-guarded solve. (Stacking column-wise keeps the
+            // element-wise dot product the helper computes equal to the sum.)
+            std::vector<Eigen::MatrixXd> stacked(m);
+            std::vector<const Eigen::MatrixXd *> errors(m);
+            for (std::size_t i = 0; i < m; ++i)
+            {
+                const auto &ea = error_a_history[i];
+                const auto &eb = error_b_history[i];
+                Eigen::MatrixXd s(ea.rows(), ea.cols() + eb.cols());
+                s.leftCols(ea.cols()) = ea;
+                s.rightCols(eb.cols()) = eb;
+                stacked[i] = std::move(s);
+                errors[i] = &stacked[i];
+            }
+            const Eigen::VectorXd c = solve_diis_coefficients(errors);
+
+            Eigen::MatrixXd Fa = Eigen::MatrixXd::Zero(fock_a_history[0].rows(), fock_a_history[0].cols());
+            Eigen::MatrixXd Fb = Eigen::MatrixXd::Zero(fock_b_history[0].rows(), fock_b_history[0].cols());
+            for (std::size_t i = 0; i < m; ++i)
+            {
+                Fa += c(i) * fock_a_history[i];
+                Fb += c(i) * fock_b_history[i];
+            }
+            return {std::move(Fa), std::move(Fb)};
+        }
+
+        // Combined RMS error of the most recent (e_a, e_b) pair.
+        double error_norm() const
+        {
+            if (error_a_history.empty())
+                return 0.0;
+            const auto &ea = error_a_history.back();
+            const auto &eb = error_b_history.back();
+            const double sq = ea.squaredNorm() + eb.squaredNorm();
+            const double n = static_cast<double>(ea.size() + eb.size());
+            return std::sqrt(sq / n);
+        }
+
+        void clear() noexcept
+        {
+            fock_a_history.clear();
+            fock_b_history.clear();
+            error_a_history.clear();
+            error_b_history.clear();
+        }
+    };
+
     struct SignedAOSymOp
     {
         std::vector<int> ao_map;     // mu -> nu under the symmetry operation
         std::vector<int8_t> ao_sign; // phase of the mapped Cartesian AO (+1 / -1)
     };
+
+    // ── Full point-group AO operation matrices (full-symmetry ERI reduction) ──────
+    // Defined here (not in symmetry/group_operations.h) so Calculator can hold a
+    // GroupOperations by value without a circular include. group_operations.h only
+    // declares build_group_operations(); see docs/FULL_SYMMETRY_ERI_DESIGN.md.
+    // Namespaced HartreeFock::Symmetry to keep the existing public type names.
+    //
+    // Unlike the D2h-only SignedAOSymOp (a monomial map: one AO → one AO with a ±1
+    // phase), O_R is a dense nb×nb matrix and so represents general operations
+    // (C3, C4, σ_d, S4, …) that the monomial scheme cannot.
+    namespace Symmetry
+    {
+        struct GroupOperation
+        {
+            std::string label; // e.g. "E", "C3", "sigma_v", "S4", "i"
+            // O_R [nb×nb], dense AO representation of the operation. Metric-orthogonal
+            // (O_Rᵀ S O_R = S); plain-orthogonal (O_Rᵀ O_R = I) only when the basis is
+            // orthonormal — true for Cartesian s,p and for ALL spherical-harmonic
+            // shells, but NOT for Cartesian d and higher (those are a non-orthonormal,
+            // reducible set). In spherical mode the physical AO representation is the
+            // metric-correct O_R = S_sph⁻¹ (C S_cart O_cart Cᵀ), so it is again only
+            // metric-orthogonal in the general case. See docs/FULL_SYMMETRY_ERI_DESIGN.md
+            // §3.1/§4 and the covariant-vs-contravariant note in scf.cpp.
+            Eigen::MatrixXd matrix;
+
+            // Shell permutation induced by R: shell_perm[s] = t means shell s maps
+            // onto shell t (its atom maps under the nuclear permutation; the k-th
+            // shell of angular type L at the source atom maps to the k-th such shell
+            // at the image atom). Exact even though the within-shell mixing in
+            // `matrix` is dense. The shell-quartet petite list (os_symm/rys_symm)
+            // uses it to pick orbit representatives. Indexed by Basis::_shells pos.
+            std::vector<int> shell_perm;
+
+            // ── Monomial fast path (Item A, docs/FULL_SYMMETRY_PERF_SCOPE.md) ────────
+            // Many O_R are MONOMIAL: each AO maps to exactly one AO with a ±1 phase
+            // (true for the D2h-subgroup operations on s,p shells; false for C3/C4/S4/
+            // σ_d and for any operation acting on Cartesian d⁺). When monomial, the
+            // symmetrization term O_Rᵀ M O_R is a row/column permute-with-signs, doable
+            // in O(nb²) instead of the dense O(nb³) matmul — see symmetrize_matrix.
+            // Classified once at build time (classify_monomial in group_operations.cpp).
+            // mono_map[mu] = nu, mono_sign[mu] = ±1 such that O_R(nu,mu) = sign, all
+            // other entries of column mu zero. Only valid when is_monomial; `matrix` is
+            // always populated and remains the source of truth (the monomial form is a
+            // derived accelerator, verified == matrix at build time).
+            bool is_monomial = false;
+            std::vector<int> mono_map;      // column mu -> the single nonzero row nu
+            std::vector<int8_t> mono_sign;  // sign of that nonzero entry (+1 / -1)
+        };
+
+        struct GroupOperations
+        {
+            std::vector<GroupOperation> operations; // includes identity at [0]
+            std::string point_group;                // Mulliken name of the full group
+            int order = 0;                          // |G| == operations.size()
+            bool valid = false;                     // false ⇒ symmetry off / C1 / linear
+        };
+    } // namespace Symmetry
 
     struct MultipoleMatrices
     {
@@ -746,76 +1250,168 @@ namespace HartreeFock
         OptionsGeometry _geometry;
         OptionsIntegral _integral;
         OptionsDFT _dft;
+        OptionsSolvation _solvation;
+        OptionsBSSE _bsse;
         OptionsOutput _output;
         InfoSCF _info;
         Molecule _molecule;
         Basis _shells;
 
-        CalculationType _calculation = CalculationType::SinglePoint; // Default is Single point energy calculation
-        PostHF _correlation = PostHF::None;                          // No Post HF corrections
-
-        double _total_energy = 0;         // Total Energy (SCF + Nuclear Repulsion)
-        double _nuclear_repulsion = 0;    // Nuclear Repulsion Energy (Bohr)
-        double _correlation_energy = 0.0; // Post-HF correlation energy (0 if not computed)
-
         // CASSCF / RASSCF results
         OptionsActiveSpace _active_space;     // active space specification
         Eigen::VectorXd _cas_nat_occ;         // active natural occupation numbers
         Eigen::MatrixXd _cas_mo_coefficients; // converged CASSCF MO coefficients [nb×nb] in the optimization basis
-        double _casscf_rhf_energy = 0.0;      // RHF reference energy (for ΔE printout)
-        Eigen::VectorXd _cas_root_energies;   // per-root CI energies (length nroots; empty for SS-CASSCF)
+        Eigen::VectorXd _cas_root_energies;   // per-root total CASSCF energies (length nroots; empty for SS-CASSCF)
+
+        // MP2 options and cached results. _mp2 is the input-driven option block.
+        // The amplitude and active-orbital fields cache the last applied MP2
+        // kernel result so gradient and RDM consumers can reuse it without
+        // forcing the older driver-style run_* wrappers.
+        OptionsMP2 _mp2;
+        int _mp2_nocc = 0;
+        int _mp2_nvir = 0;
+        int _mp2_nocca = 0;
+        int _mp2_noccb = 0;
+        int _mp2_nvira = 0;
+        int _mp2_nvirb = 0;
+        std::vector<int> _mp2_active_mo;        // active (non-frozen) MO indices into the full MO list (RMP2)
+        std::vector<int> _mp2_active_mo_alpha;  // UMP2 alpha active mask
+        std::vector<int> _mp2_active_mo_beta;   // UMP2 beta active mask
+        std::vector<double> _mp2_t2;            // RMP2 T2[i,j,a,b] (row-major), empty if not computed
+        std::vector<double> _ump2_t2_aa;        // UMP2 αα block
+        std::vector<double> _ump2_t2_ab;        // UMP2 αβ block
+        std::vector<double> _ump2_t2_bb;        // UMP2 ββ block
+        double _mp2_e_corr_ss = 0.0;            // same-spin correlation energy
+        double _mp2_e_corr_os = 0.0;            // opposite-spin correlation energy
+        bool _mp2_converged = true;             // iterative MP2 convergence flag (true = canonical or converged)
+        int _mp2_n_iter = 0;                    // iterative MP2 cycles taken (0 for canonical kernel)
 
         Eigen::MatrixXd _overlap; // Overlap matrix S
         Eigen::MatrixXd _hcore;   // Core Hamiltonian H = T + V
         std::vector<double> _eri; // ERI
 
+        // RI / density-fitting caches. The auxiliary basis and the 2-center
+        // metric live separately from the orbital AO basis so later RI-MP2
+        // work can prepare them once and reuse them across transforms.
+        std::shared_ptr<AuxBasis> _ri_aux_basis;
+        Eigen::MatrixXd _ri_j2c; // raw 2-center Coulomb metric (P|Q)
+        Eigen::MatrixXd _ri_j3c; // packed 3-center tensor (AO-pair × aux), in working AO basis
+        std::shared_ptr<Correlation::RI::MetricFactorization> _ri_metric_factor;
+
         std::string _checkpoint_path; // Path to checkpoint file (set by driver)
 
         // Symmetry-adapted orbital (SAO) blocking — populated by build_sao_basis() pre-SCF.
         // When _use_sao_blocking is true, run_rhf/run_uhf use per-irrep block diagonalization.
-        Eigen::MatrixXd _sao_transform;            // U [nb×nb]: AO→SAO unitary
-        std::vector<int> _sao_irrep_index;         // irrep index per SAO column
-        std::vector<std::string> _sao_irrep_names; // Mulliken name per irrep index
-        std::vector<int> _sao_block_sizes;         // n_SAOs per irrep block
-        std::vector<int> _sao_block_offsets;       // start offset per block in SAO ordering
-        bool _use_sao_blocking = false;
-        std::vector<SignedAOSymOp> _integral_symmetry_ops; // signed AO permutations used to reduce integral work
-        bool _use_integral_symmetry = false;
+        Eigen::MatrixXd _sao_transform;                    // U [nb×nb]: AO→SAO unitary
+        std::vector<int> _sao_irrep_index;                 // irrep index per SAO column
+        std::vector<std::string> _sao_irrep_names;         // Mulliken name per irrep index
+        std::vector<int> _sao_block_sizes;                 // n_SAOs per irrep block
+        std::vector<int> _sao_block_offsets;               // start offset per block in SAO ordering
+        std::vector<SignedAOSymOp> _integral_symmetry_ops; // signed AO permutations used to reduce integral work (D2h-only)
+
+        // Full point-group operation matrices for the direct-SCF full-symmetry ERI
+        // reduction (os_symm/rys_symm). Populated by build_group_operations() pre-SCF
+        // alongside build_sao_basis. Supersedes _integral_symmetry_ops (full group ⊇
+        // D2h) when _use_full_symmetry is true. See docs/FULL_SYMMETRY_ERI_DESIGN.md §8.
+        Symmetry::GroupOperations _group_operations;
+
+        // Persisted (orbit-weighted) Cartesian skeleton ERI for the full-symmetry
+        // direct Fock (C1, docs/FULL_SYMMETRY_PERF_SCOPE.md). The skeleton is density-
+        // INDEPENDENT (geometry/basis/group only), so it is built ONCE before the SCF
+        // loop and contracted each iteration via contract_symm_fock_* — turning the
+        // _symm path from "rebuild nb⁴ every iteration" into "build once, contract
+        // each". Always Cartesian-sized (nbasis_cart⁴), even in spherical mode (the
+        // cart→sph transform stays in the per-iteration contraction). Empty ⇒ not
+        // persisted (memory gate off / above cap, or symmetry not active) → SCF falls
+        // back to the per-iteration build. MUST be cleared on any geometry change
+        // (geomopt step, frequency displacement) so a stale-geometry skeleton is never
+        // reused — see C1 Step 6.
+        std::vector<double> _symm_skeleton_eri;
 
         // Gradient and geometry optimization
-        Eigen::MatrixXd _gradient;                    // natoms×3, Ha/Bohr; set by compute_rhf/uhf_gradient()
-        double _geomopt_grad_tol = 3e-4;              // convergence: max |∂E/∂x_i| in Ha/Bohr
-        int _geomopt_max_iter = 50;                   // maximum geometry steps
-        int _geomopt_lbfgs_m = 10;                    // L-BFGS history size
-        OptCoords _opt_coords = OptCoords::Cartesian; // coordinate system for optimization
-        std::vector<GeomConstraint> _constraints;     // from %begin_constraints section
+        Eigen::MatrixXd _gradient;                // natoms×3, Ha/Bohr; set by compute_rhf/uhf_gradient()
+        std::vector<GeomConstraint> _constraints; // from %begin_constraints section
 
         // Hessian / frequency analysis
         Eigen::MatrixXd _hessian;                       // 3N×3N Cartesian Hessian, Ha/Bohr²
         Eigen::VectorXd _frequencies;                   // n_vib vibrational frequencies in cm⁻¹
         Eigen::MatrixXd _normal_modes;                  // 3N × n_vib mass-unweighted normal modes
         std::vector<std::string> _vibrational_symmetry; // n_vib Mulliken labels
-        double _zpe = 0.0;                              // zero-point energy in Ha
-        double _hessian_step = 5e-3;                    // finite-difference step in Bohr
-        double _imag_follow_step = 0.2;                 // Cartesian displacement along imaginary mode, Bohr
 
-        void _compute_nuclear_repulsion() noexcept
+        double _total_energy = 0;                        // Total Energy (SCF + Nuclear Repulsion)
+        double _nuclear_repulsion = 0;                   // Nuclear Repulsion Energy (Bohr)
+        double _correlated_total_energy = 0.0;           // Correlated total energy when post-HF augments the SCF reference
+        double _correlation_energy = 0.0;                // Post-HF correlation energy (0 if not computed)
+        double _ccsd_reference_correlation_energy = 0.0; // CCSD correlation energy cached during CCSDT runs
+        double _casscf_rhf_energy = 0.0;                 // RHF reference energy (for ΔE printout)
+        double _geomopt_grad_tol = 3e-4;                 // convergence: max |∂E/∂x_i| in Ha/Bohr
+        double _zpe = 0.0;                               // zero-point energy in Ha
+        double _hessian_step = 5e-3;                     // finite-difference step in Bohr
+        double _imag_follow_step = 0.2;                  // Cartesian displacement along imaginary mode, Bohr
+
+        CalculationType _calculation = CalculationType::SinglePoint; // Default is Single point energy calculation
+        PostHF _correlation = PostHF::None;                          // No Post HF corrections
+        int _geomopt_max_iter = 50;                                  // maximum geometry steps
+        int _geomopt_lbfgs_m = 10;                                   // L-BFGS history size
+        OptCoords _opt_coords = OptCoords::Cartesian;                // coordinate system for optimization
+        bool _have_correlated_total_energy = false;                  // Whether the correlated total energy is valid
+        bool _have_ccsd_reference_energy = false;                    // Whether the cached CCSD correlation energy is valid
+        bool _use_sao_blocking = false;
+        bool _use_integral_symmetry = false;
+        bool _use_full_symmetry = false; // full point-group direct-Fock reduction (os_symm/rys_symm)
+
+        double current_total_energy() const noexcept
         {
+            return _have_correlated_total_energy ? _correlated_total_energy : _total_energy;
+        }
+
+        // Working AO dimension the SCF operates in: the spherical count (2L+1 per
+        // shell) when the basis is in spherical mode, else the Cartesian count. The
+        // integral engine always works in the Cartesian basis (_shells.nbasis()); the
+        // driver transforms S/H/ERI into the spherical basis, after which SCF must size
+        // everything off this value. Equals _shells.nbasis() in Cartesian mode.
+        std::size_t working_nbasis() const noexcept
+        {
+            return _shells.nbasis_sph();
+        }
+
+        std::expected<void, std::string> _compute_nuclear_repulsion()
+        {
+            assert(_molecule._standard.rows() == static_cast<Eigen::Index>(_molecule.natoms) &&
+                   _molecule._standard.cols() == 3 &&
+                   _molecule._standard_is_bohr &&
+                   "_compute_nuclear_repulsion requires molecule._standard to be initialized in Bohr");
             const std::size_t N = _molecule.natoms;
             double E_nuc = 0.0;
             for (std::size_t a = 0; a < N; a++)
             {
                 for (std::size_t b = a + 1; b < N; b++)
                 {
-                    const double Za = static_cast<double>(_molecule.atomic_numbers[a]);
-                    const double Zb = static_cast<double>(_molecule.atomic_numbers[b]);
+                    // nuclear_charge() returns 0 for ghost atoms, so ghost centers
+                    // contribute nothing to nuclear repulsion (BSSE counterpoise).
+                    const double Za = _molecule.nuclear_charge(a);
+                    const double Zb = _molecule.nuclear_charge(b);
                     const double dx = _molecule._standard(a, 0) - _molecule._standard(b, 0);
                     const double dy = _molecule._standard(a, 1) - _molecule._standard(b, 1);
                     const double dz = _molecule._standard(a, 2) - _molecule._standard(b, 2);
-                    E_nuc += Za * Zb / std::sqrt(dx * dx + dy * dy + dz * dz);
+                    const double r2 = dx * dx + dy * dy + dz * dz;
+                    assert(r2 > 1.0e-24 &&
+                           "_compute_nuclear_repulsion encountered overlapping nuclei");
+                    if (r2 < 1.0e-24)
+                    {
+                        return std::unexpected(
+                            "nuclear repulsion is undefined because two nuclei occupy the same position.");
+                    }
+                    E_nuc += Za * Zb / std::sqrt(r2);
                 }
             }
             _nuclear_repulsion = E_nuc;
+            return {};
+        }
+
+        std::expected<void, std::string> recompute_nuclear_repulsion()
+        {
+            return _compute_nuclear_repulsion();
         }
 
     public:
@@ -836,8 +1432,23 @@ namespace HartreeFock
             _molecule._is_bohr = true;
         }
 
+        void sync_coordinate_frames_from_standard() noexcept
+        {
+            assert(_molecule._standard.rows() == static_cast<Eigen::Index>(_molecule.natoms) &&
+                   _molecule._standard.cols() == 3 &&
+                   _molecule._standard_is_bohr &&
+                   "sync_coordinate_frames_from_standard requires molecule._standard in Bohr");
+            _molecule._coordinates = _molecule._standard;
+            if (_geometry._units == Units::Bohr)
+                _molecule.coordinates = _molecule._standard;
+            else
+                _molecule.coordinates = _molecule._standard * BOHR_TO_ANGSTROM;
+            _molecule._is_bohr = true;
+            _molecule.set_standard_from_bohr(_molecule._standard);
+        }
+
         // Getter
-        const Eigen::VectorXd _bohr_to_angstrom() const noexcept
+        Eigen::MatrixXd _bohr_to_angstrom() const noexcept
         {
             return _molecule._standard * 0.529177210903;
         }
@@ -848,7 +1459,7 @@ namespace HartreeFock
             if (!_info._scf.is_init)
             {
                 // First set the spin channel information
-                _info._scf = DataSCF(_scf._scf == SCFType::UHF);
+                _info._scf = DataSCF(_scf._scf != SCFType::RHF);
 
                 // Now initialize the matrices
                 _info._scf.initialize(_shells.nbasis());
@@ -864,7 +1475,9 @@ namespace HartreeFock
             // prepare_coordinates() must have been called before initialize().
             // Nothing to do here for coordinate conversion.
 
-            _compute_nuclear_repulsion();
+            auto nuclear_repulsion = recompute_nuclear_repulsion();
+            if (!nuclear_repulsion)
+                return std::unexpected("initialize: " + nuclear_repulsion.error());
 
             return {};
         }

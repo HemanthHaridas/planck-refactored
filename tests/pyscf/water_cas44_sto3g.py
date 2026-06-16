@@ -1,6 +1,6 @@
 """
 PySCF reference: H2O CAS(4,4)/STO-3G
-Matches Planck input: tests/inputs/casscf_tests/water_cas44_sto3g.hfinp
+Matches Planck input: tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g.hfinp
 
 Geometry: C2v water (Planck input geometry, Angstrom)
 Active space: CAS(4e, 4o) — two lone pairs + two OH bonding/antibonding MOs

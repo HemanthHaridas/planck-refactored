@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <numbers>
 #include <stdexcept>
 
 #include <Eigen/Eigenvalues>
@@ -110,11 +111,11 @@ static long double _boys_moment(int m, long double T) noexcept
     }
 
     const long double sqrtT = std::sqrt(T);
-    long double F = 0.5L * std::sqrt(static_cast<long double>(M_PI) / T) * std::erfl(sqrtT);
+    long double F = 0.5L * std::sqrt(std::numbers::pi_v<long double> / T) * std::erfl(sqrtT);
     if (m == 0)
         return F;
 
-    const long double eT = std::expl(-T);
+    const long double eT = std::exp(-T);
     for (int k = 1; k <= m; ++k)
         F = ((2 * k - 1) * F - eT) / (2.0L * T);
     return F;

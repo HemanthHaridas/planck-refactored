@@ -1,6 +1,6 @@
 ### Quickstart
 
-This guide gets you from zero to a converged Hartree-Fock calculation in five minutes.
+This guide gets you from zero to a converged Hartree-Fock calculation in five minutes, then shows the shortest path into DFT and TDDFT.
 
 ### 1. Build
 
@@ -91,6 +91,32 @@ ZZ                     ...
 
 The total energy is printed in Hartree, eV, and kcal/mol. After convergence, Planck also prints dipole and quadrupole components automatically from the final AO density matrix. Dipoles are reported in atomic units and Debye; quadrupoles are reported as a traceless Cartesian tensor in atomic units.
 
+### 2b. First DFT calculation
+
+Use `planck-dft` to run Kohn-Sham DFT with libxc functionals:
+
+```bash
+./build/planck-dft water.hfinp
+```
+
+Add a `%begin_dft` block to switch on DFT. For example, PBE/STO-3G:
+
+```text
+%begin_dft
+    grid        coarse
+    exchange    pbe
+    correlation pbe
+%end_dft
+```
+
+`scf_type rhf` gives an RKS reference and `scf_type uhf` gives a UKS reference.
+
+Range-separated hybrids such as `hse06` are supported for single-point,
+gradient, geometry-optimization, and frequency workflows. If you validate a
+symmetry-enabled DFT gradient or frequency job against finite differences, use
+at least `grid ultrafine`; coarse grids can show noticeable orientation
+sensitivity after symmetry standardization.
+
 ### 3. Open-shell calculation (UHF)
 
 For open-shell systems set `scf_type uhf` and the correct multiplicity. Triplet water (M=3):
@@ -115,6 +141,52 @@ UHF output includes spin contamination diagnostics:
 <S^2> :   2.004321  (exact: 2.000000)
 <S>   :   1.415390
 ```
+
+The same `scf_type uhf` setting also selects UKS when you run `planck-dft`.
+
+### 3b. TDDFT / linear response
+
+Planck’s TDDFT driver lives in `planck-dft` and is requested with `calculation tddft` (aliases: `linearresponse`, `lr`, `td-dft`).
+
+Minimal closed-shell singlet example:
+
+```text
+%begin_control
+    basis       sto-3g
+    calculation tddft
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    engine      os
+%end_scf
+
+%begin_dft
+    grid        coarse
+    exchange    pbe
+    correlation pbe
+    lr_nstates  3
+%end_dft
+```
+
+Useful TDDFT controls:
+
+```text
+lr_nstates   5                # number of roots
+lr_method    casida           # default; use tda for A-only response
+lr_spin      singlet          # RKS: singlet or triplet
+lr_spin      spin_conserving  # UKS/open-shell response
+```
+
+Current behavior:
+
+- `lr_method casida` is the default and solves the full \(A/B\) problem.
+- `lr_method tda` keeps the older Hermitian \(A\)-only approximation.
+- RKS supports `singlet` and `triplet` response.
+- UKS supports spin-conserving response blocks.
+- Semilocal XC kernels are included for the supported LDA and GGA functionals.
 
 
 ### 4. Checkpoint and restart
@@ -146,12 +218,25 @@ After a converged run, `water.hfchk` is written automatically. Add `guess read` 
     ...
 ```
 
+### Guess selection note
+
+`guess sad` is often the better starting point for symmetric molecules and
+multibasin SCF problems, but there is one known exception in the current code:
+very small isolated closed-shell atoms can false-converge to the wrong RHF
+stationary point from the SAD guess. A concrete case is lone He/cc-pVDZ, where
+`guess sad` converges to the wrong energy while `guess hcore` matches the PySCF
+RHF reference. If you are running an isolated atom, or a workflow that creates
+isolated-atom-like sub-calculations, prefer `guess hcore`.
+
+This is also why Planck's BSSE / counterpoise driver forces `guess hcore` for
+its internal sub-calculations at the moment.
+
 
 ### 5. Analytic gradient and geometry optimization
 
 ### Gradient only
 
-Set `calculation gradient` to compute the analytic nuclear gradient at the input geometry and stop. The gradient is printed in Ha/Bohr, one row per atom:
+Set `calculation gradient` to compute the analytic nuclear gradient at the input geometry and stop. The gradient is printed in Ha/Bohr, one row per atom. RHF, UHF, RMP2, and UMP2 gradients use this same entry point:
 
 ```
 %begin_control
@@ -180,6 +265,11 @@ H     0.800000     0.000000    -0.500000
 H    -0.800000     0.000000    -0.500000
 %end_coords
 ```
+
+For DFT gradients, `use_symm .false.` is the simplest starting point while
+you are setting up a workflow. Symmetry-enabled DFT gradients are supported,
+but validation is currently pinned to `grid ultrafine` because low-quality
+grids are more orientation-sensitive.
 
 Expected output (abbreviated):
 
@@ -404,9 +494,198 @@ After a single-point RMP2 run, Planck automatically diagonalizes the unrelaxed M
 
 Occupancies close to 2 indicate strongly occupied (nearly HF) natural orbitals; small values (0.01–0.1) indicate correlation-driven occupation of virtual space. This output is useful for selecting an appropriate active space before a CASSCF calculation.
 
-### 9. CASSCF active-space calculation
+To compute an analytic MP2 gradient, switch the control block to `calculation gradient` and keep the same correlation keyword. Closed-shell references use `correlation rmp2`; open-shell references use `scf_type uhf` with `correlation ump2`:
 
-CASSCF (Complete Active Space SCF) provides a multireference wavefunction by performing a full CI expansion within a chosen active space of `nactorb` orbitals containing `nactele` electrons. The RHF orbitals serve as the starting reference; CASSCF then simultaneously optimizes the CI coefficients and orbital rotations until convergence.
+```
+%begin_control
+    basis       sto-3g
+    calculation gradient
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type      uhf
+    correlation   ump2
+    engine        os
+    level_shift   0.3
+    diis_restart  2.0
+%end_scf
+```
+
+The gradient section reports the correlated MP2 derivative and includes the usual maximum and RMS gradient norms.
+
+### 9. Coupled cluster
+
+#### RCCSD
+
+`correlation ccsd` runs the conventional iterative RCCSD solver for canonical
+closed-shell RHF references. It expands spatial orbitals into a spin-orbital
+basis, forms the standard τ/τ̃ tensors and CCSD intermediates
+(F_ae, F_mi, F_me, W_mnij, W_abef, W_mbej), then iterates T1/T2 amplitudes
+with DIIS. Scales O(N⁶); no system-size cap.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation ccsd
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+    save_checkpoint .false.
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+H     0.000000     0.000000    -0.370500
+H     0.000000     0.000000     0.370500
+%end_coords
+```
+
+#### UCCSD (determinant prototype)
+
+`correlation uccsd` uses a determinant-space teaching prototype for open-shell
+UHF references. Intended for small classroom-scale systems (≤ 12 spin orbitals
+/ ≤ 1200 determinants). Boron atom is the canonical test case.
+
+```
+%begin_scf
+    scf_type    uhf
+    correlation uccsd
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+%end_scf
+
+%begin_coords
+1
+0   2
+B     0.000000    0.000000    0.000000
+%end_coords
+```
+
+#### RCCSDT — small system (determinant prototype)
+
+`correlation ccsdt` on a small RHF system automatically uses the
+determinant-space prototype: it builds the spin-orbital Hamiltonian, enumerates
+all S/D/T excitations, evaluates `exp(−T) H exp(T) |Φ₀⟩` in the determinant
+basis, and projects residuals onto S/D/T. LiH/STO-3G is the canonical test
+(4 electrons, 6 spatial orbitals); triples contribution ≈ 10⁻⁵ Hartree.
+
+```
+%begin_scf
+    scf_type    rhf
+    correlation ccsdt
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+    save_checkpoint .false.
+%end_scf
+
+%begin_coords
+2
+0   1
+Li    0.000000     0.000000     0.000000
+H     0.000000     0.000000     1.595000
+%end_coords
+```
+
+#### RCCSDT — moderate system (tensor warm-start + determinant backstop)
+
+The same `correlation ccsdt` keyword routes to the tensor production backend
+automatically when the system exceeds the direct determinant-prototype limit
+(nso > 12 or ndet > 1200). `choose_rccsdt_backend` makes this decision; no
+keyword change is needed.
+
+For moderate-size systems the tensor backend does not run alone — it is a
+three-stage pipeline:
+
+1. **Tensor RCCSD warm-start** — converges T1/T2 using the spin-orbital
+   intermediate solver. Prints a per-block memory summary up front.
+2. **Staged tensor T3 loop** — begins iterating the triples workspace for a
+   fixed number of steps to build T3 amplitude quality.
+3. **Determinant backstop** — if the system fits within nso ≤ 16 and the full
+   Fock-space determinant count `C(nso, nelec)` ≤ 5000, the determinant solver
+   takes over, warm-started from the T1/T2/T3 produced in stages 1–2, and runs
+   to full convergence. Systems beyond nso=16 / ndet=5000 will error until the
+   fully tensorized T3 residual engine is complete.
+
+Water/STO-3G (nso=14, ndet=C(14,10)=1001) goes through all three stages —
+the final convergence is through the determinant backstop with 1001 determinants.
+
+```
+%begin_scf
+    scf_type    rhf
+    correlation ccsdt
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+    save_checkpoint .false.
+%end_scf
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.000000
+H     0.000000    -0.757160     0.586260
+H     0.000000     0.757160     0.586260
+%end_coords
+```
+
+Log markers to watch for: `RCCSDT[TENSOR]` (tensor stages), `RCCSDT[DET-BACKSTOP]`
+(determinant backstop iterations).
+
+#### UCCSDT (determinant prototype)
+
+`correlation uccsdt` extends the UCCSD determinant prototype to include triple
+excitations (`max_rank = 3`). Same size limit as UCCSD; Boron/STO-3G is the
+canonical test.
+
+```
+%begin_scf
+    scf_type    uhf
+    correlation uccsdt
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+%end_scf
+
+%begin_coords
+1
+0   2
+B     0.000000    0.000000    0.000000
+%end_coords
+```
+
+The `UCCSDT − UCCSD` triples correction for B/STO-3G is nonzero and
+verifiable against `tests/pyscf/b_uccsdt_sto3g.py`.
+
+---
+
+### 10. CASSCF active-space calculation
+
+CASSCF (Complete Active Space SCF) provides a multireference wavefunction by
+performing a full CI expansion within a chosen active space of `nactorb`
+orbitals containing `nactele` electrons. The RHF orbitals serve as the starting
+reference; CASSCF then simultaneously optimizes the CI coefficients and orbital
+rotations until convergence.
 
 ```
 %begin_control
@@ -447,7 +726,8 @@ H    0.000000   -0.757005   -0.468704
 %end_coords
 ```
 
-Output includes the RHF reference energy, the CASSCF energy at each macro-iteration, orbital gradient norm, and natural orbital occupation numbers:
+Output includes the RHF reference energy, the CASSCF energy at each
+macro-iteration, orbital gradient norm, and natural orbital occupation numbers:
 
 ```
 [INF]  CASSCF  macro  0:  E = -75.9849xxxx Eh   |g| = x.xxxe-xx
@@ -458,11 +738,206 @@ Output includes the RHF reference energy, the CASSCF energy at each macro-iterat
 [INF]  Natural occupation numbers (active): 1.9xxx  1.9xxx  0.0xxx  0.0xxx
 ```
 
-**Choosing the active space**: A good starting point is to include all strongly correlated orbitals — bonding/antibonding pairs, lone pairs involved in bond breaking, frontier orbitals. For H₂O with STO-3G, CAS(4,4) includes the four valence-like orbitals. Start small and check the natural occupation numbers: values near 0 or 2 indicate weakly correlated orbitals that may not need to be active.
+**Choosing the active space**: A good starting point is to include all strongly
+correlated orbitals — bonding/antibonding pairs, lone pairs involved in bond
+breaking, frontier orbitals. For H₂O with STO-3G, CAS(4,4) includes the four
+valence-like orbitals. Start small and check the natural occupation numbers:
+values near 0 or 2 indicate weakly correlated orbitals that may not need to be
+active.
 
-**State averaging (SA-CASSCF)**: Set `nroots 2` (or more) to simultaneously optimize orbitals for multiple electronic states with equal weights. Custom weights are not currently exposed as keywords; use equal-weight averaging.
+#### State-averaged CASSCF (SA-CASSCF)
 
-### 10. SCF mode
+Set `nroots N` to simultaneously optimize orbitals for N electronic states.
+Provide `weights` (space-separated, automatically normalized) to use unequal
+state averaging. Default is equal weights when `weights` is omitted.
+
+```
+%begin_scf
+    scf_type           rhf
+    correlation        casscf
+    use_diis           .true.
+    diis_dim           8
+    engine             os
+    guess              hcore
+    nactele            2
+    nactorb            2
+    nroots             3
+    weights            0.5 0.25 0.25   # S0 weighted 2×, S1 and S2 equal
+    mcscf_max_iter     200
+    tol_mcscf_energy   1e-8
+    tol_mcscf_grad     1e-5
+%end_scf
+```
+
+The iteration table prints `SA Grad` (convergence quantity,
+`‖Σ_I w_I g_I‖∞`) and `MaxRootG` (diagnostic, max over roots).
+
+To pin active orbitals by irrep when `use_symm .true.`:
+
+```
+    core_irrep_counts   A1=3 B1=1
+    active_irrep_counts A1=1 B1=1
+```
+
+---
+
+### 11. RASSCF active-space calculation
+
+RASSCF extends CASSCF by partitioning the active space into three subspaces:
+RAS1 (hole excitations limited by `max_holes`), RAS2 (full CI, like a small
+CAS), and RAS3 (particle excitations limited by `max_elec`). Total active
+orbitals must equal `nras1 + nras2 + nras3 = nactorb`.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation rasscf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    nactele     4
+    nactorb     4
+    nroots      1
+    nras1       1        # 1 orbital in RAS1; at most max_holes holes allowed
+    nras2       2        # 2 orbitals in RAS2 (full CI)
+    nras3       1        # 1 orbital in RAS3; at most max_elec electrons allowed
+    max_holes   1
+    max_elec    1
+    mcscf_max_iter  50
+    tol_mcscf_energy  1e-8
+    tol_mcscf_grad    1e-5
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O    0.000000    0.000000    0.117176
+H    0.000000    0.757005   -0.468704
+H    0.000000   -0.757005   -0.468704
+%end_coords
+```
+
+### 12. Full configuration interaction (FCI)
+
+`correlation fci` performs **Full Configuration Interaction** over the *entire*
+MO space: it builds every Slater determinant obtainable by distributing the
+electrons among all molecular orbitals, then diagonalizes the electronic
+Hamiltonian in that determinant basis. Within a given basis set this is the
+*exact* solution of the electronic Schrödinger equation, so it is the gold
+standard against which approximate correlation methods (MP2, CCSD, …) are
+measured.
+
+FCI reuses the same determinant-string, Slater-Condon, and Davidson machinery as
+CASSCF — it is simply CASSCF's CI step with the active space taken to be the
+whole basis and no orbital optimization. It runs from a converged **RHF** or
+**ROHF** reference (so open-shell systems are supported) and is **single-point
+only**. No active-space keywords are needed.
+
+Because FCI diagonalizes the *complete* determinant space, its total energy is
+independent of the reference orbitals — RHF and ROHF give the same FCI energy
+where both apply. The reported *correlation* energy, however, is measured against
+whichever reference was used (\(E_{\text{FCI}} - E_{\text{ref}}\)), so it differs
+between an RHF and an ROHF reference for the same system.
+
+The determinant count grows combinatorially
+(\(\binom{n_{\text{orb}}}{n_\alpha}\binom{n_{\text{orb}}}{n_\beta}\)), so FCI is
+only practical for small systems and minimal/double-zeta bases. The run aborts
+if the determinant count exceeds `ci_max_dim` (default `10000`) or if the basis
+has more orbitals than the packed-determinant encoding allows.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation fci
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O    0.000000    0.000000    0.117176
+H    0.000000    0.757005   -0.468704
+H    0.000000   -0.757005   -0.468704
+%end_coords
+```
+
+The output reports the FCI determinant dimension, the correlation energy
+(\(E_{\text{FCI}} - E_{\text{RHF}}\)), and the total FCI energy:
+
+```
+[INF] FCI :                         Full CI over 7 orbitals, 5 alpha / 5 beta electrons  (CI dim = 441)
+  Correlation Energy                   -0.0494800411       -1.3464205095      -31.0491945604
+  Total FCI Energy                    -75.0124130330    -2041.1917442848   -47070.9998505472
+```
+
+For water/STO-3G this matches PySCF's FCI reference (`-75.0124130264`) to better
+than \(10^{-8}\,E_h\). To report several states, set `nroots` to the number of
+lowest roots you want printed (the ground state is always used for the reported
+total energy). Larger FCI spaces require raising `ci_max_dim`.
+
+**Open-shell example.** Switch `scf_type` to `rohf` and set an open-shell
+multiplicity in the coordinate header to run FCI on a radical or a triplet. For
+the O₂ triplet (multiplicity 3) in STO-3G:
+
+```
+%begin_scf
+    scf_type    rohf
+    correlation fci
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+...
+%begin_coords
+2
+0   3
+O    0.000000    0.000000   -0.604000
+O    0.000000    0.000000    0.604000
+%end_coords
+```
+
+```
+[INF] FCI :                         Full CI over 10 orbitals, 9 alpha / 7 beta electrons  (CI dim = 1200)
+  Total FCI Energy                   -147.7441885517    -4020.3241802795   -92710.8780539364
+```
+
+which matches PySCF's FCI reference (`-147.7441885427`) to better than
+\(10^{-8}\,E_h\).
+
+The theory is developed in detail in §15 of the
+[Planck Teaching Guide](docs/PLANCK_TEACHING_GUIDE.md).
+
+### 13. SCF mode
 
 | Mode | Keyword | When to use |
 |---|---|---|
@@ -487,8 +962,175 @@ For large systems set `scf_mode direct` or lower `threshold`:
     ...
 ```
 
+#### Symmetry path cookbook
 
-### 11. Basis sets
+Planck selects the symmetry reduction path from three knobs:
+
+- `basis_type cartesian` vs `basis_type spherical`
+- `use_symm .true.` in `%begin_geom`
+- `scf_mode direct` when you want the full point-group direct-SCF path
+
+Use the following concrete templates as starting points.
+
+**1. Cartesian D2h-style symmetry path**
+
+This is the regular symmetry-enabled Cartesian path. It is the right default for
+Abelian/D2h-subgroup cases such as water in `C2v`.
+
+```text
+%begin_control
+    basis       sto-3g
+    calculation energy
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    engine      os
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords
+```
+
+Closest checked example:
+`tests/inputs/regression/hf/water_rhf_os_symm.hfinp`
+
+**2. Cartesian full-symmetry direct-SCF path**
+
+Use this when you want the full point-group direct-SCF reduction rather than
+just the D2h-subgroup sign/permute path. The practical trigger is:
+`basis_type cartesian` + `use_symm .true.` + `scf_mode direct`, on a molecule
+whose detected point group has non-D2h operations. Ammonia (`C3v`) is the
+smallest clean example.
+
+```text
+%begin_control
+    basis       sto-3g
+    calculation energy
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+    scf_mode    direct
+    tol_energy  1e-10
+    tol_density 1e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+4
+0   1
+N     0.0000    0.0000    0.1173
+H     0.0000    0.9377   -0.2738
+H     0.8121   -0.4689   -0.2738
+H    -0.8121   -0.4689   -0.2738
+%end_coords
+```
+
+Checked examples:
+`tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_direct.hfinp`
+`tests/inputs/regression/full_symmetry/ch4_td_fullsym_direct.hfinp`
+
+**3. Spherical D2h-style symmetry path**
+
+This is the spherical-basis analogue of the regular symmetry-enabled path:
+switch to `basis_type spherical`, keep `use_symm .true.`, and do not rely on a
+non-D2h full-group case. Water in `C2v` with `6-31g*` is the standard example.
+
+```text
+%begin_control
+    basis       6-31g*
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+    tol_energy  1e-10
+    tol_density 1e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.117176
+H     0.000000     0.757200    -0.468704
+H     0.000000    -0.757200    -0.468704
+%end_coords
+```
+
+Checked example:
+`tests/inputs/regression/spherical/water_spherical_symmetry_c2v_631gd.hfinp`
+
+**4. Spherical full-symmetry direct-SCF path**
+
+This is the spherical-basis version of the full point-group direct-SCF path:
+`basis_type spherical` + `use_symm .true.` + `scf_mode direct`, again on a
+molecule whose point group includes non-D2h operations. Ammonia (`C3v`) and
+methane (`Td`) are the reference examples in the regression suite.
+
+```text
+%begin_control
+    basis       6-31g*
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+    scf_mode    direct
+    tol_energy  1e-10
+    tol_density 1e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+4
+0   1
+N     0.0000    0.0000    0.1173
+H     0.0000    0.9377   -0.2738
+H     0.8121   -0.4689   -0.2738
+H    -0.8121   -0.4689   -0.2738
+%end_coords
+```
+
+Checked examples:
+`tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_631gd_spherical_direct.hfinp`
+`tests/inputs/regression/full_symmetry/ch4_td_fullsym_631gd_spherical_direct.hfinp`
+
+### 14. Basis sets
 
 | Keyword | Description |
 |---|---|
@@ -498,7 +1140,7 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | `6-31g*` | 6-31G + d polarization on heavy atoms |
 
 
-### 12. Convergence tips
+### 15. Convergence tips
 
 | Problem | Fix |
 |---|---|
@@ -510,11 +1152,11 @@ For large systems set `scf_mode direct` or lower `threshold`:
 | MO labels are Ag/Bg/Au/Bu instead of Eg/Eu | Expected — for non-Abelian groups (D3d, Oh, …) the program uses the largest Abelian subgroup (e.g. C2h for D3d). The active group is printed to the log. |
 
 
-### 13. Kohn-Sham DFT calculation
+### 16. Kohn-Sham DFT calculation
 
-Kohn-Sham DFT uses a separate executable, `planck-dft`. It reads the same `.hfinp` format but requires a `%begin_dft` block that selects the exchange-correlation functional and integration grid. The `scf_type` keyword in `%begin_scf` controls the reference: `rhf` → RKS, `uhf` → UKS.
+Kohn-Sham DFT uses a separate executable, `planck-dft`. It reads the same `.hfinp` format but requires a `%begin_dft` block that selects the exchange-correlation functional and integration grid. The `scf_type` keyword in `%begin_scf` controls the reference: `rhf` → RKS, `uhf` → UKS. Global hybrid functionals such as B3LYP and PBE0 include their own correlation through libxc, so the `correlation` keyword is ignored for those combined XC choices.
 
-#### Minimal PBE/STO-3G single point — water
+#### Minimal PBE/STO-3G single point — water (RKS)
 
 ```
 %begin_control
@@ -596,6 +1238,10 @@ The same post-SCF multipole analysis is available in `planck-dft`, because the d
 | `exchange b88` + `correlation p86` | BP86 | GGA |
 | `exchange pbe` + `correlation pbe` | PBE (default) | GGA |
 | `exchange pw91` + `correlation pw91` | PW91 | GGA |
+| `exchange b3lyp` | B3LYP | global hybrid GGA |
+| `exchange pbe0` | PBE0 | global hybrid GGA |
+| `exchange hse06` | HSE06 | range-separated hybrid GGA |
+| `exchange b2plyp` | B2PLYP | double-hybrid GGA |
 
 #### Grid quality
 
@@ -606,9 +1252,126 @@ The same post-SCF multipole analysis is available in `planck-dft`, because the d
 | `grid fine` | ~302 | High-accuracy or difficult systems |
 | `grid ultrafine` | ~590 | Benchmark-quality results |
 
+#### Open-shell KS-DFT (UKS)
+
+Set `scf_type uhf` for unrestricted Kohn-Sham. Multiplicity goes in `%begin_coords` as usual.
+
+```
+%begin_scf
+    scf_type    uhf
+    use_diis    .true.
+    diis_dim    6
+    engine      os
+    level_shift 0.3
+%end_scf
+
+%begin_dft
+    exchange    pbe
+    correlation pbe
+    grid        normal
+%end_dft
+
+%begin_coords
+3
+0   3
+O     0.000000     0.000000     0.000000
+H     0.758077     0.000000    -0.602602
+H    -0.758077     0.000000    -0.602602
+%end_coords
+```
+
+#### DFT geometry optimization
+
+`calculation geomopt` works the same as for HF; the KS gradient drives each
+step. Use `opt_coords internal` for IC-BFGS (recommended for non-linear molecules).
+
+```
+%begin_control
+    basis       sto-3g
+    calculation geomopt
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    6
+    engine      os
+    guess       hcore
+    max_cycles  50
+    tol_energy  1.0e-8
+    tol_density 1.0e-8
+%end_scf
+
+%begin_dft
+    exchange    pbe
+    correlation pbe
+    grid        coarse
+%end_dft
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+H     0.000000     0.000000    -0.450000
+H     0.000000     0.000000     0.450000
+%end_coords
+```
+
+#### DFT frequency analysis
+
+`calculation freq` (or `calculation optfreq`) computes the semi-numerical
+Hessian from finite differences of KS gradients. Run at an optimized geometry
+to get physically meaningful frequencies.
+
+```
+%begin_control
+    basis       sto-3g
+    calculation freq
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    6
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_dft
+    exchange    pbe
+    correlation pbe
+    grid        normal
+%end_dft
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+H     0.000000     0.000000    -0.370000
+H     0.000000     0.000000     0.370000
+%end_coords
+```
+
 #### Custom libxc functional
 
-To use any libxc functional by its integer ID, replace the enum keywords with numeric IDs:
+`exchange` and `correlation` first try the built-in aliases above, then fall back
+to libxc names. That means inputs such as `exchange hse06`,
+`exchange hyb_gga_xc_cam_b3lyp`, or `exchange b2plyp` are accepted directly.
+You can also select any libxc functional by its integer ID:
 
 ```
 %begin_dft
@@ -618,25 +1381,122 @@ To use any libxc functional by its integer ID, replace the enum keywords with nu
 %end_dft
 ```
 
-### 14. All input keywords at a glance
+Range-separated and double-hybrid functionals are currently implemented for
+single-point energies. Their gradient, optimization, frequency, and TDDFT
+workflows are still rejected with an explicit diagnostic.
+
+### 17. BSSE / counterpoise correction
+
+Interaction energies computed with a finite basis are contaminated by **basis
+set superposition error (BSSE)**: in the dimer, each fragment borrows the other
+fragment's basis functions, artificially lowering the dimer energy. The
+**counterpoise (CP) correction** removes this by recomputing each monomer in the
+full dimer basis, using **ghost atoms** — centers that carry basis functions but
+no nuclear charge and no electrons.
+
+#### Ghost atoms in a single calculation
+
+A ghost is requested by decorating the element symbol with `Gh(...)`, a leading
+`@`, or a trailing `:` — all three are equivalent. This runs a one-helium RHF in
+the basis of two centers:
+
+```
+%begin_coords
+2
+0   1
+He        0.000000    0.000000    0.000000
+Gh(He)    0.000000    0.000000    3.000000
+%end_coords
+```
+
+Ghost atoms force symmetry off (a ghost breaks the point group of the real
+nuclei) and are labeled `(ghost)` in the geometry echo.
+
+#### Automated counterpoise run
+
+Add a `%begin_bsse` block listing the two fragments by 1-based atom index; the
+driver then runs all five SCF sub-calculations (dimer, two free monomers, two
+ghosted monomers) and reports the decomposition. He₂ at 3 Å in cc-pVDZ:
+
+```
+%begin_control
+    basis       cc-pVDZ
+    calculation energy
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    engine      os
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+He    0.000000    0.000000    0.000000
+He    0.000000    0.000000    3.000000
+%end_coords
+
+%begin_bsse
+    fragment      1
+    fragment      2
+    charge        0 0          # optional, per fragment (default 0)
+    multiplicity  1 1          # optional, per fragment (default 1)
+%end_bsse
+```
+
+Output:
+
+```
+E(AB)  dimer basis        :       -5.7103200891 Eh
+E(A)   monomer basis      :       -2.8551604772 Eh
+E(B)   monomer basis      :       -2.8551604772 Eh
+E(A)*  dimer basis (CP)   :       -2.8551710717 Eh
+E(B)*  dimer basis (CP)   :       -2.8551710717 Eh
+
+BSSE                      :       -0.0000211889 Eh =    -0.0133 kcal/mol
+Interaction (uncorrected) :        0.0000008654 Eh =     0.0005 kcal/mol
+Interaction (CP-corrected):        0.0000220543 Eh =     0.0138 kcal/mol
+```
+
+Notes:
+
+- Exactly **two** fragments are required, and together they must include every
+  atom exactly once (the parser validates this).
+- `charge` / `multiplicity` are optional; a fragment with `multiplicity > 1`
+  runs UHF. Use these for ion pairs or open-shell fragments.
+- The procedure is **SCF-level only** (RHF/UHF/ROHF energies) and frozen at the
+  input geometry; it corrects the basis, not the structure.
+- Larger BSSE shows up with small bases: the water dimer in STO-3G has
+  \(\sim4\) kcal/mol of BSSE, roughly half its raw interaction energy.
+
+### 18. All input keywords at a glance
 
 ```
 %begin_control
     basis        sto-3g | 3-21g | 6-31g | 6-31g*
     basis_type   cartesian | spherical
-    calculation  energy | gradient | geomopt | freq   # freq = frequency analysis
+    calculation  energy | gradient | geomopt | freq | optfreq | imagfollow
     verbosity    silent | minimal | normal | verbose | debug
     basis_path   /path/to/basis-sets          # optional override
     grad_tol     3e-4                         # geomopt convergence threshold (Ha/Bohr)
     max_geomopt_iter  50                      # maximum geometry optimization steps
     hessian_step 5e-3                         # finite-difference step (Bohr) for freq
+    print_populations .true. | .false.        # Mulliken population analysis
 %end_control
 
 %begin_scf
-    scf_type       rhf | uhf
+    scf_type       rhf | rohf | uhf
     scf_mode       conventional | direct | auto
-    engine         os
-    guess          hcore | density | full
+    engine         os | rys | auto
+    guess          hcore | sad | density | full
     save_checkpoint .true. | .false.
     use_diis       .true. | .false.
     diis_dim       8
@@ -647,19 +1507,35 @@ To use any libxc functional by its integer ID, replace the enum keywords with nu
     tol_density    1e-10
     tol_eri        1e-10
     threshold      100                        # auto-mode nbasis cutoff
-    correlation    rmp2 | ump2 | casscf | rasscf
-    nactele        4                        # active electrons (casscf/rasscf)
-    nactorb        4                        # active orbitals  (casscf/rasscf)
-    nroots         1                        # CI roots; >1 = state-averaged
+    correlation    rmp2 | ump2               # MP2
+                 | ccsd                      # RCCSD (iterative tensor, any size)
+                 | uccsd                     # UCCSD (determinant prototype, small systems)
+                 | ccsdt                     # RCCSDT (auto-selects determinant or tensor backend)
+                 | uccsdt                    # UCCSDT (determinant prototype, small systems)
+                 | casscf | rasscf           # multireference active-space SCF
+    # CASSCF / RASSCF shared
+    nactele        4                          # active electrons
+    nactorb        4                          # active orbitals
+    nroots         1                          # CI roots; >1 = state-averaged
+    weights        0.5 0.25 0.25             # SA weights (one per root, auto-normalized)
+    core_irrep_counts   A1=3 B1=1            # pin core orbitals by irrep
+    active_irrep_counts A1=2 B1=2            # pin active orbitals by irrep
+    mo_permutation      0 1 2 ...            # reorder MOs before MCSCF loop (0-based)
     mcscf_max_iter     200
     mcscf_micro_per_macro  4
     tol_mcscf_energy   1e-8
     tol_mcscf_grad     1e-4
+    # RASSCF only
+    nras1          1                          # orbitals in RAS1 (hole excitations)
+    nras2          2                          # orbitals in RAS2 (full CI)
+    nras3          1                          # orbitals in RAS3 (particle excitations)
+    max_holes      1                          # max holes in RAS1
+    max_elec       1                          # max electrons in RAS3
 %end_scf
 
 # planck-dft only: selects XC functional and numerical integration grid
 %begin_dft
-    exchange     slater | b88 | pw91 | pbe      # exchange functional (default: pbe)
+    exchange     slater | b88 | pw91 | pbe | b3lyp | pbe0  # exchange/XC functional (default: pbe)
     correlation  vwn5 | lyp | p86 | pw91 | pbe  # correlation functional (default: pbe)
     exchange_id  <int>                           # custom libxc exchange ID (overrides exchange)
     correlation_id <int>                         # custom libxc correlation ID (overrides correlation)
@@ -681,6 +1557,7 @@ To use any libxc functional by its integer ID, replace the enum keywords with nu
 <charge>  <multiplicity>
 # Cartesian (coord_type cartesian):
 <symbol>  <x>  <y>  <z>
+# Ghost atom (basis only, no charge/electrons): Gh(<symbol>) | @<symbol> | <symbol>:
 ...
 # Z-matrix (coord_type zmatrix):
 <symbol>
@@ -697,4 +1574,12 @@ To use any libxc functional by its integer ID, replace the enum keywords with nu
     d  i  j  k  l        # fix dihedral i-j-k-l
     f  i                 # freeze atom i (all Cartesian DOFs)
 %end_constraints
+
+# Optional: BSSE / counterpoise correction (runs 5 SCF sub-calculations)
+%begin_bsse
+    fragment      1 2 3            # 1-based atom indices, fragment A
+    fragment      4 5 6            # fragment B (exactly two; must cover all atoms)
+    charge        0 0              # optional, per fragment (default 0)
+    multiplicity  1 1              # optional, per fragment (default 1)
+%end_bsse
 ```

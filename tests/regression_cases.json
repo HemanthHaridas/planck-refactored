@@ -2,177 +2,1547 @@
   "cases": [
     {
       "id": "h2_rmp2_sto3g",
-      "input": "inputs/val_h2.hfinp",
-      "tags": ["smoke", "core"],
+      "input": "inputs/examples/hf/mp2_validation/val_h2.hfinp",
+      "tags": [
+        "smoke",
+        "core"
+      ],
       "expected_exit_code": 0,
-      "contains": ["SCF Converged after", "Total MP2 Energy"],
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
       "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -1.1167593103, "atol": 1e-9},
-        {"type": "metric_close", "metric": "mp2_total_energy", "expected": -1.1298973826, "atol": 1e-9},
-        {"type": "metric_lt_metric", "left": "mp2_total_energy", "right": "rhf_total_energy"}
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -1.1167593103,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -1.1298973826,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "h2_rhf_mayer_bond_order_sto3g",
+      "input": "tests/inputs/regression/scf/h2_rhf_mayer_sto3g.hfinp",
+      "tags": [
+        "core"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Mayer Bond Orders :",
+        "1       2         H         H        1.00000000"
+      ]
+    },
+    {
+      "id": "h2o_cation_uhf_mayer_bond_order_sto3g",
+      "input": "tests/inputs/regression/scf/h2o_cation_uhf_mayer_sto3g.hfinp",
+      "tags": [
+        "core"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Mayer Bond Orders :",
+        "1       2         O         H        0.76017799"
       ]
     },
     {
       "id": "lih_rmp2_sto3g",
-      "input": "inputs/val_lih.hfinp",
-      "tags": ["core"],
+      "input": "inputs/examples/hf/mp2_validation/val_lih.hfinp",
+      "tags": [
+        "core"
+      ],
       "expected_exit_code": 0,
-      "contains": ["SCF Converged after", "Total MP2 Energy"],
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
       "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -7.8620238776, "atol": 1e-9},
-        {"type": "metric_close", "metric": "mp2_total_energy", "expected": -7.8748885147, "atol": 1e-9},
-        {"type": "metric_lt_metric", "left": "mp2_total_energy", "right": "rhf_total_energy"}
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -7.8620238776,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -7.8748885147,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
       ]
     },
     {
       "id": "hf_rmp2_sto3g",
-      "input": "inputs/val_hf.hfinp",
-      "tags": ["core"],
+      "input": "inputs/examples/hf/mp2_validation/val_hf.hfinp",
+      "tags": [
+        "core"
+      ],
       "expected_exit_code": 0,
-      "contains": ["SCF Converged after", "Total MP2 Energy"],
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
       "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -98.5707800505, "atol": 1e-9},
-        {"type": "metric_close", "metric": "mp2_total_energy", "expected": -98.5881243665, "atol": 1e-9},
-        {"type": "metric_lt_metric", "left": "mp2_total_energy", "right": "rhf_total_energy"}
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -98.5707800505,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -98.5881243665,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
       ]
     },
     {
       "id": "water_rmp2_sto3g",
-      "input": "inputs/val_water.hfinp",
-      "tags": ["smoke", "core"],
+      "input": "inputs/examples/hf/mp2_validation/val_water.hfinp",
+      "tags": [
+        "smoke",
+        "core"
+      ],
       "expected_exit_code": 0,
-      "contains": ["SCF Converged after", "Total MP2 Energy"],
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
       "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.9458807581, "atol": 1e-9},
-        {"type": "metric_close", "metric": "mp2_total_energy", "expected": -74.9767773220, "atol": 1e-9},
-        {"type": "metric_lt_metric", "left": "mp2_total_energy", "right": "rhf_total_energy"}
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807581,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -74.976777322,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "water_rimp2_ccpvdz",
+      "input": "tests/inputs/regression/ri/water_rimp2_ccpvdz.hfinp",
+      "tags": [
+        "ri"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.0231369348,
+          "atol": 5e-08
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -76.2270045415,
+          "atol": 5e-08
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "water_cation_rimp2_ccpvdz",
+      "input": "tests/inputs/regression/ri/water_cation_rimp2_ccpvdz.hfinp",
+      "tags": [
+        "ri",
+        "open_shell"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "UHF Converged",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -75.6320628070,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -75.7888422433,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "cn_anion_rimp2_ccpvdz",
+      "input": "tests/inputs/regression/ri/cn_anion_rimp2_ccpvdz.hfinp",
+      "tags": [
+        "ri"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -92.2994720562,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -92.5834015696,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "cn_radical_rimp2_ccpvdz",
+      "input": "tests/inputs/regression/ri/cn_radical_rimp2_ccpvdz.hfinp",
+      "tags": [
+        "ri",
+        "open_shell"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -92.2133553633,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -92.4451428697,
+          "atol": 1e-06
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
       ]
     },
     {
       "id": "nh3_rmp2_sto3g",
-      "input": "inputs/val_nh3.hfinp",
-      "tags": ["core"],
+      "input": "inputs/examples/hf/mp2_validation/val_nh3.hfinp",
+      "tags": [
+        "core"
+      ],
       "expected_exit_code": 0,
-      "contains": ["SCF Converged after", "Total MP2 Energy"],
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
       "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -55.4363868783, "atol": 1e-9},
-        {"type": "metric_close", "metric": "mp2_total_energy", "expected": -55.4996670673, "atol": 1e-9},
-        {"type": "metric_lt_metric", "left": "mp2_total_energy", "right": "rhf_total_energy"}
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -55.4363868783,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -55.4996670673,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
       ]
     },
     {
       "id": "ch4_rmp2_sto3g",
-      "input": "inputs/val_ch4.hfinp",
-      "tags": ["core"],
+      "input": "inputs/examples/hf/mp2_validation/val_ch4.hfinp",
+      "tags": [
+        "core"
+      ],
       "expected_exit_code": 0,
-      "contains": ["SCF Converged after", "Total MP2 Energy"],
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
       "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -39.7267433254, "atol": 1e-9},
-        {"type": "metric_close", "metric": "mp2_total_energy", "expected": -39.7832030740, "atol": 1e-9},
-        {"type": "metric_lt_metric", "left": "mp2_total_energy", "right": "rhf_total_energy"}
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -39.7267433254,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -39.783203074,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_engine_os_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_os_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807610,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -74.9767773288,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_engine_hgp_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_hgp_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807610,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -74.9767773288,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "rhf_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "mp2_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_engine_rys_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_rys_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807610,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -74.9767773288,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "rhf_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "mp2_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_engine_auto_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_engine_auto_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807610,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -74.9767773288,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "rhf_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "mp2_total_energy",
+          "case": "water_rmp2_engine_os_sto3g",
+          "atol": 1e-10
+        }
       ]
     },
     {
       "id": "dihydrogen_rmp2_ccpvdz",
-      "input": "inputs/dihydrogen.hfinp",
-      "tags": ["smoke", "core"],
+      "input": "inputs/examples/hf/mp2_validation/dihydrogen.hfinp",
+      "tags": [
+        "smoke",
+        "core"
+      ],
       "expected_exit_code": 0,
-      "contains": ["Point Group :", "Total MP2 Energy"],
+      "contains": [
+        "Point Group :",
+        "Total MP2 Energy"
+      ],
       "checks": [
-        {"type": "metric_eq", "metric": "point_group", "expected": "Dinfh"},
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -1.1310536239, "atol": 1e-9},
-        {"type": "metric_close", "metric": "mp2_total_energy", "expected": -1.1501516776, "atol": 1e-9},
-        {"type": "metric_lt_metric", "left": "mp2_total_energy", "right": "rhf_total_energy"}
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "Dinfh"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -1.1310536239,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -1.1589651592,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
       ]
     },
     {
       "id": "he_rmp2_no_virtual_expected_failure",
-      "input": "inputs/val_he.hfinp",
-      "tags": ["smoke", "core"],
+      "input": "inputs/examples/hf/mp2_validation/val_he.hfinp",
+      "tags": [
+        "smoke",
+        "core"
+      ],
       "expected_exit_code": 1,
-      "contains": ["RMP2 : Failed :", "no occupied or virtual orbitals"],
+      "contains": [
+        "RMP2 : Failed :",
+        "no occupied or virtual orbitals"
+      ],
       "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -2.8077839566, "atol": 1e-9}
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -2.8077839566,
+          "atol": 1e-09
+        }
       ]
     },
     {
       "id": "ethylene_rhf_ccpvdz_auto",
-      "input": "tests/inputs/ethylene_rhf_ccpvdz_auto.hfinp",
-      "tags": ["core", "extended"],
+      "input": "tests/inputs/regression/hf/ethylene_rhf_ccpvdz_auto.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
       "expected_exit_code": 0,
-      "contains": ["SCF Converged after", "Total Energy"],
+      "contains": [
+        "SCF Converged after",
+        "Total Energy"
+      ],
       "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -78.0401905750, "atol": 1e-9},
-        {"type": "metric_eq", "metric": "scf_converged_iterations", "expected": 16}
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -78.040190575,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_eq",
+          "metric": "scf_converged_iterations",
+          "expected": 16
+        }
       ]
     },
     {
       "id": "ethylene_rhf_ccpvdz_rys",
-      "input": "tests/inputs/ethylene_rhf_ccpvdz_rys.hfinp",
-      "tags": ["extended"],
+      "input": "tests/inputs/regression/hf/ethylene_rhf_ccpvdz_rys.hfinp",
+      "tags": [
+        "extended"
+      ],
       "expected_exit_code": 0,
-      "contains": ["SCF Converged after", "Total Energy"],
+      "contains": [
+        "SCF Converged after",
+        "Total Energy"
+      ],
       "checks": [
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -78.0401905750, "atol": 1e-9},
-        {"type": "metric_eq", "metric": "scf_converged_iterations", "expected": 17}
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -78.040190575,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_le",
+          "metric": "scf_converged_iterations",
+          "value": 25
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_hgp_sto3g",
+      "input": "tests/inputs/regression/hf/water_rhf_hgp_sto3g.hfinp",
+      "tags": [
+        "smoke",
+        "core"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807581,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_eq",
+          "metric": "scf_converged_iterations",
+          "expected": 11
+        }
       ]
     },
     {
       "id": "ethylene_rhf_d2d_frontier_degeneracy",
-      "input": "tests/inputs/rhf_ao_sao_tests/ethylene_rhf_symm_321g.hfinp",
-      "tags": ["core", "extended"],
+      "input": "tests/inputs/regression/hf/ethylene_rhf_symm_321g.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
       "expected_exit_code": 0,
-      "contains": ["Point Group :                 D2d", "SCF Converged after", "Total Energy"],
+      "contains": [
+        "Point Group :                 D2d",
+        "SCF Converged after",
+        "Total Energy"
+      ],
       "checks": [
-        {"type": "metric_eq", "metric": "point_group", "expected": "D2d"},
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -77.2656992268, "atol": 1e-9},
-        {"type": "metric_close", "metric": "homo_lumo_gap", "expected": 0.0, "atol": 1e-6}
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "D2d"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -77.4195705536,
+          "atol": 1e-09
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_stability_stable",
+      "input": "tests/inputs/regression/hf/water_rhf_stability_stable.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Wavefunction stability analysis:",
+        "RHF -> RHF (real, internal)",
+        "stable"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807581,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_ge",
+          "metric": "stability_real_internal",
+          "value": 0.0
+        },
+        {
+          "type": "metric_ge",
+          "metric": "stability_complex_internal",
+          "value": 0.0
+        },
+        {
+          "type": "metric_ge",
+          "metric": "stability_triplet_external",
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "id": "ethylene_rhf_stability_unstable",
+      "input": "tests/inputs/regression/hf/ethylene_rhf_stability_unstable.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Wavefunction stability analysis:",
+        "RHF -> UHF (triplet, external)",
+        "UNSTABLE",
+        "Wavefunction is unstable"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -77.3837525262,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_le",
+          "metric": "stability_triplet_external",
+          "value": -0.001
+        },
+        {
+          "type": "metric_le",
+          "metric": "stability_complex_internal",
+          "value": -0.001
+        },
+        {
+          "type": "metric_le",
+          "metric": "stability_real_internal",
+          "value": -0.001
+        }
       ]
     },
     {
       "id": "water_rhf_os_c2v_symmetry_matches_ao_reference",
-      "input": "tests/inputs/rhf_ao_sao_tests/water_rhf_os_symm.hfinp",
-      "tags": ["core", "extended"],
+      "input": "tests/inputs/regression/hf/water_rhf_os_symm.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
       "expected_exit_code": 0,
-      "contains": ["Point Group :                 C2v", "Integral Symmetry :", "SCF Converged after", "Total Energy"],
+      "contains": [
+        "Point Group :                 C2v",
+        "Integral Symmetry :",
+        "SCF Converged after",
+        "Total Energy"
+      ],
       "checks": [
-        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
-        {"type": "metric_close", "metric": "rhf_total_energy", "expected": -74.9629329919, "atol": 1e-9}
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9458807581,
+          "atol": 1e-09
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_pcm_water_sto3g",
+      "input": "tests/inputs/regression/hf/water_rhf_pcm_water_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "PCM :",
+        "PCM Solvent :",
+        "SCF Converged after",
+        "Total Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9516348658,
+          "atol": 1e-09
+        }
       ]
     },
     {
       "id": "water_rhf_gradient_smoke",
-      "input": "tests/inputs/water_rhf_gradient.hfinp",
-      "tags": ["smoke", "extended"],
+      "input": "tests/inputs/regression/geometry/water_rhf_gradient.hfinp",
+      "tags": [
+        "smoke",
+        "extended"
+      ],
       "expected_exit_code": 0,
-      "contains": ["Gradient :", "Nuclear Gradient (Ha/Bohr) :"],
+      "contains": [
+        "Gradient :",
+        "Nuclear Gradient (Ha/Bohr) :"
+      ],
       "checks": [
-        {"type": "metric_present", "metric": "gradient_max"},
-        {"type": "metric_present", "metric": "gradient_rms"},
-        {"type": "metric_eq", "metric": "gradient_atom_lines", "expected": 3},
-        {"type": "metric_le", "metric": "gradient_max", "value": 0.2}
+        {
+          "type": "metric_present",
+          "metric": "gradient_max"
+        },
+        {
+          "type": "metric_present",
+          "metric": "gradient_rms"
+        },
+        {
+          "type": "metric_eq",
+          "metric": "gradient_atom_lines",
+          "expected": 3
+        },
+        {
+          "type": "metric_le",
+          "metric": "gradient_max",
+          "value": 0.2
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_gradient_hgp_core",
+      "input": "tests/inputs/regression/geometry/water_rhf_gradient_hgp.hfinp",
+      "executable": "tests/hf_gradient_fd.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_rhf_gradient_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/geometry/water_rhf_gradient.hfinp",
+      "executable": "tests/engine_gradient_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "OS gradient (Ha/Bohr):",
+        "HGP gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_b3lyp_gradient_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/dft/water_dft_b3lyp_gradient.hfinp",
+      "executable": "tests/engine_gradient_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "OS gradient (Ha/Bohr):",
+        "HGP gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_hse06_gradient_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/dft/water_dft_hse06_gradient.hfinp",
+      "executable": "tests/engine_gradient_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "OS gradient (Ha/Bohr):",
+        "HGP gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_rmp2_gradient_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_gradient_sto3g.hfinp",
+      "executable": "tests/engine_gradient_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "OS gradient (Ha/Bohr):",
+        "HGP gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_rhf_geomopt_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/geometry/water_rhf_geomopt_engine_compare.hfinp",
+      "executable": "tests/engine_geomopt_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Final Energy (OS)",
+        "Final Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_rhf_scf_energy_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/hf/water_rhf_energy_engine_compare.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_hse06_scf_energy_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/dft/water_dft_hse06_energy.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_uhf_triplet_scf_energy_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_uks_hse06_scf_energy_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/dft/water_triplet_uks_hse06_sto3g.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (HGP)",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_hse06_symm_scf_energy_engine_os_vs_hgp",
+      "input": "tests/inputs/regression/dft/water_dft_hse06_energy_symm.hfinp",
+      "executable": "tests/engine_scf_energy_compare.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Total Energy (OS)",
+        "Total Energy (HGP)",
+        "PASS"
       ]
     },
     {
       "id": "h2_rmp2_gradient_smoke",
-      "input": "tests/inputs/h2_rmp2_gradient.hfinp",
-      "tags": ["extended"],
+      "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
+      "tags": [
+        "extended"
+      ],
       "expected_exit_code": 0,
       "contains": [
         "Using analytic RMP2 gradient (relaxed density + pair density + Z-vector)",
         "Nuclear Gradient (Ha/Bohr) :"
       ],
       "checks": [
-        {"type": "metric_present", "metric": "gradient_max"},
-        {"type": "metric_present", "metric": "gradient_rms"},
-        {"type": "metric_eq", "metric": "gradient_atom_lines", "expected": 2},
-        {"type": "metric_le", "metric": "gradient_max", "value": 0.1}
+        {
+          "type": "metric_present",
+          "metric": "gradient_max"
+        },
+        {
+          "type": "metric_present",
+          "metric": "gradient_rms"
+        },
+        {
+          "type": "metric_eq",
+          "metric": "gradient_atom_lines",
+          "expected": 2
+        },
+        {
+          "type": "metric_le",
+          "metric": "gradient_max",
+          "value": 0.1
+        }
+      ]
+    },
+    {
+      "id": "h2_rmp2_gradient_fd",
+      "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
+      "executable": "tests/rmp2_gradient_fd.py",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_rmp2_gradient_smoke",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_gradient_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Using analytic RMP2 gradient (relaxed density + pair density + Z-vector)",
+        "Nuclear Gradient (Ha/Bohr) :"
+      ],
+      "checks": [
+        {
+          "type": "metric_present",
+          "metric": "gradient_max"
+        },
+        {
+          "type": "metric_present",
+          "metric": "gradient_rms"
+        },
+        {
+          "type": "metric_eq",
+          "metric": "gradient_atom_lines",
+          "expected": 3
+        },
+        {
+          "type": "metric_le",
+          "metric": "gradient_max",
+          "value": 0.3
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_gradient_fd",
+      "input": "tests/inputs/regression/post_hf/water_rmp2_gradient_sto3g.hfinp",
+      "executable": "tests/rmp2_gradient_fd.py",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_dft_hse06_gradient_symm_ultrafine_fd",
+      "input": "tests/inputs/regression/dft/water_dft_hse06_gradient_symm_ultrafine.hfinp",
+      "executable": "tests/dft_gradient_fd.py",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_radical_cation_ump2_gradient_smoke",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_uhf_ump2_gradient_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Using analytic UMP2 gradient (spin-resolved density + pair density)",
+        "Nuclear Gradient (Ha/Bohr) :"
+      ],
+      "checks": [
+        {
+          "type": "metric_present",
+          "metric": "gradient_max"
+        },
+        {
+          "type": "metric_present",
+          "metric": "gradient_rms"
+        },
+        {
+          "type": "metric_eq",
+          "metric": "gradient_atom_lines",
+          "expected": 3
+        }
+      ]
+    },
+    {
+      "id": "water_triplet_uhf_ump2_gradient_smoke",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_ump2_gradient_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Using analytic UMP2 gradient (spin-resolved density + pair density)",
+        "Nuclear Gradient (Ha/Bohr) :"
+      ],
+      "checks": [
+        {
+          "type": "metric_present",
+          "metric": "gradient_max"
+        },
+        {
+          "type": "metric_present",
+          "metric": "gradient_rms"
+        },
+        {
+          "type": "metric_eq",
+          "metric": "gradient_atom_lines",
+          "expected": 3
+        },
+        {
+          "type": "metric_close",
+          "metric": "gradient_max",
+          "expected": 0.32212455,
+          "atol": 0.0005
+        }
+      ]
+    },
+    {
+      "id": "h2_rccsdt_sto3g",
+      "input": "tests/inputs/regression/post_hf/h2_rccsdt_sto3g.hfinp",
+      "tags": [
+        "smoke",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "RCCSDT :                      Determinant-space prototype",
+        "CCSDT Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -1.1167061402,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "rccsdt_total_energy",
+          "expected": -1.1372744062,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "rccsdt_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "lih_rccsdt_sto3g",
+      "input": "tests/inputs/regression/post_hf/lih_rccsdt_sto3g.hfinp",
+      "tags": [
+        "smoke",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "RCCSDT :                      Determinant-space prototype",
+        "CCSDT Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -7.8620238776,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "rccsdt_total_energy",
+          "expected": -7.8824018134,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "rccsdt_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "water_rccsdt_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_rccsdt_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "timeout_s": 180,
+      "expected_exit_code": 0,
+      "contains": [
+        "RCCSDT[TENSOR] :              Using the determinant-space CCSDT backstop",
+        "RCCSDT[DET-BACKSTOP] :        Converged in",
+        "CCSDT Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9629916293,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "rccsdt_total_energy",
+          "expected": -75.0124975812,
+          "atol": 2e-08
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "rccsdt_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "b_uccsd_sto3g",
+      "input": "tests/inputs/regression/post_hf/b_uccsd_sto3g.hfinp",
+      "tags": [
+        "smoke",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "UCCSD :",
+        "Determinant-space prototype",
+        "Total UCCSD Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -24.1489886649,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "uccsd_total_energy",
+          "expected": -24.1892581442,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "uccsd_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "b_uccsdt_sto3g",
+      "input": "tests/inputs/regression/post_hf/b_uccsdt_sto3g.hfinp",
+      "tags": [
+        "smoke",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "UCCSDT :",
+        "Determinant-space prototype",
+        "UCCSDT Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -24.1489886649,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "uccsdt_total_energy",
+          "expected": -24.1892636164,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "uccsdt_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "water_triplet_uhf_sto3g",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Theory :                      UHF",
+        "UHF Converged :",
+        "<S^2> :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.5911327976,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_triplet_uhf_full_restart_smoke",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_restart_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_triplet_uhf_restart_seed.hfinp"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Theory :                      UHF",
+        "Checkpoint :                  Restoring",
+        "Checkpoint :                  Loaded from",
+        "UHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.4880704826,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "water_triplet_uhf_gradient_smoke",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_gradient_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Theory :                      UHF",
+        "Gradient :",
+        "Nuclear Gradient (Ha/Bohr) :"
+      ],
+      "checks": [
+        {
+          "type": "metric_present",
+          "metric": "gradient_max"
+        },
+        {
+          "type": "metric_present",
+          "metric": "gradient_rms"
+        },
+        {
+          "type": "metric_eq",
+          "metric": "gradient_atom_lines",
+          "expected": 3
+        },
+        {
+          "type": "metric_le",
+          "metric": "gradient_max",
+          "value": 0.5
+        }
+      ]
+    },
+    {
+      "id": "water_triplet_uhf_gradient_hgp_core",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_gradient_hgp_sto3g.hfinp",
+      "executable": "tests/hf_gradient_fd.py",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_radical_cation_rohf_sto3g",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_rohf_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Theory :                      ROHF",
+        "ROHF Converged :",
+        "Mulliken Population Analysis :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.6536945264,
+          "atol": 1e-09
+        }
+      ]
+    },
+    {
+      "id": "water_radical_cation_rohf_full_restart_smoke",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_rohf_restart_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_radical_cation_rohf_restart_seed.hfinp"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Theory :                      ROHF",
+        "Checkpoint :                  Restoring",
+        "Checkpoint :                  Loaded from",
+        "ROHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.6536945264,
+          "atol": 1e-09
+        }
+      ]
+    },
+    {
+      "id": "water_triplet_uhf_chkdump",
+      "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfchk",
+      "executable": "chkdump",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Planck checkpoint export",
+        "UHF",
+        "Alpha Orbital Energies",
+        "Beta Orbital Energies",
+        "Total SCF Density",
+        "Beta Density Matrix"
+      ]
+    },
+    {
+      "id": "water_radical_cation_rohf_chkdump",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_rohf_sto3g.hfchk",
+      "executable": "chkdump",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Planck checkpoint export",
+        "ROHF",
+        "Alpha Orbital Energies",
+        "Beta Orbital Energies",
+        "Total SCF Density",
+        "Beta Density Matrix"
+      ]
+    },
+    {
+      "id": "water_radical_cation_uhf_ump2_sto3g",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_uhf_ump2_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Theory :                      UHF",
+        "UMP2 :                        Computing MP2 correlation energy",
+        "Total MP2 Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.6557058278,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -74.6833360796,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "mp2_total_energy",
+          "right": "rhf_total_energy"
+        }
       ]
     },
     {
       "id": "h2_optfreq_smoke",
-      "input": "tests/inputs/h2_optfreq.hfinp",
-      "tags": ["extended"],
+      "input": "tests/inputs/regression/geometry/h2_optfreq.hfinp",
+      "tags": [
+        "extended"
+      ],
       "expected_exit_code": 0,
       "contains": [
         "Calculation Type :            Geometry Optimization + Frequency",
@@ -184,26 +1554,429 @@
     },
     {
       "id": "water_freq_symmetry",
-      "input": "tests/inputs/water_freq_symmetry.hfinp",
-      "tags": ["extended"],
+      "input": "tests/inputs/regression/geometry/water_freq_symmetry.hfinp",
+      "tags": [
+        "extended"
+      ],
       "expected_exit_code": 0,
       "contains": [
         "Point Group :                 C2v",
         "Vibrational Frequencies :",
-        "Mode    Symmetry    Frequency (cm⁻¹)",
+        "Mode    Symmetry    Frequency (cm\u207b\u00b9)",
         "1  A1",
         "2  A1",
         "3  B2",
         "Zero-point energy :"
       ],
       "checks": [
-        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"}
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        }
       ]
     },
     {
+      "id": "water_geomopt_full_restart_smoke",
+      "input": "tests/inputs/regression/checkpoint/water_geomopt_restart.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_geomopt_restart_seed.hfinp"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Checkpoint :                  Restoring optimized geometry",
+        "Checkpoint :                  Loaded from",
+        "Geometry Optimization :       Converged in 0 steps"
+      ],
+      "checks": [
+        {
+          "type": "metric_present",
+          "metric": "gradient_max"
+        },
+        {
+          "type": "metric_le",
+          "metric": "gradient_max",
+          "value": 0.0005
+        }
+      ]
+    },
+    {
+      "id": "h2_dft_pbe_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_pbe.hfinp",
+      "executable": "planck-dft",
+      "tags": [
+        "smoke",
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "RKS Converged :",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "Dinfh"
+        },
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -1.1520727952,
+          "atol": 1e-06
+        }
+      ],
+      "_pyscf_reference": "PySCF 2.12.1 RKS PBE/STO-3G D2h grid level=3: SCF=-1.1520727952 Eh. Planck UltraFine matches to 6.3e-8 Eh."
+    },
+    {
+      "id": "h2_dft_b3lyp_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_b3lyp.hfinp",
+      "executable": "planck-dft",
+      "tags": [
+        "smoke",
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "DFT Hybrid XC :               B3LYP exact exchange coefficient = 0.200000",
+        "DFT Correlation :             Using B3LYP as a combined XC functional; configured correlation is ignored",
+        "RKS Converged :",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "Dinfh"
+        },
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -1.1654184107,
+          "atol": 1e-06
+        }
+      ],
+      "_pyscf_reference": "PySCF 2.12.1 RKS B3LYP/STO-3G D2h grid level=3: SCF=-1.1654184107 Eh. Planck UltraFine matches to 1.7e-7 Eh."
+    },
+    {
+      "id": "h2_dft_tddft_pbe_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_tddft_pbe.hfinp",
+      "executable": "planck-dft",
+      "tags": [
+        "smoke",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "TDDFT / Linear Response :     full Casida singlet solver",
+        "UV-Vis Spectrum :",
+        "Root  1 dominant configurations:",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "Dinfh"
+        },
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -1.1520727952,
+          "atol": 1e-06
+        },
+        {
+          "type": "metric_close",
+          "metric": "lr_root1_energy_ev",
+          "expected": 25.5194502,
+          "atol": 0.001
+        }
+      ],
+      "_pyscf_reference": "PySCF 2.12.1 RKS PBE/STO-3G D2h grid level=3: SCF=-1.1520727952 Eh, TDDFT root1=25.5194502 eV. Planck UltraFine matches SCF to 6.3e-8 Eh, root1 to 1.1e-5 eV."
+    },
+    {
+      "id": "h2_dft_tddft_triplet_pbe_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_tddft_triplet_pbe.hfinp",
+      "executable": "planck-dft",
+      "tags": [
+        "smoke",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "TDDFT / Linear Response :     full Casida triplet solver",
+        "Root  1 dominant configurations:",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "Dinfh"
+        },
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -1.1520727952,
+          "atol": 1e-06
+        },
+        {
+          "type": "metric_close",
+          "metric": "lr_root1_energy_ev",
+          "expected": 16.6114488,
+          "atol": 0.001
+        }
+      ],
+      "_pyscf_reference": "PySCF 2.12.1 RKS PBE/STO-3G D2h grid level=3 triplet TDDFT: SCF=-1.1520727952 Eh, root1=16.6114488 eV. Planck UltraFine matches SCF to 6.3e-8 Eh, root1 to 1.2e-5 eV."
+    },
+    {
+      "id": "water_triplet_uks_tddft_pbe_sto3g",
+      "input": "tests/inputs/regression/dft/water_triplet_uks_tddft_pbe_sto3g.hfinp",
+      "executable": "planck-dft",
+      "_pyscf_reference": "PySCF 2.13.0 UKS PBE/STO-3G C2v grid level=5: SCF=-74.8423097227 Eh, TDDFT root1=3.18897226 eV, root2=3.73836470 eV, root3=7.23995077 eV. After the UKS Casida B-block stride fix (driver.cpp idx_j_b), Planck UltraFine matches SCF to 2.4e-6 Eh and roots 1/2/3 to within 1.0/1.3/2.1 meV.",
+      "tags": [
+        "smoke",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   UKS",
+        "TDDFT / Linear Response :     full Casida spin-conserving solver",
+        "Root  1 dominant configurations:",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -74.8423097227,
+          "atol": 1e-05
+        },
+        {
+          "type": "metric_close",
+          "metric": "lr_root1_energy_ev",
+          "expected": 3.18897226,
+          "atol": 0.01
+        },
+        {
+          "type": "metric_close",
+          "metric": "lr_root2_energy_ev",
+          "expected": 3.73836470,
+          "atol": 0.01
+        },
+        {
+          "type": "metric_close",
+          "metric": "lr_root3_energy_ev",
+          "expected": 7.23995077,
+          "atol": 0.01
+        }
+      ]
+    },
+    {
+      "id": "water_triplet_uks_tddft_root2_pbe_sto3g",
+      "input": "tests/inputs/regression/dft/water_triplet_uks_tddft_root2_pbe_sto3g.hfinp",
+      "executable": "planck-dft",
+      "_pyscf_reference": "PySCF 2.13.0 UKS PBE/STO-3G C2v grid level=5: SCF=-74.8423097227 Eh, root2=3.73836470 eV. After the UKS Casida B-block stride fix (driver.cpp idx_j_b), Planck UltraFine matches SCF to 2.4e-6 Eh and root2 to 1.3 meV.",
+      "tags": [
+        "smoke",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   UKS",
+        "TDDFT / Dense Solve :         Building full Casida spin-conserving response with 3 solved roots",
+        "Root  2 dominant configurations:",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -74.8423097227,
+          "atol": 1e-05
+        },
+        {
+          "type": "metric_close",
+          "metric": "lr_root2_energy_ev",
+          "expected": 3.73836470,
+          "atol": 0.01
+        }
+      ]
+    },
+    {
+      "id": "h_dft_uks_b3lyp_sto3g",
+      "input": "tests/inputs/regression/dft/h_dft_uks_b3lyp.hfinp",
+      "executable": "planck-dft",
+      "tags": [
+        "smoke",
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   UKS",
+        "DFT Hybrid XC :               B3LYP exact exchange coefficient = 0.200000",
+        "DFT Correlation :             Using B3LYP as a combined XC functional; configured correlation is ignored",
+        "UKS Converged :",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -0.4675325874,
+          "atol": 1e-06
+        }
+      ],
+      "_pyscf_reference": "PySCF 2.12.1 UKS B3LYP/STO-3G no symmetry grid level=3: SCF=-0.4675325874 Eh. Planck UltraFine matches to 6e-10 Eh."
+    },
+    {
+      "id": "h2_dft_hse06_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_hse06.hfinp",
+      "executable": "planck-dft",
+      "tags": [
+        "smoke",
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "DFT Correlation :             Using HSE06 as a combined XC functional; configured correlation is ignored",
+        "DFT 2e Integrals :            Building short-range ERI tensor for omega = 0.110000 (0.0 MB)",
+        "RKS Converged :",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "Dinfh"
+        },
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -1.1546214623,
+          "atol": 1e-06
+        }
+      ],
+      "_pyscf_reference": "PySCF 2.12.1 RKS HSE06/STO-3G D2h grid level=3: SCF=-1.1546214623 Eh. Planck UltraFine matches to 2.3e-8 Eh."
+    },
+    {
+      "id": "h2_dft_b2plyp_sto3g",
+      "input": "tests/inputs/regression/dft/h2_dft_b2plyp.hfinp",
+      "executable": "planck-dft",
+      "tags": [
+        "smoke",
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   RKS",
+        "DFT Hybrid XC :               Double hybrid of Grimme exact exchange coefficient = 0.530000",
+        "DFT Double Hybrid :           Double hybrid of Grimme PT2 correlation coefficient = 0.270000",
+        "DFT Correlation :             Using Double hybrid of Grimme as a combined XC functional; configured correlation is ignored",
+        "RKS Converged :",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "Dinfh"
+        },
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -1.1490390569,
+          "atol": 1e-06
+        }
+      ],
+      "_pyscf_reference": "PySCF 2.12.1 RKS B2PLYP/STO-3G D2h grid level=3 (0.53*HF + 0.47*B88, 0.73*LYP + 0.27*MP2): SCF+PT2=-1.1490390569 Eh. Planck UltraFine matches to 1.1e-7 Eh."
+    },
+    {
+      "id": "water_triplet_uks_pbe_sto3g",
+      "input": "tests/inputs/regression/dft/water_triplet_uks_pbe_sto3g.hfinp",
+      "executable": "planck-dft",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Reference :                   UKS",
+        "UKS Converged :",
+        "DFT Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -74.8423100229,
+          "atol": 1e-05
+        }
+      ],
+      "_pyscf_reference": "PySCF 2.12.1 UKS PBE/STO-3G C2v irrep_nelec={A1:(4,3), B1:(1,0), B2:(1,1)} grid level=3: SCF=-74.8423100229 Eh. Planck UltraFine matches to 2.7e-6 Eh."
+    },
+    {
+      "id": "water_rks_pbe_pcm_water_sto3g",
+      "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_water_sto3g.hfinp",
+      "executable": "planck-dft",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "PCM :",
+        "PCM Solvent :",
+        "RKS Converged :",
+        "PCM Solvation Energy :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "dft_total_energy",
+          "expected": -75.2062610742,
+          "atol": 1e-06
+        }
+      ],
+      "_pyscf_reference": "PySCF 2.12.1 RKS PBE/STO-3G C2v grid level=3 + C-PCM eps=78.3553 default cavity: SCF=-75.2068690800 Eh. Planck UltraFine (cavity_scale=1.2, surface_points_per_atom=24) lands at -75.2062610742 Eh (delta 6.1e-4 Eh reflects different PCM cavity discretization, not numerical drift). Pinned to Planck-current."
+    },
+    {
       "id": "water_casscf_c2v_b1",
-      "input": "inputs/water_cas44_b1.hfinp",
-      "tags": ["extended"],
+      "input": "tests/benchmarks/casscf/pyscf_reference/water_cas44_b1.hfinp",
+      "tags": [
+        "extended"
+      ],
       "expected_exit_code": 0,
       "contains": [
         "Point Group :                 C2v",
@@ -211,14 +1984,26 @@
         "CASSCF :                      Converged."
       ],
       "checks": [
-        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
-        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -74.2879452324, "atol": 1e-9}
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -74.585616368,
+          "atol": 1e-09
+        }
       ]
     },
     {
       "id": "water_casscf_ccpvdz_a1",
-      "input": "tests/inputs/casscf_tests/water_cas44_ccpvdz.hfinp",
-      "tags": ["extended"],
+      "input": "tests/benchmarks/casscf/pyscf_reference/water_cas44_ccpvdz.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "timeout_s": 300,
       "expected_exit_code": 0,
       "contains": [
         "Point Group :                 C2v",
@@ -226,14 +2011,25 @@
         "CASSCF :                      Converged."
       ],
       "checks": [
-        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
-        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -75.6045806122, "atol": 1e-9}
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -75.6045806122,
+          "atol": 1e-09
+        }
       ]
     },
     {
       "id": "water_rasscf_pair_filter",
-      "input": "tests/inputs/water_rasscf_pair_filter.hfinp",
-      "tags": ["extended"],
+      "input": "tests/inputs/regression/post_hf/water_rasscf_pair_filter.hfinp",
+      "tags": [
+        "extended"
+      ],
       "expected_exit_code": 0,
       "contains": [
         "Point Group :                 C2v",
@@ -241,14 +2037,25 @@
         "RASSCF :                      Target irrep: A1"
       ],
       "checks": [
-        {"type": "metric_eq", "metric": "point_group", "expected": "C2v"},
-        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -74.4581360843, "atol": 1e-9}
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -74.9641867771,
+          "atol": 1e-09
+        }
       ]
     },
     {
       "id": "ethylene_casscf_d2d_natural_occupations",
-      "input": "tests/inputs/ethylene_rasscf.hfinp",
-      "tags": ["extended"],
+      "input": "tests/inputs/regression/post_hf/ethylene_casscf_d2d_natural_occupations.hfinp",
+      "tags": [
+        "extended"
+      ],
       "expected_exit_code": 0,
       "contains": [
         "Point Group :                 D2d",
@@ -258,8 +2065,1093 @@
         "MO   2     1.000000"
       ],
       "checks": [
-        {"type": "metric_eq", "metric": "point_group", "expected": "D2d"},
-        {"type": "metric_close", "metric": "casscf_total_energy", "expected": -77.5145223873, "atol": 1e-9}
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "D2d"
+        },
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -77.5145223873,
+          "atol": 1e-09
+        }
+      ]
+    },
+    {
+      "id": "water_casscf_sa2_sto3g",
+      "input": "tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "CASSCF :                      Converged.",
+        "State-averaged over 2 roots :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -74.7751377977,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_le",
+          "metric": "casscf_sa_gnorm",
+          "value": 1e-05
+        }
+      ]
+    },
+    {
+      "id": "water_casscf_sa2_sto3g_sad_guess",
+      "input": "tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2_sad.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "CASSCF :                      Converged.",
+        "State-averaged over 2 roots :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -74.7751377977,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_le",
+          "metric": "casscf_sa_gnorm",
+          "value": 1e-05
+        }
+      ]
+    },
+    {
+      "id": "water_casscf_sa2_sto3g_sad_guess_uphill",
+      "input": "tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2_sad_uphill.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "CASSCF :                      Converged.",
+        "State-averaged over 2 roots :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -74.7877864784,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_le",
+          "metric": "casscf_sa_gnorm",
+          "value": 1e-05
+        }
+      ]
+    },
+    {
+      "id": "ethylene_casscf_sa2_sto3g",
+      "input": "tests/benchmarks/casscf/pyscf_reference/ethylene_cas44_sto3g_sa2.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "timeout_s": 300,
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 D2d",
+        "CASSCF :                      Converged.",
+        "State-averaged over 2 roots :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "D2d"
+        },
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -77.0034974301,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_le",
+          "metric": "casscf_sa_gnorm",
+          "value": 1e-05
+        }
+      ]
+    },
+    {
+      "id": "h2_fci_sto3g",
+      "input": "tests/inputs/regression/post_hf/h2_fci_sto3g.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total FCI Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "fci_total_energy",
+          "expected": -1.1372744055,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "fci_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "water_fci_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_fci_sto3g.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total FCI Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "fci_total_energy",
+          "expected": -75.0124130264,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "fci_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "o2_fci_rohf_sto3g",
+      "input": "tests/inputs/regression/post_hf/o2_fci_rohf_sto3g.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "ROHF Converged",
+        "Total FCI Energy"
+      ],
+      "timeout_s": 120,
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "fci_total_energy",
+          "expected": -147.7441885427,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "fci_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "o2_casscf_rohf_sto3g",
+      "input": "tests/inputs/regression/post_hf/o2_casscf_rohf_sto3g.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "ROHF Converged",
+        "CASSCF :                      Converged."
+      ],
+      "timeout_s": 120,
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -147.7376186328,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_le",
+          "metric": "casscf_sa_gnorm",
+          "value": 1e-05
+        }
+      ]
+    },
+    {
+      "id": "oh_casscf_rohf_sto3g",
+      "input": "tests/inputs/regression/post_hf/oh_casscf_rohf_sto3g.hfinp",
+      "tags": [
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "ROHF Converged",
+        "CASSCF :                      Converged."
+      ],
+      "timeout_s": 120,
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -74.3854276959,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_le",
+          "metric": "casscf_sa_gnorm",
+          "value": 1e-05
+        }
+      ]
+    },
+    {
+      "id": "water_fcidump_c2v_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_fcidump_c2v_sto3g.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "FCIDUMP :",
+        "ORBSYM: C2v"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9629329919,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_spherical_ccsd_sto3g",
+      "input": "tests/inputs/regression/spherical/water_spherical_ccsd_sto3g.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "RCCSD :",
+        "Total RCCSD Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rccsd_total_energy",
+          "expected": -75.0123309822,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "rccsd_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "be_ccsd_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/be_ccsd_spherical_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "timeout_s": 300,
+      "contains": [
+        "SCF Converged after",
+        "RCCSD :",
+        "Total RCCSD Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rccsd_total_energy",
+          "expected": -14.6138647122,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "rccsd_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_gradient_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_gradient_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Computing analytic nuclear gradient",
+        "Nuclear Gradient (Ha/Bohr) :"
+      ],
+      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water at the input geometry: E=-76.009125642007 Eh, gradient max|g|=1.47293665e-2 Ha/Bohr, rms|g|=6.9308072e-3 Ha/Bohr. Reference computed by tests/pyscf-style script; per-component values: O z = +0.0147293665, H y = \u00b10.0073107264, H z = -0.0073646832 Ha/Bohr.",
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642007,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_close",
+          "metric": "gradient_max",
+          "expected": 0.0147293665,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "gradient_rms",
+          "expected": 0.0069308072,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_eq",
+          "metric": "gradient_atom_lines",
+          "expected": 3
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_spherical_gradient_rejected",
+      "input": "tests/inputs/regression/spherical/water_rmp2_spherical_gradient_rejected.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 1,
+      "contains": [
+        "Spherical Basis :",
+        "MP2 analytic gradient is not yet supported"
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_geomopt_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_geomopt_631gd.hfinp",
+      "tags": [
+        "core",
+        "spherical"
+      ],
+      "timeout_s": 300,
+      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water optimized with pyscf.geomopt.geometric_solver: E_opt=-76.0093412836 Eh. Planck IC-BFGS converges to the same well within shared force-tolerance; per-component geometries agree to ~4e-4 A.",
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Geometry Optimization",
+        "Final Energy",
+        "Optimized Geometry"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.0093412836,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_present",
+          "metric": "geomopt_final_gradient_max"
+        },
+        {
+          "type": "metric_le",
+          "metric": "geomopt_final_gradient_max",
+          "value": 0.0005
+        },
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_freq_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_freq_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "timeout_s": 600,
+      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), analytic Hessian via pyscf.hessian + thermo.harmonic_analysis at the input (slightly off-eq) geometry: E=-76.009125642007 Eh, freqs (cm^-1) = 1859.21 (bend), 3924.38 (sym str), 4031.92 (asym str). Planck semi-numerical Hessian (FD of analytic gradients, delta=0.001 Bohr) reproduces these to <0.1 cm^-1.",
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Vibrational Frequencies",
+        "vibrational modes",
+        "Zero-point energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642007,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_1",
+          "expected": 1859.21,
+          "atol": 1.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_2",
+          "expected": 3924.38,
+          "atol": 1.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_3",
+          "expected": 4031.92,
+          "atol": 1.0
+        },
+        {
+          "type": "metric_present",
+          "metric": "zero_point_energy_eh"
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_geomoptfreq_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_geomoptfreq_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "timeout_s": 900,
+      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), optimized via pyscf.geomopt.geometric_solver then analytic Hessian via pyscf.hessian + thermo.harmonic_analysis: E_opt=-76.0093412836 Eh, freqs at optimum (cm^-1) = 1825.98 (bend), 4055.49 (sym str), 4173.85 (asym str). Frequencies differ from the unoptimized-geometry case because the Hessian is now at a stationary point.",
+      "expected_exit_code": 0,
+      "contains": [
+        "Geometry Optimization",
+        "Final Energy",
+        "Vibrational Frequencies",
+        "vibrational modes",
+        "Zero-point energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.0093412836,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_present",
+          "metric": "geomopt_final_gradient_max"
+        },
+        {
+          "type": "metric_le",
+          "metric": "geomopt_final_gradient_max",
+          "value": 0.0005
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_1",
+          "expected": 1825.98,
+          "atol": 2.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_2",
+          "expected": 4055.49,
+          "atol": 2.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_3",
+          "expected": 4173.85,
+          "atol": 2.0
+        },
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_spherical_geomopt_rejected",
+      "input": "tests/inputs/regression/spherical/water_rmp2_spherical_geomopt_rejected.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 1,
+      "contains": [
+        "Spherical Basis :",
+        "MP2 analytic gradient is not yet supported"
+      ]
+    },
+    {
+      "id": "water_spherical_symmetry_c2v_631gd",
+      "input": "tests/inputs/regression/spherical/water_spherical_symmetry_c2v_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "SAO Basis :                   A1(9)  A2(1)  B2(5)  B1(3)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "|mu|                    0.872741          0.000000          0.872741  2.218286"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_full_restart_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_full_restart_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_rhf_spherical_restart_seed_631gd.hfinp"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Checkpoint :                  Restoring input geometry",
+        "Checkpoint :                  Loaded from",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_projected_restart_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_projected_restart_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "setup": {
+        "seed_input": "tests/inputs/regression/seeds/water_rhf_spherical_projection_seed_sto3g.hfinp"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Basis change detected (sto-3g",
+        "Density projection successful",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_sad_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_sad_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rhf_spherical_direct_631gd",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_direct_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "SCF Mode :                    Direct"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "h2o_cation_rohf_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/h2o_cation_rohf_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "ROHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -75.6060149279,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "li_uhf_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/li_uhf_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "UHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -7.431235811,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_rmp2_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/water_rmp2_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -76.19532147291,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "h2o_cation_ump2_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/h2o_cation_ump2_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "UHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -75.6104747767,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_close",
+          "metric": "mp2_total_energy",
+          "expected": -75.747266982,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "water_casscf44_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/water_casscf44_spherical_631gd.hfinp",
+      "tags": [
+        "core",
+        "extended",
+        "spherical"
+      ],
+      "timeout_s": 180,
+      "expected_exit_code": 0,
+      "contains": [
+        "CASSCF :                      Converged."
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -76.06098305048,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "be_fci_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/be_fci_spherical_631gd.hfinp",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "timeout_s": 300,
+      "expected_exit_code": 0,
+      "contains": [
+        "Full CI over 14 orbitals"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "fci_total_energy",
+          "expected": -14.613942530866,
+          "atol": 1e-07
+        }
+      ]
+    },
+    {
+      "id": "water_fcidump_spherical_631gd",
+      "input": "tests/inputs/regression/spherical/water_fcidump_spherical_631gd.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Wrote 18 orbitals"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.009125642,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
+      "id": "water_c2v_fullsym_direct",
+      "input": "tests/inputs/regression/full_symmetry/water_c2v_fullsym_direct.hfinp",
+      "tags": [
+        "smoke",
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "Full Symmetry :",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 4)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.9629507133,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "nh3_c3v_fullsym_direct",
+      "input": "tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C3v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 6)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -55.4545450615,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "nh3_c3v_fullsym_631gd_direct",
+      "input": "tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_631gd_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C3v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 6)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -56.1838802579,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "nh3_c3v_fullsym_631gd_spherical_direct",
+      "input": "tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_631gd_spherical_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C3v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 6)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -56.1832391283,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "ch4_td_fullsym_631gd_spherical_direct",
+      "input": "tests/inputs/regression/full_symmetry/ch4_td_fullsym_631gd_spherical_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 Td",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 24)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -40.1948103195,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "ch4_td_fullsym_direct",
+      "input": "tests/inputs/regression/full_symmetry/ch4_td_fullsym_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 Td",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 24)",
+        "SCF Converged after"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -39.7268091715,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "ch2_triplet_c2v_fullsym_uhf_direct",
+      "input": "tests/inputs/regression/full_symmetry/ch2_triplet_c2v_fullsym_uhf_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 4)",
+        "UHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -38.4354082998,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "ch2_triplet_c2v_fullsym_rohf_direct",
+      "input": "tests/inputs/regression/full_symmetry/ch2_triplet_c2v_fullsym_rohf_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 4)",
+        "skeleton ERI persisted across SCF iterations",
+        "ROHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -38.91630966,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "ch2_triplet_c2v_fullsym_rohf_spherical_direct",
+      "input": "tests/inputs/regression/full_symmetry/ch2_triplet_c2v_fullsym_rohf_spherical_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C2v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 4)",
+        "skeleton ERI persisted across SCF iterations",
+        "ROHF Converged :"
+      ],
+      "checks": [
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        },
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -38.9161284632,
+          "atol": 5e-08
+        }
+      ]
+    },
+    {
+      "id": "nh3_c3v_fullsym_geomopt_direct",
+      "input": "tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_geomopt_direct.hfinp",
+      "tags": [
+        "core",
+        "symmetry"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Point Group :                 C3v",
+        "point-group operations enabled for direct-SCF ERI reduction (|G| = 6)",
+        "skeleton ERI persisted across SCF iterations",
+        "Geometry Optimization :       Converged"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -55.4554197897,
+          "atol": 1e-07
+        }
       ]
     }
   ]

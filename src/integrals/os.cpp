@@ -4,7 +4,16 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
+#include <numbers>
+#include <vector>
+
+static Eigen::MatrixXd compute_external_charge_attraction_impl(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::size_t nbasis,
+    const std::vector<HartreeFock::ExternalCharge> &charges,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops);
 
 namespace
 {
@@ -77,6 +86,9 @@ namespace
     static std::pair<std::vector<PairOrbitElem>, bool> build_pair_orbit(
         std::size_t i, std::size_t j, const SymOps &sym_ops)
     {
+        // Each AO symmetry operation maps one requested pair into an equivalent
+        // representative. If the same canonical pair is reached with opposite
+        // sign, the whole orbit cancels and the integral is symmetry-forbidden.
         std::vector<PairOrbitElem> orbit;
         orbit.reserve(sym_ops.size());
 
@@ -102,6 +114,9 @@ namespace
         std::size_t i, std::size_t j, std::size_t k, std::size_t l,
         const SymOps &sym_ops)
     {
+        // The four-index orbit plays the same role for ERIs: compute one
+        // canonical quartet, then scatter the value across all symmetry-related
+        // permutations with the accumulated AO sign.
         std::vector<QuartetOrbitElem> orbit;
         orbit.reserve(sym_ops.size());
 
@@ -132,14 +147,165 @@ namespace
                                        std::size_t k, std::size_t l,
                                        double val)
     {
-        eri[i * nb3 + j * nb2 + k * nb + l] = val;
-        eri[j * nb3 + i * nb2 + k * nb + l] = val;
-        eri[i * nb3 + j * nb2 + l * nb + k] = val;
-        eri[j * nb3 + i * nb2 + l * nb + k] = val;
-        eri[k * nb3 + l * nb2 + i * nb + j] = val;
-        eri[l * nb3 + k * nb2 + i * nb + j] = val;
-        eri[k * nb3 + l * nb2 + j * nb + i] = val;
-        eri[l * nb3 + k * nb2 + j * nb + i] = val;
+        auto write_slot = [&](std::size_t idx)
+        {
+        // This scatter path is pure store-only symmetry replication: every
+        // writer computes the same integral value for a given canonical slot.
+        // We intentionally use `atomic write`, not `atomic update`, because
+        // there is no read-modify-write reduction here.
+#ifdef USE_OPENMP
+#pragma omp atomic write
+#endif
+            eri[idx] = val;
+        };
+
+        write_slot(i * nb3 + j * nb2 + k * nb + l);
+        write_slot(j * nb3 + i * nb2 + k * nb + l);
+        write_slot(i * nb3 + j * nb2 + l * nb + k);
+        write_slot(j * nb3 + i * nb2 + l * nb + k);
+        write_slot(k * nb3 + l * nb2 + i * nb + j);
+        write_slot(l * nb3 + k * nb2 + i * nb + j);
+        write_slot(k * nb3 + l * nb2 + j * nb + i);
+        write_slot(l * nb3 + k * nb2 + j * nb + i);
+    }
+
+    struct EriScratch
+    {
+        int ax_dim = 0;
+        int ay_dim = 0;
+        int az_dim = 0;
+        int cx_dim = 0;
+        int cy_dim = 0;
+        int cz_dim = 0;
+        int m_dim = 0;
+        std::size_t ax_stride = 0;
+        std::size_t ay_stride = 0;
+        std::size_t az_stride = 0;
+        std::size_t cx_stride = 0;
+        std::size_t cy_stride = 0;
+        std::size_t cz_stride = 0;
+        std::vector<double> vrr;
+        std::vector<double> hrr;
+        double *vrr_data = nullptr;
+        double *hrr_data = nullptr;
+
+        void resize_for_quartet(
+            int lABx, int lABy, int lABz,
+            int lCDx, int lCDy, int lCDz,
+            int mmax)
+        {
+            // Reuse one per-thread scratch object for the whole quartet so the
+            // recurrence code can index dense contiguous buffers instead of
+            // allocating nested vectors in the hot integral loops.
+            ax_dim = lABx + 1;
+            ay_dim = lABy + 1;
+            az_dim = lABz + 1;
+            cx_dim = lCDx + 1;
+            cy_dim = lCDy + 1;
+            cz_dim = lCDz + 1;
+            m_dim = mmax + 1;
+            cz_stride = 1;
+            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
+            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
+            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
+            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
+            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
+
+            const std::size_t spatial =
+                static_cast<std::size_t>(ax_dim) * ay_dim * az_dim *
+                cx_dim * cy_dim * cz_dim;
+            const std::size_t vrr_size = spatial * static_cast<std::size_t>(m_dim);
+            // `_eri_vrr` overwrites every cell it later reads (the seed writes
+            // (0,0,0,0,0,0,m), then each VRR step *assigns* before any read
+            // pulls the new cell back). The HRR `h` buffer is fully overwritten
+            // by the (ax,ay,az,cx,cy,cz)-loop extraction in `_os_eri_primitive`.
+            // No zero-init is required for either buffer — skipping it removes
+            // the largest memset hotspot in the ERI engine profile.
+            if (vrr.size() < vrr_size)
+                vrr.resize(vrr_size);
+            if (hrr.size() < spatial)
+                hrr.resize(spatial);
+            vrr_data = vrr.data();
+            hrr_data = hrr.data();
+        }
+
+        std::size_t spatial_index(
+            int ax, int ay, int az,
+            int cx, int cy, int cz) const
+        {
+            return static_cast<std::size_t>(ax) * ax_stride +
+                   static_cast<std::size_t>(ay) * ay_stride +
+                   static_cast<std::size_t>(az) * az_stride +
+                   static_cast<std::size_t>(cx) * cx_stride +
+                   static_cast<std::size_t>(cy) * cy_stride +
+                   static_cast<std::size_t>(cz) * cz_stride;
+        }
+
+        double &v(
+            int ax, int ay, int az,
+            int cx, int cy, int cz,
+            int m)
+        {
+            return vrr_data[spatial_index(ax, ay, az, cx, cy, cz) *
+                                static_cast<std::size_t>(m_dim) +
+                            static_cast<std::size_t>(m)];
+        }
+
+        const double &v(
+            int ax, int ay, int az,
+            int cx, int cy, int cz,
+            int m) const
+        {
+            return vrr_data[spatial_index(ax, ay, az, cx, cy, cz) *
+                                static_cast<std::size_t>(m_dim) +
+                            static_cast<std::size_t>(m)];
+        }
+
+        double &h(
+            int ax, int ay, int az,
+            int cx, int cy, int cz)
+        {
+            return hrr_data[spatial_index(ax, ay, az, cx, cy, cz)];
+        }
+
+        const double &h(
+            int ax, int ay, int az,
+            int cx, int cy, int cz) const
+        {
+            return hrr_data[spatial_index(ax, ay, az, cx, cy, cz)];
+        }
+    };
+
+    static thread_local EriScratch _eri_scratch;
+
+    struct ScreenedKernelData
+    {
+        double rho = 0.0;
+        double prefactor_scale = 1.0;
+        double boys_scale = 1.0;
+    };
+
+    static ScreenedKernelData screened_kernel_data(
+        double rho,
+        HartreeFock::ERIKernel kernel,
+        double omega) noexcept
+    {
+        if (kernel == HartreeFock::ERIKernel::Coulomb)
+            return ScreenedKernelData{.rho = rho, .prefactor_scale = 1.0, .boys_scale = 1.0};
+
+        if (omega <= 0.0)
+        {
+            return kernel == HartreeFock::ERIKernel::LongRange
+                       ? ScreenedKernelData{.rho = 0.0, .prefactor_scale = 0.0, .boys_scale = 0.0}
+                       : ScreenedKernelData{.rho = rho, .prefactor_scale = 1.0, .boys_scale = 1.0};
+        }
+
+        const double omega2 = omega * omega;
+        const double lambda = omega2 / (omega2 + rho);
+        return ScreenedKernelData{
+            .rho = lambda * rho,
+            .prefactor_scale = std::sqrt(lambda),
+            .boys_scale = lambda};
     }
 } // namespace
 
@@ -187,64 +353,6 @@ inline double HartreeFock::ObaraSaika::_os_1d(const double gamma, const double d
     }
 
     return S[lA][lB];
-}
-
-static std::array<double, 3> _os_1d_moments(
-    const double gamma,
-    const double distPA,
-    const double distPB,
-    const double distPC,
-    const int lA,
-    const int lB)
-{
-    double M[MAX_L + 1][MAX_L + 1][3] = {};
-
-    M[0][0][0] = 1.0;
-    M[0][0][1] = distPC;
-    M[0][0][2] = distPC * distPC + gamma;
-
-    for (int i = 1; i <= lA; ++i)
-    {
-        for (int n = 0; n <= 2; ++n)
-        {
-            M[i][0][n] = distPA * M[i - 1][0][n];
-            if (i > 1)
-                M[i][0][n] += (i - 1) * gamma * M[i - 2][0][n];
-            if (n > 0)
-                M[i][0][n] += n * gamma * M[i - 1][0][n - 1];
-        }
-    }
-
-    for (int j = 1; j <= lB; ++j)
-    {
-        for (int n = 0; n <= 2; ++n)
-        {
-            M[0][j][n] = distPB * M[0][j - 1][n];
-            if (j > 1)
-                M[0][j][n] += (j - 1) * gamma * M[0][j - 2][n];
-            if (n > 0)
-                M[0][j][n] += n * gamma * M[0][j - 1][n - 1];
-        }
-    }
-
-    for (int i = 1; i <= lA; ++i)
-    {
-        for (int j = 1; j <= lB; ++j)
-        {
-            for (int n = 0; n <= 2; ++n)
-            {
-                M[i][j][n] = distPA * M[i - 1][j][n] +
-                             j * gamma * M[i - 1][j - 1][n];
-
-                if (i > 1)
-                    M[i][j][n] += (i - 1) * gamma * M[i - 2][j][n];
-                if (n > 0)
-                    M[i][j][n] += n * gamma * M[i - 1][j][n - 1];
-            }
-        }
-    }
-
-    return {M[lA][lB][0], M[lA][lB][1], M[lA][lB][2]};
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_1e(
@@ -297,178 +405,6 @@ std::pair<Eigen::MatrixXd, Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_1e
     }
 
     return {overlap, kinetic};
-}
-
-HartreeFock::MultipoleMatrices HartreeFock::ObaraSaika::_compute_multipole_matrices(
-    const std::vector<HartreeFock::ShellPair> &shell_pairs,
-    std::size_t nbasis,
-    const Eigen::Vector3d &origin)
-{
-    HartreeFock::MultipoleMatrices matrices{};
-    for (auto &component : matrices.dipole)
-        component = Eigen::MatrixXd::Zero(nbasis, nbasis);
-    for (auto &component : matrices.quadrupole)
-        component = Eigen::MatrixXd::Zero(nbasis, nbasis);
-
-    const std::size_t npairs = shell_pairs.size();
-
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; ++p)
-    {
-        const auto &sp = shell_pairs[p];
-        const std::size_t ii = sp.A._index;
-        const std::size_t jj = sp.B._index;
-
-        const auto &cartA = sp.A._cartesian;
-        const auto &cartB = sp.B._cartesian;
-
-        double dipole_x = 0.0;
-        double dipole_y = 0.0;
-        double dipole_z = 0.0;
-        double quad_xx = 0.0;
-        double quad_xy = 0.0;
-        double quad_xz = 0.0;
-        double quad_yy = 0.0;
-        double quad_yz = 0.0;
-        double quad_zz = 0.0;
-
-        for (const auto &pp : sp.primitive_pairs)
-        {
-            const double gamma = 0.5 * pp.inv_zeta;
-            const double scale = pp.prefactor * pp.coeff_product;
-
-            const auto mx = _os_1d_moments(
-                gamma,
-                pp.pA[0],
-                pp.pB[0],
-                pp.center[0] - origin[0],
-                cartA[0],
-                cartB[0]);
-            const auto my = _os_1d_moments(
-                gamma,
-                pp.pA[1],
-                pp.pB[1],
-                pp.center[1] - origin[1],
-                cartA[1],
-                cartB[1]);
-            const auto mz = _os_1d_moments(
-                gamma,
-                pp.pA[2],
-                pp.pB[2],
-                pp.center[2] - origin[2],
-                cartA[2],
-                cartB[2]);
-
-            dipole_x += mx[1] * my[0] * mz[0] * scale;
-            dipole_y += mx[0] * my[1] * mz[0] * scale;
-            dipole_z += mx[0] * my[0] * mz[1] * scale;
-
-            quad_xx += mx[2] * my[0] * mz[0] * scale;
-            quad_xy += mx[1] * my[1] * mz[0] * scale;
-            quad_xz += mx[1] * my[0] * mz[1] * scale;
-            quad_yy += mx[0] * my[2] * mz[0] * scale;
-            quad_yz += mx[0] * my[1] * mz[1] * scale;
-            quad_zz += mx[0] * my[0] * mz[2] * scale;
-        }
-
-        matrices.dipole[0](ii, jj) = dipole_x;
-        matrices.dipole[1](ii, jj) = dipole_y;
-        matrices.dipole[2](ii, jj) = dipole_z;
-        matrices.dipole[0](jj, ii) = dipole_x;
-        matrices.dipole[1](jj, ii) = dipole_y;
-        matrices.dipole[2](jj, ii) = dipole_z;
-
-        matrices.quadrupole[0](ii, jj) = quad_xx;
-        matrices.quadrupole[1](ii, jj) = quad_xy;
-        matrices.quadrupole[2](ii, jj) = quad_xz;
-        matrices.quadrupole[3](ii, jj) = quad_yy;
-        matrices.quadrupole[4](ii, jj) = quad_yz;
-        matrices.quadrupole[5](ii, jj) = quad_zz;
-        matrices.quadrupole[0](jj, ii) = quad_xx;
-        matrices.quadrupole[1](jj, ii) = quad_xy;
-        matrices.quadrupole[2](jj, ii) = quad_xz;
-        matrices.quadrupole[3](jj, ii) = quad_yy;
-        matrices.quadrupole[4](jj, ii) = quad_yz;
-        matrices.quadrupole[5](jj, ii) = quad_zz;
-    }
-
-    return matrices;
-}
-
-std::expected<HartreeFock::MultipoleMoments, std::string>
-HartreeFock::ObaraSaika::_compute_multipole_moments(
-    const HartreeFock::Calculator &calculator,
-    const std::vector<HartreeFock::ShellPair> &shell_pairs,
-    const Eigen::Vector3d &origin)
-{
-    const std::size_t nbasis = calculator._shells.nbasis();
-    const Eigen::Index nbasis_idx = static_cast<Eigen::Index>(nbasis);
-    const auto &alpha_density = calculator._info._scf.alpha.density;
-
-    if (alpha_density.rows() != nbasis_idx || alpha_density.cols() != nbasis_idx)
-        return std::unexpected("alpha density matrix is not initialized for multipole analysis");
-
-    Eigen::MatrixXd total_density = alpha_density;
-    if (calculator._info._scf.is_uhf)
-    {
-        const auto &beta_density = calculator._info._scf.beta.density;
-        if (beta_density.rows() != nbasis_idx || beta_density.cols() != nbasis_idx)
-            return std::unexpected("beta density matrix is not initialized for multipole analysis");
-        total_density += beta_density;
-    }
-
-    const HartreeFock::MultipoleMatrices matrices =
-        _compute_multipole_matrices(shell_pairs, nbasis, origin);
-
-    HartreeFock::MultipoleMoments moments{};
-    moments.origin = origin;
-
-    for (int axis = 0; axis < 3; ++axis)
-        moments.electronic_dipole[axis] =
-            -(total_density.array() * matrices.dipole[axis].array()).sum();
-
-    for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
-    {
-        const double charge = static_cast<double>(calculator._molecule.atomic_numbers[atom]);
-        const Eigen::Vector3d position =
-            calculator._molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose() - origin;
-        moments.nuclear_dipole += charge * position;
-    }
-    moments.total_dipole = moments.nuclear_dipole + moments.electronic_dipole;
-
-    Eigen::Matrix3d raw_electronic = Eigen::Matrix3d::Zero();
-    raw_electronic(0, 0) = -(total_density.array() * matrices.quadrupole[0].array()).sum();
-    raw_electronic(0, 1) = -(total_density.array() * matrices.quadrupole[1].array()).sum();
-    raw_electronic(0, 2) = -(total_density.array() * matrices.quadrupole[2].array()).sum();
-    raw_electronic(1, 1) = -(total_density.array() * matrices.quadrupole[3].array()).sum();
-    raw_electronic(1, 2) = -(total_density.array() * matrices.quadrupole[4].array()).sum();
-    raw_electronic(2, 2) = -(total_density.array() * matrices.quadrupole[5].array()).sum();
-    raw_electronic(1, 0) = raw_electronic(0, 1);
-    raw_electronic(2, 0) = raw_electronic(0, 2);
-    raw_electronic(2, 1) = raw_electronic(1, 2);
-
-    Eigen::Matrix3d raw_nuclear = Eigen::Matrix3d::Zero();
-    for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
-    {
-        const double charge = static_cast<double>(calculator._molecule.atomic_numbers[atom]);
-        const Eigen::Vector3d position =
-            calculator._molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose() - origin;
-        raw_nuclear += charge * (position * position.transpose());
-    }
-
-    auto to_traceless = [](const Eigen::Matrix3d &raw)
-    {
-        Eigen::Matrix3d quadrupole = 3.0 * raw;
-        quadrupole.diagonal().array() -= raw.trace();
-        return quadrupole;
-    };
-
-    moments.electronic_quadrupole = to_traceless(raw_electronic);
-    moments.nuclear_quadrupole = to_traceless(raw_nuclear);
-    moments.total_quadrupole =
-        moments.electronic_quadrupole + moments.nuclear_quadrupole;
-
-    return moments;
 }
 
 std::tuple<double, double> HartreeFock::ObaraSaika::_compute_3d_overlap_kinetic(const ShellPair &shell_pair)
@@ -535,18 +471,10 @@ std::tuple<double, double> HartreeFock::ObaraSaika::_compute_3d_overlap_kinetic(
 // Complexity: O(L^3 * (bx+by+bz))  vs  O(2^(bx+by+bz)) for the
 // recursive version.
 // VRR spatial dimension: each axis of the VRR table runs from 0 to
-// lAx+lBx (or y,z equivalents).  lAx can be MAX_L and lBx can be
-// MAX_L independently, so the table needs 2*MAX_L+1 entries per axis.
-static constexpr int VRR_DIM = 2 * MAX_L + 1; // = 13; per-axis bound for 1-pair VRR
-static constexpr int MMAX_4C = 4 * MAX_L + 2; // = 26; Boys m upper bound for 4-center ERI
-
-// Thread-local scratch buffers for 4-center ERI (too large for the stack).
-// VRR buffer: V[ax][ay][az][cx][cy][cz][m]
-// HRR buffer: W[ax][ay][az][cx][cy][cz]  (m=0 slice used during HRR)
-static thread_local double _vrr_buf[VRR_DIM][VRR_DIM][VRR_DIM]
-                                   [VRR_DIM][VRR_DIM][VRR_DIM][MMAX_4C];
-static thread_local double _hrr_buf[VRR_DIM][VRR_DIM][VRR_DIM]
-                                   [VRR_DIM][VRR_DIM][VRR_DIM];
+// lAx+lBx (or y,z equivalents). The fixed-size helpers below still use
+// VRR_DIM-sized stack buffers where the footprint is modest, but the 4-center
+// ERI scratch itself is allocated dynamically per quartet in `_eri_scratch`.
+static constexpr int VRR_DIM = 2 * MAX_L + 1; // = 13; per-axis bound for compact stack helpers
 
 static double _nuclear_hrr(
     const double V0[VRR_DIM][VRR_DIM][VRR_DIM],
@@ -615,7 +543,7 @@ static double _os_nuclear_primitive(
     // Nuclear prefactor = 2*pi/zeta * exp(-alpha*beta/zeta * |AB|^2)
     //                   = pp.prefactor * 2*pi/zeta * (zeta/pi)^1.5
     //                   = pp.prefactor * 2 * sqrt(zeta/pi)
-    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / M_PI);
+    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / std::numbers::pi);
 
     // VRR table V[ix][iy][iz][m]
     // Spatial dims: each axis runs 0..lAq+lBq ≤ 2*MAX_L, so VRR_DIM = 2*MAX_L+1.
@@ -712,67 +640,34 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_nuclear_attraction(
     const HartreeFock::Molecule &molecule,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    const std::size_t npairs = shell_pairs.size();
-    Eigen::MatrixXd V = Eigen::MatrixXd::Zero(nbasis, nbasis);
-    const bool use_sym = use_symmetry_ops(sym_ops);
-
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; p++)
+    std::vector<HartreeFock::ExternalCharge> charges;
+    charges.reserve(molecule.natoms);
+    for (std::size_t a = 0; a < molecule.natoms; ++a)
     {
-        const auto &sp = shell_pairs[p];
-        const std::size_t ii = sp.A._index;
-        const std::size_t jj = sp.B._index;
-        std::vector<PairOrbitElem> orbit;
-
-        if (use_sym)
-        {
-            auto [orb, forced_zero] = build_pair_orbit(ii, jj, *sym_ops);
-            if (forced_zero)
-                continue;
-            orbit = std::move(orb);
-            if (orbit.front().i != ii || orbit.front().j != jj)
-                continue;
-        }
-
-        const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
-        const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
-
-        // AB = A - B (used by HRR)
-        const double ABx = sp.R[0], ABy = sp.R[1], ABz = sp.R[2];
-
-        double v_elem = 0.0;
-
-        for (std::size_t a = 0; a < molecule.natoms; a++)
-        {
-            const double Z_C = static_cast<double>(molecule.atomic_numbers[a]);
-            // Nucleus position in Bohr — molecule._standard is always in Bohr
-            const Eigen::Vector3d C(molecule._standard(a, 0),
-                                    molecule._standard(a, 1),
-                                    molecule._standard(a, 2));
-
-            double v_nuc = 0.0;
-            for (const auto &pp : sp.primitive_pairs)
-                v_nuc += _os_nuclear_primitive(pp, lAx, lAy, lAz, lBx, lBy, lBz, ABx, ABy, ABz, C) * pp.coeff_product;
-
-            v_elem -= Z_C * v_nuc; // nuclear attraction is negative
-        }
-
-        if (!use_sym)
-        {
-            V(ii, jj) = v_elem;
-            V(jj, ii) = v_elem;
+        // Ghost atoms (BSSE counterpoise) have zero nuclear charge and so add
+        // nothing to the electron–nucleus attraction; skip them.
+        const double Z = molecule.nuclear_charge(a);
+        if (Z == 0.0)
             continue;
-        }
-
-        for (const auto &elem : orbit)
-        {
-            const double ve = static_cast<double>(elem.sign) * v_elem;
-            V(elem.i, elem.j) = ve;
-            V(elem.j, elem.i) = ve;
-        }
+        charges.push_back(
+            HartreeFock::ExternalCharge{
+                .position = Eigen::Vector3d(
+                    molecule._standard(a, 0),
+                    molecule._standard(a, 1),
+                    molecule._standard(a, 2)),
+                .charge = Z});
     }
 
-    return V;
+    return ::compute_external_charge_attraction_impl(shell_pairs, nbasis, charges, sym_ops);
+}
+
+Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_external_charge_attraction(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::size_t nbasis,
+    const std::vector<HartreeFock::ExternalCharge> &charges,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    return ::compute_external_charge_attraction_impl(shell_pairs, nbasis, charges, sym_ops);
 }
 
 // ─── 4-center ERI: VRR ───────────────────────────────────────────────────────
@@ -794,18 +689,24 @@ static void _eri_vrr(
     const HartreeFock::PrimitivePair &ppCD,
     const int lABx, const int lABy, const int lABz,
     const int lCDx, const int lCDy, const int lCDz,
-    double V[VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][MMAX_4C])
+    EriScratch &scratch,
+    HartreeFock::ERIKernel kernel,
+    double omega)
 {
     const double zetaAB = ppAB.zeta;
     const double zetaCD = ppCD.zeta;
     const double delta = zetaAB + zetaCD;
     const double rho = zetaAB * zetaCD / delta;
+    const ScreenedKernelData screen = screened_kernel_data(rho, kernel, omega);
+    const double effective_rho = screen.rho;
 
     const double inv_2_zetaAB = 0.5 / zetaAB;
     const double inv_2_zetaCD = 0.5 / zetaCD;
-    const double inv_2_delta = 0.5 / delta;
-    const double rho_over_zetaAB = rho / zetaAB;
-    const double rho_over_zetaCD = rho / zetaCD;
+    const double inv_2_delta =
+        (0.5 / delta) *
+        ((kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale);
+    const double rho_over_zetaAB = effective_rho / zetaAB;
+    const double rho_over_zetaCD = effective_rho / zetaCD;
 
     const auto &P = ppAB.center;
     const auto &Q = ppCD.center;
@@ -816,23 +717,31 @@ static void _eri_vrr(
     const double Wz = (zetaAB * P[2] + zetaCD * Q[2]) / delta;
 
     // WP = W - P,  WQ = W - Q
-    const double WPx = Wx - P[0], WPy = Wy - P[1], WPz = Wz - P[2];
-    const double WQx = Wx - Q[0], WQy = Wy - Q[1], WQz = Wz - Q[2];
+    const double wpwq_scale =
+        (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
+    const double WPx = (Wx - P[0]) * wpwq_scale;
+    const double WPy = (Wy - P[1]) * wpwq_scale;
+    const double WPz = (Wz - P[2]) * wpwq_scale;
+    const double WQx = (Wx - Q[0]) * wpwq_scale;
+    const double WQy = (Wy - Q[1]) * wpwq_scale;
+    const double WQz = (Wz - Q[2]) * wpwq_scale;
 
     // PA = P - A = ppAB.pA;  QC = Q - C = ppCD.pA (since ppCD.A is shell C)
     const double PAx = ppAB.pA[0], PAy = ppAB.pA[1], PAz = ppAB.pA[2];
     const double QCx = ppCD.pA[0], QCy = ppCD.pA[1], QCz = ppCD.pA[2];
 
     const double PQx = P[0] - Q[0], PQy = P[1] - Q[1], PQz = P[2] - Q[2];
-    const double T = rho * (PQx * PQx + PQy * PQy + PQz * PQz);
+    const double T = screen.boys_scale * rho * (PQx * PQx + PQy * PQy + PQz * PQz);
 
     const int MMAX = lABx + lABy + lABz + lCDx + lCDy + lCDz;
 
-    const double prefac = ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / M_PI);
+    const double prefac =
+        ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / std::numbers::pi) *
+        screen.prefactor_scale;
 
     // ── Seed ─────────────────────────────────────────────────────────────────
     for (int m = 0; m <= MMAX; ++m)
-        V[0][0][0][0][0][0][m] = prefac * HartreeFock::Lookup::boys(m, T);
+        scratch.v(0, 0, 0, 0, 0, 0, m) = prefac * HartreeFock::Lookup::boys(m, T);
 
     // ── A-VRR: x-axis ─────────────────────────────────────────────────────
     for (int ax = 1; ax <= lABx; ++ax)
@@ -840,12 +749,14 @@ static void _eri_vrr(
         const int mlim = MMAX - ax;
         for (int m = 0; m <= mlim; ++m)
         {
-            V[ax][0][0][0][0][0][m] =
-                PAx * V[ax - 1][0][0][0][0][0][m] + WPx * V[ax - 1][0][0][0][0][0][m + 1];
+            scratch.v(ax, 0, 0, 0, 0, 0, m) =
+                PAx * scratch.v(ax - 1, 0, 0, 0, 0, 0, m) +
+                WPx * scratch.v(ax - 1, 0, 0, 0, 0, 0, m + 1);
             if (ax > 1)
-                V[ax][0][0][0][0][0][m] +=
+                scratch.v(ax, 0, 0, 0, 0, 0, m) +=
                     (ax - 1) * inv_2_zetaAB *
-                    (V[ax - 2][0][0][0][0][0][m] - rho_over_zetaAB * V[ax - 2][0][0][0][0][0][m + 1]);
+                    (scratch.v(ax - 2, 0, 0, 0, 0, 0, m) -
+                     rho_over_zetaAB * scratch.v(ax - 2, 0, 0, 0, 0, 0, m + 1));
         }
     }
 
@@ -859,12 +770,14 @@ static void _eri_vrr(
                 continue;
             for (int m = 0; m <= mlim; ++m)
             {
-                V[ax][ay][0][0][0][0][m] =
-                    PAy * V[ax][ay - 1][0][0][0][0][m] + WPy * V[ax][ay - 1][0][0][0][0][m + 1];
+                scratch.v(ax, ay, 0, 0, 0, 0, m) =
+                    PAy * scratch.v(ax, ay - 1, 0, 0, 0, 0, m) +
+                    WPy * scratch.v(ax, ay - 1, 0, 0, 0, 0, m + 1);
                 if (ay > 1)
-                    V[ax][ay][0][0][0][0][m] +=
+                    scratch.v(ax, ay, 0, 0, 0, 0, m) +=
                         (ay - 1) * inv_2_zetaAB *
-                        (V[ax][ay - 2][0][0][0][0][m] - rho_over_zetaAB * V[ax][ay - 2][0][0][0][0][m + 1]);
+                        (scratch.v(ax, ay - 2, 0, 0, 0, 0, m) -
+                         rho_over_zetaAB * scratch.v(ax, ay - 2, 0, 0, 0, 0, m + 1));
             }
         }
     }
@@ -881,12 +794,14 @@ static void _eri_vrr(
                     continue;
                 for (int m = 0; m <= mlim; ++m)
                 {
-                    V[ax][ay][az][0][0][0][m] =
-                        PAz * V[ax][ay][az - 1][0][0][0][m] + WPz * V[ax][ay][az - 1][0][0][0][m + 1];
+                    scratch.v(ax, ay, az, 0, 0, 0, m) =
+                        PAz * scratch.v(ax, ay, az - 1, 0, 0, 0, m) +
+                        WPz * scratch.v(ax, ay, az - 1, 0, 0, 0, m + 1);
                     if (az > 1)
-                        V[ax][ay][az][0][0][0][m] +=
+                        scratch.v(ax, ay, az, 0, 0, 0, m) +=
                             (az - 1) * inv_2_zetaAB *
-                            (V[ax][ay][az - 2][0][0][0][m] - rho_over_zetaAB * V[ax][ay][az - 2][0][0][0][m + 1]);
+                            (scratch.v(ax, ay, az - 2, 0, 0, 0, m) -
+                             rho_over_zetaAB * scratch.v(ax, ay, az - 2, 0, 0, 0, m + 1));
                 }
             }
         }
@@ -906,15 +821,17 @@ static void _eri_vrr(
                         continue;
                     for (int m = 0; m <= mlim; ++m)
                     {
-                        V[ax][ay][az][cx][0][0][m] =
-                            QCx * V[ax][ay][az][cx - 1][0][0][m] + WQx * V[ax][ay][az][cx - 1][0][0][m + 1];
+                        scratch.v(ax, ay, az, cx, 0, 0, m) =
+                            QCx * scratch.v(ax, ay, az, cx - 1, 0, 0, m) +
+                            WQx * scratch.v(ax, ay, az, cx - 1, 0, 0, m + 1);
                         if (cx > 1)
-                            V[ax][ay][az][cx][0][0][m] +=
+                            scratch.v(ax, ay, az, cx, 0, 0, m) +=
                                 (cx - 1) * inv_2_zetaCD *
-                                (V[ax][ay][az][cx - 2][0][0][m] - rho_over_zetaCD * V[ax][ay][az][cx - 2][0][0][m + 1]);
+                                (scratch.v(ax, ay, az, cx - 2, 0, 0, m) -
+                                 rho_over_zetaCD * scratch.v(ax, ay, az, cx - 2, 0, 0, m + 1));
                         if (ax > 0)
-                            V[ax][ay][az][cx][0][0][m] +=
-                                ax * inv_2_delta * V[ax - 1][ay][az][cx - 1][0][0][m + 1];
+                            scratch.v(ax, ay, az, cx, 0, 0, m) +=
+                                ax * inv_2_delta * scratch.v(ax - 1, ay, az, cx - 1, 0, 0, m + 1);
                     }
                 }
             }
@@ -937,15 +854,17 @@ static void _eri_vrr(
                             continue;
                         for (int m = 0; m <= mlim; ++m)
                         {
-                            V[ax][ay][az][cx][cy][0][m] =
-                                QCy * V[ax][ay][az][cx][cy - 1][0][m] + WQy * V[ax][ay][az][cx][cy - 1][0][m + 1];
+                            scratch.v(ax, ay, az, cx, cy, 0, m) =
+                                QCy * scratch.v(ax, ay, az, cx, cy - 1, 0, m) +
+                                WQy * scratch.v(ax, ay, az, cx, cy - 1, 0, m + 1);
                             if (cy > 1)
-                                V[ax][ay][az][cx][cy][0][m] +=
+                                scratch.v(ax, ay, az, cx, cy, 0, m) +=
                                     (cy - 1) * inv_2_zetaCD *
-                                    (V[ax][ay][az][cx][cy - 2][0][m] - rho_over_zetaCD * V[ax][ay][az][cx][cy - 2][0][m + 1]);
+                                    (scratch.v(ax, ay, az, cx, cy - 2, 0, m) -
+                                     rho_over_zetaCD * scratch.v(ax, ay, az, cx, cy - 2, 0, m + 1));
                             if (ay > 0)
-                                V[ax][ay][az][cx][cy][0][m] +=
-                                    ay * inv_2_delta * V[ax][ay - 1][az][cx][cy - 1][0][m + 1];
+                                scratch.v(ax, ay, az, cx, cy, 0, m) +=
+                                    ay * inv_2_delta * scratch.v(ax, ay - 1, az, cx, cy - 1, 0, m + 1);
                         }
                     }
                 }
@@ -971,15 +890,17 @@ static void _eri_vrr(
                                 continue;
                             for (int m = 0; m <= mlim; ++m)
                             {
-                                V[ax][ay][az][cx][cy][cz][m] =
-                                    QCz * V[ax][ay][az][cx][cy][cz - 1][m] + WQz * V[ax][ay][az][cx][cy][cz - 1][m + 1];
+                                scratch.v(ax, ay, az, cx, cy, cz, m) =
+                                    QCz * scratch.v(ax, ay, az, cx, cy, cz - 1, m) +
+                                    WQz * scratch.v(ax, ay, az, cx, cy, cz - 1, m + 1);
                                 if (cz > 1)
-                                    V[ax][ay][az][cx][cy][cz][m] +=
+                                    scratch.v(ax, ay, az, cx, cy, cz, m) +=
                                         (cz - 1) * inv_2_zetaCD *
-                                        (V[ax][ay][az][cx][cy][cz - 2][m] - rho_over_zetaCD * V[ax][ay][az][cx][cy][cz - 2][m + 1]);
+                                        (scratch.v(ax, ay, az, cx, cy, cz - 2, m) -
+                                         rho_over_zetaCD * scratch.v(ax, ay, az, cx, cy, cz - 2, m + 1));
                                 if (az > 0)
-                                    V[ax][ay][az][cx][cy][cz][m] +=
-                                        az * inv_2_delta * V[ax][ay][az - 1][cx][cy][cz - 1][m + 1];
+                                    scratch.v(ax, ay, az, cx, cy, cz, m) +=
+                                        az * inv_2_delta * scratch.v(ax, ay, az - 1, cx, cy, cz - 1, m + 1);
                             }
                         }
                     }
@@ -997,7 +918,7 @@ static void _eri_vrr(
 //
 // After this call, W[lAx][lAy][lAz][cx][cy][cz] = (lA lB | cx cy cz 0).
 static void _eri_hrr_ab(
-    double W[VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM][VRR_DIM],
+    EriScratch &scratch,
     const int lAx, const int lAy, const int lAz,
     const int lBx, const int lBy, const int lBz,
     const int lCDx, const int lCDy, const int lCDz,
@@ -1011,8 +932,9 @@ static void _eri_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax][ay][az + 1][cx][cy][cz] + ABz * W[ax][ay][az][cx][cy][cz];
+                                scratch.h(ax, ay, az, cx, cy, cz) =
+                                    scratch.h(ax, ay, az + 1, cx, cy, cz) +
+                                    ABz * scratch.h(ax, ay, az, cx, cy, cz);
 
     // Phase 2: transfer lBy quanta (az range now [0, lAz])
     for (int ky = 0; ky < lBy; ++ky)
@@ -1022,8 +944,9 @@ static void _eri_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax][ay + 1][az][cx][cy][cz] + ABy * W[ax][ay][az][cx][cy][cz];
+                                scratch.h(ax, ay, az, cx, cy, cz) =
+                                    scratch.h(ax, ay + 1, az, cx, cy, cz) +
+                                    ABy * scratch.h(ax, ay, az, cx, cy, cz);
 
     // Phase 3: transfer lBx quanta (ay range now [0, lAy])
     for (int kx = 0; kx < lBx; ++kx)
@@ -1033,8 +956,9 @@ static void _eri_hrr_ab(
                     for (int cx = 0; cx <= lCDx; ++cx)
                         for (int cy = 0; cy <= lCDy; ++cy)
                             for (int cz = 0; cz <= lCDz; ++cz)
-                                W[ax][ay][az][cx][cy][cz] =
-                                    W[ax + 1][ay][az][cx][cy][cz] + ABx * W[ax][ay][az][cx][cy][cz];
+                                scratch.h(ax, ay, az, cx, cy, cz) =
+                                    scratch.h(ax + 1, ay, az, cx, cy, cz) +
+                                    ABx * scratch.h(ax, ay, az, cx, cy, cz);
 }
 
 // ─── 4-center ERI: single primitive quartet ──────────────────────────────────
@@ -1046,23 +970,19 @@ static double _os_eri_primitive(
     const int lCx, const int lCy, const int lCz,
     const int lDx, const int lDy, const int lDz,
     const double ABx, const double ABy, const double ABz,
-    const double CDx, const double CDy, const double CDz)
+    const double CDx, const double CDy, const double CDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
 {
     const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
     const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+    const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
 
-    // Zero the needed sub-region of the thread-local VRR buffer
-    for (int ax = 0; ax <= lABx; ++ax)
-        for (int ay = 0; ay <= lABy; ++ay)
-            for (int az = 0; az <= lABz; ++az)
-                for (int cx = 0; cx <= lCDx; ++cx)
-                    for (int cy = 0; cy <= lCDy; ++cy)
-                        for (int cz = 0; cz <= lCDz; ++cz)
-                            for (int m = 0; m < MMAX_4C; ++m)
-                                _vrr_buf[ax][ay][az][cx][cy][cz][m] = 0.0;
+    EriScratch &scratch = _eri_scratch;
+    scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
 
-    // Build VRR table
-    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, _vrr_buf);
+    // Build the quartet-sized VRR table in thread-local dynamic scratch.
+    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
 
     // Extract m=0 slice into HRR buffer and zero unused entries
     for (int ax = 0; ax <= lABx; ++ax)
@@ -1071,20 +991,91 @@ static double _os_eri_primitive(
                 for (int cx = 0; cx <= lCDx; ++cx)
                     for (int cy = 0; cy <= lCDy; ++cy)
                         for (int cz = 0; cz <= lCDz; ++cz)
-                            _hrr_buf[ax][ay][az][cx][cy][cz] = _vrr_buf[ax][ay][az][cx][cy][cz][0];
+                            scratch.h(ax, ay, az, cx, cy, cz) =
+                                scratch.v(ax, ay, az, cx, cy, cz, 0);
 
-    // A→B HRR: modifies _hrr_buf in-place
-    _eri_hrr_ab(_hrr_buf, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
+    // A→B HRR: modifies the quartet-sized HRR scratch in-place.
+    _eri_hrr_ab(scratch, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
 
-    // Extract C-side slice at (lAx, lAy, lAz) for C→D HRR
-    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM] = {};
+    // Extract C-side slice at (lAx, lAy, lAz) for C→D HRR.
+    // `_nuclear_hrr` only reads V0_CD[ix][iy][iz] for ix ≤ lCx+lDx = lCDx,
+    // etc., which is exactly the range filled below, so no zero-init is
+    // needed for the unused tail of the stack array.
+    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM];
     for (int cx = 0; cx <= lCDx; ++cx)
         for (int cy = 0; cy <= lCDy; ++cy)
             for (int cz = 0; cz <= lCDz; ++cz)
-                V0_CD[cx][cy][cz] = _hrr_buf[lAx][lAy][lAz][cx][cy][cz];
+                V0_CD[cx][cy][cz] = scratch.h(lAx, lAy, lAz, cx, cy, cz);
 
     // C→D HRR reusing the existing _nuclear_hrr (same 3-phase sweep)
     return _nuclear_hrr(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+}
+
+static Eigen::MatrixXd compute_external_charge_attraction_impl(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::size_t nbasis,
+    const std::vector<HartreeFock::ExternalCharge> &charges,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    const std::size_t npairs = shell_pairs.size();
+    Eigen::MatrixXd V = Eigen::MatrixXd::Zero(nbasis, nbasis);
+    const bool use_sym = use_symmetry_ops(sym_ops);
+
+#pragma omp parallel for schedule(dynamic)
+    for (std::size_t p = 0; p < npairs; p++)
+    {
+        const auto &sp = shell_pairs[p];
+        const std::size_t ii = sp.A._index;
+        const std::size_t jj = sp.B._index;
+        std::vector<PairOrbitElem> orbit;
+
+        if (use_sym)
+        {
+            auto [orb, forced_zero] = build_pair_orbit(ii, jj, *sym_ops);
+            if (forced_zero)
+                continue;
+            orbit = std::move(orb);
+            if (orbit.front().i != ii || orbit.front().j != jj)
+                continue;
+        }
+
+        const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
+        const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
+        const double ABx = sp.R[0], ABy = sp.R[1], ABz = sp.R[2];
+
+        double v_elem = 0.0;
+
+        for (const auto &charge : charges)
+        {
+            double v_point = 0.0;
+            for (const auto &pp : sp.primitive_pairs)
+                v_point += _os_nuclear_primitive(
+                               pp,
+                               lAx, lAy, lAz,
+                               lBx, lBy, lBz,
+                               ABx, ABy, ABz,
+                               charge.position) *
+                           pp.coeff_product;
+
+            v_elem -= charge.charge * v_point;
+        }
+
+        if (!use_sym)
+        {
+            V(ii, jj) = v_elem;
+            V(jj, ii) = v_elem;
+            continue;
+        }
+
+        for (const auto &elem : orbit)
+        {
+            const double ve = static_cast<double>(elem.sign) * v_elem;
+            V(elem.i, elem.j) = ve;
+            V(elem.j, elem.i) = ve;
+        }
+    }
+
+    return V;
 }
 
 // ─── 4-center ERI: contracted shell quartet ──────────────────────────────────
@@ -1094,7 +1085,9 @@ static double _contracted_eri(
     const int lAx, const int lAy, const int lAz,
     const int lBx, const int lBy, const int lBz,
     const int lCx, const int lCy, const int lCz,
-    const int lDx, const int lDy, const int lDz)
+    const int lDx, const int lDy, const int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
 {
     const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
     const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
@@ -1102,7 +1095,26 @@ static double _contracted_eri(
     double eri = 0.0;
     for (const auto &ppAB : spAB.primitive_pairs)
         for (const auto &ppCD : spCD.primitive_pairs)
-            eri += ppAB.coeff_product * ppCD.coeff_product * _os_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, ABx, ABy, ABz, CDx, CDy, CDz);
+        {
+            const double full =
+                _os_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                  lCx, lCy, lCz, lDx, lDy, lDz,
+                                  ABx, ABy, ABz, CDx, CDy, CDz,
+                                  HartreeFock::ERIKernel::Coulomb, 0.0);
+
+            double value = full;
+            if (kernel != HartreeFock::ERIKernel::Coulomb)
+            {
+                const double long_range =
+                    _os_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                      lCx, lCy, lCz, lDx, lDy, lDz,
+                                      ABx, ABy, ABz, CDx, CDy, CDz,
+                                      HartreeFock::ERIKernel::LongRange, omega);
+                value = (kernel == HartreeFock::ERIKernel::LongRange) ? long_range : (full - long_range);
+            }
+
+            eri += ppAB.coeff_product * ppCD.coeff_product * value;
+        }
     return eri;
 }
 
@@ -1112,11 +1124,14 @@ double HartreeFock::ObaraSaika::_contracted_eri_elem(
     int lAx, int lAy, int lAz,
     int lBx, int lBy, int lBz,
     int lCx, int lCy, int lCz,
-    int lDx, int lDy, int lDz)
+    int lDx, int lDy, int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
 {
     return _contracted_eri(spAB, spCD,
                            lAx, lAy, lAz, lBx, lBy, lBz,
-                           lCx, lCy, lCz, lDx, lDy, lDz);
+                           lCx, lCy, lCz, lDx, lDy, lDz,
+                           kernel, omega);
 }
 
 // ─── Gradient: derivative integral helpers ────────────────────────────────────
@@ -1172,7 +1187,7 @@ static double _os_nuclear_primitive_dC(
     const double pCz = pp.center[2] - nuc_pos[2];
     const double T = pp.zeta * (pCx * pCx + pCy * pCy + pCz * pCz);
 
-    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / M_PI);
+    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / std::numbers::pi);
     const double pAx = pp.pA[0], pAy = pp.pA[1], pAz = pp.pA[2];
     const double hiz = pp.inv_zeta * 0.5;
     const double PC_dir = (direction == 0) ? pCx : (direction == 1) ? pCy
@@ -1329,7 +1344,6 @@ std::array<double, 3> HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
     const double ABx = sp.R[0], ABy = sp.R[1], ABz = sp.R[2];
 
     std::array<double, 3> result{};
-
     for (int q = 0; q < 3; ++q)
     {
         const int lAq = sp.A._cartesian[q];
@@ -1347,14 +1361,12 @@ std::array<double, 3> HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
                 const double w = pp.coeff_product;
                 const double w2al = 2.0 * pp.alpha * w;
 
-                // +1 shift: -Z * 2α * V_prim(lA+ê_q, lB)
                 {
                     const int axp = lAx + (q == 0), ayp = lAy + (q == 1), azp = lAz + (q == 2);
                     double Vp = _os_nuclear_primitive(pp, axp, ayp, azp,
                                                       lBx, lBy, lBz, ABx, ABy, ABz, C);
                     dV -= Z * w2al * Vp;
                 }
-                // -1 shift: +Z * lAq * V_prim(lA-ê_q, lB)
                 if (lAq > 0)
                 {
                     const int axm = lAx - (q == 0), aym = lAy - (q == 1), azm = lAz - (q == 2);
@@ -1396,7 +1408,9 @@ double HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
 // result[cen*3 + dir], cen∈{0=A,1=B,2=C,3=D}, dir∈{0,1,2}
 std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
     const HartreeFock::ShellPair &spAB,
-    const HartreeFock::ShellPair &spCD)
+    const HartreeFock::ShellPair &spCD,
+    const HartreeFock::ERIKernel kernel,
+    double omega)
 {
     const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
     const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
@@ -1416,7 +1430,26 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += (2.0 * ppAB.alpha) * ppAB.coeff_product * ppCD.coeff_product * _os_eri_primitive(ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, ABx, ABy, ABz, CDx, CDy, CDz);
+            {
+                const auto primitive_value = [&]() -> double
+                {
+                    const double full = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::Coulomb, 0.0);
+                    if (kernel == HartreeFock::ERIKernel::Coulomb)
+                        return full;
+
+                    const double long_range = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::LongRange, omega);
+                    return kernel == HartreeFock::ERIKernel::LongRange
+                               ? long_range
+                               : (full - long_range);
+                }();
+                eri += (2.0 * ppAB.alpha) * ppAB.coeff_product * ppCD.coeff_product * primitive_value;
+            }
         return eri;
     };
 
@@ -1426,7 +1459,26 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += ppAB.coeff_product * (2.0 * ppAB.beta) * ppCD.coeff_product * _os_eri_primitive(ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, ABx, ABy, ABz, CDx, CDy, CDz);
+            {
+                const auto primitive_value = [&]() -> double
+                {
+                    const double full = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::Coulomb, 0.0);
+                    if (kernel == HartreeFock::ERIKernel::Coulomb)
+                        return full;
+
+                    const double long_range = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::LongRange, omega);
+                    return kernel == HartreeFock::ERIKernel::LongRange
+                               ? long_range
+                               : (full - long_range);
+                }();
+                eri += ppAB.coeff_product * (2.0 * ppAB.beta) * ppCD.coeff_product * primitive_value;
+            }
         return eri;
     };
 
@@ -1436,7 +1488,26 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += ppAB.coeff_product * (2.0 * ppCD.alpha) * ppCD.coeff_product * _os_eri_primitive(ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, ABx, ABy, ABz, CDx, CDy, CDz);
+            {
+                const auto primitive_value = [&]() -> double
+                {
+                    const double full = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::Coulomb, 0.0);
+                    if (kernel == HartreeFock::ERIKernel::Coulomb)
+                        return full;
+
+                    const double long_range = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::LongRange, omega);
+                    return kernel == HartreeFock::ERIKernel::LongRange
+                               ? long_range
+                               : (full - long_range);
+                }();
+                eri += ppAB.coeff_product * (2.0 * ppCD.alpha) * ppCD.coeff_product * primitive_value;
+            }
         return eri;
     };
 
@@ -1446,7 +1517,26 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
         double eri = 0.0;
         for (const auto &ppAB : spAB.primitive_pairs)
             for (const auto &ppCD : spCD.primitive_pairs)
-                eri += ppAB.coeff_product * ppCD.coeff_product * (2.0 * ppCD.beta) * _os_eri_primitive(ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, ABx, ABy, ABz, CDx, CDy, CDz);
+            {
+                const auto primitive_value = [&]() -> double
+                {
+                    const double full = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::Coulomb, 0.0);
+                    if (kernel == HartreeFock::ERIKernel::Coulomb)
+                        return full;
+
+                    const double long_range = _os_eri_primitive(
+                        ppAB, ppCD, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz,
+                        ABx, ABy, ABz, CDx, CDy, CDz,
+                        HartreeFock::ERIKernel::LongRange, omega);
+                    return kernel == HartreeFock::ERIKernel::LongRange
+                               ? long_range
+                               : (full - long_range);
+                }();
+                eri += ppAB.coeff_product * ppCD.coeff_product * (2.0 * ppCD.beta) * primitive_value;
+            }
         return eri;
     };
 
@@ -1455,7 +1545,8 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
     {
         return _contracted_eri(spAB, spCD,
                                ax, ay, az, bx, by, bz,
-                               cx, cy, cz, dx, dy, dz);
+                               cx, cy, cz, dx, dy, dz,
+                               kernel, omega);
     };
 
     for (int q = 0; q < 3; ++q)
@@ -1516,6 +1607,64 @@ std::array<double, 12> HartreeFock::ObaraSaika::_compute_eri_deriv_elem(
     return result;
 }
 
+double HartreeFock::ObaraSaika::_contracted_eri_elem_weighted_test(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    int lAx, int lAy, int lAz,
+    int lBx, int lBy, int lBz,
+    int lCx, int lCy, int lCz,
+    int lDx, int lDy, int lDz,
+    int weight_center,
+    const HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
+    const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
+
+    auto primitive_value = [&](const HartreeFock::PrimitivePair &ppAB,
+                               const HartreeFock::PrimitivePair &ppCD) -> double
+    {
+        const double full = _os_eri_primitive(
+            ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+            ABx, ABy, ABz, CDx, CDy, CDz,
+            HartreeFock::ERIKernel::Coulomb, 0.0);
+        if (kernel == HartreeFock::ERIKernel::Coulomb)
+            return full;
+
+        const double long_range = _os_eri_primitive(
+            ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+            ABx, ABy, ABz, CDx, CDy, CDz,
+            HartreeFock::ERIKernel::LongRange, omega);
+        return kernel == HartreeFock::ERIKernel::LongRange ? long_range : (full - long_range);
+    };
+
+    double eri = 0.0;
+    for (const auto &ppAB : spAB.primitive_pairs)
+        for (const auto &ppCD : spCD.primitive_pairs)
+        {
+            const double value = primitive_value(ppAB, ppCD);
+            switch (weight_center)
+            {
+                case 0:
+                    eri += (2.0 * ppAB.alpha) * ppAB.coeff_product * ppCD.coeff_product * value;
+                    break;
+                case 1:
+                    eri += ppAB.coeff_product * (2.0 * ppAB.beta) * ppCD.coeff_product * value;
+                    break;
+                case 2:
+                    eri += ppAB.coeff_product * (2.0 * ppCD.alpha) * ppCD.coeff_product * value;
+                    break;
+                case 3:
+                    eri += ppAB.coeff_product * ppCD.coeff_product * (2.0 * ppCD.beta) * value;
+                    break;
+                default:
+                    throw std::runtime_error("invalid weighted centre for OS ERI derivative test hook");
+            }
+        }
+
+    return eri;
+}
+
 // Forward declaration — defined later in this file before _compute_2e.
 static Eigen::MatrixXd _compute_schwarz_table(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -1533,6 +1682,8 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &density,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -1548,8 +1699,10 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
 
     const std::size_t npairs = shell_pairs.size();
 
-    // Disjoint writes per (p,q) pair → lock-free parallelism.
-    // thread_local _vrr_buf / _hrr_buf give each thread private scratch space.
+    // The contracted ERI kernel uses thread-local quartet-sized scratch, while
+    // permutation scattering only mirrors one computed integral into symmetry-
+    // related slots via atomic writes. These are plain stores of the same value,
+    // not `+=` reductions, so `atomic update` is intentionally not used here.
 #pragma omp parallel for schedule(dynamic)
     for (std::size_t p = 0; p < npairs; ++p)
     {
@@ -1586,7 +1739,8 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
 
             const double val = _contracted_eri(spAB, spCD,
                                                lAx, lAy, lAz, lBx, lBy, lBz,
-                                               lCx, lCy, lCz, lDx, lDy, lDz);
+                                               lCx, lCy, lCz, lDx, lDy, lDz,
+                                               kernel, omega);
 
             if (!use_sym)
             {
@@ -1630,6 +1784,8 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
     const Eigen::MatrixXd &Pa,
     const Eigen::MatrixXd &Pb,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -1681,7 +1837,8 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
 
             const double val = _contracted_eri(spAB, spCD,
                                                lAx, lAy, lAz, lBx, lBy, lBz,
-                                               lCx, lCy, lCz, lDx, lDy, lDz);
+                                               lCx, lCy, lCz, lDx, lDy, lDz,
+                                               kernel, omega);
 
             if (!use_sym)
             {
@@ -1775,7 +1932,7 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_cross_overlap(
                     const Eigen::Vector3d pA = P - A;
                     const Eigen::Vector3d pB = P - B;
 
-                    const double prefactor = std::pow(M_PI * inv_zeta, 1.5) * std::exp(-alpha * beta * inv_zeta * R2);
+                    const double prefactor = std::pow(std::numbers::pi * inv_zeta, 1.5) * std::exp(-alpha * beta * inv_zeta * R2);
 
                     const double Sx = _os_1d(half_inv_zeta, pA[0], pB[0], lAx, lBx);
                     const double Sy = _os_1d(half_inv_zeta, pA[1], pB[1], lAy, lBy);
@@ -1827,7 +1984,8 @@ static Eigen::MatrixXd _compute_schwarz_table(
 
         const double diag = _contracted_eri(sp, sp,
                                             lAx, lAy, lAz, lBx, lBy, lBz,
-                                            lAx, lAy, lAz, lBx, lBy, lBz);
+                                            lAx, lAy, lAz, lBx, lBy, lBz,
+                                            HartreeFock::ERIKernel::Coulomb, 0.0);
         const double q = std::sqrt(std::abs(diag));
         if (!use_sym)
         {
@@ -1850,6 +2008,8 @@ static Eigen::MatrixXd _compute_schwarz_table(
 std::vector<double> HartreeFock::ObaraSaika::_compute_2e(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
@@ -1865,57 +2025,93 @@ std::vector<double> HartreeFock::ObaraSaika::_compute_2e(
 
     const std::size_t npairs = shell_pairs.size();
 
-    // Disjoint writes per (p,q) pair → lock-free parallelism.
-    // thread_local _vrr_buf / _hrr_buf give each thread private scratch space.
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; ++p)
+    // The contracted ERI kernel uses thread-local quartet-sized scratch, while
+    // permutation scattering only mirrors one computed integral into symmetry-
+    // related slots via atomic writes. These are plain stores of the same value,
+    // not `+=` reductions, so `atomic update` is intentionally not used here.
+    //
+    // Load balance: the (p,q) pairs form the upper triangle q >= p, so a plain
+    // `parallel for` over p hands one thread a full triangle row (npairs
+    // quartets) while another gets a single quartet — the long row starves the
+    // others at the barrier. Instead we flatten the triangle into a single
+    // linear index t in [0, ntri) with ntri = npairs(npairs+1)/2 and distribute
+    // *that* with schedule(dynamic), so every thread pulls evenly sized quartet
+    // batches. The output is unchanged: the scatter is store-only, so the tensor
+    // is independent of the order in which (p,q) pairs are visited.
+    //
+    // (p,q) is recovered from t by closed-form inversion of the row-major upper
+    // triangle (row p starts at tri_base(p) = p*npairs - p(p-1)/2); the
+    // while-guards absorb any floating-point drift in the sqrt. This indexing is
+    // used ONLY to distribute work across threads — AO matrix placement still
+    // comes from spAB.A._index / spCD.A._index, never from this t->(p,q) map.
+    const std::size_t ntri = npairs * (npairs + 1) / 2;
+    const auto tri_base = [npairs](std::size_t r) -> std::size_t
+    { return r * npairs - r * (r - 1) / 2; };
+
+#pragma omp parallel for schedule(dynamic, 64)
+    for (std::size_t t = 0; t < ntri; ++t)
     {
+        // Recover (p, q) with q >= p from the flat triangle index t.
+        long long pp = static_cast<long long>(std::floor(
+            (static_cast<double>(2 * npairs + 1) -
+             std::sqrt(static_cast<double>(2 * npairs + 1) *
+                           static_cast<double>(2 * npairs + 1) -
+                       8.0 * static_cast<double>(t))) /
+            2.0));
+        if (pp < 0)
+            pp = 0;
+        while (pp > 0 && tri_base(static_cast<std::size_t>(pp)) > t)
+            --pp;
+        while (static_cast<std::size_t>(pp) + 1 < npairs &&
+               tri_base(static_cast<std::size_t>(pp) + 1) <= t)
+            ++pp;
+        const std::size_t p = static_cast<std::size_t>(pp);
+        const std::size_t q = p + (t - tri_base(p));
+
         const auto &spAB = shell_pairs[p];
         const std::size_t i = spAB.A._index;
         const std::size_t j = spAB.B._index;
         const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
         const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
 
-        for (std::size_t q = p; q < npairs; ++q)
+        const auto &spCD = shell_pairs[q];
+        const std::size_t k = spCD.A._index;
+        const std::size_t l = spCD.B._index;
+        std::vector<QuartetOrbitElem> orbit;
+
+        // Schwarz screening: |(ij|kl)| ≤ Q(i,j)·Q(k,l)
+        if (Q(i, j) * Q(k, l) < tol_eri)
+            continue;
+
+        if (use_sym)
         {
-            const auto &spCD = shell_pairs[q];
-            const std::size_t k = spCD.A._index;
-            const std::size_t l = spCD.B._index;
-            std::vector<QuartetOrbitElem> orbit;
-
-            // Schwarz screening: |(ij|kl)| ≤ Q(i,j)·Q(k,l)
-            if (Q(i, j) * Q(k, l) < tol_eri)
+            auto [orb, forced_zero] = build_quartet_orbit(i, j, k, l, *sym_ops);
+            if (forced_zero)
                 continue;
-
-            if (use_sym)
-            {
-                auto [orb, forced_zero] = build_quartet_orbit(i, j, k, l, *sym_ops);
-                if (forced_zero)
-                    continue;
-                orbit = std::move(orb);
-                if (orbit.front().i != i || orbit.front().j != j ||
-                    orbit.front().k != k || orbit.front().l != l)
-                    continue;
-            }
-
-            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-
-            const double val = _contracted_eri(spAB, spCD,
-                                               lAx, lAy, lAz, lBx, lBy, lBz,
-                                               lCx, lCy, lCz, lDx, lDy, lDz);
-
-            if (!use_sym)
-            {
-                write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+            orbit = std::move(orb);
+            if (orbit.front().i != i || orbit.front().j != j ||
+                orbit.front().k != k || orbit.front().l != l)
                 continue;
-            }
-
-            for (const auto &elem : orbit)
-                write_eri_permutations(eri, nb, nb2, nb3,
-                                       elem.i, elem.j, elem.k, elem.l,
-                                       static_cast<double>(elem.sign) * val);
         }
+
+        const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
+        const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
+
+        const double val = _contracted_eri(spAB, spCD,
+                                           lAx, lAy, lAz, lBx, lBy, lBz,
+                                           lCx, lCy, lCz, lDx, lDy, lDz,
+                                           kernel, omega);
+
+        if (!use_sym)
+        {
+            write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+            continue;
+        }
+
+        for (const auto &elem : orbit)
+            write_eri_permutations(eri, nb, nb2, nb3,
+                                   elem.i, elem.j, elem.k, elem.l,
+                                   static_cast<double>(elem.sign) * val);
     }
 
     return eri;

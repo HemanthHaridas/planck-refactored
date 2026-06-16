@@ -8,6 +8,8 @@ or directly:
 """
 
 import sys
+import tempfile
+import textwrap
 from pathlib import Path
 
 # Allow running from repo root without installation
@@ -18,9 +20,29 @@ from visualizer.parser import parse_log, ParsedRun
 
 LOG = Path(__file__).parent.parent / "visualizer_test.log"
 
+# Single-root CASSCF (H2, CAS(2,2)/STO-3G, immediate convergence)
+LOG_H2_CAS = (
+    Path(__file__).parent.parent
+    / "tests/benchmarks/casscf/pyscf_reference/h2_cas22_sto3g.log"
+)
+
+# SA-CASSCF over 2 roots (water, CAS(4,4)/STO-3G)
+LOG_WATER_SA = (
+    Path(__file__).parent.parent
+    / "tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2.log"
+)
+
 
 def get_run() -> ParsedRun:
     return parse_log(LOG)
+
+
+def get_h2_cas() -> ParsedRun:
+    return parse_log(LOG_H2_CAS)
+
+
+def get_water_sa() -> ParsedRun:
+    return parse_log(LOG_WATER_SA)
 
 
 # ── Metadata ────────────────────────────────────────────────────────────────
@@ -213,6 +235,201 @@ def test_zpe_kcal():
     run = get_run()
     assert run.zpe_kcal is not None
     assert abs(run.zpe_kcal - 13.25) < 0.01
+
+
+# ── CASSCF: single-root H2 CAS(2,2)/STO-3G ──────────────────────────────────
+
+def test_casscf_active_space():
+    run = get_h2_cas()
+    assert run.casscf_active_space == "(2e, 2o)"
+    assert run.casscf_n_active_electrons == 2
+    assert run.casscf_n_active_orbitals == 2
+    assert run.casscf_n_core == 0
+    assert run.casscf_n_virt == 0
+
+
+def test_casscf_single_root_no_sa():
+    run = get_h2_cas()
+    assert run.casscf_n_roots is None
+
+
+def test_casscf_converged_flag():
+    run = get_h2_cas()
+    assert run.casscf_converged
+
+
+def test_casscf_iter_collected():
+    run = get_h2_cas()
+    assert len(run.casscf_iters) == 1
+
+
+def test_casscf_iter_energy():
+    run = get_h2_cas()
+    it = run.casscf_iters[0]
+    assert it.iteration == 0
+    assert abs(it.energy - -1.1372838351) < 1e-7
+
+
+def test_casscf_iter_sa_grad_zero():
+    # Already converged at iter 0, sa_grad should be 0
+    run = get_h2_cas()
+    assert run.casscf_iters[0].sa_grad == 0.0
+
+
+def test_casscf_natural_occs():
+    run = get_h2_cas()
+    assert len(run.casscf_natural_occs) == 2
+    assert abs(run.casscf_natural_occs[0] - 1.974668) < 1e-5
+    assert abs(run.casscf_natural_occs[1] - 0.025332) < 1e-5
+
+
+def test_casscf_corr_energy():
+    run = get_h2_cas()
+    assert run.casscf_corr_energy is not None
+    assert abs(run.casscf_corr_energy - -0.0205245248) < 1e-7
+
+
+def test_casscf_total_energy():
+    run = get_h2_cas()
+    assert run.casscf_total_energy is not None
+    assert abs(run.casscf_total_energy - -1.1372838351) < 1e-7
+
+
+def test_casscf_no_sa_roots():
+    run = get_h2_cas()
+    assert run.casscf_sa_roots == []
+
+
+# ── SA-CASSCF: water CAS(4,4)/STO-3G, 2 roots ───────────────────────────────
+
+def test_sa_casscf_active_space():
+    run = get_water_sa()
+    assert run.casscf_active_space == "(4e, 4o)"
+    assert run.casscf_n_active_electrons == 4
+    assert run.casscf_n_active_orbitals == 4
+    assert run.casscf_n_core == 3
+
+
+def test_sa_casscf_n_roots():
+    run = get_water_sa()
+    assert run.casscf_n_roots == 2
+
+
+def test_sa_casscf_converged():
+    run = get_water_sa()
+    assert run.casscf_converged
+
+
+def test_sa_casscf_iter_count():
+    run = get_water_sa()
+    assert len(run.casscf_iters) == 8
+
+
+def test_sa_casscf_first_iter():
+    run = get_water_sa()
+    it = run.casscf_iters[0]
+    assert it.iteration == 1
+    assert abs(it.energy - -74.7738521125) < 1e-7
+    assert abs(it.sa_grad - 7.262e-3) < 1e-5
+
+
+def test_sa_casscf_last_iter_grad():
+    run = get_water_sa()
+    last = run.casscf_iters[-1]
+    assert last.sa_grad < 1e-6
+
+
+def test_sa_casscf_natural_occs():
+    run = get_water_sa()
+    assert len(run.casscf_natural_occs) == 4
+    assert abs(run.casscf_natural_occs[0] - 1.987846) < 1e-5
+
+
+def test_sa_casscf_total_energy():
+    run = get_water_sa()
+    assert run.casscf_total_energy is not None
+    assert abs(run.casscf_total_energy - -74.7751377977) < 1e-7
+
+
+def test_sa_casscf_corr_energy():
+    run = get_water_sa()
+    assert run.casscf_corr_energy is not None
+    assert abs(run.casscf_corr_energy - 0.1877951942) < 1e-7
+
+
+def test_sa_casscf_root_count():
+    run = get_water_sa()
+    assert len(run.casscf_sa_roots) == 2
+
+
+def test_sa_casscf_root_energies():
+    run = get_water_sa()
+    roots = run.casscf_sa_roots
+    assert roots[0].root == 0
+    assert abs(roots[0].energy - -74.9701867945) < 1e-7
+    assert abs(roots[0].weight - 0.500) < 1e-3
+    assert roots[1].root == 1
+    assert abs(roots[1].energy - -74.5800888009) < 1e-7
+
+
+# ── TDDFT / UV-Vis ───────────────────────────────────────────────────────────
+
+def test_tddft_uvvis_from_log():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+
+        spectrum = tmp_path / "sample.uvvis.dat"
+        spectrum.write_text(
+            textwrap.dedent(
+                """\
+                # Gaussian-broadened UV-Vis spectrum
+                # sigma_eV = 0.150000
+                # Energy_eV Wavelength_nm Intensity_arb
+                   4.10000000    302.40000000      0.12500000
+                   4.20000000    295.20000000      0.25000000
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        log = tmp_path / "sample.log"
+        log.write_text(
+            textwrap.dedent(
+                """\
+                [INF] TDDFT / Linear Response :     Semilocal XC response kernels are included
+
+                ------------------------------------------------------------------------------------------------------------------------------------
+                Root  Omega (Eh)      Omega (eV)    Lambda (nm)   f             mu_x (au)       mu_y (au)       mu_z (au)       |mu| (Debye)
+                ------------------------------------------------------------------------------------------------------------------------------------
+                1     0.15068731      4.100000      302.400       0.125000      0.000000        0.000000        0.456789        1.160000
+                2     0.15436261      4.200000      295.200       0.250000      0.000000        0.000000        0.612345        1.560000
+                ------------------------------------------------------------------------------------------------------------------------------------
+
+                [INF] UV-Vis Spectrum :             Wrote 400 Gaussian-broadened points to sample.uvvis.dat (sigma = 0.150 eV)
+                ------------------------------------------------------------------
+                Peak (eV)     Lambda (nm)     Intensity (arb)
+                ------------------------------------------------------------------
+                4.200000      295.200         0.250000
+                ------------------------------------------------------------------
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        run = parse_log(log)
+        assert len(run.tddft_roots) == 2
+        assert run.tddft_roots[0].root == 1
+        assert abs(run.tddft_roots[0].omega_ev - 4.1) < 1e-8
+        assert abs(run.tddft_roots[1].wavelength_nm - 295.2) < 1e-8
+        assert abs(run.tddft_roots[1].oscillator_strength - 0.25) < 1e-8
+
+        assert run.uvvis_spectrum_path == "sample.uvvis.dat"
+        assert abs(run.uvvis_sigma_ev - 0.15) < 1e-8
+        assert len(run.uvvis_peaks) == 1
+        assert abs(run.uvvis_peaks[0].energy_ev - 4.2) < 1e-8
+        assert len(run.uvvis_points) == 2
+        assert abs(run.uvvis_points[0].wavelength_nm - 302.4) < 1e-8
+        assert abs(run.uvvis_points[1].intensity - 0.25) < 1e-8
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────

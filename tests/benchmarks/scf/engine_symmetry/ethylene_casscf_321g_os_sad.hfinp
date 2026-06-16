@@ -1,0 +1,32 @@
+%begin_control
+    basis       3-21g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       sad
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+    opt_coords  internal
+%end_geom
+
+%begin_coords
+6
+0   1
+C    -0.669500    0.000000    0.000000
+C     0.669500    0.000000    0.000000
+H    -1.233698    0.927942    0.000000
+H    -1.233698   -0.927942    0.000000
+H     1.233698    0.000000    0.927942
+H     1.233698    0.000000   -0.927942
+%end_coords

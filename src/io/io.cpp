@@ -1,19 +1,37 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <numbers>
 #include <numeric>
 
 #include <Eigen/Geometry>
 
 #include "io.h"
+#include "io/logging.h"
 #include "lookup/elements.h"
+
+#ifdef USING_Libxc
+#include "dft/base/wrapper.h"
+#endif
 
 namespace HartreeFock::IO
 {
     using SectionMap = std::unordered_map<std::string, std::vector<std::string>>;
+    using ParseHandler = std::function<std::expected<void, std::string>(const std::string &)>;
+
+    static void log_parse_exception_detail(
+        const std::string &context,
+        const std::exception &error)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Debug,
+            "Input Parser :",
+            std::format("{} ignored exception detail: {}", context, error.what()));
+    }
 
     // Helper functions
     static void trim(std::string &s)
@@ -45,7 +63,75 @@ namespace HartreeFock::IO
         return line;
     }
 
-    static bool toBool(const std::string &parsedString)
+    // A coordinate-line atom token can mark a counterpoise ghost atom in any of
+    // three forms: "Gh(O)", "@O", or "O:". The ghost keeps the element's basis
+    // set but carries no nuclear charge or electrons. Returns the bare element
+    // symbol with the ghost decoration stripped, and reports whether it was a
+    // ghost. Case-insensitive on the "Gh" prefix.
+    struct ParsedAtomToken
+    {
+        std::string symbol;
+        bool is_ghost = false;
+    };
+
+    static ParsedAtomToken parse_atom_token(const std::string &token)
+    {
+        ParsedAtomToken parsed;
+
+        // "@O"
+        if (!token.empty() && token.front() == '@')
+        {
+            parsed.is_ghost = true;
+            parsed.symbol = token.substr(1);
+            return parsed;
+        }
+
+        // "O:"
+        if (!token.empty() && token.back() == ':')
+        {
+            parsed.is_ghost = true;
+            parsed.symbol = token.substr(0, token.size() - 1);
+            return parsed;
+        }
+
+        // "Gh(O)" / "gh(O)" / "GH(O)"
+        if (token.size() >= 4 && (token[2] == '(') && token.back() == ')' &&
+            std::tolower(static_cast<unsigned char>(token[0])) == 'g' &&
+            std::tolower(static_cast<unsigned char>(token[1])) == 'h')
+        {
+            parsed.is_ghost = true;
+            parsed.symbol = token.substr(3, token.size() - 4);
+            return parsed;
+        }
+
+        parsed.symbol = token;
+        return parsed;
+    }
+
+    static std::expected<int, std::string> resolve_libxc_name_or_id(
+        const std::string &value,
+        const std::string &label)
+    {
+#ifdef USING_Libxc
+        auto resolved = DFT::XC::functional_id(value);
+        if (!resolved)
+        {
+            return std::unexpected(
+                std::format("{} {} (and libxc resolution failed: {})",
+                            label,
+                            value,
+                            resolved.error()));
+        }
+        return resolved;
+#else
+        return std::unexpected(
+            std::format("{} {} (libxc support is unavailable in this executable)",
+                        label,
+                        value));
+#endif
+    }
+
+    static std::expected<bool, std::string> toBool(const std::string &parsedString)
     {
         std::string key = toLower(parsedString);
 
@@ -59,10 +145,10 @@ namespace HartreeFock::IO
             return false;
         }
 
-        throw std::invalid_argument("Invalid boolean value: " + parsedString);
+        return std::unexpected("Invalid boolean value: " + parsedString);
     }
 
-    static std::vector<HartreeFock::IrrepCount> parse_irrep_count_list(
+    static std::expected<std::vector<HartreeFock::IrrepCount>, std::string> parse_irrep_count_list(
         std::istringstream &iss,
         const std::string &keyword)
     {
@@ -79,43 +165,62 @@ namespace HartreeFock::IO
                 irrep = token.substr(0, sep);
                 count_text = token.substr(sep + 1);
                 if (irrep.empty() || count_text.empty())
-                    throw std::invalid_argument(keyword + " expects irrep/count pairs");
+                    return std::unexpected(keyword + " expects irrep/count pairs");
             }
             else
             {
                 irrep = token;
                 if (!(iss >> count_text))
-                    throw std::invalid_argument(keyword + " expects irrep/count pairs");
+                    return std::unexpected(keyword + " expects irrep/count pairs");
             }
 
             trim(irrep);
             trim(count_text);
             if (irrep.empty() || count_text.empty())
-                throw std::invalid_argument(keyword + " expects irrep/count pairs");
+                return std::unexpected(keyword + " expects irrep/count pairs");
 
-            const int count = std::stoi(count_text);
+            int count = 0;
+            try
+            {
+                count = std::stoi(count_text);
+            }
+            catch (const std::exception &e)
+            {
+                log_parse_exception_detail(keyword, e);
+                return std::unexpected(keyword + " counts must be integers");
+            }
             if (count < 0)
-                throw std::invalid_argument(keyword + " counts must be non-negative");
+                return std::unexpected(keyword + " counts must be non-negative");
 
             counts.push_back({irrep, count});
         }
 
         if (counts.empty())
-            throw std::invalid_argument(keyword + " requires at least one irrep/count pair");
+            return std::unexpected(keyword + " requires at least one irrep/count pair");
         return counts;
     }
 
-    static std::vector<int> parse_int_list(
+    static std::expected<std::vector<int>, std::string> parse_int_list(
         std::istringstream &iss,
         const std::string &keyword)
     {
         std::vector<int> values;
-        int value = 0;
-        while (iss >> value)
-            values.push_back(value);
+        std::string token;
+        while (iss >> token)
+        {
+            try
+            {
+                values.push_back(std::stoi(token));
+            }
+            catch (const std::exception &e)
+            {
+                log_parse_exception_detail(keyword, e);
+                return std::unexpected(keyword + " requires integer values");
+            }
+        }
 
         if (values.empty())
-            throw std::invalid_argument(keyword + " requires at least one integer");
+            return std::unexpected(keyword + " requires at least one integer");
         return values;
     }
 
@@ -186,10 +291,24 @@ namespace HartreeFock::IO
     }
 
     template <typename T>
-    T map_string_enum(const std::string &value);
+    std::expected<T, std::string> map_string_enum(const std::string &value);
+
+    template <typename T>
+    static std::expected<T, std::string> lookup_enum(
+        const std::unordered_map<std::string, T> &table,
+        const std::string &value,
+        const std::string &label)
+    {
+        const auto lowered = toLower(value);
+        auto it = table.find(lowered);
+        if (it != table.end())
+            return it->second;
+        return std::unexpected(label + value);
+    }
 
     template <>
-    HartreeFock::CalculationType map_string_enum<HartreeFock::CalculationType>(const std::string &value)
+    std::expected<HartreeFock::CalculationType, std::string>
+    map_string_enum<HartreeFock::CalculationType>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::CalculationType> _table =
             {
@@ -212,18 +331,22 @@ namespace HartreeFock::IO
 
                 {"imagfollow", HartreeFock::CalculationType::ImaginaryFollow},
                 {"imag_follow", HartreeFock::CalculationType::ImaginaryFollow},
-                {"irc_follow", HartreeFock::CalculationType::ImaginaryFollow}};
+                {"irc_follow", HartreeFock::CalculationType::ImaginaryFollow},
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
+                {"tddft", HartreeFock::CalculationType::LinearResponse},
+                {"td-dft", HartreeFock::CalculationType::LinearResponse},
+                {"td_dft", HartreeFock::CalculationType::LinearResponse},
+                {"linearresponse", HartreeFock::CalculationType::LinearResponse},
+                {"linear_response", HartreeFock::CalculationType::LinearResponse},
+                {"linear-response", HartreeFock::CalculationType::LinearResponse},
+                {"lr", HartreeFock::CalculationType::LinearResponse}};
 
-        throw std::invalid_argument("Invalid Calculation Type : " + value);
+        return lookup_enum(_table, value, "Invalid Calculation Type : ");
     }
 
     template <>
-    HartreeFock::Verbosity map_string_enum<HartreeFock::Verbosity>(const std::string &value)
+    std::expected<HartreeFock::Verbosity, std::string>
+    map_string_enum<HartreeFock::Verbosity>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::Verbosity> _table =
             {
@@ -234,32 +357,24 @@ namespace HartreeFock::IO
                 {"verbose", HartreeFock::Verbosity::Verbose},
                 {"debug", HartreeFock::Verbosity::Debug}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Verbosity : " + value);
+        return lookup_enum(_table, value, "Invalid Verbosity : ");
     }
 
     template <>
-    HartreeFock::BasisType map_string_enum<HartreeFock::BasisType>(const std::string &value)
+    std::expected<HartreeFock::BasisType, std::string>
+    map_string_enum<HartreeFock::BasisType>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::BasisType> _table =
             {
                 {"cartesian", HartreeFock::BasisType::Cartesian},
                 {"spherical", HartreeFock::BasisType::Spherical}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid BasisType : " + value);
+        return lookup_enum(_table, value, "Invalid BasisType : ");
     }
 
     template <>
-    HartreeFock::OptCoords map_string_enum<HartreeFock::OptCoords>(const std::string &value)
+    std::expected<HartreeFock::OptCoords, std::string>
+    map_string_enum<HartreeFock::OptCoords>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::OptCoords> _table =
             {
@@ -268,16 +383,12 @@ namespace HartreeFock::IO
                 {"ic", HartreeFock::OptCoords::Internal},
                 {"gic", HartreeFock::OptCoords::Internal}};
 
-        auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid OptCoords : " + value);
+        return lookup_enum(_table, value, "Invalid OptCoords : ");
     }
 
     template <>
-    HartreeFock::DFTGridQuality map_string_enum<HartreeFock::DFTGridQuality>(const std::string &value)
+    std::expected<HartreeFock::DFTGridQuality, std::string>
+    map_string_enum<HartreeFock::DFTGridQuality>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::DFTGridQuality> _table =
             {
@@ -288,16 +399,12 @@ namespace HartreeFock::IO
                 {"ultra-fine", HartreeFock::DFTGridQuality::UltraFine},
                 {"ultra_fine", HartreeFock::DFTGridQuality::UltraFine}};
 
-        const auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid DFTGridQuality : " + value);
+        return lookup_enum(_table, value, "Invalid DFTGridQuality : ");
     }
 
     template <>
-    HartreeFock::XCExchangeFunctional map_string_enum<HartreeFock::XCExchangeFunctional>(const std::string &value)
+    std::expected<HartreeFock::XCExchangeFunctional, std::string>
+    map_string_enum<HartreeFock::XCExchangeFunctional>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::XCExchangeFunctional> _table =
             {
@@ -312,18 +419,20 @@ namespace HartreeFock::IO
                 {"pw91", HartreeFock::XCExchangeFunctional::PW91},
                 {"gga_x_pw91", HartreeFock::XCExchangeFunctional::PW91},
                 {"pbe", HartreeFock::XCExchangeFunctional::PBE},
-                {"gga_x_pbe", HartreeFock::XCExchangeFunctional::PBE}};
+                {"gga_x_pbe", HartreeFock::XCExchangeFunctional::PBE},
+                {"b3lyp", HartreeFock::XCExchangeFunctional::B3LYP},
+                {"hyb_gga_xc_b3lyp", HartreeFock::XCExchangeFunctional::B3LYP},
+                {"pbe0", HartreeFock::XCExchangeFunctional::PBE0},
+                {"pbeh", HartreeFock::XCExchangeFunctional::PBE0},
+                {"pbe1pbe", HartreeFock::XCExchangeFunctional::PBE0},
+                {"hyb_gga_xc_pbeh", HartreeFock::XCExchangeFunctional::PBE0}};
 
-        const auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid XC exchange functional : " + value);
+        return lookup_enum(_table, value, "Invalid XC exchange functional : ");
     }
 
     template <>
-    HartreeFock::XCCorrelationFunctional map_string_enum<HartreeFock::XCCorrelationFunctional>(const std::string &value)
+    std::expected<HartreeFock::XCCorrelationFunctional, std::string>
+    map_string_enum<HartreeFock::XCCorrelationFunctional>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::XCCorrelationFunctional> _table =
             {
@@ -341,29 +450,102 @@ namespace HartreeFock::IO
                 {"pbe", HartreeFock::XCCorrelationFunctional::PBE},
                 {"gga_c_pbe", HartreeFock::XCCorrelationFunctional::PBE}};
 
-        const auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
+        return lookup_enum(_table, value, "Invalid XC correlation functional : ");
+    }
 
-        throw std::invalid_argument("Invalid XC correlation functional : " + value);
+    template <>
+    std::expected<HartreeFock::LinearResponseMethod, std::string>
+    map_string_enum<HartreeFock::LinearResponseMethod>(const std::string &value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::LinearResponseMethod> _table =
+            {
+                {"tda", HartreeFock::LinearResponseMethod::TDA},
+                {"casida", HartreeFock::LinearResponseMethod::Casida},
+                {"full", HartreeFock::LinearResponseMethod::Casida},
+                {"full_casida", HartreeFock::LinearResponseMethod::Casida},
+                {"full-casida", HartreeFock::LinearResponseMethod::Casida}};
+
+        return lookup_enum(_table, value, "Invalid linear-response method : ");
+    }
+
+    template <>
+    std::expected<HartreeFock::LinearResponseSpin, std::string>
+    map_string_enum<HartreeFock::LinearResponseSpin>(const std::string &value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::LinearResponseSpin> _table =
+            {
+                {"auto", HartreeFock::LinearResponseSpin::Auto},
+                {"singlet", HartreeFock::LinearResponseSpin::Singlet},
+                {"triplet", HartreeFock::LinearResponseSpin::Triplet},
+                {"spinconserving", HartreeFock::LinearResponseSpin::SpinConserving},
+                {"spin_conserving", HartreeFock::LinearResponseSpin::SpinConserving},
+                {"spin-conserving", HartreeFock::LinearResponseSpin::SpinConserving},
+                {"unrestricted", HartreeFock::LinearResponseSpin::SpinConserving}};
+
+        return lookup_enum(_table, value, "Invalid linear-response spin mode : ");
+    }
+
+    template <>
+    std::expected<HartreeFock::SolvationModel, std::string>
+    map_string_enum<HartreeFock::SolvationModel>(const std::string &value)
+    {
+        static const std::unordered_map<std::string, HartreeFock::SolvationModel> _table =
+            {
+                {"none", HartreeFock::SolvationModel::None},
+                {"pcm", HartreeFock::SolvationModel::PCM},
+                {"cpcm", HartreeFock::SolvationModel::PCM}};
+
+        return lookup_enum(_table, value, "Invalid SolvationModel : ");
     }
 
     std::expected<void, std::string> _parse_control(const std::vector<std::string> &lines, HartreeFock::CalculationType &calculation, HartreeFock::OptionsBasis &basis, HartreeFock::OptionsOutput &output)
     {
         // (key, value) pairs
-        const std::unordered_map<std::string, std::function<void(const std::string &)>> _control_map =
+        const std::unordered_map<std::string, ParseHandler> _control_map =
             {
-                {"basis", [&basis](const std::string &value)
-                 { basis._basis_name = toLower(value); }},
-                {"basis_type", [&basis](const std::string &value)
-                 { basis._basis = map_string_enum<HartreeFock::BasisType>(value); }},
-                {"calculation", [&calculation](const std::string &value)
-                 { calculation = map_string_enum<HartreeFock::CalculationType>(value); }},
-                {"verbosity", [&output](const std::string &value)
-                 { output._verbosity = map_string_enum<HartreeFock::Verbosity>(value); }},
-                {"basis_path", [&basis](const std::string &value)
-                 { basis._basis_path = value; }}};
+                {"basis", [&basis](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     basis._basis_name = value;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"basis_type", [&basis](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::BasisType>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     basis._basis = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"calculation", [&calculation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::CalculationType>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     calculation = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"verbosity", [&output](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::Verbosity>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     output._verbosity = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"basis_path", [&basis](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     basis._basis_path = value;
+                     return std::expected<void, std::string>{};
+                 }},
+
+                {"print_populations", [&output](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = toBool(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     output._print_populations = *parsed;
+                     return std::expected<void, std::string>{};
+                 }}};
 
         for (const std::string line : lines)
         {
@@ -383,7 +565,9 @@ namespace HartreeFock::IO
             {
                 try
                 {
-                    it->second(value);
+                    auto parsed = it->second(value);
+                    if (!parsed)
+                        return std::unexpected(std::string("Error parsing control '") + key + "': " + parsed.error());
                 }
                 catch (const std::exception &e)
                 {
@@ -400,7 +584,8 @@ namespace HartreeFock::IO
     }
 
     template <>
-    HartreeFock::SCFGuess map_string_enum<HartreeFock::SCFGuess>(const std::string &value)
+    std::expected<HartreeFock::SCFGuess, std::string>
+    map_string_enum<HartreeFock::SCFGuess>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::SCFGuess> _table =
             {
@@ -411,16 +596,12 @@ namespace HartreeFock::IO
                 {"full", HartreeFock::SCFGuess::ReadFull},
             };
 
-        auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid SCFGuess: " + value);
+        return lookup_enum(_table, value, "Invalid SCFGuess: ");
     }
 
     template <>
-    HartreeFock::SCFMode map_string_enum<HartreeFock::SCFMode>(const std::string &value)
+    std::expected<HartreeFock::SCFMode, std::string>
+    map_string_enum<HartreeFock::SCFMode>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::SCFMode> _table =
             {
@@ -428,55 +609,51 @@ namespace HartreeFock::IO
                 {"direct", HartreeFock::SCFMode::Direct},
                 {"auto", HartreeFock::SCFMode::Auto}};
 
-        auto _value = toLower(value);
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid SCFMode: " + value);
+        return lookup_enum(_table, value, "Invalid SCFMode: ");
     }
 
     template <>
-    HartreeFock::SCFType map_string_enum<HartreeFock::SCFType>(const std::string &value)
+    std::expected<HartreeFock::SCFType, std::string>
+    map_string_enum<HartreeFock::SCFType>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::SCFType> _table =
             {
                 // All possible combinations
                 {"rhf", HartreeFock::SCFType::RHF},
+                {"rohf", HartreeFock::SCFType::ROHF},
                 {"uhf", HartreeFock::SCFType::UHF},
                 {"rks", HartreeFock::SCFType::RHF},
                 {"uks", HartreeFock::SCFType::UHF}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid SCFType : " + value);
+        return lookup_enum(_table, value, "Invalid SCFType : ");
     }
 
     template <>
-    HartreeFock::PostHF map_string_enum<HartreeFock::PostHF>(const std::string &value)
+    std::expected<HartreeFock::PostHF, std::string>
+    map_string_enum<HartreeFock::PostHF>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::PostHF> _table =
             {
                 // All possible combinations
                 {"rmp2", HartreeFock::PostHF::RMP2},
                 {"ump2", HartreeFock::PostHF::UMP2},
+                {"ccsd", HartreeFock::PostHF::RCCSD},
+                {"uccsd", HartreeFock::PostHF::UCCSD},
+                {"ccsdt", HartreeFock::PostHF::RCCSDT},
+                {"uccsdt", HartreeFock::PostHF::UCCSDT},
+                {"ccsdtq", HartreeFock::PostHF::RCCSDTQ},
+                {"cc4", HartreeFock::PostHF::RCCSDTQ},
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
+                {"fci", HartreeFock::PostHF::FCI},
             };
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Correlation : " + value);
+        return lookup_enum(_table, value, "Invalid Correlation : ");
     }
 
     template <>
-    HartreeFock::IntegralMethod map_string_enum<HartreeFock::IntegralMethod>(const std::string &value)
+    std::expected<HartreeFock::IntegralMethod, std::string>
+    map_string_enum<HartreeFock::IntegralMethod>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::IntegralMethod> _table =
             {
@@ -484,87 +661,266 @@ namespace HartreeFock::IO
                 {"os", HartreeFock::IntegralMethod::ObaraSaika},
                 {"rys", HartreeFock::IntegralMethod::RysQuadrature},
                 {"rys-quadrature", HartreeFock::IntegralMethod::RysQuadrature},
+                {"head-gordon-pople", HartreeFock::IntegralMethod::HeadGordonPople},
+                {"hgp", HartreeFock::IntegralMethod::HeadGordonPople},
                 {"auto", HartreeFock::IntegralMethod::Auto},
             };
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Correlation : " + value);
+        return lookup_enum(_table, value, "Invalid Correlation : ");
     }
 
-    std::expected<void, std::string> _parse_scf(const std::vector<std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space)
+    std::expected<void, std::string> _parse_scf(const std::vector<std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space, HartreeFock::OptionsMP2 &mp2)
     {
         // (key, value) pairs
-        const std::unordered_map<std::string, std::function<void(const std::string &)>> _scf_map =
+        const std::unordered_map<std::string, ParseHandler> _scf_map =
             {
-                {"scf_type", [&scf](const std::string &value)
-                 { scf._scf = map_string_enum<HartreeFock::SCFType>(value); }},
-                {"use_diis", [&scf](const std::string &value)
-                 { scf._use_DIIS = toBool(value); }},
-                {"diis_dim", [&scf](const std::string &value)
-                 { scf._DIIS_dim = std::stoi(value); }},
-                {"max_cycles", [&scf](const std::string &value)
-                 { scf._max_cycles = std::stoi(value); }},
-                {"tol_energy", [&scf](const std::string &value)
-                 { scf._tol_energy = std::stod(value); }},
-                {"tol_density", [&scf](const std::string &value)
-                 { scf._tol_density = std::stod(value); }},
-                {"threshold", [&scf](const std::string &value)
-                 { scf._threshold = std::stoi(value); }},
+                {"scf_type", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::SCFType>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._scf = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"diis_dim", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._DIIS_dim = std::stoi(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"max_cycles", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._max_cycles = std::stoi(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tol_energy", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._tol_energy = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tol_density", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._tol_density = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"threshold", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._threshold = std::stoi(value);
+                     return std::expected<void, std::string>{};
+                 }},
 
-                {"correlation", [&correlation](const std::string &value)
-                 { correlation = map_string_enum<HartreeFock::PostHF>(value); }},
-                {"engine", [&integral](const std::string &value)
-                 { integral._engine = map_string_enum<HartreeFock::IntegralMethod>(value); }},
-                {"tol_eri", [&integral](const std::string &value)
-                 { integral._tol_eri = std::stod(value); }},
-                {"guess", [&scf](const std::string &value)
-                 { scf._guess = map_string_enum<HartreeFock::SCFGuess>(value); }},
-                {"save_checkpoint", [&scf](const std::string &value)
-                 { scf._save_checkpoint = toBool(value); }},
-                {"level_shift", [&scf](const std::string &value)
-                 { scf._level_shift = std::stod(value); }},
-                {"diis_restart", [&scf](const std::string &value)
-                 { scf._diis_restart_factor = std::stod(value); }},
-                {"scf_mode", [&scf](const std::string &value)
-                 { scf._mode = map_string_enum<HartreeFock::SCFMode>(value); }},
+                {"correlation", [&correlation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::PostHF>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     correlation = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"engine", [&integral](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::IntegralMethod>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     integral._engine = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tol_eri", [&integral](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     integral._tol_eri = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+
+                {"guess", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::SCFGuess>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._guess = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"level_shift", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._level_shift = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"cc_damping", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._cc_damping = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"cc_max_memory_gb", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._cc_max_memory_gb = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_ri_basis", [&mp2](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     mp2.ri_basis_name = value;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_ri_basis_path", [&mp2](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     mp2.ri_basis_path = value;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_ri_lindep", [&mp2](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     mp2.ri_lindep = std::stod(value);
+                     if (!(mp2.ri_lindep > 0.0))
+                         return std::unexpected("mp2_ri_lindep must be positive");
+                     return std::expected<void, std::string>{};
+                 }},
+                {"diis_restart", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._diis_restart_factor = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"scf_mode", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::SCFMode>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._mode = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
 
                 // Active space (CASSCF / RASSCF)
-                {"nactele", [&active_space](const std::string &v)
-                 { active_space.nactele = std::stoi(v); }},
-                {"nactorb", [&active_space](const std::string &v)
-                 { active_space.nactorb = std::stoi(v); }},
-                {"nroots", [&active_space](const std::string &v)
-                 { active_space.nroots = std::stoi(v); }},
-                {"nras1", [&active_space](const std::string &v)
-                 { active_space.nras1 = std::stoi(v); }},
-                {"nras2", [&active_space](const std::string &v)
-                 { active_space.nras2 = std::stoi(v); }},
-                {"nras3", [&active_space](const std::string &v)
-                 { active_space.nras3 = std::stoi(v); }},
-                {"max_holes", [&active_space](const std::string &v)
-                 { active_space.max_holes = std::stoi(v); }},
-                {"max_elec", [&active_space](const std::string &v)
-                 { active_space.max_elec = std::stoi(v); }},
-                {"mcscf_debug_numeric_newton", [&active_space](const std::string &v)
-                 { active_space.mcscf_debug_numeric_newton = toBool(v); }},
-                {"mcscf_debug_commutator_rhs", [&active_space](const std::string &v)
-                 { active_space.mcscf_debug_commutator_rhs = toBool(v); }},
-                {"mcscf_max_iter", [&active_space](const std::string &v)
-                 { active_space.mcscf_max_iter = static_cast<unsigned int>(std::stoi(v)); }},
-                {"mcscf_micro_per_macro", [&active_space](const std::string &v)
-                 { active_space.mcscf_micro_per_macro = static_cast<unsigned int>(std::stoi(v)); }},
-                {"tol_mcscf_energy", [&active_space](const std::string &v)
-                 { active_space.tol_mcscf_energy = std::stod(v); }},
-                {"tol_mcscf_grad", [&active_space](const std::string &v)
-                 { active_space.tol_mcscf_grad = std::stod(v); }},
-                {"ci_max_dim", [&active_space](const std::string &v)
-                 { active_space.ci_max_dim = static_cast<unsigned int>(std::stoi(v)); }},
-                {"target_irrep", [&active_space](const std::string &v)
-                 { active_space.target_irrep = v; }}};
+                {"nactele", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nactele = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nactorb", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nactorb = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nroots", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nroots = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nras1", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nras1 = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nras2", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nras2 = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nras3", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.nras3 = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+
+                {"max_holes", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.max_holes = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"max_elec", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.max_elec = std::stoi(v);
+                     return std::expected<void, std::string>{};
+                 }},
+
+                {"mcscf_max_iter", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.mcscf_max_iter = static_cast<unsigned int>(std::stoi(v));
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mcscf_micro_per_macro", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.mcscf_micro_per_macro = static_cast<unsigned int>(std::stoi(v));
+                     return std::expected<void, std::string>{};
+                 }},
+
+                {"tol_mcscf_energy", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.tol_mcscf_energy = std::stod(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tol_mcscf_grad", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.tol_mcscf_grad = std::stod(v);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mcscf_max_rot", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("mcscf_max_rot must be positive");
+                     active_space.mcscf_max_rot = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mcscf_uphill_max_eh", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("mcscf_uphill_max_eh must be positive");
+                     active_space.mcscf_uphill_max_eh = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+
+                {"ci_max_dim", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.ci_max_dim = static_cast<unsigned int>(std::stoi(v));
+                     return std::expected<void, std::string>{};
+                 }},
+                {"target_irrep", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     active_space.target_irrep = v;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fcidump", [&active_space](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     if (v.empty())
+                         return std::unexpected("fcidump requires an output file path");
+                     active_space.fcidump_path = v;
+                     return std::expected<void, std::string>{};
+                 }},
+
+                // MP2 options (RMP2 / UMP2)
+                {"mp2_max_cycle", [&mp2](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 1)
+                         return std::unexpected("mp2_max_cycle must be >= 1");
+                     mp2.max_cycle = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_conv_tol", [&mp2](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("mp2_conv_tol must be positive");
+                     mp2.conv_tol = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_conv_tol_normt", [&mp2](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("mp2_conv_tol_normt must be positive");
+                     mp2.conv_tol_normt = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_diis_space", [&mp2](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 2)
+                         return std::unexpected("mp2_diis_space must be >= 2");
+                     mp2.diis_space = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"mp2_level_shift", [&mp2](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     mp2.level_shift = std::stod(v);
+                     return std::expected<void, std::string>{};
+                 }}};
 
         for (const std::string line : lines)
         {
@@ -590,48 +946,80 @@ namespace HartreeFock::IO
 
             if (key == "core_irrep_counts")
             {
-                try
-                {
-                    auto parsed = parse_irrep_count_list(_iss, key);
-                    active_space.core_irrep_counts.insert(
-                        active_space.core_irrep_counts.end(),
-                        parsed.begin(),
-                        parsed.end());
-                }
-                catch (const std::exception &e)
-                {
-                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + e.what());
-                }
+                auto parsed = parse_irrep_count_list(_iss, key);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
+                active_space.core_irrep_counts.insert(
+                    active_space.core_irrep_counts.end(),
+                    parsed->begin(),
+                    parsed->end());
                 continue;
             }
 
             if (key == "active_irrep_counts")
             {
-                try
-                {
-                    auto parsed = parse_irrep_count_list(_iss, key);
-                    active_space.active_irrep_counts.insert(
-                        active_space.active_irrep_counts.end(),
-                        parsed.begin(),
-                        parsed.end());
-                }
-                catch (const std::exception &e)
-                {
-                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + e.what());
-                }
+                auto parsed = parse_irrep_count_list(_iss, key);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
+                active_space.active_irrep_counts.insert(
+                    active_space.active_irrep_counts.end(),
+                    parsed->begin(),
+                    parsed->end());
                 continue;
             }
 
             if (key == "mo_permutation")
             {
-                try
-                {
-                    active_space.mo_permutation = parse_int_list(_iss, key);
-                }
-                catch (const std::exception &e)
-                {
-                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + e.what());
-                }
+                auto parsed = parse_int_list(_iss, key);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
+                active_space.mo_permutation = std::move(*parsed);
+                continue;
+            }
+
+            if (key == "mp2_frozen")
+            {
+                // Either a single integer (freeze the lowest N occupied orbitals,
+                // PySCF shortcut) or a space-separated list of explicit 0-based MO
+                // indices to freeze.
+                auto parsed = parse_int_list(_iss, key);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
+                mp2.frozen = std::move(*parsed);
+                continue;
+            }
+
+            if (key == "use_diis" || key == "save_checkpoint" ||
+                key == "mcscf_debug_numeric_newton" || key == "mcscf_debug_commutator_rhs" ||
+                key == "mcscf_accept_uphill" ||
+                key == "stability_check" || key == "stability_follow" ||
+                key == "mp2_with_t2" || key == "mp2_use_ri")
+            {
+                if (!(_iss >> value))
+                    return std::unexpected("Missing value for scf keyword: " + key);
+
+                auto parsed = toBool(value);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
+
+                if (key == "use_diis")
+                    scf._use_DIIS = *parsed;
+                else if (key == "save_checkpoint")
+                    scf._save_checkpoint = *parsed;
+                else if (key == "mcscf_debug_numeric_newton")
+                    active_space.mcscf_debug_numeric_newton = *parsed;
+                else if (key == "mcscf_debug_commutator_rhs")
+                    active_space.mcscf_debug_commutator_rhs = *parsed;
+                else if (key == "mcscf_accept_uphill")
+                    active_space.mcscf_accept_uphill = *parsed;
+                else if (key == "stability_check")
+                    scf._stability_check = *parsed;
+                else if (key == "stability_follow")
+                    scf._stability_follow = *parsed;
+                else if (key == "mp2_use_ri")
+                    mp2.use_ri = *parsed;
+                else
+                    mp2.with_t2 = *parsed;
                 continue;
             }
 
@@ -645,7 +1033,9 @@ namespace HartreeFock::IO
             {
                 try
                 {
-                    it->second(value);
+                    auto parsed = it->second(value);
+                    if (!parsed)
+                        return std::unexpected(std::string("Error parsing scf '") + key + "': " + parsed.error());
                 }
                 catch (const std::exception &e)
                 {
@@ -665,49 +1055,141 @@ namespace HartreeFock::IO
         const std::vector<std::string> &lines,
         HartreeFock::OptionsDFT &dft)
     {
-        const std::unordered_map<std::string, std::function<void(const std::string &)>> _dft_map =
+        const std::unordered_map<std::string, ParseHandler> _dft_map =
             {
-                {"grid", [&dft](const std::string &value)
+                {"grid", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
-                     dft._grid = map_string_enum<HartreeFock::DFTGridQuality>(value);
+                     auto parsed = map_string_enum<HartreeFock::DFTGridQuality>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._grid = *parsed;
+                     return std::expected<void, std::string>{};
                  }},
-                {"grid_level", [&dft](const std::string &value)
+                {"grid_level", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
-                     dft._grid = map_string_enum<HartreeFock::DFTGridQuality>(value);
+                     auto parsed = map_string_enum<HartreeFock::DFTGridQuality>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._grid = *parsed;
+                     return std::expected<void, std::string>{};
                  }},
-                {"exchange", [&dft](const std::string &value)
+
+                {"exchange", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
-                     dft._exchange = map_string_enum<HartreeFock::XCExchangeFunctional>(value);
-                     if (dft._exchange != HartreeFock::XCExchangeFunctional::Custom)
-                         dft._exchange_id = 0;
+                     auto parsed = map_string_enum<HartreeFock::XCExchangeFunctional>(value);
+                     if (parsed)
+                     {
+                         dft._exchange = *parsed;
+                         if (dft._exchange != HartreeFock::XCExchangeFunctional::Custom)
+                             dft._exchange_id = 0;
+                         return std::expected<void, std::string>{};
+                     }
+
+                     auto exchange_id = resolve_libxc_name_or_id(value, "Invalid XC exchange functional :");
+                     if (!exchange_id)
+                         return std::unexpected(exchange_id.error());
+
+                     dft._exchange = HartreeFock::XCExchangeFunctional::Custom;
+                     dft._exchange_id = *exchange_id;
+                     return std::expected<void, std::string>{};
                  }},
-                {"correlation", [&dft](const std::string &value)
+                {"correlation", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
-                     dft._correlation = map_string_enum<HartreeFock::XCCorrelationFunctional>(value);
-                     if (dft._correlation != HartreeFock::XCCorrelationFunctional::Custom)
-                         dft._correlation_id = 0;
+                     auto parsed = map_string_enum<HartreeFock::XCCorrelationFunctional>(value);
+                     if (parsed)
+                     {
+                         dft._correlation = *parsed;
+                         if (dft._correlation != HartreeFock::XCCorrelationFunctional::Custom)
+                             dft._correlation_id = 0;
+                         return std::expected<void, std::string>{};
+                     }
+
+                     auto correlation_id = resolve_libxc_name_or_id(value, "Invalid XC correlation functional :");
+                     if (!correlation_id)
+                         return std::unexpected(correlation_id.error());
+
+                     dft._correlation = HartreeFock::XCCorrelationFunctional::Custom;
+                     dft._correlation_id = *correlation_id;
+                     return std::expected<void, std::string>{};
                  }},
-                {"exchange_id", [&dft](const std::string &value)
+                {"exchange_id", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
                      dft._exchange = HartreeFock::XCExchangeFunctional::Custom;
                      dft._exchange_id = std::stoi(value);
+                     return std::expected<void, std::string>{};
                  }},
-                {"correlation_id", [&dft](const std::string &value)
+                {"correlation_id", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
                      dft._correlation = HartreeFock::XCCorrelationFunctional::Custom;
                      dft._correlation_id = std::stoi(value);
+                     return std::expected<void, std::string>{};
                  }},
-                {"use_sao_blocking", [&dft](const std::string &value)
+                {"lr_nstates", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
-                     dft._use_sao_blocking = toBool(value);
+                     dft._lr_nstates = std::stoi(value);
+                     if (dft._lr_nstates < 1)
+                         return std::unexpected("lr_nstates must be >= 1");
+                     return std::expected<void, std::string>{};
                  }},
-                {"print_grid_summary", [&dft](const std::string &value)
+                {"tddft_nstates", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
-                     dft._print_grid_summary = toBool(value);
+                     dft._lr_nstates = std::stoi(value);
+                     if (dft._lr_nstates < 1)
+                         return std::unexpected("tddft_nstates must be >= 1");
+                     return std::expected<void, std::string>{};
                  }},
-                {"save_checkpoint", [&dft](const std::string &value)
+                {"nstates", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
-                     dft._save_checkpoint = toBool(value);
+                     dft._lr_nstates = std::stoi(value);
+                     if (dft._lr_nstates < 1)
+                         return std::unexpected("nstates must be >= 1");
+                     return std::expected<void, std::string>{};
+                 }},
+                {"nroots", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     dft._lr_nstates = std::stoi(value);
+                     if (dft._lr_nstates < 1)
+                         return std::unexpected("nroots must be >= 1");
+                     return std::expected<void, std::string>{};
+                 }},
+                {"root", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     dft._lr_root = std::stoi(value);
+                     if (dft._lr_root < 1)
+                         return std::unexpected("root must be >= 1");
+                     return std::expected<void, std::string>{};
+                 }},
+                {"lr_method", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::LinearResponseMethod>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._lr_method = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tddft_method", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::LinearResponseMethod>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._lr_method = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"lr_spin", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::LinearResponseSpin>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._lr_spin = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"tddft_spin", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::LinearResponseSpin>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     dft._lr_spin = *parsed;
+                     return std::expected<void, std::string>{};
                  }}};
 
         for (const std::string &line : lines)
@@ -720,11 +1202,28 @@ namespace HartreeFock::IO
 
             key = toLower(key);
 
+            if (key == "use_sao_blocking" || key == "print_grid_summary" || key == "save_checkpoint")
+            {
+                auto parsed = toBool(value);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing dft '") + key + "': " + parsed.error());
+
+                if (key == "use_sao_blocking")
+                    dft._use_sao_blocking = *parsed;
+                else if (key == "print_grid_summary")
+                    dft._print_grid_summary = *parsed;
+                else
+                    dft._save_checkpoint = *parsed;
+                continue;
+            }
+
             if (auto it = _dft_map.find(key); it != _dft_map.end())
             {
                 try
                 {
-                    it->second(value);
+                    auto parsed = it->second(value);
+                    if (!parsed)
+                        return std::unexpected(std::string("Error parsing dft '") + key + "': " + parsed.error());
                 }
                 catch (const std::exception &e)
                 {
@@ -740,8 +1239,118 @@ namespace HartreeFock::IO
         return {};
     }
 
+    static std::expected<double, std::string> dielectric_from_solvent_name(const std::string &value)
+    {
+        static const std::unordered_map<std::string, double> _table =
+            {
+                {"water", 78.3553},
+                {"acetonitrile", 35.688},
+                {"methanol", 32.613},
+                {"ethanol", 24.852},
+                {"dmso", 46.826},
+                {"dimethylsulfoxide", 46.826},
+                {"dichloromethane", 8.93},
+                {"methylenechloride", 8.93},
+                {"chloroform", 4.7113},
+                {"thf", 7.4257},
+                {"tetrahydrofuran", 7.4257},
+                {"toluene", 2.3741},
+                {"benzene", 2.2706},
+                {"hexane", 1.8819}};
+
+        return lookup_enum(_table, value, "Unknown PCM solvent: ");
+    }
+
+    std::expected<void, std::string> _parse_pcm(
+        const std::vector<std::string> &lines,
+        HartreeFock::OptionsSolvation &solvation)
+    {
+        const std::unordered_map<std::string, ParseHandler> _pcm_map =
+            {
+                {"model", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::SolvationModel>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     solvation._model = *parsed;
+                     return {};
+                 }},
+                {"dielectric", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._dielectric = std::stod(value);
+                     return {};
+                 }},
+                {"epsilon", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._dielectric = std::stod(value);
+                     return {};
+                 }},
+                {"eps", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._dielectric = std::stod(value);
+                     return {};
+                 }},
+                {"cavity_scale", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._cavity_scale = std::stod(value);
+                     return {};
+                 }},
+                {"surface_points", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._surface_points_per_atom = std::stoi(value);
+                     return {};
+                 }},
+                {"surface_points_per_atom", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     solvation._surface_points_per_atom = std::stoi(value);
+                     return {};
+                 }},
+                {"solvent", [&solvation](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     const std::string lowered = toLower(value);
+                     auto dielectric = dielectric_from_solvent_name(lowered);
+                     if (!dielectric)
+                         return std::unexpected(dielectric.error());
+                     solvation._solvent = lowered;
+                     solvation._dielectric = *dielectric;
+                     return {};
+                 }}};
+
+        for (const std::string &line : lines)
+        {
+            std::istringstream _iss(line);
+            std::string key, value;
+
+            if (!(_iss >> key >> value))
+                return std::unexpected("Missing value for pcm keyword: " + key);
+
+            key = toLower(key);
+
+            if (auto it = _pcm_map.find(key); it != _pcm_map.end())
+            {
+                try
+                {
+                    auto parsed = it->second(value);
+                    if (!parsed)
+                        return std::unexpected(std::string("Error parsing pcm '") + key + "': " + parsed.error());
+                }
+                catch (const std::exception &e)
+                {
+                    return std::unexpected(std::string("Error parsing pcm '") + key + "': " + e.what());
+                }
+            }
+            else
+            {
+                return std::unexpected("Unknown pcm keyword: " + key);
+            }
+        }
+
+        return {};
+    }
+
     template <>
-    HartreeFock::Units map_string_enum<HartreeFock::Units>(const std::string &value)
+    std::expected<HartreeFock::Units, std::string>
+    map_string_enum<HartreeFock::Units>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::Units> _table =
             {
@@ -749,16 +1358,12 @@ namespace HartreeFock::IO
                 {"angstrom", HartreeFock::Units::Angstrom},
                 {"bohr", HartreeFock::Units::Bohr}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Units : " + value);
+        return lookup_enum(_table, value, "Invalid Units : ");
     }
 
     template <>
-    HartreeFock::CoordType map_string_enum<HartreeFock::CoordType>(const std::string &value)
+    std::expected<HartreeFock::CoordType, std::string>
+    map_string_enum<HartreeFock::CoordType>(const std::string &value)
     {
         static const std::unordered_map<std::string, HartreeFock::CoordType> _table =
             {
@@ -767,29 +1372,43 @@ namespace HartreeFock::IO
                 {"zmatrix", HartreeFock::CoordType::ZMatrix},
                 {"internal", HartreeFock::CoordType::ZMatrix}};
 
-        auto _value = toLower(value); // First convert to lowercase
-        auto it = _table.find(_value);
-        if (it != _table.end())
-            return it->second;
-
-        throw std::invalid_argument("Invalid Units : " + value);
+        return lookup_enum(_table, value, "Invalid CoordType : ");
     }
 
     std::expected<void, std::string> _parse_geom(const std::vector<std::string> &lines, HartreeFock::OptionsGeometry &geom, HartreeFock::OptCoords &opt_coords, double &imag_follow_step)
     {
         // (key, value) pairs
-        const std::unordered_map<std::string, std::function<void(const std::string &)>> _geom_map =
+        const std::unordered_map<std::string, ParseHandler> _geom_map =
             {
-                {"coord_type", [&geom](const std::string &value)
-                 { geom._type = map_string_enum<HartreeFock::CoordType>(value); }},
-                {"coord_units", [&geom](const std::string &value)
-                 { geom._units = map_string_enum<HartreeFock::Units>(value); }},
-                {"use_symm", [&geom](const std::string &value)
-                 { geom._use_symm = toBool(value); }},
-                {"opt_coords", [&opt_coords](const std::string &value)
-                 { opt_coords = map_string_enum<HartreeFock::OptCoords>(value); }},
-                {"imag_follow_step", [&imag_follow_step](const std::string &value)
-                 { imag_follow_step = std::stod(value); }}};
+                {"coord_type", [&geom](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::CoordType>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     geom._type = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"coord_units", [&geom](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::Units>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     geom._units = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"opt_coords", [&opt_coords](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = map_string_enum<HartreeFock::OptCoords>(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     opt_coords = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"imag_follow_step", [&imag_follow_step](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     imag_follow_step = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }}};
 
         for (const std::string line : lines)
         {
@@ -803,12 +1422,23 @@ namespace HartreeFock::IO
 
             key = toLower(key);
 
+            if (key == "use_symm")
+            {
+                auto parsed = toBool(value);
+                if (!parsed)
+                    return std::unexpected(std::string("Error parsing geom '") + key + "': " + parsed.error());
+                geom._use_symm = *parsed;
+                continue;
+            }
+
             // Find the (key, value) pair
             if (auto it = _geom_map.find(key); it != _geom_map.end())
             {
                 try
                 {
-                    it->second(value);
+                    auto parsed = it->second(value);
+                    if (!parsed)
+                        return std::unexpected(std::string("Error parsing geom '") + key + "': " + parsed.error());
                 }
                 catch (const std::exception &e)
                 {
@@ -819,6 +1449,55 @@ namespace HartreeFock::IO
             {
                 return std::unexpected("Unknown geom keyword: " + key);
             }
+        }
+
+        return {};
+    }
+
+    static std::expected<void, std::string> validate_requested_methods(
+        const HartreeFock::Calculator &calculator)
+    {
+        if (calculator._correlation == HartreeFock::PostHF::RCCSDTQ &&
+            calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+        {
+            return std::unexpected(
+                "RCCSDTQ is currently available only for single-point calculations; "
+                "choose calculation_type sp or remove correlation ccsdtq.");
+        }
+
+        if (calculator._correlation == HartreeFock::PostHF::FCI &&
+            calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+        {
+            return std::unexpected(
+                "FCI is currently available only for single-point calculations; "
+                "choose calculation_type sp or remove correlation fci.");
+        }
+
+        if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+        {
+            if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+            {
+                return std::unexpected(
+                    "PCM is currently implemented only for single-point energy calculations.");
+            }
+
+            if (calculator._correlation != HartreeFock::PostHF::None)
+            {
+                return std::unexpected(
+                    "PCM is currently available only for SCF/DFT references without post-HF correlation.");
+            }
+
+            if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+                return std::unexpected("PCM is not implemented for ROHF references");
+
+            if (calculator._solvation._dielectric <= 1.0)
+                return std::unexpected("PCM dielectric must be greater than 1.0");
+
+            if (calculator._solvation._surface_points_per_atom < 6)
+                return std::unexpected("PCM surface_points_per_atom must be at least 6");
+
+            if (calculator._solvation._cavity_scale <= 0.0)
+                return std::unexpected("PCM cavity_scale must be positive");
         }
 
         return {};
@@ -898,6 +1577,81 @@ namespace HartreeFock::IO
         return {};
     }
 
+    // Parse the optional %begin_bsse section for counterpoise / BSSE corrections.
+    //
+    //   fragment      1 2 3      — 1-based atom indices forming a fragment
+    //   fragment      4 5 6      — a second fragment (exactly two required)
+    //   charge        0 0        — optional per-fragment charges
+    //   multiplicity  1 1        — optional per-fragment multiplicities
+    //
+    // Atom indices are stored 0-based. Validation that the fragments partition
+    // the molecule is deferred to parse_input (where natoms is known).
+    std::expected<void, std::string>
+    _parse_bsse(const std::vector<std::string> &lines, HartreeFock::OptionsBSSE &bsse)
+    {
+        bsse._enabled = true;
+
+        for (const auto &raw : lines)
+        {
+            const std::string line = strip_inline_comment(raw);
+            if (line.empty())
+                continue;
+
+            std::istringstream iss(line);
+            std::string key;
+            iss >> key;
+            const std::string lkey = toLower(key);
+
+            if (lkey == "fragment")
+            {
+                std::vector<int> atoms;
+                int idx;
+                while (iss >> idx)
+                {
+                    if (idx < 1)
+                        return std::unexpected("bsse: fragment atom indices are 1-based and must be >= 1: " + line);
+                    atoms.push_back(idx - 1); // store 0-based
+                }
+                if (atoms.empty())
+                    return std::unexpected("bsse: 'fragment' needs at least one atom index: " + line);
+                bsse._fragments.push_back(std::move(atoms));
+            }
+            else if (lkey == "charge")
+            {
+                int c;
+                while (iss >> c)
+                    bsse._charges.push_back(c);
+            }
+            else if (lkey == "multiplicity")
+            {
+                int m;
+                while (iss >> m)
+                {
+                    if (m < 1)
+                        return std::unexpected("bsse: multiplicity must be >= 1: " + line);
+                    bsse._multiplicities.push_back(m);
+                }
+            }
+            else
+            {
+                return std::unexpected("bsse: unknown keyword '" + key + "': " + line);
+            }
+        }
+
+        if (bsse._fragments.size() != 2)
+            return std::unexpected("bsse: exactly two 'fragment' lines are required (dimer counterpoise); got " +
+                                   std::to_string(bsse._fragments.size()));
+
+        if (!bsse._charges.empty() && bsse._charges.size() != bsse._fragments.size())
+            return std::unexpected("bsse: 'charge' must list one value per fragment (" +
+                                   std::to_string(bsse._fragments.size()) + ")");
+        if (!bsse._multiplicities.empty() && bsse._multiplicities.size() != bsse._fragments.size())
+            return std::unexpected("bsse: 'multiplicity' must list one value per fragment (" +
+                                   std::to_string(bsse._fragments.size()) + ")");
+
+        return {};
+    }
+
     // Convert a Z-matrix row to Cartesian given already-placed atoms.
     // Uses the standard NeRF / Natural Extension Reference Frame algorithm.
     static Eigen::Vector3d zmat_to_cart(
@@ -942,13 +1696,16 @@ namespace HartreeFock::IO
 
         molecule.atomic_numbers.resize(molecule.natoms);
         molecule.atomic_masses.resize(molecule.natoms);
+        molecule.is_ghost.assign(molecule.natoms, false);
         molecule.coordinates.resize(molecule.natoms, 3);
         molecule.standard.resize(molecule.natoms, 3);
         molecule._coordinates.resize(molecule.natoms, 3);
         molecule._standard.resize(molecule.natoms, 3);
+        molecule.standard_is_angstrom = false;
+        molecule._standard_is_bohr = false;
         molecule.coordinates.setZero();
 
-        const double deg2rad = M_PI / 180.0;
+        const double deg2rad = std::numbers::pi / 180.0;
 
         for (std::size_t i = 0; i < molecule.natoms; i++)
         {
@@ -957,16 +1714,15 @@ namespace HartreeFock::IO
             if (!(iss >> sym))
                 return std::unexpected("Invalid Z-matrix line: " + lines[i + 2]);
 
-            try
-            {
-                const ElementData el = element_from_symbol(sym);
-                molecule.atomic_numbers[i] = el.Z;
-                molecule.atomic_masses[i] = el.mass;
-            }
-            catch (...)
-            {
-                return std::unexpected("Unknown atomic symbol: " + sym);
-            }
+            // Strip any ghost decoration (Gh(O) / @O / O:) before element lookup.
+            const auto token = parse_atom_token(sym);
+
+            const auto el = element_from_symbol(token.symbol);
+            if (!el)
+                return std::unexpected(el.error());
+            molecule.atomic_numbers[i] = el->Z;
+            molecule.atomic_masses[i] = el->mass;
+            molecule.is_ghost[i] = token.is_ghost;
 
             if (i == 0)
             {
@@ -1006,8 +1762,8 @@ namespace HartreeFock::IO
                     perp = Eigen::Vector3d(0.0, 1.0, 0.0);
                 perp.normalize();
 
-                Eigen::Vector3d pos = A + r * (std::cos(M_PI - theta) * AB.normalized() +
-                                               std::sin(M_PI - theta) * perp);
+                Eigen::Vector3d pos = A + r * (std::cos(std::numbers::pi - theta) * AB.normalized() +
+                                               std::sin(std::numbers::pi - theta) * perp);
                 molecule.coordinates.row(i) = pos.transpose();
             }
             else
@@ -1029,9 +1785,6 @@ namespace HartreeFock::IO
             }
         }
 
-        molecule.nelectrons = std::accumulate(molecule.atomic_numbers.begin(),
-                                              molecule.atomic_numbers.end(), 0) -
-                              molecule.charge;
         return {};
     }
 
@@ -1062,12 +1815,15 @@ namespace HartreeFock::IO
 
         molecule.atomic_numbers.resize(molecule.natoms);
         molecule.atomic_masses.resize(molecule.natoms);
+        molecule.is_ghost.assign(molecule.natoms, false);
 
         molecule.coordinates.resize(molecule.natoms, 3);
         molecule.standard.resize(molecule.natoms, 3);
 
         molecule._coordinates.resize(molecule.natoms, 3);
         molecule._standard.resize(molecule.natoms, 3);
+        molecule.standard_is_angstrom = false;
+        molecule._standard_is_bohr = false;
 
         // Temporary variables
         std::string _atom;
@@ -1083,25 +1839,21 @@ namespace HartreeFock::IO
                 return std::unexpected("Invalid coordinate line: " + lines[i + 2]);
             }
 
+            // Strip any ghost decoration (Gh(O) / @O / O:) before element lookup.
+            const auto token = parse_atom_token(_atom);
+
             // Check if element is supported
-            try
-            {
-                const ElementData _element = element_from_symbol(_atom);
-                molecule.atomic_numbers[i] = _element.Z;
-                molecule.atomic_masses[i] = _element.mass;
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected(std::string("Unknown atomic symbol: ") + _atom);
-            }
+            const auto element = element_from_symbol(token.symbol);
+            if (!element)
+                return std::unexpected(element.error());
+            molecule.atomic_numbers[i] = element->Z;
+            molecule.atomic_masses[i] = element->mass;
+            molecule.is_ghost[i] = token.is_ghost;
 
             molecule.coordinates(i, 0) = _x;
             molecule.coordinates(i, 1) = _y;
             molecule.coordinates(i, 2) = _z;
         }
-
-        // Now set other variables
-        molecule.nelectrons = std::accumulate(molecule.atomic_numbers.begin(), molecule.atomic_numbers.end(), 0) - molecule.charge;
 
         return {};
     }
@@ -1139,7 +1891,7 @@ namespace HartreeFock::IO
         // scf
         if (auto it = _sections.find("scf"); it != _sections.end())
         {
-            if (auto res = _parse_scf(it->second, calculator._scf, calculator._correlation, calculator._integral, calculator._active_space); !res)
+            if (auto res = _parse_scf(it->second, calculator._scf, calculator._correlation, calculator._integral, calculator._active_space, calculator._mp2); !res)
                 return std::unexpected(res.error());
         }
         else
@@ -1151,6 +1903,13 @@ namespace HartreeFock::IO
         if (auto it = _sections.find("dft"); it != _sections.end())
         {
             if (auto res = _parse_dft(it->second, calculator._dft); !res)
+                return std::unexpected(res.error());
+        }
+
+        // pcm (optional)
+        if (auto it = _sections.find("pcm"); it != _sections.end())
+        {
+            if (auto res = _parse_pcm(it->second, calculator._solvation); !res)
                 return std::unexpected(res.error());
         }
 
@@ -1182,6 +1941,37 @@ namespace HartreeFock::IO
             if (auto res = _parse_constraints(it->second, calculator._constraints); !res)
                 return std::unexpected(res.error());
         }
+
+        // bsse / counterpoise (optional)
+        if (auto it = _sections.find("bsse"); it != _sections.end())
+        {
+            if (auto res = _parse_bsse(it->second, calculator._bsse); !res)
+                return std::unexpected(res.error());
+
+            // Validate that the fragments partition the molecule: every atom in
+            // exactly one fragment, all indices in range. natoms is known now.
+            const int natoms = static_cast<int>(calculator._molecule.natoms);
+            std::vector<int> assigned(static_cast<std::size_t>(natoms), 0);
+            for (const auto &frag : calculator._bsse._fragments)
+            {
+                for (int a : frag)
+                {
+                    if (a < 0 || a >= natoms)
+                        return std::unexpected("bsse: fragment atom index " + std::to_string(a + 1) +
+                                               " is out of range (1.." + std::to_string(natoms) + ")");
+                    if (assigned[static_cast<std::size_t>(a)]++)
+                        return std::unexpected("bsse: atom " + std::to_string(a + 1) +
+                                               " appears in more than one fragment");
+                }
+            }
+            for (int a = 0; a < natoms; ++a)
+                if (!assigned[static_cast<std::size_t>(a)])
+                    return std::unexpected("bsse: atom " + std::to_string(a + 1) +
+                                           " is not assigned to any fragment");
+        }
+
+        if (auto res = validate_requested_methods(calculator); !res)
+            return std::unexpected(res.error());
 
         return {};
     }

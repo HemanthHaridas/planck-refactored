@@ -1,6 +1,6 @@
 """
 PySCF reference: H2O CAS(4,4)/6-31G
-Matches Planck input: tests/inputs/casscf_tests/water_cas44_631g.hfinp
+Matches Planck input: tests/benchmarks/casscf/pyscf_reference/water_cas44_631g.hfinp
 
 Geometry: C2v water (Planck input geometry, Angstrom)
 Active space: CAS(4e, 4o)

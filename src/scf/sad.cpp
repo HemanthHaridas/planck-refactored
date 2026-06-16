@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "basis/basis.h"
@@ -52,7 +53,7 @@ namespace
     {
         return s == "S" || s == "P" || s == "D" ||
                s == "F" || s == "G" || s == "H" ||
-               s == "SP";
+               s == "I" || s == "SP";
     }
 
     static void normalize_fortran_exponents(std::string &line)
@@ -62,20 +63,7 @@ namespace
                 c = 'E';
     }
 
-    static int double_factorial(int n)
-    {
-        if (n <= 0)
-            return 1;
-        int result = 1;
-        while (n > 0)
-        {
-            result *= n;
-            n -= 2;
-        }
-        return result;
-    }
-
-    static BasisSet read_gbs(std::ifstream &input)
+    static std::expected<BasisSet, std::string> read_gbs(std::ifstream &input)
     {
         BasisSet basis;
         std::string line;
@@ -97,17 +85,19 @@ namespace
             int charge;
             if ((header >> symbol >> charge) && header.eof())
             {
-                auto _ = element_from_symbol(symbol);
+                auto element = element_from_symbol(symbol);
+                if (!element)
+                    return std::unexpected(element.error());
                 current_element = symbol;
                 basis.try_emplace(symbol);
                 continue;
             }
 
             if (!starts_with_alpha(line))
-                throw std::runtime_error("Expected shell header, got: " + line);
+                return std::unexpected("Expected shell header, got: " + line);
 
             if (current_element.empty())
-                throw std::runtime_error("Shell before element header");
+                return std::unexpected("Shell before element header");
 
             std::istringstream iss(line);
             std::string label;
@@ -116,7 +106,7 @@ namespace
             iss >> label >> nprim >> scale;
 
             if (!iss || !is_shell_label(label))
-                throw std::runtime_error("Malformed shell line: " + line);
+                return std::unexpected("Malformed shell line: " + line);
 
             if (label == "SP")
             {
@@ -155,16 +145,18 @@ namespace
     // Build a single-atom Basis for element `sym` at the origin.
     // Convention matches read_gbs_basis exactly: primitive norms folded into
     // coefficients, Cartesian AOs, _atom_index = 0.
-    static HartreeFock::Basis build_atomic_basis(const std::vector<GbsShell> &gbs_shells)
+    static std::expected<HartreeFock::Basis, std::string> build_atomic_basis(const std::vector<GbsShell> &gbs_shells)
     {
         HartreeFock::Basis basis;
-        basis._shells.reserve(gbs_shells.size());
 
         for (const GbsShell &gbs_shell : gbs_shells)
         {
             HartreeFock::Shell shell;
-            shell._center     = Eigen::Vector3d::Zero();
-            shell._shell      = HartreeFock::BasisFunctions::_map_shell_to_L(gbs_shell.label);
+            shell._center = Eigen::Vector3d::Zero();
+            auto shell_type = HartreeFock::BasisFunctions::_map_shell_to_L(gbs_shell.label);
+            if (!shell_type)
+                return std::unexpected(shell_type.error());
+            shell._shell = *shell_type;
             shell._atom_index = 0;
 
             const std::size_t nprim = gbs_shell.primitives.size();
@@ -173,7 +165,7 @@ namespace
 
             for (std::size_t i = 0; i < nprim; ++i)
             {
-                shell._primitives[i]   = gbs_shell.primitives[i].exponent;
+                shell._primitives[i] = gbs_shell.primitives[i].exponent;
                 shell._coefficients[i] = gbs_shell.primitives[i].coefficient;
             }
 
@@ -181,8 +173,11 @@ namespace
             shell._normalizations = HartreeFock::BasisFunctions::primitive_normalization(
                 L, shell._primitives);
 
-            const double Nc = HartreeFock::BasisFunctions::contracted_normalization(
+            auto normalization = HartreeFock::BasisFunctions::contracted_normalization(
                 L, shell._primitives, shell._coefficients, shell._normalizations);
+            if (!normalization)
+                return std::unexpected(normalization.error());
+            const double Nc = *normalization;
             shell._coefficients *= Nc;
 
             basis._shells.push_back(std::move(shell));
@@ -191,15 +186,15 @@ namespace
             for (auto am : HartreeFock::BasisFunctions::_cartesian_shell_order(L))
             {
                 const std::size_t idx = basis._basis_functions.size();
-                const int df = double_factorial(2 * am[0] - 1) *
-                               double_factorial(2 * am[1] - 1) *
-                               double_factorial(2 * am[2] - 1);
+                const int df = HartreeFock::BasisFunctions::double_factorial(2 * am[0] - 1) *
+                               HartreeFock::BasisFunctions::double_factorial(2 * am[1] - 1) *
+                               HartreeFock::BasisFunctions::double_factorial(2 * am[2] - 1);
                 basis._basis_functions.emplace_back();
-                auto &bf           = basis._basis_functions.back();
-                bf._shell          = shell_ptr;
-                bf._index          = idx;
-                bf._component_norm = 1.0 / std::sqrt(static_cast<double>(df));
-                bf._cartesian      = am;
+                auto &bf = basis._basis_functions.back();
+                bf._shell = shell_ptr;
+                bf._index = idx;
+                bf._component_norm = HartreeFock::BasisFunctions::component_norm(df);
+                bf._cartesian = am;
             }
         }
         return basis;
@@ -262,10 +257,12 @@ namespace
             n_atoms = std::max(n_atoms, static_cast<int>(bf._shell->_atom_index) + 1);
 
         std::vector<std::vector<int>> result(static_cast<std::size_t>(n_atoms));
-        for (int mu = 0; mu < static_cast<int>(mol_basis._basis_functions.size()); ++mu)
+        const HartreeFock::index_t basis_function_count =
+            static_cast<HartreeFock::index_t>(mol_basis._basis_functions.size());
+        for (HartreeFock::index_t mu = 0; mu < basis_function_count; ++mu)
         {
             const int A = static_cast<int>(mol_basis._basis_functions[static_cast<std::size_t>(mu)]._shell->_atom_index);
-            result[static_cast<std::size_t>(A)].push_back(mu);
+            result[static_cast<std::size_t>(A)].push_back(static_cast<int>(mu));
         }
         return result;
     }
@@ -273,11 +270,18 @@ namespace
     // ── Atomic UHF ───────────────────────────────────────────────────────────
 
     // Runs atomic UHF for element Z in the given atomic basis (single atom at
-    // the origin).  Returns (P_alpha + P_beta, S_atom) — both in the atomic AO
+    // the origin).  Returns (P_alpha, P_beta, S_atom) — all in the atomic AO
     // basis ordering (size n_at × n_at).
     // Inherits integral engine and ERI tolerance from the molecular calculator.
     // All Logger output is suppressed via ScopedSilence.
-    static std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+    struct AtomicSadSpinDensities
+    {
+        Eigen::MatrixXd alpha;
+        Eigen::MatrixXd beta;
+        Eigen::MatrixXd overlap;
+    };
+
+    static std::expected<AtomicSadSpinDensities, std::string>
     run_atomic_uhf(int Z,
                    const HartreeFock::Basis &atomic_basis,
                    const HartreeFock::Calculator &mol_calc)
@@ -292,36 +296,36 @@ namespace
         atom._molecule.atomic_numbers.resize(1);
         atom._molecule.atomic_numbers[0] = Z;
         atom._molecule.atomic_masses.resize(1);
-        atom._molecule.atomic_masses[0] =
-            static_cast<double>(element_from_z(static_cast<uint64_t>(Z)).mass);
-        atom._molecule.coordinates  = Eigen::MatrixXd::Zero(1, 3);
+        auto atom_element = element_from_z(static_cast<uint64_t>(Z));
+        if (!atom_element)
+            return std::unexpected("SAD: atomic lookup failed: " + atom_element.error());
+        atom._molecule.atomic_masses[0] = static_cast<double>(atom_element->mass);
+        atom._molecule.coordinates = Eigen::MatrixXd::Zero(1, 3);
         atom._molecule._coordinates = Eigen::MatrixXd::Zero(1, 3);
-        atom._molecule._standard    = Eigen::MatrixXd::Zero(1, 3); // Bohr
-        atom._molecule._is_bohr     = true;
-        atom._molecule.charge       = 0;
+        atom._molecule.set_standard_from_bohr(Eigen::MatrixXd::Zero(1, 3));
+        atom._molecule._is_bohr = true;
+        atom._molecule.charge = 0;
         atom._molecule.multiplicity = mult;
-        atom._molecule.nelectrons   = static_cast<unsigned int>(Z);
-
         // Basis
         atom._shells = atomic_basis;
 
         // SCF options: UHF, HCore guess, conventional mode, quiet DIIS
-        atom._scf._scf       = HartreeFock::SCFType::UHF;
-        atom._scf._guess     = HartreeFock::SCFGuess::HCore;
-        atom._scf._mode      = HartreeFock::SCFMode::Conventional;
-        atom._scf._use_DIIS  = true;
-        atom._scf._DIIS_dim  = 6;
-        atom._scf._tol_energy   = 1e-10;
-        atom._scf._tol_density  = 1e-10;
+        atom._scf._scf = HartreeFock::SCFType::UHF;
+        atom._scf._guess = HartreeFock::SCFGuess::HCore;
+        atom._scf._mode = HartreeFock::SCFMode::Conventional;
+        atom._scf._use_DIIS = true;
+        atom._scf._DIIS_dim = 6;
+        atom._scf._tol_energy = 1e-10;
+        atom._scf._tol_density = 1e-10;
 
         // Integral engine: inherit from molecular calculator
-        atom._integral._engine  = mol_calc._integral._engine;
+        atom._integral._engine = mol_calc._integral._engine;
         atom._integral._tol_eri = mol_calc._integral._tol_eri;
 
         // Initialize: sets up DataSCF matrices and nuclear repulsion (= 0 for 1 atom)
         auto init_result = atom.initialize();
         if (!init_result)
-            throw std::runtime_error("SAD: atomic calculator init failed: " + init_result.error());
+            return std::unexpected("SAD: atomic calculator init failed: " + init_result.error());
 
         // ── Atomic 1e integrals ───────────────────────────────────────────────
         const std::size_t n_at = atom._shells.nbasis();
@@ -332,21 +336,21 @@ namespace
             atom_pairs, n_at, atom._molecule, nullptr);
 
         atom._overlap = S_at;
-        atom._hcore   = T_at + V_at;
+        atom._hcore = T_at + V_at;
 
         // ── Run atomic UHF (suppress all Logger output) ───────────────────────
         {
             HartreeFock::Logger::ScopedSilence silence;
             auto result = HartreeFock::SCF::run_uhf(atom, atom_pairs);
             if (!result)
-                throw std::runtime_error(
+                return std::unexpected(
                     "SAD: atomic UHF failed for Z = " + std::to_string(Z) + ": " + result.error());
         }
 
-        Eigen::MatrixXd P_atom =
-            atom._info._scf.alpha.density + atom._info._scf.beta.density;
-
-        return {std::move(P_atom), std::move(S_at)};
+        return AtomicSadSpinDensities{
+            .alpha = atom._info._scf.alpha.density,
+            .beta = atom._info._scf.beta.density,
+            .overlap = std::move(S_at)};
     }
 
     // ── Spherical averaging ───────────────────────────────────────────────────
@@ -370,12 +374,14 @@ namespace
         std::vector<const HartreeFock::Shell *> shell_order;
         std::unordered_map<const HartreeFock::Shell *, std::vector<int>> shell_aos;
 
-        for (int mu = 0; mu < static_cast<int>(atomic_basis._basis_functions.size()); ++mu)
+        const HartreeFock::index_t basis_function_count =
+            static_cast<HartreeFock::index_t>(atomic_basis._basis_functions.size());
+        for (HartreeFock::index_t mu = 0; mu < basis_function_count; ++mu)
         {
             const HartreeFock::Shell *sp = atomic_basis._basis_functions[static_cast<std::size_t>(mu)]._shell;
             if (shell_aos.find(sp) == shell_aos.end())
                 shell_order.push_back(sp);
-            shell_aos[sp].push_back(mu);
+            shell_aos[sp].push_back(static_cast<int>(mu));
         }
 
         // Compute shell populations before modifying P_atom.  In a nonorthogonal
@@ -411,7 +417,7 @@ namespace
             for (int i = 0; i < g; ++i)
                 for (int j = 0; j < g; ++j)
                     S_blk(i, j) = S_atom(idx[static_cast<std::size_t>(i)],
-                                          idx[static_cast<std::size_t>(j)]);
+                                         idx[static_cast<std::size_t>(j)]);
 
             Eigen::MatrixXd P_sph =
                 (Nl / static_cast<double>(g)) *
@@ -429,7 +435,7 @@ namespace
     // Assembles the block-diagonal raw SAD density in the full molecular AO
     // basis by inserting each atom's cached averaged atomic block at the
     // appropriate molecular AO positions.
-    static Eigen::MatrixXd assemble_raw_sad_density(
+    static std::expected<Eigen::MatrixXd, std::string> assemble_raw_sad_density(
         const HartreeFock::Calculator &calc,
         const std::unordered_map<std::string, Eigen::MatrixXd> &atomic_P_cache)
     {
@@ -440,18 +446,26 @@ namespace
 
         for (std::size_t A = 0; A < calc._molecule.natoms; ++A)
         {
-            const std::string sym = std::string(
-                element_from_z(static_cast<uint64_t>(
-                    calc._molecule.atomic_numbers[static_cast<Eigen::Index>(A)])).symbol);
+            // Ghost atoms (BSSE counterpoise) carry basis functions but no
+            // electrons, so their AO block of the SAD density stays zero.
+            if (A < calc._molecule.is_ghost.size() && calc._molecule.is_ghost[A])
+                continue;
+
+            auto element = element_from_z(static_cast<uint64_t>(
+                calc._molecule.atomic_numbers[static_cast<Eigen::Index>(A)]));
+            if (!element)
+                return std::unexpected("SAD: atomic lookup failed while assembling density: " +
+                                       element.error());
+            const std::string sym = std::string(element->symbol);
 
             const Eigen::MatrixXd &P_atom = atomic_P_cache.at(sym);
-            const auto &ao_indices        = atom_ao_map[A];
-            const int n                   = static_cast<int>(ao_indices.size());
+            const auto &ao_indices = atom_ao_map[A];
+            const HartreeFock::index_t n = static_cast<HartreeFock::index_t>(ao_indices.size());
 
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
+            for (HartreeFock::index_t i = 0; i < n; ++i)
+                for (HartreeFock::index_t j = 0; j < n; ++j)
                     P_mol(ao_indices[static_cast<std::size_t>(i)],
-                           ao_indices[static_cast<std::size_t>(j)]) = P_atom(i, j);
+                          ao_indices[static_cast<std::size_t>(j)]) = P_atom(i, j);
         }
 
         return P_mol;
@@ -464,7 +478,24 @@ namespace
     // top n_occ = n_electrons/2 natural orbitals.
     //
     // Guarantees Tr(P * S) = n_electrons (up to the linear-dependence threshold).
-    static Eigen::MatrixXd project_raw_sad_to_rhf_density(
+    // Map a Cartesian-basis density into the spherical AO basis: P_sph = C P_cart C^T.
+    // Used to bring the block-diagonal raw SAD guess into the working spherical basis
+    // before projection. C is the S-normalized whole-basis transform built at load.
+    static std::expected<Eigen::MatrixXd, std::string> transform_density_cart_to_sph(
+        const HartreeFock::Calculator &calc,
+        const Eigen::MatrixXd &P_cart)
+    {
+        const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
+        const Eigen::Index n_cart = static_cast<Eigen::Index>(calc._shells.nbasis());
+        const Eigen::Index n_sph = static_cast<Eigen::Index>(calc._shells.nbasis_sph());
+        if (C.rows() != n_sph || C.cols() != n_cart)
+            return std::unexpected("SAD: spherical transform has unexpected shape");
+        if (P_cart.rows() != n_cart || P_cart.cols() != n_cart)
+            return std::unexpected("SAD: raw density has unexpected (non-Cartesian) shape");
+        return Eigen::MatrixXd(C * P_cart * C.transpose());
+    }
+
+    static std::expected<Eigen::MatrixXd, std::string> project_raw_sad_to_rhf_density(
         const Eigen::MatrixXd &P_raw,
         const Eigen::MatrixXd &S_mol,
         int n_electrons,
@@ -482,13 +513,42 @@ namespace
         // Diagonalize: eigenvalues are natural occupation numbers in [0,1] (ideally)
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_bar);
         if (es.info() != Eigen::Success)
-            throw std::runtime_error("SAD: failed to diagonalize orthogonalized density");
+            return std::unexpected("SAD: failed to diagonalize orthogonalized density");
 
         // Eigenvalues sorted ascending; take the top n_occ (rightmost columns).
         const Eigen::MatrixXd U_occ = es.eigenvectors().rightCols(n_occ);
         const Eigen::MatrixXd C_occ = X * U_occ;
 
         Eigen::MatrixXd P = 2.0 * C_occ * C_occ.transpose();
+        return 0.5 * (P + P.transpose());
+    }
+
+    // Projects one raw spin channel onto the nearest proper idempotent
+    // spin-density with trace n_occ in the molecular AO metric.
+    static std::expected<Eigen::MatrixXd, std::string> project_raw_sad_to_spin_density(
+        const Eigen::MatrixXd &P_raw,
+        const Eigen::MatrixXd &S_mol,
+        int n_occ,
+        double thresh)
+    {
+        if (n_occ < 0)
+            return std::unexpected("SAD: spin occupation cannot be negative");
+        if (n_occ > P_raw.rows())
+            return std::unexpected("SAD: spin occupation exceeds AO dimension");
+
+        const Eigen::MatrixXd X = make_thresholded_inverse_sqrt(S_mol, thresh);
+
+        Eigen::MatrixXd P_bar = X.transpose() * P_raw * X;
+        P_bar = 0.5 * (P_bar + P_bar.transpose());
+
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_bar);
+        if (es.info() != Eigen::Success)
+            return std::unexpected("SAD: failed to diagonalize orthogonalized spin density");
+
+        const Eigen::MatrixXd U_occ = es.eigenvectors().rightCols(n_occ);
+        const Eigen::MatrixXd C_occ = X * U_occ;
+
+        Eigen::MatrixXd P = C_occ * C_occ.transpose();
         return 0.5 * (P + P.transpose());
     }
 
@@ -502,67 +562,92 @@ namespace HartreeFock
 {
     namespace SCF
     {
-        std::unordered_map<std::string, HartreeFock::Basis>
+        std::expected<std::unordered_map<std::string, HartreeFock::Basis>, std::string>
         read_gbs_basis_atomic(const std::string &file_name,
                               const HartreeFock::Molecule &molecule,
                               const HartreeFock::BasisType &basis_type)
         {
-            if (basis_type != HartreeFock::BasisType::Cartesian)
-                throw std::runtime_error(
-                    "Spherical Harmonics are not supported. "
-                    "Only Cartesian basis functions are currently supported");
+            // SAD always builds its per-atom bases, atomic UHF, spherical averaging
+            // and raw density in the Cartesian basis; the resulting molecular density
+            // is mapped to the spherical basis once, after assembly (see
+            // compute_sad_guess_rhf). So we ignore basis_type here and always read
+            // Cartesian atomic shells — a spherical request is handled by the
+            // post-assembly transform, not by reading spherical atomic shells.
+            (void)basis_type;
 
             std::ifstream file(file_name);
             if (!file)
-                throw std::runtime_error("Cannot open basis file: " + file_name);
+                return std::unexpected("Cannot open basis file: " + file_name);
 
-            const BasisSet gbs = read_gbs(file);
+            auto gbs_res = read_gbs(file);
+            if (!gbs_res)
+                return std::unexpected(gbs_res.error());
+            const BasisSet &gbs = *gbs_res;
 
             std::unordered_set<std::string> seen;
             std::unordered_map<std::string, HartreeFock::Basis> result;
 
             for (std::size_t i = 0; i < molecule.natoms; ++i)
             {
-                const std::string sym = std::string(
-                    element_from_z(static_cast<uint64_t>(molecule.atomic_numbers[static_cast<Eigen::Index>(i)])).symbol);
+                auto element = element_from_z(static_cast<uint64_t>(
+                    molecule.atomic_numbers[static_cast<Eigen::Index>(i)]));
+                if (!element)
+                    return std::unexpected(element.error());
+                const std::string sym = std::string(element->symbol);
 
                 if (!seen.insert(sym).second)
                     continue;
 
                 auto it = gbs.find(sym);
                 if (it == gbs.end())
-                    throw std::runtime_error("Element not found in basis file: " + sym);
+                    return std::unexpected("Element not found in basis file: " + sym);
 
-                result.emplace(sym, build_atomic_basis(it->second));
+                auto atomic_basis = build_atomic_basis(it->second);
+                if (!atomic_basis)
+                    return std::unexpected(atomic_basis.error());
+                result.emplace(sym, std::move(*atomic_basis));
             }
 
             return result;
         }
 
-        Eigen::MatrixXd compute_sad_guess_rhf(const HartreeFock::Calculator &calc)
+        std::expected<Eigen::MatrixXd, std::string> compute_sad_guess_rhf(
+            const HartreeFock::Calculator &calc)
         {
-            const int n_electrons = static_cast<int>(
-                calc._molecule.atomic_numbers.cast<int>().sum() - calc._molecule.charge);
+            // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise).
+            const int n_electrons =
+                calc._molecule.total_nuclear_charge() - calc._molecule.charge;
 
             if (n_electrons % 2 != 0)
-                throw std::runtime_error("SAD: RHF requires an even number of electrons");
+                return std::unexpected("SAD: RHF requires an even number of electrons");
 
             // ── Step 1: read atomic bases (one per unique element) ────────────
             const std::string gbs_file =
                 calc._basis._basis_path + "/" + calc._basis._basis_name;
-            auto atomic_bases = read_gbs_basis_atomic(
+            auto atomic_bases_res = read_gbs_basis_atomic(
                 gbs_file,
                 calc._molecule,
                 calc._basis._basis);
+            if (!atomic_bases_res)
+                return std::unexpected(atomic_bases_res.error());
+            auto atomic_bases = std::move(*atomic_bases_res);
 
             // ── Step 2: for each unique element, run atomic UHF and average ───
             std::unordered_map<std::string, Eigen::MatrixXd> atomic_P_cache;
 
             for (auto &[sym, atomic_basis] : atomic_bases)
             {
-                const int Z = static_cast<int>(element_from_symbol(sym).Z);
+                auto element = element_from_symbol(sym);
+                if (!element)
+                    return std::unexpected(element.error());
+                const int Z = static_cast<int>(element->Z);
 
-                auto [P_atom, S_atom] = run_atomic_uhf(Z, atomic_basis, calc);
+                auto atomic_res = run_atomic_uhf(Z, atomic_basis, calc);
+                if (!atomic_res)
+                    return std::unexpected(atomic_res.error());
+                Eigen::MatrixXd P_atom =
+                    std::move(atomic_res->alpha) + std::move(atomic_res->beta);
+                const Eigen::MatrixXd &S_atom = atomic_res->overlap;
 
                 spherical_average_atomic_density(atomic_basis, S_atom, P_atom, 1e-10);
                 P_atom = 0.5 * (P_atom + P_atom.transpose());
@@ -571,12 +656,113 @@ namespace HartreeFock
             }
 
             // ── Step 3: assemble block-diagonal molecular density ─────────────
-            Eigen::MatrixXd P_raw = assemble_raw_sad_density(calc, atomic_P_cache);
+            auto raw_density = assemble_raw_sad_density(calc, atomic_P_cache);
+            if (!raw_density)
+                return std::unexpected(raw_density.error());
+            Eigen::MatrixXd P_raw = std::move(*raw_density);
             P_raw = 0.5 * (P_raw + P_raw.transpose());
+
+            // The raw SAD density is block-diagonal in the Cartesian AO basis. In
+            // spherical mode the overlap below (and the SCF that consumes the guess)
+            // are in the spherical basis, so map the guess into the spherical basis
+            // first: P_sph = C P_cart C^T. The result is only an initial guess, so the
+            // contamination subspace discarded by C is irrelevant. (No-op in
+            // Cartesian mode, where _cart_to_sph is empty.)
+            if (calc._shells._spherical)
+            {
+                if (auto t = transform_density_cart_to_sph(calc, P_raw); !t)
+                    return std::unexpected(t.error());
+                else
+                    P_raw = std::move(*t);
+            }
 
             // ── Step 4: reconstruct proper RHF density ────────────────────────
             return project_raw_sad_to_rhf_density(
                 P_raw, calc._overlap, n_electrons, 1e-8);
+        }
+
+        std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+        compute_sad_guess_open_shell(
+            const HartreeFock::Calculator &calc,
+            int n_alpha,
+            int n_beta)
+        {
+            if (n_alpha < 0 || n_beta < 0)
+                return std::unexpected("SAD: alpha and beta occupations must be non-negative");
+            if (n_alpha < n_beta)
+                return std::unexpected("SAD: expected n_alpha >= n_beta for open-shell SAD");
+
+            const std::string gbs_file =
+                calc._basis._basis_path + "/" + calc._basis._basis_name;
+            auto atomic_bases_res = read_gbs_basis_atomic(
+                gbs_file,
+                calc._molecule,
+                calc._basis._basis);
+            if (!atomic_bases_res)
+                return std::unexpected(atomic_bases_res.error());
+            auto atomic_bases = std::move(*atomic_bases_res);
+
+            std::unordered_map<std::string, Eigen::MatrixXd> atomic_Pa_cache;
+            std::unordered_map<std::string, Eigen::MatrixXd> atomic_Pb_cache;
+
+            for (auto &[sym, atomic_basis] : atomic_bases)
+            {
+                auto element = element_from_symbol(sym);
+                if (!element)
+                    return std::unexpected(element.error());
+                const int Z = static_cast<int>(element->Z);
+
+                auto atomic_res = run_atomic_uhf(Z, atomic_basis, calc);
+                if (!atomic_res)
+                    return std::unexpected(atomic_res.error());
+
+                Eigen::MatrixXd P_alpha = std::move(atomic_res->alpha);
+                Eigen::MatrixXd P_beta = std::move(atomic_res->beta);
+                const Eigen::MatrixXd &S_atom = atomic_res->overlap;
+
+                spherical_average_atomic_density(atomic_basis, S_atom, P_alpha, 1e-10);
+                spherical_average_atomic_density(atomic_basis, S_atom, P_beta, 1e-10);
+                P_alpha = 0.5 * (P_alpha + P_alpha.transpose());
+                P_beta = 0.5 * (P_beta + P_beta.transpose());
+
+                atomic_Pa_cache[sym] = std::move(P_alpha);
+                atomic_Pb_cache[sym] = std::move(P_beta);
+            }
+
+            auto raw_alpha = assemble_raw_sad_density(calc, atomic_Pa_cache);
+            if (!raw_alpha)
+                return std::unexpected(raw_alpha.error());
+            auto raw_beta = assemble_raw_sad_density(calc, atomic_Pb_cache);
+            if (!raw_beta)
+                return std::unexpected(raw_beta.error());
+
+            Eigen::MatrixXd Pa_raw = 0.5 * ((*raw_alpha) + raw_alpha->transpose());
+            Eigen::MatrixXd Pb_raw = 0.5 * ((*raw_beta) + raw_beta->transpose());
+
+            // Spherical mode: bring both raw spin densities into the spherical basis
+            // before projection (see compute_sad_guess_rhf for the rationale).
+            if (calc._shells._spherical)
+            {
+                auto ta = transform_density_cart_to_sph(calc, Pa_raw);
+                if (!ta)
+                    return std::unexpected(ta.error());
+                Pa_raw = std::move(*ta);
+                auto tb = transform_density_cart_to_sph(calc, Pb_raw);
+                if (!tb)
+                    return std::unexpected(tb.error());
+                Pb_raw = std::move(*tb);
+            }
+
+            auto Pa = project_raw_sad_to_spin_density(Pa_raw, calc._overlap, n_alpha, 1e-8);
+            if (!Pa)
+                return std::unexpected(Pa.error());
+            auto Pb = project_raw_sad_to_spin_density(Pb_raw, calc._overlap, n_beta, 1e-8);
+            if (!Pb)
+                return std::unexpected(Pb.error());
+
+            return std::pair<Eigen::MatrixXd, Eigen::MatrixXd>{
+                std::move(*Pa),
+                std::move(*Pb)};
         }
 
     } // namespace SCF

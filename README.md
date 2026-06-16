@@ -1,33 +1,55 @@
 ### Planck
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20415504.svg)](https://doi.org/10.5281/zenodo.20415504)
+[![Mirror to GitLab](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/main.yml/badge.svg)](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/main.yml)
+[![CodeQL](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/github-code-scanning/codeql)
+[![pages-build-deployment](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/pages/pages-build-deployment)
+
 <p align="justify">
-A quantum chemistry program implementing restricted and unrestricted Hartree-Fock SCF and Kohn-Sham DFT with an Obara-Saika integral engine, dipole and quadrupole moment analysis, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
+A quantum chemistry program implementing restricted, unrestricted, and restricted open-shell Hartree-Fock SCF and Kohn-Sham DFT with dipole and quadrupole moment analysis, Mulliken population analysis, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
 </p>
 
 ### Features
 
 <div align="justify">
 
-- **RHF / UHF** — closed-shell and open-shell Hartree-Fock
-- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; numerical integration on a Becke–Treutler-Ahlrichs–Lebedev molecular grid with ORCA-inspired five-region pruning; LDA (Slater/VWN5) and GGA (B88, PBE, PW91 exchange; LYP, P86, PBE, PW91 correlation) exchange-correlation functionals through libxc; four grid presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals via integer ID
-- **Two integral engines** — Obara-Saika (OS) recursive VRR/HRR for low angular momentum; Rys quadrature for high angular momentum; automatic engine selection per shell quartet based on an analytic flop-count model (`engine auto`)
-- **Electric multipole moments** — AO dipole and quadrupole matrices are built with Obara-Saika recursion after SCF convergence; the log prints electronic, nuclear, and total dipole components (`X`, `Y`, `Z`) plus the traceless Cartesian quadrupole tensor components (`XX`, `XY`, `XZ`, `YY`, `YZ`, `ZZ`) for both `hartree-fock` and `planck-dft`
+- **RHF / ROHF / UHF** — closed-shell, restricted open-shell, and unrestricted Hartree-Fock; ROHF uses a Roothaan-type effective Fock construction with aufbau orbital reordering and DIIS convergence
+- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, global hybrid, range-separated hybrid, and double-hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals by name or integer ID. Range-separated hybrids are implemented for single-point, gradient, geometry-optimization, frequency, and geomopt+frequency workflows; double hybrids remain single-point only
+- **PCM solvation** — self-consistent conductor-like polarizable continuum model (C-PCM) for single-point RHF/UHF/RKS/UKS calculations with user-defined dielectric, named solvents, atom-centered cavities, and surface discretization controls
+- **BSSE / counterpoise correction** — ghost atoms (basis-only centers, requested as `Gh(X)`/`@X`/`X:`) and a two-fragment Boys-Bernardi counterpoise driver (`%begin_bsse`) that runs the dimer, isolated monomers, and ghosted monomers to report BSSE alongside the raw and CP-corrected interaction energies; SCF-level (RHF/UHF/ROHF) single points, PySCF-validated
+- **TDDFT / linear response** — full Casida and optional TDA excited-state roots on top of converged KS orbitals, with RKS singlet/triplet support, UKS spin-conserving response, semilocal XC kernels, transition dipoles, oscillator strengths, wavelengths, and Gaussian-broadened UV-Vis spectra
+- **Three integral engines** — Obara-Saika (`engine os`) for lightly-contracted bases; Head-Gordon-Pople (`engine hgp`) for routine contracted bases through 6-31G(d,p) and similar valence-double/triple-zeta sets, where the HRR is factored out of the primitive contraction loop and yields the lowest per-quartet cost in the low-to-medium angular-momentum regime; Rys quadrature (`engine rys`) for high angular momentum; automatic engine selection per shell quartet (`engine auto`)
+- **Electric multipole moments** — dipole and quadrupole moment analysis after SCF convergence for both `hartree-fock` and `planck-dft`
+- **Mulliken population analysis** — atomic gross populations, net charges, and (for UHF/ROHF) spin populations; printed when `print_populations true` or verbosity is `verbose`/`debug`
 - **Conventional and Direct SCF** — ERI tensor stored once (conventional) or recomputed per iteration (direct); auto-selection based on system size
-- **DIIS** — Pulay extrapolation with optional automatic subspace restart
+- **DIIS** — convergence acceleration with optional automatic subspace restart
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
+- **Wavefunction stability analysis** — orbital-Hessian eigenvalue check after SCF for three RHF channels (real-internal singlet `A+B`, complex-internal singlet `A−B`, and external triplet `A^T−B^T` for RHF→UHF) and two UHF channels (spin-conserving internal and a diagonal-approximation external GHF check). When an instability is detected, optional detect-and-follow rotates the orbitals along the lowest unstable mode (using a two-step broken-symmetry guess for triplet RHF→UHF: π/8 β HOMO–LUMO mix + adaptive eigenvector rotation) and re-converges SCF
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
-- **MO symmetry** — irreducible representation labels (A1, B2, Ag, Bu, …) assigned to each converged orbital; Cartesian AO coefficients are transformed to the real spherical harmonic basis and decomposed into symmetry species via libmsym's SALC machinery; the Cartesian→spherical block transform covers all shells supported by the integral engine (S through H, L=0–5); for non-Abelian groups (D3d, Td, Oh, …) the largest Abelian subgroup with all one-dimensional irreps is automatically selected (e.g. C2h for D3d) so every MO receives a unique, unambiguous label — the active group or subgroup is printed to the log; linear molecules (C∞v / D∞h) use a dedicated character-based handler
-- **Post-HF** — RMP2 and UMP2 correlation energy corrections with natural orbital analysis; CASSCF and RASSCF multireference active-space calculations
-- **RMP2 natural orbitals** — after a single-point RMP2 run, the unrelaxed MP2 one-particle density matrix (2I + P_occ block, P_virt block) is diagonalized to yield natural orbital occupation numbers (descending) and natural orbital coefficients in both canonical-MO and AO bases; the occupation table and MO expansion are printed automatically
-- **CASSCF** — Complete Active Space SCF with full-CI / direct-sigma Davidson support, exact determinant-based 1-RDM/2-RDM construction, overlap-tracked state-averaged (SA-CASSCF) roots, root-resolved macro/micro optimizer scaffolding, analytic active-space orbital-derivative CI-response RHS by default, explicit coupled orbital/CI response blocks, block-diagonal coupled-step preconditioning, and a matrix-free finite-difference orbital Hessian (`OrbitalHessianContext` + `matrix_free_hessian_action`) that assembles a dense Hessian matrix for small pair spaces (≤ 128 non-redundant pairs) and solves the orbital Newton step by exact diagonalization; the CI-response RHS uses corrected inter-subspace ERI contributions (core↔active and virtual↔active rotations) via the `puvw` integral cache and a fixed MO-commutator one-body derivative
-- **RASSCF** — Restricted Active Space SCF extending CASSCF with RAS1/RAS2/RAS3 subspace partitioning and configurable hole/electron occupation restrictions
-- **Analytic nuclear gradients** — RHF and UHF nuclear gradients via the Obara-Saika AM-shift rule; all five terms (1e GTO-centre, nucleus-position V, ERI, Pulay/overlap, nuclear repulsion) assembled exactly
-- **Geometry optimization** — L-BFGS optimizer in Cartesian coordinates or BFGS optimizer in redundant generalized internal coordinates (GIC); Wolfe/Armijo line search; convergence on max Cartesian gradient component; optional constraints (fixed bonds, angles, dihedrals, frozen atoms) via `%begin_constraints`
-- **Vibrational frequency analysis** — semi-numerical Hessian from central finite differences of analytic gradients (2×3N evaluations); mass-weighted normal mode analysis with Eckart T+R projection; outputs vibrational frequencies in cm⁻¹ (imaginary encoded negative), zero-point energy in Ha and kcal/mol; linearity auto-detected
-- **Checkpoint system** — binary `.hfchk` files (version 2); same-basis restart (`guess density`), full geometry+density restart (`guess full`), and cross-basis density projection (Löwdin SVD); checkpoint stores `has_opt_coords` flag set after a converged geometry optimization; CASSCF checkpoints additionally store the converged active orbital coefficients, which `chkdump` can export as Gaussian CUBE volumetric files
-- **Basis sets** — STO-3G, 3-21G, 6-31G, 6-31G\*
+- **MO symmetry** — irreducible representation labels assigned to each converged orbital; non-Abelian groups automatically use the largest Abelian subgroup; linear molecules handled separately
+- **Symmetry-adapted orbital (SAO) blocking** — the Fock matrix is block-diagonalized per irrep during SCF (RHF/UHF/ROHF and RKS/UKS), reducing diagonalization cost and giving clean per-orbital irrep labels
+- **Full point-group ERI reduction** — direct-SCF Fock builds exploit the *entire* molecular point group (not just its D2h subgroup) via a petite-list / skeleton-Fock symmetrization scheme: only orbit-representative shell quartets are computed, then the skeleton Fock is projected back to the totally-symmetric component. Available for RHF, UHF, and ROHF in both the Cartesian and real-spherical-harmonic basis, OpenMP-parallel and Schwarz-screened, with the density-independent skeleton persisted across SCF iterations. Validated through d-shells (C2v→C3v→Td) with symmetry-on energies matching symmetry-off
+- **Post-HF** — RMP2 and UMP2 correlation energy corrections; RMP2 natural orbital analysis; analytic RMP2 and UMP2 nuclear gradients; RCCSD for canonical closed-shell RHF references; teaching-oriented determinant-space UCCSD/UCCSDT prototypes for small UHF systems; RCCSDT with automatic backend dispatch across three tiers (determinant-space prototype, tensor production solver, tensor-optimized ccgen-driven backend); CASSCF and RASSCF multireference active-space calculations; full configuration interaction (FCI) over the entire MO space for small RHF references
+- **Coupled cluster** — `RCCSD` is an iterative spin-orbital amplitude solver for canonical RHF references. `RCCSDT` automatically selects between (1) a determinant-space teaching prototype (≤12 spin orbitals and ≤1200 determinants), (2) a tensor production backend (dressed-intermediate CCSD + staged T3 amplitude updates), and (3) a tensor-optimized backend that consumes ccgen-generated warm-start kernels for restricted references. The backend can be forced via the `PLANCK_RCCSDT_BACKEND` environment variable (`determinant`, `tensor`, or `optimized`). `UCCSD` and `UCCSDT` currently use determinant-space prototypes aimed at small teaching examples and validation studies.
+- **ccgen — symbolic coupled-cluster equation generator** — a Python package (`python/ccgen/`) that derives spin-orbital CC residual equations at arbitrary truncation order (CCD through CC6) directly from the normal-ordered Hamiltonian via Baker-Campbell-Hausdorff expansion, Wick contraction, canonicalization, and connectivity filtering. Supports algebraic optimizations (orbital-energy denominator collection, permutation-based term grouping, implicit antisymmetry exploitation), intermediate tensor extraction with layout hints, and four tiers of C++ emission including a Planck-specific tensor emitter that targets `Tensor2D`/`Tensor4D`/`Tensor6D` and the production CC infrastructure in `src/post_hf/cc/`. Used to generate the warm-start kernels consumed by the tensor-optimized RCCSDT backend.
+- **RMP2 natural orbitals** — natural orbital occupation numbers and coefficients printed after a single-point RMP2 run
+- **CASSCF** — Complete Active Space SCF with full-CI, state-averaged (SA-CASSCF) roots, matrix-free second-order orbital optimization, and a dedicated active-integral-cache transform for the orbital-gradient/response hot path. Runs from either an RHF or an ROHF reference; open-shell (high-spin) systems are supported as long as the unpaired electrons live inside the active space, so the inactive core stays closed-shell and doubly occupied
+- **RASSCF** — Restricted Active Space SCF extending CASSCF with RAS1/RAS2/RAS3 subspace partitioning and configurable hole/electron occupation restrictions; shares the CASSCF reference handling, so it also accepts RHF and ROHF references under the same closed-inactive-core condition
+- **FCI** — Full Configuration Interaction: exact diagonalization of the electronic Hamiltonian in the determinant basis spanned by the *entire* MO space (no active-space truncation), built on the same determinant-string/Slater-Condon/Davidson engine as CASSCF. Works from a converged RHF or ROHF reference (open-shell included) and is single-point only. Because FCI spans the complete determinant space, its total energy is invariant to the choice of reference orbitals. Intended for small systems (the determinant count grows combinatorially); guarded by `ci_max_dim` and the packed-determinant orbital limit
+- **Analytic nuclear gradients** — RHF, UHF, RMP2, and UMP2 analytic nuclear gradients
+- **Geometry optimization** — optimizer in Cartesian coordinates or redundant generalized internal coordinates (GIC); optional constraints (fixed bonds, angles, dihedrals, frozen atoms) via `%begin_constraints`
+- **Vibrational frequency analysis** — semi-numerical Hessian from finite differences of analytic gradients; mass-weighted normal mode analysis with translational/rotational projection; frequencies in cm⁻¹ and zero-point energy
+- **Checkpoint system** — binary `.hfchk` files; same-basis restart, full geometry+density restart, and cross-basis density projection; `chkdump` tool can export CASSCF active orbital coefficients as volumetric files
+- **Basis sets** — Gaussian94 (`.gbs`) format; STO-nG, Pople split-valence and triple-zeta (with diffuse/polarization variants), and Dunning correlation-consistent families. Missing sets are fetched automatically from the Basis Set Exchange at build time (see *Basis Sets* below)
 
 </div>
+
+### Documentation
+
+- `docs/PLANCK_TEACHING_GUIDE.md` — high-level implementation and usage guide
+- `docs/CCGEN_TEACHING_GUIDE.md` — theory-to-code walkthrough of the Python coupled-cluster equation generator
+- `docs/README.md` — lightweight static-site export instructions for the documentation set
+- `python/README.md` — full usage reference for the ccgen symbolic CC equation generator (API, CLI, emitter tiers, optimization passes, Planck integration workflows)
 
 ### Requirements
 
@@ -118,6 +140,10 @@ Input files use an INI-style block format with the extension `.hfinp`. Each sect
     ...
 %end_dft
 
+%begin_pcm             (optional)
+    ...
+%end_pcm
+
 %begin_geom
     ...
 %end_geom
@@ -125,13 +151,17 @@ Input files use an INI-style block format with the extension `.hfinp`. Each sect
 %begin_coords
 <natoms>
 <charge>  <multiplicity>
-<symbol>  <x>  <y>  <z>
+<symbol>  <x>  <y>  <z>          # ghost atom: Gh(<symbol>) | @<symbol> | <symbol>:
 ...
 %end_coords
 
 %begin_constraints     (optional; IC geomopt only)
     ...
 %end_constraints
+
+%begin_bsse            (optional; runs counterpoise / BSSE correction)
+    ...
+%end_bsse
 ```
 
 ### Section: `%begin_control`
@@ -142,11 +172,12 @@ General calculation settings.
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
-| `basis` | string | `sto-3g`, `3-21g`, `6-31g`, `6-31g*` | — | Basis set name |
-| `basis_type` | enum | `cartesian`, `spherical` | `cartesian` | Angular function type. Only Cartesian is fully supported. |
-| `calculation` | enum | `energy` / `sp`, `gradient` / `grad`, `geomopt` / `opt`, `freq` / `frequency` | — | Calculation type. `gradient` computes the analytic nuclear gradient at the input geometry and stops. `geomopt` optimizes the geometry. `freq` computes the semi-numerical Hessian and vibrational frequencies. |
+| `basis` | string | any name in the `basis-sets/` manifest (e.g. `sto-3g`, `6-31g*`, `6-311g**`, `cc-pvtz`) | — | Basis set name. Missing sets are fetched from the Basis Set Exchange at build time; see *Basis Sets* below for the full list and how to add more. |
+| `basis_type` | enum | `cartesian`, `spherical` | `cartesian` | Angular function type. `spherical` uses real solid harmonics (2L+1 functions per shell), removing the lower-angular-momentum contamination of the Cartesian set; fully supported across SCF, SAO blocking, MO irreps, full point-group ERI reduction, and post-HF. |
+| `calculation` | enum | `energy`/`sp`, `gradient`/`grad`, `geomopt`/`opt`, `freq`/`frequency`, `optfreq`/`geomoptfreq`/`geomopt+freq`, `imagfollow`/`imag_follow`/`irc_follow`, `tddft`/`td-dft`/`linearresponse`/`linear_response`/`lr` | — | Calculation type. `gradient` computes the analytic nuclear gradient and stops. `geomopt` optimizes the geometry. `freq` computes the semi-numerical Hessian and vibrational frequencies. `optfreq` performs geometry optimization followed by frequency analysis. `imagfollow` follows the lowest imaginary frequency mode downhill. `tddft` runs the initial closed-shell linear-response excited-state solver in `planck-dft`. |
 | `verbosity` | enum | `silent`, `minimal`, `normal`, `verbose`, `debug` | `minimal` | Output level |
 | `basis_path` | string | filesystem path | compiled-in | Override the basis set search directory |
+| `print_populations` | bool | `.true.`, `.false.` | `.false.` | Print Mulliken population analysis after SCF convergence. Enabled automatically when `verbosity verbose` or `verbosity debug`. |
 
 ### Section: `%begin_scf`
 
@@ -156,30 +187,44 @@ SCF procedure and convergence settings.
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
-| `scf_type` | enum | `rhf`, `uhf` | `rhf` | Wavefunction type |
-| `engine` | enum | `os` / `obara-saika`, `rys`, `auto` | `os` | Two-electron integral engine. `os`: Obara-Saika VRR/HRR recursion. `rys`: Rys quadrature (converts the Boys integral to a Gauss-type quadrature; exact with ⌊L/2⌋+1 roots). `auto`: selects the engine per contracted shell quartet using an analytic flop-count model — OS for low total angular momentum (L < 4), Rys for L ≥ 4 (d+d and higher). |
-| `correlation` | enum | `rmp2`, `ump2`, `casscf`, `rasscf` | none | Post-HF method. `rmp2`/`ump2`: Møller-Plesset second-order correction. `casscf`: Complete Active Space SCF (requires `nactele`, `nactorb`). `rasscf`: Restricted Active Space SCF (requires `nactele`, `nactorb`, `nras1`, `nras2`, `nras3`). |
+| `scf_type` | enum | `rhf`/`rks`, `rohf`, `uhf`/`uks` | `rhf` | Wavefunction type. `rks`/`uks` are aliases for `rhf`/`uhf` when using `planck-dft`. `rohf`: restricted open-shell HF (Roothaan effective Fock with SAO blocking and full point-group ERI reduction). FCI, CASSCF, and RASSCF run from an ROHF reference (the MCSCF methods require the unpaired electrons to sit inside the active space so the inactive core stays closed-shell); other post-HF methods, analytic gradients, stability analysis, and PCM are not yet supported for ROHF. |
+| `engine` | enum | `os` / `obara-saika`, `hgp` / `head-gordon-pople`, `rys` / `rys-quadrature`, `auto` | `os` | Two-electron integral engine. `os`: Obara-Saika algorithm. `hgp`: Head-Gordon-Pople (HRR factored outside the primitive contraction loops; best per-quartet cost for routine contracted bases through 6-31G(d,p)). `rys`: Rys quadrature (preferred at high angular momentum). `auto`: selects the engine per shell quartet based on angular momentum. |
+| `correlation` | enum | `rmp2`, `ump2`, `ccsd`, `uccsd`, `ccsdt`, `uccsdt`, `ccsdtq`, `casscf`, `rasscf`, `fci` | none | Post-HF method. `rmp2`/`ump2`: Møller-Plesset second-order correction; both support `calculation gradient` for analytic MP2 nuclear gradients (`rmp2` with RHF, `ump2` with UHF). `ccsd`: restricted coupled cluster with singles and doubles for canonical RHF references. `uccsd`: unrestricted coupled cluster with singles and doubles for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `ccsdt`: restricted coupled cluster with singles, doubles, and triples; automatically dispatches to a determinant-space teaching prototype for tiny RHF systems (≤12 spin orbitals and ≤1200 determinants) or to a tensor production backend (dressed-intermediate CCSD followed by staged T3 amplitude updates) for larger systems. A third tensor-optimized backend driven by ccgen-generated warm-start kernels can be forced via the `PLANCK_RCCSDT_BACKEND=optimized` environment variable. `uccsdt`: unrestricted coupled cluster with singles, doubles, and triples for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `ccsdtq` (alias `cc4`): restricted coupled cluster through quadruples for canonical RHF references, driven by the arbitrary-order solver consuming ccgen-generated residuals; single-point energies only. `casscf`: Complete Active Space SCF (requires `nactele`, `nactorb`); runs from an RHF or ROHF reference, with high-spin open-shell systems supported when the unpaired electrons are in the active space (closed, doubly-occupied inactive core). `rasscf`: Restricted Active Space SCF (requires `nactele`, `nactorb`, `nras1`, `nras2`, `nras3`); same RHF/ROHF reference handling as `casscf`. `fci`: Full Configuration Interaction over the whole MO space for a converged RHF or ROHF reference (open-shell supported); single-point only. The FCI total energy is invariant to the reference orbitals. Honors `nroots` (lowest roots to report), `ci_max_dim` (determinant-count cap), and `target_irrep`. No active-space keywords are needed. |
 | `nactele` | int | ≥ 1 | — | Number of active electrons for CASSCF/RASSCF |
 | `nactorb` | int | ≥ 1 | — | Number of active orbitals for CASSCF/RASSCF |
 | `nroots` | int | ≥ 1 | `1` | Number of CI roots for state-averaged CASSCF (SA-CASSCF). `1` = single-state CASSCF. |
+| `weights` | float list | space-separated | equal | SA-CASSCF state-averaging weights, one per root. Automatically normalized to sum to 1. Defaults to equal weights if omitted or if the count does not match `nroots`. |
+| `core_irrep_counts` | irrep list | `irrep=N ...` | — | Explicit per-irrep counts of doubly occupied (core) orbitals, e.g. `A1=3 B1=1`. Overrides energy-sorted inference. |
+| `active_irrep_counts` | irrep list | `irrep=N ...` | — | Explicit per-irrep counts of active orbitals, e.g. `A1=2 B1=2`. Overrides energy-sorted inference. |
+| `mo_permutation` | int list | space-separated | — | Zero-based MO indices specifying the reordering applied before the MCSCF loop. |
+| `ci_max_dim` | int | ≥ 1 | auto | Maximum Davidson CI subspace dimension. |
+| `target_irrep` | string | irrep label | — | Target irrep for CI diagonalization (e.g. `A1`). |
+| `nras1` | int | ≥ 0 | `0` | RASSCF: number of orbitals in the RAS1 subspace (high-occupancy, hole-restricted). `nras1 + nras2 + nras3` must equal `nactorb`. |
+| `nras2` | int | ≥ 0 | `0` | RASSCF: number of orbitals in the RAS2 subspace (full CAS, unrestricted). |
+| `nras3` | int | ≥ 0 | `0` | RASSCF: number of orbitals in the RAS3 subspace (low-occupancy, particle-restricted). |
+| `max_holes` | int | ≥ 0 | `2` | RASSCF: maximum number of holes allowed in the RAS1 subspace. |
+| `max_elec` | int | ≥ 0 | `2` | RASSCF: maximum number of electrons allowed in the RAS3 subspace. |
 | `mcscf_max_iter` | int | ≥ 1 | `100` | Maximum CASSCF macro-iterations |
-| `mcscf_micro_per_macro` | int | ≥ 1 | `4` | Micro-iterations (DIIS steps) per macro-iteration |
+| `mcscf_micro_per_macro` | int | ≥ 1 | `4` | Micro-iterations per macro-iteration |
 | `tol_mcscf_energy` | float | > 0 | `1e-8` | CASSCF energy convergence threshold in Hartree |
 | `tol_mcscf_grad` | float | > 0 | `1e-5` | CASSCF orbital gradient convergence threshold |
-| `mcscf_debug_numeric_newton` | bool | `.true.`, `.false.` | `.false.` | Debug-only finite-difference Newton fallback for small orbital-pair spaces. The normal production CASSCF path does not rely on this. |
-| `mcscf_debug_commutator_rhs` | bool | `.true.`, `.false.` | `.false.` | Debug-only switch that forces the older commutator-only approximate CI-response RHS instead of the default exact active-space orbital-derivative RHS. |
+| `mcscf_max_rot` | float | > 0 | `0.20` | CASSCF orbital trust-region cap (max absolute κ element per macro step). |
+| `mcscf_accept_uphill` | bool | `.true.`, `.false.` | `.false.` | Opt-in SA-CASSCF basin-escape mode: allows bounded uphill trial acceptance when it reduces worst per-root orbital gradients. |
+| `mcscf_uphill_max_eh` | float | > 0 | `5e-3` | Maximum allowed uphill \u0394E (Eh) per macro step when `mcscf_accept_uphill .true.` is enabled. |
 | `use_diis` | bool | `.true.`, `.false.` | `.true.` | Enable DIIS convergence acceleration |
 | `diis_dim` | int | ≥ 2 | `8` | Maximum DIIS subspace size |
-| `diis_restart` | float | ≥ 0 | `2.0` | Clear the DIIS subspace when the Pulay error grows by more than this factor relative to the previous iteration. Set to `0` to disable. |
+| `diis_restart` | float | ≥ 0 | `2.0` | Clear the DIIS subspace when the error grows by more than this factor relative to the previous iteration. Set to `0` to disable. |
 | `level_shift` | float | ≥ 0.0 | `0.0` | Virtual orbital level shift in Hartree. Raises virtual MO energies to widen the HOMO–LUMO gap and suppress orbital swapping. Recommended `0.2`–`0.5` for open-shell systems. Set to `0` to disable. |
-| `max_cycles` | int | ≥ 1 | auto | Maximum SCF iterations. Auto-scaling: 50 for small, up to 300 for large systems. |
+| `max_cycles` | int | ≥ 1 | auto | Maximum SCF iterations |
 | `tol_energy` | float | > 0 | `1e-10` | Energy convergence threshold in Hartree |
 | `tol_density` | float | > 0 | `1e-10` | Density matrix convergence threshold (RMS and max element) |
-| `scf_mode` | enum | `conventional`, `direct`, `auto` | `conventional` | ERI strategy. `conventional`: build the full ERI tensor once before the SCF loop and reuse it (fast per-iteration, higher memory). `direct`: recompute ERIs every iteration (low memory, slower). `auto`: selects `conventional` when `nbasis ≤ threshold`, otherwise `direct`. Only the Obara-Saika engine supports conventional mode; other engines always use direct. |
-| `tol_eri` | float | > 0 | `1e-10` | ERI screening threshold (Schwarz) |
+| `scf_mode` | enum | `conventional`, `direct`, `auto` | `conventional` | ERI strategy. `conventional`: build the full ERI tensor once before the SCF loop (fast per-iteration, higher memory). `direct`: recompute ERIs every iteration (low memory, slower); with `use_symm .true.` this is the path that engages the full point-group ERI reduction. `auto`: selects based on system size. |
+| `tol_eri` | float | > 0 | `1e-10` | ERI screening threshold |
 | `threshold` | int | ≥ 1 | `100` | Basis function count cutoff used by `scf_mode auto` to decide between conventional and direct. |
-| `guess` | enum | `hcore`, `sad`, `density`, `full` | `hcore` | Initial density guess. `sad`: Superposition of Atomic Densities — constructs the initial density by summing atom-by-atom RHF densities. `density` loads only the density matrix from the checkpoint (geometry and 1e integrals are recomputed from the input file). `full` restores geometry, charge, multiplicity, and density from the checkpoint — useful to restart from an optimized geometry. Falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. |
+| `guess` | enum | `hcore`, `sad`, `density`, `full` | `hcore` | Initial density guess. `sad`: Superposition of Atomic Densities. `density`: load density matrix from checkpoint. `full`: restore geometry and density from checkpoint. Falls back to `hcore` if the checkpoint is missing or incompatible. Cross-basis projection is applied automatically when the checkpoint basis differs from the current basis. Known limitation: `guess sad` can false-converge to the wrong RHF stationary point for some tiny isolated closed-shell atoms (for example lone He/cc-pVDZ), while `guess hcore` matches the PySCF RHF reference. The BSSE / counterpoise driver therefore forces `hcore` for its sub-calculations as a workaround. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.true.` | Write a `.hfchk` checkpoint file after successful convergence |
+| `stability_check` | bool | `.true.`, `.false.` | `.false.` | Run wavefunction stability analysis after SCF convergence. Builds the orbital Hessian in occupied-virtual MO space and reports the lowest eigenvalue of each channel (three RHF channels for closed-shell references, two UHF channels for unrestricted references). Negative eigenvalues indicate an orbital rotation that lowers the energy. Cost: \(O((n_v \cdot n_o)^2)\) memory per channel. |
+| `stability_follow` | bool | `.true.`, `.false.` | `.false.` | When an instability is detected, rotate the orbitals along the lowest unstable mode and re-run SCF. For external triplet RHF→UHF instabilities, Planck promotes the calculator to UHF and applies a two-step broken-symmetry guess (π/8 β HOMO–LUMO mix + adaptive ±step·R rotation). For internal instabilities, the rotation is applied within the same SCF type. Implies `stability_check`. |
 
 ### Section: `%begin_dft`
 
@@ -190,26 +235,48 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
 | `grid` / `grid_level` | enum | `coarse`, `normal`, `fine`, `ultrafine` | `normal` | Molecular integration grid quality. Higher quality uses more radial shells and angular points; see grid preset table below. |
-| `exchange` | enum | `slater`/`lda`, `b88`/`becke88`, `pw91`, `pbe` | `pbe` | Exchange functional. `slater`/`lda`: Slater LDA exchange (LDA_X). `b88`: Becke 1988 GGA exchange. `pw91`: Perdew-Wang 1991 GGA exchange. `pbe`: Perdew-Burke-Ernzerhof GGA exchange (default). |
-| `correlation` | enum | `vwn`/`vwn5`, `lyp`, `p86`, `pw91`, `pbe` | `pbe` | Correlation functional. `vwn`/`vwn5`: Vosko-Wilk-Nusair LDA correlation (VWN5). `lyp`: Lee-Yang-Parr GGA correlation. `p86`: Perdew 1986 GGA correlation. `pw91`: Perdew-Wang 1991 GGA correlation. `pbe`: PBE GGA correlation (default). |
-| `exchange_id` | int | any libxc integer ID | — | Use an arbitrary libxc exchange functional by its integer identifier. Setting this overrides `exchange` and sets it to `custom`. |
-| `correlation_id` | int | any libxc integer ID | — | Use an arbitrary libxc correlation functional by its integer identifier. Setting this overrides `correlation` and sets it to `custom`. |
+| `exchange` | enum/string | built-in aliases such as `slater`/`lda`, `b88`/`becke88`, `pw91`, `pbe`, `b3lyp`, `pbe0`/`pbeh`, `hse06`, `b2plyp`; or any libxc name | `pbe` | Exchange or combined exchange-correlation functional. Combined XC entries such as `b3lyp`, `pbe0`, `hse06`, and `b2plyp` ignore the separate `correlation` keyword. Unknown strings are resolved through libxc by name. |
+| `correlation` | enum/string | `vwn`/`vwn5`, `lyp`, `p86`, `pw91`, `pbe`; or any libxc name | `pbe` | Correlation functional |
+| `exchange_id` | int | any libxc integer ID | — | Use an arbitrary libxc exchange functional by its integer identifier. Overrides `exchange`. |
+| `correlation_id` | int | any libxc integer ID | — | Use an arbitrary libxc correlation functional by its integer identifier. Overrides `correlation`. |
+| `lr_nstates` / `tddft_nstates` / `nstates` / `nroots` | int | ≥ 1 | `5` | Number of TDDFT roots to solve for `calculation tddft` / `linearresponse`. |
+| `root` | int | ≥ 1 | all solved roots | Optional 1-based TDDFT root selector. When set, Planck still solves enough roots to reach the requested state but reports only that root. |
+| `lr_method` / `tddft_method` | enum | `casida`, `full`, `tda` | `casida` | Linear-response solver form. `casida`/`full` solves the full \(A/B\) problem; `tda` diagonalizes the Hermitian \(A\) block only. |
+| `lr_spin` / `tddft_spin` | enum | `auto`, `singlet`, `triplet`, `spin_conserving` | `auto` | Spin channel for TDDFT response. `auto` resolves to `singlet` for RKS and `spin_conserving` for UKS. `triplet` is currently available for closed-shell RKS only. |
 | `use_sao_blocking` | bool | `.true.`, `.false.` | `.true.` | Enable symmetry-adapted AO blocking for the Coulomb matrix assembly. |
 | `print_grid_summary` | bool | `.true.`, `.false.` | `.true.` | Print a per-atom grid point count summary before the KS iterations. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.false.` | Write a `.dftchk` checkpoint file after successful convergence. |
 
-#### DFT grid presets
-
 <p align="justify">
-Grid quality levels follow ORCA-inspired angular scheme assignments. Each atom's radial shell count depends on its row in the periodic table; hydrogen/helium get one fewer angular shell than heavier atoms when `reduce_light_atoms` is active.
+Range-separated hybrids are supported for single-point energies, analytic
+gradients, geometry optimization, frequencies, and geomopt+frequency. Double
+hybrids remain single-point only. TDDFT / linear response and
+`imagfollow` remain limited to the existing semilocal/global-hybrid path and
+still error explicitly for unsupported range-separated or double-hybrid cases.
 </p>
 
-| Preset | Angular scheme | Typical angular pts (heavy atom, mid-grid) | Radial shells (row-1 / row-2) |
-|---|---|---|---|
-| `coarse` | 3 | 110 | ~28 / ~33 |
-| `normal` | 4 | 194 | ~32 / ~37 |
-| `fine` | 5 | 302 | ~36 / ~41 |
-| `ultrafine` | 6 | 590 | ~40 / ~45 |
+### Section: `%begin_pcm`
+
+<p align="justify">
+Optional continuum-solvation settings for a self-consistent conductor-like PCM surface model. The current implementation is available for single-point SCF/DFT calculations only and is not yet wired into post-HF, gradients, geometry optimization, or ROHF.
+</p>
+
+| Keyword | Type | Values | Default | Description |
+|---|---|---|---|---|
+| `model` | enum | `pcm`, `cpcm`, `none` | `none` | Solvation model selector. `pcm` and `cpcm` currently map to the same conductor-like PCM implementation. |
+| `solvent` | string | `water`, `acetonitrile`, `methanol`, `ethanol`, `dmso`, `dichloromethane`, `chloroform`, `thf`, `toluene`, `benzene`, `hexane` | — | Named solvent shortcut that sets the dielectric constant. |
+| `dielectric` / `epsilon` / `eps` | float | > 1 | `1.0` | Dielectric constant of the continuum. Overrides the solvent preset when both are given. |
+| `cavity_scale` | float | > 0 | `1.2` | Scale factor applied to the atom-centered radii used to build the PCM cavity. |
+| `surface_points` / `surface_points_per_atom` | int | ≥ 6 | `60` | Number of Fibonacci-distributed surface points generated per atom before overlap culling. |
+
+#### DFT grid presets
+
+| Preset | Typical angular pts (heavy atom) | Radial shells |
+|---|---|---|
+| `coarse` | 110 | ~28–33 |
+| `normal` | 194 | ~32–37 |
+| `fine` | 302 | ~36–41 |
+| `ultrafine` | 590 | ~40–45 |
 
 #### Common functional combinations
 
@@ -221,6 +288,19 @@ Grid quality levels follow ORCA-inspired angular scheme assignments. Each atom's
 | BPW91 | `b88` | `pw91` | GGA |
 | PW91 | `pw91` | `pw91` | GGA |
 | PBE | `pbe` | `pbe` | GGA (default) |
+| B3LYP | `b3lyp` | ignored | Global hybrid GGA |
+| PBE0 | `pbe0` | ignored | Global hybrid GGA |
+| HSE06 | `hse06` | ignored | Range-separated hybrid GGA |
+| B2PLYP | `b2plyp` | ignored | Double-hybrid GGA |
+
+<p align="justify">
+For cross-code DFT comparisons, matching the SCF convergence threshold alone is
+not enough: different molecular quadrature grids can shift total energies by
+\(10^{-3}\) Eh on coarse settings. The PySCF equivalence tests in
+`tests/pyscf/` therefore force `fine` grids on both sides, where Planck and
+PySCF agree again at the \(10^{-6}\) to \(10^{-7}\) Eh level for B3LYP, HSE06,
+and B2PLYP on the current H\(_2\)/STO-3G fixtures.
+</p>
 
 ### Section: `%begin_geom`
 
@@ -232,17 +312,9 @@ Molecular geometry options.
 |---|---|---|---|---|
 | `coord_type` | enum | `cartesian`, `zmatrix` / `internal` | `cartesian` | Coordinate specification type |
 | `coord_units` | enum | `angstrom`, `bohr` | `angstrom` | Units for input coordinates |
-| `use_symm` | bool | `.true.`, `.false.` | `.true.` | Detect molecular point group and reorient to standard frame using libmsym |
-| `opt_coords` | enum | `cartesian`, `internal` / `ic` / `gic` | `cartesian` | Coordinate system for geometry optimization. `cartesian`: L-BFGS in 3N Cartesian coordinates. `internal`: BFGS in redundant generalized internal coordinates (bonds, bends, torsions); back-transforms to Cartesian via Schlegel microiterations. Only used when `calculation geomopt`. |
-
-<p align="justify">
-Geometry optimization convergence is controlled by two additional keywords accepted in `%begin_control`:
-</p>
-
-| Keyword | Type | Default | Description |
-|---|---|---|---|
-| `grad_tol` | float | `3e-4` | Convergence threshold: maximum Cartesian gradient component in Ha/Bohr |
-| `max_geomopt_iter` | int | `50` | Maximum number of geometry optimization steps |
+| `use_symm` | bool | `.true.`, `.false.` | `.true.` | Detect molecular point group and reorient to standard frame |
+| `opt_coords` | enum | `cartesian`, `internal` / `ic` / `gic` | `cartesian` | Coordinate system for geometry optimization. `cartesian`: Cartesian coordinates. `internal`: redundant generalized internal coordinates (bonds, bends, torsions). Only used when `calculation geomopt`. |
+| `imag_follow_step` | float | > 0 | `0.1` | Step size along the imaginary frequency mode for `calculation imagfollow`. |
 
 ### Section: `%begin_constraints` (optional)
 
@@ -267,10 +339,6 @@ Example — fix the O–H bond length (atoms 1–2) and freeze the oxygen (atom 
     f  1      # freeze oxygen
 %end_constraints
 ```
-
-<p align="justify">
-When constraints are active, the optimizer zeros the corresponding IC gradient components and IC step components at each iteration, so the constrained coordinates do not move. The log prints how many IC coordinates and atoms are frozen before the optimization starts.
-</p>
 
 ### Section: `%begin_coords`
 
@@ -300,6 +368,15 @@ Molecular geometry specification. The header lines are the same for both coordin
 
 <p align="justify">
 Each subsequent line gives the element symbol and x, y, z coordinates in the units from `coord_units`.
+</p>
+
+<p align="justify">
+An element symbol may be marked as a <strong>ghost atom</strong> — a center that
+keeps its basis functions but carries no nuclear charge and no electrons — using
+any of <code>Gh(&lt;symbol&gt;)</code>, <code>@&lt;symbol&gt;</code>, or
+<code>&lt;symbol&gt;:</code>. Ghost atoms are used for basis-set superposition
+error studies and counterpoise corrections (see <code>%begin_bsse</code>). When
+any ghost atom is present, point-group symmetry is automatically disabled.
 </p>
 
 #### Z-matrix format (`coord_type zmatrix`)
@@ -333,6 +410,39 @@ H  1  0.9572
 H  1  0.9572  2  104.52
 ```
 
+### Section: `%begin_bsse` (optional)
+
+<p align="justify">
+Requests a Boys-Bernardi counterpoise / BSSE correction. When present, the driver
+runs five SCF calculations — the dimer, each isolated monomer, and each monomer in
+the full dimer basis (the partner kept as ghost atoms) — and reports the BSSE
+together with the raw and counterpoise-corrected interaction energies. SCF-level
+only (RHF/UHF/ROHF energies), two fragments, frozen at the input geometry.
+</p>
+
+```
+%begin_bsse
+    fragment      1 2 3            # 1-based atom indices, fragment A
+    fragment      4 5 6            # fragment B
+    charge        0 0              # optional, per fragment (default 0)
+    multiplicity  1 1              # optional, per fragment (default 1)
+%end_bsse
+```
+
+<div align="justify">
+
+- **fragment** — one line per fragment listing its atoms by 1-based index. Exactly two `fragment` lines are required, and together they must include every atom exactly once.
+- **charge** — optional per-fragment charges for the monomer sub-calculations (one value per fragment). Defaults to 0 for each fragment.
+- **multiplicity** — optional per-fragment spin multiplicities (one value per fragment, ≥ 1). Defaults to 1. A fragment with multiplicity > 1 is run as UHF.
+
+</div>
+
+<p align="justify">
+The isolated-monomer sub-calculations use the <code>hcore</code> initial guess
+regardless of the parent <code>guess</code> setting; see the note on the
+<code>guess</code> keyword for why.
+</p>
+
 ### Basis Sets
 
 <p align="justify">
@@ -360,15 +470,7 @@ bse --version
 #### How automatic fetching works
 
 <p align="justify">
-The file `basis-sets/basis` is a plain-text manifest — one basis set name per line. At configure time CMake reads this manifest and, for each name not already present on disk, registers a custom command that runs:
-</p>
-
-```
-bse get-basis <name> gaussian94 > basis-sets/<name>
-```
-
-<p align="justify">
-The `fetch-basis-sets` target is added to `ALL` and is a dependency of `hartree-fock`, so missing basis sets are downloaded automatically during the first `cmake --build build`. Already-present files are never re-fetched. You can also trigger the fetch manually:
+The file `basis-sets/basis` is a plain-text manifest — one basis set name per line. Missing basis sets are downloaded automatically during the first `cmake --build build`. Already-present files are never re-fetched. You can also trigger the fetch manually:
 </p>
 
 ```bash
@@ -405,7 +507,7 @@ After a successful SCF, a binary checkpoint file `<input_stem>.hfchk` is written
 ### Same-basis restart
 
 <p align="justify">
-Set `guess read` in the next run with the same basis and geometry. The overlap and core Hamiltonian matrices are read directly from the checkpoint, skipping the 1e integral computation.
+Set `guess read` in the next run with the same basis and geometry to restart from the saved density.
 </p>
 
 ### Cross-basis projection (density projection)
@@ -418,12 +520,8 @@ To warm-start a larger basis from a converged smaller-basis checkpoint:
 
 1. Converge in the small basis with `save_checkpoint .true.`
 2. Change `basis` to the larger set and add `guess read`
-3. Run — Planck detects the basis-size mismatch, computes the cross-overlap `S_cross = ⟨χ_μ^large | χ_ν^small⟩`, and applies a Löwdin SVD projection to transfer the occupied density into the new basis
+3. Run — Planck detects the basis-size mismatch and projects the density into the new basis automatically
 </div>
-
-<p align="justify">
-The projected density is used as the SCF starting point, typically reducing the number of required iterations.
-</p>
 
 ### Examples
 
@@ -549,7 +647,89 @@ H     0.000000   -0.756950    -0.468703
 %end_coords
 ```
 
+### ROHF doublet — water radical cation, STO-3G
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type         rohf
+    use_diis         .true.
+    diis_dim         8
+    engine           os
+    print_populations .true.
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+1   2
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords
+```
+
+### Wavefunction stability — twisted ethylene, 3-21G
+
+<p align="justify">
+Set <code>stability_check .true.</code> to print the orbital-Hessian lowest eigenvalues after SCF convergence. Set <code>stability_follow .true.</code> to additionally rotate along any unstable mode and re-converge — this is the standard escape path when HCore lands on a broken-symmetry stationary point. Twisted ethylene is the canonical demonstration: HCore + <code>use_symm .false.</code> reaches a charge-localized RHF that is real-internally unstable, complex-internally unstable, and triplet-externally unstable; the follow promotes to UHF and re-converges to a real spin-broken stationary point.
+</p>
+
+```
+%begin_control
+    basis       3-21g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type           rhf
+    use_diis           .true.
+    diis_dim           8
+    engine             os
+    guess              hcore
+    max_cycles         100
+    stability_check    .true.
+    stability_follow   .true.
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+6
+0   1
+C    -0.669500    0.000000    0.000000
+C     0.669500    0.000000    0.000000
+H    -1.233698    0.927942    0.000000
+H    -1.233698   -0.927942    0.000000
+H     1.233698    0.000000    0.927942
+H     1.233698    0.000000   -0.927942
+%end_coords
+```
+
+<p align="justify">
+The teaching guide chapter <em>Wavefunction Stability Analysis</em> derives the three RHF channels, explains the SVD-based orbital rotation, and walks through a four-basis sweep that isolates a DIIS limit-cycle pathology specific to STO-3G with the HCore guess.
+</p>
+
 ### Analytic gradient — water, STO-3G
+
+RHF, UHF, RMP2, and UMP2 gradients use the same `calculation gradient` entry point. Add `correlation rmp2` for a closed-shell MP2 gradient or `correlation ump2` for an open-shell UHF/UMP2 gradient.
 
 ```
 %begin_control
@@ -581,10 +761,43 @@ H    -0.800000     0.000000    -0.500000
 %end_coords
 ```
 
-### Geometry optimization — Cartesian L-BFGS
+For an open-shell UMP2 gradient, use a UHF reference and request UMP2 in the SCF block:
+
+```
+%begin_control
+    basis       sto-3g
+    calculation gradient
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type      uhf
+    correlation   ump2
+    engine        os
+    level_shift   0.3
+    diis_restart  2.0
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+1   2
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords
+```
+
+### Geometry optimization — Cartesian
 
 <p align="justify">
-Set `calculation geomopt`. The optimizer uses L-BFGS with a strong-Wolfe line search and converges when the maximum Cartesian gradient component falls below `grad_tol` (default 3×10⁻⁴ Ha/Bohr):
+Set `calculation geomopt`. The optimizer converges when the maximum Cartesian gradient component falls below `grad_tol` (default 3×10⁻⁴ Ha/Bohr):
 </p>
 
 ```
@@ -618,10 +831,10 @@ H    -0.800000     0.000000    -0.500000
 %end_coords
 ```
 
-### Geometry optimization — internal coordinates (BFGS/GIC)
+### Geometry optimization — internal coordinates (GIC)
 
 <p align="justify">
-Add `opt_coords internal` in `%begin_geom`. Bonds, valence bends, and proper torsions are detected automatically using Alvarez (2008) covalent radii. The Hessian is initialized diagonally (0.5 Ha/Bohr² for stretches, 0.2 Ha/rad² for bends, 0.1 Ha/rad² for torsions) and updated via BFGS at each step. Steps exceeding 0.3 Bohr or 0.3 rad are scaled down before back-transforming:
+Add `opt_coords internal` in `%begin_geom`. Bonds, valence bends, and proper torsions are detected automatically:
 </p>
 
 ```
@@ -636,7 +849,7 @@ Add `opt_coords internal` in `%begin_geom`. Bonds, valence bends, and proper tor
 ### Constrained geometry optimization — fixed bond
 
 <p align="justify">
-Requires `opt_coords internal` and `coord_type zmatrix`. The `%begin_constraints` block lists one constraint per line using 1-based atom indices. Here the O–H bond (atoms 1–2) is held fixed while the H–O–H angle is allowed to relax:
+Requires `opt_coords internal` and `coord_type zmatrix`. The `%begin_constraints` block lists one constraint per line using 1-based atom indices. Here both O–H bonds are held fixed:
 </p>
 
 ```
@@ -676,20 +889,10 @@ H  1  0.9572  2  104.52
 %end_constraints
 ```
 
-<p align="justify">
-Log output at startup:
-</p>
-
-```
-[INF]  Constraints :   2 constraint(s) active
-...
-[INF]  Constraints :   2 IC(s) frozen, 0 atom(s) frozen
-```
-
 ### Vibrational frequency analysis — water, STO-3G
 
 <p align="justify">
-Set `calculation freq` to compute a semi-numerical Hessian (central finite differences of analytic gradients) and perform mass-weighted normal mode analysis. For best results run at an optimized geometry (no imaginary frequencies):
+Set `calculation freq` to compute a semi-numerical Hessian and perform normal mode analysis. For best results run at an optimized geometry:
 </p>
 
 ```
@@ -738,7 +941,7 @@ Expected output at the HF/STO-3G optimized geometry:
 ```
 
 <p align="justify">
-The step size for finite differences can be changed with `hessian_step` in `%begin_control` (default 5×10⁻³ Bohr). For 2×3N gradient evaluations are required (18 for water). Imaginary frequencies are printed as negative values.
+The finite-difference step size can be changed with `hessian_step` in `%begin_control` (default 5×10⁻³ Bohr). Imaginary frequencies are printed as negative values.
 </p>
 
 ### CASSCF active-space — water, CAS(4,4)/STO-3G
@@ -787,16 +990,30 @@ H    0.000000   -0.757005   -0.468704
 ```
 
 <p align="justify">
-Current algorithm note: the production CASSCF path uses a root-resolved
-macro/micro scaffold with the exact active-space orbital-derivative CI-response
-RHS enabled by default. The code already contains explicit coupled orbital/CI
-response blocks and a block-diagonal coupled-step preconditioner, but the
-default optimizer should still be read as an approximate diagonal-response
-method rather than a final fully coupled second-order solver.
+Expected energy: `E(CASSCF) ≈ -74.9760 Eh` for H₂O CAS(4,4)/STO-3G.
 </p>
 
+### SA-CASSCF SAD-start basins — monotone vs uphill-enabled
+
 <p align="justify">
-Expected energy: `E(CASSCF) ≈ -75.9851 Eh` for H₂O CAS(4,4)/STO-3G.
+For water CAS(4,4)/STO-3G with `guess sad` and `nroots 2`, two SA stationary
+basins are observed:
+</p>
+
+<div align="justify">
+
+- **Monotone mode** (`mcscf_accept_uphill .false.`, default): converges near
+  `-74.7751378 Eh` (upper/local basin).
+- **Uphill-enabled mode** (`mcscf_accept_uphill .true.`): converges near
+  `-74.7877865 Eh` (deeper basin, matching PySCF SAD-start).
+
+</div>
+
+<p align="justify">
+This behavior is intentional and regression-gated with two fixtures:
+`water_cas44_sto3g_sa2_sad.hfinp` (original monotone path) and
+`water_cas44_sto3g_sa2_sad_uphill.hfinp` (uphill-enabled path). The paired
+cases ensure both optimizer modes remain stable.
 </p>
 
 ### CASSCF correlated π-orbitals — twisted ethylene, CAS(2,2)/STO-3G
@@ -806,7 +1023,7 @@ Twisted ethylene (90° C–C torsion) is a classic multireference system: at the
 </p>
 
 <p align="justify">
-The two active orbitals (MO 8 and MO 9 in STO-3G) are the bonding and antibonding combinations of the carbon p_z functions. At 90° twist they are related by the C₂ rotation of the D₂ point group and therefore **exactly degenerate in energy** by symmetry: neither can be identified as purely "bonding" or "antibonding" at this geometry. The CASSCF wavefunction distributes the two active electrons equally across both orbitals (CI coefficients of equal magnitude but opposite sign), recovering the correct diradical character of the twisted state.
+The two active π-type orbitals are exactly degenerate at the 90° twisted geometry. The CASSCF wavefunction distributes the two active electrons equally across both orbitals, recovering the correct diradical character of the twisted state.
 </p>
 
 | MO 8 (π-type active orbital) | MO 9 (π-type active orbital) |
@@ -816,6 +1033,111 @@ The two active orbitals (MO 8 and MO 9 in STO-3G) are the bonding and antibondin
 <p align="justify">
 The two orbitals are degenerate at the 90° twisted geometry and together span the active space of the CAS(2,2) wavefunction. Visualized from a CASSCF/STO-3G checkpoint using `chkdump --casscf-active` and rendered in VMD.
 </p>
+
+### Coupled cluster — RCCSDT on a small closed-shell system
+
+<p align="justify">
+Enable restricted CCSDT by setting <code>correlation ccsdt</code> on a converged RHF reference. The solver automatically picks the determinant-space prototype for tiny systems (≤12 spin orbitals and ≤1200 determinants) and the tensor production backend for larger ones. After convergence the CCSD reference correlation energy, the CCSDT correlation increment, and the total CCSDT energy are printed together.
+</p>
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation ccsdt
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords
+```
+
+#### Forcing a specific RCCSDT backend
+
+<p align="justify">
+The automatic dispatch can be overridden at runtime by exporting <code>PLANCK_RCCSDT_BACKEND</code> before invoking <code>hartree-fock</code>:
+</p>
+
+| Value | Backend |
+|---|---|
+| `determinant` / `determinant_prototype` | Teaching-oriented determinant-space solver (small systems only) |
+| `tensor` / `tensor_production` | Dense tensor production backend (dressed-intermediate CCSD + staged T3 updates) |
+| `optimized` / `tensor_optimized` | Phase-4 tensor-optimized backend that consumes ccgen-generated warm-start kernels (experimental for restricted CCSDT triples) |
+
+```bash
+PLANCK_RCCSDT_BACKEND=optimized ./build/hartree-fock mol.hfinp
+```
+
+### Symbolic CC equation generation — `ccgen`
+
+<p align="justify">
+The <code>python/ccgen/</code> package derives spin-orbital coupled-cluster residual equations at arbitrary truncation order (CCD, CCSD, CCSDT, CCSDTQ, CC5, CC6) from the normal-ordered Hamiltonian, applies optional algebraic optimizations, and emits production code in several formats. See <code>python/README.md</code> for the full reference.
+</p>
+
+Install locally:
+
+```bash
+cd python
+pip install -e .
+```
+
+Quick examples:
+
+```bash
+# Human-readable CCSD equations
+python generate_ccsdt_cpp.py ccsd --pretty
+
+# NumPy einsum form with opt_einsum contraction paths
+python generate_ccsdt_cpp.py ccsd --einsum --opt-einsum
+
+# Tiled + OpenMP C++ output with denominator collection
+python generate_ccsdt_cpp.py ccsd --tiled --collect-denominators
+
+# Planck-specific tensor kernels targeting src/post_hf/cc/ infrastructure
+python generate_ccsdt_cpp.py ccsdt --planck
+
+# Generate Planck-compatible .cpp kernel files
+python generate_planck_cc_kernels.py --output-dir build/ --methods ccsd ccsdt
+
+# Generate the spin-orbital CCSD warm-start .inc file used by the tensor-optimized RCCSDT backend
+python generate_spinorbital_ccsd_warm_start.py --output ccsd_warm_start.inc
+```
+
+Programmatic API:
+
+```python
+from ccgen import generate_cc_equations
+from ccgen.generate import print_equations, print_cpp_planck
+
+# Apply algebraic optimizations at generation time
+eqs = generate_cc_equations(
+    "ccsd",
+    collect_denominators=True,
+    permutation_grouping=True,
+)
+
+print(print_equations("ccsd"))
+print(print_cpp_planck("ccsdt", include_intermediates=True))
+```
 
 ### Cross-basis restart — STO-3G → 6-31G
 
@@ -854,14 +1176,14 @@ The program prints a structured log to standard output. Key sections:
 - **1e Integrals** — overlap, kinetic, nuclear attraction
 - **2e Integrals** — ERI tensor size and build status (conventional mode only)
 - **SCF Iterations** — energy, ΔE, RMS(ΔP), Max(ΔP), DIIS error, wall time per iteration
-- **MO Symmetry** — when the detected point group is non-Abelian, a line `MO Symmetry: Using Abelian subgroup <X> of <G> for MO labels` is printed; otherwise `Using point group <G> for MO labels`
 - **MO Energies** — orbital energies in Hartree with HOMO/LUMO labels and irrep labels when symmetry is enabled
 - **⟨S²⟩ / ⟨S⟩** — spin contamination diagnostics (UHF only)
 - **Converged Energy** — total energy in Hartree, eV, and kcal/mol; MP2 correlation and corrected total if post-HF enabled
 - **Dipole Moment** — printed automatically after a converged SCF/KS solution; includes the electronic, nuclear, and total `X`, `Y`, `Z` components in atomic units, plus the total vector norm in atomic units and Debye
 - **Quadrupole Moment** — printed automatically after the dipole block; includes electronic, nuclear, and total components of the traceless Cartesian tensor (`XX`, `XY`, `XZ`, `YY`, `YZ`, `ZZ`) in atomic units
-- **RMP2 Natural Orbitals** — printed after single-point RMP2: occupation numbers (descending) and MO expansion of each natural orbital (coefficients above 1e-2 threshold); helps identify the dominant occupied/virtual MOs contributing to correlation
-- **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms
+- **Mulliken Population Analysis** — printed when `print_populations true` or verbosity is `verbose`/`debug`; shows AO gross populations, net atomic charges, and spin populations (UHF/ROHF)
+- **RMP2 Natural Orbitals** — occupation numbers and natural orbital coefficients printed after single-point RMP2
+- **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms. Supported analytic gradients include RHF, UHF, RMP2, and UMP2.
 - **IC System** — when `opt_coords internal`, logs the count of stretches, bends, and torsions in the redundant GIC set
 - **Opt Step N** — per-step log line: energy, max Cartesian gradient, and RMS IC gradient (IC mode) or RMS Cartesian gradient (Cartesian mode)
 - **Optimized Geometry** — final Cartesian coordinates in Bohr after convergence
@@ -880,10 +1202,10 @@ For `planck-dft` runs, the log additionally includes:
 - **DFT Grid** — selected grid preset name
 - **Exchange / Correlation** — functional names resolved at startup
 - **Grid Summary** — per-atom point count table (when `print_grid_summary .true.`): atom index, element, atomic number, number of grid points
-- **Integrated Electrons** — electron count from numerical density integration (should match the formal count to 4–5 significant figures on a Normal grid)
+- **Integrated Electrons** — electron count from numerical density integration
 - **XC Energy** — exchange-correlation energy contribution in Hartree
-- **DFT Energy** — total Kohn-Sham energy (T + V_ne + J + E_xc + V_nn) in Hartree
-- **Dipole / Quadrupole Moments** — the same post-SCF multipole report is printed for converged RKS/UKS calculations because the property analysis uses the final KS density matrix
+- **DFT Energy** — total Kohn-Sham energy in Hartree
+- **Dipole / Quadrupole Moments** — same post-SCF multipole report as for HF
 
 </div>
 

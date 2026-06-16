@@ -11,8 +11,8 @@
 namespace
 {
 
-    using HartreeFock::Correlation::CASSCFInternal::contract_q_matrix;
     using HartreeFock::Correlation::CASSCFInternal::apply_response_diag_preconditioner;
+    using HartreeFock::Correlation::CASSCFInternal::contract_q_matrix;
     using HartreeFock::Correlation::CASSCFInternal::project_orthogonal;
 
 } // namespace
@@ -36,7 +36,7 @@ namespace HartreeFock::Correlation::CASSCF
         // Cache the AO->(p, u, v, w) transformed ERIs once per macroiteration so
         // repeated Q-matrix contractions do not pay the four-index transform again.
         const Eigen::MatrixXd C_act = C.middleCols(n_core, n_act);
-        cache.puvw = HartreeFock::Correlation::transform_eri(eri, nbasis, C, C_act, C_act, C_act);
+        cache.puvw = HartreeFock::Correlation::transform_eri_active_cache(eri, nbasis, C, C_act);
         cache.valid = true;
         return cache;
     }
@@ -113,6 +113,9 @@ namespace HartreeFock::Correlation::CASSCF
         // Assemble the generalized Fock matrix for the non-redundant rotations:
         // inactive columns come from the total Fock matrix, while active columns
         // mix the inactive-driven term gamma * F_I with the explicit Q contraction.
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int p = 0; p < nb; ++p)
         {
             for (int i = 0; i < n_core; ++i)
@@ -135,6 +138,9 @@ namespace HartreeFock::Correlation::CASSCF
         // Symmetry-forbidden rotations are projected out explicitly so all later
         // optimizers can work on the full matrix layout without revisiting labels.
         if (use_sym && !mo_irreps.empty())
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
             for (int p = 0; p < nb; ++p)
                 for (int q = 0; q < nb; ++q)
                 {
@@ -182,6 +188,9 @@ namespace HartreeFock::Correlation::CASSCF
         int n_virt)
     {
         Eigen::MatrixXd G_CI = Eigen::MatrixXd::Zero(nbasis, nbasis);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int p = 0; p < nbasis; ++p)
             for (int t = 0; t < n_act; ++t)
             {
@@ -216,6 +225,9 @@ namespace HartreeFock::Correlation::CASSCF
                                                          : 2; };
         // The current orbital model keeps only the diagonal AH blocks, so the
         // Hessian action reduces to a per-pair energy denominator.
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int p = 0; p < nb; ++p)
             for (int q = 0; q < nb; ++q)
             {
@@ -226,7 +238,7 @@ namespace HartreeFock::Correlation::CASSCF
         return HR;
     }
 
-    Eigen::MatrixXd matrix_free_hessian_action(
+    Eigen::MatrixXd delta_g_sa_action(
         const Eigen::MatrixXd &R,
         const OrbitalHessianContext *context,
         const Eigen::MatrixXd &F_I_mo,
@@ -279,6 +291,29 @@ namespace HartreeFock::Correlation::CASSCF
             mo_irreps,
             use_sym);
         return (g_plus - g_minus) / (2.0 * fd_step);
+    }
+
+    Eigen::MatrixXd matrix_free_hessian_action(
+        const Eigen::MatrixXd &R,
+        const OrbitalHessianContext *context,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt,
+        const std::vector<int> &mo_irreps,
+        bool use_sym)
+    {
+        return delta_g_sa_action(
+            R,
+            context,
+            F_I_mo,
+            F_A_mo,
+            n_core,
+            n_act,
+            n_virt,
+            mo_irreps,
+            use_sym);
     }
 
     Eigen::MatrixXd fep1_gradient_update(
@@ -582,13 +617,14 @@ namespace HartreeFock::Correlation::CASSCF
         const Eigen::MatrixXd I = Eigen::MatrixXd::Identity(nb, nb);
         // Apply the antisymmetric orbital step with a Cayley transform, then
         // restore S-orthonormality with a symmetric Löwdin-like cleanup.
-        Eigen::MatrixXd C_new =
+        Eigen::MatrixXd rotated_coefficients =
             C_old * (I - 0.5 * kappa).colPivHouseholderQr().solve(I + 0.5 * kappa);
 
-        Eigen::MatrixXd ovlp = C_new.transpose() * S * C_new;
+        Eigen::MatrixXd ovlp = rotated_coefficients.transpose() * S * rotated_coefficients;
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(ovlp);
         Eigen::VectorXd inv_sqrt = eig.eigenvalues().array().max(1e-12).sqrt().inverse();
-        return C_new * (eig.eigenvectors() * inv_sqrt.asDiagonal() * eig.eigenvectors().transpose());
+        return rotated_coefficients *
+               (eig.eigenvectors() * inv_sqrt.asDiagonal() * eig.eigenvectors().transpose());
     }
 
 } // namespace HartreeFock::Correlation::CASSCF

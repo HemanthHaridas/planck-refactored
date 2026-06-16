@@ -4,11 +4,236 @@
 #include <format>
 #include <limits>
 #include <numeric>
+#include <tuple>
 
+#include "basis/spherical.h"
 #include "integrals/base.h"
 #include "io/logging.h"
 #include "sad.h"
 #include "scf.h"
+#include "symmetry/fock_symmetrization.h"
+#include "symmetry/hgp_symm.h"
+#include "symmetry/os_symm.h"
+#include "symmetry/rys_symm.h"
+#include "symmetry/skeleton_eri.h" // contract_symm_fock_* (C1 persisted-skeleton path)
+
+namespace
+{
+    // Direct-mode two-electron build in spherical mode.
+    //
+    // The per-quartet builder (_compute_2e_fock / _uhf) works in the Cartesian basis,
+    // but in spherical mode the density and the Fock are spherical-dimensioned. We
+    // back-project the spherical density to Cartesian (P_cart = C^T P_sph C), build the
+    // Cartesian G, then forward-transform (G_sph = C G_cart C^T). G = J − ½K is linear
+    // in the density and built from the same Cartesian ERIs the conventional path
+    // contracts, so this reproduces the conventional spherical G exactly (validated
+    // against the conventional spherical energy). The contamination subspace discarded
+    // by C never enters the spherical G because both the density it is built from and
+    // the result are projected through C. RHF helper; the UHF variant mirrors it inline.
+    template <typename BuildCartFock>
+    Eigen::MatrixXd spherical_direct_fock(
+        const Eigen::MatrixXd &C,        // [n_sph × n_cart] S-normalized transform
+        const Eigen::MatrixXd &P_sph,    // [n_sph × n_sph] spherical density
+        BuildCartFock &&build_cart_fock) // (P_cart) -> G_cart [n_cart × n_cart]
+    {
+        const Eigen::MatrixXd P_cart = C.transpose() * P_sph * C;
+        const Eigen::MatrixXd G_cart = build_cart_fock(P_cart);
+        return C * G_cart * C.transpose();
+    }
+
+    // ── Full-symmetry direct Fock dispatch (SAO-blocked direct SCF) ───────────────
+    // Routes the RHF / UHF skeleton+symmetrization Fock to the requested engine
+    // (os_symm / rys_symm). See docs/FULL_SYMMETRY_ERI_DESIGN.md §8. The caller
+    // gates on calculator._use_full_symmetry && sao_active && direct; this helper
+    // then dispatches internally to the Cartesian or spherical full-symmetry path.
+    std::expected<Eigen::MatrixXd, std::string> full_symmetry_fock_rhf(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const HartreeFock::Calculator &calc,
+        const Eigen::MatrixXd &P, std::size_t nbasis, double tol_eri)
+    {
+        const auto engine = calc._integral._engine;
+        if (calc._shells._spherical)
+        {
+            // Spherical mode (Step 2): skeleton built over Cartesian quartets, the
+            // tensor transformed to spherical, contracted with the spherical density P,
+            // symmetrized with the spherical O_R. `nbasis` here is the spherical AO
+            // count; the engine needs the Cartesian count separately.
+            const std::size_t nbasis_cart = calc._shells.nbasis();
+            const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
+            if (engine == HartreeFock::IntegralMethod::RysQuadrature)
+                return HartreeFock::RysQuad::_compute_2e_fock_symm_spherical(
+                    shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+            if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
+                return HartreeFock::HeadGordonPople::_compute_2e_fock_symm_spherical(
+                    shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+            return HartreeFock::ObaraSaika::_compute_2e_fock_symm_spherical(
+                shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        }
+        if (engine == HartreeFock::IntegralMethod::RysQuadrature)
+            return HartreeFock::RysQuad::_compute_2e_fock_symm(
+                shell_pairs, calc._shells, P, nbasis, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
+            return HartreeFock::HeadGordonPople::_compute_2e_fock_symm(
+                shell_pairs, calc._shells, P, nbasis, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        return HartreeFock::ObaraSaika::_compute_2e_fock_symm(
+            shell_pairs, calc._shells, P, nbasis, calc._group_operations,
+            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+    }
+
+    std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+    full_symmetry_fock_uhf(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const HartreeFock::Calculator &calc,
+        const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb,
+        std::size_t nbasis, double tol_eri)
+    {
+        const auto engine = calc._integral._engine;
+        if (calc._shells._spherical)
+        {
+            const std::size_t nbasis_cart = calc._shells.nbasis();
+            const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
+            if (engine == HartreeFock::IntegralMethod::RysQuadrature)
+                return HartreeFock::RysQuad::_compute_2e_fock_uhf_symm_spherical(
+                    shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+            if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
+                return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_symm_spherical(
+                    shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+            return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_symm_spherical(
+                shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        }
+        if (engine == HartreeFock::IntegralMethod::RysQuadrature)
+            return HartreeFock::RysQuad::_compute_2e_fock_uhf_symm(
+                shell_pairs, calc._shells, Pa, Pb, nbasis, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
+            return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_symm(
+                shell_pairs, calc._shells, Pa, Pb, nbasis, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_symm(
+            shell_pairs, calc._shells, Pa, Pb, nbasis, calc._group_operations,
+            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+    }
+
+    // ── C1: persisted-skeleton full-symmetry Fock (docs/FULL_SYMMETRY_PERF_SCOPE.md) ─
+    // The skeleton ERI is density-independent, so it is built ONCE before the SCF loop
+    // (full_symmetry_build_skeleton) and contracted each iteration against the current
+    // density (full_symmetry_contract_{rhf,uhf}). This is bit-identical to calling
+    // full_symmetry_fock_{rhf,uhf} every iteration (proven by planck-symm-fock-
+    // equivalence) — only WHEN the skeleton is built changes. The skeleton is always
+    // Cartesian-sized; in spherical mode the contraction does the cart→sph transform.
+
+    // Returns the per-quartet count the skeleton will occupy: nbasis_cart⁴ doubles.
+    std::size_t full_symmetry_skeleton_doubles(const HartreeFock::Calculator &calc)
+    {
+        const std::size_t nbc = calc._shells.nbasis(); // Cartesian AO count
+        return nbc * nbc * nbc * nbc;
+    }
+
+    // Build the orbit-weighted Cartesian skeleton once (engine per _integral._engine).
+    std::expected<std::vector<double>, std::string> full_symmetry_build_skeleton(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const HartreeFock::Calculator &calc, double tol_eri)
+    {
+        const auto engine = calc._integral._engine;
+        const std::size_t nbasis_cart = calc._shells.nbasis();
+        if (engine == HartreeFock::IntegralMethod::RysQuadrature)
+            return HartreeFock::RysQuad::_build_skeleton_eri_symm(
+                shell_pairs, calc._shells, nbasis_cart, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
+            return HartreeFock::HeadGordonPople::_build_skeleton_eri_symm(
+                shell_pairs, calc._shells, nbasis_cart, calc._group_operations,
+                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        return HartreeFock::ObaraSaika::_build_skeleton_eri_symm(
+            shell_pairs, calc._shells, nbasis_cart, calc._group_operations,
+            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+    }
+
+    // Contract a persisted skeleton with the current RHF density (Cartesian or
+    // spherical mode), matching full_symmetry_fock_rhf's dispatch.
+    std::expected<Eigen::MatrixXd, std::string> full_symmetry_contract_rhf(
+        const std::vector<double> &skeleton, const HartreeFock::Calculator &calc,
+        const Eigen::MatrixXd &P, std::size_t nbasis)
+    {
+        const auto &ops = calc._group_operations;
+        const bool use_sym = ops.valid && ops.operations.size() > 1;
+        if (calc._shells._spherical)
+        {
+            const std::size_t nbasis_cart = calc._shells.nbasis();
+            return HartreeFock::Symmetry::contract_symm_fock_rhf_spherical(
+                skeleton, nbasis_cart, calc._shells._cart_to_sph, P, ops, use_sym);
+        }
+        return HartreeFock::Symmetry::contract_symm_fock_rhf(skeleton, nbasis, P, ops, use_sym);
+    }
+
+    std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+    full_symmetry_contract_uhf(
+        const std::vector<double> &skeleton, const HartreeFock::Calculator &calc,
+        const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, std::size_t nbasis)
+    {
+        const auto &ops = calc._group_operations;
+        const bool use_sym = ops.valid && ops.operations.size() > 1;
+        if (calc._shells._spherical)
+        {
+            const std::size_t nbasis_cart = calc._shells.nbasis();
+            return HartreeFock::Symmetry::contract_symm_fock_uhf_spherical(
+                skeleton, nbasis_cart, calc._shells._cart_to_sph, Pa, Pb, ops, use_sym);
+        }
+        // Cartesian contract returns a bare pair (no failure mode); wrap as expected.
+        return HartreeFock::Symmetry::contract_symm_fock_uhf(skeleton, nbasis, Pa, Pb, ops, use_sym);
+    }
+
+    // Verify a density is symmetry-adapted — the contract the skeleton+symmetrization
+    // Fock requires. The density is a CONTRAVARIANT object in the (non-orthonormal)
+    // AO basis, so the correct invariance is O_R P O_Rᵀ == P, NOT O_Rᵀ P O_R == P
+    // (the covariant/operator law symmetrize_matrix applies). The two coincide only
+    // for orthogonal O_R (s,p shells); for Cartesian d (and higher) under a non-
+    // monomial operation (C₃, S₄, …) O_R is not orthogonal and the laws differ —
+    // checking the covariant law there falsely rejects a perfectly symmetric SCF
+    // density. Returns max deviation max_R ‖O_R P O_Rᵀ − P‖.
+    //
+    // The SAO basis (built in build_sao_basis with the correct AO representation —
+    // metric-corrected in spherical mode) yields a density satisfying this contract
+    // for the molecules whose ground state is fully symmetric. Used as a cheap loud
+    // iteration-1 check so any violation fails visibly instead of silently corrupting
+    // the energy.
+    double density_symmetry_deviation(const Eigen::MatrixXd &P,
+                                      const HartreeFock::Symmetry::GroupOperations &ops)
+    {
+        if (!ops.valid || ops.operations.empty())
+            return std::numeric_limits<double>::infinity();
+        double dev = 0.0;
+        for (const auto &op : ops.operations)
+        {
+            if (op.matrix.rows() != P.rows() || op.matrix.cols() != P.cols())
+                return std::numeric_limits<double>::infinity();
+            dev = std::max(dev,
+                           (op.matrix * P * op.matrix.transpose() - P).cwiseAbs().maxCoeff());
+        }
+        return dev;
+    }
+
+    Eigen::MatrixXd make_level_shift_matrix(
+        const Eigen::MatrixXd &S,
+        const Eigen::MatrixXd &density,
+        double level_shift)
+    {
+        // Match PySCF's AO-metric level shift: raise the current virtual space
+        // through S - S D S instead of building a projector from the previous
+        // orthonormal orbitals. That keeps SAO and full-AO paths on the same
+        // SCF surface and avoids branch-dependent basins of attraction.
+        return level_shift * (S - S * density * S);
+    }
+
+} // namespace
 
 // ─── Orthogonalization ────────────────────────────────────────────────────────
 
@@ -172,15 +397,25 @@ void HartreeFock::SCF::store_unrestricted_iteration(
 
 // ─── SCF iteration ───────────────────────────────────────────────────────────
 
-std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculator &calculator, const std::vector<HartreeFock::ShellPair> &shell_pairs)
+std::expected<void, std::string> HartreeFock::SCF::run_rhf(
+    HartreeFock::Calculator &calculator,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const HartreeFock::Solvation::PCMState *pcm)
 {
     const Eigen::MatrixXd &S = calculator._overlap;
     const Eigen::MatrixXd &H = calculator._hcore;
-    const std::size_t nbasis = calculator._shells.nbasis();
+    // Working AO dimension: spherical (2L+1 per shell) in spherical mode, else
+    // Cartesian. S, H, and (below) the ERI tensor are all in this basis. The integral
+    // engine still builds the ERI in the Cartesian basis (nbasis_cart) before it is
+    // transformed. In Cartesian mode the two are equal.
+    const std::size_t nbasis = calculator.working_nbasis();
+    const std::size_t nbasis_cart = calculator._shells.nbasis();
 
-    // Number of occupied orbitals (closed shell singlet assumed)
-    const int n_electrons = static_cast<int>(
-        (calculator._molecule.atomic_numbers.cast<int>().sum()) - calculator._molecule.charge);
+    // Number of occupied orbitals (closed shell singlet assumed).
+    // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise), which
+    // carry basis functions but no electrons.
+    const int n_electrons =
+        calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
 
     if (n_electrons % 2 != 0)
         return std::unexpected("RHF requires an even number of electrons (closed shell)");
@@ -213,7 +448,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     }
     else if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
     {
-        P = HartreeFock::SCF::compute_sad_guess_rhf(calculator);
+        auto sad_res = HartreeFock::SCF::compute_sad_guess_rhf(calculator);
+        if (!sad_res)
+            return std::unexpected("RHF SAD guess failed: " + sad_res.error());
+        P = std::move(*sad_res);
     }
     else if (sao_active)
     {
@@ -249,20 +487,56 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
                                      std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
-        eri = _compute_2e(shell_pairs, nbasis, calculator._integral._engine,
+        // The integral engine works in the Cartesian basis (nbasis_cart). In spherical
+        // mode the tensor is then transformed with the same (S-normalized) C applied to
+        // S/H, so every quantity SCF sees is consistently spherical. In Cartesian mode
+        // nbasis_cart == nbasis and no transform is applied.
+        eri = _compute_2e(shell_pairs, nbasis_cart, calculator._integral._engine,
+                          HartreeFock::ERIKernel::Coulomb, 0.0,
                           calculator._integral._tol_eri,
                           calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+
+        if (calculator._shells._spherical)
+        {
+            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+                eri, calculator._shells._cart_to_sph, nbasis_cart);
+            if (!eri_sph)
+                return std::unexpected(eri_sph.error());
+            eri = std::move(*eri_sph);
+        }
+
         calculator._eri = eri; // persist for post-HF use
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
         HartreeFock::Logger::blank();
+    }
+
+    const double tol_eri = calculator._integral._tol_eri;
+
+    // ── C1: build the full-symmetry skeleton ONCE (docs/FULL_SYMMETRY_PERF_SCOPE.md) ─
+    // When the direct full-symmetry path is active, the density-independent skeleton
+    // can be built before the loop and contracted each iteration. Memory gate: the
+    // skeleton is nbasis_cart⁴ doubles, so persist only when the Cartesian basis size
+    // is within the same cap the conventional path uses to decide an nb⁴ tensor fits
+    // (`_threshold`). If not persisted, _symm_skeleton_eri stays empty and the loop
+    // falls back to the per-iteration full_symmetry_fock_rhf build (unchanged path).
+    calculator._symm_skeleton_eri.clear();
+    if (!use_conventional && calculator._use_full_symmetry && sao_active &&
+        calculator._shells.nbasis() <= static_cast<std::size_t>(calculator._scf._threshold))
+    {
+        auto skel = full_symmetry_build_skeleton(shell_pairs, calculator, tol_eri);
+        if (!skel)
+            return std::unexpected(skel.error());
+        calculator._symm_skeleton_eri = std::move(*skel);
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "Full Symmetry :",
+            std::format("skeleton ERI persisted across SCF iterations ({:.1f} MB)",
+                        full_symmetry_skeleton_doubles(calculator) * 8.0 / 1e6));
     }
 
     // ── DIIS state ────────────────────────────────────────────────────────────
     HartreeFock::DIISState diis;
     diis.max_vecs = calculator._scf._DIIS_dim;
     const bool use_diis = calculator._scf._use_DIIS;
-
-    const double tol_eri = calculator._integral._tol_eri;
     double E_prev = 0.0;
 
     HartreeFock::Logger::scf_header();
@@ -272,17 +546,79 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
         const auto iter_start = std::chrono::steady_clock::now();
 
         // ── Build two-electron contribution G = J - 0.5*K ────────────────────
-        Eigen::MatrixXd G = use_conventional
-                                ? HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis)
-                                : _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine, tol_eri,
-                                                   calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        // Conventional: contract the (spherical, in spherical mode) ERI tensor.
+        // Direct: the per-quartet builder works in Cartesian; in spherical mode the
+        // density is back-projected and the result forward-transformed (see
+        // spherical_direct_fock). In Cartesian mode the builder is called directly.
+        Eigen::MatrixXd G;
+        if (use_conventional)
+        {
+            G = HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis);
+        }
+        else if (calculator._use_full_symmetry && sao_active)
+        {
+            // Full point-group ERI reduction (supersedes the D2h sign-flip path:
+            // full group ⊇ D2h, so the D2h ops are NOT also applied). Requires a
+            // symmetry-adapted density (contravariant: O P O^T = P); the SAO basis
+            // (built with the correct AO representation, Cartesian or spherical)
+            // produces one. Works in BOTH Cartesian and spherical mode —
+            // full_symmetry_fock_rhf dispatches to the spherical pipeline (skeleton →
+            // cart→sph transform → contract → spherical symmetrize) when
+            // _shells._spherical (Step 2). The iteration-1 assertion fails loudly if
+            // the contract is ever violated rather than corrupting the energy.
+            if (iter == 1)
+            {
+                const double dev = density_symmetry_deviation(P, calculator._group_operations);
+                if (dev > 1e-8)
+                    return std::unexpected(std::format(
+                        "Full-symmetry SCF: initial density is not symmetry-adapted "
+                        "(max |O P O^T - P| = {:.3e}); SAO blocking should guarantee this",
+                        dev));
+            }
+            // C1: contract the persisted skeleton if built; else rebuild per-iteration.
+            auto G_res = calculator._symm_skeleton_eri.empty()
+                             ? full_symmetry_fock_rhf(shell_pairs, calculator, P, nbasis, tol_eri)
+                             : full_symmetry_contract_rhf(calculator._symm_skeleton_eri, calculator, P, nbasis);
+            if (!G_res)
+                return std::unexpected(G_res.error());
+            G = std::move(*G_res);
+        }
+        else if (calculator._shells._spherical)
+        {
+            G = spherical_direct_fock(
+                calculator._shells._cart_to_sph, P,
+                [&](const Eigen::MatrixXd &P_cart) {
+                    return _compute_2e_fock(shell_pairs, P_cart, nbasis_cart,
+                                            calculator._integral._engine,
+                                            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                });
+        }
+        else
+        {
+            G = _compute_2e_fock(shell_pairs, P, nbasis, calculator._integral._engine,
+                                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                 calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        }
+
+        Eigen::MatrixXd V_pcm = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        double pcm_energy = 0.0;
+        if (pcm != nullptr && pcm->enabled())
+        {
+            auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(calculator, *pcm, P);
+            if (!pcm_result)
+                return std::unexpected("PCM build failed inside RHF iteration: " + pcm_result.error());
+            V_pcm = std::move(pcm_result->reaction_potential);
+            pcm_energy = pcm_result->solvation_energy;
+        }
 
         // ── Fock matrix ───────────────────────────────────────────────────────
-        const Eigen::MatrixXd F = H + G;
+        const Eigen::MatrixXd F_gas = H + G;
+        const Eigen::MatrixXd F = F_gas + V_pcm;
 
-        // ── Electronic energy  E = 0.5 * tr(P * (H + F)) ────────────────────
-        // Always computed from the raw (non-extrapolated) Fock matrix.
-        const double E_elec = 0.5 * (P.array() * (H + F).array()).sum();
+        // ── Electronic energy  E = E_gas + G_pcm ────────────────────────────
+        const double E_gas = 0.5 * (P.array() * (H + F_gas).array()).sum();
+        const double E_elec = E_gas + pcm_energy;
         const double E_total = E_elec + calculator._nuclear_repulsion;
 
         // ── DIIS: compute Pulay error and push to subspace ────────────────────
@@ -371,12 +707,12 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
 
         const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
 
-        // ── New density P_new ─────────────────────────────────────────────────
-        const Eigen::MatrixXd P_new = 2.0 * C_occ * C_occ.transpose();
+        // ── Next density ──────────────────────────────────────────────────────
+        const Eigen::MatrixXd density_next = 2.0 * C_occ * C_occ.transpose();
 
         // ── Convergence checks ────────────────────────────────────────────────
         const IterationMetrics metrics =
-            restricted_iteration_metrics(P, P_new, E_prev, E_total);
+            restricted_iteration_metrics(P, density_next, E_prev, E_total);
 
         const double iter_time = std::chrono::duration<double>(
                                      std::chrono::steady_clock::now() - iter_start)
@@ -391,7 +727,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(HartreeFock::Calculat
             0.0,
             iter_time);
 
-        P = P_new;
+        P = density_next;
         E_prev = E_total;
 
         store_restricted_iteration(
@@ -448,14 +784,19 @@ static void _log_spin_contamination(
 
 std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     HartreeFock::Calculator &calculator,
-    const std::vector<HartreeFock::ShellPair> &shell_pairs)
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const HartreeFock::Solvation::PCMState *pcm)
 {
     const Eigen::MatrixXd &S = calculator._overlap;
     const Eigen::MatrixXd &H = calculator._hcore;
-    const std::size_t nbasis = calculator._shells.nbasis();
+    // Working AO dimension (spherical in spherical mode, else Cartesian); the ERI is
+    // built in the Cartesian basis (nbasis_cart) and transformed. See run_rhf.
+    const std::size_t nbasis = calculator.working_nbasis();
+    const std::size_t nbasis_cart = calculator._shells.nbasis();
 
-    const int n_electrons = static_cast<int>(
-        calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
+    // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise).
+    const int n_electrons =
+        calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
 
     const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
 
@@ -475,8 +816,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
 
     // ── SAO blocking setup ────────────────────────────────────────────────────
     // Same U used for both alpha and beta (basis and geometry are spin-independent).
-    // When SAO is active, Ca_orth_prev/Cb_orth_prev are never filled, so
-    // shift_active stays false throughout — level shift is incompatible with SAO.
     const bool sao_active_uhf = calculator._use_sao_blocking &&
                                 (calculator._sao_transform.rows() > 0);
     const Eigen::MatrixXd &U_uhf = calculator._sao_transform; // ref, no copy
@@ -496,17 +835,28 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
          calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
 
-    if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
-        return std::unexpected("SAD guess is currently implemented only for RHF");
+    Eigen::MatrixXd Pa, Pb;
+    if (use_chk_uhf)
+    {
+        Pa = calculator._info._scf.alpha.density;
+        Pb = calculator._info._scf.beta.density;
+    }
+    else if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
+    {
+        auto sad_res = HartreeFock::SCF::compute_sad_guess_open_shell(
+            calculator, n_alpha, n_beta);
+        if (!sad_res)
+            return std::unexpected("UHF SAD guess failed: " + sad_res.error());
+        Pa = std::move(sad_res->first);
+        Pb = std::move(sad_res->second);
+    }
+    else
+    {
+        Pa = make_density_spin(n_alpha);
+        Pb = make_density_spin(n_beta);
+    }
 
-    Eigen::MatrixXd Pa = use_chk_uhf
-                             ? calculator._info._scf.alpha.density
-                             : make_density_spin(n_alpha);
-    Eigen::MatrixXd Pb = use_chk_uhf
-                             ? calculator._info._scf.beta.density
-                             : make_density_spin(n_beta);
-
-    const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
+    const unsigned int max_iter = std::max(calculator._scf.get_max_cycles(nbasis), 75u);
     const double level_shift = calculator._scf._level_shift;
     const double restart_factor = calculator._scf._diis_restart_factor;
 
@@ -521,27 +871,57 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
                                      std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
-        eri = _compute_2e(shell_pairs, nbasis, calculator._integral._engine,
+        // The integral engine works in the Cartesian basis (nbasis_cart). In spherical
+        // mode the tensor is then transformed with the same (S-normalized) C applied to
+        // S/H, so every quantity SCF sees is consistently spherical. In Cartesian mode
+        // nbasis_cart == nbasis and no transform is applied.
+        eri = _compute_2e(shell_pairs, nbasis_cart, calculator._integral._engine,
+                          HartreeFock::ERIKernel::Coulomb, 0.0,
                           calculator._integral._tol_eri,
                           calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+
+        if (calculator._shells._spherical)
+        {
+            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+                eri, calculator._shells._cart_to_sph, nbasis_cart);
+            if (!eri_sph)
+                return std::unexpected(eri_sph.error());
+            eri = std::move(*eri_sph);
+        }
+
         calculator._eri = eri; // persist for post-HF use
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
         HartreeFock::Logger::blank();
     }
 
-    // ── DIIS state per spin ───────────────────────────────────────────────────
-    HartreeFock::DIISState diis_a, diis_b;
-    diis_a.max_vecs = diis_b.max_vecs = calculator._scf._DIIS_dim;
+    // ── Combined-spin DIIS ────────────────────────────────────────────────────
+    // Alpha and beta Fock are coupled through the shared Coulomb term, so they are
+    // extrapolated together with a single coefficient vector (see UHFDIISState).
+    HartreeFock::UHFDIISState diis;
+    diis.max_vecs = calculator._scf._DIIS_dim;
     const bool use_diis = calculator._scf._use_DIIS;
 
     const double tol_eri = calculator._integral._tol_eri;
     double E_prev = 0.0;
     double diis_err_prev = std::numeric_limits<double>::max();
 
-    // Level-shift: save orthonormal MO coefficients from the previous iteration
-    // to build the virtual projector Q = I - C_occ * C_occ^T  (in ortho basis).
-    Eigen::MatrixXd Ca_orth_prev, Cb_orth_prev;
-    const Eigen::MatrixXd I_nb = Eigen::MatrixXd::Identity(nbasis, nbasis);
+    // ── C1: build the full-symmetry skeleton ONCE (docs/FULL_SYMMETRY_PERF_SCOPE.md) ─
+    // Mirror of the RHF path: density-independent skeleton built before the loop and
+    // contracted each iteration. Same memory gate (nbasis_cart ≤ _threshold). Empty
+    // ⇒ fall back to per-iteration full_symmetry_fock_uhf.
+    calculator._symm_skeleton_eri.clear();
+    if (!use_conventional && calculator._use_full_symmetry && sao_active_uhf &&
+        calculator._shells.nbasis() <= static_cast<std::size_t>(calculator._scf._threshold))
+    {
+        auto skel = full_symmetry_build_skeleton(shell_pairs, calculator, tol_eri);
+        if (!skel)
+            return std::unexpected(skel.error());
+        calculator._symm_skeleton_eri = std::move(*skel);
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "Full Symmetry :",
+            std::format("skeleton ERI persisted across SCF iterations ({:.1f} MB)",
+                        full_symmetry_skeleton_doubles(calculator) * 8.0 / 1e6));
+    }
 
     HartreeFock::Logger::scf_header();
 
@@ -550,180 +930,214 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         const auto iter_start = std::chrono::steady_clock::now();
 
         // ── Two-electron Fock contributions ───────────────────────────────────
-        auto [Ga, Gb] = use_conventional
-                            ? HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis)
-                            : _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine, tol_eri,
-                                                   calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        // Conventional contracts the (spherical) ERI; direct builds per-quartet in
+        // Cartesian, with spherical back-projection/forward-transform per spin channel.
+        Eigen::MatrixXd Ga;
+        Eigen::MatrixXd Gb;
+        if (use_conventional)
+        {
+            std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
+        }
+        else if (calculator._use_full_symmetry && sao_active_uhf)
+        {
+            // Full point-group ERI reduction (supersedes the D2h sign-flip path).
+            // Both spin densities must be symmetry-adapted (contravariant); SAO
+            // blocking guarantees it, verified once on the total density. Dispatches
+            // to the spherical pipeline when _shells._spherical (Step 2).
+            if (iter == 1)
+            {
+                const double dev = density_symmetry_deviation(Pa + Pb, calculator._group_operations);
+                if (dev > 1e-8)
+                    return std::unexpected(std::format(
+                        "Full-symmetry UHF: initial density is not symmetry-adapted "
+                        "(max |O P O^T - P| = {:.3e}); SAO blocking should guarantee this",
+                        dev));
+            }
+            // C1: contract the persisted skeleton if built; else rebuild per-iteration.
+            auto G_res = calculator._symm_skeleton_eri.empty()
+                             ? full_symmetry_fock_uhf(shell_pairs, calculator, Pa, Pb, nbasis, tol_eri)
+                             : full_symmetry_contract_uhf(calculator._symm_skeleton_eri, calculator, Pa, Pb, nbasis);
+            if (!G_res)
+                return std::unexpected(G_res.error());
+            std::tie(Ga, Gb) = std::move(*G_res);
+        }
+        else if (calculator._shells._spherical)
+        {
+            const Eigen::MatrixXd &C = calculator._shells._cart_to_sph;
+            const Eigen::MatrixXd Pa_cart = C.transpose() * Pa * C;
+            const Eigen::MatrixXd Pb_cart = C.transpose() * Pb * C;
+            auto [Ga_cart, Gb_cart] =
+                _compute_2e_fock_uhf(shell_pairs, Pa_cart, Pb_cart, nbasis_cart,
+                                     calculator._integral._engine,
+                                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+            Ga = C * Ga_cart * C.transpose();
+            Gb = C * Gb_cart * C.transpose();
+        }
+        else
+        {
+            std::tie(Ga, Gb) =
+                _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine,
+                                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        }
 
-        const Eigen::MatrixXd Fa = H + Ga;
-        const Eigen::MatrixXd Fb = H + Gb;
+        const Eigen::MatrixXd P_total = Pa + Pb;
+        Eigen::MatrixXd V_pcm = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        double pcm_energy = 0.0;
+        if (pcm != nullptr && pcm->enabled())
+        {
+            auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(calculator, *pcm, P_total);
+            if (!pcm_result)
+                return std::unexpected("PCM build failed inside UHF iteration: " + pcm_result.error());
+            V_pcm = std::move(pcm_result->reaction_potential);
+            pcm_energy = pcm_result->solvation_energy;
+        }
 
-        // ── Electronic energy — always from the bare (unshifted) Fock ───────────
-        const double E_elec = 0.5 * ((Pa.array() * (H + Fa).array()).sum() + (Pb.array() * (H + Fb).array()).sum());
+        const Eigen::MatrixXd Fa_gas = H + Ga;
+        const Eigen::MatrixXd Fb_gas = H + Gb;
+        const Eigen::MatrixXd Fa = Fa_gas + V_pcm;
+        const Eigen::MatrixXd Fb = Fb_gas + V_pcm;
+
+        // ── Electronic energy — always from the bare gas-phase Fock plus PCM ──
+        const double E_gas = 0.5 * ((Pa.array() * (H + Fa_gas).array()).sum() + (Pb.array() * (H + Fb_gas).array()).sum());
+        const double E_elec = E_gas + pcm_energy;
         const double E_total = E_elec + calculator._nuclear_repulsion;
 
         // ── Level shift: build Fa_s/Fb_s before DIIS ─────────────────────────
-        // The shift  F_s = F + λ·X·(I − P_occ^orth)·X^T  raises virtual orbital
-        // energies, widening the gap and preventing occupied–virtual swapping.
-        // DIIS stores and extrapolates the shifted Fock so the subspace is
-        // self-consistent; energy is always reported from the bare Fock.
-        const bool shift_active = (level_shift > 0.0 && Ca_orth_prev.cols() > 0);
+        // Use the current AO densities in the overlap metric, matching PySCF:
+        // F_s = F + λ (S - S D S). This raises the current virtual space
+        // without relying on branch-specific cached orbitals.
         Eigen::MatrixXd Fa_s = Fa, Fb_s = Fb;
-        if (shift_active)
+        if (level_shift > 0.0)
         {
-            const Eigen::MatrixXd shift_a =
-                level_shift * X * (I_nb - Ca_orth_prev.leftCols(n_alpha) * Ca_orth_prev.leftCols(n_alpha).transpose()) * X.transpose();
-            const Eigen::MatrixXd shift_b =
-                level_shift * X * (I_nb - Cb_orth_prev.leftCols(n_beta) * Cb_orth_prev.leftCols(n_beta).transpose()) * X.transpose();
-            Fa_s += shift_a;
-            Fb_s += shift_b;
+            Fa_s += make_level_shift_matrix(S, Pa, level_shift);
+            Fb_s += make_level_shift_matrix(S, Pb, level_shift);
         }
 
-        // ── DIIS: Pulay errors from the shifted Fock ─────────────────────────
+        // ── DIIS: combined-spin Pulay errors from the shifted Fock ───────────
         double diis_err = 0.0;
+        Eigen::MatrixXd Fa_diag = Fa_s, Fb_diag = Fb_s;
         if (use_diis)
         {
             const Eigen::MatrixXd ea = X.transpose() * (Fa_s * Pa * S - S * Pa * Fa_s) * X;
             const Eigen::MatrixXd eb = X.transpose() * (Fb_s * Pb * S - S * Pb * Fb_s) * X;
 
-            // RMS norm — same normalization as DIISState::error_norm()
-            const auto rms_norm = [](const Eigen::MatrixXd &m)
-            {
-                return std::sqrt(m.squaredNorm() / static_cast<double>(m.size()));
-            };
-            const double cur_err = std::max(rms_norm(ea), rms_norm(eb));
+            // Combined RMS error over both spins (matches UHFDIISState::error_norm).
+            const double cur_err = std::sqrt(
+                (ea.squaredNorm() + eb.squaredNorm()) /
+                static_cast<double>(ea.size() + eb.size()));
 
             // ── DIIS restart ──────────────────────────────────────────────────
             if (restart_factor > 0.0 && iter > 2 && cur_err > diis_err_prev * restart_factor)
             {
-                diis_a.clear();
-                diis_b.clear();
+                diis.clear();
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,
                                              "DIIS :", std::format("Subspace restarted at iter {} (error grew {:.1f}×)", iter, cur_err / diis_err_prev));
             }
 
-            diis_a.push(Fa_s, ea);
-            diis_b.push(Fb_s, eb);
-            diis_err = std::max(diis_a.error_norm(), diis_b.error_norm());
+            diis.push(Fa_s, Fb_s, ea, eb);
+            diis_err = diis.error_norm();
             diis_err_prev = cur_err;
-        }
 
-        // Extrapolated (shifted) Fock for diagonalization
-        const Eigen::MatrixXd Fa_diag = (use_diis && diis_a.ready()) ? diis_a.extrapolate() : Fa_s;
-        const Eigen::MatrixXd Fb_diag = (use_diis && diis_b.ready()) ? diis_b.extrapolate() : Fb_s;
+            // Extrapolate both spins with one shared coefficient vector.
+            if (diis.ready())
+                std::tie(Fa_diag, Fb_diag) = diis.extrapolate();
+        }
 
         // ── Diagonalize alpha and beta ────────────────────────────────────────
         Eigen::MatrixXd Ca(nbasis, nbasis), Cb(nbasis, nbasis);
         Eigen::VectorXd epsa(nbasis), epsb(nbasis);
-
-        if (!sao_active_uhf)
+        auto diagonalize_uhf_spin = [&](const Eigen::MatrixXd &F_spin,
+                                        std::vector<std::string> *mo_sym_out,
+                                        const std::string &spin_tag)
+            -> std::expected<std::pair<Eigen::MatrixXd, Eigen::VectorXd>, std::string>
         {
-            // ── Full AO diagonalization (original path) ───────────────────────
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sa(X.transpose() * Fa_diag * X);
-            if (sa.info() != Eigen::Success)
-                return std::unexpected(std::format("Alpha Fock diagonalization failed at iter {}", iter));
-            Ca = X * sa.eigenvectors();
-            epsa = sa.eigenvalues();
-            if (shift_active)
-                epsa.tail(nbasis - n_alpha).array() -= level_shift;
-
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sb(X.transpose() * Fb_diag * X);
-            if (sb.info() != Eigen::Success)
-                return std::unexpected(std::format("Beta Fock diagonalization failed at iter {}", iter));
-            Cb = X * sb.eigenvectors();
-            epsb = sb.eigenvalues();
-            if (shift_active)
-                epsb.tail(nbasis - n_beta).array() -= level_shift;
-
-            // Save orthonormal eigenvectors for next iteration's virtual projector
-            Ca_orth_prev = sa.eigenvectors();
-            Cb_orth_prev = sb.eigenvectors();
-        }
-        else
-        {
-            // ── SAO block-diagonal diagonalization ────────────────────────────
-            // Helper lambda: block-diagonalize one spin's Fock in SAO basis.
-            // Returns {C_AO [nb×nb], eps [nb]}.  Also fills mo_sym_out with
-            // sorted irrep labels.
-            auto sao_diag_spin = [&](const Eigen::MatrixXd &F_diag_spin,
-                                     std::vector<std::string> &mo_sym_out,
-                                     const std::string &spin_tag)
-                -> std::expected<std::pair<Eigen::MatrixXd, Eigen::VectorXd>, std::string>
+            if (!sao_active_uhf)
             {
-                const Eigen::MatrixXd F_sao = U_uhf.transpose() * F_diag_spin * U_uhf;
-                const int n_blocks = static_cast<int>(calculator._sao_block_sizes.size());
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(X.transpose() * F_spin * X);
+                if (solver.info() != Eigen::Success)
+                    return std::unexpected(std::format(
+                        "{} Fock diagonalization failed at iter {}", spin_tag, iter));
+                return std::make_pair(X * solver.eigenvectors(), solver.eigenvalues());
+            }
 
-                Eigen::VectorXd eps_sao(nbasis);
-                Eigen::MatrixXd C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                std::vector<int> mo_irrep_idx(nbasis);
+            const Eigen::MatrixXd F_sao = U_uhf.transpose() * F_spin * U_uhf;
+            const int n_blocks = static_cast<int>(calculator._sao_block_sizes.size());
 
-                for (int b = 0; b < n_blocks; ++b)
-                {
-                    const int off = calculator._sao_block_offsets[b];
-                    const int ni = calculator._sao_block_sizes[b];
-                    if (ni == 0)
-                        continue;
+            Eigen::VectorXd eps_sao(nbasis);
+            Eigen::MatrixXd C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            std::vector<int> mo_irrep_idx(nbasis);
 
-                    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> s(
-                        F_sao.block(off, off, ni, ni));
-                    if (s.info() != Eigen::Success)
-                        return std::unexpected(std::format(
-                            "{} block Fock diagonalization failed (block {}) at iter {}",
-                            spin_tag, b, iter));
+            for (int b = 0; b < n_blocks; ++b)
+            {
+                const int off = calculator._sao_block_offsets[b];
+                const int ni = calculator._sao_block_sizes[b];
+                if (ni == 0)
+                    continue;
 
-                    eps_sao.segment(off, ni) = s.eigenvalues();
-                    C_sao.block(off, off, ni, ni) = s.eigenvectors();
-                    for (int k = 0; k < ni; ++k)
-                        mo_irrep_idx[off + k] = calculator._sao_irrep_index[off + k];
-                }
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> s(
+                    F_sao.block(off, off, ni, ni));
+                if (s.info() != Eigen::Success)
+                    return std::unexpected(std::format(
+                        "{} block Fock diagonalization failed (block {}) at iter {}",
+                        spin_tag, b, iter));
 
-                // Sort MOs globally by energy
-                std::vector<int> order(nbasis);
-                std::iota(order.begin(), order.end(), 0);
-                std::stable_sort(order.begin(), order.end(),
-                                 [&](int a, int b)
-                                 { return eps_sao[a] < eps_sao[b]; });
+                eps_sao.segment(off, ni) = s.eigenvalues();
+                C_sao.block(off, off, ni, ni) = s.eigenvectors();
+                for (int k = 0; k < ni; ++k)
+                    mo_irrep_idx[off + k] = calculator._sao_irrep_index[off + k];
+            }
 
-                Eigen::VectorXd eps_sorted(nbasis);
-                Eigen::MatrixXd C_sao_sorted(nbasis, nbasis);
-                mo_sym_out.resize(nbasis);
-                for (int k = 0; k < static_cast<int>(nbasis); ++k)
-                {
-                    eps_sorted[k] = eps_sao[order[k]];
-                    C_sao_sorted.col(k) = C_sao.col(order[k]);
-                    mo_sym_out[k] = calculator._sao_irrep_names[mo_irrep_idx[order[k]]];
-                }
+            std::vector<int> order(nbasis);
+            std::iota(order.begin(), order.end(), 0);
+            std::stable_sort(order.begin(), order.end(),
+                             [&](int a, int b)
+                             { return eps_sao[a] < eps_sao[b]; });
 
-                return std::make_pair(U_uhf * C_sao_sorted, eps_sorted);
-            };
+            Eigen::VectorXd eps_sorted(nbasis);
+            Eigen::MatrixXd C_sao_sorted(nbasis, nbasis);
+            std::vector<std::string> local_syms(nbasis);
+            for (int k = 0; k < static_cast<int>(nbasis); ++k)
+            {
+                eps_sorted[k] = eps_sao[order[k]];
+                C_sao_sorted.col(k) = C_sao.col(order[k]);
+                local_syms[k] = calculator._sao_irrep_names[mo_irrep_idx[order[k]]];
+            }
 
-            std::vector<std::string> mo_sym_a, mo_sym_b;
+            if (mo_sym_out != nullptr)
+                *mo_sym_out = std::move(local_syms);
+            return std::make_pair(U_uhf * C_sao_sorted, eps_sorted);
+        };
 
-            auto res_a = sao_diag_spin(Fa_diag, mo_sym_a, "Alpha");
-            if (!res_a)
-                return std::unexpected(res_a.error());
-            Ca = std::move(res_a->first);
-            epsa = std::move(res_a->second);
+        std::vector<std::string> mo_sym_a, mo_sym_b;
+        auto res_a = diagonalize_uhf_spin(Fa_diag, sao_active_uhf ? &mo_sym_a : nullptr, "Alpha");
+        if (!res_a)
+            return std::unexpected(res_a.error());
+        Ca = std::move(res_a->first);
+        epsa = std::move(res_a->second);
 
-            auto res_b = sao_diag_spin(Fb_diag, mo_sym_b, "Beta");
-            if (!res_b)
-                return std::unexpected(res_b.error());
-            Cb = std::move(res_b->first);
-            epsb = std::move(res_b->second);
+        auto res_b = diagonalize_uhf_spin(Fb_diag, sao_active_uhf ? &mo_sym_b : nullptr, "Beta");
+        if (!res_b)
+            return std::unexpected(res_b.error());
+        Cb = std::move(res_b->first);
+        epsb = std::move(res_b->second);
 
-            calculator._info._scf.alpha.mo_symmetry = std::move(mo_sym_a);
-            calculator._info._scf.beta.mo_symmetry = std::move(mo_sym_b);
-            // Ca_orth_prev / Cb_orth_prev intentionally NOT updated →
-            // shift_active stays false (level shift incompatible with SAO blocking).
+        if (sao_active_uhf)
+        {
+            calculator._info._scf.alpha.mo_symmetry = mo_sym_a;
+            calculator._info._scf.beta.mo_symmetry = mo_sym_b;
         }
 
-        // ── New spin densities ────────────────────────────────────────────────
-        const Eigen::MatrixXd Pa_new = Ca.leftCols(n_alpha) * Ca.leftCols(n_alpha).transpose();
-        const Eigen::MatrixXd Pb_new = Cb.leftCols(n_beta) * Cb.leftCols(n_beta).transpose();
+        // ── Next spin densities ───────────────────────────────────────────────
+        const Eigen::MatrixXd density_alpha_next =
+            Ca.leftCols(n_alpha) * Ca.leftCols(n_alpha).transpose();
+        const Eigen::MatrixXd density_beta_next =
+            Cb.leftCols(n_beta) * Cb.leftCols(n_beta).transpose();
 
         // ── Convergence on total density ──────────────────────────────────────
         const IterationMetrics metrics = unrestricted_iteration_metrics(
-            Pa, Pb, Pa_new, Pb_new, E_prev, E_total);
+            Pa, Pb, density_alpha_next, density_beta_next, E_prev, E_total);
 
         const double iter_time = std::chrono::duration<double>(
                                      std::chrono::steady_clock::now() - iter_start)
@@ -738,8 +1152,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             0.0,
             iter_time);
 
-        Pa = Pa_new;
-        Pb = Pb_new;
+        Pa = density_alpha_next;
+        Pb = density_beta_next;
         E_prev = E_total;
 
         store_unrestricted_iteration(
@@ -759,6 +1173,40 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
 
         if (is_converged(calculator._scf, metrics, iter))
         {
+            if (level_shift > 0.0)
+            {
+                // PySCF removes the level shift before returning the converged
+                // orbitals. Post-HF methods need those unshifted canonical MO
+                // energies in their denominators; keeping the shifted spectrum
+                // artificially weakens UMP2 correlation.
+                auto final_a = diagonalize_uhf_spin(Fa, sao_active_uhf ? &mo_sym_a : nullptr, "Alpha");
+                if (!final_a)
+                    return std::unexpected(final_a.error());
+                Ca = std::move(final_a->first);
+                epsa = std::move(final_a->second);
+
+                auto final_b = diagonalize_uhf_spin(Fb, sao_active_uhf ? &mo_sym_b : nullptr, "Beta");
+                if (!final_b)
+                    return std::unexpected(final_b.error());
+                Cb = std::move(final_b->first);
+                epsb = std::move(final_b->second);
+
+                Pa = Ca.leftCols(n_alpha) * Ca.leftCols(n_alpha).transpose();
+                Pb = Cb.leftCols(n_beta) * Cb.leftCols(n_beta).transpose();
+
+                if (sao_active_uhf)
+                {
+                    calculator._info._scf.alpha.mo_symmetry = std::move(mo_sym_a);
+                    calculator._info._scf.beta.mo_symmetry = std::move(mo_sym_b);
+                }
+            }
+
+            calculator._info._scf.alpha.density = Pa;
+            calculator._info._scf.beta.density = Pb;
+            calculator._info._scf.alpha.mo_coefficients = Ca;
+            calculator._info._scf.beta.mo_coefficients = Cb;
+            calculator._info._scf.alpha.mo_energies = epsa;
+            calculator._info._scf.beta.mo_energies = epsb;
             calculator._info._is_converged = true;
 
             HartreeFock::Logger::scf_footer();
@@ -776,4 +1224,451 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     }
 
     return std::unexpected(std::format("UHF SCF did not converge in {} iterations", max_iter));
+}
+
+// ─── ROHF helpers ────────────────────────────────────────────────────────────
+
+static Eigen::MatrixXd _rohf_effective_fock(
+    const Eigen::MatrixXd &Fa,
+    const Eigen::MatrixXd &Fb,
+    const Eigen::MatrixXd &Pa,
+    const Eigen::MatrixXd &Pb,
+    const Eigen::MatrixXd &S)
+{
+    const Eigen::Index nbasis = S.rows();
+    const Eigen::MatrixXd Fc = 0.5 * (Fa + Fb);
+    const Eigen::MatrixXd Pc = Pb * S;
+    const Eigen::MatrixXd Po = (Pa - Pb) * S;
+    const Eigen::MatrixXd Pv = Eigen::MatrixXd::Identity(nbasis, nbasis) - Pa * S;
+
+    Eigen::MatrixXd F = 0.5 * Pc.transpose() * Fc * Pc;
+    F += 0.5 * Po.transpose() * Fc * Po;
+    F += 0.5 * Pv.transpose() * Fc * Pv;
+    F += Po.transpose() * Fb * Pc;
+    F += Po.transpose() * Fa * Pv;
+    F += Pv.transpose() * Fc * Pc;
+
+    return F + F.transpose();
+}
+
+static Eigen::VectorXd _mo_energy_diagonal(
+    const Eigen::MatrixXd &C,
+    const Eigen::MatrixXd &F)
+{
+    return (C.transpose() * F * C).diagonal();
+}
+
+static void _reorder_rohf_orbitals(
+    Eigen::MatrixXd &C,
+    Eigen::VectorXd &eps,
+    Eigen::VectorXd &eps_alpha,
+    Eigen::VectorXd &eps_beta,
+    std::vector<std::string> &mo_sym,
+    int n_closed,
+    int n_open)
+{
+    const int nmo = static_cast<int>(eps.size());
+    if (n_open <= 0 || n_closed < 0 || n_closed + n_open > nmo)
+        return;
+
+    std::vector<int> order;
+    order.reserve(static_cast<std::size_t>(nmo));
+    for (int i = 0; i < n_closed; ++i)
+        order.push_back(i);
+
+    std::vector<int> candidates;
+    candidates.reserve(static_cast<std::size_t>(nmo - n_closed));
+    for (int i = n_closed; i < nmo; ++i)
+        candidates.push_back(i);
+
+    std::stable_sort(candidates.begin(), candidates.end(),
+                     [&](int a, int b)
+                     { return eps_alpha[a] < eps_alpha[b]; });
+
+    std::vector<char> selected(static_cast<std::size_t>(nmo), 0);
+    for (int k = 0; k < n_open; ++k)
+    {
+        const int idx = candidates[static_cast<std::size_t>(k)];
+        selected[static_cast<std::size_t>(idx)] = 1;
+        order.push_back(idx);
+    }
+
+    std::vector<int> virtuals;
+    for (int i = n_closed; i < nmo; ++i)
+        if (!selected[static_cast<std::size_t>(i)])
+            virtuals.push_back(i);
+    std::stable_sort(virtuals.begin(), virtuals.end(),
+                     [&](int a, int b)
+                     { return eps[a] < eps[b]; });
+    order.insert(order.end(), virtuals.begin(), virtuals.end());
+
+    Eigen::MatrixXd C_sorted(C.rows(), C.cols());
+    Eigen::VectorXd eps_sorted(nmo), epsa_sorted(nmo), epsb_sorted(nmo);
+    std::vector<std::string> sym_sorted;
+    if (!mo_sym.empty())
+        sym_sorted.resize(static_cast<std::size_t>(nmo));
+
+    for (int k = 0; k < nmo; ++k)
+    {
+        const int src = order[static_cast<std::size_t>(k)];
+        C_sorted.col(k) = C.col(src);
+        eps_sorted[k] = eps[src];
+        epsa_sorted[k] = eps_alpha[src];
+        epsb_sorted[k] = eps_beta[src];
+        if (!mo_sym.empty() && src < static_cast<int>(mo_sym.size()))
+            sym_sorted[static_cast<std::size_t>(k)] = mo_sym[static_cast<std::size_t>(src)];
+    }
+
+    C = std::move(C_sorted);
+    eps = std::move(eps_sorted);
+    eps_alpha = std::move(epsa_sorted);
+    eps_beta = std::move(epsb_sorted);
+    if (!mo_sym.empty())
+        mo_sym = std::move(sym_sorted);
+}
+
+// ─── ROHF SCF ────────────────────────────────────────────────────────────────
+
+std::expected<void, std::string> HartreeFock::SCF::run_rohf(
+    HartreeFock::Calculator &calculator,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const HartreeFock::Solvation::PCMState *pcm)
+{
+    (void)pcm;
+    const Eigen::MatrixXd &S = calculator._overlap;
+    const Eigen::MatrixXd &H = calculator._hcore;
+    // Working AO dimension: spherical (2L+1 per shell) in spherical mode, Cartesian
+    // otherwise. The integral engine still builds in the Cartesian basis (nbasis_cart);
+    // the ERI / direct Fock are transformed into the spherical basis. See run_rhf.
+    const std::size_t nbasis = calculator.working_nbasis();
+    const std::size_t nbasis_cart = calculator._shells.nbasis();
+
+    // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise).
+    const int n_electrons =
+        calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
+    const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+
+    if (n_unpaired < 0 || n_unpaired > n_electrons)
+        return std::unexpected("Invalid multiplicity for given electron count");
+    if ((n_electrons - n_unpaired) % 2 != 0)
+        return std::unexpected("Multiplicity inconsistent with electron count parity");
+
+    const int n_alpha = (n_electrons + n_unpaired) / 2;
+    const int n_beta = (n_electrons - n_unpaired) / 2;
+    const int n_closed = n_beta;
+    const int n_open = n_alpha - n_beta;
+
+    if (n_open < 0)
+        return std::unexpected("ROHF requires n_alpha >= n_beta");
+
+    auto X_result = build_orthogonalizer(S);
+    if (!X_result)
+        return std::unexpected(X_result.error());
+    const Eigen::MatrixXd X = std::move(*X_result);
+
+    const bool sao_active = calculator._use_sao_blocking &&
+                            (calculator._sao_transform.rows() > 0);
+    const Eigen::MatrixXd &U = calculator._sao_transform;
+
+    auto diagonalize_common = [&](const Eigen::MatrixXd &F_diag,
+                                  std::vector<std::string> &mo_sym)
+        -> std::expected<std::pair<Eigen::MatrixXd, Eigen::VectorXd>, std::string>
+    {
+        if (!sao_active)
+        {
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(X.transpose() * F_diag * X);
+            if (solver.info() != Eigen::Success)
+                return std::unexpected("ROHF Fock diagonalization failed");
+            return std::make_pair(X * solver.eigenvectors(), solver.eigenvalues());
+        }
+
+        const Eigen::MatrixXd F_sao = U.transpose() * F_diag * U;
+        const int n_blocks = static_cast<int>(calculator._sao_block_sizes.size());
+
+        Eigen::VectorXd eps_sao(nbasis);
+        Eigen::MatrixXd C_sao = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        std::vector<int> mo_irrep_idx(nbasis);
+
+        for (int b = 0; b < n_blocks; ++b)
+        {
+            const int off = calculator._sao_block_offsets[static_cast<std::size_t>(b)];
+            const int ni = calculator._sao_block_sizes[static_cast<std::size_t>(b)];
+            if (ni == 0)
+                continue;
+
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> sb(
+                F_sao.block(off, off, ni, ni));
+            if (sb.info() != Eigen::Success)
+                return std::unexpected(std::format(
+                    "ROHF block Fock diagonalization failed (block {})", b));
+
+            eps_sao.segment(off, ni) = sb.eigenvalues();
+            C_sao.block(off, off, ni, ni) = sb.eigenvectors();
+            for (int k = 0; k < ni; ++k)
+                mo_irrep_idx[off + k] = calculator._sao_irrep_index[off + k];
+        }
+
+        std::vector<int> order(nbasis);
+        std::iota(order.begin(), order.end(), 0);
+        std::stable_sort(order.begin(), order.end(),
+                         [&](int a, int b)
+                         { return eps_sao[a] < eps_sao[b]; });
+
+        Eigen::VectorXd eps_sorted(nbasis);
+        Eigen::MatrixXd C_sao_sorted(nbasis, nbasis);
+        mo_sym.resize(nbasis);
+        for (int k = 0; k < static_cast<int>(nbasis); ++k)
+        {
+            eps_sorted[k] = eps_sao[order[k]];
+            C_sao_sorted.col(k) = C_sao.col(order[k]);
+            mo_sym[static_cast<std::size_t>(k)] =
+                calculator._sao_irrep_names[mo_irrep_idx[order[k]]];
+        }
+
+        return std::make_pair(U * C_sao_sorted, eps_sorted);
+    };
+
+    const bool use_chk_density =
+        (calculator._scf._guess == HartreeFock::SCFGuess::ReadDensity ||
+         calculator._scf._guess == HartreeFock::SCFGuess::ReadFull);
+
+    Eigen::MatrixXd Pa, Pb;
+    if (use_chk_density)
+    {
+        Pa = calculator._info._scf.alpha.density;
+        Pb = calculator._info._scf.beta.density;
+        if (Pa.rows() != static_cast<Eigen::Index>(nbasis) ||
+            Pb.rows() != static_cast<Eigen::Index>(nbasis))
+            return std::unexpected("ROHF checkpoint density is missing alpha/beta spin channels");
+    }
+    else if (calculator._scf._guess == HartreeFock::SCFGuess::SAD)
+    {
+        auto sad_res = HartreeFock::SCF::compute_sad_guess_open_shell(
+            calculator, n_alpha, n_beta);
+        if (!sad_res)
+            return std::unexpected("ROHF SAD guess failed: " + sad_res.error());
+        Pa = std::move(sad_res->first);
+        Pb = std::move(sad_res->second);
+    }
+    else
+    {
+        std::vector<std::string> initial_sym;
+        auto init = diagonalize_common(H, initial_sym);
+        if (!init)
+            return std::unexpected(init.error());
+        const Eigen::MatrixXd &C0 = init->first;
+        Pa = C0.leftCols(n_alpha) * C0.leftCols(n_alpha).transpose();
+        Pb = C0.leftCols(n_beta) * C0.leftCols(n_beta).transpose();
+    }
+
+    const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
+
+    const bool use_conventional =
+        (calculator._scf._mode == HartreeFock::SCFMode::Conventional ||
+         (calculator._scf._mode == HartreeFock::SCFMode::Auto &&
+          nbasis <= static_cast<std::size_t>(calculator._scf._threshold)));
+
+    std::vector<double> eri;
+    if (use_conventional)
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
+                                     std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
+        // Built in the Cartesian basis (nbasis_cart), then transformed to spherical
+        // with the same S-normalized C used for S/H. Cartesian mode: no transform.
+        eri = _compute_2e(shell_pairs, nbasis_cart, calculator._integral._engine,
+                          HartreeFock::ERIKernel::Coulomb, 0.0,
+                          calculator._integral._tol_eri,
+                          calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        if (calculator._shells._spherical)
+        {
+            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+                eri, calculator._shells._cart_to_sph, nbasis_cart);
+            if (!eri_sph)
+                return std::unexpected(eri_sph.error());
+            eri = std::move(*eri_sph);
+        }
+        calculator._eri = eri;
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :", "ERI tensor ready");
+        HartreeFock::Logger::blank();
+    }
+
+    HartreeFock::DIISState diis;
+    diis.max_vecs = calculator._scf._DIIS_dim;
+    const bool use_diis = calculator._scf._use_DIIS;
+    const double tol_eri = calculator._integral._tol_eri;
+    double E_prev = 0.0;
+
+    // ── C1: build the full-symmetry skeleton ONCE (docs/FULL_SYMMETRY_PERF_SCOPE.md) ─
+    // ROHF's two-electron build is the UHF (Ga, Gb) = f(Pa, Pb) path — all the Roothaan-
+    // specific coupling happens downstream of the Fock build — so it reuses the same
+    // density-independent skeleton: built before the loop, contracted each iteration.
+    // Same memory gate (nbasis_cart ≤ _threshold). Empty ⇒ per-iteration rebuild.
+    calculator._symm_skeleton_eri.clear();
+    if (!use_conventional && calculator._use_full_symmetry && sao_active &&
+        calculator._shells.nbasis() <= static_cast<std::size_t>(calculator._scf._threshold))
+    {
+        auto skel = full_symmetry_build_skeleton(shell_pairs, calculator, tol_eri);
+        if (!skel)
+            return std::unexpected(skel.error());
+        calculator._symm_skeleton_eri = std::move(*skel);
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "Full Symmetry :",
+            std::format("skeleton ERI persisted across SCF iterations ({:.1f} MB)",
+                        full_symmetry_skeleton_doubles(calculator) * 8.0 / 1e6));
+    }
+
+    HartreeFock::Logger::scf_header();
+
+    for (unsigned int iter = 1; iter <= max_iter; ++iter)
+    {
+        const auto iter_start = std::chrono::steady_clock::now();
+
+        // Conventional contracts the (spherical) ERI; direct builds per-quartet in
+        // Cartesian with spherical back-projection/forward-transform per spin channel.
+        Eigen::MatrixXd Ga;
+        Eigen::MatrixXd Gb;
+        if (use_conventional)
+        {
+            std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
+        }
+        else if (calculator._use_full_symmetry && sao_active)
+        {
+            // Full point-group ERI reduction, reusing the UHF (Ga, Gb) machinery —
+            // ROHF differs from UHF only AFTER the Fock build (the Roothaan effective
+            // Fock below). Both spin densities must be symmetry-adapted (contravariant:
+            // O P O^T = P); SAO blocking guarantees it, verified once on the total
+            // density. A partially-occupied degenerate open shell breaks this and is
+            // refused here rather than silently corrupting the energy.
+            if (iter == 1)
+            {
+                const double dev = density_symmetry_deviation(Pa + Pb, calculator._group_operations);
+                if (dev > 1e-8)
+                    return std::unexpected(std::format(
+                        "Full-symmetry ROHF: initial density is not symmetry-adapted "
+                        "(max |O P O^T - P| = {:.3e}); SAO blocking should guarantee this "
+                        "unless a degenerate open shell is partially occupied",
+                        dev));
+            }
+            // C1: contract the persisted skeleton if built; else rebuild per-iteration.
+            auto G_res = calculator._symm_skeleton_eri.empty()
+                             ? full_symmetry_fock_uhf(shell_pairs, calculator, Pa, Pb, nbasis, tol_eri)
+                             : full_symmetry_contract_uhf(calculator._symm_skeleton_eri, calculator, Pa, Pb, nbasis);
+            if (!G_res)
+                return std::unexpected(G_res.error());
+            std::tie(Ga, Gb) = std::move(*G_res);
+        }
+        else if (calculator._shells._spherical)
+        {
+            const Eigen::MatrixXd &C = calculator._shells._cart_to_sph;
+            const Eigen::MatrixXd Pa_cart = C.transpose() * Pa * C;
+            const Eigen::MatrixXd Pb_cart = C.transpose() * Pb * C;
+            auto [Ga_cart, Gb_cart] =
+                _compute_2e_fock_uhf(shell_pairs, Pa_cart, Pb_cart, nbasis_cart,
+                                     calculator._integral._engine,
+                                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+            Ga = C * Ga_cart * C.transpose();
+            Gb = C * Gb_cart * C.transpose();
+        }
+        else
+        {
+            std::tie(Ga, Gb) =
+                _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, calculator._integral._engine,
+                                     HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri,
+                                     calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+        }
+
+        const Eigen::MatrixXd Fa = H + Ga;
+        const Eigen::MatrixXd Fb = H + Gb;
+        const Eigen::MatrixXd F_rohf = _rohf_effective_fock(Fa, Fb, Pa, Pb, S);
+
+        const double E_elec = 0.5 * ((Pa.array() * (H + Fa).array()).sum() +
+                                     (Pb.array() * (H + Fb).array()).sum());
+        const double E_total = E_elec + calculator._nuclear_repulsion;
+
+        double diis_err = 0.0;
+        if (use_diis)
+        {
+            const Eigen::MatrixXd P_total = Pa + Pb;
+            const Eigen::MatrixXd e = X.transpose() * (F_rohf * P_total * S - S * P_total * F_rohf) * X;
+            diis.push(F_rohf, e);
+            diis_err = diis.error_norm();
+        }
+
+        const Eigen::MatrixXd F_diag = (use_diis && diis.ready()) ? diis.extrapolate() : F_rohf;
+
+        std::vector<std::string> mo_sym;
+        auto diag = diagonalize_common(F_diag, mo_sym);
+        if (!diag)
+            return std::unexpected(std::format("{} at iteration {}", diag.error(), iter));
+
+        Eigen::MatrixXd C = std::move(diag->first);
+        Eigen::VectorXd eps = std::move(diag->second);
+        Eigen::VectorXd epsa = _mo_energy_diagonal(C, Fa);
+        Eigen::VectorXd epsb = _mo_energy_diagonal(C, Fb);
+
+        _reorder_rohf_orbitals(C, eps, epsa, epsb, mo_sym, n_closed, n_open);
+
+        const Eigen::MatrixXd density_alpha_next =
+            C.leftCols(n_alpha) * C.leftCols(n_alpha).transpose();
+        const Eigen::MatrixXd density_beta_next =
+            C.leftCols(n_beta) * C.leftCols(n_beta).transpose();
+
+        const IterationMetrics metrics = unrestricted_iteration_metrics(
+            Pa, Pb, density_alpha_next, density_beta_next, E_prev, E_total);
+
+        const double iter_time = std::chrono::duration<double>(
+                                     std::chrono::steady_clock::now() - iter_start)
+                                     .count();
+        HartreeFock::Logger::scf_iteration(
+            iter,
+            E_total,
+            metrics.delta_energy,
+            metrics.delta_density_rms,
+            metrics.delta_density_max,
+            diis_err,
+            0.0,
+            iter_time);
+
+        Pa = density_alpha_next;
+        Pb = density_beta_next;
+        E_prev = E_total;
+
+        calculator._info._scf.alpha.mo_symmetry = mo_sym;
+        calculator._info._scf.beta.mo_symmetry = mo_sym;
+
+        store_unrestricted_iteration(
+            calculator,
+            UnrestrictedIterationData{
+                .alpha_density = Pa,
+                .beta_density = Pb,
+                .alpha_fock = Fa,
+                .beta_fock = Fb,
+                .alpha_mo_energies = eps,
+                .beta_mo_energies = epsb,
+                .alpha_mo_coefficients = C,
+                .beta_mo_coefficients = C,
+                .electronic_energy = E_elec,
+                .total_energy = E_total},
+            metrics);
+
+        if (is_converged(calculator._scf, metrics, iter))
+        {
+            calculator._info._is_converged = true;
+
+            HartreeFock::Logger::scf_footer();
+            HartreeFock::Logger::blank();
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "ROHF Converged :",
+                                         std::format("E = {:.10f} Eh  after {} iterations", E_total, iter));
+            HartreeFock::Logger::blank();
+
+            _log_spin_contamination(C, C, S, n_alpha, n_beta,
+                                    calculator._molecule.multiplicity);
+            HartreeFock::Logger::blank();
+
+            return {};
+        }
+    }
+
+    return std::unexpected(std::format("ROHF SCF did not converge in {} iterations", max_iter));
 }

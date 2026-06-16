@@ -1,13 +1,19 @@
 #include "vibrational_symmetry.h"
 
 #include <cmath>
+#include <expected>
 #include <limits>
-#include <stdexcept>
+#include <numbers>
 
+#include "io/logging.h"
 #include "wrapper.h"
 
 namespace
 {
+    // Rebuild the same real 3×3 Cartesian operator matrix libmsym encodes for each
+    // symmetry operation. Vibrational labeling works directly on 3N Cartesian normal
+    // modes, so unlike the AO/MO paths there is no basis-function transform here —
+    // we only need the nuclear-coordinate representation.
     static Eigen::Matrix3d sop_to_matrix(const msym_symmetry_operation_t &sop)
     {
         using M3d = Eigen::Matrix3d;
@@ -29,7 +35,7 @@ namespace
         {
             V3d v(sop.v[0], sop.v[1], sop.v[2]);
             v.normalize();
-            const double angle = 2.0 * M_PI * sop.power / sop.order;
+            const double angle = 2.0 * std::numbers::pi * sop.power / sop.order;
             const double c = std::cos(angle);
             const double s = std::sin(angle);
             M3d K;
@@ -42,7 +48,7 @@ namespace
         {
             V3d v(sop.v[0], sop.v[1], sop.v[2]);
             v.normalize();
-            const double angle = 2.0 * M_PI * sop.power / sop.order;
+            const double angle = 2.0 * std::numbers::pi * sop.power / sop.order;
             const double c = std::cos(angle);
             const double s = std::sin(angle);
             M3d K;
@@ -170,10 +176,13 @@ namespace
         return -1;
     }
 
-    static Eigen::MatrixXd build_cartesian_representation(
+    static std::expected<Eigen::MatrixXd, std::string> build_cartesian_representation(
         const HartreeFock::Molecule &mol,
         const msym_symmetry_operation_t &sop)
     {
+        // Build the 3N×3N representation D_R acting on stacked Cartesian
+        // displacements (x1,y1,z1,x2,...). Each atom block is permuted to its image
+        // atom and rotated by the 3×3 operation matrix itself.
         const int n3 = static_cast<int>(3 * mol.natoms);
         Eigen::MatrixXd rep = Eigen::MatrixXd::Zero(n3, n3);
         const Eigen::Matrix3d M = sop_to_matrix(sop);
@@ -189,7 +198,7 @@ namespace
                 static_cast<int>(mol.atomic_numbers[a]),
                 used);
             if (b < 0)
-                throw std::runtime_error("vibrational symmetry: failed to map transformed atom");
+                return std::unexpected("vibrational symmetry: failed to map transformed atom");
 
             rep.block<3, 3>(3 * b, 3 * static_cast<int>(a)) = M;
         }
@@ -198,7 +207,7 @@ namespace
     }
 } // namespace
 
-std::vector<std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
+std::expected<std::vector<std::string>, std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
     const HartreeFock::Calculator &calc,
     const Eigen::MatrixXd &normal_modes)
 {
@@ -208,10 +217,18 @@ std::vector<std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
         return {};
 
     const std::string &pg = calc._molecule._point_group;
+    // Linear groups would need the dedicated infinite-group machinery used by the
+    // MO-label path; this helper only handles finite groups through libmsym.
     if (pg.find("inf") != std::string::npos)
         return {};
 
-    HartreeFock::Symmetry::SymmetryContext ctx;
+    // Rebuild libmsym on the symmetrized geometry, mirroring the MO-label path.
+    // The returned character table and subgroup selection encode the labeling
+    // convention; the mode vectors themselves are analyzed in plain Cartesian space.
+    auto ctx_result = HartreeFock::Symmetry::SymmetryContext::create();
+    if (!ctx_result)
+        return std::unexpected(ctx_result.error());
+    HartreeFock::Symmetry::SymmetryContext ctx = std::move(*ctx_result);
     HartreeFock::Symmetry::SymmetryElements atoms(calc._molecule.natoms);
 
     for (std::size_t i = 0; i < calc._molecule.natoms; ++i)
@@ -233,6 +250,10 @@ std::vector<std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
     if (MSYM_SUCCESS != msymGetPointGroupType(ctx.get(), &pg_type, &pg_n))
         return {};
 
+    // Just like MO labeling, we deliberately fall back to the largest Abelian
+    // all-1D subgroup for non-Abelian groups. This gives every mode a unique scalar
+    // Mulliken label at the cost of reporting subgroup labels rather than full-group
+    // labels such as T2/Eg/T1u.
     if (!is_all_1d_irreps(pg_type, pg_n))
     {
         int nsg = 0;
@@ -253,8 +274,15 @@ std::vector<std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
 
         if (best == nullptr)
             return {};
+        const std::string subgroup_name = best->name;
         if (MSYM_SUCCESS != msymSelectSubgroup(ctx.get(), best))
             return {};
+
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info,
+            "Vibrational Symmetry :",
+            "Using Abelian subgroup " + subgroup_name +
+                " of " + calc._molecule._point_group + " for mode labels");
     }
 
     const msym_character_table_t *ct = nullptr;
@@ -265,11 +293,17 @@ std::vector<std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
     if (nc <= 0)
         return {};
 
+    // Build D_R for every operation in the active (possibly subgroup-reduced)
+    // character table. The mode classifier compares the observed action of each D_R
+    // on a normal mode against the expected character of each irrep.
     std::vector<Eigen::MatrixXd> reps;
     reps.reserve(static_cast<std::size_t>(nc));
     for (int c = 0; c < nc; ++c)
     {
-        reps.push_back(build_cartesian_representation(calc._molecule, *ct->sops[c]));
+        auto rep = build_cartesian_representation(calc._molecule, *ct->sops[c]);
+        if (!rep)
+            return std::unexpected(rep.error());
+        reps.push_back(std::move(*rep));
     }
 
     std::vector<std::string> labels(static_cast<std::size_t>(normal_modes.cols()));
@@ -282,6 +316,10 @@ std::vector<std::string> HartreeFock::Symmetry::assign_vibrational_symmetry(
     const double *table = static_cast<const double *>(ct->table);
     for (int mode = 0; mode < normal_modes.cols(); ++mode)
     {
+        // Reduce each mode to a 1D character signature by taking the expectation
+        // value <v|D_R|v> over every group operation. For a pure 1D irrep this
+        // reproduces the character row exactly; for mixed/degenerate cases we choose
+        // the closest row and fall back to "?" if the fit is too poor.
         const Eigen::VectorXd v = normal_modes.col(mode).normalized();
         int best_irrep = -1;
         double best_err = std::numeric_limits<double>::max();

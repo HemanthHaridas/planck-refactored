@@ -1,9 +1,12 @@
 #include "post_hf/casscf/response.h"
 
-#include "post_hf/casscf/ci.h"
+#include "base/tables.h"
+#include "io/logging.h"
+#include "post_hf/casscf/casscf_utils.h"
+#include "post_hf/ci/ci.h"
 #include "post_hf/casscf/orbital.h"
-#include "post_hf/casscf/rdm.h"
-#include "post_hf/casscf/strings.h"
+#include "post_hf/ci/rdm.h"
+#include "post_hf/ci/strings.h"
 
 #include <Eigen/Eigenvalues>
 #include <Eigen/QR>
@@ -14,51 +17,29 @@
 namespace
 {
 
+    using HartreeFock::Correlation::CASSCF::as_single_column_matrix;
+    using HartreeFock::Correlation::CASSCF::build_ci_orbital_gradient_correction;
     using HartreeFock::Correlation::CASSCF::build_det_lookup;
     using HartreeFock::Correlation::CASSCF::build_spin_dets;
-    using HartreeFock::Correlation::CASSCF::build_ci_orbital_gradient_correction;
+    using HartreeFock::Correlation::CASSCF::CIDeterminantSpace;
+    using HartreeFock::Correlation::CASSCF::CISigmaApplier;
     using HartreeFock::Correlation::CASSCF::compute_2rdm_bilinear;
     using HartreeFock::Correlation::CASSCF::compute_Q_matrix;
     using HartreeFock::Correlation::CASSCF::count_occupied_below;
+    using HartreeFock::Correlation::CASSCF::delta_g_sa_action;
+    using HartreeFock::Correlation::CASSCF::hess_diag;
     using HartreeFock::Correlation::CASSCF::hessian_action;
     using HartreeFock::Correlation::CASSCF::non_redundant_pairs;
-    using HartreeFock::Correlation::CASSCF::matrix_free_hessian_action;
+    using HartreeFock::Correlation::CASSCF::OrbitalHessianContext;
     using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
     using HartreeFock::Correlation::CASSCF::RotPair;
+    using HartreeFock::Correlation::CASSCF::single_weight;
     using HartreeFock::Correlation::CASSCF::StateAveragedCoupledRoot;
-    using HartreeFock::Correlation::CASSCF::CIDeterminantSpace;
-    using HartreeFock::Correlation::CASSCF::CISigmaApplier;
-    using HartreeFock::Correlation::CASSCF::OrbitalHessianContext;
+    using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     using HartreeFock::Correlation::CASSCFInternal::apply_response_diag_preconditioner;
+    using HartreeFock::Correlation::CASSCFInternal::CIString;
     using HartreeFock::Correlation::CASSCFInternal::project_orthogonal;
     using HartreeFock::Correlation::CASSCFInternal::single_bit_mask;
-    using HartreeFock::Correlation::CASSCFInternal::CIString;
-    using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
-
-    struct FermionOpResult
-    {
-        HartreeFock::Correlation::CASSCFInternal::CIString det = 0;
-        double phase = 0.0;
-        bool valid = false;
-    };
-
-    // These mirror the string-layer operators so the response code uses the same
-    // determinant phase convention as the sigma and RDM builders.
-    inline FermionOpResult apply_annihilation(HartreeFock::Correlation::CASSCFInternal::CIString det, int orb)
-    {
-        const auto bit = single_bit_mask(orb);
-        if (!(det & bit))
-            return {};
-        return {det ^ bit, (count_occupied_below(det, orb) % 2 == 0) ? 1.0 : -1.0, true};
-    }
-
-    inline FermionOpResult apply_creation(HartreeFock::Correlation::CASSCFInternal::CIString det, int orb)
-    {
-        const auto bit = single_bit_mask(orb);
-        if (det & bit)
-            return {};
-        return {det | bit, (count_occupied_below(det, orb) % 2 == 0) ? 1.0 : -1.0, true};
-    }
 
     std::size_t idx4(int p, int q, int r, int s, int n_act)
     {
@@ -168,6 +149,10 @@ namespace
         if (!have_full_cache)
             return dga_active_only;
 
+        // The active-only derivative above captures rotations entirely within
+        // the active block.  When the cache is available, extend it with the
+        // core/virtual -> active couplings by differentiating the mixed-basis
+        // (p,u,v,w) integral cache against the full orbital rotation.
         std::vector<double> dga = dga_active_only;
         for (int t = 0; t < n_act; ++t)
             for (int u = 0; u < n_act; ++u)
@@ -206,20 +191,6 @@ namespace
         // (H - E0) c1 + Q sigma = 0, with Q enforcing orthogonality to c0.
         const Eigen::VectorXd rhs = -project_orthogonal(sigma, c0);
         return project_orthogonal(rhs - (hc1 - E0 * c1), c0);
-    }
-
-    Eigen::MatrixXd as_single_column_matrix(const Eigen::VectorXd &vec)
-    {
-        Eigen::MatrixXd mat(vec.size(), 1);
-        mat.col(0) = vec;
-        return mat;
-    }
-
-    Eigen::VectorXd single_weight(double weight)
-    {
-        Eigen::VectorXd weights(1);
-        weights(0) = weight;
-        return weights;
     }
 
     struct CoupledResidualEvaluation
@@ -270,8 +241,9 @@ namespace
         const Eigen::MatrixXd &M,
         const std::vector<RotPair> &pairs)
     {
-        Eigen::VectorXd packed = Eigen::VectorXd::Zero(static_cast<int>(pairs.size()));
-        for (int i = 0; i < static_cast<int>(pairs.size()); ++i)
+        const HartreeFock::index_t pair_count = static_cast<HartreeFock::index_t>(pairs.size());
+        Eigen::VectorXd packed = Eigen::VectorXd::Zero(pair_count);
+        for (HartreeFock::index_t i = 0; i < pair_count; ++i)
             packed(i) = M(pairs[static_cast<std::size_t>(i)].p, pairs[static_cast<std::size_t>(i)].q);
         return packed;
     }
@@ -282,7 +254,8 @@ namespace
         int nbasis)
     {
         Eigen::MatrixXd M = Eigen::MatrixXd::Zero(nbasis, nbasis);
-        for (int i = 0; i < static_cast<int>(pairs.size()) && i < packed.size(); ++i)
+        const HartreeFock::index_t pair_count = static_cast<HartreeFock::index_t>(pairs.size());
+        for (HartreeFock::index_t i = 0; i < pair_count && i < packed.size(); ++i)
         {
             const auto &pair = pairs[static_cast<std::size_t>(i)];
             M(pair.p, pair.q) = packed(i);
@@ -309,17 +282,21 @@ namespace
         op.pairs = symmetry_allowed_pairs(n_core, n_act, n_virt, mo_irreps, use_sym);
         op.nbasis = nbasis;
 
+        // For modest pair counts we explicitly build the orbital-response
+        // matrix and solve in that reduced pair basis.  Larger problems fall
+        // back to matrix-free actions elsewhere to avoid dense O(n_pair^2)
+        // storage and setup costs.
         if (orbital_hessian_ctx == nullptr || op.pairs.empty() || static_cast<int>(op.pairs.size()) > max_dense_pairs)
             return op;
 
-        const int npairs = static_cast<int>(op.pairs.size());
+        const HartreeFock::index_t npairs = static_cast<HartreeFock::index_t>(op.pairs.size());
         op.matrix = Eigen::MatrixXd::Zero(npairs, npairs);
-        for (int col = 0; col < npairs; ++col)
+        for (HartreeFock::index_t col = 0; col < npairs; ++col)
         {
             Eigen::VectorXd e = Eigen::VectorXd::Zero(npairs);
             e(col) = 1.0;
             const Eigen::MatrixXd trial = unpack_orbital_pairs(e, op.pairs, nbasis);
-            Eigen::MatrixXd action = matrix_free_hessian_action(
+            Eigen::MatrixXd action = delta_g_sa_action(
                 trial, orbital_hessian_ctx, F_I_mo, F_A_mo,
                 n_core, n_act, n_virt, mo_irreps, use_sym);
             action.noalias() += level_shift * trial;
@@ -329,6 +306,51 @@ namespace
         op.matrix = 0.5 * (op.matrix + op.matrix.transpose());
         op.available = op.matrix.allFinite();
         return op;
+    }
+
+    Eigen::VectorXd apply_orbital_linear_operator_packed(
+        const Eigen::VectorXd &x,
+        const OrbitalLinearOperator &op,
+        const OrbitalHessianContext *orbital_hessian_ctx,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        int n_core,
+        int n_act,
+        int n_virt,
+        double level_shift,
+        const std::vector<int> &mo_irreps,
+        bool use_sym)
+    {
+        if (x.size() == 0 || op.pairs.empty())
+            return Eigen::VectorXd::Zero(static_cast<HartreeFock::index_t>(op.pairs.size()));
+        if (op.available && op.matrix.rows() == x.size())
+            return op.matrix * x;
+
+        const Eigen::MatrixXd trial = unpack_orbital_pairs(x, op.pairs, op.nbasis);
+        Eigen::MatrixXd action = delta_g_sa_action(
+            trial, orbital_hessian_ctx, F_I_mo, F_A_mo,
+            n_core, n_act, n_virt, mo_irreps, use_sym);
+        action.noalias() += level_shift * trial;
+        return pack_orbital_pairs(action, op.pairs);
+    }
+
+    Eigen::VectorXd orbital_pair_preconditioner(
+        const std::vector<RotPair> &pairs,
+        const Eigen::MatrixXd &F_I_mo,
+        const Eigen::MatrixXd &F_A_mo,
+        double level_shift)
+    {
+        const Eigen::MatrixXd F_sum = F_I_mo + F_A_mo;
+        const HartreeFock::index_t pair_count = static_cast<HartreeFock::index_t>(pairs.size());
+        Eigen::VectorXd denom = Eigen::VectorXd::Ones(pair_count);
+        for (HartreeFock::index_t k = 0; k < pair_count; ++k)
+        {
+            const auto &pair = pairs[static_cast<std::size_t>(k)];
+            denom(k) = hess_diag(F_sum, pair.p, pair.q) + level_shift;
+            if (std::abs(denom(k)) < 1e-4)
+                denom(k) = (denom(k) >= 0.0) ? 1e-4 : -1e-4;
+        }
+        return denom;
     }
 
     Eigen::MatrixXd solve_orbital_action_system(
@@ -342,9 +364,13 @@ namespace
         double level_shift,
         double max_rot,
         const std::vector<int> &mo_irreps,
-        bool use_sym)
+        bool use_sym,
+        const OrbitalHessianContext *orbital_hessian_ctx)
     {
-        if (!op.available || op.matrix.rows() == 0)
+        if (op.pairs.empty())
+            return Eigen::MatrixXd::Zero(op.nbasis, op.nbasis);
+
+        if ((!op.available || op.matrix.rows() == 0) && orbital_hessian_ctx == nullptr)
             return HartreeFock::Correlation::CASSCF::diagonal_preconditioned_orbital_step(
                 orbital_residual,
                 F_I_mo,
@@ -361,25 +387,146 @@ namespace
         if (g.size() == 0 || g.cwiseAbs().maxCoeff() < 1e-12)
             return Eigen::MatrixXd::Zero(op.nbasis, op.nbasis);
 
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(op.matrix);
-        if (eig.info() != Eigen::Success)
-            return HartreeFock::Correlation::CASSCF::diagonal_preconditioned_orbital_step(
-                orbital_residual,
-                F_I_mo,
-                F_A_mo,
-                n_core,
-                n_act,
-                n_virt,
-                level_shift,
-                max_rot,
-                mo_irreps,
-                use_sym);
+        auto cap_packed_step = [&](Eigen::VectorXd x)
+        {
+            if (!x.allFinite() || x.size() == 0)
+                return x;
+            const double max_x = x.cwiseAbs().maxCoeff();
+            if (max_x > max_rot)
+                x *= max_rot / max_x;
+            return x;
+        };
 
-        Eigen::VectorXd evals = eig.eigenvalues();
-        for (int i = 0; i < evals.size(); ++i)
-            evals(i) = std::max(evals(i), 1e-4);
-        const Eigen::VectorXd step =
-            -eig.eigenvectors() * evals.cwiseInverse().asDiagonal() * eig.eigenvectors().transpose() * g;
+        Eigen::VectorXd step = Eigen::VectorXd::Zero(g.size());
+        if (op.available && op.matrix.rows() == g.size())
+        {
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(op.matrix);
+            if (eig.info() != Eigen::Success)
+                return HartreeFock::Correlation::CASSCF::diagonal_preconditioned_orbital_step(
+                    orbital_residual,
+                    F_I_mo,
+                    F_A_mo,
+                    n_core,
+                    n_act,
+                    n_virt,
+                    level_shift,
+                    max_rot,
+                    mo_irreps,
+                    use_sym);
+
+            Eigen::VectorXd evals = eig.eigenvalues();
+            int clamped_count = 0;
+            for (int i = 0; i < evals.size(); ++i)
+            {
+                if (evals(i) < 1e-4)
+                    ++clamped_count;
+                evals(i) = std::max(evals(i), 1e-4);
+            }
+            if (evals.size() > 0 &&
+                static_cast<double>(clamped_count) / static_cast<double>(evals.size()) > 0.2)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "CASSCF Response :",
+                    std::format(
+                        "Orbital Hessian has heavy negative/near-zero curvature ({} of {} eigenvalues clamped); falling back to the diagonal preconditioner.",
+                        clamped_count,
+                        evals.size()));
+                return HartreeFock::Correlation::CASSCF::diagonal_preconditioned_orbital_step(
+                    orbital_residual,
+                    F_I_mo,
+                    F_A_mo,
+                    n_core,
+                    n_act,
+                    n_virt,
+                    level_shift,
+                    max_rot,
+                    mo_irreps,
+                    use_sym);
+            }
+            step =
+                -eig.eigenvectors() * evals.cwiseInverse().asDiagonal() * eig.eigenvectors().transpose() * g;
+            step = cap_packed_step(std::move(step));
+        }
+        else
+        {
+            const Eigen::MatrixXd diagonal_guess =
+                HartreeFock::Correlation::CASSCF::diagonal_preconditioned_orbital_step(
+                    orbital_residual,
+                    F_I_mo,
+                    F_A_mo,
+                    n_core,
+                    n_act,
+                    n_virt,
+                    level_shift,
+                    max_rot,
+                    mo_irreps,
+                    use_sym);
+            step = cap_packed_step(pack_orbital_pairs(diagonal_guess, op.pairs));
+
+            const Eigen::VectorXd denom =
+                orbital_pair_preconditioner(op.pairs, F_I_mo, F_A_mo, level_shift);
+            auto residual = [&](const Eigen::VectorXd &trial) -> Eigen::VectorXd
+            {
+                Eigen::VectorXd applied = apply_orbital_linear_operator_packed(
+                    trial,
+                    op,
+                    orbital_hessian_ctx,
+                    F_I_mo,
+                    F_A_mo,
+                    n_core,
+                    n_act,
+                    n_virt,
+                    level_shift,
+                    mo_irreps,
+                    use_sym);
+                return -g - applied;
+            };
+
+            Eigen::VectorXd best_r = residual(step);
+            double best_norm = best_r.norm();
+            if (!std::isfinite(best_norm))
+                return diagonal_guess;
+
+            for (int iter = 0; iter < 6; ++iter)
+            {
+                if (best_norm < 1e-8)
+                    break;
+
+                Eigen::VectorXd correction = best_r;
+                for (int k = 0; k < correction.size(); ++k)
+                    correction(k) /= denom(k);
+                if (!correction.allFinite() || correction.cwiseAbs().maxCoeff() < 1e-12)
+                    break;
+
+                bool improved = false;
+                Eigen::VectorXd best_trial = step;
+                Eigen::VectorXd best_trial_r = best_r;
+                double best_trial_norm = best_norm;
+                for (double scale : CASSCF_PROBE_STEP_SCALES)
+                {
+                    const Eigen::VectorXd trial = cap_packed_step(step + scale * correction);
+                    const Eigen::VectorXd trial_r = residual(trial);
+                    const double trial_norm = trial_r.norm();
+                    if (!std::isfinite(trial_norm))
+                        continue;
+                    if (trial_norm < best_trial_norm - 1e-12)
+                    {
+                        improved = true;
+                        best_trial = trial;
+                        best_trial_r = trial_r;
+                        best_trial_norm = trial_norm;
+                    }
+                }
+
+                if (!improved)
+                    break;
+
+                step = std::move(best_trial);
+                best_r = std::move(best_trial_r);
+                best_norm = best_trial_norm;
+            }
+        }
 
         Eigen::MatrixXd kappa = unpack_orbital_pairs(step, op.pairs, op.nbasis);
         const double max_elem = kappa.cwiseAbs().maxCoeff();
@@ -455,7 +602,7 @@ namespace
             c1, c0, a_strs, b_strs, dets, active_integrals, nbasis, n_core, n_act, n_virt);
         evaluation.orbital_residual =
             orbital_gradient +
-            matrix_free_hessian_action(
+            delta_g_sa_action(
                 kappa, orbital_hessian_ctx, F_I_mo, F_A_mo,
                 n_core, n_act, n_virt, mo_irreps, use_sym) +
             evaluation.orbital_correction;
@@ -509,7 +656,7 @@ namespace
         evaluation.orbital_correction = Eigen::MatrixXd::Zero(nbasis, nbasis);
         evaluation.orbital_residual =
             orbital_gradient +
-            matrix_free_hessian_action(
+            delta_g_sa_action(
                 kappa, orbital_hessian_ctx, F_I_mo, F_A_mo,
                 n_core, n_act, n_virt, mo_irreps, use_sym);
         evaluation.ci_residuals.reserve(roots.size());
@@ -733,7 +880,8 @@ namespace HartreeFock::Correlation::CASSCF
             level_shift,
             max_rot,
             mo_irreps,
-            use_sym);
+            use_sym,
+            orbital_hessian_ctx);
         const CoupledResponseBlocks seed_blocks = build_coupled_response_blocks(
             mode,
             result.orbital_step,
@@ -800,7 +948,8 @@ namespace HartreeFock::Correlation::CASSCF
                 level_shift,
                 max_rot,
                 mo_irreps,
-                use_sym);
+                use_sym,
+                orbital_hessian_ctx);
 
             bool accepted_update = false;
             CoupledResidualEvaluation best_evaluation = current;
@@ -808,7 +957,7 @@ namespace HartreeFock::Correlation::CASSCF
             Eigen::VectorXd best_ci_step = result.ci_step;
             double best_metric = current_metric;
 
-            for (double scale : {1.0, 0.5, 0.25, 0.125})
+            for (double scale : CASSCF_PROBE_STEP_SCALES)
             {
                 Eigen::MatrixXd trial_orbital_step =
                     result.orbital_step + scale * correction.orbital_step;
@@ -920,7 +1069,8 @@ namespace HartreeFock::Correlation::CASSCF
             level_shift,
             max_rot,
             mo_irreps,
-            use_sym);
+            use_sym,
+            orbital_hessian_ctx);
         for (int i = 0; i < static_cast<int>(roots.size()); ++i)
         {
             const auto &root = roots[static_cast<std::size_t>(i)];
@@ -978,7 +1128,8 @@ namespace HartreeFock::Correlation::CASSCF
                 level_shift,
                 max_rot,
                 mo_irreps,
-                use_sym);
+                use_sym,
+                orbital_hessian_ctx);
             std::vector<Eigen::VectorXd> ci_corrections;
             ci_corrections.reserve(roots.size());
             for (int i = 0; i < static_cast<int>(roots.size()); ++i)
@@ -1008,7 +1159,7 @@ namespace HartreeFock::Correlation::CASSCF
             std::vector<Eigen::VectorXd> best_ci_steps = result.ci_steps;
             double best_metric = current_metric;
 
-            for (double scale : {1.0, 0.5, 0.25, 0.125})
+            for (double scale : CASSCF_PROBE_STEP_SCALES)
             {
                 Eigen::MatrixXd trial_orbital_step =
                     result.orbital_step + scale * orbital_correction;

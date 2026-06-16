@@ -1,8 +1,14 @@
 .vscode
+.matplotlib*
 build
+arXiv
 src/external
 src/base/basis.h
 inputs
+!tests/inputs/
+!tests/inputs/**
+!tests/benchmarks/
+!tests/benchmarks/**
 install
 .DS*
 bin
@@ -10,20 +16,81 @@ bin
 CLAUDE*
 gpu
 */__pycache__
-ammonia*
-*.log
 *tga
 .pytest*
 .github/*/*.yml
-*.hfchk
-*cube
 docs/casscf_remaining_work.md
 # Obsidian vault — track notes but not workspace state
-notes/.obsidian/workspace.json
-notes/.obsidian/workspace-mobile.json
-notes/.obsidian/cache
-notes/.obsidian/plugins/
-# Claude memory sync target (auto-generated)
-notes/claude-memory/*.md
-scripts
+vault/.obsidian/workspace.json
+vault/.obsidian/workspace-mobile.json
+vault/.obsidian/cache
+vault/.obsidian/plugins/
+scripts/*
+# Explicitly tracked scripts
+!scripts/vault_to_claude.py
+!scripts/sync-memory.sh
+!scripts/fit_auto_dispatch.py
+!scripts/rebuild_teaching_site_if_changed.py
 notes
+# ccgen files
+python/ccgen/__pycache__
+python/ccgen/*/__pycache__
+python/CCGEN_DEVELOPMENT_PLAN.md
+python/CCGEN_OPTIMIZATIONS.md
+python/ccgen/_wickaccel.cpython-314-darwin.so
+python/ccgen.egg-info/dependency_links.txt
+python/ccgen.egg-info/entry_points.txt
+python/ccgen.egg-info/PKG-INFO
+python/ccgen.egg-info/requires.txt
+python/ccgen.egg-info/SOURCES.txt
+python/ccgen.egg-info/top_level.txt
+python/dist
+CODE_REVIEW.md
+# Regression-test artifacts: SCF checkpoints and UV-vis spectra are
+# produced by the test runs themselves and should not be committed.
+# Already-tracked baseline checkpoints (e.g. water_rhf_pcm_water_sto3g.hfchk)
+# are unaffected because git skips ignore-rules for tracked files.
+tests/inputs/**/*.hfchk
+tests/inputs/**/*.uvvis.dat
+tests/inputs/**/*.fcidump
+tests/benchmarks/**/*.hfchk
+tests/benchmarks/**/*.uvvis.dat
+*.png
+*.log
+tests/*/__pycache__
+*.hfchk
+*.fcidump
+__pycache__
+Testing/
+docs/RMP2_GRADIENT_FIX_SUMMARY.md
+docs/SPHERICAL_HANDOFF.md
+docs/FULL_SYMMETRY_ERI_DESIGN.md
+docs/FULL_SYMMETRY_PERF_SCOPE.md
+docs/SPHERICAL_SYMMETRY_PHASE3_PLAN.md
+docs/CURRENT_STATUS.md
+docs/CALCULATOR_REFACTOR_SCOPE.md
+docs/BSSE_PLAN.md
+docs/RS_LONG_RANGE_DEBUG_HANDOFF.md
+docs/CASSCF_STATUS.md
+dist/planck-v4.1.0.tar.gz
+docs/timings.md
+docs/AUTO_DISPATCH_PLAN.md
+docs/wiki/_Footer.md
+docs/wiki/_Sidebar.md
+docs/wiki/Adding-a-Functional.md
+docs/wiki/Architecture-Overview.md
+docs/wiki/Examples.md
+docs/wiki/FAQ-and-Troubleshooting.md
+docs/wiki/Gradient-Pipeline.md
+docs/wiki/Home.md
+docs/wiki/Input-Reference.md
+docs/wiki/Installation.md
+docs/wiki/Integral-Engines.md
+docs/wiki/Quickstart.md
+docs/wiki/README.md
+docs/wiki/Symmetry.md
+docs/wiki/Testing.md
+build-profile
+build-test
+tests/avrr_x_simd_prototype.cpp
+ROHF_CASSCF_HANDOFF.md

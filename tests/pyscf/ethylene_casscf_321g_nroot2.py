@@ -1,7 +1,7 @@
 """
 PySCF reference: ethylene CAS(2,2)/3-21G — second-root variant
 Matches Planck input:
-tests/inputs/casscf_tests/ethylene_casscf_321g_nroot2.hfinp
+tests/benchmarks/casscf/pyscf_reference/ethylene_casscf_321g_nroot2.hfinp
 
 Geometry: planar ethylene (Planck input geometry, Angstrom)
 Active space: CAS(2e, 2o) — pi, pi* (HOMO, LUMO)

@@ -13,7 +13,8 @@
 //  [8]  magic: "PLNKCHK\0"
 //  [4]  version: uint32 = 6
 //  [8]  nbasis: uint64
-//  [1]  is_uhf: uint8
+//  [1]  is_uhf: uint8   (1 when the checkpoint carries separate alpha/beta
+//                       spin channels; used for both UHF and ROHF)
 //  [1]  is_converged: uint8
 //  [4]  last_iter: uint32
 //  [8]  total_energy: double
@@ -25,6 +26,7 @@
 //  [natoms × 3 × 8] coordinates_bohr: double[] (row-major: x0y0z0 x1y1z1 ...)
 //                    → always the final (possibly optimized) geometry in standard frame
 //  [4 + len]        basis name: uint32 length + chars (no null terminator)
+//  [1]              basis_type: uint8 (0 = cartesian, 1 = spherical) [version 7+]
 //  [1]              has_opt_coords: uint8 (1 if coordinates came from a converged geomopt)
 //
 //  Then for each spin channel (alpha always, beta only when is_uhf):
@@ -63,6 +65,10 @@
 //    [4]              casscf_active_start: int32 (0-based MO index) when flag is 1
 //    [4]              casscf_active_count: int32 when flag is 1
 //
+//  Version 7 adds basis_type metadata to the fixed molecule header so restart
+//  paths can distinguish Cartesian and spherical checkpoints even when the
+//  working AO dimension happens to match.
+//
 // Restart semantics:
 //   guess density — load() fills _overlap, _hcore, _info._scf.{alpha,beta},
 //     and _total_energy.  Geometry comes from the input file.
@@ -91,6 +97,13 @@ namespace HartreeFock
         //
         // On success, always fills: _info._scf (density/fock/MOs), _total_energy,
         //   _nuclear_repulsion.  Also fills _overlap and _hcore when load_1e_matrices.
+        //
+        // When restarting across restricted/open-shell references, the loader adapts
+        // the stored density to the current target:
+        //   RHF checkpoint -> UHF/ROHF : split the stored MO set into alpha/beta
+        //                                spin densities using the current occupations.
+        //   UHF/ROHF checkpoint -> RHF : combine alpha+beta densities into the
+        //                                restricted density matrix.
         // Returns an error string if the file is missing, corrupt, or nbasis mismatches.
         std::expected<void, std::string> load(HartreeFock::Calculator &calc,
                                               const std::string &path,
@@ -106,6 +119,8 @@ namespace HartreeFock
             unsigned int multiplicity;
             Eigen::VectorXi atomic_numbers;
             Eigen::MatrixXd coords_bohr; // natoms × 3, standard frame, Bohr
+            HartreeFock::BasisType basis_type = HartreeFock::BasisType::Cartesian;
+            bool has_basis_type = false;
             bool has_opt_coords;         // true if from a converged geomopt
         };
 
@@ -123,6 +138,8 @@ namespace HartreeFock
             std::size_t nbasis; // nbasis of the checkpoint's basis
             bool is_uhf;
             std::string basis_name;   // basis name stored in the checkpoint
+            HartreeFock::BasisType basis_type = HartreeFock::BasisType::Cartesian;
+            bool has_basis_type = false;
             Eigen::MatrixXd C_alpha;  // all alpha MO columns (nbasis × nbasis)
             Eigen::MatrixXd C_beta;   // beta MOs if is_uhf
             Eigen::MatrixXd C_casscf; // converged CASSCF MOs if present

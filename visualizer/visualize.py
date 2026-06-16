@@ -76,8 +76,14 @@ def main() -> int:
     n_opt  = len(run.opt_steps)
     n_freq = len(run.freq_modes)
     n_traj = len(run.opt_step_geometries)
+    n_cas  = len(run.casscf_iters)
     sep = "  ─────────────────────────────────────────"
     traj_note = f"  ({n_traj} with geometry)" if n_traj else ""
+    cas_note = (
+        f"  ({run.casscf_active_space}"
+        f"{', SA(' + str(run.casscf_n_roots) + ')' if run.casscf_n_roots else ''})"
+        if n_cas else ""
+    )
     lines = [
         "",
         "  Planck Log Viewer",
@@ -87,6 +93,8 @@ def main() -> int:
         f"  Level : {run.scf_type or '—'}  /  {run.basis or '—'}",
         f"  Group : {run.point_group or '—'}",
         f"  SCF   : {len(run.scf_iters)} iterations",
+        (f"  CAS   : {n_cas} macro iterations{cas_note}" if n_cas
+         else "  CAS   : —"),
         f"  Opt   : {n_opt} steps{traj_note}",
         f"  Freq  : {n_freq} modes",
         sep,

@@ -12,11 +12,23 @@
 namespace HartreeFock::Correlation::CASSCF
 {
 
+    using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     using HartreeFock::Correlation::CASSCFInternal::CIResponseResult;
     using HartreeFock::Correlation::CASSCFInternal::CIString;
-    using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
     struct OrbitalHessianContext;
+}
+
+// CIDeterminantSpace now lives in the shared CI namespace (see post_hf/ci/ci.h).
+// Forward-declare it there and re-export into CASSCF so the references below
+// resolve to the same type the CI engine defines, not a separate incomplete one.
+namespace HartreeFock::Correlation::CI
+{
     struct CIDeterminantSpace;
+}
+
+namespace HartreeFock::Correlation::CASSCF
+{
+    using HartreeFock::Correlation::CI::CIDeterminantSpace;
 
     // Collect the explicit coupled response blocks for a single root after an
     // orbital trial step has been chosen. These are the building blocks for a

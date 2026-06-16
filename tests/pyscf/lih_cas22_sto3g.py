@@ -1,6 +1,6 @@
 """
 PySCF reference: LiH CAS(2,2)/STO-3G
-Matches Planck input: tests/inputs/casscf_tests/lih_cas22_sto3g.hfinp
+Matches Planck input: tests/benchmarks/casscf/pyscf_reference/lih_cas22_sto3g.hfinp
 
 Geometry: Li-H at 1.595 Angstrom (Planck input geometry)
 Active space: CAS(2e, 2o) — HOMO + LUMO

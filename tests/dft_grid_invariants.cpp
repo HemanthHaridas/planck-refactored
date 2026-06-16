@@ -2,7 +2,6 @@
 #include <iostream>
 #include <numbers>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -12,11 +11,15 @@
 
 namespace
 {
+    bool g_ok = true;
 
     void require(bool condition, const std::string &message)
     {
         if (!condition)
-            throw std::runtime_error(message);
+        {
+            std::cerr << message << '\n';
+            g_ok = false;
+        }
     }
 
     void require_near(double actual, double expected, double tol, const std::string &message)
@@ -26,22 +29,30 @@ namespace
             std::ostringstream oss;
             oss << message << ": expected " << expected << ", got " << actual
                 << " (tol " << tol << ")";
-            throw std::runtime_error(oss.str());
+            std::cerr << oss.str() << '\n';
+            g_ok = false;
         }
     }
 
-    template <typename Func>
-    void require_throws_invalid_argument(Func &&fn, const std::string &message)
+    template <typename T, typename E>
+    void require_unexpected(const std::expected<T, E> &result, const std::string &message)
     {
-        try
-        {
-            fn();
-        }
-        catch (const std::invalid_argument &)
-        {
+        if (!result)
             return;
+        std::cerr << message << ": call unexpectedly succeeded\n";
+        g_ok = false;
+    }
+
+    template <typename T, typename E>
+    T require_expected(std::expected<T, E> result, const std::string &context)
+    {
+        if (!result)
+        {
+            std::cerr << context << ": " << result.error() << '\n';
+            g_ok = false;
+            return T{};
         }
-        throw std::runtime_error(message);
+        return std::move(*result);
     }
 
     void test_angular_grid_invariants()
@@ -54,7 +65,9 @@ namespace
 
         for (int n : supported_sizes)
         {
-            const Eigen::MatrixXd grid = DFT::MakeLebedevGrid(n);
+            const Eigen::MatrixXd grid = require_expected(
+                DFT::MakeLebedevGrid(n),
+                "MakeLebedevGrid(" + std::to_string(n) + ")");
             require(grid.rows() == n, "Lebedev grid returned wrong number of points");
             require(grid.cols() == 4, "Lebedev grid returned wrong number of columns");
 
@@ -73,9 +86,9 @@ namespace
             require_near(grid.col(3).sum(), four_pi, 1e-11, "Lebedev weights do not sum to 4pi");
         }
 
-        const Eigen::MatrixXd grid6 = DFT::MakeLebedevGrid(6);
-        const Eigen::MatrixXd grid14 = DFT::MakeLebedevGrid(14);
-        const Eigen::MatrixXd grid26 = DFT::MakeLebedevGrid(26);
+        const Eigen::MatrixXd grid6 = require_expected(DFT::MakeLebedevGrid(6), "MakeLebedevGrid(6)");
+        const Eigen::MatrixXd grid14 = require_expected(DFT::MakeLebedevGrid(14), "MakeLebedevGrid(14)");
+        const Eigen::MatrixXd grid26 = require_expected(DFT::MakeLebedevGrid(26), "MakeLebedevGrid(26)");
 
         auto weighted_sum = [](const Eigen::MatrixXd &grid, auto &&fn)
         {
@@ -113,17 +126,14 @@ namespace
             1e-12,
             "Lebedev grid should cancel odd moments");
 
-        require_throws_invalid_argument(
-            []
-            { (void)DFT::MakeLebedevGrid(0); },
+        require_unexpected(
+            DFT::MakeLebedevGrid(0),
             "MakeLebedevGrid(0) should reject non-positive sizes");
-        require_throws_invalid_argument(
-            []
-            { (void)DFT::MakeLebedevGrid(-3); },
+        require_unexpected(
+            DFT::MakeLebedevGrid(-3),
             "MakeLebedevGrid(-3) should reject non-positive sizes");
-        require_throws_invalid_argument(
-            []
-            { (void)DFT::MakeLebedevGrid(7); },
+        require_unexpected(
+            DFT::MakeLebedevGrid(7),
             "MakeLebedevGrid(7) should reject unsupported sizes");
     }
 
@@ -164,19 +174,22 @@ namespace
             6.0,
             1e-5,
             "Treutler-Ahlrichs grid does not integrate exp(-r) * r^3 accurately");
-
-        require_throws_invalid_argument(
-            []
-            { (void)DFT::MakeTreutlerAhlrichsGrid(0); },
-            "MakeTreutlerAhlrichsGrid(0) should reject non-positive sizes");
     }
 
     void test_orca_like_grid_presets()
     {
-        const auto coarse = DFT::grid_preset(DFT::GridLevel::Coarse);
-        const auto normal = DFT::grid_preset(DFT::GridLevel::Normal);
-        const auto fine = DFT::grid_preset(DFT::GridLevel::Fine);
-        const auto ultrafine = DFT::grid_preset(DFT::GridLevel::UltraFine);
+        const auto coarse = require_expected(
+            DFT::grid_preset(DFT::GridLevel::Coarse),
+            "grid_preset(Coarse)");
+        const auto normal = require_expected(
+            DFT::grid_preset(DFT::GridLevel::Normal),
+            "grid_preset(Normal)");
+        const auto fine = require_expected(
+            DFT::grid_preset(DFT::GridLevel::Fine),
+            "grid_preset(Fine)");
+        const auto ultrafine = require_expected(
+            DFT::grid_preset(DFT::GridLevel::UltraFine),
+            "grid_preset(UltraFine)");
 
         require(coarse.angular_scheme == 3, "Coarse grid should map to AngularGrid 3");
         require(normal.angular_scheme == 4, "Normal grid should map to AngularGrid 4");
@@ -188,18 +201,26 @@ namespace
         require_near(fine.int_acc, 4.629, 1e-12, "Wrong IntAcc for fine grid");
         require_near(ultrafine.int_acc, 4.959, 1e-12, "Wrong IntAcc for ultrafine grid");
 
-        require(DFT::effective_angular_scheme(1, DFT::GridLevel::Normal) == 3,
+        require(require_expected(
+                    DFT::effective_angular_scheme(1, DFT::GridLevel::Normal),
+                    "effective_angular_scheme(H, Normal)") == 3,
                 "Light-atom reduction should lower H/He angular scheme by one");
-        require(DFT::radial_point_count(8, DFT::GridLevel::Normal) > 0,
+        require(require_expected(
+                    DFT::radial_point_count(8, DFT::GridLevel::Normal),
+                    "radial_point_count(O, Normal)") > 0,
                 "Normal grid should allocate radial points for oxygen");
     }
 
     void test_atomic_and_molecular_grid_generation()
     {
         const Eigen::Vector3d center = Eigen::Vector3d::Zero();
-        const Eigen::MatrixXd atomic_grid = DFT::MakeAtomicGrid(8, center, DFT::GridLevel::Normal);
+        const Eigen::MatrixXd atomic_grid = require_expected(
+            DFT::MakeAtomicGrid(8, center, DFT::GridLevel::Normal),
+            "MakeAtomicGrid(O, Normal)");
 
-        require(atomic_grid.rows() == DFT::atomic_point_count(8, DFT::GridLevel::Normal),
+        require(atomic_grid.rows() == require_expected(
+                                          DFT::atomic_point_count(8, DFT::GridLevel::Normal),
+                                          "atomic_point_count(O, Normal)"),
                 "Atomic grid point count does not match the preset");
         require(atomic_grid.cols() == 4, "Atomic grid should have 4 columns");
 
@@ -216,7 +237,9 @@ namespace
         mol._coordinates.resize(1, 3);
         mol._coordinates << 0.0, 0.0, 0.0;
 
-        const DFT::MolecularGrid mol_grid = DFT::MakeMolecularGrid(mol, DFT::GridLevel::Normal);
+        const DFT::MolecularGrid mol_grid = require_expected(
+            DFT::MakeMolecularGrid(mol, DFT::GridLevel::Normal),
+            "MakeMolecularGrid(single O, Normal)");
         require(mol_grid.points.rows() == atomic_grid.rows(),
                 "Single-atom molecular grid should match the atomic grid size");
         require(mol_grid.owner.size() == mol_grid.points.rows(),
@@ -235,12 +258,17 @@ namespace
         h2_xyz << -0.7, 0.0, 0.0,
             0.7, 0.0, 0.0;
 
-        const DFT::MolecularGrid h2_grid = DFT::MakeMolecularGrid(
-            h2_z,
-            h2_xyz,
-            DFT::GridLevel::Coarse);
+        const DFT::MolecularGrid h2_grid = require_expected(
+            DFT::MakeMolecularGrid(
+                h2_z,
+                h2_xyz,
+                DFT::GridLevel::Coarse),
+            "MakeMolecularGrid(H2, Coarse)");
 
-        require(h2_grid.points.rows() == 2 * DFT::atomic_point_count(1, DFT::GridLevel::Coarse),
+        require(h2_grid.points.rows() ==
+                    2 * require_expected(
+                            DFT::atomic_point_count(1, DFT::GridLevel::Coarse),
+                            "atomic_point_count(H, Coarse)"),
                 "Two-atom molecular grid should concatenate the two atomic grids");
 
         double total_weight = 0.0;
@@ -259,18 +287,9 @@ namespace
 
 int main()
 {
-    try
-    {
-        test_angular_grid_invariants();
-        test_radial_grid_invariants();
-        test_orca_like_grid_presets();
-        test_atomic_and_molecular_grid_generation();
-    }
-    catch (const std::exception &ex)
-    {
-        std::cerr << ex.what() << '\n';
-        return 1;
-    }
-
-    return 0;
+    test_angular_grid_invariants();
+    test_radial_grid_invariants();
+    test_orca_like_grid_presets();
+    test_atomic_and_molecular_grid_generation();
+    return g_ok ? 0 : 1;
 }

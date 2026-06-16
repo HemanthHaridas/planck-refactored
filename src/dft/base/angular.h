@@ -17,10 +17,12 @@
 
 #include <Eigen/Dense>
 #include <array>
+#include <cassert>
 #include <cmath>
+#include <cstdlib>
+#include <expected>
 #include <map>
 #include <numbers>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -34,6 +36,13 @@ namespace DFT
         using GridVec = std::vector<GridPt>;
 
         inline constexpr double FOUR_PI = 4.0 * std::numbers::pi;
+
+        [[noreturn]] inline void invalid_sphgenoh_code(int code)
+        {
+            assert(false && "SphGenOh received an invalid symmetry code");
+            (void)code;
+            std::abort();
+        }
 
         // Convert accumulated GridVec to Eigen matrix (N x 4: x, y, z, w)
         inline Eigen::MatrixXd gridvec_to_matrix(const GridVec &g)
@@ -216,7 +225,7 @@ namespace DFT
                 break;
             }
             default:
-                throw std::invalid_argument("SphGenOh: invalid code " + std::to_string(code));
+                invalid_sphgenoh_code(code);
             }
         }
 
@@ -4897,7 +4906,7 @@ namespace DFT
     // Supported sizes: 6, 14, 26, 38, 50, 74, 86, 110, 146, 170, 194, 230, 266,
     //   302, 350, 434, 590, 770, 974, 1202, 1454, 1730, 2030, 2354, 2702, 3074,
     //   3470, 3890, 4334, 4802, 5294, 5810
-    inline Eigen::MatrixXd MakeLebedevGrid(int n)
+    inline std::expected<Eigen::MatrixXd, std::string> MakeLebedevGrid(int n)
     {
         if (n == 1)
         {
@@ -4906,8 +4915,10 @@ namespace DFT
             return M;
         }
         if (n <= 0)
-            throw std::invalid_argument(
+        {
+            return std::unexpected(
                 "MakeLebedevGrid: n must be positive, got " + std::to_string(n));
+        }
         detail::GridVec g;
         switch (n)
         {
@@ -5008,7 +5019,7 @@ namespace DFT
             detail::MakeAngularGrid_5810(g);
             break;
         default:
-            throw std::invalid_argument(
+            return std::unexpected(
                 "MakeLebedevGrid: unsupported grid size " + std::to_string(n));
         }
         return detail::gridvec_to_matrix(g);

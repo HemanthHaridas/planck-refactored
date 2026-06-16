@@ -1,0 +1,13 @@
+FILENAME                                  ELECTRONIC_ENERGY   TOTAL_ENERGY       ERI_ENGINE  SYMMETRY  CASSCF_ENERGY
+ethylene_cas44_sto3g_sa2.hfinp            -110.387 719 017 8  -76.852 246 554 5  rys         .true.    -77.003 497 430 1
+ethylene_casscf_321g.hfinp                -110.667 232 693 2  -77.419 570 553 6  os          .true.    -77.514 522 387 3
+ethylene_casscf_321g_nroot2.hfinp         -110.667 232 693 2  -77.419 570 553 6  os          .true.    -77.514 522 387 3
+ethylene_casscf_ccpvdz.hfinp              -111.111 874 546 7  -77.864 212 407 1  os          .true.    -77.952 485 597 8
+ethylene_casscf_ccpvdz_auto_picker.hfinp  -111.111 874 546 7  -77.864 212 407 1  os          .true.    -77.952 485 597 8
+h2_cas22_sto3g.hfinp                        -1.831 863 700 8   -1.116 759 310 3  os          .false.    -1.137 283 835 1
+lih_cas22_sto3g.hfinp                       -8.857 341 587 3   -7.862 023 877 6  os          .false.    -7.881 118 479 8
+water_cas44_631g.hfinp                     -85.178 552 195 1  -75.983 998 567 9  rys         .true.    -75.999 860 978 5
+water_cas44_b1.hfinp                       -84.157 486 619 1  -74.962 932 991 9  os          .true.    -74.585 616 368 0
+water_cas44_ccpvdz.hfinp                   -85.221 690 684 0  -76.027 137 056 8  os          .true.    -76.044 010 905 0
+water_cas44_sto3g.hfinp                    -84.157 486 619 1  -74.962 932 991 9  rys         .true.    -74.976 017 176 0
+water_cas44_sto3g_sa2.hfinp                -84.157 486 619 1  -74.962 932 991 9  rys         .false.   -74.775 137 797 7

@@ -82,8 +82,8 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
         "sphere_radii": [_SPH_R_Z.get(a.Z, 0.55) for a in atoms],
         "num_atoms": len(atoms),
         "num_electrons": n_elec,
-        "charge": 0,
-        "multiplicity": 1,
+        "charge": run.charge if run.charge is not None else 0,
+        "multiplicity": run.multiplicity if run.multiplicity is not None else 1,
     }
 
     # SCF
@@ -142,6 +142,38 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
             ),
         }
 
+    # CASSCF / SA-CASSCF
+    casscf_data = None
+    if run.casscf_iters or run.casscf_total_energy is not None:
+        casscf_data = {
+            "active_space": run.casscf_active_space,
+            "n_active_electrons": run.casscf_n_active_electrons,
+            "n_active_orbitals": run.casscf_n_active_orbitals,
+            "n_core": run.casscf_n_core,
+            "n_roots": run.casscf_n_roots,
+            "converged": run.casscf_converged,
+            "iterations": len(run.casscf_iters),
+            "energy": (
+                float(run.casscf_total_energy)
+                if run.casscf_total_energy is not None else None
+            ),
+            "e_corr": (
+                float(run.casscf_corr_energy)
+                if run.casscf_corr_energy is not None else None
+            ),
+            "natural_occs": run.casscf_natural_occs,
+            "sa_roots": [
+                {
+                    "root": r.root,
+                    "energy": float(r.energy),
+                    "weight": float(r.weight),
+                }
+                for r in run.casscf_sa_roots
+            ],
+            "energy_history": [it.energy for it in run.casscf_iters],
+            "sa_grad_history": [it.sa_grad for it in run.casscf_iters],
+        }
+
     # Freq
     freq_data = None
     if run.freq_modes:
@@ -153,6 +185,43 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
                 float(run.zpe_hartree)
                 if run.zpe_hartree is not None else None
             ),
+        }
+
+    # TDDFT / UV-Vis
+    tddft_data = None
+    if run.tddft_roots or run.uvvis_points or run.uvvis_peaks:
+        tddft_data = {
+            "roots": [
+                {
+                    "root": root.root,
+                    "omega_eh": float(root.omega_eh),
+                    "omega_ev": float(root.omega_ev),
+                    "wavelength_nm": float(root.wavelength_nm),
+                    "oscillator_strength": float(root.oscillator_strength),
+                }
+                for root in run.tddft_roots
+            ],
+            "uvvis_points": [
+                {
+                    "energy_ev": float(point.energy_ev),
+                    "wavelength_nm": float(point.wavelength_nm),
+                    "intensity": float(point.intensity),
+                }
+                for point in run.uvvis_points
+            ],
+            "uvvis_peaks": [
+                {
+                    "energy_ev": float(point.energy_ev),
+                    "wavelength_nm": float(point.wavelength_nm),
+                    "intensity": float(point.intensity),
+                }
+                for point in run.uvvis_peaks
+            ],
+            "uvvis_sigma_ev": (
+                float(run.uvvis_sigma_ev)
+                if run.uvvis_sigma_ev is not None else None
+            ),
+            "uvvis_spectrum_path": run.uvvis_spectrum_path,
         }
 
     return {
@@ -167,8 +236,10 @@ def _run_to_json(run: ParsedRun, log_path: str) -> dict:
         "molecule": mol_data,
         "scf": scf_data,
         "mp2": mp2_data,
+        "casscf": casscf_data,
         "geopt": geopt_data,
         "freq": freq_data,
+        "tddft": tddft_data,
     }
 
 

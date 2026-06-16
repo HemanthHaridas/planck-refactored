@@ -1,0 +1,3159 @@
+{
+  "input": "docs/auto_dispatch_timings.csv",
+  "rule": "pick rys iff (L_AB + L_CD) <= 1; else pick hgp",
+  "rule_in_code": "static inline bool pick_rys(int L_AB, int L_CD) { return (L_AB + L_CD) <= 1; }",
+  "engines_in_auto_menu": [
+    "hgp",
+    "rys"
+  ],
+  "n_buckets_total": 238,
+  "n_disagreements_total": 0,
+  "mean_overhead_vs_per_bucket_winner": 0.0,
+  "max_overhead_vs_per_bucket_winner": 0.0,
+  "per_case": {
+    "helium/cc-pV5Z": {
+      "n_buckets": 81,
+      "n_disagreements": 0,
+      "mean_overhead": 0.0,
+      "max_overhead": 0.0
+    },
+    "helium/cc-pVQZ": {
+      "n_buckets": 49,
+      "n_disagreements": 0,
+      "mean_overhead": 0.0,
+      "max_overhead": 0.0
+    },
+    "water/6-31g*": {
+      "n_buckets": 25,
+      "n_disagreements": 0,
+      "mean_overhead": 0.0,
+      "max_overhead": 0.0
+    },
+    "water/cc-pVDZ": {
+      "n_buckets": 25,
+      "n_disagreements": 0,
+      "mean_overhead": 0.0,
+      "max_overhead": 0.0
+    },
+    "water/cc-pVTZ": {
+      "n_buckets": 49,
+      "n_disagreements": 0,
+      "mean_overhead": 0.0,
+      "max_overhead": 0.0
+    },
+    "water/sto-3g": {
+      "n_buckets": 9,
+      "n_disagreements": 0,
+      "mean_overhead": 0.0,
+      "max_overhead": 0.0
+    }
+  },
+  "cross_case_medians": {
+    "0,0": {
+      "hgp": 0.06703,
+      "rys": 0.023505,
+      "os": 0.050905,
+      "n_cases": 6
+    },
+    "0,1": {
+      "hgp": 0.059266,
+      "rys": 0.022375,
+      "os": 0.04833,
+      "n_cases": 6
+    },
+    "0,2": {
+      "hgp": 0.036187,
+      "rys": 0.219485,
+      "os": 0.034786,
+      "n_cases": 6
+    },
+    "1,0": {
+      "hgp": 0.059857,
+      "rys": 0.022485,
+      "os": 0.049543,
+      "n_cases": 6
+    },
+    "1,1": {
+      "hgp": 0.031119,
+      "rys": 0.185302,
+      "os": 0.029318,
+      "n_cases": 6
+    },
+    "1,2": {
+      "hgp": 0.020363,
+      "rys": 0.11195,
+      "os": 0.021915,
+      "n_cases": 6
+    },
+    "2,0": {
+      "hgp": 0.037797,
+      "rys": 0.222581,
+      "os": 0.034141,
+      "n_cases": 6
+    },
+    "2,1": {
+      "hgp": 0.020661,
+      "rys": 0.114279,
+      "os": 0.021762,
+      "n_cases": 6
+    },
+    "2,2": {
+      "hgp": 0.014054,
+      "rys": 0.144003,
+      "os": 0.018604,
+      "n_cases": 6
+    },
+    "0,3": {
+      "hgp": 0.016636,
+      "rys": 0.09178,
+      "os": 0.018599,
+      "n_cases": 5
+    },
+    "0,4": {
+      "hgp": 0.011418,
+      "rys": 0.125776,
+      "os": 0.014474,
+      "n_cases": 5
+    },
+    "1,3": {
+      "hgp": 0.014278,
+      "rys": 0.149925,
+      "os": 0.019443,
+      "n_cases": 5
+    },
+    "1,4": {
+      "hgp": 0.00851,
+      "rys": 0.076624,
+      "os": 0.013717,
+      "n_cases": 5
+    },
+    "2,3": {
+      "hgp": 0.010596,
+      "rys": 0.093438,
+      "os": 0.017994,
+      "n_cases": 5
+    },
+    "2,4": {
+      "hgp": 0.00691,
+      "rys": 0.07279,
+      "os": 0.014413,
+      "n_cases": 5
+    },
+    "3,0": {
+      "hgp": 0.016787,
+      "rys": 0.092166,
+      "os": 0.018403,
+      "n_cases": 5
+    },
+    "3,1": {
+      "hgp": 0.014221,
+      "rys": 0.151149,
+      "os": 0.019064,
+      "n_cases": 5
+    },
+    "3,2": {
+      "hgp": 0.009987,
+      "rys": 0.087626,
+      "os": 0.01697,
+      "n_cases": 5
+    },
+    "3,3": {
+      "hgp": 0.007217,
+      "rys": 0.073642,
+      "os": 0.016147,
+      "n_cases": 5
+    },
+    "3,4": {
+      "hgp": 0.005863,
+      "rys": 0.045564,
+      "os": 0.015104,
+      "n_cases": 5
+    },
+    "4,0": {
+      "hgp": 0.011478,
+      "rys": 0.12402,
+      "os": 0.01432,
+      "n_cases": 5
+    },
+    "4,1": {
+      "hgp": 0.009255,
+      "rys": 0.09821,
+      "os": 0.014963,
+      "n_cases": 5
+    },
+    "4,2": {
+      "hgp": 0.007338,
+      "rys": 0.077234,
+      "os": 0.01575,
+      "n_cases": 5
+    },
+    "4,3": {
+      "hgp": 0.00571,
+      "rys": 0.044875,
+      "os": 0.014685,
+      "n_cases": 5
+    },
+    "4,4": {
+      "hgp": 0.005333,
+      "rys": 0.038059,
+      "os": 0.014544,
+      "n_cases": 5
+    },
+    "0,5": {
+      "hgp": 0.011529,
+      "rys": 0.113083,
+      "os": 0.017288,
+      "n_cases": 3
+    },
+    "0,6": {
+      "hgp": 0.012762,
+      "rys": 0.176005,
+      "os": 0.023565,
+      "n_cases": 3
+    },
+    "1,5": {
+      "hgp": 0.005639,
+      "rys": 0.059848,
+      "os": 0.011029,
+      "n_cases": 3
+    },
+    "1,6": {
+      "hgp": 0.006457,
+      "rys": 0.060072,
+      "os": 0.015486,
+      "n_cases": 3
+    },
+    "2,5": {
+      "hgp": 0.005503,
+      "rys": 0.042722,
+      "os": 0.01361,
+      "n_cases": 3
+    },
+    "2,6": {
+      "hgp": 0.006877,
+      "rys": 0.060982,
+      "os": 0.020101,
+      "n_cases": 3
+    },
+    "3,5": {
+      "hgp": 0.006602,
+      "rys": 0.050708,
+      "os": 0.019394,
+      "n_cases": 3
+    },
+    "3,6": {
+      "hgp": 0.008715,
+      "rys": 0.053419,
+      "os": 0.029725,
+      "n_cases": 3
+    },
+    "4,5": {
+      "hgp": 0.008139,
+      "rys": 0.045525,
+      "os": 0.027244,
+      "n_cases": 3
+    },
+    "4,6": {
+      "hgp": 0.011142,
+      "rys": 0.064267,
+      "os": 0.041368,
+      "n_cases": 3
+    },
+    "5,0": {
+      "hgp": 0.011569,
+      "rys": 0.113364,
+      "os": 0.017839,
+      "n_cases": 3
+    },
+    "5,1": {
+      "hgp": 0.005261,
+      "rys": 0.057008,
+      "os": 0.01037,
+      "n_cases": 3
+    },
+    "5,2": {
+      "hgp": 0.005482,
+      "rys": 0.043317,
+      "os": 0.013466,
+      "n_cases": 3
+    },
+    "5,3": {
+      "hgp": 0.006483,
+      "rys": 0.050603,
+      "os": 0.019152,
+      "n_cases": 3
+    },
+    "5,4": {
+      "hgp": 0.007842,
+      "rys": 0.04458,
+      "os": 0.025759,
+      "n_cases": 3
+    },
+    "5,5": {
+      "hgp": 0.009962,
+      "rys": 0.053661,
+      "os": 0.035915,
+      "n_cases": 3
+    },
+    "5,6": {
+      "hgp": 0.01412,
+      "rys": 0.057974,
+      "os": 0.055249,
+      "n_cases": 3
+    },
+    "6,0": {
+      "hgp": 0.013416,
+      "rys": 0.177306,
+      "os": 0.024684,
+      "n_cases": 3
+    },
+    "6,1": {
+      "hgp": 0.006352,
+      "rys": 0.06,
+      "os": 0.014902,
+      "n_cases": 3
+    },
+    "6,2": {
+      "hgp": 0.007184,
+      "rys": 0.064229,
+      "os": 0.020789,
+      "n_cases": 3
+    },
+    "6,3": {
+      "hgp": 0.008327,
+      "rys": 0.052235,
+      "os": 0.027905,
+      "n_cases": 3
+    },
+    "6,4": {
+      "hgp": 0.011313,
+      "rys": 0.06643,
+      "os": 0.042119,
+      "n_cases": 3
+    },
+    "6,5": {
+      "hgp": 0.013923,
+      "rys": 0.057744,
+      "os": 0.054827,
+      "n_cases": 3
+    },
+    "6,6": {
+      "hgp": 0.020289,
+      "rys": 0.075962,
+      "os": 0.08224,
+      "n_cases": 3
+    },
+    "0,7": {
+      "hgp": 0.013805,
+      "rys": 0.162727,
+      "os": 0.030805,
+      "n_cases": 1
+    },
+    "0,8": {
+      "hgp": 0.015901,
+      "rys": 0.230203,
+      "os": 0.041685,
+      "n_cases": 1
+    },
+    "1,7": {
+      "hgp": 0.007587,
+      "rys": 0.080847,
+      "os": 0.021098,
+      "n_cases": 1
+    },
+    "1,8": {
+      "hgp": 0.009368,
+      "rys": 0.082591,
+      "os": 0.029995,
+      "n_cases": 1
+    },
+    "2,7": {
+      "hgp": 0.008901,
+      "rys": 0.062539,
+      "os": 0.029549,
+      "n_cases": 1
+    },
+    "2,8": {
+      "hgp": 0.011248,
+      "rys": 0.086972,
+      "os": 0.041373,
+      "n_cases": 1
+    },
+    "3,7": {
+      "hgp": 0.011661,
+      "rys": 0.074432,
+      "os": 0.04366,
+      "n_cases": 1
+    },
+    "3,8": {
+      "hgp": 0.014859,
+      "rys": 0.077519,
+      "os": 0.060491,
+      "n_cases": 1
+    },
+    "4,7": {
+      "hgp": 0.015245,
+      "rys": 0.068438,
+      "os": 0.061311,
+      "n_cases": 1
+    },
+    "4,8": {
+      "hgp": 0.020098,
+      "rys": 0.087695,
+      "os": 0.086044,
+      "n_cases": 1
+    },
+    "5,7": {
+      "hgp": 0.019376,
+      "rys": 0.075004,
+      "os": 0.080616,
+      "n_cases": 1
+    },
+    "5,8": {
+      "hgp": 0.026421,
+      "rys": 0.081598,
+      "os": 0.115501,
+      "n_cases": 1
+    },
+    "6,7": {
+      "hgp": 0.027966,
+      "rys": 0.084014,
+      "os": 0.123439,
+      "n_cases": 1
+    },
+    "6,8": {
+      "hgp": 0.040588,
+      "rys": 0.114158,
+      "os": 0.184518,
+      "n_cases": 1
+    },
+    "7,0": {
+      "hgp": 0.018143,
+      "rys": 0.211577,
+      "os": 0.041267,
+      "n_cases": 1
+    },
+    "7,1": {
+      "hgp": 0.007744,
+      "rys": 0.082714,
+      "os": 0.021159,
+      "n_cases": 1
+    },
+    "7,2": {
+      "hgp": 0.008795,
+      "rys": 0.062491,
+      "os": 0.028689,
+      "n_cases": 1
+    },
+    "7,3": {
+      "hgp": 0.011074,
+      "rys": 0.071265,
+      "os": 0.041243,
+      "n_cases": 1
+    },
+    "7,4": {
+      "hgp": 0.012563,
+      "rys": 0.056217,
+      "os": 0.047659,
+      "n_cases": 1
+    },
+    "7,5": {
+      "hgp": 0.017945,
+      "rys": 0.074003,
+      "os": 0.074317,
+      "n_cases": 1
+    },
+    "7,6": {
+      "hgp": 0.029645,
+      "rys": 0.086194,
+      "os": 0.130469,
+      "n_cases": 1
+    },
+    "7,7": {
+      "hgp": 0.030428,
+      "rys": 0.107037,
+      "os": 0.135007,
+      "n_cases": 1
+    },
+    "7,8": {
+      "hgp": 0.060089,
+      "rys": 0.131697,
+      "os": 0.271013,
+      "n_cases": 1
+    },
+    "8,0": {
+      "hgp": 0.016661,
+      "rys": 0.235358,
+      "os": 0.044255,
+      "n_cases": 1
+    },
+    "8,1": {
+      "hgp": 0.009277,
+      "rys": 0.084893,
+      "os": 0.029276,
+      "n_cases": 1
+    },
+    "8,2": {
+      "hgp": 0.011605,
+      "rys": 0.093854,
+      "os": 0.04299,
+      "n_cases": 1
+    },
+    "8,3": {
+      "hgp": 0.014589,
+      "rys": 0.078741,
+      "os": 0.058827,
+      "n_cases": 1
+    },
+    "8,4": {
+      "hgp": 0.01904,
+      "rys": 0.083934,
+      "os": 0.081518,
+      "n_cases": 1
+    },
+    "8,5": {
+      "hgp": 0.024335,
+      "rys": 0.080917,
+      "os": 0.107348,
+      "n_cases": 1
+    },
+    "8,6": {
+      "hgp": 0.039255,
+      "rys": 0.114132,
+      "os": 0.178275,
+      "n_cases": 1
+    },
+    "8,7": {
+      "hgp": 0.057816,
+      "rys": 0.129048,
+      "os": 0.254188,
+      "n_cases": 1
+    },
+    "8,8": {
+      "hgp": 0.081526,
+      "rys": 0.170679,
+      "os": 0.353995,
+      "n_cases": 1
+    }
+  },
+  "buckets": [
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 0,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0483022,
+      "rys_ms_per_q": 0.0164044,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 0,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0175989,
+      "rys_ms_per_q": 0.00651333,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 0,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0137165,
+      "rys_ms_per_q": 0.078023,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 0,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0123735,
+      "rys_ms_per_q": 0.0662515,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 0,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0114175,
+      "rys_ms_per_q": 0.125776,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 0,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0106145,
+      "rys_ms_per_q": 0.104525,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 0,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0119485,
+      "rys_ms_per_q": 0.160707,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 0,
+      "L_CD": 7,
+      "hgp_ms_per_q": 0.013805,
+      "rys_ms_per_q": 0.162727,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 0,
+      "L_CD": 8,
+      "hgp_ms_per_q": 0.0159011,
+      "rys_ms_per_q": 0.230203,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 1,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0175878,
+      "rys_ms_per_q": 0.00643778,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 1,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.006723,
+      "rys_ms_per_q": 0.0367995,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 1,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.005607,
+      "rys_ms_per_q": 0.0277665,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 1,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0051305,
+      "rys_ms_per_q": 0.0503125,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 1,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0051905,
+      "rys_ms_per_q": 0.043642,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 1,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.005162,
+      "rys_ms_per_q": 0.0554485,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 1,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.006214,
+      "rys_ms_per_q": 0.056643,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 1,
+      "L_CD": 7,
+      "hgp_ms_per_q": 0.0075865,
+      "rys_ms_per_q": 0.0808465,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 1,
+      "L_CD": 8,
+      "hgp_ms_per_q": 0.0093675,
+      "rys_ms_per_q": 0.0825915,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 2,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.013727,
+      "rys_ms_per_q": 0.077827,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 2,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.005545,
+      "rys_ms_per_q": 0.027688,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 2,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0047935,
+      "rys_ms_per_q": 0.045743,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 2,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.004746,
+      "rys_ms_per_q": 0.038596,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 2,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0050645,
+      "rys_ms_per_q": 0.0508275,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 2,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.005364,
+      "rys_ms_per_q": 0.042163,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 2,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0068405,
+      "rys_ms_per_q": 0.0602775,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 2,
+      "L_CD": 7,
+      "hgp_ms_per_q": 0.0089005,
+      "rys_ms_per_q": 0.062539,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 2,
+      "L_CD": 8,
+      "hgp_ms_per_q": 0.0112475,
+      "rys_ms_per_q": 0.086972,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 3,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0133405,
+      "rys_ms_per_q": 0.0708225,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 3,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0051875,
+      "rys_ms_per_q": 0.05097,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 3,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0047515,
+      "rys_ms_per_q": 0.0383725,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 3,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.00508,
+      "rys_ms_per_q": 0.0492835,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 3,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0058635,
+      "rys_ms_per_q": 0.0447835,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 3,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.006496,
+      "rys_ms_per_q": 0.0507085,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 3,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0087155,
+      "rys_ms_per_q": 0.0530175,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 3,
+      "L_CD": 7,
+      "hgp_ms_per_q": 0.0116605,
+      "rys_ms_per_q": 0.074432,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 3,
+      "L_CD": 8,
+      "hgp_ms_per_q": 0.014859,
+      "rys_ms_per_q": 0.077519,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 4,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.011478,
+      "rys_ms_per_q": 0.12402,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 4,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.005133,
+      "rys_ms_per_q": 0.044044,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 4,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0050955,
+      "rys_ms_per_q": 0.0507665,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 4,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.00571,
+      "rys_ms_per_q": 0.042516,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 4,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0067315,
+      "rys_ms_per_q": 0.0524305,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 4,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.008139,
+      "rys_ms_per_q": 0.0455245,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 4,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0111425,
+      "rys_ms_per_q": 0.064267,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 4,
+      "L_CD": 7,
+      "hgp_ms_per_q": 0.015245,
+      "rys_ms_per_q": 0.068438,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 4,
+      "L_CD": 8,
+      "hgp_ms_per_q": 0.020098,
+      "rys_ms_per_q": 0.0876955,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 5,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.011043,
+      "rys_ms_per_q": 0.107575,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 5,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.005238,
+      "rys_ms_per_q": 0.0561455,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 5,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.005482,
+      "rys_ms_per_q": 0.0433165,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 5,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.006483,
+      "rys_ms_per_q": 0.0506025,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 5,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0083255,
+      "rys_ms_per_q": 0.045774,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 5,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0099625,
+      "rys_ms_per_q": 0.053405,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 5,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0141205,
+      "rys_ms_per_q": 0.0576165,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 5,
+      "L_CD": 7,
+      "hgp_ms_per_q": 0.019376,
+      "rys_ms_per_q": 0.0750035,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 5,
+      "L_CD": 8,
+      "hgp_ms_per_q": 0.026421,
+      "rys_ms_per_q": 0.081598,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 6,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0134165,
+      "rys_ms_per_q": 0.177306,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 6,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0063345,
+      "rys_ms_per_q": 0.05788,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 6,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0071845,
+      "rys_ms_per_q": 0.0642295,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 6,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0077505,
+      "rys_ms_per_q": 0.047622,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 6,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.012032,
+      "rys_ms_per_q": 0.0688845,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 6,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0130485,
+      "rys_ms_per_q": 0.056591,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 6,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.020817,
+      "rys_ms_per_q": 0.076756,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 6,
+      "L_CD": 7,
+      "hgp_ms_per_q": 0.0279655,
+      "rys_ms_per_q": 0.084014,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 6,
+      "L_CD": 8,
+      "hgp_ms_per_q": 0.040588,
+      "rys_ms_per_q": 0.114158,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 7,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.018143,
+      "rys_ms_per_q": 0.211577,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 7,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.007744,
+      "rys_ms_per_q": 0.082714,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 7,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0087945,
+      "rys_ms_per_q": 0.062491,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 7,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0110735,
+      "rys_ms_per_q": 0.0712655,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 7,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0125625,
+      "rys_ms_per_q": 0.056217,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 7,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0179455,
+      "rys_ms_per_q": 0.074003,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 7,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.029645,
+      "rys_ms_per_q": 0.086194,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 7,
+      "L_CD": 7,
+      "hgp_ms_per_q": 0.030428,
+      "rys_ms_per_q": 0.107037,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 7,
+      "L_CD": 8,
+      "hgp_ms_per_q": 0.0600885,
+      "rys_ms_per_q": 0.131697,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 8,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0166606,
+      "rys_ms_per_q": 0.235358,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 8,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.009277,
+      "rys_ms_per_q": 0.0848935,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 8,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.011605,
+      "rys_ms_per_q": 0.0938535,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 8,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0145885,
+      "rys_ms_per_q": 0.0787405,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 8,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.01904,
+      "rys_ms_per_q": 0.0839345,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 8,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0243355,
+      "rys_ms_per_q": 0.080917,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 8,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.039255,
+      "rys_ms_per_q": 0.114132,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 8,
+      "L_CD": 7,
+      "hgp_ms_per_q": 0.057816,
+      "rys_ms_per_q": 0.129048,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pV5Z",
+      "L_AB": 8,
+      "L_CD": 8,
+      "hgp_ms_per_q": 0.0815255,
+      "rys_ms_per_q": 0.170679,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 0,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.05588,
+      "rys_ms_per_q": 0.01888,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 0,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.019575,
+      "rys_ms_per_q": 0.00725278,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 0,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0149914,
+      "rys_ms_per_q": 0.0854753,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 0,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0128797,
+      "rys_ms_per_q": 0.0691568,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 0,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0101952,
+      "rys_ms_per_q": 0.113348,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 0,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0115292,
+      "rys_ms_per_q": 0.113083,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 0,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0127618,
+      "rys_ms_per_q": 0.176005,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 1,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0198639,
+      "rys_ms_per_q": 0.00736944,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 1,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.00760262,
+      "rys_ms_per_q": 0.0414074,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 1,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.006088,
+      "rys_ms_per_q": 0.029198,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 1,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.005304,
+      "rys_ms_per_q": 0.0542795,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 1,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.004676,
+      "rys_ms_per_q": 0.038999,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 1,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.005639,
+      "rys_ms_per_q": 0.0598485,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 1,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.00645707,
+      "rys_ms_per_q": 0.0600717,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 2,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0150548,
+      "rys_ms_per_q": 0.0861065,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 2,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.006036,
+      "rys_ms_per_q": 0.030998,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 2,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0050795,
+      "rys_ms_per_q": 0.047352,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 2,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.004604,
+      "rys_ms_per_q": 0.037237,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 2,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.004346,
+      "rys_ms_per_q": 0.041946,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 2,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.005503,
+      "rys_ms_per_q": 0.0427225,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 2,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.006877,
+      "rys_ms_per_q": 0.0609815,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 3,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0129426,
+      "rys_ms_per_q": 0.0688831,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 3,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.005203,
+      "rys_ms_per_q": 0.051276,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 3,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.004788,
+      "rys_ms_per_q": 0.038676,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 3,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.00482,
+      "rys_ms_per_q": 0.047805,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 3,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.004972,
+      "rys_ms_per_q": 0.034763,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 3,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.006602,
+      "rys_ms_per_q": 0.050172,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 3,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0085255,
+      "rys_ms_per_q": 0.0534185,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 4,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0103494,
+      "rys_ms_per_q": 0.114042,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 4,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0044925,
+      "rys_ms_per_q": 0.0377255,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 4,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.004372,
+      "rys_ms_per_q": 0.043133,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 4,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.004992,
+      "rys_ms_per_q": 0.03485,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 4,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0051405,
+      "rys_ms_per_q": 0.035637,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 4,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0071215,
+      "rys_ms_per_q": 0.0375845,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 4,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.00965,
+      "rys_ms_per_q": 0.0530935,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 5,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0115692,
+      "rys_ms_per_q": 0.113364,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 5,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0052615,
+      "rys_ms_per_q": 0.0570075,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 5,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.005377,
+      "rys_ms_per_q": 0.042155,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 5,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0062535,
+      "rys_ms_per_q": 0.048556,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 5,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0068975,
+      "rys_ms_per_q": 0.038899,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 5,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0101995,
+      "rys_ms_per_q": 0.053661,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 5,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0141705,
+      "rys_ms_per_q": 0.058205,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 6,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0131891,
+      "rys_ms_per_q": 0.173909,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 6,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.00635152,
+      "rys_ms_per_q": 0.0600005,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 6,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0068355,
+      "rys_ms_per_q": 0.062712,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 6,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0083275,
+      "rys_ms_per_q": 0.0522355,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 6,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0095955,
+      "rys_ms_per_q": 0.0534375,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 6,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.014057,
+      "rys_ms_per_q": 0.057744,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "helium",
+      "basis": "cc-pVQZ",
+      "L_AB": 6,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0202895,
+      "rys_ms_per_q": 0.07548,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 0,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.047426,
+      "rys_ms_per_q": 0.0171084,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 0,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0365816,
+      "rys_ms_per_q": 0.0139243,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 0,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0235612,
+      "rys_ms_per_q": 0.139365,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 0,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0166359,
+      "rys_ms_per_q": 0.0917798,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 0,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.00938095,
+      "rys_ms_per_q": 0.100709,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 1,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0366803,
+      "rys_ms_per_q": 0.0137611,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 1,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0289014,
+      "rys_ms_per_q": 0.171365,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 1,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0191715,
+      "rys_ms_per_q": 0.105315,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 1,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0142784,
+      "rys_ms_per_q": 0.149925,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 1,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0085102,
+      "rys_ms_per_q": 0.0766236,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 2,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0237307,
+      "rys_ms_per_q": 0.139322,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 2,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0193345,
+      "rys_ms_per_q": 0.105796,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 2,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.013514,
+      "rys_ms_per_q": 0.140458,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 2,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.010596,
+      "rys_ms_per_q": 0.0934375,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 2,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.00691005,
+      "rys_ms_per_q": 0.0727899,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 3,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0167867,
+      "rys_ms_per_q": 0.0921657,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 3,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0142209,
+      "rys_ms_per_q": 0.151149,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 3,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0106575,
+      "rys_ms_per_q": 0.093843,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 3,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.00909336,
+      "rys_ms_per_q": 0.0996327,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 3,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.00693519,
+      "rys_ms_per_q": 0.0522169,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 4,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0104082,
+      "rys_ms_per_q": 0.11816,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 4,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0092551,
+      "rys_ms_per_q": 0.0982098,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 4,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.00733787,
+      "rys_ms_per_q": 0.0772336,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 4,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.00662037,
+      "rys_ms_per_q": 0.0514894,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "6-31g*",
+      "L_AB": 4,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.00533333,
+      "rys_ms_per_q": 0.038059,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 0,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.340811,
+      "rys_ms_per_q": 0.116605,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 0,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.134536,
+      "rys_ms_per_q": 0.050363,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 0,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.070512,
+      "rys_ms_per_q": 0.426109,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 0,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0394675,
+      "rys_ms_per_q": 0.214772,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 0,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0238401,
+      "rys_ms_per_q": 0.270621,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 1,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.139448,
+      "rys_ms_per_q": 0.0523895,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 1,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.057539,
+      "rys_ms_per_q": 0.359545,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 1,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0322385,
+      "rys_ms_per_q": 0.175162,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 1,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0173835,
+      "rys_ms_per_q": 0.189692,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 1,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0120011,
+      "rys_ms_per_q": 0.108407,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 2,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.074106,
+      "rys_ms_per_q": 0.442737,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 2,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.030351,
+      "rys_ms_per_q": 0.169911,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 2,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0166215,
+      "rys_ms_per_q": 0.176091,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 2,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0107145,
+      "rys_ms_per_q": 0.0970715,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 2,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0077525,
+      "rys_ms_per_q": 0.083747,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 3,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0386805,
+      "rys_ms_per_q": 0.217067,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 3,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.017646,
+      "rys_ms_per_q": 0.190167,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 3,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.010531,
+      "rys_ms_per_q": 0.094166,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 3,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0072175,
+      "rys_ms_per_q": 0.073642,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 3,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.00578042,
+      "rys_ms_per_q": 0.0455642,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 4,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.024881,
+      "rys_ms_per_q": 0.272056,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 4,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0116712,
+      "rys_ms_per_q": 0.110999,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 4,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0079475,
+      "rys_ms_per_q": 0.0855185,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 4,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.00568188,
+      "rys_ms_per_q": 0.044875,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVDZ",
+      "L_AB": 4,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.00533333,
+      "rys_ms_per_q": 0.0362426,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 0,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.174809,
+      "rys_ms_per_q": 0.063782,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 0,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.085221,
+      "rys_ms_per_q": 0.031692,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 0,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0488135,
+      "rys_ms_per_q": 0.299605,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 0,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.032221,
+      "rys_ms_per_q": 0.181283,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 0,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.022827,
+      "rys_ms_per_q": 0.262652,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 0,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0211175,
+      "rys_ms_per_q": 0.210884,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 0,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0230965,
+      "rys_ms_per_q": 0.321756,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 1,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.090874,
+      "rys_ms_per_q": 0.0334435,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 1,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0333375,
+      "rys_ms_per_q": 0.199239,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 1,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0215545,
+      "rys_ms_per_q": 0.118585,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 1,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0168145,
+      "rys_ms_per_q": 0.179918,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 1,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0115045,
+      "rys_ms_per_q": 0.103477,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 1,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.011237,
+      "rys_ms_per_q": 0.131573,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 1,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.013398,
+      "rys_ms_per_q": 0.138047,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 2,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0518625,
+      "rys_ms_per_q": 0.305841,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 2,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0219885,
+      "rys_ms_per_q": 0.122761,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 2,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.014594,
+      "rys_ms_per_q": 0.147548,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 2,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0107395,
+      "rys_ms_per_q": 0.094736,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 2,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.009126,
+      "rys_ms_per_q": 0.0916045,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 2,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.009096,
+      "rys_ms_per_q": 0.0772405,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 2,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.0111095,
+      "rys_ms_per_q": 0.111655,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 3,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0344385,
+      "rys_ms_per_q": 0.193464,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 3,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0147955,
+      "rys_ms_per_q": 0.157669,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 3,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0099865,
+      "rys_ms_per_q": 0.0876265,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 3,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0084615,
+      "rys_ms_per_q": 0.089152,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 3,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.007455,
+      "rys_ms_per_q": 0.0584585,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 3,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0082585,
+      "rys_ms_per_q": 0.0684665,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 3,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.011174,
+      "rys_ms_per_q": 0.0708525,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 4,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.021983,
+      "rys_ms_per_q": 0.243701,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 4,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0116175,
+      "rys_ms_per_q": 0.107693,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 4,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.008586,
+      "rys_ms_per_q": 0.092074,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 4,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0079635,
+      "rys_ms_per_q": 0.0638585,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 4,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.0071275,
+      "rys_ms_per_q": 0.055758,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 4,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.0084325,
+      "rys_ms_per_q": 0.047276,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 4,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.011676,
+      "rys_ms_per_q": 0.065828,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 5,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0300485,
+      "rys_ms_per_q": 0.304356,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 5,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.010615,
+      "rys_ms_per_q": 0.127737,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 5,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.007876,
+      "rys_ms_per_q": 0.066775,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 5,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0103975,
+      "rys_ms_per_q": 0.0906015,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 5,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.007842,
+      "rys_ms_per_q": 0.0445795,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 5,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.009822,
+      "rys_ms_per_q": 0.053738,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 5,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.013966,
+      "rys_ms_per_q": 0.057974,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 6,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0242615,
+      "rys_ms_per_q": 0.327873,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 6,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0131705,
+      "rys_ms_per_q": 0.135984,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 6,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0111305,
+      "rys_ms_per_q": 0.112035,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 6,
+      "L_CD": 3,
+      "hgp_ms_per_q": 0.0108255,
+      "rys_ms_per_q": 0.0727935,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 6,
+      "L_CD": 4,
+      "hgp_ms_per_q": 0.011313,
+      "rys_ms_per_q": 0.06643,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 6,
+      "L_CD": 5,
+      "hgp_ms_per_q": 0.013923,
+      "rys_ms_per_q": 0.0583635,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "cc-pVTZ",
+      "L_AB": 6,
+      "L_CD": 6,
+      "hgp_ms_per_q": 0.019515,
+      "rys_ms_per_q": 0.0759615,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "sto-3g",
+      "L_AB": 0,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.07818,
+      "rys_ms_per_q": 0.02813,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "sto-3g",
+      "L_AB": 0,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.08195,
+      "rys_ms_per_q": 0.030825,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "sto-3g",
+      "L_AB": 0,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0866,
+      "rys_ms_per_q": 0.522783,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "sto-3g",
+      "L_AB": 1,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0830333,
+      "rys_ms_per_q": 0.0312083,
+      "best_engine": "rys",
+      "rule_pick": "rys",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "sto-3g",
+      "L_AB": 1,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0889514,
+      "rys_ms_per_q": 0.531194,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "sto-3g",
+      "L_AB": 1,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.0963194,
+      "rys_ms_per_q": 0.534556,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "sto-3g",
+      "L_AB": 2,
+      "L_CD": 0,
+      "hgp_ms_per_q": 0.0881833,
+      "rys_ms_per_q": 0.528867,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "sto-3g",
+      "L_AB": 2,
+      "L_CD": 1,
+      "hgp_ms_per_q": 0.0940972,
+      "rys_ms_per_q": 0.535556,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    },
+    {
+      "molecule": "water",
+      "basis": "sto-3g",
+      "L_AB": 2,
+      "L_CD": 2,
+      "hgp_ms_per_q": 0.109028,
+      "rys_ms_per_q": 1.19681,
+      "best_engine": "hgp",
+      "rule_pick": "hgp",
+      "overhead_vs_best": 0.0
+    }
+  ]
+}

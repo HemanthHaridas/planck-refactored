@@ -3,6 +3,7 @@
 The main teaching document is:
 
 - `docs/PLANCK_TEACHING_GUIDE.md`
+- `docs/CCGEN_TEACHING_GUIDE.md` documents the Python coupled-cluster equation generator
 
 To export it as a standalone static webpage:
 
