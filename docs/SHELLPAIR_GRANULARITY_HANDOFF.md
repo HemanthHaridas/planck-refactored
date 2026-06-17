@@ -371,55 +371,63 @@ None of these block the landed work.
 
     Net B-2: the hoisted path exists and is proven equal to the per-component
     path (to ≤1e-13), but nothing in production calls it yet. ShortRange = two
-    snapshots combined per component, as in OS/HGP. Then **B-3 ships it on the
-    Auto path (unblocked); B-2.5 + B-4 ship it on explicit `engine rys`** (B-2.5
-    first, because that path drives the basin-sensitive SA-2 gate).
+    snapshots combined per component, as in OS/HGP. **B-2.5 (CASSCF hardening)
+    must land before *either* B-3 or B-4** — both adopt the hoisted (reordered)
+    order on a Rys path that a basin-sensitive SA-CASSCF run can reach.
 
-  - **B-3 — wire into the Auto path (the actual win, and NOT blocked by the basin
-    issue).** In `_compute_2e_auto`'s Rys-chosen branch, build a
-    `RysHoistedQuartet` once per `(gA,gB,gC,gD)` shell quartet, lazily on the
-    first surviving Rys component (same lazy-`prepare` discipline as A4-2's
-    `HoistedQuartet`, so screened quartets pay nothing), and have surviving
-    components read out of it instead of calling `_auto_contracted_eri` per
-    component. Per-component Schwarz/orbit/scatter unchanged. **Adopts the
-    hoisted (reordered) order on the Auto path only**, so it is gated at the
-    1e-13 ERI bar, not bitwise.
-
-    Crucially, **B-3 does not touch the basin gate.** That gate runs
-    `engine rys` → `_compute_2e` (the *explicit*-Rys path), which keeps calling
-    the per-pair `_rys_contracted_eri`; only `_compute_2e_auto` changes here. So
-    B-3 ships the perf win on the default engine **without** the CASSCF
-    dependency. Gate: `ne_rhf_ccpvqz_highL_engine_os_vs_rys` (≤5e-9 SCF energy),
-    `ne_rhf_ccpvqz_highL_pyscf`, `planck-compute-2e` Rys-Auto (≤1e-12),
-    smoke/core/extended. Revert: restore the per-component `_auto_contracted_eri`
-    call.
-
-  - **B-2.5 — harden the SA-2 CASSCF plateau-escape (PREREQUISITE for B-4 only).**
-    B-2a established that the hoisted order perturbs Rys ERIs at ~1e-16 and that
-    `water_casscf_sa2_sto3g_sad_guess_uphill` (which runs `engine rys`) is
-    sensitive enough to flip basins on it. **This blocks B-4, not B-3** — only B-4
-    adopts the hoisted order on the explicit-Rys `_compute_2e` the gate exercises.
-    The gate's fragility is the real issue, not the integral change: the optimizer
-    should not sit 1e-16 from the wrong basin. This is the narrow hardening the
-    docs already call for (vault Open Work / CASSCF "Future hardening"): replace
-    the literal `reported_gnorm < 100·tol_mcscf_grad` plateau screen with an
-    explicit `sa_g`-stationarity assertion, and add a
+  - **B-2.5 — harden the SA-2 CASSCF plateau-escape (PREREQUISITE for B-3 AND
+    B-4).** B-2a established that adopting the hoisted order perturbs Rys ERIs at
+    ~1e-16, and that `water_casscf_sa2_sto3g_sad_guess_uphill` is sensitive enough
+    to flip from its expected SA-2 basin (−74.7877864784) to the other stationary
+    point (−74.7751377977) on that perturbation. The fragility is the real issue,
+    not the integral change: the optimizer should not sit 1e-16 from the wrong
+    basin. Narrow hardening the docs already call for (vault Open Work / CASSCF
+    "Future hardening"): replace the literal `reported_gnorm < 100·tol_mcscf_grad`
+    plateau screen with an explicit `sa_g`-stationarity assertion, and add a
     `casscf_converged_via_plateau` diagnostic the runner asserts (`false` for the
     three normal SA-2 cases, `true` only for the SAD-uphill case). Goal: the
     uphill case lands −74.7877864784 regardless of a 1e-16 ERI perturbation, so
     the gate is engine/rounding-robust. CASSCF work
-    (`src/post_hf/casscf/casscf.cpp`), out of the integral scope. Gate: all 11
-    PySCF CASSCF cases green; uphill case lands its basin under *both* per-pair
-    and hoisted Rys orders. Until B-2.5 lands, B-4 stays blocked (B-3 does not).
+    (`src/post_hf/casscf/casscf.cpp`), out of the integral scope but on the
+    critical path. Gate: all 11 PySCF CASSCF cases green; uphill case lands its
+    basin under *both* the per-pair and the hoisted Rys orders. Until B-2.5
+    lands, B-3 and B-4 both stay blocked.
 
-  - **B-4 (optional) — explicit `engine rys` (`_compute_2e`).** Same wiring in the
-    non-Auto Rys tensor/Fock builds. Lower value (Auto is the default; explicit
-    `engine rys` is rare), so defer unless explicitly wanted. Also depends on
-    B-2.5: the basin-sensitive SA-2 gate runs `engine rys`, so it is `_compute_2e`
-    (the non-Auto path) that the gate actually exercises — B-4 adopting the
-    hoisted order there is in fact what first trips the basin flip. Gate:
-    `planck-hgp-engine-smoke`-style Rys self-consistency on g shells + the robust
-    SA-2 uphill case.
+  - **B-3 — wire into the Auto path (the actual win). Blocked by B-2.5.** In
+    `_compute_2e_auto`'s Rys-chosen branch, build a `RysHoistedQuartet` once per
+    `(gA,gB,gC,gD)` shell quartet, lazily on the first surviving Rys component
+    (same lazy-`prepare` discipline as A4-2's `HoistedQuartet`, so screened
+    quartets pay nothing), and have surviving components read out of it instead of
+    calling `_auto_contracted_eri` per component. Per-component
+    Schwarz/orbit/scatter unchanged. **Adopts the hoisted (reordered) order on the
+    Auto path**, so it is gated at the 1e-13 ERI bar, not bitwise.
+
+    **Correction (this de-risking claim was wrong earlier):** B-3 *does* expose
+    the reorder to a basin-sensitive optimizer. `engine auto` dispatches through
+    `base.h` → `_compute_2e_auto` (the function B-3 changes), and the three-way
+    `kAutoEngine` table routes the `(7,8)`/`(8,8)` buckets to Rys. Any quartet
+    reaching those buckets needs g functions (`L_AB ≥ 7` ⇒ g+g); they do not
+    occur below cc-pVQZ, so cc-pVTZ does not hit them, but **an `engine auto`
+    SA-CASSCF on a g-basis (cc-pVQZ+) runs the hoisted Rys path and flips the same
+    basin** as the explicit-`engine rys` case did. The current SA-2 gate happens
+    to use explicit `engine rys` so it would not *catch* a B-3 regression — that
+    is a test gap, not safety. Hence B-3 depends on B-2.5, and B-3's gate set
+    should **add an `engine auto` SA-CASSCF case on a g-basis** (or a cheaper
+    proxy that routes a basin-sensitive optimizer through `_compute_2e_auto`'s
+    Rys branch) so the Auto path's basin robustness is actually exercised. Other
+    gates: `ne_rhf_ccpvqz_highL_engine_os_vs_rys` (≤5e-9 SCF energy),
+    `ne_rhf_ccpvqz_highL_pyscf`, `planck-compute-2e` Rys-Auto (≤1e-12),
+    smoke/core/extended. Revert: restore the per-component `_auto_contracted_eri`
+    call.
+
+  - **B-4 (optional) — explicit `engine rys` (`_compute_2e`). Blocked by B-2.5.**
+    Same wiring in the non-Auto Rys tensor/Fock builds. Lower value (Auto is the
+    default; explicit `engine rys` is rare), so defer unless explicitly wanted.
+    The *existing* SA-2 gate runs `engine rys` → `_compute_2e`, so B-4 is the step
+    that trips that specific committed gate (B-3 trips only a new Auto-g-basis
+    case). Both adopt the same hoisted order and both need B-2.5. Gate:
+    `planck-hgp-engine-smoke`-style Rys self-consistency on g shells + the
+    now-robust SA-2 uphill case under `engine rys`.
 
   B-1 established the readout property B-2/B-3 rely on: the max-box build equals
   the per-component build at every component coordinate to ≤4e-16 (bitwise where
