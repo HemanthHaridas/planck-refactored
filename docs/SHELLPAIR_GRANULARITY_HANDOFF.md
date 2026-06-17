@@ -308,7 +308,14 @@ None of these block the landed work.
     quartet** at `(max box, n_max roots)`, snapshots it, and reads each Cartesian
     component out via a per-component HRR. Not wired into any entry point in B-2
     — validated only against `_rys_contracted_eri`. B-2a folded into B-1; the
-    remaining three sub-steps (B-2b/c/d) are each gated and revertible:
+    remaining three sub-steps (B-2b/c/d) are each gated and revertible.
+
+    **Execution order: do B-2.5 (below) FIRST.** It is independent of the hoist,
+    testable against current code, and the highest-risk piece; the B-2b/c/d
+    integral work is only worth building if B-2.5 proves the basin gate can be
+    made rounding-robust. So the real sequence is **B-2.5a/b → B-2b → B-2c →
+    B-2d → B-3 → B-4** (B-2.5 is listed after B-2 here only to keep the
+    integral-side sub-steps grouped).
 
     - **B-2a — FOLDED INTO B-1; the "bitwise refactor" framing was wrong.**
       B-2a was scoped as a bitwise no-op that factors out `_rys_contract_sum`
@@ -397,22 +404,71 @@ None of these block the landed work.
     order on a Rys path that a basin-sensitive SA-CASSCF run can reach.
 
   - **B-2.5 — harden the SA-2 CASSCF plateau-escape (PREREQUISITE for B-3 AND
-    B-4).** B-2a established that adopting the hoisted order perturbs Rys ERIs at
-    ~1e-16, and that `water_casscf_sa2_sto3g_sad_guess_uphill` is sensitive enough
-    to flip from its expected SA-2 basin (−74.7877864784) to the other stationary
-    point (−74.7751377977) on that perturbation. The fragility is the real issue,
-    not the integral change: the optimizer should not sit 1e-16 from the wrong
-    basin. Narrow hardening the docs already call for (vault Open Work / CASSCF
-    "Future hardening"): replace the literal `reported_gnorm < 100·tol_mcscf_grad`
-    plateau screen with an explicit `sa_g`-stationarity assertion, and add a
-    `casscf_converged_via_plateau` diagnostic the runner asserts (`false` for the
-    three normal SA-2 cases, `true` only for the SAD-uphill case). Goal: the
-    uphill case lands −74.7877864784 regardless of a 1e-16 ERI perturbation, so
-    the gate is engine/rounding-robust. CASSCF work
-    (`src/post_hf/casscf/casscf.cpp`), out of the integral scope but on the
-    critical path. Gate: all 11 PySCF CASSCF cases green; uphill case lands its
-    basin under *both* the per-pair and the hoisted Rys orders. Until B-2.5
-    lands, B-3 and B-4 both stay blocked.
+    B-4; DO THIS FIRST).** Best done *before* any B-2 integral work — it is pure
+    CASSCF-convergence logic, independent of the hoist, fully testable against the
+    current per-pair production code, and it is the highest-uncertainty piece
+    (touches a basin-sensitive optimizer with 11 PySCF gates), so front-loading it
+    surfaces any "this basin isn't cleanly stationary" surprise before building
+    B-2b/c/d.
+
+    **What the code actually does (read, not assumed).** The plateau-exit is
+    `casscf.cpp:1238` — `stagnation_streak ≥ 2 && small_energy_change &&
+    accepted_micro_step_plateau && reported_gnorm < 100·tol_mcscf_grad`.
+    `reported_gnorm = st_current.g_orb.cwiseAbs().maxCoeff()` and
+    `g_orb = build_weighted_root_orbital_gradient(...)`, so **`reported_gnorm` is
+    already `‖sa_g‖∞`** — the screen gates on the right quantity, but the
+    threshold `100·tol_mcscf_grad ≈ 1e-3` (default tol 1e-5) is loose and
+    implicit. Measured on the uphill case: at the plateau exit `sa_g = 3.45e-10`
+    (descending 1.9e-2 → 1.6e-2 → … → 1e-10 over the last macros), while
+    `max_root_g` plateaus at 7.69e-2 (per-root screens never vanish under SA — the
+    documented reason this exit exists). So the loose screen passes *trivially*;
+    the basin flip happened during the descent, not at the exit.
+
+    **Why tightening makes it rounding-robust.** Anchor the plateau exit to a
+    regime where `sa_g` is many orders below the threshold: require
+    `sa_g ≤ 1e-6` (or a small multiple of `tol_mcscf_grad`), comfortably above the
+    observed 3.45e-10 but ~1000× below the current 1e-3. At `sa_g ≈ 1e-10` a
+    1e-16 ERI perturbation cannot move `sa_g` across 1e-6, so the exit decision is
+    deterministic w.r.t. integral rounding. (This does not, and cannot, make the
+    *energy* bitwise across orders — see "What B-2 cannot do" — it makes the
+    *gate* insensitive to the ~1e-16 reorder, which is what's needed.)
+
+    Three sub-steps:
+
+    - **B-2.5a — tighten the plateau-exit `sa_g` bound (the load-bearing fix).**
+      Replace the `reported_gnorm < 100·tol_mcscf_grad` term at `casscf.cpp:1238`
+      with an explicit stationarity bound (`reported_gnorm <= max(1e-6,
+      sa_plateau_factor·tol_mcscf_grad)`, factor chosen so the uphill case's
+      3.45e-10 passes with wide margin and the loose 1e-3 regime no longer
+      qualifies). Gate: all 11 PySCF CASSCF cases still green, **uphill case still
+      lands −74.7877864784** (the exit now fires at the same ~1e-10 `sa_g` it
+      already reached, so this is behavior-preserving on the current per-pair
+      order — verified the exit `sa_g` is 3.45e-10). Revert: restore the `100·tol`
+      term.
+
+    - **B-2.5b — `casscf_converged_via_plateau` diagnostic.** Emit a parseable
+      line (e.g. `casscf_converged_via_plateau=true|false`) on the converged-exit
+      paths, and add a runner metric for it. Assert `false` for the three normal
+      SA-2 cases (they exit through the standard `sa_g < tol` gate at
+      `casscf.cpp:1256`) and `true` only for `..._sad_guess_uphill`. This makes
+      *which* exit each case takes an explicit, regression-checked fact rather
+      than an implicit one. Gate: the four SA-2 cases assert the expected flag;
+      11/11 still green. Revert: delete the emit + metric + asserts.
+
+    - **B-2.5c — prove rounding-robustness with a throwaway reorder probe.** The
+      hoist does not exist yet, so robustness is demonstrated against a *temporary*
+      perturbation: apply a one-off ~1e-15 reorder to `_rys_contracted_eri`
+      (either the reverted B-2a contract-then-HRR, or a literal
+      `eri += tiny_jitter` in a `#ifdef RYS_REORDER_PROBE` block), rebuild, and
+      confirm the uphill case **still lands −74.7877864784** and still reports
+      `casscf_converged_via_plateau=true`. This is a local experiment, not a
+      committed change — the probe is reverted before the B-2.5 commit, which
+      ships only B-2.5a+b. Documents the robustness claim that B-3/B-4 rely on.
+
+    Net B-2.5: the SA-2 gate converges to its intended basin and exits via the
+    plateau path at a genuinely stationary `sa_g`, robustly to ~1e-16 integral
+    perturbation — so adopting the hoisted Rys order in B-3/B-4 can no longer flip
+    it. Until B-2.5a+b land, B-3 and B-4 both stay blocked.
 
   - **B-3 — wire into the Auto path (the actual win). Blocked by B-2.5.** In
     `_compute_2e_auto`'s Rys-chosen branch, build a `RysHoistedQuartet` once per
