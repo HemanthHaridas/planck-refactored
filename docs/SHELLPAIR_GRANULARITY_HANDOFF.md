@@ -310,25 +310,43 @@ None of these block the landed work.
     — validated only against `_rys_contracted_eri`. Four sub-steps, each gated
     and revertible:
 
-    - **B-2a — contract-over-primitives at a fixed box.** Add a static
-      `_rys_contract_sum(spAB, spCD, box, n_roots, kernel, omega, RysScratch&)`
-      that loops primitive pairs calling `_rys_eri_prep` + `_rys_eri_build_sum`
-      and **accumulates** each pair's 6D `sum` (weighted by
-      `coeff_product`) into one buffer. This is the Rys analog of HGP's
-      `hgp_contract_a0c0`. Refactor `_rys_contracted_eri` to call it (per-
-      component box, n_comp) then `_rys_eri_hrr_to_eri` — bitwise no-op, since it
-      is the same per-pair build + HRR, only the accumulation is factored out.
-      Gate: `planck-compute-2e`, engine equality on sto-3g/6-31g\*/Ne; bitwise.
-      Revert: inline the loop back.
+    - **B-2a — FOLDED INTO B-1; the "bitwise refactor" framing was wrong.**
+      B-2a was scoped as a bitwise no-op that factors out `_rys_contract_sum`
+      ("contract all pairs, then HRR once") and routes `_rys_contracted_eri`
+      through it. **That is not a no-op.** The original `_rys_contracted_eri`
+      sums *per-pair HRR scalars* (`Σ coeff·HRR(sum_pair)`); contract-then-HRR
+      computes `HRR(Σ coeff·sum_pair)`. HRR is linear so these are mathematically
+      equal, but moving the sum across HRR **reorders the floating-point
+      accumulation** — there is no bitwise way to hoist HRR. An attempt confirmed
+      it: integral-level gates were untouched (`planck-compute-2e` Rys-vs-OS
+      *unchanged* at 7.78e-14; all SCF-energy comparators 0.000e+00 on
+      sto-3g/6-31g\*/Ne/HSE06), but the ~1e-16 reorder flipped
+      `water_casscf_sa2_sto3g_sad_guess_uphill` (`engine rys`) from its expected
+      SA-2 basin (−74.7877864784) into the other valid SA stationary point
+      (−74.7751377977) — a 0.013 Eh jump from chaotic amplification in a
+      deliberately basin-sensitive uphill SA-CASSCF optimization. Reverting the
+      reorder makes it pass; restoring it fails. So:
+      - the bitwise/non-bitwise boundary is **not** between B-2a and B-3 — it is
+        the moment production adopts the hoisted order, i.e. B-3;
+      - B-2a's only genuine, behavior-preserving content (the `_rys_eri_build_sum`
+        `n_roots` seam) **already landed in B-1**;
+      - the contraction/readout helpers are introduced in B-2c/B-2d with their
+        off-hot-path test as first consumer (no orphan unused statics).
+      Net: B-2a contributes nothing new; it is closed as subsumed by B-1.
 
-    - **B-2b — norm-free contraction + per-component norm.** Like HGP (invariant
-      2), the single shared contraction can't carry per-component norms. Add a
-      Rys `normfree_view` (sets `_component_norm = 1`), contract once from the
-      component-0 norm-free views, and apply `normA·normB·normC·normD` at the
-      readout. Validate via a `_rys_contract_sum`-from-normfree + per-component
+    - **B-2b — `_rys_contract_sum` helper + norm-free contraction.** Introduce
+      the static `_rys_contract_sum(spAB, spCD, box, n_roots, kernel, omega,
+      acc&)` (accumulate each pair's 6D `sum` weighted by `coeff_product` into one
+      buffer — Rys analog of `hgp_contract_a0c0`). It is **not** wired into
+      `_rys_contracted_eri` (that stays on the bitwise per-pair path — see B-2a).
+      Like HGP (invariant 2), the single shared contraction can't carry
+      per-component norms, so add a Rys `normfree_view` (`_component_norm = 1`),
+      contract once from the component-0 norm-free views, and apply
+      `normA·normB·normC·normD` at readout. **First consumer is the test, not
+      production** (no orphan static). Validate normfree-contract + per-component
       HRR + norm against `_rys_contracted_eri` for one quartet — tight tolerance
-      (B-1: ≤4e-16, the root-count drift), not bitwise. No production wiring.
-      Revert: delete the normfree path.
+      (B-1: ≤4e-16, the root-count drift), not bitwise. Revert: delete helper +
+      normfree + test arm.
 
     - **B-2c — snapshot layout + per-component readout.** Add a small max-box
       stride helper (the 6-axis `idx` from `tests/rys_box_invariance.cpp`,
@@ -352,23 +370,56 @@ None of these block the landed work.
       1e-13 bar. Revert: delete struct + entry + test arm.
 
     Net B-2: the hoisted path exists and is proven equal to the per-component
-    path, but nothing in production calls it yet (that is B-3). ShortRange = two
-    snapshots combined per component, as in OS/HGP.
+    path (to ≤1e-13), but nothing in production calls it yet. ShortRange = two
+    snapshots combined per component, as in OS/HGP. Then **B-3 ships it on the
+    Auto path (unblocked); B-2.5 + B-4 ship it on explicit `engine rys`** (B-2.5
+    first, because that path drives the basin-sensitive SA-2 gate).
 
-  - **B-3 — wire into the Auto path (the actual win).** In `_compute_2e_auto`'s
-    Rys-chosen branch, build a `RysHoistedQuartet` once per `(gA,gB,gC,gD)` shell
-    quartet, lazily on the first surviving Rys component (same lazy-`prepare`
-    discipline as A4-2's `HoistedQuartet`, so screened quartets pay nothing), and
-    have surviving components read out of it instead of calling
-    `_auto_contracted_eri` per component. Per-component Schwarz/orbit/scatter
-    unchanged. Gate: `ne_rhf_ccpvqz_highL_engine_os_vs_rys` (0.0e+00),
-    `ne_rhf_ccpvqz_highL_pyscf`, `planck-compute-2e` Rys-Auto, smoke/core/extended.
-    Revert: restore the per-component `_auto_contracted_eri` call.
+  - **B-3 — wire into the Auto path (the actual win, and NOT blocked by the basin
+    issue).** In `_compute_2e_auto`'s Rys-chosen branch, build a
+    `RysHoistedQuartet` once per `(gA,gB,gC,gD)` shell quartet, lazily on the
+    first surviving Rys component (same lazy-`prepare` discipline as A4-2's
+    `HoistedQuartet`, so screened quartets pay nothing), and have surviving
+    components read out of it instead of calling `_auto_contracted_eri` per
+    component. Per-component Schwarz/orbit/scatter unchanged. **Adopts the
+    hoisted (reordered) order on the Auto path only**, so it is gated at the
+    1e-13 ERI bar, not bitwise.
+
+    Crucially, **B-3 does not touch the basin gate.** That gate runs
+    `engine rys` → `_compute_2e` (the *explicit*-Rys path), which keeps calling
+    the per-pair `_rys_contracted_eri`; only `_compute_2e_auto` changes here. So
+    B-3 ships the perf win on the default engine **without** the CASSCF
+    dependency. Gate: `ne_rhf_ccpvqz_highL_engine_os_vs_rys` (≤5e-9 SCF energy),
+    `ne_rhf_ccpvqz_highL_pyscf`, `planck-compute-2e` Rys-Auto (≤1e-12),
+    smoke/core/extended. Revert: restore the per-component `_auto_contracted_eri`
+    call.
+
+  - **B-2.5 — harden the SA-2 CASSCF plateau-escape (PREREQUISITE for B-4 only).**
+    B-2a established that the hoisted order perturbs Rys ERIs at ~1e-16 and that
+    `water_casscf_sa2_sto3g_sad_guess_uphill` (which runs `engine rys`) is
+    sensitive enough to flip basins on it. **This blocks B-4, not B-3** — only B-4
+    adopts the hoisted order on the explicit-Rys `_compute_2e` the gate exercises.
+    The gate's fragility is the real issue, not the integral change: the optimizer
+    should not sit 1e-16 from the wrong basin. This is the narrow hardening the
+    docs already call for (vault Open Work / CASSCF "Future hardening"): replace
+    the literal `reported_gnorm < 100·tol_mcscf_grad` plateau screen with an
+    explicit `sa_g`-stationarity assertion, and add a
+    `casscf_converged_via_plateau` diagnostic the runner asserts (`false` for the
+    three normal SA-2 cases, `true` only for the SAD-uphill case). Goal: the
+    uphill case lands −74.7877864784 regardless of a 1e-16 ERI perturbation, so
+    the gate is engine/rounding-robust. CASSCF work
+    (`src/post_hf/casscf/casscf.cpp`), out of the integral scope. Gate: all 11
+    PySCF CASSCF cases green; uphill case lands its basin under *both* per-pair
+    and hoisted Rys orders. Until B-2.5 lands, B-4 stays blocked (B-3 does not).
 
   - **B-4 (optional) — explicit `engine rys` (`_compute_2e`).** Same wiring in the
     non-Auto Rys tensor/Fock builds. Lower value (Auto is the default; explicit
-    `engine rys` is rare), so defer unless explicitly wanted. Gate:
-    `planck-hgp-engine-smoke`-style Rys self-consistency on g shells.
+    `engine rys` is rare), so defer unless explicitly wanted. Also depends on
+    B-2.5: the basin-sensitive SA-2 gate runs `engine rys`, so it is `_compute_2e`
+    (the non-Auto path) that the gate actually exercises — B-4 adopting the
+    hoisted order there is in fact what first trips the basin flip. Gate:
+    `planck-hgp-engine-smoke`-style Rys self-consistency on g shells + the robust
+    SA-2 uphill case.
 
   B-1 established the readout property B-2/B-3 rely on: the max-box build equals
   the per-component build at every component coordinate to ≤4e-16 (bitwise where
