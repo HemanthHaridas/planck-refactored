@@ -1437,22 +1437,25 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
     // pairs. Per-component Schwarz screening, symmetry orbit, and the 8-fold
     // store-only scatter run in the inner component loops unchanged.
     //
-    // The Rys/HGP choice keys on shell-level total L, so it is constant across a
-    // shell quartet's components. A4-3 exploits this: HGP-chosen quartets route
-    // through the hoisted block (one shared (a0|c0) contraction per quartet +
-    // cheap per-component HRR readout) instead of re-running the per-primitive
-    // contraction per component. Rys-chosen quartets (L_AB+L_CD<=1, <=3
-    // components) stay on the per-component _auto_contracted_eri path — Rys has
-    // no VRR/HRR to hoist. The hoisted block is computed lazily on the first
-    // surviving component, so a fully screened HGP quartet pays nothing.
+    // The engine choice keys on shell-level total L, so it is constant across a
+    // shell quartet's components. Both the HGP- and Rys-chosen quartets route
+    // through their respective hoisted block (one shared contraction per quartet +
+    // cheap per-component readout) instead of re-running the per-primitive
+    // contraction per component: HGP via _contracted_eri_block_hoisted_views (A4-3),
+    // Rys via RysQuad::_contracted_eri_block_hoisted_views (B-3). OS-chosen
+    // quartets stay on the per-component _auto_contracted_eri path (OS-A4 hoists
+    // inside _contracted_eri, not at this seam). The hoisted block is computed
+    // lazily on the first surviving component, so a fully screened quartet pays
+    // nothing.
     //
-    // Not bitwise vs the per-AO build for HGP-chosen d-shell quartets: the hoist
+    // Not bitwise vs the per-AO build for hoisted d-/g-shell quartets: the hoist
     // applies _component_norm after HRR while the per-component path folds it in
-    // before contraction, so they round differently at the last FP bit (~1e-15).
-    // Gated by planck-os-block-kernel's hoisted arm and the Auto-vs-OS check in
-    // planck-compute-2e (1e-12). Store-only scatter keeps the tensor independent
-    // of visitation order. The per-component (k,l) >=_lex (i,j) check reproduces
-    // the old flat-pair q >= p ordering exactly.
+    // before contraction (and, for Rys, the n_max root count differs from
+    // n_comp), so they round differently at the last FP bit (~1e-15). Gated by
+    // planck-os-block-kernel's hoisted arm, planck-rys-box-invariance (Rys block),
+    // and the Auto-vs-OS check in planck-compute-2e (1e-12). Store-only scatter
+    // keeps the tensor independent of visitation order. The per-component
+    // (k,l) >=_lex (i,j) check reproduces the old flat-pair q >= p ordering exactly.
     std::vector<const HartreeFock::ContractedView *> ao_views;
     const std::vector<RysShellGroup> groups =
         shell_groups_from_pairs(shell_pairs, nb, ao_views);
@@ -1490,28 +1493,34 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
             // component-0 views — cheaply, without building ShellPairs. The
             // shell's total L is the component-0 cartesian sum (component 0 of an
             // L-shell carries all L on one axis), so this matches _auto_engine
-            // exactly. Only HGP-chosen quartets use the hoisted block fast path
-            // (one shared contraction); OS- and Rys-chosen quartets fall to the
-            // per-component path, which re-dispatches through _auto_contracted_eri.
+            // exactly. HGP- and Rys-chosen quartets use the hoisted block fast
+            // path (one shared contraction per quartet, B-3); OS-chosen quartets
+            // fall to the per-component path via _auto_contracted_eri.
             const auto total_L = [](const HartreeFock::ContractedView &v)
             {
                 return v._cartesian[0] + v._cartesian[1] + v._cartesian[2];
             };
             const int L_AB = total_L(*ao_views[gA.first_ao]) + total_L(*ao_views[gB.first_ao]);
             const int L_CD = total_L(*ao_views[gC.first_ao]) + total_L(*ao_views[gD.first_ao]);
+            const HartreeFock::IntegralMethod quartet_engine = _auto_engine(L_AB, L_CD);
             const bool quartet_uses_hgp =
-                _auto_engine(L_AB, L_CD) == HartreeFock::IntegralMethod::HeadGordonPople;
+                quartet_engine == HartreeFock::IntegralMethod::HeadGordonPople;
+            const bool quartet_uses_rys =
+                quartet_engine == HartreeFock::IntegralMethod::RysQuadrature;
 
             const std::size_t nCq = gC.n_components;
             const std::size_t nDq = gD.n_components;
             const std::size_t nCDq = nCq * nDq;
-            std::vector<double> hgp_block; // filled lazily on first survivor
-            bool hgp_block_ready = false;
-            auto ensure_hgp_block = [&]()
+            // HGP- and Rys-chosen quartets each use a single shared hoisted
+            // contraction (one block, filled lazily on the first surviving
+            // component); OS-chosen quartets stay on the per-component path.
+            std::vector<double> hoist_block; // filled lazily on first survivor
+            bool hoist_block_ready = false;
+            auto ensure_hoist_block = [&]()
             {
-                if (hgp_block_ready)
+                if (hoist_block_ready)
                     return;
-                hgp_block.assign(
+                hoist_block.assign(
                     gA.n_components * gB.n_components * nCDq, 0.0);
                 const HartreeFock::ContractedView *const *vA =
                     ao_views.data() + gA.first_ao;
@@ -1521,10 +1530,15 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
                     ao_views.data() + gC.first_ao;
                 const HartreeFock::ContractedView *const *vD =
                     ao_views.data() + gD.first_ao;
-                HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted_views(
-                    vA, gA.n_components, vB, gB.n_components,
-                    vC, nCq, vD, nDq, kernel, omega, hgp_block.data());
-                hgp_block_ready = true;
+                if (quartet_uses_rys)
+                    HartreeFock::RysQuad::_contracted_eri_block_hoisted_views(
+                        vA, gA.n_components, vB, gB.n_components,
+                        vC, nCq, vD, nDq, kernel, omega, hoist_block.data());
+                else
+                    HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted_views(
+                        vA, gA.n_components, vB, gB.n_components,
+                        vC, nCq, vD, nDq, kernel, omega, hoist_block.data());
+                hoist_block_ready = true;
             };
 
             for (std::size_t ca = 0; ca < gA.n_components; ++ca)
@@ -1576,10 +1590,10 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
                             }
 
                             double val;
-                            if (quartet_uses_hgp)
+                            if (quartet_uses_hgp || quartet_uses_rys)
                             {
-                                ensure_hgp_block();
-                                val = hgp_block[((ca * gB.n_components + cb) * nCq + cc) * nDq + cd];
+                                ensure_hoist_block();
+                                val = hoist_block[((ca * gB.n_components + cb) * nCq + cc) * nDq + cd];
                             }
                             else
                             {

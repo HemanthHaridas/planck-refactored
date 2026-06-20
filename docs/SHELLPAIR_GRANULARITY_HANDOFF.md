@@ -511,32 +511,37 @@ None of these block the landed work.
     self-evident. So B-3/B-4 are no longer blocked by the CASSCF side — only by
     the B-2b→d integral hoist still being unbuilt.
 
-  - **B-3 — wire into the Auto path (the actual win). Blocked by B-2.5.** In
-    `_compute_2e_auto`'s Rys-chosen branch, build a `RysHoistedQuartet` once per
-    `(gA,gB,gC,gD)` shell quartet, lazily on the first surviving Rys component
-    (same lazy-`prepare` discipline as A4-2's `HoistedQuartet`, so screened
-    quartets pay nothing), and have surviving components read out of it instead of
-    calling `_auto_contracted_eri` per component. Per-component
-    Schwarz/orbit/scatter unchanged. **Adopts the hoisted (reordered) order on the
+  - **B-3 — wire into the Auto path (the actual win). LANDED.** In
+    `_compute_2e_auto`, the per-quartet engine choice (`_auto_engine(L_AB, L_CD)`)
+    now distinguishes HGP / Rys / OS. Both HGP- and Rys-chosen quartets route
+    through a single lazy hoisted block (`ensure_hoist_block`, filled on the first
+    surviving component): HGP via `HeadGordonPople::_contracted_eri_block_hoisted_views`
+    (A4-3, unchanged), Rys via the new `RysQuad::_contracted_eri_block_hoisted_views`
+    (B-2d). OS-chosen quartets stay on the per-component `_auto_contracted_eri`
+    path (OS-A4 hoists inside `_contracted_eri`, not at this seam). Per-component
+    Schwarz/orbit/scatter and the `(k,l) >=_lex (i,j)` ordering are unchanged; the
+    block is store-only scatter, so the tensor is independent of visitation order.
+    Single change point covers tensor + RHF/UHF Fock Auto builds (the Fock builds
+    delegate to `_compute_2e_auto`). **Adopts the hoisted (reordered) order on the
     Auto path**, so it is gated at the 1e-13 ERI bar, not bitwise.
 
-    **Correction (this de-risking claim was wrong earlier):** B-3 *does* expose
-    the reorder to a basin-sensitive optimizer. `engine auto` dispatches through
-    `base.h` → `_compute_2e_auto` (the function B-3 changes), and the three-way
-    `kAutoEngine` table routes the `(7,8)`/`(8,8)` buckets to Rys. Any quartet
-    reaching those buckets needs g functions (`L_AB ≥ 7` ⇒ g+g); they do not
-    occur below cc-pVQZ, so cc-pVTZ does not hit them, but **an `engine auto`
-    SA-CASSCF on a g-basis (cc-pVQZ+) runs the hoisted Rys path and flips the same
-    basin** as the explicit-`engine rys` case did. The current SA-2 gate happens
-    to use explicit `engine rys` so it would not *catch* a B-3 regression — that
-    is a test gap, not safety. Hence B-3 depends on B-2.5, and B-3's gate set
-    should **add an `engine auto` SA-CASSCF case on a g-basis** (or a cheaper
-    proxy that routes a basin-sensitive optimizer through `_compute_2e_auto`'s
-    Rys branch) so the Auto path's basin robustness is actually exercised. Other
-    gates: `ne_rhf_ccpvqz_highL_engine_os_vs_rys` (≤5e-9 SCF energy),
-    `ne_rhf_ccpvqz_highL_pyscf`, `planck-compute-2e` Rys-Auto (≤1e-12),
-    smoke/core/extended. Revert: restore the per-component `_auto_contracted_eri`
-    call.
+    **Why the basin-robustness gate matters here.** `engine auto` dispatches
+    through `base.h` → `_compute_2e_auto` (the function B-3 changes), and the
+    three-way `kAutoEngine` table routes the `(7,8)`/`(8,8)` buckets to Rys. Any
+    quartet reaching those needs g functions (`L_AB ≥ 7` ⇒ g+g; first at
+    cc-pVQZ). So an `engine auto` SA-CASSCF on a g-basis runs the hoisted Rys path
+    on a basin-sensitive optimizer. The existing SA-2 gates use explicit
+    `engine rys`, so they would *not* catch a B-3 Auto-path regression — a test
+    gap. B-3 closes it with a new **`engine auto` SA-CASSCF gate on cc-pVQZ**:
+    `water_casscf_sa2_ccpvqz_engine_{os,auto}` (water CAS(4,4) SA-2), where the
+    auto case asserts (`metric_close_case`, atol 1e-8) that it lands the **same
+    SA-2 basin** as the os twin. This directly tests that the Auto-Rys hoist's
+    reorder does not flip the basin, with no external reference needed (and is
+    consistent with B-2.5c's measured robustness). Other gates unchanged:
+    `ne_rhf_ccpvqz_highL_engine_os_vs_rys` (now exercises the Auto-Rys hoist:
+    OS==RYS==AUTO SCF energy on g-shells), `ne_rhf_ccpvqz_highL_pyscf`,
+    `planck-compute-2e` Rys-Auto (≤1e-12). Revert: restore the single
+    HGP-only `quartet_uses_hgp` block + per-component Rys call.
 
   - **B-4 (optional) — explicit `engine rys` (`_compute_2e`). Blocked by B-2.5.**
     Same wiring in the non-Auto Rys tensor/Fock builds. Lower value (Auto is the
