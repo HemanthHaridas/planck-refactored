@@ -102,8 +102,7 @@ check. This reproduces the canonical quartet set exactly. The 8-fold scatter is
 store-only, so the tensor is independent of visitation order and the result is
 bitwise-identical to the per-AO build.
 
-### 2. `_component_norm` is folded per component before contraction — a hoisted
-### contraction must be norm-free and apply the norm at readout
+### 2. `_component_norm` is folded per component before contraction — a hoisted contraction must be norm-free and apply the norm at readout
 
 The per-AO path folds each component's `_component_norm` into its primitive
 `coeff_product` *before* contraction. A path that builds **one** contraction per
@@ -404,7 +403,8 @@ None of these block the landed work.
     order on a Rys path that a basin-sensitive SA-CASSCF run can reach.
 
   - **B-2.5 — harden the SA-2 CASSCF plateau-escape (PREREQUISITE for B-3 AND
-    B-4; DO THIS FIRST).** Best done *before* any B-2 integral work — it is pure
+    B-4). a+b LANDED; c deferred to B-2b start.** Done *before* any B-2 integral
+    work, as scoped — it is pure
     CASSCF-convergence logic, independent of the hoist, fully testable against the
     current per-pair production code, and it is the highest-uncertainty piece
     (touches a basin-sensitive optimizer with 11 PySCF gates), so front-loading it
@@ -435,25 +435,26 @@ None of these block the landed work.
 
     Three sub-steps:
 
-    - **B-2.5a — tighten the plateau-exit `sa_g` bound (the load-bearing fix).**
-      Replace the `reported_gnorm < 100·tol_mcscf_grad` term at `casscf.cpp:1238`
-      with an explicit stationarity bound (`reported_gnorm <= max(1e-6,
-      sa_plateau_factor·tol_mcscf_grad)`, factor chosen so the uphill case's
-      3.45e-10 passes with wide margin and the loose 1e-3 regime no longer
-      qualifies). Gate: all 11 PySCF CASSCF cases still green, **uphill case still
-      lands −74.7877864784** (the exit now fires at the same ~1e-10 `sa_g` it
-      already reached, so this is behavior-preserving on the current per-pair
-      order — verified the exit `sa_g` is 3.45e-10). Revert: restore the `100·tol`
-      term.
+    - **B-2.5a — tighten the plateau-exit `sa_g` bound (the load-bearing fix).
+      LANDED.** The `reported_gnorm < 100·tol_mcscf_grad` term at the plateau exit
+      is replaced with the explicit stationarity bound
+      `reported_gnorm <= max(1e-6, tol_mcscf_grad)` (default tol 1e-5 → bound
+      1e-5, ~1e4 above the uphill case's observed 3.45e-10 exit `sa_g` and ~100×
+      below the old 1e-3). Sets `converged_via_plateau = true` on this exit only.
+      Behavior-preserving on the current per-pair order: all 10 CASSCF regression
+      cases green, uphill still lands −74.7877864784. Revert: restore the
+      `100·tol` term and drop the flag set.
 
-    - **B-2.5b — `casscf_converged_via_plateau` diagnostic.** Emit a parseable
-      line (e.g. `casscf_converged_via_plateau=true|false`) on the converged-exit
-      paths, and add a runner metric for it. Assert `false` for the three normal
-      SA-2 cases (they exit through the standard `sa_g < tol` gate at
-      `casscf.cpp:1256`) and `true` only for `..._sad_guess_uphill`. This makes
-      *which* exit each case takes an explicit, regression-checked fact rather
-      than an implicit one. Gate: the four SA-2 cases assert the expected flag;
-      11/11 still green. Revert: delete the emit + metric + asserts.
+    - **B-2.5b — `casscf_converged_via_plateau` diagnostic. LANDED.** The
+      converged-exit block emits a parseable
+      `casscf_converged_via_plateau=true|false` line (driven by the
+      `converged_via_plateau` flag — `true` only at the plateau exit). The runner
+      parses it as a string metric (`run_regressions.py` METRIC_PATTERNS +
+      string-passthrough alongside `point_group`). `metric_eq` asserts `false` for
+      the three normal SA-2 cases (they exit through the standard `sa_g < tol`
+      gate) and `true` only for `..._sad_guess_uphill` — matching observed output.
+      Gate: the four SA-2 cases assert the expected flag; all 10 CASSCF cases
+      green. Revert: delete the emit + metric + asserts.
 
     - **B-2.5c — prove rounding-robustness with a throwaway reorder probe.** The
       hoist does not exist yet, so robustness is demonstrated against a *temporary*
@@ -465,10 +466,14 @@ None of these block the landed work.
       committed change — the probe is reverted before the B-2.5 commit, which
       ships only B-2.5a+b. Documents the robustness claim that B-3/B-4 rely on.
 
-    Net B-2.5: the SA-2 gate converges to its intended basin and exits via the
-    plateau path at a genuinely stationary `sa_g`, robustly to ~1e-16 integral
-    perturbation — so adopting the hoisted Rys order in B-3/B-4 can no longer flip
-    it. Until B-2.5a+b land, B-3 and B-4 both stay blocked.
+    Net B-2.5: **a+b LANDED** — the plateau exit now fires at a genuinely
+    stationary `sa_g` (≤ max(1e-6, tol)), and which exit each SA-2 case takes is a
+    regression-checked fact. B-2.5c (the throwaway reorder probe) is intentionally
+    deferred to whenever B-2b actually starts: it is a local, reverted-before-
+    commit experiment with no committed artifact, and the committed
+    `sa_g≈3.4e-10` exit margin already makes the gate's rounding-robustness
+    self-evident. So B-3/B-4 are no longer blocked by the CASSCF side — only by
+    the B-2b→d integral hoist still being unbuilt.
 
   - **B-3 — wire into the Auto path (the actual win). Blocked by B-2.5.** In
     `_compute_2e_auto`'s Rys-chosen branch, build a `RysHoistedQuartet` once per

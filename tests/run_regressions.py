@@ -36,6 +36,7 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "lr_root1_energy_ev": re.compile(r"^\s*1\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
     "lr_root2_energy_ev": re.compile(r"^\s*2\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
     "lr_root3_energy_ev": re.compile(r"^\s*3\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
+    "casscf_converged_via_plateau": re.compile(r"casscf_converged_via_plateau=(true|false)"),
     "casscf_sa_gnorm": re.compile(r"sa_g=([-+0-9Ee\.]+)"),
     "casscf_root_screen_gnorm": re.compile(r"root_screen_g=([-+0-9Ee\.]+)"),
     "casscf_max_root_gnorm": re.compile(r"max_root_g=([-+0-9Ee\.]+)"),
@@ -129,7 +130,7 @@ def extract_metrics(output: str) -> dict[str, Any]:
         if not matches:
             continue
         value = matches[-1]
-        if key == "point_group":
+        if key in ("point_group", "casscf_converged_via_plateau"):
             metrics[key] = value.strip()
         else:
             metrics[key] = float(value)

@@ -2100,6 +2100,11 @@
           "type": "metric_le",
           "metric": "casscf_sa_gnorm",
           "value": 1e-05
+        },
+        {
+          "type": "metric_eq",
+          "metric": "casscf_converged_via_plateau",
+          "expected": "false"
         }
       ]
     },
@@ -2125,6 +2130,11 @@
           "type": "metric_le",
           "metric": "casscf_sa_gnorm",
           "value": 1e-05
+        },
+        {
+          "type": "metric_eq",
+          "metric": "casscf_converged_via_plateau",
+          "expected": "false"
         }
       ]
     },
@@ -2150,6 +2160,11 @@
           "type": "metric_le",
           "metric": "casscf_sa_gnorm",
           "value": 1e-05
+        },
+        {
+          "type": "metric_eq",
+          "metric": "casscf_converged_via_plateau",
+          "expected": "true"
         }
       ]
     },
@@ -2182,6 +2197,11 @@
           "type": "metric_le",
           "metric": "casscf_sa_gnorm",
           "value": 1e-05
+        },
+        {
+          "type": "metric_eq",
+          "metric": "casscf_converged_via_plateau",
+          "expected": "false"
         }
       ]
     },
