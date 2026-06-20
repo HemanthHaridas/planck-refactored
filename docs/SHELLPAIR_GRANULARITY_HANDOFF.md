@@ -306,12 +306,12 @@ None of these block the landed work.
     `HoistedQuartet`/A4-2: a struct that contracts the 6D `sum` **once per shell
     quartet** at `(max box, n_max roots)`, snapshots it, and reads each Cartesian
     component out via a per-component HRR. Not wired into any entry point in B-2
-    — validated only against `_rys_contracted_eri`. B-2a folded into B-1; B-2.5a/b
-    and B-2b are LANDED; B-2c/d remain (each gated and revertible).
+    — validated only against `_rys_contracted_eri`. B-2a folded into B-1; B-2.5a/b,
+    B-2b, and B-2c are LANDED; B-2d remains (gated and revertible).
 
     **Execution order: B-2.5 was done FIRST** (independent of the hoist,
     testable against current code, highest-risk). Remaining sequence:
-    **B-2c → B-2d → B-3 → B-4** (B-2.5 is listed after B-2 here only to keep the
+    **B-2d → B-3 → B-4** (B-2.5 is listed after B-2 here only to keep the
     integral-side sub-steps grouped).
 
     - **B-2a — FOLDED INTO B-1; the "bitwise refactor" framing was wrong.**
@@ -378,21 +378,32 @@ None of these block the landed work.
       can't inflate the reported relative diff.) Revert: delete the two hooks +
       `_rys_build_pair_value_block` + the `check_contract` arm.
 
-    - **B-2c — `RysMaxBoxLayout` + norm-free max-box readout.** Promote the
-      6-axis `idx` from the B-1 test to a `RysMaxBoxLayout(maxAB,maxCD)` (strides
-      for a snapshot independent of `g_rys_scratch`'s later resizes; Rys analog of
-      HGP's `MaxBoxLayout`). Add a Rys `normfree_view` (`_component_norm = 1`) and
-      a `rys_hoist_readout_component(layout, snapshot, comp_box, …) ` that gathers
-      a component's sub-box from an n_max snapshot into a component-sized
-      `RysScratch`, HRRs it, and the caller applies
-      `normA·normB·normC·normD` (invariant 2: the shared norm-free contraction
-      can't carry per-component norms). **Gate (≤1e-13):** test arm —
-      `_rys_contract_sum` from norm-free component-0 views at `(max box, n_max)`,
-      snapshot, then `rys_hoist_readout_component` + norm for each component of a
-      quartet — matches `_rys_contracted_eri` (which folds norm per pair and
-      builds per-component) to ≤1e-13. This is the first step exercising the
-      n_max-over-component reorder *and* the norm-after-HRR reorder together.
-      Revert: delete layout + normfree + readout + arm.
+    - **B-2c — `RysMaxBoxLayout` + norm-free max-box readout. LANDED.**
+      `RysMaxBoxLayout(maxAB..,maxCD..)` holds a snapshot's 6-axis strides (same
+      cz-fastest convention as `RysScratch`, independent of `g_rys_scratch`'s
+      later per-component resizes; Rys analog of HGP's `MaxBoxLayout`).
+      `rys_hoist_readout_component(layout, snapshot, comp_box, …)` gathers a
+      component's sub-box from an n_max snapshot into a component-sized
+      `RysScratch`, HRRs it; the caller applies `normA·normB·normC·normD`
+      (invariant 2: the shared norm-free contraction can't carry per-component
+      norms — the norm-free views are made inline, `_component_norm = 1`). Two
+      test hooks (`src/integrals/rys.{h,cpp}`): `_contract_maxbox_snapshot_native_test`
+      builds the norm-free snapshot ONCE per quartet, `_maxbox_readout_native_test`
+      reads each component out — split this way so the test contracts once per
+      quartet, exactly as the production hoist (B-3) will (the single all-in-one
+      form re-contracted per component, ~25× slower on g-shells).
+
+      **Gate (≤1e-13):** `check_maxbox_readout` (`tests/rys_box_invariance.cpp`) —
+      build the snapshot once, read out + norm each component, compare against
+      `_rys_contracted_eri` (norm folded per pair, per-component build). This is
+      the first step exercising the n_max-over-component reorder *and* the norm-
+      after-HRR reorder together. Measured: water/6-31g\* (d-shells, all 3 kernels)
+      `max|Δ| ≤ 1.1e-15`, `rel ≤ 5.4e-15`; Ne/cc-pVQZ Lq≥7 (g-shells)
+      `max|Δ| ≤ 1.1e-15`, `rel ≤ 6.3e-16`. Note the g-shell case is now *nonzero*
+      where B-2b was exactly 0.0: that is precisely the norm-after-HRR reorder
+      (production folds `_component_norm` into the primitive coeff before HRR, the
+      hoist applies it after) — last-bit, well inside the bar. Revert: delete
+      layout + readout + the two hooks + arm.
 
     - **B-2d — assemble `RysHoistedQuartet` + pointer-array entry.** Compose
       B-2b/c into the struct: ctor takes the four component-0 views + kernel/omega

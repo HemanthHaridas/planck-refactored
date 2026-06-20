@@ -940,6 +940,135 @@ double HartreeFock::RysQuad::_hrr_block_native_test(
                                ABx, ABy, ABz, CDx, CDy, CDz);
 }
 
+// ─── Test hook (Phase B / B-2c): norm-free max-box contract + per-comp readout ─
+
+namespace
+{
+    // Stride layout for a max-box snapshot, independent of g_rys_scratch's later
+    // per-component resizes. Same cz-fastest convention as RysScratch (Rys analog
+    // of HGP's MaxBoxLayout).
+    struct RysMaxBoxLayout
+    {
+        std::size_t ax_stride = 0, ay_stride = 0, az_stride = 0;
+        std::size_t cx_stride = 0, cy_stride = 0, cz_stride = 0;
+
+        RysMaxBoxLayout() = default;
+        RysMaxBoxLayout(int lABx, int lABy, int lABz, int lCDx, int lCDy, int lCDz)
+        {
+            const int az_dim = lABz + 1, ay_dim = lABy + 1;
+            const int cx_dim = lCDx + 1, cy_dim = lCDy + 1, cz_dim = lCDz + 1;
+            cz_stride = 1;
+            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
+            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
+            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
+            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
+            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
+        }
+        std::size_t index(int ax, int ay, int az, int cx, int cy, int cz) const noexcept
+        {
+            return static_cast<std::size_t>(ax) * ax_stride +
+                   static_cast<std::size_t>(ay) * ay_stride +
+                   static_cast<std::size_t>(az) * az_stride +
+                   static_cast<std::size_t>(cx) * cx_stride +
+                   static_cast<std::size_t>(cy) * cy_stride +
+                   static_cast<std::size_t>(cz) * cz_stride;
+        }
+    };
+
+    // Gather one component's sub-box from a norm-free max-box snapshot (remapping
+    // max strides -> component strides; both index the same logical coordinate),
+    // HRR it, and return the scalar. The caller applies normA·normB·normC·normD
+    // (invariant 2: the shared norm-free contraction carries no per-component
+    // norm). Rys analog of hgp_hoist_readout_component.
+    static double rys_hoist_readout_component(
+        const RysMaxBoxLayout &src, const double *snapshot,
+        int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+        int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+        double ABx, double ABy, double ABz,
+        double CDx, double CDy, double CDz) noexcept
+    {
+        const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+        const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+        RysScratch &dst = g_rys_scratch;
+        dst.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz);
+
+        for (int ax = 0; ax <= lABx; ++ax)
+            for (int ay = 0; ay <= lABy; ++ay)
+                for (int az = 0; az <= lABz; ++az)
+                    for (int cx = 0; cx <= lCDx; ++cx)
+                        for (int cy = 0; cy <= lCDy; ++cy)
+                            for (int cz = 0; cz <= lCDz; ++cz)
+                                dst.at(ax, ay, az, cx, cy, cz) =
+                                    snapshot[src.index(ax, ay, az, cx, cy, cz)];
+
+        return _rys_eri_hrr_to_eri(dst,
+                                   lAx, lAy, lAz, lBx, lBy, lBz,
+                                   lCx, lCy, lCz, lDx, lDy, lDz,
+                                   ABx, ABy, ABz, CDx, CDy, CDz);
+    }
+} // namespace
+
+void HartreeFock::RysQuad::_contract_maxbox_snapshot_native_test(
+    const HartreeFock::ContractedView &cvA0,
+    const HartreeFock::ContractedView &cvB0,
+    const HartreeFock::ContractedView &cvC0,
+    const HartreeFock::ContractedView &cvD0,
+    int maxAB, int maxCD,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    std::vector<double> &snapshot,
+    double R_AB[3], double R_CD[3]) noexcept
+{
+    // Norm-free component-0 views: _component_norm = 1 so the contraction carries
+    // no per-component norm (applied at readout). Same shell, same primitives.
+    HartreeFock::ContractedView nfA = cvA0, nfB = cvB0, nfC = cvC0, nfD = cvD0;
+    nfA._component_norm = nfB._component_norm =
+        nfC._component_norm = nfD._component_norm = 1.0;
+
+    const HartreeFock::ShellPair spAB(nfA, nfB);
+    const HartreeFock::ShellPair spCD(nfC, nfD);
+
+    // n_max is the quartet quadrature degree (L_AB_total + L_CD_total)/2 + 1, NOT
+    // the summed per-axis box: the per-axis max box is (maxAB,maxAB,maxAB,maxCD,
+    // maxCD,maxCD), but the quadrature degree uses the *total* L per bra/ket,
+    // which for the max box is maxAB (bra) + maxCD (ket).
+    const int n_roots = (maxAB + maxCD) / 2 + 1;
+
+    HartreeFock::RysQuad::_contract_sum_native_test(
+        spAB, spCD,
+        maxAB, maxAB, maxAB, maxCD, maxCD, maxCD,
+        n_roots, kernel, omega, snapshot);
+
+    R_AB[0] = spAB.R[0]; R_AB[1] = spAB.R[1]; R_AB[2] = spAB.R[2];
+    R_CD[0] = spCD.R[0]; R_CD[1] = spCD.R[1]; R_CD[2] = spCD.R[2];
+}
+
+double HartreeFock::RysQuad::_maxbox_readout_native_test(
+    const std::vector<double> &snapshot,
+    int maxAB, int maxCD,
+    const HartreeFock::ContractedView &cvA,
+    const HartreeFock::ContractedView &cvB,
+    const HartreeFock::ContractedView &cvC,
+    const HartreeFock::ContractedView &cvD,
+    const double R_AB[3], const double R_CD[3]) noexcept
+{
+    const RysMaxBoxLayout layout(maxAB, maxAB, maxAB, maxCD, maxCD, maxCD);
+
+    const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
+    const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
+    const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+    const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
+
+    const double raw = rys_hoist_readout_component(
+        layout, snapshot.data(),
+        lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+        R_AB[0], R_AB[1], R_AB[2], R_CD[0], R_CD[1], R_CD[2]);
+
+    return raw * cvA._component_norm * cvB._component_norm *
+           cvC._component_norm * cvD._component_norm;
+}
+
 // ─── Schwarz screening (mirrors os.cpp _compute_schwarz_table) ────────────────
 
 static Eigen::MatrixXd _rys_schwarz_table(

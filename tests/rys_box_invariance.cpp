@@ -402,6 +402,114 @@ namespace
                       << components_checked << " components  (" << buf << ")\n";
         }
     }
+
+    // B-2c gate: the full norm-free-max-box-contract + per-component-readout flow
+    // (_contract_maxbox_readout_native_test) reproduces _rys_contracted_eri to the
+    // 1e-13 ERI bar. This is the first step exercising BOTH the n_max-over-comp
+    // reorder (B-1) and the norm-after-HRR reorder (invariant 2) together: the
+    // hoist contracts once per quartet at the max box from norm-free views and
+    // applies normA·normB·normC·normD only at readout, while production folds the
+    // norm into each primitive pair and builds at the component box.
+    void check_maxbox_readout(const std::string &label,
+                              const HartreeFock::Calculator &calc,
+                              HartreeFock::ERIKernel kernel, double omega,
+                              int min_quartet_L = 0)
+    {
+        const HartreeFock::Basis &basis = calc._shells;
+        const std::vector<ShellGroup> groups = build_shell_groups(basis);
+
+        constexpr double REL_TOL = 1e-13;
+        std::size_t over_tol = 0;
+        std::size_t components_checked = 0;
+        double max_abs_diff = 0.0;
+        double max_rel_diff = 0.0;
+
+        for (const ShellGroup &gA : groups)
+        for (const ShellGroup &gB : groups)
+        for (const ShellGroup &gC : groups)
+        for (const ShellGroup &gD : groups)
+        {
+            const auto &cvA0 = basis._basis_functions[gA.first_ao];
+            const auto &cvB0 = basis._basis_functions[gB.first_ao];
+            const auto &cvC0 = basis._basis_functions[gC.first_ao];
+            const auto &cvD0 = basis._basis_functions[gD.first_ao];
+
+            const int LA = static_cast<int>(cvA0._shell->_shell);
+            const int LB = static_cast<int>(cvB0._shell->_shell);
+            const int LC = static_cast<int>(cvC0._shell->_shell);
+            const int LD = static_cast<int>(cvD0._shell->_shell);
+            const int maxAB = LA + LB;
+            const int maxCD = LC + LD;
+            if (maxAB + maxCD < min_quartet_L)
+                continue;
+
+            // Snapshot built ONCE per quartet (norm-free, max box / n_max), exactly
+            // as the production hoist (B-3) does; every component reads out of it.
+            std::vector<double> snapshot;
+            double R_AB[3], R_CD[3];
+            HartreeFock::RysQuad::_contract_maxbox_snapshot_native_test(
+                cvA0, cvB0, cvC0, cvD0, maxAB, maxCD, kernel, omega,
+                snapshot, R_AB, R_CD);
+
+            for (std::size_t a = 0; a < gA.n_components; ++a)
+            for (std::size_t b = 0; b < gB.n_components; ++b)
+            for (std::size_t c = 0; c < gC.n_components; ++c)
+            for (std::size_t d = 0; d < gD.n_components; ++d)
+            {
+                const auto &cvA = basis._basis_functions[gA.first_ao + a];
+                const auto &cvB = basis._basis_functions[gB.first_ao + b];
+                const auto &cvC = basis._basis_functions[gC.first_ao + c];
+                const auto &cvD = basis._basis_functions[gD.first_ao + d];
+
+                const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
+                const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
+                const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+                const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
+
+                const double via_hoist = HartreeFock::RysQuad::_maxbox_readout_native_test(
+                    snapshot, maxAB, maxCD, cvA, cvB, cvC, cvD, R_AB, R_CD);
+
+                // Production reference: norm-carrying per-component shell pairs,
+                // built per component, norm folded per primitive pair.
+                const HartreeFock::ShellPair spAB(cvA, cvB);
+                const HartreeFock::ShellPair spCD(cvC, cvD);
+                if (spAB.primitive_pairs.empty() || spCD.primitive_pairs.empty())
+                    continue;
+                const double via_prod = HartreeFock::RysQuad::_rys_contracted_eri(
+                    spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+                    kernel, omega);
+
+                ++components_checked;
+                const double adiff = std::fabs(via_hoist - via_prod);
+                const double scale = std::max(std::fabs(via_prod), 1e-300);
+                const double rdiff = adiff / scale;
+                if (adiff > max_abs_diff)
+                    max_abs_diff = adiff;
+                if (adiff > 1e-15)
+                {
+                    if (rdiff > max_rel_diff)
+                        max_rel_diff = rdiff;
+                    if (rdiff > REL_TOL)
+                        ++over_tol;
+                }
+            }
+        }
+
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "max|Δ|=%.2e rel=%.2e", max_abs_diff, max_rel_diff);
+        if (over_tol != 0)
+        {
+            fail(std::string("Rys B-2c / ") + kernel_label(kernel) + " / " + label +
+                 ": " + std::to_string(over_tol) + " of " +
+                 std::to_string(components_checked) + " components over rel-tol  " + buf);
+        }
+        else
+        {
+            std::cout << "OK  Rys B-2c / " << kernel_label(kernel) << " / " << label
+                      << ": norm-free max-box readout == _rys_contracted_eri (rel<=1e-13) at all "
+                      << components_checked << " components  (" << buf << ")\n";
+        }
+    }
 } // namespace
 
 int main()
@@ -419,10 +527,15 @@ int main()
     check("water/6-31g*", *water, HartreeFock::ERIKernel::LongRange, 0.3);
     check("water/6-31g*", *water, HartreeFock::ERIKernel::ShortRange, 0.3);
 
-    // B-2b: contract-then-HRR == _rys_contracted_eri, bitwise at a single pair.
+    // B-2b: contract-then-HRR == _rys_contracted_eri (rel<=1e-13).
     check_contract("water/6-31g*", *water, HartreeFock::ERIKernel::Coulomb, 0.0);
     check_contract("water/6-31g*", *water, HartreeFock::ERIKernel::LongRange, 0.3);
     check_contract("water/6-31g*", *water, HartreeFock::ERIKernel::ShortRange, 0.3);
+
+    // B-2c: norm-free max-box contract + per-component readout == _rys_contracted_eri.
+    check_maxbox_readout("water/6-31g*", *water, HartreeFock::ERIKernel::Coulomb, 0.0);
+    check_maxbox_readout("water/6-31g*", *water, HartreeFock::ERIKernel::LongRange, 0.3);
+    check_maxbox_readout("water/6-31g*", *water, HartreeFock::ERIKernel::ShortRange, 0.3);
 
     // g-shell basis: confine the sweep to the high-L quartets (maxAB+maxCD >= 7,
     // i.e. the (7,8)/(8,8) buckets the Auto path actually routes to Rys). Lower-L
@@ -439,6 +552,9 @@ int main()
 
     check_contract("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7);
     check_contract("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7);
+
+    check_maxbox_readout("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7);
+    check_maxbox_readout("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7);
 
     if (!g_ok)
     {

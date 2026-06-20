@@ -172,6 +172,43 @@ namespace HartreeFock
             double ABx, double ABy, double ABz,
             double CDx, double CDy, double CDz) noexcept;
 
+        // ── Test hooks (Phase B / B-2c): norm-free max-box contract + readout ──────
+        //
+        // The B-2c flow, split so the snapshot is built ONCE per shell quartet
+        // (as the production hoist B-3 will), then each component reads out of it.
+        //
+        // _contract_maxbox_snapshot_native_test: contract the 6D sum from norm-free
+        //   component-0 views (_component_norm forced to 1 internally) at the max
+        //   box / n_max roots, returning the snapshot block and the AB/CD shell
+        //   separations needed by HRR.
+        // _maxbox_readout_native_test: gather one component's sub-box from the
+        //   snapshot, HRR it, and apply normA·normB·normC·normD (invariant 2 — the
+        //   shared norm-free contraction carries no per-component norm).
+        //
+        // Together they reproduce _rys_contracted_eri (which folds norm per pair
+        // and builds per-component) to ≤1e-13, exercising both the n_max-over-
+        // component reorder (B-1) and the norm-after-HRR reorder.
+        // Used only by tests/rys_box_invariance.cpp.
+        void _contract_maxbox_snapshot_native_test(
+            const HartreeFock::ContractedView &cvA0,
+            const HartreeFock::ContractedView &cvB0,
+            const HartreeFock::ContractedView &cvC0,
+            const HartreeFock::ContractedView &cvD0,
+            int maxAB, int maxCD,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            std::vector<double> &snapshot,
+            double R_AB[3], double R_CD[3]) noexcept;
+
+        double _maxbox_readout_native_test(
+            const std::vector<double> &snapshot,
+            int maxAB, int maxCD,
+            const HartreeFock::ContractedView &cvA,
+            const HartreeFock::ContractedView &cvB,
+            const HartreeFock::ContractedView &cvC,
+            const HartreeFock::ContractedView &cvD,
+            const double R_AB[3], const double R_CD[3]) noexcept;
+
     } // namespace RysQuad
 } // namespace HartreeFock
 
