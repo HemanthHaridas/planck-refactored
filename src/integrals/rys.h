@@ -209,6 +209,32 @@ namespace HartreeFock
             const HartreeFock::ContractedView &cvD,
             const double R_AB[3], const double R_CD[3]) noexcept;
 
+        // ── Hoisted block entry (Phase B / B-2d) ───────────────────────────────────
+        //
+        // Fill `block` with every component ERI of one shell quartet via a single
+        // norm-free max-box contraction (RysHoistedQuartet), built lazily on the
+        // first component read. `block` is laid out [(a*nB+b)*nC*nD + (c*nD+d)].
+        // Reproduces the per-component `_rys_contracted_eri` path to ≤1e-13 (B-1
+        // n_max reorder + B-2c norm-after-HRR reorder). The pointer-array form lets
+        // the Auto path (B-3) feed its non-contiguous ao_views table directly.
+        // Not yet wired into any production entry point (that is B-3/B-4).
+        void _contracted_eri_block_hoisted_views(
+            const HartreeFock::ContractedView *const *viewsA, std::size_t nA,
+            const HartreeFock::ContractedView *const *viewsB, std::size_t nB,
+            const HartreeFock::ContractedView *const *viewsC, std::size_t nC,
+            const HartreeFock::ContractedView *const *viewsD, std::size_t nD,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            double *block) noexcept;
+
+        void _contracted_eri_block_hoisted(
+            const HartreeFock::Basis &basis,
+            const ShellGroup &gA, const ShellGroup &gB,
+            const ShellGroup &gC, const ShellGroup &gD,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            double *block) noexcept;
+
     } // namespace RysQuad
 } // namespace HartreeFock
 

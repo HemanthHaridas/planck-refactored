@@ -510,6 +510,100 @@ namespace
                       << components_checked << " components  (" << buf << ")\n";
         }
     }
+
+    // B-2d gate: the assembled RysHoistedQuartet block entry
+    // (_contracted_eri_block_hoisted) fills every component of a shell quartet
+    // from one lazy norm-free max-box contraction; each component matches
+    // _rys_contracted_eri to ≤1e-13. Exercises the full B-2d surface (lazy
+    // prepare, ShortRange two-snapshot subtract, norm-at-readout, block layout).
+    void check_block(const std::string &label,
+                     const HartreeFock::Calculator &calc,
+                     HartreeFock::ERIKernel kernel, double omega,
+                     int min_quartet_L = 0)
+    {
+        const HartreeFock::Basis &basis = calc._shells;
+        const std::vector<ShellGroup> groups = build_shell_groups(basis);
+
+        constexpr double REL_TOL = 1e-13;
+        std::size_t over_tol = 0;
+        std::size_t components_checked = 0;
+        double max_abs_diff = 0.0;
+        double max_rel_diff = 0.0;
+        std::vector<double> block;
+
+        for (const ShellGroup &gA : groups)
+        for (const ShellGroup &gB : groups)
+        for (const ShellGroup &gC : groups)
+        for (const ShellGroup &gD : groups)
+        {
+            const int LA = static_cast<int>(basis._basis_functions[gA.first_ao]._shell->_shell);
+            const int LB = static_cast<int>(basis._basis_functions[gB.first_ao]._shell->_shell);
+            const int LC = static_cast<int>(basis._basis_functions[gC.first_ao]._shell->_shell);
+            const int LD = static_cast<int>(basis._basis_functions[gD.first_ao]._shell->_shell);
+            if ((LA + LB) + (LC + LD) < min_quartet_L)
+                continue;
+
+            const std::size_t nCD = gC.n_components * gD.n_components;
+            block.assign(gA.n_components * gB.n_components * nCD, 0.0);
+            HartreeFock::RysQuad::_contracted_eri_block_hoisted(
+                basis, gA, gB, gC, gD, kernel, omega, block.data());
+
+            for (std::size_t a = 0; a < gA.n_components; ++a)
+            for (std::size_t b = 0; b < gB.n_components; ++b)
+            for (std::size_t c = 0; c < gC.n_components; ++c)
+            for (std::size_t d = 0; d < gD.n_components; ++d)
+            {
+                const auto &cvA = basis._basis_functions[gA.first_ao + a];
+                const auto &cvB = basis._basis_functions[gB.first_ao + b];
+                const auto &cvC = basis._basis_functions[gC.first_ao + c];
+                const auto &cvD = basis._basis_functions[gD.first_ao + d];
+
+                const HartreeFock::ShellPair spAB(cvA, cvB);
+                const HartreeFock::ShellPair spCD(cvC, cvD);
+                if (spAB.primitive_pairs.empty() || spCD.primitive_pairs.empty())
+                    continue;
+                const double via_prod = HartreeFock::RysQuad::_rys_contracted_eri(
+                    spAB, spCD,
+                    cvA._cartesian[0], cvA._cartesian[1], cvA._cartesian[2],
+                    cvB._cartesian[0], cvB._cartesian[1], cvB._cartesian[2],
+                    cvC._cartesian[0], cvC._cartesian[1], cvC._cartesian[2],
+                    cvD._cartesian[0], cvD._cartesian[1], cvD._cartesian[2],
+                    kernel, omega);
+
+                const double via_block =
+                    block[(a * gB.n_components + b) * nCD + (c * gD.n_components + d)];
+
+                ++components_checked;
+                const double adiff = std::fabs(via_block - via_prod);
+                const double scale = std::max(std::fabs(via_prod), 1e-300);
+                const double rdiff = adiff / scale;
+                if (adiff > max_abs_diff)
+                    max_abs_diff = adiff;
+                if (adiff > 1e-15)
+                {
+                    if (rdiff > max_rel_diff)
+                        max_rel_diff = rdiff;
+                    if (rdiff > REL_TOL)
+                        ++over_tol;
+                }
+            }
+        }
+
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "max|Δ|=%.2e rel=%.2e", max_abs_diff, max_rel_diff);
+        if (over_tol != 0)
+        {
+            fail(std::string("Rys B-2d / ") + kernel_label(kernel) + " / " + label +
+                 ": " + std::to_string(over_tol) + " of " +
+                 std::to_string(components_checked) + " components over rel-tol  " + buf);
+        }
+        else
+        {
+            std::cout << "OK  Rys B-2d / " << kernel_label(kernel) << " / " << label
+                      << ": hoisted block == _rys_contracted_eri (rel<=1e-13) at all "
+                      << components_checked << " components  (" << buf << ")\n";
+        }
+    }
 } // namespace
 
 int main()
@@ -537,6 +631,11 @@ int main()
     check_maxbox_readout("water/6-31g*", *water, HartreeFock::ERIKernel::LongRange, 0.3);
     check_maxbox_readout("water/6-31g*", *water, HartreeFock::ERIKernel::ShortRange, 0.3);
 
+    // B-2d: assembled RysHoistedQuartet block == _rys_contracted_eri.
+    check_block("water/6-31g*", *water, HartreeFock::ERIKernel::Coulomb, 0.0);
+    check_block("water/6-31g*", *water, HartreeFock::ERIKernel::LongRange, 0.3);
+    check_block("water/6-31g*", *water, HartreeFock::ERIKernel::ShortRange, 0.3);
+
     // g-shell basis: confine the sweep to the high-L quartets (maxAB+maxCD >= 7,
     // i.e. the (7,8)/(8,8) buckets the Auto path actually routes to Rys). Lower-L
     // Ne quartets are already covered structurally by water/6-31g*, and sweeping
@@ -555,6 +654,9 @@ int main()
 
     check_maxbox_readout("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7);
     check_maxbox_readout("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7);
+
+    check_block("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7);
+    check_block("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7);
 
     if (!g_ok)
     {

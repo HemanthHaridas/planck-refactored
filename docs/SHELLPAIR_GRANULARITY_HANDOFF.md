@@ -306,12 +306,13 @@ None of these block the landed work.
     `HoistedQuartet`/A4-2: a struct that contracts the 6D `sum` **once per shell
     quartet** at `(max box, n_max roots)`, snapshots it, and reads each Cartesian
     component out via a per-component HRR. Not wired into any entry point in B-2
-    — validated only against `_rys_contracted_eri`. B-2a folded into B-1; B-2.5a/b,
-    B-2b, and B-2c are LANDED; B-2d remains (gated and revertible).
+    — validated only against `_rys_contracted_eri`. B-2a folded into B-1;
+    B-2.5a/b/c, B-2b, B-2c, and B-2d are ALL LANDED. The entire off-hot-path Rys
+    hoist is built and gated; only production wiring remains.
 
     **Execution order: B-2.5 was done FIRST** (independent of the hoist,
     testable against current code, highest-risk). Remaining sequence:
-    **B-2d → B-3 → B-4** (B-2.5 is listed after B-2 here only to keep the
+    **B-3 → B-4** (B-2.5 is listed after B-2 here only to keep the
     integral-side sub-steps grouped).
 
     - **B-2a — FOLDED INTO B-1; the "bitwise refactor" framing was wrong.**
@@ -405,30 +406,36 @@ None of these block the landed work.
       hoist applies it after) — last-bit, well inside the bar. Revert: delete
       layout + readout + the two hooks + arm.
 
-    - **B-2d — assemble `RysHoistedQuartet` + pointer-array entry.** Compose
-      B-2b/c into the struct: ctor takes the four component-0 views + kernel/omega
-      and records `maxAB/maxCD`; lazy `prepare()` runs `_rys_contract_sum` from
-      norm-free views at `(max box, n_max)` into `a0c0_primary` (and, for
-      ShortRange, `a0c0_secondary` from the LongRange kernel); `readout(component,
-      norm)` calls `rys_hoist_readout_component` on each snapshot, combines
-      (`primary − secondary` for ShortRange), and scales by `norm`. Add public
-      `_rys_contracted_eri_block_hoisted_views(vA,nA,…, kernel, omega, block*)`
-      (pointer-array form, so B-3's non-contiguous `ao_views` feed it directly;
-      mirrors HGP's `_contracted_eri_block_hoisted_views`). **Gate (≤1e-13):**
-      extend `planck-rys-box-invariance` (or a sibling `planck-rys-hoist-block`)
-      to fill the block for every shell quartet of water/6-31g\* and Ne/cc-pVQZ
-      Lq≥7, all three kernels, and compare each component against
-      `_rys_contracted_eri`. Still no production wiring. Revert: delete struct +
-      entry + arm.
+    - **B-2d — assemble `RysHoistedQuartet` + pointer-array entry. LANDED.**
+      `RysHoistedQuartet` (anon namespace in `src/integrals/rys.cpp`, Rys analog of
+      HGP's `HoistedQuartet`): ctor takes the four component-0 views + kernel/omega,
+      makes norm-free copies (`rys_normfree_view`), records `maxAB/maxCD` and the
+      quadrature degree `n_roots`; lazy `prepare()` runs the factored-out
+      `_rys_contract_sum` from norm-free views at `(max box, n_max)` into
+      `sum_primary` (and, for ShortRange, `sum_secondary` from the LongRange
+      kernel); `readout(component, norm)` calls `rys_hoist_readout_component` on
+      each snapshot, combines (`primary − secondary` for ShortRange), and scales by
+      `norm`. Public entries `_contracted_eri_block_hoisted_views(vA,nA,…)`
+      (pointer-array form, so B-3's non-contiguous `ao_views` feed it directly) and
+      `_contracted_eri_block_hoisted(basis, gA..gD, …)` (ShellGroup wrapper),
+      mirroring HGP one-for-one. **Gate (≤1e-13):** `check_block` in
+      `tests/rys_box_invariance.cpp` fills the block via
+      `_contracted_eri_block_hoisted` for every shell quartet of water/6-31g\* and
+      Ne/cc-pVQZ Lq≥7 (all kernels) and compares each component against
+      `_rys_contracted_eri`. Measured: water/6-31g\* `max|Δ| ≤ 2.3e-15`,
+      `rel ≤ 1.1e-14`; Ne/cc-pVQZ Lq≥7 `max|Δ| ≤ 1.3e-15`, `rel ≤ 1.4e-15`. Still
+      no production wiring (that is B-3/B-4). Revert: delete struct + the two
+      entries + `rys_normfree_view` + the `check_block` arm.
 
-    Net B-2: the hoisted path exists and is proven equal to the per-component
-    path (to ≤1e-13), but nothing in production calls it yet. ShortRange = two
-    snapshots combined per component, as in OS/HGP. **B-2.5 (CASSCF hardening)
-    must land before *either* B-3 or B-4** — both adopt the hoisted (reordered)
-    order on a Rys path that a basin-sensitive SA-CASSCF run can reach.
+    Net B-2: **B-2b/c/d all LANDED.** The hoisted path exists end-to-end
+    (`RysHoistedQuartet` + the two block entries) and is proven equal to the
+    per-component path to ≤1e-13, but nothing in production calls it yet.
+    ShortRange = two snapshots combined per component, as in OS/HGP. **B-2.5
+    (CASSCF hardening) landed before this**, and B-2.5c measured the reorder
+    robustness the wiring relies on — so B-3/B-4 are unblocked.
 
   - **B-2.5 — harden the SA-2 CASSCF plateau-escape (PREREQUISITE for B-3 AND
-    B-4). a+b LANDED; c deferred to B-2b start.** Done *before* any B-2 integral
+    B-4). a+b+c ALL DONE (c run at B-2d time).** Done *before* any B-2 integral
     work, as scoped — it is pure
     CASSCF-convergence logic, independent of the hoist, fully testable against the
     current per-pair production code, and it is the highest-uncertainty piece
@@ -481,15 +488,19 @@ None of these block the landed work.
       Gate: the four SA-2 cases assert the expected flag; all 10 CASSCF cases
       green. Revert: delete the emit + metric + asserts.
 
-    - **B-2.5c — prove rounding-robustness with a throwaway reorder probe.** The
-      hoist does not exist yet, so robustness is demonstrated against a *temporary*
-      perturbation: apply a one-off ~1e-15 reorder to `_rys_contracted_eri`
-      (either the reverted B-2a contract-then-HRR, or a literal
-      `eri += tiny_jitter` in a `#ifdef RYS_REORDER_PROBE` block), rebuild, and
-      confirm the uphill case **still lands −74.7877864784** and still reports
-      `casscf_converged_via_plateau=true`. This is a local experiment, not a
-      committed change — the probe is reverted before the B-2.5 commit, which
-      ships only B-2.5a+b. Documents the robustness claim that B-3/B-4 rely on.
+    - **B-2.5c — prove rounding-robustness with a throwaway reorder probe. DONE
+      (run at B-2d time; probe reverted, uncommitted).** A `#ifdef
+      RYS_REORDER_PROBE` block in `_rys_contracted_eri` applied a ~1e-15 *relative*
+      perturbation `eri *= 1 + sign·1e-15` (sign from the value's low mantissa bit,
+      so it is a reorder-like jitter, not a bias). Built `hartree-fock` with
+      `-DRYS_REORDER_PROBE` and ran the uphill SA-2 case (`engine rys`, so it hits
+      `_rys_contracted_eri`): the perturbed integrals followed the *same* descent
+      (`sa_g` 1.6e-2 → … → 4.2e-6 → 1.35e-9 → **3.54e-10**) to the **same basin**,
+      **landing −74.7877864784** and reporting `casscf_converged_via_plateau=true`.
+      The plateau exit fired at `sa_g=3.54e-10`, ~3000× below the 1e-6 bound — so
+      the gate is empirically robust to the reorder, not just robust by argument.
+      The probe was reverted before committing B-2d; it ships nothing. This is the
+      robustness claim B-3/B-4 rely on, now measured.
 
     Net B-2.5: **a+b LANDED** — the plateau exit now fires at a genuinely
     stationary `sa_g` (≤ max(1e-6, tol)), and which exit each SA-2 case takes is a
