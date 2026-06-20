@@ -277,6 +277,131 @@ namespace
                       << coords_checked << " coords  (" << buf << ")\n";
         }
     }
+    // B-2b gate: contract-then-HRR == _rys_contracted_eri to the 1e-13 ERI bar.
+    // _rys_contract_sum (via _contract_sum_native_test) builds Σ_pair
+    // coeff·sum_pair into one block; HRR'ing it gives HRR(Σ coeff·sum_pair).
+    // _rys_contracted_eri gives Σ coeff·HRR(sum_pair). HRR is linear so the two
+    // are mathematically equal, but they reorder the FP accumulation at the last
+    // bit two ways: (1) the cross-pair sum moves across HRR, and (2) production
+    // applies coeff_product ONCE after HRR (a single final multiply), while the
+    // hoist folds coeff into the block so it rides through every HRR add. Both
+    // are inherent to the hoisted order the production path (B-3) will adopt, so
+    // the correct bar is 1e-13 rel — same as B-1 and the eventual B-2c/d — NOT
+    // bitwise. (The earlier scope note's "bitwise at a single pair" was an
+    // over-claim: it overlooked the coeff-placement reorder (2), which is present
+    // even at one pair.)
+    void check_contract(const std::string &label,
+                        const HartreeFock::Calculator &calc,
+                        HartreeFock::ERIKernel kernel, double omega,
+                        int min_quartet_L = 0)
+    {
+        const HartreeFock::Basis &basis = calc._shells;
+        const std::vector<ShellGroup> groups = build_shell_groups(basis);
+
+        // Same 1e-13 ERI bar as the box-invariance check above; the hoisted
+        // contract-then-HRR order rounds at the last bit (coeff placement +
+        // cross-pair sum reorder), so this is tight-tolerance, not bitwise.
+        constexpr double REL_TOL = 1e-13;
+        std::size_t over_tol = 0;
+        std::size_t components_checked = 0;
+        double max_abs_diff = 0.0;
+        double max_rel_diff = 0.0;
+        std::vector<double> acc;
+
+        for (const ShellGroup &gA : groups)
+        for (const ShellGroup &gB : groups)
+        for (const ShellGroup &gC : groups)
+        for (const ShellGroup &gD : groups)
+        {
+            const auto &cvA0 = basis._basis_functions[gA.first_ao];
+            const auto &cvB0 = basis._basis_functions[gB.first_ao];
+            const auto &cvC0 = basis._basis_functions[gC.first_ao];
+            const auto &cvD0 = basis._basis_functions[gD.first_ao];
+
+            const int LA = static_cast<int>(cvA0._shell->_shell);
+            const int LB = static_cast<int>(cvB0._shell->_shell);
+            const int LC = static_cast<int>(cvC0._shell->_shell);
+            const int LD = static_cast<int>(cvD0._shell->_shell);
+            if ((LA + LB) + (LC + LD) < min_quartet_L)
+                continue;
+
+            // Per-component shell pairs (carry the component's _component_norm,
+            // as production _rys_contracted_eri does). Full primitive-pair sets:
+            // B-2b's _rys_contract_sum contracts over all pairs, exactly as the
+            // production hoist (B-3) will.
+            for (std::size_t a = 0; a < gA.n_components; ++a)
+            for (std::size_t b = 0; b < gB.n_components; ++b)
+            for (std::size_t c = 0; c < gC.n_components; ++c)
+            for (std::size_t d = 0; d < gD.n_components; ++d)
+            {
+                const auto &cvA = basis._basis_functions[gA.first_ao + a];
+                const auto &cvB = basis._basis_functions[gB.first_ao + b];
+                const auto &cvC = basis._basis_functions[gC.first_ao + c];
+                const auto &cvD = basis._basis_functions[gD.first_ao + d];
+
+                const HartreeFock::ShellPair spAB(cvA, cvB);
+                const HartreeFock::ShellPair spCD(cvC, cvD);
+                if (spAB.primitive_pairs.empty() || spCD.primitive_pairs.empty())
+                    continue;
+
+                const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
+                const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
+                const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+                const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
+
+                const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+                const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+                const int n_comp =
+                    (lABx + lABy + lABz + lCDx + lCDy + lCDz) / 2 + 1;
+
+                HartreeFock::RysQuad::_contract_sum_native_test(
+                    spAB, spCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                    n_comp, kernel, omega, acc);
+
+                const double via_hoist = HartreeFock::RysQuad::_hrr_block_native_test(
+                    acc, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+                    spAB.R[0], spAB.R[1], spAB.R[2], spCD.R[0], spCD.R[1], spCD.R[2]);
+
+                const double via_prod = HartreeFock::RysQuad::_rys_contracted_eri(
+                    spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+                    kernel, omega);
+
+                ++components_checked;
+                const double adiff = std::fabs(via_hoist - via_prod);
+                const double scale = std::max(std::fabs(via_prod), 1e-300);
+                const double rdiff = adiff / scale;
+                if (adiff > max_abs_diff)
+                    max_abs_diff = adiff;
+                // Only count/report relative diff above the absolute noise floor:
+                // near-zero ERIs (|via_prod| ~ 1e-18) produce a meaningless huge
+                // rdiff from a last-bit adiff. The gate ignores them (adiff floor
+                // below), so the reported max_rel must too, else it alarms on
+                // points the gate correctly passes.
+                if (adiff > 1e-15)
+                {
+                    if (rdiff > max_rel_diff)
+                        max_rel_diff = rdiff;
+                    if (rdiff > REL_TOL)
+                        ++over_tol;
+                }
+            }
+        }
+
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "max|Δ|=%.2e rel=%.2e", max_abs_diff, max_rel_diff);
+        if (over_tol != 0)
+        {
+            fail(std::string("Rys B-2b / ") + kernel_label(kernel) + " / " + label +
+                 ": " + std::to_string(over_tol) + " of " +
+                 std::to_string(components_checked) + " components over rel-tol  " + buf);
+        }
+        else
+        {
+            std::cout << "OK  Rys B-2b / " << kernel_label(kernel) << " / " << label
+                      << ": contract-then-HRR == _rys_contracted_eri (rel<=1e-13) at all "
+                      << components_checked << " components  (" << buf << ")\n";
+        }
+    }
 } // namespace
 
 int main()
@@ -294,6 +419,11 @@ int main()
     check("water/6-31g*", *water, HartreeFock::ERIKernel::LongRange, 0.3);
     check("water/6-31g*", *water, HartreeFock::ERIKernel::ShortRange, 0.3);
 
+    // B-2b: contract-then-HRR == _rys_contracted_eri, bitwise at a single pair.
+    check_contract("water/6-31g*", *water, HartreeFock::ERIKernel::Coulomb, 0.0);
+    check_contract("water/6-31g*", *water, HartreeFock::ERIKernel::LongRange, 0.3);
+    check_contract("water/6-31g*", *water, HartreeFock::ERIKernel::ShortRange, 0.3);
+
     // g-shell basis: confine the sweep to the high-L quartets (maxAB+maxCD >= 7,
     // i.e. the (7,8)/(8,8) buckets the Auto path actually routes to Rys). Lower-L
     // Ne quartets are already covered structurally by water/6-31g*, and sweeping
@@ -306,6 +436,9 @@ int main()
     }
     check("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7);
     check("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7);
+
+    check_contract("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7);
+    check_contract("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7);
 
     if (!g_ok)
     {

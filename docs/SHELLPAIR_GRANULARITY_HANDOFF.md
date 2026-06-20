@@ -306,14 +306,12 @@ None of these block the landed work.
     `HoistedQuartet`/A4-2: a struct that contracts the 6D `sum` **once per shell
     quartet** at `(max box, n_max roots)`, snapshots it, and reads each Cartesian
     component out via a per-component HRR. Not wired into any entry point in B-2
-    — validated only against `_rys_contracted_eri`. B-2a folded into B-1; the
-    remaining three sub-steps (B-2b/c/d) are each gated and revertible.
+    — validated only against `_rys_contracted_eri`. B-2a folded into B-1; B-2.5a/b
+    and B-2b are LANDED; B-2c/d remain (each gated and revertible).
 
-    **Execution order: do B-2.5 (below) FIRST.** It is independent of the hoist,
-    testable against current code, and the highest-risk piece; the B-2b/c/d
-    integral work is only worth building if B-2.5 proves the basin gate can be
-    made rounding-robust. So the real sequence is **B-2.5a/b → B-2b → B-2c →
-    B-2d → B-3 → B-4** (B-2.5 is listed after B-2 here only to keep the
+    **Execution order: B-2.5 was done FIRST** (independent of the hoist,
+    testable against current code, highest-risk). Remaining sequence:
+    **B-2c → B-2d → B-3 → B-4** (B-2.5 is listed after B-2 here only to keep the
     integral-side sub-steps grouped).
 
     - **B-2a — FOLDED INTO B-1; the "bitwise refactor" framing was wrong.**
@@ -350,19 +348,35 @@ None of these block the landed work.
     root-count drift); arms that compare two *per-component-box* builds are
     bitwise.
 
-    - **B-2b — `_rys_contract_sum` (contract over primitives at a fixed box).**
-      Static `_rys_contract_sum(spAB, spCD, box, n_roots, kernel, omega, acc&)`:
-      loop primitive pairs, `_rys_eri_prep` + `_rys_eri_build_sum`, accumulate
-      each pair's 6D `sum` weighted by `coeff_product` into `acc` (Rys analog of
-      `hgp_contract_a0c0`). Norm handling is deferred to B-2c — here the views
-      still carry their folded `_component_norm`, so a single fixed component-0
-      pair is used. **Gate (bitwise):** a test arm that calls `_rys_contract_sum`
-      at the *component box / n_comp* for one quartet and HRRs the result
-      (`_rys_eri_hrr_to_eri`) reproduces `_rys_contracted_eri` **bitwise** — same
-      build, same box, only the per-pair-sum vs sum-then-HRR order differs, and
-      at a single primitive pair there is no reorder. (Multi-pair sum-then-HRR is
-      the reordered case and is checked at B-2d's tolerance, not here.) Revert:
-      delete static + arm.
+    - **B-2b — `_rys_contract_sum` (contract over primitives at a fixed box).
+      LANDED.** Test hook `RysQuad::_contract_sum_native_test` (`src/integrals/
+      rys.{h,cpp}`): loop primitive pairs, build each pair's kernel-resolved 6D
+      `sum` (`_rys_build_pair_value_block` — Coulomb/LongRange a single build,
+      ShortRange = Coulomb − LongRange per pair, mirroring `_rys_contracted_eri`'s
+      composition), accumulate weighted by `coeff_product` into `acc` (Rys analog
+      of `hgp_contract_a0c0`). Norm handling deferred to B-2c — the views still
+      carry folded `_component_norm`, so per-component shell pairs are used.
+      Companion hook `_hrr_block_native_test` HRRs a contracted block to a scalar
+      (reuses the anon-namespace `_rys_eri_hrr_to_eri`).
+
+      **Gate (≤1e-13, NOT bitwise — scope correction):** the test arm
+      (`tests/rys_box_invariance.cpp`, `check_contract`) contracts at the
+      *component box / n_comp* over the full primitive-pair set and HRRs the
+      result, comparing each component against `_rys_contracted_eri`. The scope's
+      "bitwise at a single primitive pair" was **wrong**: even at one pair, the
+      hoisted contract-then-HRR is `HRR(coeff·build)` while production is
+      `coeff·HRR(build)` — production applies `coeff_product` *once after* HRR,
+      the hoist folds it into the block so it rides through every HRR add
+      (`coeff·(x+CD·y)` vs `coeff·x+CD·(coeff·y)` round differently). That
+      coeff-placement reorder, plus the cross-pair sum moving across HRR, both
+      round at the last bit, so the correct bar is the 1e-13 ERI bar (same as B-1
+      and B-2c/d), exactly as the B-2a finding already established for any HRR
+      hoist. Measured: water/6-31g\* (d-shells, all three kernels)
+      `max|Δ| ≤ 1.6e-15`, `rel ≤ 5.4e-15`; Ne/cc-pVQZ Lq≥7 (g-shells, n_max==n_comp)
+      **exactly 0.0** over 21.5M components. (The reported `rel` floors near-zero
+      ERIs at `adiff > 1e-15`, matching the failure condition, so a near-zero ERI
+      can't inflate the reported relative diff.) Revert: delete the two hooks +
+      `_rys_build_pair_value_block` + the `check_contract` arm.
 
     - **B-2c — `RysMaxBoxLayout` + norm-free max-box readout.** Promote the
       6-axis `idx` from the B-1 test to a `RysMaxBoxLayout(maxAB,maxCD)` (strides

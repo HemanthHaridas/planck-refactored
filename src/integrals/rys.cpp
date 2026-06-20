@@ -849,6 +849,97 @@ void HartreeFock::RysQuad::_build_sum_native_test(
     out.assign(sum.buf.begin(), sum.buf.begin() + sum.size);
 }
 
+// ─── Test hook (Phase B / B-2b): contract the 6D sum over primitive pairs ─────
+
+namespace
+{
+    // Build one primitive pair's kernel-resolved 6D `sum` (the per-pair value
+    // block) into `sum`, mirroring _rys_contracted_eri's per-pair composition:
+    // Coulomb / LongRange are a single build; ShortRange = Coulomb − LongRange.
+    static void _rys_build_pair_value_block(
+        const HartreeFock::PrimitivePair &ppAB,
+        const HartreeFock::PrimitivePair &ppCD,
+        const int lABx, const int lABy, const int lABz,
+        const int lCDx, const int lCDy, const int lCDz,
+        const int n_roots,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        RysScratch &sum,
+        std::vector<double> &short_range_scratch) noexcept
+    {
+        if (kernel == HartreeFock::ERIKernel::ShortRange)
+        {
+            const RysPrimGeom gc =
+                _rys_eri_prep(ppAB, ppCD, HartreeFock::ERIKernel::Coulomb, 0.0);
+            _rys_eri_build_sum(gc, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+            short_range_scratch.assign(sum.buf.begin(), sum.buf.begin() + sum.size);
+
+            const RysPrimGeom gl =
+                _rys_eri_prep(ppAB, ppCD, HartreeFock::ERIKernel::LongRange, omega);
+            _rys_eri_build_sum(gl, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+
+            for (std::size_t i = 0; i < sum.size; ++i)
+                sum.buf[i] = short_range_scratch[i] - sum.buf[i];
+            return;
+        }
+
+        const RysPrimGeom geom = _rys_eri_prep(ppAB, ppCD, kernel, omega);
+        _rys_eri_build_sum(geom, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+    }
+} // namespace
+
+void HartreeFock::RysQuad::_contract_sum_native_test(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    int lABx, int lABy, int lABz,
+    int lCDx, int lCDy, int lCDz,
+    int n_roots,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    std::vector<double> &acc) noexcept
+{
+    RysScratch &sum = g_rys_scratch;
+    std::vector<double> short_range_scratch;
+
+    acc.clear();
+    for (const auto &ppAB : spAB.primitive_pairs)
+        for (const auto &ppCD : spCD.primitive_pairs)
+        {
+            _rys_build_pair_value_block(
+                ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                n_roots, kernel, omega, sum, short_range_scratch);
+
+            if (acc.size() != sum.size)
+                acc.assign(sum.size, 0.0);
+
+            const double weight = ppAB.coeff_product * ppCD.coeff_product;
+            for (std::size_t i = 0; i < sum.size; ++i)
+                acc[i] += weight * sum.buf[i];
+        }
+}
+
+double HartreeFock::RysQuad::_hrr_block_native_test(
+    const std::vector<double> &block,
+    int lAx, int lAy, int lAz,
+    int lBx, int lBy, int lBz,
+    int lCx, int lCy, int lCz,
+    int lDx, int lDy, int lDz,
+    double ABx, double ABy, double ABz,
+    double CDx, double CDy, double CDz) noexcept
+{
+    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+    RysScratch &sum = g_rys_scratch;
+    sum.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz);
+    std::copy(block.begin(), block.begin() + sum.size, sum.buf.begin());
+
+    return _rys_eri_hrr_to_eri(sum,
+                               lAx, lAy, lAz, lBx, lBy, lBz,
+                               lCx, lCy, lCz, lDx, lDy, lDz,
+                               ABx, ABy, ABz, CDx, CDy, CDz);
+}
+
 // ─── Schwarz screening (mirrors os.cpp _compute_schwarz_table) ────────────────
 
 static Eigen::MatrixXd _rys_schwarz_table(

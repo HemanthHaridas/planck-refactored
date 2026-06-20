@@ -129,6 +129,49 @@ namespace HartreeFock
             double omega,
             std::vector<double> &out) noexcept;
 
+        // ── Test hook (Phase B / B-2b): contract the 6D sum over primitive pairs ───
+        //
+        // Accumulates, over every primitive pair of the two shell pairs, the
+        // per-pair 6D Rys `sum` (built at the given box / n_roots) weighted by
+        // `coeff_product`, into a single contracted block returned in `acc` (row-
+        // major in RysScratch's stride convention, each dim = box+1). This is the
+        // Rys analog of HGP's hgp_contract_a0c0: contract-then-HRR rather than the
+        // production per-pair HRR-then-sum.
+        //
+        // ShortRange = Coulomb − LongRange is composed per pair (matching
+        // _rys_contracted_eri's per-pair value), so the contracted block already
+        // carries the kernel. Views still carry their folded _component_norm
+        // (norm-free max-box readout is B-2c), so callers use a single fixed
+        // component box / n_comp; at a single primitive pair the contracted block
+        // HRR'd reproduces _rys_contracted_eri bitwise (no cross-pair reorder).
+        // Used only by tests/rys_box_invariance.cpp; no production path calls it.
+        void _contract_sum_native_test(
+            const HartreeFock::ShellPair &spAB,
+            const HartreeFock::ShellPair &spCD,
+            int lABx, int lABy, int lABz,
+            int lCDx, int lCDy, int lCDz,
+            int n_roots,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            std::vector<double> &acc) noexcept;
+
+        // ── Test hook (Phase B / B-2b): HRR a contracted 6D block to a scalar ──────
+        //
+        // Loads `block` (row-major, dims = box+1, as produced by
+        // _contract_sum_native_test at box lAB*+? = the component's own box) into a
+        // RysScratch and runs AB-HRR then CD-HRR for the component (lA*..lD*),
+        // returning the scalar ERI. Lets the B-2b test compare
+        // contract-then-HRR against _rys_contracted_eri. Used only by
+        // tests/rys_box_invariance.cpp.
+        double _hrr_block_native_test(
+            const std::vector<double> &block,
+            int lAx, int lAy, int lAz,
+            int lBx, int lBy, int lBz,
+            int lCx, int lCy, int lCz,
+            int lDx, int lDy, int lDz,
+            double ABx, double ABy, double ABz,
+            double CDx, double CDy, double CDz) noexcept;
+
     } // namespace RysQuad
 } // namespace HartreeFock
 
