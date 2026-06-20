@@ -113,7 +113,17 @@ externalproject_add(
 externalproject_add(
     libxc
     PREFIX ${SRC_DIR}/external/libxc
-    GIT_REPOSITORY https://github.com/ElectronicStructureLibrary/libxc.git
+    # libxc moved off GitHub; the old ElectronicStructureLibrary/libxc path now
+    # 404s (and git then prompts for HTTPS credentials, since over HTTPS a 404 is
+    # indistinguishable from a private repo needing auth). GitLab is the live
+    # home. Pinned to the EXACT commit the existing validated checkout was on
+    # (5.0.0-799-g4bd0e1e36), which still exists on GitLab — a URL-only fix with
+    # zero version drift, so the DFT wrapper (src/dft/base/wrapper.h) and XC
+    # regressions stay on the libxc they were validated against. The previous
+    # unpinned default-branch fetch is what drifted onto the dead URL. (Bumping
+    # to 6.x/7.x would need a DFT build + regression check first.)
+    GIT_REPOSITORY https://gitlab.com/libxc/libxc.git
+    GIT_TAG 4bd0e1e36347c6d0a4e378a2c8d891ae43f8c951
     UPDATE_DISCONNECTED TRUE
     GIT_PROGRESS TRUE
     CMAKE_ARGS
