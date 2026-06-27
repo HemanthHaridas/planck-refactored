@@ -515,7 +515,18 @@ namespace HartreeFock::Correlation::CASSCF
             // basis imply?". Every candidate orbital step and every final accepted
             // macroiteration comes back through this full reevaluation path.
             McscfState st;
-            st.F_I_mo = build_inactive_fock_mo(C_trial, calc._hcore, eri, n_core, nbasis);
+            // A1: build the inactive Fock directly from shell-pair ERIs (screened
+            // HGP, no n_AO⁴ tensor sweep) — same J − ½K operator as the tensor
+            // path, gated bit-equivalent by planck-casscf-direct-fock. Cartesian
+            // only: the direct kernel produces Cartesian ERIs, while a spherical
+            // SCF's cached `eri` and MO coefficients are spherical, so the direct
+            // build would be basis-inconsistent there (same reason ensure_eri
+            // refuses to rebuild a Cartesian tensor in spherical mode). Spherical
+            // CASSCF keeps the tensor path.
+            st.F_I_mo = calc._shells._spherical
+                            ? build_inactive_fock_mo(C_trial, calc._hcore, eri, n_core, nbasis)
+                            : build_inactive_fock_mo_direct(
+                                  C_trial, calc._hcore, shell_pairs, n_core, nbasis);
             st.h_eff = st.F_I_mo.block(n_core, n_core, n_act, n_act);
             const Eigen::MatrixXd C_act = C_trial.middleCols(n_core, n_act);
             st.ga = HartreeFock::Correlation::transform_eri_internal(eri, nbasis, C_act);
