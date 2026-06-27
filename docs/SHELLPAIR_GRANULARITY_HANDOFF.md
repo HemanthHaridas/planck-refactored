@@ -663,9 +663,36 @@ revert.
   `water_casscf44_spherical_631gd` (exercises the tensor-fallback branch); A0 unit
   test green. **Revert:** flip the one call back.
 
-- **A2 - route the active Fock through direct.** Same for `build_active_fock_mo`
-  (per-root x per-candidate). **Gate:** 11 cases; SA-2 cases (multiple `F_A`
-  builds) unchanged. **Revert:** one call site.
+- **A2 - route the active Fock through direct. ATTEMPTED, DROPPED (do not retry
+  naively).** Swapping `build_active_fock_mo` -> `build_active_fock_mo_direct` in
+  the per-root loop flips ONLY `water_casscf_sa2_sto3g_sad_guess_uphill` from its
+  pinned basin (-74.7877864784) to the other valid SA stationary point
+  (-74.7751377977); the other 9 CASSCF cases pass. Fully diagnosed:
+  - **Not a bug, not nondeterminism.** The direct active Fock matches the tensor
+    to ≤8.9e-16 (A0 gate), and the flipped energy is bit-identical across reruns
+    and OMP_NUM_THREADS=1/2/4/8.
+  - **Mechanism:** the uphill case's macro cascade leans on `numeric-newton`
+    (load-bearing — some cases only converge with it), whose FD Hessian
+    `H = (g_orb(+ε) − g_orb(−ε)) / 2ε` divides the active-Fock reorder by `2ε`,
+    amplifying ~1e-15 → ~1e-12 in `H`. Macro 1 is bit-identical between the tensor
+    and direct trees (`step_norm=8.02e-02` both); they diverge deep in the cascade
+    via deterministic chaos over 20+ numeric-newton steps — a single perturbed
+    step is not localizable.
+  - **Saves tried and rejected.** Option 1 (consistent `evaluate` path in the FD
+    legs) is already satisfied — A2 makes every `evaluate` direct, so both ±ε legs
+    match; the drift is base-trajectory, not leg inconsistency. Option 2 (match
+    the direct build's `tol_eri` to `ensure_eri`'s tensor tol of 1e-10) was
+    tested — **still landed -74.7751**, so it is not the screening-set difference;
+    it is the fundamental direct-vs-tensor contraction-order difference, which
+    cannot be removed without bit-matching (defeating "direct").
+  - **Decision:** drop A2, ship A1 only. A1 (inactive Fock, built once per
+    `evaluate`) is the dominant per-`evaluate` cost; the active Fock is per-root
+    and a fraction of it — not worth destabilizing the basin canary. The
+    `build_active_fock_mo_direct` builder + its A0 test are kept (valid, gated) for
+    a future non-SA-path use. If A2 is ever revisited, the only viable route is the
+    **basis-size gate (A3): direct active Fock only above an n_AO threshold so the
+    STO-3G uphill canary (24 AOs) stays on the tensor path** while large-basis
+    CASSCF — the actual speed target — gets it.
 
 - **A3 - screening tolerance + basis-size gate.** Profile sto-3g and 6-31g*
   CASSCF before/after A1+A2; confirm `tol_eri` does not perturb the CASSCF energy
@@ -691,13 +718,17 @@ revert.
   dense transform to the RI fitting error, and the 11 cases pass at a
   loosened-but-documented tol behind the flag.
 
-**Recommended cut.** A0->A1->A2->A3 is the safe, exact, high-value core: it
-removes the per-`evaluate` n_AO^4 contraction with **zero approximation** (direct
-= same operator), gated bit-exactly by the existing 11 cases, touching ~3
-functions and 4 call sites. A4+A5 (dropping the tensor entirely via RI) is
-approximate and opt-in -- defer unless peak *memory* (the 1.4 GB), rather than
-time, is the blocker. Lever B (cache the core Fock per accepted macro) composes
-with A and is independent.
+**Landed cut.** A0 + **A1** are the safe, exact, high-value core that shipped: the
+inactive Fock (the dominant per-`evaluate` cost, built once per evaluate) is now
+direct in Cartesian mode, zero approximation (≤1.8e-15 vs tensor), all 10 CASSCF
+cases unchanged. **A2 was attempted and dropped** (above): the per-root active
+Fock's direct contraction order flips the basin-sensitive STO-3G uphill canary,
+unfixably without bit-matching. A2 stays available only as the **basis-size-gated
+A3** route (direct active Fock above an n_AO threshold, canary on tensor) if
+large-basis CASSCF speed is later pursued. A4+A5 (dropping the tensor entirely via
+RI) is approximate and opt-in — defer unless peak *memory* (the 1.4 GB), rather
+than time, is the blocker. Lever B (cache the core Fock per accepted macro)
+composes with A1 and is independent.
 
 ---
 
