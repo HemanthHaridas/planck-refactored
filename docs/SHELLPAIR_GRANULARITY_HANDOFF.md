@@ -651,11 +651,17 @@ revert.
   (last-bit). Both sides screen at tol_eri=1e-14 to isolate contraction algebra
   from screening (A3). **Revert:** delete the two fns + test + CMake target.
 
-- **A1 - route the inactive Fock through direct (behavior-preserving).** Switch
-  `build_inactive_fock_mo` to the direct builder (dominant per-`evaluate` cost,
-  built once per evaluate). **Gate:** all 11 CASSCF cases unchanged at the 1e-5
-  tol; A0 unit test green. **Revert:** flip one call back to
-  `_compute_fock_rhf(eri,...)`.
+- **A1 - route the inactive Fock through direct (behavior-preserving). LANDED.**
+  The hot `evaluate`-lambda inactive Fock build (`casscf.cpp`, per candidate
+  orbital step) now calls `build_inactive_fock_mo_direct` when the basis is
+  Cartesian. **Cartesian-only guard** (`calc._shells._spherical`): the direct
+  kernel emits Cartesian ERIs, but a spherical SCF's cached `eri` + MO
+  coefficients are spherical, so a direct build would be basis-inconsistent there
+  (same reason `ensure_eri` refuses to rebuild a Cartesian tensor in spherical
+  mode); spherical CASSCF keeps the tensor path. **Gate (LANDED):** all 10 CASSCF
+  regression cases unchanged — incl. ROHF, SA-2, the uphill plateau, and
+  `water_casscf44_spherical_631gd` (exercises the tensor-fallback branch); A0 unit
+  test green. **Revert:** flip the one call back.
 
 - **A2 - route the active Fock through direct.** Same for `build_active_fock_mo`
   (per-root x per-candidate). **Gate:** 11 cases; SA-2 cases (multiple `F_A`
