@@ -66,103 +66,71 @@ Cost is n_AO⁴ × (≈7 step scales + stagnation probes) × macros, so it explo
 basis size even though the active space is tiny. The AO Fock build is *already*
 OpenMP-parallel, so more cores help only linearly.
 
+**Correction to the root-cause framing.** The dense `_compute_fock_rhf(eri, D)`
+contraction is O(n_AO⁴), but the tensor `eri` is built **once** (`ensure_eri`) and
+then *re-contracted* each `evaluate` — a cache-friendly, fast operation. It is the
+1.4 GB allocation that is the cc-pVQZ blocker, i.e. a **memory** problem, not a
+**time** problem. The time cost per `evaluate` is the contraction, not a tensor
+rebuild. This distinction is what disproved lever A below.
+
 **Levers, ranked.**
 
-- **A (big, the proper fix):** build the inactive/active Fock directly from
-  shell-pair ERIs (direct-SCF style) or via the existing RI engine
-  (`src/post_hf/ri/`), removing the per-call n_AO⁴ sweep (and eventually the 1.4 GB
-  tensor). A genuine MCSCF-engine change — scoped below.
+- **A (direct Fock) — DISPROVEN for speed; see "Phase A" below.** Rebuilding the
+  Fock directly from shell-pair ERIs each `evaluate` *recomputes* integrals every
+  call instead of reusing the cached tensor, and benchmarked **1.9×–4.1× slower**,
+  worsening with basis size. Direct/RI only ever helps **memory** (dropping the
+  1.4 GB tensor), and only via RI (approximate), not direct.
 - **B (medium):** the inactive core Fock depends only on the *core* orbitals, which
   move far less than full `C`; build it once per accepted macro instead of per
-  candidate.
+  candidate. **This is now the most promising time lever** — it cuts the
+  *contraction* count without changing the (fast, cached) contraction itself.
 - **C (low, already planned):** trim the macro-optimizer cascade (vault Open Work
   "CASSCF P2"). NOTE: this previously read "demote numeric-newton to debug-only" —
   **`numeric-newton` is load-bearing** (some cases only converge with it), so it
   must NOT be demoted. The trim is limited to removing redundant per-root
   candidates / pair probes, not the numeric-newton path.
 
-### Phase A — direct/RI Fock in MCSCF
+### Phase A — direct Fock in MCSCF: ATTEMPTED, REVERTED (disproven for speed)
 
-Small, independently-gated, reversible steps. Two full-tensor consumers, on
-separate fronts:
+The hypothesis was that building the inactive/active Fock directly from shell-pair
+ERIs (tensor-free) would beat the per-`evaluate` dense contraction of the cached
+tensor. It was implemented (A0 seam + equivalence gate, A1 inactive Fock wired in
+Cartesian mode), passed all 10 CASSCF cases (the direct build is the same `J − ½K`
+operator to ≤1.8e-15), then **benchmarked and reverted** because it is slower.
 
-1. **AO Fock builds** (the hot, basis-size-explosive path): `build_inactive_fock_mo`
-   / `build_active_fock_mo` call `_compute_fock_rhf(eri, D, nbasis)` — dense
-   O(n_AO⁴), `J − ½K`, per `evaluate`. **A0–A2.**
-2. **AO→active-MO transforms** (`transform_eri_internal`,
-   `transform_eri_active_cache`): take the dense `eri` as input. **A4/A5.**
+**Benchmark (water CAS(4,4), direct vs forced-tensor inactive Fock):**
 
-A direct, engine-dispatched Fock entry already exists — `::_compute_2e_fock`
-(global-namespace dispatch in `base.h`) — with the same `J − ½K` convention as
-`_compute_fock_rhf`. Caveat: the *OS* entry still materializes the dense `nb⁴`
-buffer internally, so the tensor-free path is the **HGP/Rys direct kernels**
-(per-shell-quartet, screened). Each step gates against the **10 CASSCF regression
-cases** (exact energy — direct is the same operator).
+| basis | AOs | direct | tensor | direct/tensor |
+|---|---|---|---|---|
+| STO-3G | 7 | 0.62 s | 0.32 s | 1.9× slower |
+| 6-31G | 13 | 4.01 s | 1.42 s | 2.8× slower |
+| cc-pVDZ | 25 | 70.8 s | 17.1 s | 4.1× slower |
 
-- **A0 — seam + equivalence harness. LANDED.** `build_inactive_fock_mo_direct` /
-  `build_active_fock_mo_direct` in `orbital.{cpp,h}` take `shell_pairs`
-  (+ engine=HGP, tol) instead of `eri`, building via `::_compute_2e_fock`. Not
-  wired into production. Gate `planck-casscf-direct-fock`: water/6-31g\*, several
-  MO bases × {core, active} densities, `‖F_direct − F_tensor‖_max < 1e-12`
-  (measured ≤1.8e-15). Both sides screen at tol_eri=1e-14 to isolate algebra from
-  screening.
+**Why the premise was wrong.** The cached tensor `eri` is built **once**
+(`ensure_eri`) and the per-`evaluate` cost is a dense contraction *against* it —
+cache-friendly and fast. The direct path re-runs the full HGP VRR/HRR machinery on
+**every** `evaluate` call (dozens per macro × many macros), so it pays the integral
+cost repeatedly instead of amortizing it. Recompute-each-time only beats
+reuse-cached when the tensor cannot be built/held at all — far larger than the
+systems CASSCF active spaces reach. The 1.4 GB at cc-pVQZ is a **memory** ceiling,
+not a time cost; conflating the two is what drove the bad scope.
 
-- **A1 — inactive Fock direct. LANDED.** The hot `evaluate` inactive Fock build now
-  calls `build_inactive_fock_mo_direct` when Cartesian. **Cartesian-only guard**
-  (`calc._shells._spherical`): the direct kernel emits Cartesian ERIs, but a
-  spherical SCF's cached `eri` + MO coefficients are spherical, so a direct build
-  would be basis-inconsistent there (same reason `ensure_eri` refuses to rebuild a
-  Cartesian tensor in spherical mode); spherical CASSCF keeps the tensor path. Gate:
-  all 10 CASSCF cases unchanged (incl. ROHF, SA-2, uphill, and the spherical
-  fallback case).
+**The A2 detour (also reverted, instructive).** Before the speed benchmark, routing
+the *active* Fock direct (A2) was found to flip only the basin-sensitive STO-3G
+uphill SA-2 canary (−74.7877864784 → the other valid stationary point
+−74.7751377977), via the load-bearing `numeric-newton` FD Hessian amplifying the
+~1e-15 reorder by `/2ε`. Not a bug (bit-identical across reruns and threads); a
+fundamental direct-vs-tensor contraction-order difference unfixable without
+bit-matching. That alone would have confined direct to a basis-size gate; the speed
+benchmark then removed the case for direct Fock entirely.
 
-- **A2 — active Fock direct. ATTEMPTED, DROPPED (do not retry naively).** Swapping
-  the per-root active Fock to direct flips **only** `water_casscf_sa2_sto3g_sad_guess_uphill`
-  from its pinned basin (−74.7877864784) to the other valid SA stationary point
-  (−74.7751377977); the other 9 cases pass. Fully diagnosed:
-  - **Not a bug, not nondeterminism.** Matches the tensor to ≤8.9e-16 (A0 gate);
-    the flipped energy is bit-identical across reruns and `OMP_NUM_THREADS`=1/2/4/8.
-  - **Mechanism.** The uphill cascade leans on `numeric-newton` (load-bearing),
-    whose FD Hessian `H = (g_orb(+ε) − g_orb(−ε)) / 2ε` divides the active-Fock
-    reorder by `2ε`, amplifying ~1e-15 → ~1e-12 in `H`. Macro 1 is bit-identical
-    between the tensor and direct trees (`step_norm=8.02e-02` both); they diverge
-    deep in the cascade via deterministic chaos over 20+ numeric-newton steps — not
-    localizable to one step.
-  - **Saves rejected.** Option 1 (consistent `evaluate` path in the ±ε FD legs) is
-    already satisfied — A2 makes every `evaluate` direct, so both legs match; the
-    drift is base-trajectory, not leg inconsistency. Option 2 (match the direct
-    build's `tol_eri` to `ensure_eri`'s 1e-10) was tested — **still landed −74.7751**,
-    so it is the fundamental direct-vs-tensor contraction-order difference, not the
-    screening set, and cannot be removed without bit-matching (which defeats
-    "direct").
-  - **Decision.** Drop A2, ship A1 only. A1 (inactive Fock, once per `evaluate`) is
-    the dominant per-`evaluate` cost; the active Fock is per-root and a fraction of
-    it. The `build_active_fock_mo_direct` builder + its A0 test are **kept** (valid,
-    gated) for a future basis-size-gated route.
-  - **Only viable revival (A3).** Use direct active Fock **only above an n_AO
-    threshold**, so the STO-3G uphill canary (24 AOs) stays on the tensor path while
-    large-basis CASSCF — the actual speed target — gets it.
-
-- **A3 — screening tolerance + basis-size gate (also the A2 revival path).** Profile
-  sto-3g and 6-31g\* CASSCF before/after; confirm `tol_eri` does not perturb the
-  CASSCF energy below the 1e-5 gate. Direct-without-tensor can LOSE to tensor-reuse
-  when n_AO is small and the evaluate-count is huge, so the direct path should be
-  basis-size-gated regardless.
-
-- **A4 — drop `ensure_eri` (blocked on A5).** Stop materializing the full tensor for
-  large bases. Cannot land until A5 removes the transforms' dependence on it.
-
-- **A5 (optional, separate sub-project) — transforms without the full tensor.**
-  `transform_eri_internal` / `transform_eri_active_cache` take the dense `eri`.
-  Removing it needs an RI/direct AO→active half-transform (the repo's
-  `RI::compute_3c_eri` + metric factorization). **RI is a controlled approximation**
-  (~1e-8 fitting error, not 1e-12), so it must be opt-in behind a `casscf_ri`
-  keyword, never default.
-
-**Landed cut.** A0 + A1 shipped (inactive Fock direct, Cartesian, zero
-approximation, 10/10 CASSCF green). A2 dropped. A3+ deferred unless large-basis
-CASSCF speed (or peak memory, for A4/A5) is explicitly pursued. Lever B composes
-with A1 and is independent.
+**What remains for CASSCF speed.** Direct Fock is off the table for time. The live
+levers are **B** (build the inactive core Fock once per accepted macro, not per
+candidate — cuts the *count* of the fast cached contraction) and **C** (trim the
+optimizer cascade's redundant candidates/probes, keeping numeric-newton). The only
+direct/RI motivation left is **memory** (dropping the 1.4 GB tensor), which needs
+**RI** (approximate, opt-in behind a `casscf_ri` keyword), never the direct rebuild
+that this attempt disproved.
 
 ## How to verify the landed state
 
@@ -172,7 +140,6 @@ with A1 and is independent.
 ./planck-os-block-kernel
 ./planck-hgp-engine-smoke
 ./planck-rys-box-invariance
-./planck-casscf-direct-fock
 # from repo root
 python3 tests/run_regressions.py --suite all
 python3 tests/engine_scf_energy_compare.py <input>   # OS == HGP == Rys == Auto

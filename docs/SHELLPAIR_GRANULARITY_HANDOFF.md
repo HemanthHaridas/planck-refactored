@@ -166,14 +166,16 @@ rework was needed.
   energy.
 - `ne_rhf_ccpvqz_highL_*` — high-L g-shell guard (the Rys `(7,8)`/`(8,8)` buckets).
 
-## Related but separate outcome: CASSCF inactive-Fock speedup
+## Related but separate investigation: CASSCF Fock-build cost
 
 Profiling the (unrunnable) g-basis CASSCF gate surfaced that MCSCF rebuilds the
 inactive/active Fock by contracting the full materialized AO ERI tensor per
-candidate orbital step. The inactive Fock was moved to a direct (tensor-free)
-shell-pair build in Cartesian mode (Phase A0/A1). This is a CASSCF-engine speedup,
-not a shell-pair-granularity change, and its design + the dropped active-Fock
-attempt (A2) live in the open-work document.
+candidate orbital step. A direct (tensor-free) shell-pair Fock build was attempted
+to avoid this, but **benchmarked 1.9×–4.1× slower** (the cached tensor amortizes
+across evaluates; direct recomputes integrals each call) and was reverted. This is
+a CASSCF-engine concern, not a shell-pair-granularity change; the full finding —
+why direct loses on time, the 1.4 GB being a memory rather than time ceiling, and
+the remaining live levers — is in the open-work document.
 
 ## Remaining architecture concern
 
