@@ -531,17 +531,25 @@ None of these block the landed work.
     quartet reaching those needs g functions (`L_AB ≥ 7` ⇒ g+g; first at
     cc-pVQZ). So an `engine auto` SA-CASSCF on a g-basis runs the hoisted Rys path
     on a basin-sensitive optimizer. The existing SA-2 gates use explicit
-    `engine rys`, so they would *not* catch a B-3 Auto-path regression — a test
-    gap. B-3 closes it with a new **`engine auto` SA-CASSCF gate on cc-pVQZ**:
-    `water_casscf_sa2_ccpvqz_engine_{os,auto}` (water CAS(4,4) SA-2), where the
-    auto case asserts (`metric_close_case`, atol 1e-8) that it lands the **same
-    SA-2 basin** as the os twin. This directly tests that the Auto-Rys hoist's
-    reorder does not flip the basin, with no external reference needed (and is
-    consistent with B-2.5c's measured robustness). Other gates unchanged:
-    `ne_rhf_ccpvqz_highL_engine_os_vs_rys` (now exercises the Auto-Rys hoist:
-    OS==RYS==AUTO SCF energy on g-shells), `ne_rhf_ccpvqz_highL_pyscf`,
-    `planck-compute-2e` Rys-Auto (≤1e-12). Revert: restore the single
-    HGP-only `quartet_uses_hgp` block + per-component Rys call.
+    `engine rys`, so they would *not* catch a B-3 Auto-path regression.
+
+    **Gate decision: an `engine auto` SA-CASSCF gate on a g-basis is impractical
+    and was dropped.** A cc-pVQZ SA-2 case (`water_casscf_sa2_ccpvqz_*`, since
+    removed) ran >15 min without completing a single macroiteration on a laptop,
+    and was confirmed too slow on a larger machine too. The cost is the per-macro
+    active-integral transform over the full cc-pVQZ AO set, which no machine makes
+    suite-cheap; the SCF itself also stalled near the convergence threshold (an
+    SCF-criterion issue orthogonal to B-3). Crucially, **the SA optimizer adds no
+    coverage the cheaper gates lack**: B-3 is purely an integral-path change in
+    `_compute_2e_auto`, so its correctness is the *integral* equality already
+    proven by `ne_rhf_ccpvqz_highL_engine_os_vs_rys` (OS==RYS==AUTO SCF energy on
+    g-shells, ~14 s, now exercises the Auto-Rys hoist), and the *basin* robustness
+    is already measured by B-2.5c. So B-3's gate set is:
+    `ne_rhf_ccpvqz_highL_engine_os_vs_rys`, `ne_rhf_ccpvqz_highL_pyscf`,
+    `planck-compute-2e` Rys-Auto (≤1e-12), plus B-2.5c. Revert: restore the single
+    HGP-only `quartet_uses_hgp` block + per-component Rys call. (See the
+    "CASSCF on a g-basis is slow" note in §6 if a cheap correlated g-basis gate is
+    wanted later.)
 
   - **B-4 (optional) — explicit `engine rys` (`_compute_2e`). Blocked by B-2.5.**
     Same wiring in the non-Auto Rys tensor/Fock builds. Lower value (Auto is the
@@ -577,6 +585,28 @@ None of these block the landed work.
   `EriScratch`/`g_hgp_scratch`, and Rys's `RysScratch` carry near-duplicate
   per-quartet scratch. Extract the shared 6-axis layout; the
   triangular-vs-rectangular distinction from §4 should inform the interface.
+- **CASSCF on a g-basis is slow** (investigation, not a Rys task — surfaced when
+  the B-3 cc-pVQZ SA gate proved unrunnable). Profiled root cause: the MCSCF
+  `evaluate` lambda (`casscf.cpp:509`, called *per candidate orbital step*, not
+  just per macro) rebuilds the inactive and active Fock matrices via
+  `ObaraSaika::_compute_fock_rhf(eri, D, nbasis)` — a dense O(n_AO⁴) contraction
+  over the full materialized AO ERI tensor (`ensure_eri`, ~1.4 GB at cc-pVQZ
+  water). Cost is n_AO⁴ × (≈7 step scales + stagnation probes) × (macros), so it
+  explodes with basis size even though the active space is tiny. The AO Fock
+  build is *already* OpenMP-parallel (`os.cpp` `_compute_fock_rhf`), so more cores
+  help only linearly. Real levers, ranked:
+  - **A (big, the proper fix):** build the inactive/active Fock directly from
+    shell-pair ERIs (direct-SCF style) or via the existing RI engine
+    (`src/post_hf/ri/`), removing both the 1.4 GB tensor and the per-call n_AO⁴
+    sweep. A genuine MCSCF-engine change.
+  - **B (medium):** the inactive core Fock depends only on the *core* orbitals,
+    which move far less than full `C`; build it once per accepted macro instead
+    of per candidate.
+  - **C (low, already planned):** trim the macro-optimizer cascade (vault Open
+    Work "CASSCF P2": demote numeric-newton, drop per-root candidates / pair
+    probes) to cut the per-macro `evaluate` count directly.
+  None of these are on the shell-pair-granularity critical path; logged here so
+  the "g-basis CASSCF gate" idea has a cost model attached.
 
 ---
 

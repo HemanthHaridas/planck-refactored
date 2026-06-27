@@ -3209,40 +3209,6 @@
         "Total Energy (AUTO)",
         "PASS"
       ]
-    },
-    {
-      "id": "water_casscf_sa2_ccpvqz_engine_os",
-      "input": "tests/inputs/regression/integrals/water_casscf_sa2_ccpvqz_engine_os.hfinp",
-      "tags": [
-        "extended"
-      ],
-      "timeout_s": 1800,
-      "expected_exit_code": 0,
-      "contains": [
-        "CASSCF :                      Converged.",
-        "State-averaged over 2 roots :"
-      ]
-    },
-    {
-      "id": "water_casscf_sa2_ccpvqz_engine_auto",
-      "input": "tests/inputs/regression/integrals/water_casscf_sa2_ccpvqz_engine_auto.hfinp",
-      "tags": [
-        "extended"
-      ],
-      "timeout_s": 1800,
-      "expected_exit_code": 0,
-      "contains": [
-        "CASSCF :                      Converged.",
-        "State-averaged over 2 roots :"
-      ],
-      "checks": [
-        {
-          "type": "metric_close_case",
-          "metric": "casscf_total_energy",
-          "case": "water_casscf_sa2_ccpvqz_engine_os",
-          "atol": 1e-08
-        }
-      ]
     }
   ]
 }
