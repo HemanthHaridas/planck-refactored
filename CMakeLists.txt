@@ -572,6 +572,25 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # Phase A0: equivalence of the direct (tensor-free) MCSCF Fock builders vs the
+    # tensor-contracting builders. Links orbital.cpp (the builders) + integrals.cpp
+    # (transform_eri_active_cache, pulled by orbital.cpp) + the integral/basis core.
+    # No SYMM_SRC: the Fock builders and the integral path used here do not call
+    # the libmsym-backed symmetry routines (mo_symmetry.cpp), so linking SYMM_SRC
+    # would drag in unresolved _msym* symbols.
+    add_executable(planck-casscf-direct-fock
+        ${CMAKE_SOURCE_DIR}/tests/casscf_direct_fock.cpp
+        ${SRC_DIR}/post_hf/casscf/orbital.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     add_executable(planck-hgp-benchmark
         ${CMAKE_SOURCE_DIR}/tests/hgp_benchmark.cpp
         ${SRC_DIR}/basis/basis.cpp
@@ -860,6 +879,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-casscf-direct-fock PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-hgp-benchmark PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -1022,6 +1046,12 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-casscf-direct-fock PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-hgp-benchmark PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -1147,6 +1177,10 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-rys-box-invariance PRIVATE USE_OPENMP)
     endif()
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-casscf-direct-fock OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-casscf-direct-fock PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-hgp-benchmark OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-hgp-benchmark PRIVATE USE_OPENMP)
     endif()
@@ -1264,6 +1298,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-rys-box-invariance
         COMMAND planck-rys-box-invariance
+    )
+
+    add_test(
+        NAME planck-casscf-direct-fock
+        COMMAND planck-casscf-direct-fock
     )
 
     add_test(

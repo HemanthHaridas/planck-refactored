@@ -2,6 +2,7 @@
 #define HF_POSTHF_CASSCF_ORBITAL_H
 
 #include "post_hf/casscf_internal.h"
+#include "base/types.h" // ShellPair, IntegralMethod (Phase A0 direct Fock builders)
 
 #include <Eigen/Core>
 
@@ -79,6 +80,31 @@ namespace HartreeFock::Correlation::CASSCF
         int n_core,
         int n_act,
         int nbasis);
+
+    // Phase A0: direct (tensor-free) variants of the two Fock builders above.
+    // Same operator (closed-shell J − ½K in the current MO basis), but built from
+    // shell-pair ERIs via the screened engine-dispatched direct Fock kernel rather
+    // than contracting the full materialized `eri` tensor. Not wired into
+    // production in A0; equivalence gated by tests/casscf_direct_fock.cpp. A1/A2
+    // route the production builders here.
+    Eigen::MatrixXd build_inactive_fock_mo_direct(
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &H_core,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        int n_core,
+        int nbasis,
+        HartreeFock::IntegralMethod engine = HartreeFock::IntegralMethod::HeadGordonPople,
+        double tol_eri = 1e-12);
+
+    Eigen::MatrixXd build_active_fock_mo_direct(
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &gamma,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        int n_core,
+        int n_act,
+        int nbasis,
+        HartreeFock::IntegralMethod engine = HartreeFock::IntegralMethod::HeadGordonPople,
+        double tol_eri = 1e-12);
 
     // Compute the total electronic energy contribution from the occupied core and
     // inactive Fock blocks.

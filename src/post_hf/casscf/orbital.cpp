@@ -1,6 +1,7 @@
 #include "post_hf/casscf/orbital.h"
 
 #include "integrals/os.h"
+#include "integrals/base.h"
 #include "post_hf/integrals.h"
 
 #include <Eigen/Eigenvalues>
@@ -82,6 +83,54 @@ namespace HartreeFock::Correlation::CASSCF
         const Eigen::MatrixXd C_act = C.middleCols(n_core, n_act);
         const Eigen::MatrixXd D_act = C_act * gamma * C_act.transpose();
         return C.transpose() * HartreeFock::ObaraSaika::_compute_fock_rhf(eri, D_act, nbasis) * C;
+    }
+
+    // ── Phase A0: direct (tensor-free) variants of the two Fock builders ──────────
+    //
+    // Identical operator to the tensor versions above — the AO contribution is the
+    // closed-shell J − ½K driven by the same density — but built directly from
+    // shell-pair ERIs via the screened, engine-dispatched direct Fock kernel
+    // (HeadGordonPople: per-shell-quartet J/K, no dense nb⁴ buffer) instead of
+    // contracting the full materialized `eri` tensor. The `J − ½K` convention
+    // matches `_compute_fock_rhf` exactly. Not wired into production in A0; the
+    // equivalence (‖F_direct − F_tensor‖) is gated by tests/casscf_direct_fock.cpp.
+    // A1/A2 route the production builders here once the screening tol is settled.
+    Eigen::MatrixXd build_inactive_fock_mo_direct(
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &H_core,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        int n_core,
+        int nbasis,
+        HartreeFock::IntegralMethod engine,
+        double tol_eri)
+    {
+        if (n_core == 0)
+            return C.transpose() * H_core * C;
+        const Eigen::MatrixXd D = 2.0 * C.leftCols(n_core) * C.leftCols(n_core).transpose();
+        const Eigen::MatrixXd G = ::_compute_2e_fock(
+            shell_pairs, D, static_cast<std::size_t>(nbasis), engine,
+            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        return C.transpose() * (H_core + G) * C;
+    }
+
+    Eigen::MatrixXd build_active_fock_mo_direct(
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &gamma,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        int n_core,
+        int n_act,
+        int nbasis,
+        HartreeFock::IntegralMethod engine,
+        double tol_eri)
+    {
+        if (n_act == 0)
+            return Eigen::MatrixXd::Zero(nbasis, nbasis);
+        const Eigen::MatrixXd C_act = C.middleCols(n_core, n_act);
+        const Eigen::MatrixXd D_act = C_act * gamma * C_act.transpose();
+        const Eigen::MatrixXd G = ::_compute_2e_fock(
+            shell_pairs, D_act, static_cast<std::size_t>(nbasis), engine,
+            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
+        return C.transpose() * G * C;
     }
 
     double compute_core_energy(
