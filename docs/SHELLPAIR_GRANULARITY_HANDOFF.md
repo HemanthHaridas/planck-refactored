@@ -640,13 +640,16 @@ Each step gates against the **11 PySCF CASSCF cases** (exact energy match --
 direct Fock is the identical operator, no approximation) and is a one-call-site
 revert.
 
-- **A0 - seam + equivalence harness (no behavior change).** Add
-  `build_inactive_fock_mo_direct` / `build_active_fock_mo_direct` taking
-  `shell_pairs` (+ engine/tol) instead of `eri`, implemented via the tensor-free
-  screened direct Fock builder. Not called from production. **Gate:** unit test
-  `||F_direct - F_tensor|| < 1e-12` for water/6-31g* core + active densities, both
-  helpers, several `C`. **Revert:** delete the two fns + test. *Risk: low -- this
-  is the equivalence proof the phase rests on.*
+- **A0 - seam + equivalence harness (no behavior change). LANDED.**
+  `build_inactive_fock_mo_direct` / `build_active_fock_mo_direct` in
+  `orbital.{cpp,h}` take `shell_pairs` (+ engine=HeadGordonPople, tol) instead of
+  `eri`, building the AO Fock via `::_compute_2e_fock` (global-namespace dispatch
+  in `base.h`) — same `J − ½K` operator, no dense buffer. Not called from
+  production. **Gate (LANDED):** `planck-casscf-direct-fock`
+  (`tests/casscf_direct_fock.cpp`) — water/6-31g*, several MO bases `C` × {core,
+  active} densities, `‖F_direct − F_tensor‖_max < 1e-12`; measured ≤ 1.8e-15
+  (last-bit). Both sides screen at tol_eri=1e-14 to isolate contraction algebra
+  from screening (A3). **Revert:** delete the two fns + test + CMake target.
 
 - **A1 - route the inactive Fock through direct (behavior-preserving).** Switch
   `build_inactive_fock_mo` to the direct builder (dominant per-`evaluate` cost,
