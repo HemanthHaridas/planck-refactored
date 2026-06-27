@@ -597,8 +597,8 @@ None of these block the landed work.
   help only linearly. Real levers, ranked:
   - **A (big, the proper fix):** build the inactive/active Fock directly from
     shell-pair ERIs (direct-SCF style) or via the existing RI engine
-    (`src/post_hf/ri/`), removing both the 1.4 GB tensor and the per-call n_AO⁴
-    sweep. A genuine MCSCF-engine change.
+    (`src/post_hf/ri/`), removing the per-call n_AO⁴ sweep (and eventually the
+    1.4 GB tensor). A genuine MCSCF-engine change — scoped in detail below.
   - **B (medium):** the inactive core Fock depends only on the *core* orbitals,
     which move far less than full `C`; build it once per accepted macro instead
     of per candidate.
@@ -607,6 +607,88 @@ None of these block the landed work.
     probes) to cut the per-macro `evaluate` count directly.
   None of these are on the shell-pair-granularity critical path; logged here so
   the "g-basis CASSCF gate" idea has a cost model attached.
+
+### Phase A — direct/RI Fock in MCSCF (scoped)
+
+Not a Rys-hoist task; a CASSCF-engine speedup, scoped here because it is what a
+g-basis CASSCF gate needs. Small, independently-gated, reversible steps.
+
+**The two full-tensor consumers** (`grep '\beri\b'` in
+`src/post_hf/casscf/{casscf,orbital,response}.cpp`), handled on separate fronts:
+
+1. **AO Fock builds** (the hot, basis-size-explosive path):
+   `build_inactive_fock_mo` / `build_active_fock_mo` in `orbital.cpp` call
+   `ObaraSaika::_compute_fock_rhf(eri, D, nbasis)` — a dense O(n_AO^4) contraction
+   of the cached full tensor against a density, returning `J - 0.5 K`. Called per
+   `evaluate` (inactive: once; active: per root) — i.e. per *candidate orbital
+   step*. **A1-A4.**
+2. **AO->active-MO transforms** (small output, but currently take the dense `eri`
+   as input): `transform_eri_internal`, `transform_eri_active_cache`. **A5
+   (separate, harder).**
+
+**Key prior finding.** A *direct, engine-dispatched* Fock entry already exists --
+`base.h::_compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri,
+sym_ops)` -- and uses the **same `J - 0.5 K` convention** as `_compute_fock_rhf`
+(both `eri[munulamsig] - 0.5*eri[mulamnusig]`, verified). Caveat: the *OS*
+`_compute_2e_fock` still materializes the dense `nb^4` buffer internally (its
+Phase 1), so it is NOT a win on its own; the genuinely tensor-free, screened
+builds are the **HGP/Rys direct kernels** (per-shell-quartet J/K, no dense
+buffer, `tol_eri`-screened). So "direct Fock in MCSCF" means routing through a
+tensor-free screened engine, not the OS entry.
+
+Each step gates against the **11 PySCF CASSCF cases** (exact energy match --
+direct Fock is the identical operator, no approximation) and is a one-call-site
+revert.
+
+- **A0 - seam + equivalence harness (no behavior change).** Add
+  `build_inactive_fock_mo_direct` / `build_active_fock_mo_direct` taking
+  `shell_pairs` (+ engine/tol) instead of `eri`, implemented via the tensor-free
+  screened direct Fock builder. Not called from production. **Gate:** unit test
+  `||F_direct - F_tensor|| < 1e-12` for water/6-31g* core + active densities, both
+  helpers, several `C`. **Revert:** delete the two fns + test. *Risk: low -- this
+  is the equivalence proof the phase rests on.*
+
+- **A1 - route the inactive Fock through direct (behavior-preserving).** Switch
+  `build_inactive_fock_mo` to the direct builder (dominant per-`evaluate` cost,
+  built once per evaluate). **Gate:** all 11 CASSCF cases unchanged at the 1e-5
+  tol; A0 unit test green. **Revert:** flip one call back to
+  `_compute_fock_rhf(eri,...)`.
+
+- **A2 - route the active Fock through direct.** Same for `build_active_fock_mo`
+  (per-root x per-candidate). **Gate:** 11 cases; SA-2 cases (multiple `F_A`
+  builds) unchanged. **Revert:** one call site.
+
+- **A3 - screening tolerance + basis-size gate.** Profile sto-3g and 6-31g*
+  CASSCF before/after A1+A2; confirm `tol_eri` does not perturb the CASSCF energy
+  below the 1e-5 gate. **Decision point:** direct-without-tensor can LOSE to
+  tensor-reuse when n_AO is small and the evaluate-count is huge (the tensor is
+  built once, then cheaply re-contracted). If so, make the direct path
+  **basis-size-gated** (direct only above an n_AO threshold; keep the tensor path
+  for small bases). **Gate:** 11 cases at the chosen tol + a timing note.
+
+- **A4 - drop `ensure_eri` (blocked on A5).** Stop materializing the full tensor
+  for large bases. Cannot land until A5 removes the transforms' dependence on it --
+  the transforms are the last full-tensor consumer. **Gate:** 11 cases +
+  peak-RSS showing the 1.4 GB gone at cc-pVQZ.
+
+- **A5 (optional, separate sub-project) - transforms without the full tensor.**
+  `transform_eri_internal` / `transform_eri_active_cache` take the dense `eri`.
+  Removing it needs an RI/direct AO->active half-transform -- the repo's
+  `RI::compute_3c_eri` + metric factorization (`factorize_2c_metric`,
+  `ensure_ri_3c_ready`) is the vehicle: contract 3-center tensors to the active
+  space. **Risk: high -- RI is a controlled approximation; it shifts the energy at
+  the fitting-error level (~1e-8, NOT 1e-12).** Must be opt-in (a `casscf_ri`
+  keyword), never the default. **Gate:** active cache (`puvw`, `ga`) matches the
+  dense transform to the RI fitting error, and the 11 cases pass at a
+  loosened-but-documented tol behind the flag.
+
+**Recommended cut.** A0->A1->A2->A3 is the safe, exact, high-value core: it
+removes the per-`evaluate` n_AO^4 contraction with **zero approximation** (direct
+= same operator), gated bit-exactly by the existing 11 cases, touching ~3
+functions and 4 call sites. A4+A5 (dropping the tensor entirely via RI) is
+approximate and opt-in -- defer unless peak *memory* (the 1.4 GB), rather than
+time, is the blocker. Lever B (cache the core Fock per accepted macro) composes
+with A and is independent.
 
 ---
 
