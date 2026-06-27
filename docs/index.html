@@ -220,7 +220,7 @@
 <li class="toc-level-3"><a href="#root-finding">Root Finding</a></li>
 <li class="toc-level-3"><a href="#the-rys-1d-vrr">The Rys 1D VRR</a></li>
 <li class="toc-level-3"><a href="#6d-accumulation-and-hrr">6D Accumulation and HRR</a></li>
-<li class="toc-level-3"><a href="#auto-dispatch-calibrated-hgp-rys-selection">Auto-Dispatch: Calibrated HGP / Rys Selection</a></li>
+<li class="toc-level-3"><a href="#auto-dispatch-calibrated-per-bucket-engine-selection">Auto-Dispatch: Calibrated Per-Bucket Engine Selection</a></li>
 <li class="toc-level-3"><a href="#implementation-files">Implementation Files</a></li>
 <li class="toc-level-2"><a href="#12-the-head-gordon-pople-hgp-integral-scheme">12. The Head-Gordon-Pople (HGP) Integral Scheme</a></li>
 <li class="toc-level-3"><a href="#why-hgp-and-not-just-obara-saika">Why HGP and not just Obara-Saika</a></li>
@@ -229,7 +229,7 @@
 <li class="toc-level-3"><a href="#relationship-to-os-rys-and-auto-dispatch">Relationship to OS, Rys, and Auto-Dispatch</a></li>
 <li class="toc-level-3"><a href="#screened-and-range-separated-kernels">Screened and Range-Separated Kernels</a></li>
 <li class="toc-level-3"><a href="#symmetry-reduced-hgp">Symmetry-Reduced HGP</a></li>
-<li class="toc-level-3"><a href="#why-hgp-wins-in-practice-measured-timings">Why HGP Wins in Practice — Measured Timings</a></li>
+<li class="toc-level-3"><a href="#hgp-vs-os-vs-rys-in-practice-measured-timings">HGP vs OS vs Rys in Practice — Measured Timings</a></li>
 <li class="toc-level-3"><a href="#implementation-files">Implementation Files</a></li>
 <li class="toc-level-3"><a href="#reference">Reference</a></li>
 <li class="toc-level-2"><a href="#13-mp2-correlation-energy">13. MP2 Correlation Energy</a></li>
@@ -1306,30 +1306,11 @@ W[a_x][a_y][a_z][c_x][c_y][c_z]
 \]</span></p>
 <p>This sum runs over all <span class="math-inline">\(n\)</span> roots. After the root loop the buffer holds <span class="math-inline">\((a\,0\,|\,c\,0)\)</span> intermediates analogous to those produced by the OS VRR. A practical implementation stores this accumulated Rys intermediate in a reusable six-index work buffer. Because the root sum needs only the spatial slice and not the extra auxiliary-order dimension of OS, the scratch pattern is typically simpler than in a deep VRR stack.</p>
 <p>Angular momentum is then transferred to the second center of each shell pair using the same HRR as the OS path, first on the bra pair and then on the ket pair. The contracted ERI is obtained by summing the primitive results over all <span class="math-inline">\((\alpha, \beta)\)</span> and <span class="math-inline">\((\gamma, \delta)\)</span> primitive pairs.</p>
-<h3 id="auto-dispatch-calibrated-hgp-rys-selection">Auto-Dispatch: Calibrated HGP / Rys Selection</h3>
-<p>When the user requests <code>engine auto</code>, every contracted shell quartet is routed to whichever of HGP or Rys is empirically faster for that quartet&#x27;s angular- momentum bucket. OS is intentionally <strong>not</strong> in the auto menu — it is available only via the explicit <code>engine os</code> selection, because the calibration below shows it is dominated by HGP across the entire bucket range used in practice.</p>
-<h4 id="the-original-analytic-model-superseded">The original analytic model (superseded)</h4>
-<p>Older auto-dispatch schemes select OS-vs-Rys per quartet using an analytic operation-count estimate. With</p>
-<p><span class="math-display">\[
-\text{six\_d} = (l_{AB,x}+1)(l_{AB,y}+1)(l_{AB,z}+1)
-                (l_{CD,x}+1)(l_{CD,y}+1)(l_{CD,z}+1),
-\]</span></p>
-<p>the predicted flop counts are</p>
-<p><span class="math-display">\[
-W_{\text{OS}}  = \text{six\_d}\cdot(L+1)
-               + (l_B + l_D + 1)\cdot\text{six\_d}\cdot 0.25,
-\quad
-W_{\text{Rys}} = \text{six\_d}\cdot n
-               + (l_B + l_D + 1)\cdot\text{six\_d}\cdot 0.20
-               + 24\cdot n,
-\]</span></p>
-<p>where <span class="math-inline">\(n = \lfloor L/2 \rfloor + 1\)</span> is the number of Rys roots. Rys is preferred when <span class="math-inline">\(W_{\text{Rys}} < W_{\text{OS}}\)</span>. This model is included here as historical context: the cost surface it describes is qualitatively correct (Rys overhead is fixed per-root, OS scratch grows with auxiliary order), but quantitatively it is no longer what Planck&#x27;s <code>_auto_prefers_rys</code> predicate evaluates. With HGP available, the OS branch is dominated almost everywhere and the analytic fit collapses to a much simpler integer rule.</p>
-<h4 id="empirical-calibration-with-hgp">Empirical calibration with HGP</h4>
-<p>The actual rule in <code>src/integrals/rys.cpp::_auto_prefers_rys</code> is</p>
-<pre><code class="language-cpp">
-return (L_AB + L_CD) &lt;= 1;
-</code></pre>
-<p>— pick Rys at <span class="math-inline">\(L_{AB} + L_{CD} \in \{0, 1\}\)</span> (the three buckets <span class="math-inline">\((0,0)\)</span>, <span class="math-inline">\((0,1)\)</span>, <span class="math-inline">\((1,0)\)</span>), and pick HGP everywhere else. This is the output of a calibration sweep run by <code>tests/auto_dispatch_benchmark.cpp</code> over 238 distinct (case, bucket) entries spanning</p>
+<h3 id="auto-dispatch-calibrated-per-bucket-engine-selection">Auto-Dispatch: Calibrated Per-Bucket Engine Selection</h3>
+<p>When the user requests <code>engine auto</code>, every contracted shell quartet is routed to whichever integral engine is empirically fastest for that quartet&#x27;s angular-momentum bucket <span class="math-inline">\((L_{AB}, L_{CD})\)</span>, where <span class="math-inline">\(L_{AB} = l_A + l_B\)</span> and <span class="math-inline">\(L_{CD} = l_C + l_D\)</span>. Which engine that is has changed twice as the engines themselves were optimized, and the calibration machinery is built so the rule tracks those changes automatically rather than being hand-maintained. This section describes both the current data and how the rule is derived from it.</p>
+<h4 id="why-a-fitted-rule-and-not-an-analytic-flop-count">Why a fitted rule and not an analytic flop count</h4>
+<p>The textbook approach picks OS-vs-Rys per quartet from an analytic operation count: Rys overhead is fixed per root (<span class="math-inline">\(n = \lfloor L/2\rfloor + 1\)</span> roots), while the OS auxiliary stack grows with total angular momentum, so the two cross somewhere in the middle. That picture is <em>qualitatively</em> right but quantitatively useless once a third engine (HGP) and two rounds of engine optimization enter, because the real cost surface is set by memory-traffic and loop-structure effects (HRR hoisted out of the primitive loop, per-quartet scratch reuse) that a flop count does not model. Planck therefore <strong>measures</strong> the cost surface and fits the dispatch rule to it.</p>
+<p>The harness <code>tests/auto_dispatch_benchmark.cpp</code> times all three engines on every populated bucket across six (molecule, basis) cases, writing <code>docs/auto_dispatch_timings.csv</code>:</p>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Case</th>
@@ -1344,56 +1325,58 @@ return (L_AB + L_CD) &lt;= 1;
 <tr><td>helium / cc-pVQZ</td><td>49</td><td><span class="math-inline">\(L_{AB} + L_{CD} \le 12\)</span></td></tr>
 <tr><td>helium / cc-pV5Z</td><td>81</td><td><span class="math-inline">\(L_{AB} + L_{CD} \le 16\)</span></td></tr>
 </tbody></table></div>
-<p>The output curves are emitted to <code>docs/auto_dispatch_curves.svg</code>; the raw per-bucket medians are in <code>docs/auto_dispatch_fit.json</code>, and the underlying timings in <code>docs/auto_dispatch_timings.csv</code>. The fitter script is <code>scripts/fit_auto_dispatch.py</code>.</p>
+<p><code>scripts/fit_auto_dispatch.py</code> then derives the rule <strong>directly from the data</strong>: for each <span class="math-inline">\((L_{AB}, L_{CD})\)</span> bucket it takes the median per-quartet time across the six cases and assigns the bucket to the engine with the lowest median. There are no hard-coded angular-momentum inequalities — the region map <em>is</em> the per-bucket median-winner table. The fitter emits <code>docs/auto_dispatch_fit.json</code> (the <code>region_table</code>, the per-bucket medians, and a generated C++ lookup) and <code>docs/auto_dispatch_curves.svg</code>. When an engine is later optimized, re-running the benchmark and the fitter moves the region boundaries on their own; the self-deriving fitter was introduced precisely so the rule survives engine work without manual edits.</p>
 <p><img src="auto_dispatch_curves.svg" alt="Per-quartet build time (ms) versus L_AB + L_CD for HGP, Rys, and OS, across the six calibration cases."></p>
-<p>Cross-case median per-quartet build times (microseconds, computed as the median across the six (molecule, basis) cases for each <span class="math-inline">\((L_{AB}, L_{CD})\)</span> bucket; lower is faster):</p>
+<h4 id="the-current-cost-surface-three-way">The current cost surface (three-way)</h4>
+<p>The data below is the median of 9 benchmark runs at 10 000 sampled quartets per bucket, taken after both HGP and OS had their HRR hoisted to the contracted shell-quartet level (the &quot;A4&quot; rearrangement — VRR per primitive pair, HRR once per quartet; see §12). Cross-case median per-quartet build times, in microseconds (lower is faster), with the engine the fitted rule assigns:</p>
 <div class="table-wrap"><table>
 <thead><tr>
 <th><span class="math-inline">\(L_{AB}, L_{CD}\)</span></th>
 <th>HGP / µs</th>
 <th>Rys / µs</th>
 <th>OS / µs</th>
-<th>Per-bucket winner</th>
+<th>Rule pick</th>
 </tr></thead>
 <tbody>
-<tr><td>0, 0</td><td>67.0</td><td><strong>23.5</strong></td><td>50.9</td><td>Rys</td></tr>
-<tr><td>0, 1 / 1, 0</td><td>59.3 / 59.9</td><td><strong>22.4 / 22.5</strong></td><td>48.3 / 49.5</td><td>Rys</td></tr>
-<tr><td>0, 2 / 1, 1 / 2, 0</td><td>36.2 / 31.1 / 37.8</td><td>219 / 185 / 223</td><td><strong>34.8 / 29.3 / 34.1</strong></td><td>OS (tie with HGP)</td></tr>
-<tr><td>1, 2 / 2, 1 / 2, 2</td><td><strong>20.4 / 20.7</strong> / 14.1</td><td>112 / 114 / 144</td><td>21.9 / 21.8 / 18.6</td><td>HGP</td></tr>
-<tr><td>3, 3</td><td>7.2</td><td>73.6</td><td>16.1</td><td>HGP</td></tr>
-<tr><td>4, 4</td><td>5.3</td><td>38.1</td><td>14.5</td><td>HGP</td></tr>
-<tr><td>5, 5</td><td>10.0</td><td>53.7</td><td>35.9</td><td>HGP</td></tr>
-<tr><td>6, 6</td><td>20.3</td><td>76.0</td><td>82.2</td><td>HGP</td></tr>
-<tr><td>7, 7</td><td>30.4</td><td>107.0</td><td>135.0</td><td>HGP</td></tr>
-<tr><td>8, 8</td><td>81.5</td><td>170.7</td><td>354.0</td><td>HGP</td></tr>
+<tr><td>0, 0</td><td><strong>1.0</strong></td><td>4.0</td><td>1.3</td><td>HGP</td></tr>
+<tr><td>0, 1 / 1, 0</td><td><strong>1.1 / 1.0</strong></td><td>3.1 / 3.1</td><td>1.3 / 1.3</td><td>HGP</td></tr>
+<tr><td>1, 1 / 2, 0</td><td><strong>0.9</strong> / <strong>0.9</strong></td><td>9.0 / 10.2</td><td>1.0 / 1.1</td><td>HGP</td></tr>
+<tr><td>2, 2</td><td><strong>0.7</strong></td><td>6.8</td><td>0.8</td><td>HGP</td></tr>
+<tr><td>3, 3</td><td><strong>0.6</strong></td><td>3.6</td><td>0.7</td><td>HGP</td></tr>
+<tr><td>4, 4</td><td><strong>0.6</strong></td><td>1.8</td><td><strong>0.6</strong></td><td>HGP</td></tr>
+<tr><td>5, 5</td><td><strong>1.3</strong></td><td>3.0</td><td>1.4</td><td>HGP</td></tr>
+<tr><td>6, 6</td><td>2.8</td><td>4.4</td><td><strong>2.8</strong></td><td>OS</td></tr>
+<tr><td>7, 7</td><td>6.4</td><td>6.9</td><td><strong>5.8</strong></td><td>OS</td></tr>
+<tr><td>7, 8</td><td>9.0</td><td><strong>7.6</strong></td><td>8.1</td><td>Rys</td></tr>
+<tr><td>8, 8</td><td>12.8</td><td><strong>10.5</strong></td><td>11.0</td><td>Rys</td></tr>
 </tbody></table></div>
-<p>Three things to notice in the table and curves:</p>
+<p>Across all 81 buckets the median-winner counts are <strong>HGP 66, OS 13, Rys 2</strong>. The three regions are:</p>
 <ol>
-<li><strong>Rys owns only the bottom band</strong>, <span class="math-inline">\(L_{AB} + L_{CD} \le 1\)</span>. At <span class="math-inline">\((0,0)\)</span> Rys is roughly 2.9× faster than HGP because the entire 6D OS stack is overkill for <span class="math-inline">\((ss|ss)\)</span>; the one Rys root plus its weight delivers the same value with less arithmetic. By <span class="math-inline">\((0,2)\)</span> / <span class="math-inline">\((1,1)\)</span> the second Rys root has to fire and the per-root overhead (root finding + 1D coefficient build) buries the savings — Rys loses to both HGP and OS by 6–7×.</li>
-<li><strong>The OS-wins band is one bucket wide</strong> and the margin over HGP is in single-µs territory (HGP within ~10% of OS at <span class="math-inline">\((0,2)\)</span>/(1,1)/(2,0)). Because Lsum = 2 there is no clean integer separator between an &quot;OS strip&quot; and the HGP region; the calibration deliberately rounds Lsum = 2 into the HGP camp and accepts a measured maximum overhead of zero against the per-bucket winner across the calibration set (see the per-case stats below). The simpler rule beats a three-way table here precisely because the OS / HGP gap at Lsum = 2 is within the noise of repeated benchmark runs.</li>
-<li><strong>For Lsum <span class="math-inline">\(\ge\)</span> 3, HGP wins by a wide and growing margin</strong>. At Lsum = 6 (so e.g. <span class="math-inline">\((3,3)\)</span>) HGP is <span class="math-inline">\(\sim\)</span>10× faster than Rys and <span class="math-inline">\(\sim\)</span>2.2× faster than OS; at the high-L helium tail (Lsum = 16, <span class="math-inline">\((8,8)\)</span> on cc-pV5Z) HGP is <span class="math-inline">\(\sim\)</span>2.1× faster than Rys and <span class="math-inline">\(\sim\)</span>4.3× faster than OS. The HRR-outside-the-primitive-loop factorization compounds precisely where it should.</li>
+<li><strong>HGP wins the entire low- and mid-L bulk</strong> (66 buckets), including the <span class="math-inline">\(L_{AB}+L_{CD}\le 1\)</span> corner — <span class="math-inline">\((0,0)\)</span>, <span class="math-inline">\((0,1)\)</span>, <span class="math-inline">\((1,0)\)</span> — that older schemes handed to Rys. The HGP HRR-outside-the-primitive-loop factorization makes it the fastest engine at low L <em>and</em> keeps it competitive far up the ladder. At the d-shell sweet spot (e.g. <span class="math-inline">\((2,2)\)</span>) HGP is ~9× faster than Rys and ~15% faster than OS.</li>
+<li><strong>OS re-enters in a high-L corner</strong> (13 buckets: <span class="math-inline">\((6,6)\)</span>, <span class="math-inline">\((6,7)\)</span>, <span class="math-inline">\((6,8)\)</span>, <span class="math-inline">\((7,6)\)</span>, <span class="math-inline">\((7,7)\)</span>, <span class="math-inline">\((8,5)\)</span>, <span class="math-inline">\((8,6)\)</span>, <span class="math-inline">\((8,7)\)</span>, <span class="math-inline">\((5,7)\)</span>, <span class="math-inline">\((5,8)\)</span>, <span class="math-inline">\((4,7)\)</span>, <span class="math-inline">\((4,8)\)</span>, <span class="math-inline">\((3,8)\)</span>). Once total angular momentum is large enough, HGP&#x27;s per-shell-quartet HRR bookkeeping overhead overtakes its primitive-loop savings and plain OS wins — but only by single-digit percent (e.g. <span class="math-inline">\((6,6)\)</span>: OS 2.79 vs HGP 2.81 µs). This corner exists <em>because</em> OS itself was given the A4 hoist; before that optimization OS was dominated almost everywhere and was not in the auto menu at all.</li>
+<li><strong>Rys survives only in the extreme corner</strong>, <span class="math-inline">\((7,8)\)</span> and <span class="math-inline">\((8,8)\)</span>, where its quadrature cost grows more slowly than the OS/HGP recurrence tables (<span class="math-inline">\((8,8)\)</span>: Rys 10.5 vs OS 11.0 vs HGP 12.8 µs).</li>
 </ol>
-<p>Per-case sanity stats from <code>docs/auto_dispatch_fit.json</code>:</p>
-<div class="table-wrap"><table>
-<thead><tr>
-<th>Case</th>
-<th>Buckets</th>
-<th>Disagreements vs per-bucket winner</th>
-<th>Max overhead</th>
-</tr></thead>
-<tbody>
-<tr><td>helium / cc-pV5Z</td><td>81</td><td>0</td><td>0.000</td></tr>
-<tr><td>helium / cc-pVQZ</td><td>49</td><td>0</td><td>0.000</td></tr>
-<tr><td>water / 6-31G(d)</td><td>25</td><td>0</td><td>0.000</td></tr>
-<tr><td>water / cc-pVDZ</td><td>25</td><td>0</td><td>0.000</td></tr>
-<tr><td>water / cc-pVTZ</td><td>49</td><td>0</td><td>0.000</td></tr>
-<tr><td>water / STO-3G</td><td>9</td><td>0</td><td>0.000</td></tr>
-<tr><td><strong>total</strong></td><td><strong>238</strong></td><td><strong>0</strong></td><td><strong>0.000</strong></td></tr>
-</tbody></table></div>
-<p>&quot;Disagreements&quot; counts buckets where the rule picks a different engine than the per-case timed winner; &quot;max overhead&quot; is the worst-case extra wall-clock time at any bucket relative to that local winner. Both are zero on every case, so the integer rule <strong>reproduces the per-case optimum exactly</strong> across the calibration set — there is no headroom left for a more elaborate model on these molecules and bases.</p>
-<h4 id="why-this-rule-and-not-the-analytic-flop-count">Why this rule and not the analytic flop count</h4>
-<p>The analytic model in the previous subsection predicts a smooth crossover where Rys overtakes OS as <span class="math-inline">\(L\)</span> grows. The measured curves do show a crossover, but it is sharp and it is HGP rather than OS that defines the right edge — once HGP enters the menu, the predicted &quot;Rys at high <span class="math-inline">\(L\)</span>&quot; regime evaporates because HGP is faster than Rys at every Lsum <span class="math-inline">\(\ge\)</span> 2 in the calibration set. The fit therefore collapses to a single integer threshold; the runtime predicate compiles to a single add and compare, no table lookup, no branch mispredict from a complicated cost expression. When the calibration covers the entire angular-momentum range the user will actually request, this is the right shape of model.</p>
-<p>Stored-ERI (<code>_compute_2e_auto</code>) and direct-Fock (<code>_compute_2e_fock_auto</code>, <code>_compute_2e_fock_uhf_auto</code>) variants both consult the same per-quartet predicate, so the auto-dispatch decision is consistent across both code paths. The surrounding Schwarz screening, canonical-quartet iteration, and tensor/Fock contraction patterns are unchanged from the per-engine path.</p>
+<p>The median gate is clean: the fitted rule disagrees with the per-bucket median winner in <strong>0 of 81</strong> buckets, and the single per-case disagreement out of 238 case-rows (water/cc-pVTZ <span class="math-inline">\((5,6)\)</span>) is an OS/HGP tie at <strong>0.25%</strong> — a noise-floor straddle, correctly not flipped. Earlier single-run benchmarks showed up to ~8% per-case overhead and a dozen disagreements; the median-of-9 data confirms those were run-to-run noise on near-tie boundary buckets, not real structure.</p>
+<h4 id="how-the-rule-evolved-and-why-this-matters-pedagogically">How the rule evolved (and why this matters pedagogically)</h4>
+<p>This is a good illustration of why a dispatch rule must be re-measured, not reasoned about once:</p>
+<ul>
+<li><strong>Two engines, pre-HGP-A4.</strong> OS-vs-Rys only; Rys won the very-low-L corner and the rule was an analytic crossover.</li>
+<li><strong>Two engines, post-HGP-A4.</strong> HGP&#x27;s HRR hoist made it the broad winner and <em>took the low-L corner away from Rys</em>. The rule collapsed to &quot;Rys iff <span class="math-inline">\(L_{AB}+L_{CD}\le 1\)</span>, else HGP&quot;; OS dropped out of the menu.</li>
+<li><strong>Three engines, post-OS-A4 (current data).</strong> The same A4 hoist applied to OS made OS competitive again in the high-L corner, so OS re-enters with 13 buckets, and re-measurement showed HGP — not Rys — is actually fastest at <span class="math-inline">\((0,0)/(0,1)/(1,0)\)</span>. The rule is now genuinely three-way.</li>
+</ul>
+<p>Each transition moved the boundaries in a way the previous analytic argument did not predict, which is exactly why the fitter derives the regions from measured medians rather than from a formula.</p>
+<h4 id="runtime-implementation">Runtime implementation</h4>
+<p>The runtime consumes the fitted three-way <code>region_table</code> directly. <code>src/integrals/rys.cpp</code> holds it as a dense constexpr lookup <code>kAutoEngine[L_AB][L_CD]</code> — copied verbatim from the fitter&#x27;s generated C++ in <code>docs/auto_dispatch_fit.json</code> — and <code>_auto_engine(L_AB, L_CD)</code> indexes it (clamping <span class="math-inline">\(L\)</span> beyond the benchmarked reach to the table edge). The per-component dispatcher <code>_auto_contracted_eri</code> switches on the result and calls the OS, HGP, or Rys contracted-ERI entry accordingly:</p>
+<pre><code class="language-cpp">
+switch (_auto_engine(L_AB, L_CD)) {
+case IntegralMethod::RysQuadrature:  return RysQuad::_rys_contracted_eri(...);
+case IntegralMethod::ObaraSaika:     return ObaraSaika::_contracted_eri_elem(...);
+default:                             return HeadGordonPople::_contracted_eri_elem(...);
+}
+</code></pre>
+<p>In the stored-ERI sweep <code>_compute_2e_auto</code>, the HGP block-hoist fast path fires only when <code>_auto_engine</code> returns HGP for the shell-group bucket; OS- and Rys-chosen quartets fall to the per-component path (which re-dispatches through <code>_auto_contracted_eri</code>). The direct-Fock variants (<code>_compute_2e_fock_auto</code>, <code>_compute_2e_fock_uhf_auto</code>) reuse <code>_compute_2e_auto</code>, so the same per-quartet rule applies across stored-ERI and direct-Fock paths. Schwarz screening, canonical-quartet iteration, and the tensor/Fock contraction patterns are unchanged from the per-engine path.</p>
+<p>The dispatch is purely a <em>which-engine</em> choice — all three engines return bitwise-identical integrals — so <code>engine auto</code> always matches any single explicit engine to machine precision. This is verified by the <code>engine_scf_energy_compare.py</code> comparator (OS == HGP == Rys == Auto to <code>0.000e+00 Eh</code>), including a He₂/cc-pV5Z case that reaches the high-L corner where Auto actually selects OS (Lsum ≳ 11) and Rys (<span class="math-inline">\((7,8)\)</span>/<span class="math-inline">\((8,8)\)</span>).</p>
+<p>When an engine is re-optimized: re-run <code>planck-auto-dispatch-benchmark</code>, re-run <code>scripts/fit_auto_dispatch.py</code>, then paste the regenerated table from <code>docs/auto_dispatch_fit.json</code>&#x27;s <code>rule_in_code</code> into <code>kAutoEngine</code>. The table is kept verbatim (not reduced to inequalities) precisely so this step is a mechanical copy with no risk of drift.</p>
 <h3 id="implementation-files">Implementation Files</h3>
 <div class="table-wrap"><table>
 <thead><tr>
@@ -1402,7 +1385,7 @@ return (L_AB + L_CD) &lt;= 1;
 </tr></thead>
 <tbody>
 <tr><td><code>src/integrals/rys.h</code></td><td>Public API: <code>_compute_2e</code>, <code>_compute_2e_fock</code>, <code>_compute_2e_fock_uhf</code>, and <code>_auto</code> variants</td></tr>
-<tr><td><code>src/integrals/rys.cpp</code></td><td>VRR (<code>_rys_vrr_1d</code>), HRR (<code>_rys_hrr_ab</code>, <code>_rys_hrr_cd</code>), primitive and contracted ERI, Schwarz table, Fock builders, auto-dispatch predicate (<code>_auto_prefers_rys</code>)</td></tr>
+<tr><td><code>src/integrals/rys.cpp</code></td><td>VRR (<code>_rys_vrr_1d</code>), HRR (<code>_rys_hrr_ab</code>, <code>_rys_hrr_cd</code>), primitive and contracted ERI, Schwarz table, Fock builders, three-way auto-dispatch table + selector (<code>kAutoEngine</code>, <code>_auto_engine</code>)</td></tr>
 <tr><td><code>src/integrals/rys_roots.h</code></td><td><code>rys_roots_weights</code> declaration; exact 1-point formula <code>rys_1pt</code></td></tr>
 <tr><td><code>src/integrals/rys_roots.cpp</code></td><td>Pre-tabulated GL rules; Boys moment recursion; Stieltjes–Jacobi Gram-Schmidt + Eigen eigendecomposition</td></tr>
 <tr><td><code>tests/auto_dispatch_benchmark.cpp</code></td><td>Per-bucket timing harness that produces <code>docs/auto_dispatch_timings.csv</code></td></tr>
@@ -1489,9 +1472,9 @@ r_{12})/r_{12}\)</span>) drop in exactly as in OS: the long-range damping enters
 <p>The same Schwarz inequality <span class="math-inline">\(|(\mu\nu|\lambda\sigma)| \le \sqrt{(\mu\nu|\mu\nu)}\sqrt{(\lambda\sigma|\lambda\sigma)}\)</span> applies; the Schwarz table is precomputed by calling the same contracted ERI kernel on diagonal pairs <span class="math-inline">\((ij|ij)\)</span>.</p>
 <h3 id="symmetry-reduced-hgp">Symmetry-Reduced HGP</h3>
 <p>The HGP contracted-ERI kernel composes cleanly with the petite-list / skeleton-Fock symmetrization scheme described in §8. Pair- and quartet-orbits under the molecular point group are built once and tagged with their AO permutation phases; only the canonical representative of each orbit is evaluated, and the phase-weighted result is then scattered to the orbit&#x27;s other quartets. The same signed-AO permutation infrastructure works in both Cartesian and spherical-harmonic bases — the spherical path inserts the <span class="math-inline">\(C\)</span>-to-spherical transform on the contracted block just before the scatter, exactly as in the OS and Rys symmetry-reduced variants.</p>
-<h3 id="why-hgp-wins-in-practice-measured-timings">Why HGP Wins in Practice — Measured Timings</h3>
-<p>The theoretical argument above (HRR factored <em>outside</em> the primitive contraction loops, smaller VRR scratch than Rys at low-to-medium <span class="math-inline">\(L\)</span>) is confirmed by a direct head-to-head benchmark of all three engines (OS, Rys, HGP) on the same molecules and bases inside this codebase. The table below reports wall-clock time per ERI build (in milliseconds, lower is better) for the three engines, in three modes: no symmetry (<code>nosym</code>), the legacy D2h coordinate-axis reduction (<code>d2h</code>), and the full point-group reduction (<code>full</code>). All runs use the same shell-pair list, Schwarz screening, and OpenMP settings; only the contracted-quartet kernel and the symmetry walker change.</p>
-<p>The numbers below are the median of 7 repetitions per configuration, from a <strong><code>-O3</code>-compiled, OpenMP-enabled</strong> binary; <code>nbasis</code> is the number of basis functions, <code>|G|</code> the full point-group order, and &quot;D2h ops&quot; the number of those operations the legacy coordinate-axis reduction can actually use. An earlier version of this section was timed from a <strong><code>-O0</code> (unoptimized) serial</strong> build; the engine <em>ordering</em> differs between the two — see pattern 2 below — so these numbers should not be compared directly against that older run.</p>
+<h3 id="hgp-vs-os-vs-rys-in-practice-measured-timings">HGP vs OS vs Rys in Practice — Measured Timings</h3>
+<p>The theoretical argument above (HRR factored <em>outside</em> the primitive contraction loops) explains why HGP is fast, but it does <strong>not</strong> imply HGP wins by a wide margin, because the same factorization can be applied to OS. Once it was (the OS-A4 rearrangement — see §11 and the OS engine notes — builds the VRR <code>(a0|c0)</code> block per primitive pair and runs HRR once per shell quartet, exactly as HGP does), the OS/HGP gap narrowed sharply: HGP still leads on the workload that matters — the full point-group path — but only by ~1.1–1.2×, not the ~1.5–2× an earlier build showed. The benchmark below is a head-to-head of all three engines on the same molecules and bases, in three symmetry modes — no symmetry (<code>nosym</code>), the legacy D2h coordinate-axis reduction (<code>d2h</code>), and the full point-group reduction (<code>full</code>). All runs share the shell-pair list, Schwarz screening, and OpenMP settings; only the contracted-quartet kernel and the symmetry walker change.</p>
+<p>The numbers are the <strong>median of 9 repetitions</strong> per configuration, OpenMP enabled, <strong>on an otherwise-idle machine</strong> (an earlier run was contaminated by competing background load and is not reported here; repeated idle-machine runs agreed on every ordering and differed only in the third significant figure). They were taken after both HGP and OS had the A4 HRR hoist, reproducible from the full-symmetry direct-Fock benchmark harness (<code>tests/</code>, the same one summarized in the gitignored scratch <code>docs/timings.md</code>). <code>|G|</code> is the full point-group order; &quot;D2h ops&quot; is how many of those operations the legacy coordinate-axis reduction can actually use. The fastest engine in each (case, mode) cell is <strong>bold</strong>.</p>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Molecule / basis</th>
@@ -1502,62 +1485,46 @@ r_{12})/r_{12}\)</span>) drop in exactly as in OS: the long-range damping enters
 <th>full ms</th>
 </tr></thead>
 <tbody>
-<tr><td>H₂O / STO-3G (C2v, order(G)=4)</td><td>7</td><td>OS</td><td>0.739</td><td>0.381</td><td>0.531</td></tr>
-<tr><td>H₂O / STO-3G (C2v, order(G)=4)</td><td>7</td><td>Rys</td><td>3.034</td><td>1.502</td><td>2.394</td></tr>
-<tr><td>H₂O / STO-3G (C2v, order(G)=4)</td><td>7</td><td><strong>HGP</strong></td><td><strong>0.376</strong></td><td><strong>0.239</strong></td><td><strong>0.322</strong></td></tr>
-<tr><td>H₂O / STO-3G (C2v, order(G)=4)</td><td>7</td><td>Auto</td><td>0.455</td><td>0.284</td><td><strong>0.322</strong></td></tr>
-<tr><td>NH₃ / STO-3G (C3v, order(G)=6)</td><td>8</td><td>OS</td><td>0.833</td><td>0.573</td><td>0.530</td></tr>
-<tr><td>NH₃ / STO-3G (C3v, order(G)=6)</td><td>8</td><td>Rys</td><td>3.999</td><td>2.569</td><td>2.683</td></tr>
-<tr><td>NH₃ / STO-3G (C3v, order(G)=6)</td><td>8</td><td><strong>HGP</strong></td><td><strong>0.473</strong></td><td><strong>0.354</strong></td><td><strong>0.346</strong></td></tr>
-<tr><td>NH₃ / STO-3G (C3v, order(G)=6)</td><td>8</td><td>Auto</td><td>0.684</td><td>0.471</td><td><strong>0.346</strong></td></tr>
-<tr><td>CH₄ / STO-3G (Td, order(G)=24)</td><td>9</td><td>OS</td><td>1.134</td><td>0.506</td><td>0.575</td></tr>
-<tr><td>CH₄ / STO-3G (Td, order(G)=24)</td><td>9</td><td>Rys</td><td>5.474</td><td>2.045</td><td>2.782</td></tr>
-<tr><td>CH₄ / STO-3G (Td, order(G)=24)</td><td>9</td><td><strong>HGP</strong></td><td><strong>0.620</strong></td><td><strong>0.316</strong></td><td><strong>0.361</strong></td></tr>
-<tr><td>CH₄ / STO-3G (Td, order(G)=24)</td><td>9</td><td>Auto</td><td>0.983</td><td>0.437</td><td><strong>0.361</strong></td></tr>
-<tr><td>H₂O / <code>6-31G**</code> (C2v, order(G)=4)</td><td>25</td><td>OS</td><td>8.837</td><td>4.010</td><td>6.711</td></tr>
-<tr><td>H₂O / <code>6-31G**</code> (C2v, order(G)=4)</td><td>25</td><td>Rys</td><td>53.027</td><td>17.695</td><td>37.180</td></tr>
-<tr><td>H₂O / <code>6-31G**</code> (C2v, order(G)=4)</td><td>25</td><td><strong>HGP</strong></td><td><strong>6.214</strong></td><td><strong>2.996</strong></td><td><strong>4.437</strong></td></tr>
-<tr><td>H₂O / <code>6-31G**</code> (C2v, order(G)=4)</td><td>25</td><td>Auto</td><td>6.345</td><td>3.176</td><td><strong>4.437</strong></td></tr>
-<tr><td>NH₃ / 6-31G (C3v, order(G)=6)</td><td>15</td><td>OS</td><td>2.688</td><td>1.790</td><td>1.619</td></tr>
-<tr><td>NH₃ / 6-31G (C3v, order(G)=6)</td><td>15</td><td>Rys</td><td>13.176</td><td>7.788</td><td>7.377</td></tr>
-<tr><td>NH₃ / 6-31G (C3v, order(G)=6)</td><td>15</td><td><strong>HGP</strong></td><td><strong>1.270</strong></td><td><strong>0.946</strong></td><td><strong>0.836</strong></td></tr>
-<tr><td>NH₃ / 6-31G (C3v, order(G)=6)</td><td>15</td><td>Auto</td><td>2.226</td><td>1.510</td><td><strong>0.836</strong></td></tr>
-<tr><td>NH₃ / <code>6-31G*</code> (C3v, order(G)=6)</td><td>21</td><td>OS</td><td>6.393</td><td>4.161</td><td>4.135</td></tr>
-<tr><td>NH₃ / <code>6-31G*</code> (C3v, order(G)=6)</td><td>21</td><td>Rys</td><td>38.083</td><td>23.032</td><td>22.801</td></tr>
-<tr><td>NH₃ / <code>6-31G*</code> (C3v, order(G)=6)</td><td>21</td><td><strong>HGP</strong></td><td><strong>3.697</strong></td><td><strong>2.558</strong></td><td><strong>2.532</strong></td></tr>
-<tr><td>NH₃ / <code>6-31G*</code> (C3v, order(G)=6)</td><td>21</td><td>Auto</td><td>4.673</td><td>3.079</td><td><strong>2.532</strong></td></tr>
-<tr><td>NH₃ / <code>6-31G**</code> (C3v, order(G)=6)</td><td>30</td><td>OS</td><td>14.494</td><td>9.490</td><td>7.127</td></tr>
-<tr><td>NH₃ / <code>6-31G**</code> (C3v, order(G)=6)</td><td>30</td><td>Rys</td><td>97.369</td><td>53.524</td><td>39.379</td></tr>
-<tr><td>NH₃ / <code>6-31G**</code> (C3v, order(G)=6)</td><td>30</td><td><strong>HGP</strong></td><td><strong>9.274</strong></td><td><strong>6.879</strong></td><td><strong>4.753</strong></td></tr>
-<tr><td>NH₃ / <code>6-31G**</code> (C3v, order(G)=6)</td><td>30</td><td>Auto</td><td>10.637</td><td>7.660</td><td><strong>4.753</strong></td></tr>
-<tr><td>CH₄ / <code>6-31G**</code> (Td, order(G)=24)</td><td>35</td><td>OS</td><td>22.981</td><td>10.391</td><td>8.160</td></tr>
-<tr><td>CH₄ / <code>6-31G**</code> (Td, order(G)=24)</td><td>35</td><td>Rys</td><td>155.936</td><td>44.731</td><td>40.797</td></tr>
-<tr><td>CH₄ / <code>6-31G**</code> (Td, order(G)=24)</td><td>35</td><td><strong>HGP</strong></td><td><strong>14.824</strong></td><td><strong>8.572</strong></td><td><strong>5.871</strong></td></tr>
-<tr><td>CH₄ / <code>6-31G**</code> (Td, order(G)=24)</td><td>35</td><td>Auto</td><td>17.490</td><td>8.749</td><td><strong>5.871</strong></td></tr>
+<tr><td>H₂O / STO-3G (C2v, |G|=4)</td><td>7</td><td><strong>OS</strong></td><td><strong>0.946</strong></td><td><strong>0.501</strong></td><td>0.371</td></tr>
+<tr><td>H₂O / STO-3G</td><td>7</td><td>Rys</td><td>3.925</td><td>1.863</td><td>2.762</td></tr>
+<tr><td>H₂O / STO-3G</td><td>7</td><td><strong>HGP</strong></td><td>1.081</td><td>0.807</td><td><strong>0.340</strong></td></tr>
+<tr><td>H₂O / STO-3G</td><td>7</td><td>Auto</td><td>1.092</td><td>0.795</td><td><strong>0.340</strong></td></tr>
+<tr><td>NH₃ / STO-3G (C3v, |G|=6)</td><td>8</td><td><strong>OS</strong></td><td><strong>1.218</strong></td><td><strong>0.822</strong></td><td>0.413</td></tr>
+<tr><td>NH₃ / STO-3G</td><td>8</td><td>Rys</td><td>4.900</td><td>3.177</td><td>2.859</td></tr>
+<tr><td>NH₃ / STO-3G</td><td>8</td><td><strong>HGP</strong></td><td>1.590</td><td>1.237</td><td><strong>0.360</strong></td></tr>
+<tr><td>NH₃ / STO-3G</td><td>8</td><td>Auto</td><td>1.604</td><td>1.216</td><td><strong>0.360</strong></td></tr>
+<tr><td>CH₄ / STO-3G (Td, |G|=24)</td><td>9</td><td><strong>OS</strong></td><td><strong>1.790</strong></td><td><strong>0.813</strong></td><td>0.452</td></tr>
+<tr><td>CH₄ / STO-3G</td><td>9</td><td>Rys</td><td>6.284</td><td>2.266</td><td>2.988</td></tr>
+<tr><td>CH₄ / STO-3G</td><td>9</td><td><strong>HGP</strong></td><td>2.058</td><td>1.221</td><td><strong>0.388</strong></td></tr>
+<tr><td>CH₄ / STO-3G</td><td>9</td><td>Auto</td><td>2.034</td><td>1.201</td><td><strong>0.388</strong></td></tr>
+<tr><td>H₂O / <code>6-31G**</code> (C2v, |G|=4)</td><td>25</td><td><strong>OS</strong></td><td>12.850</td><td><strong>6.463</strong></td><td>5.691</td></tr>
+<tr><td>H₂O / <code>6-31G**</code></td><td>25</td><td>Rys</td><td>58.597</td><td>18.773</td><td>38.293</td></tr>
+<tr><td>H₂O / <code>6-31G**</code></td><td>25</td><td><strong>HGP</strong></td><td><strong>11.835</strong></td><td>8.886</td><td><strong>5.065</strong></td></tr>
+<tr><td>H₂O / <code>6-31G**</code></td><td>25</td><td>Auto</td><td>11.904</td><td>9.233</td><td><strong>5.065</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G</code> (C3v, |G|=6)</td><td>15</td><td><strong>OS</strong></td><td>3.378</td><td><strong>2.303</strong></td><td>1.048</td></tr>
+<tr><td>NH₃ / <code>6-31G</code></td><td>15</td><td>Rys</td><td>11.329</td><td>7.362</td><td>7.228</td></tr>
+<tr><td>NH₃ / <code>6-31G</code></td><td>15</td><td><strong>HGP</strong></td><td><strong>2.769</strong></td><td>2.388</td><td><strong>0.918</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G</code></td><td>15</td><td>Auto</td><td>2.776</td><td>2.500</td><td><strong>0.918</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G*</code> (C3v, |G|=6)</td><td>21</td><td><strong>OS</strong></td><td>8.746</td><td><strong>5.545</strong></td><td>2.901</td></tr>
+<tr><td>NH₃ / <code>6-31G*</code></td><td>21</td><td>Rys</td><td>33.220</td><td>19.045</td><td>19.590</td></tr>
+<tr><td>NH₃ / <code>6-31G*</code></td><td>21</td><td><strong>HGP</strong></td><td><strong>7.640</strong></td><td>6.560</td><td><strong>2.521</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G*</code></td><td>21</td><td>Auto</td><td>7.524</td><td>6.728</td><td><strong>2.521</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G**</code> (C3v, |G|=6)</td><td>30</td><td>OS</td><td>18.896</td><td>12.952</td><td>5.076</td></tr>
+<tr><td>NH₃ / <code>6-31G**</code></td><td>30</td><td>Rys</td><td>92.177</td><td>50.980</td><td>36.201</td></tr>
+<tr><td>NH₃ / <code>6-31G**</code></td><td>30</td><td><strong>HGP</strong></td><td><strong>16.332</strong></td><td><strong>12.708</strong></td><td><strong>4.714</strong></td></tr>
+<tr><td>NH₃ / <code>6-31G**</code></td><td>30</td><td>Auto</td><td>17.114</td><td>13.173</td><td><strong>4.714</strong></td></tr>
+<tr><td>CH₄ / <code>6-31G**</code> (Td, |G|=24)</td><td>35</td><td>OS</td><td>33.109</td><td>14.945</td><td>6.546</td></tr>
+<tr><td>CH₄ / <code>6-31G**</code></td><td>35</td><td>Rys</td><td>143.254</td><td>42.482</td><td>37.544</td></tr>
+<tr><td>CH₄ / <code>6-31G**</code></td><td>35</td><td><strong>HGP</strong></td><td><strong>23.256</strong></td><td><strong>14.936</strong></td><td><strong>5.840</strong></td></tr>
+<tr><td>CH₄ / <code>6-31G**</code></td><td>35</td><td>Auto</td><td>24.176</td><td>16.291</td><td><strong>5.840</strong></td></tr>
 </tbody></table></div>
 <p>Reading the table, four patterns stand out.</p>
-<p><strong>1. Rys is dominated by both HGP and OS across the bulk of these bases.</strong> On 6-31G(d,p) / CH₄ (Td) the spread reaches <span class="math-inline">\(\sim\)</span>10.5× over HGP on <code>nosym</code> and <span class="math-inline">\(\sim\)</span>5.2× on <code>d2h</code>; Rys is not a competitor across the medium-<span class="math-inline">\(L\)</span> bulk. Note that Planck&#x27;s <em>calibrated</em> auto-dispatch (§11) does <strong>not</strong> match the textbook &quot;Rys wins at high <span class="math-inline">\(L\)</span>&quot; intuition: the measured per-bucket sweep picks Rys only at the very bottom, <span class="math-inline">\(L_{AB}+L_{CD} \le 1\)</span> (the <span class="math-inline">\((ss|ss)\)</span>/<span class="math-inline">\((ss|sp)\)</span> buckets), where Rys&#x27;s 1–2 roots undercut HGP&#x27;s HRR-outside setup cost; everywhere above that HGP wins. So in this codebase Rys&#x27;s empirical niche is the low-<span class="math-inline">\(L\)</span> corner, not the high-<span class="math-inline">\(L\)</span> tail — see §11 and <code>_auto_prefers_rys</code>. (The asymptotic flop-count argument that Rys&#x27;s fixed root count eventually beats the growing OS/HGP scratch extents is still true in the limit, but that crossover sits beyond the angular momenta any shipped basis reaches, so it does not drive the dispatch decision in practice.)</p>
-<p><strong>2. HGP is the fastest engine on every case in the table.</strong> Unlike an earlier <code>-O0</code> serial run of this same benchmark — where HGP and OS were within a few percent of each other on STO-3G and OS actually edged ahead on the larger NH₃ basis — the <code>-O3</code> build here puts HGP clearly in front everywhere, by roughly 1.4–2.0× over OS on <code>nosym</code>. The optimization level matters because HGP&#x27;s hot loop is the tight per-primitive VRR into a small <span class="math-inline">\((a0|c0)\)</span> block with the HRR hoisted out; <code>-O3</code> vectorizes and unrolls that kernel aggressively, whereas OS&#x27;s larger per-primitive scratch traffic leaves less on the table. At <code>-O0</code> those advantages are masked, which is why the ordering flips:</p>
-<div class="table-wrap"><table>
-<thead><tr>
-<th>Case</th>
-<th>OS <code>nosym</code></th>
-<th>HGP <code>nosym</code></th>
-<th>OS / HGP</th>
-</tr></thead>
-<tbody>
-<tr><td>H₂O / STO-3G</td><td>0.739</td><td>0.376</td><td>1.97×</td></tr>
-<tr><td>CH₄ / STO-3G</td><td>1.134</td><td>0.620</td><td>1.83×</td></tr>
-<tr><td>H₂O / <code>6-31G**</code></td><td>8.837</td><td>6.214</td><td>1.42×</td></tr>
-<tr><td>NH₃ / <code>6-31G*</code></td><td>6.393</td><td>3.697</td><td>1.73×</td></tr>
-<tr><td>NH₃ / <code>6-31G**</code></td><td>14.494</td><td>9.274</td><td>1.56×</td></tr>
-<tr><td>CH₄ / <code>6-31G**</code></td><td>22.981</td><td>14.824</td><td>1.55×</td></tr>
-</tbody></table></div>
-<p>That is exactly the regime where the HGP analysis predicts wins: the HRR is removed from the <span class="math-inline">\(K^4\)</span> primitive loop, and at the same time the larger <span class="math-inline">\((a0|c0)\)</span> reduced block being VRR&#x27;d inside the loop avoids materializing the full <span class="math-inline">\((ab|cd)\)</span> tensor at every primitive step. The win even holds on STO-3G (<span class="math-inline">\(K = 3\)</span> primitives, <span class="math-inline">\(s/p\)</span> only), where the earlier <code>-O0</code> serial measurement had shown essentially no gap.</p>
-<p><strong>3. The NH₃ / 6-31G(d,p) &quot;OS beats HGP&quot; outlier is gone — but read the build flags first.</strong> A prior <code>-O0</code> serial version of this benchmark recorded HGP as <span class="math-inline">\(\sim\)</span>37% <em>slower</em> than OS on NH₃ / 6-31G(d,p) in every symmetry mode, and the guide kept that case pinned as a counter-example to &quot;HGP <span class="math-inline">\(\leq\)</span> OS everywhere.&quot; On the current <code>-O3</code> build HGP is the fastest engine on that case in all three modes (<code>nosym</code> 9.274 vs 14.494, <code>d2h</code> 6.879 vs 9.490, <code>full</code> 4.753 vs 7.127 ms). So the counter-example did not vanish because the kernel changed — it vanished because the optimizer closed the gap that the unoptimized build had exposed. The honest takeaway is that &quot;HGP at least matches OS&quot; holds across this benchmark set <strong>when compiled <code>-O3</code></strong>; at <code>-O0</code> the ordering is implementation-traffic-bound and can reverse, so the engine default should be reasoned about on optimized builds only.</p>
-<p><strong>4. HGP cooperates with symmetry well, with the largest absolute wins on the biggest polarized bases.</strong> On CH₄ / 6-31G(d,p) under Td (<span class="math-inline">\(|G|=24\)</span>), HGP <code>full</code> runs at 5.871 ms vs OS <code>full</code> at 8.160 ms (a 1.39× HGP-over-OS win), and the within-engine symmetry speedup (<code>nosym</code>→<code>full</code>) is 2.52× for HGP and 2.82× for OS — both engines amortize the orbit walk well, and the kernel-level HGP advantage carries through to the final time. On H₂O / 6-31G(d,p) under C2v the same pattern holds (HGP <code>full</code> 4.437 ms vs OS <code>full</code> 6.711 ms; 1.51× faster). NH₃ / 6-31G(d,p) now agrees: HGP <code>full</code> 4.753 ms vs OS <code>full</code> 7.127 ms, a 1.50× HGP win that tracks the <code>nosym</code> ordering rather than reversing it.</p>
-<p>Auto-dispatch follows HGP exactly under <code>full</code> symmetry — for every case in the table the <code>Auto full</code> column matches <code>HGP full</code> to the millisecond, because the dispatch logic in §11 picks HGP for the low-to-medium-<span class="math-inline">\(L\)</span> blocks that dominate these bases. Without symmetry, <code>Auto</code> is consistently slower than HGP alone (e.g. H₂O / 6-31G(d,p) <code>nosym</code>: Auto 6.345 vs HGP 6.214 ms; CH₄ / 6-31G(d,p) <code>nosym</code>: Auto 17.490 vs HGP 14.824 ms): the dispatch overhead is real, and it pays off only once the orbit walk amortizes it across the symmetry-reduced quartet set.</p>
-<p>Putting these together: <strong>for the routine quantum-chemistry case — Pople-style contracted bases up through 6-31G(d,p) and similar valence-double/triple-zeta sets with d polarization — HGP is the engine to default to</strong>, and on this <code>-O3</code> build it is the fastest engine on every case in the table, including the tiny STO-3G systems where the <code>-O0</code> gap had been negligible. OS remains a reasonable fallback for tiny, lightly contracted bases where the HGP/OS gap narrows, and Rys is reserved for high-<span class="math-inline">\(L\)</span> work (f/g/h) where the OS-and-HGP recurrence stacks would otherwise dominate. The OS-vs-Rys auto-dispatch model in §11 applies essentially unchanged to HGP-vs-Rys; HGP simply lowers the OS flop estimate further, which is why the auto-dispatch threshold moves toward higher <span class="math-inline">\(L\)</span> once HGP is the low-L path.</p>
+<p><strong>1. Rys is dominated by both HGP and OS across this entire set.</strong> Every case here tops out at d functions, and Rys loses in every cell — by up to ~6.2× (CH₄ / 6-31G(d,p), <code>nosym</code>: Rys 143.3 vs HGP 23.3 ms). This is consistent with the per-bucket calibration in §11: Rys&#x27;s empirical niche is the high-<span class="math-inline">\(L\)</span> tail (f/g/h, the <span class="math-inline">\((7,8)\)</span>/<span class="math-inline">\((8,8)\)</span> buckets), which none of these Pople bases reach. The asymptotic flop-count argument that Rys&#x27;s fixed root count eventually beats the growing OS/HGP recurrence stacks holds, but only at angular momenta past where these bases live.</p>
+<p><strong>2. HGP wins the mode that matters — <code>full</code> symmetry — on every case, but only narrowly.</strong> In the full point-group mode (the one you actually run when symmetry is available) HGP is fastest in all 8 cases, by 1.08–1.16× over OS (e.g. CH₄ / 6-31G(d,p): HGP 5.840 vs OS 6.546 ms, 1.12×; NH₃ / 6-31G(d,p): 4.714 vs 5.076, 1.08×). The HRR-outside factorization still pays off, but after OS-A4 the lead is small — a far cry from the ~1.5–2× HGP showed before OS got the same hoist. This is why the section is no longer titled &quot;Why HGP Wins&quot;: HGP is the right default, but the honest reason is &quot;consistently a little faster on the symmetry path,&quot; not &quot;dominant.&quot;</p>
+<p><strong>3. Without full symmetry the ranking is mixed and near-tied.</strong> In <code>nosym</code> HGP leads on the larger / polarized cases (H₂O and CH₄ / 6-31G(d,p), all three NH₃ bases) while OS edges ahead on the small STO-3G systems (H₂O, NH₃, CH₄). In the legacy <code>d2h</code> mode OS is faster in most cells — but <code>d2h</code> is the partial coordinate-axis reduction, frequently <em>slower</em> than full symmetry and sometimes barely better than <code>nosym</code>, because its limited orbit walk adds bookkeeping it cannot fully amortize. The practical reading is that the <code>nosym</code>/<code>d2h</code> orderings sit within the noise of which engine&#x27;s loop structure the build happens to favor; they should not drive the default, because the recommended path is full symmetry, where HGP wins cleanly.</p>
+<p><strong>4. Full point-group symmetry is the larger lever by far, and both engines exploit it well.</strong> The <code>nosym</code>→<code>full</code> speedup dwarfs the OS-vs-HGP kernel gap: on CH₄ / 6-31G(d,p) (Td) HGP goes 23.256→5.840 ms (4.0×) and OS 33.109→6.546 ms (5.1×); on NH₃ / 6-31G(d,p) HGP goes 16.332→4.714 ms (3.5×). Whichever engine you fix, turning on the full reduction (§8) buys 3–5× here — several times more than the ~1.12× difference between engines. <code>d2h</code> captures only part of that and can even regress relative to <code>nosym</code>; it is the wrong mode to use when the full group is available.</p>
+<p><strong>Auto-dispatch under <code>full</code> symmetry equals HGP</strong> in every case — the <code>Auto full</code> and <code>HGP full</code> cells match exactly — because these bases live in the low-to-medium-<span class="math-inline">\(L\)</span> region where the §11 three-way rule selects HGP, which is also the per-cell <code>full</code> winner here, so Auto inherits the right choice. (Auto keys on per-quartet buckets; OS&#x27;s standalone wins in this table are confined to the small-system <code>nosym</code>/<code>d2h</code> cells, not the <code>full</code> path Auto is compared on, so there is no conflict in this set.)</p>
+<p>Putting these together: <strong>for routine Pople-style bases up through 6-31G(d,p), run with full point-group symmetry and let Auto pick the engine — it lands on HGP, which is the fastest engine on the full-symmetry path for every case here.</strong> OS is now close enough that on small systems or the legacy <code>d2h</code> mode it can edge ahead, so it is a perfectly reasonable explicit choice; Rys stays reserved for genuine high-<span class="math-inline">\(L\)</span> work (f/g/h) where the per-bucket rule (§11) actually routes quartets to it. The dominant performance decision is the symmetry mode, not the kernel.</p>
 <h3 id="implementation-files">Implementation Files</h3>
 <div class="table-wrap"><table>
 <thead><tr>

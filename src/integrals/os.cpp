@@ -40,6 +40,59 @@ namespace
         return sym_ops != nullptr && sym_ops->size() > 1;
     }
 
+    // ─── Shell-quartet iteration support (H-10 step 2b) ──────────────────────
+    //
+    // _compute_2e receives the per-Cartesian-AO shell_pairs list, not the Basis,
+    // so to iterate at shell-quartet granularity we reconstruct the shell
+    // grouping from the pair list itself. build_shellpairs emits every diagonal
+    // pair (i,i), so each AO i appears as some pair's A side with A._index == i;
+    // collecting those recovers the full AO -> ContractedView table. Runs of
+    // AOs sharing the same Shell* (contiguous by construction) form the groups.
+    struct OsShellGroup
+    {
+        const HartreeFock::ContractedView *first = nullptr; // AO view of component 0
+        std::size_t first_ao = 0;                           // _index of component 0
+        std::size_t n_components = 0;                        // (L+1)(L+2)/2
+    };
+
+    static std::vector<OsShellGroup> shell_groups_from_pairs(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nbasis,
+        std::vector<const HartreeFock::ContractedView *> &ao_views)
+    {
+        // AO index -> its ContractedView, recovered from the diagonal pairs.
+        ao_views.assign(nbasis, nullptr);
+        for (const auto &sp : shell_pairs)
+        {
+            if (sp.A._index < nbasis)
+                ao_views[sp.A._index] = &sp.A;
+            if (sp.B._index < nbasis)
+                ao_views[sp.B._index] = &sp.B;
+        }
+
+        std::vector<OsShellGroup> groups;
+        const HartreeFock::Shell *current = nullptr;
+        for (std::size_t ao = 0; ao < nbasis; ++ao)
+        {
+            const HartreeFock::ContractedView *view = ao_views[ao];
+            const HartreeFock::Shell *shell = view ? view->_shell : nullptr;
+            if (groups.empty() || shell != current)
+            {
+                OsShellGroup g;
+                g.first = view;
+                g.first_ao = ao;
+                g.n_components = 1;
+                groups.emplace_back(g);
+                current = shell;
+            }
+            else
+            {
+                ++groups.back().n_components;
+            }
+        }
+        return groups;
+    }
+
     static void canonicalize_pair(std::size_t &i, std::size_t &j)
     {
         if (i > j)
@@ -186,8 +239,15 @@ namespace
         std::size_t cz_stride = 0;
         std::vector<double> vrr;
         std::vector<double> hrr;
+        // Primitive-contracted (a0|c0) accumulator (OS-A4-1), mirroring HGP's
+        // EriScratch::a0c0_accum. `_contracted_eri` sums each primitive pair's
+        // (a0|c0) block here, then HRRs once per shell quartet instead of once
+        // per primitive pair. Zeroed in resize_for_quartet.
+        std::vector<double> a0c0_accum;
+        std::size_t spatial_size = 0;
         double *vrr_data = nullptr;
         double *hrr_data = nullptr;
+        double *a0c0_data = nullptr;
 
         void resize_for_quartet(
             int lABx, int lABy, int lABz,
@@ -225,8 +285,16 @@ namespace
                 vrr.resize(vrr_size);
             if (hrr.size() < spatial)
                 hrr.resize(spatial);
+            spatial_size = spatial;
+            // The (a0|c0) accumulator is summed into across primitive pairs, so
+            // it must start zeroed for this quartet (unlike vrr/hrr, which are
+            // fully overwritten before being read). Matches HGP's a0c0_accum.
+            if (a0c0_accum.size() < spatial)
+                a0c0_accum.resize(spatial);
+            std::fill(a0c0_accum.begin(), a0c0_accum.begin() + spatial, 0.0);
             vrr_data = vrr.data();
             hrr_data = hrr.data();
+            a0c0_data = a0c0_accum.data();
         }
 
         std::size_t spatial_index(
@@ -961,6 +1029,76 @@ static void _eri_hrr_ab(
                                     ABx * scratch.h(ax, ay, az, cx, cy, cz);
 }
 
+// ─── 4-center ERI: (a0|c0) block for one primitive quartet (OS-A4-0) ─────────
+//
+// Builds the contracted-shell `(a0|c0)^{m=0}` block for a single primitive
+// pair and writes it into `scratch.h` (the m=0 slice of the VRR table). This
+// is the per-primitive half of the OS ERI: VRR + m=0 extraction, with no HRR.
+//
+// Extracted from `_os_eri_primitive` with no behavior change. It is the seam
+// the A4-1 hoist will exploit: instead of running HRR per primitive pair, the
+// contracted driver will sum these `(a0|c0)` blocks across primitives (into a
+// quartet-level accumulator) and run HRR once per shell quartet. The caller
+// is responsible for `scratch.resize_for_quartet(...)` beforehand.
+static void _os_eri_build_a0c0(
+    const HartreeFock::PrimitivePair &ppAB,
+    const HartreeFock::PrimitivePair &ppCD,
+    const int lABx, const int lABy, const int lABz,
+    const int lCDx, const int lCDy, const int lCDz,
+    EriScratch &scratch,
+    HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    // Build the quartet-sized VRR table in thread-local dynamic scratch.
+    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
+
+    // Extract m=0 slice into the HRR buffer (the (a0|c0) block).
+    for (int ax = 0; ax <= lABx; ++ax)
+        for (int ay = 0; ay <= lABy; ++ay)
+            for (int az = 0; az <= lABz; ++az)
+                for (int cx = 0; cx <= lCDx; ++cx)
+                    for (int cy = 0; cy <= lCDy; ++cy)
+                        for (int cz = 0; cz <= lCDz; ++cz)
+                            scratch.h(ax, ay, az, cx, cy, cz) =
+                                scratch.v(ax, ay, az, cx, cy, cz, 0);
+}
+
+// ─── 4-center ERI: HRR an (a0|c0) block down to one component ERI (OS-A4-0) ──
+//
+// Consumes a filled `(a0|c0)` block in `scratch.h` (either from a single
+// primitive pair or, after A4-1, the primitive-contracted accumulator) and
+// runs the two HRR passes (A→B then C→D) to produce the final
+// (lA lB | lC lD) Cartesian-component ERI. Modifies `scratch.h` in place.
+//
+// Extracted from `_os_eri_primitive` with no behavior change.
+static double _os_eri_hrr_to_eri(
+    EriScratch &scratch,
+    const int lAx, const int lAy, const int lAz,
+    const int lBx, const int lBy, const int lBz,
+    const int lCx, const int lCy, const int lCz,
+    const int lDx, const int lDy, const int lDz,
+    const double ABx, const double ABy, const double ABz,
+    const double CDx, const double CDy, const double CDz)
+{
+    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+    // A→B HRR: modifies the quartet-sized HRR scratch in-place.
+    _eri_hrr_ab(scratch, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
+
+    // Extract C-side slice at (lAx, lAy, lAz) for C→D HRR.
+    // `_nuclear_hrr` only reads V0_CD[ix][iy][iz] for ix ≤ lCx+lDx = lCDx,
+    // etc., which is exactly the range filled below, so no zero-init is
+    // needed for the unused tail of the stack array.
+    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM];
+    for (int cx = 0; cx <= lCDx; ++cx)
+        for (int cy = 0; cy <= lCDy; ++cy)
+            for (int cz = 0; cz <= lCDz; ++cz)
+                V0_CD[cx][cy][cz] = scratch.h(lAx, lAy, lAz, cx, cy, cz);
+
+    // C→D HRR reusing the existing _nuclear_hrr (same 3-phase sweep)
+    return _nuclear_hrr(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+}
+
 // ─── 4-center ERI: single primitive quartet ──────────────────────────────────
 static double _os_eri_primitive(
     const HartreeFock::PrimitivePair &ppAB,
@@ -981,34 +1119,13 @@ static double _os_eri_primitive(
     EriScratch &scratch = _eri_scratch;
     scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
 
-    // Build the quartet-sized VRR table in thread-local dynamic scratch.
-    _eri_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
+    _os_eri_build_a0c0(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                       scratch, kernel, omega);
 
-    // Extract m=0 slice into HRR buffer and zero unused entries
-    for (int ax = 0; ax <= lABx; ++ax)
-        for (int ay = 0; ay <= lABy; ++ay)
-            for (int az = 0; az <= lABz; ++az)
-                for (int cx = 0; cx <= lCDx; ++cx)
-                    for (int cy = 0; cy <= lCDy; ++cy)
-                        for (int cz = 0; cz <= lCDz; ++cz)
-                            scratch.h(ax, ay, az, cx, cy, cz) =
-                                scratch.v(ax, ay, az, cx, cy, cz, 0);
-
-    // A→B HRR: modifies the quartet-sized HRR scratch in-place.
-    _eri_hrr_ab(scratch, lAx, lAy, lAz, lBx, lBy, lBz, lCDx, lCDy, lCDz, ABx, ABy, ABz);
-
-    // Extract C-side slice at (lAx, lAy, lAz) for C→D HRR.
-    // `_nuclear_hrr` only reads V0_CD[ix][iy][iz] for ix ≤ lCx+lDx = lCDx,
-    // etc., which is exactly the range filled below, so no zero-init is
-    // needed for the unused tail of the stack array.
-    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM];
-    for (int cx = 0; cx <= lCDx; ++cx)
-        for (int cy = 0; cy <= lCDy; ++cy)
-            for (int cz = 0; cz <= lCDz; ++cz)
-                V0_CD[cx][cy][cz] = scratch.h(lAx, lAy, lAz, cx, cy, cz);
-
-    // C→D HRR reusing the existing _nuclear_hrr (same 3-phase sweep)
-    return _nuclear_hrr(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+    return _os_eri_hrr_to_eri(scratch,
+                              lAx, lAy, lAz, lBx, lBy, lBz,
+                              lCx, lCy, lCz, lDx, lDy, lDz,
+                              ABx, ABy, ABz, CDx, CDy, CDz);
 }
 
 static Eigen::MatrixXd compute_external_charge_attraction_impl(
@@ -1078,7 +1195,77 @@ static Eigen::MatrixXd compute_external_charge_attraction_impl(
     return V;
 }
 
+// Contract the per-primitive (a0|c0; m=0) blocks across all primitive pairs
+// into `scratch.a0c0_data`, mirroring HGP's `hgp_contract_a0c0`. The caller's
+// `scratch` is (re)sized and the accumulator zeroed by resize_for_quartet, so a
+// single fresh contraction lands here. `_os_eri_build_a0c0` writes each pair's
+// block into `scratch.h` (the hrr buffer doubles as per-pair VRR scratch — it
+// is only read after the accumulation loop), and we sum it in flat over
+// `spatial_size`, exactly the contiguous accumulation order HGP uses.
+static void _os_contract_a0c0(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    EriScratch &scratch,
+    const int lABx, const int lABy, const int lABz,
+    const int lCDx, const int lCDy, const int lCDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
+    scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
+
+    for (const auto &ppAB : spAB.primitive_pairs)
+        for (const auto &ppCD : spCD.primitive_pairs)
+        {
+            _os_eri_build_a0c0(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                               scratch, kernel, omega);
+            const double w = ppAB.coeff_product * ppCD.coeff_product;
+            for (std::size_t n = 0; n < scratch.spatial_size; ++n)
+                scratch.a0c0_data[n] += w * scratch.hrr_data[n];
+        }
+}
+
+// ─── 4-center ERI: contracted shell quartet, one kernel (OS-A4-1) ─────────────
+//
+// Hoisted base: contract (a0|c0) across all primitive pairs, copy the
+// accumulator into the HRR buffer, then run both HRR passes ONCE per shell
+// quartet instead of once per primitive pair. Algebraically identical to the
+// per-pair form because HRR is linear in the (a0|c0) block (same argument and
+// structure as HGP's hgp_contracted_eri_weighted_base).
+static double _contracted_eri_base(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    const int lAx, const int lAy, const int lAz,
+    const int lBx, const int lBy, const int lBz,
+    const int lCx, const int lCy, const int lCz,
+    const int lDx, const int lDy, const int lDz,
+    HartreeFock::ERIKernel kernel,
+    double omega)
+{
+    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+    EriScratch &scratch = _eri_scratch;
+    _os_contract_a0c0(spAB, spCD, scratch, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                      kernel, omega);
+
+    // Move the contracted accumulator into the HRR working buffer.
+    std::copy(scratch.a0c0_data, scratch.a0c0_data + scratch.spatial_size,
+              scratch.hrr_data);
+
+    const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
+    const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
+    return _os_eri_hrr_to_eri(scratch,
+                              lAx, lAy, lAz, lBx, lBy, lBz,
+                              lCx, lCy, lCz, lDx, lDy, lDz,
+                              ABx, ABy, ABz, CDx, CDy, CDz);
+}
+
 // ─── 4-center ERI: contracted shell quartet ──────────────────────────────────
+//
+// Kernel dispatch mirroring HGP's hgp_contracted_eri_weighted: Coulomb and
+// LongRange run a single hoisted contraction; ShortRange is the linear
+// combination (full − long_range), each computed with its own hoisted pass.
 static double _contracted_eri(
     const HartreeFock::ShellPair &spAB,
     const HartreeFock::ShellPair &spCD,
@@ -1089,33 +1276,23 @@ static double _contracted_eri(
     HartreeFock::ERIKernel kernel,
     double omega)
 {
-    const double ABx = spAB.R[0], ABy = spAB.R[1], ABz = spAB.R[2];
-    const double CDx = spCD.R[0], CDy = spCD.R[1], CDz = spCD.R[2];
+    if (kernel != HartreeFock::ERIKernel::ShortRange)
+        return _contracted_eri_base(spAB, spCD,
+                                    lAx, lAy, lAz, lBx, lBy, lBz,
+                                    lCx, lCy, lCz, lDx, lDy, lDz,
+                                    kernel, omega);
 
-    double eri = 0.0;
-    for (const auto &ppAB : spAB.primitive_pairs)
-        for (const auto &ppCD : spCD.primitive_pairs)
-        {
-            const double full =
-                _os_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
-                                  lCx, lCy, lCz, lDx, lDy, lDz,
-                                  ABx, ABy, ABz, CDx, CDy, CDz,
-                                  HartreeFock::ERIKernel::Coulomb, 0.0);
+    if (omega <= 0.0)
+        return 0.0;
 
-            double value = full;
-            if (kernel != HartreeFock::ERIKernel::Coulomb)
-            {
-                const double long_range =
-                    _os_eri_primitive(ppAB, ppCD, lAx, lAy, lAz, lBx, lBy, lBz,
-                                      lCx, lCy, lCz, lDx, lDy, lDz,
-                                      ABx, ABy, ABz, CDx, CDy, CDz,
-                                      HartreeFock::ERIKernel::LongRange, omega);
-                value = (kernel == HartreeFock::ERIKernel::LongRange) ? long_range : (full - long_range);
-            }
-
-            eri += ppAB.coeff_product * ppCD.coeff_product * value;
-        }
-    return eri;
+    return _contracted_eri_base(spAB, spCD,
+                                lAx, lAy, lAz, lBx, lBy, lBz,
+                                lCx, lCy, lCz, lDx, lDy, lDz,
+                                HartreeFock::ERIKernel::Coulomb, 0.0) -
+           _contracted_eri_base(spAB, spCD,
+                                lAx, lAy, lAz, lBx, lBy, lBz,
+                                lCx, lCy, lCz, lDx, lDy, lDz,
+                                HartreeFock::ERIKernel::LongRange, omega);
 }
 
 double HartreeFock::ObaraSaika::_contracted_eri_elem(
@@ -1132,6 +1309,73 @@ double HartreeFock::ObaraSaika::_contracted_eri_elem(
                            lAx, lAy, lAz, lBx, lBy, lBz,
                            lCx, lCy, lCz, lDx, lDy, lDz,
                            kernel, omega);
+}
+
+// ─── Shell-quartet block kernel (H-10 step 2a) ───────────────────────────────
+//
+// Compute every Cartesian-component ERI of a shell quartet (A B | C D) in one
+// call, filling a caller-provided flat buffer in [a][b][c][d] row-major order
+// (a fastest-varying is d). This is purely an *iteration-shape* refactor: it
+// loops the four shells' Cartesian components and calls the existing per-
+// component _contracted_eri once per (a,b,c,d), constructing each component's
+// ShellPair from the real ContractedView entries in Basis::_basis_functions —
+// exactly as build_shellpairs does, so the per-component _component_norm folded
+// into PrimitivePair is identical and the values are bitwise-identical to the
+// current per-AO path.
+//
+// It does NOT yet hoist the per-primitive seed work across components (that is
+// step 2d) and is NOT yet wired into any entry point (that is step 2b/2c). It
+// exists so the block shape can be validated against the per-AO kernel before
+// any entry point routes through it. blockAB stride is n_c*n_d.
+//
+// Returns block[(a*n_b + b)*(n_c*n_d) + (c*n_d + d)] for a in A's components,
+// b in B's, c in C's, d in D's, where n_x = group.n_components.
+void HartreeFock::ObaraSaika::_contracted_eri_block(
+    const HartreeFock::Basis &basis,
+    const ShellGroup &gA, const ShellGroup &gB,
+    const ShellGroup &gC, const ShellGroup &gD,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    double *block)
+{
+    const std::size_t nA = gA.n_components;
+    const std::size_t nB = gB.n_components;
+    const std::size_t nC = gC.n_components;
+    const std::size_t nD = gD.n_components;
+    const std::size_t nCD = nC * nD;
+
+    for (std::size_t a = 0; a < nA; ++a)
+    {
+        const HartreeFock::ContractedView &cvA = basis._basis_functions[gA.first_ao + a];
+        for (std::size_t b = 0; b < nB; ++b)
+        {
+            const HartreeFock::ContractedView &cvB = basis._basis_functions[gB.first_ao + b];
+            // Per-component AB ShellPair: identical construction to build_shellpairs,
+            // so it carries cvA._component_norm * cvB._component_norm in its
+            // PrimitivePair coeff_product.
+            const HartreeFock::ShellPair spAB(cvA, cvB);
+            const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
+            const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
+
+            for (std::size_t c = 0; c < nC; ++c)
+            {
+                const HartreeFock::ContractedView &cvC = basis._basis_functions[gC.first_ao + c];
+                for (std::size_t d = 0; d < nD; ++d)
+                {
+                    const HartreeFock::ContractedView &cvD = basis._basis_functions[gD.first_ao + d];
+                    const HartreeFock::ShellPair spCD(cvC, cvD);
+                    const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+                    const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
+
+                    block[(a * nB + b) * nCD + (c * nD + d)] =
+                        _contracted_eri(spAB, spCD,
+                                        lAx, lAy, lAz, lBx, lBy, lBz,
+                                        lCx, lCy, lCz, lDx, lDy, lDz,
+                                        kernel, omega);
+                }
+            }
+        }
+    }
 }
 
 // ─── Gradient: derivative integral helpers ────────────────────────────────────
@@ -1671,6 +1915,21 @@ static Eigen::MatrixXd _compute_schwarz_table(
     std::size_t nbasis,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops);
 
+namespace
+{
+    // Forward declaration — shared phase-1 ERI tensor build (defined before
+    // _compute_2e). Used by the direct-SCF Fock builders below and _compute_2e.
+    static void build_eri_tensor_shellwise(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nb,
+        const Eigen::MatrixXd &Q,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        double tol_eri,
+        const SymOps *sym_ops,
+        std::vector<double> &eri);
+} // namespace
+
 // ─── Public: build 2e Fock (G = J - 0.5*K) ──────────────────────────────────
 //
 // Phase 1: build the full (μν|λσ) ERI tensor by iterating over unique shell-pair
@@ -1690,70 +1949,15 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock(
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
-    const bool use_sym = use_symmetry_ops(sym_ops);
 
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
 
-    // ── Phase 1: build ERI tensor ─────────────────────────────────────────────
+    // ── Phase 1: build ERI tensor (shell-quartet iteration, H-10 step 2c) ─────
+    // Identical tensor to the per-AO build; shared with _compute_2e and the UHF
+    // direct-Fock builder.
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
-
-    const std::size_t npairs = shell_pairs.size();
-
-    // The contracted ERI kernel uses thread-local quartet-sized scratch, while
-    // permutation scattering only mirrors one computed integral into symmetry-
-    // related slots via atomic writes. These are plain stores of the same value,
-    // not `+=` reductions, so `atomic update` is intentionally not used here.
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; ++p)
-    {
-        const auto &spAB = shell_pairs[p];
-        const std::size_t i = spAB.A._index;
-        const std::size_t j = spAB.B._index;
-        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
-        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
-
-        for (std::size_t q = p; q < npairs; ++q)
-        {
-            const auto &spCD = shell_pairs[q];
-            const std::size_t k = spCD.A._index;
-            const std::size_t l = spCD.B._index;
-            std::vector<QuartetOrbitElem> orbit;
-
-            // Schwarz screening
-            if (Q(i, j) * Q(k, l) < tol_eri)
-                continue;
-
-            if (use_sym)
-            {
-                auto [orb, forced_zero] = build_quartet_orbit(i, j, k, l, *sym_ops);
-                if (forced_zero)
-                    continue;
-                orbit = std::move(orb);
-                if (orbit.front().i != i || orbit.front().j != j ||
-                    orbit.front().k != k || orbit.front().l != l)
-                    continue;
-            }
-
-            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-
-            const double val = _contracted_eri(spAB, spCD,
-                                               lAx, lAy, lAz, lBx, lBy, lBz,
-                                               lCx, lCy, lCz, lDx, lDy, lDz,
-                                               kernel, omega);
-
-            if (!use_sym)
-            {
-                write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
-                continue;
-            }
-
-            for (const auto &elem : orbit)
-                write_eri_permutations(eri, nb, nb2, nb3,
-                                       elem.i, elem.j, elem.k, elem.l,
-                                       static_cast<double>(elem.sign) * val);
-        }
-    }
+    build_eri_tensor_shellwise(shell_pairs, nb, Q, kernel, omega, tol_eri,
+                               sym_ops, eri);
 
     // ── Phase 2: contract with density ────────────────────────────────────────
     // G[μ][ν] = Σ_{λσ} P[λσ] · ( ERI[μ][ν][λ][σ]  −  0.5 · ERI[μ][λ][ν][σ] )
@@ -1792,66 +1996,14 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
     const std::size_t nb = nbasis;
     const std::size_t nb2 = nb * nb;
     const std::size_t nb3 = nb * nb * nb;
-    const bool use_sym = use_symmetry_ops(sym_ops);
 
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
 
-    // ── Phase 1: build ERI tensor (identical to _compute_2e_fock) ────────────
+    // ── Phase 1: build ERI tensor (shell-quartet iteration, H-10 step 2c) ─────
+    // The ERI tensor is spin-independent and identical to _compute_2e_fock's.
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
-
-    const std::size_t npairs = shell_pairs.size();
-
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t p = 0; p < npairs; ++p)
-    {
-        const auto &spAB = shell_pairs[p];
-        const std::size_t i = spAB.A._index;
-        const std::size_t j = spAB.B._index;
-        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
-        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
-
-        for (std::size_t q = p; q < npairs; ++q)
-        {
-            const auto &spCD = shell_pairs[q];
-            const std::size_t k = spCD.A._index;
-            const std::size_t l = spCD.B._index;
-            std::vector<QuartetOrbitElem> orbit;
-
-            // Schwarz screening
-            if (Q(i, j) * Q(k, l) < tol_eri)
-                continue;
-
-            if (use_sym)
-            {
-                auto [orb, forced_zero] = build_quartet_orbit(i, j, k, l, *sym_ops);
-                if (forced_zero)
-                    continue;
-                orbit = std::move(orb);
-                if (orbit.front().i != i || orbit.front().j != j ||
-                    orbit.front().k != k || orbit.front().l != l)
-                    continue;
-            }
-
-            const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-            const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-
-            const double val = _contracted_eri(spAB, spCD,
-                                               lAx, lAy, lAz, lBx, lBy, lBz,
-                                               lCx, lCy, lCz, lDx, lDy, lDz,
-                                               kernel, omega);
-
-            if (!use_sym)
-            {
-                write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
-                continue;
-            }
-
-            for (const auto &elem : orbit)
-                write_eri_permutations(eri, nb, nb2, nb3,
-                                       elem.i, elem.j, elem.k, elem.l,
-                                       static_cast<double>(elem.sign) * val);
-        }
-    }
+    build_eri_tensor_shellwise(shell_pairs, nb, Q, kernel, omega, tol_eri,
+                               sym_ops, eri);
 
     // ── Phase 2: spin-resolved contraction ───────────────────────────────────
     // Ga(μ,ν) += Pt(λ,σ)·(μν|λσ) − Pa(λ,σ)·(μλ|νσ)
@@ -2004,6 +2156,151 @@ static Eigen::MatrixXd _compute_schwarz_table(
     return Q;
 }
 
+namespace
+{
+    // ─── Shared phase-1 ERI tensor build (H-10 step 2b/2c) ───────────────────
+    //
+    // Fill the dense (μν|λσ) tensor `eri` (size nb^4, must be pre-zeroed) by
+    // iterating shell-quartet by shell-quartet instead of per Cartesian-AO. The
+    // shell grouping is reconstructed from the per-AO shell_pairs list (every AO
+    // is reachable via build_shellpairs' diagonal pairs). The per-component
+    // Schwarz screening, symmetry orbit, contracted-ERI evaluation, and 8-fold
+    // store-only scatter are unchanged — they run in the inner component loops.
+    // The contracted value comes from the same _contracted_eri on the same per-
+    // component ShellPair, and the scatter is store-only, so the result is
+    // bitwise-identical to the per-AO build regardless of visitation order.
+    //
+    // Shared by _compute_2e (conventional SCF) and the direct-SCF Fock builders
+    // _compute_2e_fock / _compute_2e_fock_uhf, whose phase-1 builds were byte-
+    // identical.
+    static void build_eri_tensor_shellwise(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nb,
+        const Eigen::MatrixXd &Q,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        double tol_eri,
+        const SymOps *sym_ops,
+        std::vector<double> &eri)
+    {
+        const std::size_t nb2 = nb * nb;
+        const std::size_t nb3 = nb * nb * nb;
+        const bool use_sym = use_symmetry_ops(sym_ops);
+
+        std::vector<const HartreeFock::ContractedView *> ao_views;
+        const std::vector<OsShellGroup> groups =
+            shell_groups_from_pairs(shell_pairs, nb, ao_views);
+        const std::size_t ngroups = groups.size();
+
+        // Bra shell pairs (sa <= sb) enumerated into a flat list, distributed
+        // with schedule(dynamic) for load balance. The bra-ket and AO upper-
+        // triangle canonical restrictions are applied per component inside,
+        // reproducing the old per-AO upper triangle + canonicalization exactly.
+        struct GroupPair
+        {
+            std::size_t a;
+            std::size_t b;
+        };
+        std::vector<GroupPair> group_pairs;
+        group_pairs.reserve(ngroups * (ngroups + 1) / 2);
+        for (std::size_t sa = 0; sa < ngroups; ++sa)
+            for (std::size_t sb = sa; sb < ngroups; ++sb)
+                group_pairs.push_back({sa, sb});
+
+        const std::size_t ngp = group_pairs.size();
+
+#pragma omp parallel for schedule(dynamic, 8)
+        for (std::size_t bra = 0; bra < ngp; ++bra)
+        {
+            const OsShellGroup &gA = groups[group_pairs[bra].a];
+            const OsShellGroup &gB = groups[group_pairs[bra].b];
+
+            // Iterate every ket shell pair; the per-component bra-ket canonical
+            // check below ((k,l) >=_lex (i,j)) is the exact filter, so we must
+            // not prune ket shell pairs by their flat index — the lex ordering
+            // of component AO indices is not monotonic in the shell-pair index.
+            for (std::size_t ket = 0; ket < ngp; ++ket)
+            {
+                const OsShellGroup &gC = groups[group_pairs[ket].a];
+                const OsShellGroup &gD = groups[group_pairs[ket].b];
+
+                for (std::size_t ca = 0; ca < gA.n_components; ++ca)
+                {
+                    const HartreeFock::ContractedView &cvA = *ao_views[gA.first_ao + ca];
+                    const std::size_t i = cvA._index;
+                    const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
+
+                    for (std::size_t cb = 0; cb < gB.n_components; ++cb)
+                    {
+                        const HartreeFock::ContractedView &cvB = *ao_views[gB.first_ao + cb];
+                        const std::size_t j = cvB._index;
+                        if (j < i) // bra upper triangle: j >= i
+                            continue;
+                        const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
+
+                        const HartreeFock::ShellPair spAB(cvA, cvB);
+
+                        for (std::size_t cc = 0; cc < gC.n_components; ++cc)
+                        {
+                            const HartreeFock::ContractedView &cvC = *ao_views[gC.first_ao + cc];
+                            const std::size_t k = cvC._index;
+                            const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+
+                            for (std::size_t cd = 0; cd < gD.n_components; ++cd)
+                            {
+                                const HartreeFock::ContractedView &cvD = *ao_views[gD.first_ao + cd];
+                                const std::size_t l = cvD._index;
+                                if (l < k) // ket upper triangle: l >= k
+                                    continue;
+                                // bra-ket canonical: (k,l) >=_lex (i,j)
+                                if (k < i || (k == i && l < j))
+                                    continue;
+
+                                const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
+
+                                // Schwarz screening: |(ij|kl)| ≤ Q(i,j)·Q(k,l)
+                                if (Q(i, j) * Q(k, l) < tol_eri)
+                                    continue;
+
+                                std::vector<QuartetOrbitElem> orbit;
+                                if (use_sym)
+                                {
+                                    auto [orb, forced_zero] =
+                                        build_quartet_orbit(i, j, k, l, *sym_ops);
+                                    if (forced_zero)
+                                        continue;
+                                    orbit = std::move(orb);
+                                    if (orbit.front().i != i || orbit.front().j != j ||
+                                        orbit.front().k != k || orbit.front().l != l)
+                                        continue;
+                                }
+
+                                const HartreeFock::ShellPair spCD(cvC, cvD);
+                                const double val = _contracted_eri(
+                                    spAB, spCD,
+                                    lAx, lAy, lAz, lBx, lBy, lBz,
+                                    lCx, lCy, lCz, lDx, lDy, lDz,
+                                    kernel, omega);
+
+                                if (!use_sym)
+                                {
+                                    write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+                                    continue;
+                                }
+
+                                for (const auto &elem : orbit)
+                                    write_eri_permutations(eri, nb, nb2, nb3,
+                                                           elem.i, elem.j, elem.k, elem.l,
+                                                           static_cast<double>(elem.sign) * val);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+} // namespace
+
 // Compute ERI and store it for conventional SCF
 std::vector<double> HartreeFock::ObaraSaika::_compute_2e(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -2014,105 +2311,13 @@ std::vector<double> HartreeFock::ObaraSaika::_compute_2e(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     const std::size_t nb = nbasis;
-    const std::size_t nb2 = nb * nb;
-    const std::size_t nb3 = nb * nb * nb;
-    const bool use_sym = use_symmetry_ops(sym_ops);
 
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
 
-    // ── Phase 1: build ERI tensor ─────────────────────────────────────────────
+    // ── Phase 1: build ERI tensor (shell-quartet iteration, H-10 step 2b) ─────
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
-
-    const std::size_t npairs = shell_pairs.size();
-
-    // The contracted ERI kernel uses thread-local quartet-sized scratch, while
-    // permutation scattering only mirrors one computed integral into symmetry-
-    // related slots via atomic writes. These are plain stores of the same value,
-    // not `+=` reductions, so `atomic update` is intentionally not used here.
-    //
-    // Load balance: the (p,q) pairs form the upper triangle q >= p, so a plain
-    // `parallel for` over p hands one thread a full triangle row (npairs
-    // quartets) while another gets a single quartet — the long row starves the
-    // others at the barrier. Instead we flatten the triangle into a single
-    // linear index t in [0, ntri) with ntri = npairs(npairs+1)/2 and distribute
-    // *that* with schedule(dynamic), so every thread pulls evenly sized quartet
-    // batches. The output is unchanged: the scatter is store-only, so the tensor
-    // is independent of the order in which (p,q) pairs are visited.
-    //
-    // (p,q) is recovered from t by closed-form inversion of the row-major upper
-    // triangle (row p starts at tri_base(p) = p*npairs - p(p-1)/2); the
-    // while-guards absorb any floating-point drift in the sqrt. This indexing is
-    // used ONLY to distribute work across threads — AO matrix placement still
-    // comes from spAB.A._index / spCD.A._index, never from this t->(p,q) map.
-    const std::size_t ntri = npairs * (npairs + 1) / 2;
-    const auto tri_base = [npairs](std::size_t r) -> std::size_t
-    { return r * npairs - r * (r - 1) / 2; };
-
-#pragma omp parallel for schedule(dynamic, 64)
-    for (std::size_t t = 0; t < ntri; ++t)
-    {
-        // Recover (p, q) with q >= p from the flat triangle index t.
-        long long pp = static_cast<long long>(std::floor(
-            (static_cast<double>(2 * npairs + 1) -
-             std::sqrt(static_cast<double>(2 * npairs + 1) *
-                           static_cast<double>(2 * npairs + 1) -
-                       8.0 * static_cast<double>(t))) /
-            2.0));
-        if (pp < 0)
-            pp = 0;
-        while (pp > 0 && tri_base(static_cast<std::size_t>(pp)) > t)
-            --pp;
-        while (static_cast<std::size_t>(pp) + 1 < npairs &&
-               tri_base(static_cast<std::size_t>(pp) + 1) <= t)
-            ++pp;
-        const std::size_t p = static_cast<std::size_t>(pp);
-        const std::size_t q = p + (t - tri_base(p));
-
-        const auto &spAB = shell_pairs[p];
-        const std::size_t i = spAB.A._index;
-        const std::size_t j = spAB.B._index;
-        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
-        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
-
-        const auto &spCD = shell_pairs[q];
-        const std::size_t k = spCD.A._index;
-        const std::size_t l = spCD.B._index;
-        std::vector<QuartetOrbitElem> orbit;
-
-        // Schwarz screening: |(ij|kl)| ≤ Q(i,j)·Q(k,l)
-        if (Q(i, j) * Q(k, l) < tol_eri)
-            continue;
-
-        if (use_sym)
-        {
-            auto [orb, forced_zero] = build_quartet_orbit(i, j, k, l, *sym_ops);
-            if (forced_zero)
-                continue;
-            orbit = std::move(orb);
-            if (orbit.front().i != i || orbit.front().j != j ||
-                orbit.front().k != k || orbit.front().l != l)
-                continue;
-        }
-
-        const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-        const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-
-        const double val = _contracted_eri(spAB, spCD,
-                                           lAx, lAy, lAz, lBx, lBy, lBz,
-                                           lCx, lCy, lCz, lDx, lDy, lDz,
-                                           kernel, omega);
-
-        if (!use_sym)
-        {
-            write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
-            continue;
-        }
-
-        for (const auto &elem : orbit)
-            write_eri_permutations(eri, nb, nb2, nb3,
-                                   elem.i, elem.j, elem.k, elem.l,
-                                   static_cast<double>(elem.sign) * val);
-    }
+    build_eri_tensor_shellwise(shell_pairs, nb, Q, kernel, omega, tol_eri,
+                               sym_ops, eri);
 
     return eri;
 }

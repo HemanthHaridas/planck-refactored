@@ -288,7 +288,16 @@ def render_markdown(
         if line.startswith("|") and line.endswith("|"):
             flush_paragraph()
             close_list()
-            cells = [c.strip() for c in line.strip("|").split("|")]
+            # Split on column-separator pipes only — a backslash-escaped
+            # "\|" is a literal pipe inside a cell (e.g. the "\|G\|" group
+            # order in the timings table), so it must not split the row.
+            # Strip the outer separators, split on unescaped "|", then
+            # unescape "\|" -> "|" in each cell.
+            inner = line.strip()[1:-1]
+            cells = [
+                c.strip().replace("\\|", "|")
+                for c in re.split(r"(?<!\\)\|", inner)
+            ]
 
             # Separator row (|---|---|): emit buffered header, open tbody
             if all(re.fullmatch(r"[-: ]+", c) for c in cells):

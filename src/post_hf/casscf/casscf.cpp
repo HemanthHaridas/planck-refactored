@@ -763,6 +763,7 @@ namespace HartreeFock::Correlation::CASSCF
         double E_prev = 0.0;
         double prev_sa_gnorm = std::numeric_limits<double>::infinity();
         bool converged = false;
+        bool converged_via_plateau = false;
         double level_shift = 0.2;
         int rejected_streak = 0;
         int stagnation_streak = 0;
@@ -1235,14 +1236,23 @@ namespace HartreeFock::Correlation::CASSCF
                 logging(LogLevel::Warning, tag + " :",
                         "CI response Davidson solve did not fully converge for at least one root; using single-step fallback.");
 
+            // Plateau-exit stationarity bound. `reported_gnorm` is ‖sa_g‖∞ (the
+            // weighted SA orbital gradient), so this gates the exit on the SA
+            // gradient genuinely being at a stationary point. The bound is
+            // max(1e-6, tol_mcscf_grad): the uphill SA-2 case reaches the plateau
+            // at sa_g≈3.4e-10, ~1e4 below this floor, so the exit decision is
+            // deterministic w.r.t. ~1e-16 integral rounding (B-2.5a). The old
+            // 100·tol≈1e-3 screen passed trivially and was rounding-sensitive.
+            const double plateau_sa_g_bound = std::max(1e-6, as.tol_mcscf_grad);
             if (stagnation_streak >= 2 &&
                 small_energy_change &&
                 accepted_micro_step_plateau &&
-                reported_gnorm < 100.0 * as.tol_mcscf_grad)
+                reported_gnorm <= plateau_sa_g_bound)
             {
                 logging(LogLevel::Warning, tag + " :",
                         "Treating the stationary orbital plateau as converged: the CASSCF energy and accepted orbital step are flat, while the weighted and max-root orbital-gradient screens are no longer improving.");
                 converged = true;
+                converged_via_plateau = true;
                 break;
             }
 
@@ -1267,6 +1277,9 @@ namespace HartreeFock::Correlation::CASSCF
 
         HartreeFock::Logger::blank();
         logging(LogLevel::Info, tag + " :", "Converged.");
+        logging(LogLevel::Info, tag + " :",
+                std::format("casscf_converged_via_plateau={}",
+                            converged_via_plateau ? "true" : "false"));
 
         auto final_res = evaluate(C, root_reference.valid ? &root_reference : nullptr, false);
         if (!final_res)

@@ -56,6 +56,20 @@ namespace HartreeFock
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0);
 
+        // Shell-quartet block kernel (H-10 step 2a). Fills `block` with every
+        // Cartesian-component ERI of the quartet (A B | C D) in [a][b][c][d]
+        // row-major order (d fastest). `block` must hold at least
+        // gA.n_components * gB.n_components * gC.n_components * gD.n_components
+        // doubles. Bitwise-identical to per-component _contracted_eri_elem; not
+        // yet wired into the production entry points (see os.cpp).
+        void _contracted_eri_block(
+            const HartreeFock::Basis &basis,
+            const ShellGroup &gA, const ShellGroup &gB,
+            const ShellGroup &gC, const ShellGroup &gD,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            double *block);
+
         Eigen::MatrixXd _compute_fock_rhf(const std::vector<double> &_eri,
                                           const Eigen::MatrixXd &density,
                                           const std::size_t nbasis);

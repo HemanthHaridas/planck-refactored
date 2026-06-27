@@ -1,5 +1,6 @@
 #include "rys.h"
-#include "hgp.h"       // Auto path picks between HGP and Rys per quartet.
+#include "hgp.h"       // Auto path picks between OS, HGP and Rys per quartet.
+#include "os.h"        // Auto path OS branch (high-L corner).
 #include "rys_roots.h"
 #include "screening.h" // Shared HGP-based Schwarz table for the Auto path.
 
@@ -161,6 +162,54 @@ namespace
         return sym_ops != nullptr && sym_ops->size() > 1;
     }
 
+    // ─── Shell-quartet iteration support (H-10 step A3, Auto path) ───────────
+    //
+    // Reconstruct the shell grouping from the per-AO shell_pairs list so the
+    // Auto _compute_2e_auto build can iterate at shell-quartet granularity.
+    // build_shellpairs emits every diagonal pair (i,i), so each AO i appears as
+    // some pair's A side with A._index == i; runs of AOs sharing the same Shell*
+    // (contiguous by construction) form the groups. Mirrors the OS/HGP
+    // shell_groups_from_pairs; engine-local because the helpers live in this
+    // translation unit's anonymous namespace.
+    struct RysShellGroup
+    {
+        std::size_t first_ao = 0;     // _index of component 0
+        std::size_t n_components = 0; // (L+1)(L+2)/2
+    };
+
+    static std::vector<RysShellGroup> shell_groups_from_pairs(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nbasis,
+        std::vector<const HartreeFock::ContractedView *> &ao_views)
+    {
+        ao_views.assign(nbasis, nullptr);
+        for (const auto &sp : shell_pairs)
+        {
+            if (sp.A._index < nbasis)
+                ao_views[sp.A._index] = &sp.A;
+            if (sp.B._index < nbasis)
+                ao_views[sp.B._index] = &sp.B;
+        }
+
+        std::vector<RysShellGroup> groups;
+        const HartreeFock::Shell *current = nullptr;
+        for (std::size_t ao = 0; ao < nbasis; ++ao)
+        {
+            const HartreeFock::ContractedView *view = ao_views[ao];
+            const HartreeFock::Shell *shell = view ? view->_shell : nullptr;
+            if (groups.empty() || shell != current)
+            {
+                groups.push_back(RysShellGroup{ao, 1});
+                current = shell;
+            }
+            else
+            {
+                ++groups.back().n_components;
+            }
+        }
+        return groups;
+    }
+
     static void canonicalize_pair(std::size_t &i, std::size_t &j)
     {
         if (i > j)
@@ -301,32 +350,53 @@ namespace
 
 } // namespace
 
-// Auto-dispatch predicate. HGP-default with a Rys tail at the bottom.
+// Auto-dispatch engine selection: three-way OS / HGP / Rys, keyed on the
+// quartet's angular-momentum bucket (L_AB, L_CD).
 //
-// Calibrated against the per-(L_AB, L_CD) benchmark in
-// tests/auto_dispatch_benchmark.cpp; the fit artifact is
-// docs/auto_dispatch_fit.json and the cost curves are
-// docs/auto_dispatch_curves.svg. 238 buckets across water at
-// STO-3G / 6-31G(d) / cc-pVDZ / cc-pVTZ and helium at cc-pVQZ / cc-pV5Z
-// agree unanimously on the rule:
+// The region table below is the calibration result emitted by
+// scripts/fit_auto_dispatch.py (the `region_table` / generated C++ in
+// docs/auto_dispatch_fit.json), derived as "pick the engine with the lowest
+// cross-case median per-quartet time in that bucket" over the benchmark in
+// tests/auto_dispatch_benchmark.cpp. It is a dense lookup, not a hand-fitted
+// inequality, because the OS/HGP/Rys boundaries are irregular and move when the
+// engines are optimized — keeping the table verbatim from the fitter avoids
+// drift. After re-benchmarking and re-running the fitter, regenerate this table
+// from docs/auto_dispatch_fit.json's `rule_in_code`.
 //
-//   pick Rys when (L_AB + L_CD) <= 1; pick HGP otherwise.
-//
-// At those low-L buckets — (ss|ss), (ss|sp), (sp|ss) — Rys runs
-// roots-of-1-or-2 quadrature and beats the HGP HRR-outside path by
-// ~2.1-2.7x. Everywhere else HGP wins, by factors of 2.5x at the high-L
-// helium tail to 12x at the d-shell sweet spot.
-//
-// OS is intentionally not in the auto menu anymore. Users who want OS
-// must select it explicitly with `engine os`.
-static inline bool _auto_prefers_rys(const HartreeFock::ShellPair &spAB,
-                                     const HartreeFock::ShellPair &spCD) noexcept
+// Current shape (median of 9 runs, post HGP-A4 and OS-A4 HRR hoists):
+//   - HGP wins the low/mid-L bulk (incl. the L_AB+L_CD<=1 corner).
+//   - OS wins a high-L corner where HGP's per-quartet HRR overhead overtakes
+//     its primitive-loop savings.
+//   - Rys wins only the extreme tail (7,8) and (8,8).
+static constexpr int kAutoMaxL = 8;
+static constexpr HartreeFock::IntegralMethod
+    kAutoEngine[kAutoMaxL + 1][kAutoMaxL + 1] = {
+        // L_CD =  0    1    2    3    4    5    6    7    8
+        /*L_AB=0*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople},
+        /*L_AB=1*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople},
+        /*L_AB=2*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople},
+        /*L_AB=3*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika},
+        /*L_AB=4*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika},
+        /*L_AB=5*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika},
+        /*L_AB=6*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika},
+        /*L_AB=7*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::RysQuadrature},
+        /*L_AB=8*/ {HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::HeadGordonPople, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::ObaraSaika, HartreeFock::IntegralMethod::RysQuadrature},
+};
+
+// Look up the calibrated engine for a quartet bucket. L beyond the benchmarked
+// reach (kAutoMaxL) is clamped to the table edge; the table edges already
+// capture the asymptotic high-L preference.
+static inline HartreeFock::IntegralMethod _auto_engine(int L_AB, int L_CD) noexcept
 {
-    const int L_AB = spAB.A._cartesian[0] + spAB.A._cartesian[1] + spAB.A._cartesian[2] +
-                     spAB.B._cartesian[0] + spAB.B._cartesian[1] + spAB.B._cartesian[2];
-    const int L_CD = spCD.A._cartesian[0] + spCD.A._cartesian[1] + spCD.A._cartesian[2] +
-                     spCD.B._cartesian[0] + spCD.B._cartesian[1] + spCD.B._cartesian[2];
-    return (L_AB + L_CD) <= 1;
+    if (L_AB < 0)
+        L_AB = 0;
+    if (L_CD < 0)
+        L_CD = 0;
+    if (L_AB > kAutoMaxL)
+        L_AB = kAutoMaxL;
+    if (L_CD > kAutoMaxL)
+        L_CD = kAutoMaxL;
+    return kAutoEngine[L_AB][L_CD];
 }
 
 static double _auto_contracted_eri(
@@ -339,12 +409,23 @@ static double _auto_contracted_eri(
     HartreeFock::ERIKernel kernel,
     double omega) noexcept
 {
-    if (_auto_prefers_rys(spAB, spCD))
+    const int L_AB = spAB.A._cartesian[0] + spAB.A._cartesian[1] + spAB.A._cartesian[2] +
+                     spAB.B._cartesian[0] + spAB.B._cartesian[1] + spAB.B._cartesian[2];
+    const int L_CD = spCD.A._cartesian[0] + spCD.A._cartesian[1] + spCD.A._cartesian[2] +
+                     spCD.B._cartesian[0] + spCD.B._cartesian[1] + spCD.B._cartesian[2];
+
+    switch (_auto_engine(L_AB, L_CD))
+    {
+    case HartreeFock::IntegralMethod::RysQuadrature:
         return HartreeFock::RysQuad::_rys_contracted_eri(
             spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
-
-    return HartreeFock::HeadGordonPople::_contracted_eri_elem(
-        spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
+    case HartreeFock::IntegralMethod::ObaraSaika:
+        return HartreeFock::ObaraSaika::_contracted_eri_elem(
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
+    default:
+        return HartreeFock::HeadGordonPople::_contracted_eri_elem(
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, kernel, omega);
+    }
 }
 
 // ─── 1D Rys VRR ───────────────────────────────────────────────────────────────
@@ -474,7 +555,181 @@ static double _rys_hrr_cd(
     return W[lCx][lCy][lCz];
 }
 
-// ─── Primitive ERI ────────────────────────────────────────────────────────────
+// ─── Primitive ERI: B-0 seam (Phase B) ──────────────────────────────────────
+//
+// `_rys_eri_primitive` is split into three statics so the Rys shell-quartet
+// hoist (Phase B) can later build the per-primitive-pair geometry once and the
+// 6D `sum` once per shell quartet, then read each component's HRR out of it.
+// In B-0 the three are simply called in sequence by `_rys_eri_primitive`, so
+// the result is bitwise-identical to the previous single-function form (same
+// arithmetic, same order).
+//
+//   _rys_eri_prep        — per-primitive-pair geometry (kernel-screened),
+//                          independent of the Cartesian component split
+//   _rys_eri_build_sum   — roots + per-root 1D VRR + 6D outer-product
+//                          accumulation + prefactor scale, at a given box
+//   _rys_eri_hrr_to_eri  — AB-HRR then CD-HRR readout to the scalar ERI
+
+namespace
+{
+    struct RysPrimGeom
+    {
+        double PAx, PAy, PAz;
+        double QCx, QCy, QCz;
+        double WPx, WPy, WPz;
+        double WQx, WQy, WQz;
+        double T;
+        double prefac;
+        double inv_delta;
+        double inv_zetaAB; // ppAB.inv_zeta
+        double inv_zetaCD; // ppCD.inv_zeta
+        double rho_over_zeta;
+        double rho_over_eta;
+        double b00_scale; // 1 for Coulomb, screen.boys_scale otherwise
+    };
+
+    // Per-primitive-pair derived quantities. Independent of how the bra/ket
+    // angular momentum splits between A/B and C/D, so it is computed once per
+    // primitive pair (component-independent).
+    static RysPrimGeom _rys_eri_prep(
+        const HartreeFock::PrimitivePair &ppAB,
+        const HartreeFock::PrimitivePair &ppCD,
+        HartreeFock::ERIKernel kernel,
+        double omega) noexcept
+    {
+        const double zeta = ppAB.zeta;
+        const double eta = ppCD.zeta;
+        const double delta = zeta + eta;
+        const double inv_delta = 1.0 / delta;
+        const double rho = zeta * eta * inv_delta;
+        const ScreenedKernelData screen = screened_kernel_data(rho, kernel, omega);
+        const double effective_rho = screen.rho;
+
+        const double Px = ppAB.center[0], Py = ppAB.center[1], Pz = ppAB.center[2];
+        const double Qx = ppCD.center[0], Qy = ppCD.center[1], Qz = ppCD.center[2];
+
+        const double PQx = Px - Qx, PQy = Py - Qy, PQz = Pz - Qz;
+
+        const double Wx = (zeta * Px + eta * Qx) * inv_delta;
+        const double Wy = (zeta * Py + eta * Qy) * inv_delta;
+        const double Wz = (zeta * Pz + eta * Qz) * inv_delta;
+
+        const double wpwq_scale =
+            (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
+        const double b00_scale =
+            (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
+
+        return RysPrimGeom{
+            .PAx = ppAB.pA[0], .PAy = ppAB.pA[1], .PAz = ppAB.pA[2],
+            .QCx = ppCD.pA[0], .QCy = ppCD.pA[1], .QCz = ppCD.pA[2],
+            .WPx = (Wx - Px) * wpwq_scale,
+            .WPy = (Wy - Py) * wpwq_scale,
+            .WPz = (Wz - Pz) * wpwq_scale,
+            .WQx = (Wx - Qx) * wpwq_scale,
+            .WQy = (Wy - Qy) * wpwq_scale,
+            .WQz = (Wz - Qz) * wpwq_scale,
+            .T = screen.boys_scale * rho * (PQx * PQx + PQy * PQy + PQz * PQz),
+            .prefac = ppAB.prefactor * ppCD.prefactor * 2.0 *
+                      std::sqrt(rho / std::numbers::pi) * screen.prefactor_scale,
+            .inv_delta = inv_delta,
+            .inv_zetaAB = ppAB.inv_zeta,
+            .inv_zetaCD = ppCD.inv_zeta,
+            .rho_over_zeta = effective_rho * ppAB.inv_zeta,
+            .rho_over_eta = effective_rho * ppCD.inv_zeta,
+            .b00_scale = b00_scale,
+        };
+    }
+
+    // Roots + per-root 1D VRR + 6D outer-product accumulation + prefactor scale,
+    // at the box (lABx..lCDz) using `n_roots` Rys roots. `sum` is sized and
+    // zero-filled here.
+    //
+    // The root count is an explicit parameter, NOT derived from the box: the box
+    // is per-axis (lABx..lCDz) but the Rys quadrature degree depends on the
+    // quartet's *total* L = (L_A+L_B)+(L_C+L_D), capped per axis. Deriving n from
+    // the summed per-axis box would over-count badly (a g max-box sums to L=48 ->
+    // n=25, past RYS_MAX_ROOTS=11), so the caller passes the correct n. Per-
+    // component, n = L_comp/2+1; the hoist passes the quartet n_max (Gauss
+    // over-integration makes n_max >= n_comp exact for every component).
+    static void _rys_eri_build_sum(
+        const RysPrimGeom &g,
+        const int lABx, const int lABy, const int lABz,
+        const int lCDx, const int lCDy, const int lCDz,
+        const int n_roots,
+        RysScratch &sum) noexcept
+    {
+        const int n = n_roots;
+        double t2[HartreeFock::Rys::RYS_MAX_ROOTS];
+        double w[HartreeFock::Rys::RYS_MAX_ROOTS];
+        HartreeFock::Rys::rys_roots_weights(n, g.T, t2, w);
+
+        sum.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz);
+        std::fill(sum.buf.begin(), sum.buf.end(), 0.0);
+
+        for (int r = 0; r < n; ++r)
+        {
+            const double u = t2[r];
+            const double wr = w[r];
+
+            const double B00 = 0.5 * g.inv_delta * u * g.b00_scale;
+            const double B10 = 0.5 * g.inv_zetaAB * (1.0 - g.rho_over_zeta * u);
+            const double B01 = 0.5 * g.inv_zetaCD * (1.0 - g.rho_over_eta * u);
+
+            double Ix[VRR_DIM][VRR_DIM];
+            double Iy[VRR_DIM][VRR_DIM];
+            double Iz[VRR_DIM][VRR_DIM];
+
+            _rys_vrr_1d(Ix, lABx, lCDx, g.PAx + u * g.WPx, g.QCx + u * g.WQx, B00, B10, B01);
+            _rys_vrr_1d(Iy, lABy, lCDy, g.PAy + u * g.WPy, g.QCy + u * g.WQy, B00, B10, B01);
+            _rys_vrr_1d(Iz, lABz, lCDz, g.PAz + u * g.WPz, g.QCz + u * g.WQz, B00, B10, B01);
+
+            for (int ax = 0; ax <= lABx; ++ax)
+                for (int ay = 0; ay <= lABy; ++ay)
+                    for (int az = 0; az <= lABz; ++az)
+                        for (int cx = 0; cx <= lCDx; ++cx)
+                            for (int cy = 0; cy <= lCDy; ++cy)
+                                for (int cz = 0; cz <= lCDz; ++cz)
+                                    sum.at(ax, ay, az, cx, cy, cz) +=
+                                        wr * Ix[ax][cx] * Iy[ay][cy] * Iz[az][cz];
+        }
+
+        for (int ax = 0; ax <= lABx; ++ax)
+            for (int ay = 0; ay <= lABy; ++ay)
+                for (int az = 0; az <= lABz; ++az)
+                    for (int cx = 0; cx <= lCDx; ++cx)
+                        for (int cy = 0; cy <= lCDy; ++cy)
+                            for (int cz = 0; cz <= lCDz; ++cz)
+                                sum.at(ax, ay, az, cx, cy, cz) *= g.prefac;
+    }
+
+    // AB-HRR (in place on `sum`) then CD-HRR readout to the scalar ERI for the
+    // component (lA*,lB*,lC*,lD*). `sum` must already hold the contracted
+    // (built) block at a box that covers this component (lAB* = lA*+lB*, etc.).
+    static double _rys_eri_hrr_to_eri(
+        RysScratch &sum,
+        const int lAx, const int lAy, const int lAz,
+        const int lBx, const int lBy, const int lBz,
+        const int lCx, const int lCy, const int lCz,
+        const int lDx, const int lDy, const int lDz,
+        const double ABx, const double ABy, const double ABz,
+        const double CDx, const double CDy, const double CDz) noexcept
+    {
+        const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+        _rys_hrr_ab(sum,
+                    lAx, lAy, lAz, lBx, lBy, lBz,
+                    lCDx, lCDy, lCDz,
+                    ABx, ABy, ABz);
+
+        double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM];
+        for (int cx = 0; cx <= lCDx; ++cx)
+            for (int cy = 0; cy <= lCDy; ++cy)
+                for (int cz = 0; cz <= lCDz; ++cz)
+                    V0_CD[cx][cy][cz] = sum.at(lAx, lAy, lAz, cx, cy, cz);
+
+        return _rys_hrr_cd(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+    }
+} // namespace
 
 double HartreeFock::RysQuad::_rys_eri_primitive(
     const HartreeFock::PrimitivePair &ppAB,
@@ -488,123 +743,19 @@ double HartreeFock::RysQuad::_rys_eri_primitive(
     HartreeFock::ERIKernel kernel,
     double omega) noexcept
 {
-    // Derived quantities
-    const double zeta = ppAB.zeta;
-    const double eta = ppCD.zeta;
-    const double delta = zeta + eta;
-    const double inv_delta = 1.0 / delta;
-    const double rho = zeta * eta * inv_delta;
-    const ScreenedKernelData screen = screened_kernel_data(rho, kernel, omega);
-    const double effective_rho = screen.rho;
-    const double rho_over_zeta = effective_rho * ppAB.inv_zeta;
-    const double rho_over_eta = effective_rho * ppCD.inv_zeta;
-
-    // Gaussian product centers P and Q
-    const double Px = ppAB.center[0], Py = ppAB.center[1], Pz = ppAB.center[2];
-    const double Qx = ppCD.center[0], Qy = ppCD.center[1], Qz = ppCD.center[2];
-
-    // PQ displacement and Boys argument T = rho * |PQ|^2
-    const double PQx = Px - Qx, PQy = Py - Qy, PQz = Pz - Qz;
-    const double T = screen.boys_scale * rho * (PQx * PQx + PQy * PQy + PQz * PQz);
-
-    // PA and QC vectors (stored in PrimitivePair.pA)
-    const double PAx = ppAB.pA[0], PAy = ppAB.pA[1], PAz = ppAB.pA[2];
-    const double QCx = ppCD.pA[0], QCy = ppCD.pA[1], QCz = ppCD.pA[2];
-
-    // W = (zeta*P + eta*Q) / delta
-    const double Wx = (zeta * Px + eta * Qx) * inv_delta;
-    const double Wy = (zeta * Py + eta * Qy) * inv_delta;
-    const double Wz = (zeta * Pz + eta * Qz) * inv_delta;
-
-    // WP = W - P,  WQ = W - Q
-    const double wpwq_scale =
-        (kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale;
-    const double WPx = (Wx - Px) * wpwq_scale;
-    const double WPy = (Wy - Py) * wpwq_scale;
-    const double WPz = (Wz - Pz) * wpwq_scale;
-    const double WQx = (Wx - Qx) * wpwq_scale;
-    const double WQy = (Wy - Qy) * wpwq_scale;
-    const double WQz = (Wz - Qz) * wpwq_scale;
-
-    // Overall prefactor: K_AB * K_CD * 2*sqrt(rho/pi)
-    const double prefac =
-        ppAB.prefactor * ppCD.prefactor * 2.0 * std::sqrt(rho / std::numbers::pi) *
-        screen.prefactor_scale;
-
-    // Number of Rys roots
     const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
     const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
-    const int L = lABx + lABy + lABz + lCDx + lCDy + lCDz;
-    const int n = L / 2 + 1;
-    // Fetch Rys roots and weights
-    double t2[HartreeFock::Rys::RYS_MAX_ROOTS];
-    double w[HartreeFock::Rys::RYS_MAX_ROOTS];
-    HartreeFock::Rys::rys_roots_weights(n, T, t2, w);
+    const int n = (lABx + lABy + lABz + lCDx + lCDy + lCDz) / 2 + 1;
 
-    // Size the per-quartet 6D accumulator (dims = lAB*+1, lCD*+1). The buffer
-    // is exactly the active region, so a single fill zeroes precisely the cells
-    // the old explicit nested-loop zeroed — same set, same final values.
+    const RysPrimGeom geom = _rys_eri_prep(ppAB, ppCD, kernel, omega);
+
     RysScratch &sum = g_rys_scratch;
-    sum.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz);
-    std::fill(sum.buf.begin(), sum.buf.end(), 0.0);
+    _rys_eri_build_sum(geom, lABx, lABy, lABz, lCDx, lCDy, lCDz, n, sum);
 
-    // Per-root VRR + accumulation
-    for (int r = 0; r < n; ++r)
-    {
-        const double u = t2[r];
-        const double wr = w[r];
-
-        // Root-dependent scalars (same for all axes)
-        const double B00 =
-            0.5 * inv_delta * u *
-            ((kernel == HartreeFock::ERIKernel::Coulomb) ? 1.0 : screen.boys_scale);
-        const double B10 = 0.5 * ppAB.inv_zeta * (1.0 - rho_over_zeta * u);
-        const double B01 = 0.5 * ppCD.inv_zeta * (1.0 - rho_over_eta * u);
-
-        // 1D VRR tables for each Cartesian component
-        double Ix[VRR_DIM][VRR_DIM];
-        double Iy[VRR_DIM][VRR_DIM];
-        double Iz[VRR_DIM][VRR_DIM];
-
-        _rys_vrr_1d(Ix, lABx, lCDx, PAx + u * WPx, QCx + u * WQx, B00, B10, B01);
-        _rys_vrr_1d(Iy, lABy, lCDy, PAy + u * WPy, QCy + u * WQy, B00, B10, B01);
-        _rys_vrr_1d(Iz, lABz, lCDz, PAz + u * WPz, QCz + u * WQz, B00, B10, B01);
-
-        // Accumulate outer product into the 6D buffer
-        for (int ax = 0; ax <= lABx; ++ax)
-            for (int ay = 0; ay <= lABy; ++ay)
-                for (int az = 0; az <= lABz; ++az)
-                    for (int cx = 0; cx <= lCDx; ++cx)
-                        for (int cy = 0; cy <= lCDy; ++cy)
-                            for (int cz = 0; cz <= lCDz; ++cz)
-                                sum.at(ax, ay, az, cx, cy, cz) +=
-                                    wr * Ix[ax][cx] * Iy[ay][cy] * Iz[az][cz];
-    }
-
-    // Scale by overall prefactor
-    for (int ax = 0; ax <= lABx; ++ax)
-        for (int ay = 0; ay <= lABy; ++ay)
-            for (int az = 0; az <= lABz; ++az)
-                for (int cx = 0; cx <= lCDx; ++cx)
-                    for (int cy = 0; cy <= lCDy; ++cy)
-                        for (int cz = 0; cz <= lCDz; ++cz)
-                            sum.at(ax, ay, az, cx, cy, cz) *= prefac;
-
-    // AB-HRR (in-place on the 6D buffer)
-    _rys_hrr_ab(sum,
-                lAx, lAy, lAz, lBx, lBy, lBz,
-                lCDx, lCDy, lCDz,
-                ABx, ABy, ABz);
-
-    // Extract CD slice at (lAx, lAy, lAz)
-    double V0_CD[VRR_DIM][VRR_DIM][VRR_DIM];
-    for (int cx = 0; cx <= lCDx; ++cx)
-        for (int cy = 0; cy <= lCDy; ++cy)
-            for (int cz = 0; cz <= lCDz; ++cz)
-                V0_CD[cx][cy][cz] = sum.at(lAx, lAy, lAz, cx, cy, cz);
-
-    // CD-HRR
-    return _rys_hrr_cd(V0_CD, lCx, lCy, lCz, lDx, lDy, lDz, CDx, CDy, CDz);
+    return _rys_eri_hrr_to_eri(sum,
+                               lAx, lAy, lAz, lBx, lBy, lBz,
+                               lCx, lCy, lCz, lDx, lDy, lDz,
+                               ABx, ABy, ABz, CDx, CDy, CDz);
 }
 
 // ─── Contracted ERI ───────────────────────────────────────────────────────────
@@ -646,6 +797,470 @@ double HartreeFock::RysQuad::_rys_contracted_eri(
             eri += ppAB.coeff_product * ppCD.coeff_product * value;
         }
     return eri;
+}
+
+// ─── Test hook (Phase B / B-1): box-size invariance of the 6D sum ────────────
+//
+// Fills `out` with the full per-primitive-pair 6D Rys `sum` buffer (row-major
+// in RysScratch's stride convention: index = ((((ax*ay_dim+ay)*az_dim+az)*
+// cx_dim+cx)*cy_dim+cy)*cz_dim+cz, with each *_dim = box+1), at a caller-given
+// box and root count, BEFORE HRR. Filling the whole buffer once lets the caller
+// read every coordinate from one build instead of rebuilding per cell.
+//
+// The root count is explicit (not box-derived) because it is the quartet's
+// quadrature degree n = (L_AB_total + L_CD_total)/2 + 1 — the summed per-axis
+// box would over-count (g max-box sums to L=48 -> n=25, past RYS_MAX_ROOTS). B-1
+// builds twice per quartet/component: the max box with n_max and the component
+// box with n_comp; box-invariance + Gauss over-integration require the two to
+// agree at every component coordinate. ShortRange = Coulomb − LongRange,
+// matching production. No production path calls this; it exists for
+// tests/rys_box_invariance.cpp.
+void HartreeFock::RysQuad::_build_sum_native_test(
+    const HartreeFock::PrimitivePair &ppAB,
+    const HartreeFock::PrimitivePair &ppCD,
+    int lABx, int lABy, int lABz,
+    int lCDx, int lCDy, int lCDz,
+    int n_roots,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    std::vector<double> &out) noexcept
+{
+    RysScratch &sum = g_rys_scratch;
+
+    if (kernel == HartreeFock::ERIKernel::ShortRange)
+    {
+        // Build Coulomb, snapshot, then LongRange, and combine cell-wise
+        // (matching production's full − long_range).
+        const RysPrimGeom gc = _rys_eri_prep(ppAB, ppCD, HartreeFock::ERIKernel::Coulomb, 0.0);
+        _rys_eri_build_sum(gc, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+        std::vector<double> coulomb(sum.buf.begin(), sum.buf.begin() + sum.size);
+
+        const RysPrimGeom gl = _rys_eri_prep(ppAB, ppCD, HartreeFock::ERIKernel::LongRange, omega);
+        _rys_eri_build_sum(gl, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+
+        out.assign(sum.size, 0.0);
+        for (std::size_t i = 0; i < sum.size; ++i)
+            out[i] = coulomb[i] - sum.buf[i];
+        return;
+    }
+
+    const RysPrimGeom geom = _rys_eri_prep(ppAB, ppCD, kernel, omega);
+    _rys_eri_build_sum(geom, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+    out.assign(sum.buf.begin(), sum.buf.begin() + sum.size);
+}
+
+// ─── Test hook (Phase B / B-2b): contract the 6D sum over primitive pairs ─────
+
+namespace
+{
+    // Build one primitive pair's kernel-resolved 6D `sum` (the per-pair value
+    // block) into `sum`, mirroring _rys_contracted_eri's per-pair composition:
+    // Coulomb / LongRange are a single build; ShortRange = Coulomb − LongRange.
+    static void _rys_build_pair_value_block(
+        const HartreeFock::PrimitivePair &ppAB,
+        const HartreeFock::PrimitivePair &ppCD,
+        const int lABx, const int lABy, const int lABz,
+        const int lCDx, const int lCDy, const int lCDz,
+        const int n_roots,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        RysScratch &sum,
+        std::vector<double> &short_range_scratch) noexcept
+    {
+        if (kernel == HartreeFock::ERIKernel::ShortRange)
+        {
+            const RysPrimGeom gc =
+                _rys_eri_prep(ppAB, ppCD, HartreeFock::ERIKernel::Coulomb, 0.0);
+            _rys_eri_build_sum(gc, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+            short_range_scratch.assign(sum.buf.begin(), sum.buf.begin() + sum.size);
+
+            const RysPrimGeom gl =
+                _rys_eri_prep(ppAB, ppCD, HartreeFock::ERIKernel::LongRange, omega);
+            _rys_eri_build_sum(gl, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+
+            for (std::size_t i = 0; i < sum.size; ++i)
+                sum.buf[i] = short_range_scratch[i] - sum.buf[i];
+            return;
+        }
+
+        const RysPrimGeom geom = _rys_eri_prep(ppAB, ppCD, kernel, omega);
+        _rys_eri_build_sum(geom, lABx, lABy, lABz, lCDx, lCDy, lCDz, n_roots, sum);
+    }
+
+    // Contract the kernel-resolved 6D `sum` over every primitive pair of the two
+    // shell pairs, weighted by coeff_product, into `acc` (sized box+1 per axis).
+    // Rys analog of HGP's hgp_contract_a0c0. ShortRange is composed per pair.
+    static void _rys_contract_sum(
+        const HartreeFock::ShellPair &spAB,
+        const HartreeFock::ShellPair &spCD,
+        const int lABx, const int lABy, const int lABz,
+        const int lCDx, const int lCDy, const int lCDz,
+        const int n_roots,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        std::vector<double> &acc) noexcept
+    {
+        RysScratch &sum = g_rys_scratch;
+        std::vector<double> short_range_scratch;
+
+        acc.clear();
+        for (const auto &ppAB : spAB.primitive_pairs)
+            for (const auto &ppCD : spCD.primitive_pairs)
+            {
+                _rys_build_pair_value_block(
+                    ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                    n_roots, kernel, omega, sum, short_range_scratch);
+
+                if (acc.size() != sum.size)
+                    acc.assign(sum.size, 0.0);
+
+                const double weight = ppAB.coeff_product * ppCD.coeff_product;
+                for (std::size_t i = 0; i < sum.size; ++i)
+                    acc[i] += weight * sum.buf[i];
+            }
+    }
+} // namespace
+
+void HartreeFock::RysQuad::_contract_sum_native_test(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    int lABx, int lABy, int lABz,
+    int lCDx, int lCDy, int lCDz,
+    int n_roots,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    std::vector<double> &acc) noexcept
+{
+    _rys_contract_sum(spAB, spCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                      n_roots, kernel, omega, acc);
+}
+
+double HartreeFock::RysQuad::_hrr_block_native_test(
+    const std::vector<double> &block,
+    int lAx, int lAy, int lAz,
+    int lBx, int lBy, int lBz,
+    int lCx, int lCy, int lCz,
+    int lDx, int lDy, int lDz,
+    double ABx, double ABy, double ABz,
+    double CDx, double CDy, double CDz) noexcept
+{
+    const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+    const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+    RysScratch &sum = g_rys_scratch;
+    sum.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz);
+    std::copy(block.begin(), block.begin() + sum.size, sum.buf.begin());
+
+    return _rys_eri_hrr_to_eri(sum,
+                               lAx, lAy, lAz, lBx, lBy, lBz,
+                               lCx, lCy, lCz, lDx, lDy, lDz,
+                               ABx, ABy, ABz, CDx, CDy, CDz);
+}
+
+// ─── Test hook (Phase B / B-2c): norm-free max-box contract + per-comp readout ─
+
+namespace
+{
+    // Stride layout for a max-box snapshot, independent of g_rys_scratch's later
+    // per-component resizes. Same cz-fastest convention as RysScratch (Rys analog
+    // of HGP's MaxBoxLayout).
+    struct RysMaxBoxLayout
+    {
+        std::size_t ax_stride = 0, ay_stride = 0, az_stride = 0;
+        std::size_t cx_stride = 0, cy_stride = 0, cz_stride = 0;
+
+        RysMaxBoxLayout() = default;
+        RysMaxBoxLayout(int lABx, int lABy, int lABz, int lCDx, int lCDy, int lCDz)
+        {
+            const int az_dim = lABz + 1, ay_dim = lABy + 1;
+            const int cx_dim = lCDx + 1, cy_dim = lCDy + 1, cz_dim = lCDz + 1;
+            cz_stride = 1;
+            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
+            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
+            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
+            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
+            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
+        }
+        std::size_t index(int ax, int ay, int az, int cx, int cy, int cz) const noexcept
+        {
+            return static_cast<std::size_t>(ax) * ax_stride +
+                   static_cast<std::size_t>(ay) * ay_stride +
+                   static_cast<std::size_t>(az) * az_stride +
+                   static_cast<std::size_t>(cx) * cx_stride +
+                   static_cast<std::size_t>(cy) * cy_stride +
+                   static_cast<std::size_t>(cz) * cz_stride;
+        }
+    };
+
+    // Gather one component's sub-box from a norm-free max-box snapshot (remapping
+    // max strides -> component strides; both index the same logical coordinate),
+    // HRR it, and return the scalar. The caller applies normA·normB·normC·normD
+    // (invariant 2: the shared norm-free contraction carries no per-component
+    // norm). Rys analog of hgp_hoist_readout_component.
+    static double rys_hoist_readout_component(
+        const RysMaxBoxLayout &src, const double *snapshot,
+        int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+        int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+        double ABx, double ABy, double ABz,
+        double CDx, double CDy, double CDz) noexcept
+    {
+        const int lABx = lAx + lBx, lABy = lAy + lBy, lABz = lAz + lBz;
+        const int lCDx = lCx + lDx, lCDy = lCy + lDy, lCDz = lCz + lDz;
+
+        RysScratch &dst = g_rys_scratch;
+        dst.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz);
+
+        for (int ax = 0; ax <= lABx; ++ax)
+            for (int ay = 0; ay <= lABy; ++ay)
+                for (int az = 0; az <= lABz; ++az)
+                    for (int cx = 0; cx <= lCDx; ++cx)
+                        for (int cy = 0; cy <= lCDy; ++cy)
+                            for (int cz = 0; cz <= lCDz; ++cz)
+                                dst.at(ax, ay, az, cx, cy, cz) =
+                                    snapshot[src.index(ax, ay, az, cx, cy, cz)];
+
+        return _rys_eri_hrr_to_eri(dst,
+                                   lAx, lAy, lAz, lBx, lBy, lBz,
+                                   lCx, lCy, lCz, lDx, lDy, lDz,
+                                   ABx, ABy, ABz, CDx, CDy, CDz);
+    }
+
+    static HartreeFock::ContractedView rys_normfree_view(
+        const HartreeFock::ContractedView &v)
+    {
+        HartreeFock::ContractedView out = v;
+        out._component_norm = 1.0;
+        return out;
+    }
+
+    // Holds the once-per-shell-quartet shared norm-free 6D contraction(s) so any
+    // surviving Cartesian component can read its ERI out cheaply (B-2d). Built at
+    // the max box / n_max roots from norm-free component-0 views; readout applies
+    // normA·normB·normC·normD. ShortRange snapshots Coulomb and LongRange and
+    // subtracts per component. Contraction is deferred to the first prepare() so a
+    // fully screened-out quartet pays nothing. Rys analog of HGP's HoistedQuartet.
+    struct RysHoistedQuartet
+    {
+        // Norm-free views must outlive spAB/spCD (which hold references).
+        HartreeFock::ContractedView nfA, nfB, nfC, nfD;
+        HartreeFock::ShellPair spAB, spCD;
+        double ABx, ABy, ABz, CDx, CDy, CDz;
+        int maxAB, maxCD, n_roots;
+        bool short_range;
+        bool zero;        // ShortRange with omega<=0: identically zero
+        bool prepared = false;
+        std::vector<double> sum_primary;   // Coulomb (ShortRange) or `kernel`
+        std::vector<double> sum_secondary; // LongRange (ShortRange only)
+        RysMaxBoxLayout layout;
+
+        RysHoistedQuartet(
+            const HartreeFock::ContractedView &cvA0,
+            const HartreeFock::ContractedView &cvB0,
+            const HartreeFock::ContractedView &cvC0,
+            const HartreeFock::ContractedView &cvD0,
+            HartreeFock::ERIKernel kernel, double omega)
+            : nfA(rys_normfree_view(cvA0)), nfB(rys_normfree_view(cvB0)),
+              nfC(rys_normfree_view(cvC0)), nfD(rys_normfree_view(cvD0)),
+              spAB(nfA, nfB), spCD(nfC, nfD)
+        {
+            ABx = spAB.R[0]; ABy = spAB.R[1]; ABz = spAB.R[2];
+            CDx = spCD.R[0]; CDy = spCD.R[1]; CDz = spCD.R[2];
+            const int LA = static_cast<int>(cvA0._shell->_shell);
+            const int LB = static_cast<int>(cvB0._shell->_shell);
+            const int LC = static_cast<int>(cvC0._shell->_shell);
+            const int LD = static_cast<int>(cvD0._shell->_shell);
+            maxAB = LA + LB;
+            maxCD = LC + LD;
+            // Quartet quadrature degree (NOT the summed per-axis box).
+            n_roots = (maxAB + maxCD) / 2 + 1;
+            short_range = (kernel == HartreeFock::ERIKernel::ShortRange);
+            zero = (short_range && omega <= 0.0);
+            kernel_ = kernel;
+            omega_ = omega;
+            layout = RysMaxBoxLayout(maxAB, maxAB, maxAB, maxCD, maxCD, maxCD);
+        }
+
+        void prepare()
+        {
+            if (prepared || zero)
+                return;
+            prepared = true;
+            const HartreeFock::ERIKernel primary =
+                short_range ? HartreeFock::ERIKernel::Coulomb : kernel_;
+            _rys_contract_sum(spAB, spCD,
+                              maxAB, maxAB, maxAB, maxCD, maxCD, maxCD,
+                              n_roots, primary, omega_, sum_primary);
+            if (short_range)
+                _rys_contract_sum(spAB, spCD,
+                                  maxAB, maxAB, maxAB, maxCD, maxCD, maxCD,
+                                  n_roots, HartreeFock::ERIKernel::LongRange,
+                                  omega_, sum_secondary);
+        }
+
+        // ERI for one Cartesian component (norm applied by caller's `norm`).
+        double readout(
+            int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+            int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+            double norm)
+        {
+            if (zero)
+                return 0.0;
+            prepare();
+            double value = rys_hoist_readout_component(
+                layout, sum_primary.data(),
+                lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+                ABx, ABy, ABz, CDx, CDy, CDz);
+            if (short_range)
+                value -= rys_hoist_readout_component(
+                    layout, sum_secondary.data(),
+                    lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+                    ABx, ABy, ABz, CDx, CDy, CDz);
+            return value * norm;
+        }
+
+    private:
+        HartreeFock::ERIKernel kernel_;
+        double omega_;
+    };
+} // namespace
+
+void HartreeFock::RysQuad::_contract_maxbox_snapshot_native_test(
+    const HartreeFock::ContractedView &cvA0,
+    const HartreeFock::ContractedView &cvB0,
+    const HartreeFock::ContractedView &cvC0,
+    const HartreeFock::ContractedView &cvD0,
+    int maxAB, int maxCD,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    std::vector<double> &snapshot,
+    double R_AB[3], double R_CD[3]) noexcept
+{
+    // Norm-free component-0 views: _component_norm = 1 so the contraction carries
+    // no per-component norm (applied at readout). Same shell, same primitives.
+    HartreeFock::ContractedView nfA = cvA0, nfB = cvB0, nfC = cvC0, nfD = cvD0;
+    nfA._component_norm = nfB._component_norm =
+        nfC._component_norm = nfD._component_norm = 1.0;
+
+    const HartreeFock::ShellPair spAB(nfA, nfB);
+    const HartreeFock::ShellPair spCD(nfC, nfD);
+
+    // n_max is the quartet quadrature degree (L_AB_total + L_CD_total)/2 + 1, NOT
+    // the summed per-axis box: the per-axis max box is (maxAB,maxAB,maxAB,maxCD,
+    // maxCD,maxCD), but the quadrature degree uses the *total* L per bra/ket,
+    // which for the max box is maxAB (bra) + maxCD (ket).
+    const int n_roots = (maxAB + maxCD) / 2 + 1;
+
+    HartreeFock::RysQuad::_contract_sum_native_test(
+        spAB, spCD,
+        maxAB, maxAB, maxAB, maxCD, maxCD, maxCD,
+        n_roots, kernel, omega, snapshot);
+
+    R_AB[0] = spAB.R[0]; R_AB[1] = spAB.R[1]; R_AB[2] = spAB.R[2];
+    R_CD[0] = spCD.R[0]; R_CD[1] = spCD.R[1]; R_CD[2] = spCD.R[2];
+}
+
+double HartreeFock::RysQuad::_maxbox_readout_native_test(
+    const std::vector<double> &snapshot,
+    int maxAB, int maxCD,
+    const HartreeFock::ContractedView &cvA,
+    const HartreeFock::ContractedView &cvB,
+    const HartreeFock::ContractedView &cvC,
+    const HartreeFock::ContractedView &cvD,
+    const double R_AB[3], const double R_CD[3]) noexcept
+{
+    const RysMaxBoxLayout layout(maxAB, maxAB, maxAB, maxCD, maxCD, maxCD);
+
+    const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
+    const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
+    const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+    const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
+
+    const double raw = rys_hoist_readout_component(
+        layout, snapshot.data(),
+        lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz,
+        R_AB[0], R_AB[1], R_AB[2], R_CD[0], R_CD[1], R_CD[2]);
+
+    return raw * cvA._component_norm * cvB._component_norm *
+           cvC._component_norm * cvD._component_norm;
+}
+
+// ─── Hoisted block entry (Phase B / B-2d) ─────────────────────────────────────
+//
+// Fill `block` with every component ERI of one shell quartet via a single
+// norm-free max-box contraction (RysHoistedQuartet), lazily built on the first
+// component read. Pointer-array form so the Auto path (B-3) can feed its non-
+// contiguous ao_views table directly; same output contract and ≤1e-13
+// equivalence to the per-component `_rys_contracted_eri` path. Not yet wired
+// into any production entry point (that is B-3/B-4).
+
+void HartreeFock::RysQuad::_contracted_eri_block_hoisted_views(
+    const HartreeFock::ContractedView *const *viewsA, std::size_t nA,
+    const HartreeFock::ContractedView *const *viewsB, std::size_t nB,
+    const HartreeFock::ContractedView *const *viewsC, std::size_t nC,
+    const HartreeFock::ContractedView *const *viewsD, std::size_t nD,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    double *block) noexcept
+{
+    const std::size_t nCD = nC * nD;
+
+    RysHoistedQuartet quartet(*viewsA[0], *viewsB[0], *viewsC[0], *viewsD[0],
+                              kernel, omega);
+
+    for (std::size_t a = 0; a < nA; ++a)
+    {
+        const HartreeFock::ContractedView &cvA = *viewsA[a];
+        const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
+        for (std::size_t b = 0; b < nB; ++b)
+        {
+            const HartreeFock::ContractedView &cvB = *viewsB[b];
+            const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
+            const double normAB = cvA._component_norm * cvB._component_norm;
+
+            for (std::size_t c = 0; c < nC; ++c)
+            {
+                const HartreeFock::ContractedView &cvC = *viewsC[c];
+                const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+                for (std::size_t d = 0; d < nD; ++d)
+                {
+                    const HartreeFock::ContractedView &cvD = *viewsD[d];
+                    const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
+                    const double norm = normAB * cvC._component_norm * cvD._component_norm;
+
+                    block[(a * nB + b) * nCD + (c * nD + d)] = quartet.readout(
+                        lAx, lAy, lAz, lBx, lBy, lBz,
+                        lCx, lCy, lCz, lDx, lDy, lDz, norm);
+                }
+            }
+        }
+    }
+}
+
+void HartreeFock::RysQuad::_contracted_eri_block_hoisted(
+    const HartreeFock::Basis &basis,
+    const ShellGroup &gA, const ShellGroup &gB,
+    const ShellGroup &gC, const ShellGroup &gD,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    double *block) noexcept
+{
+    std::vector<const HartreeFock::ContractedView *> pA(gA.n_components);
+    std::vector<const HartreeFock::ContractedView *> pB(gB.n_components);
+    std::vector<const HartreeFock::ContractedView *> pC(gC.n_components);
+    std::vector<const HartreeFock::ContractedView *> pD(gD.n_components);
+    for (std::size_t a = 0; a < gA.n_components; ++a)
+        pA[a] = &basis._basis_functions[gA.first_ao + a];
+    for (std::size_t b = 0; b < gB.n_components; ++b)
+        pB[b] = &basis._basis_functions[gB.first_ao + b];
+    for (std::size_t c = 0; c < gC.n_components; ++c)
+        pC[c] = &basis._basis_functions[gC.first_ao + c];
+    for (std::size_t d = 0; d < gD.n_components; ++d)
+        pD[d] = &basis._basis_functions[gD.first_ao + d];
+
+    HartreeFock::RysQuad::_contracted_eri_block_hoisted_views(
+        pA.data(), gA.n_components, pB.data(), gB.n_components,
+        pC.data(), gC.n_components, pD.data(), gD.n_components,
+        kernel, omega, block);
 }
 
 // ─── Schwarz screening (mirrors os.cpp _compute_schwarz_table) ────────────────
@@ -816,79 +1431,196 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
         shell_pairs, nb, sym_ops);
     std::vector<double> eri(nb * nb * nb * nb, 0.0);
 
-    const std::size_t npairs = shell_pairs.size();
+    // H-10 step A3/A4-3: iterate the default Auto path at *shell-quartet*
+    // granularity instead of per Cartesian-AO. Reconstruct the shell grouping
+    // from the per-AO shell_pairs list and form the upper triangle of *shell*
+    // pairs. Per-component Schwarz screening, symmetry orbit, and the 8-fold
+    // store-only scatter run in the inner component loops unchanged.
+    //
+    // The engine choice keys on shell-level total L, so it is constant across a
+    // shell quartet's components. Both the HGP- and Rys-chosen quartets route
+    // through their respective hoisted block (one shared contraction per quartet +
+    // cheap per-component readout) instead of re-running the per-primitive
+    // contraction per component: HGP via _contracted_eri_block_hoisted_views (A4-3),
+    // Rys via RysQuad::_contracted_eri_block_hoisted_views (B-3). OS-chosen
+    // quartets stay on the per-component _auto_contracted_eri path (OS-A4 hoists
+    // inside _contracted_eri, not at this seam). The hoisted block is computed
+    // lazily on the first surviving component, so a fully screened quartet pays
+    // nothing.
+    //
+    // Not bitwise vs the per-AO build for hoisted d-/g-shell quartets: the hoist
+    // applies _component_norm after HRR while the per-component path folds it in
+    // before contraction (and, for Rys, the n_max root count differs from
+    // n_comp), so they round differently at the last FP bit (~1e-15). Gated by
+    // planck-os-block-kernel's hoisted arm, planck-rys-box-invariance (Rys block),
+    // and the Auto-vs-OS check in planck-compute-2e (1e-12). Store-only scatter
+    // keeps the tensor independent of visitation order. The per-component
+    // (k,l) >=_lex (i,j) check reproduces the old flat-pair q >= p ordering exactly.
+    std::vector<const HartreeFock::ContractedView *> ao_views;
+    const std::vector<RysShellGroup> groups =
+        shell_groups_from_pairs(shell_pairs, nb, ao_views);
+    const std::size_t ngroups = groups.size();
 
-    // Flatten the upper-triangle (p,q) iteration space for load balance; see
-    // ObaraSaika::_compute_2e for the rationale and the closed-form t->(p,q)
-    // inversion. The scatter is store-only, so the tensor is independent of
-    // visitation order and this stays bitwise-identical to the serial-row form.
-    const std::size_t ntri = npairs * (npairs + 1) / 2;
-    const auto tri_base = [npairs](std::size_t r) -> std::size_t
-    { return r * npairs - r * (r - 1) / 2; };
-
-#pragma omp parallel for schedule(dynamic, 64)
-    for (std::size_t t = 0; t < ntri; ++t)
+    struct GroupPair
     {
-        long long pp = static_cast<long long>(std::floor(
-            (static_cast<double>(2 * npairs + 1) -
-             std::sqrt(static_cast<double>(2 * npairs + 1) *
-                           static_cast<double>(2 * npairs + 1) -
-                       8.0 * static_cast<double>(t))) /
-            2.0));
-        if (pp < 0)
-            pp = 0;
-        while (pp > 0 && tri_base(static_cast<std::size_t>(pp)) > t)
-            --pp;
-        while (static_cast<std::size_t>(pp) + 1 < npairs &&
-               tri_base(static_cast<std::size_t>(pp) + 1) <= t)
-            ++pp;
-        const std::size_t p = static_cast<std::size_t>(pp);
-        const std::size_t q = p + (t - tri_base(p));
+        std::size_t a;
+        std::size_t b;
+    };
+    std::vector<GroupPair> group_pairs;
+    group_pairs.reserve(ngroups * (ngroups + 1) / 2);
+    for (std::size_t sa = 0; sa < ngroups; ++sa)
+        for (std::size_t sb = sa; sb < ngroups; ++sb)
+            group_pairs.push_back({sa, sb});
 
-        const auto &spAB = shell_pairs[p];
-        const std::size_t i = spAB.A._index;
-        const std::size_t j = spAB.B._index;
-        const int lAx = spAB.A._cartesian[0], lAy = spAB.A._cartesian[1], lAz = spAB.A._cartesian[2];
-        const int lBx = spAB.B._cartesian[0], lBy = spAB.B._cartesian[1], lBz = spAB.B._cartesian[2];
+    const std::size_t ngp = group_pairs.size();
 
-        const auto &spCD = shell_pairs[q];
-        const std::size_t k = spCD.A._index;
-        const std::size_t l = spCD.B._index;
-        std::vector<QuartetOrbitElem> orbit;
-        if (Q[i * nb + j] * Q[k * nb + l] < tol_eri)
-            continue;
+#pragma omp parallel for schedule(dynamic, 8)
+    for (std::size_t bra = 0; bra < ngp; ++bra)
+    {
+        const RysShellGroup &gA = groups[group_pairs[bra].a];
+        const RysShellGroup &gB = groups[group_pairs[bra].b];
 
-        if (use_sym)
+        // Iterate every ket shell pair; the per-component bra-ket canonical
+        // check ((k,l) >=_lex (i,j)) is the exact filter, so we must not prune
+        // ket shell pairs by their flat index.
+        for (std::size_t ket = 0; ket < ngp; ++ket)
         {
-            auto [orb, forced_zero] =
-                build_quartet_orbit(i, j, k, l, *sym_ops);
-            if (forced_zero)
-                continue;
-            orbit = std::move(orb);
-            if (orbit.front().i != i || orbit.front().j != j ||
-                orbit.front().k != k || orbit.front().l != l)
-                continue;
-        }
+            const RysShellGroup &gC = groups[group_pairs[ket].a];
+            const RysShellGroup &gD = groups[group_pairs[ket].b];
 
-        const int lCx = spCD.A._cartesian[0], lCy = spCD.A._cartesian[1], lCz = spCD.A._cartesian[2];
-        const int lDx = spCD.B._cartesian[0], lDy = spCD.B._cartesian[1], lDz = spCD.B._cartesian[2];
-        const double val = _auto_contracted_eri(spAB, spCD,
-                                                lAx, lAy, lAz, lBx, lBy, lBz,
-                                                lCx, lCy, lCz, lDx, lDy, lDz,
-                                                kernel, omega);
+            // The engine choice is constant across the quartet's components
+            // (it keys on shell-level total L), so decide once here off the
+            // component-0 views — cheaply, without building ShellPairs. The
+            // shell's total L is the component-0 cartesian sum (component 0 of an
+            // L-shell carries all L on one axis), so this matches _auto_engine
+            // exactly. HGP- and Rys-chosen quartets use the hoisted block fast
+            // path (one shared contraction per quartet, B-3); OS-chosen quartets
+            // fall to the per-component path via _auto_contracted_eri.
+            const auto total_L = [](const HartreeFock::ContractedView &v)
+            {
+                return v._cartesian[0] + v._cartesian[1] + v._cartesian[2];
+            };
+            const int L_AB = total_L(*ao_views[gA.first_ao]) + total_L(*ao_views[gB.first_ao]);
+            const int L_CD = total_L(*ao_views[gC.first_ao]) + total_L(*ao_views[gD.first_ao]);
+            const HartreeFock::IntegralMethod quartet_engine = _auto_engine(L_AB, L_CD);
+            const bool quartet_uses_hgp =
+                quartet_engine == HartreeFock::IntegralMethod::HeadGordonPople;
+            const bool quartet_uses_rys =
+                quartet_engine == HartreeFock::IntegralMethod::RysQuadrature;
 
-        if (!use_sym)
-        {
-            write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
-            continue;
-        }
+            const std::size_t nCq = gC.n_components;
+            const std::size_t nDq = gD.n_components;
+            const std::size_t nCDq = nCq * nDq;
+            // HGP- and Rys-chosen quartets each use a single shared hoisted
+            // contraction (one block, filled lazily on the first surviving
+            // component); OS-chosen quartets stay on the per-component path.
+            std::vector<double> hoist_block; // filled lazily on first survivor
+            bool hoist_block_ready = false;
+            auto ensure_hoist_block = [&]()
+            {
+                if (hoist_block_ready)
+                    return;
+                hoist_block.assign(
+                    gA.n_components * gB.n_components * nCDq, 0.0);
+                const HartreeFock::ContractedView *const *vA =
+                    ao_views.data() + gA.first_ao;
+                const HartreeFock::ContractedView *const *vB =
+                    ao_views.data() + gB.first_ao;
+                const HartreeFock::ContractedView *const *vC =
+                    ao_views.data() + gC.first_ao;
+                const HartreeFock::ContractedView *const *vD =
+                    ao_views.data() + gD.first_ao;
+                if (quartet_uses_rys)
+                    HartreeFock::RysQuad::_contracted_eri_block_hoisted_views(
+                        vA, gA.n_components, vB, gB.n_components,
+                        vC, nCq, vD, nDq, kernel, omega, hoist_block.data());
+                else
+                    HartreeFock::HeadGordonPople::_contracted_eri_block_hoisted_views(
+                        vA, gA.n_components, vB, gB.n_components,
+                        vC, nCq, vD, nDq, kernel, omega, hoist_block.data());
+                hoist_block_ready = true;
+            };
 
-        for (const auto &elem : orbit)
-        {
-            write_eri_permutations(
-                eri, nb, nb2, nb3,
-                elem.i, elem.j, elem.k, elem.l,
-                static_cast<double>(elem.sign) * val);
+            for (std::size_t ca = 0; ca < gA.n_components; ++ca)
+            {
+                const HartreeFock::ContractedView &cvA = *ao_views[gA.first_ao + ca];
+                const std::size_t i = cvA._index;
+                const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
+
+                for (std::size_t cb = 0; cb < gB.n_components; ++cb)
+                {
+                    const HartreeFock::ContractedView &cvB = *ao_views[gB.first_ao + cb];
+                    const std::size_t j = cvB._index;
+                    if (j < i) // bra upper triangle: j >= i
+                        continue;
+                    const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
+
+                    for (std::size_t cc = 0; cc < gC.n_components; ++cc)
+                    {
+                        const HartreeFock::ContractedView &cvC = *ao_views[gC.first_ao + cc];
+                        const std::size_t k = cvC._index;
+                        const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+
+                        for (std::size_t cd = 0; cd < gD.n_components; ++cd)
+                        {
+                            const HartreeFock::ContractedView &cvD = *ao_views[gD.first_ao + cd];
+                            const std::size_t l = cvD._index;
+                            if (l < k) // ket upper triangle: l >= k
+                                continue;
+                            // bra-ket canonical: (k,l) >=_lex (i,j)
+                            if (k < i || (k == i && l < j))
+                                continue;
+
+                            const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
+
+                            if (Q[i * nb + j] * Q[k * nb + l] < tol_eri)
+                                continue;
+
+                            std::vector<QuartetOrbitElem> orbit;
+                            if (use_sym)
+                            {
+                                auto [orb, forced_zero] =
+                                    build_quartet_orbit(i, j, k, l, *sym_ops);
+                                if (forced_zero)
+                                    continue;
+                                orbit = std::move(orb);
+                                if (orbit.front().i != i || orbit.front().j != j ||
+                                    orbit.front().k != k || orbit.front().l != l)
+                                    continue;
+                            }
+
+                            double val;
+                            if (quartet_uses_hgp || quartet_uses_rys)
+                            {
+                                ensure_hoist_block();
+                                val = hoist_block[((ca * gB.n_components + cb) * nCq + cc) * nDq + cd];
+                            }
+                            else
+                            {
+                                const HartreeFock::ShellPair spAB(cvA, cvB);
+                                const HartreeFock::ShellPair spCD(cvC, cvD);
+                                val = _auto_contracted_eri(
+                                    spAB, spCD,
+                                    lAx, lAy, lAz, lBx, lBy, lBz,
+                                    lCx, lCy, lCz, lDx, lDy, lDz,
+                                    kernel, omega);
+                            }
+
+                            if (!use_sym)
+                            {
+                                write_eri_permutations(eri, nb, nb2, nb3, i, j, k, l, val);
+                                continue;
+                            }
+
+                            for (const auto &elem : orbit)
+                                write_eri_permutations(
+                                    eri, nb, nb2, nb3,
+                                    elem.i, elem.j, elem.k, elem.l,
+                                    static_cast<double>(elem.sign) * val);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -965,10 +1697,9 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf(
 
 // ─── Auto-dispatch variants ───────────────────────────────────────────────────
 //
-// Per-quartet HGP/Rys selection (see `_auto_prefers_rys` above). Both
-// engines are reachable from the auto path; OS is not. The Fock-auto
-// entries reuse `_compute_2e_auto` so they pick up the same per-quartet
-// dispatch.
+// Per-quartet three-way engine selection (see `_auto_engine` above). OS, HGP
+// and Rys are all reachable from the auto path. The Fock-auto entries reuse
+// `_compute_2e_auto` so they pick up the same per-quartet dispatch.
 
 Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,

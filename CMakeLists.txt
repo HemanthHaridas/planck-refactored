@@ -113,7 +113,17 @@ externalproject_add(
 externalproject_add(
     libxc
     PREFIX ${SRC_DIR}/external/libxc
-    GIT_REPOSITORY https://github.com/ElectronicStructureLibrary/libxc.git
+    # libxc moved off GitHub; the old ElectronicStructureLibrary/libxc path now
+    # 404s (and git then prompts for HTTPS credentials, since over HTTPS a 404 is
+    # indistinguishable from a private repo needing auth). GitLab is the live
+    # home. Pinned to the EXACT commit the existing validated checkout was on
+    # (5.0.0-799-g4bd0e1e36), which still exists on GitLab — a URL-only fix with
+    # zero version drift, so the DFT wrapper (src/dft/base/wrapper.h) and XC
+    # regressions stay on the libxc they were validated against. The previous
+    # unpinned default-branch fetch is what drifted onto the dead URL. (Bumping
+    # to 6.x/7.x would need a DFT build + regression check first.)
+    GIT_REPOSITORY https://gitlab.com/libxc/libxc.git
+    GIT_TAG 4bd0e1e36347c6d0a4e378a2c8d891ae43f8c951
     UPDATE_DISCONNECTED TRUE
     GIT_PROGRESS TRUE
     CMAKE_ARGS
@@ -529,6 +539,39 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    add_executable(planck-os-block-kernel
+        ${CMAKE_SOURCE_DIR}/tests/os_block_kernel.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-hgp-triangular-contract
+        ${CMAKE_SOURCE_DIR}/tests/hgp_triangular_contract.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-rys-box-invariance
+        ${CMAKE_SOURCE_DIR}/tests/rys_box_invariance.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     add_executable(planck-hgp-benchmark
         ${CMAKE_SOURCE_DIR}/tests/hgp_benchmark.cpp
         ${SRC_DIR}/basis/basis.cpp
@@ -802,6 +845,21 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-os-block-kernel PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-hgp-triangular-contract PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-rys-box-invariance PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-hgp-benchmark PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -946,6 +1004,24 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-os-block-kernel PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-hgp-triangular-contract PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-rys-box-invariance PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-hgp-benchmark PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -1059,6 +1135,18 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-hgp-quartet-validation PRIVATE USE_OPENMP)
     endif()
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-os-block-kernel OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-os-block-kernel PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-hgp-triangular-contract OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-hgp-triangular-contract PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-rys-box-invariance OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-rys-box-invariance PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-hgp-benchmark OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-hgp-benchmark PRIVATE USE_OPENMP)
     endif()
@@ -1161,6 +1249,21 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-hgp-quartet-validation
         COMMAND planck-hgp-quartet-validation
+    )
+
+    add_test(
+        NAME planck-os-block-kernel
+        COMMAND planck-os-block-kernel
+    )
+
+    add_test(
+        NAME planck-hgp-triangular-contract
+        COMMAND planck-hgp-triangular-contract
+    )
+
+    add_test(
+        NAME planck-rys-box-invariance
+        COMMAND planck-rys-box-invariance
     )
 
     add_test(
