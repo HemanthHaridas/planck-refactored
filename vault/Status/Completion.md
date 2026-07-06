@@ -100,6 +100,13 @@ historical design context, but they are no longer the source of truth for
 - SA diagnostics are parsed by the regression runner
 - SAD-start uphill-enabled water SA-2 basin is validated and retained as a separate
   regression mode
+- Plateau-escape convergence branch is hardened: the old rounding-sensitive
+  `100·tol_mcscf_grad` screen is replaced by an explicit `sa_g`-stationarity
+  bound `plateau_sa_g_bound = max(1e-6, tol_mcscf_grad)`, and a
+  `casscf_converged_via_plateau` diagnostic is emitted and asserted by the
+  runner — `false` for `water_casscf_sa2_sto3g`,
+  `water_casscf_sa2_sto3g_sad_guess`, and `ethylene_casscf_sa2_sto3g`; `true`
+  only for `water_casscf_sa2_sto3g_sad_guess_uphill` (all four green)
 
 ### Gradients, optimization, and frequencies
 

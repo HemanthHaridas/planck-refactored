@@ -126,14 +126,6 @@ Gate:
   `water_casscf_sa2_sto3g_sad_guess_uphill` (the only one of the four SA-2
   cases that uses it; the other three converge through the normal gate at
   `sa_g < 1e-5`).
-- Narrow hardening worth doing (NOT a correctness fix): replace the literal
-  `reported_gnorm < 100·tol_mcscf_grad` screen in the plateau branch with an
-  explicit `sa_g`-stationarity assertion (the uphill case already satisfies it
-  at ~1e-10, so this only tightens against a future regression where the branch
-  could fire while `sa_g` is not actually small), and add a
-  `casscf_converged_via_plateau` diagnostic the runner asserts is `false` for
-  the three normal SA-2 cases and `true` only for the SAD-uphill case. Keep the
-  uphill SA-2 case green as the acceptance gate.
 - Keep the two water SA-2 SAD-start regressions, because they intentionally protect two distinct optimizer policies
 
 ## Performance and maintenance opportunities
