@@ -1456,8 +1456,21 @@
           "metric": "rhf_total_energy",
           "expected": -74.6536945264,
           "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "homo_energy",
+          "expected": -1.110582,
+          "atol": 1e-05
+        },
+        {
+          "type": "metric_close",
+          "metric": "lumo_energy",
+          "expected": 0.085350,
+          "atol": 1e-05
         }
-      ]
+      ],
+      "_pyscf_reference": "ROHF MO energies are the canonical alpha-Fock diagonal (epsa), matching PySCF 2.13.0 ROHF C epsa exactly (HOMO -1.110582, LUMO +0.085350 Eh; full set -21.03012/-1.91715/-1.19607/-1.06650/-1.11058/+0.08535/+0.20040). Previously the alpha slot stored the effective Roothaan eigenvalues (a mislabeled pair with canonical epsb); now both spin channels store matched canonical per-spin energies, aligned to the C column order that _reorder_rohf_orbitals sorts by epsa."
     },
     {
       "id": "water_radical_cation_rohf_full_restart_smoke",

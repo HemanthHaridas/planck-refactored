@@ -18,7 +18,8 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
-- Resolve the ROHF MO-energy bookkeeping inconsistency between effective, alpha, and beta eigenvalue sets
+- (none currently — the ROHF MO-energy bookkeeping inconsistency is resolved;
+  see Completion)
 
 ## Verification and regression gaps
 

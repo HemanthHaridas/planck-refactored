@@ -21,6 +21,16 @@ historical design context, but they are no longer the source of truth for
 ### HF / SCF core
 
 - RHF, UHF, and ROHF SCF with DIIS (`src/scf/scf.cpp`)
+- ROHF MO-energy bookkeeping is consistent: both spin channels store the
+  canonical per-spin Fock diagonals (`epsa`/`epsb`), a matched pair aligned to
+  the `C` column order that `_reorder_rohf_orbitals` sorts by `epsa`. Previously
+  the alpha slot held the effective Roothaan eigenvalues (a mislabeled pairing
+  with canonical `epsb`); the effective set was a convergence device only and is
+  not read after the reorder. The two ROHF-reachable consumers (CASSCF/FCI
+  active-space selection) use these energies for ordering only, so the change is
+  behavior-neutral for them; it fixes the user-facing MO-energy printout. Planck
+  now matches PySCF 2.13.0 ROHF `Cᵀ Fα C` (epsa) exactly. Gated by
+  `homo_energy`/`lumo_energy` `metric_close` on `water_radical_cation_rohf_sto3g`
 - H_core and SAD initial guesses
 - Same-basis checkpoint restart and density restart
 - Symmetry detection, MO irrep labeling, and SAO-blocked Fock diagonalization
