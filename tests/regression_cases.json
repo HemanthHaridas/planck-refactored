@@ -1094,6 +1094,24 @@
       ]
     },
     {
+      "id": "water_hse06_631gd_geomoptfreq_smoke",
+      "input": "tests/inputs/regression/dft/water_hse06_631gd_geomoptfreq.hfinp",
+      "executable": "planck-dft",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "Calculation Type :            Geometry Optimization + Frequency",
+        "Geometry Optimization :       Converged in",
+        "Vibrational Frequencies :",
+        "Molecule: non-linear (6 T+R modes removed, 3 vibrational modes)",
+        "Zero-point energy :",
+        "Converged :                   true"
+      ],
+      "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |Δfreq| 4.8 cm-1, ΔE ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
+    },
+    {
       "id": "water_radical_cation_ump2_gradient_smoke",
       "input": "tests/inputs/regression/open_shell/water_radical_cation_uhf_ump2_gradient_sto3g.hfinp",
       "tags": [
