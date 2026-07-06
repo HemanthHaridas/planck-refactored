@@ -1271,27 +1271,35 @@ namespace HartreeFock
         Eigen::VectorXd _cas_root_energies;   // per-root total CASSCF energies (length nroots; empty for SS-CASSCF)
 
         // MP2 options and cached results. _mp2 is the input-driven option block.
-        // The amplitude and active-orbital fields cache the last applied MP2
-        // kernel result so gradient and RDM consumers can reuse it without
-        // forcing the older driver-style run_* wrappers.
+        // _mp2_result caches the last applied MP2 kernel result (amplitudes,
+        // active-orbital masks, spin-resolved correlation energies) so gradient
+        // and RDM consumers can reuse it without forcing the older driver-style
+        // run_* wrappers.
         OptionsMP2 _mp2;
-        int _mp2_nocc = 0;
-        int _mp2_nvir = 0;
-        int _mp2_nocca = 0;
-        int _mp2_noccb = 0;
-        int _mp2_nvira = 0;
-        int _mp2_nvirb = 0;
-        std::vector<int> _mp2_active_mo;        // active (non-frozen) MO indices into the full MO list (RMP2)
-        std::vector<int> _mp2_active_mo_alpha;  // UMP2 alpha active mask
-        std::vector<int> _mp2_active_mo_beta;   // UMP2 beta active mask
-        std::vector<double> _mp2_t2;            // RMP2 T2[i,j,a,b] (row-major), empty if not computed
-        std::vector<double> _ump2_t2_aa;        // UMP2 αα block
-        std::vector<double> _ump2_t2_ab;        // UMP2 αβ block
-        std::vector<double> _ump2_t2_bb;        // UMP2 ββ block
-        double _mp2_e_corr_ss = 0.0;            // same-spin correlation energy
-        double _mp2_e_corr_os = 0.0;            // opposite-spin correlation energy
-        bool _mp2_converged = true;             // iterative MP2 convergence flag (true = canonical or converged)
-        int _mp2_n_iter = 0;                    // iterative MP2 cycles taken (0 for canonical kernel)
+
+        // Grouped "last computed MP2 result" state. Written once per kernel run
+        // in src/post_hf/mp2.cpp; read by the gradient/RDM reuse paths.
+        struct MP2Result
+        {
+            int nocc = 0;
+            int nvir = 0;
+            int nocca = 0;
+            int noccb = 0;
+            int nvira = 0;
+            int nvirb = 0;
+            std::vector<int> active_mo;        // active (non-frozen) MO indices into the full MO list (RMP2)
+            std::vector<int> active_mo_alpha;  // UMP2 alpha active mask
+            std::vector<int> active_mo_beta;   // UMP2 beta active mask
+            std::vector<double> t2;            // RMP2 T2[i,j,a,b] (row-major), empty if not computed
+            std::vector<double> ump2_t2_aa;    // UMP2 αα block
+            std::vector<double> ump2_t2_ab;    // UMP2 αβ block
+            std::vector<double> ump2_t2_bb;    // UMP2 ββ block
+            double e_corr_ss = 0.0;            // same-spin correlation energy
+            double e_corr_os = 0.0;            // opposite-spin correlation energy
+            bool converged = true;             // iterative MP2 convergence flag (true = canonical or converged)
+            int n_iter = 0;                    // iterative MP2 cycles taken (0 for canonical kernel)
+        };
+        MP2Result _mp2_result;
 
         Eigen::MatrixXd _overlap; // Overlap matrix S
         Eigen::MatrixXd _hcore;   // Core Hamiltonian H = T + V
