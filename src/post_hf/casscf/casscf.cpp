@@ -26,7 +26,6 @@ namespace
 {
 
     using HartreeFock::Correlation::CASSCF::append_candidate_step;
-    using HartreeFock::Correlation::CASSCF::append_root_candidate_steps;
     using HartreeFock::Correlation::CASSCF::build_weighted_root_quadratic_model_prediction;
     using HartreeFock::Correlation::CASSCF::CandidateSelection;
     using HartreeFock::Correlation::CASSCF::CandidateStep;
@@ -41,7 +40,6 @@ namespace
     using HartreeFock::Correlation::CASSCF::ResponseMode;
     using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
     using HartreeFock::Correlation::CASSCF::RootReference;
-    using HartreeFock::Correlation::CASSCF::RootResolvedCoupledStepSet;
     using HartreeFock::Correlation::CASSCF::RootResolvedGradientScreen;
     using HartreeFock::Correlation::CASSCF::RootResolvedOrbitalStepSet;
     using HartreeFock::Correlation::CASSCF::RotPair;
@@ -861,75 +859,6 @@ namespace HartreeFock::Correlation::CASSCF
                     vec, sigma_vec);
             };
 
-            auto build_root_resolved_coupled_step_set =
-                [&](const std::vector<StateSpecificData> &roots,
-                    double level_shift_local)
-            {
-                RootResolvedCoupledStepSet steps;
-                steps.orbital_steps.weighted = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                steps.orbital_steps.per_root.reserve(roots.size());
-
-                for (const auto &root : roots)
-                {
-                    Eigen::MatrixXd root_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                    if (root.weight == 0.0)
-                    {
-                        steps.orbital_steps.per_root.push_back(std::move(root_step));
-                        continue;
-                    }
-
-                    const OrbitalHessianContext root_hessian_ctx{
-                        .C = &C,
-                        .S = &calc._overlap,
-                        .H_core = &calc._hcore,
-                        .eri = &eri,
-                        .gamma = &root.gamma,
-                        .Gamma_vec = &root.Gamma_vec,
-                    };
-                    const CoupledStepSolveResult result =
-                        solve_coupled_orbital_ci_step(
-                            configured_rhs_mode,
-                            root.g_orb,
-                            st_current.F_I_mo,
-                            root.F_A_mo,
-                            st_current.h_eff,
-                            st_current.ga,
-                            st_current.ci_space,
-                            a_strs,
-                            b_strs,
-                            st_current.dets,
-                            st_current.active_integrals,
-                            ci_apply,
-                            root.ci_vector,
-                            root.ci_energy,
-                            st_current.H_CI_diag,
-                            nbasis,
-                            n_core,
-                            n_act,
-                            n_virt,
-                            level_shift_local,
-                            max_rot,
-                            all_mo_irr,
-                            use_sym,
-                            &root_hessian_ctx);
-
-                    steps.converged = steps.converged && result.converged;
-                    steps.max_orbital_residual =
-                        std::max(steps.max_orbital_residual, result.orbital_residual_max);
-                    steps.max_ci_residual =
-                        std::max(steps.max_ci_residual, result.ci_residual_norm);
-                    steps.max_iterations =
-                        std::max(steps.max_iterations, result.iterations);
-
-                    root_step = cap_orbital_step(result.orbital_step);
-                    steps.orbital_steps.weighted.noalias() += root.weight * root_step;
-                    steps.orbital_steps.per_root.push_back(std::move(root_step));
-                }
-
-                steps.orbital_steps.weighted = cap_orbital_step(std::move(steps.orbital_steps.weighted));
-                return steps;
-            };
-
             std::vector<StateAveragedCoupledRoot> sa_coupled_roots;
             sa_coupled_roots.reserve(st_current.roots.size());
             for (const auto &root : st_current.roots)
@@ -1091,18 +1020,16 @@ namespace HartreeFock::Correlation::CASSCF
                 append_candidate_step(step_candidates, kappa_total, "sa-diag-fallback");
             append_candidate_step(step_candidates, kappa_grad, "sa-grad-fallback");
 
+            // Per-root candidate steps (coupled + grad-fallback, one per root)
+            // were removed here: a suite-wide sweep of every CAS input showed
+            // they were accepted zero times, while each stagnant macro paid a
+            // full per-root coupled solve (build_root_resolved_coupled_step_set)
+            // to generate them. Single-pair probes are kept — the SAD-uphill
+            // SA-2 canary accepts one (probe-pair6-favored[uphill]), so they are
+            // load-bearing on that basin. numeric-newton is kept (the dominant
+            // accepted fallback). See the cascade-trim spike.
             if (stagnation_streak >= 2 && probe_signal.weighted_abs.size() > 0)
             {
-                if (nroots > 1)
-                {
-                    const RootResolvedCoupledStepSet root_resolved_coupled_step_set =
-                        build_root_resolved_coupled_step_set(st_current.roots, level_shift);
-                    append_root_candidate_steps(
-                        step_candidates, root_resolved_coupled_step_set.orbital_steps.per_root, "coupled", false);
-                    append_root_candidate_steps(
-                        step_candidates, kappa_grad_step_set.per_root, "grad-fallback", false);
-                }
-
                 std::vector<int> ranked_pairs(static_cast<std::size_t>(probe_signal.weighted_abs.size()));
                 std::iota(ranked_pairs.begin(), ranked_pairs.end(), 0);
                 std::partial_sort(
