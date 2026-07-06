@@ -133,7 +133,10 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     }
     else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
     {
-        return std::unexpected("GeomOpt ROHF gradient is not implemented");
+        auto grad_res = HartreeFock::Gradient::compute_rohf_gradient(calc, shell_pairs);
+        if (!grad_res)
+            return std::unexpected("GeomOpt ROHF gradient failed: " + grad_res.error());
+        grad_mat = std::move(*grad_res);
     }
     else if (calc._scf._scf == HartreeFock::SCFType::UHF)
     {

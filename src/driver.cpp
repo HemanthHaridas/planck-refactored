@@ -1434,9 +1434,13 @@ int main(int argc, const char *argv[])
         }
         else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
         {
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
-                                         "ROHF analytic gradients are not implemented");
-            return EXIT_FAILURE;
+            auto grad_res = HartreeFock::Gradient::compute_rohf_gradient(calculator, shellpairs);
+            if (!grad_res)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :", grad_res.error());
+                return EXIT_FAILURE;
+            }
+            grad = std::move(*grad_res);
         }
         else if (calculator._info._scf.is_uhf)
         {

@@ -503,6 +503,18 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_exchange
 //        - 2 Σ_{μ∈A,ν}  W_μν dS_μν/dA_x                   [Pulay]
 //        + Σ_{B≠A}      Z_A Z_B (R_A-R_B)/|R_A-R_B|³      [nuclear repulsion]
 
+Eigen::MatrixXd HartreeFock::Gradient::build_rohf_energy_weighted_density(
+    const Eigen::MatrixXd &density_alpha,
+    const Eigen::MatrixXd &density_beta,
+    const Eigen::MatrixXd &fock_alpha,
+    const Eigen::MatrixXd &fock_beta)
+{
+    // W = Pa Fa Pa + Pb Fb Pb  (see header). Both terms are individually
+    // symmetric (Pa, Fa symmetric ⇒ Pa Fa Pa symmetric), so W is symmetric.
+    return density_alpha * fock_alpha * density_alpha +
+           density_beta * fock_beta * density_beta;
+}
+
 std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rhf_gradient(
     const HartreeFock::Calculator &calc,
     const std::vector<HartreeFock::ShellPair> &shell_pairs)
@@ -779,6 +791,186 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
                 atom_B,
                 atom_C,
                 atom_D);
+        }
+    }
+
+    // ── Term 4: nuclear repulsion ─────────────────────────────────────────────
+    for (std::size_t a = 0; a < natoms; ++a)
+    {
+        for (std::size_t b = 0; b < natoms; ++b)
+        {
+            if (a == b)
+                continue;
+            const double Za = static_cast<double>(mol.atomic_numbers[a]);
+            const double Zb = static_cast<double>(mol.atomic_numbers[b]);
+            const double dx = mol._standard(a, 0) - mol._standard(b, 0);
+            const double dy = mol._standard(a, 1) - mol._standard(b, 1);
+            const double dz = mol._standard(a, 2) - mol._standard(b, 2);
+            const double r2 = dx * dx + dy * dy + dz * dz;
+            if (r2 < 1e-24)
+            {
+                return std::unexpected(
+                    std::format("Gradient: atoms {} and {} are coincident or too close for nuclear-repulsion differentiation",
+                                static_cast<int>(a + 1),
+                                static_cast<int>(b + 1)));
+            }
+            const double r3 = std::pow(r2, 1.5);
+            grad(a, 0) -= Za * Zb * dx / r3;
+            grad(a, 1) -= Za * Zb * dy / r3;
+            grad(a, 2) -= Za * Zb * dz / r3;
+        }
+    }
+
+    return grad;
+}
+
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_gradient(
+    const HartreeFock::Calculator &calc,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs)
+{
+    // Clone of compute_uhf_gradient: every term (Hellmann-Feynman + Pulay, the
+    // nucleus-position V term, the 2e ERI term, and Vnn) is identical because
+    // ROHF supplies valid alpha/beta densities exactly like UHF. The one
+    // difference is the energy-weighted density W — see the W block below.
+    g_last_wavefunction_gradient_breakdown.reset();
+    const auto &mol = calc._molecule;
+    const auto &basis = calc._shells;
+    const std::size_t natoms = mol.natoms;
+    const std::size_t nb = basis.nbasis();
+
+    auto Pa_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.alpha.density);
+    if (!Pa_lifted)
+        return std::unexpected(Pa_lifted.error());
+    auto Pb_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.beta.density);
+    if (!Pb_lifted)
+        return std::unexpected(Pb_lifted.error());
+    const Eigen::MatrixXd P_a = std::move(*Pa_lifted);
+    const Eigen::MatrixXd P_b = std::move(*Pb_lifted);
+    const Eigen::MatrixXd P_t = P_a + P_b;
+
+    // ── ROHF energy-weighted density ─────────────────────────────────────────
+    // W = Pa Fa Pa + Pb Fb Pb, built from the converged spin Fock matrices the
+    // ROHF SCF persists into the alpha/beta channels. This replaces the UHF
+    // W = Σ_i ε_i C_i C_iᵀ, which is only exact when the orbitals diagonalize
+    // their own spin Fock — true for UHF, false for ROHF (its orbitals are
+    // canonical for the effective Roothaan Fock, so Cᵀ Fa C is not diagonal).
+    // Both Fock matrices are lifted the same way as the densities so the
+    // Cartesian derivative kernel indexing lines up in spherical mode.
+    auto Fa_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.alpha.fock);
+    if (!Fa_lifted)
+        return std::unexpected(Fa_lifted.error());
+    auto Fb_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.beta.fock);
+    if (!Fb_lifted)
+        return std::unexpected(Fb_lifted.error());
+    const Eigen::MatrixXd W =
+        build_rohf_energy_weighted_density(P_a, P_b, *Fa_lifted, *Fb_lifted);
+
+    Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(natoms, 3);
+
+    auto shell_atom_res = build_shell_atom_map(calc);
+    if (!shell_atom_res)
+        return std::unexpected(shell_atom_res.error());
+    const std::vector<int> shell_atom = std::move(*shell_atom_res);
+    const auto &shells = basis._shells;
+    const auto &bfs = basis._basis_functions;
+    const std::size_t nshells = shells.size();
+    const Eigen::MatrixXd schwarz_q = build_pair_schwarz_table(shell_pairs, nb);
+
+    std::vector<int> bf_shell(nb, -1);
+    for (std::size_t s = 0; s < nshells; ++s)
+        for (std::size_t mu = 0; mu < nb; ++mu)
+            if (bfs[mu]._shell == &shells[s])
+                bf_shell[mu] = static_cast<int>(s);
+
+    // ── Term 1+Pulay (P_t and W) ─────────────────────────────────────────────
+    for (const auto &sp : shell_pairs)
+    {
+        const std::size_t ii = sp.A._index;
+        const std::size_t jj = sp.B._index;
+        const int atom_ii = shell_atom[bf_shell[ii]];
+        const int atom_jj = shell_atom[bf_shell[jj]];
+
+        const auto dST_A = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
+        const auto dV_A = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp, mol);
+
+        for (int q = 0; q < 3; ++q)
+        {
+            const double contrib = 2.0 * P_t(ii, jj) * (dST_A[q + 3] + dV_A[q]) - 2.0 * W(ii, jj) * dST_A[q];
+            grad(atom_ii, q) += contrib;
+        }
+
+        if (ii != jj)
+        {
+            HartreeFock::ShellPair sp_rev(sp.B, sp.A);
+            const auto dST_B = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp_rev);
+            const auto dV_B = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp_rev, mol);
+
+            for (int q = 0; q < 3; ++q)
+            {
+                const double contrib = 2.0 * P_t(jj, ii) * (dST_B[q + 3] + dV_B[q]) - 2.0 * W(jj, ii) * dST_B[q];
+                grad(atom_jj, q) += contrib;
+            }
+        }
+    }
+
+    // ── Term 2: nucleus-position V ────────────────────────────────────────────
+    for (std::size_t atom_a = 0; atom_a < natoms; ++atom_a)
+    {
+        const double Z_A = static_cast<double>(mol.atomic_numbers[atom_a]);
+        const Eigen::Vector3d C_A(mol._standard(atom_a, 0),
+                                  mol._standard(atom_a, 1),
+                                  mol._standard(atom_a, 2));
+
+        for (int q = 0; q < 3; ++q)
+        {
+            double dV_sum = 0.0;
+            for (const auto &sp : shell_pairs)
+            {
+                const std::size_t ii = sp.A._index;
+                const std::size_t jj = sp.B._index;
+                const double dv = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
+                    sp, C_A, Z_A, q);
+                if (ii == jj)
+                    dV_sum += P_t(ii, jj) * dv;
+                else
+                    dV_sum += 2.0 * P_t(ii, jj) * dv;
+            }
+            grad(atom_a, q) += dV_sum;
+        }
+    }
+
+    // ── Term 3: ERI gradient ──────────────────────────────────────────────────
+    // Γ_μνλσ = 2*P_t_μν*P_t_λσ - 2*P_a_μλ*P_a_νσ - 2*P_b_μλ*P_b_νσ
+    auto gamma_fn = [&P_t, &P_a, &P_b](std::size_t ii, std::size_t jj,
+                                       std::size_t kk, std::size_t ll) -> double
+    {
+        return 2.0 * P_t(ii, jj) * P_t(kk, ll) -
+               2.0 * P_a(ii, kk) * P_a(jj, ll) -
+               2.0 * P_b(ii, kk) * P_b(jj, ll);
+    };
+
+    for (const auto &spAB : shell_pairs)
+    {
+        const std::size_t ii = spAB.A._index;
+        const std::size_t jj = spAB.B._index;
+        const int atom_A = shell_atom[bf_shell[ii]];
+        const int atom_B = shell_atom[bf_shell[jj]];
+
+        for (const auto &spCD : shell_pairs)
+        {
+            const std::size_t kk = spCD.A._index;
+            const std::size_t ll = spCD.B._index;
+            const int atom_C = shell_atom[bf_shell[kk]];
+            const int atom_D = shell_atom[bf_shell[ll]];
+
+            if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
+                continue;
+
+            const auto dI = compute_eri_deriv_dispatch(
+                calc, spAB, spCD, HartreeFock::ERIKernel::Coulomb, 0.0);
+            accumulate_eri_gradient_permutations(
+                grad, dI, gamma_fn, ii, jj, kk, ll,
+                atom_A, atom_B, atom_C, atom_D);
         }
     }
 

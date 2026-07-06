@@ -128,11 +128,27 @@ historical design context, but they are no longer the source of truth for
 
 ### Gradients, optimization, and frequencies
 
-- Analytic gradients for RHF, UHF, RMP2, and UMP2
+- Analytic gradients for RHF, UHF, ROHF, RMP2, and UMP2
 - Geometry optimization in Cartesian and internal coordinates
 - Semi-numerical Hessian / vibrational frequencies
 - Imaginary-frequency following
 - Constrained geometry optimization
+- ROHF analytic gradients (Cartesian basis), plus the geometry-optimization
+  and frequency workflows built on them. The gradient is structurally the UHF
+  gradient — same Hellmann-Feynman + Pulay + 2e + Vnn terms over the alpha/beta
+  densities — with one ROHF-specific piece: the energy-weighted density
+  `W = Pa·Fa·Pa + Pb·Fb·Pb` (`build_rohf_energy_weighted_density` in
+  `src/gradient/gradient.cpp`, built from the spin Fock matrices the SCF already
+  persists). This is exactly PySCF's ROHF `make_rdm1e` (`W_a + W_b`) and is
+  required because ROHF orbitals are canonical for the effective Roothaan Fock,
+  not for the individual spin Focks, so the UHF `Σ ε_i C_i C_iᵀ` form is wrong.
+  No CPHF/Z-vector solve — ROHF SCF is variational, so the SCF gradient needs
+  none, same as RHF/UHF. PySCF-gated by `oh_rohf_gradient_sto3g`,
+  `ch3_radical_rohf_gradient_sto3g` (low-symmetry C1, all 12 gradient components
+  non-zero, matches PySCF analytic to ~8e-8), `oh_rohf_geomopt_sto3g`
+  (E_opt Δ ~2e-8 Eh), and `oh_rohf_freq_sto3g` (stretch Δ ~0.07 cm⁻¹ vs a
+  PySCF FD-of-analytic-gradient Hessian). Spherical ROHF gradients, ROHF-MP2
+  gradients, ROHF stability, and ROHF PCM remain out of scope.
 
 ### DFT
 

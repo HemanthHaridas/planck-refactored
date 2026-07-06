@@ -58,6 +58,17 @@ namespace HartreeFock
 
         // Analytic UHF nuclear gradient.
         // Returns natoms×3 matrix in Ha/Bohr.
+        // Analytic ROHF nuclear gradient. Structurally identical to the UHF
+        // gradient (same Hellmann-Feynman + Pulay + 2e + Vnn terms over the
+        // alpha/beta densities); the only ROHF-specific piece is the
+        // energy-weighted density W = build_rohf_energy_weighted_density(...),
+        // which the ROHF orbitals require because they are not canonical for
+        // the individual spin Fock matrices. Requires a converged ROHF
+        // reference. Returns natoms×3 in Ha/Bohr.
+        std::expected<Eigen::MatrixXd, std::string> compute_rohf_gradient(
+            const HartreeFock::Calculator &calc,
+            const std::vector<HartreeFock::ShellPair> &shell_pairs);
+
         std::expected<Eigen::MatrixXd, std::string> compute_uhf_gradient(
             const HartreeFock::Calculator &calc,
             const std::vector<HartreeFock::ShellPair> &shell_pairs);
@@ -93,6 +104,24 @@ namespace HartreeFock
         std::expected<Eigen::MatrixXd, std::string> compute_ump2_gradient(
             HartreeFock::Calculator &calc,
             const std::vector<HartreeFock::ShellPair> &shell_pairs);
+
+        // ROHF energy-weighted (AO) density for the gradient Pulay term.
+        //
+        //   W = Pa*Fa*Pa + Pb*Fb*Pb
+        //
+        // with Pa/Pb the alpha/beta AO densities and Fa/Fb the converged spin
+        // Fock matrices. This is exactly PySCF's ROHF make_rdm1e (W_a + W_b),
+        // and reduces to the RHF/UHF energy-weighted density in the closed-shell
+        // and unrestricted limits. Unlike UHF, an ROHF W cannot be built from
+        // the stored MO energies alone (the orbitals are canonical for the
+        // effective Roothaan Fock, not for Fa/Fb individually), so it is formed
+        // directly from the AO matrices the SCF already persists.
+        // Pure matrix function (no Calculator/SCF state) for unit testing.
+        Eigen::MatrixXd build_rohf_energy_weighted_density(
+            const Eigen::MatrixXd &density_alpha,
+            const Eigen::MatrixXd &density_beta,
+            const Eigen::MatrixXd &fock_alpha,
+            const Eigen::MatrixXd &fock_beta);
     } // namespace Gradient
 } // namespace HartreeFock
 

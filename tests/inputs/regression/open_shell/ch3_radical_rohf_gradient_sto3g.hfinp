@@ -1,0 +1,29 @@
+%begin_control
+    basis       sto-3g
+    calculation gradient
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rohf
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+4
+0   2
+C     0.031000    -0.017000     0.022000
+H     1.079000     0.043000    -0.061000
+H    -0.361000     0.998000     0.104000
+H    -0.402000    -0.552000     0.881000
+%end_coords
