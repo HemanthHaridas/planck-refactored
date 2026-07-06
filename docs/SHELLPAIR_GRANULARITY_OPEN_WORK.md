@@ -80,10 +80,23 @@ rebuild. This distinction is what disproved lever A below.
   call instead of reusing the cached tensor, and benchmarked **1.9×–4.1× slower**,
   worsening with basis size. Direct/RI only ever helps **memory** (dropping the
   1.4 GB tensor), and only via RI (approximate), not direct.
-- **B (medium):** the inactive core Fock depends only on the *core* orbitals, which
-  move far less than full `C`; build it once per accepted macro instead of per
-  candidate. **This is now the most promising time lever** — it cuts the
-  *contraction* count without changing the (fast, cached) contraction itself.
+- **B (medium) — premise DISPROVEN as a cache; real fix is optimizer restructuring.**
+  The idea was that the inactive core Fock depends only on the *core* orbitals,
+  which "move far less than full `C`", so it could be cached across candidate
+  evaluations. **Measured false.** A step-0 characterization counter on
+  `build_inactive_fock_mo` (water CAS(4,4)/6-31G) logged **1913** `_compute_fock_rhf`
+  builds, with core-column drift `‖C_prevᵀ C_core − I‖_F ≈ 0.65–0.73` between
+  *consecutive* calls — not small. Consecutive calls are different trial step-scales /
+  roots / probe directions within a macro, each with a substantially different core
+  basis, so a drift-tolerance AO-Fock cache would hit ~0% of the time. The redundancy
+  is real (~1913 builds) but **structural, not incremental**: there is no stable key.
+  A genuine win therefore requires **restructuring the candidate search** so it does
+  not re-enter the full `evaluate` lambda (and its O(n⁴) inactive-Fock rebuild) per
+  step-scale — bigger than the original ~1-day estimate (~2–3 days, Bucket 2), and it
+  carries basin-stability risk on the SA-2 uphill canary (the numeric-newton FD
+  Hessian amplifies ~1e-15 perturbations). Reusing a stale accepted-macro `F_I_ao`
+  across candidates is an *approximation*, not a refactor, and would need its own
+  validation. Not the cheap lever it looked like.
 - **C (low, already planned):** trim the macro-optimizer cascade (vault Open Work
   "CASSCF P2"). NOTE: this previously read "demote numeric-newton to debug-only" —
   **`numeric-newton` is load-bearing** (some cases only converge with it), so it
@@ -124,13 +137,14 @@ fundamental direct-vs-tensor contraction-order difference unfixable without
 bit-matching. That alone would have confined direct to a basis-size gate; the speed
 benchmark then removed the case for direct Fock entirely.
 
-**What remains for CASSCF speed.** Direct Fock is off the table for time. The live
-levers are **B** (build the inactive core Fock once per accepted macro, not per
-candidate — cuts the *count* of the fast cached contraction) and **C** (trim the
-optimizer cascade's redundant candidates/probes, keeping numeric-newton). The only
-direct/RI motivation left is **memory** (dropping the 1.4 GB tensor), which needs
-**RI** (approximate, opt-in behind a `casscf_ri` keyword), never the direct rebuild
-that this attempt disproved.
+**What remains for CASSCF speed.** Direct Fock is off the table for time. Lever **B**
+as a *cache* is disproven (see above — consecutive core bases differ by ~0.65–0.73,
+no stable key); its surviving form is an **optimizer restructuring** (~2–3 days,
+basin-risk on the SA-2 canary), not a drop-in cache. That leaves **C** (trim the
+optimizer cascade's redundant candidates/probes, keeping numeric-newton) as the one
+cheap live lever. The only direct/RI motivation left is **memory** (dropping the
+1.4 GB tensor), which needs **RI** (approximate, opt-in behind a `casscf_ri`
+keyword), never the direct rebuild that this attempt disproved.
 
 ## How to verify the landed state
 

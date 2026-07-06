@@ -21,6 +21,16 @@ historical design context, but they are no longer the source of truth for
 ### HF / SCF core
 
 - RHF, UHF, and ROHF SCF with DIIS (`src/scf/scf.cpp`)
+- ROHF MO-energy bookkeeping is consistent: both spin channels store the
+  canonical per-spin Fock diagonals (`epsa`/`epsb`), a matched pair aligned to
+  the `C` column order that `_reorder_rohf_orbitals` sorts by `epsa`. Previously
+  the alpha slot held the effective Roothaan eigenvalues (a mislabeled pairing
+  with canonical `epsb`); the effective set was a convergence device only and is
+  not read after the reorder. The two ROHF-reachable consumers (CASSCF/FCI
+  active-space selection) use these energies for ordering only, so the change is
+  behavior-neutral for them; it fixes the user-facing MO-energy printout. Planck
+  now matches PySCF 2.13.0 ROHF `Cᵀ Fα C` (epsa) exactly. Gated by
+  `homo_energy`/`lumo_energy` `metric_close` on `water_radical_cation_rohf_sto3g`
 - H_core and SAD initial guesses
 - Same-basis checkpoint restart and density restart
 - Symmetry detection, MO irrep labeling, and SAO-blocked Fock diagonalization
@@ -100,6 +110,21 @@ historical design context, but they are no longer the source of truth for
 - SA diagnostics are parsed by the regression runner
 - SAD-start uphill-enabled water SA-2 basin is validated and retained as a separate
   regression mode
+- Plateau-escape convergence branch is hardened: the old rounding-sensitive
+  `100·tol_mcscf_grad` screen is replaced by an explicit `sa_g`-stationarity
+  bound `plateau_sa_g_bound = max(1e-6, tol_mcscf_grad)`, and a
+  `casscf_converged_via_plateau` diagnostic is emitted and asserted by the
+  runner — `false` for `water_casscf_sa2_sto3g`,
+  `water_casscf_sa2_sto3g_sad_guess`, and `ethylene_casscf_sa2_sto3g`; `true`
+  only for `water_casscf_sa2_sto3g_sad_guess_uphill` (all four green)
+- Stagnation-cascade trim: the per-root candidate steps (`root*-coupled` /
+  `root*-grad-fallback`) and their generator `build_root_resolved_coupled_step_set`
+  are removed. A suite-wide accepted-candidate sweep showed they never won a
+  merit selection while costing a per-root coupled solve every stagnant macro.
+  `numeric-newton` (dominant fallback) and single-pair probes (load-bearing on
+  the SAD-uphill SA-2 canary) are kept. Verified zero behavior change: 121/121
+  regressions green including all 11 PySCF CASSCF gates, and the SAD-uphill case
+  accepts the identical candidate sequence as before
 
 ### Gradients, optimization, and frequencies
 

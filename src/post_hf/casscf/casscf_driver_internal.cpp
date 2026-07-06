@@ -333,34 +333,4 @@ namespace HartreeFock::Correlation::CASSCF
             return;
         candidates.push_back({std::move(step), label});
     }
-
-    void append_root_candidate_steps(
-        std::vector<CandidateStep> &candidates,
-        const std::vector<Eigen::MatrixXd> &root_steps,
-        const std::string &base_label,
-        bool cap_steps,
-        double max_rot)
-    {
-        const HartreeFock::index_t root_count =
-            static_cast<HartreeFock::index_t>(root_steps.size());
-        const double trust_radius_frob = 4.0 * max_rot;
-        for (HartreeFock::index_t root = 0; root < root_count; ++root)
-        {
-            Eigen::MatrixXd step = root_steps[static_cast<std::size_t>(root)];
-            if (cap_steps)
-            {
-                const double max_elem = step.cwiseAbs().maxCoeff();
-                if (max_elem > max_rot)
-                    step *= max_rot / max_elem;
-
-                const double frob = step.norm();
-                if (frob > trust_radius_frob)
-                    step *= trust_radius_frob / frob;
-            }
-            append_candidate_step(
-                candidates,
-                std::move(step),
-                std::format("root{:d}-{}", root, base_label));
-        }
-    }
 } // namespace HartreeFock::Correlation::CASSCF

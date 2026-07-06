@@ -18,7 +18,8 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
-- Resolve the ROHF MO-energy bookkeeping inconsistency between effective, alpha, and beta eigenvalue sets
+- (none currently — the ROHF MO-energy bookkeeping inconsistency is resolved;
+  see Completion)
 
 ## Verification and regression gaps
 
@@ -92,24 +93,26 @@ truth for what remains.
 
 ### Remaining work
 
-#### P2: Optimizer simplification pass
+#### P2: Optimizer simplification pass — mostly resolved; only cosmetic remainder
 
-`numeric-newton` is still a production escape hatch for spaces with `<= 64`
-orbital-rotation pairs. The shared-kappa state-averaged solve is now mature
-enough that this path should likely be demoted or removed from normal
-production flow.
+A suite-wide sweep of every CAS input recorded which candidate the merit
+selector actually accepts. Result:
 
-Deliverables:
+- **Per-root candidates** (`root*-coupled` / `root*-grad-fallback`): accepted
+  **zero** times, yet cost a full per-root coupled solve every stagnant macro.
+  **Removed** (see Completion). Dead weight, no behavior change.
+- **`numeric-newton`**: the dominant accepted fallback (~125 accepted steps
+  across the suite). **Load-bearing — must NOT be demoted.** The original P2
+  deliverable to demote it behind `mcscf_debug_numeric_newton` was wrong.
+- **Single-pair probes**: accepted exactly once, but that once is the
+  load-bearing `probe-pair6-favored[uphill]` step on the SAD-uphill SA-2 canary.
+  **Must NOT be removed.**
 
-- Demote `numeric-newton` to debug-only behind `mcscf_debug_numeric_newton`
-- Remove per-root candidates and pair probes from the stagnation family
-- Keep `sa-diag-fallback` as the sole explicit fallback path
-- Make every transcript step label uniquely identify the path taken
+So the original P2 deliverables (demote numeric-newton, remove probes) are
+disproven; only the per-root removal was correct, and it is done.
 
-Gate:
-
-- All 11 PySCF reference cases continue to pass
-- Stagnation logging becomes simpler and easier to audit
+Cosmetic remainder (low value): make every transcript step label uniquely
+identify the path taken. Not required for correctness or performance.
 
 ### Future hardening
 
@@ -126,14 +129,6 @@ Gate:
   `water_casscf_sa2_sto3g_sad_guess_uphill` (the only one of the four SA-2
   cases that uses it; the other three converge through the normal gate at
   `sa_g < 1e-5`).
-- Narrow hardening worth doing (NOT a correctness fix): replace the literal
-  `reported_gnorm < 100·tol_mcscf_grad` screen in the plateau branch with an
-  explicit `sa_g`-stationarity assertion (the uphill case already satisfies it
-  at ~1e-10, so this only tightens against a future regression where the branch
-  could fire while `sa_g` is not actually small), and add a
-  `casscf_converged_via_plateau` diagnostic the runner asserts is `false` for
-  the three normal SA-2 cases and `true` only for the SAD-uphill case. Keep the
-  uphill SA-2 case green as the acceptance gate.
 - Keep the two water SA-2 SAD-start regressions, because they intentionally protect two distinct optimizer policies
 
 ## Performance and maintenance opportunities

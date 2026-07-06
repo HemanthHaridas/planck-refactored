@@ -1644,7 +1644,16 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
                 .beta_density = Pb,
                 .alpha_fock = Fa,
                 .beta_fock = Fb,
-                .alpha_mo_energies = eps,
+                // Store the canonical alpha-Fock diagonal (epsa), not the
+                // effective Roothaan eigenvalues (eps). epsa is the physically
+                // meaningful per-spin orbital energy and is what the MO-energy
+                // printout should show; _reorder_rohf_orbitals already sorts the
+                // columns by epsa, so the stored energies stay monotonic with
+                // the column order and the downstream ordering consumers
+                // (CASSCF/FCI active-space selection) are unaffected. The
+                // effective eps was a convergence device only and is not read
+                // after the reorder.
+                .alpha_mo_energies = epsa,
                 .beta_mo_energies = epsb,
                 .alpha_mo_coefficients = C,
                 .beta_mo_coefficients = C,

@@ -205,13 +205,6 @@ namespace HartreeFock::Correlation::CASSCF
         std::vector<CandidateStep> &candidates,
         Eigen::MatrixXd step,
         const std::string &label);
-
-    void append_root_candidate_steps(
-        std::vector<CandidateStep> &candidates,
-        const std::vector<Eigen::MatrixXd> &root_steps,
-        const std::string &base_label,
-        bool cap_steps,
-        double max_rot = 0.20);
 } // namespace HartreeFock::Correlation::CASSCF
 
 #endif // HF_POSTHF_CASSCF_DRIVER_INTERNAL_H
