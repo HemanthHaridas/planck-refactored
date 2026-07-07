@@ -9,6 +9,7 @@
 #include "driver.h"
 #include "io/io.h"
 #include "io/logging.h"
+#include "io/results_json.h"
 #include "populations/multipole.h"
 
 using SystemClock = std::chrono::system_clock;
@@ -47,7 +48,7 @@ namespace
         return "Unknown";
     }
 
-    void log_multipole_report(const HartreeFock::Calculator &calculator)
+    void log_multipole_report(HartreeFock::Calculator &calculator)
     {
         auto shell_pairs = build_shellpairs(calculator._shells);
         auto moments = HartreeFock::ObaraSaika::_compute_multipole_moments(
@@ -65,6 +66,8 @@ namespace
             return;
         }
 
+        calculator._multipole = *moments;   // cache for the JSON results dump
+        calculator._have_multipole = true;
         HartreeFock::Logger::multipole_moments(*moments);
         HartreeFock::Logger::blank();
     }
@@ -75,16 +78,29 @@ int main(int argc, const char *argv[])
 {
     const auto program_start = SystemClock::now();
 
-    if (argc != 2)
+    // Args: <input file> [--json <path>]. --json writes machine-readable
+    // results for the Python front end; the human log is unaffected.
+    std::string input_file;
+    std::string json_path;
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::string arg = argv[i];
+        if (arg == "--json" && i + 1 < argc)
+            json_path = argv[++i];
+        else if (input_file.empty())
+            input_file = arg;
+        else
+            input_file.clear(); // force the usage error below
+    }
+    if (input_file.empty())
     {
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Error,
             "Usage :",
-            std::format("{} <input file>", argv[0]));
+            std::format("{} <input file> [--json <path>]", argv[0]));
         return EXIT_FAILURE;
     }
 
-    const std::string input_file = argv[1];
     std::ifstream input_stream(input_file);
     if (!input_stream)
     {
@@ -168,6 +184,19 @@ int main(int argc, const char *argv[])
             "{} ({} seconds)",
             format_time(SystemClock::now()),
             std::chrono::duration<double>(SystemClock::now() - program_start).count()));
+
+    if (!json_path.empty())
+    {
+        // The DFT total lives in the driver Result, not on the Calculator; copy
+        // it in so the shared serializer reports the same energy the log does.
+        calculator._total_energy = result->total_energy;
+        if (auto res = HartreeFock::IO::dump_results_json(calculator, json_path); !res)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Error, "JSON Output Failed :", res.error());
+            return EXIT_FAILURE;
+        }
+    }
 
     return EXIT_SUCCESS;
 }
