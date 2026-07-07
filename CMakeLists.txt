@@ -91,6 +91,14 @@ fetchcontent_declare(
 )
 fetchcontent_makeavailable(eigen)
 
+# Run Eigen's GEMMs serially on the calling thread. This code owns its own
+# OpenMP parallelism at the ERI/Fock level; letting Eigen spawn a second thread
+# pool nests against ours and oversubscribes the cores. Disabling it measured
+# ~26% faster on 8-thread conventional RHF (water dimer/cc-pVTZ), energies
+# bit-identical. ponytail: global define, revisit only if a hot path is proven
+# GEMM-bound and would benefit from parallel Eigen in its own scope.
+add_compile_definitions(EIGEN_DONT_PARALLELIZE)
+
 # External project: libmsym
 set(MSYM_INSTALL_DIR ${SRC_DIR}/external/libmsym/install)
 set(MSYM_BUILD_DIR ${SRC_DIR}/external/libmsym/build)
