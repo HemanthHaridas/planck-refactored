@@ -1264,6 +1264,11 @@ namespace HartreeFock
         Molecule _molecule;
         Basis _shells;
 
+        // Multipole moments (dipole/quadrupole), cached by the multipole report
+        // for the JSON results dump. _have_multipole guards whether it's valid.
+        MultipoleMoments _multipole;
+        bool _have_multipole = false;
+
         // CASSCF / RASSCF results
         OptionsActiveSpace _active_space;     // active space specification
         Eigen::VectorXd _cas_nat_occ;         // active natural occupation numbers

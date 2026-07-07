@@ -19,6 +19,7 @@
 #include "io/checkpoint.h"
 #include "io/fcidump.h"
 #include "io/io.h"
+#include "io/results_json.h"
 #include "io/logging.h"
 #include "lookup/elements.h"
 #include "opt/geomopt.h"
@@ -56,7 +57,7 @@ static std::string format_time(SystemClock::time_point tp)
 }
 
 static void log_multipole_report(
-    const HartreeFock::Calculator &calculator,
+    HartreeFock::Calculator &calculator,
     const std::vector<HartreeFock::ShellPair> &shell_pairs)
 {
     auto moments = HartreeFock::ObaraSaika::_compute_multipole_moments(
@@ -74,6 +75,8 @@ static void log_multipole_report(
         return;
     }
 
+    calculator._multipole = *moments;   // cache for the JSON results dump
+    calculator._have_multipole = true;
     HartreeFock::Logger::multipole_moments(*moments);
     HartreeFock::Logger::blank();
 }
@@ -246,13 +249,31 @@ int main(int argc, const char *argv[])
 {
     const auto program_start = SystemClock::now(); // Start time
 
-    if (argc != 2)
+    // Args: <input file> [--json <path>]. --json writes machine-readable
+    // results for the Python front end; the human log is unaffected.
+    std::string input_file;
+    std::string json_path;
+    for (int i = 1; i < argc; ++i)
     {
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Usage :", std::format("{} <input file>", argv[0]));
+        const std::string arg = argv[i];
+        if (arg == "--json" && i + 1 < argc)
+            json_path = argv[++i];
+        else if (input_file.empty())
+            input_file = arg;
+        else
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Usage :",
+                                         std::format("{} <input file> [--json <path>]", argv[0]));
+            return EXIT_FAILURE;
+        }
+    }
+    if (input_file.empty())
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Usage :",
+                                     std::format("{} <input file> [--json <path>]", argv[0]));
         return EXIT_FAILURE;
     }
 
-    const std::string input_file = argv[1];
     std::ifstream input_stream(input_file);
 
     if (!input_stream)
@@ -1949,6 +1970,15 @@ int main(int argc, const char *argv[])
             }
         }
         HartreeFock::Logger::blank();
+    }
+
+    if (!json_path.empty())
+    {
+        if (auto res = HartreeFock::IO::dump_results_json(calculator, json_path); !res)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "JSON Output Failed :", res.error());
+            return EXIT_FAILURE;
+        }
     }
 
     const auto program_end = SystemClock::now();
