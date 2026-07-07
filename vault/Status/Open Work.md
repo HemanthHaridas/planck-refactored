@@ -31,15 +31,13 @@ truth for what remains.
 
 ## Spherical-basis work still intentionally guarded off
 
-- Spherical analytic gradients (and therefore geomopt / freq) for ROHF and
-  for the post-HF correlated paths (RMP2 / UMP2). RHF/UHF spherical gradients,
-  geomopt, and frequencies are landed. ROHF analytic gradients now exist
-  Cartesian-side (see Completion), but the spherical ROHF path is still
-  guarded off — the Cartesian lift adapter has not been wired through
-  `compute_rohf_gradient`. MP2 gradients still need the response-machinery
-  audit before the same lift adapter (Phase 1) can be wired through
-  `compute_rmp2_gradient` / `compute_ump2_gradient`. Boundary markers:
-  `water_rmp2_spherical_{gradient,geomopt}_rejected`.
+- Spherical analytic gradients (and therefore geomopt / freq) for the post-HF
+  correlated paths (RMP2 / UMP2). RHF, UHF, and ROHF spherical gradients,
+  geomopt, and frequencies are all landed (ROHF via the same build-W-in-the-
+  spherical-basis-then-lift-once pattern the RHF/UHF paths use). MP2 gradients
+  still need the response-machinery audit before the same lift adapter (Phase 1)
+  can be wired through `compute_rmp2_gradient` / `compute_ump2_gradient`.
+  Boundary markers: `water_rmp2_spherical_{gradient,geomopt}_rejected`.
 - Spherical PCM
 - Spherical DFT and TDDFT
 - Any additional spherical workflows not already covered by the landed

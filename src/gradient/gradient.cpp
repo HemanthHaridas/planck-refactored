@@ -849,21 +849,26 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
     const Eigen::MatrixXd P_t = P_a + P_b;
 
     // ── ROHF energy-weighted density ─────────────────────────────────────────
-    // W = Pa Fa Pa + Pb Fb Pb, built from the converged spin Fock matrices the
+    // W = Pa Fa Pa + Pb Fb Pb, built from the converged spin densities/Fock the
     // ROHF SCF persists into the alpha/beta channels. This replaces the UHF
     // W = Σ_i ε_i C_i C_iᵀ, which is only exact when the orbitals diagonalize
     // their own spin Fock — true for UHF, false for ROHF (its orbitals are
     // canonical for the effective Roothaan Fock, so Cᵀ Fa C is not diagonal).
-    // Both Fock matrices are lifted the same way as the densities so the
-    // Cartesian derivative kernel indexing lines up in spherical mode.
-    auto Fa_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.alpha.fock);
-    if (!Fa_lifted)
-        return std::unexpected(Fa_lifted.error());
-    auto Fb_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.beta.fock);
-    if (!Fb_lifted)
-        return std::unexpected(Fb_lifted.error());
-    const Eigen::MatrixXd W =
-        build_rohf_energy_weighted_density(P_a, P_b, *Fa_lifted, *Fb_lifted);
+    //
+    // W is built in the SCF's own AO basis (spherical when _spherical) from the
+    // stored matrices, then lifted ONCE — exactly like the RHF/UHF W. It must
+    // NOT be assembled from separately-lifted factors: the lift Cᵀ(·)C is
+    // Cᵀ M C with C the non-square (n_sph × n_cart) transform, so C Cᵀ ≠ I and
+    // lift(Pa Fa Pa) ≠ lift(Pa) lift(Fa) lift(Pa). In Cartesian mode the lift is
+    // the identity, so build-then-lift and lift-then-build coincide and this is
+    // byte-identical to the pre-S1 form.
+    const Eigen::MatrixXd W_native = build_rohf_energy_weighted_density(
+        calc._info._scf.alpha.density, calc._info._scf.beta.density,
+        calc._info._scf.alpha.fock, calc._info._scf.beta.fock);
+    auto W_lifted = lift_ao_matrix_if_spherical(calc, W_native);
+    if (!W_lifted)
+        return std::unexpected(W_lifted.error());
+    const Eigen::MatrixXd W = std::move(*W_lifted);
 
     Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(natoms, 3);
 
