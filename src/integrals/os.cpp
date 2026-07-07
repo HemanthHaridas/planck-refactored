@@ -2329,7 +2329,13 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_fock_rhf(const std::vector<dou
     const std::size_t nb3 = nb * nb * nb;
     Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
 
-#pragma omp parallel for schedule(static)
+    // schedule(dynamic): each mu writes a disjoint output row G(mu,·) — no race,
+    // output-identical to static. Static split the nb rows evenly, but per-row
+    // work is uneven in practice (the exchange access _eri[mu·nb3+lam·nb2+…]
+    // strides the tensor differently per mu, so cache behavior varies and fast
+    // threads stall at the barrier — profiled at ~14% idle every SCF iteration).
+    // Dynamic lets a thread that finishes early pick up the next row.
+#pragma omp parallel for schedule(dynamic, 4)
     for (std::size_t mu = 0; mu < nb; ++mu)
         for (std::size_t nu = 0; nu < nb; ++nu)
             for (std::size_t lam = 0; lam < nb; ++lam)
@@ -2354,7 +2360,9 @@ std::pair<Eigen::MatrixXd, Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_fo
     Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
     Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
 
-#pragma omp parallel for schedule(static)
+    // Same dynamic-schedule rationale as _compute_fock_rhf: disjoint output rows
+    // (mu), uneven per-row cache behavior, output-identical.
+#pragma omp parallel for schedule(dynamic, 4)
     for (std::size_t mu = 0; mu < nb; ++mu)
         for (std::size_t nu = 0; nu < nb; ++nu)
             for (std::size_t lam = 0; lam < nb; ++lam)
