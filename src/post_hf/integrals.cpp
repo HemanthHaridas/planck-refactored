@@ -105,16 +105,22 @@ namespace HartreeFock::Correlation
 
         // T1[i,ν,λ,σ] = Σ_μ C1(μ,i) * eri[μνλσ]   shape: n1 × nb × nb × nb
         //
-        // Each quarter transform is parallelized over its leading index, which
-        // strides whole disjoint output slices (T1[i*...], T2[i*...], ...). No
-        // thread shares a write target and the inner accumulation order is
-        // unchanged, so the result is identical to the serial version — this is
-        // a scheduling change only. transform_eri is never called from inside an
-        // OpenMP parallel region (all call sites are serial), so there is no
-        // nesting / over-subscription concern.
+        // Each quarter transform is parallelized over its two leading indices,
+        // which stride whole disjoint output slices. No thread shares a write
+        // target and the inner accumulation order is unchanged, so the result is
+        // identical to the serial version — this is a scheduling change only.
+        // transform_eri is never called from inside an OpenMP parallel region
+        // (all call sites are serial), so there is no nesting / over-subscription
+        // concern.
+        //
+        // collapse(2) + schedule(dynamic): the leading index alone is the number
+        // of occupied MOs (n1), which is O(10) — too few work units to fill 8+
+        // threads without leaving cores idle at the barrier (profiled at ~38% idle
+        // on the MP2 transform). Collapsing the first two loops widens the
+        // iteration space (n1·n2, n1·nb, …) so dynamic scheduling can balance it.
         std::vector<double> T1(n1 * nb * nb * nb, 0.0);
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for collapse(2) schedule(dynamic)
 #endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t nu = 0; nu < nb; ++nu)
@@ -127,7 +133,7 @@ namespace HartreeFock::Correlation
         // T2[i,a,λ,σ] = Σ_ν C2(ν,a) * T1[i,ν,λ,σ]   shape: n1 × n2 × nb × nb
         std::vector<double> T2(n1 * n2 * nb * nb, 0.0);
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for collapse(2) schedule(dynamic)
 #endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
@@ -143,7 +149,7 @@ namespace HartreeFock::Correlation
         // T3[i,a,j,σ] = Σ_λ C3(λ,j) * T2[i,a,λ,σ]   shape: n1 × n2 × n3 × nb
         std::vector<double> T3(n1 * n2 * n3 * nb, 0.0);
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for collapse(2) schedule(dynamic)
 #endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
@@ -159,7 +165,7 @@ namespace HartreeFock::Correlation
         // out[i,a,j,b] = Σ_σ C4(σ,b) * T3[i,a,j,σ]   shape: n1 × n2 × n3 × n4
         std::vector<double> out(n1 * n2 * n3 * n4, 0.0);
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for collapse(2) schedule(dynamic)
 #endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
