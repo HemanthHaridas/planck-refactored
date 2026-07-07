@@ -491,7 +491,7 @@ int main(int argc, const char *argv[])
                        "(basis_type spherical); currently single-point RHF/UHF/ROHF "
                        "energies (Conventional or Direct), with MP2, CASSCF/RASSCF, "
                        "FCI, or coupled cluster (RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ), "
-                       "RHF/UHF analytic gradients, RHF/UHF geometry optimization, "
+                       "RHF/UHF/ROHF analytic gradients, geometry optimization, "
                        "frequencies, geomopt+freq, and imaginary-mode following, "
                        "and point-group symmetry / SAO blocking are available. Use "
                        "basis_type cartesian for this calculation.");
@@ -530,8 +530,8 @@ int main(int argc, const char *argv[])
             calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
         if (needs_gradient)
         {
-            if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
-                return reject("ROHF analytic gradient");
+            // ROHF spherical gradients: enabled (compute_rohf_gradient builds W
+            // in the spherical basis then lifts once — see gradient.cpp).
             if (calculator._correlation == HartreeFock::PostHF::RMP2 ||
                 calculator._correlation == HartreeFock::PostHF::UMP2)
                 return reject("MP2 analytic gradient");
@@ -1434,9 +1434,13 @@ int main(int argc, const char *argv[])
         }
         else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
         {
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :",
-                                         "ROHF analytic gradients are not implemented");
-            return EXIT_FAILURE;
+            auto grad_res = HartreeFock::Gradient::compute_rohf_gradient(calculator, shellpairs);
+            if (!grad_res)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :", grad_res.error());
+                return EXIT_FAILURE;
+            }
+            grad = std::move(*grad_res);
         }
         else if (calculator._info._scf.is_uhf)
         {

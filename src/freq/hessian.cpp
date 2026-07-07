@@ -100,7 +100,10 @@ static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(Hart
     }
     else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
     {
-        return std::unexpected("Hessian ROHF gradient is not implemented");
+        auto grad_res = HartreeFock::Gradient::compute_rohf_gradient(calc, shell_pairs);
+        if (!grad_res)
+            return std::unexpected("Hessian ROHF gradient failed: " + grad_res.error());
+        grad = std::move(*grad_res);
     }
     else
     {

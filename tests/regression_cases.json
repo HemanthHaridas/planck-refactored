@@ -197,7 +197,7 @@
         {
           "type": "metric_close",
           "metric": "rhf_total_energy",
-          "expected": -75.6320628070,
+          "expected": -75.632062807,
           "atol": 1e-07
         },
         {
@@ -352,7 +352,7 @@
         {
           "type": "metric_close",
           "metric": "rhf_total_energy",
-          "expected": -74.9458807610,
+          "expected": -74.945880761,
           "atol": 1e-07
         },
         {
@@ -383,7 +383,7 @@
         {
           "type": "metric_close",
           "metric": "rhf_total_energy",
-          "expected": -74.9458807610,
+          "expected": -74.945880761,
           "atol": 1e-07
         },
         {
@@ -426,7 +426,7 @@
         {
           "type": "metric_close",
           "metric": "rhf_total_energy",
-          "expected": -74.9458807610,
+          "expected": -74.945880761,
           "atol": 1e-07
         },
         {
@@ -469,7 +469,7 @@
         {
           "type": "metric_close",
           "metric": "rhf_total_energy",
-          "expected": -74.9458807610,
+          "expected": -74.945880761,
           "atol": 1e-07
         },
         {
@@ -1109,7 +1109,7 @@
         "Zero-point energy :",
         "Converged :                   true"
       ],
-      "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |Δfreq| 4.8 cm-1, ΔE ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
+      "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |\u0394freq| 4.8 cm-1, \u0394E ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
     },
     {
       "id": "water_radical_cation_ump2_gradient_smoke",
@@ -1335,6 +1335,25 @@
       ]
     },
     {
+      "id": "he_sad_ccpvdz",
+      "input": "tests/inputs/regression/closed_shell/he_sad_ccpvdz.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -2.8551604772,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
       "id": "water_triplet_uhf_sto3g",
       "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfinp",
       "tags": [
@@ -1466,7 +1485,7 @@
         {
           "type": "metric_close",
           "metric": "lumo_energy",
-          "expected": 0.085350,
+          "expected": 0.08535,
           "atol": 1e-05
         }
       ],
@@ -1806,7 +1825,7 @@
         {
           "type": "metric_close",
           "metric": "lr_root2_energy_ev",
-          "expected": 3.73836470,
+          "expected": 3.7383647,
           "atol": 0.01
         },
         {
@@ -1848,7 +1867,7 @@
         {
           "type": "metric_close",
           "metric": "lr_root2_energy_ev",
-          "expected": 3.73836470,
+          "expected": 3.7383647,
           "atol": 0.01
         }
       ]
@@ -3239,6 +3258,193 @@
         "Total Energy (RYS)",
         "Total Energy (AUTO)",
         "PASS"
+      ]
+    },
+    {
+      "id": "oh_rohf_gradient_sto3g",
+      "input": "tests/inputs/regression/open_shell/oh_rohf_gradient_sto3g.hfinp",
+      "executable": "tests/hf_gradient_fd.py",
+      "tags": [
+        "core",
+        "extended",
+        "open_shell"
+      ],
+      "_pyscf_reference": "ROHF analytic gradient. PySCF 2.13.0 ROHF/STO-3G cart, OH doublet at r=0.97 Ang: g_z(H)=-0.05487538 Ha/Bohr. Planck analytic matches PySCF analytic to 1.0e-7 and Planck FD to 3.7e-7. W = Pa Fa Pa + Pb Fb Pb (PySCF make_rdm1e).",
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "ch3_radical_rohf_gradient_sto3g",
+      "input": "tests/inputs/regression/open_shell/ch3_radical_rohf_gradient_sto3g.hfinp",
+      "executable": "tests/hf_gradient_fd.py",
+      "tags": [
+        "core",
+        "extended",
+        "open_shell"
+      ],
+      "_pyscf_reference": "ROHF analytic gradient, low-symmetry (C1) doublet CH3 radical so ALL 12 gradient components are non-zero and off-axis. Planck analytic matches PySCF 2.13.0 ROHF analytic to 8.1e-8 and Planck FD to 2.8e-7 across every component. This is the case that exercises the full 3-vector (the OH/CH2 cases are effectively 1-D).",
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "oh_rohf_geomopt_sto3g",
+      "input": "tests/inputs/regression/open_shell/oh_rohf_geomopt_sto3g.hfinp",
+      "tags": [
+        "core",
+        "extended",
+        "open_shell"
+      ],
+      "timeout_s": 300,
+      "_pyscf_reference": "ROHF/STO-3G geomopt, OH doublet. PySCF 2.13.0 ROHF + geometric_solver optimize: E_opt=-74.3636983636 Eh (O-H=1.012845 Ang). Planck IC-BFGS: E_opt=-74.3636983851 Eh -> Delta 2.2e-8 Eh, same well.",
+      "expected_exit_code": 0,
+      "contains": [
+        "Geometry Optimization",
+        "Final Energy",
+        "Optimized Geometry"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -74.3636983636,
+          "atol": 1e-06
+        },
+        {
+          "type": "metric_present",
+          "metric": "geomopt_final_gradient_max"
+        },
+        {
+          "type": "metric_le",
+          "metric": "geomopt_final_gradient_max",
+          "value": 0.0005
+        }
+      ]
+    },
+    {
+      "id": "oh_rohf_freq_sto3g",
+      "input": "tests/inputs/regression/open_shell/oh_rohf_freq_sto3g.hfinp",
+      "tags": [
+        "core",
+        "extended",
+        "open_shell"
+      ],
+      "timeout_s": 300,
+      "_pyscf_reference": "ROHF/STO-3G semi-numerical frequency, OH doublet at input geom (r=0.97 Ang, unoptimized). PySCF 2.13.0 ROHF FD-of-analytic-gradient Hessian (delta=1e-3 Bohr) + thermo.harmonic_analysis: stretch = 4597.66 cm-1. Planck semi-numerical Hessian (same method, same delta): 4597.73 cm-1 -> Delta 0.07 cm-1.",
+      "expected_exit_code": 0,
+      "contains": [
+        "Vibrational Frequencies",
+        "Frequency (cm"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_1",
+          "expected": 4597.66,
+          "atol": 2.0
+        }
+      ]
+    },
+    {
+      "id": "h2o_cation_rohf_spherical_gradient_631gd",
+      "input": "tests/inputs/regression/spherical/h2o_cation_rohf_spherical_gradient_631gd.hfinp",
+      "executable": "tests/hf_gradient_fd.py",
+      "tags": [
+        "core",
+        "extended",
+        "spherical",
+        "open_shell"
+      ],
+      "_pyscf_reference": "Spherical-basis ROHF analytic gradient (6-31g*, d shell on O). Water cation doublet. Planck analytic matches PySCF 2.13.0 ROHF cart=False analytic to 7.8e-8 and Planck FD to 1.4e-7 across all components. W is built in the spherical basis then lifted once (lift(Pa Fa Pa) != lift(Pa) lift(Fa) lift(Pa) since the cart<-sph transform is non-square).",
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "h2o_cation_rohf_spherical_geomopt_631gd",
+      "input": "tests/inputs/regression/spherical/h2o_cation_rohf_spherical_geomopt_631gd.hfinp",
+      "tags": [
+        "core",
+        "extended",
+        "spherical",
+        "open_shell"
+      ],
+      "timeout_s": 300,
+      "_pyscf_reference": "Spherical ROHF/6-31g* geomopt, water cation doublet. PySCF 2.13.0 ROHF cart=False + geometric_solver: E_opt=-75.6091342728 Eh. Planck IC-BFGS: E_opt=-75.6091341456 Eh -> Delta 1.3e-7 Eh, point group C2v.",
+      "expected_exit_code": 0,
+      "contains": [
+        "Geometry Optimization",
+        "Final Energy",
+        "Optimized Geometry"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -75.6091342728,
+          "atol": 1e-06
+        },
+        {
+          "type": "metric_present",
+          "metric": "geomopt_final_gradient_max"
+        },
+        {
+          "type": "metric_le",
+          "metric": "geomopt_final_gradient_max",
+          "value": 0.0005
+        },
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        }
+      ]
+    },
+    {
+      "id": "h2o_cation_rohf_spherical_freq_631gd",
+      "input": "tests/inputs/regression/spherical/h2o_cation_rohf_spherical_freq_631gd.hfinp",
+      "tags": [
+        "core",
+        "extended",
+        "spherical",
+        "open_shell"
+      ],
+      "timeout_s": 300,
+      "_pyscf_reference": "Spherical ROHF/6-31g* semi-numerical frequency, water cation doublet at input geom (unoptimized). PySCF 2.13.0 ROHF cart=False FD-of-analytic-gradient Hessian (delta=1e-3 Bohr) + thermo.harmonic_analysis: 1613.1/4000.4/4038.8 cm-1. Planck (same method/step): 1613.02/4000.45/4038.79 cm-1 -> Delta < 0.1 cm-1 per mode.",
+      "expected_exit_code": 0,
+      "contains": [
+        "Vibrational Frequencies",
+        "Frequency (cm"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_1",
+          "expected": 1613.1,
+          "atol": 2.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_2",
+          "expected": 4000.4,
+          "atol": 2.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "vib_freq_3",
+          "expected": 4038.8,
+          "atol": 2.0
+        }
       ]
     }
   ]

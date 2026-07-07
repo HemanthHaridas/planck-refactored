@@ -50,7 +50,7 @@ Uses two `SpinChannel` objects (alpha, beta). Each has its own Fock matrix, dens
 - a Roothaan effective Fock for DIIS and orbital updates,
 - an orbital reordering helper to keep closed/open/virtual spaces in Aufbau order.
 
-ROHF is available for SCF and checkpoint/restart workflows, but downstream support is narrower than RHF/UHF: FCI works, while most other post-HF, gradients, and PCM paths still reject ROHF explicitly.
+ROHF is available for SCF and checkpoint/restart workflows, but downstream support is narrower than RHF/UHF: FCI, CASSCF, and RASSCF accept ROHF references, and analytic gradients / geomopt / frequencies are implemented in **both** the Cartesian and spherical bases (see Gradients and GeomOpt → ROHF Analytic Gradient). ROHF-MP2/UMP2 and coupled-cluster, ROHF stability analysis, and ROHF PCM still reject ROHF explicitly.
 
 ## Stability Analysis
 

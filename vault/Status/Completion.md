@@ -62,14 +62,19 @@ historical design context, but they are no longer the source of truth for
 - Spherical property reporting
 - Same-basis and cross-basis checkpoint restart in the spherical working basis
 - Spherical MP2, CASSCF, RASSCF, FCI, FCIDUMP export, and coupled-cluster energies
-- Spherical analytic gradients for RHF and UHF, via the
+- Spherical analytic gradients for RHF, UHF, and ROHF, via the
   `lift_density_sph_to_cart` adapter that maps the spherical SCF density and
   energy-weighted density back to the Cartesian basis so the Cartesian
   derivative-integral engine can be reused unchanged (the energy is invariant
-  under the basis change, so the lift carries no approximation). PySCF-validated
-  to ~1e-7 Ha/Bohr on water/6-31g* and OH/STO-3G
+  under the basis change, so the lift carries no approximation). For ROHF the
+  energy-weighted density `W = Pa·Fa·Pa + Pb·Fb·Pb` is built in the spherical
+  basis and lifted **once** — never from separately-lifted factors, since the
+  cart←sph transform C is non-square (C·Cᵀ ≠ I), so
+  `lift(Pa·Fa·Pa) ≠ lift(Pa)·lift(Fa)·lift(Pa)`. PySCF-validated to ~1e-7
+  Ha/Bohr on water/6-31g* (RHF), OH/STO-3G (UHF), and the water-cation doublet
+  6-31g* (ROHF, `h2o_cation_rohf_spherical_gradient_631gd`)
 - Spherical geometry optimization (IC-BFGS + Cartesian L-BFGS) and
-  semi-numerical frequencies for RHF and UHF, plus geomopt+frequency and
+  semi-numerical frequencies for RHF, UHF, and ROHF, plus geomopt+frequency and
   imaginary-mode following. Driven by a shared
   `HartreeFock::SCF::rebuild_basis_dependent_state` helper that re-runs the
   spherical `_cart_to_sph` row-normalization and the `C·(T+V)·Cᵀ` working-basis
@@ -128,11 +133,30 @@ historical design context, but they are no longer the source of truth for
 
 ### Gradients, optimization, and frequencies
 
-- Analytic gradients for RHF, UHF, RMP2, and UMP2
+- Analytic gradients for RHF, UHF, ROHF, RMP2, and UMP2
 - Geometry optimization in Cartesian and internal coordinates
 - Semi-numerical Hessian / vibrational frequencies
 - Imaginary-frequency following
 - Constrained geometry optimization
+- ROHF analytic gradients (Cartesian basis), plus the geometry-optimization
+  and frequency workflows built on them. The gradient is structurally the UHF
+  gradient — same Hellmann-Feynman + Pulay + 2e + Vnn terms over the alpha/beta
+  densities — with one ROHF-specific piece: the energy-weighted density
+  `W = Pa·Fa·Pa + Pb·Fb·Pb` (`build_rohf_energy_weighted_density` in
+  `src/gradient/gradient.cpp`, built from the spin Fock matrices the SCF already
+  persists). This is exactly PySCF's ROHF `make_rdm1e` (`W_a + W_b`) and is
+  required because ROHF orbitals are canonical for the effective Roothaan Fock,
+  not for the individual spin Focks, so the UHF `Σ ε_i C_i C_iᵀ` form is wrong.
+  No CPHF/Z-vector solve — ROHF SCF is variational, so the SCF gradient needs
+  none, same as RHF/UHF. PySCF-gated by `oh_rohf_gradient_sto3g`,
+  `ch3_radical_rohf_gradient_sto3g` (low-symmetry C1, all 12 gradient components
+  non-zero, matches PySCF analytic to ~8e-8), `oh_rohf_geomopt_sto3g`
+  (E_opt Δ ~2e-8 Eh), and `oh_rohf_freq_sto3g` (stretch Δ ~0.07 cm⁻¹ vs a
+  PySCF FD-of-analytic-gradient Hessian). Spherical ROHF gradients, geomopt,
+  and frequencies are also landed (same build-W-in-spherical-then-lift-once
+  pattern; PySCF-gated by `h2o_cation_rohf_spherical_{gradient,geomopt,freq}_631gd`
+  to ~1e-7 Ha/Bohr, ~1e-7 Eh, and <0.1 cm⁻¹). ROHF-MP2 gradients, ROHF
+  stability, and ROHF PCM remain out of scope.
 
 ### DFT
 
@@ -163,6 +187,18 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- SAD isolated-atom false-convergence fixed in the SCF convergence gate
+  (`is_converged`, `src/scf/scf.cpp`). For small lone closed-shell atoms
+  (He/cc-pVDZ) the SAD guess drove DIIS to extrapolate a Fock whose
+  diagonalized density exactly reproduced the previous one (ΔP → 0) while the
+  DIIS residual FPS-SPF was still ~1e-3, so the ΔE+ΔP gate declared convergence
+  in a wrong basin (-2.8551548739 vs the true -2.8551604772). `is_converged`
+  now also requires the DIIS error below `_tol_density`; `IterationMetrics`
+  carries `diis_error` (set at the RHF/UHF/ROHF call sites from the already-
+  computed `diis_err`), and it is 0 when DIIS is inactive so non-DIIS paths are
+  unaffected. Full regression suite unchanged (71/71); new gate
+  `he_sad_ccpvdz` pins the He/cc-pVDZ SAD energy to -2.8551604772. The earlier
+  BSSE HCore workaround is no longer required for correctness.
 - Rys 6D ERI accumulator sized per quartet (PR #126). `_rys_sum_buf` in
   `src/integrals/rys.cpp` was a thread-local `double[2·MAX_L+1]^6 = [13]^6 =
   38.5 MB` sized off the global `MAX_L=6`; on the g++-15 / emulated-TLS build

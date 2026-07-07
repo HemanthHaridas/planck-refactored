@@ -72,7 +72,65 @@ component tolerance on the gradient cases is 1e-7 Ha/Bohr (limited by the
 
 Wired into the gradient driver (`src/driver.cpp`) so `correlation ump2` with `calculation gradient` now produces the correlated nuclear gradient instead of exiting as unimplemented. Regression: `water_radical_cation_ump2_gradient_smoke`.
 
-ROHF analytic gradients are still explicitly unimplemented, so ROHF frequency and geometry-optimization paths fail once they need the gradient.
+## ROHF Analytic Gradient
+
+`compute_rohf_gradient` in `src/gradient/gradient.cpp` is structurally the UHF
+gradient — identical Hellmann-Feynman + Pulay, nucleus-position V, 2e ERI, and
+Vnn terms contracted over the alpha/beta densities — with a single
+ROHF-specific substitution: the energy-weighted density used in the Pulay term.
+
+The UHF energy-weighted density `W = Σ_i ε_i C_i C_iᵀ` is only correct when the
+orbitals diagonalize their own spin Fock (true for UHF). ROHF orbitals
+diagonalize the effective Roothaan Fock, so `Cᵀ Fα C` / `Cᵀ Fβ C` carry
+non-zero off-diagonal blocks and that form is wrong. The correct ROHF density is
+
+```
+W = Pa·Fa·Pa + Pb·Fb·Pb
+```
+
+(`build_rohf_energy_weighted_density`), with `Pa`/`Pb` the alpha/beta AO
+densities and `Fa`/`Fb` the converged spin Fock matrices — all four already
+persisted by the ROHF SCF into `_info._scf.{alpha,beta}.{density,fock}`, so no
+Fock rebuild is needed at gradient time. This is exactly PySCF's ROHF
+`make_rdm1e` (`W_a + W_b`) and reduces to the RHF/UHF energy-weighted density in
+the closed-shell and unrestricted limits.
+
+No CPHF / Z-vector solve is involved: ROHF SCF is variational, so the SCF
+gradient needs none — the same reason the RHF/UHF SCF gradients don't. (A
+Z-vector solve only re-enters for a future ROHF-*MP2* gradient, which would need
+a new three-block ROHF CPHF solver, not the RHF/UHF ones.)
+
+Wired into the driver (`src/driver.cpp`), the geomopt inner loop
+(`src/opt/geomopt.cpp`), and the semi-numerical Hessian
+(`src/freq/hessian.cpp`), so `scf_type rohf` with `calculation
+gradient`/`geomopt`/`frequency`/`geomoptfreq`/`imaginaryfollow` runs in **both**
+the Cartesian and the spherical basis. ROHF-MP2 gradients, ROHF stability, and
+ROHF PCM remain out of scope.
+
+### Spherical ROHF (build-then-lift W)
+
+`compute_rohf_gradient` is spherical-ready through the same `lift_ao_matrix_if_spherical`
+skin the RHF/UHF gradients use — but the energy-weighted density needs one
+specific ordering. `W = Pa·Fa·Pa + Pb·Fb·Pb` is built in the SCF's own
+(spherical) basis from the stored `_info._scf.{alpha,beta}.{density,fock}` and
+lifted **once**. It must **not** be assembled from separately-lifted factors:
+the lift is `Cᵀ M C` with `C` the non-square (n_sph × n_cart) transform, so
+`C·Cᵀ ≠ I` and `lift(Pa·Fa·Pa) ≠ lift(Pa)·lift(Fa)·lift(Pa)` (the two differ by
+O(1e4) on a random d-shell). This mirrors exactly how the RHF/UHF paths lift
+their MO-built `W` once. In Cartesian mode the lift is the identity, so
+build-then-lift and lift-then-build coincide and the Cartesian gradient is
+byte-identical. The geomopt / freq inner loops inherit the spherical basis
+rebuild (`rebuild_basis_dependent_state`) unchanged from the RHF/UHF path.
+
+PySCF-gated in the Cartesian basis by `oh_rohf_gradient_sto3g`,
+`ch3_radical_rohf_gradient_sto3g` (low-symmetry C1 doublet — all 12 gradient
+components non-zero and off-axis, matching PySCF analytic to ~8e-8),
+`oh_rohf_geomopt_sto3g` (E_opt Δ ~2e-8 Eh vs PySCF `geometric_solver`), and
+`oh_rohf_freq_sto3g` (OH stretch Δ ~0.07 cm⁻¹ vs a PySCF FD-of-analytic-gradient
+Hessian). In the spherical basis (6-31g*, d shell on O) by
+`h2o_cation_rohf_spherical_{gradient,geomopt,freq}_631gd` (water-cation doublet;
+gradient ~7.8e-8 Ha/Bohr vs PySCF `cart=False` analytic, geomopt Δ ~1.3e-7 Eh,
+frequencies <0.1 cm⁻¹ per mode).
 
 ## Spherical-basis gradients, geomopt, and frequencies (RHF / UHF)
 
@@ -97,7 +155,7 @@ Contract test: `planck-working-state-rebuild` (`tests/working_state_rebuild.cpp`
 
 ### Driver gate
 
-`src/driver.cpp` admits `Gradient`, `GeomOpt`, `Frequency`, `GeomOptFrequency`, and `ImaginaryFollow` for RHF and UHF in the spherical basis. ROHF analytic gradients (unimplemented Cartesian-side too) and MP2/UMP2 gradients (need the response-machinery audit before the same lift adapter can be wired in) remain rejected explicitly for every gradient-consuming workflow; each rejection names the specific feature.
+`src/driver.cpp` admits `Gradient`, `GeomOpt`, `Frequency`, `GeomOptFrequency`, and `ImaginaryFollow` for RHF, UHF, and ROHF in the spherical basis (ROHF via the build-then-lift W above). MP2/UMP2 gradients still need the response-machinery audit before the same lift adapter can be wired in, so they remain rejected in spherical mode for every gradient-consuming workflow; each rejection names the specific feature.
 
 ### Regression coverage
 

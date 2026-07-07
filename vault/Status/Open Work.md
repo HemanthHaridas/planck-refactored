@@ -31,13 +31,13 @@ truth for what remains.
 
 ## Spherical-basis work still intentionally guarded off
 
-- Spherical analytic gradients (and therefore geomopt / freq) for ROHF and
-  for the post-HF correlated paths (RMP2 / UMP2). RHF/UHF spherical gradients,
-  geomopt, and frequencies are landed; ROHF gradients remain unimplemented
-  Cartesian-side too, and MP2 gradients still need the response-machinery
-  audit before the same lift adapter (Phase 1) can be wired through
-  `compute_rmp2_gradient` / `compute_ump2_gradient`. Boundary markers:
-  `water_rmp2_spherical_{gradient,geomopt}_rejected`.
+- Spherical analytic gradients (and therefore geomopt / freq) for the post-HF
+  correlated paths (RMP2 / UMP2). RHF, UHF, and ROHF spherical gradients,
+  geomopt, and frequencies are all landed (ROHF via the same build-W-in-the-
+  spherical-basis-then-lift-once pattern the RHF/UHF paths use). MP2 gradients
+  still need the response-machinery audit before the same lift adapter (Phase 1)
+  can be wired through `compute_rmp2_gradient` / `compute_ump2_gradient`.
+  Boundary markers: `water_rmp2_spherical_{gradient,geomopt}_rejected`.
 - Spherical PCM
 - Spherical DFT and TDDFT
 - Any additional spherical workflows not already covered by the landed
@@ -77,10 +77,10 @@ truth for what remains.
   spin-polarized open inactive core (distinct alpha/beta core orbitals, with the
   unrestricted core Fock, core energy, and response-block changes it implies)
   is out of scope and stays rejected by the parity guard
-- ROHF analytic gradients, stability analysis, and PCM remain incomplete
+- ROHF stability analysis and PCM remain incomplete (ROHF analytic gradients,
+  and the geomopt / frequency workflows built on them, are now landed
+  Cartesian-side — see Completion)
 - The ccgen `TensorOptimized` RCCSDT backend is still treated in-tree as an experimental / phase-4 path
-- The triplet UHF state-selection / convergence gap noted during the UMP2 gradient check is still open as an SCF issue
-- The isolated-small-atom SAD false-convergence issue surfaced by the BSSE work is still open; the counterpoise driver currently works around it by forcing HCore
 
 ## BSSE follow-up
 
