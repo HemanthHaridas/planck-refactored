@@ -353,10 +353,19 @@ bool HartreeFock::SCF::is_converged(
     const IterationMetrics &metrics,
     unsigned int iteration) noexcept
 {
+    // DIIS can extrapolate a Fock whose diagonalized density exactly
+    // reproduces the previous one (ΔP → 0) while the DIIS residual FPS-SPF is
+    // still large — a stalled step, not convergence. Gate on the DIIS error too
+    // so we don't declare convergence in a wrong basin (seen with SAD guess on
+    // lone closed-shell atoms). diis_error is 0 when DIIS is inactive, so this
+    // is a no-op for non-DIIS runs. See SAD isolated-atom bug.
+    const bool diis_residual_ok =
+        metrics.diis_error <= 0.0 || metrics.diis_error < scf_options._tol_density;
     return iteration > 1 &&
            metrics.delta_energy < scf_options._tol_energy &&
            metrics.delta_density_rms < scf_options._tol_density &&
-           metrics.delta_density_max < scf_options._tol_density;
+           metrics.delta_density_max < scf_options._tol_density &&
+           diis_residual_ok;
 }
 
 void HartreeFock::SCF::store_restricted_iteration(
@@ -711,8 +720,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         const Eigen::MatrixXd density_next = 2.0 * C_occ * C_occ.transpose();
 
         // ── Convergence checks ────────────────────────────────────────────────
-        const IterationMetrics metrics =
+        IterationMetrics metrics =
             restricted_iteration_metrics(P, density_next, E_prev, E_total);
+        metrics.diis_error = diis_err;
 
         const double iter_time = std::chrono::duration<double>(
                                      std::chrono::steady_clock::now() - iter_start)
@@ -1136,8 +1146,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             Cb.leftCols(n_beta) * Cb.leftCols(n_beta).transpose();
 
         // ── Convergence on total density ──────────────────────────────────────
-        const IterationMetrics metrics = unrestricted_iteration_metrics(
+        IterationMetrics metrics = unrestricted_iteration_metrics(
             Pa, Pb, density_alpha_next, density_beta_next, E_prev, E_total);
+        metrics.diis_error = diis_err;
 
         const double iter_time = std::chrono::duration<double>(
                                      std::chrono::steady_clock::now() - iter_start)
@@ -1614,8 +1625,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
         const Eigen::MatrixXd density_beta_next =
             C.leftCols(n_beta) * C.leftCols(n_beta).transpose();
 
-        const IterationMetrics metrics = unrestricted_iteration_metrics(
+        IterationMetrics metrics = unrestricted_iteration_metrics(
             Pa, Pb, density_alpha_next, density_beta_next, E_prev, E_total);
+        metrics.diis_error = diis_err;
 
         const double iter_time = std::chrono::duration<double>(
                                      std::chrono::steady_clock::now() - iter_start)

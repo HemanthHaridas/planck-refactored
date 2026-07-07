@@ -187,6 +187,18 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- SAD isolated-atom false-convergence fixed in the SCF convergence gate
+  (`is_converged`, `src/scf/scf.cpp`). For small lone closed-shell atoms
+  (He/cc-pVDZ) the SAD guess drove DIIS to extrapolate a Fock whose
+  diagonalized density exactly reproduced the previous one (ΔP → 0) while the
+  DIIS residual FPS-SPF was still ~1e-3, so the ΔE+ΔP gate declared convergence
+  in a wrong basin (-2.8551548739 vs the true -2.8551604772). `is_converged`
+  now also requires the DIIS error below `_tol_density`; `IterationMetrics`
+  carries `diis_error` (set at the RHF/UHF/ROHF call sites from the already-
+  computed `diis_err`), and it is 0 when DIIS is inactive so non-DIIS paths are
+  unaffected. Full regression suite unchanged (71/71); new gate
+  `he_sad_ccpvdz` pins the He/cc-pVDZ SAD energy to -2.8551604772. The earlier
+  BSSE HCore workaround is no longer required for correctness.
 - Rys 6D ERI accumulator sized per quartet (PR #126). `_rys_sum_buf` in
   `src/integrals/rys.cpp` was a thread-local `double[2·MAX_L+1]^6 = [13]^6 =
   38.5 MB` sized off the global `MAX_L=6`; on the g++-15 / emulated-TLS build

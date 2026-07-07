@@ -81,8 +81,6 @@ truth for what remains.
   and the geomopt / frequency workflows built on them, are now landed
   Cartesian-side — see Completion)
 - The ccgen `TensorOptimized` RCCSDT backend is still treated in-tree as an experimental / phase-4 path
-- The triplet UHF state-selection / convergence gap noted during the UMP2 gradient check is still open as an SCF issue
-- The isolated-small-atom SAD false-convergence issue surfaced by the BSSE work is still open; the counterpoise driver currently works around it by forcing HCore
 
 ## BSSE follow-up
 

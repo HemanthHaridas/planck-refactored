@@ -1335,6 +1335,25 @@
       ]
     },
     {
+      "id": "he_sad_ccpvdz",
+      "input": "tests/inputs/regression/closed_shell/he_sad_ccpvdz.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -2.8551604772,
+          "atol": 1e-08
+        }
+      ]
+    },
+    {
       "id": "water_triplet_uhf_sto3g",
       "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfinp",
       "tags": [
