@@ -2815,6 +2815,52 @@ W_{\mu\nu} = \sum_{i}^{\alpha,occ} \varepsilon^\alpha_i C^\alpha_{\mu i} C^\alph
            + \sum_{i}^{\beta,occ}  \varepsilon^\beta_i  C^\beta_{\mu i}  C^\beta_{\nu i}
 \]
 
+### ROHF Gradient
+
+The ROHF gradient is *structurally* identical to the UHF gradient — the same
+Hellmann-Feynman + Pulay terms, contracted over the alpha/beta densities
+\(P^\alpha, P^\beta\) that ROHF supplies just like UHF. Only the
+energy-weighted density changes, and that change is instructive.
+
+The forms above, \(W = \sum_i \varepsilon_i C_i C_i^{\mathsf T}\), are only
+valid because the orbitals **diagonalize the Fock matrix whose eigenvalues
+appear in the sum** — true for RHF and UHF, where \(C^{\mathsf T} F C\) is
+diagonal. ROHF orbitals do *not* have this property: they diagonalize the
+effective *Roothaan* Fock, so \(C^{\mathsf T} F^\alpha C\) and
+\(C^{\mathsf T} F^\beta C\) carry non-zero closed–open and open–virtual
+off-diagonal blocks. Dropping those blocks (which the naive \(\sum_i \varepsilon_i\)
+form silently does) gives the wrong Pulay term.
+
+The correct ROHF energy-weighted density is built directly in the AO basis from
+the two spin densities and the two converged spin Fock matrices:
+
+\[
+W = P^\alpha F^\alpha P^\alpha + P^\beta F^\beta P^\beta
+\]
+
+This is exactly PySCF's ROHF `make_rdm1e` (\(W_a + W_b\)), and it reduces to the
+RHF/UHF forms above in the closed-shell and unrestricted limits. All four
+matrices are already stored by the ROHF SCF, so no Fock rebuild is needed at
+gradient time. Note that **no CPHF / Z-vector solve is involved** — ROHF SCF is
+variational, so its orbital-response gradient term vanishes at the minimum, the
+same reason the RHF/UHF *SCF* gradients need no response solve. (A Z-vector
+solve only re-enters for a future ROHF-*MP2* gradient, which is a separate,
+non-variational problem.) Implemented in `build_rohf_energy_weighted_density`
+and `compute_rohf_gradient` in `src/gradient/gradient.cpp`.
+
+**Spherical basis caveat.** When the AO matrices live in the spherical
+(real-solid-harmonic) basis, they are mapped back to the Cartesian basis with a
+lift \(M_{\text{cart}} = C^{\mathsf T} M_{\text{sph}} C\) so the Cartesian
+derivative-integral engine can be reused. Because that transform \(C\) is
+non-square (\(n_{\text{sph}} \times n_{\text{cart}}\), so \(C C^{\mathsf T} \ne
+I\)), it does **not** distribute through the triple product:
+\(\text{lift}(P F P) \ne \text{lift}(P)\,\text{lift}(F)\,\text{lift}(P)\). \(W\)
+must therefore be built in the spherical basis *first* and lifted **once** — the
+same one-shot lift the RHF/UHF paths apply to their MO-built \(W\). Building it
+from separately-lifted factors is a subtle, silent error that only shows up on
+shells with \(L \ge 2\) (where the Cartesian and spherical function counts
+differ).
+
 ### Analytic Kohn-Sham DFT Gradients
 
 For Kohn-Sham DFT, the variational part of the gradient has the same
@@ -6605,6 +6651,7 @@ driver.cpp
 | Orbital update | `src/post_hf/casscf.cpp` | Cayley transform |
 | RHF gradient | `src/gradient/gradient.cpp` | `compute_rhf_gradient` |
 | UHF gradient | `src/gradient/gradient.cpp` | `compute_uhf_gradient` |
+| ROHF gradient | `src/gradient/gradient.cpp` | `compute_rohf_gradient`, `build_rohf_energy_weighted_density` |
 | UMP2 gradient | `src/gradient/gradient.cpp` | `compute_ump2_gradient` |
 | Derivative integrals | `src/integrals/os.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem` |
 | L-BFGS optimizer | `src/opt/geomopt.cpp` | `run_geomopt` |
@@ -6649,7 +6696,7 @@ driver.cpp
 | Feature | Status |
 |---|---|
 | RHF and UHF SCF | Complete |
-| ROHF SCF | Complete (Guest–Saunders effective Fock with SAD guess; post-HF not yet supported from ROHF reference) |
+| ROHF SCF | Complete (Guest–Saunders effective Fock with SAD guess). FCI, CASSCF, and RASSCF run from an ROHF reference; analytic gradients / geomopt / frequencies are supported (Cartesian and spherical). ROHF-MP2/CC, stability, and PCM are not yet supported |
 | Obara-Saika 1e and 2e integrals | Complete |
 | Rys quadrature ERIs | Complete |
 | Head-Gordon-Pople (HGP) ERI engine | Complete (VRR-inside / HRR-outside factorization; Cartesian and full-symmetry direct-Fock variants in `src/symmetry/hgp_symm.cpp`) |
@@ -6668,10 +6715,11 @@ driver.cpp
 | RCCSDTQ single-point energy | Generated restricted tensor kernels when built with CCSDTQ support |
 | Analytic RHF gradient | Complete |
 | Analytic UHF gradient | Complete |
+| Analytic ROHF gradient | Complete (Cartesian and spherical; `W = P^α F^α P^α + P^β F^β P^β`, no Z-vector — SCF is variational) |
 | Analytic RMP2 gradient (Z-vector) | Complete |
 | Analytic UMP2 gradient | Complete |
 | CASSCF / RASSCF | Complete |
-| Geometry optimization (RHF/UHF/RMP2/UMP2) | Complete |
+| Geometry optimization (RHF/UHF/ROHF/RMP2/UMP2) | Complete |
 | Semi-numerical Hessian | Complete |
 | Harmonic vibrational analysis | Complete |
 | Checkpoint save/restart | Complete |
