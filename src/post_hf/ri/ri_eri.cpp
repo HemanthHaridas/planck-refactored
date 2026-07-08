@@ -923,4 +923,61 @@ namespace HartreeFock::Correlation::RI
         calculator._ri_j3c = std::move(*j3c_res);
         return {};
     }
+
+    Eigen::MatrixXd build_ri_pair_factors(const HartreeFock::Calculator &calculator)
+    {
+        const Eigen::MatrixXd &j3c = calculator._ri_j3c;
+        const auto &metric = *calculator._ri_metric_factor;
+
+        if (metric.method == MetricFactorization::Method::Eigen)
+            return j3c * metric.transform.transpose();
+
+        const Eigen::MatrixXd &L = metric.transform;
+        Eigen::MatrixXd pair_factors_t = j3c.transpose();
+        pair_factors_t =
+            L.triangularView<Eigen::Lower>().solve(pair_factors_t);
+        return pair_factors_t.transpose();
+    }
+
+    Eigen::MatrixXd build_ri_mo_block(
+        const Eigen::MatrixXd &pair_factors,
+        const Eigen::MatrixXd &C_row,
+        const Eigen::MatrixXd &C_col)
+    {
+        const int nrow = static_cast<int>(C_row.cols());
+        const int ncol = static_cast<int>(C_col.cols());
+        const int nfit = static_cast<int>(pair_factors.cols());
+        const int npq = nrow * ncol;
+
+        Eigen::MatrixXd b_pq = Eigen::MatrixXd::Zero(npq, nfit);
+        std::size_t pair_row = 0;
+        for (Eigen::Index mu = 0; mu < C_row.rows(); ++mu)
+        {
+            const Eigen::RowVectorXd row_mu = C_row.row(mu);
+            const Eigen::RowVectorXd col_mu = C_col.row(mu);
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
+            {
+                const Eigen::RowVectorXd factors =
+                    pair_factors.row(static_cast<Eigen::Index>(pair_row));
+                const Eigen::RowVectorXd row_nu = C_row.row(nu);
+                const Eigen::RowVectorXd col_nu = C_col.row(nu);
+
+                int ia = 0;
+                for (int i = 0; i < nrow; ++i)
+                {
+                    const double cmi = row_mu(i);
+                    const double cni = row_nu(i);
+                    for (int a = 0; a < ncol; ++a, ++ia)
+                    {
+                        double weight = cmi * col_nu(a);
+                        if (mu != nu)
+                            weight += cni * col_mu(a);
+                        if (weight != 0.0)
+                            b_pq.row(ia).noalias() += weight * factors;
+                    }
+                }
+            }
+        }
+        return b_pq;
+    }
 } // namespace HartreeFock::Correlation::RI
