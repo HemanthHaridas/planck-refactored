@@ -1902,6 +1902,7 @@ namespace HartreeFock::IO
         // dft (optional)
         if (auto it = _sections.find("dft"); it != _sections.end())
         {
+            calculator._is_dft = true; // a %begin_dft section declares a DFT run
             if (auto res = _parse_dft(it->second, calculator._dft); !res)
                 return std::unexpected(res.error());
         }
