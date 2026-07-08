@@ -710,6 +710,28 @@ if(BUILD_TESTING)
         ${SRC_DIR}/lookup/boys.cpp
     )
 
+    # Step 2 seam: transform_eri_ri must reproduce the dense transform_eri.
+    # Self-contained (no PySCF), so it is registered as a ctest below.
+    add_executable(planck-ri-transform-equivalence
+        ${CMAKE_SOURCE_DIR}/tests/ri_transform_equivalence.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
     # Contract test for the working-state rebuild helper that will drive
     # spherical geomopt and freq in Phase 3. Currently the helper has no live
     # caller (the driver keeps its inline copy for ordering reasons around the
@@ -954,6 +976,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-ri-3c-eri PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-transform-equivalence PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -1326,6 +1353,12 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-ri-2c-eri
         COMMAND planck-ri-2c-eri
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-ri-transform-equivalence
+        COMMAND planck-ri-transform-equivalence
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 

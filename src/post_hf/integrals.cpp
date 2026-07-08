@@ -5,6 +5,7 @@
 #include "integrals.h"
 #include "integrals/base.h"
 #include "io/logging.h"
+#include "post_hf/ri/ri_eri.h"
 
 namespace
 {
@@ -175,6 +176,49 @@ namespace HartreeFock::Correlation
                             out[i * n2 * n3 * n4 + a * n3 * n4 + j * n4 + b] +=
                                 C4(sig, b) * T3[i * n2 * n3 * nb + a * n3 * nb + j * nb + sig];
 
+        return out;
+    }
+
+    // ── transform_eri_ri ──────────────────────────────────────────────────────────
+
+    std::expected<std::vector<double>, std::string> transform_eri_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C1,
+        const Eigen::MatrixXd &C2,
+        const Eigen::MatrixXd &C3,
+        const Eigen::MatrixXd &C4)
+    {
+        auto ri_ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator);
+        if (!ri_ready)
+            return std::unexpected("transform_eri_ri: " + ri_ready.error());
+        if (!calculator._ri_metric_factor)
+            return std::unexpected("transform_eri_ri: RI metric factorization is missing.");
+
+        // B_{(ia),Q} and B_{(jb),Q} share the same fitted AO-pair factors; the
+        // two bra/ket blocks only differ in which MO coefficients project them.
+        const Eigen::MatrixXd pair_factors =
+            HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
+        const Eigen::MatrixXd b_bra =
+            HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors, C1, C2);
+        const Eigen::MatrixXd b_ket =
+            HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors, C3, C4);
+
+        // (ia|jb) = Σ_Q B_bra(ia,Q) B_ket(jb,Q); rows of b_bra are i*n2+a,
+        // rows of b_ket are j*n4+b — exactly the transform_eri row-major layout.
+        const Eigen::MatrixXd gram = b_bra * b_ket.transpose();
+
+        const std::size_t n1 = static_cast<std::size_t>(C1.cols());
+        const std::size_t n2 = static_cast<std::size_t>(C2.cols());
+        const std::size_t n3 = static_cast<std::size_t>(C3.cols());
+        const std::size_t n4 = static_cast<std::size_t>(C4.cols());
+        std::vector<double> out(n1 * n2 * n3 * n4, 0.0);
+        for (std::size_t i = 0; i < n1; ++i)
+            for (std::size_t a = 0; a < n2; ++a)
+                for (std::size_t j = 0; j < n3; ++j)
+                    for (std::size_t b = 0; b < n4; ++b)
+                        out[i * n2 * n3 * n4 + a * n3 * n4 + j * n4 + b] =
+                            gram(static_cast<Eigen::Index>(i * n2 + a),
+                                 static_cast<Eigen::Index>(j * n4 + b));
         return out;
     }
 
