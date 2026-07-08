@@ -29,7 +29,8 @@ format_decimal() {
 
     for file in *.hfinp
     do
-        ../../../build/hartree-fock "$file" > "${file%.hfinp}.log" 2>&1
+        CASSCF=""  # reset: else a non-converged file inherits the prior row's value
+        /Users/hemanthharidas/Desktop/codes/planck-refactored/build/hartree-fock "$file" > "${file%.hfinp}.log" 2>&1
 
         ELECT=$(grep 'Electronic Energy' "${file%.hfinp}.log" | awk '{print $3}')
         TOTAL=$(grep 'Total Energy' "${file%.hfinp}.log" | grep -v 'CASSCF' | awk '{print $3}')
