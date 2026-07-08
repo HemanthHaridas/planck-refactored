@@ -94,3 +94,5 @@ build-profile
 build-test
 tests/avrr_x_simd_prototype.cpp
 ROHF_CASSCF_HANDOFF.md
+docs/HPC_MPI_EXECUTABLE_SCOPE.md
+docs/RI_GEOMETRY_CACHE_SCOPE.md
