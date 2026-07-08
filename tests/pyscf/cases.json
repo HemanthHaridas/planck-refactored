@@ -97,6 +97,12 @@
       "allowed_statuses": ["PASS"]
     },
     {
+      "id": "water_casscf_ri_ccpvdz",
+      "script": "tests/pyscf/water_casscf_ri_ccpvdz.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
       "id": "water_cas44_sto3g",
       "script": "tests/pyscf/water_cas44_sto3g.py",
       "kind": "casscf",
