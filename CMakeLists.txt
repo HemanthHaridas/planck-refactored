@@ -266,6 +266,7 @@ file(GLOB BSSE_SRC CONFIGURE_DEPENDS
 
 set(HF_MAIN_SRC
     ${SRC_DIR}/driver.cpp
+    ${SRC_DIR}/hf_driver.cpp
 )
 
 set(DFT_SRC
