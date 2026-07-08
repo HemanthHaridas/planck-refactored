@@ -156,6 +156,40 @@ int main()
         fail("RI Coulomb J disagrees with dense beyond fitting accuracy (>2e-2) "
              "— indicates a packing/charge-accumulation bug, not fitting error");
 
+    // J2: the unpacked B[Q](μ,ν) must round-trip the packed pair factors it
+    // came from, and be symmetric in (μ,ν).
+    {
+        const Eigen::MatrixXd pf =
+            HartreeFock::Correlation::RI::build_ri_pair_factors(calc);
+        const auto B = HartreeFock::Correlation::RI::build_ri_3index_unpacked(calc);
+        const Eigen::Index naux = pf.cols();
+        double max_rt = 0.0, max_asym = 0.0;
+        std::size_t pair_row = 0;
+        for (std::size_t mu = 0; mu < nb; ++mu)
+            for (std::size_t nu = 0; nu <= mu; ++nu, ++pair_row)
+                for (Eigen::Index Q = 0; Q < naux; ++Q)
+                {
+                    const double packed = pf(static_cast<Eigen::Index>(pair_row), Q);
+                    const auto &BQ = B[static_cast<std::size_t>(Q)];
+                    max_rt = std::max(max_rt,
+                                      std::abs(BQ(static_cast<Eigen::Index>(mu),
+                                                  static_cast<Eigen::Index>(nu)) -
+                                               packed));
+                    max_asym = std::max(max_asym,
+                                        std::abs(BQ(static_cast<Eigen::Index>(mu),
+                                                    static_cast<Eigen::Index>(nu)) -
+                                                 BQ(static_cast<Eigen::Index>(nu),
+                                                    static_cast<Eigen::Index>(mu))));
+                }
+        std::cout << "unpacked B: naux=" << naux
+                  << "  max|round-trip|=" << max_rt
+                  << "  max|B-Bᵀ|=" << max_asym << '\n';
+        if (max_rt > 1e-14)
+            fail("unpacked B does not match the packed pair factors");
+        if (max_asym > 1e-14)
+            fail("unpacked B is not symmetric in (μ,ν)");
+    }
+
     // --- J3 hook (full RI G) lands here ---
 
     if (g_ok)

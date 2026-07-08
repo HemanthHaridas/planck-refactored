@@ -91,6 +91,14 @@ namespace HartreeFock::Correlation::RI
     Eigen::MatrixXd build_ri_j(
         const HartreeFock::Calculator &calculator,
         const Eigen::MatrixXd &D);
+
+    // Unpack the fitted pair factors B_{(μν),Q} (packed μ≥ν) into the full
+    // symmetric per-aux matrices B[Q](μ,ν) = B[Q](ν,μ). Returned as naux
+    // matrices of size nb×nb — the nb²·naux working set the RI exchange build
+    // needs (still far below nb⁴). This is fitted (metric already applied), not
+    // the raw 3-center tensor.
+    std::vector<Eigen::MatrixXd> build_ri_3index_unpacked(
+        const HartreeFock::Calculator &calculator);
 } // namespace HartreeFock::Correlation::RI
 
 #endif // HF_POST_HF_RI_ERI_H

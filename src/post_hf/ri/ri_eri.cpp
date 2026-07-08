@@ -1014,4 +1014,31 @@ namespace HartreeFock::Correlation::RI
             }
         return J;
     }
+
+    std::vector<Eigen::MatrixXd> build_ri_3index_unpacked(
+        const HartreeFock::Calculator &calculator)
+    {
+        const Eigen::MatrixXd pair_factors = build_ri_pair_factors(calculator);
+        const Eigen::Index nb =
+            static_cast<Eigen::Index>(calculator.working_nbasis());
+        const Eigen::Index naux = pair_factors.cols();
+
+        std::vector<Eigen::MatrixXd> B(
+            static_cast<std::size_t>(naux), Eigen::MatrixXd::Zero(nb, nb));
+
+        std::size_t pair_row = 0;
+        for (Eigen::Index mu = 0; mu < nb; ++mu)
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
+            {
+                const Eigen::RowVectorXd factors =
+                    pair_factors.row(static_cast<Eigen::Index>(pair_row));
+                for (Eigen::Index Q = 0; Q < naux; ++Q)
+                {
+                    const double v = factors(Q);
+                    B[static_cast<std::size_t>(Q)](mu, nu) = v;
+                    B[static_cast<std::size_t>(Q)](nu, mu) = v;
+                }
+            }
+        return B;
+    }
 } // namespace HartreeFock::Correlation::RI
