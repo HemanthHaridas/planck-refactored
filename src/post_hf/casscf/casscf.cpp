@@ -467,7 +467,15 @@ namespace HartreeFock::Correlation::CASSCF
                 ? ResponseRHSMode::CommutatorOnlyApproximate
                 : ResponseRHSMode::ExactActiveSpaceOrbitalDerivative;
         const bool use_numeric_newton_debug = as.mcscf_debug_numeric_newton;
-        const int numeric_newton_pair_limit = 64;
+        // Exact-FD-Hessian escape from optimizer stalls (fires only under
+        // stagnation, not every macro). Costs 2*npairs CI re-evaluations, so the
+        // cap is a runtime guard, not a correctness one. It was 64, which is
+        // smaller than a realistic C1 active space: water/cc-pVDZ CAS(4,4) has
+        // n_core=3/n_act=4/n_virt=18 => 138 rotation pairs, so the escape hatch
+        // was unavailable exactly where the flat-valley stall occurs (symmetry-on
+        // blocks most pairs and stays under the old cap; symmetry-off does not).
+        // 256 covers common CAS spaces at <=512 evals/attempt when stalled.
+        const int numeric_newton_pair_limit = 256;
         const int ci_dense_threshold = 500;
         const double max_rot = (as.mcscf_max_rot > 0.0) ? as.mcscf_max_rot : 0.20;
         const double trust_radius_frob = 4.0 * max_rot;
@@ -1114,9 +1122,26 @@ namespace HartreeFock::Correlation::CASSCF
                 sa_gradient_progress_flat(reported_gnorm, prev_sa_gnorm);
             const bool accepted_micro_step_plateau =
                 diag.step_accepted && diag.accepted_step_norm < 5e-5;
+            // A flat gradient that is still well above tolerance is itself a stall
+            // signal, independent of the energy drift and step size. A healthy
+            // macroiteration drives the gradient down fast (so it is NOT flat
+            // within 5% macro-over-macro), and near a true stationary point the
+            // gradient is already below tolerance — so requiring gnorm to be an
+            // order of magnitude above tol keeps this from mis-firing during a
+            // legitimate finish. This is the C1 flat-valley crawl: without
+            // symmetry blocking the rotation space, aug-Hessian keeps taking
+            // O(1e-4) steps that shave ~2e-7 off the energy but leave the
+            // gradient frozen at ~1.5e-3, and dE stays just above the
+            // small_energy_change floor so the first two clauses never fire.
+            // water/cc-pVDZ CAS(4,4) burned all 100 macros here; symmetry-on
+            // converges in ~16.
+            const bool flat_gradient_stall =
+                little_gradient_progress && reported_gnorm > 10.0 * as.tol_mcscf_grad;
             // Track repeated "flat" iterations separately from hard rejections so
             // we can switch to more exploratory probes before declaring failure.
-            if ((!diag.step_accepted && rejected_streak >= 2) || (small_energy_change && little_gradient_progress))
+            if ((!diag.step_accepted && rejected_streak >= 2) ||
+                (small_energy_change && little_gradient_progress) ||
+                flat_gradient_stall)
                 ++stagnation_streak;
             else
                 stagnation_streak = 0;
