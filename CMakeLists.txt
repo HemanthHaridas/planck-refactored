@@ -468,6 +468,14 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/casscf/response.cpp
         ${SRC_DIR}/post_hf/ci/strings.cpp
         ${SRC_DIR}/post_hf/integrals.cpp
+        # integrals.cpp now references the RI transform (transform_eri_ri), which
+        # lives in ri_eri.cpp — link it plus its rifit/basis deps even though this
+        # test only exercises the dense path.
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${INT_SRC}
         ${LOOKUP_SRC}
         ${SYMM_SRC}
@@ -651,6 +659,9 @@ if(BUILD_TESTING)
     add_executable(planck-transform-eri
         ${CMAKE_SOURCE_DIR}/tests/transform_eri_unit.cpp
         ${SRC_DIR}/post_hf/integrals.cpp
+        # integrals.cpp references transform_eri_ri (ri_eri.cpp) since Step 2.
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/rifit.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
