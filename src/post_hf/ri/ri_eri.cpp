@@ -980,4 +980,38 @@ namespace HartreeFock::Correlation::RI
         }
         return b_pq;
     }
+
+    Eigen::MatrixXd build_ri_j(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D)
+    {
+        const Eigen::MatrixXd pair_factors = build_ri_pair_factors(calculator);
+        const Eigen::Index nb = D.rows();
+        const Eigen::Index nfit = pair_factors.cols();
+
+        // c_Q = Σ_{μν} B_{(μν),Q} D_{μν}. The packed factors store μ≥ν only, so
+        // off-diagonal pairs contribute twice (D symmetric): weight = (μ==ν?1:2).
+        Eigen::RowVectorXd c = Eigen::RowVectorXd::Zero(nfit);
+        std::size_t pair_row = 0;
+        for (Eigen::Index mu = 0; mu < nb; ++mu)
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
+            {
+                const double w = (mu == nu ? 1.0 : 2.0) * D(mu, nu);
+                if (w != 0.0)
+                    c.noalias() += w * pair_factors.row(static_cast<Eigen::Index>(pair_row));
+            }
+
+        // J_{μν} = Σ_Q B_{(μν),Q} c_Q; scatter to both (μ,ν) and (ν,μ).
+        Eigen::MatrixXd J = Eigen::MatrixXd::Zero(nb, nb);
+        pair_row = 0;
+        for (Eigen::Index mu = 0; mu < nb; ++mu)
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
+            {
+                const double val =
+                    pair_factors.row(static_cast<Eigen::Index>(pair_row)).dot(c);
+                J(mu, nu) = val;
+                J(nu, mu) = val;
+            }
+        return J;
+    }
 } // namespace HartreeFock::Correlation::RI

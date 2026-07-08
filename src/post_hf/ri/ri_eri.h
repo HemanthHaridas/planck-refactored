@@ -81,6 +81,16 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd &pair_factors,
         const Eigen::MatrixXd &C_row,
         const Eigen::MatrixXd &C_col);
+
+    // RI Coulomb matrix J_{μν} = Σ_Q B_{(μν),Q} c_Q, with the fitted charge
+    // c_Q = Σ_{λσ} B_{(λσ),Q} D_{λσ}. Both use the packed (μ≥ν) pair factors, so
+    // off-diagonal pairs carry an explicit factor 2 in the c_Q accumulation and
+    // the J scatter fills both (μ,ν) and (ν,μ). D must be symmetric. Requires a
+    // ready RI cache (build_ri_pair_factors); the AO dimension nb is inferred
+    // from the packed pair count.
+    Eigen::MatrixXd build_ri_j(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D);
 } // namespace HartreeFock::Correlation::RI
 
 #endif // HF_POST_HF_RI_ERI_H

@@ -130,7 +130,33 @@ int main()
     if (asym > 1e-10)
         fail("dense reference Fock is not symmetric for a symmetric density");
 
-    // --- J1 hook (RI Coulomb) and J3 hook (full RI G) land here ---
+    // J1: RI Coulomb vs dense J. Build the dense J alone (not J - 1/2 K) so we
+    // isolate the Coulomb half: J_{μν} = Σ_{λσ} (μν|λσ) D_{λσ}.
+    Eigen::MatrixXd J_dense = Eigen::MatrixXd::Zero(nb, nb);
+    {
+        const std::size_t nb2 = nb * nb, nb3 = nb * nb * nb;
+        for (std::size_t mu = 0; mu < nb; ++mu)
+            for (std::size_t nu = 0; nu < nb; ++nu)
+            {
+                double v = 0.0;
+                for (std::size_t lam = 0; lam < nb; ++lam)
+                    for (std::size_t sig = 0; sig < nb; ++sig)
+                        v += D(static_cast<Eigen::Index>(lam), static_cast<Eigen::Index>(sig)) *
+                             dense_eri[mu * nb3 + nu * nb2 + lam * nb + sig];
+                J_dense(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(nu)) = v;
+            }
+    }
+
+    const Eigen::MatrixXd J_ri = HartreeFock::Correlation::RI::build_ri_j(calc, D);
+    const double j_rel =
+        (J_ri - J_dense).norm() / std::max(J_dense.norm(), 1e-300);
+    std::cout << "J: ‖RI-dense‖/‖dense‖=" << j_rel
+              << "  max|Δ|=" << (J_ri - J_dense).cwiseAbs().maxCoeff() << '\n';
+    if (j_rel > 2e-2)
+        fail("RI Coulomb J disagrees with dense beyond fitting accuracy (>2e-2) "
+             "— indicates a packing/charge-accumulation bug, not fitting error");
+
+    // --- J3 hook (full RI G) lands here ---
 
     if (g_ok)
         std::cout << "PASS: ri_jk_equivalence (J0 fixture)\n";
