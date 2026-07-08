@@ -103,6 +103,12 @@
       "allowed_statuses": ["PASS"]
     },
     {
+      "id": "h2_fci_ri_ccpvdz",
+      "script": "tests/pyscf/h2_fci_ri_ccpvdz.py",
+      "kind": "casscf",
+      "allowed_statuses": ["PASS"]
+    },
+    {
       "id": "water_cas44_sto3g",
       "script": "tests/pyscf/water_cas44_sto3g.py",
       "kind": "casscf",
