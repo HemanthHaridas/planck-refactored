@@ -743,6 +743,27 @@ if(BUILD_TESTING)
         ${SRC_DIR}/lookup/boys.cpp
     )
 
+    # Step J0: RI-JK builder harness. Same self-contained fixture; the RI J/K
+    # equivalence assertions land in J1/J3.
+    add_executable(planck-ri-jk-equivalence
+        ${CMAKE_SOURCE_DIR}/tests/ri_jk_equivalence.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
     # Contract test for the working-state rebuild helper that will drive
     # spherical geomopt and freq in Phase 3. Currently the helper has no live
     # caller (the driver keeps its inline copy for ordering reasons around the
@@ -992,6 +1013,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-ri-transform-equivalence PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-jk-equivalence PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -1370,6 +1396,12 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-ri-transform-equivalence
         COMMAND planck-ri-transform-equivalence
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-ri-jk-equivalence
+        COMMAND planck-ri-jk-equivalence
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 

@@ -1,0 +1,138 @@
+// RI-JK builder harness (Step J0).
+//
+// Stands up the fixture the RI Coulomb/exchange steps (J1/J3) check against:
+//   - a Calculator with the RI cache ready (metric + 3-center) on water/cc-pVDZ,
+//   - a fixed symmetric test density D,
+//   - the dense reference G = J - 1/2 K from ObaraSaika::_compute_fock_rhf(eri,D).
+//
+// At J0 there is no RI J/K code yet, so this only exercises the oracle: it
+// asserts the dense G is symmetric (it must be, for a symmetric D and the 8-fold
+// ERI symmetry). J1 adds the RI-Coulomb vs dense-J assertion; J3 adds the full
+// RI-G vs dense-G assertion. Keeping the fixture in one place means those steps
+// are a few added lines here, each independently revertible.
+
+#include <Eigen/Dense>
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include "base/types.h"
+#include "basis/basis.h"
+#include "basis/rifit.h"
+#include "integrals/base.h"
+#include "integrals/os.h"
+#include "integrals/shellpair.h"
+#include "post_hf/ri/ri_eri.h"
+
+namespace
+{
+    bool g_ok = true;
+    void fail(const std::string &m)
+    {
+        std::cerr << "FAIL: " << m << '\n';
+        g_ok = false;
+    }
+
+    std::filesystem::path repo_root()
+    {
+        if (const char *env = std::getenv("BASIS_PATH"); env && *env)
+            return std::filesystem::path(env).parent_path();
+        return std::filesystem::current_path();
+    }
+}
+
+int main()
+{
+    using HartreeFock::BasisFunctions::read_gbs_basis;
+    using HartreeFock::BasisFunctions::read_ri_basis;
+    using HartreeFock::Correlation::RI::ensure_ri_3c_ready;
+    using HartreeFock::Correlation::RI::ensure_ri_metric_ready;
+
+    const auto root = repo_root();
+    const auto basis_file = root / "basis-sets" / "cc-pVDZ";
+    const auto aux_file = root / "basis-sets" / "cc-pVDZ-RIFIT";
+
+    HartreeFock::Molecule mol;
+    mol.natoms = 3;
+    mol.atomic_numbers.resize(3);
+    mol.atomic_numbers << 8, 1, 1;
+    mol._standard.resize(3, 3);
+    mol._standard << 0.0, 0.0, 0.0,
+        0.0, 1.43, 1.11,
+        0.0, -1.43, 1.11;
+    mol._standard_is_bohr = true;
+
+    HartreeFock::Calculator calc;
+    calc._molecule = mol;
+    calc._basis._basis_name = "cc-pVDZ";
+    calc._basis._basis_path = (root / "basis-sets").string();
+    calc._integral._engine = HartreeFock::IntegralMethod::HeadGordonPople;
+    calc._mp2.use_ri = true;
+    calc._mp2.ri_basis_name = "cc-pVDZ-RIFIT";
+    calc._mp2.ri_basis_path = (root / "basis-sets").string();
+    calc._mp2.ri_lindep = 1e-7;
+
+    auto basis_res = read_gbs_basis(basis_file.string(), mol, HartreeFock::BasisType::Cartesian);
+    if (!basis_res)
+        fail("read_gbs_basis failed: " + basis_res.error());
+    else
+        calc._shells = std::move(*basis_res);
+
+    auto aux_res = read_ri_basis(aux_file.string(), mol);
+    if (!aux_res)
+        fail("read_ri_basis failed: " + aux_res.error());
+    else
+        calc._ri_aux_basis = std::make_shared<HartreeFock::AuxBasis>(std::move(*aux_res));
+
+    if (g_ok)
+    {
+        auto prep = ensure_ri_metric_ready(calc);
+        if (!prep)
+            fail("ensure_ri_metric_ready failed: " + prep.error());
+    }
+    if (g_ok)
+    {
+        auto prep = ensure_ri_3c_ready(calc);
+        if (!prep)
+            fail("ensure_ri_3c_ready failed: " + prep.error());
+    }
+    if (!g_ok)
+        return 1;
+
+    const std::size_t nb = calc._shells.nbasis();
+
+    // Dense AO ERI tensor for the reference Fock build.
+    const auto shell_pairs = build_shellpairs(calc._shells);
+    const std::vector<double> dense_eri =
+        _compute_2e(shell_pairs, nb, calc._integral._engine,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, 1e-12, nullptr);
+
+    // A fixed, symmetric, deterministic test density. Not a real SCF density —
+    // only symmetry and reproducibility matter for the equivalence checks.
+    Eigen::MatrixXd D(nb, nb);
+    for (std::size_t mu = 0; mu < nb; ++mu)
+        for (std::size_t nu = 0; nu < nb; ++nu)
+            D(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(nu)) =
+                std::cos(0.4 * static_cast<double>(mu) - 0.6 * static_cast<double>(nu));
+    D = 0.5 * (D + D.transpose()).eval(); // symmetrize
+
+    // Dense oracle: G = J - 1/2 K.
+    const Eigen::MatrixXd G_dense =
+        HartreeFock::ObaraSaika::_compute_fock_rhf(dense_eri, D, nb);
+
+    // J0 assertion: the oracle is symmetric for a symmetric density.
+    const double asym = (G_dense - G_dense.transpose()).cwiseAbs().maxCoeff();
+    std::cout << "dense G: nb=" << nb << "  ‖G‖_max=" << G_dense.cwiseAbs().maxCoeff()
+              << "  max|G-Gᵀ|=" << asym << '\n';
+    if (asym > 1e-10)
+        fail("dense reference Fock is not symmetric for a symmetric density");
+
+    // --- J1 hook (RI Coulomb) and J3 hook (full RI G) land here ---
+
+    if (g_ok)
+        std::cout << "PASS: ri_jk_equivalence (J0 fixture)\n";
+    return g_ok ? 0 : 1;
+}
