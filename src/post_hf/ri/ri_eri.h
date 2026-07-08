@@ -99,6 +99,21 @@ namespace HartreeFock::Correlation::RI
     // the raw 3-center tensor.
     std::vector<Eigen::MatrixXd> build_ri_3index_unpacked(
         const HartreeFock::Calculator &calculator);
+
+    // RI exchange K_{μν} = Σ_Q Σ_{λσ} B_{μλ,Q} B_{νσ,Q} D_{λσ}, via the two-step
+    // H[Q] = B[Q] D ; K = Σ_Q H[Q] B[Q]ᵀ, using the unpacked per-aux matrices.
+    // D symmetric. Optionally pass a prebuilt unpacked tensor to avoid rebuilding
+    // it when J and K share one (e.g. build_ri_fock_rhf).
+    Eigen::MatrixXd build_ri_k(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D,
+        const std::vector<Eigen::MatrixXd> *unpacked = nullptr);
+
+    // Closed-shell RI Fock contribution G = J - 1/2 K, matching
+    // ObaraSaika::_compute_fock_rhf(eri, D) to density-fitting accuracy.
+    Eigen::MatrixXd build_ri_fock_rhf(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D);
 } // namespace HartreeFock::Correlation::RI
 
 #endif // HF_POST_HF_RI_ERI_H

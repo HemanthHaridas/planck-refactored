@@ -190,7 +190,21 @@ int main()
             fail("unpacked B is not symmetric in (μ,ν)");
     }
 
-    // --- J3 hook (full RI G) lands here ---
+    // J3: full RI Fock G = J - 1/2 K vs the dense _compute_fock_rhf oracle.
+    // This is the load-bearing gate for the whole RI-JK builder.
+    const Eigen::MatrixXd G_ri =
+        HartreeFock::Correlation::RI::build_ri_fock_rhf(calc, D);
+    const double g_rel =
+        (G_ri - G_dense).norm() / std::max(G_dense.norm(), 1e-300);
+    const double g_asym = (G_ri - G_ri.transpose()).cwiseAbs().maxCoeff();
+    std::cout << "G=J-½K: ‖RI-dense‖/‖dense‖=" << g_rel
+              << "  max|Δ|=" << (G_ri - G_dense).cwiseAbs().maxCoeff()
+              << "  max|G-Gᵀ|=" << g_asym << '\n';
+    if (g_rel > 2e-2)
+        fail("full RI Fock G disagrees with dense beyond fitting accuracy "
+             "(>2e-2) — indicates an exchange-contraction bug, not fitting error");
+    if (g_asym > 1e-10)
+        fail("RI Fock G is not symmetric for a symmetric density");
 
     if (g_ok)
         std::cout << "PASS: ri_jk_equivalence (J0 fixture)\n";

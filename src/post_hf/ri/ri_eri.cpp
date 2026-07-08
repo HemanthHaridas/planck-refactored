@@ -1041,4 +1041,41 @@ namespace HartreeFock::Correlation::RI
             }
         return B;
     }
+
+    Eigen::MatrixXd build_ri_k(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D,
+        const std::vector<Eigen::MatrixXd> *unpacked)
+    {
+        std::vector<Eigen::MatrixXd> owned;
+        if (!unpacked)
+        {
+            owned = build_ri_3index_unpacked(calculator);
+            unpacked = &owned;
+        }
+        const auto &B = *unpacked;
+        const Eigen::Index nb = D.rows();
+
+        Eigen::MatrixXd K = Eigen::MatrixXd::Zero(nb, nb);
+        for (const Eigen::MatrixXd &BQ : B)
+        {
+            // H = B[Q] D ; K += H B[Q]ᵀ  ⇒  K_{μν} += Σ_{λσ} B_{μλ} D_{λσ} B_{νσ}.
+            const Eigen::MatrixXd H = BQ * D;
+            K.noalias() += H * BQ.transpose();
+        }
+        return K;
+    }
+
+    Eigen::MatrixXd build_ri_fock_rhf(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D)
+    {
+        // Share one unpacked tensor across J and K. J uses the packed factors
+        // (via build_ri_j), K uses the unpacked ones; build the latter once.
+        const std::vector<Eigen::MatrixXd> unpacked =
+            build_ri_3index_unpacked(calculator);
+        const Eigen::MatrixXd J = build_ri_j(calculator, D);
+        const Eigen::MatrixXd K = build_ri_k(calculator, D, &unpacked);
+        return J - 0.5 * K;
+    }
 } // namespace HartreeFock::Correlation::RI
