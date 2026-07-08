@@ -207,6 +207,31 @@
       ]
     },
     {
+      "id": "water_casscf_ri_ccpvdz",
+      "input": "tests/inputs/regression/ri/water_casscf_ri_ccpvdz.hfinp",
+      "tags": [
+        "ri"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "CASSCF Total Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "casscf_total_energy",
+          "expected": -76.0449911146,
+          "atol": 5e-06
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "casscf_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
       "id": "water_cation_rimp2_ccpvdz",
       "input": "tests/inputs/regression/ri/water_cation_rimp2_ccpvdz.hfinp",
       "tags": [
