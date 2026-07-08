@@ -9,13 +9,26 @@ same Weigend/Turbomole fitting set Planck loads as cc-pVDZ-RIFIT).
 
 Planck RI-CASSCF energy: -76.0449911146 Eh
 
-Tolerance note: 5e-5, looser than the conventional gate's 1e-5. Both codes
-use the same aux basis and land in the same basin (conventional CASSCF
--76.0440 in both), so the residual ~2.7e-5 spread is the genuine cross-code
-difference in how the density fitting itself is applied (metric lindep
-threshold, fitting-contraction order), not a basin or active-space
-disagreement. The RI-induced *shift* from conventional agrees to ~3e-6
-between the two codes, which is the real correctness signal.
+WHY BOTH mf.density_fit() AND DFCASSCF (do not "simplify" to exact SCF):
+Planck's RI-CASSCF fits *every* two-electron contraction it does — the
+inactive/active Fock (an SCF-like Coulomb/exchange build) and the CASSCF
+integral transform — while keeping the driving RHF exact. Numerically that
+lands on PySCF's FULLY density-fitted DFCASSCF (DF SCF + DF CASSCF),
+-76.0450177, to 2.66e-5. It does NOT match exact-SCF DFCASSCF
+(mf = plain scf.RHF, then DFCASSCF), which for this well-converged case
+stays essentially at the conventional energy -76.0440 (~9.8e-4 away from
+Planck). So the fully-DF PySCF setup below is the correct reference; an
+exact-SCF mf would be the wrong comparison and would fail.
+
+Tolerance note: 5e-5, looser than the conventional gate's 1e-5. This is
+NOT a tunable lindep-threshold gap — the cc-pVDZ-RI metric on this system
+is well-conditioned (smallest eigenvalue 6.9e-7, positive definite), so
+BOTH codes Cholesky-factor it with no mode pruning; Planck's mp2_ri_lindep
+is inert here. The residual ~2.7e-5 is the irreducible cross-code
+difference in how the fit itself is assembled (Cholesky solve vs
+metric-inverse application, contraction order), not a threshold that can be
+matched. The RI-induced *shift* from conventional agrees to ~3e-6 between
+the two codes, which is the real correctness signal.
 """
 
 from pyscf import gto, scf, mcscf
