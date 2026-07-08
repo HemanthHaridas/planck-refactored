@@ -182,6 +182,31 @@
       ]
     },
     {
+      "id": "h2_fci_rimp2_ccpvdz",
+      "input": "tests/inputs/regression/ri/h2_fci_rimp2_ccpvdz.hfinp",
+      "tags": [
+        "ri"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "Total FCI Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "fci_total_energy",
+          "expected": -1.1634586999,
+          "atol": 5e-08
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "fci_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
       "id": "water_cation_rimp2_ccpvdz",
       "input": "tests/inputs/regression/ri/water_cation_rimp2_ccpvdz.hfinp",
       "tags": [

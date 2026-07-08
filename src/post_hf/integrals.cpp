@@ -346,4 +346,21 @@ namespace HartreeFock::Correlation
         return transform_eri(eri, nb, C_int, C_int, C_int, C_int);
     }
 
+    std::expected<std::vector<double>, std::string> transform_eri_internal_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C_int)
+    {
+        return transform_eri_ri(calculator, C_int, C_int, C_int, C_int);
+    }
+
+    std::expected<std::vector<double>, std::string> transform_eri_active_cache_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &C_act)
+    {
+        // _active_cache produces out[p,u,v,w] = (p u | v w), p full-MO, uvw
+        // active — exactly transform_eri_ri with legs (C, C_act, C_act, C_act).
+        return transform_eri_ri(calculator, C, C_act, C_act, C_act);
+    }
+
 } // namespace HartreeFock::Correlation

@@ -107,15 +107,30 @@ namespace HartreeFock::Correlation
         if (C.rows() != nbasis || C.cols() != nbasis)
             return std::unexpected(tag + ": MO coefficient matrix has wrong size.");
 
-        std::vector<double> eri_local;
-        const std::vector<double> &eri =
-            ensure_eri(calc, shell_pairs, eri_local, tag + " :");
-
         // With no inactive core, the effective one-electron integrals are just the
         // core Hamiltonian in the MO basis, and the core energy is zero — so the CI
         // eigenvalue plus nuclear repulsion is the total electronic energy.
         const Eigen::MatrixXd h_eff = C.transpose() * calc._hcore * C;
-        const std::vector<double> ga = transform_eri_internal(eri, nbasis, C);
+
+        // FCI's only ERI consumer is the all-MO (pq|rs) transform, so it opts
+        // into the density-fitted path with a single call swap. RI makes FCI
+        // approximate (density-fitting error on the two-electron integrals), so
+        // it is strictly opt-in via mp2_use_ri and never the default here.
+        std::vector<double> ga;
+        if (calc._mp2.use_ri)
+        {
+            auto ga_ri = transform_eri_internal_ri(calc, C);
+            if (!ga_ri)
+                return std::unexpected(tag + ": " + ga_ri.error());
+            ga = std::move(*ga_ri);
+        }
+        else
+        {
+            std::vector<double> eri_local;
+            const std::vector<double> &eri =
+                ensure_eri(calc, shell_pairs, eri_local, tag + " :");
+            ga = transform_eri_internal(eri, nbasis, C);
+        }
 
         logging(LogLevel::Info, tag + " :",
                 std::format("Full CI over {} orbitals, {} alpha / {} beta electrons  (CI dim = {})",

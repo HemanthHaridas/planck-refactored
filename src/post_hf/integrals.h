@@ -74,6 +74,19 @@ namespace HartreeFock::Correlation
         const Eigen::MatrixXd &C3,  // nb × n3
         const Eigen::MatrixXd &C4); // nb × n4
 
+    // RI substitutes for the two CASSCF/FCI transform entry points. Same output
+    // layout as their dense counterparts (transform_eri_internal / _active_cache),
+    // assembled from the RI cache. Both are transform_eri_ri with the appropriate
+    // legs, so the RI-vs-dense equivalence gate covers them too.
+    std::expected<std::vector<double>, std::string> transform_eri_internal_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C_int); // nb × n_int
+
+    std::expected<std::vector<double>, std::string> transform_eri_active_cache_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C,       // nb × nb (full MO)
+        const Eigen::MatrixXd &C_act);  // nb × n_act
+
     // ── Mixed-basis active-cache transform (CASSCF) ────────────────────────────
     //
     // Dedicated entry point for the cache used by the orbital-gradient and
