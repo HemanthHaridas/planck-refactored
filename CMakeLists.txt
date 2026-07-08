@@ -468,6 +468,14 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/casscf/response.cpp
         ${SRC_DIR}/post_hf/ci/strings.cpp
         ${SRC_DIR}/post_hf/integrals.cpp
+        # integrals.cpp now references the RI transform (transform_eri_ri), which
+        # lives in ri_eri.cpp — link it plus its rifit/basis deps even though this
+        # test only exercises the dense path.
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
         ${INT_SRC}
         ${LOOKUP_SRC}
         ${SYMM_SRC}
@@ -651,6 +659,9 @@ if(BUILD_TESTING)
     add_executable(planck-transform-eri
         ${CMAKE_SOURCE_DIR}/tests/transform_eri_unit.cpp
         ${SRC_DIR}/post_hf/integrals.cpp
+        # integrals.cpp references transform_eri_ri (ri_eri.cpp) since Step 2.
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/rifit.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -693,6 +704,49 @@ if(BUILD_TESTING)
     # Native RI 3-center (mu nu | P) gate, validated against local PySCF.
     add_executable(planck-ri-3c-eri
         ${CMAKE_SOURCE_DIR}/tests/ri_3c_eri.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    # Step 2 seam: transform_eri_ri must reproduce the dense transform_eri.
+    # Self-contained (no PySCF), so it is registered as a ctest below.
+    add_executable(planck-ri-transform-equivalence
+        ${CMAKE_SOURCE_DIR}/tests/ri_transform_equivalence.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    # Step J0: RI-JK builder harness. Same self-contained fixture; the RI J/K
+    # equivalence assertions land in J1/J3.
+    add_executable(planck-ri-jk-equivalence
+        ${CMAKE_SOURCE_DIR}/tests/ri_jk_equivalence.cpp
         ${SRC_DIR}/post_hf/ri/ri_eri.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/rifit.cpp
@@ -954,6 +1008,16 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-ri-3c-eri PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-transform-equivalence PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-jk-equivalence PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -1326,6 +1390,18 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-ri-2c-eri
         COMMAND planck-ri-2c-eri
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-ri-transform-equivalence
+        COMMAND planck-ri-transform-equivalence
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-ri-jk-equivalence
+        COMMAND planck-ri-jk-equivalence
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 

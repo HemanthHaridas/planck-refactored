@@ -2,6 +2,7 @@
 #define HF_POSTHF_INTEGRALS_H
 
 #include <Eigen/Core>
+#include <expected>
 #include <string>
 #include <vector>
 
@@ -53,6 +54,38 @@ namespace HartreeFock::Correlation
         const Eigen::MatrixXd &C2,  // nb × n2
         const Eigen::MatrixXd &C3,  // nb × n3
         const Eigen::MatrixXd &C4); // nb × n4
+
+    // ── RI (density-fitted) 4-index AO→MO transform ────────────────────────────
+    //
+    // Same output contract and layout as transform_eri:
+    //   out[i,a,j,b] = (i a | j b) = Σ_Q B_{(ia),Q} B_{(jb),Q}
+    // but assembled from the cached RI 3-center factors instead of a dense AO
+    // ERI tensor, so it never materializes the nb^4 buffer. The Calculator must
+    // carry a ready RI cache (ensure_ri_3c_ready + _ri_metric_factor); on error
+    // (e.g. RI not enabled / cache missing) returns std::unexpected.
+    //
+    // Step 2 seam: this is the drop-in RI substitute for transform_eri that the
+    // conventional post-HF paths will opt into from Step 3. It is currently only
+    // reached by the RI-vs-dense equivalence unit test.
+    std::expected<std::vector<double>, std::string> transform_eri_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C1,  // nb × n1
+        const Eigen::MatrixXd &C2,  // nb × n2
+        const Eigen::MatrixXd &C3,  // nb × n3
+        const Eigen::MatrixXd &C4); // nb × n4
+
+    // RI substitutes for the two CASSCF/FCI transform entry points. Same output
+    // layout as their dense counterparts (transform_eri_internal / _active_cache),
+    // assembled from the RI cache. Both are transform_eri_ri with the appropriate
+    // legs, so the RI-vs-dense equivalence gate covers them too.
+    std::expected<std::vector<double>, std::string> transform_eri_internal_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C_int); // nb × n_int
+
+    std::expected<std::vector<double>, std::string> transform_eri_active_cache_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C,       // nb × nb (full MO)
+        const Eigen::MatrixXd &C_act);  // nb × n_act
 
     // ── Mixed-basis active-cache transform (CASSCF) ────────────────────────────
     //

@@ -2,6 +2,7 @@
 #define HF_POSTHF_CASSCF_ORBITAL_H
 
 #include "post_hf/casscf_internal.h"
+#include "base/types.h"
 
 #include <Eigen/Core>
 
@@ -42,17 +43,25 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<double> *eri = nullptr;
         const Eigen::MatrixXd *gamma = nullptr;
         const std::vector<double> *Gamma_vec = nullptr;
+        // When non-null and RI-enabled, the FD Hessian differentiates the RI
+        // orbital gradient (so the Hessian is consistent with the RI energy /
+        // gradient it curves). Left null in the dense path.
+        HartreeFock::Calculator *ri_calc = nullptr;
         double fd_step = 5e-4;
     };
 
     // Cache the active-space integral transform and reuse it across all response
     // contractions in a macroiteration.
+    // When ri_calc is non-null and RI is enabled on it, the ERI-dependent Fock /
+    // transform pieces are built from the density-fitted RI path instead of the
+    // dense eri tensor (the eri argument is then ignored for those pieces).
     ActiveIntegralCache build_active_integral_cache(
         const std::vector<double> &eri,
         const Eigen::MatrixXd &C,
         int n_core,
         int n_act,
-        int nbasis);
+        int nbasis,
+        HartreeFock::Calculator *ri_calc = nullptr);
 
     // Contract the active 2-RDM against the cached mixed-basis integrals to build
     // the Q matrix that enters the orbital gradient.
@@ -68,7 +77,8 @@ namespace HartreeFock::Correlation::CASSCF
         const Eigen::MatrixXd &H_core,
         const std::vector<double> &eri,
         int n_core,
-        int nbasis);
+        int nbasis,
+        const HartreeFock::Calculator *ri_calc = nullptr);
 
     // Build the active-space contribution from the 1-RDM so the generalized Fock
     // matrix can include the coupling between core, active, and virtual blocks.
@@ -78,7 +88,8 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<double> &eri,
         int n_core,
         int n_act,
-        int nbasis);
+        int nbasis,
+        const HartreeFock::Calculator *ri_calc = nullptr);
 
     // Compute the total electronic energy contribution from the occupied core and
     // inactive Fock blocks.
@@ -114,7 +125,8 @@ namespace HartreeFock::Correlation::CASSCF
         int n_act,
         int n_virt,
         const std::vector<int> &mo_irreps,
-        bool use_sym);
+        bool use_sym,
+        HartreeFock::Calculator *ri_calc = nullptr);
 
     // Feed the first-order CI response back into the orbital stationarity
     // equations. Only inactive/active and active/virtual blocks survive; within

@@ -12,6 +12,7 @@
 #include "post_hf/casscf/response.h"
 #include "post_hf/ci/strings.h"
 #include "post_hf/integrals.h"
+#include "post_hf/ri/ri_eri.h"
 
 #include <algorithm>
 #include <chrono>
@@ -452,9 +453,23 @@ namespace HartreeFock::Correlation::CASSCF
                                                tag, as.target_irrep));
         const int target_irr = *target_irr_opt;
 
+        // RI path: prepare the density-fitting cache once up front (metric +
+        // 3-center) and skip the dense nb^4 build entirely — the eri reference
+        // below stays empty and is never read on the RI branch. Dense path:
+        // materialize the AO tensor as before.
         std::vector<double> eri_local;
-        const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
-            calc, shell_pairs, eri_local, tag + " :");
+        if (calc._mp2.use_ri)
+        {
+            auto ri_ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calc);
+            if (!ri_ready)
+                return std::unexpected(tag + ": " + ri_ready.error());
+            if (!calc._ri_metric_factor)
+                return std::unexpected(tag + ": RI metric factorization is missing.");
+        }
+        const std::vector<double> &eri =
+            calc._mp2.use_ri
+                ? eri_local // empty; RI branch never dereferences it
+                : HartreeFock::Correlation::ensure_eri(calc, shell_pairs, eri_local, tag + " :");
 
         std::vector<CIString> a_strs;
         std::vector<CIString> b_strs;
@@ -521,11 +536,26 @@ namespace HartreeFock::Correlation::CASSCF
             // basis imply?". Every candidate orbital step and every final accepted
             // macroiteration comes back through this full reevaluation path.
             McscfState st;
-            st.F_I_mo = build_inactive_fock_mo(C_trial, calc._hcore, eri, n_core, nbasis);
+            // Density-fitted path: when mp2_use_ri is set, the four ERI-dependent
+            // pieces (inactive Fock, active-space transform, active cache, and the
+            // active Fock built later) all route through the validated RI builders
+            // so the whole CASSCF evaluation is RI-consistent.
+            HartreeFock::Calculator *ri_calc = calc._mp2.use_ri ? &calc : nullptr;
+            st.F_I_mo = build_inactive_fock_mo(C_trial, calc._hcore, eri, n_core, nbasis, ri_calc);
             st.h_eff = st.F_I_mo.block(n_core, n_core, n_act, n_act);
             const Eigen::MatrixXd C_act = C_trial.middleCols(n_core, n_act);
-            st.ga = HartreeFock::Correlation::transform_eri_internal(eri, nbasis, C_act);
-            st.active_integrals = build_active_integral_cache(eri, C_trial, n_core, n_act, nbasis);
+            if (ri_calc)
+            {
+                auto ga_ri = HartreeFock::Correlation::transform_eri_internal_ri(*ri_calc, C_act);
+                if (!ga_ri)
+                    return std::unexpected(tag + ": " + ga_ri.error());
+                st.ga = std::move(*ga_ri);
+            }
+            else
+            {
+                st.ga = HartreeFock::Correlation::transform_eri_internal(eri, nbasis, C_act);
+            }
+            st.active_integrals = build_active_integral_cache(eri, C_trial, n_core, n_act, nbasis, ri_calc);
 
             st.ci_space = build_ci_space(
                 a_strs, b_strs, ras, st.h_eff, st.ga, n_act,
@@ -572,7 +602,7 @@ namespace HartreeFock::Correlation::CASSCF
                     ci_vec, single_weight(1.0), a_strs, b_strs, st.dets, n_act);
                 root.Gamma_vec = compute_2rdm(
                     ci_vec, single_weight(1.0), a_strs, b_strs, st.dets, n_act);
-                root.F_A_mo = build_active_fock_mo(C_trial, root.gamma, eri, n_core, n_act, nbasis);
+                root.F_A_mo = build_active_fock_mo(C_trial, root.gamma, eri, n_core, n_act, nbasis, ri_calc);
                 root.Q = compute_Q_matrix(st.active_integrals, root.Gamma_vec);
                 root.g_orb = compute_orbital_gradient(
                     st.F_I_mo, root.F_A_mo, root.Q, root.gamma,
@@ -879,6 +909,9 @@ namespace HartreeFock::Correlation::CASSCF
                 .eri = &eri,
                 .gamma = &st_current.gamma,
                 .Gamma_vec = &st_current.Gamma_vec,
+                // Keep the FD Hessian on the same (RI or dense) integrals the
+                // energy/gradient used, so the curvature is consistent.
+                .ri_calc = calc._mp2.use_ri ? &calc : nullptr,
             };
 
             const SACoupledStepSolveResult sa_coupled_result =

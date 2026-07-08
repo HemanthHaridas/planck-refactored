@@ -65,6 +65,55 @@ namespace HartreeFock::Correlation::RI
 
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);
+
+    // Fitted AO-pair factors B_{(μν),Q} from the cached 3-center tensor and the
+    // 2-center metric factorization: applies V^{-1/2} (Cholesky solve or the
+    // eigen-pruned transform) to _ri_j3c. Rows index the packed AO pair (μ≥ν),
+    // columns index the fitting-metric space. Requires ensure_ri_3c_ready and a
+    // populated _ri_metric_factor on the Calculator.
+    Eigen::MatrixXd build_ri_pair_factors(const HartreeFock::Calculator &calculator);
+
+    // Contract the packed-pair fitted factors into an MO block B_{(pq),Q},
+    // rows indexed p*ncol_q + q over the columns of C_row / C_col. The AO-pair
+    // packing (μ≥ν with the off-diagonal doubling) is unfolded here. Reused by
+    // MP2 (o/v block) and, from Step 3 on, by the conventional post-HF paths.
+    Eigen::MatrixXd build_ri_mo_block(
+        const Eigen::MatrixXd &pair_factors,
+        const Eigen::MatrixXd &C_row,
+        const Eigen::MatrixXd &C_col);
+
+    // RI Coulomb matrix J_{μν} = Σ_Q B_{(μν),Q} c_Q, with the fitted charge
+    // c_Q = Σ_{λσ} B_{(λσ),Q} D_{λσ}. Both use the packed (μ≥ν) pair factors, so
+    // off-diagonal pairs carry an explicit factor 2 in the c_Q accumulation and
+    // the J scatter fills both (μ,ν) and (ν,μ). D must be symmetric. Requires a
+    // ready RI cache (build_ri_pair_factors); the AO dimension nb is inferred
+    // from the packed pair count.
+    Eigen::MatrixXd build_ri_j(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D);
+
+    // Unpack the fitted pair factors B_{(μν),Q} (packed μ≥ν) into the full
+    // symmetric per-aux matrices B[Q](μ,ν) = B[Q](ν,μ). Returned as naux
+    // matrices of size nb×nb — the nb²·naux working set the RI exchange build
+    // needs (still far below nb⁴). This is fitted (metric already applied), not
+    // the raw 3-center tensor.
+    std::vector<Eigen::MatrixXd> build_ri_3index_unpacked(
+        const HartreeFock::Calculator &calculator);
+
+    // RI exchange K_{μν} = Σ_Q Σ_{λσ} B_{μλ,Q} B_{νσ,Q} D_{λσ}, via the two-step
+    // H[Q] = B[Q] D ; K = Σ_Q H[Q] B[Q]ᵀ, using the unpacked per-aux matrices.
+    // D symmetric. Optionally pass a prebuilt unpacked tensor to avoid rebuilding
+    // it when J and K share one (e.g. build_ri_fock_rhf).
+    Eigen::MatrixXd build_ri_k(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D,
+        const std::vector<Eigen::MatrixXd> *unpacked = nullptr);
+
+    // Closed-shell RI Fock contribution G = J - 1/2 K, matching
+    // ObaraSaika::_compute_fock_rhf(eri, D) to density-fitting accuracy.
+    Eigen::MatrixXd build_ri_fock_rhf(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D);
 } // namespace HartreeFock::Correlation::RI
 
 #endif // HF_POST_HF_RI_ERI_H
