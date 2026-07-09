@@ -147,6 +147,21 @@ namespace HartreeFock::Correlation::RI
         std::size_t natoms,
         std::size_t nb);
 
+    // RI Lagrangian imat for the RMP2 gradient (Step RG3.3):
+    //   imat(q,v) = Σ_{p,r,s} (pq|rs) · dm2buf[p,v,r,s]
+    // factored through the fitted ERI (pq|rs) = Σ_Q B[Q](p,q) B[Q](r,s):
+    //   W[Q](p,v) = Σ_{rs} B[Q](r,s) · dm2buf[p,v,r,s]
+    //   imat(q,v) = Σ_Q Σ_p B[Q](p,q) · W[Q](p,v)  =  Σ_Q (B[Q]ᵀ W[Q])(q,v)
+    // dm2buf is the (transitional) dense nao⁴ separable density, laid out
+    // row-major [p][v][r][s]. Uses the unpacked per-aux factors
+    // (build_ri_3index_unpacked); intermediate is nao²·naux, never nao⁴ ERI.
+    // Matches the dense imat (before the −1 sign flip the caller applies) to
+    // fitting accuracy. Requires a ready RI cache.
+    Eigen::MatrixXd build_ri_imat(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<double> &dm2buf,
+        int nao);
+
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);
 

@@ -272,9 +272,15 @@ namespace HartreeFock::Correlation
         dm1_corr_mo.bottomRightCorner(nvirt, nvirt) = dvv + dvv.transpose();
         const Eigen::MatrixXd dm1_corr_ao = result.mo_coeff * dm1_corr_mo * result.mo_coeff.transpose();
 
+        // The dense nao⁴ ERI feeds only the Lagrangian imat below. Under RI that
+        // contraction runs through the 3-center factors (Step RG3.3), so the
+        // dense tensor is not built at all.
         std::vector<double> eri_local;
-        const std::vector<double> &eri = ensure_eri(
-            calculator, shell_pairs, eri_local, "RMP2 Gradient :");
+        static const std::vector<double> empty_eri;
+        const std::vector<double> &eri =
+            calculator._mp2.use_ri
+                ? empty_eri
+                : ensure_eri(calculator, shell_pairs, eri_local, "RMP2 Gradient :");
 
         std::vector<double> pair_dm2_ao(static_cast<std::size_t>(nao) * nao * nao * nao, 0.0);
         for (int mu = 0; mu < nao; ++mu)
@@ -390,10 +396,15 @@ namespace HartreeFock::Correlation
                             // Imat(q,v) += sum_{p,r,s} (pq|rs) * dm2buf[p,v,r,s].
                             // dm2buf_full omits the r<->s symmetrization, so the
                             // full-ERI contraction matches PySCF's packed Imat with
-                            // factor 1 (verified element-wise: ratio 1.0).
-                            const double eri_pqrs = eri[idx_dm2(p, q, r, s, nao)];
-                            for (int v = 0; v < nao; ++v)
-                                imat_ao(q, v) += eri_pqrs * dm2buf_full[idx_dm2(p, v, r, s, nao)];
+                            // factor 1 (verified element-wise: ratio 1.0). Under RI
+                            // this is built once from the 3-center factors after the
+                            // loop (Step RG3.3), so skip the dense accumulation here.
+                            if (!calculator._mp2.use_ri)
+                            {
+                                const double eri_pqrs = eri[idx_dm2(p, q, r, s, nao)];
+                                for (int v = 0; v < nao; ++v)
+                                    imat_ao(q, v) += eri_pqrs * dm2buf_full[idx_dm2(p, v, r, s, nao)];
+                            }
 
                             for (int comp = 0; comp < 3; ++comp)
                             {
@@ -404,6 +415,12 @@ namespace HartreeFock::Correlation
                             }
                         }
         }
+        // RI Lagrangian: imat = Σ (pq|rs)·dm2buf[p,v,r,s] via the 3-center
+        // factors (Step RG3.3), replacing the dense nao⁴ contraction skipped in
+        // the loop above. Same quantity, before the −1 sign flip.
+        if (calculator._mp2.use_ri)
+            imat_ao = HartreeFock::Correlation::RI::build_ri_imat(
+                calculator, dm2buf_full, nao);
         imat_ao = -imat_ao;
         Eigen::MatrixXd imat_mo = result.mo_coeff.transpose() * imat_ao * calculator._overlap * result.mo_coeff;
         const Eigen::MatrixXd veff_corr_ao = 2.0 * build_veff_from_density(calculator, shell_pairs, dm1_corr_ao);

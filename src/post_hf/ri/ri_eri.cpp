@@ -1286,6 +1286,33 @@ namespace HartreeFock::Correlation::RI
         return two_e;
     }
 
+    Eigen::MatrixXd build_ri_imat(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<double> &dm2buf,
+        int nao)
+    {
+        using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+        const std::vector<Eigen::MatrixXd> B = build_ri_3index_unpacked(calculator);
+        const Eigen::Index n = nao;
+
+        // dm2buf is row-major [p][v][r][s]; view as [(p v) × (r s)] row-major.
+        const Eigen::Map<const RowMat> M(dm2buf.data(), n * n, n * n);
+
+        Eigen::MatrixXd imat = Eigen::MatrixXd::Zero(n, n);
+        for (const Eigen::MatrixXd &BQ : B)
+        {
+            // vec(B[Q]) over (r,s) with r*n+s packing to match M's columns.
+            const RowMat BQr = BQ; // symmetric, but pack row-major to be exact
+            const Eigen::Map<const Eigen::VectorXd> bvec(BQr.data(), n * n);
+            // W[Q](p,v) = Σ_rs B[Q](r,s) dm2buf[p,v,r,s]; reshape the (pv)-vector.
+            const Eigen::VectorXd wcol = M * bvec;               // (p*n+v) row-major
+            const Eigen::Map<const RowMat> W(wcol.data(), n, n); // rows p, cols v
+            // imat(q,v) += Σ_p B[Q](p,q) W(p,v) = (B[Q]ᵀ W)(q,v).
+            imat.noalias() += BQ.transpose() * W;
+        }
+        return imat;
+    }
+
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator)
     {
