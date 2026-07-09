@@ -951,12 +951,21 @@ namespace HartreeFock::Correlation::RI
         // so the 2ζ raise acts on the bare angular part — exactly the
         // translational derivative identity. 3-center analog of the 4-center
         // nceri / wceri_{A,B,C} helpers.
+        // The aux basis function's Cartesian normalization is fixed at its
+        // ORIGINAL momenta (lCx,lCy,lCz) — it is the normalization of the
+        // contracted d/f/… function, not of the raised/lowered angular part the
+        // derivative recurrence walks through. Recomputing it from the raised
+        // (cx,cy,cz) inside contract is wrong for the aux raise/lower (e.g. a
+        // d-aux raised to f uses cartesian_norm(3,0,0) instead of the correct
+        // cartesian_norm(2,0,0)) — it silently broke the Σ_center=0 identity for
+        // p/d-aux elements. Fix it here, once.
+        const double normC = cartesian_norm(lCx, lCy, lCz);
+
         auto contract = [&](int ax, int ay, int az,
                             int bx, int by, int bz,
                             int cx, int cy, int cz,
                             Weight w) -> double
         {
-            const double normC = cartesian_norm(cx, cy, cz);
             double value = 0.0;
             for (const auto &ppAB : spAB.primitive_pairs)
             {

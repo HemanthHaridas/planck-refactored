@@ -24,9 +24,11 @@
 #include <cmath>
 #include <cstdlib>
 #include <expected>
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "base/types.h"
 #include "basis/basis.h"
@@ -286,6 +288,82 @@ int main()
                          std::to_string(q) + " (>1e-7)");
             }
         }
+    }
+
+    // ── RG1a.3: p/d element sweep — exercise the lowering term ────────────────
+    // build_shellpairs expands to per-Cartesian-component pairs (each pair's
+    // A/B carry specific _cartesian momenta and their AO _index). Sweep pairs
+    // whose μ leg has non-zero momentum (p or d) so the −l_Xq·I(l_X−ê_q) lowering
+    // term actually fires — the s-s-s case above never exercised it. For each,
+    // compare the analytic μ-block to FD, isolating μ by requiring its atom be
+    // distinct from ν's and the aux's. Also assert Σ_center = 0 per element.
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        const auto shell_pairs = build_shellpairs(calc._shells);
+
+        // Precompute aux (shell, first-cartesian-momenta, column) list.
+        struct AuxElem { const HartreeFock::Shell *sh; int lx, ly, lz; std::size_t col; };
+        std::vector<AuxElem> aux_elems;
+        {
+            std::size_t col = 0;
+            for (const auto &sh : calc._ri_aux_basis->shells)
+            {
+                const auto comps = HartreeFock::BasisFunctions::_cartesian_shell_order(
+                    static_cast<unsigned>(sh._shell));
+                // Use the first component of each aux shell.
+                aux_elems.push_back({&sh, comps[0][0], comps[0][1], comps[0][2], col});
+                col += comps.size();
+            }
+        }
+
+        int checked = 0, lowering_hit = 0;
+        for (const auto &sp : shell_pairs)
+        {
+            if (checked >= 12) break; // a representative dozen is plenty
+            const int muL = sp.A._cartesian.sum();
+            if (muL == 0) continue; // want p/d on μ to fire the lowering term
+            const unsigned aMu = sp.A._shell->_atom_index;
+            const unsigned aNu = sp.B._shell->_atom_index;
+            if (aMu == aNu) continue; // need μ isolable from ν
+
+            for (const auto &ae : aux_elems)
+            {
+                if (aMu == ae.sh->_atom_index) continue; // μ isolable from aux
+                if (checked >= 12) break;
+
+                const std::size_t hi = std::max(sp.A._index, sp.B._index);
+                const std::size_t lo = std::min(sp.A._index, sp.B._index);
+                const Eigen::Index r = static_cast<Eigen::Index>(hi * (hi + 1) / 2 + lo);
+                const int move_atom = static_cast<int>(aMu);
+
+                const auto d = HartreeFock::Correlation::RI::compute_3c_deriv_elem(
+                    sp, sp.A._cartesian[0], sp.A._cartesian[1], sp.A._cartesian[2],
+                    sp.B._cartesian[0], sp.B._cartesian[1], sp.B._cartesian[2],
+                    *ae.sh, ae.lx, ae.ly, ae.lz);
+
+                for (int q = 0; q < 3; ++q)
+                {
+                    auto fd = fd_derivative(root, geom, move_atom, q, delta);
+                    if (!fd) { fail("sweep fd_derivative failed: " + fd.error()); return 1; }
+                    const double fdv = (*fd)(r, static_cast<Eigen::Index>(ae.col));
+                    if (std::abs(d[0 * 3 + q] - fdv) > 1e-7)
+                        fail("sweep: analytic μ-derivative ≠ FD (muL=" +
+                             std::to_string(muL) + ", axis " + std::to_string(q) + ")");
+                    // per-element translational sum
+                    const double s = d[0 * 3 + q] + d[1 * 3 + q] + d[2 * 3 + q];
+                    if (std::abs(s) > 1e-9)
+                        fail("sweep: Σ_center ≠ 0 (axis " + std::to_string(q) + ")");
+                }
+                if (muL > 0) ++lowering_hit;
+                ++checked;
+            }
+        }
+        std::cout << "  RG1a.3 sweep: " << checked << " p/d elements checked, "
+                  << lowering_hit << " with lowering term active\n";
+        if (checked == 0)
+            fail("RG1a.3 sweep checked no elements — the lowering term is untested");
+        if (lowering_hit == 0)
+            fail("RG1a.3 sweep never fired the lowering term");
     }
 
     if (g_ok)
