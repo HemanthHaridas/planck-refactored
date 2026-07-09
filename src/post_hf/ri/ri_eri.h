@@ -13,6 +13,7 @@
 //     held separately on Shell._normalizations. See the Norm Factors gotcha.
 
 #include <Eigen/Core>
+#include <array>
 #include <expected>
 #include <string>
 
@@ -62,6 +63,26 @@ namespace HartreeFock::Correlation::RI
     // legs; the auxiliary basis remains Cartesian.
     std::expected<Eigen::MatrixXd, std::string> compute_3c_eri(
         const HartreeFock::Calculator &calculator);
+
+    // Analytic nuclear derivative of one contracted 3-center Cartesian element
+    // (μ ν | Q) w.r.t. the three centers it sits on. Layout: [center][axis],
+    // center 0 = μ (orbital A), 1 = ν (orbital B), 2 = aux (Q); axis 0/1/2 = x/y/z,
+    // so index = center*3 + axis. Contracted over the μν primitive pairs and the
+    // aux shell primitives at the given Cartesian momenta. Coulomb kernel only
+    // (RI fitting is Coulomb-metric).
+    //
+    // Uses the Gaussian translational identity, same as the 4-center
+    // ObaraSaika::_compute_eri_deriv_elem:
+    //   d/dX_q = 2 ζ_X · I(l_X + ê_q)  −  l_Xq · I(l_X − ê_q).
+    //
+    // RG1a.1: only the μ-center (A) block is populated; ν and aux blocks are
+    // filled by RG1a.2. The unpopulated blocks are left zero.
+    std::array<double, 9> compute_3c_deriv_elem(
+        const HartreeFock::ShellPair &spAB,
+        int lAx, int lAy, int lAz,
+        int lBx, int lBy, int lBz,
+        const HartreeFock::Shell &shellC,
+        int lCx, int lCy, int lCz);
 
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);

@@ -928,6 +928,68 @@ namespace HartreeFock::Correlation::RI
         return unpack_transform_repack_3c(j3c_cart, calculator._shells._cart_to_sph);
     }
 
+    std::array<double, 9> compute_3c_deriv_elem(
+        const HartreeFock::ShellPair &spAB,
+        int lAx, int lAy, int lAz,
+        int lBx, int lBy, int lBz,
+        const HartreeFock::Shell &shellC,
+        int lCx, int lCy, int lCz)
+    {
+        std::array<double, 9> result{}; // zero-initialized
+
+        // Contracted (μν|Q) at explicit Cartesian momenta, optionally weighting
+        // the μ-primitive (A) by 2·alpha for the derivative raise term. This is
+        // the 3-center analog of the 4-center nceri / wceri_A helpers, and folds
+        // the same aux Cartesian norm (normC) the energy loop in compute_3c_eri
+        // applies. normC depends only on (cx,cy,cz), which the A-derivative never
+        // raises, so it is a constant scale on the μ-block. The μ/ν orbital norms
+        // are NOT applied at this level (they live in coeff_product / the OS
+        // primitive convention), so the 2α raise acts on the bare angular part —
+        // exactly the translational derivative identity.
+        auto contract = [&](int ax, int ay, int az,
+                            int bx, int by, int bz,
+                            int cx, int cy, int cz,
+                            bool weight_2alpha_A) -> double
+        {
+            const double normC = cartesian_norm(cx, cy, cz);
+            double value = 0.0;
+            for (const auto &ppAB : spAB.primitive_pairs)
+            {
+                const double wA = weight_2alpha_A ? (2.0 * ppAB.alpha) : 1.0;
+                for (Eigen::Index ic = 0; ic < shellC._primitives.size(); ++ic)
+                {
+                    value += wA * ppAB.coeff_product *
+                             shellC._coefficients(ic) *
+                             shellC._normalizations(ic) *
+                             normC *
+                             _3c_eri_primitive(
+                                 ppAB, ax, ay, az, bx, by, bz, spAB.R,
+                                 shellC._center, shellC._primitives(ic),
+                                 cx, cy, cz);
+                }
+            }
+            return value;
+        };
+
+        // Centre μ (A): d/dA_q = 2α·(lA+ê_q) − lAq·(lA−ê_q).
+        // RG1a.1: only this block; ν and aux follow in RG1a.2.
+        for (int q = 0; q < 3; ++q)
+        {
+            const int lAq = (q == 0 ? lAx : q == 1 ? lAy : lAz);
+            const int axp = lAx + (q == 0), ayp = lAy + (q == 1), azp = lAz + (q == 2);
+            double d = contract(axp, ayp, azp, lBx, lBy, lBz, lCx, lCy, lCz, true);
+            if (lAq > 0)
+            {
+                const int axm = lAx - (q == 0), aym = lAy - (q == 1), azm = lAz - (q == 2);
+                d -= static_cast<double>(lAq) *
+                     contract(axm, aym, azm, lBx, lBy, lBz, lCx, lCy, lCz, false);
+            }
+            result[0 * 3 + q] = d;
+        }
+
+        return result;
+    }
+
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator)
     {

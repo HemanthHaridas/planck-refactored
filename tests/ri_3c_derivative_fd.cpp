@@ -21,6 +21,7 @@
 //       mis-signed FD.
 
 #include <Eigen/Dense>
+#include <cmath>
 #include <cstdlib>
 #include <expected>
 #include <filesystem>
@@ -30,6 +31,7 @@
 #include "base/types.h"
 #include "basis/basis.h"
 #include "basis/rifit.h"
+#include "integrals/shellpair.h"
 #include "post_hf/ri/ri_eri.h"
 
 namespace
@@ -176,6 +178,80 @@ int main()
         if (resid > 1e-5)
             fail("translational invariance violated on axis " + std::to_string(c) +
                  " — FD oracle is mis-centered or mis-signed");
+    }
+
+    // ── RG1a.1: analytic μ-center derivative vs FD ────────────────────────────
+    // Pick an s-s AO pair whose two centers are on DIFFERENT atoms, with an
+    // s-type aux. Moving μ's atom then changes the integral (a spectator element
+    // where μ and everything else are on the same atom gives a trivially-zero
+    // μ-derivative by translational invariance — no test). The analytic μ-block
+    // for that element must match the FD of the corresponding packed tensor entry
+    // w.r.t. μ's atom coordinate.
+    //
+    // s-s-s exercises the 2α raise but not the lowering term (lAq = 0); the p/d
+    // sweep in RG1a.3 covers lowering.
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        const auto shell_pairs = build_shellpairs(calc._shells);
+        const HartreeFock::Shell *auxC = nullptr;
+        for (const auto &sh : calc._ri_aux_basis->shells)
+            if (static_cast<int>(sh._shell) == 0) { auxC = &sh; break; }
+        if (!auxC)
+        {
+            fail("no s-type aux shell found");
+            return 1;
+        }
+        // aux column of that shell = number of aux functions before it.
+        std::size_t aux_col = 0;
+        for (const auto &sh : calc._ri_aux_basis->shells)
+        {
+            if (&sh == auxC) break;
+            aux_col += HartreeFock::BasisFunctions::_cartesian_shell_order(
+                           static_cast<unsigned>(sh._shell)).size();
+        }
+
+        // s-s pair where μ (A) is on an atom distinct from BOTH ν's atom and the
+        // aux's atom, so moving μ's atom perturbs only the μ leg and the FD
+        // isolates the analytic μ-derivative.
+        const HartreeFock::ShellPair *pair = nullptr;
+        for (const auto &sp : shell_pairs)
+        {
+            const bool s_s = sp.A._cartesian.sum() == 0 && sp.B._cartesian.sum() == 0;
+            const unsigned aA = sp.A._shell->_atom_index;
+            const unsigned aB = sp.B._shell->_atom_index;
+            if (s_s && aA != aB && aA != auxC->_atom_index) { pair = &sp; break; }
+        }
+        if (!pair)
+        {
+            fail("no suitable s-s pair (μ atom distinct from ν and aux) found");
+            return 1;
+        }
+
+        const std::size_t mu = pair->A._index, nu = pair->B._index;
+        const std::size_t hi = std::max(mu, nu), lo = std::min(mu, nu);
+        const Eigen::Index row = static_cast<Eigen::Index>(hi * (hi + 1) / 2 + lo);
+        const int move_atom = static_cast<int>(pair->A._shell->_atom_index);
+
+        const auto d = HartreeFock::Correlation::RI::compute_3c_deriv_elem(
+            *pair, 0, 0, 0, 0, 0, 0, *auxC, 0, 0, 0);
+
+        for (int q = 0; q < 3; ++q)
+        {
+            auto fd = fd_derivative(root, geom, move_atom, q, delta);
+            if (!fd)
+            {
+                fail("fd_derivative failed: " + fd.error());
+                return 1;
+            }
+            const double fdv = (*fd)(row, static_cast<Eigen::Index>(aux_col));
+            const double an = d[0 * 3 + q];
+            const double diff = std::abs(an - fdv);
+            std::cout << "  analytic dμ/dR_" << q << " = " << an
+                      << "  FD = " << fdv << "  |Δ| = " << diff << '\n';
+            if (diff > 1e-7)
+                fail("analytic μ-derivative disagrees with FD on axis " +
+                     std::to_string(q) + " (>1e-7)");
+        }
     }
 
     if (g_ok)
