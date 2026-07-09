@@ -13,6 +13,7 @@
 #include "post_hf/mp2_internal.h"
 #include "post_hf/rhf_response.h"
 #include "post_hf/uhf_response.h"
+#include "post_hf/ri/ri_eri.h"
 
 namespace
 {
@@ -62,6 +63,12 @@ namespace
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &density)
     {
+        // RI-consistent veff G = J - 1/2 K when MP2 RI is enabled (Step RG3.2).
+        // build_ri_fock_rhf returns the same J - 1/2 K as _compute_2e_fock, so
+        // the caller factor (2· at veff_corr, projector sandwich at vhf_s1occ)
+        // is unchanged. Density is symmetric at both call sites.
+        if (calculator._mp2.use_ri)
+            return HartreeFock::Correlation::RI::build_ri_fock_rhf(calculator, density);
         return _compute_2e_fock(
             shell_pairs,
             density,
