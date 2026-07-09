@@ -798,6 +798,29 @@ namespace HartreeFock::Correlation::RI
         return out;
     }
 
+    // Single invalidation point for every RI cache. All four (aux basis,
+    // 2-center metric, its factorization, 3-center tensor) depend on the atom
+    // positions, so when _molecule._standard no longer matches the geometry the
+    // caches were built against, clear them all and restamp. ensure_ri_3c_ready
+    // calls ensure_ri_metric_ready first, so placing this at the top of the
+    // metric path covers both entry points. In the common case (geometry
+    // unchanged) it is a cheap matrix compare and a no-op.
+    void ri_invalidate_if_geometry_moved(HartreeFock::Calculator &calculator)
+    {
+        const Eigen::MatrixXd &geom = calculator._molecule._standard;
+        const Eigen::MatrixXd &stamp = calculator._ri_cache_geometry;
+        const bool same = stamp.rows() == geom.rows() &&
+                          stamp.cols() == geom.cols() && stamp == geom;
+        if (same)
+            return;
+
+        calculator._ri_aux_basis.reset();
+        calculator._ri_j2c.resize(0, 0);
+        calculator._ri_metric_factor.reset();
+        calculator._ri_j3c.resize(0, 0);
+        calculator._ri_cache_geometry = geom;
+    }
+
     std::expected<void, std::string> ensure_ri_metric_ready(
         HartreeFock::Calculator &calculator)
     {
@@ -806,6 +829,8 @@ namespace HartreeFock::Correlation::RI
             return std::unexpected("ensure_ri_metric_ready: MP2 RI is disabled.");
         if (opts.ri_basis_name.empty())
             return std::unexpected("ensure_ri_metric_ready: mp2_ri_basis must be set when mp2_use_ri is true.");
+
+        ri_invalidate_if_geometry_moved(calculator);
 
         if (!calculator._ri_aux_basis)
         {
