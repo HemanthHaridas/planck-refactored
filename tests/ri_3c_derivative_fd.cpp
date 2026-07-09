@@ -366,6 +366,40 @@ int main()
             fail("RG1a.3 sweep never fired the lowering term");
     }
 
+    // ── RG1b.1: packed dJ/dR driver vs the whole-tensor FD ────────────────────
+    // compute_3c_eri_deriv assembles the element helper and scatters to atoms.
+    // Its per-(atom,axis) matrix must equal the finite difference of the full
+    // packed tensor — a strict superset of the element checks above, since it
+    // also validates the scatter/assembly. Every entry, every atom, every axis.
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        auto dJ = HartreeFock::Correlation::RI::compute_3c_eri_deriv(calc);
+        if (!dJ)
+        {
+            fail("compute_3c_eri_deriv failed: " + dJ.error());
+            return 1;
+        }
+        const std::size_t natoms = calc._molecule.natoms;
+        double worst = 0.0;
+        for (std::size_t a = 0; a < natoms; ++a)
+            for (int q = 0; q < 3; ++q)
+            {
+                auto fd = fd_derivative(root, geom, static_cast<int>(a), q, delta);
+                if (!fd)
+                {
+                    fail("RG1b.1 fd_derivative failed: " + fd.error());
+                    return 1;
+                }
+                const Eigen::MatrixXd &an = (*dJ)[a * 3 + static_cast<std::size_t>(q)];
+                const double diff = (an - *fd).cwiseAbs().maxCoeff();
+                worst = std::max(worst, diff);
+            }
+        std::cout << "  RG1b.1 packed dJ/dR vs FD: worst |Δ| over all atoms/axes = "
+                  << worst << '\n';
+        if (worst > 1e-7)
+            fail("packed dJ/dR disagrees with the whole-tensor FD (>1e-7)");
+    }
+
     if (g_ok)
         std::cout << "PASS: ri_3c_derivative_fd\n";
     return g_ok ? 0 : 1;

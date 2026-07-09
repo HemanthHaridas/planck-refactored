@@ -16,6 +16,7 @@
 #include <array>
 #include <expected>
 #include <string>
+#include <vector>
 
 #include "base/types.h"
 #include "basis/rifit.h"
@@ -83,6 +84,18 @@ namespace HartreeFock::Correlation::RI
         int lBx, int lBy, int lBz,
         const HartreeFock::Shell &shellC,
         int lCx, int lCy, int lCz);
+
+    // Packed nuclear derivative of the full 3-center tensor: assembles
+    // compute_3c_deriv_elem over the same loop as compute_3c_eri and scatters
+    // each element's 9 components to the (≤3) atoms its μ/ν/aux legs sit on.
+    // Returns natoms*3 matrices, index = atom*3 + axis, each [npair × naux]
+    // (packed AO pair × aux function) — d/dR_{atom,axis} of the packed tensor,
+    // directly comparable to a finite difference of compute_3c_eri. Cartesian
+    // AO basis only for now (spherical lift, if ever needed, follows
+    // compute_3c_eri's transform at the skin — out of scope until a consumer
+    // needs it).
+    std::expected<std::vector<Eigen::MatrixXd>, std::string>
+    compute_3c_eri_deriv(const HartreeFock::Calculator &calculator);
 
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);
