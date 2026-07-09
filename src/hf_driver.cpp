@@ -548,32 +548,36 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         // for cross-basis density projection in the spherical working basis.
     }
 
-    // ── RI-MP2 workflow gate: single-point energies only ─────────────────────────
+    // ── RI-MP2 workflow gate: single-point energies + single-shot RHF gradient ───
     // The RI front-end caches the auxiliary basis, the 2-center Coulomb metric,
     // and the packed 3-center tensor on the Calculator (_ri_aux_basis / _ri_j2c /
-    // _ri_j3c). ensure_ri_3c_ready reuses them whenever their dimensions match,
-    // RI is restricted to single-point energies, but the binding reason is now
-    // the analytic gradient, not the caches. The RI caches self-invalidate on a
-    // geometry change (Calculator::_ri_cache_geometry + ri_invalidate_if_
-    // geometry_moved in ri_eri.cpp), so RI energies are correct at any geometry.
-    // What is still missing is an RI gradient: compute_rmp2_gradient /
-    // compute_ump2_gradient build their intermediates from the dense ERI tensor
-    // (ensure_eri), with no use_ri path. A geometry-moving RI workflow would
-    // therefore pair an RI-fitted energy with a dense gradient — an inconsistent
-    // (E, dE/dR) that does not converge to the RI stationary point. (CASSCF has
-    // no analytic gradient at all, so RI-CASSCF geomopt is unreachable for a
-    // separate reason.) Keep the gate until RI gradients land; then relax this
-    // and gate RI geomopt against PySCF DF-MP2. Basis-agnostic.
+    // _ri_j3c). The caches self-invalidate on a geometry change (G1:
+    // Calculator::_ri_cache_geometry + ri_invalidate_if_geometry_moved in
+    // ri_eri.cpp), so RI energies are correct at any geometry.
+    //
+    // A single-shot RHF analytic Gradient is admitted: it computes derivatives at
+    // the one input geometry, and the RI gradient is now RI-consistent end-to-end
+    // (RG2/RG3 — 2e-term + RI CPHF / Z-vector / Lagrangian / veff, FD-gated to
+    // ~3e-7 Ha/Bohr by water_ri_rmp2_gradient_fd). Geometry-MOVING workflows
+    // (GeomOpt / Frequency / GeomOptFreq / ImaginaryFollow) stay blocked pending
+    // their own validation — G1 keeps the per-displacement caches correct, but the
+    // geomopt/freq RI path is not yet gated (RG5). UMP2 RI gradients are not
+    // implemented (RG4), so unrestricted RI gradients fall through to the block
+    // below. Basis-agnostic.
+    const bool ri_gradient_ok =
+        calculator._calculation == HartreeFock::CalculationType::Gradient &&
+        calculator._scf._scf == HartreeFock::SCFType::RHF;
     if (calculator._mp2.use_ri &&
-        calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+        calculator._calculation != HartreeFock::CalculationType::SinglePoint &&
+        !ri_gradient_ok)
     {
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Error, "RI-MP2 :",
-            "RI (mp2_use_ri) is only supported for single-point energies: the "
-            "analytic gradient does not have an RI path yet, so a geometry-moving "
-            "workflow would pair an RI energy with a dense gradient and converge "
-            "to the wrong geometry. Set calculation singlepoint, or disable RI "
-            "(mp2_use_ri false) for " + map_enum(calculator._calculation) + ".");
+            "RI-MP2 (mp2_use_ri) is supported for single-point energies and the "
+            "single-shot RHF analytic gradient only; geometry-moving workflows "
+            "(geomopt/frequency) and UMP2 RI gradients are not yet enabled. Set "
+            "calculation singlepoint or gradient, or disable RI (mp2_use_ri false) "
+            "for " + map_enum(calculator._calculation) + ".");
         return EXIT_FAILURE;
     }
 

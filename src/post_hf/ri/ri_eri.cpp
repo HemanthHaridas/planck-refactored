@@ -1241,20 +1241,23 @@ namespace HartreeFock::Correlation::RI
         const std::vector<Eigen::MatrixXd> &dJ,
         const std::vector<Eigen::MatrixXd> &dV,
         std::size_t natoms,
-        std::size_t nb)
+        std::size_t nb,
+        bool bra_prefolded)
     {
         const Eigen::Index npair = gamma3.rows();
         const Eigen::Index naux = gamma3.cols();
 
-        // Pair weight (μ==ν?1:2), packed hi*(hi+1)/2+lo order — same doubling the
-        // fitted factors carry (build_ri_j). Off-diagonal packed pairs stand in
-        // for both (μν) and (νμ) in the full bra sum.
+        // Bra pair weight. When gamma3's bra is a SINGLE ordering (μ≥ν only, e.g.
+        // a bra-symmetric density), off-diagonal packed pairs stand in for both
+        // (μν) and (νμ), so w=(μ==ν?1:2) recovers the full bra sum (build_ri_j
+        // convention). When gamma3 is already the sum of both orderings
+        // (bra_prefolded — the general non-bra-symmetric dm2buf case), w=1.
         Eigen::VectorXd w(npair);
         {
             Eigen::Index row = 0;
             for (std::size_t mu = 0; mu < nb; ++mu)
                 for (std::size_t nu = 0; nu <= mu; ++nu, ++row)
-                    w(row) = (mu == nu) ? 1.0 : 2.0;
+                    w(row) = (bra_prefolded || mu == nu) ? 1.0 : 2.0;
         }
 
         // Both terms couple through V^{-1}, not V^{-1/2}: the fitted ERI is
@@ -1284,6 +1287,76 @@ namespace HartreeFock::Correlation::RI
         }
         (void)naux;
         return two_e;
+    }
+
+    namespace
+    {
+        // X = J V^{-1} in packed (μ≥ν) pair × aux form. B = J V^{-1/2} is the
+        // fitted pair factors; one more V^{-1/2} gives X. Built from the metric
+        // factorization the same way build_ri_pair_factors applies V^{-1/2}.
+        Eigen::MatrixXd build_ri_x_pair_factors(const HartreeFock::Calculator &calculator)
+        {
+            const Eigen::MatrixXd &J = calculator._ri_j3c;
+            const auto &metric = *calculator._ri_metric_factor;
+            Eigen::MatrixXd vhalf_inv; // X_metric with X V Xᵀ = I ⇒ V^{-1} = Xᵀ X
+            if (metric.method == MetricFactorization::Method::Eigen)
+                vhalf_inv = metric.transform;
+            else
+            {
+                const Eigen::MatrixXd I =
+                    Eigen::MatrixXd::Identity(J.cols(), J.cols());
+                vhalf_inv = metric.transform.triangularView<Eigen::Lower>().solve(I);
+            }
+            const Eigen::MatrixXd Vinv = vhalf_inv.transpose() * vhalf_inv;
+            return J * Vinv; // packed pair × aux
+        }
+    }
+
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_gamma3_from_ao_dm2(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<double> &dm2buf,
+        int nao)
+    {
+        using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+        const Eigen::MatrixXd x_pair = build_ri_x_pair_factors(calculator);
+        const Eigen::Index naux = x_pair.cols();
+        const Eigen::Index n = nao;
+        const Eigen::Index npair = n * (n + 1) / 2;
+
+        // Unpack X into per-aux nao×nao matrices X[Q](r,s) = X[Q](s,r).
+        std::vector<Eigen::MatrixXd> X(static_cast<std::size_t>(naux),
+                                       Eigen::MatrixXd::Zero(n, n));
+        {
+            std::size_t pr = 0;
+            for (Eigen::Index mu = 0; mu < n; ++mu)
+                for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
+                    for (Eigen::Index Q = 0; Q < naux; ++Q)
+                    {
+                        const double v = x_pair(static_cast<Eigen::Index>(pr), Q);
+                        X[static_cast<std::size_t>(Q)](mu, nu) = v;
+                        X[static_cast<std::size_t>(Q)](nu, mu) = v;
+                    }
+        }
+
+        // dm2buf viewed as [(μ ν) full × (r s) full] row-major (μ,ν both full).
+        const Eigen::Map<const RowMat> D(dm2buf.data(), n * n, n * n);
+
+        // gamma3[(μν)packed, Q] = Σ_{rs} dm2buf[μ,ν,r,s] X[Q](r,s).
+        Eigen::MatrixXd gamma3 = Eigen::MatrixXd::Zero(npair, naux);
+        for (Eigen::Index Q = 0; Q < naux; ++Q)
+        {
+            const RowMat XQ = X[static_cast<std::size_t>(Q)];
+            const Eigen::Map<const Eigen::VectorXd> xvec(XQ.data(), n * n);
+            const Eigen::VectorXd wfull = D * xvec; // (μ*n+ν) full
+            const Eigen::Map<const RowMat> Wm(wfull.data(), n, n); // rows μ, cols ν
+            std::size_t pr = 0;
+            for (Eigen::Index mu = 0; mu < n; ++mu)
+                for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
+                    // Packed bra folds μ<ν into μ≥ν: dm2buf[μν] + dm2buf[νμ].
+                    gamma3(static_cast<Eigen::Index>(pr), Q) =
+                        (mu == nu) ? Wm(mu, nu) : (Wm(mu, nu) + Wm(nu, mu));
+        }
+        return {gamma3, x_pair};
     }
 
     Eigen::MatrixXd build_ri_imat(

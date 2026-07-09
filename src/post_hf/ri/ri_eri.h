@@ -139,13 +139,30 @@ namespace HartreeFock::Correlation::RI
     // derivative correction that has no dense analog (it exists only because RI
     // factors through V). dJ = compute_3c_eri_deriv, dV = compute_2c_eri_deriv,
     // both natoms*3 packed derivative tensors. Returns natoms×3.
+    // bra_prefolded: false (default) — gamma3's bra is a single μ≥ν ordering and
+    // off-diagonal pairs are doubled internally (bra-symmetric density, RG2.2
+    // synthetic gate). true — gamma3 already sums both (μν)+(νμ) orderings
+    // (general non-bra-symmetric dm2buf, RG3.4), so no internal doubling.
     Eigen::MatrixXd build_ri_two_electron_gradient(
         const Eigen::MatrixXd &gamma3,
         const Eigen::MatrixXd &x_proj,
         const std::vector<Eigen::MatrixXd> &dJ,
         const std::vector<Eigen::MatrixXd> &dV,
         std::size_t natoms,
-        std::size_t nb);
+        std::size_t nb,
+        bool bra_prefolded = false);
+
+    // Packed 3-index density and raw X factors for the RI 2e-gradient term
+    // (Step RG3.4), built from the AO separable density dm2buf[μ,ν,r,s] (the
+    // transitional nao⁴ buffer, row-major). Returns:
+    //   gamma3[(μν),Q] = Σ_{rs} dm2buf[μ,ν,r,s]·X[Q](r,s)   (packed μ≥ν × aux)
+    //   x_proj[(μν),Q] = X[(μν),Q]                          (raw J V^{-1} factors)
+    // both feeding build_ri_two_electron_gradient. X = J V^{-1} (build_ri_pair
+    // _factors then one more V^{-1/2}); dm2buf's bra μν is packed on the way out.
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_gamma3_from_ao_dm2(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<double> &dm2buf,
+        int nao);
 
     // RI Lagrangian imat for the RMP2 gradient (Step RG3.3):
     //   imat(q,v) = Σ_{p,r,s} (pq|rs) · dm2buf[p,v,r,s]

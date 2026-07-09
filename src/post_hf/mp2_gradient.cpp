@@ -386,11 +386,17 @@ namespace HartreeFock::Correlation
                             // PySCF contracts the pair density with the ERI derivative
                             // with an overall factor of 2 (grad/mp2.py: de -= ... * 2);
                             // dm2buf_full carries only one bra-derivative permutation here.
-                            const double dm2v = 2.0 * dm2buf_full[idx_dm2(p, q, r, s, nao)];
-                            for (int comp = 0; comp < 3; ++comp)
+                            // Under RI this 2e-term is built from the 3-center
+                            // derivative tensors after the loop (Step RG3.4), so skip
+                            // the dense derivative-ERI accumulation here.
+                            if (!calculator._mp2.use_ri)
                             {
-                                two_e_terms(atom, comp) += dI[comp] * dm2v;
-                                electronic(atom, comp) += dI[comp] * dm2v;
+                                const double dm2v = 2.0 * dm2buf_full[idx_dm2(p, q, r, s, nao)];
+                                for (int comp = 0; comp < 3; ++comp)
+                                {
+                                    two_e_terms(atom, comp) += dI[comp] * dm2v;
+                                    electronic(atom, comp) += dI[comp] * dm2v;
+                                }
                             }
 
                             // Imat(q,v) += sum_{p,r,s} (pq|rs) * dm2buf[p,v,r,s].
@@ -421,6 +427,30 @@ namespace HartreeFock::Correlation
         if (calculator._mp2.use_ri)
             imat_ao = HartreeFock::Correlation::RI::build_ri_imat(
                 calculator, dm2buf_full, nao);
+
+        // RI 2e-gradient term (Step RG3.4): contract the fitted 3-index density
+        // against the RG1 derivative tensors instead of the dense 4-center
+        // derivative ERIs skipped in the loop. dm2buf's bra is non-symmetric, so
+        // gamma3 sums both orderings and the contraction runs bra_prefolded.
+        if (calculator._mp2.use_ri)
+        {
+            auto dJ = HartreeFock::Correlation::RI::compute_3c_eri_deriv(calculator);
+            auto dV = HartreeFock::Correlation::RI::compute_2c_eri_deriv(calculator);
+            if (!dJ)
+                return std::unexpected("RMP2 RI gradient: " + dJ.error());
+            if (!dV)
+                return std::unexpected("RMP2 RI gradient: " + dV.error());
+            auto [gamma3, x_proj] =
+                HartreeFock::Correlation::RI::build_ri_gamma3_from_ao_dm2(
+                    calculator, dm2buf_full, nao);
+            const Eigen::MatrixXd ri_two_e =
+                HartreeFock::Correlation::RI::build_ri_two_electron_gradient(
+                    gamma3, x_proj, *dJ, *dV,
+                    calculator._molecule.natoms, static_cast<std::size_t>(nao),
+                    /*bra_prefolded=*/true);
+            two_e_terms += ri_two_e;
+            electronic += ri_two_e;
+        }
         imat_ao = -imat_ao;
         Eigen::MatrixXd imat_mo = result.mo_coeff.transpose() * imat_ao * calculator._overlap * result.mo_coeff;
         const Eigen::MatrixXd veff_corr_ao = 2.0 * build_veff_from_density(calculator, shell_pairs, dm1_corr_ao);
