@@ -124,6 +124,29 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd &D_ovov,
         const Eigen::MatrixXd &b_ov);
 
+    // RI two-electron gradient term (Step RG2.2). Contracts the fitted 3-index
+    // 2-particle density against the RG1 derivative tensors, producing the same
+    // per-atom two_e_terms the dense 4-center path builds — without ever forming
+    // nao⁴. The fitted ERI is (μν|λσ) = J V^{-1} Jᵀ, so BOTH gradient terms
+    // couple through V^{-1} (not V^{-1/2}). Inputs, packed (μ≥ν) pair × aux:
+    //   gamma3_{(μν),P} = Σ_{λσ} Γ_{(μν),(λσ)} · X_{(λσ),P}   (X = J V^{-1})
+    //   x_proj_{(μν),P} = X_{(μν),P}                          (raw fitted factors)
+    // The builder applies the bra pair weight (μ==ν?1:2) — the same off-diagonal
+    // doubling build_ri_j uses.
+    //
+    //   E2(atom,q) = Σ_{(μν),P} w·gamma3·dJ_{(μν),P}  −  ½ Σ_{PQ} γ_{PQ}·dV_{PQ}
+    // with γ_{PQ} = Σ_{(μν)} w·x_proj_{(μν),P}·gamma3_{(μν),Q} — the metric-
+    // derivative correction that has no dense analog (it exists only because RI
+    // factors through V). dJ = compute_3c_eri_deriv, dV = compute_2c_eri_deriv,
+    // both natoms*3 packed derivative tensors. Returns natoms×3.
+    Eigen::MatrixXd build_ri_two_electron_gradient(
+        const Eigen::MatrixXd &gamma3,
+        const Eigen::MatrixXd &x_proj,
+        const std::vector<Eigen::MatrixXd> &dJ,
+        const std::vector<Eigen::MatrixXd> &dV,
+        std::size_t natoms,
+        std::size_t nb);
+
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);
 

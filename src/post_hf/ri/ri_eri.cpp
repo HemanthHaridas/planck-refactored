@@ -1235,6 +1235,57 @@ namespace HartreeFock::Correlation::RI
         return D_ovov * b_ov;
     }
 
+    Eigen::MatrixXd build_ri_two_electron_gradient(
+        const Eigen::MatrixXd &gamma3,
+        const Eigen::MatrixXd &x_proj,
+        const std::vector<Eigen::MatrixXd> &dJ,
+        const std::vector<Eigen::MatrixXd> &dV,
+        std::size_t natoms,
+        std::size_t nb)
+    {
+        const Eigen::Index npair = gamma3.rows();
+        const Eigen::Index naux = gamma3.cols();
+
+        // Pair weight (μ==ν?1:2), packed hi*(hi+1)/2+lo order — same doubling the
+        // fitted factors carry (build_ri_j). Off-diagonal packed pairs stand in
+        // for both (μν) and (νμ) in the full bra sum.
+        Eigen::VectorXd w(npair);
+        {
+            Eigen::Index row = 0;
+            for (std::size_t mu = 0; mu < nb; ++mu)
+                for (std::size_t nu = 0; nu <= mu; ++nu, ++row)
+                    w(row) = (mu == nu) ? 1.0 : 2.0;
+        }
+
+        // Both terms couple through V^{-1}, not V^{-1/2}: the fitted ERI is
+        // (μν|λσ) = J V^{-1} Jᵀ, so d(μν|λσ) pairs dJ with (V^{-1}Jᵀ) and dV with
+        // (J V^{-1})…(V^{-1}Jᵀ). gamma3 = Σ_{λσ} Γ·X (X = J V^{-1}) carries one
+        // V^{-1}; x_proj is the raw X factors (the other leg of the metric fold).
+        const Eigen::MatrixXd wg = w.asDiagonal() * gamma3; // w · Σ Γ·X, bra fold
+
+        // Metric-derivative charge γ_{PQ} = Σ_{(μν)} w·x_{(μν),P}·gamma3_{(μν),Q}.
+        const Eigen::MatrixXd wx = w.asDiagonal() * x_proj;    // npair × naux
+        const Eigen::MatrixXd gamma_pq = wx.transpose() * gamma3; // naux × naux
+
+        Eigen::MatrixXd two_e = Eigen::MatrixXd::Zero(
+            static_cast<Eigen::Index>(natoms), 3);
+        for (std::size_t a = 0; a < natoms * 3; ++a)
+        {
+            // 3-center: Σ_{(μν),Q} w·gamma3·dJ. Frobenius inner product. dJ
+            // scatters all three legs (μ, ν, aux) to their atoms, so one pass
+            // gives the full per-atom 3-center derivative.
+            const double j_term = (wg.cwiseProduct(dJ[a])).sum();
+            // 2-center metric correction: −½ Σ_{PQ} γ_{PQ}·dV. The ½ is real —
+            // it balances the metric leg against the (unfactored) 3-center leg,
+            // matching the dense two_e term to fitting accuracy (gated RG2.2).
+            const double v_term = -0.5 * (gamma_pq.cwiseProduct(dV[a])).sum();
+            two_e(static_cast<Eigen::Index>(a / 3),
+                  static_cast<Eigen::Index>(a % 3)) = j_term + v_term;
+        }
+        (void)naux;
+        return two_e;
+    }
+
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator)
     {

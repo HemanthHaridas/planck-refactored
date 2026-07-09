@@ -826,6 +826,26 @@ if(BUILD_TESTING)
         ${SRC_DIR}/lookup/boys.cpp
     )
 
+    # RG2.2: RI-MP2 gradient two-electron term vs dense two_e_terms.
+    add_executable(planck-ri-two-electron-gradient
+        ${CMAKE_SOURCE_DIR}/tests/ri_two_electron_gradient.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
     # Step J0: RI-JK builder harness. Same self-contained fixture; the RI J/K
     # equivalence assertions land in J1/J3.
     add_executable(planck-ri-jk-equivalence
@@ -1142,6 +1162,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-ri-gamma3 PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-two-electron-gradient PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -1541,6 +1566,12 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-ri-gamma3
         COMMAND planck-ri-gamma3
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-ri-two-electron-gradient
+        COMMAND planck-ri-two-electron-gradient
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
