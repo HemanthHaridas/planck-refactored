@@ -27,9 +27,17 @@ namespace HartreeFock
         inline std::mutex log_mutex;
         inline thread_local int silence_depth = 0;
 
+        // Process-wide MPI rank. Only rank 0 writes the human log / checkpoints;
+        // non-zero ranks are silenced at the single is_silenced() choke every
+        // output function already checks. Defaults to 0 so serial builds and the
+        // two non-MPI binaries are unaffected. Set once at startup via set_rank().
+        inline int process_rank = 0;
+
+        inline void set_rank(int rank) noexcept { process_rank = rank; }
+
         inline bool is_silenced() noexcept
         {
-            return silence_depth > 0;
+            return silence_depth > 0 || process_rank != 0;
         }
 
         class ScopedSilence

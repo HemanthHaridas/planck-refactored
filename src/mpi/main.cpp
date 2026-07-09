@@ -54,6 +54,12 @@ int main(int argc, const char *argv[])
 #endif
     const int rank = mpi_rank();
 
+    // Gate all human-log / checkpoint output to rank 0 at the source: every
+    // Logger function checks is_silenced(), which now also honors the rank. This
+    // covers the driver's internal logging, not just main's messages, so
+    // mpirun -n k no longer prints the log k times.
+    HartreeFock::Logger::set_rank(rank);
+
     auto finalize = [](int code) -> int
     {
 #ifdef USE_MPI
@@ -114,6 +120,16 @@ int main(int argc, const char *argv[])
         const std::string stem = (inp.parent_path() / inp.stem()).string();
         calculator._checkpoint_path =
             stem + (calculator.is_dft_run() ? ".dftchk" : ".hfchk");
+    }
+
+    // Single-writer checkpoint: only rank 0 saves. Non-zero ranks compute the
+    // same converged result, so letting them all write the same file would just
+    // race. Disable checkpoint saving on those ranks at the source (both the HF
+    // and DFT save flags), rather than threading rank through the drivers.
+    if (rank != 0)
+    {
+        calculator._scf._save_checkpoint = false;
+        calculator._dft._save_checkpoint = false;
     }
 
     // Only rank 0 writes JSON; pass an empty path on the other ranks so the
