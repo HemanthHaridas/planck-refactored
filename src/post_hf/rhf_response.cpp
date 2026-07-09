@@ -7,9 +7,61 @@
 #include <string_view>
 
 #include "post_hf/integrals.h"
+#include "post_hf/ri/ri_eri.h"
 
 namespace HartreeFock::Correlation
 {
+        // RI-fitted RHF CPHF orbital Hessian (Step RG3.1). Assembles the same
+        // A_{bj,ai} = (e_a-e_i)δ + [4(ai|jb)-(ab|ji)-(aj|bi)] as the dense build,
+        // but every MO ERI comes from the fitted 3-center factors
+        // (pq|rs) = Σ_Q B_{pq,Q} B_{rs,Q} — no nao⁴. Requires the RI caches ready
+        // (ensure_ri_3c_ready + _ri_metric_factor), which the RI-MP2 energy path
+        // already populates before the gradient runs.
+        std::expected<Eigen::MatrixXd, std::string> build_rhf_cphf_matrix_ri(
+            HartreeFock::Calculator &calculator,
+            const Eigen::MatrixXd &C,
+            const Eigen::VectorXd &eps,
+            int n_occ,
+            int n_virt)
+        {
+            auto ready = RI::ensure_ri_3c_ready(calculator);
+            if (!ready)
+                return std::unexpected("build_rhf_cphf_matrix_ri: " + ready.error());
+
+            const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
+            const Eigen::MatrixXd C_virt = C.rightCols(n_virt);
+            const Eigen::MatrixXd pf = RI::build_ri_pair_factors(calculator);
+
+            // Fitted MO blocks. Row packing from build_ri_mo_block is
+            // row_orbital * n_col + col_orbital.
+            const Eigen::MatrixXd b_vo = RI::build_ri_mo_block(pf, C_virt, C_occ);  // a*nocc+i
+            const Eigen::MatrixXd b_ov = RI::build_ri_mo_block(pf, C_occ, C_virt);  // i*nvirt+a
+            const Eigen::MatrixXd b_vv = RI::build_ri_mo_block(pf, C_virt, C_virt); // a*nvirt+b
+            const Eigen::MatrixXd b_oo = RI::build_ri_mo_block(pf, C_occ, C_occ);   // i*nocc+j
+
+            auto ai = [n_occ](int a, int i) { return a * n_occ + i; };
+            auto ovr = [n_virt](int i, int a) { return i * n_virt + a; };
+            auto vvr = [n_virt](int a, int b) { return a * n_virt + b; };
+            auto oor = [n_occ](int i, int j) { return i * n_occ + j; };
+
+            Eigen::MatrixXd A = Eigen::MatrixXd::Zero(n_virt * n_occ, n_virt * n_occ);
+            for (int a = 0; a < n_virt; ++a)
+                for (int i = 0; i < n_occ; ++i)
+                {
+                    const int row_ai = ai(a, i);
+                    A(row_ai, row_ai) += eps(n_occ + a) - eps(i);
+                    for (int b = 0; b < n_virt; ++b)
+                        for (int j = 0; j < n_occ; ++j)
+                        {
+                            const double ai_jb = b_vo.row(ai(a, i)).dot(b_ov.row(ovr(j, b)));
+                            const double ab_ji = b_vv.row(vvr(a, b)).dot(b_oo.row(oor(j, i)));
+                            const double aj_bi = b_vo.row(ai(a, j)).dot(b_vo.row(ai(b, i)));
+                            A(ai(b, j), row_ai) += 4.0 * ai_jb - ab_ji - aj_bi;
+                        }
+                }
+            return A;
+        }
+
     namespace
     {
         void maybe_print_rhf_response_matrix(const char *name, const Eigen::MatrixXd &mat)
@@ -54,6 +106,10 @@ namespace HartreeFock::Correlation
 
         const int n_occ = n_electrons / 2;
         const int n_virt = nb - n_occ;
+
+        // RI-fitted CPHF operator when MP2 RI is enabled — same A, no nao⁴.
+        if (calculator._mp2.use_ri)
+            return build_rhf_cphf_matrix_ri(calculator, C, eps, n_occ, n_virt);
 
         // RHF CPHF/Z-vector equations live in the occupied-virtual rotation
         // space, so each (a,i) pair is flattened into one linear response index.
