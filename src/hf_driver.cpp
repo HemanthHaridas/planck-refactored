@@ -552,24 +552,28 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     // The RI front-end caches the auxiliary basis, the 2-center Coulomb metric,
     // and the packed 3-center tensor on the Calculator (_ri_aux_basis / _ri_j2c /
     // _ri_j3c). ensure_ri_3c_ready reuses them whenever their dimensions match,
-    // and those dimensions (npair × naux) key only off atom count and basis — not
-    // geometry. Any workflow that re-runs the energy at a displaced geometry on
-    // the same Calculator (GeomOpt, the finite-difference Frequency/GeomOptFreq/
-    // ImaginaryFollow Hessian, an analytic Gradient response build) would silently
-    // reuse the stale first-geometry integrals. There is no geometry-keyed
-    // invalidation today, so restrict RI-MP2 to a single point and name the
-    // constraint rather than risk a wrong number. Basis-agnostic: applies in both
-    // Cartesian and spherical mode.
+    // RI is restricted to single-point energies, but the binding reason is now
+    // the analytic gradient, not the caches. The RI caches self-invalidate on a
+    // geometry change (Calculator::_ri_cache_geometry + ri_invalidate_if_
+    // geometry_moved in ri_eri.cpp), so RI energies are correct at any geometry.
+    // What is still missing is an RI gradient: compute_rmp2_gradient /
+    // compute_ump2_gradient build their intermediates from the dense ERI tensor
+    // (ensure_eri), with no use_ri path. A geometry-moving RI workflow would
+    // therefore pair an RI-fitted energy with a dense gradient — an inconsistent
+    // (E, dE/dR) that does not converge to the RI stationary point. (CASSCF has
+    // no analytic gradient at all, so RI-CASSCF geomopt is unreachable for a
+    // separate reason.) Keep the gate until RI gradients land; then relax this
+    // and gate RI geomopt against PySCF DF-MP2. Basis-agnostic.
     if (calculator._mp2.use_ri &&
         calculator._calculation != HartreeFock::CalculationType::SinglePoint)
     {
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Error, "RI-MP2 :",
-            "RI-MP2 (mp2_use_ri) is only supported for single-point energies; "
-            "the auxiliary-basis / 2-center-metric / 3-center caches are not "
-            "invalidated when the geometry changes, so geometry-moving workflows "
-            "would reuse stale integrals. Set calculation singlepoint, or disable "
-            "RI (mp2_use_ri false) for " + map_enum(calculator._calculation) + ".");
+            "RI (mp2_use_ri) is only supported for single-point energies: the "
+            "analytic gradient does not have an RI path yet, so a geometry-moving "
+            "workflow would pair an RI energy with a dense gradient and converge "
+            "to the wrong geometry. Set calculation singlepoint, or disable RI "
+            "(mp2_use_ri false) for " + map_enum(calculator._calculation) + ".");
         return EXIT_FAILURE;
     }
 

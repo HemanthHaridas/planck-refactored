@@ -1317,6 +1317,13 @@ namespace HartreeFock
         Eigen::MatrixXd _ri_j2c; // raw 2-center Coulomb metric (P|Q)
         Eigen::MatrixXd _ri_j3c; // packed 3-center tensor (AO-pair × aux), in working AO basis
         std::shared_ptr<Correlation::RI::MetricFactorization> _ri_metric_factor;
+        // Geometry (_molecule._standard) the RI caches above were built against.
+        // The aux basis / 2-center metric / 3-center tensor all sit on the atom
+        // centers, so they go stale when the geometry moves. Empty = never built.
+        // The RI ensure_* functions clear and rebuild all four caches when this
+        // no longer matches the current geometry (see ri_eri.cpp). Single
+        // invalidation key for every RI consumer (MP2/FCI/CASSCF).
+        Eigen::MatrixXd _ri_cache_geometry;
 
         std::string _checkpoint_path; // Path to checkpoint file (set by driver)
 
