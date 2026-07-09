@@ -13,8 +13,10 @@
 //     held separately on Shell._normalizations. See the Norm Factors gotcha.
 
 #include <Eigen/Core>
+#include <array>
 #include <expected>
 #include <string>
+#include <vector>
 
 #include "base/types.h"
 #include "basis/rifit.h"
@@ -62,6 +64,120 @@ namespace HartreeFock::Correlation::RI
     // legs; the auxiliary basis remains Cartesian.
     std::expected<Eigen::MatrixXd, std::string> compute_3c_eri(
         const HartreeFock::Calculator &calculator);
+
+    // Analytic nuclear derivative of one contracted 3-center Cartesian element
+    // (μ ν | Q) w.r.t. the three centers it sits on. Layout: [center][axis],
+    // center 0 = μ (orbital A), 1 = ν (orbital B), 2 = aux (Q); axis 0/1/2 = x/y/z,
+    // so index = center*3 + axis. Contracted over the μν primitive pairs and the
+    // aux shell primitives at the given Cartesian momenta. Coulomb kernel only
+    // (RI fitting is Coulomb-metric).
+    //
+    // Uses the Gaussian translational identity, same as the 4-center
+    // ObaraSaika::_compute_eri_deriv_elem:
+    //   d/dX_q = 2 ζ_X · I(l_X + ê_q)  −  l_Xq · I(l_X − ê_q).
+    //
+    // RG1a.1: only the μ-center (A) block is populated; ν and aux blocks are
+    // filled by RG1a.2. The unpopulated blocks are left zero.
+    std::array<double, 9> compute_3c_deriv_elem(
+        const HartreeFock::ShellPair &spAB,
+        int lAx, int lAy, int lAz,
+        int lBx, int lBy, int lBz,
+        const HartreeFock::Shell &shellC,
+        int lCx, int lCy, int lCz);
+
+    // Packed nuclear derivative of the full 3-center tensor: assembles
+    // compute_3c_deriv_elem over the same loop as compute_3c_eri and scatters
+    // each element's 9 components to the (≤3) atoms its μ/ν/aux legs sit on.
+    // Returns natoms*3 matrices, index = atom*3 + axis, each [npair × naux]
+    // (packed AO pair × aux function) — d/dR_{atom,axis} of the packed tensor,
+    // directly comparable to a finite difference of compute_3c_eri. Cartesian
+    // AO basis only for now (spherical lift, if ever needed, follows
+    // compute_3c_eri's transform at the skin — out of scope until a consumer
+    // needs it).
+    std::expected<std::vector<Eigen::MatrixXd>, std::string>
+    compute_3c_eri_deriv(const HartreeFock::Calculator &calculator);
+
+    // Analytic nuclear derivative of one contracted 2-center metric element
+    // (P|Q) w.r.t. its two aux centers. Layout: [center][axis], center 0 = P,
+    // 1 = Q; index = center*3 + axis. Same 2ζ·raise − l·lower identity as the
+    // 3-center helper. Both legs are aux functions, so BOTH Cartesian norms are
+    // fixed at their original momenta (the RG1a.3 normC lesson, doubled).
+    std::array<double, 6> compute_2c_deriv_elem(
+        const HartreeFock::Shell &shellP, int lPx, int lPy, int lPz,
+        const HartreeFock::Shell &shellQ, int lQx, int lQy, int lQz);
+
+    // Packed nuclear derivative of the full 2-center metric V_{PQ}. Assembles
+    // compute_2c_deriv_elem over the compute_2c_eri shell-pair loop and scatters
+    // each element's 6 components to the (≤2) atoms its P/Q legs sit on. Returns
+    // natoms*3 matrices, index = atom*3 + axis, each [naux × naux] — d/dR of V.
+    std::expected<std::vector<Eigen::MatrixXd>, std::string>
+    compute_2c_eri_deriv(const HartreeFock::Calculator &calculator);
+
+    // Fitted 3-index 2-particle density for the RI-MP2 gradient:
+    //   Γ3_{(ia),Q} = Σ_{jb} D_{(ia),(jb)} · B_{(jb),Q}
+    // where D is the MP2 amplitude 2-particle density in the occupied-virtual ×
+    // occupied-virtual space (rows/cols indexed i*nvirt+a) and b_ov is the
+    // fitted ov factors (rows i*nvirt+a, cols Q) from build_ri_mo_block. This is
+    // the 3-index analog of the dense nao⁴ pair_dm2; it stays in the npair×naux
+    // RI working set. Pure D·B_ov — the gradient contraction (RG2.2) consumes it.
+    Eigen::MatrixXd build_ri_gamma3_ov(
+        const Eigen::MatrixXd &D_ovov,
+        const Eigen::MatrixXd &b_ov);
+
+    // RI two-electron gradient term (Step RG2.2). Contracts the fitted 3-index
+    // 2-particle density against the RG1 derivative tensors, producing the same
+    // per-atom two_e_terms the dense 4-center path builds — without ever forming
+    // nao⁴. The fitted ERI is (μν|λσ) = J V^{-1} Jᵀ, so BOTH gradient terms
+    // couple through V^{-1} (not V^{-1/2}). Inputs, packed (μ≥ν) pair × aux:
+    //   gamma3_{(μν),P} = Σ_{λσ} Γ_{(μν),(λσ)} · X_{(λσ),P}   (X = J V^{-1})
+    //   x_proj_{(μν),P} = X_{(μν),P}                          (raw fitted factors)
+    // The builder applies the bra pair weight (μ==ν?1:2) — the same off-diagonal
+    // doubling build_ri_j uses.
+    //
+    //   E2(atom,q) = Σ_{(μν),P} w·gamma3·dJ_{(μν),P}  −  ½ Σ_{PQ} γ_{PQ}·dV_{PQ}
+    // with γ_{PQ} = Σ_{(μν)} w·x_proj_{(μν),P}·gamma3_{(μν),Q} — the metric-
+    // derivative correction that has no dense analog (it exists only because RI
+    // factors through V). dJ = compute_3c_eri_deriv, dV = compute_2c_eri_deriv,
+    // both natoms*3 packed derivative tensors. Returns natoms×3.
+    // bra_prefolded: false (default) — gamma3's bra is a single μ≥ν ordering and
+    // off-diagonal pairs are doubled internally (bra-symmetric density, RG2.2
+    // synthetic gate). true — gamma3 already sums both (μν)+(νμ) orderings
+    // (general non-bra-symmetric dm2buf, RG3.4), so no internal doubling.
+    Eigen::MatrixXd build_ri_two_electron_gradient(
+        const Eigen::MatrixXd &gamma3,
+        const Eigen::MatrixXd &x_proj,
+        const std::vector<Eigen::MatrixXd> &dJ,
+        const std::vector<Eigen::MatrixXd> &dV,
+        std::size_t natoms,
+        std::size_t nb,
+        bool bra_prefolded = false);
+
+    // Packed 3-index density and raw X factors for the RI 2e-gradient term
+    // (Step RG3.4), built from the AO separable density dm2buf[μ,ν,r,s] (the
+    // transitional nao⁴ buffer, row-major). Returns:
+    //   gamma3[(μν),Q] = Σ_{rs} dm2buf[μ,ν,r,s]·X[Q](r,s)   (packed μ≥ν × aux)
+    //   x_proj[(μν),Q] = X[(μν),Q]                          (raw J V^{-1} factors)
+    // both feeding build_ri_two_electron_gradient. X = J V^{-1} (build_ri_pair
+    // _factors then one more V^{-1/2}); dm2buf's bra μν is packed on the way out.
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_gamma3_from_ao_dm2(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<double> &dm2buf,
+        int nao);
+
+    // RI Lagrangian imat for the RMP2 gradient (Step RG3.3):
+    //   imat(q,v) = Σ_{p,r,s} (pq|rs) · dm2buf[p,v,r,s]
+    // factored through the fitted ERI (pq|rs) = Σ_Q B[Q](p,q) B[Q](r,s):
+    //   W[Q](p,v) = Σ_{rs} B[Q](r,s) · dm2buf[p,v,r,s]
+    //   imat(q,v) = Σ_Q Σ_p B[Q](p,q) · W[Q](p,v)  =  Σ_Q (B[Q]ᵀ W[Q])(q,v)
+    // dm2buf is the (transitional) dense nao⁴ separable density, laid out
+    // row-major [p][v][r][s]. Uses the unpacked per-aux factors
+    // (build_ri_3index_unpacked); intermediate is nao²·naux, never nao⁴ ERI.
+    // Matches the dense imat (before the −1 sign flip the caller applies) to
+    // fitting accuracy. Requires a ready RI cache.
+    Eigen::MatrixXd build_ri_imat(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<double> &dm2buf,
+        int nao);
 
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);

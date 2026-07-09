@@ -805,6 +805,89 @@ if(BUILD_TESTING)
         ${SRC_DIR}/lookup/boys.cpp
     )
 
+    # RG2.1: RI-MP2 gradient fitted 3-index density (Γ3) re-gram check.
+    add_executable(planck-ri-gamma3
+        ${CMAKE_SOURCE_DIR}/tests/ri_gamma3.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    # RG3.3: RI Lagrangian imat vs dense imat.
+    add_executable(planck-ri-imat
+        ${CMAKE_SOURCE_DIR}/tests/ri_imat.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    # RG3.1: RI-fitted RHF CPHF orbital Hessian vs dense A.
+    add_executable(planck-ri-cphf-matrix
+        ${CMAKE_SOURCE_DIR}/tests/ri_cphf_matrix.cpp
+        ${SRC_DIR}/post_hf/rhf_response.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    # RG2.2: RI-MP2 gradient two-electron term vs dense two_e_terms.
+    add_executable(planck-ri-two-electron-gradient
+        ${CMAKE_SOURCE_DIR}/tests/ri_two_electron_gradient.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
     # Step J0: RI-JK builder harness. Same self-contained fixture; the RI J/K
     # equivalence assertions land in J1/J3.
     add_executable(planck-ri-jk-equivalence
@@ -829,6 +912,27 @@ if(BUILD_TESTING)
     # G0/G1: RI caches must rebuild when the geometry moves.
     add_executable(planck-ri-cache-invalidation
         ${CMAKE_SOURCE_DIR}/tests/ri_cache_invalidation.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+
+    # RG0: finite-difference oracle for the 3-center derivative d/dR (μν|Q),
+    # the reference the analytic RI-MP2-gradient derivative (RG1) is gated on.
+    add_executable(planck-ri-3c-derivative-fd
+        ${CMAKE_SOURCE_DIR}/tests/ri_3c_derivative_fd.cpp
         ${SRC_DIR}/post_hf/ri/ri_eri.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/rifit.cpp
@@ -1099,12 +1203,37 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-ri-gamma3 PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-imat PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-cphf-matrix PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-two-electron-gradient PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-ri-jk-equivalence PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
 
     target_include_directories(planck-ri-cache-invalidation PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-ri-3c-derivative-fd PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -1487,6 +1616,30 @@ if(BUILD_TESTING)
     )
 
     add_test(
+        NAME planck-ri-gamma3
+        COMMAND planck-ri-gamma3
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-ri-imat
+        COMMAND planck-ri-imat
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-ri-cphf-matrix
+        COMMAND planck-ri-cphf-matrix
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-ri-two-electron-gradient
+        COMMAND planck-ri-two-electron-gradient
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
         NAME planck-ri-jk-equivalence
         COMMAND planck-ri-jk-equivalence
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -1495,6 +1648,12 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-ri-cache-invalidation
         COMMAND planck-ri-cache-invalidation
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME planck-ri-3c-derivative-fd
+        COMMAND planck-ri-3c-derivative-fd
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
