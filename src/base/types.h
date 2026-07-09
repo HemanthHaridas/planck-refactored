@@ -1379,11 +1379,18 @@ namespace HartreeFock
         bool _use_sao_blocking = false;
         bool _use_integral_symmetry = false;
         bool _use_full_symmetry = false; // full point-group direct-Fock reduction (os_symm/rys_symm)
+        bool _is_dft = false;            // set by the parser when a %begin_dft section is present
 
         double current_total_energy() const noexcept
         {
             return _have_correlated_total_energy ? _correlated_total_energy : _total_energy;
         }
+
+        // True when the input declared a DFT calculation (a %begin_dft section was
+        // present). The method is declared by the input, not by which binary ran,
+        // so a unified front end (planck-mpi) dispatches on this:
+        //   is_dft_run() ? DFT::Driver::run(...) : HartreeFock::Driver::run(...)
+        bool is_dft_run() const noexcept { return _is_dft; }
 
         // Working AO dimension the SCF operates in: the spherical count (2L+1 per
         // shell) when the basis is in spherical mode, else the Cartesian count. The

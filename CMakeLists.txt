@@ -264,12 +264,19 @@ file(GLOB BSSE_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/bsse/*.cpp
 )
 
+# The HF workflow (HartreeFock::Driver::run) is shared by every front end;
+# each front end supplies its own thin main().
+set(HF_DRIVER_SRC
+    ${SRC_DIR}/hf_driver.cpp
+)
 set(HF_MAIN_SRC
     ${SRC_DIR}/driver.cpp
+    ${HF_DRIVER_SRC}
 )
 
-set(DFT_SRC
-    ${SRC_DIR}/dft/main.cpp
+# DFT compute/CLI sources without the entry point, so multiple front ends
+# (planck-dft, planck-mpi) can share the DFT driver.
+set(DFT_LIB_SRC
     ${SRC_DIR}/dft/ao_grid.h
     ${SRC_DIR}/dft/dft_gradient.cpp
     ${SRC_DIR}/dft/dft_gradient.h
@@ -283,6 +290,10 @@ set(DFT_SRC
     ${SRC_DIR}/dft/base/radial.h
     ${SRC_DIR}/dft/base/grid.h
     ${SRC_DIR}/dft/base/wrapper.h
+)
+set(DFT_SRC
+    ${SRC_DIR}/dft/main.cpp
+    ${DFT_LIB_SRC}
 )
 
 # Executable target
@@ -415,22 +426,73 @@ if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_compile_definitions(planck-dft PRIVATE USE_OPENMP)
 endif()
 
-# ── GPU acceleration (optional) ───────────────────────────────────────────────
-# Must be added after Eigen is fetched (gpu/CMakeLists.txt uses eigen_SOURCE_DIR)
-# and after SRC_DIR is defined, but before the install rules.
-if(USE_CUDA)
-    add_subdirectory(gpu)
-    target_include_directories(hartree-fock PUBLIC ${PLANCK_GPU_INCLUDE})
-    target_link_libraries(hartree-fock ${PLANCK_GPU_LIB})
-    target_compile_definitions(hartree-fock PRIVATE USE_CUDA)
-    message(STATUS "GPU        : CUDA acceleration enabled")
-else()
-    message(STATUS "GPU        : disabled (USE_CUDA=OFF)")
-endif()
-
 # Install executable
 install(TARGETS hartree-fock DESTINATION bin)
 install(TARGETS planck-dft DESTINATION bin)
+
+# ── planck-mpi: unified hybrid MPI/OpenMP front end (opt-in) ───────────────────
+# One binary that dispatches HF vs DFT on calculator.is_dft_run(). Built when
+# BUILD_MPI=ON. If MPI is found it links MPI and defines USE_MPI; otherwise it
+# still builds as a plain serial binary so the dispatch logic is testable without
+# an MPI toolchain (single rank 0). See docs/HPC_MPI_EXECUTABLE_SCOPE.md.
+option(BUILD_MPI "Build the unified planck-mpi front end" OFF)
+if(BUILD_MPI)
+    add_executable(planck-mpi
+        ${SRC_DIR}/mpi/main.cpp
+        ${HF_DRIVER_SRC}
+        ${DFT_LIB_SRC}
+        ${BASE_SRC}
+        ${LOOKUP_SRC}
+        ${SYMM_SRC}
+        ${BASIS_SRC}
+        ${INT_SRC}
+        ${IO_SRC}
+        ${SCF_SRC}
+        ${SOLVATION_SRC}
+        ${BSSE_SRC}
+        ${POPULATIONS_SRC}
+        ${POSTHF_SRC}
+        ${GRADIENT_SRC}
+        ${OPT_SRC}
+        ${FREQ_SRC}
+    )
+
+    target_include_directories(planck-mpi PUBLIC
+        ${SRC_DIR}
+        ${CMAKE_BINARY_DIR}
+        ${MSYM_INSTALL_DIR}/include
+        ${LIBXC_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_link_libraries(planck-mpi
+        ${MSYM_INSTALL_DIR}/lib/libmsym.a
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-mpi libmsym libxc)
+    if(Python3_Interpreter_FOUND)
+        add_dependencies(planck-mpi ccgen-spinorbital-warm-start)
+        add_dependencies(planck-mpi ccgen-planck-kernels)
+    endif()
+    # USING_Libxc enables the libxc-backed XC path (same as planck-dft).
+    target_compile_definitions(planck-mpi PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
+
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-mpi OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-mpi PRIVATE USE_OPENMP)
+    endif()
+
+    find_package(MPI QUIET)
+    if(MPI_CXX_FOUND)
+        target_link_libraries(planck-mpi MPI::MPI_CXX)
+        target_compile_definitions(planck-mpi PRIVATE USE_MPI)
+        message(STATUS "planck-mpi : MPI found — hybrid MPI/OpenMP build")
+    else()
+        message(STATUS "planck-mpi : MPI not found — serial dispatch build (single rank)")
+    endif()
+
+    install(TARGETS planck-mpi DESTINATION bin)
+endif()
 
 # ── Optional utility tools ────────────────────────────────────────────────────
 option(BUILD_TOOLS "Build utility tools (chkdump checkpoint formatter)" ON)
