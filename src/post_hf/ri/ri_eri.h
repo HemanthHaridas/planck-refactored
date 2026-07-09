@@ -113,6 +113,17 @@ namespace HartreeFock::Correlation::RI
     std::expected<std::vector<Eigen::MatrixXd>, std::string>
     compute_2c_eri_deriv(const HartreeFock::Calculator &calculator);
 
+    // Fitted 3-index 2-particle density for the RI-MP2 gradient:
+    //   Γ3_{(ia),Q} = Σ_{jb} D_{(ia),(jb)} · B_{(jb),Q}
+    // where D is the MP2 amplitude 2-particle density in the occupied-virtual ×
+    // occupied-virtual space (rows/cols indexed i*nvirt+a) and b_ov is the
+    // fitted ov factors (rows i*nvirt+a, cols Q) from build_ri_mo_block. This is
+    // the 3-index analog of the dense nao⁴ pair_dm2; it stays in the npair×naux
+    // RI working set. Pure D·B_ov — the gradient contraction (RG2.2) consumes it.
+    Eigen::MatrixXd build_ri_gamma3_ov(
+        const Eigen::MatrixXd &D_ovov,
+        const Eigen::MatrixXd &b_ov);
+
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);
 

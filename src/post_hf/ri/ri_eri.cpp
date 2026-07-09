@@ -1225,6 +1225,16 @@ namespace HartreeFock::Correlation::RI
         return dV;
     }
 
+    Eigen::MatrixXd build_ri_gamma3_ov(
+        const Eigen::MatrixXd &D_ovov,
+        const Eigen::MatrixXd &b_ov)
+    {
+        // Γ3_{(ia),Q} = Σ_{jb} D_{(ia),(jb)} B_{(jb),Q}. Both index the ov space
+        // as i*nvirt+a; b_ov rows are that same packing (build_ri_mo_block with
+        // C_occ, C_virt). Plain matrix product.
+        return D_ovov * b_ov;
+    }
+
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator)
     {
