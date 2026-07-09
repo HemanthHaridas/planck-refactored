@@ -93,6 +93,29 @@ namespace
         return HartreeFock::Correlation::RI::compute_3c_eri(calc);
     }
 
+    // V(geometry) = 2-center metric (P|Q).
+    std::expected<Eigen::MatrixXd, std::string> v2c_at(
+        const std::filesystem::path &root, const Eigen::MatrixXd &geom)
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        return HartreeFock::Correlation::RI::compute_2c_eri(*calc._ri_aux_basis);
+    }
+
+    // Central-difference dV/dR for atom `a`, axis `c`.
+    std::expected<Eigen::MatrixXd, std::string> fd_v2c(
+        const std::filesystem::path &root, const Eigen::MatrixXd &geom,
+        int a, int c, double delta)
+    {
+        Eigen::MatrixXd gp = geom, gm = geom;
+        gp(a, c) += delta;
+        gm(a, c) -= delta;
+        auto Vp = v2c_at(root, gp);
+        if (!Vp) return std::unexpected(Vp.error());
+        auto Vm = v2c_at(root, gm);
+        if (!Vm) return std::unexpected(Vm.error());
+        return Eigen::MatrixXd((*Vp - *Vm) / (2.0 * delta));
+    }
+
     // Central-difference dJ/dR for atom `a`, axis `c`.
     std::expected<Eigen::MatrixXd, std::string> fd_derivative(
         const std::filesystem::path &root, const Eigen::MatrixXd &geom,
@@ -398,6 +421,40 @@ int main()
                   << worst << '\n';
         if (worst > 1e-7)
             fail("packed dJ/dR disagrees with the whole-tensor FD (>1e-7)");
+    }
+
+    // ── RG1b.2: packed dV/dR metric derivative vs FD ──────────────────────────
+    // compute_2c_eri_deriv assembles the 2-center element helper. Its
+    // per-(atom,axis) matrix must equal the finite difference of the metric
+    // V = (P|Q) — validating both P and Q blocks (each with the double-normC
+    // fix) and the scatter, across every aux-aux entry / atom / axis.
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        auto dV = HartreeFock::Correlation::RI::compute_2c_eri_deriv(calc);
+        if (!dV)
+        {
+            fail("compute_2c_eri_deriv failed: " + dV.error());
+            return 1;
+        }
+        const std::size_t natoms = calc._molecule.natoms;
+        double worst = 0.0;
+        for (std::size_t a = 0; a < natoms; ++a)
+            for (int q = 0; q < 3; ++q)
+            {
+                auto fd = fd_v2c(root, geom, static_cast<int>(a), q, delta);
+                if (!fd)
+                {
+                    fail("RG1b.2 fd_v2c failed: " + fd.error());
+                    return 1;
+                }
+                const Eigen::MatrixXd &an = (*dV)[a * 3 + static_cast<std::size_t>(q)];
+                const Eigen::MatrixXd diff = an - *fd;
+                worst = std::max(worst, diff.cwiseAbs().maxCoeff());
+            }
+        std::cout << "  RG1b.2 packed dV/dR vs FD: worst |Δ| over all atoms/axes = "
+                  << worst << '\n';
+        if (worst > 1e-7)
+            fail("packed dV/dR disagrees with the metric FD (>1e-7)");
     }
 
     if (g_ok)

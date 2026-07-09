@@ -97,6 +97,22 @@ namespace HartreeFock::Correlation::RI
     std::expected<std::vector<Eigen::MatrixXd>, std::string>
     compute_3c_eri_deriv(const HartreeFock::Calculator &calculator);
 
+    // Analytic nuclear derivative of one contracted 2-center metric element
+    // (P|Q) w.r.t. its two aux centers. Layout: [center][axis], center 0 = P,
+    // 1 = Q; index = center*3 + axis. Same 2ζ·raise − l·lower identity as the
+    // 3-center helper. Both legs are aux functions, so BOTH Cartesian norms are
+    // fixed at their original momenta (the RG1a.3 normC lesson, doubled).
+    std::array<double, 6> compute_2c_deriv_elem(
+        const HartreeFock::Shell &shellP, int lPx, int lPy, int lPz,
+        const HartreeFock::Shell &shellQ, int lQx, int lQy, int lQz);
+
+    // Packed nuclear derivative of the full 2-center metric V_{PQ}. Assembles
+    // compute_2c_deriv_elem over the compute_2c_eri shell-pair loop and scatters
+    // each element's 6 components to the (≤2) atoms its P/Q legs sit on. Returns
+    // natoms*3 matrices, index = atom*3 + axis, each [naux × naux] — d/dR of V.
+    std::expected<std::vector<Eigen::MatrixXd>, std::string>
+    compute_2c_eri_deriv(const HartreeFock::Calculator &calculator);
+
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator);
 

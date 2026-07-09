@@ -1104,6 +1104,127 @@ namespace HartreeFock::Correlation::RI
         return dJ;
     }
 
+    std::array<double, 6> compute_2c_deriv_elem(
+        const HartreeFock::Shell &shellP, int lPx, int lPy, int lPz,
+        const HartreeFock::Shell &shellQ, int lQx, int lQy, int lQz)
+    {
+        std::array<double, 6> result{};
+
+        enum class Weight { None, P, Q };
+
+        // Both P and Q Cartesian norms are fixed at their ORIGINAL momenta — the
+        // contracted aux functions' normalizations, not the raised angular parts
+        // the derivative recurrence walks (the RG1a.3 normC lesson, on both legs).
+        const double normP = cartesian_norm(lPx, lPy, lPz);
+        const double normQ = cartesian_norm(lQx, lQy, lQz);
+
+        auto contract = [&](int px, int py, int pz,
+                            int qx, int qy, int qz,
+                            Weight w) -> double
+        {
+            double value = 0.0;
+            for (Eigen::Index ip = 0; ip < shellP._primitives.size(); ++ip)
+            {
+                const double wP = (w == Weight::P) ? (2.0 * shellP._primitives(ip)) : 1.0;
+                for (Eigen::Index iq = 0; iq < shellQ._primitives.size(); ++iq)
+                {
+                    const double wQ = (w == Weight::Q) ? (2.0 * shellQ._primitives(iq)) : 1.0;
+                    value += wP * wQ *
+                             shellP._coefficients(ip) * shellQ._coefficients(iq) *
+                             shellP._normalizations(ip) * shellQ._normalizations(iq) *
+                             normP * normQ *
+                             _2c_eri_primitive(
+                                 shellP._center, shellP._primitives(ip),
+                                 shellQ._center, shellQ._primitives(iq),
+                                 px, py, pz, qx, qy, qz);
+                }
+            }
+            return value;
+        };
+
+        for (int a = 0; a < 3; ++a)
+        {
+            // Centre P: d/dP_a = 2ζ_P·(lP+ê_a) − lPa·(lP−ê_a).
+            {
+                const int lPa = (a == 0 ? lPx : a == 1 ? lPy : lPz);
+                double d = contract(lPx + (a == 0), lPy + (a == 1), lPz + (a == 2),
+                                    lQx, lQy, lQz, Weight::P);
+                if (lPa > 0)
+                    d -= static_cast<double>(lPa) *
+                         contract(lPx - (a == 0), lPy - (a == 1), lPz - (a == 2),
+                                  lQx, lQy, lQz, Weight::None);
+                result[0 * 3 + a] = d;
+            }
+            // Centre Q: d/dQ_a = 2ζ_Q·(lQ+ê_a) − lQa·(lQ−ê_a).
+            {
+                const int lQa = (a == 0 ? lQx : a == 1 ? lQy : lQz);
+                double d = contract(lPx, lPy, lPz,
+                                    lQx + (a == 0), lQy + (a == 1), lQz + (a == 2), Weight::Q);
+                if (lQa > 0)
+                    d -= static_cast<double>(lQa) *
+                         contract(lPx, lPy, lPz,
+                                  lQx - (a == 0), lQy - (a == 1), lQz - (a == 2), Weight::None);
+                result[1 * 3 + a] = d;
+            }
+        }
+
+        return result;
+    }
+
+    std::expected<std::vector<Eigen::MatrixXd>, std::string>
+    compute_2c_eri_deriv(const HartreeFock::Calculator &calculator)
+    {
+        if (!calculator._ri_aux_basis)
+            return std::unexpected("compute_2c_eri_deriv: RI auxiliary basis is not loaded.");
+
+        const std::size_t natoms = calculator._molecule.natoms;
+        const HartreeFock::AuxBasis &aux = *calculator._ri_aux_basis;
+        const std::size_t naux = aux.nfunctions;
+
+        std::vector<Eigen::MatrixXd> dV(
+            natoms * 3,
+            Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(naux),
+                                  static_cast<Eigen::Index>(naux)));
+
+        const std::size_t nshells = aux.shells.size();
+        for (std::size_t K = 0; K < nshells; ++K)
+        {
+            const auto &shP = aux.shells[K];
+            const std::size_t off_K = aux.offsets[K];
+            const std::size_t atomP = shP._atom_index;
+            const auto compP = HartreeFock::BasisFunctions::_cartesian_shell_order(
+                static_cast<unsigned>(shP._shell));
+
+            for (std::size_t Lsh = 0; Lsh < nshells; ++Lsh)
+            {
+                const auto &shQ = aux.shells[Lsh];
+                const std::size_t off_L = aux.offsets[Lsh];
+                const std::size_t atomQ = shQ._atom_index;
+                const auto compQ = HartreeFock::BasisFunctions::_cartesian_shell_order(
+                    static_cast<unsigned>(shQ._shell));
+
+                for (std::size_t p = 0; p < compP.size(); ++p)
+                {
+                    for (std::size_t q = 0; q < compQ.size(); ++q)
+                    {
+                        const auto d = compute_2c_deriv_elem(
+                            shP, compP[p][0], compP[p][1], compP[p][2],
+                            shQ, compQ[q][0], compQ[q][1], compQ[q][2]);
+                        const Eigen::Index r = static_cast<Eigen::Index>(off_K + p);
+                        const Eigen::Index c = static_cast<Eigen::Index>(off_L + q);
+                        for (int a = 0; a < 3; ++a)
+                        {
+                            dV[atomP * 3 + a](r, c) += d[0 * 3 + a];
+                            dV[atomQ * 3 + a](r, c) += d[1 * 3 + a];
+                        }
+                    }
+                }
+            }
+        }
+
+        return dV;
+    }
+
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator)
     {
