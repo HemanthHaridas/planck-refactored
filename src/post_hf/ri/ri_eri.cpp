@@ -937,28 +937,38 @@ namespace HartreeFock::Correlation::RI
     {
         std::array<double, 9> result{}; // zero-initialized
 
-        // Contracted (μν|Q) at explicit Cartesian momenta, optionally weighting
-        // the μ-primitive (A) by 2·alpha for the derivative raise term. This is
-        // the 3-center analog of the 4-center nceri / wceri_A helpers, and folds
-        // the same aux Cartesian norm (normC) the energy loop in compute_3c_eri
-        // applies. normC depends only on (cx,cy,cz), which the A-derivative never
-        // raises, so it is a constant scale on the μ-block. The μ/ν orbital norms
-        // are NOT applied at this level (they live in coeff_product / the OS
-        // primitive convention), so the 2α raise acts on the bare angular part —
-        // exactly the translational derivative identity.
+        // Which primitive exponent (if any) weights the contraction by 2ζ for a
+        // derivative raise term: None (plain, the lower term), or the μ / ν / aux
+        // primitive. The μ and ν exponents (alpha, beta) are per-pair; the aux
+        // exponent varies per aux primitive, so its weight lives inside the ic
+        // loop.
+        enum class Weight { None, A, B, C };
+
+        // Contracted (μν|Q) at explicit Cartesian momenta. Folds the aux
+        // Cartesian norm (normC) the energy loop in compute_3c_eri applies; normC
+        // depends only on (cx,cy,cz). The μ/ν orbital norms are NOT applied at
+        // this level (they live in coeff_product / the OS primitive convention),
+        // so the 2ζ raise acts on the bare angular part — exactly the
+        // translational derivative identity. 3-center analog of the 4-center
+        // nceri / wceri_{A,B,C} helpers.
         auto contract = [&](int ax, int ay, int az,
                             int bx, int by, int bz,
                             int cx, int cy, int cz,
-                            bool weight_2alpha_A) -> double
+                            Weight w) -> double
         {
             const double normC = cartesian_norm(cx, cy, cz);
             double value = 0.0;
             for (const auto &ppAB : spAB.primitive_pairs)
             {
-                const double wA = weight_2alpha_A ? (2.0 * ppAB.alpha) : 1.0;
+                const double wAB = (w == Weight::A)   ? (2.0 * ppAB.alpha)
+                                   : (w == Weight::B) ? (2.0 * ppAB.beta)
+                                                      : 1.0;
                 for (Eigen::Index ic = 0; ic < shellC._primitives.size(); ++ic)
                 {
-                    value += wA * ppAB.coeff_product *
+                    const double wC = (w == Weight::C)
+                                          ? (2.0 * shellC._primitives(ic))
+                                          : 1.0;
+                    value += wAB * wC * ppAB.coeff_product *
                              shellC._coefficients(ic) *
                              shellC._normalizations(ic) *
                              normC *
@@ -971,20 +981,45 @@ namespace HartreeFock::Correlation::RI
             return value;
         };
 
-        // Centre μ (A): d/dA_q = 2α·(lA+ê_q) − lAq·(lA−ê_q).
-        // RG1a.1: only this block; ν and aux follow in RG1a.2.
         for (int q = 0; q < 3; ++q)
         {
-            const int lAq = (q == 0 ? lAx : q == 1 ? lAy : lAz);
-            const int axp = lAx + (q == 0), ayp = lAy + (q == 1), azp = lAz + (q == 2);
-            double d = contract(axp, ayp, azp, lBx, lBy, lBz, lCx, lCy, lCz, true);
-            if (lAq > 0)
+            // Centre μ (A): d/dA_q = 2α·(lA+ê_q) − lAq·(lA−ê_q).
             {
-                const int axm = lAx - (q == 0), aym = lAy - (q == 1), azm = lAz - (q == 2);
-                d -= static_cast<double>(lAq) *
-                     contract(axm, aym, azm, lBx, lBy, lBz, lCx, lCy, lCz, false);
+                const int lAq = (q == 0 ? lAx : q == 1 ? lAy : lAz);
+                double d = contract(lAx + (q == 0), lAy + (q == 1), lAz + (q == 2),
+                                    lBx, lBy, lBz, lCx, lCy, lCz, Weight::A);
+                if (lAq > 0)
+                    d -= static_cast<double>(lAq) *
+                         contract(lAx - (q == 0), lAy - (q == 1), lAz - (q == 2),
+                                  lBx, lBy, lBz, lCx, lCy, lCz, Weight::None);
+                result[0 * 3 + q] = d;
             }
-            result[0 * 3 + q] = d;
+            // Centre ν (B): d/dB_q = 2β·(lB+ê_q) − lBq·(lB−ê_q).
+            {
+                const int lBq = (q == 0 ? lBx : q == 1 ? lBy : lBz);
+                double d = contract(lAx, lAy, lAz,
+                                    lBx + (q == 0), lBy + (q == 1), lBz + (q == 2),
+                                    lCx, lCy, lCz, Weight::B);
+                if (lBq > 0)
+                    d -= static_cast<double>(lBq) *
+                         contract(lAx, lAy, lAz,
+                                  lBx - (q == 0), lBy - (q == 1), lBz - (q == 2),
+                                  lCx, lCy, lCz, Weight::None);
+                result[1 * 3 + q] = d;
+            }
+            // Centre aux (C): d/dC_q = 2γ·(lC+ê_q) − lCq·(lC−ê_q).
+            {
+                const int lCq = (q == 0 ? lCx : q == 1 ? lCy : lCz);
+                double d = contract(lAx, lAy, lAz, lBx, lBy, lBz,
+                                    lCx + (q == 0), lCy + (q == 1), lCz + (q == 2),
+                                    Weight::C);
+                if (lCq > 0)
+                    d -= static_cast<double>(lCq) *
+                         contract(lAx, lAy, lAz, lBx, lBy, lBz,
+                                  lCx - (q == 0), lCy - (q == 1), lCz - (q == 2),
+                                  Weight::None);
+                result[2 * 3 + q] = d;
+            }
         }
 
         return result;

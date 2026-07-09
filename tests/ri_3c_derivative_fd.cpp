@@ -252,6 +252,40 @@ int main()
                 fail("analytic μ-derivative disagrees with FD on axis " +
                      std::to_string(q) + " (>1e-7)");
         }
+
+        // ── RG1a.2: ν and aux blocks via translational invariance ─────────────
+        // For a single element, the three center-derivatives must sum to zero on
+        // each axis (rigidly translating all three centers leaves the integral
+        // unchanged). This is an analytic-only identity, so it gates the ν (B)
+        // and aux (C) blocks against the already-FD-validated μ (A) block to
+        // ~1e-10 — tighter than FD and needing no extra displaced-geometry runs.
+        for (int q = 0; q < 3; ++q)
+        {
+            const double sum = d[0 * 3 + q] + d[1 * 3 + q] + d[2 * 3 + q];
+            std::cout << "  Σ_center d/dR_" << q << " = " << sum << '\n';
+            if (std::abs(sum) > 1e-10)
+                fail("center-derivative sum ≠ 0 on axis " + std::to_string(q) +
+                     " (>1e-10) — ν or aux block is wrong");
+        }
+
+        // Direct FD cross-check of the ν block, but only when ν's atom is also
+        // distinct from the aux's atom (else moving it perturbs aux too and the
+        // FD would not isolate ν). When ν shares the aux atom, the Σ=0 check
+        // above already pins the ν+aux blocks jointly against μ.
+        if (pair->B._shell->_atom_index != auxC->_atom_index)
+        {
+            const int nu_atom = static_cast<int>(pair->B._shell->_atom_index);
+            for (int q = 0; q < 3; ++q)
+            {
+                auto fd = fd_derivative(root, geom, nu_atom, q, delta);
+                if (!fd) { fail("fd_derivative(ν) failed: " + fd.error()); return 1; }
+                const double fdv = (*fd)(row, static_cast<Eigen::Index>(aux_col));
+                const double an = d[1 * 3 + q];
+                if (std::abs(an - fdv) > 1e-7)
+                    fail("analytic ν-derivative disagrees with FD on axis " +
+                         std::to_string(q) + " (>1e-7)");
+            }
+        }
     }
 
     if (g_ok)
