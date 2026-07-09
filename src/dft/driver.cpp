@@ -23,6 +23,7 @@
 #include "integrals/os.h"
 #include "io/checkpoint.h"
 #include "io/logging.h"
+#include "io/results_json.h"
 #include "opt/geomopt.h"
 #include "populations/multipole.h"
 #include "post_hf/integrals.h"
@@ -3758,6 +3759,127 @@ namespace DFT::Driver
         }
 
         return std::unexpected("Unsupported DFT calculation type");
+    }
+
+    // ── CLI entry (peer of HartreeFock::Driver::run) ──────────────────────────
+    namespace
+    {
+        using CliSystemClock = std::chrono::system_clock;
+
+        std::string cli_format_time(CliSystemClock::time_point tp)
+        {
+            const std::time_t t = CliSystemClock::to_time_t(tp);
+            std::tm tm{};
+#if defined(_WIN32)
+            localtime_s(&tm, &t);
+#else
+            localtime_r(&t, &tm);
+#endif
+            std::ostringstream os;
+            os << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+            return os.str();
+        }
+
+        std::string dft_reference_label(HartreeFock::SCFType scf_type)
+        {
+            switch (scf_type)
+            {
+            case HartreeFock::SCFType::RHF:
+                return "RKS";
+            case HartreeFock::SCFType::ROHF:
+                return "ROKS";
+            case HartreeFock::SCFType::UHF:
+                return "UKS";
+            }
+            return "Unknown";
+        }
+
+        void log_multipole_report(HartreeFock::Calculator &calculator)
+        {
+            auto shell_pairs = build_shellpairs(calculator._shells);
+            auto moments = HartreeFock::ObaraSaika::_compute_multipole_moments(
+                calculator, shell_pairs, Eigen::Vector3d::Zero());
+            if (!moments)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning, "Multipole Moments :",
+                    "Unavailable: " + moments.error());
+                HartreeFock::Logger::blank();
+                return;
+            }
+            calculator._multipole = *moments; // cache for the JSON results dump
+            calculator._have_multipole = true;
+            HartreeFock::Logger::multipole_moments(*moments);
+            HartreeFock::Logger::blank();
+        }
+    } // namespace
+
+    std::expected<int, std::string> run(
+        HartreeFock::Calculator &calculator,
+        [[maybe_unused]] const std::string &input_file,
+        const std::string &json_path)
+    {
+        const auto program_start = CliSystemClock::now();
+
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :", "Kohn-Sham DFT");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Reference :", dft_reference_label(calculator._scf._scf));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis :", calculator._basis._basis_name);
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "DFT Grid :", map_enum(calculator._dft._grid));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Exchange :", map_enum(calculator._dft._exchange));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Correlation :", map_enum(calculator._dft._correlation));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Charge :", calculator._molecule.charge);
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Multiplicity :", calculator._molecule.multiplicity);
+        if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "Solvation :",
+                std::format("PCM (epsilon = {:.4f}, points/atom = {})",
+                            calculator._solvation._dielectric,
+                            calculator._solvation._surface_points_per_atom));
+        }
+        HartreeFock::Logger::blank();
+
+        const auto result = run(calculator);
+        if (!result)
+            return std::unexpected(result.error());
+
+        if (result->converged)
+            log_multipole_report(calculator);
+
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "DFT Energy :",
+            std::format("{:.10f} Eh", result->total_energy));
+        if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "PCM Solvation Energy :",
+                std::format("{:.10f} Eh", result->solvation_energy));
+        }
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "Converged :",
+            result->converged ? "true" : "false");
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "Wall Time :",
+            std::format("{} ({} seconds)",
+                        cli_format_time(CliSystemClock::now()),
+                        std::chrono::duration<double>(CliSystemClock::now() - program_start).count()));
+
+        if (!json_path.empty())
+        {
+            // The DFT total lives in the driver Result, not on the Calculator;
+            // copy it in so the shared serializer reports the log's energy.
+            calculator._total_energy = result->total_energy;
+            if (auto res = HartreeFock::IO::dump_results_json(calculator, json_path); !res)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Error, "JSON Output Failed :", res.error());
+                return EXIT_FAILURE;
+            }
+        }
+
+        return EXIT_SUCCESS;
     }
 
 } // namespace DFT::Driver

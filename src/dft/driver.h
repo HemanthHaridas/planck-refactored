@@ -64,8 +64,22 @@ namespace DFT::Driver
     std::expected<PreparedSystem, std::string>
     prepare(HartreeFock::Calculator &calculator, const Options &options = {});
 
+    // Compute core: runs the KS-DFT workflow and returns the Result. Consumed by
+    // the CLI entry below and directly by any caller that wants the structured
+    // result rather than the process exit code.
     std::expected<Result, std::string>
     run(HartreeFock::Calculator &calculator, const Options &options = {});
+
+    // CLI entry, the exact peer of HartreeFock::Driver::run: the DFT banner, the
+    // compute core above, the energy / convergence / multipole report, timing,
+    // and optional JSON dump. Returns the process exit code. Both planck-dft and
+    // the unified planck-mpi reduce to a thin parse-then-dispatch shell that
+    // calls this. `calculator` must already be parsed with its checkpoint path
+    // set.
+    std::expected<int, std::string> run(
+        HartreeFock::Calculator &calculator,
+        const std::string &input_file,
+        const std::string &json_path);
 
 } // namespace DFT::Driver
 

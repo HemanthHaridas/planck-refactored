@@ -25,6 +25,7 @@
 #endif
 
 #include "driver.h"
+#include "dft/driver.h"
 
 #include "base/types.h"
 #include "io/io.h"
@@ -106,37 +107,24 @@ int main(int argc, const char *argv[])
         return finalize(EXIT_FAILURE);
     }
 
-    // DFT dispatch gate. Two things must land before planck-mpi can run DFT:
-    // (1) link libxc + the DFT source set into this target, and (2) extract the
-    // DFT CLI reporting into a callable the way HartreeFock::Driver::run already
-    // is. Until (1), a %begin_dft input is actually rejected earlier, at parse
-    // time, because this HF-linked binary has no libxc — so this branch is the
-    // forward-looking guard, not the current rejection path. The is_dft_run()
-    // predicate itself is live and drives the HF path below.
-    if (calculator.is_dft_run())
-    {
-        if (rank == 0)
-            HartreeFock::Logger::logging(
-                HartreeFock::LogLevel::Error, "planck-mpi :",
-                "DFT runs (%begin_dft) are not yet wired into planck-mpi; use planck-dft. "
-                "HF/post-HF runs are supported.");
-        return finalize(EXIT_FAILURE);
-    }
-
-    if (rank == 0)
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");
-
+    // Checkpoint path suffix follows the dispatched method, matching the two
+    // serial binaries (.dftchk for DFT, .hfchk for HF).
     {
         std::filesystem::path inp(input_file);
+        const std::string stem = (inp.parent_path() / inp.stem()).string();
         calculator._checkpoint_path =
-            (inp.parent_path() / inp.stem()).string() + ".hfchk";
+            stem + (calculator.is_dft_run() ? ".dftchk" : ".hfchk");
     }
 
     // Only rank 0 writes JSON; pass an empty path on the other ranks so the
     // driver's serializer stays a single-writer.
     const std::string effective_json = (rank == 0) ? json_path : std::string{};
 
-    auto result = HartreeFock::Driver::run(calculator, input_file, effective_json);
+    // Dispatch on the method the input declared — the whole point of the unified
+    // binary. Both drivers are symmetric CLI peers returning the exit code.
+    auto result = calculator.is_dft_run()
+                      ? DFT::Driver::run(calculator, input_file, effective_json)
+                      : HartreeFock::Driver::run(calculator, input_file, effective_json);
     if (!result)
     {
         if (rank == 0)

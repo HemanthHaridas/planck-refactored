@@ -274,8 +274,9 @@ set(HF_MAIN_SRC
     ${HF_DRIVER_SRC}
 )
 
-set(DFT_SRC
-    ${SRC_DIR}/dft/main.cpp
+# DFT compute/CLI sources without the entry point, so multiple front ends
+# (planck-dft, planck-mpi) can share the DFT driver.
+set(DFT_LIB_SRC
     ${SRC_DIR}/dft/ao_grid.h
     ${SRC_DIR}/dft/dft_gradient.cpp
     ${SRC_DIR}/dft/dft_gradient.h
@@ -289,6 +290,10 @@ set(DFT_SRC
     ${SRC_DIR}/dft/base/radial.h
     ${SRC_DIR}/dft/base/grid.h
     ${SRC_DIR}/dft/base/wrapper.h
+)
+set(DFT_SRC
+    ${SRC_DIR}/dft/main.cpp
+    ${DFT_LIB_SRC}
 )
 
 # Executable target
@@ -435,6 +440,7 @@ if(BUILD_MPI)
     add_executable(planck-mpi
         ${SRC_DIR}/mpi/main.cpp
         ${HF_DRIVER_SRC}
+        ${DFT_LIB_SRC}
         ${BASE_SRC}
         ${LOOKUP_SRC}
         ${SYMM_SRC}
@@ -455,18 +461,21 @@ if(BUILD_MPI)
         ${SRC_DIR}
         ${CMAKE_BINARY_DIR}
         ${MSYM_INSTALL_DIR}/include
+        ${LIBXC_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
     )
 
     target_link_libraries(planck-mpi
         ${MSYM_INSTALL_DIR}/lib/libmsym.a
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
     )
-    add_dependencies(planck-mpi libmsym)
+    add_dependencies(planck-mpi libmsym libxc)
     if(Python3_Interpreter_FOUND)
         add_dependencies(planck-mpi ccgen-spinorbital-warm-start)
         add_dependencies(planck-mpi ccgen-planck-kernels)
     endif()
-    target_compile_definitions(planck-mpi PRIVATE PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
+    # USING_Libxc enables the libxc-backed XC path (same as planck-dft).
+    target_compile_definitions(planck-mpi PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
 
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-mpi OpenMP::OpenMP_CXX)
