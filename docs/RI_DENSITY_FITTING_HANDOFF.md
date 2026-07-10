@@ -249,6 +249,35 @@ The predicted risk, incidentally, was the wrong one: the scope flagged the
 UHF-`K`-has-no-½ factor as the danger. That was right first try. The JK gate pins
 it directly — `G_uhf(D/2, D/2) == G_rhf(D)` to `rel = 0` exactly.
 
+## One non-bug, and why it is recorded here
+
+RG4 also added a fallback to `tests/rmp2_gradient_fd.py` that reconstructed the
+UMP2 correlated total as `Total Energy` + `Correlation Energy`, on the premise
+that UMP2 prints no combined `Total MP2 Energy` line. **The premise was false** —
+it prints one, from the same `method_label = "MP2"` mapping RMP2 uses.
+
+The premise came from a truncated probe:
+
+```
+./build/hartree-fock <ri_ump2_input> | grep -iE 'Total MP2 Energy|Correlation Energy' | head -2
+```
+
+The case-insensitive match let `[INF] UMP2 : Computing MP2 correlation energy`
+consume one of the two slots, so `head -2` cut off the `Total MP2 Energy` line
+that came third. Absence of evidence, read as evidence of absence.
+
+Nothing was ever wrong numerically: `parse_mp2_energy` tries the primary regex
+first, it always matched, so the fallback was unreachable — and it would have
+produced the same number anyway. But it carried a latent trap, because its
+`Total Energy` regex took the **last** match, which in a geomopt run is the final
+optimized SCF energy rather than the one paired with the correlation piece.
+Harmless while unreachable; wrong the moment the primary regex ever failed. The
+fallback is removed.
+
+Recorded because the failure mode is cheap to repeat: **`head -n` on a grep is a
+truncation, not a search.** When establishing that something is *absent*, print
+the whole match set.
+
 ## Conventions a new reader will trip on
 
 - **UHF Fock has no ½ on K.** `G_σ = J(Pa + Pb) − K(P_σ)`: Coulomb from the
@@ -259,11 +288,11 @@ it directly — `G_uhf(D/2, D/2) == G_rhf(D)` to `rel = 0` exactly.
   `w = (μ==ν?1:2)`. The real `dm2buf` is **not** bra-symmetric → `gamma3` must sum
   both `(μν)` and `(νμ)` orderings and use `w = 1` (`bra_prefolded = true`). Same
   algebra, different packing.
-- **UMP2 prints no `Total MP2 Energy` line**, only `Total Energy` +
-  `Correlation Energy`. `tests/rmp2_gradient_fd.py` reconstructs the correlated
-  total from the pair. That parser change was validated against the *dense* UMP2
-  gradient (5e-8) before being trusted on RI — a broken parser would otherwise
-  have silently "validated" a broken gradient.
+- **`Total MP2 Energy` is printed for UMP2 too.** `hf_driver.cpp` maps both
+  `PostHF::RMP2` and `PostHF::UMP2` to the same `"MP2"` `method_label`, which
+  `Logger::correlation_energy` renders as `Total <label> Energy` — restricted and
+  unrestricted, dense and RI. `tests/rmp2_gradient_fd.py` parses that one line for
+  every case, and always has.
 
 ## What is still held back
 
