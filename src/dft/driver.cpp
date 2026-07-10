@@ -475,6 +475,25 @@ namespace DFT::Driver
                 calculator._molecule._point_group.find("inf") != std::string::npos)
                 return;
 
+            // Suppressed under PCM: the cavity is tessellated with a Fibonacci
+            // (golden-angle) sphere (src/solvation/pcm.cpp) and carries no
+            // point-group symmetry, so V_pcm is not symmetry-adapted. Block
+            // diagonalization reads only the diagonal irrep blocks of the KS
+            // matrix and silently discards the off-block reaction-field elements,
+            // converging to a symmetry-projected solution. Unlike HF (whose DIIS
+            // gate catches it) the KS convergence test would report success on
+            // the wrong energy: water/STO-3G/PBE/C-PCM gave -75.2062610742
+            // (projected) vs the true -75.2062005342.
+            if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning, "DFT SAO :",
+                    "Disabled: the PCM cavity tessellation is not symmetry-adapted, "
+                    "so symmetry-blocked diagonalization would project away part of "
+                    "the reaction field. Running without SAO blocking.");
+                return;
+            }
+
             auto sao = HartreeFock::Symmetry::build_sao_basis(calculator);
             if (!sao)
             {
