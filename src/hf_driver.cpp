@@ -548,36 +548,48 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         // for cross-basis density projection in the spherical working basis.
     }
 
-    // ── RI-MP2 workflow gate: single-point energies + single-shot RHF gradient ───
+    // ── RI-MP2 workflow gate: single point, RHF gradient, RHF geomopt ────────────
     // The RI front-end caches the auxiliary basis, the 2-center Coulomb metric,
     // and the packed 3-center tensor on the Calculator (_ri_aux_basis / _ri_j2c /
     // _ri_j3c). The caches self-invalidate on a geometry change (G1:
     // Calculator::_ri_cache_geometry + ri_invalidate_if_geometry_moved in
-    // ri_eri.cpp), so RI energies are correct at any geometry.
+    // ri_eri.cpp), keyed off _molecule._standard — which the geomopt inner loop
+    // updates at every step (sync_coordinate_frames_from_standard). So RI energies
+    // and gradients are correct at every displaced geometry.
     //
-    // A single-shot RHF analytic Gradient is admitted: it computes derivatives at
-    // the one input geometry, and the RI gradient is now RI-consistent end-to-end
-    // (RG2/RG3 — 2e-term + RI CPHF / Z-vector / Lagrangian / veff, FD-gated to
-    // ~3e-7 Ha/Bohr by water_ri_rmp2_gradient_fd). Geometry-MOVING workflows
-    // (GeomOpt / Frequency / GeomOptFreq / ImaginaryFollow) stay blocked pending
-    // their own validation — G1 keeps the per-displacement caches correct, but the
-    // geomopt/freq RI path is not yet gated (RG5). UMP2 RI gradients are not
-    // implemented (RG4), so unrestricted RI gradients fall through to the block
-    // below. Basis-agnostic.
-    const bool ri_gradient_ok =
-        calculator._calculation == HartreeFock::CalculationType::Gradient &&
-        calculator._scf._scf == HartreeFock::SCFType::RHF;
+    // Admitted for RHF (RG5a):
+    //   * Gradient — single-shot analytic derivatives at the input geometry.
+    //   * GeomOpt  — geomopt.cpp calls compute_rmp2_gradient directly at each
+    //                step; nothing RI-specific is needed there, G1 handles caches.
+    // The RI gradient is RI-consistent end-to-end (RG2/RG3: 2e-term + RI CPHF /
+    // Z-vector / Lagrangian / veff), FD-gated to ~3e-7 Ha/Bohr by
+    // water_ri_rmp2_gradient_fd; the optimized geometry is PySCF-gated by
+    // water_ri_rmp2_geomopt_sto3g.
+    //
+    // Still rejected here: UMP2 RI gradient/geomopt (RG4 — not implemented).
+    // Frequency / GeomOptFreq / ImaginaryFollow are deliberately NOT rejected
+    // here — they fall through to the correlated-frequency guard below, which
+    // gives the accurate reason (the semi-numerical Hessian differentiates the
+    // SCF gradient, not the MP2 one; a limitation of every MP2, dense or RI).
+    // Basis-agnostic.
+    const bool ri_freq_workflow =
+        calculator._calculation == HartreeFock::CalculationType::Frequency ||
+        calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
+        calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
+    const bool ri_workflow_ok =
+        calculator._scf._scf == HartreeFock::SCFType::RHF &&
+        (calculator._calculation == HartreeFock::CalculationType::Gradient ||
+         calculator._calculation == HartreeFock::CalculationType::GeomOpt);
     if (calculator._mp2.use_ri &&
         calculator._calculation != HartreeFock::CalculationType::SinglePoint &&
-        !ri_gradient_ok)
+        !ri_workflow_ok && !ri_freq_workflow)
     {
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Error, "RI-MP2 :",
-            "RI-MP2 (mp2_use_ri) is supported for single-point energies and the "
-            "single-shot RHF analytic gradient only; geometry-moving workflows "
-            "(geomopt/frequency) and UMP2 RI gradients are not yet enabled. Set "
-            "calculation singlepoint or gradient, or disable RI (mp2_use_ri false) "
-            "for " + map_enum(calculator._calculation) + ".");
+            "RI-MP2 (mp2_use_ri) supports single-point energies plus the RHF "
+            "analytic gradient and RHF geometry optimization; UMP2 RI gradients "
+            "are not implemented. Set calculation singlepoint, or disable RI "
+            "(mp2_use_ri false) for " + map_enum(calculator._calculation) + ".");
         return EXIT_FAILURE;
     }
 
