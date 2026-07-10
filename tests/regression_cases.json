@@ -1146,6 +1146,62 @@
       ]
     },
     {
+      "id": "water_ri_rmp2_geomopt_sto3g",
+      "input": "tests/inputs/regression/post_hf/water_ri_rmp2_geomopt_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "timeout_s": 300,
+      "_note": "RG5a: RHF RI-MP2 geometry optimization. Nothing in geomopt.cpp is RI-specific -- it calls compute_rmp2_gradient each step, and G1 (ri_invalidate_if_geometry_moved, keyed off _molecule._standard which the geomopt loop updates) rebuilds the RI caches at every displaced geometry. G1 is LOAD-BEARING and verified so: with invalidation disabled the run dies with 'GeomOpt line search failed', because stale first-geometry 3-center integrals make the energy and gradient inconsistent. No PySCF DF-MP2 geomopt reference is possible -- PySCF 2.13.0 raises NotImplementedError for the DF-MP2 analytic gradient by every route (mp.MP2().density_fit(), DF-HF+MP2, and mp.dfmp2_native). Instead this is anchored two ways: (1) Planck dense-MP2 geomopt gives E_opt=-75.0061363361 Eh, O-H=1.013462 Ang, angle=97.2703 deg, itself matching PySCF dense-MP2 geomopt (-75.0061363107, 1.013460, 97.2729) to 2.5e-8 Eh; the RI run lands at -75.0061310245 Eh, O-H=1.013461 Ang, angle=97.2704 deg -- 5.3e-6 Eh above dense (RI fitting error) at the same geometry to 1e-6 Ang. (2) water_ri_rmp2_geomopt_stationary_fd proves the optimized point is a true stationary point OF THE RI SURFACE.",
+      "expected_exit_code": 0,
+      "contains": [
+        "Geometry Optimization",
+        "Using analytic RMP2 gradient",
+        "Final Energy",
+        "Optimized Geometry"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "geomopt_final_energy",
+          "expected": -75.0061310245,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_le",
+          "metric": "geomopt_final_gradient_max",
+          "value": 0.0005
+        }
+      ]
+    },
+    {
+      "id": "water_ri_rmp2_geomopt_stationary_fd",
+      "input": "tests/inputs/regression/post_hf/water_ri_rmp2_geomopt_stationary_fd.hfinp",
+      "executable": "tests/rmp2_gradient_fd.py",
+      "tags": [
+        "extended"
+      ],
+      "_note": "RG5a load-bearing gate. A single-point RI-MP2 gradient AT the geometry water_ri_rmp2_geomopt_sto3g optimizes to. Two assertions in one: the analytic RI gradient there is ~0 (max component 2.4e-5 Ha/Bohr -> genuine stationary point) AND it agrees with a finite difference of the RI-MP2 ENERGY to 2.0e-7 Ha/Bohr (-> the gradient really is the derivative of the RI surface). Together these prove the RI geomopt converged to a stationary point of the RI surface, which is exactly what a geometry-moving RI run needs and what no external reference can supply (PySCF has no DF-MP2 analytic gradient).",
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
+      "id": "water_ri_rmp2_freq_rejected",
+      "input": "tests/inputs/regression/post_hf/water_ri_rmp2_freq_rejected.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "_note": "Boundary marker, pins guard ORDERING. RI + frequency must fall through the RI-MP2 workflow gate and be rejected by the correlated-frequency guard instead, because that is the accurate reason: the semi-numerical Hessian differentiates the SCF gradient, not the MP2 gradient -- a limitation of every MP2, dense or RI, not something RI-specific. If the RI gate ever swallows freq workflows again the user gets a misleading 'RI does not support frequency' message. Asserts the frequency guard's text, not the RI gate's.",
+      "expected_exit_code": 1,
+      "contains": [
+        "Correlated (MP2) frequencies are not implemented"
+      ]
+    },
+    {
       "id": "water_dft_hse06_gradient_symm_ultrafine_fd",
       "input": "tests/inputs/regression/dft/water_dft_hse06_gradient_symm_ultrafine.hfinp",
       "executable": "tests/dft_gradient_fd.py",
