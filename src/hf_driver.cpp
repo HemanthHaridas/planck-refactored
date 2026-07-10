@@ -581,6 +581,36 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         return EXIT_FAILURE;
     }
 
+    // ── Correlated frequencies are not implemented ───────────────────────────────
+    // src/freq/hessian.cpp finite-differences the SCF gradient, dispatching on the
+    // reference type only (compute_{rhf,uhf,rohf}_gradient); it never calls the
+    // MP2 gradient. So `correlation rmp2|ump2` + `frequency`/`geomoptfreq`/
+    // `imaginaryfollow` would print the MP2 correlation energy and then report
+    // frequencies built from an *HF* Hessian — a silently wrong answer. Reject it
+    // explicitly until the MP2 gradient is wired into the Hessian dispatch.
+    // (`gradient` and `geomopt` are fine: both call compute_{r,u}mp2_gradient.)
+    {
+        const bool freq_workflow =
+            calculator._calculation == HartreeFock::CalculationType::Frequency ||
+            calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
+            calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
+        const bool correlated =
+            calculator._correlation == HartreeFock::PostHF::RMP2 ||
+            calculator._correlation == HartreeFock::PostHF::UMP2;
+        if (freq_workflow && correlated)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Error, "Frequency :",
+                "Correlated (MP2) frequencies are not implemented: the "
+                "semi-numerical Hessian finite-differences the SCF gradient, not "
+                "the MP2 gradient, so " + map_enum(calculator._calculation) +
+                " with correlation rmp2/ump2 would report HF frequencies. Use "
+                "calculation gradient or geomopt for MP2, or drop the correlation "
+                "keyword for HF frequencies.");
+            return EXIT_FAILURE;
+        }
+    }
+
     // Now initialize SCF data structures
     calculator.initialize();
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis Construction :", std::format("Generated {} Shells and {} contracted functions", calculator._shells.nshells(), calculator._shells.nbasis()));
