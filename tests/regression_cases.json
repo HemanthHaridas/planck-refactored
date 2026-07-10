@@ -1203,6 +1203,54 @@
       ]
     },
     {
+      "id": "water_radical_cation_ump2_geomopt_sto3g",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_ump2_geomopt_sto3g.hfinp",
+      "tags": [
+        "extended",
+        "open_shell"
+      ],
+      "timeout_s": 300,
+      "_pyscf_reference": "UMP2/STO-3G geomopt, water radical cation doublet (charge 1, mult 2), cart=True. PySCF 2.13.0 scf.UHF + mp.UMP2 + geometric_solver optimize: E_opt=-74.7014274718 Eh (O-H=1.050301 Ang, H-O-H=106.4704 deg). Planck L-BFGS: E_opt=-74.7014273686 Eh -> Delta 1.0e-7 Eh (O-H=1.050094 Ang, H-O-H=106.5033 deg); same minimum, the small geometric spread is the two optimizers stopping at their own force thresholds on a flat well.",
+      "expected_exit_code": 0,
+      "contains": [
+        "Geometry Optimization",
+        "Using analytic UMP2 gradient (spin-resolved density + pair density)",
+        "Final Energy",
+        "Optimized Geometry"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "geomopt_final_energy",
+          "expected": -74.7014274718,
+          "atol": 1e-06
+        },
+        {
+          "type": "metric_le",
+          "metric": "geomopt_final_gradient_max",
+          "value": 0.0005
+        },
+        {
+          "type": "metric_eq",
+          "metric": "point_group",
+          "expected": "C2v"
+        }
+      ]
+    },
+    {
+      "id": "water_radical_cation_ump2_freq_rejected",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_ump2_freq_rejected.hfinp",
+      "tags": [
+        "extended",
+        "open_shell"
+      ],
+      "_note": "Boundary marker. freq/hessian.cpp finite-differences the SCF gradient (compute_{rhf,uhf,rohf}_gradient) and never calls the MP2 gradient, so correlation rmp2/ump2 + frequency|geomoptfreq|imaginaryfollow would silently report HF frequencies. hf_driver.cpp rejects the combination; this pins that. Remove once the MP2 gradient is wired into the Hessian dispatch.",
+      "expected_exit_code": 1,
+      "contains": [
+        "Correlated (MP2) frequencies are not implemented"
+      ]
+    },
+    {
       "id": "water_triplet_uhf_ump2_gradient_smoke",
       "input": "tests/inputs/regression/open_shell/water_triplet_uhf_ump2_gradient_sto3g.hfinp",
       "tags": [

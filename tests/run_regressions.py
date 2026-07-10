@@ -47,6 +47,12 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     # a geomopt run, last-match is still the step-0 value because subsequent
     # steps print only "Opt Step N : ... max|g| = ..." without the full prefix).
     "geomopt_final_gradient_max": re.compile(r"Final max\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
+    # Converged geomopt energy from the "Final Energy" summary line. For a
+    # correlated geomopt (correlation rmp2/ump2) this is the CORRELATED optimized
+    # energy — the quantity a PySCF MP2-geomopt reference pins. The post-opt
+    # "Final Symmetry SCF" prints only the SCF energy, so rhf_total_energy /
+    # uhf_total_energy cannot gate a correlated optimization.
+    "geomopt_final_energy": re.compile(r"Final Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
     # Vibrational frequencies from the freq table. The freq output is emitted
     # through the logger so each row carries an "[INF]" prefix; the MO energy
     # table (also indexed N) does NOT carry that prefix, so requiring it here
