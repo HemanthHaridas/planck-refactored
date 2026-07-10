@@ -206,6 +206,52 @@ int main()
     if (g_asym > 1e-10)
         fail("RI Fock G is not symmetric for a symmetric density");
 
+    // J4 (Step RG4.1): unrestricted RI Fock {Ga, Gb} = {J(Pa+Pb) - K(Pa),
+    // J(Pa+Pb) - K(Pb)} vs the dense _compute_fock_uhf oracle. Pa and Pb are
+    // deliberately DIFFERENT — with Pa == Pb a wrong exchange factor (e.g. the
+    // closed-shell ½ carried over) can still land close, and the spin-resolved
+    // structure goes untested.
+    {
+        Eigen::MatrixXd Pa(nb, nb), Pb(nb, nb);
+        for (std::size_t mu = 0; mu < nb; ++mu)
+            for (std::size_t nu = 0; nu < nb; ++nu)
+            {
+                Pa(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(nu)) =
+                    std::sin(0.4 * mu + 0.7 * nu + 0.3);
+                Pb(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(nu)) =
+                    std::cos(0.6 * mu - 0.2 * nu + 1.1);
+            }
+        Pa = (0.5 * (Pa + Pa.transpose())).eval();
+        Pb = (0.5 * (Pb + Pb.transpose())).eval();
+
+        const auto [Ga_dense, Gb_dense] =
+            HartreeFock::ObaraSaika::_compute_fock_uhf(dense_eri, Pa, Pb, nb);
+        const auto [Ga_ri, Gb_ri] =
+            HartreeFock::Correlation::RI::build_ri_fock_uhf(calc, Pa, Pb);
+
+        const double a_rel =
+            (Ga_ri - Ga_dense).norm() / std::max(Ga_dense.norm(), 1e-300);
+        const double b_rel =
+            (Gb_ri - Gb_dense).norm() / std::max(Gb_dense.norm(), 1e-300);
+        std::cout << "UHF G: ‖RI-dense‖/‖dense‖  alpha=" << a_rel
+                  << "  beta=" << b_rel << '\n';
+        if (a_rel > 2e-2 || b_rel > 2e-2)
+            fail("RI UHF Fock disagrees with dense beyond fitting accuracy "
+                 "(>2e-2) — wrong Coulomb/exchange split or a stray ½ on K");
+
+        // Sanity: with Pa == Pb == D/2 the UHF form must reduce to the RHF one,
+        // G_sigma = J(D) - K(D/2) = J(D) - ½K(D). Pins the missing-½ convention.
+        const auto [Gh_a, Gh_b] =
+            HartreeFock::Correlation::RI::build_ri_fock_uhf(calc, 0.5 * D, 0.5 * D);
+        const double closed_shell_rel =
+            (Gh_a - G_ri).norm() / std::max(G_ri.norm(), 1e-300);
+        std::cout << "UHF G(D/2,D/2) vs RHF G(D): rel=" << closed_shell_rel << '\n';
+        if (closed_shell_rel > 1e-12)
+            fail("RI UHF Fock at Pa=Pb=D/2 does not reduce to the RHF J-½K form");
+        if ((Gh_a - Gh_b).cwiseAbs().maxCoeff() > 1e-12)
+            fail("RI UHF Fock gives different alpha/beta for Pa == Pb");
+    }
+
     if (g_ok)
         std::cout << "PASS: ri_jk_equivalence (J0 fixture)\n";
     return g_ok ? 0 : 1;

@@ -1146,6 +1146,22 @@
       ]
     },
     {
+      "id": "water_radical_cation_ri_ump2_gradient_fd",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_ri_ump2_gradient_sto3g.hfinp",
+      "executable": "tests/rmp2_gradient_fd.py",
+      "tags": [
+        "extended",
+        "open_shell"
+      ],
+      "_note": "RG4 load-bearing gate. Full RI-consistent UMP2 analytic gradient (2e-term + RI UHF CPHF + RI Lagrangians Imata/Imatb + RI veff, all via build_ri_fock_uhf / build_ri_imat / build_ri_two_electron_gradient) vs a finite difference of the RI-UMP2 ENERGY. max |dg| = 1.9e-7 Ha/Bohr (tol 3e-4). Bisecting the four RI surfaces isolated a factor-of-2 in the 2e-term: build_ri_two_electron_gradient reproduces the RHF dense convention (2.0*dm2buf), while the UMP2 dense term contracts dm2a+dm2b with no factor 2 -- RI/dense measured exactly 2.0000 on every non-zero component. Hence the 0.5 in mp2_gradient.cpp. The FD driver reconstructs the UMP2 correlated total as 'Total Energy' + 'Correlation Energy' (UMP2 prints no 'Total MP2 Energy' line).",
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
       "id": "water_ri_rmp2_geomopt_sto3g",
       "input": "tests/inputs/regression/post_hf/water_ri_rmp2_geomopt_sto3g.hfinp",
       "tags": [

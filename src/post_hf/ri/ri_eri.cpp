@@ -1561,4 +1561,20 @@ namespace HartreeFock::Correlation::RI
         const Eigen::MatrixXd K = build_ri_k(calculator, D, &unpacked);
         return J - 0.5 * K;
     }
+
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_fock_uhf(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &Pa,
+        const Eigen::MatrixXd &Pb)
+    {
+        // G_sigma = J(Pa + Pb) - K(P_sigma). Coulomb from the TOTAL density,
+        // exchange per-spin, no 1/2 (see the header note). One unpacked tensor
+        // shared across both exchange builds.
+        const std::vector<Eigen::MatrixXd> unpacked =
+            build_ri_3index_unpacked(calculator);
+        const Eigen::MatrixXd J = build_ri_j(calculator, Pa + Pb);
+        const Eigen::MatrixXd Ka = build_ri_k(calculator, Pa, &unpacked);
+        const Eigen::MatrixXd Kb = build_ri_k(calculator, Pb, &unpacked);
+        return {J - Ka, J - Kb};
+    }
 } // namespace HartreeFock::Correlation::RI

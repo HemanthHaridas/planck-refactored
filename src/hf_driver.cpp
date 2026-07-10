@@ -557,27 +557,31 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     // updates at every step (sync_coordinate_frames_from_standard). So RI energies
     // and gradients are correct at every displaced geometry.
     //
-    // Admitted for RHF (RG5a):
-    //   * Gradient — single-shot analytic derivatives at the input geometry.
-    //   * GeomOpt  — geomopt.cpp calls compute_rmp2_gradient directly at each
-    //                step; nothing RI-specific is needed there, G1 handles caches.
-    // The RI gradient is RI-consistent end-to-end (RG2/RG3: 2e-term + RI CPHF /
-    // Z-vector / Lagrangian / veff), FD-gated to ~3e-7 Ha/Bohr by
-    // water_ri_rmp2_gradient_fd; the optimized geometry is PySCF-gated by
-    // water_ri_rmp2_geomopt_sto3g.
+    // Admitted, for both RHF and UHF:
+    //   * Gradient — single-shot analytic derivatives at the input geometry. The
+    //     RI gradient is RI-consistent end-to-end (2e-term + RI CPHF/Z-vector +
+    //     RI Lagrangian + RI veff): RHF via RG2/RG3, UHF via RG4. Each is FD-gated
+    //     against a finite difference of the RI-MP2 energy itself
+    //     (water_ri_rmp2_gradient_fd, water_radical_cation_ri_ump2_gradient_fd).
+    //   * GeomOpt  — geomopt.cpp calls compute_{r,u}mp2_gradient directly at each
+    //     step; nothing RI-specific is needed there, G1 handles the caches. Gated
+    //     by water_ri_rmp2_geomopt_sto3g and
+    //     water_radical_cation_ri_ump2_geomopt_sto3g, each with a stationary-point
+    //     FD check against its own RI surface.
     //
-    // Still rejected here: UMP2 RI gradient/geomopt (RG4 — not implemented).
     // Frequency / GeomOptFreq / ImaginaryFollow are deliberately NOT rejected
     // here — they fall through to the correlated-frequency guard below, which
     // gives the accurate reason (the semi-numerical Hessian differentiates the
-    // SCF gradient, not the MP2 one; a limitation of every MP2, dense or RI).
-    // Basis-agnostic.
+    // SCF gradient, not the MP2 one; a limitation of every MP2, dense or RI, not
+    // something RI-specific). ROHF is excluded: there is no ROHF-MP2 gradient at
+    // all, dense or RI. Basis-agnostic.
     const bool ri_freq_workflow =
         calculator._calculation == HartreeFock::CalculationType::Frequency ||
         calculator._calculation == HartreeFock::CalculationType::GeomOptFrequency ||
         calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow;
     const bool ri_workflow_ok =
-        calculator._scf._scf == HartreeFock::SCFType::RHF &&
+        (calculator._scf._scf == HartreeFock::SCFType::RHF ||
+         calculator._scf._scf == HartreeFock::SCFType::UHF) &&
         (calculator._calculation == HartreeFock::CalculationType::Gradient ||
          calculator._calculation == HartreeFock::CalculationType::GeomOpt);
     if (calculator._mp2.use_ri &&
@@ -586,10 +590,10 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     {
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Error, "RI-MP2 :",
-            "RI-MP2 (mp2_use_ri) supports single-point energies plus the RHF "
-            "analytic gradient and RHF geometry optimization; UMP2 RI gradients "
-            "are not implemented. Set calculation singlepoint, or disable RI "
-            "(mp2_use_ri false) for " + map_enum(calculator._calculation) + ".");
+            "RI-MP2 (mp2_use_ri) supports single-point energies plus the RHF/UHF "
+            "analytic gradient and RHF/UHF geometry optimization. Set calculation "
+            "singlepoint, gradient or geomopt, or disable RI (mp2_use_ri false) "
+            "for " + map_enum(calculator._calculation) + ".");
         return EXIT_FAILURE;
     }
 

@@ -27,6 +27,17 @@ MP2_ENERGY_RE = re.compile(
     r"^\s*Total MP2 Energy\s+([-+0-9Ee\.]+)",
     re.MULTILINE,
 )
+# UMP2 prints no combined "Total MP2 Energy" line, only the SCF total and the
+# correlation piece. Their sum is the same correlated total the RMP2 line
+# reports, so the FD driver reconstructs it for unrestricted runs.
+SCF_ENERGY_RE = re.compile(
+    r"^\s*Total Energy\s+([-+0-9Ee\.]+)",
+    re.MULTILINE,
+)
+CORR_ENERGY_RE = re.compile(
+    r"^\s*Correlation Energy\s+([-+0-9Ee\.]+)",
+    re.MULTILINE,
+)
 
 
 def parse_coords_block(text: str) -> tuple[list[str], list[list[float]], int, int]:
@@ -95,9 +106,17 @@ def run_hartree_fock(executable: Path, input_path: Path) -> str:
 
 def parse_mp2_energy(output: str) -> float:
     matches = MP2_ENERGY_RE.findall(output)
-    if not matches:
-        raise SystemExit("no 'Total MP2 Energy' line found in hartree-fock output")
-    return float(matches[-1])
+    if matches:
+        return float(matches[-1])
+    # UMP2 fallback: correlated total = SCF total + correlation energy.
+    scf = SCF_ENERGY_RE.findall(output)
+    corr = CORR_ENERGY_RE.findall(output)
+    if scf and corr:
+        return float(scf[-1]) + float(corr[-1])
+    raise SystemExit(
+        "no 'Total MP2 Energy' line, and no 'Total Energy' + 'Correlation Energy' "
+        "pair, found in hartree-fock output"
+    )
 
 
 def parse_analytic_gradient(output: str, natom: int) -> list[list[float]]:
