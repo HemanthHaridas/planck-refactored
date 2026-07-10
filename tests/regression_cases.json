@@ -1162,6 +1162,52 @@
       ]
     },
     {
+      "id": "water_radical_cation_ri_ump2_geomopt_sto3g",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_ri_ump2_geomopt_sto3g.hfinp",
+      "tags": [
+        "extended",
+        "open_shell"
+      ],
+      "timeout_s": 300,
+      "_note": "UHF RI-MP2 geometry optimization. Nothing in geomopt.cpp is RI-specific: it calls compute_ump2_gradient each step, and G1 (ri_invalidate_if_geometry_moved, keyed off _molecule._standard which the geomopt loop updates) rebuilds the RI caches at every displaced geometry. Verified frame-independent: use_symm .true. gives the identical energy. No PySCF DF-MP2 geomopt reference is possible (PySCF 2.13.0 raises NotImplementedError for the DF-MP2 analytic gradient by every route), so this is anchored two ways: (1) Planck DENSE UMP2 geomopt gives E_opt=-74.7014273686 Eh, O-H=1.050094 Ang, angle=106.5033 deg and is itself PySCF-gated to 1.0e-7 Eh; the RI run lands at -74.7014233294 Eh, O-H=1.050093 Ang, angle=106.5037 deg -- 4.0e-6 Eh above dense (RI fitting error) at the same minimum to 7.3e-7 Ang. (2) water_radical_cation_ri_ump2_geomopt_stationary_fd proves the optimized point is a true stationary point OF THE RI-UMP2 SURFACE.",
+      "expected_exit_code": 0,
+      "contains": [
+        "Geometry Optimization",
+        "Using analytic UMP2 gradient",
+        "Final Energy",
+        "Optimized Geometry"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "geomopt_final_energy",
+          "expected": -74.7014233294,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_le",
+          "metric": "geomopt_final_gradient_max",
+          "value": 0.0005
+        }
+      ]
+    },
+    {
+      "id": "water_radical_cation_ri_ump2_geomopt_stationary_fd",
+      "input": "tests/inputs/regression/open_shell/water_radical_cation_ri_ump2_geomopt_stationary_fd.hfinp",
+      "executable": "tests/rmp2_gradient_fd.py",
+      "tags": [
+        "extended",
+        "open_shell"
+      ],
+      "_note": "Load-bearing gate for UHF RI geomopt. A single-point RI-UMP2 gradient AT the geometry water_radical_cation_ri_ump2_geomopt_sto3g optimizes to. Two assertions: the analytic RI-UMP2 gradient there is ~0 (max 2.75e-4 Ha/Bohr, the geomopt convergence threshold) AND it agrees with a finite difference of the RI-UMP2 ENERGY to 1.4e-7 Ha/Bohr. Together: the optimizer landed on a true stationary point of the RI-UMP2 surface and the gradient really is that surface's derivative. No external reference can supply this (PySCF has no DF-MP2 analytic gradient).",
+      "expected_exit_code": 0,
+      "contains": [
+        "Analytic gradient (Ha/Bohr):",
+        "Finite-difference gradient (Ha/Bohr):",
+        "PASS"
+      ]
+    },
+    {
       "id": "water_ri_rmp2_geomopt_sto3g",
       "input": "tests/inputs/regression/post_hf/water_ri_rmp2_geomopt_sto3g.hfinp",
       "tags": [
