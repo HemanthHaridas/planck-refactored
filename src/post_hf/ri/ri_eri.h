@@ -16,6 +16,7 @@
 #include <array>
 #include <expected>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/types.h"
@@ -230,6 +231,21 @@ namespace HartreeFock::Correlation::RI
     Eigen::MatrixXd build_ri_fock_rhf(
         const HartreeFock::Calculator &calculator,
         const Eigen::MatrixXd &D);
+
+    // Unrestricted RI Fock contribution {G_alpha, G_beta} (Step RG4.1), matching
+    // _compute_2e_fock_uhf(Pa, Pb) to density-fitting accuracy:
+    //
+    //   G_sigma = J(Pa + Pb) - K(P_sigma)
+    //
+    // Coulomb is built once from the TOTAL density (spin-agnostic); exchange is
+    // per-spin. There is NO factor 1/2 on K here — the closed-shell J - 1/2 K
+    // carries that ½ only because RHF's P is doubly occupied. Both Pa and Pb must
+    // be symmetric (every caller symmetrizes). J and K share one unpacked
+    // 3-index tensor, so the nb²·naux build happens once per call.
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_fock_uhf(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &Pa,
+        const Eigen::MatrixXd &Pb);
 } // namespace HartreeFock::Correlation::RI
 
 #endif // HF_POST_HF_RI_ERI_H
