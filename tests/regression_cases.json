@@ -818,12 +818,14 @@
       "tags": [
         "extended"
       ],
+      "_note": "Re-baselined from -74.9516348658 to -74.9516348849 when SAO blocking was disabled under PCM. The old value was the symmetry-PROJECTED solution: the Fibonacci cavity is not symmetry-adapted, so SAO block-diagonalization discarded V_pcm's off-block elements. That run never actually converged (DIIS residual pinned at 3.758e-05) -- it only passed before the DIIS-error convergence gate was added. Point group is still detected and asserted; only the SAO blocking is off. The energy is frame-dependent at this tessellation density (surface_points_per_atom 24 -> ~5e-5 Eh spread under rigid rotation), so this pins the standardized frame, not a frame-invariant number.",
       "expected_exit_code": 0,
       "contains": [
         "PCM :",
         "PCM Solvent :",
         "SCF Converged after",
-        "Total Energy"
+        "Total Energy",
+        "Disabled: the PCM cavity tessellation is not symmetry-adapted"
       ],
       "checks": [
         {
@@ -834,7 +836,7 @@
         {
           "type": "metric_close",
           "metric": "rhf_total_energy",
-          "expected": -74.9516348658,
+          "expected": -74.9516348849,
           "atol": 1e-09
         }
       ]
@@ -2068,7 +2070,8 @@
         "PCM :",
         "PCM Solvent :",
         "RKS Converged :",
-        "PCM Solvation Energy :"
+        "PCM Solvation Energy :",
+        "Disabled: the PCM cavity tessellation is not symmetry-adapted"
       ],
       "checks": [
         {
@@ -2079,11 +2082,12 @@
         {
           "type": "metric_close",
           "metric": "dft_total_energy",
-          "expected": -75.2062610742,
+          "expected": -75.2062610942,
           "atol": 1e-06
         }
       ],
-      "_pyscf_reference": "PySCF 2.12.1 RKS PBE/STO-3G C2v grid level=3 + C-PCM eps=78.3553 default cavity: SCF=-75.2068690800 Eh. Planck UltraFine (cavity_scale=1.2, surface_points_per_atom=24) lands at -75.2062610742 Eh (delta 6.1e-4 Eh reflects different PCM cavity discretization, not numerical drift). Pinned to Planck-current."
+      "_pyscf_reference": "PySCF 2.12.1 RKS PBE/STO-3G C2v grid level=3 + C-PCM eps=78.3553 default cavity: SCF=-75.2068690800 Eh. Planck UltraFine (cavity_scale=1.2, surface_points_per_atom=24) lands at -75.2062610942 Eh (delta 6.1e-4 Eh reflects different PCM cavity discretization, not numerical drift). Pinned to Planck-current.",
+      "_note": "Re-baselined from -75.2062610742 to -75.2062610942 (2e-8) when SAO blocking was disabled under PCM. The old value was the symmetry-PROJECTED solution: the Fibonacci cavity is not symmetry-adapted, so block-diagonalization discarded the KS matrix's off-block reaction-field elements. Unlike the HF case (whose DIIS-error gate exposed it) the KS convergence test reported success on the wrong energy -- this was a SILENT wrong answer. Point group is still detected and asserted; only SAO blocking is off."
     },
     {
       "id": "water_casscf_c2v_b1",

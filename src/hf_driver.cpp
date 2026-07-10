@@ -903,7 +903,32 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     }
 
     // ── SAO basis for symmetry-blocked Fock diagonalization ──────────────────
-    if (calculator._molecule._symmetry &&
+    //
+    // Suppressed under PCM. The cavity is tessellated with a Fibonacci
+    // (golden-angle) sphere (src/solvation/pcm.cpp), which has NO point-group
+    // symmetry by construction, so the reaction potential V_pcm is not
+    // symmetry-adapted. SAO block-diagonalization reads only the diagonal irrep
+    // blocks of F and silently discards the off-block elements V_pcm puts there:
+    // the SCF then converges to a fixed point of a symmetry-PROJECTED problem
+    // (ΔE = ΔP = 0 exactly) while ‖FPS-SPF‖ stays pinned at ~4e-5 forever,
+    // because the DIIS error is built from the full F. Water/STO-3G/C-PCM gave
+    // -74.9516348658 (projected, never converged) vs the true -74.9515732413.
+    // Full point-group ERI reduction (_use_full_symmetry, set inside this block)
+    // makes the same symmetry-adapted-density assumption, so it goes too.
+    const bool pcm_active =
+        calculator._solvation._model != HartreeFock::SolvationModel::None;
+    if (pcm_active && calculator._molecule._symmetry &&
+        calculator._molecule._point_group != "C1")
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning, "SAO Basis :",
+            "Disabled: the PCM cavity tessellation is not symmetry-adapted, so "
+            "symmetry-blocked diagonalization would project away part of the "
+            "reaction field. Running without SAO blocking; MO irrep labels are "
+            "unavailable (the PCM wavefunction is genuinely not symmetry-adapted).");
+    }
+    if (!pcm_active &&
+        calculator._molecule._symmetry &&
         calculator._molecule._point_group != "C1" &&
         calculator._molecule._point_group != "Kh" &&
         calculator._molecule._point_group.find("inf") == std::string::npos)
@@ -1686,8 +1711,10 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             }
             std::vector<HartreeFock::ShellPair> sp_sym = std::move(*sp_sym_res);
 
-            // Try SAO symmetry blocking
-            if (calculator._molecule._point_group != "C1" &&
+            // Try SAO symmetry blocking. Suppressed under PCM for the same reason
+            // as the startup path above: the cavity is not symmetry-adapted.
+            if (calculator._solvation._model == HartreeFock::SolvationModel::None &&
+                calculator._molecule._point_group != "C1" &&
                 calculator._molecule._point_group != "Kh" &&
                 calculator._molecule._point_group.find("inf") == std::string::npos)
             {
