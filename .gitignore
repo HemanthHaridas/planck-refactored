@@ -95,10 +95,6 @@ build-test
 tests/avrr_x_simd_prototype.cpp
 ROHF_CASSCF_HANDOFF.md
 docs/HPC_MPI_EXECUTABLE_SCOPE.md
-docs/RI_GEOMETRY_CACHE_SCOPE.md
-docs/RI_MP2_GRADIENT_SCOPE.md
-docs/RI_RG1A_SCOPE.md
-docs/RI_RG1B_SCOPE.md
 build-mpi
-docs/RI_RG2_SCOPE.md
 
+docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md
