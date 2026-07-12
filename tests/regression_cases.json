@@ -1040,6 +1040,24 @@
       ]
     },
     {
+      "id": "water_rhf_mpi_smoke",
+      "input": "tests/inputs/regression/hf/water_rhf_energy_engine_compare.hfinp",
+      "executable": "tests/mpi_smoke_compare.py",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0
+    },
+    {
+      "id": "water_dft_mpi_smoke",
+      "input": "tests/inputs/regression/dft/water_dft_hse06_energy.hfinp",
+      "executable": "tests/mpi_smoke_compare.py",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0
+    },
+    {
       "id": "h2_rmp2_gradient_smoke",
       "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
       "tags": [
