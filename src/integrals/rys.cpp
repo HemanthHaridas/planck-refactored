@@ -1474,6 +1474,13 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
 
     const std::size_t ngp = group_pairs.size();
 
+    // ponytail: Rys is NOT MPI-distributed — every rank builds the full tensor
+    // (correct, just replicated work) since there is no allreduce here. Only OS
+    // (the default engine) is striped, covering RHF/UHF/DFT. Distribute Rys/HGP
+    // by folding the same bra%rank stride + allreduce into the shared
+    // SpatialQuartetLayout the Open Work item already scopes, not by copying the
+    // MPI code into all three near-identical loops. Add when a run needs Rys at
+    // rank count > 1.
 #pragma omp parallel for schedule(dynamic, 8)
     for (std::size_t bra = 0; bra < ngp; ++bra)
     {

@@ -1377,6 +1377,10 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
 
     const std::size_t ngp = group_pairs.size();
 
+    // ponytail: HGP is NOT MPI-distributed — every rank builds the full tensor
+    // (correct, just replicated work); no allreduce here. Only OS (the default
+    // engine) is striped. See the matching note in rys.cpp: distribute both via
+    // the shared SpatialQuartetLayout, not by triplicating the stride+reduce.
 #pragma omp parallel for schedule(dynamic, 8)
     for (std::size_t bra = 0; bra < ngp; ++bra)
     {

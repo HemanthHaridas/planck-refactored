@@ -1,6 +1,7 @@
 #include "os.h"
 #include "base.h"
 #include "boys.h"
+#include "base/mpi_env.h"
 
 #include <algorithm>
 #include <array>
@@ -2209,9 +2210,23 @@ namespace
 
         const std::size_t ngp = group_pairs.size();
 
+        // MPI: partition the bra shell-pair triangle across ranks; OpenMP splits
+        // each rank's stripe within the node — the hybrid. A canonical quartet
+        // (i,j,k,l) is produced by exactly one bra, so each rank fills a disjoint
+        // set of tensor entries and the rest stay zero; the MPI_Allreduce(SUM)
+        // below then merges them exactly. Serial builds have rank 0 / size 1, so
+        // the stride degrades to the full loop and the reduce is a no-op —
+        // byte-identical to the pre-MPI path.
+        const int mpi_rank = HartreeFock::Mpi::rank();
+        const int mpi_size = HartreeFock::Mpi::size();
+
 #pragma omp parallel for schedule(dynamic, 8)
         for (std::size_t bra = 0; bra < ngp; ++bra)
         {
+            if (mpi_size > 1 &&
+                static_cast<int>(bra % static_cast<std::size_t>(mpi_size)) != mpi_rank)
+                continue;
+
             const OsShellGroup &gA = groups[group_pairs[bra].a];
             const OsShellGroup &gB = groups[group_pairs[bra].b];
 
@@ -2298,6 +2313,11 @@ namespace
                 }
             }
         }
+
+        // Merge the per-rank partial tensors into the full, replicated tensor on
+        // every rank. No-op when serial (size 1). Each canonical entry was
+        // written by a single rank, so a plain sum reconstructs the whole tensor.
+        HartreeFock::Mpi::allreduce_inplace(eri.data(), eri.size());
     }
 } // namespace
 
