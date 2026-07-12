@@ -3,6 +3,7 @@
 #include "os.h"        // Auto path OS branch (high-L corner).
 #include "rys_roots.h"
 #include "screening.h" // Shared HGP-based Schwarz table for the Auto path.
+#include "quartet_layout.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,10 +37,9 @@ namespace
 {
     struct RysScratch
     {
-        int ax_dim = 0, ay_dim = 0, az_dim = 0;
-        int cx_dim = 0, cy_dim = 0, cz_dim = 0;
-        std::size_t ax_stride = 0, ay_stride = 0, az_stride = 0;
-        std::size_t cx_stride = 0, cy_stride = 0, cz_stride = 0;
+        // Six-axis dims/strides/index shared with OS and HGP; Rys adds no Boys
+        // `m` axis and no HRR sub-buffers, so the layout is the whole geometry.
+        HartreeFock::Integrals::SpatialQuartetLayout layout;
         std::size_t size = 0;
         std::vector<double> buf;
         double *data = nullptr;
@@ -52,21 +52,8 @@ namespace
             int lABx, int lABy, int lABz,
             int lCDx, int lCDy, int lCDz)
         {
-            ax_dim = lABx + 1;
-            ay_dim = lABy + 1;
-            az_dim = lABz + 1;
-            cx_dim = lCDx + 1;
-            cy_dim = lCDy + 1;
-            cz_dim = lCDz + 1;
-            cz_stride = 1;
-            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
-            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
-            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
-            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
-            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
             const std::size_t needed =
-                static_cast<std::size_t>(ax_dim) * ay_dim * az_dim *
-                cx_dim * cy_dim * cz_dim;
+                layout.configure(lABx, lABy, lABz, lCDx, lCDy, lCDz);
             if (buf.size() != needed)
                 buf.resize(needed);
             size = needed;
@@ -75,12 +62,7 @@ namespace
 
         std::size_t index(int ax, int ay, int az, int cx, int cy, int cz) const noexcept
         {
-            return static_cast<std::size_t>(ax) * ax_stride +
-                   static_cast<std::size_t>(ay) * ay_stride +
-                   static_cast<std::size_t>(az) * az_stride +
-                   static_cast<std::size_t>(cx) * cx_stride +
-                   static_cast<std::size_t>(cy) * cy_stride +
-                   static_cast<std::size_t>(cz) * cz_stride;
+            return layout.spatial_index(ax, ay, az, cx, cy, cz);
         }
 
         double &at(int ax, int ay, int az, int cx, int cy, int cz) noexcept
@@ -1476,11 +1458,13 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
 
     // ponytail: Rys is NOT MPI-distributed — every rank builds the full tensor
     // (correct, just replicated work) since there is no allreduce here. Only OS
-    // (the default engine) is striped, covering RHF/UHF/DFT. Distribute Rys/HGP
-    // by folding the same bra%rank stride + allreduce into the shared
-    // SpatialQuartetLayout the Open Work item already scopes, not by copying the
-    // MPI code into all three near-identical loops. Add when a run needs Rys at
-    // rank count > 1.
+    // (the default engine) is striped, covering RHF/UHF/DFT. To distribute:
+    // apply the same `bra % nranks == rank` stride as os.cpp's
+    // build_eri_tensor_shellwise plus one Mpi::allreduce_inplace on the tensor.
+    // Deliberately not copied here yet — three near-identical copies of the
+    // stride+reduce want the shell-quartet loop itself factored first (a
+    // separate job from SpatialQuartetLayout, which shares only scratch
+    // indexing). Add when a run actually needs Rys at rank count > 1.
 #pragma omp parallel for schedule(dynamic, 8)
     for (std::size_t bra = 0; bra < ngp; ++bra)
     {

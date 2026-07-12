@@ -3,6 +3,7 @@
 #include "boys.h"
 #include "os.h"
 #include "screening.h"
+#include "quartet_layout.h"
 
 #include <algorithm>
 #include <array>
@@ -221,19 +222,9 @@ namespace
 
     struct EriScratch
     {
-        int ax_dim = 0;
-        int ay_dim = 0;
-        int az_dim = 0;
-        int cx_dim = 0;
-        int cy_dim = 0;
-        int cz_dim = 0;
+        // Six-axis dims/strides/index shared with OS and Rys (quartet_layout.h).
+        HartreeFock::Integrals::SpatialQuartetLayout layout;
         int m_dim = 0;
-        std::size_t ax_stride = 0;
-        std::size_t ay_stride = 0;
-        std::size_t az_stride = 0;
-        std::size_t cx_stride = 0;
-        std::size_t cy_stride = 0;
-        std::size_t cz_stride = 0;
         std::size_t cd_block_size = 0;
         std::size_t spatial_size = 0;
         std::vector<double> vrr;
@@ -248,24 +239,11 @@ namespace
             int lCDx, int lCDy, int lCDz,
             int mmax)
         {
-            ax_dim = lABx + 1;
-            ay_dim = lABy + 1;
-            az_dim = lABz + 1;
-            cx_dim = lCDx + 1;
-            cy_dim = lCDy + 1;
-            cz_dim = lCDz + 1;
             m_dim = mmax + 1;
-            cz_stride = 1;
-            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
-            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
-            cd_block_size = static_cast<std::size_t>(cx_dim) * cy_dim * cz_dim;
-            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
-            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
-            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
-
             spatial_size =
-                static_cast<std::size_t>(ax_dim) * ay_dim * az_dim *
-                cx_dim * cy_dim * cz_dim;
+                layout.configure(lABx, lABy, lABz, lCDx, lCDy, lCDz);
+            cd_block_size = static_cast<std::size_t>(layout.cx_dim) *
+                            layout.cy_dim * layout.cz_dim;
             const std::size_t vrr_size = spatial_size * static_cast<std::size_t>(m_dim);
             if (vrr.size() != vrr_size)
                 vrr.resize(vrr_size);
@@ -284,12 +262,7 @@ namespace
             int ax, int ay, int az,
             int cx, int cy, int cz) const
         {
-            return static_cast<std::size_t>(ax) * ax_stride +
-                   static_cast<std::size_t>(ay) * ay_stride +
-                   static_cast<std::size_t>(az) * az_stride +
-                   static_cast<std::size_t>(cx) * cx_stride +
-                   static_cast<std::size_t>(cy) * cy_stride +
-                   static_cast<std::size_t>(cz) * cz_stride;
+            return layout.spatial_index(ax, ay, az, cx, cy, cz);
         }
 
         double &v(
@@ -320,9 +293,9 @@ namespace
         double *h_block_ptr(int ax, int ay, int az)
         {
             return hrr_data +
-                   static_cast<std::size_t>(ax) * ax_stride +
-                   static_cast<std::size_t>(ay) * ay_stride +
-                   static_cast<std::size_t>(az) * az_stride;
+                   static_cast<std::size_t>(ax) * layout.ax_stride +
+                   static_cast<std::size_t>(ay) * layout.ay_stride +
+                   static_cast<std::size_t>(az) * layout.az_stride;
         }
     };
 
@@ -1016,32 +989,20 @@ namespace
     // component scratch; `src` is the shared max-AM scratch.
     // Strides of the shared max-AM (a0|c0) accumulator, kept lightweight so the
     // readout can index a snapshot vector without copying the whole EriScratch.
-    // Must match EriScratch::resize_for_quartet's stride convention exactly.
+    // Same stride convention as EriScratch — both now come from the shared
+    // SpatialQuartetLayout, so they cannot drift.
     struct MaxBoxLayout
     {
-        std::size_t ax_stride = 0, ay_stride = 0, az_stride = 0;
-        std::size_t cx_stride = 0, cy_stride = 0, cz_stride = 0;
+        HartreeFock::Integrals::SpatialQuartetLayout layout;
 
         MaxBoxLayout() = default;
         MaxBoxLayout(int lABx, int lABy, int lABz, int lCDx, int lCDy, int lCDz)
         {
-            const int ax_dim = lABx + 1, ay_dim = lABy + 1, az_dim = lABz + 1;
-            const int cx_dim = lCDx + 1, cy_dim = lCDy + 1, cz_dim = lCDz + 1;
-            cz_stride = 1;
-            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
-            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
-            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
-            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
-            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
+            layout.configure(lABx, lABy, lABz, lCDx, lCDy, lCDz);
         }
         std::size_t index(int ax, int ay, int az, int cx, int cy, int cz) const
         {
-            return static_cast<std::size_t>(ax) * ax_stride +
-                   static_cast<std::size_t>(ay) * ay_stride +
-                   static_cast<std::size_t>(az) * az_stride +
-                   static_cast<std::size_t>(cx) * cx_stride +
-                   static_cast<std::size_t>(cy) * cy_stride +
-                   static_cast<std::size_t>(cz) * cz_stride;
+            return layout.spatial_index(ax, ay, az, cx, cy, cz);
         }
     };
 
@@ -1379,8 +1340,8 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
 
     // ponytail: HGP is NOT MPI-distributed — every rank builds the full tensor
     // (correct, just replicated work); no allreduce here. Only OS (the default
-    // engine) is striped. See the matching note in rys.cpp: distribute both via
-    // the shared SpatialQuartetLayout, not by triplicating the stride+reduce.
+    // engine) is striped. Same upgrade path as the matching note in rys.cpp:
+    // `bra % nranks == rank` + one Mpi::allreduce_inplace on the tensor.
 #pragma omp parallel for schedule(dynamic, 8)
     for (std::size_t bra = 0; bra < ngp; ++bra)
     {
