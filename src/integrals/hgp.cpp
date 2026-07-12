@@ -859,6 +859,56 @@ double HartreeFock::HeadGordonPople::_contracted_eri_elem(
 // larger box only adds higher-AM cells and leaves every lower coordinate
 // bitwise-identical; this hook exposes the accumulator so the test can prove it
 // on d-shells (the (dd|dd) case that NaN'd A4-1's dense-cube HRR readout).
+// Build the whole (a0|c0) accumulator for one box ONCE and hand it back.
+//
+// `_contract_a0c0_at_native_test` below returns a single cell, but pays for a
+// full contraction (every primitive pair, whole box) to produce it. Callers that
+// want many cells of the same box — the box-invariance gates sweep every
+// coordinate in it — must not call the per-cell entry in a loop: that rebuilds
+// the box once per coordinate (a 5^6 = 15625x redundancy on a (dd|dd) quartet).
+// Build once with this, then index `out` with `spatial_index`-equivalent
+// row-major strides (cz fastest). Mirrors RysQuad::_build_sum_native_test.
+void HartreeFock::HeadGordonPople::_build_a0c0_native_test(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    int lABx, int lABy, int lABz,
+    int lCDx, int lCDy, int lCDz,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    std::vector<double> &out)
+{
+    EriScratch &scratch = g_hgp_scratch;
+
+    if (kernel == HartreeFock::ERIKernel::ShortRange)
+    {
+        // ShortRange = Coulomb - LongRange, so build both and subtract cellwise
+        // (the per-cell entry does exactly this, one coordinate at a time).
+        if (omega <= 0.0)
+        {
+            HartreeFock::Integrals::SpatialQuartetLayout probe;
+            out.assign(probe.configure(lABx, lABy, lABz, lCDx, lCDy, lCDz), 0.0);
+            return;
+        }
+        hgp_contract_a0c0(spAB, spCD, scratch,
+                          lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                          HartreeFock::ERIKernel::Coulomb, 0.0,
+                          PrimitiveWeightCenter::None);
+        out.assign(scratch.a0c0_data, scratch.a0c0_data + scratch.spatial_size);
+        hgp_contract_a0c0(spAB, spCD, scratch,
+                          lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                          HartreeFock::ERIKernel::LongRange, omega,
+                          PrimitiveWeightCenter::None);
+        for (std::size_t n = 0; n < out.size(); ++n)
+            out[n] -= scratch.a0c0_data[n];
+        return;
+    }
+
+    hgp_contract_a0c0(spAB, spCD, scratch,
+                      lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                      kernel, omega, PrimitiveWeightCenter::None);
+    out.assign(scratch.a0c0_data, scratch.a0c0_data + scratch.spatial_size);
+}
+
 double HartreeFock::HeadGordonPople::_contract_a0c0_at_native_test(
     const HartreeFock::ShellPair &spAB,
     const HartreeFock::ShellPair &spCD,

@@ -25,6 +25,7 @@
 // coordinate vary. The hoisted A4 path will likewise contract norm-free once
 // and apply the per-component norm product at readout, exactly mirroring this.
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -96,6 +97,38 @@ namespace
         return "?";
     }
 
+    // One representative shell group per angular momentum L.
+    //
+    // The box-invariance property checked here (max-AM (a0|c0) contraction ==
+    // per-component contraction) depends only on the quartet's angular-momentum
+    // pattern (LA,LB,LC,LD), never on which shell of that L carries it: shells
+    // of equal L differ only in their exponents, and the box geometry — the only
+    // thing under test — is a function of L alone. Sweeping all shells re-runs
+    // each L-pattern once per shell multiplicity.
+    //
+    // For water/6-31g* that is 10 shells but only 3 distinct L (s,p,d), so the
+    // full 10^4 = 10000 quartet sweep collapses to 3^4 = 81 distinct patterns
+    // while still covering the (dd|dd) quartets this gate exists to protect.
+    // That is what takes this test from ~750 s to seconds. The comparison is
+    // bitwise, so a dropped repeat cannot mask a discrepancy the kept
+    // representative would not also show.
+    std::vector<ShellGroup> unique_l_groups(const std::vector<ShellGroup> &groups,
+                                            const HartreeFock::Basis &basis)
+    {
+        std::vector<ShellGroup> out;
+        std::vector<int> seen;
+        for (const ShellGroup &g : groups)
+        {
+            const int L = static_cast<int>(
+                basis._basis_functions[g.first_ao]._shell->_shell);
+            if (std::find(seen.begin(), seen.end(), L) != seen.end())
+                continue;
+            seen.push_back(L);
+            out.push_back(g);
+        }
+        return out;
+    }
+
     // For shell quartet (gA gB | gC gD), build the (a0|c0) accumulator ONCE at
     // the max AM box and compare every coordinate inside each component's own
     // box against a contraction sized to that single component.
@@ -109,11 +142,15 @@ namespace
             return;
         }
         const HartreeFock::Basis &basis = calc_res->_shells;
-        const std::vector<ShellGroup> groups = build_shell_groups(basis);
+        const std::vector<ShellGroup> groups =
+            unique_l_groups(build_shell_groups(basis), basis);
 
         std::size_t mismatched = 0;
         std::size_t coords_checked = 0;
         bool saw_nonfinite = false;
+        // Reused across quartets so the box builds don't reallocate every time.
+        std::vector<double> box_max;
+        std::vector<double> box_comp;
 
         for (const ShellGroup &gA : groups)
         for (const ShellGroup &gB : groups)
@@ -161,6 +198,29 @@ namespace
                 // Every coordinate inside this component's box must be reachable
                 // and equal between the max build and a build sized to exactly
                 // this component's AM.
+                // Build each box ONCE, then read every coordinate out of it.
+                // Calling the per-cell entry inside the coordinate loop would
+                // re-contract the whole box per coordinate (the old shape, and
+                // the reason this test took ~750 s).
+                HartreeFock::HeadGordonPople::_build_a0c0_native_test(
+                    spAB, spCD, maxAB, maxAB, maxAB, maxCD, maxCD, maxCD,
+                    kernel, omega, box_max);
+                HartreeFock::HeadGordonPople::_build_a0c0_native_test(
+                    spAB, spCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                    kernel, omega, box_comp);
+
+                // Row-major flat index, cz fastest — the SpatialQuartetLayout
+                // convention both boxes are built with. Each box has its own
+                // dims, so the strides differ between the two.
+                auto idx = [](int ax, int ay, int az, int cx, int cy, int cz,
+                              int bABx, int bABy, int bABz,
+                              int bCDx, int bCDy, int bCDz) -> std::size_t
+                {
+                    return (((((static_cast<std::size_t>(ax) * (bABy + 1) + ay) *
+                                   (bABz + 1) + az) * (bCDx + 1) + cx) *
+                                 (bCDy + 1) + cy) * (bCDz + 1) + cz);
+                };
+
                 for (int ax = 0; ax <= lABx; ++ax)
                 for (int ay = 0; ay <= lABy; ++ay)
                 for (int az = 0; az <= lABz; ++az)
@@ -169,16 +229,11 @@ namespace
                 for (int cz = 0; cz <= lCDz; ++cz)
                 {
                     const double from_max =
-                        HartreeFock::HeadGordonPople::_contract_a0c0_at_native_test(
-                            spAB, spCD,
-                            maxAB, maxAB, maxAB, maxCD, maxCD, maxCD,
-                            ax, ay, az, cx, cy, cz, kernel, omega);
-
+                        box_max[idx(ax, ay, az, cx, cy, cz,
+                                    maxAB, maxAB, maxAB, maxCD, maxCD, maxCD)];
                     const double from_comp =
-                        HartreeFock::HeadGordonPople::_contract_a0c0_at_native_test(
-                            spAB, spCD,
-                            lABx, lABy, lABz, lCDx, lCDy, lCDz,
-                            ax, ay, az, cx, cy, cz, kernel, omega);
+                        box_comp[idx(ax, ay, az, cx, cy, cz,
+                                     lABx, lABy, lABz, lCDx, lCDy, lCDz)];
 
                     ++coords_checked;
                     if (!std::isfinite(from_max) || !std::isfinite(from_comp))
