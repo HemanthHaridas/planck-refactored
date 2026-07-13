@@ -34,6 +34,7 @@
 // two-phase builder when symmetry ops are active.
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <vector>
 
@@ -135,6 +136,34 @@ namespace HartreeFock::Integrals
 
         const std::size_t ngp = group_pairs.size();
 
+        // Shell-pair Schwarz bound: Qmax[p] = max over the components (ca,cb) of
+        // shell-pair p of Q(i,j). Since every component quartet of the block
+        // (A B | C D) obeys Q(i,j)*Q(k,l) <= Qmax[bra] * Qmax[ket], a block whose
+        // product is already below tol_eri has EVERY component screened, so the
+        // whole block can be skipped before entering the component loops.
+        //
+        // This is exact, not an approximation — it is the same Schwarz test,
+        // hoisted. It matters now in a way it did not before: the two-phase
+        // builder had to walk the components anyway to fill the tensor, but with
+        // nothing to fill, a screened block costs literally nothing. Skipping at
+        // the block level avoids up to 6^4 = 1296 component iterations (d shells)
+        // and, more importantly, the ShellPair construction inside them.
+        std::vector<double> qmax(ngp, 0.0);
+        for (std::size_t p = 0; p < ngp; ++p)
+        {
+            const FusedShellGroup &ga = groups[group_pairs[p].a];
+            const FusedShellGroup &gb = groups[group_pairs[p].b];
+            double m = 0.0;
+            for (std::size_t ca = 0; ca < ga.n_components; ++ca)
+                for (std::size_t cb = 0; cb < gb.n_components; ++cb)
+                {
+                    const std::size_t i = ao_views[ga.first_ao + ca]->_index;
+                    const std::size_t j = ao_views[gb.first_ao + cb]->_index;
+                    m = std::max(m, Q(i, j));
+                }
+            qmax[p] = m;
+        }
+
 #ifdef USE_OPENMP
         const int n_threads = omp_get_max_threads();
 #else
@@ -175,6 +204,12 @@ namespace HartreeFock::Integrals
 
             for (std::size_t ket = 0; ket < ngp; ++ket)
             {
+                // Block-level Schwarz: every component of this block is below
+                // tolerance, so skip all of them without touching the component
+                // loops or building a single ShellPair. Exact — same bound.
+                if (qmax[bra] * qmax[ket] < tol_eri)
+                    continue;
+
                 const FusedShellGroup &gC = groups[group_pairs[ket].a];
                 const FusedShellGroup &gD = groups[group_pairs[ket].b];
 
