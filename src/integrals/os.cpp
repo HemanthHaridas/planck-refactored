@@ -2022,11 +2022,6 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock_direct(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    // Integral symmetry is not supported by the fused path — delegate.
-    if (use_symmetry_ops(sym_ops))
-        return _compute_2e_fock(shell_pairs, density, nbasis, kernel, omega,
-                                tol_eri, sym_ops);
-
     const std::size_t nb = nbasis;
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
 
@@ -2044,7 +2039,8 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock_direct(
         {
             return _contracted_eri(spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
                                    lCx, lCy, lCz, lDx, lDy, lDz, k, w);
-        });
+        },
+        sym_ops);
     return G;
 }
 
@@ -2059,10 +2055,6 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    if (use_symmetry_ops(sym_ops))
-        return _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega,
-                                    tol_eri, sym_ops);
-
     const std::size_t nb = nbasis;
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
 
@@ -2083,7 +2075,8 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(
         {
             return _contracted_eri(spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
                                    lCx, lCy, lCz, lDx, lDy, lDz, k, w);
-        });
+        },
+        sym_ops);
     return {Ga, Gb};
 }
 

@@ -513,6 +513,84 @@ void check_all_engines(const std::string &basis_name)
                  RysQuad::_compute_2e_fock_uhf_auto_direct(sp, Pa, Pb, nb, K, W, T, nullptr).first);
 }
 
+// ── Integral symmetry (sym_ops): the fused path handles it natively ─────────
+//
+// Under sym_ops the scatter is a NESTED orbit — the symmetry orbit of the
+// quartet, and then the 8-fold permutational orbit of each of its elements. The
+// fused builders used to bail out to the two-phase builder here; they now handle
+// it directly, which is only correct because the two dedups compose (see the
+// argument in src/integrals/quartet_orbit.h).
+//
+// This is the gate for that claim: with a real symmetry-op set, every engine's
+// fused builder must still reproduce its own two-phase builder. Without this,
+// the sym_ops path would be entirely untested — every other check in this file
+// passes sym_ops = nullptr.
+void check_symmetry_ops(const std::string &basis_name)
+{
+    HartreeFock::Calculator calc = make_water(basis_name);
+    if (!g_ok)
+        return;
+
+    const std::vector<HartreeFock::ShellPair> sp = build_shellpairs(calc._shells);
+    const std::size_t nb = calc._shells._basis_functions.size();
+
+    // Water in the yz plane has a C2v-like AO sign structure. Rather than derive
+    // the real point group here (that is symmetry.cpp's job and is separately
+    // tested), synthesize op sets that exercise the orbit machinery: identity,
+    // a pure sign flip, and a sign flip on a different AO. These drive the same
+    // build_quartet_orbit code paths — dedup, forced_zero, and the representative
+    // filter — that a real point group does.
+    std::vector<HartreeFock::SignedAOSymOp> ops;
+
+    HartreeFock::SignedAOSymOp identity;
+    identity.ao_map.resize(nb);
+    identity.ao_sign.assign(nb, 1);
+    for (std::size_t a = 0; a < nb; ++a)
+        identity.ao_map[a] = static_cast<int>(a);
+    ops.push_back(identity);
+
+    HartreeFock::SignedAOSymOp flip = identity;
+    flip.ao_sign[nb / 3] = -1; // one AO changes phase
+    ops.push_back(flip);
+
+    std::mt19937 rng(23);
+    const Eigen::MatrixXd P = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pa = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pb = random_symmetric_density(nb, rng);
+
+    const auto K = HartreeFock::ERIKernel::Coulomb;
+    constexpr double W = 0.0;
+    constexpr double T = 1e-10;
+
+    using namespace HartreeFock;
+
+    check_engine("OS   RHF sym", basis_name,
+                 ObaraSaika::_compute_2e_fock(sp, P, nb, K, W, T, &ops),
+                 ObaraSaika::_compute_2e_fock_direct(sp, P, nb, K, W, T, &ops));
+    check_engine("HGP  RHF sym", basis_name,
+                 HeadGordonPople::_compute_2e_fock(sp, P, nb, K, W, T, &ops),
+                 HeadGordonPople::_compute_2e_fock_direct(sp, P, nb, K, W, T, &ops));
+    check_engine("Rys  RHF sym", basis_name,
+                 RysQuad::_compute_2e_fock(sp, P, nb, K, W, T, &ops),
+                 RysQuad::_compute_2e_fock_direct(sp, P, nb, K, W, T, &ops));
+    check_engine("Auto RHF sym", basis_name,
+                 RysQuad::_compute_2e_fock_auto(sp, P, nb, K, W, T, &ops),
+                 RysQuad::_compute_2e_fock_auto_direct(sp, P, nb, K, W, T, &ops));
+
+    check_engine("OS   UHF sym", basis_name,
+                 ObaraSaika::_compute_2e_fock_uhf(sp, Pa, Pb, nb, K, W, T, &ops).first,
+                 ObaraSaika::_compute_2e_fock_uhf_direct(sp, Pa, Pb, nb, K, W, T, &ops).first);
+    check_engine("HGP  UHF sym", basis_name,
+                 HeadGordonPople::_compute_2e_fock_uhf(sp, Pa, Pb, nb, K, W, T, &ops).first,
+                 HeadGordonPople::_compute_2e_fock_uhf_direct(sp, Pa, Pb, nb, K, W, T, &ops).first);
+    check_engine("Rys  UHF sym", basis_name,
+                 RysQuad::_compute_2e_fock_uhf(sp, Pa, Pb, nb, K, W, T, &ops).first,
+                 RysQuad::_compute_2e_fock_uhf_direct(sp, Pa, Pb, nb, K, W, T, &ops).first);
+    check_engine("Auto UHF sym", basis_name,
+                 RysQuad::_compute_2e_fock_uhf_auto(sp, Pa, Pb, nb, K, W, T, &ops).first,
+                 RysQuad::_compute_2e_fock_uhf_auto_direct(sp, Pa, Pb, nb, K, W, T, &ops).first);
+}
+
 int main()
 {
     check_random_tensors();
@@ -521,6 +599,8 @@ int main()
     check_fixed_thread_determinism("6-31g*");
     check_all_engines("sto-3g");
     check_all_engines("6-31g*");
+    check_symmetry_ops("sto-3g");
+    check_symmetry_ops("6-31g*");
 
     if (!g_ok)
     {

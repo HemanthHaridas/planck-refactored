@@ -28,10 +28,11 @@
 //     or schedule(dynamic), makes the result drift with thread count (measured);
 //     see the note in the loop and src/dft/ks_matrix.cpp.
 //
-// Integral symmetry (sym_ops) is NOT handled here: that path replicates a
-// symmetry orbit on top of the permutational orbit, and deduplicating across
-// both needs its own correctness argument. Callers must delegate to the
-// two-phase builder when symmetry ops are active.
+// Integral symmetry (sym_ops) IS handled: the ERI is computed once at each
+// symmetry-orbit representative and replicated across the orbit with the
+// accumulated AO sign, exactly as the tensor build's scatter does. The two
+// dedups compose without double-counting — see the dedup argument in
+// quartet_orbit.h. Passing sym_ops = nullptr (the default) disables it.
 #pragma once
 
 #include <algorithm>
@@ -43,6 +44,7 @@
 #include "base/mpi_env.h"
 #include "base/types.h"
 #include "fock_accumulate.h"
+#include "quartet_orbit.h"
 
 #ifdef USE_OPENMP
 #include <omp.h>
@@ -117,8 +119,10 @@ namespace HartreeFock::Integrals
         Eigen::MatrixXd &G,
         Eigen::MatrixXd &Ga,
         Eigen::MatrixXd &Gb,
-        EriElem &&eri_elem)
+        EriElem &&eri_elem,
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
     {
+        const bool use_sym = (sym_ops != nullptr) && !sym_ops->empty();
         std::vector<const HartreeFock::ContractedView *> ao_views;
         const std::vector<FusedShellGroup> groups =
             fused_shell_groups(shell_pairs, nb, ao_views);
@@ -275,6 +279,30 @@ namespace HartreeFock::Integrals
                                 if (Q(i, j) * Q(k, l) < tol_eri)
                                     continue;
 
+                                // Integral symmetry: compute the ERI only at the
+                                // orbit representative, then replicate it (with
+                                // the accumulated AO sign) across the orbit —
+                                // exactly what the tensor build's scatter does.
+                                //
+                                // The two dedups compose without double-counting:
+                                // build_quartet_orbit returns DISTINCT canonical
+                                // quartets, and fock_accumulate_* dedups the
+                                // 8-fold permutational orbit of each. See the
+                                // dedup argument in quartet_orbit.h.
+                                std::vector<QuartetOrbitElem> orbit;
+                                if (use_sym)
+                                {
+                                    auto [orb, forced_zero] =
+                                        build_quartet_orbit(i, j, k, l, *sym_ops);
+                                    if (forced_zero)
+                                        continue; // symmetry-forbidden: vanishes
+                                    orbit = std::move(orb);
+                                    // Only the representative computes the value.
+                                    if (orbit.front().i != i || orbit.front().j != j ||
+                                        orbit.front().k != k || orbit.front().l != l)
+                                        continue;
+                                }
+
                                 const HartreeFock::ShellPair spCD(cvC, cvD);
                                 const double val = eri_elem(
                                     spAB, spCD,
@@ -282,13 +310,29 @@ namespace HartreeFock::Integrals
                                     lCx, lCy, lCz, lDx, lDy, lDz,
                                     kernel, omega);
 
-                                if (need_uhf)
-                                    fock_accumulate_uhf(G_local, Gb_local,
-                                                        *dens.Pt, *dens.Pa, *dens.Pb,
-                                                        i, j, k, l, val);
-                                else
-                                    fock_accumulate_rhf(G_local, *dens.P,
-                                                        i, j, k, l, val);
+                                if (!use_sym)
+                                {
+                                    if (need_uhf)
+                                        fock_accumulate_uhf(G_local, Gb_local,
+                                                            *dens.Pt, *dens.Pa, *dens.Pb,
+                                                            i, j, k, l, val);
+                                    else
+                                        fock_accumulate_rhf(G_local, *dens.P,
+                                                            i, j, k, l, val);
+                                    continue;
+                                }
+
+                                for (const auto &e : orbit)
+                                {
+                                    const double sv = static_cast<double>(e.sign) * val;
+                                    if (need_uhf)
+                                        fock_accumulate_uhf(G_local, Gb_local,
+                                                            *dens.Pt, *dens.Pa, *dens.Pb,
+                                                            e.i, e.j, e.k, e.l, sv);
+                                    else
+                                        fock_accumulate_rhf(G_local, *dens.P,
+                                                            e.i, e.j, e.k, e.l, sv);
+                                }
                             }
                         }
                     }

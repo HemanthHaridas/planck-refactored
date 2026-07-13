@@ -115,10 +115,10 @@ namespace HartreeFock
         // bitwise: the fused orbit accumulates in a different order than the nb^4
         // sweep. Gated by planck-fock-accumulate and planck-fused-fock.
         //
-        // sym_ops (integral symmetry) is not supported by the fused path and is
-        // delegated to the two-phase builder — that path replicates a symmetry
-        // orbit on top of the permutational orbit, which needs its own
-        // dedup correctness argument.
+        // Integral symmetry (sym_ops) is handled natively: the ERI is computed
+        // once per symmetry-orbit representative and replicated across the orbit
+        // with the accumulated AO sign. See the dedup argument in
+        // src/integrals/quartet_orbit.h.
         Eigen::MatrixXd _compute_2e_fock_direct(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const Eigen::MatrixXd &density,

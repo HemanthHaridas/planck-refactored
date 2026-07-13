@@ -114,7 +114,8 @@ namespace HartreeFock
         // quartet is contracted straight into G via the shared fused loop
         // (fused_fock.h); the nb^4 tensor is never allocated. The *_auto_direct
         // pair uses the same angular-momentum dispatch as the Auto tensor path.
-        // sym_ops delegates back to two-phase. Gated by planck-fock-accumulate.
+        // Integral symmetry (sym_ops) is handled natively — see quartet_orbit.h.
+        // Gated by planck-fock-accumulate.
         Eigen::MatrixXd _compute_2e_fock_direct(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const Eigen::MatrixXd &density,

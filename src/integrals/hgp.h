@@ -105,8 +105,9 @@ namespace HartreeFock
         // ── Memory-direct Fock builders ─────────────────────────────────────
         // Same result as the two-phase builders above, but each canonical
         // quartet is contracted straight into G via the shared fused loop
-        // (fused_fock.h); the nb^4 tensor is never allocated. sym_ops delegates
-        // back to the two-phase path. Gated by planck-fock-accumulate.
+        // (fused_fock.h); the nb^4 tensor is never allocated. Integral symmetry
+        // (sym_ops) is handled natively — see quartet_orbit.h. Gated by
+        // planck-fock-accumulate.
         Eigen::MatrixXd _compute_2e_fock_direct(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const Eigen::MatrixXd &density,

@@ -1604,10 +1604,6 @@ Eigen::MatrixXd HartreeFock::HeadGordonPople::_compute_2e_fock_direct(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    if (sym_ops != nullptr && !sym_ops->empty())
-        return _compute_2e_fock(shell_pairs, density, nbasis, kernel, omega,
-                                tol_eri, sym_ops);
-
     const std::size_t nb = nbasis;
     const Eigen::MatrixXd Q = hgp_schwarz_matrix(shell_pairs, nb, sym_ops);
 
@@ -1617,7 +1613,8 @@ Eigen::MatrixXd HartreeFock::HeadGordonPople::_compute_2e_fock_direct(
 
     HartreeFock::Integrals::fused_fock_build(
         shell_pairs, nb, Q, kernel, omega, tol_eri,
-        /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, hgp_eri_elem);
+        /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, hgp_eri_elem,
+        sym_ops);
     return G;
 }
 
@@ -1632,10 +1629,6 @@ HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_direct(
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    if (sym_ops != nullptr && !sym_ops->empty())
-        return _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega,
-                                    tol_eri, sym_ops);
-
     const std::size_t nb = nbasis;
     const Eigen::MatrixXd Q = hgp_schwarz_matrix(shell_pairs, nb, sym_ops);
 
@@ -1648,7 +1641,8 @@ HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_direct(
 
     HartreeFock::Integrals::fused_fock_build(
         shell_pairs, nb, Q, kernel, omega, tol_eri,
-        /*spin_resolved=*/true, dens, G_unused, Ga, Gb, hgp_eri_elem);
+        /*spin_resolved=*/true, dens, G_unused, Ga, Gb, hgp_eri_elem,
+        sym_ops);
     return {Ga, Gb};
 }
 

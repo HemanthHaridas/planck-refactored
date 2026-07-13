@@ -1813,7 +1813,7 @@ namespace
         dens.P = &density;
         HartreeFock::Integrals::fused_fock_build(
             shell_pairs, nb, Q, kernel, omega, tol_eri,
-            /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, elem);
+            /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, elem, sym_ops);
         return G;
     }
 
@@ -1833,7 +1833,7 @@ namespace
         dens.Pb = &Pb;
         HartreeFock::Integrals::fused_fock_build(
             shell_pairs, nb, Q, kernel, omega, tol_eri,
-            /*spin_resolved=*/true, dens, G_unused, Ga, Gb, elem);
+            /*spin_resolved=*/true, dens, G_unused, Ga, Gb, elem, sym_ops);
         return {Ga, Gb};
     }
 }
@@ -1844,8 +1844,6 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_direct(
     const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    if (sym_ops != nullptr && !sym_ops->empty())
-        return _compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, rys_eri_elem);
 }
 
@@ -1856,8 +1854,6 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_direct(
     const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    if (sym_ops != nullptr && !sym_ops->empty())
-        return _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, rys_eri_elem);
 }
 
@@ -1867,8 +1863,6 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto_direct(
     const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    if (sym_ops != nullptr && !sym_ops->empty())
-        return _compute_2e_fock_auto(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem);
 }
 
@@ -1879,8 +1873,6 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(
     const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
-    if (sym_ops != nullptr && !sym_ops->empty())
-        return _compute_2e_fock_uhf_auto(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem);
 }
 
