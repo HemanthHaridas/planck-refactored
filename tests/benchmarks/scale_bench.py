@@ -28,33 +28,37 @@ It answers exactly four questions, and each maps to an open scoping decision:
       Decides: the size of the scale-proving regression fixture to commit.
 
 Every measurement is per-rank where that matters. `ru_maxrss` on the mpirun
-child measures the whole process tree, which would hide the very thing Q2 is
-asking about, so ranks self-report RSS from /proc/self/status (Linux; the
-cluster). On macOS that path is absent and per-rank RSS is reported as None --
-the dev box can check correctness, not the memory claim.
+child measures the whole process TREE, which would hide the very thing Q2 asks
+(what does ONE rank hold?), so each rank self-reports its own high-water mark by
+running under `time` -- GNU `time -v` on Linux, BSD `time -l` on macOS. Both are
+supported, so Q2 is answerable on the dev box, not only on a cluster.
 
 RESULTS ARE WRITTEN AS JSON (--out). Bring that file back and the remaining
 work scopes itself off it.
 
-Usage on a cluster (typical):
+See tests/benchmarks/CLUSTER_RUNBOOK.md for the full cluster procedure and what
+to report. The short version:
 
     # correctness first -- cheap, catches a broken build before you burn an
     # allocation. Asserts every rank count gives the SAME energy.
     tests/benchmarks/scale_bench.py --verify-only --build-dir build
 
-    # the real run
-    tests/benchmarks/scale_bench.py \
-        --build-dir build \
-        --sizes 4,8,16,24,32 \
-        --ranks 1,2,4,8,16 \
-        --basis 6-31g \
-        --methods hf,dft \
-        --out scale.json
+    # the scaling sweep (Q1/Q3/Q4)
+    tests/benchmarks/scale_bench.py --build-dir build \
+        --sizes 8,12,16,24,32 --ranks 1,2,4,8,16,32 \
+        --basis 6-31g --methods hf,dft --threads 1 --out scale.json
+
+    # the memory question (Q2) on its own -- 1 rank, max_cycles=1
+    tests/benchmarks/scale_bench.py --memory-only --basis 6-31g --out memory.json
 
 Needs: `build/hartree-fock`, `build/planck-dft`, and for the MPI arm
-`build/planck-mpi` (cmake -DBUILD_MPI=ON) plus `mpirun`. Arms whose binary is
-missing are SKIPPED, not failed, so a serial-only box still produces the Q2/Q3
-memory and diagonalization curves.
+`build/planck-mpi` (cmake -DBUILD_MPI=ON) plus a launcher. Arms whose binary is
+missing are SKIPPED, not failed, so a serial-only box still produces the Q2
+memory curve.
+
+Launcher: `mpirun -n k` by default. Override with $MPIRUN (e.g. "srun") and
+$MPIRUN_EXTRA (e.g. "--oversubscribe", which is OPEN MPI ONLY -- Intel MPI /
+MPICH / srun reject it and every rank dies, so it is not passed by default).
 """
 
 from __future__ import annotations
@@ -277,6 +281,12 @@ def run_serial(exe: Path, atoms, basis, engine, method, threads, max_cycles=100)
     return r
 
 
+def have_launcher() -> bool:
+    """Is an MPI launcher available? Honours $MPIRUN (e.g. "srun") -- hardcoding
+    `which("mpirun")` would skip the whole MPI arm on an srun-only cluster."""
+    return shutil.which(os.environ.get("MPIRUN", "mpirun").split()[0]) is not None
+
+
 def run_mpi(exe: Path, atoms, basis, engine, method, ranks, threads, max_cycles=100):
     """mpirun -n <ranks> planck-mpi, with each rank self-reporting peak RSS."""
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
@@ -286,15 +296,15 @@ def run_mpi(exe: Path, atoms, basis, engine, method, ranks, threads, max_cycles=
         probe = Path(td) / "probe.sh"
         probe.write_text(rank_rss_probe())
         probe.chmod(0o755)
-        cmd = [
-            "mpirun",
-            "-n",
-            str(ranks),
-            "--oversubscribe",  # let rank count exceed cores on a dev box
-            str(probe),
-            str(exe),
-            str(inp),
-        ]
+        # --oversubscribe is OPEN MPI ONLY. Intel MPI / MPICH / srun reject it
+        # as an unknown option and every rank dies -- which on a cluster is the
+        # first thing that would break. It only exists so a dev box can request
+        # more ranks than it has cores, so make it opt-in via $MPIRUN_EXTRA and
+        # let the launcher itself be overridden ($MPIRUN, e.g. "srun").
+        launcher = os.environ.get("MPIRUN", "mpirun").split()
+        extra = os.environ.get("MPIRUN_EXTRA", "").split()
+        cmd = [*launcher, "-n", str(ranks), *extra,
+               str(probe), str(exe), str(inp)]
         t0 = time.perf_counter()
         p = subprocess.run(cmd, capture_output=True, text=True, env=env)
         wall = time.perf_counter() - t0
@@ -328,7 +338,7 @@ def verify_rank_invariance(build: Path, atoms, basis, engine, methods, ranks, th
             ok = False
             continue
         print(f"  {method:3s} serial          E = {ref['energy']:.10f}  (nb={ref['nbasis']})")
-        if not mpi_exe.exists() or not shutil.which("mpirun"):
+        if not mpi_exe.exists() or not have_launcher():
             print(f"  SKIP {method}: planck-mpi or mpirun absent (serial arms still run)")
             continue
         for n in ranks:
@@ -550,7 +560,7 @@ def main() -> int:
     for method in methods:
         serial_exe = build / ("planck-dft" if method == "dft" else "hartree-fock")
         mpi_exe = build / "planck-mpi"
-        have_mpi = mpi_exe.exists() and shutil.which("mpirun") is not None
+        have_mpi = mpi_exe.exists() and have_launcher()
         if not serial_exe.exists():
             print(f"SKIP {method}: {serial_exe.name} not built\n")
             continue
