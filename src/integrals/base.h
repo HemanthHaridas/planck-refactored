@@ -80,13 +80,22 @@ inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
-        return HartreeFock::RysQuad::_compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::HeadGordonPople:
-        return HartreeFock::HeadGordonPople::_compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::HeadGordonPople::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::Auto:
-        return HartreeFock::RysQuad::_compute_2e_fock_auto(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_auto_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     default:
-        return HartreeFock::ObaraSaika::_compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+        // OS (the default engine) uses the MEMORY-DIRECT builder: it contracts
+        // each quartet straight into G and never allocates the nb^4 tensor. The
+        // two-phase ObaraSaika::_compute_2e_fock allocated the full tensor on
+        // every SCF iteration (0.8 GB at nb=100, 500 GB at nb=500), so "direct"
+        // mode cost more memory than conventional, not less.
+        //
+        // Rys / HGP / Auto keep the two-phase path — they have no fused builder
+        // yet. The fused entry itself delegates back to two-phase when integral
+        // symmetry (sym_ops) is active, so that path is unchanged too.
+        return HartreeFock::ObaraSaika::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     }
 }
 
@@ -106,13 +115,14 @@ _compute_2e_fock_uhf(const std::vector<HartreeFock::ShellPair> &shell_pairs,
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
-        return HartreeFock::RysQuad::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::HeadGordonPople:
-        return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::Auto:
-        return HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     default:
-        return HartreeFock::ObaraSaika::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+        // Memory-direct: see the RHF dispatcher above.
+        return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     }
 }
 

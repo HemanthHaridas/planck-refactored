@@ -54,6 +54,40 @@ namespace
         g_ok = false;
     }
 
+    // One representative shell group per angular momentum L.
+    //
+    // The box-invariance identity being checked (max-AM box == per-component
+    // box, by Gauss over-integration) depends only on the quartet's angular
+    // momentum pattern (LA,LB,LC,LD) — never on which particular shell of that
+    // L carries it, since shells of equal L differ only in exponents and the
+    // identity is exponent-independent. Sweeping all shells therefore re-tests
+    // each L-pattern once per (5s x 4p x 3d x 2f x 1g)-style multiplicity.
+    //
+    // For Ne/cc-pVQZ that redundancy is the entire cost: the full sweep is
+    // 15^4 = 15730 quartets above the L>=7 cut, of which only 435 are distinct
+    // L-patterns — a 6.2x saving, and 86% of the work sits in the g-containing
+    // quartets whose boxes are 9^6 cells. Deduping keeps every distinct pattern
+    // (including all g ones) and drops only exact repeats.
+    //
+    // Water/6-31g* is left undeduped: it already runs in ~16 s and its shell
+    // multiplicities are what make it a good structural sweep.
+    std::vector<ShellGroup> unique_l_groups(const std::vector<ShellGroup> &groups,
+                                            const HartreeFock::Basis &basis)
+    {
+        std::vector<ShellGroup> out;
+        std::vector<int> seen;
+        for (const ShellGroup &g : groups)
+        {
+            const int L = static_cast<int>(
+                basis._basis_functions[g.first_ao]._shell->_shell);
+            if (std::find(seen.begin(), seen.end(), L) != seen.end())
+                continue;
+            seen.push_back(L);
+            out.push_back(g);
+        }
+        return out;
+    }
+
     std::expected<HartreeFock::Calculator, std::string> make_calculator(
         const std::string &basis_name,
         const std::vector<int> &Z,
@@ -134,10 +168,13 @@ namespace
     void check(const std::string &label,
                const HartreeFock::Calculator &calc,
                HartreeFock::ERIKernel kernel, double omega,
-               int min_quartet_L = 0)
+               int min_quartet_L = 0,
+               bool dedup_l = false)
     {
         const HartreeFock::Basis &basis = calc._shells;
-        const std::vector<ShellGroup> groups = build_shell_groups(basis);
+        const std::vector<ShellGroup> all_groups = build_shell_groups(basis);
+        const std::vector<ShellGroup> groups =
+            dedup_l ? unique_l_groups(all_groups, basis) : all_groups;
 
         std::size_t over_tol = 0;
         std::size_t coords_checked = 0;
@@ -293,10 +330,13 @@ namespace
     void check_contract(const std::string &label,
                         const HartreeFock::Calculator &calc,
                         HartreeFock::ERIKernel kernel, double omega,
-                        int min_quartet_L = 0)
+                        int min_quartet_L = 0,
+               bool dedup_l = false)
     {
         const HartreeFock::Basis &basis = calc._shells;
-        const std::vector<ShellGroup> groups = build_shell_groups(basis);
+        const std::vector<ShellGroup> all_groups = build_shell_groups(basis);
+        const std::vector<ShellGroup> groups =
+            dedup_l ? unique_l_groups(all_groups, basis) : all_groups;
 
         // Same 1e-13 ERI bar as the box-invariance check above; the hoisted
         // contract-then-HRR order rounds at the last bit (coeff placement +
@@ -413,10 +453,13 @@ namespace
     void check_maxbox_readout(const std::string &label,
                               const HartreeFock::Calculator &calc,
                               HartreeFock::ERIKernel kernel, double omega,
-                              int min_quartet_L = 0)
+                              int min_quartet_L = 0,
+               bool dedup_l = false)
     {
         const HartreeFock::Basis &basis = calc._shells;
-        const std::vector<ShellGroup> groups = build_shell_groups(basis);
+        const std::vector<ShellGroup> all_groups = build_shell_groups(basis);
+        const std::vector<ShellGroup> groups =
+            dedup_l ? unique_l_groups(all_groups, basis) : all_groups;
 
         constexpr double REL_TOL = 1e-13;
         std::size_t over_tol = 0;
@@ -519,10 +562,13 @@ namespace
     void check_block(const std::string &label,
                      const HartreeFock::Calculator &calc,
                      HartreeFock::ERIKernel kernel, double omega,
-                     int min_quartet_L = 0)
+                     int min_quartet_L = 0,
+               bool dedup_l = false)
     {
         const HartreeFock::Basis &basis = calc._shells;
-        const std::vector<ShellGroup> groups = build_shell_groups(basis);
+        const std::vector<ShellGroup> all_groups = build_shell_groups(basis);
+        const std::vector<ShellGroup> groups =
+            dedup_l ? unique_l_groups(all_groups, basis) : all_groups;
 
         constexpr double REL_TOL = 1e-13;
         std::size_t over_tol = 0;
@@ -646,17 +692,17 @@ int main()
         std::cerr << ne.error() << '\n';
         return 1;
     }
-    check("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7);
-    check("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7);
+    check("Ne/cc-pVQZ (Lq>=7, L-dedup)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7, /*dedup_l=*/true);
+    check("Ne/cc-pVQZ (Lq>=7, L-dedup)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7, /*dedup_l=*/true);
 
-    check_contract("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7);
-    check_contract("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7);
+    check_contract("Ne/cc-pVQZ (Lq>=7, L-dedup)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7, /*dedup_l=*/true);
+    check_contract("Ne/cc-pVQZ (Lq>=7, L-dedup)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7, /*dedup_l=*/true);
 
-    check_maxbox_readout("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7);
-    check_maxbox_readout("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7);
+    check_maxbox_readout("Ne/cc-pVQZ (Lq>=7, L-dedup)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7, /*dedup_l=*/true);
+    check_maxbox_readout("Ne/cc-pVQZ (Lq>=7, L-dedup)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7, /*dedup_l=*/true);
 
-    check_block("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7);
-    check_block("Ne/cc-pVQZ (Lq>=7)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7);
+    check_block("Ne/cc-pVQZ (Lq>=7, L-dedup)", *ne, HartreeFock::ERIKernel::Coulomb, 0.0, 7, /*dedup_l=*/true);
+    check_block("Ne/cc-pVQZ (Lq>=7, L-dedup)", *ne, HartreeFock::ERIKernel::ShortRange, 0.3, 7, /*dedup_l=*/true);
 
     if (!g_ok)
     {

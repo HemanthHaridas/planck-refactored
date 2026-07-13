@@ -102,6 +102,31 @@ namespace HartreeFock
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
+        // ── Memory-direct Fock builders ─────────────────────────────────────
+        // Same result as the two-phase builders above, but each canonical
+        // quartet is contracted straight into G via the shared fused loop
+        // (fused_fock.h); the nb^4 tensor is never allocated. Integral symmetry
+        // (sym_ops) is handled natively — see quartet_orbit.h. Gated by
+        // planck-fock-accumulate.
+        Eigen::MatrixXd _compute_2e_fock_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &density,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_2e_fock_uhf_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &Pa,
+            const Eigen::MatrixXd &Pb,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
         // Returns flat array of ERI derivatives for one (mu nu | lambda sigma)
         // contracted quartet.
         // Layout: [cen*3 + dir], cen in {0=A,1=B,2=C,3=D}, dir in {0=x,1=y,2=z}
@@ -141,6 +166,21 @@ namespace HartreeFock
             int cx, int cy, int cz,
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0);
+
+        // Test hook: build the WHOLE (a0|c0) box once into `out` (row-major,
+        // cz fastest — the SpatialQuartetLayout convention). Use this instead of
+        // calling _contract_a0c0_at_native_test per coordinate: that entry pays
+        // for a full contraction to return one cell, so sweeping a box with it
+        // rebuilds the box once per coordinate (15625x on a (dd|dd) quartet).
+        // Mirrors RysQuad::_build_sum_native_test.
+        void _build_a0c0_native_test(
+            const HartreeFock::ShellPair &spAB,
+            const HartreeFock::ShellPair &spCD,
+            int lABx, int lABy, int lABz,
+            int lCDx, int lCDy, int lCDz,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            std::vector<double> &out);
 
         // Test hook: return the weighted AM-raising term used by the HGP ERI
         // derivative assembly for one specified centre (0=A, 1=B, 2=C, 3=D).

@@ -16,22 +16,37 @@ self-consistent field theory. It implements:
 - Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF
 - Point-group detection, symmetry-adapted orbitals, and MO irrep labeling
 - RMP2 and UMP2 correlation energies with RMP2 natural orbital analysis
+- Density-fitted (RI) integrals: RI-MP2 energies and gradients, an RI-JK Fock builder, and RI-routed CASSCF/FCI
 - RCCSD for canonical closed-shell RHF references
 - Small-system determinant-space teaching prototypes for RCCSDT, UCCSD, and UCCSDT
 - Generated arbitrary-order restricted tensor kernels, including RCCSDTQ when built
-- Analytic RHF, UHF, RKS, UKS, RMP2, and UMP2 nuclear gradients
+- Analytic RHF, UHF, ROHF, RKS, UKS, RMP2, and UMP2 nuclear gradients
 - Analytic RMP2 nuclear gradients include Z-vector / CPHF relaxation
 - Geometry optimization in Cartesian and internal coordinates
 - Semi-numerical Hessians and harmonic vibrational analysis
-- CASSCF and RASSCF active-space multiconfigurational SCF
+- CASSCF and RASSCF active-space multiconfigurational SCF, and full CI
 - Binary checkpoint save/restart with cross-basis Löwdin projection
+- A memory-direct Fock build that never allocates the \(n_b^4\) ERI tensor, shared by all four integral engines
+- Optional MPI distribution of the direct-SCF Fock build
 
-The HF/post-HF calculation is coordinated by `src/driver.cpp`. The Kohn-Sham
-DFT calculation uses the separate entry point `src/dft/main.cpp` and the
-`DFT::Driver` pipeline in `src/dft/driver.cpp`. The central data object is
-`HartreeFock::Calculator` in `src/base/types.h`, which is shared by both
-pipelines and carries all options, molecular data, basis data, SCF state, and
-results.
+### The three binaries
+
+| Binary | Entry point | Purpose |
+|---|---|---|
+| `hartree-fock` | `src/driver.cpp` → `HartreeFock::Driver::run` (`src/hf_driver.cpp`) | HF, post-HF, gradients, geomopt, frequencies |
+| `planck-dft` | `src/dft/main.cpp` → `DFT::Driver::run` (`src/dft/driver.cpp`) | Kohn-Sham DFT and TD-DFT |
+| `planck-mpi` | `src/mpi/main.cpp` | Unified MPI front end; dispatches to *either* of the above based on `Calculator::is_dft_run()`. Built only with `-DBUILD_MPI=ON` |
+
+All three share the same compute layer. The central data object is
+`HartreeFock::Calculator` in `src/base/types.h`, which carries all options,
+molecular data, basis data, SCF state, and results, and is common to every
+pipeline. The MPI surface is confined to `src/base/mpi_env.h`, which compiles to
+no-ops in the two serial binaries — so the integral and SCF kernels carry
+identical source in all three, with no runtime cost off the MPI path.
+
+A Python front end (`python/planck.py`) drives either serial binary and returns
+results as a dict, parsed from the binary's `--json` dump rather than scraped
+from the human-readable log.
 
 ## 2. Architecture Overview
 
@@ -47,9 +62,13 @@ Input file (.hfinp)
   → one-electron integrals S, T, V (src/integrals/os.cpp)
   → optional SAO basis construction (src/symmetry/mo_symmetry.cpp)
   → SCF loop (src/scf/scf.cpp)
-       ├── conventional:  build ERI tensor once, reuse
-       └── direct:        rebuild G(P) from scratch each iteration
-  → post-HF: MP2, coupled cluster, or CASSCF (src/post_hf/)
+       ├── conventional:  build the full ERI tensor once, reuse it
+       ├── direct:        rebuild G(P) each iteration, memory-direct — each
+       │                  quartet is contracted straight into F and the nb^4
+       │                  tensor is never allocated (src/integrals/fused_fock.h)
+       └── RI:            fitted 3-center factors instead of 4-center ERIs
+                          (src/post_hf/ri/ri_eri.cpp)
+  → post-HF: MP2, coupled cluster, FCI, or CASSCF (src/post_hf/)
   → gradient (src/gradient/)
   → geometry optimization (src/opt/)
   → frequency analysis (src/freq/)
@@ -60,18 +79,25 @@ Input file (.hfinp)
 
 | Directory | Contents |
 |---|---|
-| `src/base` | `types.h` (all structs/enums/Calculator), `tables.h`, `basis.h` |
-| `src/io` | input parsing, checkpoint I/O, logging |
-| `src/basis` | GBS file reading, primitive normalization, contraction |
-| `src/integrals` | shell pairs, Obara-Saika OS engine, Head-Gordon-Pople (HGP) engine, Rys quadrature engine |
-| `src/scf` | orthogonalizer, initial guess, RHF/UHF SCF loops |
-| `src/symmetry` | libmsym wrapper, SAO basis, MO labeling, integral sym ops |
-| `src/post_hf` | MP2 energy/gradient, RCCSD/UCCSD/RCCSDT/UCCSDT, CASSCF/RASSCF, AO→MO transforms, CPHF |
-| `src/gradient` | analytic RHF, UHF, RMP2, and UMP2 gradients |
+| `src/base` | `types.h` (all structs/enums/Calculator), `tables.h`, `basis.h`, `mpi_env.h` (the whole MPI surface) |
+| `src/io` | input parsing, checkpoint I/O, logging, FCIDUMP export, JSON results |
+| `src/basis` | GBS file reading, primitive normalization, contraction, cart→spherical transform, RI auxiliary-basis loading |
+| `src/integrals` | shell pairs, Obara-Saika OS engine, Head-Gordon-Pople (HGP) engine, Rys quadrature engine, and the shared memory-direct fused Fock loop (`fused_fock.h`, `fock_accumulate.h`) |
+| `src/scf` | orthogonalizer, initial guess (H\(_{core}\)/SAD), RHF/UHF/ROHF SCF loops, DIIS, stability analysis |
+| `src/symmetry` | libmsym wrapper, SAO basis, MO labeling, integral sym ops, full point-group ERI reduction |
+| `src/post_hf` | MP2 energy/gradient, RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ, FCI, CASSCF/RASSCF, AO→MO transforms, CPHF |
+| `src/post_hf/ci` | the shared CI engine (determinant strings, sigma build, Davidson, RDMs) used by both FCI and CASSCF |
+| `src/post_hf/ri` | density fitting: 2c/3c integrals, metric factorization, fitted factors, RI-JK, RI derivative integrals and gradient |
+| `src/gradient` | analytic RHF, UHF, ROHF, RMP2, and UMP2 gradients |
 | `src/opt` | L-BFGS/BFGS optimizer, internal coordinates, constraints |
 | `src/freq` | finite-difference Hessian, vibrational analysis |
-| `src/dft` | Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, analytic KS gradients, KS driver |
+| `src/solvation` | C-PCM cavity, influence matrix, reaction-field operator (shared by HF and DFT) |
+| `src/bsse` | ghost atoms and the counterpoise driver |
+| `src/populations` | Mulliken, Löwdin, Mayer bond orders |
+| `src/dft` | Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, analytic KS gradients, TD-DFT, KS driver |
 | `src/dft/base` | grid construction headers: radial (Treutler-Ahlrichs), angular (Lebedev), Becke partition, libxc wrapper |
+| `src/mpi` | the `planck-mpi` unified front end |
+| `python/` | the Python front end (`planck.py`) and `ccgen`, the CC equation generator |
 
 ## 3. Core Data Structures
 
@@ -847,7 +873,7 @@ spurious low UHF.
 
 A clean illustration of how guess choice, basis flexibility, and the follow
 machinery interact comes from running 90°-twisted ethylene
-(`tests/benchmarks/scf/ethylene_rhf_stability_unstable.hfinp`) across four
+(`tests/inputs/regression/hf/ethylene_rhf_stability_unstable.hfinp`) across four
 basis sets with two guesses each (HCore vs SAD), once with
 `stability_follow .false.` and once with `.true.` and `max_cycles 300`.
 
@@ -1568,6 +1594,104 @@ canonical quartets can map onto the same physical tensor entry. If point-group
 symmetry is also used, one computes only the canonical representative of each
 symmetry orbit and writes the value back to the remaining orbit elements with
 the appropriate phase factors.
+
+### The Memory-Direct Fock Build
+
+The scatter just described has an obvious flaw for direct SCF, where the only
+consumer of the ERIs is the Fock matrix. The two-phase build computes a quartet,
+scatters it into eight slots of an \(n_b^4\) array, and then, in a second
+\(n_b^4\) sweep, contracts that array back down against the density into an
+\(n_b^2\) matrix. The tensor is a write-only staging area: every value is stored
+once and read once. For \(n_b = 200\) it is 12 GB of allocation to carry
+information that never needed to be held.
+
+The **memory-direct** (or *fused*) build eliminates it. As soon as a canonical
+quartet's contracted value is known, it is accumulated directly into \(\mathbf
+F\) along every element of its permutational orbit:
+
+\[
+G_{\mu\nu} \mathrel{+}= P_{\lambda\sigma}(\mu\nu|\lambda\sigma), \qquad
+G_{\mu\lambda} \mathrel{-}= \tfrac{1}{2} P_{\nu\sigma}(\mu\nu|\lambda\sigma),
+\qquad \dots
+\]
+
+applied for each of the (up to eight) distinct index tuples in the orbit.
+Nothing larger than \(n_b^2\) is ever allocated, and the second \(n_b^4\) sweep
+disappears entirely.
+
+#### Why there are no degeneracy factors
+
+This build is notoriously easy to get wrong, and the usual bug is in the
+bookkeeping. When indices coincide — \(\mu = \nu\), or \(\lambda = \sigma\), or
+\((\mu\nu) = (\lambda\sigma)\) — the eight-element orbit *collapses*: several of
+the eight tuples name the same physical slot. The textbook fix is a table of
+hand-derived degeneracy weights (\(\tfrac{1}{2}\), \(\tfrac{1}{4}\), …) covering
+each collapse case, and getting one wrong produces an error that is small,
+geometry-dependent, and miserable to find.
+
+Planck sidesteps the whole issue. Instead of weighting, it **enumerates the
+orbit's distinct tuples** and applies one unweighted contribution per distinct
+tuple (`distinct_eri_orbit` in `src/integrals/fock_accumulate.h`). Deduplication
+then handles every collapse case automatically — and it reproduces the two-phase
+result *by construction*, because a Phase-2 sweep over the tensor also reads
+each distinct slot exactly once. There is no case analysis to get wrong.
+
+This is correct only if the quartet loop visits each canonical \((\mu\nu|\lambda
+\sigma)\) exactly once, which the canonical filter (\(\nu\ge\mu\), \(\sigma\ge
+\lambda\), \((\lambda\sigma) \ge_{\text{lex}} (\mu\nu)\)) guarantees. The two
+invariants are load-bearing together: dedup without the filter would
+double-count, and the filter without dedup would miss the collapse cases.
+
+Point-group symmetry composes on top without double-counting: the ERI is
+computed once at each symmetry-orbit representative and replicated across the
+orbit with the accumulated AO sign, exactly as the tensor scatter does.
+
+#### One loop, four engines
+
+OS, HGP, Rys, and Rys-Auto had four copies of the identical two-phase builder.
+They differ in exactly one expression — which per-quartet function returns the
+contracted ERI — and all four of those have the same signature. So the engine
+enters as a callable and the loop is written once, in
+`src/integrals/fused_fock.h`. The engine-specific recurrences stay in their own
+files; the traversal, screening, threading, and accumulation are shared.
+
+Screening happens at the block level: a Schwarz bound is computed per
+shell-group pair and whole quartet blocks are rejected before any primitive work
+is done.
+
+#### Threading: why the reduction order is fixed
+
+The accumulations into \(\mathbf F\) are **read-modify-write**, unlike the
+store-only scatter of the tensor build. That difference matters. A store-only
+scatter is order-independent — every writer stores the same value, so the result
+is bitwise-identical no matter how threads interleave. A summation is not:
+floating-point addition is not associative, so summing partials in completion
+order makes the result drift with thread count.
+
+Planck therefore gives each thread its own \(\mathbf G\) partial and sums the
+partials in **fixed thread-index order**, under `schedule(static)`. Never `omp
+atomic`, never `omp critical`, never `schedule(dynamic)` — each of those
+reintroduces the drift. The result is bitwise-invariant to `OMP_NUM_THREADS`.
+This is not a hypothetical concern: it is exactly the bug that produced the
+historical \(\sim10^{-10}\) jitter in the DFT XC grid reduction.
+
+#### MPI distribution
+
+Because the loop already accumulates into a small matrix, distributing it is
+almost free. Ranks stripe over the bra shell-pair index, each computing a
+disjoint subset of quartets into its own local \(\mathbf G\), and a single
+`Allreduce` at the end sums the \(n_b^2\) matrices. The communication volume is
+\(O(n_b^2)\) per SCF iteration — not \(O(n_b^4)\), which is the whole point: no
+integrals cross the wire, only the Fock matrix does.
+
+The MPI surface is confined to `src/base/mpi_env.h`, which compiles to rank 0 /
+size 1 / no-op reductions in the serial binaries. So the stride degrades to the
+full loop, the reduce touches nothing, and the serial and MPI builds are
+bitwise-identical — verified by `water_rhf_mpi_smoke` and `water_dft_mpi_smoke`.
+
+Implementation: `src/integrals/fused_fock.h` (loop),
+`src/integrals/fock_accumulate.h` (orbit accumulation),
+`src/integrals/quartet_orbit.h` (symmetry-orbit dedup), `src/base/mpi_env.h`.
 
 ---
 
@@ -2732,6 +2856,113 @@ So the theory-to-code map is:
 \;\longrightarrow\;
 E_{MP2}
 \]
+
+Everything is enabled by the `mp2_use_ri` keyword, with the auxiliary basis
+named by `mp2_ri_basis`. Implementation: `src/post_hf/ri/ri_eri.cpp`, with the
+auxiliary-basis loader in `src/basis/rifit.cpp`.
+
+### RI Beyond MP2: the JK Builder, CASSCF, and FCI
+
+Nothing in the RI factorization is specific to MP2. Once the fitted pair factors
+\(\widetilde B_{\mu\nu}^{Q}\) exist, *any* consumer of a four-center ERI can be
+re-expressed in terms of them. Planck exploits this in three further places.
+
+#### The RI-JK Fock builder
+
+The Coulomb and exchange matrices are contractions of the ERI tensor against the
+density, so both factor through the fitted three-index quantities. For Coulomb,
+contract the density into an auxiliary-space vector first:
+
+\[
+d_Q = \sum_{\lambda\sigma} \widetilde B_{\lambda\sigma}^{Q} P_{\lambda\sigma}
+\qquad\Longrightarrow\qquad
+J_{\mu\nu} = \sum_Q \widetilde B_{\mu\nu}^{Q}\, d_Q
+\]
+
+This is two \(O(N^2 N_{\text{aux}})\) passes; the \(N^4\) tensor never appears.
+Exchange needs the density factorized into occupied orbitals rather than
+contracted away, because its index pattern entangles the bra and ket:
+
+\[
+K_{\mu\nu} = \sum_{Q}\sum_{i} \widetilde B_{\mu i}^{Q}\, \widetilde B_{\nu i}^{Q},
+\qquad
+\widetilde B_{\mu i}^{Q} = \sum_{\lambda} C_{\lambda i}\, \widetilde B_{\mu\lambda}^{Q}
+\]
+
+so \(K\) costs a half-transform into the occupied space followed by a Gram
+product. This is the standard reason RI helps Coulomb more than exchange.
+Functions: `build_ri_j`, `build_ri_k`, and the assembled `build_ri_fock_rhf` /
+`build_ri_fock_uhf`.
+
+#### RI-routed CASSCF and FCI
+
+Both CASSCF and FCI need the ERIs transformed into the active MO space. That
+transform is just a four-index contraction against \(\mathbf C\), so it too can
+run off the fitted factors: transform each three-index factor into the MO legs
+and take the Gram product, instead of building the AO ERI tensor and
+transforming it. The seam is `transform_eri_ri` in `src/post_hf/integrals.cpp`,
+which the active-space transform routes through whenever `mp2_use_ri` is set.
+The CI engine downstream is unchanged — it consumes an MO integral list and
+neither knows nor cares that the list was fitted.
+
+Both are gated against PySCF's own density-fitted CASSCF and FCI (not its
+conventional ones) to \(\sim10^{-9}\) Eh. That is the correct comparison: a
+fitted calculation should reproduce a *fitted* reference exactly, and would
+differ from a conventional one by the fitting error, which is a property of the
+auxiliary basis, not a bug.
+
+#### The RI gradient, and the term with no dense analog
+
+The subtle part is the gradient. It is not enough to compute an RI energy and
+then differentiate it with the dense gradient code — that would be
+differentiating one function while evaluating the derivative of another. To be
+a true derivative of the RI energy, *every* stage of the gradient must be
+fitted: the derivative integrals, the two-particle density, and the CPHF
+response.
+
+Differentiating the fitted ERI \((\mu\nu|\lambda\sigma) = \mathbf J \mathbf
+V^{-1} \mathbf J^{T}\) by the product rule gives two terms, because the metric
+\(\mathbf V\) is itself geometry-dependent:
+
+\[
+\frac{\partial E_2}{\partial R}
+=
+\underbrace{\sum_{(\mu\nu),P} w\,\Gamma^3_{(\mu\nu),P}\,
+\frac{\partial J_{(\mu\nu),P}}{\partial R}}_{\text{3-center derivative}}
+\;-\;
+\underbrace{\tfrac{1}{2}\sum_{PQ}\gamma_{PQ}\,
+\frac{\partial V_{PQ}}{\partial R}}_{\text{metric derivative}}
+\]
+
+The second term **has no counterpart in the dense four-center gradient**. It
+exists purely because RI factors through \(\mathbf V\), and dropping it — an
+easy and tempting mistake, since it looks like a fitting detail rather than
+physics — leaves a gradient that is not the derivative of anything. Note also
+that both terms couple through \(\mathbf V^{-1}\), not \(\mathbf V^{-1/2}\):
+the symmetric half-metric is a convenience for building the *energy*'s Gram
+form, but the gradient sees the full inverse.
+
+\(\Gamma^3\) is the fitted three-index two-particle density, the RI analog of
+the dense \(n_{ao}^4\) pair density:
+
+\[
+\Gamma^3_{(ia),Q} = \sum_{jb} D_{(ia),(jb)}\, \widetilde B_{(jb),Q}
+\]
+
+which stays in the \(N^2 N_{\text{aux}}\) working set. The orbital-response
+half (§15) is fitted the same way: `build_rhf_cphf_matrix` routes to
+`build_rhf_cphf_matrix_ri` under `mp2_use_ri`, assembling the CPHF orbital
+Hessian from the three-center factors, and the Lagrangian `imat` is built by
+`build_ri_imat` through an \(N^2 N_{\text{aux}}\) intermediate rather than an
+\(N^4\) ERI.
+
+The payoff is that RI-MP2 gradients and geometry optimizations are available for
+both RHF and UHF references. RI-MP2 *frequencies* are not implemented and are
+explicitly rejected rather than silently computed from a mismatched Hessian.
+
+Functions: `compute_3c_eri_deriv`, `compute_2c_eri_deriv`, `build_ri_gamma3_ov`,
+`build_ri_gamma3_from_ao_dm2`, `build_ri_two_electron_gradient`,
+`build_ri_imat`, all in `src/post_hf/ri/ri_eri.cpp`.
 
 ### RMP2 Natural Orbitals
 
@@ -6613,6 +6844,14 @@ driver.cpp
 | Nuclear attraction | `src/integrals/os.cpp` | `_compute_nuclear_attraction` |
 | ERI tensor | `src/integrals/os.cpp` | `_compute_2e`, `_contracted_eri` |
 | Direct Fock build | `src/integrals/os.cpp` | `_compute_2e_fock`, `_compute_2e_fock_uhf` |
+| Memory-direct fused Fock loop (all engines) | `src/integrals/fused_fock.h` | `fused_fock_build`, `fused_shell_groups` |
+| Fused Fock orbit accumulation | `src/integrals/fock_accumulate.h` | `distinct_eri_orbit`, `fock_accumulate_rhf`, `fock_accumulate_uhf` |
+| Symmetry-orbit dedup for the fused loop | `src/integrals/quartet_orbit.h` | `canonicalize_orbit_quartet`, `QuartetOrbitElem` |
+| Shared per-quartet scratch layout | `src/integrals/quartet_layout.h` | `SpatialQuartetLayout::configure`, `spatial_index` |
+| MPI environment (rank, size, Allreduce) | `src/base/mpi_env.h` | `Mpi::rank`, `Mpi::size`, `Mpi::allreduce_inplace` |
+| `planck-mpi` unified front end | `src/mpi/main.cpp` | rank-gated dispatch to `HartreeFock::Driver::run` / `DFT::Driver::run` |
+| Python front end | `python/planck.py` | `planck.run` (drives the binaries' `--json` dump) |
+| JSON results contract | `src/io/results_json.h` | machine-readable result schema |
 | Rys quadrature | `src/integrals/rys.cpp` | `_rys_eri_primitive`, `_rys_contracted_eri` |
 | Head-Gordon-Pople (HGP) ERI engine | `src/integrals/hgp.cpp` | `hgp_vrr`, `hgp_hrr_ab`, `hgp_hrr_cd`, `_contracted_eri_elem`, `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf` |
 | HGP full-symmetry direct Fock | `src/symmetry/hgp_symm.cpp` | `_build_skeleton_eri_symm`, `_compute_2e_fock_symm`, `_compute_2e_fock_uhf_symm`, spherical-basis variants |
@@ -6626,12 +6865,17 @@ driver.cpp
 | MO irrep labels | `src/symmetry/mo_symmetry.cpp` | `assign_mo_symmetry` |
 | Integral symmetry ops | `src/symmetry/integral_symmetry.cpp` | `update_integral_symmetry` |
 | AO→MO transform | `src/post_hf/integrals.cpp` | half-transformation functions |
-| RMP2 energy | `src/post_hf/mp2.cpp` | `run_rmp2` |
-| UMP2 energy | `src/post_hf/mp2.cpp` | `run_ump2` |
+| RMP2 energy | `src/post_hf/mp2_rmp2.cpp` | `rmp2_kernel`, `apply_rmp2_result` |
+| UMP2 energy | `src/post_hf/mp2_ump2.cpp` | `ump2_kernel`, `apply_ump2_result` |
+| MP2 shared internals (ERI blocks, amplitudes) | `src/post_hf/mp2_internal.cpp` | `make_eris_rmp2`, `make_eris_ump2` |
 | RI auxiliary-basis loader | `src/basis/rifit.cpp` | `read_ri_basis` |
-| RI 2c / 3c integrals + metric factorization | `src/post_hf/ri/ri_eri.cpp` | `compute_2c_eri`, `compute_3c_eri`, `factorize_2c_metric`, `ensure_ri_3c_ready` |
-| RI-backed MP2 ERI builders | `src/post_hf/mp2_internal.cpp` | `build_ri_pair_factors`, `build_ri_ov_block`, `make_eris_rmp2`, `make_eris_ump2` |
-| MP2 amplitudes | `src/post_hf/mp2.cpp` | `build_rmp2_amplitudes` |
+| RI 2c / 3c integrals + metric factorization | `src/post_hf/ri/ri_eri.cpp` | `compute_2c_eri`, `compute_3c_eri`, `factorize_2c_metric`, `ensure_ri_metric_ready`, `ensure_ri_3c_ready` |
+| RI fitted pair / MO factors | `src/post_hf/ri/ri_eri.cpp` | `build_ri_pair_factors`, `build_ri_mo_block`, `build_ri_3index_unpacked` |
+| RI-backed AO→MO transform (CASSCF / FCI) | `src/post_hf/integrals.cpp` | `transform_eri_ri` |
+| RI-JK Fock builder | `src/post_hf/ri/ri_eri.cpp` | `build_ri_j`, `build_ri_k`, `build_ri_fock_rhf`, `build_ri_fock_uhf` |
+| RI derivative integrals (3c / 2c) | `src/post_hf/ri/ri_eri.cpp` | `compute_3c_eri_deriv`, `compute_2c_eri_deriv` |
+| RI 2-particle density and gradient | `src/post_hf/ri/ri_eri.cpp` | `build_ri_gamma3_ov`, `build_ri_gamma3_from_ao_dm2`, `build_ri_two_electron_gradient`, `build_ri_imat` |
+| RI-fitted CPHF orbital Hessian | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix_ri` |
 | RCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_rccsd`, `run_rccsd` |
 | UCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_uccsd`, `run_uccsd` |
 | Determinant-space CC backend | `src/post_hf/cc/determinant_space.cpp` | `build_rhf_spin_orbital_system`, `build_uhf_spin_orbital_system`, `solve_determinant_cc` |
@@ -6644,11 +6888,17 @@ driver.cpp
 | CPHF Z-vector | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix` |
 | RMP2 gradient | `src/post_hf/mp2_gradient.cpp` | `compute_rmp2_gradient` |
 | UMP2 gradient intermediates | `src/post_hf/mp2_gradient.cpp` | `build_ump2_gradient_intermediates` |
-| CI string generation | `src/post_hf/casscf.cpp` | Gosper enumeration |
-| CI solve (Davidson) | `src/post_hf/casscf.cpp` | Davidson solver |
-| 1-RDM, 2-RDM | `src/post_hf/casscf.cpp` | `compute_1rdm`, `compute_2rdm` |
-| Orbital gradient | `src/post_hf/casscf.cpp` | generalized Fock matrix |
-| Orbital update | `src/post_hf/casscf.cpp` | Cayley transform |
+| CI string generation | `src/post_hf/ci/strings.cpp` | `generate_strings`, `parity_between`, `select_active_orbitals` |
+| CI determinant space + sigma | `src/post_hf/ci/ci.cpp` | `build_ci_space`, `apply_ci_hamiltonian`, `slater_condon_element` |
+| CI solve (Davidson) | `src/post_hf/ci/ci.cpp` | `solve_ci`, `solve_ci_dense`, `build_ci_diagonal` |
+| 1-RDM, 2-RDM | `src/post_hf/ci/rdm.cpp` | `compute_1rdm`, `compute_2rdm`, `compute_2rdm_bilinear` |
+| FCI driver | `src/post_hf/fci.cpp` | `run_fci` |
+| CASSCF / RASSCF macro-iteration | `src/post_hf/casscf/casscf.cpp` | `run_mcscf_loop` |
+| CASSCF root tracking, SA helpers | `src/post_hf/casscf/casscf_driver_internal.cpp` | `build_weighted_root_orbital_gradient`, candidate-step assembly |
+| Orbital gradient (generalized Fock) | `src/post_hf/casscf/orbital.cpp` | `compute_orbital_gradient`, `build_inactive_fock_mo`, `build_active_fock_mo`, `compute_Q_matrix` |
+| Orbital Hessian action | `src/post_hf/casscf/orbital.cpp` | `hessian_action`, `fixed_ci_orbital_gradient` |
+| Augmented-Hessian orbital step | `src/post_hf/casscf/aug-hessian.cpp`, `src/post_hf/casscf/aug-hessian-orbital.cpp` | `solve_augmented_hessian`, `solve_orbital_augmented_hessian_step` |
+| SA coupled orbital/CI solve | `src/post_hf/casscf/response.cpp` | `solve_sa_coupled_orbital_ci_step` |
 | RHF gradient | `src/gradient/gradient.cpp` | `compute_rhf_gradient` |
 | UHF gradient | `src/gradient/gradient.cpp` | `compute_uhf_gradient` |
 | ROHF gradient | `src/gradient/gradient.cpp` | `compute_rohf_gradient`, `build_rohf_energy_weighted_density` |
@@ -6707,7 +6957,16 @@ driver.cpp
 | Point group detection and SAO blocking | Complete |
 | MO irrep labeling | Complete |
 | Full point-group ERI reduction (direct SCF, RHF/UHF) | Complete (Cartesian and spherical-harmonic basis; petite list + skeleton-Fock symmetrization; OpenMP + Schwarz screened; metric-correct spherical \(\mathbf O_R\); validated through \(d\)-shells, C2v→C3v→Td) |
+| Memory-direct fused Fock build | Complete (one shared quartet loop for OS / HGP / Rys / Auto; contracts each canonical quartet straight into \(\mathbf F\), so no \(n_b^4\) tensor is ever allocated; block-level Schwarz prescreen; handles integral symmetry natively; OpenMP with a fixed-order reduction, so it is bitwise thread-count-invariant) |
+| MPI-distributed direct SCF (`planck-mpi`) | Complete (bra-triangle stripe over the fused Fock loop, one \(n_b^2\) Allreduce per iteration; unified front end dispatching to both HF and DFT; bitwise-identical to the serial build, gated by `water_rhf_mpi_smoke` and `water_dft_mpi_smoke`). Build with `-DBUILD_MPI=ON` |
+| Python front end | Complete (`python/planck.py`; drives either binary and returns a results dict parsed from the binary's own `--json` dump, not from scraping the log) |
 | RMP2 and UMP2 energy | Complete |
+| RI-MP2 / DF-MP2 energy (RHF and UHF references) | Complete (auxiliary basis, 2c metric with linear-dependence filtering, packed 3c tensor, fitted \(ov\) factors). Enable with `mp2_use_ri`; auxiliary basis via `mp2_ri_basis` |
+| RI-JK Fock builder | Complete (`build_ri_j`, `build_ri_k`, `build_ri_fock_rhf/uhf`) |
+| RI-routed CASSCF and FCI | Complete (the active-space transform routes through `transform_eri_ri` under `mp2_use_ri`; PySCF DF-CASSCF and DF-FCI gated to \(\sim10^{-9}\) Eh) |
+| RI-consistent analytic MP2 gradient (RMP2 and UMP2) | Complete (3-center and 2-center derivative integrals, fitted 3-index 2-particle density \(\Gamma^3\), RI-fitted CPHF orbital Hessian, RI Lagrangian; every stage of the gradient is fitted, so the gradient is the exact derivative of the RI energy). Finite-difference gated to \(\sim3\times10^{-7}\) |
+| RI-MP2 geometry optimization (RHF and UHF references) | Complete |
+| RI-MP2 frequencies | Not implemented (explicitly rejected; boundary marker `water_ri_rmp2_freq_rejected`) |
 | RCCSD single-point energy | Complete |
 | UCCSD single-point energy | Teaching-oriented small-system determinant-space prototype |
 | RCCSDT single-point energy | Determinant prototype for tiny systems plus tensor production/optimized entry points for larger restricted references; size-based default selected by `choose_rccsdt_backend`, optional override via `PLANCK_RCCSDT_BACKEND` |
@@ -6751,28 +7010,42 @@ driver.cpp
 Recommended reading order for the HF/post-HF pipeline:
 
 1. `src/base/types.h` — understand every struct before reading any algorithm
-2. `src/driver.cpp` — the control flow map for one complete calculation
+2. `src/driver.cpp` and `src/hf_driver.cpp` — the control flow map for one complete calculation. `src/driver.h` declares `HartreeFock::Driver::run`, the entry the three binaries all funnel through
 3. `src/io/io.cpp` — how input files become a Calculator
 4. `src/integrals/os.cpp` — the Obara-Saika integral engine top to bottom
 5. `src/scf/scf.cpp` — the SCF iteration in detail
 6. `src/gradient/gradient.cpp` — how analytic gradients are assembled
-7. `src/post_hf/mp2.cpp` and `src/post_hf/integrals.cpp` — MP2 energy
+7. `src/post_hf/mp2_rmp2.cpp`, `src/post_hf/mp2_ump2.cpp`, and `src/post_hf/integrals.cpp` — MP2 energy. `src/post_hf/mp2_internal.cpp` holds the shared ERI-block and amplitude machinery both spin cases use
 8. `src/post_hf/cc/` — RCCSD, the tensor RCCSDT backend, and the determinant-space restricted/unrestricted CC teaching prototypes
-9. `src/post_hf/casscf.cpp` — the most complex module: CI, RDMs, orbital update
-10. `src/opt/geomopt.cpp` — L-BFGS and internal coordinate optimization
-11. `src/freq/hessian.cpp` — finite-difference Hessian and normal modes
+9. `src/post_hf/ci/` — the shared CI engine: `strings.cpp` (determinant enumeration), `ci.cpp` (sigma build and Davidson), `rdm.cpp` (1- and 2-RDMs). Read this before CASSCF; both FCI and CASSCF consume it
+10. `src/post_hf/fci.cpp` — the CI engine at its simplest, with no orbital optimization on top
+11. `src/post_hf/casscf/` — the most complex module. `casscf.cpp` is the macro-iteration driver; `orbital.cpp` the orbital gradient and Hessian action; `response.cpp` the state-averaged coupled solve; `aug-hessian*.cpp` the augmented-Hessian step
+12. `src/opt/geomopt.cpp` — L-BFGS and internal coordinate optimization
+13. `src/freq/hessian.cpp` — finite-difference Hessian and normal modes
 
 Recommended reading order for the KS-DFT pipeline (read after items 1–5 above):
 
-12. `src/dft/base/radial.h` — Treutler-Ahlrichs M4 radial grid
-13. `src/dft/base/angular.h` — Lebedev angular quadrature
-14. `src/dft/base/grid.h` — Becke partitioning, pruning, molecular grid assembly
-15. `src/dft/ao_grid.h` — AO and gradient evaluation at grid points
-16. `src/dft/xc_grid.cpp` — density, XC energy and potentials on the grid
-17. `src/dft/ks_matrix.cpp` — \(V^{xc}_{\mu\nu}\) and full KS potential matrices
-18. `src/dft/dft_gradient.cpp` — analytic KS gradient assembly, including moving-grid response
-19. `src/dft/driver.cpp` — the KS-DFT SCF loop end to end
+14. `src/dft/base/radial.h` — Treutler-Ahlrichs M4 radial grid
+15. `src/dft/base/angular.h` — Lebedev angular quadrature
+16. `src/dft/base/grid.h` — Becke partitioning, pruning, molecular grid assembly
+17. `src/dft/ao_grid.h` — AO and gradient evaluation at grid points
+18. `src/dft/xc_grid.cpp` — density, XC energy and potentials on the grid
+19. `src/dft/ks_matrix.cpp` — \(V^{xc}_{\mu\nu}\) and full KS potential matrices
+20. `src/dft/dft_gradient.cpp` — analytic KS gradient assembly, including moving-grid response
+21. `src/dft/driver.cpp` — the KS-DFT SCF loop end to end
+
+Recommended reading order for the density-fitting (RI) and HPC layers. These are
+orthogonal to the method chapters above — they change how the two-electron
+integrals are assembled and distributed, not what is computed from them, so read
+them once the conventional path makes sense:
+
+22. `src/basis/rifit.cpp` — loading the auxiliary basis
+23. `src/post_hf/ri/ri_eri.cpp` — the whole RI subsystem in one file: 2c/3c integrals, metric factorization, fitted pair factors, the JK builder, and the derivative/gradient machinery. Read it against [§13](#resolution-of-the-identity-mp2-ri-mp2--df-mp2)
+24. `src/integrals/fock_accumulate.h` — how one canonical quartet is contracted straight into the Fock matrix. The header comment explains why there are no degeneracy factors; this is the subtlest reasoning in the integral layer
+25. `src/integrals/fused_fock.h` — the shared memory-direct Fock loop that all four engines route through, including the OpenMP reduction and the MPI stripe
+26. `src/base/mpi_env.h` and `src/mpi/main.cpp` — the entire MPI surface, which is deliberately tiny
 
 This order follows the dependency graph: basic state and types first, then
 integral machinery, then the SCF loop that uses those integrals, then the
-higher-level methods that build on SCF.
+higher-level methods that build on SCF, and finally the RI and HPC layers that
+re-implement the integral assembly underneath all of it.

@@ -109,6 +109,52 @@ namespace HartreeFock
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
+        // ── Memory-direct Fock builders ─────────────────────────────────────
+        // Same results as the two-phase builders above, but each canonical
+        // quartet is contracted straight into G via the shared fused loop
+        // (fused_fock.h); the nb^4 tensor is never allocated. The *_auto_direct
+        // pair uses the same angular-momentum dispatch as the Auto tensor path.
+        // Integral symmetry (sym_ops) is handled natively — see quartet_orbit.h.
+        // Gated by planck-fock-accumulate.
+        Eigen::MatrixXd _compute_2e_fock_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &density,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_2e_fock_uhf_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &Pa,
+            const Eigen::MatrixXd &Pb,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
+        Eigen::MatrixXd _compute_2e_fock_auto_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &density,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_2e_fock_uhf_auto_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &Pa,
+            const Eigen::MatrixXd &Pb,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
+
         // ── Test hook (Phase B / B-1): box-size invariance of the 6D sum ───────────
         //
         // Fills `out` with the full per-primitive-pair 6D Rys `sum` buffer at a

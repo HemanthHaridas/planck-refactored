@@ -3,6 +3,8 @@
 #include "boys.h"
 #include "os.h"
 #include "screening.h"
+#include "quartet_layout.h"
+#include "fused_fock.h"
 
 #include <algorithm>
 #include <array>
@@ -221,19 +223,9 @@ namespace
 
     struct EriScratch
     {
-        int ax_dim = 0;
-        int ay_dim = 0;
-        int az_dim = 0;
-        int cx_dim = 0;
-        int cy_dim = 0;
-        int cz_dim = 0;
+        // Six-axis dims/strides/index shared with OS and Rys (quartet_layout.h).
+        HartreeFock::Integrals::SpatialQuartetLayout layout;
         int m_dim = 0;
-        std::size_t ax_stride = 0;
-        std::size_t ay_stride = 0;
-        std::size_t az_stride = 0;
-        std::size_t cx_stride = 0;
-        std::size_t cy_stride = 0;
-        std::size_t cz_stride = 0;
         std::size_t cd_block_size = 0;
         std::size_t spatial_size = 0;
         std::vector<double> vrr;
@@ -248,24 +240,11 @@ namespace
             int lCDx, int lCDy, int lCDz,
             int mmax)
         {
-            ax_dim = lABx + 1;
-            ay_dim = lABy + 1;
-            az_dim = lABz + 1;
-            cx_dim = lCDx + 1;
-            cy_dim = lCDy + 1;
-            cz_dim = lCDz + 1;
             m_dim = mmax + 1;
-            cz_stride = 1;
-            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
-            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
-            cd_block_size = static_cast<std::size_t>(cx_dim) * cy_dim * cz_dim;
-            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
-            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
-            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
-
             spatial_size =
-                static_cast<std::size_t>(ax_dim) * ay_dim * az_dim *
-                cx_dim * cy_dim * cz_dim;
+                layout.configure(lABx, lABy, lABz, lCDx, lCDy, lCDz);
+            cd_block_size = static_cast<std::size_t>(layout.cx_dim) *
+                            layout.cy_dim * layout.cz_dim;
             const std::size_t vrr_size = spatial_size * static_cast<std::size_t>(m_dim);
             if (vrr.size() != vrr_size)
                 vrr.resize(vrr_size);
@@ -284,12 +263,7 @@ namespace
             int ax, int ay, int az,
             int cx, int cy, int cz) const
         {
-            return static_cast<std::size_t>(ax) * ax_stride +
-                   static_cast<std::size_t>(ay) * ay_stride +
-                   static_cast<std::size_t>(az) * az_stride +
-                   static_cast<std::size_t>(cx) * cx_stride +
-                   static_cast<std::size_t>(cy) * cy_stride +
-                   static_cast<std::size_t>(cz) * cz_stride;
+            return layout.spatial_index(ax, ay, az, cx, cy, cz);
         }
 
         double &v(
@@ -320,9 +294,9 @@ namespace
         double *h_block_ptr(int ax, int ay, int az)
         {
             return hrr_data +
-                   static_cast<std::size_t>(ax) * ax_stride +
-                   static_cast<std::size_t>(ay) * ay_stride +
-                   static_cast<std::size_t>(az) * az_stride;
+                   static_cast<std::size_t>(ax) * layout.ax_stride +
+                   static_cast<std::size_t>(ay) * layout.ay_stride +
+                   static_cast<std::size_t>(az) * layout.az_stride;
         }
     };
 
@@ -886,6 +860,56 @@ double HartreeFock::HeadGordonPople::_contracted_eri_elem(
 // larger box only adds higher-AM cells and leaves every lower coordinate
 // bitwise-identical; this hook exposes the accumulator so the test can prove it
 // on d-shells (the (dd|dd) case that NaN'd A4-1's dense-cube HRR readout).
+// Build the whole (a0|c0) accumulator for one box ONCE and hand it back.
+//
+// `_contract_a0c0_at_native_test` below returns a single cell, but pays for a
+// full contraction (every primitive pair, whole box) to produce it. Callers that
+// want many cells of the same box — the box-invariance gates sweep every
+// coordinate in it — must not call the per-cell entry in a loop: that rebuilds
+// the box once per coordinate (a 5^6 = 15625x redundancy on a (dd|dd) quartet).
+// Build once with this, then index `out` with `spatial_index`-equivalent
+// row-major strides (cz fastest). Mirrors RysQuad::_build_sum_native_test.
+void HartreeFock::HeadGordonPople::_build_a0c0_native_test(
+    const HartreeFock::ShellPair &spAB,
+    const HartreeFock::ShellPair &spCD,
+    int lABx, int lABy, int lABz,
+    int lCDx, int lCDy, int lCDz,
+    HartreeFock::ERIKernel kernel,
+    double omega,
+    std::vector<double> &out)
+{
+    EriScratch &scratch = g_hgp_scratch;
+
+    if (kernel == HartreeFock::ERIKernel::ShortRange)
+    {
+        // ShortRange = Coulomb - LongRange, so build both and subtract cellwise
+        // (the per-cell entry does exactly this, one coordinate at a time).
+        if (omega <= 0.0)
+        {
+            HartreeFock::Integrals::SpatialQuartetLayout probe;
+            out.assign(probe.configure(lABx, lABy, lABz, lCDx, lCDy, lCDz), 0.0);
+            return;
+        }
+        hgp_contract_a0c0(spAB, spCD, scratch,
+                          lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                          HartreeFock::ERIKernel::Coulomb, 0.0,
+                          PrimitiveWeightCenter::None);
+        out.assign(scratch.a0c0_data, scratch.a0c0_data + scratch.spatial_size);
+        hgp_contract_a0c0(spAB, spCD, scratch,
+                          lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                          HartreeFock::ERIKernel::LongRange, omega,
+                          PrimitiveWeightCenter::None);
+        for (std::size_t n = 0; n < out.size(); ++n)
+            out[n] -= scratch.a0c0_data[n];
+        return;
+    }
+
+    hgp_contract_a0c0(spAB, spCD, scratch,
+                      lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                      kernel, omega, PrimitiveWeightCenter::None);
+    out.assign(scratch.a0c0_data, scratch.a0c0_data + scratch.spatial_size);
+}
+
 double HartreeFock::HeadGordonPople::_contract_a0c0_at_native_test(
     const HartreeFock::ShellPair &spAB,
     const HartreeFock::ShellPair &spCD,
@@ -1016,32 +1040,20 @@ namespace
     // component scratch; `src` is the shared max-AM scratch.
     // Strides of the shared max-AM (a0|c0) accumulator, kept lightweight so the
     // readout can index a snapshot vector without copying the whole EriScratch.
-    // Must match EriScratch::resize_for_quartet's stride convention exactly.
+    // Same stride convention as EriScratch — both now come from the shared
+    // SpatialQuartetLayout, so they cannot drift.
     struct MaxBoxLayout
     {
-        std::size_t ax_stride = 0, ay_stride = 0, az_stride = 0;
-        std::size_t cx_stride = 0, cy_stride = 0, cz_stride = 0;
+        HartreeFock::Integrals::SpatialQuartetLayout layout;
 
         MaxBoxLayout() = default;
         MaxBoxLayout(int lABx, int lABy, int lABz, int lCDx, int lCDy, int lCDz)
         {
-            const int ax_dim = lABx + 1, ay_dim = lABy + 1, az_dim = lABz + 1;
-            const int cx_dim = lCDx + 1, cy_dim = lCDy + 1, cz_dim = lCDz + 1;
-            cz_stride = 1;
-            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
-            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
-            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
-            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
-            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
+            layout.configure(lABx, lABy, lABz, lCDx, lCDy, lCDz);
         }
         std::size_t index(int ax, int ay, int az, int cx, int cy, int cz) const
         {
-            return static_cast<std::size_t>(ax) * ax_stride +
-                   static_cast<std::size_t>(ay) * ay_stride +
-                   static_cast<std::size_t>(az) * az_stride +
-                   static_cast<std::size_t>(cx) * cx_stride +
-                   static_cast<std::size_t>(cy) * cy_stride +
-                   static_cast<std::size_t>(cz) * cz_stride;
+            return layout.spatial_index(ax, ay, az, cx, cy, cz);
         }
     };
 
@@ -1377,6 +1389,10 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
 
     const std::size_t ngp = group_pairs.size();
 
+    // ponytail: HGP is NOT MPI-distributed — every rank builds the full tensor
+    // (correct, just replicated work); no allreduce here. Only OS (the default
+    // engine) is striped. Same upgrade path as the matching note in rys.cpp:
+    // `bra % nranks == rank` + one Mpi::allreduce_inplace on the tensor.
 #pragma omp parallel for schedule(dynamic, 8)
     for (std::size_t bra = 0; bra < ngp; ++bra)
     {
@@ -1534,6 +1550,99 @@ HartreeFock::HeadGordonPople::_compute_2e_fock_uhf(
                     Gb(mu, nu) += Pt(lam, sig) * coulomb - Pb(lam, sig) * exch;
                 }
 
+    return {Ga, Gb};
+}
+
+// ─── Memory-direct Fock builders (no nb^4 tensor) ────────────────────────────
+//
+// Same result as _compute_2e_fock / _compute_2e_fock_uhf above, but driven by
+// the shared fused loop (fused_fock.h): each canonical quartet is contracted
+// straight into G, and the nb^4 tensor is never allocated. The two-phase
+// builders above call _compute_2e, which materializes the full tensor on every
+// SCF iteration. Only the per-quartet ERI callable differs between engines.
+//
+// sym_ops (integral symmetry) is delegated to the two-phase builder — see the
+// note in fused_fock.h.
+
+namespace
+{
+    // Schwarz table as an nb x nb Eigen view over the shared flat helper
+    // (row-major nb*nb, Q[i*nb+j] == Q[j*nb+i]).
+    inline Eigen::MatrixXd hgp_schwarz_matrix(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nb,
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+    {
+        const std::vector<double> flat =
+            HartreeFock::Screening::schwarz_table_hgp(shell_pairs, nb, sym_ops);
+        Eigen::MatrixXd Q(nb, nb);
+        for (std::size_t i = 0; i < nb; ++i)
+            for (std::size_t j = 0; j < nb; ++j)
+                Q(i, j) = flat[i * nb + j];
+        return Q;
+    }
+
+    // The HGP per-quartet contracted ERI, in the shape fused_fock_build wants.
+    constexpr auto hgp_eri_elem =
+        [](const HartreeFock::ShellPair &spAB, const HartreeFock::ShellPair &spCD,
+           int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+           int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+           HartreeFock::ERIKernel k, double w)
+    {
+        return HartreeFock::HeadGordonPople::_contracted_eri_elem(
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
+            lCx, lCy, lCz, lDx, lDy, lDz, k, w);
+    };
+}
+
+Eigen::MatrixXd HartreeFock::HeadGordonPople::_compute_2e_fock_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density,
+    const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    const std::size_t nb = nbasis;
+    const Eigen::MatrixXd Q = hgp_schwarz_matrix(shell_pairs, nb, sym_ops);
+
+    Eigen::MatrixXd G, Ga_unused, Gb_unused;
+    HartreeFock::Integrals::FusedFockDensities dens;
+    dens.P = &density;
+
+    HartreeFock::Integrals::fused_fock_build(
+        shell_pairs, nb, Q, kernel, omega, tol_eri,
+        /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, hgp_eri_elem,
+        sym_ops);
+    return G;
+}
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &Pa,
+    const Eigen::MatrixXd &Pb,
+    const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    const std::size_t nb = nbasis;
+    const Eigen::MatrixXd Q = hgp_schwarz_matrix(shell_pairs, nb, sym_ops);
+
+    const Eigen::MatrixXd Pt = Pa + Pb;
+    Eigen::MatrixXd G_unused, Ga, Gb;
+    HartreeFock::Integrals::FusedFockDensities dens;
+    dens.Pt = &Pt;
+    dens.Pa = &Pa;
+    dens.Pb = &Pb;
+
+    HartreeFock::Integrals::fused_fock_build(
+        shell_pairs, nb, Q, kernel, omega, tol_eri,
+        /*spin_resolved=*/true, dens, G_unused, Ga, Gb, hgp_eri_elem,
+        sym_ops);
     return {Ga, Gb};
 }
 

@@ -1,6 +1,14 @@
 #include "os.h"
 #include "base.h"
 #include "boys.h"
+#include "base/mpi_env.h"
+#include "quartet_layout.h"
+#include "fock_accumulate.h"
+#include "fused_fock.h"
+
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -224,19 +232,9 @@ namespace
 
     struct EriScratch
     {
-        int ax_dim = 0;
-        int ay_dim = 0;
-        int az_dim = 0;
-        int cx_dim = 0;
-        int cy_dim = 0;
-        int cz_dim = 0;
+        // Six-axis dims/strides/index shared with HGP and Rys (quartet_layout.h).
+        HartreeFock::Integrals::SpatialQuartetLayout layout;
         int m_dim = 0;
-        std::size_t ax_stride = 0;
-        std::size_t ay_stride = 0;
-        std::size_t az_stride = 0;
-        std::size_t cx_stride = 0;
-        std::size_t cy_stride = 0;
-        std::size_t cz_stride = 0;
         std::vector<double> vrr;
         std::vector<double> hrr;
         // Primitive-contracted (a0|c0) accumulator (OS-A4-1), mirroring HGP's
@@ -257,23 +255,9 @@ namespace
             // Reuse one per-thread scratch object for the whole quartet so the
             // recurrence code can index dense contiguous buffers instead of
             // allocating nested vectors in the hot integral loops.
-            ax_dim = lABx + 1;
-            ay_dim = lABy + 1;
-            az_dim = lABz + 1;
-            cx_dim = lCDx + 1;
-            cy_dim = lCDy + 1;
-            cz_dim = lCDz + 1;
             m_dim = mmax + 1;
-            cz_stride = 1;
-            cy_stride = static_cast<std::size_t>(cz_dim) * cz_stride;
-            cx_stride = static_cast<std::size_t>(cy_dim) * cy_stride;
-            az_stride = static_cast<std::size_t>(cx_dim) * cx_stride;
-            ay_stride = static_cast<std::size_t>(az_dim) * az_stride;
-            ax_stride = static_cast<std::size_t>(ay_dim) * ay_stride;
-
             const std::size_t spatial =
-                static_cast<std::size_t>(ax_dim) * ay_dim * az_dim *
-                cx_dim * cy_dim * cz_dim;
+                layout.configure(lABx, lABy, lABz, lCDx, lCDy, lCDz);
             const std::size_t vrr_size = spatial * static_cast<std::size_t>(m_dim);
             // `_eri_vrr` overwrites every cell it later reads (the seed writes
             // (0,0,0,0,0,0,m), then each VRR step *assigns* before any read
@@ -301,12 +285,7 @@ namespace
             int ax, int ay, int az,
             int cx, int cy, int cz) const
         {
-            return static_cast<std::size_t>(ax) * ax_stride +
-                   static_cast<std::size_t>(ay) * ay_stride +
-                   static_cast<std::size_t>(az) * az_stride +
-                   static_cast<std::size_t>(cx) * cx_stride +
-                   static_cast<std::size_t>(cy) * cy_stride +
-                   static_cast<std::size_t>(cz) * cz_stride;
+            return layout.spatial_index(ax, ay, az, cx, cy, cz);
         }
 
         double &v(
@@ -2028,6 +2007,79 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
     return {Ga, Gb};
 }
 
+// ─── Memory-direct Fock builders (no nb^4 tensor) ────────────────────────────
+//
+// See os.h. These fuse the quartet loop with the density contraction, so the
+// only allocation is the nb^2 Fock matrix. Serial at this step; threading is a
+// separate change because the accumulations are read-modify-write.
+
+Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density,
+    const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    const std::size_t nb = nbasis;
+    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
+
+    Eigen::MatrixXd G, Ga_unused, Gb_unused;
+    HartreeFock::Integrals::FusedFockDensities dens;
+    dens.P = &density;
+
+    HartreeFock::Integrals::fused_fock_build(
+        shell_pairs, nb, Q, kernel, omega, tol_eri,
+        /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused,
+        [](const HartreeFock::ShellPair &spAB, const HartreeFock::ShellPair &spCD,
+           int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+           int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+           HartreeFock::ERIKernel k, double w)
+        {
+            return _contracted_eri(spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                   lCx, lCy, lCz, lDx, lDy, lDz, k, w);
+        },
+        sym_ops);
+    return G;
+}
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &Pa,
+    const Eigen::MatrixXd &Pb,
+    const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    const std::size_t nb = nbasis;
+    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
+
+    const Eigen::MatrixXd Pt = Pa + Pb;
+    Eigen::MatrixXd G_unused, Ga, Gb;
+    HartreeFock::Integrals::FusedFockDensities dens;
+    dens.Pt = &Pt;
+    dens.Pa = &Pa;
+    dens.Pb = &Pb;
+
+    HartreeFock::Integrals::fused_fock_build(
+        shell_pairs, nb, Q, kernel, omega, tol_eri,
+        /*spin_resolved=*/true, dens, G_unused, Ga, Gb,
+        [](const HartreeFock::ShellPair &spAB, const HartreeFock::ShellPair &spCD,
+           int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+           int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+           HartreeFock::ERIKernel k, double w)
+        {
+            return _contracted_eri(spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                   lCx, lCy, lCz, lDx, lDy, lDz, k, w);
+        },
+        sym_ops);
+    return {Ga, Gb};
+}
+
 // ─── Cross-overlap between two basis sets ────────────────────────────────────
 //
 // Computes S_cross(μ, ν) = <χ_μ^large | χ_ν^small> using the same Obara-Saika
@@ -2209,9 +2261,23 @@ namespace
 
         const std::size_t ngp = group_pairs.size();
 
+        // MPI: partition the bra shell-pair triangle across ranks; OpenMP splits
+        // each rank's stripe within the node — the hybrid. A canonical quartet
+        // (i,j,k,l) is produced by exactly one bra, so each rank fills a disjoint
+        // set of tensor entries and the rest stay zero; the MPI_Allreduce(SUM)
+        // below then merges them exactly. Serial builds have rank 0 / size 1, so
+        // the stride degrades to the full loop and the reduce is a no-op —
+        // byte-identical to the pre-MPI path.
+        const int mpi_rank = HartreeFock::Mpi::rank();
+        const int mpi_size = HartreeFock::Mpi::size();
+
 #pragma omp parallel for schedule(dynamic, 8)
         for (std::size_t bra = 0; bra < ngp; ++bra)
         {
+            if (mpi_size > 1 &&
+                static_cast<int>(bra % static_cast<std::size_t>(mpi_size)) != mpi_rank)
+                continue;
+
             const OsShellGroup &gA = groups[group_pairs[bra].a];
             const OsShellGroup &gB = groups[group_pairs[bra].b];
 
@@ -2298,7 +2364,13 @@ namespace
                 }
             }
         }
+
+        // Merge the per-rank partial tensors into the full, replicated tensor on
+        // every rank. No-op when serial (size 1). Each canonical entry was
+        // written by a single rank, so a plain sum reconstructs the whole tensor.
+        HartreeFock::Mpi::allreduce_inplace(eri.data(), eri.size());
     }
+
 } // namespace
 
 // Compute ERI and store it for conventional SCF

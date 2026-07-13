@@ -101,6 +101,44 @@ namespace HartreeFock
                              double tol_eri = 1e-10,
                              const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
+        // ── Memory-direct Fock builders ─────────────────────────────────────
+        //
+        // Same result as _compute_2e_fock / _compute_2e_fock_uhf above, but each
+        // canonical quartet is contracted straight into G (nb^2) rather than
+        // scattered into an nb^4 tensor that is then contracted in a second
+        // sweep. The nb^4 array is never allocated — which is the whole point:
+        // the two-phase builders above allocate it on EVERY SCF iteration
+        // (0.8 GB at nb=100, 500 GB at nb=500), so "direct" mode currently costs
+        // more memory than conventional, not less.
+        //
+        // Equal to the two-phase builders to summation-order noise (~1e-14), not
+        // bitwise: the fused orbit accumulates in a different order than the nb^4
+        // sweep. Gated by planck-fock-accumulate and planck-fused-fock.
+        //
+        // Integral symmetry (sym_ops) is handled natively: the ERI is computed
+        // once per symmetry-orbit representative and replicated across the orbit
+        // with the accumulated AO sign. See the dedup argument in
+        // src/integrals/quartet_orbit.h.
+        Eigen::MatrixXd _compute_2e_fock_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &density,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+        _compute_2e_fock_uhf_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &Pa,
+            const Eigen::MatrixXd &Pb,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
         // ── Gradient derivative integrals ──────────────────────────────────────────
 
         // Returns {dS/dAx, dS/dAy, dS/dAz, dT/dAx, dT/dAy, dT/dAz}
