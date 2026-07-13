@@ -5,6 +5,10 @@
 #include "quartet_layout.h"
 #include "fock_accumulate.h"
 
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -2430,8 +2434,67 @@ namespace
 
         const std::size_t ngp = group_pairs.size();
 
+        // Per-thread Fock partials, summed in FIXED thread-index order after the
+        // parallel region.
+        //
+        // This is the one genuinely hazardous part of the memory-direct build.
+        // write_eri_permutations is store-only (`omp atomic write`, every writer
+        // storing the same canonical value), so the tensor build is inherently
+        // order-independent. These accumulations are read-modify-write into a
+        // shared G, so they are a real reduction — and an `omp critical` /
+        // `omp atomic update` reduction sums in non-deterministic completion
+        // order, which (floating-point addition being non-associative) makes the
+        // result drift with thread count. That is exactly the ~1e-10 jitter the
+        // DFT XC accumulation already had to fix (see src/dft/ks_matrix.cpp).
+        // Per-thread buffers + fixed-index summation keeps the fused build
+        // bitwise-reproducible at any thread count.
+#ifdef USE_OPENMP
+        const int n_threads = omp_get_max_threads();
+#else
+        const int n_threads = 1;
+#endif
+        const bool need_uhf = spin_resolved;
+        std::vector<Eigen::MatrixXd> g_partials(
+            need_uhf ? 0 : static_cast<std::size_t>(n_threads),
+            Eigen::MatrixXd::Zero(nb, nb));
+        std::vector<Eigen::MatrixXd> ga_partials(
+            need_uhf ? static_cast<std::size_t>(n_threads) : 0,
+            Eigen::MatrixXd::Zero(nb, nb));
+        std::vector<Eigen::MatrixXd> gb_partials(
+            need_uhf ? static_cast<std::size_t>(n_threads) : 0,
+            Eigen::MatrixXd::Zero(nb, nb));
+
+        // schedule(static), NOT dynamic — and this is load-bearing, not a
+        // preference. Per-thread partials + fixed-index summation fixes the
+        // order the PARTIALS are combined in, but under schedule(dynamic) the
+        // set of quartets each thread happens to grab varies run to run, so each
+        // partial sums a different subset in a different order and the total
+        // still drifts (measured: max|dG| moved 2.0e-15..2.9e-15 across thread
+        // counts with dynamic). static pins the bra -> thread mapping, making
+        // the whole build bitwise-reproducible at any thread count.
+        //
+        // The tensor build can afford dynamic (better load balance on the
+        // triangular loop) precisely because its scatter is store-only and thus
+        // order-independent; a reduction cannot.
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (std::size_t bra = 0; bra < ngp; ++bra)
         {
+#ifdef USE_OPENMP
+            const int thread_id = omp_get_thread_num();
+#else
+            const int thread_id = 0;
+#endif
+            // In the RHF branch only g_partials is populated and only
+            // fock_accumulate_rhf runs, so the beta reference is never read;
+            // it aliases the alpha slot purely to keep both branches in one
+            // loop. (Binding it to an empty vector would be UB.)
+            Eigen::MatrixXd &G_local =
+                need_uhf ? ga_partials[thread_id] : g_partials[thread_id];
+            Eigen::MatrixXd &Gb_local =
+                need_uhf ? gb_partials[thread_id] : g_partials[thread_id];
+
             const OsShellGroup &gA = groups[group_pairs[bra].a];
             const OsShellGroup &gB = groups[group_pairs[bra].b];
 
@@ -2490,15 +2553,33 @@ namespace
 
                                 if (spin_resolved)
                                     HartreeFock::Integrals::fock_accumulate_uhf(
-                                        Ga, Gb, Pt, Pa, Pb, i, j, k, l, val);
+                                        G_local, Gb_local, Pt, Pa, Pb, i, j, k, l, val);
                                 else
                                     HartreeFock::Integrals::fock_accumulate_rhf(
-                                        G, P, i, j, k, l, val);
+                                        G_local, P, i, j, k, l, val);
                             }
                         }
                     }
                 }
             }
+        }
+
+        // Fixed thread-index order — never completion order. See the note above.
+        if (need_uhf)
+        {
+            Ga.setZero(nb, nb);
+            Gb.setZero(nb, nb);
+            for (int t = 0; t < n_threads; ++t)
+            {
+                Ga += ga_partials[static_cast<std::size_t>(t)];
+                Gb += gb_partials[static_cast<std::size_t>(t)];
+            }
+        }
+        else
+        {
+            G.setZero(nb, nb);
+            for (int t = 0; t < n_threads; ++t)
+                G += g_partials[static_cast<std::size_t>(t)];
         }
     }
 } // namespace

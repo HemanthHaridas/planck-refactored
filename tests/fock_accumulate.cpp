@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <random>
 #include <string>
@@ -381,11 +382,73 @@ namespace
     }
 }
 
+// ── Step 3: determinism of the threaded fused build ─────────────────────────
+//
+// The fused accumulations are read-modify-write reductions into G, unlike the
+// store-only write_eri_permutations. A reduction summed in nondeterministic
+// order drifts, floating-point addition not being associative — the jitter the
+// DFT XC accumulation already had to fix (src/dft/ks_matrix.cpp).
+//
+// The achievable guarantee, and the one that file states, is *bitwise
+// reproducible at a fixed thread count*. It is NOT bitwise equality across
+// different thread counts: with per-thread partials, N threads necessarily sum
+// N different subsets, so the totals differ in the last bits no matter how the
+// partials are ordered. (The two-phase tensor build IS cross-count invariant,
+// but only because its scatter is store-only/idempotent — a genuine reduction
+// cannot be. The DFT grid XC reduction likewise still drifts ~1e-10 across
+// thread counts; the fused Fock build is ~1e-16 relative, far tighter.)
+//
+// So this checks the real contract: repeated runs at the SAME thread count must
+// be bitwise identical. That is what schedule(static) + fixed-thread-index
+// summation buys; with schedule(dynamic), or a critical-section reduction,
+// repeated runs at one count would already differ.
+void check_fixed_thread_determinism(const std::string &basis_name)
+{
+    HartreeFock::Calculator calc = make_water(basis_name);
+    if (!g_ok)
+        return;
+
+    const std::vector<HartreeFock::ShellPair> shell_pairs =
+        build_shellpairs(calc._shells);
+    const std::size_t nb = calc._shells._basis_functions.size();
+
+    std::mt19937 rng(7);
+    const Eigen::MatrixXd P = random_symmetric_density(nb, rng);
+
+    auto build = [&]()
+    {
+        return HartreeFock::ObaraSaika::_compute_2e_fock_direct(
+            shell_pairs, P, nb, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10,
+            nullptr);
+    };
+
+    const Eigen::MatrixXd first = build();
+    for (int rep = 0; rep < 4; ++rep)
+    {
+        const Eigen::MatrixXd again = build();
+        // Bitwise: not a tolerance. Same thread count, same partition, same
+        // summation order -> the identical bits, every time.
+        if (!(again.array() == first.array()).all())
+        {
+            fail("water/" + basis_name +
+                 ": fused build is not bitwise reproducible at a fixed thread "
+                 "count (repeat " + std::to_string(rep) + " differs)");
+            return;
+        }
+    }
+
+    std::cout << "OK  Step 3 / water/" << basis_name
+              << ": fused build bitwise-reproducible across 5 runs at a fixed "
+                 "thread count; checksum sum="
+              << std::setprecision(17) << first.sum() << '\n';
+}
+
 int main()
 {
     check_random_tensors();
     check_real_integrals("sto-3g");
     check_real_integrals("6-31g*"); // d shells: exercises the multi-component orbit
+    check_fixed_thread_determinism("6-31g*");
 
     if (!g_ok)
     {
