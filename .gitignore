@@ -95,6 +95,7 @@ build-test
 tests/avrr_x_simd_prototype.cpp
 ROHF_CASSCF_HANDOFF.md
 docs/HPC_MPI_EXECUTABLE_SCOPE.md
+docs/DFT_FUSED_JK_SCOPE.md
 build-mpi
 
 docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md
