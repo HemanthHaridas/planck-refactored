@@ -110,7 +110,8 @@ def water_chain(n: int, spacing: float = 3.0):
     return atoms
 
 
-def planck_input(atoms, basis: str, engine: str, method: str) -> str:
+def planck_input(atoms, basis: str, engine: str, method: str,
+                 max_cycles: int = 100) -> str:
     coords = "\n".join(f"{s}  {x:.6f}  {y:.6f}  {z:.6f}" for s, x, y, z in atoms)
     # DFT: B3LYP is the hybrid case -- it exercises BOTH the Coulomb and the
     # exact-exchange build, which is exactly the nb^4 path DFT_FUSED_JK_SCOPE
@@ -140,7 +141,7 @@ def planck_input(atoms, basis: str, engine: str, method: str) -> str:
     guess       hcore
     use_diis    .true.
     diis_dim    8
-    max_cycles  100
+    max_cycles  {max_cycles}
     tol_energy  1.0e-9
     tol_density 1.0e-7
 %end_scf
@@ -166,36 +167,50 @@ def rank_rss_probe() -> str:
     the whole process tree into one number. The Q2 claim is about what ONE rank
     holds, so the aggregate is precisely the number that cannot answer it.
 
-    So each rank runs its binary under `/usr/bin/time -v`, whose "Maximum
-    resident set size" is that process's own high-water mark, reported after
-    exit. GNU time is universally present on Linux clusters. The rank id comes
-    from the MPI runtime's env (OMPI_COMM_WORLD_RANK for Open MPI; PMI_RANK for
-    MPICH/Intel MPI -- both are checked). If /usr/bin/time is absent we run the
-    binary bare and simply report no per-rank RSS, rather than failing.
+    Each rank runs its binary under `time`, whose max-RSS report is that
+    process's own high-water mark. Both flavours are supported:
+
+      GNU  (Linux/clusters):  time -v  -> "Maximum resident set size (kbytes)"
+      BSD  (macOS):           time -l  -> "maximum resident set size" in BYTES
+
+    The UNIT DIFFERS (KB vs bytes) -- getting that wrong is a silent 1024x
+    error in the headline Q2 number, so the two branches normalise separately.
+    Supporting BSD is what makes Q2 answerable on the dev box instead of only
+    on the cluster.
+
+    Rank id comes from the MPI runtime's env: OMPI_COMM_WORLD_RANK (Open MPI),
+    PMI_RANK (MPICH/Intel MPI), SLURM_PROCID (srun). Defaults to 0 for a serial
+    run, which is how run_serial reuses this same probe.
     """
-    # NOTE: probe for GNU time by CAPABILITY, not by existence. macOS ships a
-    # BSD /usr/bin/time that has no -v; testing `[ -x /usr/bin/time ]` passes
-    # there, `time -v` then fails, and the RANK DIES WITH EXIT 1 -- taking the
-    # whole mpirun job with it. (Found the hard way; the fixture's own gate
-    # caught it.) `time -v true` is the cheap capability test.
+    # Probe by CAPABILITY, not existence. macOS ships a BSD /usr/bin/time that
+    # has no -v; `[ -x /usr/bin/time ]` passes there, `time -v` then fails, and
+    # THE RANK DIES WITH EXIT 1 -- taking the whole mpirun job with it. (Found
+    # the hard way; the fixture's own gate caught it.) `time -v true` is the
+    # cheap capability test.
     #
-    # Also: no bash process substitution (`2> >(...)`). mpirun may launch this
-    # under a plain sh. Redirect stderr to a temp file and post-process it.
+    # No bash process substitution (`2> >(...)`): mpirun may launch this under a
+    # plain sh. Redirect stderr to a temp file and post-process.
     return (
         '#!/bin/bash\n'
         'RANK="${OMPI_COMM_WORLD_RANK:-${PMI_RANK:-${SLURM_PROCID:-0}}}"\n'
+        'ERR="$(mktemp)"\n'
         'if /usr/bin/time -v true >/dev/null 2>&1; then\n'
-        '  ERR="$(mktemp)"\n'
-        '  /usr/bin/time -v "$@" 2>"$ERR"\n'
-        '  RC=$?\n'
-        '  KB="$(grep -i "Maximum resident" "$ERR" | grep -o "[0-9]*$")"\n'
-        '  grep -vi "^\\s*[A-Z].*:" "$ERR" >&2 || true\n'
-        '  [ -n "$KB" ] && echo "PLANCK_RANK_RSS rank=$RANK peak_kb=$KB" >&2\n'
-        '  rm -f "$ERR"\n'
-        '  exit $RC\n'
+        '  /usr/bin/time -v "$@" 2>"$ERR"; RC=$?\n'
+        '  KB="$(grep -i "Maximum resident" "$ERR" | grep -oE "[0-9]+" | tail -1)"\n'
+        'elif /usr/bin/time -l true >/dev/null 2>&1; then\n'
+        '  /usr/bin/time -l "$@" 2>"$ERR"; RC=$?\n'
+        '  BYTES="$(grep -i "maximum resident" "$ERR" | grep -oE "[0-9]+" | head -1)"\n'
+        '  KB=$([ -n "$BYTES" ] && echo $((BYTES / 1024)))\n'  # BSD reports BYTES
         'else\n'
-        '  exec "$@"\n'
+        '  rm -f "$ERR"; exec "$@"\n'
         'fi\n'
+        # Pass the child's own stderr through, minus time's report block.
+        'grep -viE "maximum resident|^[[:space:]]*[0-9]+[[:space:]]+[a-z]|'
+        '^\\s*(Command|User|System|Percent|Elapsed|Average|Major|Minor|Voluntary|'
+        'Involuntary|Swaps|File|Socket|Signals|Page|Exit)" "$ERR" >&2 || true\n'
+        '[ -n "$KB" ] && echo "PLANCK_RANK_RSS rank=$RANK peak_kb=$KB" >&2\n'
+        'rm -f "$ERR"\n'
+        'exit $RC\n'
     )
 
 
@@ -233,29 +248,41 @@ def parse_run(out: str, err: str, wall: float):
     }
 
 
-def run_serial(exe: Path, atoms, basis, engine, method, threads):
+def run_serial(exe: Path, atoms, basis, engine, method, threads, max_cycles=100):
+    """One serial process. Runs under the SAME RSS probe as the MPI arm.
+
+    The probe is not MPI-specific -- it just wraps a process in GNU time. Using
+    it here too means the 1-rank peak-RSS number (the Q2 baseline, and the whole
+    point of --memory-only) is measured the same way as the MPI numbers, rather
+    than being None on the serial path.
+    """
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
     with tempfile.TemporaryDirectory() as td:
         inp = Path(td) / "scale.hfinp"
-        inp.write_text(planck_input(atoms, basis, engine, method))
+        inp.write_text(planck_input(atoms, basis, engine, method, max_cycles))
+        probe = Path(td) / "probe.sh"
+        probe.write_text(rank_rss_probe())
+        probe.chmod(0o755)
         t0 = time.perf_counter()
         p = subprocess.run(
-            [str(exe), str(inp)], capture_output=True, text=True, env=env
+            [str(probe), str(exe), str(inp)],
+            capture_output=True, text=True, env=env
         )
         wall = time.perf_counter() - t0
     r = parse_run(p.stdout, p.stderr, wall)
     r["returncode"] = p.returncode
+    r["ranks"] = 1
     if r["energy"] is None:
         r["error"] = (p.stderr or p.stdout)[-400:]
     return r
 
 
-def run_mpi(exe: Path, atoms, basis, engine, method, ranks, threads):
+def run_mpi(exe: Path, atoms, basis, engine, method, ranks, threads, max_cycles=100):
     """mpirun -n <ranks> planck-mpi, with each rank self-reporting peak RSS."""
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
     with tempfile.TemporaryDirectory() as td:
         inp = Path(td) / "scale.hfinp"
-        inp.write_text(planck_input(atoms, basis, engine, method))
+        inp.write_text(planck_input(atoms, basis, engine, method, max_cycles))
         probe = Path(td) / "probe.sh"
         probe.write_text(rank_rss_probe())
         probe.chmod(0o755)
@@ -319,6 +346,103 @@ def verify_rank_invariance(build: Path, atoms, basis, engine, methods, ranks, th
     return ok
 
 
+def run_memory_only(build: Path, sizes, args, methods) -> int:
+    """Q2 in isolation: does DFT pay for the missing fused J/K, and how much?
+
+    Prints measured peak RSS beside the nb^4 tensor that DFT still materializes
+    (and HF, being fused, does not). The two columns to compare are DFT_MB and
+    nb^4_MB: if the former tracks the latter while HF stays flat, the claim in
+    docs/DFT_FUSED_JK_SCOPE.md is confirmed by measurement.
+
+    A crash IS data. Once nb^4 exceeds RAM, DFT dies where HF keeps going --
+    that ceiling is the single most useful number for scoping the DFT work, so
+    it is reported rather than treated as a failure.
+    """
+    rows = []
+    print(f"{'nwat':>5} {'natoms':>7} {'nb':>5} {'nb^4_MB':>10} "
+          f"{'HF_MB':>8} {'DFT_MB':>9} {'ratio':>7}")
+    print("-" * 60)
+
+    for n in sizes:
+        atoms = water_chain(n)
+        row = {"nwater": n, "natoms": len(atoms)}
+        for m in methods:
+            exe = build / ("planck-dft" if m == "dft" else "hartree-fock")
+            if not exe.exists():
+                continue
+            r = run_serial(exe, atoms, args.basis, args.engine, m,
+                           args.threads, args.max_cycles)
+            row[m] = r
+            if row.get("nbasis") is None and r.get("nbasis"):
+                row["nbasis"] = r["nbasis"]
+
+        nb = row.get("nbasis")
+        # The dense tensor DFT still allocates and HF (fused) does not.
+        nb4_mb = (nb**4) * 8 / 1e6 if nb else None
+        hf = row.get("hf", {}).get("peak_rss_mb_per_rank")
+        dft = row.get("dft", {}).get("peak_rss_mb_per_rank")
+
+        # CAREFUL: a non-zero exit does NOT mean it ran out of memory. In this
+        # mode max_cycles=1, so the SCF deliberately does not converge and the
+        # binaries exit 1 EVERY time. Using returncode as the ceiling signal
+        # would report a false ceiling on every single row (it did).
+        #
+        # A real allocation failure means the process died before `time` could
+        # report a high-water mark -- so the true signal is "no RSS came back".
+        def cell(run, mb):
+            if mb:
+                return f"{mb:.0f}"
+            return "DIED" if run else "--"
+
+        ratio = f"{dft / hf:.0f}x" if (hf and dft) else "--"
+        print(f"{n:>5} {row['natoms']:>7} {(nb or 0):>5} "
+              f"{(f'{nb4_mb:.0f}' if nb4_mb else '--'):>10} "
+              f"{cell(row.get('hf'), hf):>8} {cell(row.get('dft'), dft):>9} "
+              f"{ratio:>7}")
+        rows.append(row)
+
+    print()
+    print("=" * 60)
+    print("Q2 READ-OUT")
+    print("=" * 60)
+    print("HF is fused: it never allocates nb^4, so HF_MB should stay ~flat.")
+    print("DFT still materializes it (TWICE for range-separated), so DFT_MB")
+    print("should track the nb^4_MB column -- and eventually DIE where HF does not.")
+    print()
+    measured = [r for r in rows
+                if r.get("hf", {}).get("peak_rss_mb_per_rank")
+                and r.get("dft", {}).get("peak_rss_mb_per_rank")]
+    if measured:
+        worst = max(measured,
+                    key=lambda r: r["dft"]["peak_rss_mb_per_rank"]
+                    / r["hf"]["peak_rss_mb_per_rank"])
+        h = worst["hf"]["peak_rss_mb_per_rank"]
+        d = worst["dft"]["peak_rss_mb_per_rank"]
+        print(f"Worst measured gap: nb={worst['nbasis']} -- "
+              f"HF {h:.0f} MB vs DFT {d:.0f} MB ({d / h:.0f}x).")
+        print("That excess is the nb^4 tensor. It is what")
+        print("docs/DFT_FUSED_JK_SCOPE.md removes.")
+
+    # The ceiling: DFT reported no high-water mark (it died before `time` could)
+    # while HF at the same size did. NOT returncode -- see the note in cell():
+    # max_cycles=1 makes every run exit non-zero, so returncode would flag a
+    # false ceiling on every row.
+    died = [r for r in rows
+            if r.get("dft") and not r["dft"].get("peak_rss_mb_per_rank")
+            and r.get("hf", {}).get("peak_rss_mb_per_rank")]
+    if died:
+        d0 = died[0]
+        print(f"\nDFT CEILING: DFT produced no RSS at nwater={d0['nwater']} "
+              f"(nb={d0.get('nbasis')}) -- it died before it could be measured,")
+        print(f"while HF survived on {d0['hf']['peak_rss_mb_per_rank']:.0f} MB. "
+              f"THAT GAP IS THE DELIVERABLE: the same system runs under HF and")
+        print("does not under DFT, purely because DFT still materializes nb^4.")
+    if args.out:
+        args.out.write_text(json.dumps({"mode": "memory_only", "rows": rows}, indent=2))
+        print(f"\nWrote {args.out}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Scale-proving fixture: strong scaling, memory, diag ceiling."
@@ -340,6 +464,16 @@ def main() -> int:
     ap.add_argument("--out", type=Path, help="write results JSON here")
     ap.add_argument("--verify-only", action="store_true",
                     help="run only the rank-invariance gate and exit")
+    ap.add_argument("--memory-only", action="store_true",
+                    help="Q2 ONLY: 1 rank, a size ladder chosen to make the nb^4 "
+                         "tensor hurt, and max_cycles=1. Peak RSS is set on the "
+                         "first iteration -- converging the SCF just to measure "
+                         "memory wastes hours. Use --sizes to override the ladder.")
+    ap.add_argument("--max-cycles", type=int, default=100,
+                    help="SCF iteration cap. --memory-only forces 1: the nb^4 "
+                         "allocation happens up front, so one iteration is enough "
+                         "to catch the high-water mark (and DFT at nb=200+ would "
+                         "otherwise take hours to converge).")
     args = ap.parse_args()
 
     build = args.build_dir.resolve()
@@ -347,13 +481,42 @@ def main() -> int:
     ranks = [int(r) for r in args.ranks.split(",") if r]
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
 
+    # ---------------------------------------------------------------------
+    # --memory-only: answer Q2 and nothing else, as cheaply as possible.
+    #
+    # Q2 does not need MPI (it is a 1-rank question: what does ONE process
+    # hold?), and it does not need a converged SCF -- the nb^4 tensor is
+    # allocated up front, so the high-water mark is already set by the first
+    # iteration. Converging a DFT run at nb=200 to measure a memory peak that
+    # was reached in second one would waste hours.
+    #
+    # The default ladder is picked so the nb^4 tensor actually HURTS. With
+    # 6-31g (cartesian) a water chain gives nb = 13*nwater, so:
+    #     nwater= 8 -> nb=104 -> nb^4 =  0.9 GB
+    #     nwater=12 -> nb=156 -> nb^4 =  4.7 GB
+    #     nwater=16 -> nb=208 -> nb^4 = 15.0 GB
+    # HF (fused) should stay flat and tiny across all three. DFT should track
+    # the nb^4 column and eventually die. Both outcomes are the result.
+    # ---------------------------------------------------------------------
+    if args.memory_only:
+        if args.sizes == ap.get_default("sizes"):
+            sizes = [8, 12, 16]
+        ranks = [1]
+        if args.max_cycles == ap.get_default("max_cycles"):
+            args.max_cycles = 1
+
     print(f"host    : {platform.node()} ({platform.system()})")
     print(f"build   : {build}")
     print(f"basis   : {args.basis}   engine: {args.engine}   threads/rank: {args.threads}")
-    if platform.system() != "Linux":
-        print("NOTE    : not Linux -- per-rank RSS unavailable, Q2 memory numbers "
-              "will be None. Correctness (Q0) still valid.")
+    if args.memory_only:
+        print(f"mode    : MEMORY-ONLY (Q2) -- 1 rank, max_cycles={args.max_cycles}, "
+              f"sizes={sizes}")
+        print("          Peak RSS is set by the first iteration; the SCF is NOT")
+        print("          converged and no energy is expected. That is intended.")
     print()
+
+    if args.memory_only:
+        return run_memory_only(build, sizes, args, methods)
 
     # Gate on the SMALLEST system: correctness is size-independent, so pay the
     # cheapest possible price to catch a broken build.
