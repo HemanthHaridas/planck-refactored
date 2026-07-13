@@ -3,6 +3,7 @@
 #include "boys.h"
 #include "base/mpi_env.h"
 #include "quartet_layout.h"
+#include "fock_accumulate.h"
 
 #include <algorithm>
 #include <array>
@@ -1901,6 +1902,24 @@ namespace
         double tol_eri,
         const SymOps *sym_ops,
         std::vector<double> &eri);
+
+    // Forward declaration — memory-direct fused quartet->Fock build (defined
+    // after build_eri_tensor_shellwise). Used by the _direct entries below.
+    static void fused_fock_shellwise(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nb,
+        const Eigen::MatrixXd &Q,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        double tol_eri,
+        bool spin_resolved,
+        const Eigen::MatrixXd &P,
+        const Eigen::MatrixXd &Pt,
+        const Eigen::MatrixXd &Pa,
+        const Eigen::MatrixXd &Pb,
+        Eigen::MatrixXd &G,
+        Eigen::MatrixXd &Ga,
+        Eigen::MatrixXd &Gb);
 } // namespace
 
 // ─── Public: build 2e Fock (G = J - 0.5*K) ──────────────────────────────────
@@ -1998,6 +2017,69 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf(
                     Gb(mu, nu) += Pt(lam, sig) * coulomb - Pb(lam, sig) * exch;
                 }
 
+    return {Ga, Gb};
+}
+
+// ─── Memory-direct Fock builders (no nb^4 tensor) ────────────────────────────
+//
+// See os.h. These fuse the quartet loop with the density contraction, so the
+// only allocation is the nb^2 Fock matrix. Serial at this step; threading is a
+// separate change because the accumulations are read-modify-write.
+
+Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density,
+    const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    // Integral symmetry is not supported by the fused path — delegate.
+    if (use_symmetry_ops(sym_ops))
+        return _compute_2e_fock(shell_pairs, density, nbasis, kernel, omega,
+                                tol_eri, sym_ops);
+
+    const std::size_t nb = nbasis;
+    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
+
+    Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
+    Eigen::MatrixXd unused; // UHF outputs, not used in the RHF branch
+
+    fused_fock_shellwise(shell_pairs, nb, Q, kernel, omega, tol_eri,
+                         /*spin_resolved=*/false,
+                         density, unused, unused, unused,
+                         G, unused, unused);
+    return G;
+}
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &Pa,
+    const Eigen::MatrixXd &Pb,
+    const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    if (use_symmetry_ops(sym_ops))
+        return _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega,
+                                    tol_eri, sym_ops);
+
+    const std::size_t nb = nbasis;
+    const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
+
+    const Eigen::MatrixXd Pt = Pa + Pb;
+    Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
+    Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
+    Eigen::MatrixXd unused;
+
+    fused_fock_shellwise(shell_pairs, nb, Q, kernel, omega, tol_eri,
+                         /*spin_resolved=*/true,
+                         unused, Pt, Pa, Pb,
+                         unused, Ga, Gb);
     return {Ga, Gb};
 }
 
@@ -2290,6 +2372,134 @@ namespace
         // every rank. No-op when serial (size 1). Each canonical entry was
         // written by a single rank, so a plain sum reconstructs the whole tensor.
         HartreeFock::Mpi::allreduce_inplace(eri.data(), eri.size());
+    }
+
+    // ── Memory-direct Fock build (step 2: serial) ────────────────────────────
+    //
+    // Same shell-quartet loop as build_eri_tensor_shellwise, but each canonical
+    // quartet's contracted value is contracted straight into the Fock matrix via
+    // fock_accumulate.h instead of being scattered into an nb^4 tensor. Nothing
+    // nb^4 is ever allocated: the only output is G (nb^2), or Ga/Gb for UHF.
+    //
+    // Serial by design at this step. The accumulations are read-modify-write
+    // (unlike the store-only write_eri_permutations), so a threaded version must
+    // give each thread its own G and reduce in a fixed thread-index order — that
+    // is step 3, deliberately separated so a threading bug cannot be confused
+    // with an accumulation bug.
+    //
+    // `spin_resolved == false` fills G (RHF); otherwise it fills Ga/Gb (UHF) and
+    // G is unused. One loop serves both so the quartet traversal cannot drift
+    // between the two.
+    //
+    // Integral symmetry (sym_ops) is NOT handled here: that path replicates a
+    // symmetry orbit of quartets on top of the 8-fold permutational orbit, and
+    // deduplicating across both is a separate correctness problem. Callers must
+    // fall back to the two-phase builder when symmetry ops are active — the
+    // public entries below enforce that.
+    static void fused_fock_shellwise(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nb,
+        const Eigen::MatrixXd &Q,
+        HartreeFock::ERIKernel kernel,
+        double omega,
+        double tol_eri,
+        bool spin_resolved,
+        const Eigen::MatrixXd &P,   // RHF density (spin_resolved == false)
+        const Eigen::MatrixXd &Pt,  // Pa + Pb   (spin_resolved == true)
+        const Eigen::MatrixXd &Pa,
+        const Eigen::MatrixXd &Pb,
+        Eigen::MatrixXd &G,
+        Eigen::MatrixXd &Ga,
+        Eigen::MatrixXd &Gb)
+    {
+        std::vector<const HartreeFock::ContractedView *> ao_views;
+        const std::vector<OsShellGroup> groups =
+            shell_groups_from_pairs(shell_pairs, nb, ao_views);
+        const std::size_t ngroups = groups.size();
+
+        struct GroupPair
+        {
+            std::size_t a;
+            std::size_t b;
+        };
+        std::vector<GroupPair> group_pairs;
+        group_pairs.reserve(ngroups * (ngroups + 1) / 2);
+        for (std::size_t sa = 0; sa < ngroups; ++sa)
+            for (std::size_t sb = sa; sb < ngroups; ++sb)
+                group_pairs.push_back({sa, sb});
+
+        const std::size_t ngp = group_pairs.size();
+
+        for (std::size_t bra = 0; bra < ngp; ++bra)
+        {
+            const OsShellGroup &gA = groups[group_pairs[bra].a];
+            const OsShellGroup &gB = groups[group_pairs[bra].b];
+
+            for (std::size_t ket = 0; ket < ngp; ++ket)
+            {
+                const OsShellGroup &gC = groups[group_pairs[ket].a];
+                const OsShellGroup &gD = groups[group_pairs[ket].b];
+
+                for (std::size_t ca = 0; ca < gA.n_components; ++ca)
+                {
+                    const HartreeFock::ContractedView &cvA = *ao_views[gA.first_ao + ca];
+                    const std::size_t i = cvA._index;
+                    const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
+
+                    for (std::size_t cb = 0; cb < gB.n_components; ++cb)
+                    {
+                        const HartreeFock::ContractedView &cvB = *ao_views[gB.first_ao + cb];
+                        const std::size_t j = cvB._index;
+                        if (j < i) // bra upper triangle: j >= i
+                            continue;
+                        const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
+
+                        const HartreeFock::ShellPair spAB(cvA, cvB);
+
+                        for (std::size_t cc = 0; cc < gC.n_components; ++cc)
+                        {
+                            const HartreeFock::ContractedView &cvC = *ao_views[gC.first_ao + cc];
+                            const std::size_t k = cvC._index;
+                            const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
+
+                            for (std::size_t cd = 0; cd < gD.n_components; ++cd)
+                            {
+                                const HartreeFock::ContractedView &cvD = *ao_views[gD.first_ao + cd];
+                                const std::size_t l = cvD._index;
+                                if (l < k) // ket upper triangle: l >= k
+                                    continue;
+                                // bra-ket canonical: (k,l) >=_lex (i,j)
+                                if (k < i || (k == i && l < j))
+                                    continue;
+
+                                const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
+
+                                // Schwarz screening: |(ij|kl)| ≤ Q(i,j)·Q(k,l).
+                                // With no tensor to fill, a screened-out quartet
+                                // is simply never contracted — it contributes
+                                // nothing to G, exactly as a stored zero would.
+                                if (Q(i, j) * Q(k, l) < tol_eri)
+                                    continue;
+
+                                const HartreeFock::ShellPair spCD(cvC, cvD);
+                                const double val = _contracted_eri(
+                                    spAB, spCD,
+                                    lAx, lAy, lAz, lBx, lBy, lBz,
+                                    lCx, lCy, lCz, lDx, lDy, lDz,
+                                    kernel, omega);
+
+                                if (spin_resolved)
+                                    HartreeFock::Integrals::fock_accumulate_uhf(
+                                        Ga, Gb, Pt, Pa, Pb, i, j, k, l, val);
+                                else
+                                    HartreeFock::Integrals::fock_accumulate_rhf(
+                                        G, P, i, j, k, l, val);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 } // namespace
 

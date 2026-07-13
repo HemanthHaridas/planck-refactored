@@ -302,6 +302,67 @@ namespace
         const double d_a = (Ga_ref - Ga_fus).cwiseAbs().maxCoeff();
         const double d_b = (Gb_ref - Gb_fus).cwiseAbs().maxCoeff();
 
+        // ── Step 2: the production memory-direct builders ────────────────────
+        // The checks above fuse from a PRE-BUILT tensor, isolating the
+        // accumulation rule. These call the real fused quartet loop, which never
+        // allocates nb^4 at all — so they gate the loop, not just the algebra.
+        const Eigen::MatrixXd G_direct =
+            HartreeFock::ObaraSaika::_compute_2e_fock_direct(
+                shell_pairs, P, nb, HartreeFock::ERIKernel::Coulomb, 0.0, 0.0, nullptr);
+        const auto [Ga_direct, Gb_direct] =
+            HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(
+                shell_pairs, Pa, Pb, nb, HartreeFock::ERIKernel::Coulomb, 0.0, 0.0, nullptr);
+
+        const double dd_rhf = (G_ref - G_direct).cwiseAbs().maxCoeff();
+        const double dd_uhf = std::max((Ga_ref - Ga_direct).cwiseAbs().maxCoeff(),
+                                       (Gb_ref - Gb_direct).cwiseAbs().maxCoeff());
+
+        if (dd_rhf > TOL)
+            fail("water/" + basis_name +
+                 " RHF: _compute_2e_fock_direct != _compute_2e_fock, max|dG| = " +
+                 std::to_string(dd_rhf));
+        else
+            std::cout << "OK  Step 2 / RHF / water/" << basis_name
+                      << " (nb=" << nb
+                      << "): _compute_2e_fock_direct == _compute_2e_fock, max|dG| = "
+                      << dd_rhf << '\n';
+
+        if (dd_uhf > TOL)
+            fail("water/" + basis_name +
+                 " UHF: _compute_2e_fock_uhf_direct != _compute_2e_fock_uhf, max|dG| = " +
+                 std::to_string(dd_uhf));
+        else
+            std::cout << "OK  Step 2 / UHF / water/" << basis_name
+                      << " (nb=" << nb
+                      << "): _compute_2e_fock_uhf_direct == _compute_2e_fock_uhf, max|dG| = "
+                      << dd_uhf << '\n';
+
+        // With Schwarz screening ON (the production tol_eri), both builders must
+        // still agree. This is not redundant with the unscreened check: the
+        // two-phase path leaves a screened quartet as a stored ZERO that Phase 2
+        // still reads, while the fused path never contracts it at all. The two
+        // are only equivalent if the fused skip is exactly a no-op contribution.
+        constexpr double PROD_TOL_ERI = 1e-10;
+        const Eigen::MatrixXd G_ref_s =
+            HartreeFock::ObaraSaika::_compute_2e_fock(
+                shell_pairs, P, nb, HartreeFock::ERIKernel::Coulomb, 0.0,
+                PROD_TOL_ERI, nullptr);
+        const Eigen::MatrixXd G_direct_s =
+            HartreeFock::ObaraSaika::_compute_2e_fock_direct(
+                shell_pairs, P, nb, HartreeFock::ERIKernel::Coulomb, 0.0,
+                PROD_TOL_ERI, nullptr);
+        const double dd_screened = (G_ref_s - G_direct_s).cwiseAbs().maxCoeff();
+
+        if (dd_screened > TOL)
+            fail("water/" + basis_name +
+                 " RHF (screened): _compute_2e_fock_direct != _compute_2e_fock, max|dG| = " +
+                 std::to_string(dd_screened));
+        else
+            std::cout << "OK  Step 2 / RHF / water/" << basis_name
+                      << " (nb=" << nb << ", Schwarz tol=" << PROD_TOL_ERI
+                      << "): screened fused == screened two-phase, max|dG| = "
+                      << dd_screened << '\n';
+
         if (d_rhf > TOL)
             fail("water/" + basis_name + " RHF: fused != _compute_2e_fock, max|dG| = " +
                  std::to_string(d_rhf));
