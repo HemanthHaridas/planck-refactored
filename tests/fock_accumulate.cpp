@@ -37,7 +37,9 @@
 #include "base/types.h"
 #include "basis/basis.h"
 #include "integrals/fock_accumulate.h"
+#include "integrals/hgp.h"
 #include "integrals/os.h"
+#include "integrals/rys.h"
 #include "integrals/shellpair.h"
 
 namespace
@@ -443,12 +445,82 @@ void check_fixed_thread_determinism(const std::string &basis_name)
               << std::setprecision(17) << first.sum() << '\n';
 }
 
+// ── Step 6: every engine's fused builder matches its two-phase builder ───────
+//
+// The fused loop (fused_fock.h) is shared; only the per-quartet ERI callable
+// differs between OS, HGP, Rys, and Rys-Auto. Each engine's *_direct entry must
+// therefore reproduce its OWN two-phase builder (not OS's — the engines differ
+// from each other at the last bits, which is expected and separately gated).
+void check_engine(const std::string &name,
+                  const std::string &basis_name,
+                  const Eigen::MatrixXd &two_phase,
+                  const Eigen::MatrixXd &fused)
+{
+    const double d = (two_phase - fused).cwiseAbs().maxCoeff();
+    if (d > TOL)
+        fail(name + " / water/" + basis_name +
+             ": fused != two-phase, max|dG| = " + std::to_string(d));
+    else
+        std::cout << "OK  Step 6 / " << name << " / water/" << basis_name
+                  << ": fused == two-phase, max|dG| = " << d << '\n';
+}
+
+void check_all_engines(const std::string &basis_name)
+{
+    HartreeFock::Calculator calc = make_water(basis_name);
+    if (!g_ok)
+        return;
+
+    const std::vector<HartreeFock::ShellPair> sp = build_shellpairs(calc._shells);
+    const std::size_t nb = calc._shells._basis_functions.size();
+
+    std::mt19937 rng(11);
+    const Eigen::MatrixXd P = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pa = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pb = random_symmetric_density(nb, rng);
+
+    const auto K = HartreeFock::ERIKernel::Coulomb;
+    constexpr double W = 0.0;
+    constexpr double T = 1e-10;
+
+    using namespace HartreeFock;
+
+    check_engine("OS   RHF", basis_name,
+                 ObaraSaika::_compute_2e_fock(sp, P, nb, K, W, T, nullptr),
+                 ObaraSaika::_compute_2e_fock_direct(sp, P, nb, K, W, T, nullptr));
+    check_engine("HGP  RHF", basis_name,
+                 HeadGordonPople::_compute_2e_fock(sp, P, nb, K, W, T, nullptr),
+                 HeadGordonPople::_compute_2e_fock_direct(sp, P, nb, K, W, T, nullptr));
+    check_engine("Rys  RHF", basis_name,
+                 RysQuad::_compute_2e_fock(sp, P, nb, K, W, T, nullptr),
+                 RysQuad::_compute_2e_fock_direct(sp, P, nb, K, W, T, nullptr));
+    check_engine("Auto RHF", basis_name,
+                 RysQuad::_compute_2e_fock_auto(sp, P, nb, K, W, T, nullptr),
+                 RysQuad::_compute_2e_fock_auto_direct(sp, P, nb, K, W, T, nullptr));
+
+    // UHF: compare the alpha block (beta is built by the same accumulation).
+    check_engine("OS   UHF", basis_name,
+                 ObaraSaika::_compute_2e_fock_uhf(sp, Pa, Pb, nb, K, W, T, nullptr).first,
+                 ObaraSaika::_compute_2e_fock_uhf_direct(sp, Pa, Pb, nb, K, W, T, nullptr).first);
+    check_engine("HGP  UHF", basis_name,
+                 HeadGordonPople::_compute_2e_fock_uhf(sp, Pa, Pb, nb, K, W, T, nullptr).first,
+                 HeadGordonPople::_compute_2e_fock_uhf_direct(sp, Pa, Pb, nb, K, W, T, nullptr).first);
+    check_engine("Rys  UHF", basis_name,
+                 RysQuad::_compute_2e_fock_uhf(sp, Pa, Pb, nb, K, W, T, nullptr).first,
+                 RysQuad::_compute_2e_fock_uhf_direct(sp, Pa, Pb, nb, K, W, T, nullptr).first);
+    check_engine("Auto UHF", basis_name,
+                 RysQuad::_compute_2e_fock_uhf_auto(sp, Pa, Pb, nb, K, W, T, nullptr).first,
+                 RysQuad::_compute_2e_fock_uhf_auto_direct(sp, Pa, Pb, nb, K, W, T, nullptr).first);
+}
+
 int main()
 {
     check_random_tensors();
     check_real_integrals("sto-3g");
     check_real_integrals("6-31g*"); // d shells: exercises the multi-component orbit
     check_fixed_thread_determinism("6-31g*");
+    check_all_engines("sto-3g");
+    check_all_engines("6-31g*");
 
     if (!g_ok)
     {

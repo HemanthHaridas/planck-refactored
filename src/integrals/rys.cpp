@@ -4,6 +4,7 @@
 #include "rys_roots.h"
 #include "screening.h" // Shared HGP-based Schwarz table for the Auto path.
 #include "quartet_layout.h"
+#include "fused_fock.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1749,3 +1750,137 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(
                 }
     return {Ga, Gb};
 }
+
+// ─── Memory-direct Fock builders (no nb^4 tensor) ────────────────────────────
+//
+// Same results as the two-phase builders above, driven by the shared fused loop
+// (fused_fock.h). Each canonical quartet is contracted straight into G; the nb^4
+// tensor is never allocated. Only the per-quartet ERI callable differs between
+// engines -- here the Rys kernel, and for the Auto entries the same
+// angular-momentum dispatch (_auto_contracted_eri) the Auto tensor path uses.
+//
+// sym_ops delegates to the two-phase builder -- see the note in fused_fock.h.
+
+namespace
+{
+    inline Eigen::MatrixXd rys_schwarz_matrix(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nb,
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+    {
+        const std::vector<double> flat =
+            HartreeFock::Screening::schwarz_table_hgp(shell_pairs, nb, sym_ops);
+        Eigen::MatrixXd Q(nb, nb);
+        for (std::size_t i = 0; i < nb; ++i)
+            for (std::size_t j = 0; j < nb; ++j)
+                Q(i, j) = flat[i * nb + j];
+        return Q;
+    }
+
+    constexpr auto rys_eri_elem =
+        [](const HartreeFock::ShellPair &spAB, const HartreeFock::ShellPair &spCD,
+           int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+           int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+           HartreeFock::ERIKernel k, double w)
+    {
+        return HartreeFock::RysQuad::_rys_contracted_eri(
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
+            lCx, lCy, lCz, lDx, lDy, lDz, k, w);
+    };
+
+    constexpr auto auto_eri_elem =
+        [](const HartreeFock::ShellPair &spAB, const HartreeFock::ShellPair &spCD,
+           int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+           int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+           HartreeFock::ERIKernel k, double w)
+    {
+        return _auto_contracted_eri(
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
+            lCx, lCy, lCz, lDx, lDy, lDz, k, w);
+    };
+
+    // One body for all four entries; `elem` picks Rys or Auto.
+    template <typename Elem>
+    Eigen::MatrixXd rys_fused_rhf(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &density, std::size_t nb,
+        HartreeFock::ERIKernel kernel, double omega, double tol_eri,
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem)
+    {
+        const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
+        Eigen::MatrixXd G, Ga_unused, Gb_unused;
+        HartreeFock::Integrals::FusedFockDensities dens;
+        dens.P = &density;
+        HartreeFock::Integrals::fused_fock_build(
+            shell_pairs, nb, Q, kernel, omega, tol_eri,
+            /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, elem);
+        return G;
+    }
+
+    template <typename Elem>
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> rys_fused_uhf(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, std::size_t nb,
+        HartreeFock::ERIKernel kernel, double omega, double tol_eri,
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem)
+    {
+        const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
+        const Eigen::MatrixXd Pt = Pa + Pb;
+        Eigen::MatrixXd G_unused, Ga, Gb;
+        HartreeFock::Integrals::FusedFockDensities dens;
+        dens.Pt = &Pt;
+        dens.Pa = &Pa;
+        dens.Pb = &Pb;
+        HartreeFock::Integrals::fused_fock_build(
+            shell_pairs, nb, Q, kernel, omega, tol_eri,
+            /*spin_resolved=*/true, dens, G_unused, Ga, Gb, elem);
+        return {Ga, Gb};
+    }
+}
+
+Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density, const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    if (sym_ops != nullptr && !sym_ops->empty())
+        return _compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, rys_eri_elem);
+}
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+HartreeFock::RysQuad::_compute_2e_fock_uhf_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    if (sym_ops != nullptr && !sym_ops->empty())
+        return _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, rys_eri_elem);
+}
+
+Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density, const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    if (sym_ops != nullptr && !sym_ops->empty())
+        return _compute_2e_fock_auto(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem);
+}
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    if (sym_ops != nullptr && !sym_ops->empty())
+        return _compute_2e_fock_uhf_auto(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem);
+}
+

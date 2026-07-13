@@ -4,6 +4,7 @@
 #include "base/mpi_env.h"
 #include "quartet_layout.h"
 #include "fock_accumulate.h"
+#include "fused_fock.h"
 
 #ifdef USE_OPENMP
 #include <omp.h>
@@ -1906,24 +1907,6 @@ namespace
         double tol_eri,
         const SymOps *sym_ops,
         std::vector<double> &eri);
-
-    // Forward declaration — memory-direct fused quartet->Fock build (defined
-    // after build_eri_tensor_shellwise). Used by the _direct entries below.
-    static void fused_fock_shellwise(
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        std::size_t nb,
-        const Eigen::MatrixXd &Q,
-        HartreeFock::ERIKernel kernel,
-        double omega,
-        double tol_eri,
-        bool spin_resolved,
-        const Eigen::MatrixXd &P,
-        const Eigen::MatrixXd &Pt,
-        const Eigen::MatrixXd &Pa,
-        const Eigen::MatrixXd &Pb,
-        Eigen::MatrixXd &G,
-        Eigen::MatrixXd &Ga,
-        Eigen::MatrixXd &Gb);
 } // namespace
 
 // ─── Public: build 2e Fock (G = J - 0.5*K) ──────────────────────────────────
@@ -2047,13 +2030,21 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock_direct(
     const std::size_t nb = nbasis;
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
 
-    Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
-    Eigen::MatrixXd unused; // UHF outputs, not used in the RHF branch
+    Eigen::MatrixXd G, Ga_unused, Gb_unused;
+    HartreeFock::Integrals::FusedFockDensities dens;
+    dens.P = &density;
 
-    fused_fock_shellwise(shell_pairs, nb, Q, kernel, omega, tol_eri,
-                         /*spin_resolved=*/false,
-                         density, unused, unused, unused,
-                         G, unused, unused);
+    HartreeFock::Integrals::fused_fock_build(
+        shell_pairs, nb, Q, kernel, omega, tol_eri,
+        /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused,
+        [](const HartreeFock::ShellPair &spAB, const HartreeFock::ShellPair &spCD,
+           int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+           int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+           HartreeFock::ERIKernel k, double w)
+        {
+            return _contracted_eri(spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                   lCx, lCy, lCz, lDx, lDy, lDz, k, w);
+        });
     return G;
 }
 
@@ -2076,14 +2067,23 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
 
     const Eigen::MatrixXd Pt = Pa + Pb;
-    Eigen::MatrixXd Ga = Eigen::MatrixXd::Zero(nb, nb);
-    Eigen::MatrixXd Gb = Eigen::MatrixXd::Zero(nb, nb);
-    Eigen::MatrixXd unused;
+    Eigen::MatrixXd G_unused, Ga, Gb;
+    HartreeFock::Integrals::FusedFockDensities dens;
+    dens.Pt = &Pt;
+    dens.Pa = &Pa;
+    dens.Pb = &Pb;
 
-    fused_fock_shellwise(shell_pairs, nb, Q, kernel, omega, tol_eri,
-                         /*spin_resolved=*/true,
-                         unused, Pt, Pa, Pb,
-                         unused, Ga, Gb);
+    HartreeFock::Integrals::fused_fock_build(
+        shell_pairs, nb, Q, kernel, omega, tol_eri,
+        /*spin_resolved=*/true, dens, G_unused, Ga, Gb,
+        [](const HartreeFock::ShellPair &spAB, const HartreeFock::ShellPair &spCD,
+           int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+           int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+           HartreeFock::ERIKernel k, double w)
+        {
+            return _contracted_eri(spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
+                                   lCx, lCy, lCz, lDx, lDy, lDz, k, w);
+        });
     return {Ga, Gb};
 }
 
@@ -2378,210 +2378,6 @@ namespace
         HartreeFock::Mpi::allreduce_inplace(eri.data(), eri.size());
     }
 
-    // ── Memory-direct Fock build (step 2: serial) ────────────────────────────
-    //
-    // Same shell-quartet loop as build_eri_tensor_shellwise, but each canonical
-    // quartet's contracted value is contracted straight into the Fock matrix via
-    // fock_accumulate.h instead of being scattered into an nb^4 tensor. Nothing
-    // nb^4 is ever allocated: the only output is G (nb^2), or Ga/Gb for UHF.
-    //
-    // Serial by design at this step. The accumulations are read-modify-write
-    // (unlike the store-only write_eri_permutations), so a threaded version must
-    // give each thread its own G and reduce in a fixed thread-index order — that
-    // is step 3, deliberately separated so a threading bug cannot be confused
-    // with an accumulation bug.
-    //
-    // `spin_resolved == false` fills G (RHF); otherwise it fills Ga/Gb (UHF) and
-    // G is unused. One loop serves both so the quartet traversal cannot drift
-    // between the two.
-    //
-    // Integral symmetry (sym_ops) is NOT handled here: that path replicates a
-    // symmetry orbit of quartets on top of the 8-fold permutational orbit, and
-    // deduplicating across both is a separate correctness problem. Callers must
-    // fall back to the two-phase builder when symmetry ops are active — the
-    // public entries below enforce that.
-    static void fused_fock_shellwise(
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        std::size_t nb,
-        const Eigen::MatrixXd &Q,
-        HartreeFock::ERIKernel kernel,
-        double omega,
-        double tol_eri,
-        bool spin_resolved,
-        const Eigen::MatrixXd &P,   // RHF density (spin_resolved == false)
-        const Eigen::MatrixXd &Pt,  // Pa + Pb   (spin_resolved == true)
-        const Eigen::MatrixXd &Pa,
-        const Eigen::MatrixXd &Pb,
-        Eigen::MatrixXd &G,
-        Eigen::MatrixXd &Ga,
-        Eigen::MatrixXd &Gb)
-    {
-        std::vector<const HartreeFock::ContractedView *> ao_views;
-        const std::vector<OsShellGroup> groups =
-            shell_groups_from_pairs(shell_pairs, nb, ao_views);
-        const std::size_t ngroups = groups.size();
-
-        struct GroupPair
-        {
-            std::size_t a;
-            std::size_t b;
-        };
-        std::vector<GroupPair> group_pairs;
-        group_pairs.reserve(ngroups * (ngroups + 1) / 2);
-        for (std::size_t sa = 0; sa < ngroups; ++sa)
-            for (std::size_t sb = sa; sb < ngroups; ++sb)
-                group_pairs.push_back({sa, sb});
-
-        const std::size_t ngp = group_pairs.size();
-
-        // Per-thread Fock partials, summed in FIXED thread-index order after the
-        // parallel region.
-        //
-        // This is the one genuinely hazardous part of the memory-direct build.
-        // write_eri_permutations is store-only (`omp atomic write`, every writer
-        // storing the same canonical value), so the tensor build is inherently
-        // order-independent. These accumulations are read-modify-write into a
-        // shared G, so they are a real reduction — and an `omp critical` /
-        // `omp atomic update` reduction sums in non-deterministic completion
-        // order, which (floating-point addition being non-associative) makes the
-        // result drift with thread count. That is exactly the ~1e-10 jitter the
-        // DFT XC accumulation already had to fix (see src/dft/ks_matrix.cpp).
-        // Per-thread buffers + fixed-index summation keeps the fused build
-        // bitwise-reproducible at any thread count.
-#ifdef USE_OPENMP
-        const int n_threads = omp_get_max_threads();
-#else
-        const int n_threads = 1;
-#endif
-        const bool need_uhf = spin_resolved;
-        std::vector<Eigen::MatrixXd> g_partials(
-            need_uhf ? 0 : static_cast<std::size_t>(n_threads),
-            Eigen::MatrixXd::Zero(nb, nb));
-        std::vector<Eigen::MatrixXd> ga_partials(
-            need_uhf ? static_cast<std::size_t>(n_threads) : 0,
-            Eigen::MatrixXd::Zero(nb, nb));
-        std::vector<Eigen::MatrixXd> gb_partials(
-            need_uhf ? static_cast<std::size_t>(n_threads) : 0,
-            Eigen::MatrixXd::Zero(nb, nb));
-
-        // schedule(static), NOT dynamic — and this is load-bearing, not a
-        // preference. Per-thread partials + fixed-index summation fixes the
-        // order the PARTIALS are combined in, but under schedule(dynamic) the
-        // set of quartets each thread happens to grab varies run to run, so each
-        // partial sums a different subset in a different order and the total
-        // still drifts (measured: max|dG| moved 2.0e-15..2.9e-15 across thread
-        // counts with dynamic). static pins the bra -> thread mapping, making
-        // the whole build bitwise-reproducible at any thread count.
-        //
-        // The tensor build can afford dynamic (better load balance on the
-        // triangular loop) precisely because its scatter is store-only and thus
-        // order-independent; a reduction cannot.
-#ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-        for (std::size_t bra = 0; bra < ngp; ++bra)
-        {
-#ifdef USE_OPENMP
-            const int thread_id = omp_get_thread_num();
-#else
-            const int thread_id = 0;
-#endif
-            // In the RHF branch only g_partials is populated and only
-            // fock_accumulate_rhf runs, so the beta reference is never read;
-            // it aliases the alpha slot purely to keep both branches in one
-            // loop. (Binding it to an empty vector would be UB.)
-            Eigen::MatrixXd &G_local =
-                need_uhf ? ga_partials[thread_id] : g_partials[thread_id];
-            Eigen::MatrixXd &Gb_local =
-                need_uhf ? gb_partials[thread_id] : g_partials[thread_id];
-
-            const OsShellGroup &gA = groups[group_pairs[bra].a];
-            const OsShellGroup &gB = groups[group_pairs[bra].b];
-
-            for (std::size_t ket = 0; ket < ngp; ++ket)
-            {
-                const OsShellGroup &gC = groups[group_pairs[ket].a];
-                const OsShellGroup &gD = groups[group_pairs[ket].b];
-
-                for (std::size_t ca = 0; ca < gA.n_components; ++ca)
-                {
-                    const HartreeFock::ContractedView &cvA = *ao_views[gA.first_ao + ca];
-                    const std::size_t i = cvA._index;
-                    const int lAx = cvA._cartesian[0], lAy = cvA._cartesian[1], lAz = cvA._cartesian[2];
-
-                    for (std::size_t cb = 0; cb < gB.n_components; ++cb)
-                    {
-                        const HartreeFock::ContractedView &cvB = *ao_views[gB.first_ao + cb];
-                        const std::size_t j = cvB._index;
-                        if (j < i) // bra upper triangle: j >= i
-                            continue;
-                        const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
-
-                        const HartreeFock::ShellPair spAB(cvA, cvB);
-
-                        for (std::size_t cc = 0; cc < gC.n_components; ++cc)
-                        {
-                            const HartreeFock::ContractedView &cvC = *ao_views[gC.first_ao + cc];
-                            const std::size_t k = cvC._index;
-                            const int lCx = cvC._cartesian[0], lCy = cvC._cartesian[1], lCz = cvC._cartesian[2];
-
-                            for (std::size_t cd = 0; cd < gD.n_components; ++cd)
-                            {
-                                const HartreeFock::ContractedView &cvD = *ao_views[gD.first_ao + cd];
-                                const std::size_t l = cvD._index;
-                                if (l < k) // ket upper triangle: l >= k
-                                    continue;
-                                // bra-ket canonical: (k,l) >=_lex (i,j)
-                                if (k < i || (k == i && l < j))
-                                    continue;
-
-                                const int lDx = cvD._cartesian[0], lDy = cvD._cartesian[1], lDz = cvD._cartesian[2];
-
-                                // Schwarz screening: |(ij|kl)| ≤ Q(i,j)·Q(k,l).
-                                // With no tensor to fill, a screened-out quartet
-                                // is simply never contracted — it contributes
-                                // nothing to G, exactly as a stored zero would.
-                                if (Q(i, j) * Q(k, l) < tol_eri)
-                                    continue;
-
-                                const HartreeFock::ShellPair spCD(cvC, cvD);
-                                const double val = _contracted_eri(
-                                    spAB, spCD,
-                                    lAx, lAy, lAz, lBx, lBy, lBz,
-                                    lCx, lCy, lCz, lDx, lDy, lDz,
-                                    kernel, omega);
-
-                                if (spin_resolved)
-                                    HartreeFock::Integrals::fock_accumulate_uhf(
-                                        G_local, Gb_local, Pt, Pa, Pb, i, j, k, l, val);
-                                else
-                                    HartreeFock::Integrals::fock_accumulate_rhf(
-                                        G_local, P, i, j, k, l, val);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Fixed thread-index order — never completion order. See the note above.
-        if (need_uhf)
-        {
-            Ga.setZero(nb, nb);
-            Gb.setZero(nb, nb);
-            for (int t = 0; t < n_threads; ++t)
-            {
-                Ga += ga_partials[static_cast<std::size_t>(t)];
-                Gb += gb_partials[static_cast<std::size_t>(t)];
-            }
-        }
-        else
-        {
-            G.setZero(nb, nb);
-            for (int t = 0; t < n_threads; ++t)
-                G += g_partials[static_cast<std::size_t>(t)];
-        }
-    }
 } // namespace
 
 // Compute ERI and store it for conventional SCF

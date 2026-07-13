@@ -80,11 +80,11 @@ inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
-        return HartreeFock::RysQuad::_compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::HeadGordonPople:
-        return HartreeFock::HeadGordonPople::_compute_2e_fock(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::HeadGordonPople::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::Auto:
-        return HartreeFock::RysQuad::_compute_2e_fock_auto(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_auto_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     default:
         // OS (the default engine) uses the MEMORY-DIRECT builder: it contracts
         // each quartet straight into G and never allocates the nb^4 tensor. The
@@ -115,11 +115,11 @@ _compute_2e_fock_uhf(const std::vector<HartreeFock::ShellPair> &shell_pairs,
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
-        return HartreeFock::RysQuad::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::HeadGordonPople:
-        return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     case HartreeFock::IntegralMethod::Auto:
-        return HartreeFock::RysQuad::_compute_2e_fock_uhf_auto(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
+        return HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);
     default:
         // Memory-direct: see the RHF dispatcher above.
         return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops);

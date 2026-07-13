@@ -4,6 +4,7 @@
 #include "os.h"
 #include "screening.h"
 #include "quartet_layout.h"
+#include "fused_fock.h"
 
 #include <algorithm>
 #include <array>
@@ -1549,6 +1550,105 @@ HartreeFock::HeadGordonPople::_compute_2e_fock_uhf(
                     Gb(mu, nu) += Pt(lam, sig) * coulomb - Pb(lam, sig) * exch;
                 }
 
+    return {Ga, Gb};
+}
+
+// ─── Memory-direct Fock builders (no nb^4 tensor) ────────────────────────────
+//
+// Same result as _compute_2e_fock / _compute_2e_fock_uhf above, but driven by
+// the shared fused loop (fused_fock.h): each canonical quartet is contracted
+// straight into G, and the nb^4 tensor is never allocated. The two-phase
+// builders above call _compute_2e, which materializes the full tensor on every
+// SCF iteration. Only the per-quartet ERI callable differs between engines.
+//
+// sym_ops (integral symmetry) is delegated to the two-phase builder — see the
+// note in fused_fock.h.
+
+namespace
+{
+    // Schwarz table as an nb x nb Eigen view over the shared flat helper
+    // (row-major nb*nb, Q[i*nb+j] == Q[j*nb+i]).
+    inline Eigen::MatrixXd hgp_schwarz_matrix(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        std::size_t nb,
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+    {
+        const std::vector<double> flat =
+            HartreeFock::Screening::schwarz_table_hgp(shell_pairs, nb, sym_ops);
+        Eigen::MatrixXd Q(nb, nb);
+        for (std::size_t i = 0; i < nb; ++i)
+            for (std::size_t j = 0; j < nb; ++j)
+                Q(i, j) = flat[i * nb + j];
+        return Q;
+    }
+
+    // The HGP per-quartet contracted ERI, in the shape fused_fock_build wants.
+    constexpr auto hgp_eri_elem =
+        [](const HartreeFock::ShellPair &spAB, const HartreeFock::ShellPair &spCD,
+           int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+           int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+           HartreeFock::ERIKernel k, double w)
+    {
+        return HartreeFock::HeadGordonPople::_contracted_eri_elem(
+            spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
+            lCx, lCy, lCz, lDx, lDy, lDz, k, w);
+    };
+}
+
+Eigen::MatrixXd HartreeFock::HeadGordonPople::_compute_2e_fock_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density,
+    const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    if (sym_ops != nullptr && !sym_ops->empty())
+        return _compute_2e_fock(shell_pairs, density, nbasis, kernel, omega,
+                                tol_eri, sym_ops);
+
+    const std::size_t nb = nbasis;
+    const Eigen::MatrixXd Q = hgp_schwarz_matrix(shell_pairs, nb, sym_ops);
+
+    Eigen::MatrixXd G, Ga_unused, Gb_unused;
+    HartreeFock::Integrals::FusedFockDensities dens;
+    dens.P = &density;
+
+    HartreeFock::Integrals::fused_fock_build(
+        shell_pairs, nb, Q, kernel, omega, tol_eri,
+        /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, hgp_eri_elem);
+    return G;
+}
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &Pa,
+    const Eigen::MatrixXd &Pb,
+    const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    if (sym_ops != nullptr && !sym_ops->empty())
+        return _compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega,
+                                    tol_eri, sym_ops);
+
+    const std::size_t nb = nbasis;
+    const Eigen::MatrixXd Q = hgp_schwarz_matrix(shell_pairs, nb, sym_ops);
+
+    const Eigen::MatrixXd Pt = Pa + Pb;
+    Eigen::MatrixXd G_unused, Ga, Gb;
+    HartreeFock::Integrals::FusedFockDensities dens;
+    dens.Pt = &Pt;
+    dens.Pa = &Pa;
+    dens.Pb = &Pb;
+
+    HartreeFock::Integrals::fused_fock_build(
+        shell_pairs, nb, Q, kernel, omega, tol_eri,
+        /*spin_resolved=*/true, dens, G_unused, Ga, Gb, hgp_eri_elem);
     return {Ga, Gb};
 }
 
