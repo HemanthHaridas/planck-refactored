@@ -40,6 +40,7 @@
 
 #include <Eigen/Dense>
 
+#include "base/mpi_env.h"
 #include "base/types.h"
 #include "fock_accumulate.h"
 
@@ -180,12 +181,33 @@ namespace HartreeFock::Integrals
             need_uhf ? static_cast<std::size_t>(n_threads) : 0,
             Eigen::MatrixXd::Zero(nb, nb));
 
+        // MPI: partition the bra shell-pair triangle across ranks; OpenMP splits
+        // each rank's stripe within the node — the hybrid. Each canonical quartet
+        // is produced by exactly one bra, so the ranks accumulate into disjoint
+        // sets of quartets and the MPI_Allreduce(SUM) below merges them exactly.
+        //
+        // This is where the memory-direct build pays off a second time. The
+        // tensor path (build_eri_tensor_shellwise) has to Allreduce the whole
+        // nb^4 tensor — 267 MB at nb=76, 500 GB at nb=500 — which is not a
+        // "cheap reduce" by any reading. Here the only thing reduced is the
+        // nb^2 Fock matrix: 46 KB at nb=76, 2 MB at nb=500. That is the reduce
+        // the HPC scope doc always assumed was happening.
+        //
+        // Serial builds get rank 0 / size 1, so the stride degrades to the full
+        // loop and the reduce is a no-op — byte-identical to the non-MPI path.
+        const int mpi_rank = HartreeFock::Mpi::rank();
+        const int mpi_size = HartreeFock::Mpi::size();
+
         // schedule(static), NOT dynamic — load-bearing, see the header note.
 #ifdef USE_OPENMP
 #pragma omp parallel for schedule(static)
 #endif
         for (std::size_t bra = 0; bra < ngp; ++bra)
         {
+            if (mpi_size > 1 &&
+                static_cast<int>(bra % static_cast<std::size_t>(mpi_size)) != mpi_rank)
+                continue;
+
 #ifdef USE_OPENMP
             const int thread_id = omp_get_thread_num();
 #else
@@ -284,12 +306,20 @@ namespace HartreeFock::Integrals
                 Ga += ga_partials[static_cast<std::size_t>(t)];
                 Gb += gb_partials[static_cast<std::size_t>(t)];
             }
+            // Merge the per-rank partial Focks. nb^2, not nb^4. No-op when serial.
+            // Eigen's default storage is column-major and contiguous, so the raw
+            // buffer is a plain nb*nb double array either way — the sum is
+            // elementwise, so the layout convention does not matter as long as
+            // every rank uses the same one (they do; same type, same dims).
+            HartreeFock::Mpi::allreduce_inplace(Ga.data(), static_cast<std::size_t>(Ga.size()));
+            HartreeFock::Mpi::allreduce_inplace(Gb.data(), static_cast<std::size_t>(Gb.size()));
         }
         else
         {
             G.setZero(nb, nb);
             for (int t = 0; t < n_threads; ++t)
                 G += g_partials[static_cast<std::size_t>(t)];
+            HartreeFock::Mpi::allreduce_inplace(G.data(), static_cast<std::size_t>(G.size()));
         }
     }
 }
