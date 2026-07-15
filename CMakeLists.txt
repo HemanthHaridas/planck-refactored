@@ -581,6 +581,13 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # boys_vec vs scalar boys bitwise-equality gate.
+    add_executable(planck-boys-vec
+        ${CMAKE_SOURCE_DIR}/tests/boys_vec.cpp
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-boys-vec PRIVATE ${SRC_DIR})
+
     add_executable(planck-hgp-engine-smoke
         ${CMAKE_SOURCE_DIR}/tests/hgp_engine_smoke.cpp
         ${SRC_DIR}/basis/basis.cpp

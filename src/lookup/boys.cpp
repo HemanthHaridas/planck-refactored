@@ -1617,3 +1617,41 @@ double HartreeFock::Lookup::boys(int n, double x) noexcept
 
     return result;
 }
+
+void HartreeFock::Lookup::boys_vec(double x, std::span<double> out) noexcept
+{
+    const std::size_t count = out.size();
+    if (count == 0)
+        return;
+
+    // Setup shared across all orders — this is the whole point (hoisted out of
+    // the per-n loop the scalar boys() would run).
+    const double x_max = TABLE_ROWS * TABLE_STEP;
+    const bool asymptotic = (x >= x_max);
+    const int xIndex = asymptotic ? 0 : static_cast<int>(x / TABLE_STEP);
+    const double delta = asymptotic ? 0.0 : x - xIndex * TABLE_STEP;
+
+    for (std::size_t idx = 0; idx < count; ++idx)
+    {
+        const int n = static_cast<int>(idx);
+        if (n >= TABLE_COLS)
+        {
+            out[idx] = std::numeric_limits<double>::quiet_NaN();
+            continue;
+        }
+        if (asymptotic)
+        {
+            out[idx] = std::tgamma(n + 0.5) / (2.0 * std::pow(x, n + 0.5));
+            continue;
+        }
+
+        // Same Taylor series as boys(): result = Σ_k (-1)^k/k! F_{n+k}(x0) δ^k.
+        const int max_k = std::min(6, TABLE_COLS - 1 - n);
+        double result = boysTable[xIndex][n];
+        double delta_k = delta;
+        double sign = -1.0;
+        for (int k = 1; k <= max_k; ++k, delta_k *= delta, sign = -sign)
+            result += sign * boysTable[xIndex][n + k] / kFactorial[k] * delta_k;
+        out[idx] = result;
+    }
+}
