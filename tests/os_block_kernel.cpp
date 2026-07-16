@@ -273,6 +273,15 @@ namespace
                     "ShortRange", /*hoisted=*/true);
         check_basis(Engine::HGP, "sto-3g", HartreeFock::ERIKernel::Coulomb, 0.0,
                     "Coulomb", /*hoisted=*/true);
+        // f-shell coverage. The Auto dispatcher routes f-containing quartets
+        // (L_AB up to 6) to the HGP hoisted block in the production _compute_2e
+        // tensor build, but this gate historically only reached d (6-31g*). A
+        // deleted OS hoisted twin SIGBUSed on exactly this untested f path, so
+        // pin the live HGP kernel against its per-component reference on cc-pVTZ.
+        check_basis(Engine::HGP, "cc-pVTZ", HartreeFock::ERIKernel::Coulomb, 0.0,
+                    "Coulomb", /*hoisted=*/true);
+        check_basis(Engine::HGP, "cc-pVTZ", HartreeFock::ERIKernel::LongRange, 0.3,
+                    "LongRange", /*hoisted=*/true);
     }
 } // namespace
 

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <span>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -787,8 +788,14 @@ static void _eri_vrr(
         screen.prefactor_scale;
 
     // ── Seed ─────────────────────────────────────────────────────────────────
+    // One vector Boys call fills F_0..F_MMAX for this T, sharing the table-index
+    // setup across all orders (was ~26% of the Fock build as MMAX+1 scalar
+    // boys() calls). Bitwise-identical to the per-order loop. MMAX here is the
+    // per-quartet total AM lABx+..+lCDz, bounded by L_A+L_B+L_C+L_D <= 4*MAX_L.
+    double F[4 * MAX_L + 1];
+    HartreeFock::Lookup::boys_vec(T, std::span<double>(F, MMAX + 1));
     for (int m = 0; m <= MMAX; ++m)
-        scratch.v(0, 0, 0, 0, 0, 0, m) = prefac * HartreeFock::Lookup::boys(m, T);
+        scratch.v(0, 0, 0, 0, 0, 0, m) = prefac * F[m];
 
     // ── A-VRR: x-axis ─────────────────────────────────────────────────────
     for (int ax = 1; ax <= lABx; ++ax)
