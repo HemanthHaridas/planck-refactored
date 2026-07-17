@@ -257,6 +257,22 @@ def parse_run(out: str, err: str, wall: float):
     }
 
 
+def extract_error(stdout: str, stderr: str) -> str:
+    """Best explanation of why a run produced no energy.
+
+    Planck writes its diagnostics to STDOUT ("[ERR] DFT Driver Failed : ..."),
+    while the RSS probe writes GNU-time output to STDERR. The old
+    `(stderr or stdout)` picked stderr whenever the probe said anything at all,
+    so every failure reported the probe's timing line and threw the actual
+    error away -- which is why a failing cluster DFT run looked silent.
+    Prefer real [ERR] lines from either stream; fall back to whatever exists.
+    """
+    errs = [ln for ln in (stdout + "\n" + stderr).splitlines() if "[ERR]" in ln]
+    if errs:
+        return "\n".join(errs[-3:])
+    return (stdout.strip() or stderr.strip())[-400:]
+
+
 @contextlib.contextmanager
 def case_dir(tag: str):
     """Directory for one run's input + probe.
@@ -317,7 +333,7 @@ def run_serial(exe: Path, atoms, basis, engine, method, threads, max_cycles=100)
     r["returncode"] = p.returncode
     r["ranks"] = 1
     if r["energy"] is None:
-        r["error"] = (p.stderr or p.stdout)[-400:]
+        r["error"] = extract_error(p.stdout, p.stderr)
     return r
 
 
@@ -349,7 +365,7 @@ def run_mpi(exe: Path, atoms, basis, engine, method, ranks, threads, max_cycles=
     r["returncode"] = p.returncode
     r["ranks"] = ranks
     if r["energy"] is None:
-        r["error"] = (p.stderr or p.stdout)[-400:]
+        r["error"] = extract_error(p.stdout, p.stderr)
     return r
 
 
@@ -643,6 +659,13 @@ def main() -> int:
                     # A failure IS data: it is the ceiling (Q4). Record and move on.
                     print(f"{n:>5} {'--':>5} {run['ranks']:>6} {'FAILED':>11} "
                           f"{'':>8} {'':>6} {'':>11}   <- ceiling?")
+                    # Show WHY. The error text was captured into run["error"] and
+                    # then only ever written to the JSON, so a failing cluster run
+                    # printed "FAILED" and nothing else -- the one line you need
+                    # (returncode, missing basis, libxc abort) was invisible.
+                    err = (run.get("error") or "").strip()
+                    if err:
+                        print(f"      rc={run.get('returncode')} {err.splitlines()[-1][:160]}")
                     run["ceiling"] = True
                     break
 
