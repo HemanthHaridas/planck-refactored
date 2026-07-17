@@ -67,6 +67,7 @@ import argparse
 import json
 import math
 import os
+import contextlib
 import platform
 import re
 import shutil
@@ -76,6 +77,10 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+# Set from --workdir. None => inputs go to a temp dir and are deleted on exit
+# (the default). Set => inputs, probes, and per-run stdout/stderr persist there.
+WORKDIR = None
 
 # ---------------------------------------------------------------------------
 # Log scrapers. These mirror tests/benchmarks/pyscf_bench.py -- same binaries,
@@ -252,6 +257,44 @@ def parse_run(out: str, err: str, wall: float):
     }
 
 
+@contextlib.contextmanager
+def case_dir(tag: str):
+    """Directory for one run's input + probe.
+
+    Default: a temp dir, deleted on exit (unchanged behaviour). With --workdir
+    set (WORKDIR global), files persist under a per-case name so a failed
+    cluster run leaves its exact .hfinp behind to rerun by hand.
+    """
+    if WORKDIR is None:
+        with tempfile.TemporaryDirectory() as td:
+            yield Path(td), None
+    else:
+        WORKDIR.mkdir(parents=True, exist_ok=True)
+        yield WORKDIR, tag
+
+
+def write_case(td: Path, tag, atoms, basis, engine, method, max_cycles):
+    """Write the .hfinp + probe for one run; return (input_path, probe_path)."""
+    stem = tag or "scale"
+    inp = td / f"{stem}.hfinp"
+    inp.write_text(planck_input(atoms, basis, engine, method, max_cycles))
+    probe = td / f"{stem}.probe.sh"
+    probe.write_text(rank_rss_probe())
+    probe.chmod(0o755)
+    return inp, probe
+
+
+def save_output(td: Path, tag, p):
+    """With --workdir, keep the run's stdout+stderr next to its input. This is
+    the other half of debugging a cluster failure: the input that failed AND
+    what the binary actually said about it."""
+    if tag is None:
+        return
+    (td / f"{tag}.out").write_text(
+        f"$ returncode = {p.returncode}\n\n--- stdout ---\n{p.stdout}\n"
+        f"--- stderr ---\n{p.stderr}\n")
+
+
 def run_serial(exe: Path, atoms, basis, engine, method, threads, max_cycles=100):
     """One serial process. Runs under the SAME RSS probe as the MPI arm.
 
@@ -261,18 +304,15 @@ def run_serial(exe: Path, atoms, basis, engine, method, threads, max_cycles=100)
     than being None on the serial path.
     """
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
-    with tempfile.TemporaryDirectory() as td:
-        inp = Path(td) / "scale.hfinp"
-        inp.write_text(planck_input(atoms, basis, engine, method, max_cycles))
-        probe = Path(td) / "probe.sh"
-        probe.write_text(rank_rss_probe())
-        probe.chmod(0o755)
+    with case_dir(f"{method}_n{len(atoms)}_r1") as (td, tag):
+        inp, probe = write_case(td, tag, atoms, basis, engine, method, max_cycles)
         t0 = time.perf_counter()
         p = subprocess.run(
             [str(probe), str(exe), str(inp)],
             capture_output=True, text=True, env=env
         )
         wall = time.perf_counter() - t0
+        save_output(td, tag, p)
     r = parse_run(p.stdout, p.stderr, wall)
     r["returncode"] = p.returncode
     r["ranks"] = 1
@@ -290,12 +330,8 @@ def have_launcher() -> bool:
 def run_mpi(exe: Path, atoms, basis, engine, method, ranks, threads, max_cycles=100):
     """mpirun -n <ranks> planck-mpi, with each rank self-reporting peak RSS."""
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
-    with tempfile.TemporaryDirectory() as td:
-        inp = Path(td) / "scale.hfinp"
-        inp.write_text(planck_input(atoms, basis, engine, method, max_cycles))
-        probe = Path(td) / "probe.sh"
-        probe.write_text(rank_rss_probe())
-        probe.chmod(0o755)
+    with case_dir(f"{method}_n{len(atoms)}_r{ranks}") as (td, tag):
+        inp, probe = write_case(td, tag, atoms, basis, engine, method, max_cycles)
         # --oversubscribe is OPEN MPI ONLY. Intel MPI / MPICH / srun reject it
         # as an unknown option and every rank dies -- which on a cluster is the
         # first thing that would break. It only exists so a dev box can request
@@ -308,6 +344,7 @@ def run_mpi(exe: Path, atoms, basis, engine, method, ranks, threads, max_cycles=
         t0 = time.perf_counter()
         p = subprocess.run(cmd, capture_output=True, text=True, env=env)
         wall = time.perf_counter() - t0
+        save_output(td, tag, p)
     r = parse_run(p.stdout, p.stderr, wall)
     r["returncode"] = p.returncode
     r["ranks"] = ranks
@@ -472,6 +509,13 @@ def main() -> int:
     ap.add_argument("--atol", type=float, default=1e-8,
                     help="max |dE| between rank counts before the gate fails")
     ap.add_argument("--out", type=Path, help="write results JSON here")
+    ap.add_argument("--workdir", type=Path,
+                    help="keep the generated .hfinp / probe.sh and each run's "
+                         "stdout+stderr here instead of a temp dir that is "
+                         "deleted on exit. Required to debug a failing cluster "
+                         "run -- otherwise the input that failed is gone before "
+                         "you can look at it. Files are named per case, e.g. "
+                         "dft_n16_r4.hfinp / dft_n16_r4.out.")
     ap.add_argument("--verify-only", action="store_true",
                     help="run only the rank-invariance gate and exit")
     ap.add_argument("--memory-only", action="store_true",
@@ -485,6 +529,12 @@ def main() -> int:
                          "to catch the high-water mark (and DFT at nb=200+ would "
                          "otherwise take hours to converge).")
     args = ap.parse_args()
+
+    global WORKDIR
+    if args.workdir is not None:
+        WORKDIR = args.workdir.resolve()
+        WORKDIR.mkdir(parents=True, exist_ok=True)
+        print(f"[workdir] inputs and per-run logs kept in {WORKDIR}")
 
     build = args.build_dir.resolve()
     sizes = [int(s) for s in args.sizes.split(",") if s]
