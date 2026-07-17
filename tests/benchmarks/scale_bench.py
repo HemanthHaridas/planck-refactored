@@ -67,6 +67,7 @@ import argparse
 import json
 import math
 import os
+import contextlib
 import platform
 import re
 import shutil
@@ -76,6 +77,10 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+# Set from --workdir. None => inputs go to a temp dir and are deleted on exit
+# (the default). Set => inputs, probes, and per-run stdout/stderr persist there.
+WORKDIR = None
 
 # ---------------------------------------------------------------------------
 # Log scrapers. These mirror tests/benchmarks/pyscf_bench.py -- same binaries,
@@ -194,26 +199,38 @@ def rank_rss_probe() -> str:
     #
     # No bash process substitution (`2> >(...)`): mpirun may launch this under a
     # plain sh. Redirect stderr to a temp file and post-process.
+    # Separate the child's stderr from `time`'s report by FILE DESCRIPTOR, not by
+    # text matching. The previous version sent both to one file and tried to
+    # grep time's block back out with a pattern that included the bare words
+    # Command|User|Exit|Page|... and `^\s*[0-9]+\s+[a-z]`. Those are ordinary
+    # English/number shapes: any child stderr line starting with them was
+    # silently eaten -- e.g. "Exit code weirdness explained here" and
+    # "  12 some numeric-ish line" both vanished, taking the explanation of a
+    # failure with them (verified). Here fd 3 carries the child's stderr
+    # straight through untouched and time writes to its own file, so no filter
+    # is needed and nothing can be misclassified.
     return (
         '#!/bin/bash\n'
         'RANK="${OMPI_COMM_WORLD_RANK:-${PMI_RANK:-${SLURM_PROCID:-0}}}"\n'
-        'ERR="$(mktemp)"\n'
+        'TREP="$(mktemp)"\n'
+        # `time` writes its report to ITS OWN stderr. Redirecting time's stderr
+        # to $TREP would also capture the child's (the child inherits it), so
+        # instead: give the child fd 3 (the real stderr) via `2>&3`, and point
+        # time's stderr at $TREP. Order matters -- 3>&2 must be set up OUTSIDE
+        # the group so fd 3 still refers to the original stderr.
+        'exec 3>&2\n'
         'if /usr/bin/time -v true >/dev/null 2>&1; then\n'
-        '  /usr/bin/time -v "$@" 2>"$ERR"; RC=$?\n'
-        '  KB="$(grep -i "Maximum resident" "$ERR" | grep -oE "[0-9]+" | tail -1)"\n'
+        '  /usr/bin/time -v bash -c \'"$@" 2>&3\' _ "$@" 2>"$TREP"; RC=$?\n'
+        '  KB="$(grep -i "Maximum resident" "$TREP" | grep -oE "[0-9]+" | tail -1)"\n'
         'elif /usr/bin/time -l true >/dev/null 2>&1; then\n'
-        '  /usr/bin/time -l "$@" 2>"$ERR"; RC=$?\n'
-        '  BYTES="$(grep -i "maximum resident" "$ERR" | grep -oE "[0-9]+" | head -1)"\n'
+        '  /usr/bin/time -l bash -c \'"$@" 2>&3\' _ "$@" 2>"$TREP"; RC=$?\n'
+        '  BYTES="$(grep -i "maximum resident" "$TREP" | grep -oE "[0-9]+" | head -1)"\n'
         '  KB=$([ -n "$BYTES" ] && echo $((BYTES / 1024)))\n'  # BSD reports BYTES
         'else\n'
-        '  rm -f "$ERR"; exec "$@"\n'
+        '  rm -f "$TREP"; exec "$@"\n'
         'fi\n'
-        # Pass the child's own stderr through, minus time's report block.
-        'grep -viE "maximum resident|^[[:space:]]*[0-9]+[[:space:]]+[a-z]|'
-        '^\\s*(Command|User|System|Percent|Elapsed|Average|Major|Minor|Voluntary|'
-        'Involuntary|Swaps|File|Socket|Signals|Page|Exit)" "$ERR" >&2 || true\n'
         '[ -n "$KB" ] && echo "PLANCK_RANK_RSS rank=$RANK peak_kb=$KB" >&2\n'
-        'rm -f "$ERR"\n'
+        'rm -f "$TREP"\n'
         'exit $RC\n'
     )
 
@@ -252,6 +269,60 @@ def parse_run(out: str, err: str, wall: float):
     }
 
 
+def extract_error(stdout: str, stderr: str) -> str:
+    """Best explanation of why a run produced no energy.
+
+    Planck writes its diagnostics to STDOUT ("[ERR] DFT Driver Failed : ..."),
+    while the RSS probe writes GNU-time output to STDERR. The old
+    `(stderr or stdout)` picked stderr whenever the probe said anything at all,
+    so every failure reported the probe's timing line and threw the actual
+    error away -- which is why a failing cluster DFT run looked silent.
+    Prefer real [ERR] lines from either stream; fall back to whatever exists.
+    """
+    errs = [ln for ln in (stdout + "\n" + stderr).splitlines() if "[ERR]" in ln]
+    if errs:
+        return "\n".join(errs[-3:])
+    return (stdout.strip() or stderr.strip())[-400:]
+
+
+@contextlib.contextmanager
+def case_dir(tag: str):
+    """Directory for one run's input + probe.
+
+    Default: a temp dir, deleted on exit (unchanged behaviour). With --workdir
+    set (WORKDIR global), files persist under a per-case name so a failed
+    cluster run leaves its exact .hfinp behind to rerun by hand.
+    """
+    if WORKDIR is None:
+        with tempfile.TemporaryDirectory() as td:
+            yield Path(td), None
+    else:
+        WORKDIR.mkdir(parents=True, exist_ok=True)
+        yield WORKDIR, tag
+
+
+def write_case(td: Path, tag, atoms, basis, engine, method, max_cycles):
+    """Write the .hfinp + probe for one run; return (input_path, probe_path)."""
+    stem = tag or "scale"
+    inp = td / f"{stem}.hfinp"
+    inp.write_text(planck_input(atoms, basis, engine, method, max_cycles))
+    probe = td / f"{stem}.probe.sh"
+    probe.write_text(rank_rss_probe())
+    probe.chmod(0o755)
+    return inp, probe
+
+
+def save_output(td: Path, tag, p):
+    """With --workdir, keep the run's stdout+stderr next to its input. This is
+    the other half of debugging a cluster failure: the input that failed AND
+    what the binary actually said about it."""
+    if tag is None:
+        return
+    (td / f"{tag}.out").write_text(
+        f"$ returncode = {p.returncode}\n\n--- stdout ---\n{p.stdout}\n"
+        f"--- stderr ---\n{p.stderr}\n")
+
+
 def run_serial(exe: Path, atoms, basis, engine, method, threads, max_cycles=100):
     """One serial process. Runs under the SAME RSS probe as the MPI arm.
 
@@ -261,23 +332,20 @@ def run_serial(exe: Path, atoms, basis, engine, method, threads, max_cycles=100)
     than being None on the serial path.
     """
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
-    with tempfile.TemporaryDirectory() as td:
-        inp = Path(td) / "scale.hfinp"
-        inp.write_text(planck_input(atoms, basis, engine, method, max_cycles))
-        probe = Path(td) / "probe.sh"
-        probe.write_text(rank_rss_probe())
-        probe.chmod(0o755)
+    with case_dir(f"{method}_n{len(atoms)}_r1") as (td, tag):
+        inp, probe = write_case(td, tag, atoms, basis, engine, method, max_cycles)
         t0 = time.perf_counter()
         p = subprocess.run(
             [str(probe), str(exe), str(inp)],
             capture_output=True, text=True, env=env
         )
         wall = time.perf_counter() - t0
+        save_output(td, tag, p)
     r = parse_run(p.stdout, p.stderr, wall)
     r["returncode"] = p.returncode
     r["ranks"] = 1
     if r["energy"] is None:
-        r["error"] = (p.stderr or p.stdout)[-400:]
+        r["error"] = extract_error(p.stdout, p.stderr)
     return r
 
 
@@ -290,12 +358,8 @@ def have_launcher() -> bool:
 def run_mpi(exe: Path, atoms, basis, engine, method, ranks, threads, max_cycles=100):
     """mpirun -n <ranks> planck-mpi, with each rank self-reporting peak RSS."""
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
-    with tempfile.TemporaryDirectory() as td:
-        inp = Path(td) / "scale.hfinp"
-        inp.write_text(planck_input(atoms, basis, engine, method, max_cycles))
-        probe = Path(td) / "probe.sh"
-        probe.write_text(rank_rss_probe())
-        probe.chmod(0o755)
+    with case_dir(f"{method}_n{len(atoms)}_r{ranks}") as (td, tag):
+        inp, probe = write_case(td, tag, atoms, basis, engine, method, max_cycles)
         # --oversubscribe is OPEN MPI ONLY. Intel MPI / MPICH / srun reject it
         # as an unknown option and every rank dies -- which on a cluster is the
         # first thing that would break. It only exists so a dev box can request
@@ -308,11 +372,12 @@ def run_mpi(exe: Path, atoms, basis, engine, method, ranks, threads, max_cycles=
         t0 = time.perf_counter()
         p = subprocess.run(cmd, capture_output=True, text=True, env=env)
         wall = time.perf_counter() - t0
+        save_output(td, tag, p)
     r = parse_run(p.stdout, p.stderr, wall)
     r["returncode"] = p.returncode
     r["ranks"] = ranks
     if r["energy"] is None:
-        r["error"] = (p.stderr or p.stdout)[-400:]
+        r["error"] = extract_error(p.stdout, p.stderr)
     return r
 
 
@@ -472,6 +537,13 @@ def main() -> int:
     ap.add_argument("--atol", type=float, default=1e-8,
                     help="max |dE| between rank counts before the gate fails")
     ap.add_argument("--out", type=Path, help="write results JSON here")
+    ap.add_argument("--workdir", type=Path,
+                    help="keep the generated .hfinp / probe.sh and each run's "
+                         "stdout+stderr here instead of a temp dir that is "
+                         "deleted on exit. Required to debug a failing cluster "
+                         "run -- otherwise the input that failed is gone before "
+                         "you can look at it. Files are named per case, e.g. "
+                         "dft_n16_r4.hfinp / dft_n16_r4.out.")
     ap.add_argument("--verify-only", action="store_true",
                     help="run only the rank-invariance gate and exit")
     ap.add_argument("--memory-only", action="store_true",
@@ -485,6 +557,12 @@ def main() -> int:
                          "to catch the high-water mark (and DFT at nb=200+ would "
                          "otherwise take hours to converge).")
     args = ap.parse_args()
+
+    global WORKDIR
+    if args.workdir is not None:
+        WORKDIR = args.workdir.resolve()
+        WORKDIR.mkdir(parents=True, exist_ok=True)
+        print(f"[workdir] inputs and per-run logs kept in {WORKDIR}")
 
     build = args.build_dir.resolve()
     sizes = [int(s) for s in args.sizes.split(",") if s]
@@ -593,6 +671,13 @@ def main() -> int:
                     # A failure IS data: it is the ceiling (Q4). Record and move on.
                     print(f"{n:>5} {'--':>5} {run['ranks']:>6} {'FAILED':>11} "
                           f"{'':>8} {'':>6} {'':>11}   <- ceiling?")
+                    # Show WHY. The error text was captured into run["error"] and
+                    # then only ever written to the JSON, so a failing cluster run
+                    # printed "FAILED" and nothing else -- the one line you need
+                    # (returncode, missing basis, libxc abort) was invisible.
+                    err = (run.get("error") or "").strip()
+                    if err:
+                        print(f"      rc={run.get('returncode')} {err.splitlines()[-1][:160]}")
                     run["ceiling"] = True
                     break
 
