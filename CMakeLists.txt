@@ -103,6 +103,13 @@ add_compile_definitions(EIGEN_DONT_PARALLELIZE)
 set(MSYM_INSTALL_DIR ${SRC_DIR}/external/libmsym/install)
 set(MSYM_BUILD_DIR ${SRC_DIR}/external/libmsym/build)
 set(LIBXC_INSTALL_DIR ${SRC_DIR}/external/libxc/install)
+
+# OFF by default so planck-dft runs on any node in a heterogeneous cluster, not
+# just ones as new as the build host. See the ENABLE_XHOST note on the libxc
+# ExternalProject below. Set -DLIBXC_ENABLE_XHOST=ON only when build host == run
+# host and you want libxc tuned for it.
+option(LIBXC_ENABLE_XHOST
+       "Let libxc compile itself with -march=native/-xHost (NOT portable)" OFF)
 set(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_SOURCE_DIR}/install)
 
 include(ExternalProject)
@@ -141,6 +148,22 @@ externalproject_add(
         -DNAMESPACE_INSTALL_INCLUDEDIR:STRING=/
         -DCMAKE_INSTALL_LIBDIR:STRING=lib
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        # libxc's cmake/xhost.cmake defaults ENABLE_XHOST=ON, which on GCC/Clang
+        # appends -march=native (Intel: -xHost) to ITS OWN build. libxc.a is then
+        # statically linked into planck-dft, so the binary carries whatever
+        # instruction set the BUILD host happened to have. On a heterogeneous
+        # cluster that is a landmine: build on a newer login/compute node, land
+        # on an older one, and planck-dft dies with SIGILL ("Illegal instruction,
+        # core dumped") the moment it first calls into libxc -- before any real
+        # work, so it looks like a silent no-output failure. hartree-fock is
+        # unaffected because it is the one binary that does NOT link libxc, which
+        # is exactly why HF passes and DFT fails on the same node.
+        #
+        # Planck's own build never sets -march (only -O3), so turning this off
+        # makes planck-dft as portable as hartree-fock. Anyone wanting the
+        # host-tuned build back can set -DLIBXC_ENABLE_XHOST=ON, and should only
+        # do so when build host == run host.
+        -DENABLE_XHOST:BOOL=${LIBXC_ENABLE_XHOST}
     BUILD_BYPRODUCTS ${LIBXC_INSTALL_DIR}/lib/libxc.a
 )
 
