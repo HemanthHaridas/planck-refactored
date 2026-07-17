@@ -199,26 +199,38 @@ def rank_rss_probe() -> str:
     #
     # No bash process substitution (`2> >(...)`): mpirun may launch this under a
     # plain sh. Redirect stderr to a temp file and post-process.
+    # Separate the child's stderr from `time`'s report by FILE DESCRIPTOR, not by
+    # text matching. The previous version sent both to one file and tried to
+    # grep time's block back out with a pattern that included the bare words
+    # Command|User|Exit|Page|... and `^\s*[0-9]+\s+[a-z]`. Those are ordinary
+    # English/number shapes: any child stderr line starting with them was
+    # silently eaten -- e.g. "Exit code weirdness explained here" and
+    # "  12 some numeric-ish line" both vanished, taking the explanation of a
+    # failure with them (verified). Here fd 3 carries the child's stderr
+    # straight through untouched and time writes to its own file, so no filter
+    # is needed and nothing can be misclassified.
     return (
         '#!/bin/bash\n'
         'RANK="${OMPI_COMM_WORLD_RANK:-${PMI_RANK:-${SLURM_PROCID:-0}}}"\n'
-        'ERR="$(mktemp)"\n'
+        'TREP="$(mktemp)"\n'
+        # `time` writes its report to ITS OWN stderr. Redirecting time's stderr
+        # to $TREP would also capture the child's (the child inherits it), so
+        # instead: give the child fd 3 (the real stderr) via `2>&3`, and point
+        # time's stderr at $TREP. Order matters -- 3>&2 must be set up OUTSIDE
+        # the group so fd 3 still refers to the original stderr.
+        'exec 3>&2\n'
         'if /usr/bin/time -v true >/dev/null 2>&1; then\n'
-        '  /usr/bin/time -v "$@" 2>"$ERR"; RC=$?\n'
-        '  KB="$(grep -i "Maximum resident" "$ERR" | grep -oE "[0-9]+" | tail -1)"\n'
+        '  /usr/bin/time -v bash -c \'"$@" 2>&3\' _ "$@" 2>"$TREP"; RC=$?\n'
+        '  KB="$(grep -i "Maximum resident" "$TREP" | grep -oE "[0-9]+" | tail -1)"\n'
         'elif /usr/bin/time -l true >/dev/null 2>&1; then\n'
-        '  /usr/bin/time -l "$@" 2>"$ERR"; RC=$?\n'
-        '  BYTES="$(grep -i "maximum resident" "$ERR" | grep -oE "[0-9]+" | head -1)"\n'
+        '  /usr/bin/time -l bash -c \'"$@" 2>&3\' _ "$@" 2>"$TREP"; RC=$?\n'
+        '  BYTES="$(grep -i "maximum resident" "$TREP" | grep -oE "[0-9]+" | head -1)"\n'
         '  KB=$([ -n "$BYTES" ] && echo $((BYTES / 1024)))\n'  # BSD reports BYTES
         'else\n'
-        '  rm -f "$ERR"; exec "$@"\n'
+        '  rm -f "$TREP"; exec "$@"\n'
         'fi\n'
-        # Pass the child's own stderr through, minus time's report block.
-        'grep -viE "maximum resident|^[[:space:]]*[0-9]+[[:space:]]+[a-z]|'
-        '^\\s*(Command|User|System|Percent|Elapsed|Average|Major|Minor|Voluntary|'
-        'Involuntary|Swaps|File|Socket|Signals|Page|Exit)" "$ERR" >&2 || true\n'
         '[ -n "$KB" ] && echo "PLANCK_RANK_RSS rank=$RANK peak_kb=$KB" >&2\n'
-        'rm -f "$ERR"\n'
+        'rm -f "$TREP"\n'
         'exit $RC\n'
     )
 
