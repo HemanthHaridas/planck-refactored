@@ -1805,7 +1805,8 @@ namespace
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &density, std::size_t nb,
         HartreeFock::ERIKernel kernel, double omega, double tol_eri,
-        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem)
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem,
+        HartreeFock::Integrals::FusedTerm term)
     {
         const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
         Eigen::MatrixXd G, Ga_unused, Gb_unused;
@@ -1813,7 +1814,7 @@ namespace
         dens.P = &density;
         HartreeFock::Integrals::fused_fock_build(
             shell_pairs, nb, Q, kernel, omega, tol_eri,
-            /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, elem, sym_ops);
+            /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, elem, sym_ops, term);
         return G;
     }
 
@@ -1822,7 +1823,8 @@ namespace
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, std::size_t nb,
         HartreeFock::ERIKernel kernel, double omega, double tol_eri,
-        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem)
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem,
+        HartreeFock::Integrals::FusedTerm term)
     {
         const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
         const Eigen::MatrixXd Pt = Pa + Pb;
@@ -1833,7 +1835,7 @@ namespace
         dens.Pb = &Pb;
         HartreeFock::Integrals::fused_fock_build(
             shell_pairs, nb, Q, kernel, omega, tol_eri,
-            /*spin_resolved=*/true, dens, G_unused, Ga, Gb, elem, sym_ops);
+            /*spin_resolved=*/true, dens, G_unused, Ga, Gb, elem, sym_ops, term);
         return {Ga, Gb};
     }
 }
@@ -1842,9 +1844,10 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_direct(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &density, const std::size_t nbasis,
     const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
+    HartreeFock::Integrals::FusedTerm term)
 {
-    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, rys_eri_elem);
+    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, rys_eri_elem, term);
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
@@ -1852,18 +1855,20 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_direct(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, const std::size_t nbasis,
     const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
+    HartreeFock::Integrals::FusedTerm term)
 {
-    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, rys_eri_elem);
+    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, rys_eri_elem, term);
 }
 
 Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto_direct(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &density, const std::size_t nbasis,
     const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
+    HartreeFock::Integrals::FusedTerm term)
 {
-    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem);
+    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term);
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
@@ -1871,8 +1876,9 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, const std::size_t nbasis,
     const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
-    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
+    HartreeFock::Integrals::FusedTerm term)
 {
-    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem);
+    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term);
 }
 

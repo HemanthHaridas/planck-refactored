@@ -70,6 +70,95 @@ namespace HartreeFock::Integrals
         return n;
     }
 
+    // Which term(s) the loop accumulates.
+    //
+    // HF wants Combined (G = J - 0.5K) and is the only mode that existed when
+    // this loop was written. DFT needs the single terms: J always, K alone
+    // scaled by exact_exchange_coefficient, and for range-separated functionals
+    // two K's at different omega added to one J.
+    //
+    // This is a mode on the existing loop rather than three copies of it. The
+    // ~100 lines of block/component screening, canonical filtering, and orbit
+    // handling between the loop head and the accumulate call are identical for
+    // all three; forking them would mean keeping three copies of the trickiest
+    // code in the build in sync. Only the terminal accumulate differs.
+    //
+    // CoulombOnly / ExchangeOnly emit RAW J and RAW K — the caller applies its
+    // own coefficient. See the prefactor contract in fock_accumulate.h.
+    enum class FusedTerm
+    {
+        Combined,     // G = J - 0.5K (RHF) / J - K (UHF) — the HF path
+        CoulombOnly,  // J, raw
+        ExchangeOnly, // K, raw
+    };
+
+    // ── Single-term accumulators (J-only / K-only) ───────────────────────────
+    //
+    // HF always wants the combined G = J - 0.5K, so the entries below fuse both
+    // terms. DFT does not: it needs J alone, K alone scaled by
+    // exact_exchange_coefficient, and — for range-separated functionals — two
+    // K's at different omega added to one J. Hence the split.
+    //
+    // The orbit argument carries over verbatim: `distinct_eri_orbit` enumerates
+    // the orbit's distinct tuples and each gets one unweighted contribution, so
+    // collapse cases handle themselves. That is a property of the enumeration,
+    // not of which term is accumulated, so it holds term-by-term.
+    //
+    // PREFACTOR CONTRACT: `exchange_accumulate` emits RAW, UNSCALED K —
+    //
+    //     K(a,c) += P(b,d) * val        (no 0.5, no sign)
+    //
+    // The 0.5 (RHF) and 1.0 (UHF) belong to the combined wrappers below, and
+    // DFT applies its own coefficient downstream (-0.5 for RKS, -1 for UKS, on
+    // top of full_range_/short_range_exchange_coefficient). Folding the 0.5 in
+    // here would halve every RKS hybrid's exact exchange while leaving UKS
+    // correct — a plausible-looking energy, no crash. Pinned by the round-trip
+    // assertions in tests/fock_accumulate.cpp.
+
+    // J(a,b) += P(c,d) * val, over the orbit.
+    inline void coulomb_accumulate(
+        Eigen::MatrixXd &J,
+        const Eigen::MatrixXd &P,
+        std::size_t i, std::size_t j, std::size_t k, std::size_t l,
+        double val) noexcept
+    {
+        std::array<std::array<std::size_t, 4>, 8> orbit;
+        const std::size_t n = distinct_eri_orbit(i, j, k, l, orbit);
+        for (std::size_t m = 0; m < n; ++m)
+        {
+            const std::size_t a = orbit[m][0], b = orbit[m][1];
+            const std::size_t c = orbit[m][2], d = orbit[m][3];
+            J(a, b) += P(c, d) * val;
+        }
+    }
+
+    // K(a,c) += P(b,d) * val, over the orbit. Raw — see the contract above.
+    inline void exchange_accumulate(
+        Eigen::MatrixXd &K,
+        const Eigen::MatrixXd &P,
+        std::size_t i, std::size_t j, std::size_t k, std::size_t l,
+        double val) noexcept
+    {
+        std::array<std::array<std::size_t, 4>, 8> orbit;
+        const std::size_t n = distinct_eri_orbit(i, j, k, l, orbit);
+        for (std::size_t m = 0; m < n; ++m)
+        {
+            const std::size_t a = orbit[m][0], b = orbit[m][1];
+            const std::size_t c = orbit[m][2], d = orbit[m][3];
+            K(a, c) += P(b, d) * val;
+        }
+    }
+
+    // ── Combined entries (the HF path) ───────────────────────────────────────
+    //
+    // Deliberately NOT rewritten as coulomb_accumulate + exchange_accumulate.
+    // Both terms share one orbit enumeration and one traversal here; routing
+    // through the split pair would call distinct_eri_orbit twice and reorder
+    // UHF's accumulation. The bodies stay as they were, so the HF path is
+    // byte-identical by construction and its gate cannot drift. The split
+    // functions above are the same algebra, one term each — the round-trip
+    // assertions verify the two forms agree.
+
     // RHF: G(mu,nu) = sum_{lam,sig} P(lam,sig) * [ (mu nu|lam sig)
     //                                              - 0.5 (mu lam|nu sig) ]
     //

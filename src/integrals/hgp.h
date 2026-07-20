@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "base/types.h"
+#include "fock_accumulate.h"
 #include "shellpair.h"
 
 namespace HartreeFock
@@ -115,7 +116,9 @@ namespace HartreeFock
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0,
             double tol_eri = 1e-10,
-            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
+            HartreeFock::Integrals::FusedTerm term =
+                HartreeFock::Integrals::FusedTerm::Combined);
 
         std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_2e_fock_uhf_direct(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -125,7 +128,9 @@ namespace HartreeFock
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0,
             double tol_eri = 1e-10,
-            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
+            HartreeFock::Integrals::FusedTerm term =
+                HartreeFock::Integrals::FusedTerm::Combined);
 
         // Returns flat array of ERI derivatives for one (mu nu | lambda sigma)
         // contracted quartet.

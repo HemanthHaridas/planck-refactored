@@ -36,6 +36,7 @@
 #include "base/basis.h"
 #include "base/types.h"
 #include "basis/basis.h"
+#include "integrals/base.h"
 #include "integrals/fock_accumulate.h"
 #include "integrals/hgp.h"
 #include "integrals/os.h"
@@ -227,6 +228,160 @@ namespace
             std::cout << "OK  Step 1 / UHF / random 8-fold-symmetric tensors "
                          "(nb=1..7, 20 trials): max|dG| = "
                       << worst_uhf << '\n';
+    }
+
+    // ── J-only / K-only split (DFT_FUSED_JK_SCOPE.md Steps 0-1) ──────────────
+    //
+    // DFT needs J and K separately: J always, K scaled by
+    // exact_exchange_coefficient, and for range-separated functionals TWO K's
+    // at different omega added to ONE J. That cannot be expressed as the
+    // combined G = J - 0.5K the HF path wants.
+    //
+    // The contract these oracles pin: exchange_accumulate emits RAW, UNSCALED
+    // K. The 0.5 (RHF) and 1.0 (UHF) live in the combined wrappers, NOT in the
+    // accumulator — DFT applies its own factor downstream and would otherwise
+    // inherit the RHF convention, halving every RKS hybrid's exact exchange
+    // while leaving UKS correct.
+
+    // Naive nb^4 Coulomb: J(mu,nu) = sum_{lam,sig} P(lam,sig) (mu nu|lam sig)
+    Eigen::MatrixXd naive_j(const std::vector<double> &eri,
+                            const Eigen::MatrixXd &P, std::size_t nb)
+    {
+        Eigen::MatrixXd J = Eigen::MatrixXd::Zero(nb, nb);
+        for (std::size_t mu = 0; mu < nb; ++mu)
+            for (std::size_t nu = 0; nu < nb; ++nu)
+                for (std::size_t lam = 0; lam < nb; ++lam)
+                    for (std::size_t sig = 0; sig < nb; ++sig)
+                        J(mu, nu) += P(lam, sig) * at(eri, nb, mu, nu, lam, sig);
+        return J;
+    }
+
+    // Naive nb^4 exchange, UNSCALED: K(mu,nu) = sum P(lam,sig) (mu lam|nu sig).
+    // Matches build_exchange_from_eri in src/dft/driver.cpp, which likewise
+    // returns raw K and leaves the coefficient to the caller.
+    Eigen::MatrixXd naive_k(const std::vector<double> &eri,
+                            const Eigen::MatrixXd &P, std::size_t nb)
+    {
+        Eigen::MatrixXd K = Eigen::MatrixXd::Zero(nb, nb);
+        for (std::size_t mu = 0; mu < nb; ++mu)
+            for (std::size_t nu = 0; nu < nb; ++nu)
+                for (std::size_t lam = 0; lam < nb; ++lam)
+                    for (std::size_t sig = 0; sig < nb; ++sig)
+                        K(mu, nu) += P(lam, sig) * at(eri, nb, mu, lam, nu, sig);
+        return K;
+    }
+
+    Eigen::MatrixXd fused_j(const std::vector<double> &eri,
+                            const Eigen::MatrixXd &P, std::size_t nb)
+    {
+        Eigen::MatrixXd J = Eigen::MatrixXd::Zero(nb, nb);
+        for (std::size_t i = 0; i < nb; ++i)
+            for (std::size_t j = 0; j < nb; ++j)
+                for (std::size_t k = 0; k < nb; ++k)
+                    for (std::size_t l = 0; l < nb; ++l)
+                    {
+                        if (!canonical(i, j, k, l))
+                            continue;
+                        HartreeFock::Integrals::coulomb_accumulate(
+                            J, P, i, j, k, l, at(eri, nb, i, j, k, l));
+                    }
+        return J;
+    }
+
+    Eigen::MatrixXd fused_k(const std::vector<double> &eri,
+                            const Eigen::MatrixXd &P, std::size_t nb)
+    {
+        Eigen::MatrixXd K = Eigen::MatrixXd::Zero(nb, nb);
+        for (std::size_t i = 0; i < nb; ++i)
+            for (std::size_t j = 0; j < nb; ++j)
+                for (std::size_t k = 0; k < nb; ++k)
+                    for (std::size_t l = 0; l < nb; ++l)
+                    {
+                        if (!canonical(i, j, k, l))
+                            continue;
+                        HartreeFock::Integrals::exchange_accumulate(
+                            K, P, i, j, k, l, at(eri, nb, i, j, k, l));
+                    }
+        return K;
+    }
+
+    void check_split_accumulators()
+    {
+        std::mt19937 rng(20260720);
+        double worst_j = 0.0;
+        double worst_k = 0.0;
+        double worst_rt_rhf = 0.0;
+        double worst_rt_uhf = 0.0;
+
+        for (std::size_t nb = 1; nb <= 7; ++nb)
+            for (int trial = 0; trial < 20; ++trial)
+            {
+                const std::vector<double> eri = random_symmetric_eri(nb, rng);
+                const Eigen::MatrixXd P = random_symmetric_density(nb, rng);
+
+                // (a) each term against its own brute-force oracle
+                worst_j = std::max(worst_j,
+                                   (naive_j(eri, P, nb) - fused_j(eri, P, nb))
+                                       .cwiseAbs().maxCoeff());
+                worst_k = std::max(worst_k,
+                                   (naive_k(eri, P, nb) - fused_k(eri, P, nb))
+                                       .cwiseAbs().maxCoeff());
+
+                // (b) round-trip: recombining must reproduce the combined
+                // entries bitwise-close, which pins BOTH prefactor conventions.
+                // RHF carries 0.5 on exchange; UHF carries 1.0.
+                const Eigen::MatrixXd J = fused_j(eri, P, nb);
+                const Eigen::MatrixXd K = fused_k(eri, P, nb);
+
+                const Eigen::MatrixXd rhf_rt = J - 0.5 * K;
+                worst_rt_rhf = std::max(
+                    worst_rt_rhf,
+                    (fused_g_rhf(eri, P, nb) - rhf_rt).cwiseAbs().maxCoeff());
+
+                // UHF: Ga = J(Pt) - 1.0 * K(Pa). Same-spin exchange, no 0.5.
+                const Eigen::MatrixXd Pa = random_symmetric_density(nb, rng);
+                const Eigen::MatrixXd Pb = random_symmetric_density(nb, rng);
+                const Eigen::MatrixXd Pt = Pa + Pb;
+                Eigen::MatrixXd Ga_ref, Gb_ref;
+                fused_g_uhf(eri, Pa, Pb, nb, Ga_ref, Gb_ref);
+
+                const Eigen::MatrixXd Jt = fused_j(eri, Pt, nb);
+                const Eigen::MatrixXd Ga_rt = Jt - fused_k(eri, Pa, nb);
+                const Eigen::MatrixXd Gb_rt = Jt - fused_k(eri, Pb, nb);
+                worst_rt_uhf = std::max(
+                    worst_rt_uhf,
+                    std::max((Ga_ref - Ga_rt).cwiseAbs().maxCoeff(),
+                             (Gb_ref - Gb_rt).cwiseAbs().maxCoeff()));
+            }
+
+        if (worst_j > TOL)
+            fail("split J: coulomb_accumulate != naive nb^4 Coulomb, "
+                 "max|dJ| = " + std::to_string(worst_j));
+        else
+            std::cout << "OK  Step 0 / J-only / random tensors (nb=1..7): "
+                         "max|dJ| = " << worst_j << '\n';
+
+        if (worst_k > TOL)
+            fail("split K: exchange_accumulate != naive nb^4 exchange. Is the "
+                 "0.5 folded into the accumulator? It must NOT be — K is raw. "
+                 "max|dK| = " + std::to_string(worst_k));
+        else
+            std::cout << "OK  Step 0 / K-only (raw, unscaled) / random tensors "
+                         "(nb=1..7): max|dK| = " << worst_k << '\n';
+
+        if (worst_rt_rhf > TOL)
+            fail("round-trip RHF: J - 0.5*K != fock_accumulate_rhf, "
+                 "max|dG| = " + std::to_string(worst_rt_rhf));
+        else
+            std::cout << "OK  Step 0 / round-trip RHF (J - 0.5K == combined): "
+                         "max|dG| = " << worst_rt_rhf << '\n';
+
+        if (worst_rt_uhf > TOL)
+            fail("round-trip UHF: J - K != fock_accumulate_uhf, "
+                 "max|dG| = " + std::to_string(worst_rt_uhf));
+        else
+            std::cout << "OK  Step 0 / round-trip UHF (J - 1.0K == combined): "
+                         "max|dG| = " << worst_rt_uhf << '\n';
     }
 
     // ── Step 0: real integrals, against the production two-phase builder ─────
@@ -461,7 +616,7 @@ void check_engine(const std::string &name,
         fail(name + " / water/" + basis_name +
              ": fused != two-phase, max|dG| = " + std::to_string(d));
     else
-        std::cout << "OK  Step 6 / " << name << " / water/" << basis_name
+        std::cout << "OK  " << name << " / water/" << basis_name
                   << ": fused == two-phase, max|dG| = " << d << '\n';
 }
 
@@ -511,6 +666,61 @@ void check_all_engines(const std::string &basis_name)
     check_engine("Auto UHF", basis_name,
                  RysQuad::_compute_2e_fock_uhf_auto(sp, Pa, Pb, nb, K, W, T, nullptr).first,
                  RysQuad::_compute_2e_fock_uhf_auto_direct(sp, Pa, Pb, nb, K, W, T, nullptr).first);
+}
+
+// ── Step 2: the single-term builders, on real integrals ─────────────────────
+//
+// check_split_accumulators proves the accumulation rule on synthetic tensors.
+// This proves the whole plumbed path — engine dispatch, Schwarz screening,
+// canonical filter, threaded reduction — by the identity that has to hold if
+// the term parameter is wired correctly through all four engines:
+//
+//     J - 0.5*K == combined G      (RHF)
+//     J - K_sigma == G_sigma       (UHF, per spin channel)
+//
+// It goes through the base.h dispatchers, i.e. exactly the entries DFT will
+// call, so a mis-wired engine case shows up here rather than in Step 3.
+void check_single_term_builders(const std::string &basis_name)
+{
+    HartreeFock::Calculator calc = make_water(basis_name);
+    if (!g_ok)
+        return;
+
+    const std::vector<HartreeFock::ShellPair> sp = build_shellpairs(calc._shells);
+    const std::size_t nb = calc._shells._basis_functions.size();
+
+    std::mt19937 rng(2027);
+    const Eigen::MatrixXd P = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pa = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pb = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pt = Pa + Pb;
+
+    const auto K = HartreeFock::ERIKernel::Coulomb;
+    constexpr double W = 0.0;
+    constexpr double T = 1e-10;
+
+    const std::vector<std::pair<std::string, HartreeFock::IntegralMethod>> engines = {
+        {"OS  ", HartreeFock::IntegralMethod::ObaraSaika},
+        {"HGP ", HartreeFock::IntegralMethod::HeadGordonPople},
+        {"Rys ", HartreeFock::IntegralMethod::RysQuadrature},
+        {"Auto", HartreeFock::IntegralMethod::Auto},
+    };
+
+    for (const auto &[name, engine] : engines)
+    {
+        // RHF: J - 0.5K must reproduce the combined build.
+        const Eigen::MatrixXd G = _compute_2e_fock(sp, P, nb, engine, K, W, T, nullptr);
+        const Eigen::MatrixXd J = _compute_2e_j_direct(sp, P, nb, engine, K, W, T, nullptr);
+        const Eigen::MatrixXd Kx = _compute_2e_k_direct(sp, P, nb, engine, K, W, T, nullptr);
+        check_engine(name + std::string(" RHF J-0.5K"), basis_name, G, J - 0.5 * Kx);
+
+        // UHF: per spin, J(Pt) - K_sigma must reproduce that channel.
+        const auto [Ga, Gb] = _compute_2e_fock_uhf(sp, Pa, Pb, nb, engine, K, W, T, nullptr);
+        const Eigen::MatrixXd Jt = _compute_2e_j_direct(sp, Pt, nb, engine, K, W, T, nullptr);
+        const auto [Ka, Kb] = _compute_2e_k_uhf_direct(sp, Pa, Pb, nb, engine, K, W, T, nullptr);
+        check_engine(name + std::string(" UHF a"), basis_name, Ga, Jt - Ka);
+        check_engine(name + std::string(" UHF b"), basis_name, Gb, Jt - Kb);
+    }
 }
 
 // ── Integral symmetry (sym_ops): the fused path handles it natively ─────────
@@ -594,11 +804,14 @@ void check_symmetry_ops(const std::string &basis_name)
 int main()
 {
     check_random_tensors();
+    check_split_accumulators();
     check_real_integrals("sto-3g");
     check_real_integrals("6-31g*"); // d shells: exercises the multi-component orbit
     check_fixed_thread_determinism("6-31g*");
     check_all_engines("sto-3g");
     check_all_engines("6-31g*");
+    check_single_term_builders("sto-3g");
+    check_single_term_builders("6-31g*");
     check_symmetry_ops("sto-3g");
     check_symmetry_ops("6-31g*");
 
