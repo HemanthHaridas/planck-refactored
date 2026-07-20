@@ -3465,10 +3465,22 @@ namespace DFT::Driver
             total_density += beta_density;
         }
 
-        const Eigen::MatrixXd coulomb = build_coulomb_from_eri(
-            calculator._eri,
+        // Memory-direct Coulomb: contract each canonical quartet straight into
+        // J instead of sweeping the nb^4 tensor. Same loop the HF Fock build
+        // uses, so this inherits block-level Schwarz, the fixed-order OpenMP
+        // reduction, the MPI bra-stripe, and native sym_ops handling.
+        //
+        // Raw J — no coefficient. See the prefactor contract in
+        // fock_accumulate.h.
+        const Eigen::MatrixXd coulomb = _compute_2e_j_direct(
+            prepared.shell_pairs,
             total_density,
-            calculator._shells.nbasis());
+            calculator._shells.nbasis(),
+            calculator._integral._engine,
+            HartreeFock::ERIKernel::Coulomb,
+            0.0,
+            calculator._integral._tol_eri,
+            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
         const double full_range_exchange_coefficient = xc_grid.full_range_exchange_coefficient;
         const double short_range_exchange_coefficient = xc_grid.short_range_exchange_coefficient;
