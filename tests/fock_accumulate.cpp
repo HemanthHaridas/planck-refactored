@@ -36,6 +36,7 @@
 #include "base/basis.h"
 #include "base/types.h"
 #include "basis/basis.h"
+#include "integrals/base.h"
 #include "integrals/fock_accumulate.h"
 #include "integrals/hgp.h"
 #include "integrals/os.h"
@@ -615,7 +616,7 @@ void check_engine(const std::string &name,
         fail(name + " / water/" + basis_name +
              ": fused != two-phase, max|dG| = " + std::to_string(d));
     else
-        std::cout << "OK  Step 6 / " << name << " / water/" << basis_name
+        std::cout << "OK  " << name << " / water/" << basis_name
                   << ": fused == two-phase, max|dG| = " << d << '\n';
 }
 
@@ -665,6 +666,61 @@ void check_all_engines(const std::string &basis_name)
     check_engine("Auto UHF", basis_name,
                  RysQuad::_compute_2e_fock_uhf_auto(sp, Pa, Pb, nb, K, W, T, nullptr).first,
                  RysQuad::_compute_2e_fock_uhf_auto_direct(sp, Pa, Pb, nb, K, W, T, nullptr).first);
+}
+
+// ── Step 2: the single-term builders, on real integrals ─────────────────────
+//
+// check_split_accumulators proves the accumulation rule on synthetic tensors.
+// This proves the whole plumbed path — engine dispatch, Schwarz screening,
+// canonical filter, threaded reduction — by the identity that has to hold if
+// the term parameter is wired correctly through all four engines:
+//
+//     J - 0.5*K == combined G      (RHF)
+//     J - K_sigma == G_sigma       (UHF, per spin channel)
+//
+// It goes through the base.h dispatchers, i.e. exactly the entries DFT will
+// call, so a mis-wired engine case shows up here rather than in Step 3.
+void check_single_term_builders(const std::string &basis_name)
+{
+    HartreeFock::Calculator calc = make_water(basis_name);
+    if (!g_ok)
+        return;
+
+    const std::vector<HartreeFock::ShellPair> sp = build_shellpairs(calc._shells);
+    const std::size_t nb = calc._shells._basis_functions.size();
+
+    std::mt19937 rng(2027);
+    const Eigen::MatrixXd P = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pa = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pb = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pt = Pa + Pb;
+
+    const auto K = HartreeFock::ERIKernel::Coulomb;
+    constexpr double W = 0.0;
+    constexpr double T = 1e-10;
+
+    const std::vector<std::pair<std::string, HartreeFock::IntegralMethod>> engines = {
+        {"OS  ", HartreeFock::IntegralMethod::ObaraSaika},
+        {"HGP ", HartreeFock::IntegralMethod::HeadGordonPople},
+        {"Rys ", HartreeFock::IntegralMethod::RysQuadrature},
+        {"Auto", HartreeFock::IntegralMethod::Auto},
+    };
+
+    for (const auto &[name, engine] : engines)
+    {
+        // RHF: J - 0.5K must reproduce the combined build.
+        const Eigen::MatrixXd G = _compute_2e_fock(sp, P, nb, engine, K, W, T, nullptr);
+        const Eigen::MatrixXd J = _compute_2e_j_direct(sp, P, nb, engine, K, W, T, nullptr);
+        const Eigen::MatrixXd Kx = _compute_2e_k_direct(sp, P, nb, engine, K, W, T, nullptr);
+        check_engine(name + std::string(" RHF J-0.5K"), basis_name, G, J - 0.5 * Kx);
+
+        // UHF: per spin, J(Pt) - K_sigma must reproduce that channel.
+        const auto [Ga, Gb] = _compute_2e_fock_uhf(sp, Pa, Pb, nb, engine, K, W, T, nullptr);
+        const Eigen::MatrixXd Jt = _compute_2e_j_direct(sp, Pt, nb, engine, K, W, T, nullptr);
+        const auto [Ka, Kb] = _compute_2e_k_uhf_direct(sp, Pa, Pb, nb, engine, K, W, T, nullptr);
+        check_engine(name + std::string(" UHF a"), basis_name, Ga, Jt - Ka);
+        check_engine(name + std::string(" UHF b"), basis_name, Gb, Jt - Kb);
+    }
 }
 
 // ── Integral symmetry (sym_ops): the fused path handles it natively ─────────
@@ -754,6 +810,8 @@ int main()
     check_fixed_thread_determinism("6-31g*");
     check_all_engines("sto-3g");
     check_all_engines("6-31g*");
+    check_single_term_builders("sto-3g");
+    check_single_term_builders("6-31g*");
     check_symmetry_ops("sto-3g");
     check_symmetry_ops("6-31g*");
 

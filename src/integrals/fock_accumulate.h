@@ -70,6 +70,28 @@ namespace HartreeFock::Integrals
         return n;
     }
 
+    // Which term(s) the loop accumulates.
+    //
+    // HF wants Combined (G = J - 0.5K) and is the only mode that existed when
+    // this loop was written. DFT needs the single terms: J always, K alone
+    // scaled by exact_exchange_coefficient, and for range-separated functionals
+    // two K's at different omega added to one J.
+    //
+    // This is a mode on the existing loop rather than three copies of it. The
+    // ~100 lines of block/component screening, canonical filtering, and orbit
+    // handling between the loop head and the accumulate call are identical for
+    // all three; forking them would mean keeping three copies of the trickiest
+    // code in the build in sync. Only the terminal accumulate differs.
+    //
+    // CoulombOnly / ExchangeOnly emit RAW J and RAW K — the caller applies its
+    // own coefficient. See the prefactor contract in fock_accumulate.h.
+    enum class FusedTerm
+    {
+        Combined,     // G = J - 0.5K (RHF) / J - K (UHF) — the HF path
+        CoulombOnly,  // J, raw
+        ExchangeOnly, // K, raw
+    };
+
     // ── Single-term accumulators (J-only / K-only) ───────────────────────────
     //
     // HF always wants the combined G = J - 0.5K, so the entries below fuse both

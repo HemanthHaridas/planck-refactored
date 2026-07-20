@@ -104,8 +104,62 @@ namespace HartreeFock::Integrals
         const Eigen::MatrixXd *Pb = nullptr;
     };
 
+
+    // The terminal accumulation, the one thing that varies between the three
+    // FusedTerm modes. Everything upstream of it in the quartet loop is shared.
+    //
+    // The single-term modes accumulate into `G` for RHF. For UHF they fill both
+    // channels from their own spin density (Pa -> G, Pb -> Gb), so a UKS caller
+    // gets K_alpha and K_beta from one sweep, matching how the combined mode
+    // fills Ga/Gb. Coulomb is spin-independent and uses the total density in
+    // both channels, so a UHF J call returns the same matrix twice.
+    inline void accumulate_term(
+        FusedTerm term,
+        bool need_uhf,
+        Eigen::MatrixXd &G,
+        Eigen::MatrixXd &Gb,
+        const FusedFockDensities &dens,
+        std::size_t i, std::size_t j, std::size_t k, std::size_t l,
+        double val) noexcept
+    {
+        switch (term)
+        {
+        case FusedTerm::CoulombOnly:
+            if (need_uhf)
+            {
+                coulomb_accumulate(G, *dens.Pt, i, j, k, l, val);
+                coulomb_accumulate(Gb, *dens.Pt, i, j, k, l, val);
+            }
+            else
+                coulomb_accumulate(G, *dens.P, i, j, k, l, val);
+            return;
+
+        case FusedTerm::ExchangeOnly:
+            if (need_uhf)
+            {
+                exchange_accumulate(G, *dens.Pa, i, j, k, l, val);
+                exchange_accumulate(Gb, *dens.Pb, i, j, k, l, val);
+            }
+            else
+                exchange_accumulate(G, *dens.P, i, j, k, l, val);
+            return;
+
+        case FusedTerm::Combined:
+        default:
+            if (need_uhf)
+                fock_accumulate_uhf(G, Gb, *dens.Pt, *dens.Pa, *dens.Pb,
+                                    i, j, k, l, val);
+            else
+                fock_accumulate_rhf(G, *dens.P, i, j, k, l, val);
+            return;
+        }
+    }
+
     // `eri_elem(spAB, spCD, lAx..lDz, kernel, omega) -> double` is the engine's
     // per-quartet contracted ERI. Fills G (RHF) or Ga/Gb (UHF).
+    //
+    // `term` selects which term(s) land in the output; it defaults to Combined
+    // so every existing HF call site is unchanged.
     template <typename EriElem>
     void fused_fock_build(
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -120,7 +174,8 @@ namespace HartreeFock::Integrals
         Eigen::MatrixXd &Ga,
         Eigen::MatrixXd &Gb,
         EriElem &&eri_elem,
-        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
+        FusedTerm term = FusedTerm::Combined)
     {
         const bool use_sym = (sym_ops != nullptr) && !sym_ops->empty();
         std::vector<const HartreeFock::ContractedView *> ao_views;
@@ -312,26 +367,16 @@ namespace HartreeFock::Integrals
 
                                 if (!use_sym)
                                 {
-                                    if (need_uhf)
-                                        fock_accumulate_uhf(G_local, Gb_local,
-                                                            *dens.Pt, *dens.Pa, *dens.Pb,
-                                                            i, j, k, l, val);
-                                    else
-                                        fock_accumulate_rhf(G_local, *dens.P,
-                                                            i, j, k, l, val);
+                                    accumulate_term(term, need_uhf, G_local, Gb_local,
+                                                    dens, i, j, k, l, val);
                                     continue;
                                 }
 
                                 for (const auto &e : orbit)
                                 {
                                     const double sv = static_cast<double>(e.sign) * val;
-                                    if (need_uhf)
-                                        fock_accumulate_uhf(G_local, Gb_local,
-                                                            *dens.Pt, *dens.Pa, *dens.Pb,
-                                                            e.i, e.j, e.k, e.l, sv);
-                                    else
-                                        fock_accumulate_rhf(G_local, *dens.P,
-                                                            e.i, e.j, e.k, e.l, sv);
+                                    accumulate_term(term, need_uhf, G_local, Gb_local,
+                                                    dens, e.i, e.j, e.k, e.l, sv);
                                 }
                             }
                         }
