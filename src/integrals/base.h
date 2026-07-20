@@ -92,9 +92,11 @@ inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair
         // every SCF iteration (0.8 GB at nb=100, 500 GB at nb=500), so "direct"
         // mode cost more memory than conventional, not less.
         //
-        // Rys / HGP / Auto keep the two-phase path — they have no fused builder
-        // yet. The fused entry itself delegates back to two-phase when integral
-        // symmetry (sym_ops) is active, so that path is unchanged too.
+        // Every case above is memory-direct too: Rys / HGP / Auto gained fused
+        // builders in 2b23971, and 802168b made the fused entry handle integral
+        // symmetry (sym_ops) natively rather than delegating back to two-phase.
+        // So all four engines share one loop here — the switch selects only the
+        // per-quartet ERI kernel.
         return HartreeFock::ObaraSaika::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
     }
 }
