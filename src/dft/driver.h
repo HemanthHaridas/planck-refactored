@@ -35,8 +35,6 @@ namespace DFT::Driver
         AOGridEvaluation ao_grid;
         GridPreset grid_preset;
         std::optional<HartreeFock::Solvation::PCMState> pcm;
-        mutable std::vector<double> short_range_eri;
-        mutable double short_range_eri_omega = -1.0;
     };
 
     struct Result
