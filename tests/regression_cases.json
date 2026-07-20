@@ -2162,7 +2162,6 @@
       "contains": [
         "Reference :                   RKS",
         "DFT Correlation :             Using HSE06 as a combined XC functional; configured correlation is ignored",
-        "DFT 2e Integrals :            Building short-range ERI tensor for omega = 0.110000 (0.0 MB)",
         "RKS Converged :",
         "DFT Energy :"
       ],

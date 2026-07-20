@@ -3440,8 +3440,10 @@ namespace DFT::Driver
         if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
             return std::unexpected("AO grid basis dimension does not match the calculator basis");
 
-        if (auto eri_ready = ensure_eri_tensor(calculator, prepared); !eri_ready)
-            return std::unexpected(eri_ready.error());
+        // No ERI tensor is built here any more: the J and K builds below are
+        // memory-direct. calculator._eri stays in the Calculator because TDDFT
+        // still needs the dense tensor for its AO->MO transform, but it is no
+        // longer populated for the SCF loop.
 
         auto xc_matrix = assemble_xc_matrix(
             prepared.molecular_grid,
@@ -3490,15 +3492,9 @@ namespace DFT::Driver
         Eigen::MatrixXd exact_exchange_beta;
         double exact_exchange_energy = 0.0;
 
-        if (std::abs(short_range_exchange_coefficient) > 1.0e-14)
-        {
-            if (auto screened_eri_ready =
-                    ensure_short_range_eri_tensor(calculator, prepared, xc_grid.range_separation_omega);
-                !screened_eri_ready)
-            {
-                return std::unexpected(screened_eri_ready.error());
-            }
-        }
+        // Range-separated functionals no longer build a SECOND nb^4 tensor at
+        // the screened omega either — the short-range K calls below pass the
+        // omega straight to the fused loop.
 
         if (std::abs(exact_exchange_coefficient) > 1.0e-14)
         {
@@ -3507,24 +3503,32 @@ namespace DFT::Driver
                 Eigen::MatrixXd exchange_alpha = Eigen::MatrixXd::Zero(nbasis, nbasis);
                 Eigen::MatrixXd exchange_beta = Eigen::MatrixXd::Zero(nbasis, nbasis);
 
+                // Both spin channels from ONE quartet sweep per kernel — the UHF
+                // entry fills K_alpha from Pa and K_beta from Pb together, so a
+                // UKS hybrid does not pay the traversal twice.
                 if (std::abs(full_range_exchange_coefficient) > 1.0e-14)
                 {
-                    exchange_alpha.noalias() +=
-                        full_range_exchange_coefficient *
-                        build_exchange_from_eri(calculator._eri, alpha_density, calculator._shells.nbasis());
-                    exchange_beta.noalias() +=
-                        full_range_exchange_coefficient *
-                        build_exchange_from_eri(calculator._eri, beta_density, calculator._shells.nbasis());
+                    const auto [Ka, Kb] = _compute_2e_k_uhf_direct(
+                        prepared.shell_pairs, alpha_density, beta_density,
+                        calculator._shells.nbasis(), calculator._integral._engine,
+                        HartreeFock::ERIKernel::Coulomb, 0.0,
+                        calculator._integral._tol_eri,
+                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                    exchange_alpha.noalias() += full_range_exchange_coefficient * Ka;
+                    exchange_beta.noalias() += full_range_exchange_coefficient * Kb;
                 }
 
                 if (std::abs(short_range_exchange_coefficient) > 1.0e-14)
                 {
-                    exchange_alpha.noalias() +=
-                        short_range_exchange_coefficient *
-                        build_exchange_from_eri(prepared.short_range_eri, alpha_density, calculator._shells.nbasis());
-                    exchange_beta.noalias() +=
-                        short_range_exchange_coefficient *
-                        build_exchange_from_eri(prepared.short_range_eri, beta_density, calculator._shells.nbasis());
+                    const auto [Ka, Kb] = _compute_2e_k_uhf_direct(
+                        prepared.shell_pairs, alpha_density, beta_density,
+                        calculator._shells.nbasis(), calculator._integral._engine,
+                        HartreeFock::ERIKernel::ShortRange,
+                        xc_grid.range_separation_omega,
+                        calculator._integral._tol_eri,
+                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                    exchange_alpha.noalias() += short_range_exchange_coefficient * Ka;
+                    exchange_beta.noalias() += short_range_exchange_coefficient * Kb;
                 }
 
                 exact_exchange_alpha = -exchange_alpha;
@@ -3541,13 +3545,24 @@ namespace DFT::Driver
                 {
                     exchange.noalias() +=
                         full_range_exchange_coefficient *
-                        build_exchange_from_eri(calculator._eri, alpha_density, calculator._shells.nbasis());
+                        _compute_2e_k_direct(
+                            prepared.shell_pairs, alpha_density,
+                            calculator._shells.nbasis(), calculator._integral._engine,
+                            HartreeFock::ERIKernel::Coulomb, 0.0,
+                            calculator._integral._tol_eri,
+                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
                 }
                 if (std::abs(short_range_exchange_coefficient) > 1.0e-14)
                 {
                     exchange.noalias() +=
                         short_range_exchange_coefficient *
-                        build_exchange_from_eri(prepared.short_range_eri, alpha_density, calculator._shells.nbasis());
+                        _compute_2e_k_direct(
+                            prepared.shell_pairs, alpha_density,
+                            calculator._shells.nbasis(), calculator._integral._engine,
+                            HartreeFock::ERIKernel::ShortRange,
+                            xc_grid.range_separation_omega,
+                            calculator._integral._tol_eri,
+                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
                 }
 
                 exact_exchange_alpha = -0.5 * exchange;
