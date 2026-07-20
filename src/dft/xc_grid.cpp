@@ -4,6 +4,10 @@
 #include <stdexcept>
 #include <vector>
 
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
+
 namespace DFT
 {
 
@@ -46,16 +50,56 @@ namespace DFT
         {
             // The density matrix is symmetrized defensively before grid
             // contraction so tiny SCF asymmetries do not leak into rho or its
-            // gradient.  `density_times_values` is reused across rho and all
-            // gradient components to keep the AO-grid contractions compact.
+            // gradient.  Within each block below, `density_times_values` is
+            // reused across rho and all gradient components to keep the AO-grid
+            // contractions compact.
             const Eigen::MatrixXd symmetric_density = 0.5 * (density + density.transpose());
-            const Eigen::MatrixXd density_times_values = ao_grid.values * symmetric_density;
+
+            const Eigen::Index npoints = ao_grid.values.rows();
+            const Eigen::Index nbasis = ao_grid.values.cols();
 
             DensityChannelOnGrid channel;
-            channel.rho = (ao_grid.values.array() * density_times_values.array()).rowwise().sum().matrix();
-            channel.grad_x = (2.0 * ao_grid.grad_x.array() * density_times_values.array()).rowwise().sum().matrix();
-            channel.grad_y = (2.0 * ao_grid.grad_y.array() * density_times_values.array()).rowwise().sum().matrix();
-            channel.grad_z = (2.0 * ao_grid.grad_z.array() * density_times_values.array()).rowwise().sum().matrix();
+            channel.rho.resize(npoints);
+            channel.grad_x.resize(npoints);
+            channel.grad_y.resize(npoints);
+            channel.grad_z.resize(npoints);
+
+            // Blocked over grid points: each thread owns a disjoint row slab and
+            // computes its own `values * P` slice plus the four reductions over
+            // it, so there is no cross-thread summation and no dependence on
+            // completion order.  That matters here -- the historical DFT jitter
+            // came from an order-dependent reduction in the XC matrix build, and
+            // this loop deliberately has none.  Verified bitwise-identical to the
+            // whole-matrix form across thread counts.
+            //
+            // Eigen's own GEMM threading stays disabled (EIGEN_DONT_PARALLELIZE);
+            // each slab is a serial Eigen product called from one OpenMP thread,
+            // so this does not nest a second thread pool against ours.
+            constexpr Eigen::Index block_rows = 2048;
+
+#ifdef USE_OPENMP
+            // Degrade to serial if a caller ever wraps this in its own region,
+            // rather than oversubscribing the cores.
+#pragma omp parallel for schedule(static) if (!omp_in_parallel())
+#endif
+            for (Eigen::Index start = 0; start < npoints; start += block_rows)
+            {
+                const Eigen::Index rows = std::min(block_rows, npoints - start);
+
+                const auto values_block = ao_grid.values.middleRows(start, rows);
+                Eigen::MatrixXd density_times_values(rows, nbasis);
+                density_times_values.noalias() = values_block * symmetric_density;
+
+                channel.rho.segment(start, rows) =
+                    (values_block.array() * density_times_values.array()).rowwise().sum();
+                channel.grad_x.segment(start, rows) =
+                    (2.0 * ao_grid.grad_x.middleRows(start, rows).array() * density_times_values.array()).rowwise().sum();
+                channel.grad_y.segment(start, rows) =
+                    (2.0 * ao_grid.grad_y.middleRows(start, rows).array() * density_times_values.array()).rowwise().sum();
+                channel.grad_z.segment(start, rows) =
+                    (2.0 * ao_grid.grad_z.middleRows(start, rows).array() * density_times_values.array()).rowwise().sum();
+            }
+
             return channel;
         }
 
