@@ -249,7 +249,23 @@ def parse_run(out: str, err: str, wall: float):
     # MEDIAN, not mean: the first iteration carries one-off setup (basis, 1e
     # integrals, grid) and the last can be short. The median isolates the
     # steady-state Fock build, which is the thing that is supposed to scale.
-    per_iter = statistics.median(iters) if iters else None
+    #
+    # BUT this is scraped from the SCF table, which under mpirun is printed by
+    # ONE rank about ITS OWN iteration timer -- it does not reflect how the work
+    # was distributed. Measured on a 16-water HF sweep it was bit-identical
+    # (1.371943 s) at 1, 2, 4, 8 and 16 ranks while the true per-iteration time
+    # went 15.75 -> 1.62 s (9.7x). Reporting it as "per_iter_s" hid the entire
+    # strong-scaling result and made a working MPI build look like it did not
+    # scale at all.
+    #
+    # So per_iter_s is wall_s / n_iters: wall is measured by THIS process around
+    # the whole mpirun, so it cannot be fooled by which rank printed what. The
+    # scraped value is kept as per_iter_rank_s for reference (it is still the
+    # right number for a serial run, and its gap to the wall-derived value is a
+    # useful load-imbalance hint).
+    per_iter_rank = statistics.median(iters) if iters else None
+    n_iters = len(iters)
+    per_iter = (wall / n_iters) if n_iters else None
 
     rank_rss = {}
     for m in RANK_RSS_RE.finditer(err):
@@ -260,7 +276,11 @@ def parse_run(out: str, err: str, wall: float):
         "nbasis": nb,
         "wall_s": wall,
         "per_iter_s": per_iter,
-        "n_iters": len(iters),
+        # The SCF table's own number. Under mpirun this is one rank's timer and
+        # does NOT track rank count -- kept for reference and as a load-imbalance
+        # hint (its gap to per_iter_s), never as the scaling metric.
+        "per_iter_rank_s": per_iter_rank,
+        "n_iters": n_iters,
         # The per-rank peak. max() over ranks is the number that decides whether
         # a system FITS -- one rank blowing up is a failed job, however small the
         # others are.
