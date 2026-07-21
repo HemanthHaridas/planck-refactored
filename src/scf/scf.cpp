@@ -1,11 +1,14 @@
 #include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <format>
 #include <limits>
 #include <numeric>
 #include <tuple>
 
+#include "base/mpi_env.h"
 #include "basis/spherical.h"
 #include "integrals/base.h"
 #include "io/logging.h"
@@ -610,6 +613,11 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
                                  calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
         }
 
+        // ponytail: phase timers, env-gated, RHF only -- the Amdahl probe for
+        // MPI strong scaling (what fraction of the iteration is replicated).
+        // Three clock reads; the print is behind PLANCK_PHASE_TIMING.
+        const auto t_fock_end = std::chrono::steady_clock::now();
+
         Eigen::MatrixXd V_pcm = Eigen::MatrixXd::Zero(nbasis, nbasis);
         double pcm_energy = 0.0;
         if (pcm != nullptr && pcm->enabled())
@@ -644,6 +652,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         // Once DIIS has ≥2 vectors, use the extrapolated Fock; otherwise plain F.
         const bool do_diis = use_diis && diis.ready();
         const Eigen::MatrixXd F_diag = do_diis ? diis.extrapolate() : F;
+
+        const auto t_diis_end = std::chrono::steady_clock::now();
 
         // ── Diagonalize Fock matrix ───────────────────────────────────────────
         Eigen::MatrixXd C(nbasis, nbasis);
@@ -714,6 +724,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
             calculator._info._scf.alpha.mo_symmetry = std::move(mo_sym);
         }
 
+        const auto t_diag_end = std::chrono::steady_clock::now();
+
         const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
 
         // ── Next density ──────────────────────────────────────────────────────
@@ -724,9 +736,27 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
             restricted_iteration_metrics(P, density_next, E_prev, E_total);
         metrics.diis_error = diis_err;
 
-        const double iter_time = std::chrono::duration<double>(
-                                     std::chrono::steady_clock::now() - iter_start)
-                                     .count();
+        const auto iter_end = std::chrono::steady_clock::now();
+        const double iter_time = std::chrono::duration<double>(iter_end - iter_start).count();
+
+        // ponytail: one line per iteration per rank, scraped by phase_bench.py.
+        // "rest" = everything not Fock/DIIS/diag (density build, metrics, PCM):
+        // by construction the four buckets sum to iter_s, so no phase hides.
+        if (std::getenv("PLANCK_PHASE_TIMING"))
+        {
+            const auto sec = [](auto a, auto b)
+            { return std::chrono::duration<double>(b - a).count(); };
+            const double t_fock = sec(iter_start, t_fock_end);
+            const double t_diis = sec(t_fock_end, t_diis_end);
+            const double t_diag = sec(t_diis_end, t_diag_end);
+            std::printf(
+                "PLANCK_PHASE rank=%d iter=%u fock_s=%.6f diis_s=%.6f "
+                "diag_s=%.6f rest_s=%.6f iter_s=%.6f\n",
+                HartreeFock::Mpi::rank(), iter, t_fock, t_diis, t_diag,
+                iter_time - t_fock - t_diis - t_diag, iter_time);
+            std::fflush(stdout);
+        }
+
         HartreeFock::Logger::scf_iteration(
             iter,
             E_total,

@@ -12,11 +12,10 @@ It answers exactly four questions, and each maps to an open scoping decision:
       -> ranks vs per-iteration time, on a system big enough to mean something.
       Decides: is Tier 1 done, or is there a load-imbalance/comm problem?
 
-  Q2  Is the memory-direct claim real at scale, and is DFT paying for its
-      absence?
-      -> peak RSS, HF (fused, no nb^4) vs DFT (still materializes nb^4, twice
-      for range-separated). Decides: how urgent is DFT_FUSED_JK_SCOPE.md, and
-      what nb does it unblock?
+  Q2  Is the memory-direct claim real at scale, for BOTH methods?
+      -> peak RSS, HF vs DFT. Both are memory-direct as of #151, so this now
+      CHECKS the gap stayed closed rather than measuring an expected gap.
+      Decides: did the fused J/K hold, and what nb does it unblock?
 
   Q3  Where does replicated serial diagonalization become the bottleneck?
       -> diag time as a fraction of per-iteration time vs nb. The HPC scope
@@ -442,16 +441,21 @@ def verify_rank_invariance(build: Path, atoms, basis, engine, methods, ranks, th
 
 
 def run_memory_only(build: Path, sizes, args, methods) -> int:
-    """Q2 in isolation: does DFT pay for the missing fused J/K, and how much?
+    """Q2 in isolation: is the DFT memory gap actually closed?
 
-    Prints measured peak RSS beside the nb^4 tensor that DFT still materializes
-    (and HF, being fused, does not). The two columns to compare are DFT_MB and
-    nb^4_MB: if the former tracks the latter while HF stays flat, the claim in
-    docs/DFT_FUSED_JK_SCOPE.md is confirmed by measurement.
+    History: this mode was written BEFORE #151, to prove DFT paid an nb^4
+    penalty that HF did not. #151 landed the memory-direct J/K in the DFT
+    driver (_compute_2e_j_direct / _compute_2e_k_uhf_direct, including the
+    range-separated short-range K), so src/dft/ no longer allocates nb^4 at
+    all. The nb^4_MB column is now a COUNTERFACTUAL -- what DFT would have
+    cost before #151 -- not a prediction.
 
-    A crash IS data. Once nb^4 exceeds RAM, DFT dies where HF keeps going --
-    that ceiling is the single most useful number for scoping the DFT work, so
-    it is reported rather than treated as a failure.
+    So the expected result inverted: DFT_MB should now stay flat like HF_MB
+    and should NOT track nb^4_MB. If DFT still tracks nb^4, that is a
+    regression in the fused path, not a confirmation of the old scope.
+
+    A crash is still data: it would mean the memory-direct path is not being
+    taken on this input.
     """
     rows = []
     print(f"{'nwat':>5} {'natoms':>7} {'nb':>5} {'nb^4_MB':>10} "
@@ -500,9 +504,9 @@ def run_memory_only(build: Path, sizes, args, methods) -> int:
     print("=" * 60)
     print("Q2 READ-OUT")
     print("=" * 60)
-    print("HF is fused: it never allocates nb^4, so HF_MB should stay ~flat.")
-    print("DFT still materializes it (TWICE for range-separated), so DFT_MB")
-    print("should track the nb^4_MB column -- and eventually DIE where HF does not.")
+    print("Both HF and DFT are memory-direct as of #151: neither should allocate")
+    print("nb^4, so BOTH columns should stay ~flat and the ratio should stay O(1).")
+    print("nb^4_MB is the pre-#151 counterfactual, not a target to track.")
     print()
     measured = [r for r in rows
                 if r.get("hf", {}).get("peak_rss_mb_per_rank")
@@ -513,10 +517,18 @@ def run_memory_only(build: Path, sizes, args, methods) -> int:
                     / r["hf"]["peak_rss_mb_per_rank"])
         h = worst["hf"]["peak_rss_mb_per_rank"]
         d = worst["dft"]["peak_rss_mb_per_rank"]
-        print(f"Worst measured gap: nb={worst['nbasis']} -- "
-              f"HF {h:.0f} MB vs DFT {d:.0f} MB ({d / h:.0f}x).")
-        print("That excess is the nb^4 tensor. It is what")
-        print("docs/DFT_FUSED_JK_SCOPE.md removes.")
+        ratio = d / h
+        print(f"Worst DFT/HF ratio: nb={worst['nbasis']} -- "
+              f"HF {h:.0f} MB vs DFT {d:.0f} MB ({ratio:.1f}x).")
+        # The pre-#151 gap was ~2053x. Anything near that means the fused path
+        # is not being taken; a small ratio is grid + AO-on-grid, which is
+        # real DFT work and is NOT what the fused J/K work removes.
+        if ratio > 50:
+            print("REGRESSION: that is nb^4-scale. The DFT driver should be calling")
+            print("_compute_2e_j_direct / _compute_2e_k_uhf_direct -- check it still is.")
+        else:
+            print("Memory gap is closed (was ~2053x pre-#151). The residual is the")
+            print("replicated grid + AO-on-grid buffers, which is Gap 2, not J/K.")
 
     # The ceiling: DFT reported no high-water mark (it died before `time` could)
     # while HF at the same size did. NOT returncode -- see the note in cell():
@@ -529,9 +541,9 @@ def run_memory_only(build: Path, sizes, args, methods) -> int:
         d0 = died[0]
         print(f"\nDFT CEILING: DFT produced no RSS at nwater={d0['nwater']} "
               f"(nb={d0.get('nbasis')}) -- it died before it could be measured,")
-        print(f"while HF survived on {d0['hf']['peak_rss_mb_per_rank']:.0f} MB. "
-              f"THAT GAP IS THE DELIVERABLE: the same system runs under HF and")
-        print("does not under DFT, purely because DFT still materializes nb^4.")
+        print(f"while HF survived on {d0['hf']['peak_rss_mb_per_rank']:.0f} MB.")
+        print("Post-#151 this is a BUG, not the expected result: the DFT J/K is")
+        print("memory-direct, so DFT should no longer die where HF survives.")
     if args.out:
         args.out.write_text(json.dumps({"mode": "memory_only", "rows": rows}, indent=2))
         print(f"\nWrote {args.out}")
@@ -745,11 +757,6 @@ def main() -> int:
                 eff = (t1 / r["per_iter_s"]) / r["ranks"]
                 if t1 < MIN_MEANINGFUL_S:
                     verdict = f"too small to judge (serial iter = {t1 * 1000:.0f} ms)"
-                elif r["method"] == "dft":
-                    # Expected, not a surprise: DFT's J/K never enters the fused
-                    # loop, so there is nothing to distribute.
-                    verdict = ("EXPECTED -- DFT J/K is not distributed at all "
-                               "(see DFT_FUSED_JK_SCOPE.md)")
                 elif eff > 0.7:
                     verdict = "GOOD -- Tier 1 holds"
                 else:
@@ -759,8 +766,9 @@ def main() -> int:
         print("    For HF, <70% at a MEANINGFUL size => the bra-stripe is imbalanced:")
         print("    the triangular loop hands rank 0 the long rows. Fix = flatten the")
         print("    triangle and stripe the LINEAR index, as _compute_2e already does.")
-        print("    For DFT, ~50% at 2 ranks (1.00x speedup) is the predicted symptom of")
-        print("    the un-fused J/K -- it confirms the scope, it is not a new bug.")
+        print("    For DFT, J/K IS fused and distributed as of #151, so it is judged on")
+        print("    the same threshold as HF. A weak DFT number now points at the")
+        print("    replicated grid (Gap 2: src/dft/ has no Mpi:: call), not at J/K.")
 
     # Q2 -- the DFT memory gap. The headline number for DFT_FUSED_JK_SCOPE.md.
     print("\nQ2  Is DFT paying for the missing fused J/K? (peak RSS, 1 rank)")
@@ -796,16 +804,21 @@ def main() -> int:
     #          residue really is diag + 1e + Allreduce. Amdahl means what it
     #          says. This is the number that decides ScaLAPACK.
     #
-    #   DFT -- the J/K build is NOT distributed at all (still the dense nb^4
-    #          contraction; see DFT_FUSED_JK_SCOPE.md). It therefore dominates
-    #          the residue, and reading it as "diag is expensive" would send you
-    #          to build ScaLAPACK to fix a problem that is actually the missing
-    #          fused J/K. DFT's residue is NOT a diag verdict until Step 3 of
-    #          that scope lands.
+    #   DFT -- the J/K build IS distributed as of #151 (same fused loop), but
+    #          the GRID is not: src/dft/ contains no Mpi:: call, so every rank
+    #          builds the full grid and evaluates the full XC. That replicated
+    #          grid now dominates DFT's residue, so reading it as "diag is
+    #          expensive" would still send you to ScaLAPACK for a problem that
+    #          is actually Gap 2. DFT's residue is not a diag verdict until the
+    #          grid is rank-split.
+    #
+    # Either way this Amdahl split only bounds the residue; it cannot say which
+    # phase owns it. tests/benchmarks/phase_bench.py measures that directly.
     print("\nQ3  What does NOT scale, and is it really diagonalization?")
     print("    Diag is O(nb^3) and is NOT distributed (every rank does it all).")
     print("    But Amdahl lumps ALL non-scaling work together -- see the per-method")
-    print("    reading below, because for DFT the residue is mostly the un-fused J/K.")
+    print("    reading below. For DFT the residue is mostly the replicated grid.")
+    print("    To attribute the residue by phase, run phase_bench.py.")
     mx = max(ranks)
     for m in methods:
         rs = sorted(runs(m, mx), key=lambda r: r["nbasis"] or 0)
