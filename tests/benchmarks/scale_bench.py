@@ -476,7 +476,8 @@ def run_memory_only(build: Path, sizes, args, methods) -> int:
                 row["nbasis"] = r["nbasis"]
 
         nb = row.get("nbasis")
-        # The dense tensor DFT still allocates and HF (fused) does not.
+        # Pre-#151 counterfactual: the nb^4 tensor DFT used to allocate.
+        # Neither method allocates it now; kept as the reference column.
         nb4_mb = (nb**4) * 8 / 1e6 if nb else None
         hf = row.get("hf", {}).get("peak_rss_mb_per_rank")
         dft = row.get("dft", {}).get("peak_rss_mb_per_rank")
@@ -785,13 +786,14 @@ def main() -> int:
             if not (hm and dm):
                 continue
             nb = h["nbasis"] or 0
-            nb4 = (nb**4) * 8 / 1e6  # the dense tensor DFT still allocates
+            nb4 = (nb**4) * 8 / 1e6  # pre-#151 counterfactual, not a live alloc
             ratio = dm / hm
             print(f"    {nb:>5} {hm:>8.0f} {dm:>8.0f} {ratio:>6.1f}x {nb4:>11.0f}")
-        print("    HF never allocates nb^4 (fused). DFT still does -- TWICE for")
-        print("    range-separated. If DFT_MB tracks the nb^4 column, the scope in")
-        print("    docs/DFT_FUSED_JK_SCOPE.md is confirmed and its priority is set by")
-        print("    the ratio column.")
+        print("    Neither HF nor DFT allocates nb^4 as of #151 -- DFT's J and K")
+        print("    (incl. the range-separated short-range K) go through the same")
+        print("    memory-direct loop. nb^4_MB is the pre-#151 counterfactual. If")
+        print("    DFT_MB tracks it, the fused path regressed; if it stays flat, the")
+        print("    ratio column is grid + AO-on-grid (Gap 2), not J/K.")
 
     # Q3 -- the non-scaling residue, and WHAT it is.
     #
