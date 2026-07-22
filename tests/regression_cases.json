@@ -1058,6 +1058,15 @@
       "expected_exit_code": 0
     },
     {
+      "id": "water_uks_mpi_grid_smoke",
+      "input": "tests/inputs/regression/dft/water_triplet_uks_hse06_sto3g.hfinp",
+      "executable": "tests/mpi_smoke_compare.py",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0
+    },
+    {
       "id": "h2_rmp2_gradient_smoke",
       "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
       "tags": [

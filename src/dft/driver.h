@@ -46,18 +46,30 @@ namespace DFT::Driver
         bool converged = false;
     };
 
+    // slice_begin/slice_end restrict the density/XC evaluation to this rank's
+    // grid-point slice (MPI). slice_end < 0 (default) = whole grid; the
+    // gradient/TDDFT callers pass no slice and stay byte-identical. The returned
+    // xc_grid's total_energy / integrated_electrons are then PARTIAL (slice
+    // only) and must be scalar-reduced by the SCF caller before use.
     std::expected<XCGridEvaluation, std::string>
     evaluate_current_density_and_xc(
         const HartreeFock::Calculator &calculator,
         const PreparedSystem &prepared,
         const XC::Functional &exchange_functional,
-        const XC::Functional &correlation_functional);
+        const XC::Functional &correlation_functional,
+        Eigen::Index slice_begin = 0,
+        Eigen::Index slice_end = -1);
 
+    // xc_point_begin/xc_point_end restrict XC assembly to this rank's slice and
+    // reduce the nb^2 XC matrix internally (J/K reduce themselves). xc_point_end
+    // < 0 (default) = whole grid, no reduce.
     std::expected<KSPotentialMatrices, std::string>
     assemble_current_ks_potential(
         HartreeFock::Calculator &calculator,
         PreparedSystem &prepared,
-        const XCGridEvaluation &xc_grid);
+        const XCGridEvaluation &xc_grid,
+        Eigen::Index xc_point_begin = 0,
+        Eigen::Index xc_point_end = -1);
 
     std::expected<PreparedSystem, std::string>
     prepare(HartreeFock::Calculator &calculator, const Options &options = {});

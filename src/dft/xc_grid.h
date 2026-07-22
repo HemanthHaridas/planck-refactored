@@ -84,16 +84,26 @@ namespace DFT
         double integrated_electrons = 0.0;
     };
 
+    // slice_begin/slice_end restrict the density/XC evaluation to a contiguous
+    // grid-point slice for MPI rank partitioning. The output per-point arrays
+    // stay full length (npoints) with points outside the slice left ZERO, so
+    // downstream absolute-point indexing and the driver's MPI_SUM over disjoint
+    // slices stay correct. slice_end < 0 (default) means all points => serial
+    // and test call sites are byte-identical.
     std::expected<DensityOnGrid, std::string>
     evaluate_density_on_grid(
         const AOGridEvaluation &ao_grid,
-        const Eigen::Ref<const Eigen::MatrixXd> &restricted_density);
+        const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
+        Eigen::Index slice_begin = 0,
+        Eigen::Index slice_end = -1);
 
     std::expected<DensityOnGrid, std::string>
     evaluate_density_on_grid(
         const AOGridEvaluation &ao_grid,
         const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
-        const Eigen::Ref<const Eigen::MatrixXd> &beta_density);
+        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
+        Eigen::Index slice_begin = 0,
+        Eigen::Index slice_end = -1);
 
     std::expected<XCGridEvaluation, std::string>
     evaluate_xc_on_grid(
@@ -108,7 +118,9 @@ namespace DFT
         const AOGridEvaluation &ao_grid,
         const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
         const XC::Functional &exchange_functional,
-        const XC::Functional &correlation_functional);
+        const XC::Functional &correlation_functional,
+        Eigen::Index slice_begin = 0,
+        Eigen::Index slice_end = -1);
 
     std::expected<XCGridEvaluation, std::string>
     evaluate_xc_on_grid(
@@ -117,7 +129,9 @@ namespace DFT
         const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
         const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
         const XC::Functional &exchange_functional,
-        const XC::Functional &correlation_functional);
+        const XC::Functional &correlation_functional,
+        Eigen::Index slice_begin = 0,
+        Eigen::Index slice_end = -1);
 
 } // namespace DFT
 
