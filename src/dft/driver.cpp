@@ -14,6 +14,7 @@
 #include <numeric>
 #include <string>
 
+#include "base/mpi_env.h"
 #include "base/wrapper.h"
 #include "basis/basis.h"
 #include "dft_gradient.h"
@@ -35,6 +36,45 @@
 
 namespace DFT::Driver
 {
+
+    // MPI grid partition: this rank's contiguous slice [begin, end) of the
+    // npoints grid points, split as evenly as possible. Serial builds get
+    // rank 0 / size 1 => [0, npoints), i.e. all points, so the sliced grid
+    // calls degrade to the whole-grid form. The remainder (npoints % size) is
+    // spread one-per-rank across the low ranks so slices differ by at most one
+    // point. Contiguous (not strided) keeps each rank's points spatially
+    // coherent for AO screening; the reduce is a sum so order does not matter.
+    inline std::pair<Eigen::Index, Eigen::Index>
+    mpi_grid_slice(Eigen::Index npoints)
+    {
+        const Eigen::Index size = static_cast<Eigen::Index>(HartreeFock::Mpi::size());
+        const Eigen::Index rank = static_cast<Eigen::Index>(HartreeFock::Mpi::rank());
+        if (size <= 1)
+            return {0, npoints};
+        const Eigen::Index base = npoints / size;
+        const Eigen::Index rem = npoints % size;
+        const Eigen::Index begin = rank * base + std::min(rank, rem);
+        const Eigen::Index end = begin + base + (rank < rem ? 1 : 0);
+        return {begin, end};
+    }
+
+    // Sum the slice-local XC energy scalars across ranks so the full-grid totals
+    // feed the SCF energy and the electron-count check. Per-point arrays inside
+    // xc_grid stay slice-local (each rank only assembles its own points), so
+    // ONLY these reduced scalars are touched. No-op when serial.
+    inline void reduce_partial_xc_scalars(XCGridEvaluation &xc_grid)
+    {
+        if (!HartreeFock::Mpi::distributed())
+            return;
+        double scalars[4] = {
+            xc_grid.total_energy, xc_grid.exchange_energy,
+            xc_grid.correlation_energy, xc_grid.integrated_electrons};
+        HartreeFock::Mpi::allreduce_inplace(scalars, 4);
+        xc_grid.total_energy = scalars[0];
+        xc_grid.exchange_energy = scalars[1];
+        xc_grid.correlation_energy = scalars[2];
+        xc_grid.integrated_electrons = scalars[3];
+    }
 
     namespace
     {
@@ -1983,15 +2023,27 @@ namespace DFT::Driver
                     // loop that evaluates the current density, queries libxc
                     // for the semilocal derivatives, and assembles the AO-space
                     // KS potential for the present density matrix.
+                    // MPI: this rank's grid-point slice, shared by the density/XC
+                    // eval and the XC matrix assembly. Serial => whole grid.
+                    const auto [xc_lo, xc_hi] =
+                        mpi_grid_slice(prepared.molecular_grid.points.rows());
+
                     auto xc_grid = evaluate_current_density_and_xc(
                         calculator,
                         prepared,
                         x_functional,
-                        c_functional);
+                        c_functional,
+                        xc_lo, xc_hi);
                     if (!xc_grid)
                         return std::unexpected("DFT density/XC evaluation failed: " + xc_grid.error());
 
-                    auto ks_potential = assemble_current_ks_potential(calculator, prepared, *xc_grid);
+                    // xc_grid's energy/electron scalars are this rank's slice
+                    // only; sum them across ranks before they feed the SCF energy
+                    // and the electron-count check below.
+                    reduce_partial_xc_scalars(*xc_grid);
+
+                    auto ks_potential =
+                        assemble_current_ks_potential(calculator, prepared, *xc_grid, xc_lo, xc_hi);
                     if (!ks_potential)
                         return std::unexpected("DFT KS potential assembly failed: " + ks_potential.error());
 
@@ -2136,15 +2188,22 @@ namespace DFT::Driver
                 calculator._info._scf.alpha.density = alpha_density;
                 calculator._info._scf.beta.density = beta_density;
 
+                const auto [xc_lo, xc_hi] =
+                    mpi_grid_slice(prepared.molecular_grid.points.rows());
+
                 auto xc_grid = evaluate_current_density_and_xc(
                     calculator,
                     prepared,
                     x_functional,
-                    c_functional);
+                    c_functional,
+                    xc_lo, xc_hi);
                 if (!xc_grid)
                     return std::unexpected("DFT density/XC evaluation failed: " + xc_grid.error());
 
-                auto ks_potential = assemble_current_ks_potential(calculator, prepared, *xc_grid);
+                reduce_partial_xc_scalars(*xc_grid);
+
+                auto ks_potential =
+                    assemble_current_ks_potential(calculator, prepared, *xc_grid, xc_lo, xc_hi);
                 if (!ks_potential)
                     return std::unexpected("DFT KS potential assembly failed: " + ks_potential.error());
 
@@ -3145,7 +3204,9 @@ namespace DFT::Driver
         const HartreeFock::Calculator &calculator,
         const PreparedSystem &prepared,
         const XC::Functional &exchange_functional,
-        const XC::Functional &correlation_functional)
+        const XC::Functional &correlation_functional,
+        Eigen::Index slice_begin,
+        Eigen::Index slice_end)
     {
         if (prepared.ao_grid.npoints() != prepared.molecular_grid.points.rows())
             return std::unexpected("AO grid and molecular grid point counts do not match");
@@ -3170,7 +3231,9 @@ namespace DFT::Driver
                 alpha_density,
                 beta_density,
                 exchange_functional,
-                correlation_functional);
+                correlation_functional,
+                slice_begin,
+                slice_end);
         }
 
         return evaluate_xc_on_grid(
@@ -3178,7 +3241,9 @@ namespace DFT::Driver
             prepared.ao_grid,
             alpha_density,
             exchange_functional,
-            correlation_functional);
+            correlation_functional,
+            slice_begin,
+            slice_end);
     }
 
     namespace
@@ -3302,7 +3367,9 @@ namespace DFT::Driver
     assemble_current_ks_potential(
         HartreeFock::Calculator &calculator,
         PreparedSystem &prepared,
-        const XCGridEvaluation &xc_grid)
+        const XCGridEvaluation &xc_grid,
+        Eigen::Index xc_point_begin,
+        Eigen::Index xc_point_end)
     {
         if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
             return std::unexpected("AO grid basis dimension does not match the calculator basis");
@@ -3312,12 +3379,33 @@ namespace DFT::Driver
         // still needs the dense tensor for its AO->MO transform, but it is no
         // longer populated for the SCF loop.
 
+        // MPI grid partition: assemble only this rank's XC point slice, then
+        // reduce the nb^2 XC contribution HERE -- before J/K are built and
+        // combined below. J/K are already MPI-reduced inside their own direct
+        // builders, so reducing the whole KS potential later would double-count
+        // them; reducing XC in isolation at the point of assembly avoids that.
+        // xc_point_end < 0 (default) = whole grid, so the gradient/TDDFT callers
+        // that pass no slice are byte-identical.
         auto xc_matrix = assemble_xc_matrix(
             prepared.molecular_grid,
             prepared.ao_grid,
-            xc_grid);
+            xc_grid,
+            xc_point_begin,
+            xc_point_end);
         if (!xc_matrix)
             return std::unexpected(xc_matrix.error());
+
+        if (xc_point_end >= 0 && HartreeFock::Mpi::distributed())
+        {
+            // Disjoint point slices => MPI_SUM reassembles the full XC matrix.
+            // Same reduce pattern as the Fock build (fused_fock.h), already
+            // gated bitwise across ranks. Both spin channels always exist
+            // (beta == alpha shape for RKS), so reduce both unconditionally.
+            HartreeFock::Mpi::allreduce_inplace(
+                xc_matrix->alpha.data(), static_cast<std::size_t>(xc_matrix->alpha.size()));
+            HartreeFock::Mpi::allreduce_inplace(
+                xc_matrix->beta.data(), static_cast<std::size_t>(xc_matrix->beta.size()));
+        }
 
         const Eigen::Index nbasis = prepared.ao_grid.nbasis();
         const auto &alpha_density = calculator._info._scf.alpha.density;

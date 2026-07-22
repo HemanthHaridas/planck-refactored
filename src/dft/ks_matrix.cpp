@@ -98,13 +98,25 @@ namespace DFT
     assemble_xc_matrix(
         const MolecularGrid &molecular_grid,
         const AOGridEvaluation &ao_grid,
-        const XCGridEvaluation &xc_grid)
+        const XCGridEvaluation &xc_grid,
+        Eigen::Index point_begin,
+        Eigen::Index point_end)
     {
         if (auto valid = validate_grid_inputs(molecular_grid, ao_grid, xc_grid); !valid)
             return std::unexpected(valid.error());
 
-        const Eigen::Index npoints = ao_grid.npoints();
         const Eigen::Index nbasis = ao_grid.nbasis();
+
+        // MPI: each rank assembles only its contiguous point slice, and the
+        // driver reduces the nb^2 partials. point_end < 0 means "all points"
+        // (the serial default), so non-MPI and test call sites are unchanged.
+        // The point loop runs [point_begin, point_end); the cross-rank sum of
+        // disjoint slices is the same MPI_SUM pattern the Fock reduce uses.
+        const Eigen::Index all_points = ao_grid.npoints();
+        const Eigen::Index lo = (point_end < 0) ? 0 : point_begin;
+        const Eigen::Index npoints = (point_end < 0) ? all_points : point_end;
+        if (lo < 0 || npoints > all_points || lo > npoints)
+            return std::unexpected("assemble_xc_matrix: point slice out of range");
 
         XCMatrixContribution contribution;
         contribution.polarized = xc_grid.density.polarized;
@@ -148,7 +160,7 @@ namespace DFT
 #ifdef USE_OPENMP
 #pragma omp for nowait schedule(static)
 #endif
-            for (Eigen::Index point = 0; point < npoints; ++point)
+            for (Eigen::Index point = lo; point < npoints; ++point)
             {
                 const double weight = molecular_grid.points(point, 3);
                 if (weight == 0.0)

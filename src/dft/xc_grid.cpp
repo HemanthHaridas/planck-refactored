@@ -46,7 +46,9 @@ namespace DFT
 
         DensityChannelOnGrid evaluate_density_channel(
             const AOGridEvaluation &ao_grid,
-            const Eigen::Ref<const Eigen::MatrixXd> &density)
+            const Eigen::Ref<const Eigen::MatrixXd> &density,
+            Eigen::Index slice_begin = 0,
+            Eigen::Index slice_end = -1)
         {
             // The density matrix is symmetrized defensively before grid
             // contraction so tiny SCF asymmetries do not leak into rho or its
@@ -58,11 +60,20 @@ namespace DFT
             const Eigen::Index npoints = ao_grid.values.rows();
             const Eigen::Index nbasis = ao_grid.values.cols();
 
+            // MPI slice: compute rho/grad only on [lo, hi); the arrays stay full
+            // length npoints with the rest left ZERO. Downstream (libxc pack,
+            // matrix assembly) indexes by absolute point, so full-length arrays
+            // are required; zero rho outside the slice contributes zero XC there,
+            // and the driver's MPI_SUM over disjoint slices reassembles the whole.
+            // slice_end < 0 = all points (serial default) => byte-identical.
+            const Eigen::Index lo = (slice_end < 0) ? 0 : slice_begin;
+            const Eigen::Index hi = (slice_end < 0) ? npoints : slice_end;
+
             DensityChannelOnGrid channel;
-            channel.rho.resize(npoints);
-            channel.grad_x.resize(npoints);
-            channel.grad_y.resize(npoints);
-            channel.grad_z.resize(npoints);
+            channel.rho = Eigen::VectorXd::Zero(npoints);
+            channel.grad_x = Eigen::VectorXd::Zero(npoints);
+            channel.grad_y = Eigen::VectorXd::Zero(npoints);
+            channel.grad_z = Eigen::VectorXd::Zero(npoints);
 
             // Blocked over grid points: each thread owns a disjoint row slab and
             // computes its own `values * P` slice plus the four reductions over
@@ -82,9 +93,9 @@ namespace DFT
             // rather than oversubscribing the cores.
 #pragma omp parallel for schedule(static) if (!omp_in_parallel())
 #endif
-            for (Eigen::Index start = 0; start < npoints; start += block_rows)
+            for (Eigen::Index start = lo; start < hi; start += block_rows)
             {
-                const Eigen::Index rows = std::min(block_rows, npoints - start);
+                const Eigen::Index rows = std::min(block_rows, hi - start);
 
                 const auto values_block = ao_grid.values.middleRows(start, rows);
                 Eigen::MatrixXd density_times_values(rows, nbasis);
@@ -342,7 +353,9 @@ namespace DFT
     std::expected<DensityOnGrid, std::string>
     evaluate_density_on_grid(
         const AOGridEvaluation &ao_grid,
-        const Eigen::Ref<const Eigen::MatrixXd> &restricted_density)
+        const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
+        Eigen::Index slice_begin,
+        Eigen::Index slice_end)
     {
         if (auto valid = validate_ao_grid(ao_grid); !valid)
             return std::unexpected(valid.error());
@@ -352,7 +365,7 @@ namespace DFT
 
         DensityOnGrid density;
         density.polarized = false;
-        density.total = evaluate_density_channel(ao_grid, restricted_density);
+        density.total = evaluate_density_channel(ao_grid, restricted_density, slice_begin, slice_end);
 
         density.alpha.rho = 0.5 * density.total.rho;
         density.alpha.grad_x = 0.5 * density.total.grad_x;
@@ -367,7 +380,9 @@ namespace DFT
     evaluate_density_on_grid(
         const AOGridEvaluation &ao_grid,
         const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
-        const Eigen::Ref<const Eigen::MatrixXd> &beta_density)
+        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
+        Eigen::Index slice_begin,
+        Eigen::Index slice_end)
     {
         if (auto valid = validate_ao_grid(ao_grid); !valid)
             return std::unexpected(valid.error());
@@ -380,8 +395,8 @@ namespace DFT
 
         DensityOnGrid density;
         density.polarized = true;
-        density.alpha = evaluate_density_channel(ao_grid, alpha_density);
-        density.beta = evaluate_density_channel(ao_grid, beta_density);
+        density.alpha = evaluate_density_channel(ao_grid, alpha_density, slice_begin, slice_end);
+        density.beta = evaluate_density_channel(ao_grid, beta_density, slice_begin, slice_end);
 
         density.total.rho = density.alpha.rho + density.beta.rho;
         density.total.grad_x = density.alpha.grad_x + density.beta.grad_x;
@@ -460,9 +475,11 @@ namespace DFT
         const AOGridEvaluation &ao_grid,
         const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
         const XC::Functional &exchange_functional,
-        const XC::Functional &correlation_functional)
+        const XC::Functional &correlation_functional,
+        Eigen::Index slice_begin,
+        Eigen::Index slice_end)
     {
-        auto density = evaluate_density_on_grid(ao_grid, restricted_density);
+        auto density = evaluate_density_on_grid(ao_grid, restricted_density, slice_begin, slice_end);
         if (!density)
             return std::unexpected(density.error());
 
@@ -480,9 +497,11 @@ namespace DFT
         const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
         const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
         const XC::Functional &exchange_functional,
-        const XC::Functional &correlation_functional)
+        const XC::Functional &correlation_functional,
+        Eigen::Index slice_begin,
+        Eigen::Index slice_end)
     {
-        auto density = evaluate_density_on_grid(ao_grid, alpha_density, beta_density);
+        auto density = evaluate_density_on_grid(ao_grid, alpha_density, beta_density, slice_begin, slice_end);
         if (!density)
             return std::unexpected(density.error());
 

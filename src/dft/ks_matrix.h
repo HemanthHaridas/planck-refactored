@@ -35,11 +35,16 @@ namespace DFT
         double exact_exchange_energy = 0.0;
     };
 
+    // point_begin/point_end restrict assembly to a contiguous grid-point slice
+    // (for MPI rank partitioning); point_end < 0 (the default) means all points,
+    // keeping every serial/test call site byte-identical.
     std::expected<XCMatrixContribution, std::string>
     assemble_xc_matrix(
         const MolecularGrid &molecular_grid,
         const AOGridEvaluation &ao_grid,
-        const XCGridEvaluation &xc_grid);
+        const XCGridEvaluation &xc_grid,
+        Eigen::Index point_begin = 0,
+        Eigen::Index point_end = -1);
 
     KSPotentialMatrices combine_ks_potential(
         const Eigen::Ref<const Eigen::MatrixXd> &coulomb,
