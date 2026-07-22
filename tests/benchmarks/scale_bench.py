@@ -511,25 +511,39 @@ def run_memory_only(build: Path, sizes, args, methods) -> int:
     print()
     measured = [r for r in rows
                 if r.get("hf", {}).get("peak_rss_mb_per_rank")
-                and r.get("dft", {}).get("peak_rss_mb_per_rank")]
+                and r.get("dft", {}).get("peak_rss_mb_per_rank")
+                and r.get("nbasis")]
     if measured:
         worst = max(measured,
                     key=lambda r: r["dft"]["peak_rss_mb_per_rank"]
                     / r["hf"]["peak_rss_mb_per_rank"])
         h = worst["hf"]["peak_rss_mb_per_rank"]
         d = worst["dft"]["peak_rss_mb_per_rank"]
-        ratio = d / h
         print(f"Worst DFT/HF ratio: nb={worst['nbasis']} -- "
-              f"HF {h:.0f} MB vs DFT {d:.0f} MB ({ratio:.1f}x).")
-        # The pre-#151 gap was ~2053x. Anything near that means the fused path
-        # is not being taken; a small ratio is grid + AO-on-grid, which is
-        # real DFT work and is NOT what the fused J/K work removes.
-        if ratio > 50:
-            print("REGRESSION: that is nb^4-scale. The DFT driver should be calling")
-            print("_compute_2e_j_direct / _compute_2e_k_uhf_direct -- check it still is.")
+              f"HF {h:.0f} MB vs DFT {d:.0f} MB ({d / h:.1f}x).")
+
+        # The RATIO is the wrong discriminator: DFT carries genuine nb^2 grid +
+        # AO-on-grid buffers HF lacks, so the ratio is large AND grows with nb
+        # (measured 22x -> 42x) even with the memory wall fully closed. What
+        # tells a closed wall (nb^2 grid) from a regression (nb^4 tensor) is the
+        # EXPONENT of DFT RSS vs nb: fit it across the two extreme sizes.
+        by_nb = sorted(measured, key=lambda r: r["nbasis"])
+        lo, hi = by_nb[0], by_nb[-1]
+        if hi["nbasis"] > lo["nbasis"]:
+            exponent = math.log(
+                hi["dft"]["peak_rss_mb_per_rank"] / lo["dft"]["peak_rss_mb_per_rank"]
+            ) / math.log(hi["nbasis"] / lo["nbasis"])
+            print(f"DFT RSS exponent nb^{exponent:.2f} "
+                  f"(nb {lo['nbasis']}->{hi['nbasis']}). "
+                  "nb^2 = grid (wall closed); nb^4 = tensor (regressed).")
+            if exponent > 3.0:
+                print("REGRESSION: nb^4-scale growth. The DFT driver should be calling")
+                print("_compute_2e_j_direct / _compute_2e_k_uhf_direct -- check it still is.")
+            else:
+                print("Memory gap is closed (was ~2053x pre-#151). The residual grows")
+                print("as nb^2 -- replicated grid + AO-on-grid buffers, Gap 2, not J/K.")
         else:
-            print("Memory gap is closed (was ~2053x pre-#151). The residual is the")
-            print("replicated grid + AO-on-grid buffers, which is Gap 2, not J/K.")
+            print("Need >=2 distinct nb sizes to fit the RSS exponent.")
 
     # The ceiling: DFT reported no high-water mark (it died before `time` could)
     # while HF at the same size did. NOT returncode -- see the note in cell():
