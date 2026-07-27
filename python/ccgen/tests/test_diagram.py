@@ -304,7 +304,7 @@ class TopologyClassOracleTests(unittest.TestCase):
         ("ccsd", "doubles"): (123, 19, 31),
     }
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_NAME_OVERLOAD_BUG_HANDOFF.
+    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
     def test_measured_class_counts(self):
         for (method, manifold), expected in self.EXPECTED.items():
             with self.subTest(method=method, manifold=manifold):
@@ -335,7 +335,7 @@ class TopologyClassOracleTests(unittest.TestCase):
                     len({exact_topology_key(t) for t in terms}),
                 )
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_NAME_OVERLOAD_BUG_HANDOFF.
+    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
     def test_exact_key_counts(self):
         expected = {
             ("ccd", "energy"): 1,
@@ -371,7 +371,7 @@ class TopologyClassOracleTests(unittest.TestCase):
         self.assertEqual(len(terms), 6)
         self.assertEqual(len({exact_topology_key(t) for t in terms}), 3)
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_NAME_OVERLOAD_BUG_HANDOFF.
+    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
     def test_repeated_factor_exchange_is_the_known_overcount(self):
         # The documented limitation, pinned so it cannot regress silently:
         # t2(a,c,i,j)*t2(b,d,k,l) and t2(a,c,k,l)*t2(b,d,i,j) are one diagram
@@ -384,7 +384,7 @@ class TopologyClassOracleTests(unittest.TestCase):
         # 6 classes here; textbook CCD has 5 distinct quadratic diagrams.
         self.assertEqual(len({exact_topology_key(t) for t in quad}), 6)
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_NAME_OVERLOAD_BUG_HANDOFF.
+    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
     def test_quadratic_ccd_terms_are_not_one_topology(self):
         # The specific undercount that motivated D2.0: the 24 t2*t2*v terms
         # share ONE coarse key but span several distinct diagrams.
@@ -702,7 +702,7 @@ class DiagramWeightOracleTests(unittest.TestCase):
             with self.subTest(method=method, manifold=manifold):
                 self.assertEqual(from_terms, from_enum)
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_NAME_OVERLOAD_BUG_HANDOFF.
+    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
     def test_ccd_signed_sums_are_the_textbook_weights(self):
         # The D3.0 success case, hand-checkable against any CC textbook.
         weights = diagram_weights(generate_cc_equations("ccd")["doubles"])
@@ -721,7 +721,7 @@ class DiagramWeightOracleTests(unittest.TestCase):
             {k: v for k, v in weights.items() if k[0]}, expected
         )
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_NAME_OVERLOAD_BUG_HANDOFF.
+    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
     def test_ccd_weights_are_clean_but_the_summands_are_not(self):
         # Why a diagram maps to ONE weight and not to n terms: the ring-ring
         # diagram's ten terms carry 1/32, 1/16 and 3/32 yet total 1/2.
@@ -764,7 +764,7 @@ class DiagramWeightOracleTests(unittest.TestCase):
                 with self.subTest(method=method, manifold=manifold):
                     self.assertTrue(all(v > 0 for v in mags.values()))
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_NAME_OVERLOAD_BUG_HANDOFF.
+    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
     def test_magnitudes_are_not_the_weight_either(self):
         # Denominator 8 where the true CCD weights have at most 4: the
         # magnitude sums over the P expansion without dividing by it. D3.3 owes

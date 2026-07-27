@@ -1,6 +1,6 @@
 """W0 -- primitive-level per-structure weight table for the reference r2.
 
-Companion to `docs/CCGEN_RAW_GENERATION_WEIGHT_SCOPE.md`.  Expands the
+Companion to `docs/CCGEN_GENERATION_AND_VALIDATION.md`.  Expands the
 hand-written, PySCF-validated GCCSD doubles reference (`gccsd_reference.py`)
 into its individual t1-containing primitive contractions, each carrying a
 rational coefficient and an einsum "structure signature".  This is the

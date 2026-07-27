@@ -1012,7 +1012,7 @@ class FactoredCanonicalizationTests(unittest.TestCase):
         """Buggy pre-fix CCSD counts; see test_ccsd_term_counts_unchanged.
 
         Expected-failure until the residual ~2% CCSD raw-generation error is
-        fixed and the final counts are known (CCGEN_NAME_OVERLOAD_BUG_HANDOFF).
+        fixed and the final counts are known (CCGEN_GENERATION_AND_VALIDATION).
         """
         eqs = generate_cc_equations("ccsd")
         self.assertEqual(len(eqs["energy"]), 3)
@@ -1264,7 +1264,7 @@ class WickEarlyTerminationTests(unittest.TestCase):
         canonicalize's (space, name) key false-zeroed legitimate terms
         (T1.2b) and its non-idempotence split equivalent terms (T1.2c).
         Post-fix counts are singles 16, doubles 70, but a residual ~2% CCSD
-        error remains in raw generation (see CCGEN_NAME_OVERLOAD_BUG_HANDOFF),
+        error remains in raw generation (see CCGEN_GENERATION_AND_VALIDATION),
         so these are NOT yet final -- do not freeze them. Flip to a hard
         assertion with the final counts once the whole-residual gate reaches 0.
         """
