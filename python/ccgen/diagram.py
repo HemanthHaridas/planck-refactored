@@ -1189,6 +1189,12 @@ def diagram_orbit_terms(ds: DiagramString, h_rank: int):
     weight = diagram_signed_weight(ds, h_rank)
     occ_ext = [i for i in rep.free_indices if i.space == "occ"]
     vir_ext = [i for i in rep.free_indices if i.space == "vir"]
+    # Emit free indices in the term path's order (occ..., vir...) so the lowered
+    # / emitted kernels have the same residual index LAYOUT (R[occ,vir], not
+    # R[vir,occ]). The residual is the same tensor either way, but the layout is
+    # a convention downstream consumers depend on -- matching it is the D5
+    # kernel-equivalence prerequisite.
+    free = tuple(occ_ext) + tuple(vir_ext)
 
     terms = []
     for occ_perm in itertools.permutations(range(len(occ_ext))):
@@ -1207,7 +1213,7 @@ def diagram_orbit_terms(ds: DiagramString, h_rank: int):
                 AlgebraTerm(
                     coeff=weight * occ_sgn * vir_sgn,
                     factors=factors,
-                    free_indices=rep.free_indices,
+                    free_indices=free,
                     summed_indices=rep.summed_indices,
                     connected=rep.connected,
                     provenance=rep.provenance,
@@ -1235,7 +1241,7 @@ def _bare_manifold_term(bra_level: int):
 
     occ = [make_occ(n, dummy=False) for n in _OCC_EXT_NAMES[:bra_level]]
     vir = [make_vir(n, dummy=False) for n in _VIR_EXT_NAMES[:bra_level]]
-    free = tuple(vir) + tuple(occ)
+    free = tuple(occ) + tuple(vir)  # occ-first, matching the term path's layout
     if bra_level == 1:
         factors = (f(vir[0], occ[0]),)
     elif bra_level == 2:

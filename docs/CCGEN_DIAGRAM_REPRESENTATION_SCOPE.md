@@ -250,10 +250,35 @@ ccgen residual → D4.2 engine flag, residual-equal to wick → D4.3 FCI energy.
 AR4 (arbitrary `(ranks, manifold)`) is the same `_generate_diagram_equations`
 generalized — already rank-parameterized; CCSDTQ rides AR1 + the same weights.
 
-### 2.4 D5 — retire the term-path enumeration
+### 2.4 D5 — retire the term-path enumeration. SCOPE CORRECTED; kernel-equivalence LANDED.
 
-Once D4 holds, `wick.py` + `project.py` + the BCH path in `algebra.py` are dead
-for generation. Pure deletion behind the passing D4 gate (~2600 lines).
+**D5 is NOT pure deletion** — the earlier "~2600-line deletion behind the D4
+gate" was wrong. `project.py` holds the shared types (`AlgebraTerm`,
+`MANIFOLD_NAMES`/`_NAME_TO_RANK`/`manifold_name`) that the diagram engine and all
+downstream (`canonicalize`, `tensor_ir`, the diagram engine itself) consume, so
+it stays. Only `wick.py`, the BCH path in `algebra.py`, and the
+projection-of-Hbar helpers are genuinely term-path-only — and they can only be
+deleted **after flipping the default to `engine="diagram"`**, which changes what
+the real codegen consumers (`cli.py`, `bench.py`,
+`generate_planck_cc_kernels.py`, `generate_cc_equations_lowered`) emit. So D5 is
+gated on a production-codegen default flip, not a mechanical deletion.
+
+**Kernel-equivalence prerequisite — LANDED (the safe-to-flip evidence).**
+`engine` already threads through `generate_cc_equations_lowered` /
+`print_einsum` (via `**kwargs`). Emitting both engines as numpy einsum, exec'ing,
+and comparing arrays surfaced a real convention gap: the diagram path emitted the
+residual in `[vir, occ]` order vs the term path's `[occ, vir]` — same tensor
+(energy bit-identical, residual ~1e-14) but a **layout** downstream solvers
+depend on. Fixed by ordering the diagram terms' `free_indices` occ-first
+(`diagram_orbit_terms` / `_bare_manifold_term`). Now the einsum-emitted kernels
+match in value AND layout (`test_diagram_engine_emits_equivalent_kernels`:
+R1/R2 same shape, ≤1e-11). `residual_einsum` normalizes to `[vir,occ]`
+internally, so `ccgen_iterate_amps` / the FCI gates are unaffected by the
+reorder (verified).
+
+**Still deferred (deliberately):** the default flip + deletion. The diagram
+engine stays opt-in; the term path remains the default and fallback. The flip is
+a separate, higher-risk decision now backed by kernel-equivalence evidence.
 
 ### 2.5 Later, separate decisions (not on the critical path)
 

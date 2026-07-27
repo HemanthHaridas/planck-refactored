@@ -492,6 +492,37 @@ class EquationRegressionTests(unittest.TestCase):
             {m: [repr(t) for t in ts] for m, ts in b.items()},
         )
 
+    def test_diagram_engine_emits_equivalent_kernels(self) -> None:
+        # D5 kernel-equivalence: the einsum-EMITTED kernels of the diagram and
+        # wick engines compute the same residual AND in the same index LAYOUT
+        # (R1[occ,vir], R2[occ,occ,vir,vir]). Residual equality (D4.2) is at the
+        # AlgebraTerm level; this checks the whole generate->emit pipeline at the
+        # emitted-code level, exec'ing both and comparing arrays. This is the
+        # prerequisite evidence for ever flipping the default to "diagram":
+        # downstream solvers depend on the residual layout, and the diagram path
+        # is now made occ-first to match. No default flip / deletion here.
+        if np is None:
+            self.skipTest("numpy required")
+        from ccgen.generate import print_einsum
+        from ccgen.tests.residual_eval import random_tensors
+
+        no, nv = 4, 5
+        tn = random_tensors(no, nv, seed=9)
+
+        def run(code):
+            ns = {"np": np, "no": no, "nv": nv, "F": tn["f"], "V": tn["v"],
+                  "T1": tn["t1"], "T2": tn["t2"]}
+            exec(code, ns)
+            return ns["E_CC"], ns["R1"], ns["R2"]
+
+        ew, r1w, r2w = run(print_einsum("ccsd", engine="wick"))
+        ed, r1d, r2d = run(print_einsum("ccsd", engine="diagram"))
+        self.assertAlmostEqual(float(ew), float(ed), places=12)
+        self.assertEqual(r1w.shape, r1d.shape)
+        self.assertEqual(r2w.shape, r2d.shape)
+        self.assertTrue(np.allclose(r1w, r1d, atol=1e-11), np.max(np.abs(r1w - r1d)))
+        self.assertTrue(np.allclose(r2w, r2d, atol=1e-11), np.max(np.abs(r2w - r2d)))
+
     def test_ccsd_singles_linear_seed_matches_pyscf(self) -> None:
         if np is None:
             self.skipTest("numpy is required for PySCF-backed residual tests")
