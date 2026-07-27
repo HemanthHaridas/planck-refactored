@@ -232,7 +232,9 @@ def _map_factor(tensor: Tensor | LoweredTensorFactor) -> tuple[int, str]:
         left, right = indices
         return 1, f"(({left.name} == {right.name}) ? 1.0 : 0.0)"
 
-    if tensor_obj.name.startswith("W_"):
+    # Extracted intermediates (CSE "W_*" and the tau pseudo-amplitude) are
+    # materialized locals built once per kernel; reference them by name.
+    if tensor_obj.name.startswith("W_") or tensor_obj.name == "tau":
         return 1, _target_expr(tensor_obj.name, indices)
 
     raise NotImplementedError(f"Unsupported tensor factor {tensor_obj!r}")

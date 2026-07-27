@@ -36,33 +36,37 @@
       background: linear-gradient(
         135deg, rgba(154,61,34,0.95), rgba(123,53,31,0.92)
       );  color:  #fff9f2; border-radius: 24px; padding: 28px 34px; box-shadow:
-      var(--shadow); margin-bottom: 24px;
+      var(--shadow); margin-bottom: 24px; min-width: 0;
     } .hero h1 {
       margin: 0 0 8px; font-size: clamp(2rem, 3vw, 3.2rem); line-height: 1.1;
+      overflow-wrap: anywhere;
     } .hero p {
       margin:  0;  max-width:  100%;  color: rgba(255,249,242,0.92); font-size:
-      1.05rem;
+      1.05rem; overflow-wrap: anywhere;
     } .layout {
       display:  grid;  grid-template-columns:  300px minmax(0, 1fr); gap: 24px;
-      align-items: start;
+      align-items: start; min-width: 0;
     } .sidebar, .content {
       background:  var(--panel);  border: 1px solid var(--rule); border-radius:
-      22px; box-shadow: var(--shadow);
+      22px; box-shadow: var(--shadow); min-width: 0;
     } .sidebar {
       position:  sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y:
       auto; padding: 22px 20px;
     } .sidebar h2 {
       margin:   0   0   12px;  font-size:  0.9rem;  text-transform:  uppercase;
       letter-spacing: 0.09em; color: var(--accent);
-    }  .sidebar  ul { list-style: none; padding: 0; margin: 0; } .sidebar li
+    }  .sidebar  ul { list-style: none; padding: 0; margin: 0; min-width: 0; } .sidebar li
     { margin: 0; padding: 0; } .sidebar a {
       display:  block;  padding:  4px  0; color: var(--muted); text-decoration:
-      none; font-size: 0.9rem; line-height: 1.4;
+      none; font-size: 0.9rem; line-height: 1.4; overflow-wrap: anywhere;
+      word-break: break-word;
     } .sidebar a:hover { color: var(--accent); } .toc-level-1 a {
       font-weight:   600;   padding-top:  7px;  color:  var(--ink);  font-size:
       0.93rem;
     } .toc-level-2 a { padding-left: 12px; } .toc-level-3 a { padding-left:
-    24px;  font-size:  0.85rem;  } .content { padding: 36px 40px; } .content
+    24px;  font-size:  0.85rem;  } .sidebar .math-inline {
+      white-space: normal;
+    } .content { padding: 36px 40px; } .content
     h1, .content h2, .content h3, .content h4 {
       line-height: 1.2; color: #13202b; scroll-margin-top: 24px;
     } .content h1 {
@@ -102,7 +106,11 @@
       border: 1px solid var(--rule); padding: 10px 14px; vertical-align: top;
     } .content tr:nth-child(even) td {
       background: rgba(219,205,185,0.18);
-    } .content a { color: var(--accent); } .content img {
+    } .content blockquote {
+      margin: 1.4rem 0; padding: 0.6rem 1.2rem; border-left: 4px solid
+      var(--accent); background: rgba(154,61,34,0.06); border-radius: 0 10px
+      10px 0; color: var(--muted); font-style: italic;
+    } .content blockquote p { margin: 0; } .content a { color: var(--accent); } .content img {
       display:  block;  max-width:  100%;  height:  auto;  margin: 1.2rem auto;
       border:  1px solid var(--rule); border-radius: 16px; background: #fffdf8;
       box-shadow: 0 10px 28px rgba(42, 33, 20, 0.06); padding: 10px;
@@ -120,14 +128,14 @@
     }  /* ── Tablet breakpoint (≤ 980 px) ────────────────────────── */ @media
     (max-width: 980px) {
       .layout  {  grid-template-columns: 1fr; } .sidebar { position: static;
-      max-height:  none;  }  .content { padding: 24px 18px; } .toc-toggle {
-      display: block; } .sidebar-nav { display: none; } .sidebar-nav.open {
-      display: block; } .sidebar h2 { display: none; }
+      max-height:  none; overflow-x: hidden; }  .content { padding: 24px 18px; }
+      .toc-toggle { display: block; } .sidebar-nav { display: none; min-width: 0; }
+      .sidebar-nav.open { display: block; } .sidebar h2 { display: none; }
     }  /* ── Phone breakpoint (≤ 600 px) ─────────────────────────── */ @media
     (max-width: 600px) {
       .page  {  padding:  12px  10px  40px;  }  .hero  { padding: 18px 18px;
       border-radius:  16px;  }  .hero  h1  {  font-size:  clamp(1.6rem,  7vw,
-      2.4rem);  }  .hero p { font-size: 0.95rem; } .content { padding: 18px
+      2.4rem);  line-height: 1.08; }  .hero p { font-size: 0.95rem; } .content { padding: 18px
       14px;  border-radius:  16px; } .sidebar { border-radius: 16px; padding:
       16px 14px; } .content p, .content li {
         text-align: left; -webkit-hyphens: none; hyphens: none;
@@ -135,7 +143,7 @@
       margin-top: 2rem; } .content h3 { font-size: 1.1rem; } .content pre {
       padding: 14px 14px; border-radius: 10px; } .sidebar a { padding: 7px 0;
       font-size:   0.97rem;   }  .toc-level-2  a  {  padding-left:  14px;  }
-      .toc-level-3 a { padding-left: 26px; font-size: 0.9rem; }
+      .toc-level-3 a { padding-left: 22px; font-size: 0.9rem; }
     }
   </style>
 </head> <body>
@@ -233,7 +241,8 @@
 <li class="toc-level-3"><a href="#emit-debug-einsum">Emit Debug `einsum`</a></li>
 <li class="toc-level-3"><a href="#emit-tiled-c-with-openmp">Emit Tiled C++ with OpenMP</a></li>
 <li class="toc-level-3"><a href="#emit-c-with-blas-gemm-lowering">Emit C++ with BLAS/GEMM Lowering</a></li>
-<li class="toc-level-3"><a href="#21-mental-model-for-contributors">21. Mental Model for Contributors</a></li>
+<li class="toc-level-3"><a href="#21-the-diagram-engine-engine-diagram">21. The Diagram Engine (`engine=&quot;diagram&quot;`)</a></li>
+<li class="toc-level-3"><a href="#22-mental-model-for-contributors">22. Mental Model for Contributors</a></li>
 </ul>
         </nav>
       </aside> <main class="content">
@@ -717,6 +726,12 @@ dict[str, list[AlgebraTerm]]
 <li><code>exploit_symmetry=True</code>: exploit implicit antisymmetry (experimental)</li>
 <li><code>debug=True</code>: print term counts and timing to stderr; store in <code>last_stats</code></li>
 </ul>
+<p>Other flags:</p>
+<ul>
+<li><code>engine=&quot;wick&quot;</code> (default) or <code>&quot;diagram&quot;</code>: which generation engine to use. The <code>&quot;diagram&quot;</code> engine builds equations from canonical Kállay–Surján diagrams instead of BCH + Wick — same equations (residual-equal), far less work at high rank. See section 21.</li>
+<li><code>canonical_fock=True</code>: drop terms whose Fock factor spans an occupied-virtual block (<code>f_ov</code>/<code>f_vo</code> = 0 for a canonical HF reference).</li>
+<li><code>factorize_tau=True</code>: fold <code>t2 + ½P(t1t1)</code> groupings into a <code>τ</code> intermediate (default off; the wider dressed-intermediate work is retired in favour of the diagram representation — see section 21).</li>
+</ul>
 <h3 id="generate-cc-contractions"><code>generate_cc_contractions()</code></h3>
 <p>Runs <code>generate_cc_equations()</code> and lowers the result into basic <code>BackendTerm</code>s via <code>lower_equations()</code>.</p>
 <h3 id="generate-cc-contractions-ex"><code>generate_cc_contractions_ex()</code></h3>
@@ -798,7 +813,7 @@ f_i^a t_i^a
 \]</span></p>
 <p>and the test suite cross-checks that formula numerically against local PySCF.</p>
 <h3 id="17-testing-and-regression-strategy">17. Testing and Regression Strategy</h3>
-<p>The test suite lives in <code>python/ccgen/tests/</code> and is split across two modules.</p>
+<p>The test suite lives in <code>python/ccgen/tests/</code> and has grown well beyond the two core modules described here — it now also includes <code>test_diagram.py</code> (the diagram engine), <code>test_reference_vs_pyscf.py</code> (PySCF/FCI validation, run under the pyscf venv), and others. The two core modules:</p>
 <p><strong><code>test_regressions.py</code></strong> covers core correctness:</p>
 <ul>
 <li>dummy relabeling must not collide with free residual labels</li>
@@ -817,11 +832,11 @@ f_i^a t_i^a
 <p>This two-tier strategy is important because symbolic code can be &quot;almost right&quot; in ways that are very hard to notice by eye. Tiny errors in sign, relabeling, or free-index restoration can completely change a residual while still producing something that looks plausible.</p>
 <h3 id="18-current-limitations">18. Current Limitations</h3>
 <ul>
-<li>It works in spin-orbital form only (no spin-adapted or spatial-orbital formulation).</li>
-<li>The BCH layer still builds the full formal expansion before projection.</li>
-<li>Intermediate detection is heuristic-based (threshold on reuse count); it does not yet perform global optimal factorization.</li>
+<li>The symbolic derivation is spin-orbital; a <code>restricted_closed_shell</code> lowering (<code>lowering/restricted_closed_shell.py</code>, via <code>generate_cc_equations_lowered</code>) annotates the terms with spatial-orbital layout for restricted backends, but there is no spin-adapted <em>derivation</em>.</li>
+<li>The wick (default) engine&#x27;s BCH layer builds the full formal expansion before projection — the reason the diagram engine (section 21) is far faster at high rank.</li>
+<li>Intermediate detection is heuristic-based (threshold on reuse count); it does not perform global optimal factorization (which is NP-hard).</li>
 <li>Implicit antisymmetry exploitation is experimental and requires extensive validation before production use.</li>
-<li>There is no direct integration with Planck&#x27;s production C++ coupled-cluster solvers yet (the <code>TensorOptimized</code> backend is planned; see <code>CCGEN_DEVELOPMENT_PLAN.md</code> Phase 4).</li>
+<li>The generated equations are validated (PySCF + FCI, through CCSDTQ) but not yet compiled into any binary: the shipping CCSD warm-start calls the hand-written <code>src/post_hf/cc/ccsd.cpp</code>. Wiring the generated path into the build is a separate, deferred step. Status + roadmap: <code>docs/CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md</code> and <code>docs/CCGEN_GENERATION_AND_VALIDATION.md</code>.</li>
 </ul>
 <h3 id="19-how-to-extend-the-package">19. How to Extend the Package</h3>
 <h3 id="to-add-a-new-method">To Add a New Method</h3>
@@ -939,7 +954,38 @@ from ccgen.generate import print_cpp_blas
 
 print(print_cpp_blas(&quot;ccsd&quot;, use_blas=True))
 </code></pre>
-<h3 id="21-mental-model-for-contributors">21. Mental Model for Contributors</h3>
+<h3 id="21-the-diagram-engine-engine-diagram">21. The Diagram Engine (<code>engine=&quot;diagram&quot;</code>)</h3>
+<p>Everything above describes the <strong>wick engine</strong> (the default): build <code>H̄</code> by BCH, project, Wick-contract, canonicalize. It is pedagogically clear but does redundant work — it enumerates every algebraic term and dedups afterwards, and that redundancy grows fast with excitation rank (generating CCSDTQ takes ~600 s; 78× more terms are projected than survive at CCSDT).</p>
+<p><code>ccgen</code> has a second engine that produces the <strong>same equations</strong> a different way:</p>
+<pre><code class="language-python">
+eqs = generate_cc_equations(&quot;ccsdt&quot;, engine=&quot;diagram&quot;)
+</code></pre>
+<h4 id="the-idea">The idea</h4>
+<p>Instead of enumerating labeled terms, enumerate <strong>diagrams</strong> — the Kállay–Surján integer-triplet encoding, one triplet <code>(μ₁, μ₂, μ₃)</code> per cluster operator (its excitation level; internal lines to the Hamiltonian; particle internal lines). Diagrams are <strong>canonical by construction</strong>: two diagrams are equal iff their triplet strings are equal, so duplicates are never generated. This is <code>python/ccgen/diagram.py</code>.</p>
+<p>Each diagram is then given a <strong>weight</strong> (its coefficient) and expanded into the concrete <code>AlgebraTerm</code>s the rest of the pipeline consumes. The weight is <code>sign × magnitude</code>, derived from the diagram&#x27;s topology alone — no BCH, no Wick:</p>
+<ul>
+<li><strong>magnitude</strong> = <code>equivalent_vertex_factor · ∏(1/n_ext!) / 2^(equivalent_line_pairs + vertex_pairs)</code></li>
+<li><strong>sign</strong> = <code>(-1)^bra_level · external_pairing_parity · (-1)^loops · (-1 if the Fock line contracts a hole)</code></li>
+</ul>
+<p>(These are the diagrammatic weight/sign rules from Crawford &amp; Schaefer; the derivation and the per-piece validation are in <code>docs/CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md</code>.)</p>
+<h4 id="why-the-two-engines-agree-and-how-it-is-checked">Why the two engines agree — and how it is checked</h4>
+<p>The two engines emit <strong>different term multisets</strong> but the <strong>same residual tensor</strong>. The only difference is how repeated-factor terms split: the wick path keeps <code>t1·t1·v</code> as two <code>±½</code> terms; the diagram path merges them to one. Both lower and emit to the same runtime accumulation, so equivalence is checked at the <strong>residual level</strong> (the per-manifold arrays agree to ~1e-13), never by comparing term lists. This is the key subtlety: <em>canonical-multiset equality is the wrong gate; residual/kernel equality is the right one.</em></p>
+<h4 id="when-to-use-which">When to use which</h4>
+<div class="table-wrap"><table>
+<thead><tr>
+<th></th>
+<th>wick (default)</th>
+<th>diagram</th>
+</tr></thead>
+<tbody>
+<tr><td>clarity</td><td>textbook derivation, easy to follow term by term</td><td>canonical topologies, less obvious</td></tr>
+<tr><td>speed</td><td>slow at high rank (CCSDTQ ~600 s)</td><td>fast (CCSDTQ ~3 s, ~205×)</td></tr>
+<tr><td>output</td><td>the reference</td><td>residual-equal to wick, fewer terms</td></tr>
+</tbody></table></div>
+<p>The diagram engine is opt-in and validated end-to-end through <strong>CCSDTQ</strong> (its solved residual reaches FCI to ~1e-12 on a 4-electron system). The default stays <code>wick</code> until the generated path is wired into the build.</p>
+<h4 id="the-retired-exact-cover-route">The retired exact-cover route</h4>
+<p>An earlier effort tried to recognize <em>dressed</em> intermediates (<code>Wmnij</code>, <code>Wabef</code>, τ) by index-binding + exact cover over the flat term list (<code>optimization/dressing.py</code>, <code>optimization/tau.py</code>). It was a dead end. The diagram representation makes each dressed operator an <em>identifiable subgraph</em>, so that recognition becomes topological (the future &quot;D7&quot; work). The exact-cover code and its two <code>@expectedFailure</code> tests are kept only as the record of the abandoned route.</p>
+<h3 id="22-mental-model-for-contributors">22. Mental Model for Contributors</h3>
 <p>The easiest way to understand <code>ccgen</code> is to think of it as six stacked layers:</p>
 <ol>
 <li>operator algebra (hamiltonian, cluster, algebra)</li>

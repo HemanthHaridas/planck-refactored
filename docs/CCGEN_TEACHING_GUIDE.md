@@ -721,6 +721,18 @@ The optimization flags control post-canonicalization passes:
 - `exploit_symmetry=True`: exploit implicit antisymmetry (experimental)
 - `debug=True`: print term counts and timing to stderr; store in `last_stats`
 
+Other flags:
+
+- `engine="wick"` (default) or `"diagram"`: which generation engine to use. The
+  `"diagram"` engine builds equations from canonical Kállay–Surján diagrams
+  instead of BCH + Wick — same equations (residual-equal), far less work at high
+  rank. See section 21.
+- `canonical_fock=True`: drop terms whose Fock factor spans an occupied-virtual
+  block (`f_ov`/`f_vo` = 0 for a canonical HF reference).
+- `factorize_tau=True`: fold `t2 + ½P(t1t1)` groupings into a `τ` intermediate
+  (default off; the wider dressed-intermediate work is retired in favour of the
+  diagram representation — see section 21).
+
 ### `generate_cc_contractions()`
 
 Runs `generate_cc_equations()` and lowers the result into basic `BackendTerm`s
@@ -852,7 +864,10 @@ and the test suite cross-checks that formula numerically against local PySCF.
 
 ### 17. Testing and Regression Strategy
 
-The test suite lives in `python/ccgen/tests/` and is split across two modules.
+The test suite lives in `python/ccgen/tests/` and has grown well beyond the two
+core modules described here — it now also includes `test_diagram.py` (the diagram
+engine), `test_reference_vs_pyscf.py` (PySCF/FCI validation, run under the pyscf
+venv), and others. The two core modules:
 
 **`test_regressions.py`** covers core correctness:
 
@@ -879,15 +894,23 @@ something that looks plausible.
 
 ### 18. Current Limitations
 
-- It works in spin-orbital form only (no spin-adapted or spatial-orbital formulation).
-- The BCH layer still builds the full formal expansion before projection.
+- The symbolic derivation is spin-orbital; a `restricted_closed_shell` lowering
+  (`lowering/restricted_closed_shell.py`, via `generate_cc_equations_lowered`)
+  annotates the terms with spatial-orbital layout for restricted backends, but
+  there is no spin-adapted *derivation*.
+- The wick (default) engine's BCH layer builds the full formal expansion before
+  projection — the reason the diagram engine (section 21) is far faster at high
+  rank.
 - Intermediate detection is heuristic-based (threshold on reuse count); it does
-  not yet perform global optimal factorization.
+  not perform global optimal factorization (which is NP-hard).
 - Implicit antisymmetry exploitation is experimental and requires extensive
   validation before production use.
-- There is no direct integration with Planck's production C++ coupled-cluster
-  solvers yet (the `TensorOptimized` backend is planned; see
-  `CCGEN_DEVELOPMENT_PLAN.md` Phase 4).
+- The generated equations are validated (PySCF + FCI, through CCSDTQ) but not yet
+  compiled into any binary: the shipping CCSD warm-start calls the hand-written
+  `src/post_hf/cc/ccsd.cpp`. Wiring the generated path into the build is a
+  separate, deferred step. Status + roadmap:
+  `docs/CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md` and
+  `docs/CCGEN_GENERATION_AND_VALIDATION.md`.
 
 ### 19. How to Extend the Package
 
@@ -1027,7 +1050,73 @@ from ccgen.generate import print_cpp_blas
 print(print_cpp_blas("ccsd", use_blas=True))
 ```
 
-### 21. Mental Model for Contributors
+### 21. The Diagram Engine (`engine="diagram"`)
+
+Everything above describes the **wick engine** (the default): build `H̄` by BCH,
+project, Wick-contract, canonicalize. It is pedagogically clear but does
+redundant work — it enumerates every algebraic term and dedups afterwards, and
+that redundancy grows fast with excitation rank (generating CCSDTQ takes ~600 s;
+78× more terms are projected than survive at CCSDT).
+
+`ccgen` has a second engine that produces the **same equations** a different way:
+
+```python
+eqs = generate_cc_equations("ccsdt", engine="diagram")
+```
+
+#### The idea
+
+Instead of enumerating labeled terms, enumerate **diagrams** — the
+Kállay–Surján integer-triplet encoding, one triplet `(μ₁, μ₂, μ₃)` per cluster
+operator (its excitation level; internal lines to the Hamiltonian; particle
+internal lines). Diagrams are **canonical by construction**: two diagrams are
+equal iff their triplet strings are equal, so duplicates are never generated.
+This is `python/ccgen/diagram.py`.
+
+Each diagram is then given a **weight** (its coefficient) and expanded into the
+concrete `AlgebraTerm`s the rest of the pipeline consumes. The weight is
+`sign × magnitude`, derived from the diagram's topology alone — no BCH, no Wick:
+
+- **magnitude** = `equivalent_vertex_factor · ∏(1/n_ext!) / 2^(equivalent_line_pairs + vertex_pairs)`
+- **sign** = `(-1)^bra_level · external_pairing_parity · (-1)^loops · (-1 if the Fock line contracts a hole)`
+
+(These are the diagrammatic weight/sign rules from Crawford & Schaefer; the
+derivation and the per-piece validation are in
+`docs/CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md`.)
+
+#### Why the two engines agree — and how it is checked
+
+The two engines emit **different term multisets** but the **same residual
+tensor**. The only difference is how repeated-factor terms split: the wick path
+keeps `t1·t1·v` as two `±½` terms; the diagram path merges them to one. Both
+lower and emit to the same runtime accumulation, so equivalence is checked at the
+**residual level** (the per-manifold arrays agree to ~1e-13), never by comparing
+term lists. This is the key subtlety: *canonical-multiset equality is the wrong
+gate; residual/kernel equality is the right one.*
+
+#### When to use which
+
+| | wick (default) | diagram |
+|---|---|---|
+| clarity | textbook derivation, easy to follow term by term | canonical topologies, less obvious |
+| speed | slow at high rank (CCSDTQ ~600 s) | fast (CCSDTQ ~3 s, ~205×) |
+| output | the reference | residual-equal to wick, fewer terms |
+
+The diagram engine is opt-in and validated end-to-end through **CCSDTQ** (its
+solved residual reaches FCI to ~1e-12 on a 4-electron system). The default stays
+`wick` until the generated path is wired into the build.
+
+#### The retired exact-cover route
+
+An earlier effort tried to recognize *dressed* intermediates (`Wmnij`, `Wabef`,
+τ) by index-binding + exact cover over the flat term list
+(`optimization/dressing.py`, `optimization/tau.py`). It was a dead end. The
+diagram representation makes each dressed operator an *identifiable subgraph*, so
+that recognition becomes topological (the future "D7" work). The exact-cover code
+and its two `@expectedFailure` tests are kept only as the record of the abandoned
+route.
+
+### 22. Mental Model for Contributors
 
 The easiest way to understand `ccgen` is to think of it as six stacked layers:
 

@@ -1,0 +1,1100 @@
+"""Seeded dressed-operator hypotheses for CCSD residual factorization (A2).
+
+A1 introduced the tau pseudo-amplitude.  A2 adds the rest of the Stanton-Gauss
+dressed-operator family that the hand-written CCSD tensor backend uses:
+
+    Fae, Fmi, Fme          (one-particle dressed Fock blocks)
+    Wmnij, Wabef, Wmbej    (two-particle dressed intermediates)
+
+These operators are NOT discovered from scratch (that is A2b / A3's job); they
+are *seeded* -- transcribed verbatim from the spin-orbital CCSD equations
+(Stanton, Gauss, Watts, Bartlett, JCP 94, 4334 (1991), Eqs. 3-8), which are
+exactly the convention ccgen's spin-orbital residual uses.  A2 builds and
+validates these hypotheses offline; it does not rewrite any equation.
+
+ponytail: seeded, not discovered. The general subgraph-isomorphism rewrite of
+embedded operators is A3 -- keep that out of this module. A2 only says "here is
+what a Wmnij looks like, and here is proof the definition is self-consistent".
+
+Reference (spin-orbital, antisymmetrized <pq||rs> = v, amplitudes t1/t2, and
+the A1 pseudo-amplitudes tau, tau_tilde):
+
+    Fae   = f_ae - 1/2 f_me t1_ma + t1_mf <ma||fe> - 1/2 tau~_mnaf <mn||ef>
+    Fmi   = f_mi + 1/2 f_me t1_ie + t1_ne <mn||ie> + 1/2 tau~_inef <mn||ef>
+    Fme   = f_me + t1_nf <mn||ef>
+    Wmnij = <mn||ij> + P(ij) t1_je <mn||ie> + 1/4 tau_ijef <mn||ef>
+    Wabef = <ab||ef> - P(ab) t1_mb <am||ef> + 1/4 tau_mnab <mn||ef>
+    Wmbej = <mb||ej> + t1_jf <mb||ef> - t1_nb <mn||ej>
+                     - ( 1/2 t2_jnfb + t1_jf t1_nb ) <mn||ef>
+
+(The diagonal Fock pieces f_ae/f_mi are the orbital-energy seeds; in the ccgen
+algebra they are the ``f`` tensor's vv/oo blocks.)
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from fractions import Fraction
+from typing import Sequence
+
+from ..canonicalize import canonicalize_term
+from ..indices import Index, make_occ, make_vir
+from ..project import AlgebraTerm
+from ..tensors import Tensor, f, t1, t2, v, reindex_tensors
+from .tau import TAU_NAME, TAU_SPEC, tau, _canonical_key, _canonical_fixed_point
+
+TAU_TILDE_NAME = "tau_tilde"
+
+
+def tau_tilde(a: Index, b: Index, i: Index, j: Index) -> Tensor:
+    """The tau~ pseudo-amplitude tau~_{ij}^{ab} = t2 + 1/2 P(t1 t1).
+
+    Same index layout / antisymmetry as t2 and tau; differs from tau only in
+    the t1t1 weight (1/2 * 1/2 vs tau's 1/2), which the definition machinery
+    accounts for.  Used by the F-operators.
+    """
+    return Tensor(TAU_TILDE_NAME, (a, b, i, j), antisym_groups=((0, 1), (2, 3)))
+
+
+@dataclass(frozen=True)
+class DressedOperator:
+    """A seeded dressed operator: its name, index block, and definition.
+
+    ``block`` is the canonical free-index tuple of the operator (e.g. the four
+    occupied indices of Wmnij), in the order the operator's factor carries.
+    ``definition_terms`` are the AlgebraTerms that sum to the operator over that
+    block -- transcribed from the spin-orbital CCSD equations.  ``uses`` names
+    the pseudo-amplitudes the definition references (``tau`` / ``tau_tilde``),
+    so a caller knows the build-order dependencies.
+    """
+
+    name: str
+    block: tuple[Index, ...]
+    definition_terms: tuple[AlgebraTerm, ...]
+    uses: frozenset[str] = frozenset()
+
+    @property
+    def rank(self) -> int:
+        return len(self.block)
+
+    def space_sig(self) -> str:
+        return "".join(
+            "o" if idx.space == "occ" else "v" if idx.space == "vir" else "g"
+            for idx in self.block
+        )
+
+
+# ---------------------------------------------------------------------------
+# A2.0 -- the seeded operator family, as data
+# ---------------------------------------------------------------------------
+#
+# Canonical block indices per operator.  Dummy (summed) indices inside a
+# definition term use fresh letters; the block indices are the operator's own
+# externals.
+
+
+def _term(coeff, factors, free, summed) -> AlgebraTerm:
+    return AlgebraTerm(
+        coeff=Fraction(coeff),
+        factors=tuple(factors),
+        free_indices=tuple(free),
+        summed_indices=tuple(summed),
+        connected=True,
+    )
+
+
+def _build_fme() -> DressedOperator:
+    m, e = make_occ("m"), make_vir("e")
+    n, ff = make_occ("n", dummy=True), make_vir("f", dummy=True)
+    block = (m, e)
+    return DressedOperator(
+        name="Fme",
+        block=block,
+        definition_terms=(
+            _term(1, (f(m, e),), block, ()),
+            _term(1, (t1(ff, n), v(m, n, e, ff)), block, (n, ff)),
+        ),
+    )
+
+
+def _build_fae() -> DressedOperator:
+    a, e = make_vir("a"), make_vir("e")
+    m, n = make_occ("m", dummy=True), make_occ("n", dummy=True)
+    ff = make_vir("f", dummy=True)
+    block = (a, e)
+    return DressedOperator(
+        name="Fae",
+        block=block,
+        uses=frozenset({TAU_TILDE_NAME}),
+        definition_terms=(
+            _term(1, (f(a, e),), block, ()),
+            _term(Fraction(-1, 2), (f(m, e), t1(a, m)), block, (m,)),
+            _term(1, (t1(ff, m), v(m, a, ff, e)), block, (m, ff)),
+            _term(Fraction(-1, 2), (tau_tilde(a, ff, m, n), v(m, n, e, ff)),
+                  block, (m, n, ff)),
+        ),
+    )
+
+
+def _build_fmi() -> DressedOperator:
+    m, i = make_occ("m"), make_occ("i")
+    n = make_occ("n", dummy=True)
+    e, ff = make_vir("e", dummy=True), make_vir("f", dummy=True)
+    block = (m, i)
+    return DressedOperator(
+        name="Fmi",
+        block=block,
+        uses=frozenset({TAU_TILDE_NAME}),
+        definition_terms=(
+            _term(1, (f(m, i),), block, ()),
+            _term(Fraction(1, 2), (f(m, e), t1(e, i)), block, (e,)),
+            _term(1, (t1(e, n), v(m, n, i, e)), block, (n, e)),
+            _term(Fraction(1, 2), (tau_tilde(e, ff, i, n), v(m, n, e, ff)),
+                  block, (n, e, ff)),
+        ),
+    )
+
+
+def _build_wmnij() -> DressedOperator:
+    m, n, i, j = make_occ("m"), make_occ("n"), make_occ("i"), make_occ("j")
+    e, ff = make_vir("e", dummy=True), make_vir("f", dummy=True)
+    block = (m, n, i, j)
+    return DressedOperator(
+        name="Wmnij",
+        block=block,
+        uses=frozenset({TAU_NAME}),
+        definition_terms=(
+            _term(1, (v(m, n, i, j),), block, ()),
+            # P(ij) t1_je <mn||ie>
+            _term(1, (t1(e, j), v(m, n, i, e)), block, (e,)),
+            _term(-1, (t1(e, i), v(m, n, j, e)), block, (e,)),
+            _term(Fraction(1, 4), (tau(e, ff, i, j), v(m, n, e, ff)),
+                  block, (e, ff)),
+        ),
+    )
+
+
+def _build_wabef() -> DressedOperator:
+    a, b, e, ff = make_vir("a"), make_vir("b"), make_vir("e"), make_vir("f")
+    m, n = make_occ("m", dummy=True), make_occ("n", dummy=True)
+    block = (a, b, e, ff)
+    return DressedOperator(
+        name="Wabef",
+        block=block,
+        uses=frozenset({TAU_NAME}),
+        definition_terms=(
+            _term(1, (v(a, b, e, ff),), block, ()),
+            # -P(ab) t1_mb <am||ef>
+            _term(-1, (t1(b, m), v(a, m, e, ff)), block, (m,)),
+            _term(1, (t1(a, m), v(b, m, e, ff)), block, (m,)),
+            _term(Fraction(1, 4), (tau(a, b, m, n), v(m, n, e, ff)),
+                  block, (m, n)),
+        ),
+    )
+
+
+def _build_wmbej() -> DressedOperator:
+    m, b, e, j = make_occ("m"), make_vir("b"), make_vir("e"), make_occ("j")
+    n = make_occ("n", dummy=True)
+    ff = make_vir("f", dummy=True)
+    block = (m, b, e, j)
+    return DressedOperator(
+        name="Wmbej",
+        block=block,
+        definition_terms=(
+            _term(1, (v(m, b, e, j),), block, ()),
+            _term(1, (t1(ff, j), v(m, b, e, ff)), block, (ff,)),
+            _term(-1, (t1(b, n), v(m, n, e, j)), block, (n,)),
+            _term(Fraction(-1, 2), (t2(ff, b, j, n), v(m, n, e, ff)),
+                  block, (n, ff)),
+            _term(-1, (t1(ff, j), t1(b, n), v(m, n, e, ff)),
+                  block, (n, ff)),
+        ),
+    )
+
+
+def seeded_operators() -> list[DressedOperator]:
+    """The full seeded CCSD dressed-operator family (A2.0)."""
+    return [
+        _build_fme(),
+        _build_fae(),
+        _build_fmi(),
+        _build_wmnij(),
+        _build_wabef(),
+        _build_wmbej(),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# A2.1 -- definition self-consistency gate
+# ---------------------------------------------------------------------------
+
+
+def operator_definition_is_consistent(op: DressedOperator) -> bool:
+    """A2.1 -- is the operator's transcribed definition self-consistent?
+
+    Catches a mis-transcribed formula before it is ever matched against a
+    residual (the operator analog of A1.4).  Requires:
+
+      * every definition term carries exactly the operator's free block (same
+        index set, so the terms genuinely define a tensor over that block),
+      * every term canonicalizes without collapsing to zero,
+      * no two DISTINCT-looking terms canonicalize to the same structure with
+        coefficients that cancel to zero (a sign/coefficient transcription slip
+        that would silently drop a defining contribution).
+
+    Returns True iff the definition passes.
+    """
+    if not op.definition_terms:
+        return False
+
+    block_set = frozenset(op.block)
+    acc: dict[tuple[object, ...], Fraction] = {}
+    for term in op.definition_terms:
+        if frozenset(term.free_indices) != block_set:
+            return False
+        ct = _canonical_fixed_point(term)
+        if ct.coeff == 0:
+            return False
+        key = _canonical_key(ct)
+        acc[key] = acc.get(key, Fraction(0)) + ct.coeff
+
+    # Every distinct defining structure must survive with a non-zero net
+    # coefficient; a cancellation to zero means a transcription error dropped a
+    # real contribution.
+    return all(c != 0 for c in acc.values())
+
+
+# ---------------------------------------------------------------------------
+# A2.2 -- operator footprint (the index A2.3 / A3 match residual terms against)
+# ---------------------------------------------------------------------------
+#
+# When operator W sits inside a residual term ``c * W(block) * rest``, expanding
+# W yields ``c * defn_term_k * rest`` for each defining term.  A residual term
+# is "a piece of W" if, ignoring its contraction with rest, it has the SAME
+# non-block factor structure and the SAME wiring of W's block indices as some
+# defn_term_k.  The footprint captures exactly that, per defining term, in a
+# form independent of which concrete rest / dummy letters the residual used.
+#
+# Representation: the canonical key of the defining term with the operator's
+# block indices rewritten to positional slot tokens ($0, $1, ...).  Two
+# structures share a footprint entry iff their non-block factors AND their
+# block-slot wiring agree -- rest and dummy names are already normalized away by
+# the canonical key.
+
+
+def _slotize_key(
+    key: tuple[object, ...],
+    block: tuple[Index, ...],
+) -> tuple[object, ...]:
+    """Rewrite block index NAMES in a canonical key to positional slot tokens.
+
+    ``key`` is a ``_canonical_key`` result: nested tuples of (space, name)
+    pairs.  Block index names become ``"$k"`` for the k-th block slot; every
+    other name is left as-is (it is a canonicalized dummy, already normalized).
+    Space is preserved so a slot cannot match the wrong index space.
+    """
+    slot_of = {idx.name: f"${k}" for k, idx in enumerate(block)}
+
+    def _rewrite(node):
+        if isinstance(node, tuple):
+            if len(node) == 2 and isinstance(node[0], str) and isinstance(node[1], str):
+                space, name = node
+                return (space, slot_of.get(name, name))
+            return tuple(_rewrite(x) for x in node)
+        return node
+
+    return _rewrite(key)
+
+
+@dataclass(frozen=True)
+class OperatorFootprint:
+    """Per-definition-term footprint of one operator (A2.2).
+
+    ``entries`` maps each slotized definition-term key to the coefficient that
+    defining term carries.  A2.4 uses the coefficients to verify a matched
+    occurrence is COMPLETE (all defining pieces present with the right weights);
+    A2.3 uses the keys to find candidate pieces.
+    """
+
+    name: str
+    block: tuple[Index, ...]
+    entries: dict[tuple[object, ...], Fraction]
+
+
+def operator_footprint(op: DressedOperator) -> OperatorFootprint:
+    """A2.2 -- build the slotized footprint of an operator's definition."""
+    entries: dict[tuple[object, ...], Fraction] = {}
+    for term in op.definition_terms:
+        ct = _canonical_fixed_point(term)
+        key = _slotize_key(_canonical_key(ct), op.block)
+        entries[key] = entries.get(key, Fraction(0)) + ct.coeff
+    entries = {k: c for k, c in entries.items() if c != 0}
+    return OperatorFootprint(name=op.name, block=op.block, entries=entries)
+
+
+def footprints_are_distinct(operators: Sequence[DressedOperator]) -> bool:
+    """Do the seeded operators have non-overlapping footprint entry sets?
+
+    Two operators sharing a footprint entry would make an ambiguous match in
+    A2.3.  The bare-integral seed term of each operator (its <block>||<block>
+    ERI) is the natural discriminator; this checks the whole entry sets are
+    pairwise disjoint.
+    """
+    seen: dict[tuple[object, ...], str] = {}
+    for op in operators:
+        fp = operator_footprint(op)
+        for key in fp.entries:
+            if key in seen and seen[key] != op.name:
+                return False
+            seen[key] = op.name
+    return True
+
+
+# ---------------------------------------------------------------------------
+# A2.3 -- occurrence detection (read-only, conservative over-approximation)
+# ---------------------------------------------------------------------------
+#
+# Scan a residual term list and report which terms could be a piece of an
+# operator's definition.  Detection is deliberately a SOUND OVER-APPROXIMATION:
+# a term is a candidate piece of defining term d if its factor multiset contains
+# d's operator-piece factors with matching (name, space-pattern).  It never
+# misses a real piece, but may over-report; A2.4 validates each candidate group
+# exactly (all defining pieces present, coefficients consistent) before anything
+# is collapsible.  Keeping A2.3 conservative isolates the exact/expensive check
+# to A2.4 and the isomorphism rewrite to A3.
+
+
+def _factor_shape(factor: Tensor) -> tuple[str, tuple[str, ...]]:
+    """(name, space-pattern) of a factor -- e.g. ('v', ('o','o','v','v'))."""
+    return (
+        factor.name,
+        tuple(
+            "o" if x.space == "occ" else "v" if x.space == "vir" else "g"
+            for x in factor.indices
+        ),
+    )
+
+
+def _entry_factor_shapes(key: tuple[object, ...]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Factor shapes of a footprint entry key ((name, ((space,slot),...)),...)."""
+    shapes = []
+    for name, indices in key[0]:
+        pattern = tuple(space for space, _slot in indices)
+        pattern = tuple("o" if s == "occ" else "v" if s == "vir" else "g" for s in pattern)
+        shapes.append((name, pattern))
+    return tuple(sorted(shapes))
+
+
+def _term_factor_shapes(term: AlgebraTerm) -> list[tuple[str, tuple[str, ...]]]:
+    return sorted(_factor_shape(f) for f in term.factors)
+
+
+def _multiset_contains(
+    haystack: Sequence[tuple[str, tuple[str, ...]]],
+    needle: Sequence[tuple[str, tuple[str, ...]]],
+) -> bool:
+    """Is ``needle`` a sub-multiset of ``haystack``?"""
+    from collections import Counter
+
+    h = Counter(haystack)
+    n = Counter(needle)
+    return all(h.get(shape, 0) >= count for shape, count in n.items())
+
+
+@dataclass(frozen=True)
+class OperatorPieceMatch:
+    """A residual term reported as a candidate piece of one operator entry.
+
+    ``term_index`` is the position in the scanned residual list; ``entry_key``
+    is the matched footprint entry; ``entry_coeff`` is that defining piece's
+    coefficient (for A2.4's completeness check).
+    """
+
+    operator: str
+    term_index: int
+    entry_key: tuple[object, ...]
+    entry_coeff: Fraction
+
+
+def find_operator_pieces(
+    terms: Sequence[AlgebraTerm],
+    op: DressedOperator,
+) -> list[OperatorPieceMatch]:
+    """A2.3 -- report residual terms that could be pieces of ``op``.
+
+    For each residual term and each footprint entry, report a candidate match
+    when the term's factor shapes contain the entry's operator-piece factor
+    shapes.  Read-only, sound over-approximation (see module note).
+    """
+    fp = operator_footprint(op)
+    entry_shapes = {key: _entry_factor_shapes(key) for key in fp.entries}
+
+    matches: list[OperatorPieceMatch] = []
+    for k, term in enumerate(terms):
+        term_shapes = _term_factor_shapes(term)
+        for key, coeff in fp.entries.items():
+            if _multiset_contains(term_shapes, entry_shapes[key]):
+                matches.append(
+                    OperatorPieceMatch(
+                        operator=op.name,
+                        term_index=k,
+                        entry_key=key,
+                        entry_coeff=coeff,
+                    )
+                )
+    return matches
+
+
+# ---------------------------------------------------------------------------
+# A2.4 -- completeness classification (the hand-off seam to A3)
+# ---------------------------------------------------------------------------
+#
+# Group A2.3's candidate pieces into occurrences and classify each as COMPLETE
+# (every defining footprint entry of the operator has at least one matched
+# piece in the group) or PARTIAL (some defining entry is unmatched, so the
+# group can never assemble the full operator).
+#
+# Scope boundary, stated honestly: A2.4 classifies at the granularity A2.3
+# provides -- factor SHAPES, not index bindings.  "COMPLETE" here means
+# "coverage-complete: worth A3's exact binding + coefficient check", NOT
+# "proven-collapsible".  The exact firewall (bind block slots, reconstruct
+# c * operator * rest, verify coefficients) requires subgraph-isomorphism
+# binding and lives in A3.  A2.4 is sound in the safe direction: PARTIAL is a
+# definitive reject (a missing defining piece can never be recovered), so A3
+# only ever sees coverage-complete candidates.
+
+
+def _rest_signature(term: AlgebraTerm, entry_shapes: Sequence) -> tuple[object, ...]:
+    """Signature of a term's ``rest`` after removing one operator-piece worth of
+    factors (by shape).  Groups pieces of the same occurrence together.
+
+    Removes, for each operator-piece factor shape, one matching factor from the
+    term; the remaining factors' shapes plus the term's free-index space pattern
+    form the rest signature.  Shape-level (no binding) -- consistent with A2.3.
+    """
+    from collections import Counter
+
+    remaining = list(term.factors)
+    for shape in entry_shapes:
+        for k, fac in enumerate(remaining):
+            if _factor_shape(fac) == shape:
+                del remaining[k]
+                break
+    rest_shapes = tuple(sorted(_factor_shape(f) for f in remaining))
+    free_pattern = tuple(
+        "o" if x.space == "occ" else "v" if x.space == "vir" else "g"
+        for x in term.free_indices
+    )
+    return (rest_shapes, free_pattern)
+
+
+@dataclass(frozen=True)
+class OperatorOccurrence:
+    """A group of candidate pieces classified for collapsibility (A2.4).
+
+    ``matched_entries`` are the operator footprint entries covered by pieces in
+    this group; ``covered`` is True iff that set is the operator's FULL entry
+    set (coverage-complete).  ``term_indices`` are the residual positions in the
+    group.  See the A2.4 module note: covered means "worth A3's exact check",
+    not "proven collapsible".
+    """
+
+    operator: str
+    rest_signature: tuple[object, ...]
+    term_indices: tuple[int, ...]
+    matched_entries: frozenset
+    covered: bool
+
+
+def classify_operator_occurrences(
+    terms: Sequence[AlgebraTerm],
+    op: DressedOperator,
+) -> list[OperatorOccurrence]:
+    """A2.4 -- group candidate pieces by rest and classify coverage.
+
+    Returns one OperatorOccurrence per distinct rest signature.  ``covered`` is
+    True iff the group's matched footprint entries equal the operator's full
+    entry set.  Read-only.
+    """
+    fp = operator_footprint(op)
+    full_entries = frozenset(fp.entries)
+    entry_shapes = {key: _entry_factor_shapes(key) for key in fp.entries}
+    matches = find_operator_pieces(terms, op)
+
+    groups: dict[tuple[object, ...], dict] = {}
+    for m in matches:
+        rest = _rest_signature(terms[m.term_index], entry_shapes[m.entry_key])
+        g = groups.setdefault(
+            rest, {"indices": set(), "entries": set()}
+        )
+        g["indices"].add(m.term_index)
+        g["entries"].add(m.entry_key)
+
+    occurrences: list[OperatorOccurrence] = []
+    for rest, g in groups.items():
+        entries = frozenset(g["entries"])
+        occurrences.append(
+            OperatorOccurrence(
+                operator=op.name,
+                rest_signature=rest,
+                term_indices=tuple(sorted(g["indices"])),
+                matched_entries=entries,
+                covered=(entries == full_entries),
+            )
+        )
+    return occurrences
+
+
+# ---------------------------------------------------------------------------
+# A3.1 -- single definition-term binding (subgraph match, one entry)
+# ---------------------------------------------------------------------------
+#
+# Bind one operator definition term against a residual term: find every way to
+# identify a subset of the residual's factors with the definition's factors,
+# unifying indices.  A definition term's FREE indices are the operator's block
+# (exported as the slot binding); its SUMMED indices are internal dummies
+# (bound consistently but not exported).  Definition terms have 1-2 factors, so
+# the backtracking search is tiny.
+
+
+# Full permutational symmetry of the antisymmetrized ERI <pq||rs>: the two
+# intra-pair antisymmetries AND bra<->ket exchange (pq <-> rs).  This is the
+# 8-fold group the emitter's _ERI_SYMMETRY_PERMUTATIONS also uses -- crucially
+# it includes the (2,3,0,1) exchange, which reconciles the textbook operator
+# definitions' ERI arrangement (<oo||ov>) with the pipeline's raw-residual
+# arrangement (<ov||oo>).  Without the exchange, binding could never match the
+# W-operator t1-pieces against the real residual (the A3.2 wall).
+_ERI_PERMUTATIONS: tuple[tuple[int, int, int, int], ...] = (
+    (0, 1, 2, 3), (1, 0, 2, 3), (0, 1, 3, 2), (1, 0, 3, 2),
+    (2, 3, 0, 1), (3, 2, 0, 1), (2, 3, 1, 0), (3, 2, 1, 0),
+)
+
+
+def _eri_normalize_factor(factor: Tensor) -> Tensor:
+    """Reorder a v factor's indices to a canonical arrangement under 8-fold ERI
+    symmetry.  Non-v factors are returned unchanged.
+
+    Picks the permutation whose resulting (space, index-name) sequence is
+    lexicographically smallest, so any two exchange-related v arrangements map
+    to the SAME order.  The indices themselves are unchanged (just reordered),
+    so the downstream dummy relabel still converges two equivalent terms.
+    """
+    if factor.name != "v" or len(factor.indices) != 4:
+        return factor
+    best = None
+    for perm in _ERI_PERMUTATIONS:
+        order = tuple(factor.indices[p] for p in perm)
+        sig = tuple((x.space, x.name) for x in order)
+        if best is None or sig < best[0]:
+            best = (sig, order)
+    return factor.with_indices(best[1])
+
+
+def _eri_normalize_term(term: AlgebraTerm) -> AlgebraTerm:
+    """Normalize every v factor in a term to its canonical ERI arrangement."""
+    new_factors = tuple(_eri_normalize_factor(f) for f in term.factors)
+    return term.with_factors(new_factors)
+
+
+def _free_order_normalized(term: AlgebraTerm) -> AlgebraTerm:
+    """Relabel a term's FREE indices to canonical names by sorted order.
+
+    Two terms with the same free-index *set* but listed in a different order
+    (e.g. R2 externals as (a,b,i,j) vs the generated residual's (i,j,a,b))
+    otherwise get different canonical keys, because the key records free indices
+    positionally.  Renames each free index to a fixed reserved token by its
+    sorted (space, name) rank, consistently across the factors, so listing order
+    no longer matters.  Dummies are untouched (the downstream relabel handles
+    them).
+    """
+    ordered = sorted(term.free_indices, key=lambda x: (x.space, x.name))
+    ren: dict[Index, Index] = {}
+    for rank, idx in enumerate(ordered):
+        ren[idx] = Index(f"$free{rank}", idx.space, False)
+    if not ren:
+        return term
+    new_factors = reindex_tensors(term.factors, ren)
+    new_free = tuple(ren[i] for i in ordered)
+    return AlgebraTerm(
+        coeff=term.coeff, factors=new_factors, free_indices=new_free,
+        summed_indices=term.summed_indices, connected=term.connected,
+    )
+
+
+def _eri_canonical(term: AlgebraTerm) -> tuple[tuple, Fraction]:
+    """(ERI-canonical key, signed coefficient) for a term.
+
+    Folds v's bra<->ket exchange symmetry (which _canonical_key alone does not,
+    since ccgen's v carries only intra-pair antisymmetry) so the pipeline's raw
+    residual and the dressed reconstruction -- which write the same integral in
+    exchange-related arrangements -- compare equal.  Also normalizes free-index
+    listing order so two terms with the same externals in a different order
+    compare equal.  Any antisymmetry sign from reordering v is folded into the
+    returned coefficient via the fixed point.
+    """
+    normalized = _free_order_normalized(_eri_normalize_term(term))
+    cf = _canonical_fixed_point(normalized)
+    return _canonical_key(cf), cf.coeff
+
+
+def _eri_canonical_key(term: AlgebraTerm) -> tuple:
+    return _eri_canonical(term)[0]
+
+
+def _antisym_permutations(factor: Tensor):
+    """Yield index-order permutations of a factor allowed by its symmetry.
+
+    For ``v`` (the antisymmetrized ERI) this is the FULL 8-fold ERI symmetry
+    group -- intra-pair antisymmetry plus bra<->ket exchange -- because two v
+    factors that differ by any of those permutations are the same integral (up
+    to a sign, which structural binding ignores).  For every other tensor the
+    symmetry is just its ``antisym_groups`` (free permutation within each
+    group).  Always includes the identity; yields tuples of indices in permuted
+    order, de-duplicated.
+    """
+    from itertools import permutations, product
+
+    n = len(factor.indices)
+
+    if factor.name == "v" and n == 4:
+        seen = set()
+        for perm in _ERI_PERMUTATIONS:
+            order = tuple(factor.indices[p] for p in perm)
+            if order not in seen:
+                seen.add(order)
+                yield order
+        return
+
+    group_perms = []
+    for group in factor.antisym_groups:
+        group_perms.append([
+            dict(zip(group, perm)) for perm in permutations(group)
+        ])
+
+    if not group_perms:
+        yield tuple(factor.indices)
+        return
+
+    for combo in product(*group_perms):
+        pos_map = {}
+        for mapping in combo:
+            pos_map.update(mapping)
+        order = [
+            factor.indices[pos_map.get(p, p)] for p in range(n)
+        ]
+        yield tuple(order)
+
+
+def _bind_factor(
+    defn_factor: Tensor,
+    res_factor: Tensor,
+    binding: dict[Index, Index],
+) -> list[dict[Index, Index]]:
+    """Extend ``binding`` by matching ``defn_factor`` to ``res_factor``.
+
+    Antisymmetry-aware: tries every index order of the residual factor allowed
+    by its antisymmetry groups (the definition and residual carry the same
+    antisym structure, so permuting one side suffices).  Returns the list of
+    successfully extended bindings -- possibly several (distinct permutations),
+    empty on no match.  A definition index already bound must bind consistently;
+    spaces must agree.
+    """
+    if defn_factor.name != res_factor.name:
+        return []
+    if len(defn_factor.indices) != len(res_factor.indices):
+        return []
+
+    outs: list[dict[Index, Index]] = []
+    seen: set[tuple] = set()
+    for res_order in _antisym_permutations(res_factor):
+        out = dict(binding)
+        ok = True
+        for di, ri in zip(defn_factor.indices, res_order):
+            if di.space != ri.space:
+                ok = False
+                break
+            if di in out:
+                if out[di] != ri:
+                    ok = False
+                    break
+            else:
+                out[di] = ri
+        if not ok:
+            continue
+        key = tuple(sorted((k.name, v.name) for k, v in out.items()))
+        if key not in seen:
+            seen.add(key)
+            outs.append(out)
+    return outs
+
+
+def bind_definition_term(
+    defn_term: AlgebraTerm,
+    res_term: AlgebraTerm,
+) -> list[dict[Index, Index]]:
+    """A3.1 -- all block bindings embedding ``defn_term`` into ``res_term``.
+
+    Returns a list of ``{block_index -> residual_index}`` maps, one per distinct
+    embedding of the definition's factors into a factor-subset of the residual
+    term.  Only the block (definition free) indices are exported; internal
+    dummies are unified during the search but dropped from the result.
+
+    An empty list means the definition term does not embed in the residual term
+    (this is the common case -- most residual terms are not a piece of a given
+    operator).  Multiple maps mean an ambiguous embedding, which A3.2 must
+    reconcile across the whole occurrence.
+    """
+    block = set(defn_term.free_indices)
+    defn_factors = list(defn_term.factors)
+    res_factors = list(res_term.factors)
+
+    results: list[dict[Index, Index]] = []
+    seen: set[tuple] = set()
+
+    def _search(di: int, used: frozenset[int], binding: dict[Index, Index]) -> None:
+        if di == len(defn_factors):
+            block_binding = {k: v for k, v in binding.items() if k in block}
+            key = tuple(sorted((k.name, v.name) for k, v in block_binding.items()))
+            if key not in seen:
+                seen.add(key)
+                results.append(block_binding)
+            return
+        dfac = defn_factors[di]
+        for ri, rfac in enumerate(res_factors):
+            if ri in used:
+                continue
+            for extended in _bind_factor(dfac, rfac, binding):
+                _search(di + 1, used | {ri}, extended)
+
+    _search(0, frozenset(), {})
+    return results
+
+
+# ---------------------------------------------------------------------------
+# A3.2 -- global occurrence binding (unify per-term bindings)
+# ---------------------------------------------------------------------------
+#
+# Given an operator and a set of residual terms that might form ONE instance of
+# it, find a single block->index map under which EVERY definition term of the
+# operator binds to some residual term in the set.  This is the isomorphism
+# core: A3.1 gives per-(defn,residual) bindings; A3.2 finds one global binding
+# consistent across all definition terms at once (or proves none exists).
+#
+# Search strategy: seed candidate global bindings from the most constrained
+# definition term (fewest admitted bindings across the residual set -- usually
+# the bare ERI), then verify each remaining definition term binds to some
+# residual under that exact binding.
+
+
+def _bindings_for_defn(
+    defn_term: AlgebraTerm,
+    res_terms: Sequence[AlgebraTerm],
+) -> list[tuple[int, dict[Index, Index]]]:
+    """All (residual_index, block_binding) pairs for one definition term."""
+    out: list[tuple[int, dict[Index, Index]]] = []
+    for ri, rt in enumerate(res_terms):
+        for b in bind_definition_term(defn_term, rt):
+            out.append((ri, b))
+    return out
+
+
+def _binding_key(binding: dict[Index, Index]) -> tuple:
+    return tuple(sorted((k.name, v.name) for k, v in binding.items()))
+
+
+@dataclass(frozen=True)
+class OccurrenceBinding:
+    """A global block-binding under which an operator instance is present.
+
+    ``binding`` maps each block index name to the residual index name.
+    ``coverage`` maps each definition-term position to the residual-term index
+    (within the given res_terms list) it binds to under this global binding --
+    the fragments that would collapse into this operator instance.
+    """
+
+    operator: str
+    binding: tuple[tuple[str, str], ...]
+    coverage: tuple[tuple[int, int], ...]  # (defn_term_index, res_term_index)
+
+
+def bind_occurrence(
+    op: DressedOperator,
+    res_terms: Sequence[AlgebraTerm],
+) -> list[OccurrenceBinding]:
+    """A3.2 -- global bindings covering all of ``op``'s definition terms.
+
+    Returns every distinct block-binding under which each definition term of
+    ``op`` binds to at least one residual term in ``res_terms``.  Empty if no
+    such global binding exists (the operator instance is not assemblable from
+    this fragment set).  Read-only.
+    """
+    defn_terms = list(op.definition_terms)
+    if not defn_terms:
+        return []
+
+    # Per-definition admitted bindings; the seed is the one with the fewest.
+    per_defn = [_bindings_for_defn(dt, res_terms) for dt in defn_terms]
+    if any(not opts for opts in per_defn):
+        return []  # some definition term has no residual match at all
+
+    seed_idx = min(range(len(defn_terms)), key=lambda k: len(per_defn[k]))
+
+    results: list[OccurrenceBinding] = []
+    seen: set[tuple] = set()
+
+    for seed_ri, seed_binding in per_defn[seed_idx]:
+        key = _binding_key(seed_binding)
+        if key in seen:
+            continue
+        # Verify every definition term binds to some residual under THIS binding.
+        coverage: list[tuple[int, int]] = []
+        ok = True
+        for di in range(len(defn_terms)):
+            match_ri = next(
+                (ri for ri, b in per_defn[di] if _binding_key(b) == key),
+                None,
+            )
+            if match_ri is None:
+                ok = False
+                break
+            coverage.append((di, match_ri))
+        if not ok:
+            continue
+        seen.add(key)
+        results.append(
+            OccurrenceBinding(
+                operator=op.name,
+                binding=key,
+                coverage=tuple(coverage),
+            )
+        )
+    return results
+
+
+# ---------------------------------------------------------------------------
+# A3.2 (completion) -- tau-expanded operator variant
+# ---------------------------------------------------------------------------
+#
+# The raw residual carries no literal `tau` factor (A3.0.c proved tau is not
+# collapsible there by residue-pairing).  So an operator whose definition
+# references tau/tau_tilde -- Wmnij, Wabef, Fae, Fmi -- cannot bind its tau
+# piece against raw doubles directly.  The fix is to bind against a variant
+# operator whose tau/tau_tilde factors are pre-expanded into their
+# t2 + written*t1t1 pieces, matching the raw residual's un-collapsed form.  No
+# tau pre-collapse is then needed, and A3.0's dead embedded-tau path is bypassed
+# entirely.
+
+
+def _expand_pseudo_amplitude_in_term(
+    term: AlgebraTerm,
+) -> list[AlgebraTerm]:
+    """Expand one tau / tau_tilde factor in a term into its t2 + t1t1 pieces.
+
+    tau      = t2 + 2  * t1(a,i) t1(b,j)   (written single-rep weight)
+    tau_tilde = t2 + 1 * t1(a,i) t1(b,j)   (half the t1t1 weight)
+
+    Returns the (one or two) expansion terms; a term with no pseudo-amplitude
+    is returned unchanged.  Only the first pseudo-amplitude factor is expanded;
+    call repeatedly (fixed point) if a term carries several.
+    """
+    tilde_weight = TAU_SPEC.written_t1t1_weight / 2  # tau_tilde carries half
+    weights = {TAU_NAME: TAU_SPEC.written_t1t1_weight, TAU_TILDE_NAME: tilde_weight}
+
+    pos = next(
+        (k for k, f in enumerate(term.factors) if f.name in weights), None
+    )
+    if pos is None:
+        return [term]
+
+    pf = term.factors[pos]
+    a, b, i, j = pf.indices
+    others = tuple(f for k, f in enumerate(term.factors) if k != pos)
+    w = weights[pf.name]
+
+    def _mk(coeff, amp):
+        return AlgebraTerm(
+            coeff=coeff, factors=amp + others,
+            free_indices=term.free_indices, summed_indices=term.summed_indices,
+            connected=term.connected,
+        )
+
+    return [
+        _mk(term.coeff, (t2(a, b, i, j),)),
+        _mk(term.coeff * w, (t1(a, i), t1(b, j))),
+    ]
+
+
+def tau_expanded_operator(op: DressedOperator) -> DressedOperator:
+    """Return a variant of ``op`` with every tau/tau_tilde piece expanded.
+
+    Binding against this variant matches the raw (un-collapsed) residual, since
+    the residual never carries a literal tau factor.  The variant keeps the same
+    name and block; only the definition terms change.
+    """
+    new_terms: list[AlgebraTerm] = []
+    for term in op.definition_terms:
+        frontier = [term]
+        # fixed point: expand until no pseudo-amplitude factor remains
+        changed = True
+        while changed:
+            changed = False
+            nxt: list[AlgebraTerm] = []
+            for t in frontier:
+                expanded = _expand_pseudo_amplitude_in_term(t)
+                if len(expanded) != 1 or expanded[0] is not t:
+                    changed = changed or (len(expanded) != 1)
+                nxt.extend(expanded)
+            frontier = nxt
+        new_terms.extend(frontier)
+    return DressedOperator(
+        name=op.name, block=op.block,
+        definition_terms=tuple(new_terms), uses=frozenset(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# A3.3 -- exact-coefficient firewall for a bound occurrence
+# ---------------------------------------------------------------------------
+#
+# A3.2 gives a structural binding; it is coeff-blind, so a binding can be
+# structurally valid yet numerically wrong (a covered fragment carries a
+# coefficient inconsistent with a single instance scalar c).  A3.3 is the
+# firewall: given the operator, the residual, and a global binding, reconstruct
+# the operator instance c * op(bound_block) * rest and require that expanding it
+# reproduces EXACTLY the residual fragments it claims (Fraction coefficients,
+# with fracturing handled by summing residual fragments per canonical key).
+#
+# This is A1.4 / A1.6 generalized to a bound operator instance.  A "verified"
+# occurrence is genuinely collapsible; a rejected one is left for A3.4 to skip.
+
+
+def _apply_binding_to_term(
+    defn_term: AlgebraTerm,
+    binding_map: dict[str, str],
+    rest_factors: tuple[Tensor, ...],
+    rest_summed: tuple[Index, ...],
+    rest_free: tuple[Index, ...],
+    index_by_name: dict[str, Index],
+) -> AlgebraTerm:
+    """Instantiate one (tau-expanded) definition term under a block binding.
+
+    Renames the definition's block indices to the residual indices named by
+    ``binding_map`` (internal dummies kept, but disambiguated from rest names),
+    appends ``rest_factors``, and builds the full residual-space term.
+    """
+    # Rename block indices via the binding; leave internal dummies as-is but
+    # ensure they do not collide with rest/free names (prefix with '__').
+    ren: dict[Index, Index] = {}
+    block_targets = set(binding_map.values())
+    for idx in defn_term.free_indices:  # block indices
+        tgt_name = binding_map[idx.name]
+        ren[idx] = index_by_name.get(tgt_name, Index(tgt_name, idx.space, True))
+    for idx in defn_term.summed_indices:  # internal dummies
+        safe = Index("__" + idx.name, idx.space, True)
+        ren[idx] = safe
+
+    from ..tensors import reindex_tensors
+    new_amp = reindex_tensors(defn_term.factors, ren)
+    factors = tuple(new_amp) + rest_factors
+    internal = tuple(ren[i] for i in defn_term.summed_indices)
+    return AlgebraTerm(
+        coeff=defn_term.coeff,
+        factors=factors,
+        free_indices=rest_free,
+        summed_indices=tuple(sorted(set(rest_summed) | set(internal),
+                                    key=lambda x: (x.space, x.name))),
+        connected=True,
+    )
+
+
+def verify_occurrence(
+    op: DressedOperator,
+    res_terms: Sequence[AlgebraTerm],
+    ob: OccurrenceBinding,
+) -> bool:
+    """A3.3 -- is a bound occurrence an EXACT operator collapse?
+
+    Derives the instance scalar c and the rest factors from the SEED fragment
+    (the bare-ERI definition term's covered residual term), then reconstructs
+    c * op * rest for the tau-expanded operator, expands, and checks the result
+    reproduces the claimed residual fragments exactly (per-canonical-key
+    coefficient sums match).  Returns False on any coefficient mismatch.
+
+    Uses the tau-expanded operator so the reconstruction is in the same
+    (un-collapsed) basis as the raw residual.
+
+    SCOPE (coupling with A3.4): this checks only the fragments the binding
+    CLAIMS (one per definition term via ob.coverage).  In the raw residual each
+    definition-term contribution is fractured across several index-permuted
+    fragments that must SUM to c * defn_coeff; A3.3 alone does not gather that
+    fracture (that assignment is A3.4).  So verify_occurrence returns True for a
+    complete, unfractured occurrence (e.g. one already assembled, or a synthetic
+    instance) and False for a single-fragment-per-term slice of a fractured raw
+    residual.  It is the exact coefficient check; A3.4 supplies the complete
+    fragment set it checks against.
+    """
+    expected = expected_instance_fragments(op, res_terms, ob)
+    if expected is None:
+        return False
+
+    # Actual: sum the claimed residual fragments per ERI-canonical key.
+    claimed_indices = {ri for _di, ri in ob.coverage}
+    actual: dict[tuple, Fraction] = {}
+    for ri in claimed_indices:
+        key, coeff = _eri_canonical(res_terms[ri])
+        actual[key] = actual.get(key, Fraction(0)) + coeff
+    actual = {k: v for k, v in actual.items() if v != 0}
+
+    return expected == actual
+
+
+def expected_instance_fragments(
+    op: DressedOperator,
+    res_terms: Sequence[AlgebraTerm],
+    ob: OccurrenceBinding,
+) -> dict[tuple, Fraction] | None:
+    """The exact fragment contribution of one bound operator instance.
+
+    Returns ``{canonical_key -> coefficient}`` for ``c * op * rest`` (tau-
+    expanded), where c and rest are derived from the seed fragment.  This is the
+    fracture spec A3.4 gathers against: every residual fragment whose canonical
+    key appears here, summed, must equal these coefficients for the instance to
+    be exact.  Returns None if the seed fragment cannot yield a clean c / rest.
+    """
+    op = tau_expanded_operator(op)
+    binding_map = dict(ob.binding)
+
+    seed_di, seed_ri = ob.coverage[0]
+    seed_defn = op.definition_terms[seed_di]
+    seed_res = res_terms[seed_ri]
+
+    if len(seed_defn.factors) != 1:
+        return None
+    dfac = seed_defn.factors[0]
+    rest_factors = None
+    for k, rf in enumerate(seed_res.factors):
+        if rf.name == dfac.name and len(rf.indices) == len(dfac.indices):
+            rest_factors = tuple(g for gk, g in enumerate(seed_res.factors) if gk != k)
+            break
+    if rest_factors is None:
+        return None
+
+    if seed_defn.coeff == 0:
+        return None
+    c = seed_res.coeff / seed_defn.coeff
+
+    index_by_name: dict[str, Index] = {}
+    for t in res_terms:
+        for idx in list(t.free_indices) + list(t.summed_indices):
+            index_by_name[idx.name] = idx
+
+    expected: dict[tuple, Fraction] = {}
+    for dt in op.definition_terms:
+        inst = _apply_binding_to_term(
+            dt, binding_map, rest_factors,
+            seed_res.summed_indices, seed_res.free_indices, index_by_name,
+        )
+        key, coeff = _eri_canonical(inst.scaled(c))
+        expected[key] = expected.get(key, Fraction(0)) + coeff
+    return {k: v for k, v in expected.items() if v != 0}
