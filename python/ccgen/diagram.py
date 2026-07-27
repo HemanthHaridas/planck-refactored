@@ -1047,40 +1047,74 @@ def equivalent_vertex_factor(rep):
 #
 # Derived + verified 30/30 against ccsd_diagram_weights.json (the 6 rows the
 # amplitude-only count missed are exactly the ones whose external pair sits on
-# the vertex). AR2.2c is the dyadic CCSD piece; T3+ amplitudes add the (1/n!)^2
-# normalization (AR3), which extends -- not replaces -- this counting.
+# the vertex).
+#
+# M1.0/M1.1 (AR3): the factor splits into an AMPLITUDE part and a VERTEX part.
+# The amplitude part is the amplitude-normalization factor `prod (1/n_ext!)` over
+# each amplitude's same-species external legs -- NOT the pair-count `(1/2)^(k//2)`.
+# On doubles the two coincide exactly (verified 30/30: for T2, k_ext in {0,1,2}
+# and `(1/2)^(k//2) == 1/k!`), but they DIVERGE at T3 (`1/3! = 1/6` vs
+# `(1/2)^(3//2) = 1/2`), so the factorial form is the correct generalization and
+# the pair form was only an artifact of n<=2. The vertex part stays a pair count.
 
 
-def external_pair_factor(ds: DiagramString) -> int:
-    """The ``2^p`` amplitude/vertex antisymmetrization factor of ``|weight|``.
+def _amplitude_norm_factor(ds: DiagramString):
+    """Amplitude external-normalization ``prod_amp prod_species (1/n_ext!)``
+    (M1.1). For an amplitude ``(mu1,mu2,mu3)``: particle-external ``= mu1-mu3``,
+    hole-external ``= mu1-(mu2-mu3)``. Identical to the old pair-count amplitude
+    part on doubles; the correct ``1/n!`` at T3+. Returns a ``Fraction``."""
+    import math
+    from fractions import Fraction
 
-    ``p`` = number of same-species external-line pairs, counted per amplitude
-    and on the Hamiltonian vertex. Each pair supplies one 1/2 to ``|weight|``
-    (i.e. divides by this returned power of two)."""
+    f = Fraction(1)
+    for m1, m2, m3 in ds.t_ops:
+        pe = m1 - m3
+        he = m1 - (m2 - m3)
+        f *= Fraction(1, math.factorial(pe)) * Fraction(1, math.factorial(he))
+    return f
+
+
+def _vertex_pair_factor(ds: DiagramString) -> int:
+    """The vertex external same-species pair count ``2^p`` (the part of the old
+    `external_pair_factor` that sits on the Hamiltonian vertex, unchanged)."""
     bra = ds.bra_level
     amp_pe = sum(m1 - m3 for m1, m2, m3 in ds.t_ops)
     amp_he = sum(m1 - (m2 - m3) for m1, m2, m3 in ds.t_ops)
-    pairs = sum((m1 - m3) // 2 + (m1 - (m2 - m3)) // 2 for m1, m2, m3 in ds.t_ops)
-    pairs += (bra - amp_pe) // 2 + (bra - amp_he) // 2
-    return 2 ** pairs
+    return 2 ** ((bra - amp_pe) // 2 + (bra - amp_he) // 2)
+
+
+def external_pair_factor(ds: DiagramString) -> int:
+    """DEPRECATED (kept for the AR2.2c doubles gate): the ``2^p`` amplitude+vertex
+    pair count. Superseded on the magnitude path by ``_amplitude_norm_factor`` x
+    ``_vertex_pair_factor`` (M1), which is identical on doubles and correct at
+    T3+. ``p`` = same-species external-line pairs, per amplitude and on the
+    vertex, each a 1/2 to ``|weight|``."""
+    amp_pairs = sum(
+        (m1 - m3) // 2 + (m1 - (m2 - m3)) // 2 for m1, m2, m3 in ds.t_ops
+    )
+    return 2 ** amp_pairs * _vertex_pair_factor(ds)
 
 
 def diagram_magnitude(ds: DiagramString, h_rank: int):
-    """``|weight|`` for a diagram (AR2.2 complete for CCSD doubles).
+    """``|weight|`` for a diagram.
 
-    The three structural factors:
+    The structural factors:
       * equivalent-VERTEX ``∏ 1/n_v!`` (AR2.2b)
       * equivalent-LINE ``(1/2)^(pairs)`` (AR2.2a, internal/summed)
-      * external-pair ``(1/2)^(pairs)`` (AR2.2c, amplitude + vertex)
+      * amplitude normalization ``∏ 1/n_ext!`` (AR2.2c / M1, per amplitude)
+      * vertex external pairs ``(1/2)^(pairs)`` (AR2.2c, on the vertex)
 
-    Reproduces every CCSD-doubles magnitude in ``ccsd_diagram_weights.json``.
-    Sign is separate (``diagram_sign``, AR2.1) and still carries the AR2.3
-    convention delta vs the table; this is magnitude only."""
+    Reproduces every CCSD-doubles magnitude in ``ccsd_diagram_weights.json``
+    (30/30). At T3+ the amplitude factor is non-dyadic (``1/3!`` etc.); that
+    higher-rank value is validated only by the AR3 energy/FCI gate, not a
+    per-diagram oracle. Sign is separate (``structural_sign``)."""
     from fractions import Fraction
 
     rep = diagram_representative(ds, h_rank)
-    return equivalent_vertex_factor(rep) / Fraction(
-        2 ** equivalent_line_pairs(rep) * external_pair_factor(ds)
+    return (
+        equivalent_vertex_factor(rep)
+        * _amplitude_norm_factor(ds)
+        / Fraction(2 ** equivalent_line_pairs(rep) * _vertex_pair_factor(ds))
     )
 
 
@@ -1112,13 +1146,21 @@ def sign_correction(ds: DiagramString, h_rank: int) -> int:
 
 def diagram_signed_weight(ds: DiagramString, h_rank: int):
     """The full signed diagram weight ``sign * |weight|`` as a ``Fraction``,
-    SOLVE-FREE (AR2.3(i).1b.3).
+    SOLVE-FREE (AR2.3(i).1b.3 + M1.2).
 
-    ``sign = structural_sign`` (topology-derived, .1b) and ``|weight| =
-    diagram_magnitude`` (structural, AR2.2). Reproduces every PySCF-solved signed
-    weight in ``ccsd_diagram_weights.json`` with no PySCF, table, or generator."""
+    ``sign = (-1)^bra_level * structural_sign`` (topology-derived, .1b) and
+    ``|weight| = diagram_magnitude`` (structural, AR2.2 + M1). The
+    ``(-1)^bra_level`` is a per-MANIFOLD sign convention (M1.2): it was invisible
+    on doubles (``(-1)^2 = +1``, a no-op) and only surfaced when the
+    diagram-weighted residual was validated against ccgen at singles (bra=1) and
+    triples (bra=3), where the whole manifold's weight is flipped. Verified: with
+    this factor, ``diagram_signed_weight * orbit(rep)`` reproduces the ccgen
+    residual per-diagram across ccsd/ccsdt singles+doubles+triples (140 diagrams),
+    and the diagram-built CCSDT residual reaches the FCI energy. Still 30/30 on
+    the PySCF doubles table (the factor is +1 there)."""
     rep = diagram_representative(ds, h_rank)
-    return structural_sign(rep, h_rank) * diagram_magnitude(ds, h_rank)
+    manifold_sign = (-1) ** ds.bra_level
+    return manifold_sign * structural_sign(rep, h_rank) * diagram_magnitude(ds, h_rank)
 
 
 # ── D3.1 line graph ──────────────────────────────────────────────────

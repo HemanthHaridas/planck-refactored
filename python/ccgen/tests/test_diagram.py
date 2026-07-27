@@ -1114,6 +1114,39 @@ class ExternalPairFactorTests(unittest.TestCase):
             external_pair_factor(DiagramString(((1, 1, 0),), 2, 0)), 1
         )
 
+    def test_amplitude_norm_equals_pair_count_on_doubles(self):
+        # M1.0/M1.1 invariance: the new prod(1/n_ext!) amplitude factor is
+        # IDENTICAL to the old (1/2)^(amp_pairs) on every doubles diagram (for
+        # T2, k_ext in {0,1,2} and (1/2)^(k//2) == 1/k!). This is why swapping it
+        # in keeps diagram_magnitude at 30/30 (asserted separately). It DIVERGES
+        # at T3, which is the point.
+        from fractions import Fraction
+        from ccgen.diagram import (
+            DiagramString, _amplitude_norm_factor, pyscf_signed_weights,
+        )
+
+        for did in pyscf_signed_weights():
+            if did == "bare":
+                continue
+            tops, hr = did
+            ds = DiagramString(tops, 2, 0)
+            amp_pairs = sum(
+                (m1 - m3) // 2 + (m1 - (m2 - m3)) // 2 for m1, m2, m3 in tops
+            )
+            self.assertEqual(
+                _amplitude_norm_factor(ds), Fraction(1, 2 ** amp_pairs), str(did)
+            )
+
+    def test_t3_amplitude_factor_is_non_dyadic(self):
+        # M1.1: the T3 amplitude normalization (1/3! = 1/6) appears -- triples
+        # magnitudes go non-dyadic where a T3 sits, which the old pair-count
+        # (saturating at (1/2)^(3//2)=1/2) could never produce.
+        from ccgen.diagram import DiagramString, diagram_magnitude
+
+        # single T3, doubles ERI vertex: carries a 1/3! -> denominator has a 3.
+        m = diagram_magnitude(DiagramString(((3, 2, 0),), 3, 0), 2)
+        self.assertEqual(m.denominator % 3, 0, "T3 amplitude factor missing")
+
 
 class PyscfSignedWeightOracleTests(unittest.TestCase):
     """AR2.3(i).0: `pyscf_signed_weights` is the PySCF-derived ground-truth

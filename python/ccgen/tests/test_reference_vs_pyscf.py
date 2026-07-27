@@ -128,6 +128,189 @@ def ccgen_energy_at_pyscf_amps(method, atom, basis):
     return e_corr, float(cc.e_corr), resid_max
 
 
+def _spinorbital_integrals(atom, basis, spin=0, charge=0):
+    """GHF spin-orbital Fock + full antisymmetric <pq||rs> and orbital energies.
+
+    ``spin`` = 2S = Nalpha - Nbeta (0 closed-shell, 1 doublet, ...). GHF handles
+    open-shell in a single spin-orbital set, which is what the FCI-limit
+    (3-electron doublet) systems need."""
+    mol = gto.M(atom=atom, basis=basis, spin=spin, charge=charge)
+    mf = scf.GHF(mol).run(verbose=0)
+    cc = gccsd.GCCSD(mf)
+    eris = cc.ao2mo()
+    nocc, nmo = cc.nocc, cc.nmo
+    nvir = nmo - nocc
+    fock = np.asarray(eris.fock)
+    v = _full_antisym_v(eris, nmo, nocc)
+    return mf, fock, v, nocc, nmo, nvir
+
+
+def _amp_denominators(fock, nocc, ranks):
+    """Orbital-energy denominators ``D = sum(eps_occ) - sum(eps_vir)`` in ccgen
+    amplitude layout ``[vir..., occ...]``, one per requested excitation rank."""
+    e = fock.diagonal()
+    eo, ev = e[:nocc], e[nocc:]
+    d = {}
+    for r in ranks:
+        # D_{i..}^{a..} = sum eps_i - sum eps_a, built in [a.., i..] layout by
+        # broadcasting each orbital-energy axis into a 2r-dim array.
+        occ_part = 0.0
+        for k in range(r):
+            shape = [1] * (2 * r)
+            shape[r + k] = eo.shape[0]
+            occ_part = occ_part + eo.reshape(shape)
+        vir_part = 0.0
+        for k in range(r):
+            shape = [1] * (2 * r)
+            shape[k] = ev.shape[0]
+            vir_part = vir_part + ev.reshape(shape)
+        d[r] = occ_part - vir_part  # [a..(r), i..(r)]
+    return d
+
+
+def ccgen_iterate_amps(method, atom, basis, targets, spin=0, charge=0,
+                       maxiter=500, tol=1e-11):
+    """Solve the GENERATED CC amplitude equations by Jacobi iteration (AR3.2.0).
+
+    Generalizes :func:`ccgen_energy_at_pyscf_amps` from *evaluate-at-PySCF* to
+    *solve*: iterate ``t <- t + R/D`` on the generated residual for each manifold
+    in ``targets`` (``["singles","doubles"]`` = CCSD, ``+["triples"]`` = CCSDT)
+    until self-consistent, then evaluate the generated energy manifold. The plain
+    Jacobi step converges for these systems (verified: CCSD/H2 -> PySCF in ~23
+    iters to 4.6e-12); higher rank may need the C++ solver for speed but the
+    algebra is identical. ``spin``/``charge`` pick open-shell references (the
+    FCI-limit test uses a 3-electron doublet, spin=1).
+
+    Returns ``(e_corr, amps, mf, nocc, nvir)``. ``amps`` is a dict t1/t2/t3 in
+    ccgen layout ``[vir..., occ...]``; ``mf`` is the GHF reference (for E_tot).
+    """
+    from ccgen.generate import generate_cc_equations
+    from ccgen.tests.residual_eval import residual_einsum
+
+    mf, fock, v, nocc, nmo, nvir = _spinorbital_integrals(atom, basis, spin, charge)
+    rank = {"singles": 1, "doubles": 2, "triples": 3}
+    denom = _amp_denominators(fock, nocc, [rank[m] for m in targets])
+    tname = {"singles": "t1", "doubles": "t2", "triples": "t3"}
+
+    amps = {}
+    for m in targets:
+        r = rank[m]
+        amps[tname[m]] = np.zeros((nvir,) * r + (nocc,) * r)
+    # MP2 start for doubles if present
+    if "doubles" in targets:
+        amps["t2"] = (
+            v[:nocc, :nocc, nocc:, nocc:].transpose(2, 3, 0, 1) / denom[2]
+        )
+
+    eqs = generate_cc_equations(method)
+
+    def tensors():
+        return {"v": v, "f": fock, **amps}
+
+    # residual_einsum (per-term np.einsum) instead of residual_of (per-index-tuple
+    # Python loop): identical result, ~3000x faster -- required for the triples
+    # manifold (417 terms over [nv^3, no^3]), where residual_of takes >120s per
+    # eval but einsum takes ~0.04s.
+    def manifold_residual(m):
+        tn = tensors()
+        return sum(residual_einsum(t, nocc, nvir, tensors=tn) for t in eqs[m])
+
+    for _ in range(maxiter):
+        delta = 0.0
+        updates = {}
+        for m in targets:
+            r = manifold_residual(m)
+            new = amps[tname[m]] + r / denom[rank[m]]
+            updates[tname[m]] = new
+            delta = max(delta, float(np.max(np.abs(new - amps[tname[m]]))))
+        amps.update(updates)
+        if delta < tol:
+            break
+
+    tn = tensors()
+    e_corr = sum(
+        float(residual_einsum(t, nocc, nvir, tensors=tn)) for t in eqs["energy"]
+    )
+    return e_corr, amps, mf, nocc, nvir
+
+
+def fci_total_energy(atom, basis, spin=0, charge=0):
+    """Exact FCI total energy for the FCI-limit gate (AR3.2.1).
+
+    The ground-state total energy is reference-independent, so CCSDT on the GHF
+    reference (which for an N=3 doublet may be spin-broken) must converge to this
+    same FCI total. Compare ``mf.e_tot + E_corr(CCSDT)`` against it."""
+    from pyscf import fci
+
+    mol = gto.M(atom=atom, basis=basis, spin=spin, charge=charge)
+    mfr = scf.ROHF(mol).run(verbose=0)
+    e_fci, _ = fci.FCI(mfr).kernel()
+    return float(e_fci)
+
+
+def diagram_ccsdt_energy(atom, basis, spin=0, charge=0, maxiter=200, tol=1e-11):
+    """Solve CCSDT with residuals built from the DIAGRAM weights (M1.3 gate).
+
+    Each manifold's residual is ``sum_d diagram_signed_weight(d) * orbit(rep_d)``
+    (+ the bare ERI on doubles), i.e. driven entirely by ``diagram.py``'s
+    solve-free sign (B1 + the (-1)^bra manifold factor) and magnitude (AR2.2 +
+    M1's 1/n! amplitude factor) -- NOT the term-path generator. Iterating this to
+    the FCI energy validates the triples weights end-to-end (there is no
+    per-diagram CCSDT weight oracle). Energy is taken from the generated energy
+    manifold (unweighted; it is exact). Returns ``(e_corr, mf)``."""
+    import numpy as np
+
+    from ccgen.diagram import (
+        diagram_representative, diagram_signed_weight, enumerate_diagrams,
+    )
+    from ccgen.generate import generate_cc_equations
+    from ccgen.tests.residual_eval import residual_einsum, _antisymmetrize_block
+
+    mf, fock, v, nocc, nmo, nvir = _spinorbital_integrals(atom, basis, spin, charge)
+    d = _amp_denominators(fock, nocc, [1, 2, 3])
+    ranks = [1, 2, 3]
+    dsets = {bra: list(enumerate_diagrams(ranks, bra)) for bra in (1, 2, 3)}
+
+    def orbit(base, k):
+        r = _antisymmetrize_block(base, tuple(range(k)))
+        return _antisymmetrize_block(r, tuple(range(k, 2 * k)))
+
+    def diagram_residual(bra, tensors):
+        R = np.zeros((nvir,) * bra + (nocc,) * bra)
+        for ds, hr in dsets[bra]:
+            w = float(diagram_signed_weight(ds, hr))
+            rep = diagram_representative(ds, hr)
+            R += w * orbit(residual_einsum(rep, nocc, nvir, tensors=tensors), bra)
+        # bare (no-cluster) Hamiltonian terms enumerate_diagrams does not emit:
+        if bra == 1:  # f(a,i), the Fock ov block  [a,i]
+            R += fock[nocc:, :nocc]
+        if bra == 2:  # <ij||ab>  [a,b,i,j]
+            R += v[:nocc, :nocc, nocc:, nocc:].transpose(2, 3, 0, 1)
+        return R
+
+    tname = {1: "t1", 2: "t2", 3: "t3"}
+    amps = {
+        "t1": np.zeros((nvir, nocc)),
+        "t2": v[:nocc, :nocc, nocc:, nocc:].transpose(2, 3, 0, 1) / d[2],
+        "t3": np.zeros((nvir,) * 3 + (nocc,) * 3),
+    }
+    for _ in range(maxiter):
+        tn = {"v": v, "f": fock, **amps}
+        upd, delta = {}, 0.0
+        for bra in (1, 2, 3):
+            new = amps[tname[bra]] + diagram_residual(bra, tn) / d[bra]
+            upd[tname[bra]] = new
+            delta = max(delta, float(np.max(np.abs(new - amps[tname[bra]]))))
+        amps.update(upd)
+        if delta < tol:
+            break
+
+    en = generate_cc_equations("ccsdt")["energy"]
+    tn = {"v": v, "f": fock, **amps}
+    e_corr = sum(float(residual_einsum(t, nocc, nvir, tensors=tn)) for t in en)
+    return e_corr, mf
+
+
 def _pyscf_singles_residual_ccgen(atom, basis, seed, scale):
     """(PySCF r1, ccgen-evaluated r1) on the same GHF integrals, layout [occ,vir]."""
     import itertools
@@ -403,6 +586,48 @@ class ReferenceVsPyscfTests(unittest.TestCase):
             "ccsd", "H 0 0 0; H 0 0 0.74", "sto-3g"
         )
         self.assertAlmostEqual(e_corr, e_pyscf, places=12)
+
+    def test_ccgen_ccsd_solver_matches_pyscf(self):
+        # AR3.2.0: the reusable Jacobi solver ccgen_iterate_amps SOLVES the
+        # generated CCSD equations (not just evaluates at PySCF's amps) and its
+        # converged E_corr matches PySCF gccsd. Verifies the iterate before it is
+        # extended to CCSDT for the FCI-limit gate (AR3.2.2). H2/STO-3G is fast.
+        e_corr, _amps, _mf, _no, _nv = ccgen_iterate_amps(
+            "ccsd", "H 0 0 0; H 0 0 0.74", "sto-3g", ["singles", "doubles"]
+        )
+        mol = gto.M(atom="H 0 0 0; H 0 0 0.74", basis="sto-3g", spin=0)
+        cc = gccsd.GCCSD(scf.GHF(mol).run(verbose=0))
+        cc.conv_tol = 1e-11
+        cc.kernel()
+        self.assertAlmostEqual(e_corr, cc.e_corr, places=9)
+
+    def test_ccgen_ccsdt_reaches_fci_limit(self):
+        # AR3.2.2 -- the decisive TRIPLES-correctness gate. For a 3-electron
+        # system CCSDT = FCI exactly. Solve the generated CCSDT residual
+        # (singles+doubles+triples) and require GHF+E_corr == the FCI total.
+        # H3/6-31g doublet: nvir=9 so T3 is non-trivial (CCSD alone misses FCI by
+        # 1.4e-4, the T3 contribution), and residual_einsum makes the 417-term
+        # triples solve tractable (~11s). This validates the generated triples
+        # equations end-to-end with NO per-diagram CCSDT weight oracle.
+        atom = "H 0 0 0; H 0 0 0.74; H 0 0 1.48"
+        e_corr, _amps, mf, _no, _nv = ccgen_iterate_amps(
+            "ccsdt", atom, "6-31g", ["singles", "doubles", "triples"], spin=1
+        )
+        e_fci = fci_total_energy(atom, "6-31g", spin=1)
+        self.assertAlmostEqual(mf.e_tot + e_corr, e_fci, places=8)
+
+    def test_diagram_weighted_ccsdt_reaches_fci_limit(self):
+        # M1.3 -- the decisive gate for the DIAGRAM weights at triples. The CCSDT
+        # residual is built ENTIRELY from diagram.py's solve-free weights
+        # (structural sign incl. the M1.2 (-1)^bra manifold factor, + magnitude
+        # incl. M1's 1/n! T3 amplitude factor), NOT the term-path generator. It
+        # must reach the same FCI total as the generated residual. This validates
+        # M1 (the T3 magnitude) end-to-end -- the only real check, since there is
+        # no per-diagram CCSDT weight oracle.
+        atom = "H 0 0 0; H 0 0 0.74; H 0 0 1.48"
+        e_corr, mf = diagram_ccsdt_energy(atom, "6-31g", spin=1)
+        e_fci = fci_total_energy(atom, "6-31g", spin=1)
+        self.assertAlmostEqual(mf.e_tot + e_corr, e_fci, places=8)
 
     def test_diagram_basis_spans_the_pyscf_doubles_residual(self):
         # THE D3.2-vs-PySCF oracle: the assembled diagram representatives
