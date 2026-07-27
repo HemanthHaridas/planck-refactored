@@ -211,10 +211,17 @@ singles+doubles+triples (140 diagrams, ~1e-13), and a CCSDT residual built
   Discovered exactly because M1.3 validated the diagram-built residual against
   ccgen manifold-by-manifold rather than only on doubles.
 - **AR1 (LANDED):** all 74 ccsdtq diagrams assemble, orbit residuals
-  antisymmetric, rank 74/74. Well-formedness; correctness rides AR3.1/AR3.2 up.
+  antisymmetric, rank 74/74. Well-formedness.
 
-So the **solve-free diagram weight (sign + magnitude) is validated through
-CCSDT** — AR3 is essentially complete bar CCSDTQ (rides AR1 + the CCSDT formula).
+**CCSDTQ is now VALIDATED, not just well-formed (2026-07-27).** The T4 `1/4!`
+amplitude factor generalizes from M1's `∏(1/n_ext!)` with no rank-4-specific
+work, and the whole diagram-engine CCSDTQ residual solved to convergence reaches
+**FCI to 1.12e-12** (H4/STO-3G, 4 electrons, where CCSDTQ = FCI). So the
+solve-free diagram weight (sign + magnitude) is validated **end-to-end through
+CCSDTQ**, and the diagram engine emits the full CCSDTQ kernel (einsum 3289 lines,
+C++ 57925 lines, all 5 manifolds) — where the wick engine takes **615 s** to
+generate CCSDTQ, the diagram engine takes **3.0 s** (~205×). The generated
+kernel is not yet compiled into any binary (§5).
 
 **B1 (LANDED):** `crossing_parity` generalized to `external_pairing_parity` (sign
 of the occ→vir external permutation); identical to `crossing_parity` on all 30
@@ -285,24 +292,70 @@ a separate, higher-risk decision now backed by kernel-equivalence evidence.
 - **D6 — string-driven contraction.** MRCC's runtime half (drive contractions
   over excitation strings, never materialize high-rank equations). Changes the
   runtime, not codegen. Only if generation time stops being the constraint.
-- **D7 — dressing on diagrams.** With canonical topologies, `Wmnij`/`Wabef` are
-  recognizable subgraphs. But optimal factorization is **NP-hard** — production
-  codes use staged heuristics — so D7 buys tractable *recognition*, not an
-  optimal factorizer. Curated templates (Open Work, Option B) stay the pragmatic
-  route for shipping dressed CCSD/CCSDT.
 
-  **The exact-cover mechanism is now retired (superseded, D4 landed).** The
-  term-algebra dressing route — recognizing dressed operators by index-binding +
-  exact cover over the flat post-Wick term list (`optimization/dressing.py`'s
-  A2/A3, the embedded-τ firewall in `optimization/tau.py`) — was always the
-  acknowledged dead end (it reached only 20/70 residual fragments; see below and
-  Open Work). Now that generation produces canonical diagrams, dressed-operator
-  recognition is a topological subgraph match, so the exact-cover search is no
-  longer required and will not be completed. The A2/A3 code and its two
-  `@expectedFailure` tests (`test_tau.py`) are kept as the **record of the
-  abandoned route**, re-marked OBSOLETE (not work-in-progress); actual dressing,
-  if pursued, is D7 on the diagram representation. Deletion of the dead
-  term-algebra dressing code is deferred (documentation-only retirement for now).
+#### D7 — dressing on diagrams (scoped 2026-07-27)
+
+**What D7 is — and is NOT.** D7 is **not** about generation speed: the diagram
+enumeration already banks that (CCSDTQ 3.0 s vs wick 615 s). D7 is about the
+**FLOP scaling of the generated kernel** — factoring the residual into dressed
+intermediates (`Wmnij·τ`, `Wabef·τ`, `Fae·t2`, …) so contraction cost drops from
+`O(n⁶)` to `O(n⁵)` in the places dressing covers. It is the same reason
+PySCF/CFOUR ship dressed CC.
+
+**Why it is tractable now (the exact-cover retirement, made concrete).** The
+term-algebra route tried to *recognize* dressed operators by index-binding +
+exact cover over the flat post-Wick term list (`optimization/dressing.py`'s
+A2/A3, the embedded-τ firewall in `optimization/tau.py`). Dead end — 20/70
+fragments; two `@expectedFailure` tests in `test_tau.py` pin it, now re-marked
+OBSOLETE. **The diagram representation makes each dressed operator an
+identifiable subgraph of `diagram_representative`'s assembled contraction**, so
+recognition is a topological match, not a combinatorial search. That supersession
+is the whole reason exact-cover was retired: D7 replaces it. (Dead-code deletion
+of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
+
+**Carries over — already built, no rework:**
+- `dressing.py::seeded_operators()` — the six Stanton–Gauss operator definitions
+  (`Fae/Fmi/Fme`, `Wmnij/Wabef/Wmbej`), each itself a small diagram/term sum.
+- `dressed_equation.py` — the **rank-agnostic verifier** (`expand_dressed_term`,
+  `verify_dressed_equation`): expand every operator + pseudo-amplitude and check
+  the dressed equation equals the raw residual exactly. Works at any rank.
+- `diagram_representative` / `build_line_graph` — the assembled diagram + its
+  line graph, the substrate a subgraph match runs on.
+
+**What D7 must add (recognition — the new piece):**
+- **D7.1 — operator-diagram encoding (~M).** Express each seeded operator as a
+  diagram fragment (partial line-graph / index-wiring pattern) rather than a term
+  list. Reuses the definitions; the work is casting them in the diagram encoding.
+- **D7.2 — subgraph recognition (~L, the core).** Find occurrences of each
+  operator fragment as a subgraph of a diagram's assembled contraction
+  (topological + species-consistent match on the line graph). Subgraph iso is
+  NP-hard in general, but the graphs are tiny (≤4 operators, bounded lines), so
+  this is a bounded search — the term-algebra intractability does not carry over.
+- **D7.3 — factorization + emit (~M).** Rewrite the residual to reference the
+  recognized operators, order the intermediate DAG (`Wmnij` needs `τ`), emit
+  through the existing builder path. *Gate:* the dressed residual expanded via
+  `verify_dressed_equation` equals the undressed residual exactly, AND the
+  emitted kernel reaches the same energy (reuse the AR3.3 / FCI harness).
+- **D7.4 — scaling assertion (~S, the honest check).** The dressed residual must
+  actually drop the FLOP exponent, not merely rename subexpressions — else the
+  pass was cosmetic. Assert the dressed leading cost < undressed.
+
+**Honest ceiling.** Optimal factorization is **NP-hard**; production codes use
+staged heuristics (contraction-path search + CSE + memory-aware rollback). D7
+buys tractable *recognition of a curated operator set*, not an optimal
+factorizer. The operator set stays curated per method (the six seeded ops cover
+CCSD; CCSDT/CCSDTQ add their own W-intermediates, human-derived — as PySCF/CFOUR
+do). `verify_dressed_equation` gates every step against the exact undressed
+residual, so D7 can never silently emit wrong algebra.
+
+**Priority (lazy-correct read).** D7 optimizes the FLOP scaling of the *generated*
+kernel — which only matters once generated kernels are compiled into a binary.
+Today the default build compiles the hand-written `src/post_hf/cc/ccsd.cpp`, not
+generated code (§5). So D7's payoff is gated on the deferred D5 flip + wiring the
+(already-correct, already-fast, now-CCSDTQ-validated) generated path into the
+build. Until then D7 improves an un-shipped path — correctly scoped, but
+lower-priority than wiring the generated path in. D7 does **not** need the default
+engine flipped: dressing operates on the diagram-produced equations regardless.
 
 ---
 

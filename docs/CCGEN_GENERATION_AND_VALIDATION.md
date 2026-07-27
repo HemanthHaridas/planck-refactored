@@ -52,6 +52,8 @@ ccgen is validated the way MRCC/CFOUR validate arbitrary order:
 - the full CCSD residual matches PySCF `gccsd.update_amps`,
 - CCSDT singles/doubles with `T3 = 0` reduce exactly to the validated CCSD,
 - generated CCSDT solved to convergence reaches FCI on a 3-electron system,
+- generated CCSDTQ solved to convergence reaches FCI on a 4-electron system
+  (the diagram engine, `1.1e-12`),
 - the diagram engine reproduces both the wick residual and the FCI energy.
 
 The load-bearing discipline: no generation gate is pinned to
