@@ -222,14 +222,33 @@ doubles diagrams, defined for triples/higher. `structural_sign` uses it. So the
 sign machinery is rank-ready; only the magnitude's `(1/n!)²` factor and the
 AR3.1–3.3 validation remain.
 
-### 2.3 D4 / AR4 — wire the weighted diagram into generation
+### 2.3 D4 — wire the weighted diagram into generation. LANDED.
 
-Once §2.1 clears: emit `diagram_signed_weight · orbit(rep)` as `AlgebraTerm`s
-through the unmodified emitter, behind a flag
-(`generate_cc_equations(..., engine="wick"|"diagram")`, default `wick`).
-*Gate:* default output byte-identical; diagram path reproduces the (bug-fixed)
-term path after canonicalization. AR4 is the same pipeline generalized to any
-`(ranks, manifold)`.
+`generate_cc_equations(method, engine="wick"|"diagram")`, default `"wick"`
+(byte-identical, guarded by `test_default_engine_is_wick`). The `"diagram"`
+engine (`_generate_diagram_equations`) builds each manifold from the solve-free
+diagram weights — `diagram_manifold_terms` = the signed `AlgebraTerm` orbit of
+every enumerated diagram (`diagram_orbit_terms`, D4.0) + the bare Hamiltonian
+term (`_bare_manifold_term`: `f(a,i)` singles, `⟨ij||ab⟩` doubles, none higher)
+— then runs the SAME `canonicalize_term_to_fixed_point` + `merge_term_into_buckets`
+finalization as the wick path. No BCH/Wick.
+
+**The gate is RESIDUAL equality, not canonical-multiset equality** — the crucial
+finding that vindicates the Route-2 decision. The two engines' term multisets
+differ, but **only** by how repeated-factor terms are split (measured: 0
+non-repeated-factor differences across every ccsd/ccsdt manifold — the
+`t1·t1·v` / `t1·t1·t2·v` exchange pairs the wick path keeps as two `±½` terms,
+the diagram path merges to one). Both lower/emit to the same runtime
+accumulation, so the tensors are identical: the diagram engine's per-manifold
+residual equals the wick engine's to ≤1e-13 across ccsd + ccsdt (`residual_einsum`,
+`test_diagram_engine_matches_wick_residual`). The diagram path even emits *fewer*
+terms (ccsdt triples 417→414). End-to-end: `engine="diagram"` CCSDT solved to the
+FCI energy on H₃/6-31g (`test_diagram_engine_ccsdt_reaches_fci_limit`, D4.3).
+
+Ladder: D4.0 orbit-terms == array orbit (reuses M1.3) → D4.1 manifold == full
+ccgen residual → D4.2 engine flag, residual-equal to wick → D4.3 FCI energy.
+AR4 (arbitrary `(ranks, manifold)`) is the same `_generate_diagram_equations`
+generalized — already rank-parameterized; CCSDTQ rides AR1 + the same weights.
 
 ### 2.4 D5 — retire the term-path enumeration
 

@@ -1411,6 +1411,94 @@ class CrossingParityTests(unittest.TestCase):
             )
 
 
+class DiagramOrbitTermsTests(unittest.TestCase):
+    """D4.0: `diagram_orbit_terms` emits the signed AlgebraTerm orbit whose
+    summed evaluation reproduces the array-level `weight * orbit(rep)` (the
+    M1.3-validated target). This lifts the validated array weight to symbolic
+    terms for D4 generation. Array-level (random tensors), no PySCF."""
+
+    def test_emitted_orbit_matches_array_orbit(self):
+        import numpy as np
+        from ccgen.diagram import (
+            enumerate_diagrams, diagram_representative, diagram_signed_weight,
+            diagram_orbit_terms,
+        )
+        from ccgen.tests.residual_eval import (
+            residual_einsum, _antisymmetrize_block, random_tensors,
+        )
+
+        no, nv = 4, 5
+        tn = random_tensors(no, nv, seed=2)
+
+        def orbit(base, k):
+            r = _antisymmetrize_block(base, tuple(range(k)))
+            return _antisymmetrize_block(r, tuple(range(k, 2 * k)))
+
+        checked = 0
+        for bra in (1, 2, 3):
+            for ds, hr in enumerate_diagrams([1, 2, 3], bra):
+                rep = diagram_representative(ds, hr)
+                w = float(diagram_signed_weight(ds, hr))
+                target = w * orbit(residual_einsum(rep, no, nv, tensors=tn), bra)
+                emitted = sum(
+                    residual_einsum(t, no, nv, tensors=tn)
+                    for t in diagram_orbit_terms(ds, hr)
+                )
+                self.assertTrue(
+                    np.allclose(target, emitted, atol=1e-12),
+                    f"{ds.t_ops} h={hr}: {np.max(np.abs(target - emitted)):.2e}",
+                )
+                checked += 1
+        self.assertGreater(checked, 90)
+
+    def test_orbit_size_and_coeffs(self):
+        # A doubles diagram emits (2!)*(2!) = 4 terms; a triples one (3!)*(3!)=36.
+        # Coefficients are +/- the signed weight (no 1/k! normalization).
+        from ccgen.diagram import DiagramString, diagram_signed_weight, diagram_orbit_terms
+
+        w2 = diagram_signed_weight(DiagramString(((2, 2, 2),), 2, 0), 2)
+        terms2 = diagram_orbit_terms(DiagramString(((2, 2, 2),), 2, 0), 2)
+        self.assertEqual(len(terms2), 4)
+        self.assertTrue(all(abs(t.coeff) == abs(w2) for t in terms2))
+
+        terms3 = diagram_orbit_terms(DiagramString(((3, 2, 1),), 3, 0), 2)
+        self.assertEqual(len(terms3), 36)
+
+    def test_manifold_terms_match_full_ccgen_residual(self):
+        # D4.1: diagram_manifold_terms (all orbits + the bare Hamiltonian term)
+        # summed+evaluated == the FULL ccgen manifold residual, across
+        # singles/doubles/triples. This is the whole-manifold form the diagram
+        # front-end emits, built with no BCH/Wick. Array-level (random tensors).
+        import numpy as np
+        from ccgen.diagram import diagram_manifold_terms
+        from ccgen.generate import generate_cc_equations
+        from ccgen.tests.residual_eval import residual_einsum, random_tensors
+
+        no, nv = 4, 5
+        tn = random_tensors(no, nv, seed=5)
+        for manifold, bra in [("singles", 1), ("doubles", 2), ("triples", 3)]:
+            rgen = sum(
+                residual_einsum(t, no, nv, tensors=tn)
+                for t in generate_cc_equations("ccsdt")[manifold]
+            )
+            rdia = sum(
+                residual_einsum(t, no, nv, tensors=tn)
+                for t in diagram_manifold_terms([1, 2, 3], bra)
+            )
+            self.assertTrue(
+                np.allclose(rdia, rgen, atol=1e-11),
+                f"{manifold}: {np.max(np.abs(rdia - rgen)):.2e}",
+            )
+
+    def test_bare_terms(self):
+        # D4.1: singles -> f(a,i), doubles -> v(i,j,a,b), triples -> none.
+        from ccgen.diagram import _bare_manifold_term
+
+        self.assertEqual([f.name for f in _bare_manifold_term(1).factors], ["f"])
+        self.assertEqual([f.name for f in _bare_manifold_term(2).factors], ["v"])
+        self.assertIsNone(_bare_manifold_term(3))
+
+
 @unittest.skipUnless(
     os.environ.get("CCGEN_SLOW_TESTS"),
     "AR1 ccsdtq gate is slow (~30s); set CCGEN_SLOW_TESTS=1 to run",

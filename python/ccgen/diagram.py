@@ -1163,6 +1163,109 @@ def diagram_signed_weight(ds: DiagramString, h_rank: int):
     return manifold_sign * structural_sign(rep, h_rank) * diagram_magnitude(ds, h_rank)
 
 
+def diagram_orbit_terms(ds: DiagramString, h_rank: int):
+    """Expand a diagram into its signed ``AlgebraTerm`` orbit (D4.0).
+
+    Emits one ``AlgebraTerm`` per element of the external antisymmetrizer
+    ``P(occ)P(vir)`` orbit: for each permutation of the occupied externals and
+    each of the virtual externals, the representative's factors are relabeled and
+    the coefficient is ``diagram_signed_weight * sgn(occ perm) * sgn(vir perm)``.
+    NO ``1/k!`` normalization -- this matches the array-level orbit
+    (``_antisymmetrize_block`` sums signed permutations without dividing), which
+    is the M1.3-validated target. Summing + evaluating these terms reproduces
+    ``diagram_signed_weight * orbit(rep)`` exactly.
+
+    The relabel permutes each species' externals AMONG THEMSELVES via a single
+    simultaneous mapping (``reindex_tensors``), so internal/dummy indices are
+    untouched. This is the symbolic form of the residual the diagram path emits;
+    the term coefficients are the ragged per-term values the term path produces,
+    reconstructed here from the single validated weight."""
+    import itertools
+
+    from .project import AlgebraTerm
+    from .tensors import reindex_tensors
+
+    rep = diagram_representative(ds, h_rank)
+    weight = diagram_signed_weight(ds, h_rank)
+    occ_ext = [i for i in rep.free_indices if i.space == "occ"]
+    vir_ext = [i for i in rep.free_indices if i.space == "vir"]
+
+    terms = []
+    for occ_perm in itertools.permutations(range(len(occ_ext))):
+        occ_sgn = _permutation_parity(list(occ_perm))
+        for vir_perm in itertools.permutations(range(len(vir_ext))):
+            vir_sgn = _permutation_parity(list(vir_perm))
+            mapping = {}
+            for src, dst in enumerate(occ_perm):
+                if src != dst:
+                    mapping[occ_ext[src]] = occ_ext[dst]
+            for src, dst in enumerate(vir_perm):
+                if src != dst:
+                    mapping[vir_ext[src]] = vir_ext[dst]
+            factors = reindex_tensors(rep.factors, mapping)
+            terms.append(
+                AlgebraTerm(
+                    coeff=weight * occ_sgn * vir_sgn,
+                    factors=factors,
+                    free_indices=rep.free_indices,
+                    summed_indices=rep.summed_indices,
+                    connected=rep.connected,
+                    provenance=rep.provenance,
+                )
+            )
+    return terms
+
+
+# names for the projector externals per species (i,j,k,... / a,b,c,...), matching
+# what diagram_representative uses for its free indices.
+_OCC_EXT_NAMES = ("i", "j", "k", "l", "m", "n")
+_VIR_EXT_NAMES = ("a", "b", "c", "d", "e", "g")
+
+
+def _bare_manifold_term(bra_level: int):
+    """The zero-cluster-operator Hamiltonian term for a manifold that
+    `enumerate_diagrams` does not emit (it has no T operators): the direct
+    Hamiltonian projection ``<Phi|H|0>``. Singles -> ``f(a,i)``; doubles ->
+    ``v(i,j,a,b)`` = ``<ij||ab>``; triples and higher have none (a two-body
+    Hamiltonian cannot reach a triple excitation with no cluster operator)."""
+    from fractions import Fraction
+
+    from .project import AlgebraTerm
+    from .tensors import f, v
+
+    occ = [make_occ(n, dummy=False) for n in _OCC_EXT_NAMES[:bra_level]]
+    vir = [make_vir(n, dummy=False) for n in _VIR_EXT_NAMES[:bra_level]]
+    free = tuple(vir) + tuple(occ)
+    if bra_level == 1:
+        factors = (f(vir[0], occ[0]),)
+    elif bra_level == 2:
+        factors = (v(occ[0], occ[1], vir[0], vir[1]),)
+    else:
+        return None
+    return AlgebraTerm(
+        coeff=Fraction(1), factors=factors, free_indices=free,
+        summed_indices=(), connected=True,
+    )
+
+
+def diagram_manifold_terms(ranks, bra_level: int):
+    """All diagram-derived ``AlgebraTerm``s for one residual manifold (D4.1).
+
+    = ``flatten(diagram_orbit_terms(d) for d in enumerate_diagrams(ranks,
+    bra_level))`` plus the bare Hamiltonian term (:func:`_bare_manifold_term`).
+    The result, evaluated and summed, is the full residual for that manifold --
+    the same array the term-path generator produces, built entirely from the
+    solve-free diagram weights (no BCH/Wick). Coefficients are un-canonicalized
+    (D4.2 runs the shared canonicalize+merge to compare against the term path)."""
+    terms = []
+    for ds, hr in enumerate_diagrams(list(ranks), bra_level):
+        terms.extend(diagram_orbit_terms(ds, hr))
+    bare = _bare_manifold_term(bra_level)
+    if bare is not None:
+        terms.append(bare)
+    return terms
+
+
 # ── D3.1 line graph ──────────────────────────────────────────────────
 #
 # The triplets say HOW MANY particle/hole lines each operator sends internally

@@ -122,6 +122,53 @@ def targets_for_method(method: str) -> list[str]:
     return ["energy"] + [manifold_name(r) for r in ranks]
 
 
+def _generate_diagram_equations(
+    method: str,
+    targets: list[str],
+    canonical_fock: bool,
+) -> dict[str, list[AlgebraTerm]]:
+    """The DIAGRAM engine (D4.2): build each residual manifold from the
+    solve-free diagram weights instead of BCH + Wick projection.
+
+    Each manifold's terms are the signed AlgebraTerm orbit of every enumerated
+    diagram (``diagram_manifold_terms``) plus the bare Hamiltonian term, then run
+    through the SAME finalization the wick path uses
+    (``canonicalize_term_to_fixed_point`` + ``merge_term_into_buckets``). The
+    result is EQUIVALENT to the wick output -- verified by residual equality (the
+    correct gate; canonical-multiset equality is NOT expected, because the two
+    paths split repeated-factor terms differently, an exchange-symmetry
+    representational choice that lowers/emits to the same kernel).
+    """
+    from .canonicalize import (
+        canonicalize_term_to_fixed_point, merge_term_into_buckets,
+    )
+    from .diagram import diagram_manifold_terms
+    from .project import _NAME_TO_RANK
+
+    ranks = parse_cc_level(method)
+
+    def finalize(raw_terms):
+        buckets: dict = {}
+        order: list = []
+        for t in raw_terms:
+            merge_term_into_buckets(
+                canonicalize_term_to_fixed_point(t), buckets, order
+            )
+        return [buckets[s] for s in order if buckets[s].coeff != 0]
+
+    equations: dict[str, list[AlgebraTerm]] = {}
+    for manifold in targets:
+        bra = _NAME_TO_RANK[manifold]  # energy=0, singles=1, ...
+        equations[manifold] = finalize(diagram_manifold_terms(ranks, bra))
+
+    if canonical_fock:
+        equations = {
+            manifold: [t for t in terms if not _drops_under_canonical_fock(t)]
+            for manifold, terms in equations.items()
+        }
+    return equations
+
+
 def _resolve_parallel_workers(parallel_workers: int | None) -> int:
     if parallel_workers is not None:
         return max(1, parallel_workers)
@@ -513,6 +560,7 @@ def generate_cc_equations(
     debug: bool = False,
     parallel_workers: int | None = None,
     cache_dir: str | None = None,
+    engine: str = "wick",
 ) -> dict[str, list[AlgebraTerm]]:
     """Generate coupled-cluster equations for a given method.
 
@@ -544,6 +592,11 @@ def generate_cc_equations(
     method = canonicalize_cc_level(method.lower())
     if targets is None:
         targets = targets_for_method(method)
+
+    if engine == "diagram":
+        return _generate_diagram_equations(method, targets, canonical_fock)
+    if engine != "wick":
+        raise ValueError(f"unknown engine {engine!r}; expected 'wick' or 'diagram'")
 
     # Build the symbolic Hamiltonian H and cluster operator T once, then reuse
     # them throughout the pipeline.  Everything below transforms or projects

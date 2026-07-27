@@ -450,6 +450,48 @@ class EquationRegressionTests(unittest.TestCase):
                 f"CCSDT {manifold} with T3=0 != CCSD {manifold}",
             )
 
+    def test_diagram_engine_matches_wick_residual(self) -> None:
+        # D4.2 -- the load-bearing gate: generate_cc_equations(engine="diagram")
+        # produces equations whose per-manifold RESIDUAL equals the wick engine's,
+        # for ccsd and ccsdt. Residual equality (not canonical-multiset equality)
+        # is the correct gate: the two paths split repeated-factor terms
+        # differently (an exchange-symmetry representational choice), so the term
+        # multisets differ but the tensors are identical -- and it is the tensor
+        # the emitter accumulates. The diagram path is the solve-free front end,
+        # no BCH/Wick. Default engine="wick" is unchanged (asserted separately).
+        if np is None:
+            self.skipTest("numpy required")
+        from ccgen.tests.residual_eval import residual_einsum, random_tensors
+
+        no, nv = 4, 5
+        tn = random_tensors(no, nv, seed=7)
+        for method in ("ccsd", "ccsdt"):
+            wick = generate_cc_equations(method, engine="wick")
+            dia = generate_cc_equations(method, engine="diagram")
+            self.assertEqual(set(wick), set(dia))
+            for manifold in wick:
+                rw = sum(
+                    residual_einsum(t, no, nv, tensors=tn) for t in wick[manifold]
+                )
+                rd = sum(
+                    residual_einsum(t, no, nv, tensors=tn) for t in dia[manifold]
+                )
+                self.assertTrue(
+                    np.allclose(np.asarray(rw), np.asarray(rd), atol=1e-11),
+                    f"{method}/{manifold}: "
+                    f"{np.max(np.abs(np.asarray(rw) - np.asarray(rd))):.2e}",
+                )
+
+    def test_default_engine_is_wick(self) -> None:
+        # The diagram engine must be strictly opt-in: the default output is the
+        # wick path, byte-identical. (Guards against a default flip.)
+        a = generate_cc_equations("ccsd")
+        b = generate_cc_equations("ccsd", engine="wick")
+        self.assertEqual(
+            {m: [repr(t) for t in ts] for m, ts in a.items()},
+            {m: [repr(t) for t in ts] for m, ts in b.items()},
+        )
+
     def test_ccsd_singles_linear_seed_matches_pyscf(self) -> None:
         if np is None:
             self.skipTest("numpy is required for PySCF-backed residual tests")

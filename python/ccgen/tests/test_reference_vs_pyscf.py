@@ -169,7 +169,7 @@ def _amp_denominators(fock, nocc, ranks):
 
 
 def ccgen_iterate_amps(method, atom, basis, targets, spin=0, charge=0,
-                       maxiter=500, tol=1e-11):
+                       maxiter=500, tol=1e-11, engine="wick"):
     """Solve the GENERATED CC amplitude equations by Jacobi iteration (AR3.2.0).
 
     Generalizes :func:`ccgen_energy_at_pyscf_amps` from *evaluate-at-PySCF* to
@@ -202,7 +202,7 @@ def ccgen_iterate_amps(method, atom, basis, targets, spin=0, charge=0,
             v[:nocc, :nocc, nocc:, nocc:].transpose(2, 3, 0, 1) / denom[2]
         )
 
-    eqs = generate_cc_equations(method)
+    eqs = generate_cc_equations(method, engine=engine)
 
     def tensors():
         return {"v": v, "f": fock, **amps}
@@ -626,6 +626,21 @@ class ReferenceVsPyscfTests(unittest.TestCase):
         # no per-diagram CCSDT weight oracle.
         atom = "H 0 0 0; H 0 0 0.74; H 0 0 1.48"
         e_corr, mf = diagram_ccsdt_energy(atom, "6-31g", spin=1)
+        e_fci = fci_total_energy(atom, "6-31g", spin=1)
+        self.assertAlmostEqual(mf.e_tot + e_corr, e_fci, places=8)
+
+    def test_diagram_engine_ccsdt_reaches_fci_limit(self):
+        # D4.3 -- the end-to-end gate for the DIAGRAM ENGINE. Solve the equations
+        # produced by generate_cc_equations(engine="diagram") (the wired-in
+        # front end, canonicalized like the wick path) and require GHF+E_corr ==
+        # FCI on the 3-electron H3/6-31g doublet. Follows from D4.2's residual
+        # equality but checks the whole generate->solve->energy pipeline through
+        # the flag.
+        atom = "H 0 0 0; H 0 0 0.74; H 0 0 1.48"
+        e_corr, _amps, mf, _no, _nv = ccgen_iterate_amps(
+            "ccsdt", atom, "6-31g", ["singles", "doubles", "triples"],
+            spin=1, engine="diagram",
+        )
         e_fci = fci_total_energy(atom, "6-31g", spin=1)
         self.assertAlmostEqual(mf.e_tot + e_corr, e_fci, places=8)
 
