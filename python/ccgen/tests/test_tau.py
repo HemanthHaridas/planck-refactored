@@ -349,9 +349,12 @@ class ValidateTauMatchTests(unittest.TestCase):
         )
         self.assertFalse(validate_tau_match(terms, match))
 
-    @unittest.expectedFailure  # generated term structure changed by the
-    # name-overload bug fixes (T1.2b/c); re-validate once CCSD generation is
-    # final. See docs/CCGEN_NAME_OVERLOAD_BUG_HANDOFF.md.
+    @unittest.expectedFailure  # OBSOLETE, not WIP: this pins the term-algebra
+    # tau-detection (A1.4 firewall over the flat term list). With diagrammatic
+    # generation (D4 landed), dressed-operator recognition is a topological
+    # subgraph match (D7), so this index-binding approach is superseded and will
+    # not be "flipped". Kept as the record of why the term-algebra route was
+    # abandoned. See CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md (D7) + Open Work.
     def test_energy_and_singles_matches_validate(self) -> None:
         # A1.3 detection and the A1.4 exact firewall agree wherever the written
         # t1t1 representative carries TAU_SPEC.written_t1t1_weight.
@@ -766,9 +769,12 @@ class ValidateEmbeddedTauMatchTests(unittest.TestCase):
             "firewall accepted a coefficient-corrupted pair",
         )
 
-    @unittest.expectedFailure  # generated doubles structure changed by the
-    # name-overload bug fixes (T1.2b/c); re-validate once CCSD generation is
-    # final. See docs/CCGEN_NAME_OVERLOAD_BUG_HANDOFF.md.
+    @unittest.expectedFailure  # OBSOLETE, not WIP: the A3.0 embedded-tau
+    # collapse over the flat term list is exactly the exact-cover / index-binding
+    # dead end that diagrammatic generation (D4 landed) replaces -- dressed
+    # operators are identifiable subgraphs (D7), not fragments to exact-cover.
+    # Kept as the record of the abandoned route. See
+    # CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md (D7) + Open Work.
     def test_real_doubles_have_no_valid_embedded_tau(self) -> None:
         # THE A3.0 VERDICT: residue-based embedded-tau collapse is a dead end.
         # A3.0.b proposes 18 pairs on real CCSD doubles; A3.0.c's exact firewall

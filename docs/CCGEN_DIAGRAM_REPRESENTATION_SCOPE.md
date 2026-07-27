@@ -291,6 +291,19 @@ a separate, higher-risk decision now backed by kernel-equivalence evidence.
   optimal factorizer. Curated templates (Open Work, Option B) stay the pragmatic
   route for shipping dressed CCSD/CCSDT.
 
+  **The exact-cover mechanism is now retired (superseded, D4 landed).** The
+  term-algebra dressing route — recognizing dressed operators by index-binding +
+  exact cover over the flat post-Wick term list (`optimization/dressing.py`'s
+  A2/A3, the embedded-τ firewall in `optimization/tau.py`) — was always the
+  acknowledged dead end (it reached only 20/70 residual fragments; see below and
+  Open Work). Now that generation produces canonical diagrams, dressed-operator
+  recognition is a topological subgraph match, so the exact-cover search is no
+  longer required and will not be completed. The A2/A3 code and its two
+  `@expectedFailure` tests (`test_tau.py`) are kept as the **record of the
+  abandoned route**, re-marked OBSOLETE (not work-in-progress); actual dressing,
+  if pursued, is D7 on the diagram representation. Deletion of the dead
+  term-algebra dressing code is deferred (documentation-only retirement for now).
+
 ---
 
 ## 3. Rewrite-from-scratch verdict — DO NOT

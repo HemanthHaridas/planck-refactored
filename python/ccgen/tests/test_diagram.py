@@ -296,15 +296,18 @@ class TopologyClassOracleTests(unittest.TestCase):
     """
 
     # (method, manifold): (terms, coarse classes, fine classes)
+    # Counts as of the canonicalize is_dummy / canonical-Fock fixes (the ones the
+    # retracted "raw-generation bug" investigation actually landed): the term
+    # counts dropped from the pre-fix numbers (ccsd doubles 123->70) because the
+    # false-zero recovery + relabel changes let genuinely-equal terms merge.
     EXPECTED = {
         ("ccd", "energy"): (1, 1, 1),
-        ("ccd", "doubles"): (35, 7, 10),
+        ("ccd", "doubles"): (18, 7, 10),
         ("ccsd", "energy"): (3, 3, 3),
-        ("ccsd", "singles"): (21, 12, 14),
-        ("ccsd", "doubles"): (123, 19, 31),
+        ("ccsd", "singles"): (16, 12, 14),
+        ("ccsd", "doubles"): (70, 19, 31),
     }
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
     def test_measured_class_counts(self):
         for (method, manifold), expected in self.EXPECTED.items():
             with self.subTest(method=method, manifold=manifold):
@@ -335,14 +338,13 @@ class TopologyClassOracleTests(unittest.TestCase):
                     len({exact_topology_key(t) for t in terms}),
                 )
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
     def test_exact_key_counts(self):
         expected = {
             ("ccd", "energy"): 1,
-            ("ccd", "doubles"): 12,     # hand-derivation says 11; see below
+            ("ccd", "doubles"): 11,     # now MATCHES hand-derivation (was 12)
             ("ccsd", "energy"): 3,
-            ("ccsd", "singles"): 18,
-            ("ccsd", "doubles"): 35,
+            ("ccsd", "singles"): 16,
+            ("ccsd", "doubles"): 33,
         }
         for (method, manifold), want in expected.items():
             terms = generate_cc_equations(method)[manifold]
@@ -371,28 +373,29 @@ class TopologyClassOracleTests(unittest.TestCase):
         self.assertEqual(len(terms), 6)
         self.assertEqual(len({exact_topology_key(t) for t in terms}), 3)
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
-    def test_repeated_factor_exchange_is_the_known_overcount(self):
-        # The documented limitation, pinned so it cannot regress silently:
-        # t2(a,c,i,j)*t2(b,d,k,l) and t2(a,c,k,l)*t2(b,d,i,j) are one diagram
-        # with the two t2 copies exchanged, but land in different classes.
+    def test_repeated_factor_exchange_overcount_is_gone(self):
+        # PREVIOUSLY a known overcount (24 terms -> 6 exact classes, where
+        # textbook CCD has 5 quadratic diagrams). The canonicalize is_dummy /
+        # relabel fixes eliminated it: the t2*t2*v terms now merge to the
+        # textbook 5 exact classes. This is the SAME repeated-factor exchange
+        # symmetry, now correctly identified rather than overcounted.
         quad = [
             t for t in generate_cc_equations("ccd")["doubles"]
             if tuple(sorted(f.name for f in t.factors)) == ("t2", "t2", "v")
         ]
-        self.assertEqual(len(quad), 24)
-        # 6 classes here; textbook CCD has 5 distinct quadratic diagrams.
-        self.assertEqual(len({exact_topology_key(t) for t in quad}), 6)
+        self.assertEqual(len(quad), 7)
+        self.assertEqual(len({exact_topology_key(t) for t in quad}), 5)
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
     def test_quadratic_ccd_terms_are_not_one_topology(self):
-        # The specific undercount that motivated D2.0: the 24 t2*t2*v terms
-        # share ONE coarse key but span several distinct diagrams.
+        # The coarse-key undercount that motivated D2.0 still holds: the
+        # t2*t2*v terms share ONE coarse key but span several fine classes
+        # (the coarse key is a genuine lower bound). Term count is now 7 (was 24
+        # pre-fix), fine classes 4.
         terms = [
             t for t in generate_cc_equations("ccd")["doubles"]
             if tuple(sorted(f.name for f in t.factors)) == ("t2", "t2", "v")
         ]
-        self.assertEqual(len(terms), 24)
+        self.assertEqual(len(terms), 7)
         self.assertEqual(len(topology_classes(terms)), 1)
         self.assertEqual(len(fine_classes(terms)), 4)
 
@@ -702,38 +705,42 @@ class DiagramWeightOracleTests(unittest.TestCase):
             with self.subTest(method=method, manifold=manifold):
                 self.assertEqual(from_terms, from_enum)
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
-    def test_ccd_signed_sums_are_the_textbook_weights(self):
-        # The D3.0 success case, hand-checkable against any CC textbook.
+    def test_ccd_signed_sums_after_the_canonicalize_fixes(self):
+        # `diagram_weights` is the D3.0-era per-diagram SIGNED SUM -- superseded
+        # by the solve-free `diagram_signed_weight` (the actual weight). This
+        # pins its current CCD output: after the canonicalize is_dummy / relabel
+        # fixes, many diagrams' signed sums collapse to 0 (the two P(ij)
+        # antisymmetrizer halves now merge and cancel), which is exactly the D3.0
+        # limitation that motivated moving to the structural weight. Kept as a
+        # regression on the diagnostic, not a correctness claim about the weight.
         weights = diagram_weights(generate_cc_equations("ccd")["doubles"])
         expected = {
-            ((((2, 1, 0),)), 1): Fraction(-1),          # Fock, hole
-            ((((2, 1, 1),)), 1): Fraction(1),           # Fock, particle
+            ((((2, 1, 0),)), 1): Fraction(0),
+            ((((2, 1, 1),)), 1): Fraction(0),
             ((((2, 2, 0),)), 2): Fraction(1, 2),        # hh ladder
             ((((2, 2, 2),)), 2): Fraction(1, 2),        # pp ladder
-            ((((2, 2, 1),)), 2): Fraction(-1),          # ring
+            ((((2, 2, 1),)), 2): Fraction(0),
             (((2, 2, 0), (2, 2, 2)), 2): Fraction(1, 4),
-            (((2, 2, 1), (2, 2, 1)), 2): Fraction(1, 2),
-            (((2, 1, 0), (2, 3, 2)), 2): Fraction(-1, 2),
-            (((2, 1, 1), (2, 3, 1)), 2): Fraction(-1, 2),
+            (((2, 2, 1), (2, 2, 1)), 2): Fraction(0),
+            (((2, 1, 0), (2, 3, 2)), 2): Fraction(0),
+            (((2, 1, 1), (2, 3, 1)), 2): Fraction(-1),
         }
         self.assertEqual(
             {k: v for k, v in weights.items() if k[0]}, expected
         )
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
-    def test_ccd_weights_are_clean_but_the_summands_are_not(self):
-        # Why a diagram maps to ONE weight and not to n terms: the ring-ring
-        # diagram's ten terms carry 1/32, 1/16 and 3/32 yet total 1/2.
+    def test_ring_ring_diagram_after_the_canonicalize_fixes(self):
+        # PRE-FIX the ring-ring diagram expanded to 10 raggedly-weighted terms
+        # (1/32, 1/16, 3/32 summing to 1/2). After the canonicalize relabel
+        # fixes it is 2 equal-and-opposite terms summing to 0 -- the P(ij)
+        # halves now merge and cancel (see the D3.0 note). The structural weight
+        # is supplied by `diagram_signed_weight`, not this signed sum.
         terms = generate_cc_equations("ccd")["doubles"]
         target = (((2, 2, 1), (2, 2, 1)), 2)
         members = [t for t in terms if term_diagram_id(t) == target]
-        self.assertEqual(len(members), 10)
-        self.assertEqual(
-            {t.coeff for t in members},
-            {Fraction(1, 32), Fraction(1, 16), Fraction(3, 32)},
-        )
-        self.assertEqual(sum(t.coeff for t in members), Fraction(1, 2))
+        self.assertEqual(len(members), 2)
+        self.assertEqual(sorted(t.coeff for t in members), [Fraction(-1), Fraction(1)])
+        self.assertEqual(sum(t.coeff for t in members), Fraction(0))
 
     def test_signed_sums_collapse_to_zero_beyond_ccd(self):
         # THE D3.0 limitation, pinned so D3.3 cannot be built on a false
@@ -764,14 +771,16 @@ class DiagramWeightOracleTests(unittest.TestCase):
                 with self.subTest(method=method, manifold=manifold):
                     self.assertTrue(all(v > 0 for v in mags.values()))
 
-    @unittest.expectedFailure  # oracle pinned the pre-fix (buggy) ccgen term counts; name-overload fixes T1.2b/c changed them. Diagram work paused; see CCGEN_GENERATION_AND_VALIDATION.
-    def test_magnitudes_are_not_the_weight_either(self):
-        # Denominator 8 where the true CCD weights have at most 4: the
-        # magnitude sums over the P expansion without dividing by it. D3.3 owes
-        # that divisor.
+    def test_magnitude_diagnostic_denominators_are_now_clean(self):
+        # PRE-FIX this diagnostic (`diagram_weight_magnitudes`, the D3.0 sum of
+        # |coeff|) had denominators up to 8 -- it summed over the P expansion
+        # without dividing, the missing divisor D3.3 owed. After the canonicalize
+        # relabel fixes the ccsd doubles magnitudes are clean dyadic (denominator
+        # <= 4). The authoritative weight is `diagram_signed_weight`; this just
+        # pins that the raw diagnostic no longer overcounts the P expansion.
         mags = diagram_weight_magnitudes(generate_cc_equations("ccsd")["doubles"])
         self.assertTrue(
-            any(v.denominator > 4 for k, v in mags.items() if k[0]),
+            all(v.denominator <= 4 for k, v in mags.items() if k[0]),
         )
 
 

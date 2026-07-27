@@ -1007,17 +1007,17 @@ class EmissionTests(unittest.TestCase):
 class FactoredCanonicalizationTests(unittest.TestCase):
     """Tests verifying the factored canonicalization refactor."""
 
-    @unittest.expectedFailure
     def test_ccsd_term_counts_stable(self) -> None:
-        """Buggy pre-fix CCSD counts; see test_ccsd_term_counts_unchanged.
-
-        Expected-failure until the residual ~2% CCSD raw-generation error is
-        fixed and the final counts are known (CCGEN_GENERATION_AND_VALIDATION).
-        """
+        """Post-fix CCSD term counts. The old pins (singles 21, doubles 123)
+        were the pre-fix BUGGY counts; the canonicalize is_dummy / relabel fixes
+        dropped them to 16 / 70. The "residual ~2% error" that kept this
+        expected-failure was retracted -- it was an off-shell comparison
+        artifact, and the full ccgen residual matches PySCF to ~1e-16 (see
+        CCGEN_GENERATION_AND_VALIDATION). So these counts are final."""
         eqs = generate_cc_equations("ccsd")
         self.assertEqual(len(eqs["energy"]), 3)
-        self.assertEqual(len(eqs["singles"]), 21)
-        self.assertEqual(len(eqs["doubles"]), 123)
+        self.assertEqual(len(eqs["singles"]), 16)
+        self.assertEqual(len(eqs["doubles"]), 70)
 
     def test_ccd_term_counts_stable(self) -> None:
         eqs = generate_cc_equations("ccd")
@@ -1256,22 +1256,18 @@ class CSETests(unittest.TestCase):
 class WickEarlyTerminationTests(unittest.TestCase):
     """Tests verifying Wick early termination preserves correctness."""
 
-    @unittest.expectedFailure
     def test_ccsd_term_counts_unchanged(self) -> None:
-        """CCSD doubles counts changed by the name-overload bug fixes.
-
-        The old pins (singles 21, doubles 123) were the BUGGY counts:
-        canonicalize's (space, name) key false-zeroed legitimate terms
-        (T1.2b) and its non-idempotence split equivalent terms (T1.2c).
-        Post-fix counts are singles 16, doubles 70, but a residual ~2% CCSD
-        error remains in raw generation (see CCGEN_GENERATION_AND_VALIDATION),
-        so these are NOT yet final -- do not freeze them. Flip to a hard
-        assertion with the final counts once the whole-residual gate reaches 0.
-        """
+        """Post-fix CCSD term counts. The old pins (singles 21, doubles 123)
+        were the BUGGY counts: canonicalize's (space, name) key false-zeroed
+        legitimate terms (T1.2b) and its non-idempotence split equivalent terms
+        (T1.2c). Post-fix counts are singles 16, doubles 70. The "residual ~2%
+        error" that kept this NOT-yet-final was retracted -- an off-shell
+        comparison artifact; the full ccgen residual matches PySCF to ~1e-16
+        (see CCGEN_GENERATION_AND_VALIDATION). These counts are now final."""
         eqs = generate_cc_equations("ccsd")
         self.assertEqual(len(eqs["energy"]), 3)  # energy is correct + unchanged
-        self.assertEqual(len(eqs["singles"]), 21)
-        self.assertEqual(len(eqs["doubles"]), 123)
+        self.assertEqual(len(eqs["singles"]), 16)
+        self.assertEqual(len(eqs["doubles"]), 70)
 
     def test_ccd_term_counts_are_pyscf_correct(self) -> None:
         # CCD is FULLY fixed by T1.2b/c and PySCF-validated (see
