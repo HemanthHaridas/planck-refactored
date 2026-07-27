@@ -31,6 +31,12 @@ def main() -> None:
         help="Also emit supported intermediate builders.",
     )
     parser.add_argument(
+        "--factorize-tau",
+        action="store_true",
+        help="Collapse validated t2 + t1t1 pairs into the tau pseudo-amplitude "
+             "(experimental; default off).",
+    )
+    parser.add_argument(
         "--intermediate-threshold",
         type=int,
         default=5,
@@ -57,6 +63,7 @@ def main() -> None:
         code = print_cpp_planck(
             method.lower(),
             include_intermediates=args.include_intermediates,
+            factorize_tau=args.factorize_tau,
             intermediate_threshold=args.intermediate_threshold,
             intermediate_memory_budget_bytes=(
                 None

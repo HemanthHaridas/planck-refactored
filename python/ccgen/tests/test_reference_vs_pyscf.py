@@ -1,0 +1,502 @@
+"""Validate the GCCSD reference (gccsd_reference.py) against PySCF GCCSD.
+
+The reference is the ground truth the ccgen gate compares against, so its own
+correctness must be independently established. This computes the doubles
+residual r2 at RANDOM amplitudes two ways -- the hand transcription and PySCF's
+own gccsd.update_amps -- on the SAME GHF integrals, and requires they agree.
+
+Skipped if PySCF is not importable (it lives in tests/pyscf/.venv, not the
+default env). Run with that interpreter:
+
+    tests/pyscf/.venv/bin/python -m unittest ccgen.tests.test_reference_vs_pyscf
+"""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+try:
+    from pyscf import gto, scf
+    from pyscf.cc import gccsd
+    _HAVE_PYSCF = True
+except ImportError:  # pragma: no cover - depends on the pyscf venv
+    _HAVE_PYSCF = False
+
+from ccgen.tests.gccsd_reference import gccsd_doubles_residual  # noqa: E402
+
+
+def _pyscf_residual_and_blocks(atom, basis, seed, scale):
+    mol = gto.M(atom=atom, basis=basis, spin=0)
+    mf = scf.GHF(mol).run(verbose=0)
+    cc = gccsd.GCCSD(mf)
+    eris = cc.ao2mo()
+    nocc = cc.nocc
+    nvir = cc.nmo - nocc
+
+    rng = np.random.default_rng(seed)
+    t1 = rng.random((nocc, nvir)) * scale
+    t2 = rng.random((nocc, nocc, nvir, nvir)) * scale
+    t2 = t2 - t2.transpose(1, 0, 2, 3)
+    t2 = t2 - t2.transpose(0, 1, 3, 2)
+
+    # PySCF's update returns t + r2/D2; recover r2 = (t2_new - t2) * D2.
+    _, t2n = gccsd.update_amps(cc, t1, t2, eris)
+    mo_e = eris.fock.diagonal()
+    eia = mo_e[:nocc][:, None] - mo_e[nocc:][None, :]
+    d2 = eia[:, None, :, None] + eia[None, :, None, :]
+    r2_pyscf = (t2n - t2) * d2
+
+    blocks = {s: np.asarray(getattr(eris, s))
+              for s in ("oooo", "ooov", "oovv", "ovov", "ovvo", "ovvv", "vvvv")}
+    f = eris.fock
+    fdict = {"oo": f[:nocc, :nocc], "ov": f[:nocc, nocc:],
+             "vo": f[nocc:, :nocc], "vv": f[nocc:, nocc:]}
+    return r2_pyscf, gccsd_doubles_residual(fdict, blocks, t1, t2)
+
+
+def _full_antisym_v(eris, nmo, nocc):
+    """Reconstruct the full spin-orbital ``<pq||rs>`` tensor from PySCF's stored
+    space-blocked ERIs by filling every 8-fold-symmetry image."""
+    N = nmo
+    sl = {"o": slice(0, nocc), "v": slice(nocc, N)}
+    v = np.full((N, N, N, N), np.nan)
+    for name in ("oooo", "ooov", "oovv", "ovov", "ovvo", "ovvv", "vvvv"):
+        blk = np.asarray(getattr(eris, name))
+        s = [sl[c] for c in name]
+        v[s[0], s[1], s[2], s[3]] = blk
+    for _ in range(8):
+        images = [
+            v, -v.transpose(1, 0, 2, 3), -v.transpose(0, 1, 3, 2),
+            v.transpose(1, 0, 3, 2), v.transpose(2, 3, 0, 1),
+            -v.transpose(3, 2, 0, 1), -v.transpose(2, 3, 1, 0),
+            v.transpose(3, 2, 1, 0),
+        ]
+        for img in images:
+            m = np.isnan(v) & ~np.isnan(img)
+            v[m] = img[m]
+    assert not np.isnan(v).any()
+    return v
+
+
+def ccgen_energy_at_pyscf_amps(method, atom, basis):
+    """Evaluate the GENERATED energy + amplitude residuals at PySCF's OWN
+    converged CC amplitudes. Returns ``(e_corr_ccgen, cc.e_corr, resid_max)``.
+
+    AR3.3 harness. This is the convention-independent end-to-end check: at the
+    CC solution the amplitude residual is zero and the energy is E_corr, so
+    plugging PySCF's converged (t1, t2, ...) into the GENERATED equations must
+    reproduce PySCF's E_corr exactly AND give a (near-)zero amplitude residual.
+    A wrong generated equation fails one or both.
+
+    Evaluating at PySCF's amplitudes (rather than iterating our own Jacobi)
+    isolates the equations from solver-convergence and amplitude-layout
+    confounds: the energy is a fully-contracted scalar and is convention-robust,
+    while the residual max flags any per-term structural error.
+    """
+    from ccgen.generate import generate_cc_equations
+    from ccgen.tests.residual_eval import residual_of
+
+    mol = gto.M(atom=atom, basis=basis, spin=0)
+    mf = scf.GHF(mol).run(verbose=0)
+    cc = gccsd.GCCSD(mf)
+    cc.kernel()
+    eris = cc.ao2mo()
+    nocc, nmo = cc.nocc, cc.nmo
+    nvir = nmo - nocc
+    fock = np.asarray(eris.fock)
+    v = _full_antisym_v(eris, nmo, nocc)
+    # PySCF amps: t1 [i,a], t2 [i,j,a,b] -> ccgen layout [a,i], [a,b,i,j].
+    tensors = {"t1": cc.t1.T, "t2": cc.t2.transpose(2, 3, 0, 1), "v": v, "f": fock}
+    eqs = generate_cc_equations(method)
+
+    e_corr = sum(
+        float(residual_of([t], nocc, nvir, tensors=tensors))
+        for t in eqs["energy"]
+    )
+    resid_max = 0.0
+    for m in ("singles", "doubles"):
+        r = residual_of(eqs[m], nocc, nvir, tensors=tensors)
+        resid_max = max(resid_max, float(np.max(np.abs(r))))
+    return e_corr, float(cc.e_corr), resid_max
+
+
+def _pyscf_singles_residual_ccgen(atom, basis, seed, scale):
+    """(PySCF r1, ccgen-evaluated r1) on the same GHF integrals, layout [occ,vir]."""
+    import itertools
+
+    from ccgen.generate import generate_cc_equations
+
+    mol = gto.M(atom=atom, basis=basis, spin=0)
+    mf = scf.GHF(mol).run(verbose=0)
+    cc = gccsd.GCCSD(mf)
+    eris = cc.ao2mo()
+    nocc, nmo = cc.nocc, cc.nmo
+    nvir = nmo - nocc
+
+    rng = np.random.default_rng(seed)
+    t1 = rng.random((nocc, nvir)) * scale
+    t2 = rng.random((nocc, nocc, nvir, nvir)) * scale
+    t2 = t2 - t2.transpose(1, 0, 2, 3)
+    t2 = t2 - t2.transpose(0, 1, 3, 2)
+
+    t1n, _ = gccsd.update_amps(cc, t1, t2, eris)
+    fock = np.asarray(eris.fock)
+    mo_e = fock.diagonal()
+    eia = mo_e[:nocc][:, None] - mo_e[nocc:][None, :]
+    r1_pyscf = (t1n - t1) * eia
+
+    v = _full_antisym_v(eris, nmo, nocc)
+    tensors = {"t1": t1.T, "t2": t2.transpose(2, 3, 0, 1), "v": v, "f": fock}
+
+    def space(idx):
+        return range(nocc) if idx.space == "occ" else range(nocc, nmo)
+
+    singles = generate_cc_equations("ccsd", canonical_fock=False)["singles"]
+    r1 = np.zeros((nvir, nocc))
+    for term in singles:
+        bn = {x.name: x for x in term.free_indices}
+        a, i = bn["a"], bn["i"]
+        summed = term.summed_indices
+        for av, iv in itertools.product(range(nvir), range(nocc)):
+            env = {a: nocc + av, i: iv}
+            acc = 0.0
+            for sv in itertools.product(*[space(x) for x in summed]):
+                for k, x in enumerate(summed):
+                    env[x] = sv[k]
+                p = 1.0
+                for fac in term.factors:
+                    key = tuple(
+                        env[x] - nocc
+                        if (fac.name.startswith("t") and x.space == "vir")
+                        else env[x]
+                        for x in fac.indices
+                    )
+                    p *= tensors[fac.name][key]
+                acc += p
+            r1[av, iv] += float(term.coeff) * acc
+    return r1_pyscf, r1.T
+
+
+def _pyscf_doubles_residual_and_integrals(atom, basis, seed, scale):
+    """PySCF CCSD doubles residual r2[i,j,a,b] + the spin-orbital integrals
+    (antisymmetric ``v``, Fock ``f``) and amplitudes on the same GHF reference."""
+    mol = gto.M(atom=atom, basis=basis, spin=0)
+    mf = scf.GHF(mol).run(verbose=0)
+    cc = gccsd.GCCSD(mf)
+    eris = cc.ao2mo()
+    nocc, nmo = cc.nocc, cc.nmo
+    nvir = nmo - nocc
+
+    rng = np.random.default_rng(seed)
+    t1 = rng.random((nocc, nvir)) * scale
+    t2 = rng.random((nocc, nocc, nvir, nvir)) * scale
+    t2 = t2 - t2.transpose(1, 0, 2, 3)
+    t2 = t2 - t2.transpose(0, 1, 3, 2)
+
+    _, t2n = gccsd.update_amps(cc, t1, t2, eris)
+    fock = np.asarray(eris.fock)
+    mo_e = fock.diagonal()
+    eia = mo_e[:nocc][:, None] - mo_e[nocc:][None, :]
+    d2 = eia[:, None, :, None] + eia[None, :, None, :]
+    r2 = (t2n - t2) * d2  # [i, j, a, b], antisymmetric
+    v = _full_antisym_v(eris, nmo, nocc)
+    return r2, v, fock, t1, t2, nocc, nmo, nvir
+
+
+def _eval_doubles_term(term, tensors, nocc, nmo, nvir):
+    """Evaluate one doubles AlgebraTerm to r[a, b, i, j] on the given integrals."""
+    import itertools
+
+    bn = {x.name: x for x in term.free_indices}
+    a, b, i, j = bn["a"], bn["b"], bn["i"], bn["j"]
+    summed = term.summed_indices
+    r = np.zeros((nvir, nvir, nocc, nocc))
+
+    def space(idx):
+        return range(nocc) if idx.space == "occ" else range(nocc, nmo)
+
+    for av, bv, iv, jv in itertools.product(
+        range(nvir), range(nvir), range(nocc), range(nocc)
+    ):
+        env = {a: nocc + av, b: nocc + bv, i: iv, j: jv}
+        acc = 0.0
+        for sv in itertools.product(*[space(x) for x in summed]):
+            for k, x in enumerate(summed):
+                env[x] = sv[k]
+            p = 1.0
+            for f in term.factors:
+                key = tuple(
+                    env[x] - nocc
+                    if (f.name.startswith("t") and x.space == "vir")
+                    else env[x]
+                    for x in f.indices
+                )
+                p *= tensors[f.name][key]
+            acc += p
+        r[av, bv, iv, jv] += float(term.coeff) * acc
+    return r
+
+
+def solve_diagram_weights_vs_pyscf(atom, basis, seed, scale):
+    """Solve for the per-diagram weight that makes the assembled diagram basis
+    reproduce the PySCF doubles residual.
+
+    This is the CORRECT oracle for D3.2 (unlike "proportional to ccgen", which is
+    wrong on the buggy diagrams). Each diagram contributes one basis vector
+    ``orbit(rep_d)``; the least-squares solve against ``r2_pyscf`` is EXACT and
+    UNIQUE when the basis is full rank (LiH/STO-3G: 31 diagrams, rank 31). The
+    resulting weights are the true per-diagram weights.
+
+    Returns ``(dids, weights, rank, span_residual, pyscf_norm)``.
+    """
+    from ccgen.diagram import (
+        DiagramString, diagram_representative, enumerate_diagrams,
+    )
+    from ccgen.tests.residual_eval import _antisymmetrize_block
+
+    r2, v, fock, t1, t2, nocc, nmo, nvir = _pyscf_doubles_residual_and_integrals(
+        atom, basis, seed, scale
+    )
+    tensors = {"t1": t1.T, "t2": t2.transpose(2, 3, 0, 1), "v": v, "f": fock}
+
+    def orbit(base):  # P(ij) P(ab) on [a, b, i, j]
+        r = _antisymmetrize_block(base, (0, 1))
+        return _antisymmetrize_block(r, (2, 3))
+
+    # Diagram id set comes from the DIAGRAM enumerator (PySCF-free, canonical-by-
+    # construction), NOT from generate_cc_equations -- the term-path generator is
+    # the thing under test and must never be an oracle. The two sets are pinned
+    # equal by test_diagram_ids_match_the_diagram_enumerator; the WEIGHTS below
+    # come purely from the PySCF least-squares solve.
+    dids_all = [(ds.t_ops, hr) for ds, hr in enumerate_diagrams([1, 2], 2)]
+
+    basis_vecs, dids = [], []
+    for did in dids_all:
+        if not did[0]:  # bare Hamiltonian handled below
+            continue
+        rep = diagram_representative(DiagramString(did[0], 2, 0), did[1])
+        ob = orbit(_eval_doubles_term(rep, tensors, nocc, nmo, nvir))
+        ob = ob.transpose(2, 3, 0, 1)  # -> [i, j, a, b]
+        if np.linalg.norm(ob) < 1e-9:
+            continue
+        basis_vecs.append(ob.ravel())
+        dids.append(did)
+    occ, vir = slice(0, nocc), slice(nocc, nmo)
+    basis_vecs.append(v[occ, occ, vir, vir].ravel())
+    dids.append("bare")
+
+    A = np.array(basis_vecs).T
+    w, _, rank, _ = np.linalg.lstsq(A, r2.ravel(), rcond=None)
+    span_residual = np.linalg.norm(A @ w - r2.ravel())
+    return dids, w, int(rank), float(span_residual), float(np.linalg.norm(r2))
+
+
+def dump_ccsd_weight_table(path, atom="Li 0 0 0; H 0 0 1.6", basis="sto-3g",
+                           seed=0, scale=0.05):
+    """Write the PySCF-determined CCSD-doubles diagram weight table to JSON.
+
+    The AR2 oracle: `{ diagram_id_repr : [num, den] }`. Requires the pyscf venv
+    (this whole module is `skipUnless(_HAVE_PYSCF)`); AR2's structural weight
+    formula is then developed and gated OFFLINE against the dumped table, so the
+    formula work needs no pyscf. Rerun this only to refresh the fixture.
+    """
+    import json
+    from fractions import Fraction
+
+    dids, w, rank, span_res, _ = solve_diagram_weights_vs_pyscf(
+        atom, basis, seed, scale
+    )
+    assert rank == len(dids), f"table not full-rank ({rank}/{len(dids)})"
+    assert span_res < 1e-9, f"assembly does not span PySCF ({span_res:.1e})"
+    table = {}
+    for did, wi in zip(dids, w):
+        key = "bare" if did == "bare" else repr(did)
+        fr = Fraction(wi).limit_denominator(256)
+        assert abs(float(fr) - wi) < 1e-6, f"{did}: weight not a clean fraction"
+        table[key] = [fr.numerator, fr.denominator]
+    with open(path, "w") as fh:
+        json.dump(table, fh, indent=1, sort_keys=True)
+    return table
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class ReferenceVsPyscfTests(unittest.TestCase):
+    def test_h2_matches_pyscf_exactly(self):
+        r2_pyscf, r2_ref = _pyscf_residual_and_blocks(
+            "H 0 0 0; H 0 0 0.74", "sto-3g", seed=0, scale=0.1
+        )
+        self.assertTrue(
+            np.allclose(r2_ref, r2_pyscf, atol=1e-10),
+            np.max(np.abs(r2_ref - r2_pyscf)),
+        )
+
+    def test_lih_matches_pyscf(self):
+        # Larger (nocc=4, nvir=8); ~1e-5 is the residual-extraction precision of
+        # the (t2n - t2)*D2 reconstruction, not a reference error.
+        r2_pyscf, r2_ref = _pyscf_residual_and_blocks(
+            "Li 0 0 0; H 0 0 1.6", "sto-3g", seed=1, scale=0.05
+        )
+        self.assertTrue(
+            np.allclose(r2_ref, r2_pyscf, atol=1e-4),
+            np.max(np.abs(r2_ref - r2_pyscf)),
+        )
+
+    def test_ccgen_singles_matches_pyscf(self):
+        # The SINGLES gate the suite previously lacked. ccgen's generated CCSD
+        # singles residual is evaluated on the same GHF integrals as PySCF's
+        # gccsd.update_amps and required to match. This gate exists because a
+        # candidate doubles fix (identical-operator vertex-absorption division)
+        # silently CORRUPTED the singles -- the suite had no singles residual
+        # check to catch it. PySCF confirms ccgen singles are already correct,
+        # so any singles-touching change must keep this at ~0.
+        r1_pyscf, r1_ccgen = _pyscf_singles_residual_ccgen(
+            "H 0 0 0; H 0 0 0.74", "sto-3g", seed=0, scale=0.1
+        )
+        self.assertTrue(
+            np.allclose(r1_ccgen, r1_pyscf, atol=1e-6),
+            np.max(np.abs(r1_ccgen - r1_pyscf)),
+        )
+
+    def test_ccgen_doubles_matches_pyscf(self):
+        # THE decisive doubles gate: the FULL ccgen CCSD doubles residual (all
+        # ~200 terms, incl. the t1*t2*v / t1*t1*t2*v / f*t1*t2 classes once
+        # thought buggy) evaluated on PySCF's own GHF integrals equals
+        # gccsd.update_amps to ~1e-15. This OVERTURNS the earlier "generator bug"
+        # belief: ccgen's doubles residual is correct against the true PySCF
+        # oracle. The `test_gccsd_gate.py` "~3% error" was an artifact of
+        # comparing ccgen to the *dressed* reference on OFF-SHELL random
+        # amplitudes -- the raw projection and the dressed form coincide on-shell
+        # and in the antisymmetric projection, not term-by-term on random tensors.
+        from ccgen.generate import generate_cc_equations
+
+        r2, v, fock, t1, t2, nocc, nmo, nvir = (
+            _pyscf_doubles_residual_and_integrals(
+                "Li 0 0 0; H 0 0 1.6", "sto-3g", seed=0, scale=0.05
+            )
+        )
+        tensors = {"t1": t1.T, "t2": t2.transpose(2, 3, 0, 1), "v": v, "f": fock}
+        terms = generate_cc_equations("ccsd")["doubles"]
+        r = np.zeros((nvir, nvir, nocc, nocc))
+        for term in terms:
+            r += _eval_doubles_term(term, tensors, nocc, nmo, nvir)
+        r_ijab = r.transpose(2, 3, 0, 1)
+        self.assertTrue(
+            np.allclose(r_ijab, r2, atol=1e-10), np.max(np.abs(r_ijab - r2))
+        )
+
+    def test_ccgen_ccsd_energy_matches_pyscf(self):
+        # AR3.3 harness: plug PySCF's converged CCSD amplitudes into the
+        # GENERATED equations. The generated E_corr must equal PySCF's EXACTLY
+        # (it does, to ~1e-15) -- the convention-independent, end-to-end
+        # validation of the generated equations. This is the gate the higher-rank
+        # magnitude extension will be validated against (there is no per-diagram
+        # CCSDT weight oracle -- PySCF ships no spin-orbital gccsdt).
+        e_corr, e_pyscf, _resid_max = ccgen_energy_at_pyscf_amps(
+            "ccsd", "H 0 0 0; H 0 0 0.74", "sto-3g"
+        )
+        self.assertAlmostEqual(e_corr, e_pyscf, places=12)
+
+    def test_diagram_basis_spans_the_pyscf_doubles_residual(self):
+        # THE D3.2-vs-PySCF oracle: the assembled diagram representatives
+        # (orbit(rep_d), one per diagram) must be able to reproduce the PySCF
+        # doubles residual exactly. On LiH/STO-3G the basis is full rank (31
+        # diagrams, rank 31), so the weight solve is unique -- and the span
+        # residual is ~0, proving the ASSEMBLY is correct against the right
+        # oracle (not merely "proportional to ccgen", which is wrong on the
+        # t1*t1*t2*v diagrams). This is the harness D3.3/D4 are graded on.
+        dids, w, rank, span_res, pyscf_norm = solve_diagram_weights_vs_pyscf(
+            "Li 0 0 0; H 0 0 1.6", "sto-3g", seed=0, scale=0.05
+        )
+        self.assertEqual(rank, len(dids), "diagram basis not full rank")
+        self.assertLess(span_res / pyscf_norm, 1e-10, "assembly cannot span PySCF")
+
+    def test_buggy_diagram_true_weight_is_one_half(self):
+        # The PySCF-determined weight of the two t1*t1*t2*v diagrams is exactly
+        # 1/2 -- the correct value the term path over-counts to 1.0. This is the
+        # target D3.3's structural weight rule must reproduce, and D4 must apply.
+        from fractions import Fraction
+
+        dids, w, rank, span_res, _ = solve_diagram_weights_vs_pyscf(
+            "Li 0 0 0; H 0 0 1.6", "sto-3g", seed=0, scale=0.05
+        )
+        weight = dict(zip(dids, w))
+        buggy = [
+            (((1, 1, 0), (1, 2, 1), (2, 1, 1)), 2),
+            (((1, 1, 1), (1, 2, 1), (2, 1, 0)), 2),
+        ]
+        for did in buggy:
+            self.assertAlmostEqual(weight[did], 0.5, places=6, msg=str(did))
+
+    def test_all_pyscf_diagram_weights_are_clean_dyadic_fractions(self):
+        # Every PySCF-determined weight is a clean +/- 1/2^k (denominator a power
+        # of two) -- the signature of the textbook diagrammatic weight rule and
+        # evidence the solve is physical, not a noisy fit. D3.3 derives these
+        # from structure.
+        from fractions import Fraction
+
+        dids, w, *_ = solve_diagram_weights_vs_pyscf(
+            "Li 0 0 0; H 0 0 1.6", "sto-3g", seed=0, scale=0.05
+        )
+        for did, wi in zip(dids, w):
+            fr = Fraction(wi).limit_denominator(64)
+            self.assertLess(abs(float(fr) - wi), 1e-6, f"{did}: not a clean fraction")
+            den = fr.denominator
+            self.assertEqual(den & (den - 1), 0, f"{did}: denominator {den} not 2^k")
+
+    def test_committed_weight_fixture_matches_fresh_solve(self):
+        # The AR2 oracle fixture (ccsd_diagram_weights.json) must equal a fresh
+        # PySCF solve, so the offline weight-formula development (AR2) is graded
+        # against a table that cannot silently rot. Regenerate the fixture with
+        # dump_ccsd_weight_table if this fails after an intended change.
+        import json
+        from fractions import Fraction
+        from pathlib import Path
+
+        fixture = Path(__file__).with_name("ccsd_diagram_weights.json")
+        self.assertTrue(fixture.exists(), "AR2 weight fixture missing")
+        committed = json.load(open(fixture))
+
+        dids, w, *_ = solve_diagram_weights_vs_pyscf(
+            "Li 0 0 0; H 0 0 1.6", "sto-3g", seed=0, scale=0.05
+        )
+        fresh = {}
+        for did, wi in zip(dids, w):
+            key = "bare" if did == "bare" else repr(did)
+            fr = Fraction(wi).limit_denominator(256)
+            fresh[key] = [fr.numerator, fr.denominator]
+        self.assertEqual(
+            {k: tuple(v) for k, v in committed.items()},
+            {k: tuple(v) for k, v in fresh.items()},
+            "committed weight fixture is stale; rerun dump_ccsd_weight_table",
+        )
+
+    def test_diagram_ids_match_the_diagram_enumerator(self):
+        # The weight solve enumerates diagrams from enumerate_diagrams (PySCF-free,
+        # canonical-by-construction), NOT from the term-path generator. This guard
+        # is the ONE place the two are compared -- a set equality, never a value
+        # oracle: if the buggy generator ever drops or adds a diagram, this fails
+        # loudly instead of the solve silently trusting it. Does not need PySCF.
+        from ccgen.diagram import (
+            enumerate_diagrams, term_diagram_id,
+        )
+        from ccgen.generate import generate_cc_equations
+
+        dia = {(ds.t_ops, hr) for ds, hr in enumerate_diagrams([1, 2], 2)}
+        term = {
+            term_diagram_id(t)
+            for t in generate_cc_equations("ccsd")["doubles"]
+            if term_diagram_id(t)[0]
+        }
+        self.assertEqual(dia - {("bare", 0)}, term - {("bare", 0)})
+
+
+if __name__ == "__main__":
+    unittest.main()

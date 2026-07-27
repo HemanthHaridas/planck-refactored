@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from fractions import Fraction
 from functools import lru_cache
@@ -19,10 +20,13 @@ from .indices import (
 from .tensors import Tensor, reindex_tensors
 from .project import AlgebraTerm
 
-try:
-    from . import _wickaccel
-except ImportError:  # pragma: no cover - exercised without the extension
+if os.environ.get("CCGEN_NO_ACCEL"):  # see wick.py: not spawn-worker safe
     _wickaccel = None
+else:
+    try:
+        from . import _wickaccel
+    except ImportError:  # pragma: no cover - exercised without the extension
+        _wickaccel = None
 
 
 def _space_rank(space: str) -> int:
@@ -35,6 +39,19 @@ def _space_rank(space: str) -> int:
 
 def _space_code(space: str) -> int:
     return _space_rank(space)
+
+
+def _antisym_slot_key(idx: Index) -> tuple[int, str, bool]:
+    """Sort/identity key for an index inside an antisymmetry group.
+
+    ``(space_rank, name, is_dummy)``. The trailing ``is_dummy`` is what makes a
+    free external and a summed dummy of the same name distinguishable: without
+    it, ``(space, name)`` ties them, so the degeneracy check reads a repeated
+    slot and the ordering treats a swap between them as an antisymmetry sign
+    flip -- both wrong, since they are different indices. ``is_dummy`` sorts
+    last so it only breaks exact same-name ties and never reorders otherwise.
+    """
+    return (_space_rank(idx.space), idx.name, idx.is_dummy)
 
 
 def _pool_for_space(space: str) -> list[str]:
@@ -91,7 +108,7 @@ def _canonical_ordering_for_group(
 
     for perm in permutations(range(len(positions))):
         reordered = [orig[p] for p in perm]
-        key = tuple((idx.space, idx.name) for idx in reordered)
+        key = tuple(_antisym_slot_key(idx) for idx in reordered)
         inversions = 0
         for x in range(len(perm)):
             for y in range(x + 1, len(perm)):
@@ -117,13 +134,17 @@ def canonicalize_tensor(tensor: Tensor) -> tuple[Tensor, int]:
         return tensor, 1
 
     if _wickaccel is not None:
+        # Codes must distinguish a free external from a summed dummy of the same
+        # name -- otherwise the C layout kernel sees a repeated slot and zeroes a
+        # legitimate term (see test_canon_sign_bug). Keying the slot set on the
+        # full _antisym_slot_key (incl. is_dummy) gives same-name free/summed
+        # indices distinct integer codes, so the kernel is unchanged.
         slot_order = {
             slot: pos for pos, slot in enumerate(sorted(
-                {(idx.space, idx.name) for idx in tensor.indices},
-                key=lambda item: (_space_rank(item[0]), item[1]),
+                {_antisym_slot_key(idx) for idx in tensor.indices}
             ))
         }
-        codes = tuple(slot_order[(idx.space, idx.name)] for idx in tensor.indices)
+        codes = tuple(slot_order[_antisym_slot_key(idx)] for idx in tensor.indices)
         is_zero, sign, order = _wickaccel.canonicalize_tensor_layout(
             codes,
             tensor.antisym_groups,
@@ -135,8 +156,13 @@ def canonicalize_tensor(tensor: Tensor) -> tuple[Tensor, int]:
         return tensor.with_indices([tensor.indices[pos] for pos in order]), sign
 
     for group in tensor.antisym_groups:
+        # A pair is antisymmetry-zero only when the SAME index sits in both
+        # slots. Two distinct indices that merely share a name (a free external
+        # and a summed dummy both called "i") are NOT degenerate -- keying on
+        # (space, name) alone falsely zeroed them (see test_canon_sign_bug).
+        # is_dummy separates them.
         slots = [
-            (tensor.indices[p].space, tensor.indices[p].name)
+            _antisym_slot_key(tensor.indices[p])
             for p in group
         ]
         if len(slots) != len(set(slots)):
@@ -292,6 +318,33 @@ def canonicalize_term(term: AlgebraTerm) -> AlgebraTerm:
 
     term = relabel_term_dummies(term)
     return term
+
+
+def canonicalize_term_to_fixed_point(term: AlgebraTerm) -> AlgebraTerm:
+    """Apply :func:`canonicalize_term` until it stops changing.
+
+    ``canonicalize_term`` is **not idempotent**: its dummy relabel can reorder an
+    antisymmetric factor's indices (e.g. ``v(c,d,k,l)`` -> ``v(c,d,l,k)``) *after*
+    that factor's antisymmetry sign was already normalized, leaving the residual
+    sign un-folded until the next pass. A single pass therefore yields two
+    different canonical forms for what is one term (the two summed dummies of an
+    antisym pair distributed across equivalent factors -- e.g. the two ``t1`` in
+    ``t1·t1·t2·v`` -- swap, and only the first pass's arbitrary order survives).
+    Those forms then fail to merge, under-counting the residual.
+
+    Re-applying to a fixed point folds the residual sign into the coefficient so
+    equivalent terms reach one canonical form and merge. Converges in two passes
+    for CC residuals; bounded at 4. (This mirrors ``optimization/tau._canonical_fixed_point``,
+    which hit the same non-idempotence; that one stays for the tau/dressing
+    call sites.)
+    """
+    prev = term
+    for _ in range(4):
+        cur = canonicalize_term(prev)
+        if cur.factors == prev.factors and cur.coeff == prev.coeff:
+            return cur
+        prev = cur
+    return prev
 
 
 def _term_signature(term: AlgebraTerm) -> tuple[object, ...]:

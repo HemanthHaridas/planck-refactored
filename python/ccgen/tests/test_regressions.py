@@ -209,6 +209,44 @@ class RelabelingTests(unittest.TestCase):
         self.assertEqual(mapping[make_occ("m", dummy=True)].name, "j")
         self.assertEqual(mapping[make_vir("e", dummy=True)].name, "b")
 
+    def test_apply_deltas_does_not_collapse_dummies_onto_like_named_externals(
+        self,
+    ) -> None:
+        """A summation dummy must not be rewritten into a same-named external.
+
+        Cluster amplitudes use dummy index names (a, b, i, j) that collide with
+        the projector's external names.  ``apply_deltas`` used to key its
+        protected-external lookup on ``(space, name)`` alone, so ANY dummy
+        sharing a name with an external was silently rewritten into it -- even
+        with no delta relating them.  That collapsed summations into degenerate
+        terms (f(a,a), t2(b,b,i,j), t2(a,b,i,j)v(i,j,i,j)) and deleted the
+        genuine ladder contractions from every projected manifold.  Fixed by
+        matching on union-find COMPONENT rather than name.
+        """
+        from ccgen.wick import apply_deltas
+        from ccgen.tensors import f as fock, t2
+        from ccgen.indices import Index
+
+        ext_a = Index("a", "vir", False)
+        ext_b = Index("b", "vir", False)
+        dum_a = Index("a", "vir", True)
+        dum_b = Index("b", "vir", True)
+        i = Index("i", "occ", True)
+        j = Index("j", "occ", True)
+
+        tensors = (fock(ext_a, dum_a), t2(dum_a, dum_b, i, j))
+        out = apply_deltas(tensors, deltas=(), protected=(ext_a, ext_b))
+
+        self.assertIsNotNone(out)
+        # No delta relates them, so nothing may change at all.
+        self.assertEqual(out, tensors)
+        # In particular the dummies stay dummies (no f(a,a) / t2(a,b,..)).
+        fock_out = out[0]
+        self.assertTrue(fock_out.indices[1].is_dummy)
+        self.assertFalse(fock_out.indices[0].is_dummy)
+        for idx in out[1].indices:
+            self.assertTrue(idx.is_dummy)
+
 
 class EquationRegressionTests(unittest.TestCase):
     def test_restricted_closed_shell_lowering_preserves_ccsd_manifold_layout(
@@ -376,6 +414,41 @@ class EquationRegressionTests(unittest.TestCase):
 
         self.assertTrue(all(len(term.free_indices) == 2 for term in eqs["singles"]))
         self.assertTrue(all(len(term.free_indices) == 4 for term in eqs["doubles"]))
+
+    def test_ccsdt_reduces_to_ccsd_when_t3_dropped(self) -> None:
+        # AR3.1 cross-rank reduction: the CCSDT singles/doubles residuals, with
+        # every T3-containing term removed, must equal the CCSD singles/doubles
+        # residuals EXACTLY (canonical coefficient multiset). This is the strong,
+        # oracle-free way to validate higher-rank generation: it chains the
+        # PySCF-validated CCSD residual (test_reference_vs_pyscf) up to CCSDT
+        # without any per-term CCSDT oracle (PySCF ships no spin-orbital gccsdt).
+        # A wrong CCSDT singles/doubles term that survives T3=0 would break this.
+        from collections import Counter
+        from ccgen.canonicalize import (
+            canonicalize_term_to_fixed_point, merge_like_terms,
+        )
+
+        def multiset(terms):
+            c: Counter = Counter()
+            merged = merge_like_terms(
+                [canonicalize_term_to_fixed_point(t) for t in terms]
+            )
+            for t in merged:
+                names = tuple(sorted(f.name for f in t.factors))
+                c[(names, t.coeff)] += 1
+            return c
+
+        def has_t3(term):
+            return any(f.name == "t3" for f in term.factors)
+
+        ccsdt = generate_cc_equations("ccsdt")
+        ccsd = generate_cc_equations("ccsd")
+        for manifold in ("singles", "doubles"):
+            reduced = [t for t in ccsdt[manifold] if not has_t3(t)]
+            self.assertEqual(
+                multiset(reduced), multiset(ccsd[manifold]),
+                f"CCSDT {manifold} with T3=0 != CCSD {manifold}",
+            )
 
     def test_ccsd_singles_linear_seed_matches_pyscf(self) -> None:
         if np is None:

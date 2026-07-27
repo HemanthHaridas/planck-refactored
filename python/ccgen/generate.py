@@ -24,6 +24,7 @@ from .project import (
 )
 from .canonicalize import (
     canonicalize_term,
+    canonicalize_term_to_fixed_point,
     merge_exact_term_into_buckets,
     merge_term_into_buckets,
     term_is_zero_before_canonicalization,
@@ -200,7 +201,12 @@ def _process_term_chunk(
         # algebraically equivalent terms acquire the same signature and can be
         # merged into a single bucket.
         t1 = time.monotonic()
-        canonical = canonicalize_term(raw_term)
+        # Fixed-point, not a single pass: canonicalize_term is not idempotent
+        # (an antisym-factor swap induced by the dummy relabel leaves a residual
+        # sign un-folded), so a single pass gives equivalent terms different
+        # canonical forms and they fail to merge. See
+        # canonicalize_term_to_fixed_point.
+        canonical = canonicalize_term_to_fixed_point(raw_term)
         canonicalization_time += time.monotonic() - t1
         canonicalized_count += 1
         merge_term_into_buckets(canonical, buckets, order)
@@ -477,6 +483,25 @@ def _store_cached_manifold(
         pickle.dump((mstats, canonical), handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
+def _drops_under_canonical_fock(term: AlgebraTerm) -> bool:
+    """Whether *term* vanishes for a canonical HF reference.
+
+    A canonical Hartree-Fock reference diagonalizes the Fock matrix, so its
+    occupied-virtual blocks are zero: ``f_ov = f_vo = 0``. Any term carrying an
+    ``f`` factor whose two indices span one occupied and one virtual space is
+    therefore identically zero and must be dropped. Diagonal ``f_oo`` / ``f_vv``
+    terms survive (they contribute the orbital energies via ``t2 * Fae`` /
+    ``t2 * Fmi``), matching the hand-written GCCSD reference in
+    ``src/post_hf/cc/ccsd.cpp``, which uses only ``eps_occ`` / ``eps_virt``.
+    """
+    for fac in term.factors:
+        if fac.name == "f" and len(fac.indices) == 2:
+            p, q = fac.indices
+            if {p.space, q.space} == {"occ", "vir"}:
+                return True
+    return False
+
+
 def generate_cc_equations(
     method: str,
     targets: list[str] | None = None,
@@ -484,6 +509,7 @@ def generate_cc_equations(
     collect_denominators: bool = False,
     permutation_grouping: bool = False,
     exploit_symmetry: bool = False,
+    canonical_fock: bool = False,
     debug: bool = False,
     parallel_workers: int | None = None,
     cache_dir: str | None = None,
@@ -503,6 +529,12 @@ def generate_cc_equations(
     exploit_symmetry : bool
         If True, apply implicit antisymmetry exploitation to reduce
         term count (Phase 3, experimental).
+    canonical_fock : bool
+        If True, drop terms that vanish for a canonical HF reference --
+        those carrying an ``f`` factor with an occupied-virtual block
+        (``f_ov`` / ``f_vo`` = 0). Matches the hand-written GCCSD reference,
+        which uses only diagonal orbital energies. Default False keeps the
+        general (Brillouin-incomplete) Fock so the output is unchanged.
     debug : bool
         If True, print term counts and timing at each pipeline stage
         to stderr.  Statistics are also stored in ``ccgen.generate.last_stats``.
@@ -675,6 +707,14 @@ def generate_cc_equations(
         for manifold in target_tuple
     }
 
+    if canonical_fock:
+        equations = {
+            manifold: [
+                t for t in terms if not _drops_under_canonical_fock(t)
+            ]
+            for manifold, terms in equations.items()
+        }
+
     last_stats = stats
 
     if debug:
@@ -820,10 +860,20 @@ def print_cpp_planck(
     intermediate_threshold: int = 5,
     intermediate_memory_budget_bytes: int | None = None,
     intermediate_peak_memory_budget_bytes: int | None = None,
+    factorize_tau: bool = False,
     **kwargs: Any,
 ) -> str:
     """Generate Planck-compatible C++ tensor kernels."""
     eqs = generate_cc_equations(method, **kwargs)
+
+    tau_spec = None
+    if factorize_tau:
+        # Collapse validated t2 + t1t1 pairs into the tau pseudo-amplitude
+        # before CSE. Algebra-preserving by construction (apply_tau only
+        # collapses A1.4-validated pairs; A1.6 gates it offline).
+        from .optimization.tau import factorize_tau_equations
+        eqs, tau_spec = factorize_tau_equations(eqs)
+
     intermediates = None
     if include_intermediates:
         from .optimization.intermediates import (
@@ -844,6 +894,12 @@ def print_cpp_planck(
         intermediates = annotate_layout_hints(supported) if supported else None
         if intermediates:
             eqs = rewrite_equations(eqs, list(intermediates))
+
+    # tau is materialized through the same intermediate machinery; prepend it so
+    # its builder is emitted and residual `tau` factors resolve to the local.
+    if tau_spec is not None:
+        intermediates = [tau_spec] + list(intermediates or [])
+
     return emit_planck_translation_unit(
         method,
         eqs,

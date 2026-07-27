@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterator, Sequence
@@ -11,10 +12,16 @@ from .indices import Index
 from .tensors import Tensor, delta, reindex_tensors
 from .sqops import SQOp
 
-try:
-    from . import _wickaccel
-except ImportError:  # pragma: no cover - exercised when extension is unavailable
+# CCGEN_NO_ACCEL forces the pure-Python path. The C extension is not safe to
+# use in a spawned worker process (its index-layout results diverge from the
+# parent), so the parallel generator sets this in its workers.
+if os.environ.get("CCGEN_NO_ACCEL"):
     _wickaccel = None
+else:
+    try:
+        from . import _wickaccel
+    except ImportError:  # pragma: no cover - exercised when extension is unavailable
+        _wickaccel = None
 
 _KIND_CREATE = 0
 _KIND_ANNIHILATE = 1
@@ -654,9 +661,6 @@ def apply_deltas(
         for lhs, rhs in deltas
     )
     protected_rank = {pos: rank for rank, pos in enumerate(protected_pos)}
-    protected_by_slot = {
-        (idx.space, idx.name): idx for idx in protected
-    }
     if _wickaccel is not None and delta_pos:
         all_indices_tuple = tuple(all_indices)
         space_codes, name_codes, dummy_mask = _delta_layout_metadata(
@@ -745,10 +749,22 @@ def apply_deltas(
         for idx in protected_members[1:]:
             extra_factors.append(delta(rep, idx))
 
+    # Which union-find component does each protected external belong to?  A
+    # dummy may only be rewritten INTO an external when a delta actually merged
+    # them (same component) -- never on a mere name coincidence.  Cluster
+    # amplitudes use dummy names (a, b, i, j) that collide with the projector's
+    # external names, so a name-keyed lookup here silently collapsed summation
+    # indices onto externals (producing f(a,a) and t2(b,b,i,j)-style degenerate
+    # terms in every projected manifold).
+    protected_by_component: dict[int, Index] = {}
+    for pos, idx in zip(protected_pos, protected):
+        protected_by_component.setdefault(root_by_pos[pos], idx)
+
     mapping: dict[Index, Index] = {}
     for idx in tensor_indices:
-        root_idx = all_indices[root_by_pos[index_pos[idx]]]
-        protected_target = protected_by_slot.get((root_idx.space, root_idx.name))
+        root_pos = root_by_pos[index_pos[idx]]
+        root_idx = all_indices[root_pos]
+        protected_target = protected_by_component.get(root_pos)
         if protected_target is not None:
             mapped = protected_target
         elif idx.is_dummy or root_idx.is_dummy:
