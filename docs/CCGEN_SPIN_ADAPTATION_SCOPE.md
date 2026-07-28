@@ -117,10 +117,52 @@ diagram work had.
   thing a direct comparison adds — the physicist(ccgen)→chemist(PySCF) ERI
   convention — is an EMIT concern and is settled at S3, not in the integration.
 
-- **S2 — RCC closed-shell reduction (~L, algebra-heavy core).** Apply α ≡ β:
-  collapse the UCC blocks to the minimal spatial set, combining coefficients.
-  This is where restricted-CC derivations are subtle. *Gate:* the `rccsd`
-  residual matches PySCF `rccsd.update_amps`.
+### S2 — RCC closed-shell reduction (α ≡ β)
+
+**The physics (confirmed).** For a closed-shell RHF reference, α and β spatial
+orbitals are identical, so `t1a = t1b = t1` and the UCC t2 blocks collapse: RCC
+stores a **single** `t2 [o,o,v,v]` (the mixed `abab` block), with the same-spin
+block recovered by antisymmetry `t2aa = t2ab − P(t2ab)`. RCC's single residual
+equals the closed-shell GCC/UCC residual's `abab` block (confirmed: RHF ≡ GHF
+closed-shell energy to 6e-14). PySCF `rccsd.update_amps` is the oracle. The
+characteristic output is `2J − K` coefficient combinations.
+
+**Why S2 is the hard step.** S1 (UCC) was mechanical — spin-label, filter by
+block existence, keep the GCC coefficient (which came out right unchanged). S2 is
+**not** mechanical: imposing `t2aa = t2ab − P(t2ab)` substitutes one block's
+amplitude by a combination of another's, which *changes coefficients* — terms
+merge and the `2J − K` structure appears. That coefficient collapse is the
+genuine derivation content.
+
+Sub-steps (de-risk numerically **before** any symbolic collapse):
+
+- **S2.0 — closed-shell block relations, numeric (~S).** Pin the relations RCC
+  rests on: `t1a = t1b`, and `t2aa = t2ab − t2ab.transpose(pair-swap)`
+  (determine the exact swap + sign against PySCF). *Gate:* reproduce PySCF's
+  `t2aa` from its `t2ab` numerically. Settles the single most error-prone spot —
+  the `P(t2ab)` swap convention — before any equation work.
+
+- **S2.1 — RCC residual as a numeric block identity (~M).** Show the RCC single
+  residual equals the UCC `abab`-block residual (S1's `ucc_manifold`) evaluated
+  with the S2.0 substitution, on RHF tensors, vs PySCF `rccsd.update_amps`.
+  *Gate:* per-element ~1e-12. **Proves the "abab + substitution" model is right
+  before the symbolic collapse** — if it fails, the model is wrong and no
+  symbolic work saves it.
+
+- **S2.2 — symbolic collapse (~L, the core).** Produce the RCC spatial equation:
+  take the UCC `abab` `SpinTerm`s, apply `t2aa → t2ab − P(t2ab)` and
+  `t1a,t1b → t1` as term rewrites, and merge (where the `2J − K` combos form).
+  *Gate:* the symbolic RCC residual evaluated matches PySCF `rccsd.update_amps`
+  (~1e-12) and reproduces the S2.1 identity — the symbolic form is the validated
+  model, not a new guess.
+
+- **S2.3 — RCC energy end-to-end (~S).** RCC energy from the collapsed equations
+  reaches the PySCF RCCSD energy (iterate harness on the single-block RHF
+  tensors). *Gate:* ~1e-9 on a small closed-shell system.
+
+**Recommended first move:** S2.0 + S2.1 — numeric, gated purely against PySCF,
+*prove the model before writing collapse code*. RCC's `rccsd.update_amps` is the
+strongest per-residual oracle in the whole ccgen effort — use it at every step.
 
 - **S3 — wire the stage + emitter compatibility (~M).** Route adapted terms into
   lowering (`restricted_closed_shell` becomes layout-only on already-spatial
@@ -135,7 +177,9 @@ diagram work had.
 ## Honest boundaries
 
 - **S2 (RCC coefficient collapse) is the hard part** — the α ≡ β reduction's
-  coefficient algebra is where the real derivation lives; S1/S0 are bookkeeping.
+  coefficient algebra is where the real derivation lives. S0/S1 turned out to be
+  bookkeeping, exactly as expected: the UCC raw GCC coefficients came out right
+  unchanged (S1.3b). S2 is the one step where coefficients genuinely change.
 - **On the production critical path (intent confirmed).** The ccgen-generated
   kernels are intended to replace the hand-written `src/post_hf/cc/` solvers in
   production, once D7 (dressing on diagrams) is done. Production RHF/UHF CC needs
