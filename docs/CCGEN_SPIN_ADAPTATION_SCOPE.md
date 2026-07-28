@@ -89,14 +89,26 @@ diagram work had.
   that the raw GCC coefficient is already correct (the block combinatorics
   needed no extra factor for this term). `tests/test_spin.py::UccIntegrateTermTests`.
 
-- **S1.3 — full-manifold UCC residual (~M, next; S1.2 done).** Aggregate
-  `ucc_integrate_term` over all GCC terms and all external blocks into
-  `{block: [SpinTerm]}`. *Gate:* the assembled `uccsd` residual (t1a, t1b, t2aa,
-  t2ab, t2bb) matches PySCF `uccsd.update_amps` on random amplitudes, per block —
-  the strong external oracle, and where multi-survivor coefficient summation is
-  actually exercised (single terms like the pp-ladder have one survivor each).
-  UCC first because it is mechanical and has this clean oracle, before RCC's
-  collapse.
+- **S1.3a — full-manifold aggregation. LANDED.** `external_blocks(residual_tpl)`
+  enumerates the canonical UCC external blocks (spin conservation on the
+  residual's own lines, one rep per global a↔b flip → doubles `{aaaa, abab}`,
+  singles `{aa}`), and `ucc_manifold(terms, residual_tpl)` integrates every GCC
+  term into each block, returning `{block_tag: [SpinTerm]}`. *Gate (no PySCF):*
+  structural (aggregation = per-term union) + the full-manifold spin-orbital
+  identity on the `t2·v` subset — all six terms summed reproduce the sliced GCC
+  `aaaa` and `abab` blocks to ~1e-16, exercising the **multi-term aggregation +
+  multi-survivor summation** the single pp-ladder did not.
+  `tests/test_spin.py::UccManifoldTests`.
+
+- **S1.3b — general evaluator + PySCF cross-check (~M, next).** The S1.3a numeric
+  gate uses a compact evaluator that does not yet handle the `f` (2D) factor or
+  the physicist→chemist ERI convention. S1.3b builds the general `SpinTerm`
+  evaluator and gates the assembled `uccsd` residual (t1a, t1b, t2aa, t2ab, t2bb)
+  against PySCF `uccsd.update_amps` on random amplitudes, per block — the strong
+  external oracle. This is also where the physicist(ccgen)→chemist(PySCF) ERI
+  mapping (the old S1.4) is settled, since PySCF's blocks are chemist-ordered.
+  If the raw GCC coefficients don't already come out right (S1.2/S1.3a suggest
+  they do for `t2·v`), this is where any block-combinatoric factor surfaces.
 
 - **S2 — RCC closed-shell reduction (~L, algebra-heavy core).** Apply α ≡ β:
   collapse the UCC blocks to the minimal spatial set, combining coefficients.

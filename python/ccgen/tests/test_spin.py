@@ -304,5 +304,132 @@ class UccIntegrateTermTests(unittest.TestCase):
         self.assertEqual(sts, [])
 
 
+def _sc(p, no):
+    """Spin of combined-space position p (occ block [0,no), vir block [no,n)):
+    even offset within its block = alpha (0), odd = beta (1)."""
+    return (p if p < no else p - no) % 2
+
+
+def _slice_spinterm_factor(sf, tensors, no, n):
+    """Slice a SpinFactor's spatial block from the spin-orbital tensors. `v`/`f`
+    are over the combined n-space (occ then vir); amplitudes are vir/occ-sized."""
+    import numpy as np
+
+    arr = tensors[sf.name]
+    sets = []
+    for k, si in enumerate(sf.indices):
+        want = 0 if si.spin == "a" else 1
+        if sf.name in ("v", "f"):
+            base = range(0, no) if si.space == "occ" else range(no, n)
+            sel = [p for p in base if _sc(p, no) == want]
+        else:
+            sel = [p for p in range(arr.shape[k]) if p % 2 == want]
+        sets.append(sel)
+    return arr[np.ix_(*sets)]
+
+
+def _eval_spinterm(st, tensors, no, n, out_names):
+    import string
+
+    import numpy as np
+
+    letters: dict = {}
+    it = iter(string.ascii_lowercase)
+
+    def L(nm):
+        return letters.setdefault(nm, next(it))
+
+    subs = [
+        "".join(L(si.name) for si in sf.indices) for sf in st.factors
+    ]
+    out = "".join(L(nm) for nm in out_names)
+    arrs = [_slice_spinterm_factor(sf, tensors, no, n) for sf in st.factors]
+    return float(st.coeff) * np.einsum(
+        f"{','.join(subs)}->{out}", *arrs
+    )
+
+
+class UccManifoldTests(unittest.TestCase):
+    """S1.3a: full-manifold aggregation into UCC blocks.
+
+    Structural checks on external_blocks / ucc_manifold, plus the full-manifold
+    spin-orbital identity on the t2*v subset (all six terms, exercising
+    multi-term aggregation + multi-survivor summation -- which the single
+    pp-ladder does not). The f-containing terms use a 2D factor the compact
+    evaluator here does not handle; the general evaluator + PySCF cross-check are
+    S1.3b.
+    """
+
+    def _R2(self):
+        from ccgen.tensors import Tensor
+        return Tensor("R2", (make_vir("a"), make_vir("b"),
+                             make_occ("i"), make_occ("j")))
+
+    def test_doubles_external_blocks_are_canonical(self):
+        from ccgen.spin import external_blocks
+        blocks = external_blocks(self._R2())
+        tags = {"".join(b[n] for n in ["a", "b", "i", "j"]) for b in blocks}
+        # bbbb folds under global a<->b; the minimal UCC set is aaaa + abab
+        self.assertEqual(tags, {"aaaa", "abab"})
+
+    def test_singles_external_blocks(self):
+        from ccgen.spin import external_blocks
+        from ccgen.tensors import Tensor
+        R1 = Tensor("R1", (make_vir("a"), make_occ("i")))
+        tags = {"".join(b[n] for n in ["a", "i"])
+                for b in external_blocks(R1)}
+        self.assertEqual(tags, {"aa"})   # bb folds under a<->b
+
+    def test_manifold_is_the_union_of_per_term_integrations(self):
+        from ccgen.spin import ucc_manifold, ucc_integrate_term, external_blocks
+        terms = generate_cc_equations("ccd")["doubles"]
+        man = ucc_manifold(terms, self._R2())
+        for block in external_blocks(self._R2()):
+            tag = "".join(block[n] for n in ["a", "b", "i", "j"])
+            expected = []
+            for t in terms:
+                expected.extend(ucc_integrate_term(t, block))
+            self.assertEqual(man[tag], expected)
+
+    def test_t2v_subset_reproduces_gcc_blocks(self):
+        import numpy as np
+        from ccgen.spin import ucc_integrate_term
+        from ccgen.tests.residual_eval import residual_einsum, random_tensors
+
+        nosp, nvsp = 2, 3
+        no, nv = 2 * nosp, 2 * nvsp
+        n = no + nv
+        tn = random_tensors(no, nv, seed=0)
+        # spin-structure t2 [v,v,o,o] and v (combined space): zero forbidden blocks
+        t2 = tn["t2"]
+        mask = np.zeros_like(t2)
+        for idx in np.ndindex(*t2.shape):
+            if (idx[0] % 2 == idx[2] % 2) and (idx[1] % 2 == idx[3] % 2):
+                mask[idx] = 1
+        tn["t2"] = t2 * mask
+        v = tn["v"]
+        mv = np.zeros_like(v)
+        for idx in np.ndindex(*v.shape):
+            if _sc(idx[0], no) == _sc(idx[2], no) and _sc(idx[1], no) == _sc(idx[3], no):
+                mv[idx] = 1
+        tn["v"] = v * mv
+
+        t2v = [
+            t for t in generate_cc_equations("ccd")["doubles"]
+            if tuple(sorted(f.name for f in t.factors)) == ("t2", "v")
+        ]
+        Rgcc = sum(residual_einsum(t, no, nv, tensors=tn) for t in t2v)
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+        for tag, sl in [("aaaa", (ve, ve, oe, oe)), ("abab", (ve, vo, oe, oo))]:
+            Rb = Rgcc[np.ix_(*sl)]
+            acc = np.zeros_like(Rb)
+            for t in t2v:
+                for st in ucc_integrate_term(t, dict(zip(["a", "b", "i", "j"], tag))):
+                    acc += _eval_spinterm(st, tn, no, n, ["a", "b", "i", "j"])
+            self.assertTrue(np.allclose(Rb, acc, atol=1e-12),
+                            f"{tag}: {np.max(np.abs(Rb - acc))}")
+
+
 if __name__ == "__main__":
     unittest.main()

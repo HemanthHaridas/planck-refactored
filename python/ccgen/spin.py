@@ -211,3 +211,55 @@ def ucc_integrate_term(term, external_spins: dict):
         )
         out.append(SpinTerm(coeff=term.coeff, external_block=ext_block, factors=factors))
     return out
+
+
+# ── S1.3a full-manifold UCC aggregation ───────────────────────────────
+#
+# Enumerate the residual's own valid external spin blocks (same conservation rule
+# as any tensor), then integrate every GCC term of the manifold into each block.
+# Gated by the full-manifold spin-orbital identity (the S1.2 oracle over the whole
+# residual) -- no PySCF, no chemist convention. The PySCF cross-check (which also
+# exercises the physicist->chemist ERI mapping) is a separate later step.
+
+
+def external_blocks(residual_template) -> list[dict]:
+    """The canonical UCC external spin blocks for a residual, as
+    {free-index-name: spin} dicts. Enumerates the spin patterns that conserve
+    spin along the residual's lines (:func:`block_exists`), then keeps one
+    representative per block up to a global a<->b flip (so doubles -> aaaa, abab,
+    bbbb, not also baba)."""
+    n = len(residual_template.indices) // 2
+    names = [i.name for i in residual_template.indices]
+    seen = set()
+    blocks = []
+    for combo in itertools.product(SPINS, repeat=len(names)):
+        label = {nm: SpinIndex(idx, s)
+                 for nm, idx, s in zip(names, residual_template.indices, combo)}
+        if not block_exists(residual_template, label):
+            continue
+        flip = tuple("b" if s == "a" else "a" for s in combo)
+        key = min(combo, flip)  # canonical under global a<->b
+        if key in seen:
+            continue
+        seen.add(key)
+        blocks.append(dict(zip(names, combo)))
+    return blocks
+
+
+def ucc_manifold(terms, residual_template):
+    """Integrate a whole GCC residual manifold into UCC blocks (S1.3a).
+
+    Returns ``{external_block_tag: [SpinTerm]}`` where ``external_block_tag`` is
+    the per-slot spin string of the residual (e.g. doubles -> "aaaa", "abab",
+    "bbbb"), and the value is every surviving integrated term of every GCC term
+    for that block. Carries raw GCC coefficients (S1.2); the coefficient
+    correctness is what the identity / PySCF gates check."""
+    names = [i.name for i in residual_template.indices]
+    out: dict = {}
+    for block in external_blocks(residual_template):
+        tag = "".join(block[nm] for nm in names)
+        acc: list = []
+        for term in terms:
+            acc.extend(ucc_integrate_term(term, block))
+        out[tag] = acc
+    return out
