@@ -1,0 +1,106 @@
+# ccgen Spin-Adaptation Layer (GCC → RCC / UCC)
+
+Scope + status for mapping ccgen's spin-orbital (GCC) equations to spatial
+restricted (RCC) and unrestricted (UCC) form. Companion:
+`CCGEN_GENERATION_AND_VALIDATION.md` (how the GCC equations are generated and
+validated).
+
+This file answers one architecture question:
+
+**How does a spin-adaptation layer turn ccgen's spin-orbital CC equations into
+restricted and unrestricted spatial-orbital equations, and where does it sit?**
+
+## Where it sits
+
+ccgen derives everything in **spin-orbital (GCC)** form — `indices.Index` has a
+space (occ/vir/gen) and no spin. Spin adaptation is a new stage that consumes and
+produces `AlgebraTerm`s, so generation (both the wick and diagram engines),
+canonicalization, lowering, and the emitters are untouched:
+
+```
+generate (GCC AlgebraTerms)  →  [spin adaptation]  →  spatial AlgebraTerms (RCC/UCC)  →  lowering → emit
+```
+
+It is engine-agnostic by construction: it operates on the `AlgebraTerm`s either
+engine produces. The existing `lowering/restricted_closed_shell.py` does NOT do
+this — it only re-lays-out spin-orbital terms into spatial blocks; it explicitly
+does not spin-integrate.
+
+## Why a separate layer, not a spin field on Index
+
+`Index`'s identity `(name, space, is_dummy)` is baked into every canonicalize /
+wick / diagram hash and equality. Adding a spin field there would perturb the
+validated GCC path. So the spin layer is **isolated**: it wraps a spatial `Index`
+in a lightweight `SpinIndex` (spatial base + spin ∈ {a,b}) and works on the terms
+generation already produces. The GCC path is not modified.
+
+## The physics
+
+Each spin-orbital index `p` = (spatial `p̄`, spin `σ`). A GCC term is a sum over
+spin-orbital indices; adaptation performs the spin summation. Within one term a
+repeated index NAME is one physical line, so it carries one spin (a contracted
+line preserves spin); summed indices are summed over both spins.
+
+- **UCC** keeps α/β distinct: each GCC term expands into the spin blocks its
+  externals allow (a doubles term → `aa`, `bb`, `ab`), with the spin-integrated
+  coefficient. Amplitudes/integrals become spin-blocked. Mechanical.
+- **RCC** = UCC + the closed-shell constraint α ≡ β: collapse the spin blocks to
+  the minimal spatial set, combining coefficients (the `2J − K` pattern). The
+  coefficient algebra here is the genuinely hard part.
+
+## The validation advantage
+
+Unlike the GCCSDT case (PySCF ships no `gccsdt`), the adapted targets **have**
+per-residual oracles: `pyscf.cc.rccsd.update_amps`, `uccsd.update_amps`, and at
+higher rank `rccsdt` / `uccsdt`. So adapted equations are validated directly
+against PySCF residuals, not only by an FCI limit — a stronger gate than the
+diagram work had.
+
+## Steps
+
+- **S0 — index model + single-term spin labeling. LANDED.** `ccgen/spin.py`:
+  `SpinIndex` (spatial `Index` + spin) and `spin_label_cases(term,
+  external_spins)` — label every index of one GCC term consistently along shared
+  lines, enumerate the summed-index spin cases (`2^(#distinct summed names)`).
+  Structural, not yet coefficient-integrated. Gated by `tests/test_spin.py` on
+  the pp-ladder `t2·v` doubles term (case count, external-block spins,
+  shared-line consistency, exhaustive summed enumeration).
+
+- **S1 — UCC spin integration (~L, mechanical core).** For each GCC term,
+  enumerate the allowed external-spin blocks, spin-sum the contracted indices,
+  and emit one spatial `AlgebraTerm` per surviving block with the integrated
+  coefficient; amplitudes/integrals become spin-blocked tensors (`t2_aaaa`,
+  `t2_abab`, spin-cased `⟨pq|rs⟩`). *Gate:* the `uccsd` residual (aa/bb/ab)
+  matches PySCF `uccsd.update_amps` on random amplitudes. UCC first because it is
+  mechanical and has a clean oracle — it proves the spin-summation machinery
+  before RCC's collapse.
+
+- **S2 — RCC closed-shell reduction (~L, algebra-heavy core).** Apply α ≡ β:
+  collapse the UCC blocks to the minimal spatial set, combining coefficients.
+  This is where restricted-CC derivations are subtle. *Gate:* the `rccsd`
+  residual matches PySCF `rccsd.update_amps`.
+
+- **S3 — wire the stage + emitter compatibility (~M).** Route adapted terms into
+  lowering (`restricted_closed_shell` becomes layout-only on already-spatial
+  terms; add a UCC lowering) and confirm the emitters produce spin-blocked
+  kernels. *Gate:* emitted RCC/UCC kernel reaches the PySCF energy end-to-end
+  (reuse the `ccgen_iterate_amps` harness on spatial tensors).
+
+- **S4 — higher rank + engine-agnostic (~M).** Confirm adaptation is
+  engine-agnostic (it operates on `AlgebraTerm`s) and extends to CCSDT (gated vs
+  `rccsdt` / `uccsdt`).
+
+## Honest boundaries
+
+- **S2 (RCC coefficient collapse) is the hard part** — the α ≡ β reduction's
+  coefficient algebra is where the real derivation lives; S1/S0 are bookkeeping.
+- **Priority caveat.** Like the diagram / D7 work, this layer's payoff is
+  realized only once generated kernels are compiled into the build. Today RCC/UCC
+  production runs the hand-written `src/post_hf/cc/` solvers, not generated code,
+  and the arbitrary-order / diagram research paths are natively spin-orbital and
+  do not need adaptation. So spin adaptation is high value *if* the generated
+  path is headed for production, lower value as long as it feeds only the
+  spin-orbital research paths. Worth confirming that intent before the L-scale
+  S1/S2 effort.
+- **Not a rewrite.** An insertable stage; generation, lowering, and emit are
+  untouched. But S1+S2 are each large.
