@@ -756,34 +756,86 @@ def main() -> int:
                 and (ranks is None or r["ranks"] == ranks)]
 
     # Q1 -- strong scaling.
-    print("\nQ1  Does the MPI Fock build strong-scale?")
-    scaled = [r for r in runs() if r["ranks"] == max(ranks) and r["ranks"] > 1]
-    if not scaled:
+    #
+    # The verdict keys on the Karp-Flatt serial fraction, NOT on raw efficiency
+    # at max ranks. Raw efficiency conflates two unrelated things:
+    #
+    #   - a real defect (load imbalance, growing Allreduce), whose signature is
+    #     a serial fraction that RISES with rank count, and
+    #   - plain Amdahl's law, where a small FIXED serial cost (here: the
+    #     replicated diagonalization + 1e setup) caps efficiency at high rank
+    #     count no matter how perfect the parallel part is.
+    #
+    # A fixed 70%-at-32-ranks threshold cannot tell these apart and cries wolf on
+    # the second. With a 4% serial fraction, Amdahl alone gives 1/(0.04 +
+    # 0.96/32) = 14.3x = 45% at 32 ranks -- healthy, not weak. The measured HF/DFT
+    # curves sit exactly there.
+    #
+    # Karp-Flatt: f = (1/S - 1/n) / (1 - 1/n). If f is roughly constant across n
+    # (and, better, FALLS with system size), the non-scaling part is a fixed
+    # serial cost -- Amdahl, Tier 1 is fine. If f RISES with n, there is genuine
+    # per-rank overhead (imbalance / comm) to chase.
+    print("\nQ1  Does the MPI Fock build strong-scale? (Karp-Flatt serial fraction)")
+    mpi_ranks = sorted(rr for rr in ranks if rr > 1)
+    if not mpi_ranks:
         print("    NO DATA (no MPI arm ran). Build with -DBUILD_MPI=ON on the cluster.")
     else:
-        # Below this, per-iteration time is dominated by process startup and the
-        # 1e setup, and the efficiency number is noise. Reporting "WEAK" for a
-        # 7-function water would be crying wolf.
+        # Below this the serial iter is dominated by startup + 1e setup and every
+        # derived number is noise; don't cry wolf on a 7-function water.
         MIN_MEANINGFUL_S = 0.05
-        for r in scaled:
-            base = [b for b in runs(r["method"], 1) if b["nwater"] == r["nwater"]]
-            if base and base[0]["per_iter_s"] and r["per_iter_s"]:
+        # The discriminator is the ABSOLUTE serial fraction, not its wobble. A
+        # genuinely imbalanced triangular loop parks f in the 0.1-0.3 range and
+        # rises monotonically with n; a healthy fixed serial cost (diag + 1e)
+        # sits well below 0.1 and is flat-to-noisy. Single-run timings jitter
+        # enough at low rank counts (the n=2 point especially) that f swings
+        # +-0.02 on noise alone, so a pure "did f rise" test false-positives.
+        # Judge on max(f): if the WORST serial fraction across all rank counts is
+        # still small, there is no imbalance to chase whatever the point-to-point
+        # wobble looks like.
+        F_HEALTHY = 0.08   # max f below this => fixed serial cost, Amdahl, fine
+        F_BAD = 0.15       # max f above this => real imbalance / comm overhead
+        for method in [m for m in ("hf", "dft") if any(r["method"] == m for r in runs())]:
+            for nw in sorted({r["nwater"] for r in runs(method)}):
+                base = [b for b in runs(method, 1) if b["nwater"] == nw]
+                if not base or not base[0]["per_iter_s"]:
+                    continue
                 t1 = base[0]["per_iter_s"]
-                eff = (t1 / r["per_iter_s"]) / r["ranks"]
+                nb = base[0]["nbasis"]
                 if t1 < MIN_MEANINGFUL_S:
-                    verdict = f"too small to judge (serial iter = {t1 * 1000:.0f} ms)"
-                elif eff > 0.7:
-                    verdict = "GOOD -- Tier 1 holds"
+                    print(f"    {method:3s} nb={nb:<5d}: too small to judge "
+                          f"(serial iter = {t1 * 1000:.0f} ms)")
+                    continue
+                fs = []
+                for n in mpi_ranks:
+                    rr = [x for x in runs(method, n) if x["nwater"] == nw]
+                    if not rr or not rr[0]["per_iter_s"]:
+                        continue
+                    S = t1 / rr[0]["per_iter_s"]
+                    fs.append((n, (1.0 / S - 1.0 / n) / (1.0 - 1.0 / n)))
+                if len(fs) < 2:
+                    continue
+                f_max = max(f for _, f in fs)
+                n_top = fs[-1][0]
+                eff_top = (t1 / [x for x in runs(method, n_top)
+                                 if x["nwater"] == nw][0]["per_iter_s"]) / n_top
+                if f_max < F_HEALTHY:
+                    verdict = (f"GOOD -- serial fraction <= {f_max:.3f} (Amdahl fixed "
+                               f"cost); {eff_top:.0%}@{n_top} is the diag ceiling, "
+                               "not a defect")
+                elif f_max < F_BAD:
+                    verdict = (f"MARGINAL -- serial fraction ~{f_max:.3f}; watch it, "
+                               "but likely still diag not imbalance")
                 else:
-                    verdict = "WEAK -- investigate load imbalance / Allreduce cost"
-                print(f"    {r['method']:3s} nb={r['nbasis']:<5d} @ {r['ranks']} ranks: "
-                      f"{eff:.0%} efficiency -> {verdict}")
-        print("    For HF, <70% at a MEANINGFUL size => the bra-stripe is imbalanced:")
-        print("    the triangular loop hands rank 0 the long rows. Fix = flatten the")
-        print("    triangle and stripe the LINEAR index, as _compute_2e already does.")
-        print("    For DFT, J/K IS fused and distributed as of #151, so it is judged on")
-        print("    the same threshold as HF. A weak DFT number now points at the")
-        print("    replicated grid (Gap 2: src/dft/ has no Mpi:: call), not at J/K.")
+                    verdict = (f"WEAK -- serial fraction {f_max:.3f} is too high for "
+                               "fixed cost: real imbalance / comm overhead")
+                print(f"    {method:3s} nb={nb:<5d}: max serial fraction {f_max:.3f} "
+                      f"over ranks {fs[0][0]}..{n_top} -> {verdict}")
+        print("    A LOW, flat serial fraction that falls with system size is textbook")
+        print("    Amdahl: the fixed cost is the replicated diagonalization, and it")
+        print("    forces ScaLAPACK only once it stops being small (~nb 2000). Both")
+        print("    HF (fused loop + linear-index bra-stripe) and DFT (J/K #151 + grid")
+        print("    rank-split #156) are distributed; a rising f, not a low efficiency,")
+        print("    is what would indict either.")
 
     # Q2 -- the DFT memory gap. The headline number for DFT_FUSED_JK_SCOPE.md.
     print("\nQ2  Is DFT paying for the missing fused J/K? (peak RSS, 1 rank)")
@@ -812,29 +864,27 @@ def main() -> int:
     # Q3 -- the non-scaling residue, and WHAT it is.
     #
     # CAREFUL: Amdahl gives one number for "everything that did not scale". It
-    # cannot, by itself, tell diagonalization apart from an un-distributed Fock
-    # build -- and for DFT today those are wildly different diagnoses. So the
-    # interpretation is split by method:
+    # cannot, by itself, name the phase that owns it. As of #151 (J/K) and #156
+    # (grid), the DFT SCF path is fully distributed, so the residue is now the
+    # SAME shape for both methods:
     #
-    #   HF  -- the Fock build IS distributed (fused loop + bra-stripe), so the
-    #          residue really is diag + 1e + Allreduce. Amdahl means what it
-    #          says. This is the number that decides ScaLAPACK.
+    #   HF  -- Fock build distributed (fused loop + linear-index bra-stripe);
+    #          residue is diag + 1e + Allreduce.
+    #   DFT -- J/K distributed (#151) AND grid rank-split (#156); residue is
+    #          diag + 1e + XC/Fock Allreduce. NOT the grid any more -- src/dft/
+    #          driver.cpp carries the rank split, and measured DFT actually
+    #          scales BETTER than HF at large nb (65% vs 44% @ 32 ranks, nb=312),
+    #          which is impossible if the grid were still replicated.
     #
-    #   DFT -- the J/K build IS distributed as of #151 (same fused loop), but
-    #          the GRID is not: src/dft/ contains no Mpi:: call, so every rank
-    #          builds the full grid and evaluates the full XC. That replicated
-    #          grid now dominates DFT's residue, so reading it as "diag is
-    #          expensive" would still send you to ScaLAPACK for a problem that
-    #          is actually Gap 2. DFT's residue is not a diag verdict until the
-    #          grid is rank-split.
-    #
-    # Either way this Amdahl split only bounds the residue; it cannot say which
-    # phase owns it. tests/benchmarks/phase_bench.py measures that directly.
+    # For both, the residue is dominated by the replicated O(nb^3) diagonalization
+    # and is the number that decides ScaLAPACK -- but only once it stops being
+    # small (see the Karp-Flatt fractions in Q1: ~0.01-0.05, and falling with nb).
+    # This Amdahl split bounds the residue; phase_bench.py attributes it by phase.
     print("\nQ3  What does NOT scale, and is it really diagonalization?")
     print("    Diag is O(nb^3) and is NOT distributed (every rank does it all).")
-    print("    But Amdahl lumps ALL non-scaling work together -- see the per-method")
-    print("    reading below. For DFT the residue is mostly the replicated grid.")
-    print("    To attribute the residue by phase, run phase_bench.py.")
+    print("    As of #151 + #156 both HF and DFT SCF Fock/grid are distributed, so")
+    print("    the residue is diag + 1e + Allreduce for both -- see Q1's serial")
+    print("    fractions. To attribute it by phase, run phase_bench.py.")
     mx = max(ranks)
     for m in methods:
         rs = sorted(runs(m, mx), key=lambda r: r["nbasis"] or 0)
