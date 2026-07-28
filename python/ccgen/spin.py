@@ -103,3 +103,48 @@ def spin_label_cases(term, external_spins: dict[str, str]):
             label[name] = SpinIndex(base, spin)
         cases.append(label)
     return cases
+
+
+# ── S1.0 the UCC block model: spin conservation per line ──────────────
+#
+# A spin-orbital tensor block is nonzero iff spin is CONSERVED along every
+# excitation / interaction LINE. ccgen orders each tensor's indices as n virtual
+# slots followed by n occupied slots (t1: [v,o]; t2: [v,v,o,o]; t3: [v,v,v,o,o,o];
+# f: [p,q]; v = <pq||rs>: [v,v,o,o] but the physicist antisym lines pair p-r, q-s).
+# So for a rank-2n tensor the lines pair slot k with slot k+n, and the block
+# exists iff spin(slot k) == spin(slot k+n) for every k in 0..n-1.
+#
+# This one rule covers every tensor kind ccgen emits -- there is no per-tensor
+# lookup table. It is the spin-conservation content of the UCC block structure
+# (t1 -> a,b; t2 -> aa,bb,ab; f -> a,b; v -> aaaa,bbbb,abab,baba), derived from
+# physics, matching PySCF's case-tagged UCC blocks.
+
+
+def _line_pairs(factor) -> list[tuple[int, int]]:
+    """Slot pairs (k, k+n) for a rank-2n tensor -- the excitation/interaction
+    lines along which spin is conserved. Raises for odd rank (no line pairing)."""
+    r = len(factor.indices)
+    if r % 2 != 0:
+        raise ValueError(f"{factor.name}: odd rank {r} has no line pairing")
+    n = r // 2
+    return [(k, k + n) for k in range(n)]
+
+
+def block_exists(factor, label: dict) -> bool:
+    """Whether the spin-labeled *factor* is a nonzero UCC block: spin is
+    conserved along every line (slot k and slot k+n carry the same spin).
+    ``label`` maps index name -> SpinIndex (from :func:`spin_label_cases`)."""
+    spins = [label[i.name].spin for i in factor.indices]
+    return all(spins[a] == spins[b] for a, b in _line_pairs(factor))
+
+
+def resolve_block(factor, label: dict) -> tuple[str, bool]:
+    """Resolve the spin-labeled *factor* to a (block_tag, exists) pair (S1.1).
+
+    ``block_tag`` is the per-slot spin string in the factor's own index order
+    (e.g. ``t2`` slots [v,v,o,o] with spins a,b,a,b -> "abab"); ``exists`` is
+    :func:`block_exists`. A forbidden block still gets a tag (for diagnostics)
+    but ``exists=False`` and S1.2 will drop it. Coefficient integration and the
+    physicist->chemist naming are S1.2/S1.4, not here."""
+    tag = "".join(label[i.name].spin for i in factor.indices)
+    return tag, block_exists(factor, label)

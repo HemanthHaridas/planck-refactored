@@ -66,11 +66,23 @@ diagram work had.
   the pp-ladder `t2·v` doubles term (case count, external-block spins,
   shared-line consistency, exhaustive summed enumeration).
 
-- **S1 — UCC spin integration (~L, mechanical core).** For each GCC term,
-  enumerate the allowed external-spin blocks, spin-sum the contracted indices,
-  and emit one spatial `AlgebraTerm` per surviving block with the integrated
-  coefficient; amplitudes/integrals become spin-blocked tensors (`t2_aaaa`,
-  `t2_abab`, spin-cased `⟨pq|rs⟩`). *Gate:* the `uccsd` residual (aa/bb/ab)
+- **S1.0/S1.1 — block model + one-factor resolution. LANDED.** `ccgen/spin.py`:
+  the UCC block existence rule is **spin conservation per line** — for a rank-2n
+  tensor (ccgen orders n virtual then n occupied slots) the lines pair slot k
+  with slot k+n, and a block is nonzero iff `spin(k) == spin(k+n)` for all k. One
+  rule, no per-tensor table (covers t1→a,b; t2→aa,bb,ab; f→a,b; v→aaaa/bbbb/
+  abab/baba — the physicist `⟨pq||rs⟩` lines pair p-r, q-s). `block_exists` and
+  `resolve_block(factor, label) -> (tag, exists)`. Gated by
+  `tests/test_spin.py::BlockModelTests` incl. the S0+S1.1 integration on the
+  pp-ladder: of the 4 summed-spin cases exactly 1 survives (the block-existence
+  *filter*, the heart of S1.2).
+
+- **S1 — UCC spin integration (~L, mechanical core; S1.0/S1.1 done).** For each
+  GCC term, enumerate the external-spin blocks, filter the summed-spin cases by
+  block existence (S1.1), and emit one spatial `AlgebraTerm` per surviving case
+  with the integrated coefficient; amplitudes/integrals become spin-blocked
+  tensors (`t2_aaaa`, `t2_abab`, spin-cased `⟨pq|rs⟩`). *Gate:* the `uccsd`
+  residual (aa/bb/ab)
   matches PySCF `uccsd.update_amps` on random amplitudes. UCC first because it is
   mechanical and has a clean oracle — it proves the spin-summation machinery
   before RCC's collapse.
