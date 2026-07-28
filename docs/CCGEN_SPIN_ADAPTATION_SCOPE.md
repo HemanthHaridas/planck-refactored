@@ -77,15 +77,26 @@ diagram work had.
   pp-ladder: of the 4 summed-spin cases exactly 1 survives (the block-existence
   *filter*, the heart of S1.2).
 
-- **S1 — UCC spin integration (~L, mechanical core; S1.0/S1.1 done).** For each
-  GCC term, enumerate the external-spin blocks, filter the summed-spin cases by
-  block existence (S1.1), and emit one spatial `AlgebraTerm` per surviving case
-  with the integrated coefficient; amplitudes/integrals become spin-blocked
-  tensors (`t2_aaaa`, `t2_abab`, spin-cased `⟨pq|rs⟩`). *Gate:* the `uccsd`
-  residual (aa/bb/ab)
-  matches PySCF `uccsd.update_amps` on random amplitudes. UCC first because it is
-  mechanical and has a clean oracle — it proves the spin-summation machinery
-  before RCC's collapse.
+- **S1.2 — single-term integration. LANDED.** `ucc_integrate_term(term,
+  external_spins)` enumerates the summed-spin cases (S0), keeps only those where
+  every factor is a valid block (S1.1), and emits one `SpinTerm` per survivor
+  carrying the **raw GCC coefficient** (`SpinFactor`/`SpinTerm` in `spin.py`).
+  Gated by the **spin-orbital identity** (no PySCF): on a spin-STRUCTURED
+  spin-orbital tensor (forbidden blocks zeroed, as physical CC tensors are), the
+  chosen external block of the GCC term equals the sum of its surviving
+  integrated terms on the matching block slices — maxdiff 0 on the pp-ladder
+  into both the `abab` and `aaaa` blocks. This validates the block filter *and*
+  that the raw GCC coefficient is already correct (the block combinatorics
+  needed no extra factor for this term). `tests/test_spin.py::UccIntegrateTermTests`.
+
+- **S1.3 — full-manifold UCC residual (~M, next; S1.2 done).** Aggregate
+  `ucc_integrate_term` over all GCC terms and all external blocks into
+  `{block: [SpinTerm]}`. *Gate:* the assembled `uccsd` residual (t1a, t1b, t2aa,
+  t2ab, t2bb) matches PySCF `uccsd.update_amps` on random amplitudes, per block —
+  the strong external oracle, and where multi-survivor coefficient summation is
+  actually exercised (single terms like the pp-ladder have one survivor each).
+  UCC first because it is mechanical and has this clean oracle, before RCC's
+  collapse.
 
 - **S2 — RCC closed-shell reduction (~L, algebra-heavy core).** Apply α ≡ β:
   collapse the UCC blocks to the minimal spatial set, combining coefficients.

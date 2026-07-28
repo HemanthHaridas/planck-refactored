@@ -148,3 +148,66 @@ def resolve_block(factor, label: dict) -> tuple[str, bool]:
     physicist->chemist naming are S1.2/S1.4, not here."""
     tag = "".join(label[i.name].spin for i in factor.indices)
     return tag, block_exists(factor, label)
+
+
+# ── S1.2 single-term UCC integration ──────────────────────────────────
+#
+# For a fixed EXTERNAL block (a spin assignment to the free indices), a GCC term
+# contributes the SUM over its summed-index spin cases (S0) of the cases where
+# EVERY factor is a valid block (S1.1). Each surviving case is one spatial term:
+# same GCC coefficient, factors tagged with their spin block, spatial indices.
+#
+# The coefficient here is the RAW GCC coefficient. Whether the spatial block
+# combinatorics multiply it by a factor (e.g. the GCC 1/2 on a summed
+# spin-orbital antisym pair becoming 1 when the surviving spatial case has
+# distinct-spin summed indices) is deliberately NOT decided here -- it is the
+# thing the numeric gates settle: the spin-orbital identity (S1.2 test) and PySCF
+# `uccsd.update_amps` (S1.3). S1.2 emits the surviving cases faithfully; the gates
+# tell us if the block model already makes the coefficients come out right.
+
+
+@dataclass(frozen=True)
+class SpinFactor:
+    """One factor of a spin-integrated (spatial) term: the tensor name, its spin
+    block tag (per-slot spins in the factor's index order), and the SpinIndex per
+    slot (spatial index + spin)."""
+
+    name: str
+    block: str
+    indices: tuple
+
+
+@dataclass(frozen=True)
+class SpinTerm:
+    """A single spin-integrated spatial term: coefficient + tagged factors, for a
+    named external block (the spin assignment of the free indices)."""
+
+    coeff: object
+    external_block: tuple
+    factors: tuple
+
+
+def ucc_integrate_term(term, external_spins: dict):
+    """Integrate one GCC ``AlgebraTerm`` into the UCC ``SpinTerm``s that
+    contribute to the given external block (S1.2).
+
+    Enumerates the summed-spin cases (:func:`spin_label_cases`), keeps only cases
+    where every factor is a valid block (:func:`block_exists`), and emits one
+    ``SpinTerm`` per surviving case carrying the GCC coefficient. The external
+    block is the sorted (free-name, spin) tuple; each factor is tagged with its
+    resolved block."""
+    ext_block = tuple(sorted(external_spins.items()))
+    out = []
+    for label in spin_label_cases(term, external_spins):
+        if not all(block_exists(f, label) for f in term.factors):
+            continue
+        factors = tuple(
+            SpinFactor(
+                name=f.name,
+                block=resolve_block(f, label)[0],
+                indices=tuple(label[i.name] for i in f.indices),
+            )
+            for f in term.factors
+        )
+        out.append(SpinTerm(coeff=term.coeff, external_block=ext_block, factors=factors))
+    return out

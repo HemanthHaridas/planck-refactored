@@ -172,5 +172,137 @@ class BlockModelTests(unittest.TestCase):
         self.assertEqual(survivors, 1)
 
 
+def _spin_structured_tensor(shape, factor_template, seed):
+    """A random spin-orbital tensor with the physical UCC block structure: the
+    array is zeroed on every FORBIDDEN block (spin not conserved along a line),
+    and antisymmetrized within each vir/occ pair. Spin-orbital convention: index
+    k has spin 'a' if k is even, 'b' if odd. ``factor_template`` is a bare Tensor
+    of the same index-space pattern, used for the line-pairing rule."""
+    import numpy as np
+    from ccgen.spin import _line_pairs
+
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal(shape)
+    n = len(shape) // 2
+    # antisymmetrize within the first-n (vir) and last-n (occ) index blocks.
+    # These tests use n==2 (rank-4 tensors: [v,v,o,o] and [v,v,v,v]).
+    if n == 2:
+        x = x - x.transpose(1, 0, 2, 3)   # antisym slots 0,1
+        x = x - x.transpose(0, 1, 3, 2)   # antisym slots 2,3
+    spin = lambda k: "a" if k % 2 == 0 else "b"
+    mask = np.zeros_like(x)
+    it = np.ndindex(*shape)
+    pairs = _line_pairs(factor_template)
+    for idx in it:
+        if all(spin(idx[a]) == spin(idx[b]) for a, b in pairs):
+            mask[idx] = 1.0
+    return x * mask
+
+
+def _slice_spin_block(arr, spin_factor):
+    """Slice the spatial block of a spin-orbital array selected by a SpinFactor's
+    per-slot spins (even indices = alpha, odd = beta)."""
+    import numpy as np
+
+    sets = [
+        list(range(0, arr.shape[k], 2)) if si.spin == "a"
+        else list(range(1, arr.shape[k], 2))
+        for k, si in enumerate(spin_factor.indices)
+    ]
+    return arr[np.ix_(*sets)]
+
+
+class UccIntegrateTermTests(unittest.TestCase):
+    """S1.2: ucc_integrate_term reproduces the GCC residual's external block.
+
+    The gate is the spin-orbital identity (no PySCF): on a SPIN-STRUCTURED
+    spin-orbital tensor (forbidden blocks zeroed, as physical CC tensors are),
+    the chosen external block of the GCC term equals the sum of its surviving
+    integrated SpinTerms evaluated on the matching spatial block slices. This
+    validates both the block filter and the raw GCC coefficient.
+    """
+
+    def _pp_ladder(self):
+        terms = [
+            t for t in generate_cc_equations("ccd")["doubles"]
+            if tuple(sorted(f.name for f in t.factors)) == ("t2", "v")
+        ]
+        return [t for t in terms
+                if [i.name for i in t.factors[0].indices] == ["c", "d", "i", "j"]][0]
+
+    def test_pp_ladder_reproduces_gcc_abab_block(self):
+        import numpy as np
+        from ccgen.spin import ucc_integrate_term
+        from ccgen.tensors import Tensor
+
+        nocc_sp, nvir_sp = 2, 3
+        no, nv = 2 * nocc_sp, 2 * nvir_sp
+        t2tpl = Tensor("t2", (make_vir("a"), make_vir("b"), make_occ("i"), make_occ("j")))
+        vtpl = Tensor("v", (make_vir("c"), make_vir("d"), make_vir("a"), make_vir("b")))
+        t2 = _spin_structured_tensor((nv, nv, no, no), t2tpl, seed=1)
+        v = _spin_structured_tensor((nv, nv, nv, nv), vtpl, seed=2)
+
+        pp = self._pp_ladder()
+        R = float(pp.coeff) * np.einsum("cdij,cdab->abij", t2, v)
+        ea, eb = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oa, ob = list(range(0, no, 2)), list(range(1, no, 2))
+        R_abab = R[np.ix_(ea, eb, oa, ob)]
+
+        acc = np.zeros_like(R_abab)
+        for st in ucc_integrate_term(pp, {"i": "a", "j": "b", "a": "a", "b": "b"}):
+            f = {s.name: s for s in st.factors}
+            acc += float(st.coeff) * np.einsum(
+                "cdij,cdab->abij",
+                _slice_spin_block(t2, f["t2"]),
+                _slice_spin_block(v, f["v"]),
+            )
+        self.assertTrue(np.allclose(R_abab, acc, atol=1e-12),
+                        np.max(np.abs(R_abab - acc)))
+
+    def test_pp_ladder_reproduces_gcc_aaaa_block(self):
+        # the same-spin (aaaa) external block: all four externals alpha, forcing
+        # the summed c,d = a,a. A different external block from abab, exercising
+        # the same identity on the fully-alpha sector. (Multi-survivor summation
+        # is exercised at S1.3 on the full manifold, not by this single term.)
+        import numpy as np
+        from ccgen.spin import ucc_integrate_term
+        from ccgen.tensors import Tensor
+
+        nocc_sp, nvir_sp = 2, 3
+        no, nv = 2 * nocc_sp, 2 * nvir_sp
+        t2tpl = Tensor("t2", (make_vir("a"), make_vir("b"), make_occ("i"), make_occ("j")))
+        vtpl = Tensor("v", (make_vir("c"), make_vir("d"), make_vir("a"), make_vir("b")))
+        t2 = _spin_structured_tensor((nv, nv, no, no), t2tpl, seed=3)
+        v = _spin_structured_tensor((nv, nv, nv, nv), vtpl, seed=4)
+
+        pp = self._pp_ladder()
+        R = float(pp.coeff) * np.einsum("cdij,cdab->abij", t2, v)
+        ea, oa = list(range(0, nv, 2)), list(range(0, no, 2))
+        R_aaaa = R[np.ix_(ea, ea, oa, oa)]
+
+        acc = np.zeros_like(R_aaaa)
+        for st in ucc_integrate_term(pp, {"i": "a", "j": "a", "a": "a", "b": "a"}):
+            f = {s.name: s for s in st.factors}
+            acc += float(st.coeff) * np.einsum(
+                "cdij,cdab->abij",
+                _slice_spin_block(t2, f["t2"]),
+                _slice_spin_block(v, f["v"]),
+            )
+        self.assertTrue(np.allclose(R_aaaa, acc, atol=1e-12),
+                        np.max(np.abs(R_aaaa - acc)))
+
+    def test_forbidden_external_block_is_empty(self):
+        # An external block that violates spin conservation on the residual's own
+        # lines produces no surviving terms. R2(a,b,i,j) lines a-i, b-j: external
+        # a=alpha,i=beta breaks the a-i line -> the v/t2 factors can't all be valid.
+        from ccgen.spin import ucc_integrate_term
+
+        pp = self._pp_ladder()
+        # i=b but a=a: the residual line a<-i would be a<-b (broken) at the vertex
+        sts = ucc_integrate_term(pp, {"i": "b", "j": "b", "a": "a", "b": "a"})
+        # every case forces c=a (from a-c) and c=b (from i-c) simultaneously -> none
+        self.assertEqual(sts, [])
+
+
 if __name__ == "__main__":
     unittest.main()
