@@ -87,9 +87,18 @@ the real codegen consumers emit, and only then can the term-path enumeration
 regardless — it holds the shared types both engines use. The flip is a separate,
 higher-risk decision, now backed by the kernel-equivalence evidence above.
 
-## Why a generator issue is never a wrong-energy-in-production issue
+## Why a generator issue is not (yet) a wrong-energy-in-production issue
 
-The default build compiles neither generated path into a binary. The shipping
-CCSD warm-start calls the hand-written residual in `src/post_hf/cc/ccsd.cpp`. A
-generator defect would gate trusting the algebraic path — the arbitrary-order
-solver and the diagram front end — not any production energy.
+**Today** the default build compiles neither generated path into a binary — the
+shipping CCSD warm-start calls the hand-written residual in
+`src/post_hf/cc/ccsd.cpp`, so a generator defect gates trusting the algebraic
+path (the arbitrary-order solver, the diagram front end), not any production
+energy.
+
+**That is the current state, not the end state.** The generated kernels are
+intended to replace the hand-written solvers in production, gated on the D7
+dressing work (an undressed kernel has the wrong FLOP scaling to ship) and the
+spin-adaptation layer (production RHF/UHF CC needs spatial RCC/UCC kernels; the
+generated path is spin-orbital). Once that lands, generator correctness — which
+this document establishes through CCSDTQ — becomes production-load-bearing, which
+is exactly why the validation here is built to the standard it is.

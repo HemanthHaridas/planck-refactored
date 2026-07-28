@@ -348,14 +348,16 @@ CCSD; CCSDT/CCSDTQ add their own W-intermediates, human-derived — as PySCF/CFO
 do). `verify_dressed_equation` gates every step against the exact undressed
 residual, so D7 can never silently emit wrong algebra.
 
-**Priority (lazy-correct read).** D7 optimizes the FLOP scaling of the *generated*
-kernel — which only matters once generated kernels are compiled into a binary.
-Today the default build compiles the hand-written `src/post_hf/cc/ccsd.cpp`, not
-generated code (§5). So D7's payoff is gated on the deferred D5 flip + wiring the
-(already-correct, already-fast, now-CCSDTQ-validated) generated path into the
-build. Until then D7 improves an un-shipped path — correctly scoped, but
-lower-priority than wiring the generated path in. D7 does **not** need the default
-engine flipped: dressing operates on the diagram-produced equations regardless.
+**Priority — D7 is the production gate (intent confirmed).** The generated
+kernels are intended to replace the hand-written `src/post_hf/cc/` solvers in
+production, **once D7 is done**: an undressed generated kernel has the wrong FLOP
+scaling to ship, so the dressing D7 provides is the load-bearing prerequisite for
+the swap — not optional optimization of an un-shipped path. Today the default
+build still compiles `ccsd.cpp` (§5), but that is the current state, not the end
+state. So D7 is critical-path, alongside the spin-adaptation layer
+(`CCGEN_SPIN_ADAPTATION_SCOPE.md`) that production RHF/UHF CC needs. D7 does
+**not** need the default engine flipped: dressing operates on the
+diagram-produced equations regardless.
 
 ---
 

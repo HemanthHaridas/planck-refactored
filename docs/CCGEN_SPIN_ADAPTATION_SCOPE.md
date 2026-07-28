@@ -94,13 +94,12 @@ diagram work had.
 
 - **S2 (RCC coefficient collapse) is the hard part** — the α ≡ β reduction's
   coefficient algebra is where the real derivation lives; S1/S0 are bookkeeping.
-- **Priority caveat.** Like the diagram / D7 work, this layer's payoff is
-  realized only once generated kernels are compiled into the build. Today RCC/UCC
-  production runs the hand-written `src/post_hf/cc/` solvers, not generated code,
-  and the arbitrary-order / diagram research paths are natively spin-orbital and
-  do not need adaptation. So spin adaptation is high value *if* the generated
-  path is headed for production, lower value as long as it feeds only the
-  spin-orbital research paths. Worth confirming that intent before the L-scale
-  S1/S2 effort.
+- **On the production critical path (intent confirmed).** The ccgen-generated
+  kernels are intended to replace the hand-written `src/post_hf/cc/` solvers in
+  production, once D7 (dressing on diagrams) is done. Production RHF/UHF CC needs
+  spatial RCC/UCC kernels, and the generated path is spin-orbital (GCC) — so this
+  layer (S1 UCC, S2 RCC) is a **prerequisite for the production swap**, not
+  optional research. The "not compiled into any binary" state elsewhere in these
+  docs is the current state, not the end state.
 - **Not a rewrite.** An insertable stage; generation, lowering, and emit are
   untouched. But S1+S2 are each large.
