@@ -431,5 +431,81 @@ class UccManifoldTests(unittest.TestCase):
                             f"{tag}: {np.max(np.abs(Rb - acc))}")
 
 
+def _spin_structure_all(tn, no, n):
+    """Zero the forbidden blocks of every tensor in a residual_einsum tensor dict:
+    t1/t2/t3 lines are pos%2 per axis; v/f are combined-space (occ then vir), spin
+    by _sc. Returns the same dict, mutated."""
+    import numpy as np
+
+    def structure(arr, spin_of_axis):
+        r = len(arr.shape) // 2
+        m = np.zeros_like(arr)
+        for idx in np.ndindex(*arr.shape):
+            if all(spin_of_axis(idx[k]) == spin_of_axis(idx[k + r]) for k in range(r)):
+                m[idx] = 1.0
+        return arr * m
+
+    for name in ("t1", "t2", "t3"):
+        if name in tn:
+            tn[name] = structure(tn[name], lambda p: p % 2)
+    for name in ("v", "f"):
+        if name in tn:
+            tn[name] = structure(tn[name], lambda p: _sc(p, no))
+    return tn
+
+
+class UccFullManifoldTests(unittest.TestCase):
+    """S1.3b: the general SpinTerm evaluator handles ALL factor kinds (t1, t2, f,
+    v), so the full-manifold spin-orbital identity holds for the complete CCD and
+    CCSD residuals -- not just the t2*v subset. This validates the UCC
+    spin-integration MECHANISM end to end.
+
+    (A direct PySCF uccsd.update_amps cross-check would additionally exercise the
+    physicist->chemist ERI convention, which is an EMIT concern (S3); the
+    integration itself is validated here against ccgen's own spin-orbital GCC
+    residual, which is already PySCF-gccsd-validated to 1e-16.)
+    """
+
+    def _check(self, method, nosp, nvsp, seed):
+        import numpy as np
+        from ccgen.spin import ucc_manifold
+        from ccgen.tensors import Tensor
+        from ccgen.tests.residual_eval import residual_einsum, random_tensors
+
+        no, nv = 2 * nosp, 2 * nvsp
+        n = no + nv
+        tn = _spin_structure_all(random_tensors(no, nv, seed=seed), no, n)
+        eqs = generate_cc_equations(method)
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+
+        if "singles" in eqs:
+            R1 = Tensor("R1", (make_vir("a"), make_occ("i")))
+            Rg = sum(residual_einsum(t, no, nv, tensors=tn) for t in eqs["singles"])
+            acc = np.zeros_like(Rg[np.ix_(ve, oe)])
+            for st in ucc_manifold(eqs["singles"], R1)["aa"]:
+                acc += _eval_spinterm(st, tn, no, n, ["a", "i"])
+            self.assertTrue(np.allclose(Rg[np.ix_(ve, oe)], acc, atol=1e-11),
+                            f"{method} singles aa: "
+                            f"{np.max(np.abs(Rg[np.ix_(ve, oe)] - acc))}")
+
+        R2 = Tensor("R2", (make_vir("a"), make_vir("b"), make_occ("i"), make_occ("j")))
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn) for t in eqs["doubles"])
+        man = ucc_manifold(eqs["doubles"], R2)
+        for tag, sl in [("aaaa", (ve, ve, oe, oe)), ("abab", (ve, vo, oe, oo))]:
+            Rb = Rg[np.ix_(*sl)]
+            acc = np.zeros_like(Rb)
+            for st in man[tag]:
+                acc += _eval_spinterm(st, tn, no, n, ["a", "b", "i", "j"])
+            self.assertTrue(np.allclose(Rb, acc, atol=1e-11),
+                            f"{method} doubles {tag}: {np.max(np.abs(Rb - acc))}")
+
+    def test_ccd_full_manifold(self):
+        self._check("ccd", nosp=2, nvsp=3, seed=0)
+
+    def test_ccsd_full_manifold(self):
+        self._check("ccsd", nosp=3, nvsp=4, seed=1)
+
+
 if __name__ == "__main__":
     unittest.main()

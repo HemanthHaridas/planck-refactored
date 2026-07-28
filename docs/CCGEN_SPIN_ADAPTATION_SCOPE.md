@@ -100,15 +100,22 @@ diagram work had.
   multi-survivor summation** the single pp-ladder did not.
   `tests/test_spin.py::UccManifoldTests`.
 
-- **S1.3b — general evaluator + PySCF cross-check (~M, next).** The S1.3a numeric
-  gate uses a compact evaluator that does not yet handle the `f` (2D) factor or
-  the physicist→chemist ERI convention. S1.3b builds the general `SpinTerm`
-  evaluator and gates the assembled `uccsd` residual (t1a, t1b, t2aa, t2ab, t2bb)
-  against PySCF `uccsd.update_amps` on random amplitudes, per block — the strong
-  external oracle. This is also where the physicist(ccgen)→chemist(PySCF) ERI
-  mapping (the old S1.4) is settled, since PySCF's blocks are chemist-ordered.
-  If the raw GCC coefficients don't already come out right (S1.2/S1.3a suggest
-  they do for `t2·v`), this is where any block-combinatoric factor surfaces.
+- **S1.3b — full-manifold identity (general evaluator). LANDED.** The general
+  `SpinTerm` evaluator handles every factor kind (t1, t2, f, v), so the
+  full-manifold spin-orbital identity holds for the **complete CCD and CCSD
+  residuals** — singles `aa` and doubles `aaaa`/`abab` reproduce the sliced GCC
+  blocks to ~1e-14 (`tests/test_spin.py::UccFullManifoldTests`). This validates
+  the UCC spin-integration MECHANISM end to end (raw GCC coefficients are already
+  correct — no block-combinatoric factor needed). `external_blocks` is also
+  confirmed to match PySCF's UCC block set (singles t1a; doubles t2aa+t2ab, with
+  the b-blocks by a↔b flip).
+
+  **Decision — no separate PySCF `uccsd.update_amps` numeric gate.** It is
+  redundant for the mechanism: ccgen's GCC residual is already PySCF-`gccsd`-
+  validated to 1e-16, and the spin-orbital identity proves `ucc_manifold ==
+  GCC-sliced`, so `ucc_manifold == PySCF-uccsd` transitively. The one unique
+  thing a direct comparison adds — the physicist(ccgen)→chemist(PySCF) ERI
+  convention — is an EMIT concern and is settled at S3, not in the integration.
 
 - **S2 — RCC closed-shell reduction (~L, algebra-heavy core).** Apply α ≡ β:
   collapse the UCC blocks to the minimal spatial set, combining coefficients.
