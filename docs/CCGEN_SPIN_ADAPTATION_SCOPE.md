@@ -552,14 +552,11 @@ spin-blocked RCC kernels reaching the PySCF energy).
   `(i,a)↔(j,b)` (verified `0`), NOT antisymmetric in `(i,j)` alone (`~1e-3`).
   (`RCCSDTQ`/`cc_order=4` gives `t4` the same way for the rank-8 gate.)
 
-  *What's been tried and where it stands (two attempts):*
-  - naive "spin-conserving fill from `t3full` + antisymmetrize the full bra/ket
-    (÷6)": ENERGY correct to 1e-9, residual ~2e-3.
-  - "antisymmetrize only within same-spin sub-groups" (the rule that reproduces
-    `so_t2` exactly): `t3so` IS antisymmetric (0), ENERGY still ~1e-9, residual
-    still ~1e-4/1e-3.
-
-    Both get the energy (a robust full contraction) but not the residual.
+  *What's been tried:* two antisymmetrization-based lifts (full-bra/ket ÷6; and
+  same-spin-group). Both got the ENERGY right to 1e-9 on LiH but that was
+  misleading — S4a.0a (below) showed on N2 that the same-spin-group lift produces
+  an **all-zero `t3so`**, so any antisymmetrization-of-`t3full` approach is wrong.
+  The energy survived only because LiH's `t3` is negligibly small.
 
   *Diagnostics gathered (these reshape S4a.0 — the earlier "missing scalar
   weight" hypothesis is DISPROVEN):*
@@ -579,26 +576,43 @@ spin-blocked RCC kernels reaching the PySCF energy).
     "give me the antisym `t3`" bridge (applying `P3_full` `-1/6, beta=1` to
     `t3full` barely changes it), so reverse-engineering it is the wrong lever.
 
-  *Scoped sub-steps (revised):*
-  - **S4a.0a — a strong-correlation triples fixture + t3-sensitivity check
-    (~S).** Build `_real_antisym_tensors`-style tensors from `RCCSDT` on `N2` or
-    linear stretched `H4` (`|t3| ≈ 0.03`), with the current (imperfect) `t3so`
-    lift. *Gate:* confirm the triples residual is now t3-DOMINATED — i.e. it
-    changes materially between `t3so=0` and `t3so`, and the `t3corr = R0/e`
-    (residual-solved `t3`) drives the full residual to ~1e-10. This proves the
-    fixture exposes the lift error (unlike LiH) and gives `t3corr`, the exact
-    target the lift must reproduce.
-  - **S4a.0b — diff the lift against `t3corr`, block by block (~S).** With
-    `t3corr` (the correct spin-orbital antisym `t3` in ccgen's convention) in
-    hand, compute `t3so_lift − t3corr` per spin block (`aaa`, `aab`, `aba`, …).
-    *Gate:* identify whether the discrepancy is a per-block sign/permutation
-    (structural) or a per-block scalar. This turns "fix the lift" into a concrete
-    finite table of corrections.
-  - **S4a.0c — corrected lift + numeric gate (~M).** Apply the S4a.0b finding to
-    the lift rule (the same-spin-group antisymmetrizer plus whatever per-block
-    correction b reveals). *Gate:* GCC triples residual at RCCSDT amps < 1e-7 on
-    the strong-correlation system, AND still energy-correct to 1e-9. `t3corr` is
-    the oracle throughout — no reverse-engineering of PySCF internals.
+  **S4a.0a DONE — and it found the root cause: the lift approach is wrong, not
+  just mis-weighted.** Built the N2/STO-3G RCCSDT fixture (`|t3| = 0.0315`,
+  nocc 7 / nvir 3). Two decisive results:
+  - The same-spin-group-antisymmetrizer lift produces a **literally all-zero
+    `t3so`** on N2 (norm 0) — it contributes *nothing* to the triples residual
+    (identical to `t3so = 0`). It "worked" on LiH only because LiH's `t3` is so
+    tiny the zero was within the residual noise.
+  - **Why it zeros: antisymmetrizing the RCC-symmetric `t3full` self-cancels.**
+    The lift antisymmetrizes over line-paired swaps within same-spin groups —
+    but a line-paired simultaneous swap `(i,a)↔(j,b)` IS exactly `t3full`'s
+    built-in RCC symmetry (verified `t3full[i,j,k,a,b,c] − t3full[j,i,k,b,a,c] =
+    0.0`). So the antisymmetrizer subtracts `t3full` from itself. (`t2` escaped
+    this because its same-spin `aaaa` block IS `t2ab − P(t2ab)` with a genuinely
+    non-symmetric mixed block; the rank-3 symmetric rep is different.)
+  - Corollary: **the antisym spin-orbital `t3` is NOT a permutation of `t3full`**
+    — antisymmetrization annihilates the symmetric rep's content. The lift must
+    be the **spin-summation INVERSE** (the antisym `t3` that, spin-summed
+    forward, gives `t3full`), a genuine rank-6 transform, not a reshuffle.
+  - Also: the fock-diagonal `t3corr = R0/e` is NOT a clean oracle — the triples
+    residual has many non-fock `t3` terms (`W·t3`, …), so `R0/e` only captures
+    part (drove N2 residual to 2e-3, not ~0). A correct oracle is ccgen's own
+    GCC-CCSDT converged `t3` (Jacobi-iterate the GCC residual to self-consistency
+    on the real integrals) or the true spin-summation inverse of `t3full`.
+
+  *Scoped sub-steps (revised again per S4a.0a):*
+  - **S4a.0b — derive the spin-summation inverse for `t3` (~M, the core).** The
+    forward map (spin-orbital antisym `t3` → RCC symmetric `t3full`) is the
+    standard closed-shell spin summation; invert it. Cleanest validation: pick a
+    small random SPATIAL seed, build a spin-orbital antisym `t3` from it by a
+    candidate inverse rule, spin-sum it forward, and require it round-trips to the
+    seed. *Gate:* forward∘inverse == identity on random spatial `t3`
+    (PySCF-free, algebraic).
+  - **S4a.0c — numeric gate on the strong-correlation fixture (~S).** Apply the
+    S4a.0b inverse to PySCF's `t3full` and require the GCC triples residual at
+    RCCSDT amps < 1e-7 on N2 (`|t3|` large enough to expose any error), AND
+    energy still 1e-9. Oracle: PySCF RCCSDT (the fixture is built; only the lift
+    rule changes).
   - **S4a.1 — the rank-6 S1' identity (~S).** With S4a.0's correct `t3` fixture,
     gate `ucc_integrate_term_antisym` == GCC triples slice on the real
     closed-shell antisym integrals (~1e-11). This is the numeric proof the S4
