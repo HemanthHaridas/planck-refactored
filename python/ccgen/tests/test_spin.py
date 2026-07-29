@@ -1494,5 +1494,532 @@ class S32EnergyTests(unittest.TestCase):
                         f"adapted RCC energy {E} != PySCF e_corr {cc.e_corr}")
 
 
+def _uccsdt_t3_blocks(atom="N 0 0 0; N 0 0 1.3", basis="sto-3g"):
+    """S4a.0b oracle: converged UCCSDT `t3` spin blocks on a closed-shell
+    RHF->UHF-converted reference. Returns (aaa, aab, bba, bbb, nocc, nvir, cc).
+
+    The RHF->UHF convert is load-bearing: a fresh scf.UHF(N2) at 1.3 A relaxes to
+    a symmetry-broken solution (aaa != bbb), so we lift the RHF orbitals instead
+    (aaa == bbb to ~1e-18). Blocks (from tamps_tri2full_uhf): aaa/bbb are
+    [i,j,k,a,b,c] and genuinely antisym; aab/bba are [i,j,a,b,k,c] (block layout
+    from the pyscf.cc.uccsdt docstring: block[2] is bba = 2-beta-1-alpha, NOT
+    abb), antisym in the occ-pair (0,1) and vir-pair (2,3) separately."""
+    from pyscf.cc import uccsdt
+    mol = gto.M(atom=atom, basis=basis, spin=0, verbose=0)
+    mol.cart = True
+    mf = scf.addons.convert_to_uhf(scf.RHF(mol).run())
+    cc = uccsdt.UCCSDT(mf)
+    cc.conv_tol = 1e-10
+    cc.kernel()
+    aaa, aab, bba, bbb = uccsdt.tamps_tri2full_uhf(cc, cc.t3)
+    nocc = int(cc.nocc[0])
+    nvir = aaa.shape[3]
+    return aaa, aab, bba, bbb, nocc, nvir, cc
+
+
+def _t3so_canonical_read(a, b, c, i, j, k, blocks):
+    """map.1: the closed-form spin-orbital t3so[a,b,c,i,j,k] read for a CANONICAL
+    entry -- one where each ccgen line (vir slot k / occ slot k: (a,i),(b,j),(c,k))
+    is spin-conserving. Returns the UCCSDT block value at the entry's spatial
+    indices. Canonical means the entry is already in the block's stored slot order
+    for its spin pattern; the full line-swap antisymmetry that reorders lines is
+    map.2. Returns None for a non-spin-conserving line (0 by construction) and
+    "MIXED-ORDER" for a spin pattern needing a line reorder (deferred to map.2)."""
+    aaa, aab, bba, bbb = blocks
+    sa, sb, sc = a % 2, b % 2, c % 2
+    si, sj, sk = i % 2, j % 2, k % 2
+    if not (sa == si and sb == sj and sc == sk):
+        return None
+    A, B, C = a // 2, b // 2, c // 2
+    I, J, K = i // 2, j // 2, k // 2
+    sp = (sa, sb, sc)
+    if sp == (0, 0, 0):
+        return aaa[I, J, K, A, B, C]
+    if sp == (1, 1, 1):
+        return bbb[I, J, K, A, B, C]
+    if sp == (0, 0, 1):          # two alpha lines then one beta line
+        return aab[I, J, A, B, K, C]
+    if sp == (1, 1, 0):          # two beta lines then one alpha line
+        return bba[I, J, A, B, K, C]
+    return "MIXED-ORDER"
+
+
+def _line_parity(order):
+    """Sign of the permutation `order` (order[k] = source slot placed at k)."""
+    seen = [False] * len(order)
+    par = 1
+    for start in range(len(order)):
+        if seen[start]:
+            continue
+        j, length = start, 0
+        while not seen[j]:
+            seen[j] = True
+            j = order[j]
+            length += 1
+        if length % 2 == 0:
+            par = -par
+    return par
+
+
+def _read_ascending(virs, occs, spins, blocks):
+    """Read a SPIN-CONSERVING arrangement (line k has spin == spins[k], and spins
+    is ascending) from the correct PySCF UCCSDT block. The one non-face-value case
+    is (0,1,1): PySCF stores that multiset as `bba` in majority-first order
+    (1,1,0), so the ascending (0,1,1) lines are reordered to (1,1,0) with the
+    resulting line-permutation parity."""
+    aaa, aab, bba, bbb = blocks
+    A, B, C = (x // 2 for x in virs)
+    I, J, K = (x // 2 for x in occs)
+    if spins == (0, 0, 0):
+        return aaa[I, J, K, A, B, C]
+    if spins == (1, 1, 1):
+        return bbb[I, J, K, A, B, C]
+    if spins == (0, 0, 1):
+        return aab[I, J, A, B, K, C]
+    if spins == (0, 1, 1):
+        order = [1, 2, 0]                       # (alpha,beta,beta) -> (beta,beta,alpha)
+        v2 = [virs[o] for o in order]
+        o2 = [occs[o] for o in order]
+        A, B, C = (x // 2 for x in v2)
+        I, J, K = (x // 2 for x in o2)
+        return _line_parity(order) * bba[I, J, A, B, K, C]
+    return None
+
+
+def _t3so_read(a, b, c, i, j, k, blocks):
+    """map.2: the general spin-orbital t3so[a,b,c,i,j,k] read, valid for ANY line
+    ordering. The GCC t3 is antisymmetric INDEPENDENTLY within the bra group
+    (virtuals a,b,c) and the ket group (occupieds i,j,k) -- exactly the convention
+    production `spin.py::_antisym_to_allowed` consumes, and the one PySCF's raw
+    `aaa` block satisfies (antisym under a lone occ-swap and a lone vir-swap;
+    SYMMETRIC under a joint line swap). It is NOT antisymmetric under a physical
+    line swap -- that earlier scoping was a misconception (a joint bra+ket swap is
+    (-1)(-1) = +1). So: sort the bra by spin and the ket by spin independently
+    (sign = product of the two parities), landing on a spin-conserving ascending
+    arrangement, then read the correct block."""
+    virs, occs = [a, b, c], [i, j, k]
+    bs = [x % 2 for x in virs]
+    ks = [x % 2 for x in occs]
+    if sorted(bs) != sorted(ks):
+        return 0.0                              # no line can conserve spin
+    bord = sorted(range(3), key=lambda t: bs[t])
+    kord = sorted(range(3), key=lambda t: ks[t])
+    sign = _line_parity(bord) * _line_parity(kord)
+    v2 = [virs[o] for o in bord]
+    o2 = [occs[o] for o in kord]
+    spins = tuple(x % 2 for x in v2)             # ascending, spin-conserving
+    return sign * _read_ascending(v2, o2, spins, blocks)
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S4aMap1CanonicalReadTests(unittest.TestCase):
+    """map.1: pin the canonical spin-orbital t3so read against PySCF's UCCSDT
+    stored blocks. On CANONICAL entries (each line spin-conserving, in the block's
+    stored slot order) t3so == block for every spin pattern. This inherits the
+    single occ-pair / vir-pair antisymmetry from the blocks; the physical
+    line-swap antisymmetry that reorders lines is map.2."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.aaa, cls.aab, cls.bba, cls.bbb, cls.nocc, cls.nvir, cls.cc = \
+            _uccsdt_t3_blocks()
+        cls.blocks = (cls.aaa, cls.aab, cls.bba, cls.bbb)
+
+    def _sweep(self, spins, block, layout):
+        """spins = per-line (vir/occ) spins; layout maps (I,J,K,A,B,C)->block idx."""
+        import numpy as np
+        no, nv = self.nocc, self.nvir
+        maxerr = 0.0
+        for I in range(no):
+            for J in range(no):
+                for K in range(no):
+                    for A in range(nv):
+                        for B in range(nv):
+                            for C in range(nv):
+                                a = 2 * A + spins[0]
+                                b = 2 * B + spins[1]
+                                c = 2 * C + spins[2]
+                                i = 2 * I + spins[0]
+                                j = 2 * J + spins[1]
+                                k = 2 * K + spins[2]
+                                got = _t3so_canonical_read(a, b, c, i, j, k,
+                                                           self.blocks)
+                                ref = block[layout(I, J, K, A, B, C)]
+                                maxerr = max(maxerr, abs(got - ref))
+        return maxerr
+
+    def test_aaa_canonical(self):
+        err = self._sweep((0, 0, 0), self.aaa,
+                          lambda I, J, K, A, B, C: (I, J, K, A, B, C))
+        self.assertLess(err, 1e-14, f"aaa canonical read off {err}")
+
+    def test_bbb_canonical(self):
+        err = self._sweep((1, 1, 1), self.bbb,
+                          lambda I, J, K, A, B, C: (I, J, K, A, B, C))
+        self.assertLess(err, 1e-14, f"bbb canonical read off {err}")
+
+    def test_aab_canonical(self):
+        # aab layout [i,j,a,b,k,c]: two alpha lines (I,A),(J,B) then beta (K,C)
+        err = self._sweep((0, 0, 1), self.aab,
+                          lambda I, J, K, A, B, C: (I, J, A, B, K, C))
+        self.assertLess(err, 1e-14, f"aab canonical read off {err}")
+
+    def test_bba_canonical(self):
+        # bba layout [i,j,a,b,k,c]: two beta lines then one alpha line
+        err = self._sweep((1, 1, 0), self.bba,
+                          lambda I, J, K, A, B, C: (I, J, A, B, K, C))
+        self.assertLess(err, 1e-14, f"bba canonical read off {err}")
+
+    def test_closed_shell_fixture(self):
+        # the RHF->UHF convert must give a genuinely closed-shell t3 (aaa == bbb)
+        import numpy as np
+        self.assertLess(np.max(np.abs(self.aaa - self.bbb)), 1e-12,
+                        "fixture not closed-shell (aaa != bbb)")
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S4aMap2GeneralReadTests(unittest.TestCase):
+    """map.2: the general spin-orbital t3so read (any line order) is the correct
+    GCC-antisymmetric t3.
+
+    FINDING (reshapes the doc's map.2 gate): the invariant is INDEPENDENT bra/ket
+    antisymmetry -- antisym under any permutation of the virtuals (a,b,c) and,
+    separately, any permutation of the occupieds (i,j,k) -- exactly what
+    production `_antisym_to_allowed` consumes. The doc scoped map.2 as "the three
+    physical LINE-swaps all ~1e-12", but a valid t3 is SYMMETRIC under a joint
+    line swap (a joint bra+ket transposition is (-1)(-1)=+1). PySCF's raw `aaa`
+    block confirms this directly (test_ground_truth_block_symmetry). So the
+    line-swap gate was a misconception; the real gate is bra/ket antisymmetry.
+    map.2's read also reproduces map.1's canonical block reads exactly."""
+
+    @classmethod
+    def setUpClass(cls):
+        import numpy as np
+        cls.aaa, cls.aab, cls.bba, cls.bbb, cls.nocc, cls.nvir, cls.cc = \
+            _uccsdt_t3_blocks()
+        cls.blocks = (cls.aaa, cls.aab, cls.bba, cls.bbb)
+        no, nv = 2 * cls.nocc, 2 * cls.nvir
+        t3 = np.zeros((nv, nv, nv, no, no, no))
+        for a in range(nv):
+            for b in range(nv):
+                for c in range(nv):
+                    for i in range(no):
+                        for j in range(no):
+                            for k in range(no):
+                                t3[a, b, c, i, j, k] = _t3so_read(
+                                    a, b, c, i, j, k, cls.blocks)
+        cls.t3so = t3
+
+    def test_ground_truth_block_symmetry(self):
+        # The raw antisym block is symmetric under a JOINT line swap and antisym
+        # under lone occ / lone vir swaps -- this is WHY the line-swap gate is
+        # wrong and the bra/ket gate is right.
+        import numpy as np
+        aaa = self.aaa                                    # [i,j,k,a,b,c]
+        self.assertLess(np.abs(aaa - aaa.transpose(1, 0, 2, 4, 3, 5)).max(),
+                        1e-12, "aaa NOT symmetric under joint line swap")
+        self.assertLess(np.abs(aaa + aaa.transpose(1, 0, 2, 3, 4, 5)).max(),
+                        1e-12, "aaa NOT antisym under lone occ swap")
+        self.assertLess(np.abs(aaa + aaa.transpose(0, 1, 2, 4, 3, 5)).max(),
+                        1e-12, "aaa NOT antisym under lone vir swap")
+
+    def test_bra_ket_independent_antisymmetry(self):
+        import numpy as np
+        t = self.t3so
+        for name, tr in [("vir a<->b", (1, 0, 2, 3, 4, 5)),
+                         ("vir b<->c", (0, 2, 1, 3, 4, 5)),
+                         ("occ i<->j", (0, 1, 2, 4, 3, 5)),
+                         ("occ j<->k", (0, 1, 2, 3, 5, 4))]:
+            err = np.abs(t + t.transpose(tr)).max()
+            self.assertLess(err, 1e-11, f"t3so not antisym under {name}: {err}")
+
+    def test_symmetric_under_joint_line_swap(self):
+        # the property the misconceived line-swap gate demanded be ANTISYM; it is
+        # SYMMETRIC. Pinned so the finding does not silently regress.
+        import numpy as np
+        t = self.t3so
+        err = np.abs(t - t.transpose(1, 0, 2, 4, 3, 5)).max()
+        self.assertLess(err, 1e-11, f"joint line swap not symmetric: {err}")
+
+    def test_matches_canonical_read(self):
+        # map.2 (general) reproduces map.1 (canonical block reads) where map.1 is
+        # defined -- the aaa and aab canonical slots.
+        import numpy as np
+        no, nv = self.nocc, self.nvir
+        wa = wb = 0.0
+        for I in range(no):
+            for J in range(no):
+                for K in range(no):
+                    for A in range(nv):
+                        for B in range(nv):
+                            for C in range(nv):
+                                wa = max(wa, abs(
+                                    self.t3so[2*A, 2*B, 2*C, 2*I, 2*J, 2*K]
+                                    - self.aaa[I, J, K, A, B, C]))
+        for I in range(no):
+            for J in range(no):
+                for A in range(nv):
+                    for B in range(nv):
+                        for K in range(no):
+                            for C in range(nv):
+                                wb = max(wb, abs(
+                                    self.t3so[2*A, 2*B, 2*C+1, 2*I, 2*J, 2*K+1]
+                                    - self.aab[I, J, A, B, K, C]))
+        self.assertLess(wa, 1e-14, f"aaa canonical mismatch {wa}")
+        self.assertLess(wb, 1e-14, f"aab canonical mismatch {wb}")
+
+
+def _uccsdt_so_tensors(atom="N 0 0 0; N 0 0 1.3", basis="sto-3g"):
+    """map.3: build the spin-orbital CC tensors (t1, t2, t3, v, f) from a converged
+    UCCSDT closed-shell reference, in the residual_eval layout (amplitudes
+    vir-first: t1 [a,i], t2 [a,b,i,j], t3 [a,b,c,i,j,k]; v = <pq||rs>; f diagonal).
+
+    The load-bearing layout fact (this note's whole point): UCCSDT stores t2ab as
+    **[i,a,j,b]** (nocca,nvira,noccb,nvirb) -- unlike rccsd's AND pyscf.cc.uccsd's
+    [i,j,a,b]. The mixed-spin so_t2 fill must index it as [i,a,j,b]; t2aa/t2bb are
+    [i,j,a,b]. t3 comes from the map.2 read (`_t3so_read`).
+
+    Returns (tensors, no, nv, cc)."""
+    import numpy as np
+    from pyscf import ao2mo
+    from pyscf.cc import uccsdt
+    mol = gto.M(atom=atom, basis=basis, spin=0, verbose=0)
+    mol.cart = True
+    rhf = scf.RHF(mol).run()
+    mf = scf.addons.convert_to_uhf(rhf)
+    cc = uccsdt.UCCSDT(mf)
+    cc.conv_tol = 1e-12
+    cc.max_cycle = 200
+    cc.kernel()
+    nocc = int(cc.nocc[0])
+    nmo = rhf.mo_coeff.shape[1]
+    nvir = nmo - nocc
+    no, nv, n = 2 * nocc, 2 * nvir, 2 * nmo
+
+    def csp(p):
+        return (p // 2) if p < no else nocc + ((p - no) // 2)
+
+    def cspin(p):
+        return (p % 2) if p < no else ((p - no) % 2)
+
+    eri = ao2mo.kernel(mol, rhf.mo_coeff, aosym="s1").reshape(nmo, nmo, nmo, nmo)
+    g = eri.transpose(0, 2, 1, 3)                       # physicist <pq|rs>
+    v = np.zeros((n, n, n, n))
+    for p in range(n):
+        for q in range(n):
+            for r in range(n):
+                for s in range(n):
+                    c = (g[csp(p), csp(q), csp(r), csp(s)]
+                         if cspin(p) == cspin(r) and cspin(q) == cspin(s) else 0)
+                    e = (g[csp(p), csp(q), csp(s), csp(r)]
+                         if cspin(p) == cspin(s) and cspin(q) == cspin(r) else 0)
+                    v[p, q, r, s] = c - e
+    f = np.zeros((n, n))
+    for p in range(n):
+        f[p, p] = rhf.mo_energy[csp(p)]
+
+    t1a = cc.t1[0]                                      # [i,a]
+    t1 = np.zeros((nv, no))
+    for a in range(nv):
+        for i in range(no):
+            if a % 2 == i % 2:
+                t1[a, i] = t1a[i // 2, a // 2]
+
+    t2aa, t2ab, t2bb = cc.t2                            # aa/bb [i,j,a,b]; ab [i,a,j,b]
+    t2 = np.zeros((nv, nv, no, no))
+    for a in range(nv):
+        for b in range(nv):
+            for i in range(no):
+                for j in range(no):
+                    sa, sb, si, sj = a % 2, b % 2, i % 2, j % 2
+                    A, B, I, J = a // 2, b // 2, i // 2, j // 2
+                    if sa == si and sb == sj:          # direct: line0=(a,i), line1=(b,j)
+                        if sa == sb == 0:
+                            t2[a, b, i, j] = t2aa[I, J, A, B]
+                        elif sa == sb == 1:
+                            t2[a, b, i, j] = t2bb[I, J, A, B]
+                        elif sa == 0:                  # abab -- t2ab is [i,a,j,b]
+                            t2[a, b, i, j] = t2ab[I, A, J, B]
+                        else:                          # baba
+                            t2[a, b, i, j] = t2ab[J, B, I, A]
+                    elif sa == sj and sb == si:        # exchange fill (abba / baab)
+                        if sa == 0:
+                            t2[a, b, i, j] = -t2ab[J, A, I, B]
+                        else:
+                            t2[a, b, i, j] = -t2ab[I, B, J, A]
+
+    aaa, aab, bba, bbb = uccsdt.tamps_tri2full_uhf(cc, cc.t3)
+    blocks = (aaa, aab, bba, bbb)
+    t3 = np.zeros((nv, nv, nv, no, no, no))
+    for a in range(nv):
+        for b in range(nv):
+            for c in range(nv):
+                for i in range(no):
+                    for j in range(no):
+                        for k in range(no):
+                            t3[a, b, c, i, j, k] = _t3so_read(a, b, c, i, j, k,
+                                                              blocks)
+    return {"t1": t1, "t2": t2, "t3": t3, "v": v, "f": f}, no, nv, cc
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S4aMap3T2LayoutTests(unittest.TestCase):
+    """map.3: fix the fixture's t2ab layout ([i,a,j,b], NOT [i,j,a,b]).
+
+    Proven correct (this is what map.3 delivers): the assembled spin-orbital t2 is
+    bit-identical to the validated so_t2 fill (`_real_antisym_tensors`) rebuilt
+    from the transposed t2ab, and the GCC energy at these amps hits PySCF's
+    e_corr. The full doubles/triples residual < 1e-7 gate is NOT here -- with every
+    base tensor proven and t3 round-tripping to its blocks exactly, the residual
+    isolates a remaining t3 contraction-convention question, which is S4a.0c's job
+    (this note explicitly separates the layout fix from the residual gate)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tn, cls.no, cls.nv, cls.cc = _uccsdt_so_tensors()
+
+    def test_t2_matches_so_t2_reference(self):
+        # Rebuild t2 via the proven so_t2 fill from the [i,j,a,b]-transposed t2ab
+        # and require bit-identity -- pins the [i,a,j,b] indexing.
+        import numpy as np
+        _, t2ab, _ = self.cc.t2
+        T = t2ab.transpose(0, 2, 1, 3)                  # [i,a,j,b] -> [i,j,a,b]
+        no, nv = self.no, self.nv
+
+        def so(sa, sb, si, sj, A, B, I, J):
+            if sa == si and sb == sj and not (sa == sj and sb == si):
+                return T[I, J, A, B]
+            if sa == sj and sb == si and not (sa == si and sb == sj):
+                return -T[I, J, B, A]
+            if sa == sb == si == sj:
+                return T[I, J, A, B] - T[I, J, B, A]
+            return 0.0
+
+        ref = np.zeros((nv, nv, no, no))
+        for a in range(nv):
+            for b in range(nv):
+                for i in range(no):
+                    for j in range(no):
+                        ref[a, b, i, j] = so(a % 2, b % 2, i % 2, j % 2,
+                                              a // 2, b // 2, i // 2, j // 2)
+        self.assertLess(np.max(np.abs(self.tn["t2"] - ref)), 1e-12,
+                        "t2 fill disagrees with so_t2 reference (t2ab layout bug)")
+
+    def test_t2_antisymmetric(self):
+        import numpy as np
+        t2 = self.tn["t2"]
+        self.assertLess(np.abs(t2 + t2.transpose(1, 0, 2, 3)).max(), 1e-12)
+        self.assertLess(np.abs(t2 + t2.transpose(0, 1, 3, 2)).max(), 1e-12)
+
+    def test_gcc_energy_at_amps(self):
+        # Fully-contracted scalar -> convention-robust; breaks on any t1/t2/v/f bug.
+        from ccgen.generate import generate_cc_equations
+        from ccgen.tests.residual_eval import residual_einsum
+        eqs = generate_cc_equations("ccsd")
+        E = sum(float(residual_einsum(t, self.no, self.nv, tensors=self.tn))
+                for t in eqs["energy"])
+        self.assertLess(abs(E - self.cc.e_corr), 1e-8,
+                        f"GCC energy {E} != UCCSDT e_corr {self.cc.e_corr}")
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S4a0cTriplesResidualTests(unittest.TestCase):
+    """S4a.0c: the numeric gate the S4 structural gate defers. With the correct
+    spin-orbital t3 (map.2 read) and the full UCCSDT fixture (map.3), ccgen's GCC
+    CCSDT residual VANISHES at PySCF's converged UCCSDT amplitudes on the
+    strong-correlation N2/STO-3G fixture (|t3| ~ 0.03, ~20x LiH -- large enough to
+    expose any t3 error, unlike the LiH the earlier scoping showed was too weak).
+
+    This is the oracle S4a.0a identified: the residual vanishing at the converged
+    UCCSDT amps (a self-consistent full t1/t2/t3 set), NOT an RCCSDT t3full
+    inversion. It validates BOTH generation engines (wick and diagram) and pins
+    the whole map.1->map.3 t3 assembly end-to-end: singles/doubles/triples all
+    < 1e-7 and the energy == e_corr."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tn, cls.no, cls.nv, cls.cc = _uccsdt_so_tensors()
+
+    def _residuals(self, engine):
+        import numpy as np
+        from ccgen.generate import generate_cc_equations
+        from ccgen.tests.residual_eval import residual_einsum
+        eqs = generate_cc_equations("ccsdt", engine=engine)
+        out = {}
+        for name in ("singles", "doubles", "triples"):
+            R = None
+            for term in eqs[name]:
+                r = residual_einsum(term, self.no, self.nv, tensors=self.tn)
+                R = r if R is None else R + r
+            out[name] = np.abs(R).max()
+        out["energy"] = abs(
+            sum(float(residual_einsum(t, self.no, self.nv, tensors=self.tn))
+                for t in eqs["energy"]) - self.cc.e_corr)
+        return out
+
+    def test_wick_engine_residual_vanishes(self):
+        r = self._residuals("wick")
+        for name in ("singles", "doubles", "triples", "energy"):
+            self.assertLess(r[name], 1e-7,
+                            f"wick {name} residual {r[name]} not ~0 at UCCSDT amps")
+
+    def test_diagram_engine_residual_vanishes(self):
+        r = self._residuals("diagram")
+        for name in ("singles", "doubles", "triples", "energy"):
+            self.assertLess(r[name], 1e-7,
+                            f"diagram {name} residual {r[name]} not ~0 at UCCSDT amps")
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S4a1Rank6IdentityTests(unittest.TestCase):
+    """S4a.1: the rank-6 S1' identity -- the numeric proof the S4 STRUCTURAL gate
+    defers. Production `spin.py::ucc_integrate_term_antisym` (which drives the
+    general rank-2n `_antisym_to_allowed`) reproduces the GCC TRIPLES residual on
+    the real closed-shell antisymmetric integrals, sliced to a canonical external
+    block. This is the rank-6 analog of `S1AntisymIntegrationTests` (rank-4),
+    exercising the production path -- not the fixture -- at rank 6.
+
+    It is a per-term ALGEBRAIC identity (holds for any amplitudes), so the UCCSDT
+    fixture's t3 is used only as a convenient real antisym tensor set; the gate is
+    `sum(integrate_antisym) == GCC-slice`, not residual-vanishing (that is S4a.0c).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tn, cls.no, cls.nv, cls.cc = _uccsdt_so_tensors()
+
+    def _check_external(self, ext, vir_pat, occ_pat):
+        import numpy as np
+        from ccgen.spin import ucc_integrate_term_antisym
+        from ccgen.tests.residual_eval import residual_einsum
+        tn, no, nv = self.tn, self.no, self.nv
+        n = no + nv
+        eqs = generate_cc_equations("ccsdt")
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn) for t in eqs["triples"])
+        # R layout is [a,b,c,i,j,k]; slice each axis to its spin (a=even, b=odd)
+        vsl = {"a": list(range(0, nv, 2)), "b": list(range(1, nv, 2))}
+        osl = {"a": list(range(0, no, 2)), "b": list(range(1, no, 2))}
+        Rb = Rg[np.ix_(vsl[vir_pat[0]], vsl[vir_pat[1]], vsl[vir_pat[2]],
+                       osl[occ_pat[0]], osl[occ_pat[1]], osl[occ_pat[2]])]
+        acc = np.zeros_like(Rb)
+        for t in eqs["triples"]:
+            for st in ucc_integrate_term_antisym(t, ext):
+                acc += _eval_spinterm(st, tn, no, n,
+                                      ["a", "b", "c", "i", "j", "k"])
+        self.assertLess(np.max(np.abs(acc - Rb)), 1e-10,
+                        f"triples antisym != GCC slice for external {ext}")
+
+    def test_aaa_external(self):
+        self._check_external(
+            {"a": "a", "b": "a", "c": "a", "i": "a", "j": "a", "k": "a"},
+            "aaa", "aaa")
+
+    def test_aab_external(self):
+        # two alpha lines (a,i),(b,j); one beta line (c,k)
+        self._check_external(
+            {"a": "a", "b": "a", "c": "b", "i": "a", "j": "a", "k": "b"},
+            "aab", "aab")
+
+
 if __name__ == "__main__":
     unittest.main()

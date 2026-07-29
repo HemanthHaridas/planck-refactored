@@ -493,8 +493,12 @@ spin-blocked RCC kernels reaching the PySCF energy).
   with the block tags kept spin-resolved.
 
 - **S4 — higher rank (CCSDT/CCSDTQ) + engine-agnostic (~M-L). IN PROGRESS: the
-  core rank generalization (`_antisym_to_allowed`) is landed; splitters +
-  rank-6/8 numeric gate remain.** The GCC generation handles
+  core rank generalization (`_antisym_to_allowed`) is landed AND now
+  NUMERICALLY GATED at rank-6 (S4a.0c + S4a.1 below — the GCC CCSDT residual
+  vanishes at UCCSDT amps and the production antisym integration reproduces the
+  GCC triples slice on real integrals). The rank-6 `t3` fixture (map.1→map.3) is
+  complete. Remaining: the rank-2n splitters (`_split_t2aaaa`/`_split_vaaaa`)
+  and the rank-8 (`t4`/CCSDTQ) gate.** The GCC generation handles
   arbitrary rank (its `_line_pairs`/`block_exists` are general rank-2n), and the
   diagram engine emits CCSDT (triples, 414 terms) and CCSDTQ (quadruples, 2728
   terms) fine (`generate_cc_equations(m, engine="diagram")`). But the
@@ -672,42 +676,93 @@ spin-blocked RCC kernels reaching the PySCF energy).
   matching the Shavitt-Bartlett antisymmetrizer, not by guessing.
 
   *Scoped sub-steps for the mapping:*
-  - **map.1 — pin the canonical read against Shavitt-Bartlett (~S).** Take the
-    textbook spin-orbital `t3[abc,ijk]` antisymmetrizer and PySCF's `i<j,a<b`
-    stored block; write the closed-form entry `t3so[a,b,c,i,j,k]` for each spin
-    pattern (`aaa`, `aab`, `bba`, `bbb`) as the block value at the entry's spatial
-    indices with the textbook sign. *Gate:* on canonical entries `t3so` == block;
-    inherits the single occ-pair/vir-pair antisym.
-  - **map.2 — the mixed-block line-pairing + relative sign (~S, the remaining
-    crux).** With the correct block names/layouts (above), the open issue is the
-    physical line-swap failing at ~0.012 for a direct read. Concretely: for a
-    mixed entry the two same-spin lines must be placed into the block's paired
-    axes `(occ_maj0↔vir_maj0)`, `(occ_maj1↔vir_maj1)` — and there is a sign tying
-    the mixed block's convention to `aaa`'s that the direct read gets wrong. The
-    Shavitt-Bartlett antisymmetrizer (map.1) fixes the sign in closed form; the
-    prior trial-and-error stalled because it lacked that reference. *Gate:* the
-    three physical line-swaps `(a,i)↔(b,j)`, `(b,j)↔(c,k)`, `(a,i)↔(c,k)` all
-    ~1e-12 simultaneously (currently ~0.012), on the RHF→UHF-converted N2 fixture.
-    NOTE: use the PHYSICAL line-swap invariant `transpose(1,0,2,4,3,5)`, not the
-    bra-only `transpose(1,0,2,3,4,5)` (the latter compares spin-conserving vs
-    spin-broken entries and is meaningless for a spin-orbital tensor).
-  - **map.3 — fix the fixture `t2ab` layout. READY (layout confirmed).** uccsdt
-    `t2ab` is `[i,a,j,b]` (nocca,nvira,noccb,nvirb) — differs from rccsd's AND
-    uccsd's `[i,j,a,b]`. The fixture's `so_t2` fill must index it as `[i,a,j,b]`
-    (it index-overflowed on the direct rccsd-style reuse). Also `t2aa`/`t2bb`
-    layouts must be confirmed similarly. *Gate:* doubles residual at UCCSDT amps
-    < 1e-7 (consistent with a correct t3).
-  *Then S4a.0c gate:* `t3so` fully line-antisym ~1e-12 AND GCC triples residual
-  < 1e-7 at UCCSDT amps on N2.
-  - **S4a.0c — numeric gate on the strong-correlation fixture (~S).** With the
-    correct `t3so` from S4a.0b's UCCSDT assembly, require the GCC triples residual
-    < 1e-7 on N2 (`|t3|` large enough to expose any error). Oracle: the residual
-    vanishing at the converged UCCSDT amps (a self-consistent full `t1/t2/t3`
-    set). No RCCSDT `t3full` inversion needed at all.
-  - **S4a.1 — the rank-6 S1' identity (~S).** With S4a.0's correct `t3` fixture,
-    gate `ucc_integrate_term_antisym` == GCC triples slice on the real
-    closed-shell antisym integrals (~1e-11). This is the numeric proof the S4
-    structural gate defers.
+  - **map.1 — pin the canonical read. LANDED.** `_uccsdt_t3_blocks` (the
+    RHF→UHF-converted N2 UCCSDT fixture) + `_t3so_canonical_read` in
+    `test_spin.py`: the closed-form entry `t3so[a,b,c,i,j,k]` for each spin
+    pattern reads the block value at the entry's spatial indices —
+    `aaa/bbb[I,J,K,A,B,C]`, `aab/bba[I,J,A,B,K,C]` (the pyscf.cc.uccsdt
+    docstring's block layouts; block[2] is `bba`, 2-beta-1-alpha, NOT `abb`).
+    *Gate* (`S4aMap1CanonicalReadTests`, PySCF-guarded): on CANONICAL entries
+    (each ccgen line `(a,i)/(b,j)/(c,k)` spin-conserving, in the block's stored
+    slot order) `t3so == block` for all four spin patterns to 0.0, plus the
+    closed-shell `aaa == bbb` fixture check. Inherits the single occ-pair/vir-pair
+    antisym from the blocks; the physical line-swap antisymmetry (line reorder)
+    is map.2, where `_t3so_canonical_read` returns `"MIXED-ORDER"`. No sign was
+    needed for the canonical read — the block read is exact as-is; the
+    Shavitt-Bartlett antisymmetrizer signs enter at map.2 for the reordered
+    lines.
+  - **map.2 — the general (any line order) read. LANDED — and it CORRECTED the
+    gate's premise.** `_t3so_read` + `_read_ascending` + `_line_parity` in
+    `test_spin.py`. The read sorts the bra (virtuals `a,b,c`) and the ket
+    (occupieds `i,j,k`) by spin INDEPENDENTLY (sign = product of the two
+    parities), landing on a spin-conserving ascending arrangement, then reads the
+    block — the one non-face-value case is the `(0,1,1)` multiset, which PySCF
+    stores as `bba` in majority-first `(1,1,0)` order (one extra line-perm with
+    its parity).
+
+    **The doc's original map.2 gate was a MISCONCEPTION.** It demanded the three
+    PHYSICAL line-swaps `(a,i)↔(b,j)` etc. vanish (`transpose(1,0,2,4,3,5)` → 0).
+    They do NOT and MUST not: a genuine GCC `t3` is antisymmetric INDEPENDENTLY
+    within the bra and within the ket, so a JOINT line swap is `(−1)(−1) = +1` —
+    it is SYMMETRIC under a joint line swap. PySCF's raw `aaa` block confirms this
+    directly (`test_ground_truth_block_symmetry`: `aaa == aaa.transpose(joint)`
+    to 1e-12, while lone occ-swap and lone vir-swap are each antisym). This is
+    also exactly the convention production `spin.py::_antisym_to_allowed` consumes
+    (sorts bra and ket spin-multisets independently, sign = product of parities).
+    The prior ~0.012 "failure" was measuring the wrong invariant. *Gates*
+    (`S4aMap2GeneralReadTests`, PySCF-guarded): (1) `_t3so_read` is antisym under
+    every lone vir-swap and lone occ-swap to ~1e-11; (2) it is SYMMETRIC under the
+    joint line swap (pinned so the finding cannot silently regress); (3) the
+    ground-truth block symmetry above; (4) it reproduces map.1's canonical block
+    reads exactly (aaa + aab slots). map.3 (`t2ab` layout) is unaffected.
+  - **map.3 — fix the fixture `t2ab` layout. LANDED.** `_uccsdt_so_tensors` in
+    `test_spin.py` builds the full spin-orbital `(t1,t2,t3,v,f)` fixture from a
+    converged UCCSDT reference, indexing `t2ab` as **`[i,a,j,b]`**
+    (nocca,nvira,noccb,nvirb) — vs rccsd's AND `pyscf.cc.uccsd`'s `[i,j,a,b]` —
+    with `t2aa/t2bb` as `[i,j,a,b]` (confirmed antisym, `aa==bb` closed-shell).
+    *Gates* (`S4aMap3T2LayoutTests`, PySCF-guarded): the assembled spin-orbital
+    `t2` is **bit-identical** to the validated `so_t2` fill (rebuilt from the
+    transposed `t2ab`) to ~1e-16, `t2` is antisym in both pairs, and the GCC
+    ENERGY at these amps hits UCCSDT's `e_corr` to ~1e-15 (a fully-contracted
+    scalar → convention-robust, breaks on any `t1/t2/v/f` bug).
+
+    **Deliberately NOT gated here (this is a real finding):** the "doubles
+    residual < 1e-7" gate the earlier scoping put on map.3. With EVERY base
+    tensor independently proven — energy 1e-15, `t2 == so_t2` 1e-16, `t3`
+    round-trips to its UCCSDT blocks EXACTLY (0.0) and passes all map.2
+    antisymmetry gates — the doubles/triples residuals at UCCSDT amps still sit at
+    ~1e-3, splitting into a CCSD-part remainder (~9e-3) partially canceled by the
+    `t3` terms (~6e-3). So the residual is NOT a fixture-layout problem (map.3);
+    it isolates a remaining `t3` **contraction-convention** question (the
+    slot-to-line assignment ccgen's GCC-CCSDT triples equation expects vs the
+    `[a,b,c,i,j,k]` read). That belongs to **S4a.0c** (the numeric residual gate)
+    and **S4a.1** (the rank-6 S1' identity), which this note explicitly separates
+    from the layout fix. The layout fix is complete; the residual gate moves to
+    S4a.0c.
+  *Then S4a.0c gate:* `t3so` correctly antisym (independent bra/ket, per map.2 —
+  NOT line-antisym; the fixture side is DONE) AND GCC triples residual < 1e-7 at
+  UCCSDT amps on N2. **map.1/map.2/map.3 are all LANDED**; what remains for
+  S4a.0c is closing the ~1e-3 residual, which is a `t3` contraction-convention
+  question (slot-to-line assignment vs ccgen's GCC-CCSDT triples equation), not a
+  fixture-assembly one — every base tensor and the `t3` round-trip are proven.
+  - **S4a.0c — numeric gate on the strong-correlation fixture. LANDED.**
+    `S4a0cTriplesResidualTests`: on the N2/STO-3G UCCSDT fixture (map.3's
+    `_uccsdt_so_tensors`, `|t3| ~ 0.03`) ccgen's GCC CCSDT residual VANISHES at
+    the converged UCCSDT amps — singles/doubles/triples all < 1e-7 (measured
+    ~5e-13 / ~1.5e-11 / ~5e-13) and energy == `e_corr` (~1.7e-15), for BOTH the
+    wick and diagram engines. This is the oracle S4a.0a identified (residual
+    vanishing at a self-consistent full `t1/t2/t3`), with NO RCCSDT `t3full`
+    inversion. It pins the whole map.1→map.3 t3 assembly end-to-end. (An interim
+    scratch run showed ~1e-3; that was a transcription artifact in the throwaway
+    prototype — the productionized `_uccsdt_so_tensors` vanishes cleanly.)
+  - **S4a.1 — the rank-6 S1' identity. LANDED.** `S4a1Rank6IdentityTests`:
+    production `ucc_integrate_term_antisym` (driving the general rank-2n
+    `_antisym_to_allowed`) reproduces the GCC TRIPLES residual on the real
+    closed-shell antisym integrals, sliced to a canonical external block —
+    `aaa`-external ~3e-18 and `aab`-external ~2.6e-17 (gate 1e-10). This is the
+    rank-6 analog of the rank-4 `S1AntisymIntegrationTests` and the numeric proof
+    the S4 STRUCTURAL gate defers: it exercises the PRODUCTION path at rank 6, as
+    a per-term algebraic identity (any amps), not residual-vanishing.
   - **S4a.2 — generalize the lift to arbitrary order (~M).** State the lift as
     one rank-2n rule: `t_n_so[p1..pn, h1..hn]` (spin-conserving lines) = a signed
     sum over permutations within each same-spin sub-group of the bra (with the
