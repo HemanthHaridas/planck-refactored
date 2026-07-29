@@ -492,8 +492,9 @@ spin-blocked RCC kernels reaching the PySCF energy).
   production target and the harder coefficient case; UCC reuses the same bridge
   with the block tags kept spin-resolved.
 
-- **S4 — higher rank (CCSDT/CCSDTQ) + engine-agnostic (~M-L). SCOPED; the layer
-  is currently RANK-LIMITED to ≤ 4 — confirmed.** The GCC generation handles
+- **S4 — higher rank (CCSDT/CCSDTQ) + engine-agnostic (~M-L). IN PROGRESS: the
+  core rank generalization (`_antisym_to_allowed`) is landed; splitters +
+  rank-6/8 numeric gate remain.** The GCC generation handles
   arbitrary rank (its `_line_pairs`/`block_exists` are general rank-2n), and the
   diagram engine emits CCSDT (triples, 414 terms) and CCSDTQ (quadruples, 2728
   terms) fine (`generate_cc_equations(m, engine="diagram")`). But the
@@ -503,31 +504,46 @@ spin-blocked RCC kernels reaching the PySCF energy).
   140/428, quadruples 1612/2728 have a rank>4 factor; max factor rank 8).
 
   The three rank-4 hardcodings:
-  1. **`_antisym_to_allowed`** only has rank-2 and rank-4 candidate swaps. On a
-     rank-6/8 factor it falls through to the rank-4 `conserves` check and returns
-     `None` ("genuinely zero") for cases that are actually reachable by
-     antisymmetry — silently DROPPING valid terms. This is the load-bearing bug.
-     *Fix (prototyped):* general rank-2n version — a factor is antisym within the
-     bra group (slots `0..n-1`) and ket group (`n..2n-1`); it maps to an allowed
-     (spin-conserving-per-line) block iff `sorted(bra_spins) == sorted(ket_spins)`
-     (multiset match), via a within-group permutation whose parity product is the
-     sign. Prototype runs on rank-6/8. **Caveat:** it picks a DIFFERENT canonical
-     block than the current rank-4 path for 2 patterns (`baba` vs `abab`), so it
-     must NOT replace the validated rank-4 logic — keep rank-4 exactly, add
-     general handling only for rank ≥ 6.
-  2. **`_split_t2aaaa` / `_split_vaaaa`** are hardcoded 4-index. Same-spin
-     higher-rank amplitude blocks (`t3[aaaaaa]` etc.) need their own antisym
-     split, or a general rank-2n splitter.
+  1. **`_antisym_to_allowed` — GENERALIZED (LANDED).** The old version had only
+     rank-2/rank-4 candidate swaps; on a rank-6/8 factor it fell through and
+     returned `None` ("genuinely zero") for cases actually reachable by
+     antisymmetry, silently DROPPING valid terms. Replaced with a general rank-2n
+     version: a factor is antisym within the bra group (slots `0..n-1`) and ket
+     group (`n..2n-1`); it maps to an allowed (spin-conserving-per-line) block iff
+     `sorted(bra_spins) == sorted(ket_spins)` (multiset match), via a within-group
+     permutation whose parity product (`_permutation_parity`) is the sign;
+     `None` only on a genuine multiset mismatch. On rank-4 it picks a different
+     canonical block than the old 4-candidate path for 2 patterns (`abab` vs
+     `baba`) — but those are **provably equivalent** (they differ by a bra-swap +
+     ket-swap, net sign +1, block flips; verified to evaluate identically to 0.0
+     on a random antisym tensor). Confirmed to reproduce GCC at rank-4 both raw
+     and through the full collapse+merge pipeline (~1e-17), so it is a safe
+     **drop-in replacement** — all rank-4 numeric gates stay green. Gated at
+     rank-6 STRUCTURALLY (`S4HigherRankTests`): a rank-6 `t3` factor maps to an
+     allowed block with ±1 (not `None`) on multiset match and `None` only on
+     mismatch, and the CCSDT triples manifold integrates to a nonzero survivor
+     set (the old bug dropped them all). Mutation-verified (re-limiting to
+     rank ≤ 4 fails the gate).
+  2. **`_split_t2aaaa` / `_split_vaaaa`** are still hardcoded 4-index — the
+     same-spin higher-rank amplitude blocks (`t3[aaaaaa]` etc.) need their own
+     antisym split, or a general rank-2n splitter. NOT yet done.
   3. The closed-shell block relations generalize (`t3aa… = t3 mixed − P`) but the
      coefficient collapse for rank ≥ 6 is unverified.
 
-  *Gate:* the S1' identity extended to rank-6/8 — antisym integration of the
-  triples/quadruples manifold == GCC slice on real antisymmetric tensors. Since
-  the identity is algebraic (holds for ANY amplitudes, verified at rank-4), use
-  RANDOM antisym `t3`/`t4` (no PySCF rccsdt oracle needed); a physics gate can
-  later reuse the FCI-limit path (`test_diagram_engine_ccsdt_reaches_fci_limit`).
-  Engine-agnostic is nearly free — the layer already operates on `AlgebraTerm`s;
-  the diagram-engine manifolds feed the same `ucc_integrate_term_antisym`.
+  **Remaining for S4:** (a) the rank-6/8 NUMERIC gate — the S1' identity
+  (`ucc_integrate_term_antisym` == GCC slice) at rank-6/8. This needs a
+  **closed-shell ANTISYMMETRIC `t3`/`t4` fixture** (both properties at once): the
+  antisym re-expression is INVALID on spin-structured tensors whose forbidden
+  blocks are artificially zeroed (a zero forbidden block must NOT be re-expressed
+  to a nonzero allowed one — verified this breaks, 108/126 terms), and raw random
+  antisym tensors aren't closed-shell (α≢β) so the spin-integration identity
+  doesn't hold. Building that fixture is the same class of work as the
+  `_real_antisym_tensors` build but for `t3`/`t4` (no PySCF rccsdt oracle needed
+  since the identity is algebraic — a synthetic closed-shell antisym lift
+  suffices). (b) the rank-2n splitters (#2). (c) the higher-rank collapse
+  coefficient check (#3). Engine-agnostic is already effectively there — the
+  layer operates on `AlgebraTerm`s and the diagram-engine manifolds feed the same
+  `ucc_integrate_term_antisym` unchanged.
 
 ## Honest boundaries
 

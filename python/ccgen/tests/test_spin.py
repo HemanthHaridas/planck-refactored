@@ -524,6 +524,67 @@ class UccFullManifoldTests(unittest.TestCase):
         self._check("ccsd", nosp=3, nvsp=4, seed=1)
 
 
+class S4HigherRankTests(unittest.TestCase):
+    """S4: the general-rank `_antisym_to_allowed` handles rank-6 (`t3`) / rank-8
+    (`t4`) factors, where the old rank-4-only version silently dropped them.
+
+    Structural gate (PySCF-free). The old code returned None ("genuinely zero")
+    for reachable rank-6/8 cases via its rank-4-only candidate list, dropping
+    valid terms; the general multiset+parity version integrates them. This gate
+    pins that behavior: (1) `_antisym_to_allowed` maps a rank-6 t3 factor to an
+    allowed block with a ±1 sign (not None) whenever the bra/ket spin multisets
+    match, and returns None only when they genuinely differ; (2) the CCSDT
+    triples manifold (diagram engine) integrates to a nonzero set of survivors.
+
+    The rank-4 exchange mechanism is validated NUMERICALLY end-to-end
+    (S1AntisymIntegrationTests, real integrals) and the general method is proven
+    equivalent to the old rank-4 path there (all rank-4 gates green). A rank-6
+    NUMERIC gate needs a closed-shell ANTISYMMETRIC t3 fixture (both properties at
+    once -- the antisym re-expression is invalid on spin-structured tensors whose
+    forbidden blocks are artificially zeroed); that fixture is future work, noted
+    in the S4 scope.
+    """
+
+    def test_rank6_factor_maps_to_allowed_block(self):
+        from ccgen.spin import _antisym_to_allowed, SpinIndex
+        from ccgen.indices import make_occ, make_vir
+
+        class _F:
+            pass
+
+        base = [make_vir("a"), make_vir("b"), make_vir("c"),
+                make_occ("i"), make_occ("j"), make_occ("k")]
+        f = _F()
+        f.indices = base
+        # bra spins {a,a,b}, ket spins {a,a,b}: multisets match -> allowed, ±1 sign
+        spins = ["a", "a", "b", "a", "b", "a"]  # bra a,a,b ; ket a,b,a
+        label = {b.name: SpinIndex(b, s) for b, s in zip(base, spins)}
+        res = _antisym_to_allowed(f, label)
+        self.assertIsNotNone(res, "reachable rank-6 block wrongly dropped")
+        sign, idx = res
+        self.assertIn(sign, (1, -1))
+        # every line conserves spin after the re-expression
+        rr = len(idx) // 2
+        self.assertTrue(all(idx[m].spin == idx[m + rr].spin for m in range(rr)))
+        # bra/ket multiset MISMATCH -> genuinely None
+        spins2 = ["a", "a", "a", "a", "b", "b"]  # bra a,a,a ; ket a,b,b
+        label2 = {b.name: SpinIndex(b, s) for b, s in zip(base, spins2)}
+        self.assertIsNone(_antisym_to_allowed(f, label2),
+                          "spin-multiset mismatch should be genuinely zero")
+
+    def test_ccsdt_triples_integrate_without_dropping(self):
+        from ccgen.spin import ucc_integrate_term_antisym
+        ext = {"a": "a", "b": "b", "c": "a", "i": "a", "j": "b", "k": "a"}
+        t3terms = [t for t in generate_cc_equations("ccsdt",
+                                                    engine="diagram")["triples"]
+                   if any(f.name == "t3" for f in t.factors)]
+        self.assertTrue(t3terms, "no t3-containing triples terms")
+        total = sum(len(ucc_integrate_term_antisym(t, ext)) for t in t3terms)
+        # the old rank-4 bug returned None for every rank-6 factor -> zero
+        # survivors across all t3 terms; the general version must integrate them.
+        self.assertGreater(total, 0, "t3 terms all dropped (rank>4 bug)")
+
+
 def _closed_shell_tensors(no, nv, seed):
     """A CLOSED-SHELL (alpha == beta) spin-orbital tensor dict for the general
     SpinTerm evaluator, built from a single SPATIAL seed and lifted into the

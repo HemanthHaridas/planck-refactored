@@ -234,32 +234,58 @@ def ucc_integrate_term(term, external_spins: dict):
 # antisymmetric water/STO-3G integrals to ~2e-17 (singles + doubles).
 
 
+def _permutation_parity(order) -> int:
+    """Sign (+1/-1) of the permutation given by ``order`` (a list whose k-th
+    entry is the source position placed at position k)."""
+    seen = [False] * len(order)
+    parity = 1
+    for start in range(len(order)):
+        if seen[start]:
+            continue
+        j = start
+        length = 0
+        while not seen[j]:
+            seen[j] = True
+            j = order[j]
+            length += 1
+        if length % 2 == 0:
+            parity = -parity
+    return parity
+
+
 def _antisym_to_allowed(factor, label):
     """Map a spin-labeled factor to its allowed (spin-conserving-per-line) block
     via antisymmetry, returning ``(sign, indices)`` or ``None`` if genuinely zero.
+    General rank-2n.
 
-    rank-2 (f, t1): one line (slots 0-1); allowed iff the two spins match, else
-    zero (no swap can fix a single line). rank-4 (t2, v): lines 0-2 and 1-3;
-    antisymmetric in the bra pair (0,1) and ket pair (2,3), so try the identity,
-    the bra swap (sign -1), the ket swap (sign -1), and both (sign +1), returning
-    the first that conserves spin on both lines."""
+    A rank-2n amplitude/integral is antisymmetric WITHIN its bra group (slots
+    ``0..n-1``) and WITHIN its ket group (``n..2n-1``); the lines pair slot k with
+    slot k+n. A within-group permutation reorders the spins, each transposition
+    contributing sign -1. The factor maps to an allowed block (every line
+    spin-conserving) iff the bra and ket spin MULTISETS match
+    (``sorted(bra) == sorted(ket)``): then sorting the bra and the ket into the
+    same spin order aligns the lines. The sign is the product of the two
+    within-group permutation parities. If the multisets differ no permutation can
+    conserve every line and the block is genuinely zero (rank-2: a single line
+    that simply must match).
+
+    On rank-4 this picks the same physical value as the bra/ket-swap enumeration
+    it replaced -- when it lands on a different canonical block (abab vs baba)
+    the two are related by exactly a bra-swap + ket-swap and evaluate identically;
+    validated to reproduce GCC at rank-4 raw and through the full collapse+merge
+    pipeline (~1e-17)."""
     idx = [label[i.name] for i in factor.indices]
-    if len(idx) == 2:
-        return (1, idx) if idx[0].spin == idx[1].spin else None
-
-    def conserves(ix):
-        return ix[0].spin == ix[2].spin and ix[1].spin == ix[3].spin
-
-    candidates = [
-        (1, idx),
-        (-1, [idx[1], idx[0], idx[2], idx[3]]),   # bra swap
-        (-1, [idx[0], idx[1], idx[3], idx[2]]),   # ket swap
-        (1, [idx[1], idx[0], idx[3], idx[2]]),    # both
-    ]
-    for sign, cix in candidates:
-        if conserves(cix):
-            return (sign, cix)
-    return None
+    n = len(idx) // 2
+    bra, ket = idx[:n], idx[n:]
+    bra_spins = [x.spin for x in bra]
+    ket_spins = [x.spin for x in ket]
+    if sorted(bra_spins) != sorted(ket_spins):
+        return None
+    bra_order = sorted(range(n), key=lambda k: bra_spins[k])
+    ket_order = sorted(range(n), key=lambda k: ket_spins[k])
+    sign = _permutation_parity(bra_order) * _permutation_parity(ket_order)
+    new_idx = [bra[k] for k in bra_order] + [ket[k] for k in ket_order]
+    return (sign, new_idx)
 
 
 def ucc_integrate_term_antisym(term, external_spins: dict):
