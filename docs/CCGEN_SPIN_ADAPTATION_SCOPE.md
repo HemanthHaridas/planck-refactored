@@ -608,14 +608,35 @@ spin-blocked RCC kernels reaching the PySCF energy).
   full tensors. Crucially the `aaa` block is **genuinely antisymmetric** (verified
   `aaa == −aaa.T` in both `(i,j)` and `(a,b)`, unlike RCCSDT's symmetric
   `t3full`). So the antisym spin-orbital `t3` assembles DIRECTLY from these
-  blocks — no spin-summation inverse to derive. Progress: assembled `t3so` from
-  the 4 blocks (norm 0.11, nonzero as it should be); antisymmetry is down to
-  ~0.007 — the remaining error is the **mixed-block index layout** (`aab` is
-  `[i,j,a,b,k,c]` = alpha `i,j,a,b` / beta `k,c`; the `abb` layout + the
-  line-reorder-parity sign in the assembly need pinning). *Remaining S4a.0b
-  work:* fix the `aab`/`abb` index map so `t3so` is antisym to ~1e-12, mechanical
-  block-layout bookkeeping. *Gate:* `t3so` fully antisym + `t3so` reduces to
-  `aaa`/`aab` on the pure blocks.
+  blocks — no spin-summation inverse to derive.
+
+  *Progress + the remaining precise task:*
+  - **UHF symmetry-breaking gotcha (found + fixed).** A bare `scf.UHF(N2)` at
+    1.3 Å converges to a symmetry-BROKEN solution (α/β MOs differ by 0.28 though
+    `<S²>≈0`), so `aaa ≠ bbb` (off ~0.002). Fix: build the UHF reference from RHF
+    orbitals — `mf = scf.addons.convert_to_uhf(scf.RHF(mol).run())` — then
+    `aaa == bbb` to 3e-18 and the fixture is genuinely closed-shell. Any
+    UCCSDT-fixture code MUST do this convert, not a fresh UHF.
+  - **Block layouts pinned:** `aaa/bbb` are `[i,j,k,a,b,c]`; `aab` is
+    `[i,j,a,b,k,c]` (verified antisym in axes (0,1) alpha-occ and (2,3)
+    alpha-vir; beta `k,c` last); `abb` is `[k,l,c,d,i,a]` = beta-occ,beta-occ,
+    beta-vir,beta-vir,alpha-occ,alpha-vir (antisym in (0,1)&(2,3)).
+  - **Assembly status:** same-spin-swap antisymmetry is EXACT (0.0); the residual
+    error is only in the mixed blocks — the physical **line-swap** antisymmetry
+    `(a,i)↔(b,j)` ACROSS spins is still ~0.013. Ruled out: it is NOT a global sign
+    or alpha-line occ-ordering — all four {±sign}×{occ-order} combos give the
+    identical 0.013, so the error is structural in the mixed-block slot mapping,
+    not a sign. The likely culprit is how a cross-spin line-swap maps `aab`→`aba`
+    (a *different* index arrangement of the same block) and whether PySCF's `aab`
+    has the antisymmetry I'm assuming under that particular swap — this needs
+    checking the `aab` block's OWN transposition symmetries directly (which axis
+    swaps it is/ isn't invariant under) and building the mixed t3so entry as the
+    correctly-signed image, rather than a canonical-order lookup. ALSO: uccsdt
+    `t2ab` has a different layout than rccsd's — the fixture's `so_t2` fill needs
+    the uccsdt `t2ab` convention (its direct reuse index-overflowed). *Gate:*
+    `t3so` line-swap-antisym ~1e-12 + reduces to `aaa`/`aab` on pure blocks.
+    This is bounded but genuinely fiddly PySCF-convention archaeology — not a
+    quick finish; best done methodically against each block's measured symmetries.
   - **S4a.0c — numeric gate on the strong-correlation fixture (~S).** With the
     correct `t3so` from S4a.0b's UCCSDT assembly, require the GCC triples residual
     < 1e-7 on N2 (`|t3|` large enough to expose any error). Oracle: the residual
