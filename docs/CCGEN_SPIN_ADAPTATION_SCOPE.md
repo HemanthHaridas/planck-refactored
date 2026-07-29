@@ -388,10 +388,14 @@ Sub-steps (de-risk numerically **before** any symbolic collapse):
       equation IS the RCC residual. Merged CCSD coefficients carry the RCC
       `2J − K` combinations (`{−2, 2, 4, −3/2, …}`). Two gates: the identity
       (merged RCC == GCC abab for any amps, ~1e-10) and vanishing-at-solution;
-      merge-mutation-verified. **This is the original S2.2d-2 goal, achieved —
-      S2.2 (symbolic collapse) is complete end-to-end on real integrals for
-      CCD/CCSD doubles.** Remaining: the singles spatial residual (same pipeline,
-      smaller) and S3 emit wiring.
+      merge-mutation-verified. **This is the original S2.2d-2 goal, achieved.**
+      The SINGLES spatial residual runs through the identical pipeline
+      (`_rcc_pipeline(method, "singles")`, external `{a,i}` — the collapse steps
+      act on `t2[aaaa]`/`v[aaaa]` factors so they are block-agnostic): merged RCC
+      singles == GCC aa slice ~1e-16 and vanishes at converged amps
+      (`test_ccsd_rcc_singles_matches_gcc_slice`). **S2.2 (symbolic collapse) is
+      complete end-to-end on real integrals for CCD/CCSD, both singles and
+      doubles.** Remaining in the layer: S3 emit wiring.
 
   Do the singles residual after doubles (same four sub-steps, smaller); CCSD
   needs both. CCD (doubles only) is the first target so S2.2a–d land against the
@@ -420,7 +424,8 @@ dropping it), and the full S2.2a→d pipeline rebuilt on it
 (`_rcc_doubles_pipeline`) reproduces the GCC abab residual on real antisymmetric
 water/STO-3G integrals to ~1e-16 and the merged RCC residual vanishes at PySCF's
 converged RCCSD amps (`S22dEndToEndTests`). The RCC `2J − K` coefficients appear
-in the merged form. Next: the singles spatial residual (same pipeline) and S3
+in the merged form. Singles run through the identical pipeline (also gated on
+real integrals). **S2.2 is complete for CCD/CCSD singles + doubles.** Next: S3
 (emit wiring — route adapted terms into lowering + confirm the emitters produce
 spin-blocked RCC kernels reaching the PySCF energy).
 
@@ -450,8 +455,9 @@ spin-blocked RCC kernels reaching the PySCF energy).
   allowed block via bra/ket swaps carrying `−1` (the `−K`), and the full
   S2.2a→d pipeline rebuilt on it reproduces the GCC residual on real integrals
   to ~1e-16 and vanishes at PySCF's converged RCCSD amps. The `2J − K`
-  coefficients appear in the merged form. Remaining for the layer: the singles
-  spatial residual (same pipeline) and S3 emit wiring.
+  coefficients appear in the merged form. Singles run through the identical
+  pipeline (gated on real integrals). Complete for CCD/CCSD singles + doubles;
+  remaining for the layer: S3 emit wiring.
 - **On the production critical path (intent confirmed).** The ccgen-generated
   kernels are intended to replace the hand-written `src/post_hf/cc/` solvers in
   production, once D7 (dressing on diagrams) is done. Production RHF/UHF CC needs

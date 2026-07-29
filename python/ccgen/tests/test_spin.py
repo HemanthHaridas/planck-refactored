@@ -1183,21 +1183,29 @@ class S1AntisymIntegrationTests(unittest.TestCase):
         self.assertLess(abs(E - cc.e_corr), 1e-6, "GCC energy != cc.e_corr")
 
 
-def _rcc_doubles_pipeline(method):
-    """The full S2.2a->d spatial RCC doubles residual, built on the
-    antisymmetry-correct integration: antisym-integrate the abab external block,
-    then canonicalize -> collapse amplitudes -> collapse integrals -> merge.
-    Returns the merged spatial SpinTerms."""
+def _rcc_pipeline(method, block):
+    """The full S2.2a->d spatial RCC residual for one block, built on the
+    antisymmetry-correct integration: antisym-integrate the external block, then
+    canonicalize -> collapse amplitudes -> collapse integrals -> merge. ``block``
+    is "singles" or "doubles"; the collapse steps are block-agnostic (they act on
+    t2[aaaa]/v[aaaa] factors regardless of the residual's own externals). Returns
+    the merged spatial SpinTerms."""
     from ccgen.spin import (ucc_integrate_term_antisym, canonicalize_spin_blocks,
                             collapse_amplitudes, collapse_integrals, merge_terms)
-    ext = {"a": "a", "b": "b", "i": "a", "j": "b"}
+    ext = ({"a": "a", "i": "a"} if block == "singles"
+           else {"a": "a", "b": "b", "i": "a", "j": "b"})
     manifold = []
-    for t in generate_cc_equations(method)["doubles"]:
+    for t in generate_cc_equations(method)[block]:
         manifold.extend(ucc_integrate_term_antisym(t, ext))
     canon = [canonicalize_spin_blocks(st) for st in manifold]
     amp = [c for st in canon for c in collapse_amplitudes(st)]
     coll = [c for st in amp for c in collapse_integrals(st)]
     return merge_terms(coll, set(ext))
+
+
+def _rcc_doubles_pipeline(method):
+    """Back-compat alias: the doubles RCC residual pipeline."""
+    return _rcc_pipeline(method, "doubles")
 
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
@@ -1206,10 +1214,11 @@ class S22dEndToEndTests(unittest.TestCase):
     reproduces the RCC residual on REAL integrals end to end.
 
     This is the payoff the block-filter fix unblocked. The merged spatial RCC
-    doubles residual, evaluated on the real antisymmetric water/STO-3G tensors at
-    PySCF's converged RCCSD amplitudes, vanishes (== the GCC residual there,
-    ~1e-7) -- so the collapsed equation IS the RCC doubles residual. The merged
-    coefficients carry the RCC `2J - K` combinations (|coeff| in {2, 4}).
+    doubles (and singles) residual, evaluated on the real antisymmetric
+    water/STO-3G tensors at PySCF's converged RCCSD amplitudes, vanishes (== the
+    GCC residual there, ~1e-7) -- so the collapsed equation IS the RCC residual.
+    The merged doubles coefficients carry the RCC `2J - K` combinations
+    (|coeff| in {2, 4}).
     """
 
     def test_ccsd_rcc_residual_vanishes_at_converged_amps(self):
@@ -1249,6 +1258,27 @@ class S22dEndToEndTests(unittest.TestCase):
             acc += _eval_spinterm(st, tn, no, n, ["a", "b", "i", "j"])
         self.assertLess(np.max(np.abs(acc - Rb)), 1e-10,
                         f"merged RCC != GCC abab: {np.max(np.abs(acc - Rb))}")
+
+    def test_ccsd_rcc_singles_matches_gcc_slice(self):
+        # the singles spatial residual through the same pipeline: merged RCC
+        # singles == GCC aa slice, and vanishes at the converged amps.
+        import numpy as np
+        from ccgen.tests.residual_eval import residual_einsum
+        tn, no, nv, mf, cc = _real_antisym_tensors()
+        n = no + nv
+        ve, oe = list(range(0, nv, 2)), list(range(0, no, 2))
+        Rb = sum(residual_einsum(t, no, nv, tensors=tn)
+                 for t in generate_cc_equations("ccsd")["singles"]
+                 )[np.ix_(ve, oe)]
+        merged = _rcc_pipeline("ccsd", "singles")
+        acc = np.zeros_like(Rb)
+        for st in merged:
+            acc += _eval_spinterm(st, tn, no, n, ["a", "i"])
+        self.assertLess(np.max(np.abs(acc - Rb)), 1e-10,
+                        f"merged RCC singles != GCC aa: {np.max(np.abs(acc - Rb))}")
+        # vanishes at converged amps (Rb itself is the residual at the solution)
+        self.assertLess(np.max(np.abs(acc)), 1e-6,
+                        "merged RCC singles residual should vanish at converged amps")
 
 
 if __name__ == "__main__":
