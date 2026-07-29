@@ -608,3 +608,49 @@ def merge_terms(terms, externals) -> list[SpinTerm]:
                                 external_block=rep.external_block,
                                 factors=rep.factors))
     return out
+
+
+# ── S3.0 bridge: spatial SpinTerm -> AlgebraTerm ──────────────────────
+#
+# The S2 pipeline produces merged spatial RCC `SpinTerm`s (single spatial block
+# per factor, with the 2J-K coefficients). The emit path
+# (`emit/planck_tensor_cpp` via `lowering/restricted_closed_shell`) consumes
+# `AlgebraTerm`s. This bridge drops the spin labels -- each `SpinIndex.base` is
+# already the spatial occ/vir `Index` -- and rebuilds an `AlgebraTerm` with the
+# same coefficient, factor tensors, and free/summed split. It is a pure
+# structural transform: the spatial algebra (which factor contracts which index)
+# is unchanged, only the wrapper type differs. Gated by evaluation equivalence
+# (the converted term contracts to the same residual as the SpinTerm).
+
+
+def spinterm_to_algebraterm(spinterm: SpinTerm, externals):
+    """Convert a spatial ``SpinTerm`` to an ``AlgebraTerm`` for the emit path
+    (S3.0). ``externals`` is the set of free-index names (e.g.
+    ``{"a","b","i","j"}``). Each factor becomes a ``Tensor`` over the spatial base
+    indices; free and summed indices are split by name (de-duplicated,
+    first-appearance order). The coefficient is carried as a ``Fraction``."""
+    from fractions import Fraction
+
+    from .project import AlgebraTerm
+    from .tensors import Tensor
+
+    externals = set(externals)
+    factors = tuple(
+        Tensor(f.name, tuple(si.base for si in f.indices))
+        for f in spinterm.factors
+    )
+    free: list = []
+    summed: list = []
+    seen_free: set = set()
+    seen_summed: set = set()
+    for f in spinterm.factors:
+        for si in f.indices:
+            if si.name in externals:
+                if si.name not in seen_free:
+                    seen_free.add(si.name)
+                    free.append(si.base)
+            elif si.name not in seen_summed:
+                seen_summed.add(si.name)
+                summed.append(si.base)
+    return AlgebraTerm(Fraction(spinterm.coeff), factors,
+                       tuple(free), tuple(summed), True)

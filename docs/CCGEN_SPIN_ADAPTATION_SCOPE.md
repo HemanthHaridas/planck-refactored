@@ -429,11 +429,50 @@ real integrals). **S2.2 is complete for CCD/CCSD singles + doubles.** Next: S3
 (emit wiring — route adapted terms into lowering + confirm the emitters produce
 spin-blocked RCC kernels reaching the PySCF energy).
 
-- **S3 — wire the stage + emitter compatibility (~M).** Route adapted terms into
-  lowering (`restricted_closed_shell` becomes layout-only on already-spatial
-  terms; add a UCC lowering) and confirm the emitters produce spin-blocked
-  kernels. *Gate:* emitted RCC/UCC kernel reaches the PySCF energy end-to-end
-  (reuse the `ccgen_iterate_amps` harness on spatial tensors).
+- **S3 — wire the adapted terms into lowering + emit (~M).** The S2 pipeline
+  produces merged spatial `SpinTerm`s (RCC, single-block per factor, with the
+  `2J − K` coefficients). The emit path (`emit/planck_tensor_cpp.py` via
+  `lowering/restricted_closed_shell.py`) consumes `AlgebraTerm`s. S3 bridges the
+  two. Existing state that shapes the work:
+  - `restricted_closed_shell` lowering already exists but is **layout-only** — it
+    "does not attempt a full symbolic spin summation" (its own docstring); it
+    re-lays-out spin-orbital terms into occ/vir blocks. Our `SpinTerm`s are
+    ALREADY spin-summed to spatial RCC, so lowering becomes a near-passthrough on
+    them (block signature + spatial index order), not a spin step.
+  - The end gate is the **"evaluate at PySCF converged amps"** trick that already
+    works for GCC (`ccgen_energy_at_pyscf_amps` in `test_reference_vs_pyscf.py`,
+    and the S2.2d `_rcc_pipeline` residual). There is NO `ccgen_iterate_amps`
+    harness to build — reuse the energy-at-amps scalar gate (convention-robust).
+
+  Sub-steps:
+  - **S3.0 — `SpinTerm → AlgebraTerm` bridge. LANDED.**
+    `spinterm_to_algebraterm` in `ccgen/spin.py`: each factor → `Tensor` over the
+    spatial `SpinIndex.base` indices; free/summed split by external-name
+    membership (de-duplicated, first-appearance); coefficient as `Fraction`;
+    `connected=True`. *Gate* (`S30BridgeTests`, PySCF-free — the bridge is a pure
+    structural transform, tensor-value-independent): every converted term
+    preserves the coefficient, the factor names + per-factor spatial index names
+    AND spaces, and the free/summed partition (`free = allnames ∩ externals`,
+    `summed = allnames − externals`, disjoint+complete). CCD/CCSD, singles +
+    doubles. Coefficient-mutation-verified. (Per-term evaluation equivalence to
+    the SpinTerm was confirmed manually via matched slicing; the structural gate
+    is the durable check.)
+  - **S3.1 — lower the bridged terms (~S).** Feed the converted RCC
+    `AlgebraTerm`s through `lower_term_restricted_closed_shell`; confirm it
+    produces valid `RestrictedClosedShellTerm` IR (block signatures + slot
+    permutations) without error and that the lowered form still evaluates to the
+    same residual. Since the terms are already spatial, this exercises lowering
+    as layout-only. *Gate:* lowered-IR evaluation == S3.0 residual.
+  - **S3.2 — emit + end-to-end energy (~M).** Run `planck_tensor_cpp` on the
+    lowered RCC terms; confirm the emitted C++ compiles against the real CC
+    headers (the `tau` A1 work already established this compile harness). *Gate:*
+    the emitted RCC kernel (or its Python-evaluated equivalent) reaches the PySCF
+    RCCSD `E_corr` via the energy-at-amps trick (~1e-9 on water/STO-3G). Do
+    doubles first, then singles.
+
+  A UCC lowering (distinct α/β blocks) is deferred — RCC is the closed-shell
+  production target and the harder coefficient case; UCC reuses the same bridge
+  with the block tags kept spin-resolved.
 
 - **S4 — higher rank + engine-agnostic (~M).** Confirm adaptation is
   engine-agnostic (it operates on `AlgebraTerm`s) and extends to CCSDT (gated vs

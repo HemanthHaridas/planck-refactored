@@ -1208,6 +1208,79 @@ def _rcc_doubles_pipeline(method):
     return _rcc_pipeline(method, "doubles")
 
 
+def _rcc_pipeline_filtered(method, block):
+    """PySCF-free variant of the RCC pipeline for the SYNTHETIC spin-conserving
+    fixture: uses the filtered `ucc_manifold` (valid on that fixture) instead of
+    the antisym integration. Same canonicalize -> collapse -> merge tail. Used by
+    tests that only need the merged spatial term STRUCTURE (S3 bridge/lowering),
+    not real-integral physics."""
+    from ccgen.spin import (ucc_manifold, canonicalize_spin_blocks,
+                            collapse_amplitudes, collapse_integrals, merge_terms)
+    from ccgen.tensors import Tensor
+    if block == "singles":
+        tpl = Tensor("R1", (make_vir("a"), make_occ("i")))
+        ext = {"a", "i"}
+    else:
+        tpl = Tensor("R2", (make_vir("a"), make_vir("b"),
+                            make_occ("i"), make_occ("j")))
+        ext = {"a", "b", "i", "j"}
+    man = ucc_manifold(generate_cc_equations(method)[block], tpl)
+    tag = "".join(dict(a="a", b="b", i="a", j="b")[nm]
+                  for nm in [x.name for x in tpl.indices])
+    canon = [canonicalize_spin_blocks(st) for st in man[tag]]
+    amp = [c for st in canon for c in collapse_amplitudes(st)]
+    coll = [c for st in amp for c in collapse_integrals(st)]
+    return merge_terms(coll, ext)
+
+
+class S30BridgeTests(unittest.TestCase):
+    """S3.0: `spinterm_to_algebraterm` bridges a spatial RCC SpinTerm to the
+    AlgebraTerm the emit path consumes.
+
+    PySCF-free (uses the filtered synthetic-fixture pipeline -- the bridge is a
+    pure structural transform, independent of the tensor values). Gate: every
+    converted AlgebraTerm preserves the coefficient, the factor tensor names +
+    per-factor spatial index identities, and the free/summed split matches the
+    SpinTerm's externals. This is the "algebra unchanged, wrapper differs"
+    contract; downstream (S3.1 lowering, S3.2 emit) rides on it.
+    """
+
+    def _check(self, method, block, externals, res_indices):
+        from ccgen.spin import spinterm_to_algebraterm
+        merged = _rcc_pipeline_filtered(method, block)
+        self.assertTrue(merged, f"{method} {block}: empty pipeline")
+        for st in merged:
+            at = spinterm_to_algebraterm(st, externals)
+            # coefficient preserved
+            self.assertEqual(at.coeff, st.coeff)
+            # factor names + spatial index names, in order, preserved
+            self.assertEqual([f.name for f in at.factors],
+                             [f.name for f in st.factors])
+            for af, sf in zip(at.factors, st.factors):
+                self.assertEqual([x.name for x in af.indices],
+                                 [si.name for si in sf.indices])
+                self.assertEqual([x.space for x in af.indices],
+                                 [si.base.space for si in sf.indices])
+            # free = externals present; summed = the rest; disjoint, complete
+            free = {x.name for x in at.free_indices}
+            summed = {x.name for x in at.summed_indices}
+            allnames = {si.name for f in st.factors for si in f.indices}
+            self.assertEqual(free, allnames & set(externals))
+            self.assertEqual(summed, allnames - set(externals))
+            self.assertEqual(free & summed, set())
+            # connected flag set (RCC residual terms are connected)
+            self.assertTrue(at.connected)
+
+    def test_ccd_doubles_bridge(self):
+        self._check("ccd", "doubles", {"a", "b", "i", "j"}, ["a", "b", "i", "j"])
+
+    def test_ccsd_doubles_bridge(self):
+        self._check("ccsd", "doubles", {"a", "b", "i", "j"}, ["a", "b", "i", "j"])
+
+    def test_ccsd_singles_bridge(self):
+        self._check("ccsd", "singles", {"a", "i"}, ["a", "i"])
+
+
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
 class S22dEndToEndTests(unittest.TestCase):
     """S2.2d-2: the whole S2.2a->d collapse, built on the antisym integration,
