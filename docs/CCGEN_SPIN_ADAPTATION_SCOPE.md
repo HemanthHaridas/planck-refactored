@@ -492,9 +492,42 @@ spin-blocked RCC kernels reaching the PySCF energy).
   production target and the harder coefficient case; UCC reuses the same bridge
   with the block tags kept spin-resolved.
 
-- **S4 — higher rank + engine-agnostic (~M).** Confirm adaptation is
-  engine-agnostic (it operates on `AlgebraTerm`s) and extends to CCSDT (gated vs
-  `rccsdt` / `uccsdt`).
+- **S4 — higher rank (CCSDT/CCSDTQ) + engine-agnostic (~M-L). SCOPED; the layer
+  is currently RANK-LIMITED to ≤ 4 — confirmed.** The GCC generation handles
+  arbitrary rank (its `_line_pairs`/`block_exists` are general rank-2n), and the
+  diagram engine emits CCSDT (triples, 414 terms) and CCSDTQ (quadruples, 2728
+  terms) fine (`generate_cc_equations(m, engine="diagram")`). But the
+  spin-adaptation layer has rank-4 hardcodings, so it does NOT extend as-is —
+  and this bites even the CCSDTQ singles/doubles residuals, which contain `t3`
+  (rank-6) and `t4` (rank-8) factors (measured: doubles 11/79 terms, triples
+  140/428, quadruples 1612/2728 have a rank>4 factor; max factor rank 8).
+
+  The three rank-4 hardcodings:
+  1. **`_antisym_to_allowed`** only has rank-2 and rank-4 candidate swaps. On a
+     rank-6/8 factor it falls through to the rank-4 `conserves` check and returns
+     `None` ("genuinely zero") for cases that are actually reachable by
+     antisymmetry — silently DROPPING valid terms. This is the load-bearing bug.
+     *Fix (prototyped):* general rank-2n version — a factor is antisym within the
+     bra group (slots `0..n-1`) and ket group (`n..2n-1`); it maps to an allowed
+     (spin-conserving-per-line) block iff `sorted(bra_spins) == sorted(ket_spins)`
+     (multiset match), via a within-group permutation whose parity product is the
+     sign. Prototype runs on rank-6/8. **Caveat:** it picks a DIFFERENT canonical
+     block than the current rank-4 path for 2 patterns (`baba` vs `abab`), so it
+     must NOT replace the validated rank-4 logic — keep rank-4 exactly, add
+     general handling only for rank ≥ 6.
+  2. **`_split_t2aaaa` / `_split_vaaaa`** are hardcoded 4-index. Same-spin
+     higher-rank amplitude blocks (`t3[aaaaaa]` etc.) need their own antisym
+     split, or a general rank-2n splitter.
+  3. The closed-shell block relations generalize (`t3aa… = t3 mixed − P`) but the
+     coefficient collapse for rank ≥ 6 is unverified.
+
+  *Gate:* the S1' identity extended to rank-6/8 — antisym integration of the
+  triples/quadruples manifold == GCC slice on real antisymmetric tensors. Since
+  the identity is algebraic (holds for ANY amplitudes, verified at rank-4), use
+  RANDOM antisym `t3`/`t4` (no PySCF rccsdt oracle needed); a physics gate can
+  later reuse the FCI-limit path (`test_diagram_engine_ccsdt_reaches_fci_limit`).
+  Engine-agnostic is nearly free — the layer already operates on `AlgebraTerm`s;
+  the diagram-engine manifolds feed the same `ucc_integrate_term_antisym`.
 
 ## Honest boundaries
 
