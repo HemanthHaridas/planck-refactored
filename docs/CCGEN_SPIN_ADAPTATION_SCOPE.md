@@ -538,31 +538,80 @@ spin-blocked RCC kernels reaching the PySCF energy).
   to a nonzero allowed one — verified this breaks, 108/126 terms), and raw random
   antisym tensors aren't closed-shell (α≢β).
 
-  *Real oracle available (explored):* **`pyscf.cc.rccsdt.RCCSDT`** ships in the
-  pinned PySCF 2.13.0 and converges (`cc.kernel()`, `cc.t1/t2/t3`,
-  `cc.e_corr`) — a genuine closed-shell RCCSDT `t3`. Its `t3` is stored in a
-  **triangular-packed spatial** form (`cc.t3` shape `[o,o,v,v]`-ish for LiH;
-  unpack to full `[o,o,o,v,v,v]` via `tamps_tri2full_rhf(cc, cc.t3)`). The
-  unpacked `t3full` is the RCC **symmetric** representation — symmetric under
-  simultaneous particle interchange `(i,a)↔(j,b)` (verified `0`), NOT
-  antisymmetric in `(i,j)` alone (verified `~1e-3`). Lifting it to the
-  spin-orbital ANTISYMMETRIC `t3` (the ccgen convention) is the remaining
-  convention work: a naive "spin-conserving fill + antisymmetrize/6" lift got the
-  **energy** right to 1e-9 (evaluating ccgen's GCC energy at the lifted amps ==
-  `cc.e_corr`) but left the **residual** at ~1e-4 (not the ~1e-8 a correct lift
-  gives), because the RCC-symmetric `t3full` is not the "mixed abab block" the
-  way `t2ab` is — the inverse of RCC's spatial reduction for `t3` must be applied.
-  So the oracle is real and the energy already cross-validates the lift; the
-  residual-level rank-6 identity needs that `t3` lift convention pinned (the same
-  class of work as `_real_antisym_tensors`' `t2` lift, one rank up).
+  ### S4a — the closed-shell spatial→spin-orbital-antisym amplitude lift (`t3`, then arbitrary order)
 
-  (b) the rank-2n splitters (#2). (c) the higher-rank collapse coefficient check
-  (#3). Engine-agnostic is already effectively there — the layer operates on
-  `AlgebraTerm`s and the diagram-engine manifolds feed the same
-  `ucc_integrate_term_antisym` unchanged.
+  This is the load-bearing piece of the rank-6/8 numeric gate: given a closed-
+  shell RHF-based spatial amplitude, produce the genuinely-antisymmetric
+  spin-orbital `t_n` that ccgen's GCC equations consume. It is `so_t2` (working,
+  in `_real_antisym_tensors`) generalized to rank ≥ 3.
+
+  *Oracle (confirmed working):* **`pyscf.cc.rccsdt.RCCSDT`** (PySCF 2.13.0)
+  converges and gives `cc.t1/t2/t3` + `cc.e_corr`. `cc.t3` is triangular-packed;
+  `tamps_tri2full_rhf(cc, cc.t3)` → full `[o,o,o,v,v,v]`. That `t3full` is the RCC
+  **symmetric** representation: symmetric under simultaneous particle interchange
+  `(i,a)↔(j,b)` (verified `0`), NOT antisymmetric in `(i,j)` alone (`~1e-3`).
+  (`RCCSDTQ`/`cc_order=4` gives `t4` the same way for the rank-8 gate.)
+
+  *What's been tried and where it stands (two attempts):*
+  - naive "spin-conserving fill from `t3full` + antisymmetrize the full bra/ket
+    (÷6)": ENERGY correct to 1e-9, residual ~2e-3.
+  - "antisymmetrize only within same-spin sub-groups" (the rule that reproduces
+    `so_t2` exactly): `t3so` IS antisymmetric (0), ENERGY still ~1e-9, residual
+    still ~1e-4/1e-3.
+
+    Both get the energy (a robust full contraction) but not the residual — so
+    the lift is CLOSE but structurally incomplete. The gap is almost certainly a
+    missing **spin-summation weight**: PySCF's own `t3_spin_summation_inplace_`
+    applies a `P3_full` pattern with a `-1/6` factor (seen in
+    `update_amps_rccsdt_tri_`), i.e. the RCC-symmetric `t3full` carries a
+    normalization that the antisymmetrizer must undo. The correct lift is the
+    inverse of RCC's forward spatial reduction, not a blanket antisymmetrization.
+
+  *Scoped sub-steps:*
+  - **S4a.0 — nail the `t3` lift numerically (~M).** Derive/curve-fit the exact
+    weight so the lift reproduces the GCC residual at PySCF amps to ~1e-8 (not
+    just the energy). Fastest path: compare the lifted `t3so`'s mixed
+    (`aab/aba/…`) and same-spin (`aaa`) blocks directly against a *reference*
+    spin-orbital antisym `t3` — obtain one from PySCF `gccsd_t`/a GHF triples
+    amplitude if extractable, or from `t3_spin_summation_inplace_`'s inverse.
+    *Gate:* GCC triples residual at PySCF RCCSDT amps < 1e-7 with the lifted `t3`.
+  - **S4a.1 — the rank-6 S1' identity (~S).** With S4a.0's correct `t3` fixture,
+    gate `ucc_integrate_term_antisym` == GCC triples slice on the real
+    closed-shell antisym integrals (~1e-11). This is the numeric proof the S4
+    structural gate defers.
+  - **S4a.2 — generalize the lift to arbitrary order (~M).** State the lift as
+    one rank-2n rule: `t_n_so[p1..pn, h1..hn]` (spin-conserving lines) = a signed
+    sum over permutations within each same-spin sub-group of the bra (with the
+    matched ket permutation), applied to the RCC spatial amplitude, times the
+    spin-summation weight from S4a.0. Verify it reduces to `so_t2` at n=2 and
+    reproduces S4a.0 at n=3, then gate `t4` (rank-8) against `RCCSDTQ` the same
+    way. Deliverable: a single `closed_shell_antisym_lift(spatial, n)` replacing
+    the hand-written `so_t2`.
+
+  Then: **(b)** the rank-2n splitters (`_split_t2aaaa`/`_split_vaaaa` still
+  4-index — generalize `_split_t2aaaa` to a rank-2n same-spin antisym splitter);
+  **(c)** the higher-rank collapse coefficient check. Engine-agnostic is already
+  effectively there — the layer operates on `AlgebraTerm`s and the diagram-engine
+  manifolds feed the same `ucc_integrate_term_antisym` unchanged.
 
 ## Honest boundaries
 
+- **Why this layer exists at all: COST, not correctness (confirmed).** The GCC
+  equations, evaluated on spin-orbitals built from an **RHF** reference, already
+  give the exact closed-shell CC energy — verified: ccgen's GCC energy on
+  RHF-derived amps == PySCF RCCSD `e_corr` to 1e-8, and == PySCF GCCSD (GHF ref)
+  to 7e-9. GHF-CC and RCC are energy-equivalent for a closed shell (GHF reduces
+  to RHF at the closed-shell minimum). So RCC/UCC are **NOT needed for the right
+  number** — they exist purely to exploit spin symmetry for efficiency: the
+  spin-orbital representation is ~16× the `t2` storage and ~64× the doubles-
+  contraction flops of the spatial one (water/STO-3G; the ratio is
+  `2^(2·rank)` and grows with system size). This is exactly the production
+  driver: per [[ccgen_generated_kernels_to_production]] the generated kernels
+  replace the hand-written `src/post_hf/cc` solvers, and production CC on real
+  molecules cannot afford the spin-orbital blowup. So the spin-adaptation layer
+  is a **performance prerequisite** for the production swap (alongside D7
+  scaling), not a correctness one — a useful thing to keep straight: if the goal
+  were only "get the energy," GCC-on-RHF suffices and this layer is unnecessary.
 - **S2 (RCC coefficient collapse) is the hard part** — the α ≡ β reduction's
   coefficient algebra is where the real derivation lives. S0/S1 turned out to be
   bookkeeping, exactly as expected: the UCC raw GCC coefficients came out right
