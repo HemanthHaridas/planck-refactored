@@ -2217,5 +2217,157 @@ class S4cIntegralRankTests(unittest.TestCase):
                              f"{method}: v factors not all rank-4: {ranks}")
 
 
+def _ccsdtq_fci_limit_tensors(atom="H 0 0 0; H 0 0 1.0; H 0 0 2.0; H 0 0 3.0",
+                              basis="sto-3g"):
+    """S4d fixture: a closed-shell ANTISYMMETRIC rank-8 `t4` (with t1/t2/t3, v, f)
+    obtained by Jacobi-iterating ccgen's GCC CCSDTQ residual to self-consistency
+    on RHF-derived spin-orbitals (even=alpha / odd=beta).
+
+    This is the fixture the oracle wall denied: PySCF 2.13.0 has no `uccsdtq`, and
+    `rccsdtq` gives a SYMMETRIC triangular `t4full` that self-cancels under
+    antisymmetrization (the S4a.0a wall, one rank up). GHF-CCSDTQ reaches FCI but
+    is spin-mixed (no clean alpha/beta partition the adaptation needs). Iterating
+    the GCC residual on the RHF even/odd basis sidesteps both: for a 4-electron
+    system CCSDTQ == FCI, so the converged amps ARE the exact closed-shell antisym
+    tensors -- no lift, no oracle. Returns (tensors, no, nv, e_corr, e_fci_tot,
+    e_hf)."""
+    import numpy as np
+    from pyscf import gto, scf, ao2mo, fci
+    from ccgen.tests.residual_eval import residual_einsum
+
+    mol = gto.M(atom=atom, basis=basis, spin=0, verbose=0)
+    mol.cart = True
+    mf = scf.RHF(mol).run()
+    nocc_sp = mol.nelectron // 2
+    nmo = mf.mo_coeff.shape[1]
+    nvir_sp = nmo - nocc_sp
+    no, nv, n = 2 * nocc_sp, 2 * nvir_sp, 2 * nmo
+
+    def csp(p):
+        return (p // 2) if p < no else nocc_sp + ((p - no) // 2)
+
+    def cspin(p):
+        return (p % 2) if p < no else ((p - no) % 2)
+
+    eri = ao2mo.kernel(mol, mf.mo_coeff, aosym="s1").reshape(nmo, nmo, nmo, nmo)
+    g = eri.transpose(0, 2, 1, 3)
+    v = np.zeros((n, n, n, n))
+    for p in range(n):
+        for q in range(n):
+            for r in range(n):
+                for s in range(n):
+                    c = (g[csp(p), csp(q), csp(r), csp(s)]
+                         if cspin(p) == cspin(r) and cspin(q) == cspin(s) else 0)
+                    e = (g[csp(p), csp(q), csp(s), csp(r)]
+                         if cspin(p) == cspin(s) and cspin(q) == cspin(r) else 0)
+                    v[p, q, r, s] = c - e
+    f = np.zeros((n, n))
+    for p in range(n):
+        f[p, p] = mf.mo_energy[csp(p)]
+
+    e = f.diagonal()
+    eo, ev = e[:no], e[no:]
+
+    def denom(r):
+        D = np.zeros((nv,) * r + (no,) * r)
+        it = np.nditer(D, flags=["multi_index"], op_flags=["writeonly"])
+        for _ in it:
+            idx = it.multi_index
+            it[0] = (sum(eo[o] for o in idx[r:])
+                     - sum(ev[a] for a in idx[:r]))
+        return D
+
+    targets = ["singles", "doubles", "triples", "quadruples"]
+    rk = {"singles": 1, "doubles": 2, "triples": 3, "quadruples": 4}
+    tn_name = {"singles": "t1", "doubles": "t2", "triples": "t3",
+               "quadruples": "t4"}
+    D = {r: denom(r) for r in (1, 2, 3, 4)}
+    amps = {tn_name[m]: np.zeros((nv,) * rk[m] + (no,) * rk[m]) for m in targets}
+    amps["t2"] = v[:no, :no, no:, no:].transpose(2, 3, 0, 1) / D[2]
+
+    eqs = generate_cc_equations("ccsdtq", engine="diagram")
+
+    def tensors():
+        return {"v": v, "f": f, **amps}
+
+    for _ in range(500):
+        delta, upd = 0.0, {}
+        for m in targets:
+            R = sum(residual_einsum(t, no, nv, tensors=tensors()) for t in eqs[m])
+            new = amps[tn_name[m]] + R / D[rk[m]]
+            upd[tn_name[m]] = new
+            delta = max(delta, float(np.max(np.abs(new - amps[tn_name[m]]))))
+        amps.update(upd)
+        if delta < 1e-11:
+            break
+
+    e_corr = sum(float(residual_einsum(t, no, nv, tensors=tensors()))
+                 for t in eqs["energy"])
+    e_fci, _ = fci.FCI(mf).kernel()
+    return ({"v": v, "f": f, **amps}, no, nv, e_corr,
+            float(e_fci), float(mf.e_tot))
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S4dRank8IdentityTests(unittest.TestCase):
+    """S4d: the rank-8 numeric gate. On a closed-shell antisymmetric `t4` obtained
+    by iterating GCC CCSDTQ to the FCI limit (`_ccsdtq_fci_limit_tensors`),
+    production `ucc_integrate_term_antisym` reproduces the GCC QUADRUPLES residual
+    sliced to a canonical external block -- the rank-8 analog of S4a.1, exercising
+    the general rank-2n `_antisym_to_allowed` at rank 8.
+
+    The FCI-limit route replaces the missing `uccsdtq` oracle: for a 4-electron
+    system CCSDTQ == FCI, so the iterated amps are exact closed-shell antisym
+    tensors. The all-alpha rank-8 block is structurally impossible at 4 electrons
+    (needs 4 same-spin occupieds), so the gate uses a mixed `aabb` external, and
+    perturbs t4 (x0.5) so the residual is genuinely nonzero (a real identity test,
+    not 0 == 0)."""
+
+    @classmethod
+    def setUpClass(cls):
+        (cls.tn, cls.no, cls.nv, cls.e_corr,
+         cls.e_fci, cls.e_hf) = _ccsdtq_fci_limit_tensors()
+
+    def test_fixture_reaches_fci(self):
+        # the fixture is only valid if the iterated CCSDTQ energy == FCI
+        self.assertLess(abs(self.e_hf + self.e_corr - self.e_fci), 1e-6,
+                        f"CCSDTQ e_corr does not reach FCI "
+                        f"({self.e_hf + self.e_corr} vs {self.e_fci})")
+
+    def test_t4_closed_shell_antisym(self):
+        import numpy as np
+        t4 = self.tn["t4"]
+        self.assertLess(np.abs(t4 + t4.transpose(1, 0, 2, 3, 4, 5, 6, 7)).max(),
+                        1e-12, "t4 not antisym in a vir pair")
+        self.assertLess(np.abs(t4 + t4.transpose(0, 1, 2, 3, 5, 4, 6, 7)).max(),
+                        1e-12, "t4 not antisym in an occ pair")
+
+    def test_rank8_aabb_identity(self):
+        import numpy as np
+        from ccgen.spin import ucc_integrate_term_antisym
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv, n = self.no, self.nv, self.no + self.nv
+        tn = dict(self.tn)
+        tn["t4"] = 0.5 * tn["t4"]              # perturb -> nonzero residual
+        eqs = generate_cc_equations("ccsdtq", engine="diagram")
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn)
+                 for t in eqs["quadruples"])
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+        Rb = Rg[np.ix_(ve, ve, vo, vo, oe, oe, oo, oo)]
+        self.assertGreater(np.abs(Rb).max(), 1e-6,
+                           "perturbed residual should be nonzero")
+        ext = {"a": "a", "b": "a", "c": "b", "d": "b",
+               "i": "a", "j": "a", "k": "b", "l": "b"}
+        acc = np.zeros_like(Rb)
+        for t in eqs["quadruples"]:
+            for st in ucc_integrate_term_antisym(t, ext):
+                acc += _eval_spinterm(st, tn, no, n,
+                                      ["a", "b", "c", "d", "i", "j", "k", "l"])
+        self.assertLess(np.abs(acc - Rb).max(), 1e-10,
+                        f"rank-8 antisym != GCC aabb slice: "
+                        f"{np.abs(acc - Rb).max()}")
+
+
 if __name__ == "__main__":
     unittest.main()

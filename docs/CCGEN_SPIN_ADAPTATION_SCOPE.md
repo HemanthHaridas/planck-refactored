@@ -492,13 +492,15 @@ spin-blocked RCC kernels reaching the PySCF energy).
   production target and the harder coefficient case; UCC reuses the same bridge
   with the block tags kept spin-resolved.
 
-- **S4 — higher rank (CCSDT/CCSDTQ) + engine-agnostic (~M-L). IN PROGRESS: the
-  core rank generalization (`_antisym_to_allowed`) is landed AND now
-  NUMERICALLY GATED at rank-6 (S4a.0c + S4a.1 below — the GCC CCSDT residual
-  vanishes at UCCSDT amps and the production antisym integration reproduces the
-  GCC triples slice on real integrals). The rank-6 `t3` fixture (map.1→map.3) is
-  complete. Remaining: the rank-2n splitters (`_split_t2aaaa`/`_split_vaaaa`)
-  and the rank-8 (`t4`/CCSDTQ) gate.** The GCC generation handles
+- **S4 — higher rank (CCSDT/CCSDTQ) + engine-agnostic (~M-L). NUMERICALLY
+  COMPLETE through rank-8.** The core rank generalization (`_antisym_to_allowed`)
+  is landed and NUMERICALLY GATED at rank-6 (S4a.0c + S4a.1) AND rank-8 (S4d —
+  the production antisym integration reproduces the GCC quadruples slice on an
+  FCI-limit-converged closed-shell antisym `t4`). The rank-2n amplitude splitter
+  (S4b) is landed; the integral splitter is a confirmed no-op (S4c — `v` is always
+  rank-4). The rank-6 `t3` fixture (map.1→map.3) is complete. Only S4a.2 (the
+  optional unified lift consolidation) remains, and S4d showed it is not needed
+  for correctness. The GCC generation handles
   arbitrary rank (its `_line_pairs`/`block_exists` are general rank-2n), and the
   diagram engine emits CCSDT (triples, 414 terms) and CCSDTQ (quadruples, 2728
   terms) fine (`generate_cc_equations(m, engine="diagram")`). But the
@@ -789,14 +791,33 @@ spin-blocked RCC kernels reaching the PySCF energy).
     rank-6 analog of the rank-4 `S1AntisymIntegrationTests` and the numeric proof
     the S4 STRUCTURAL gate defers: it exercises the PRODUCTION path at rank 6, as
     a per-term algebraic identity (any amps), not residual-vanishing.
-  - **S4a.2 — generalize the lift to arbitrary order (~M).** State the lift as
-    one rank-2n rule: `t_n_so[p1..pn, h1..hn]` (spin-conserving lines) = a signed
-    sum over permutations within each same-spin sub-group of the bra (with the
-    matched ket permutation), applied to the RCC spatial amplitude, times the
-    spin-summation weight from S4a.0. Verify it reduces to `so_t2` at n=2 and
-    reproduces S4a.0 at n=3, then gate `t4` (rank-8) against `RCCSDTQ` the same
-    way. Deliverable: a single `closed_shell_antisym_lift(spatial, n)` replacing
-    the hand-written `so_t2`.
+  - **S4d — rank-8 (CCSDTQ / `t4`) numeric gate. LANDED (via the FCI-limit
+    route, not a `t4` oracle).** The doc originally scoped this as "gate `t4`
+    against RCCSDTQ the same way [as uccsdt]" — but PySCF 2.13.0 has **no
+    `uccsdtq`**, and `rccsdtq` gives only a SYMMETRIC triangular `t4full` that
+    self-cancels under antisymmetrization (the S4a.0a wall, one rank up). A random
+    antisym `t4` also fails (the collapse identity needs closed-shell α≡β;
+    measured off by 54). **Resolution:** iterate ccgen's GCC CCSDTQ residual to
+    self-consistency on RHF even/odd spin-orbitals — for a 4-electron system
+    (H4/STO-3G) CCSDTQ == FCI, so the converged amps ARE the exact closed-shell
+    antisymmetric tensors, no lift and no oracle needed. GHF was ruled out
+    (spin-mixed, no α/β partition); the RHF even/odd basis gives the clean
+    partition the adaptation needs. *Gates* (`S4dRank8IdentityTests`,
+    PySCF-guarded): the iterated CCSDTQ energy reaches FCI (~3e-8), `t4` is
+    closed-shell antisym (~4e-17), and production `ucc_integrate_term_antisym`
+    reproduces the GCC QUADRUPLES residual sliced to a mixed `aabb` external block
+    (the all-alpha rank-8 block is structurally impossible at 4 electrons) to
+    ~1e-16, on a t4 perturbed ×0.5 so the residual is genuinely nonzero (a real
+    identity test). This is the rank-8 analog of S4a.1, exercising the general
+    rank-2n `_antisym_to_allowed` at rank 8.
+  - **S4a.2 — generalize the lift to arbitrary order (~M). Now OPTIONAL /
+    lower-priority.** State the lift as one rank-2n rule and provide a single
+    `closed_shell_antisym_lift(spatial, n)` replacing the hand-written
+    `so_t2`/`_t3so_read`. This is a consolidation refactor, not a capability gate:
+    S4d showed the rank-8 numeric proof does NOT need a spatial→antisym lift at
+    all (the FCI-limit iterate produces the antisym `t4` directly), so the
+    unified lift is only worth building if the hand-written per-rank fills become
+    a maintenance burden.
 
   Then: **(b)** the rank-2n splitters. **The AMPLITUDE splitter is LANDED (S4b):**
   `_split_same_spin_amplitude` generalizes `_split_t2aaaa` to rank-2n (byte-
