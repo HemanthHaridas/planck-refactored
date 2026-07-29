@@ -349,6 +349,23 @@ def _eval_spinterm(st, tensors, no, n, out_names):
     )
 
 
+def _rcc_doubles_residual(terms, tensors, no, n):
+    """Spatial RCC doubles residual R2[a,b,i,j] (S2.2d-0): sum every single-block
+    spatial SpinTerm over its factors' spatial slices. Each collapsed term is one
+    fixed spin block, so evaluating it is a plain contraction (no spin sum) --
+    _eval_spinterm already slices each factor by spin+space and einsums, so this
+    is the RCC analog of residual_of over ONE spatial (abab) block. Output layout
+    [a,b,i,j] matches the sliced GCC abab residual, so it reconnects the collapsed
+    form to the already-validated S1/S2.1 identity."""
+    import numpy as np
+
+    nvs, nos = (n - no) // 2, no // 2
+    acc = np.zeros((nvs, nvs, nos, nos))
+    for st in terms:
+        acc = acc + _eval_spinterm(st, tensors, no, n, ["a", "b", "i", "j"])
+    return acc
+
+
 class UccManifoldTests(unittest.TestCase):
     """S1.3a: full-manifold aggregation into UCC blocks.
 
@@ -505,6 +522,733 @@ class UccFullManifoldTests(unittest.TestCase):
 
     def test_ccsd_full_manifold(self):
         self._check("ccsd", nosp=3, nvsp=4, seed=1)
+
+
+def _closed_shell_tensors(no, nv, seed):
+    """A CLOSED-SHELL (alpha == beta) spin-orbital tensor dict for the general
+    SpinTerm evaluator, built from a single SPATIAL seed and lifted into the
+    interleaved (even=alpha, odd=beta) spin-orbital layout.
+
+    For a closed-shell RHF reference the spin-orbital tensors are fixed by
+    spatial data: pick spatial amplitudes/integrals once, then for every
+    spin-allowed block copy the spatial values with the physical antisymmetry
+    sign. This makes the closed-shell relations hold by construction (t1a==t1b;
+    t2aa==antisym(t2ab)); S2.0 then VERIFIES `t2aa_from_t2ab` extracts that
+    relation, and the strong independent S2.0 check is PySCF UCCSD (S2PyscfTests).
+    Layout matches residual_eval: t1/t2 are [v..,o..] spin-orbital; v/f are over
+    the combined n-space (occ then vir), each block interleaved.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    nos, nvs = no // 2, nv // 2
+    n = no + nv
+
+    # spatial seeds
+    t1s = rng.standard_normal((nvs, nos))
+    t2s = rng.standard_normal((nvs, nvs, nos, nos))          # abab spatial
+    vs = rng.standard_normal((n // 2, n // 2, n // 2, n // 2))
+    fs = rng.standard_normal((n // 2, n // 2))
+
+    def sp_amp(p):        # spatial index of amplitude axis (even=a, odd=b)
+        return p // 2
+
+    def sp_v(p):          # spatial index of combined v/f axis
+        return (p // 2) if p < no else (p - no) // 2
+
+    t1 = np.zeros((nv, no))
+    for a in range(nv):
+        for i in range(no):
+            if a % 2 == i % 2:                               # spin conserved
+                t1[a, i] = t1s[sp_amp(a), sp_amp(i)]
+
+    t2 = np.zeros((nv, nv, no, no))
+    for a in range(nv):
+        for b in range(nv):
+            for i in range(no):
+                for j in range(no):
+                    if a % 2 == i % 2 and b % 2 == j % 2:    # spin conserved
+                        # antisymmetric spatial doubles = t2ab - swaps as needed
+                        t2[a, b, i, j] = (
+                            t2s[sp_amp(a), sp_amp(b), sp_amp(i), sp_amp(j)]
+                            - t2s[sp_amp(b), sp_amp(a), sp_amp(i), sp_amp(j)]
+                            if (a % 2) == (b % 2)             # same-spin: antisym
+                            else t2s[sp_amp(a), sp_amp(b), sp_amp(i), sp_amp(j)]
+                        )
+
+    # v is spin-conserving-per-line over the combined space (occ then vir),
+    # alpha==beta by the sp_v spatial seed. This is NOT the fully antisymmetric
+    # physicist integral -- S2.1/S2.2a/b are pure block-slicing identities that
+    # hold for any v. NOTE (S2.2c finding): ccgen's v structurally CANNOT carry
+    # the closed-shell relation v[aaaa] = v[abab] - P(v[abab]); that relation
+    # needs the exchange term, which a per-line-spin-conserving v lacks (the
+    # ket-swapped abab entry is spin-forbidden -> zero here). See the S2.2c note
+    # in CCGEN_SPIN_ADAPTATION_SCOPE.md.
+    v = np.zeros((n, n, n, n))
+    for p in range(n):
+        for q in range(n):
+            for r in range(n):
+                for s in range(n):
+                    if _sc(p, no) == _sc(r, no) and _sc(q, no) == _sc(s, no):
+                        v[p, q, r, s] = vs[sp_v(p), sp_v(q), sp_v(r), sp_v(s)]
+
+    f = np.zeros((n, n))
+    for p in range(n):
+        for q in range(n):
+            if _sc(p, no) == _sc(q, no):
+                f[p, q] = fs[sp_v(p), sp_v(q)]
+
+    return {"t1": t1, "t2": t2, "v": v, "f": f}
+
+
+class S2ClosedShellRelationTests(unittest.TestCase):
+    """S2.0: the closed-shell (alpha==beta) doubles block relation + t1 collapse.
+
+    Pins the swap+sign convention of `t2aa = t2ab - P(t2ab)`: on a closed-shell
+    spin-orbital t2, the directly-sliced same-spin (aaaa) block equals
+    `t2aa_from_t2ab` of the sliced mixed (abab) block, and t1a==t1b. This settles
+    the single most error-prone spot before any equation work. The STRONG,
+    independent S2.0 gate is PySCF UCCSD (S2PyscfTests.test_s20_*); this class is
+    the always-runnable tripwire on ccgen's own closed-shell lift.
+    """
+
+    def _tn(self, seed=7):
+        return _closed_shell_tensors(no=6, nv=8, seed=seed)
+
+    def test_t2aa_is_antisymmetrized_t2ab(self):
+        import numpy as np
+        from ccgen.spin import t2aa_from_t2ab
+        t2 = self._tn()["t2"]
+        nv, no = t2.shape[0], t2.shape[2]
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+        t2ab = t2[np.ix_(ve, vo, oe, oo)]
+        t2aa = t2[np.ix_(ve, ve, oe, oe)]
+        self.assertTrue(np.allclose(t2aa, t2aa_from_t2ab(t2ab), atol=1e-13),
+                        np.max(np.abs(t2aa - t2aa_from_t2ab(t2ab))))
+
+    def test_t1a_equals_t1b(self):
+        import numpy as np
+        t1 = self._tn(seed=8)["t1"]
+        nv, no = t1.shape
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+        self.assertTrue(np.allclose(t1[np.ix_(ve, oe)], t1[np.ix_(vo, oo)],
+                                    atol=1e-13))
+
+
+class S2AbabSubstitutionTests(unittest.TestCase):
+    """S2.1: the RCC single residual as the UCC abab-block residual evaluated
+    under the S2.0 substitution.
+
+    Proves the 'abab + substitution' model BEFORE any symbolic collapse: evaluate
+    the UCC abab-block manifold reading the same-spin (aaaa/bbbb) t2 slices ONLY
+    through `t2aa_from_t2ab(t2ab)` -- i.e. the RCC model stores a single mixed
+    block and reconstructs the same-spin one -- and require it reproduces the
+    directly-sliced GCC abab residual on closed-shell tensors. If this fails the
+    'abab + substitution' model is wrong and no symbolic work (S2.2) saves it.
+    The independent numeric anchor is PySCF rccsd.update_amps (S2PyscfTests).
+    """
+
+    def _check(self, method, seed):
+        import numpy as np
+        from ccgen.spin import ucc_manifold, t2aa_from_t2ab
+        from ccgen.tensors import Tensor
+        from ccgen.tests.residual_eval import residual_einsum
+
+        no, nv = 6, 8
+        n = no + nv
+        tn = _closed_shell_tensors(no, nv, seed=seed)
+        eqs = generate_cc_equations(method)
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+
+        # the GCC abab residual on the closed-shell tensors (the RCC target)
+        R2 = Tensor("R2", (make_vir("a"), make_vir("b"),
+                           make_occ("i"), make_occ("j")))
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn) for t in eqs["doubles"])
+        Rb = Rg[np.ix_(ve, vo, oe, oo)]
+
+        # substituted tensor set: DROP the same-spin t2 slices and rebuild them
+        # from the stored mixed block, so only t2ab is independent RCC data.
+        t2 = tn["t2"].copy()
+        t2aa_rec = t2aa_from_t2ab(t2[np.ix_(ve, vo, oe, oo)])
+        t2[np.ix_(ve, ve, oe, oe)] = t2aa_rec
+        t2[np.ix_(vo, vo, oo, oo)] = t2aa_rec       # alpha==beta closed shell
+        tn_sub = dict(tn, t2=t2)
+
+        acc = np.zeros_like(Rb)
+        for st in ucc_manifold(eqs["doubles"], R2)["abab"]:
+            acc += _eval_spinterm(st, tn_sub, no, n, ["a", "b", "i", "j"])
+        self.assertTrue(np.allclose(Rb, acc, atol=1e-11),
+                        f"{method} abab-substitution: {np.max(np.abs(Rb - acc))}")
+
+    def test_ccd_abab_substitution(self):
+        self._check("ccd", seed=0)
+
+    def test_ccsd_abab_substitution(self):
+        self._check("ccsd", seed=1)
+
+
+class S22aCanonicalizeBlocksTests(unittest.TestCase):
+    """S2.2a: canonicalize the abab-residual factors to the global-flip block rep.
+
+    The first, purely-mechanical piece of the S2.2 collapse: flip a<->b on any
+    factor whose spin block is not canonical (baba->abab, bbbb->aaaa), keeping
+    spatial indices and coefficients. Under the closed-shell alpha==beta symmetry
+    the flipped factor is the identical spatial quantity, so the rewrite must be a
+    NO-OP on the residual value -- gated at maxdiff 0 by the S2.1 harness. Also
+    asserts only {aaaa, abab} blocks survive (the reduction the step exists for).
+    """
+
+    def _check(self, method, seed):
+        import numpy as np
+        from ccgen.spin import ucc_manifold, canonicalize_spin_blocks
+        from ccgen.tensors import Tensor
+        from ccgen.tests.residual_eval import residual_einsum
+
+        no, nv = 6, 8
+        n = no + nv
+        tn = _closed_shell_tensors(no, nv, seed=seed)
+        eqs = generate_cc_equations(method)
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+
+        R2 = Tensor("R2", (make_vir("a"), make_vir("b"),
+                           make_occ("i"), make_occ("j")))
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn) for t in eqs["doubles"])
+        Rb = Rg[np.ix_(ve, vo, oe, oo)]
+
+        raw = ucc_manifold(eqs["doubles"], R2)["abab"]
+        canon = [canonicalize_spin_blocks(st) for st in raw]
+
+        # structural: every surviving block is its own global-flip canonical
+        # form (doubles collapse to {aaaa, abab}; singles factors to {aa}). The
+        # non-canonical reps baba/bbbb/bb must all be gone.
+        from ccgen.spin import _canonical_block
+        blocks = {f.block for st in canon for f in st.factors}
+        noncanon = {b for b in blocks if _canonical_block(b)[1]}
+        self.assertEqual(noncanon, set(),
+                         f"{method}: non-canonical blocks survived: {noncanon}")
+        self.assertTrue({"baba", "bbbb", "bb"}.isdisjoint(blocks))
+
+        # consistency: each factor's block tag must match its SpinIndex spins.
+        # (The numeric no-op alone cannot catch a relabel that leaves the indices
+        # unflipped -- eval reads spins, not the tag -- but S2.2b/c read the tag,
+        # so a tag/spin mismatch would silently corrupt the collapse.)
+        for st in canon:
+            for f in st.factors:
+                self.assertEqual(f.block, "".join(si.spin for si in f.indices),
+                                 f"{method}: {f.name} block/spin mismatch")
+
+        # numeric no-op: canonicalized terms reproduce the abab residual exactly
+        acc = np.zeros_like(Rb)
+        for st in canon:
+            acc += _eval_spinterm(st, tn, no, n, ["a", "b", "i", "j"])
+        self.assertTrue(np.allclose(Rb, acc, atol=1e-13),
+                        f"{method} canonicalize: {np.max(np.abs(Rb - acc))}")
+
+    def test_ccd_canonicalize_is_noop(self):
+        self._check("ccd", seed=0)
+
+    def test_ccsd_canonicalize_is_noop(self):
+        self._check("ccsd", seed=1)
+
+
+class S22bAmplitudeCollapseTests(unittest.TestCase):
+    """S2.2b: collapse the same-spin amplitude block t2[aaaa] -> t2ab - P(t2ab).
+
+    The first step where coefficients change (one term splits into two). Applies
+    `collapse_amplitudes` to the canonicalized abab residual and requires:
+    (1) no t2[aaaa] factor survives -- every t2 is now the single spatial abab
+    block; (2) the term count grew (the split actually fired); (3) the residual
+    value is UNCHANGED (S2.1 harness, maxdiff ~1e-13) -- proving the symbolic
+    split equals the numeric S2.0 relation already validated at S2.1. v[aaaa] is
+    intentionally still present (S2.2c handles integrals).
+    """
+
+    def _check(self, method, seed):
+        import numpy as np
+        from ccgen.spin import ucc_manifold, canonicalize_spin_blocks
+        from ccgen.spin import collapse_amplitudes
+        from ccgen.tensors import Tensor
+        from ccgen.tests.residual_eval import residual_einsum
+
+        no, nv = 6, 8
+        n = no + nv
+        tn = _closed_shell_tensors(no, nv, seed=seed)
+        eqs = generate_cc_equations(method)
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+
+        R2 = Tensor("R2", (make_vir("a"), make_vir("b"),
+                           make_occ("i"), make_occ("j")))
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn) for t in eqs["doubles"])
+        Rb = Rg[np.ix_(ve, vo, oe, oo)]
+
+        canon = [canonicalize_spin_blocks(st)
+                 for st in ucc_manifold(eqs["doubles"], R2)["abab"]]
+        collapsed = [c for st in canon for c in collapse_amplitudes(st)]
+
+        # (1) no same-spin t2 amplitude remains
+        t2blocks = {f.block for st in collapsed for f in st.factors
+                    if f.name == "t2"}
+        self.assertEqual(t2blocks, {"abab"}, f"{method}: t2 blocks {t2blocks}")
+        # tag/spin consistency preserved through the split
+        for st in collapsed:
+            for f in st.factors:
+                self.assertEqual(f.block, "".join(si.spin for si in f.indices))
+        # (2) the split fired -- more terms out than in
+        self.assertGreater(len(collapsed), len(canon))
+
+        # (3) residual value unchanged
+        acc = np.zeros_like(Rb)
+        for st in collapsed:
+            acc += _eval_spinterm(st, tn, no, n, ["a", "b", "i", "j"])
+        self.assertTrue(np.allclose(Rb, acc, atol=1e-13),
+                        f"{method} amplitude-collapse: {np.max(np.abs(Rb - acc))}")
+
+    def test_ccd_amplitude_collapse(self):
+        self._check("ccd", seed=0)
+
+    def test_ccsd_amplitude_collapse(self):
+        self._check("ccsd", seed=1)
+
+
+class S22cIntegralCollapseStructureTests(unittest.TestCase):
+    """S2.2c: `collapse_integrals` splits the same-spin integral block
+    v[aaaa] -> v[abab] - v[abab](ket swap), the integral analog of S2.2b.
+
+    STRUCTURAL gate only. Unlike S2.2b, the residual-value no-op CANNOT be gated
+    on the synthetic fixture: ccgen's v is spin-conserving-per-line and
+    structurally cannot carry the closed-shell relation v[aaaa] = v[abab] - P
+    (the ket-swapped abab entry is spin-forbidden -> zero for a per-line v, so
+    v[aaaa] would collapse to just v[abab], not the antisymmetrized combination).
+    The exchange term the relation needs lives in separate ccgen terms, not in v.
+    So the numeric no-op belongs to a later step with real (chemist 2J-K)
+    integrals -- see the S2.2c note in CCGEN_SPIN_ADAPTATION_SCOPE.md and S2.2d.
+    Here we pin the rewrite's STRUCTURE: after S2.2a->b->c every doubles factor is
+    a single spatial block, the v split fires, and tag/spin stays consistent.
+    """
+
+    def _check(self, method, seed):
+        from ccgen.spin import (ucc_manifold, canonicalize_spin_blocks,
+                                 collapse_amplitudes, collapse_integrals)
+        from ccgen.tensors import Tensor
+
+        no, nv = 6, 8
+        R2 = Tensor("R2", (make_vir("a"), make_vir("b"),
+                           make_occ("i"), make_occ("j")))
+        canon = [canonicalize_spin_blocks(st)
+                 for st in ucc_manifold(generate_cc_equations(method)["doubles"],
+                                        R2)["abab"]]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        collapsed = [c for st in amp for c in collapse_integrals(st)]
+
+        # every v is the single spatial abab block; no same-spin v[aaaa] remains
+        vblocks = {f.block for st in collapsed for f in st.factors
+                   if f.name == "v"}
+        self.assertEqual(vblocks, {"abab"}, f"{method}: v blocks {vblocks}")
+        # after the full pipeline every doubles factor is a canonical single block
+        allblocks = {(f.name, f.block) for st in collapsed for f in st.factors}
+        self.assertTrue(all(b in ("abab", "aa") for _, b in allblocks),
+                        f"{method}: non-single blocks {allblocks}")
+        # the v split fired, and tag/spin stays consistent
+        self.assertGreater(len(collapsed), len(amp))
+        for st in collapsed:
+            for f in st.factors:
+                self.assertEqual(f.block, "".join(si.spin for si in f.indices))
+
+    def test_ccd_integral_collapse_structure(self):
+        self._check("ccd", seed=0)
+
+    def test_ccsd_integral_collapse_structure(self):
+        self._check("ccsd", seed=1)
+
+
+class S22d0SpatialResidualTests(unittest.TestCase):
+    """S2.2d-0: the spatial RCC doubles residual evaluator reproduces the
+    already-validated S2.1 abab block, PySCF-free.
+
+    `_rcc_doubles_residual` sums the collapsed single-block SpinTerms as plain
+    spatial contractions. Gated on the AMPLITUDE-collapsed manifold (post-S2.2b):
+    there every factor is single-block AND the value is preserved on the
+    synthetic fixture (~1e-13 vs the sliced GCC abab residual). The FULL integral
+    collapse (post-S2.2c) is intentionally NOT value-gated here -- ccgen's
+    spin-conserving v cannot carry v[aaaa]=v[abab]-P, so the v-split is only
+    value-correct on real chemist integrals (S2.2d-2). This asserts that gap
+    explicitly, so the split between the PySCF-free baseline (amp) and the
+    real-integral proof (S2.2d-2) is pinned, not forgotten.
+    """
+
+    def _manifolds(self, method):
+        from ccgen.spin import (ucc_manifold, canonicalize_spin_blocks,
+                                 collapse_amplitudes, collapse_integrals)
+        from ccgen.tensors import Tensor
+        R2 = Tensor("R2", (make_vir("a"), make_vir("b"),
+                           make_occ("i"), make_occ("j")))
+        canon = [canonicalize_spin_blocks(st)
+                 for st in ucc_manifold(generate_cc_equations(method)["doubles"],
+                                        R2)["abab"]]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        collapsed = [c for st in amp for c in collapse_integrals(st)]
+        return amp, collapsed
+
+    def _check(self, method, seed):
+        import numpy as np
+        from ccgen.tensors import Tensor
+        from ccgen.tests.residual_eval import residual_einsum
+
+        no, nv = 6, 8
+        n = no + nv
+        tn = _closed_shell_tensors(no, nv, seed=seed)
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn)
+                 for t in generate_cc_equations(method)["doubles"])
+        Rb = Rg[np.ix_(ve, vo, oe, oo)]
+
+        amp, collapsed = self._manifolds(method)
+
+        # PySCF-free baseline: amp-collapsed spatial residual == sliced GCC abab
+        R_amp = _rcc_doubles_residual(amp, tn, no, n)
+        self.assertTrue(np.allclose(R_amp, Rb, atol=1e-11),
+                        f"{method} spatial(amp): {np.max(np.abs(R_amp - Rb))}")
+
+        # the FULL integral collapse is NOT value-preserving on the synthetic
+        # spin-conserving v (the documented S2.2c finding) -- assert the gap so
+        # the deferral to S2.2d-2 is explicit, not silently wrong.
+        R_full = _rcc_doubles_residual(collapsed, tn, no, n)
+        self.assertFalse(np.allclose(R_full, Rb, atol=1e-6),
+                         f"{method}: integral collapse unexpectedly value-preserving "
+                         "on synthetic v -- S2.2c finding may be stale, recheck")
+
+    def test_ccd_spatial_residual(self):
+        self._check("ccd", seed=0)
+
+    def test_ccsd_spatial_residual(self):
+        self._check("ccsd", seed=1)
+
+
+class S22d1MergeTests(unittest.TestCase):
+    """S2.2d-1: merge structurally-identical spatial terms.
+
+    `merge_terms` groups collapsed SpinTerms by a factor-order- and
+    summed-relabel-invariant signature and sums coefficients. Requires: (1) the
+    residual VALUE is unchanged (merge is pure algebra -- value-preserving on the
+    synthetic fixture regardless of v); (2) the term count actually dropped (real
+    merges fired, not a no-op); (3) the merged coefficients carry the
+    characteristic RCC 2J-K combinations (e.g. |coeff| in {2, 4} appears -- the
+    exchange/Coulomb pair sums), which the un-merged collapsed list does not.
+    """
+
+    def _collapsed(self, method):
+        from ccgen.spin import (ucc_manifold, canonicalize_spin_blocks,
+                                 collapse_amplitudes, collapse_integrals)
+        from ccgen.tensors import Tensor
+        R2 = Tensor("R2", (make_vir("a"), make_vir("b"),
+                           make_occ("i"), make_occ("j")))
+        canon = [canonicalize_spin_blocks(st)
+                 for st in ucc_manifold(generate_cc_equations(method)["doubles"],
+                                        R2)["abab"]]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        return [c for st in amp for c in collapse_integrals(st)]
+
+    def _check(self, method, seed):
+        import numpy as np
+        from ccgen.spin import merge_terms
+
+        no, nv = 6, 8
+        n = no + nv
+        tn = _closed_shell_tensors(no, nv, seed=seed)
+        externals = {"a", "b", "i", "j"}
+
+        collapsed = self._collapsed(method)
+        merged = merge_terms(collapsed, externals)
+
+        # (2) real merges fired
+        self.assertLess(len(merged), len(collapsed),
+                        f"{method}: no merge ({len(merged)} == {len(collapsed)})")
+        # (1) value unchanged (merge is tensor-independent algebra)
+        R_before = _rcc_doubles_residual(collapsed, tn, no, n)
+        R_after = _rcc_doubles_residual(merged, tn, no, n)
+        self.assertTrue(np.allclose(R_before, R_after, atol=1e-12),
+                        f"{method} merge: {np.max(np.abs(R_before - R_after))}")
+        # (3) the RCC 2J-K coefficient combinations appear
+        merged_absc = {abs(t.coeff) for t in merged}
+        collapsed_absc = {abs(t.coeff) for t in collapsed}
+        self.assertTrue(any(c > 1 for c in merged_absc),
+                        f"{method}: no 2J-K combination in merged coeffs "
+                        f"{sorted(str(c) for c in merged_absc)}")
+        self.assertFalse(any(c > 1 for c in collapsed_absc),
+                         "unmerged collapsed terms should have |coeff|<=1")
+
+        # idempotent: merging again is a no-op
+        self.assertEqual(len(merge_terms(merged, externals)), len(merged))
+
+    def test_ccd_merge(self):
+        self._check("ccd", seed=0)
+
+    def test_ccsd_merge(self):
+        self._check("ccsd", seed=1)
+
+
+try:
+    from pyscf import gto, scf  # noqa: F401
+    from pyscf.cc import rccsd, uccsd  # noqa: F401
+    _HAVE_PYSCF = True
+except ImportError:  # pragma: no cover - pyscf lives in tests/pyscf/.venv
+    _HAVE_PYSCF = False
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S2PyscfTests(unittest.TestCase):
+    """S2.0 against an independent oracle: PySCF UCCSD's own closed-shell block
+    relation. rccsd/uccsd are the RHF closed-shell CC residual -- exactly the RCC
+    target. Run with the pyscf venv:
+
+        tests/pyscf/.venv/bin/python -m unittest ccgen.tests.test_spin
+    """
+
+    def test_s20_t2aa_from_uccsd_blocks(self):
+        # Converge UCCSD from a UHF reference on a closed-shell molecule; its
+        # spin blocks satisfy the closed-shell relation. PySCF layout is
+        # [i,j,a,b]; our helper is [v,v,o,o] with a virtual swap. Confirm both
+        # give PySCF's own t2aa from its t2ab. Water/sto-3g stays symmetric
+        # (UHF==RHF) and has 5 occ / 2 vir spatials, so t2aa is a real nonzero
+        # block that exercises the swap sign; equally-spaced H4 breaks spin
+        # symmetry, which would violate alpha==beta.
+        import numpy as np
+        from ccgen.spin import t2aa_from_t2ab
+        mol = gto.M(atom="O 0 0 0; H 0 0 0.96; H 0.93 0 -0.24",
+                    basis="sto-3g", spin=0, verbose=0)
+        mf = scf.UHF(mol).run()
+        mc = uccsd.UCCSD(mf)
+        mc.kernel()
+        t2aa, t2ab, _ = mc.t2                       # [i,j,a,b]
+        self.assertGreater(np.max(np.abs(t2aa)), 1e-3, "t2aa must be nonzero")
+        # PySCF's relation: same-spin = antisymmetrize the mixed block
+        self.assertLess(np.max(np.abs(t2aa - (t2ab - t2ab.transpose(1, 0, 2, 3)))),
+                        1e-7, "PySCF occ-swap relation")
+        # our helper in [v,v,o,o] must reproduce it
+        t2ab_vvoo = t2ab.transpose(2, 3, 0, 1)
+        got = t2aa_from_t2ab(t2ab_vvoo).transpose(2, 3, 0, 1)  # back to [i,j,a,b]
+        self.assertLess(np.max(np.abs(got - t2aa)), 1e-7,
+                        "t2aa_from_t2ab vs PySCF UCCSD")
+        # t1a == t1b on the closed-shell reference
+        self.assertLess(np.max(np.abs(mc.t1[0] - mc.t1[1])), 1e-5)
+
+
+def _real_antisym_tensors(atom="O 0 0 0; H 0 0 0.96; H 0.93 0 -0.24",
+                          basis="sto-3g"):
+    """Build the REAL antisymmetric spin-orbital CC tensors from a PySCF RHF
+    RCCSD reference, in the residual_eval layout. `v = <pq||rs>` (fully
+    antisym, from ao2mo <pq|rs> minus exchange); `t1`/`t2` from the converged
+    RCCSD amplitudes lifted to spin-orbital (closed-shell fill); `f` diagonal MO
+    energies. These are the tensors ccgen's GCC equations actually consume, so
+    they are the correct oracle for spin integration -- unlike the synthetic
+    spin-conserving `_closed_shell_tensors`, their forbidden blocks are nonzero
+    (they carry exchange). Returns (tensors, no, nv, mf, cc)."""
+    import numpy as np
+    mol = gto.M(atom=atom, basis=basis, spin=0, verbose=0)
+    mf = scf.RHF(mol).run()
+    cc = rccsd.RCCSD(mf)
+    cc.kernel()
+    nocc = cc.nocc
+    nmo = mf.mo_coeff.shape[1]
+    nvir = nmo - nocc
+    no, nv, n = 2 * nocc, 2 * nvir, 2 * nmo
+    from pyscf import ao2mo
+    eri = ao2mo.kernel(mol, mf.mo_coeff, aosym="s1").reshape(nmo, nmo, nmo, nmo)
+    g = eri.transpose(0, 2, 1,3)   # physicist <pq|rs>
+
+    def csp(p):
+        return (p // 2) if p < no else nocc + ((p - no) // 2)
+
+    def cspin(p):
+        return (p % 2) if p < no else ((p - no) % 2)
+
+    v = np.zeros((n, n, n, n))
+    for p in range(n):
+        for q in range(n):
+            for r in range(n):
+                for s in range(n):
+                    c = (g[csp(p), csp(q), csp(r), csp(s)]
+                         if cspin(p) == cspin(r) and cspin(q) == cspin(s) else 0)
+                    e = (g[csp(p), csp(q), csp(s), csp(r)]
+                         if cspin(p) == cspin(s) and cspin(q) == cspin(r) else 0)
+                    v[p, q, r, s] = c - e
+    t2ab = cc.t2
+
+    def so_t2(sa, sb, si, sj, A, B, I, J):
+        if sa == si and sb == sj and not (sa == sj and sb == si):
+            return t2ab[I, J, A, B]
+        if sa == sj and sb == si and not (sa == si and sb == sj):
+            return -t2ab[I, J, B, A]
+        if sa == sb == si == sj:
+            return t2ab[I, J, A, B] - t2ab[I, J, B, A]
+        return 0.0
+
+    t2 = np.zeros((nv, nv, no, no))
+    for a in range(nv):
+        for b in range(nv):
+            for i in range(no):
+                for j in range(no):
+                    t2[a, b, i, j] = so_t2(a % 2, b % 2, i % 2, j % 2,
+                                           a // 2, b // 2, i // 2, j // 2)
+    t1 = np.zeros((nv, no))
+    for a in range(nv):
+        for i in range(no):
+            if a % 2 == i % 2:
+                t1[a, i] = cc.t1[i // 2, a // 2]
+    f = np.zeros((n, n))
+    for p in range(n):
+        f[p, p] = mf.mo_energy[csp(p)]
+    return {"t1": t1, "t2": t2, "v": v, "f": f}, no, nv, mf, cc
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S1AntisymIntegrationTests(unittest.TestCase):
+    """S1.2' / S2.2d-2 blocker resolution: `ucc_integrate_term_antisym`
+    reproduces the GCC residual on REAL antisymmetric integrals.
+
+    The plain `ucc_integrate_term` (block filter) drops the forbidden-block
+    cases, which is exact only for spin-conserving tensors; on real
+    antisymmetric integrals it fails the S2.1 identity (~0.06). The antisym
+    variant re-expresses each forbidden factor into its allowed block via
+    bra/ket swaps with sign, and matches GCC to ~1e-16 -- singles and doubles,
+    on the tensors ccgen's GCC actually consumes.
+    """
+
+    def _check(self, method):
+        import numpy as np
+        from ccgen.spin import ucc_integrate_term_antisym
+        from ccgen.tests.residual_eval import residual_einsum
+
+        tn, no, nv, mf, cc = _real_antisym_tensors()
+        n = no + nv
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+        eqs = generate_cc_equations(method)
+
+        # The gate is the IDENTITY (antisym integration == GCC slice), which holds
+        # for any amplitudes -- not that the residual vanishes (CCD at CCSD amps
+        # does not). CCSD full-residual vanishing is a separate check below.
+        Rg_d = sum(residual_einsum(t, no, nv, tensors=tn) for t in eqs["doubles"])
+
+        # doubles abab: antisym integration == GCC slice
+        Rb = Rg_d[np.ix_(ve, vo, oe, oo)]
+        acc = np.zeros_like(Rb)
+        for t in eqs["doubles"]:
+            for st in ucc_integrate_term_antisym(t, {"a": "a", "b": "b",
+                                                     "i": "a", "j": "b"}):
+                acc += _eval_spinterm(st, tn, no, n, ["a", "b", "i", "j"])
+        self.assertLess(np.max(np.abs(acc - Rb)), 1e-10,
+                        f"{method} doubles antisym != GCC abab")
+
+        # singles aa: same
+        if "singles" in eqs:
+            Rs = sum(residual_einsum(t, no, nv, tensors=tn)
+                     for t in eqs["singles"])
+            Rsa = Rs[np.ix_(ve, oe)]
+            accs = np.zeros_like(Rsa)
+            for t in eqs["singles"]:
+                for st in ucc_integrate_term_antisym(t, {"a": "a", "i": "a"}):
+                    accs += _eval_spinterm(st, tn, no, n, ["a", "i"])
+            self.assertLess(np.max(np.abs(accs - Rsa)), 1e-10,
+                            f"{method} singles antisym != GCC aa")
+
+    def test_ccsd_antisym_matches_gcc(self):
+        self._check("ccsd")
+
+    def test_ccd_antisym_matches_gcc(self):
+        self._check("ccd")
+
+    def test_gcc_vanishes_at_converged_ccsd_amps(self):
+        # validates the real-antisym tensor build: ccgen's GCC CCSD residual
+        # (both blocks) is ~0 at PySCF's converged RCCSD amps, and the energy
+        # matches cc.e_corr. If this fails the oracle tensors are wrong, not the
+        # integration.
+        import numpy as np
+        from ccgen.tests.residual_eval import residual_einsum
+        tn, no, nv, mf, cc = _real_antisym_tensors()
+        eqs = generate_cc_equations("ccsd")
+        for block in ("singles", "doubles"):
+            R = sum(residual_einsum(t, no, nv, tensors=tn) for t in eqs[block])
+            self.assertLess(np.max(np.abs(R)), 1e-5,
+                            f"GCC {block} residual nonzero at converged amps")
+        E = sum(float(residual_einsum(t, no, nv, tensors=tn))
+                for t in eqs["energy"])
+        self.assertLess(abs(E - cc.e_corr), 1e-6, "GCC energy != cc.e_corr")
+
+
+def _rcc_doubles_pipeline(method):
+    """The full S2.2a->d spatial RCC doubles residual, built on the
+    antisymmetry-correct integration: antisym-integrate the abab external block,
+    then canonicalize -> collapse amplitudes -> collapse integrals -> merge.
+    Returns the merged spatial SpinTerms."""
+    from ccgen.spin import (ucc_integrate_term_antisym, canonicalize_spin_blocks,
+                            collapse_amplitudes, collapse_integrals, merge_terms)
+    ext = {"a": "a", "b": "b", "i": "a", "j": "b"}
+    manifold = []
+    for t in generate_cc_equations(method)["doubles"]:
+        manifold.extend(ucc_integrate_term_antisym(t, ext))
+    canon = [canonicalize_spin_blocks(st) for st in manifold]
+    amp = [c for st in canon for c in collapse_amplitudes(st)]
+    coll = [c for st in amp for c in collapse_integrals(st)]
+    return merge_terms(coll, set(ext))
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S22dEndToEndTests(unittest.TestCase):
+    """S2.2d-2: the whole S2.2a->d collapse, built on the antisym integration,
+    reproduces the RCC residual on REAL integrals end to end.
+
+    This is the payoff the block-filter fix unblocked. The merged spatial RCC
+    doubles residual, evaluated on the real antisymmetric water/STO-3G tensors at
+    PySCF's converged RCCSD amplitudes, vanishes (== the GCC residual there,
+    ~1e-7) -- so the collapsed equation IS the RCC doubles residual. The merged
+    coefficients carry the RCC `2J - K` combinations (|coeff| in {2, 4}).
+    """
+
+    def test_ccsd_rcc_residual_vanishes_at_converged_amps(self):
+        import numpy as np
+        tn, no, nv, mf, cc = _real_antisym_tensors()
+        n = no + nv
+        ve, oe = list(range(0, nv, 2)), list(range(0, no, 2))
+        vo, oo = list(range(1, nv, 2)), list(range(1, no, 2))
+
+        merged = _rcc_doubles_pipeline("ccsd")
+        acc = np.zeros((nv // 2, nv // 2, no // 2, no // 2))
+        for st in merged:
+            acc += _eval_spinterm(st, tn, no, n, ["a", "b", "i", "j"])
+        self.assertLess(np.max(np.abs(acc)), 1e-6,
+                        "merged RCC doubles residual should vanish at converged "
+                        f"amps, got {np.max(np.abs(acc))}")
+        # the RCC 2J-K coefficients are present
+        self.assertTrue(any(abs(t.coeff) > 1 for t in merged),
+                        "no 2J-K combination in merged RCC coefficients")
+
+    def test_ccsd_rcc_matches_gcc_slice(self):
+        # stronger than "vanishes": the merged RCC residual equals the GCC abab
+        # slice for ANY amplitudes (not just at the solution). Perturb the amps
+        # off the solution and require the identity still holds.
+        import numpy as np
+        from ccgen.tests.residual_eval import residual_einsum
+        tn, no, nv, mf, cc = _real_antisym_tensors()
+        n = no + nv
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+        Rb = sum(residual_einsum(t, no, nv, tensors=tn)
+                 for t in generate_cc_equations("ccsd")["doubles"]
+                 )[np.ix_(ve, vo, oe, oo)]
+        merged = _rcc_doubles_pipeline("ccsd")
+        acc = np.zeros_like(Rb)
+        for st in merged:
+            acc += _eval_spinterm(st, tn, no, n, ["a", "b", "i", "j"])
+        self.assertLess(np.max(np.abs(acc - Rb)), 1e-10,
+                        f"merged RCC != GCC abab: {np.max(np.abs(acc - Rb))}")
 
 
 if __name__ == "__main__":
