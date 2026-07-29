@@ -536,13 +536,29 @@ spin-blocked RCC kernels reaching the PySCF energy).
   antisym re-expression is INVALID on spin-structured tensors whose forbidden
   blocks are artificially zeroed (a zero forbidden block must NOT be re-expressed
   to a nonzero allowed one — verified this breaks, 108/126 terms), and raw random
-  antisym tensors aren't closed-shell (α≢β) so the spin-integration identity
-  doesn't hold. Building that fixture is the same class of work as the
-  `_real_antisym_tensors` build but for `t3`/`t4` (no PySCF rccsdt oracle needed
-  since the identity is algebraic — a synthetic closed-shell antisym lift
-  suffices). (b) the rank-2n splitters (#2). (c) the higher-rank collapse
-  coefficient check (#3). Engine-agnostic is already effectively there — the
-  layer operates on `AlgebraTerm`s and the diagram-engine manifolds feed the same
+  antisym tensors aren't closed-shell (α≢β).
+
+  *Real oracle available (explored):* **`pyscf.cc.rccsdt.RCCSDT`** ships in the
+  pinned PySCF 2.13.0 and converges (`cc.kernel()`, `cc.t1/t2/t3`,
+  `cc.e_corr`) — a genuine closed-shell RCCSDT `t3`. Its `t3` is stored in a
+  **triangular-packed spatial** form (`cc.t3` shape `[o,o,v,v]`-ish for LiH;
+  unpack to full `[o,o,o,v,v,v]` via `tamps_tri2full_rhf(cc, cc.t3)`). The
+  unpacked `t3full` is the RCC **symmetric** representation — symmetric under
+  simultaneous particle interchange `(i,a)↔(j,b)` (verified `0`), NOT
+  antisymmetric in `(i,j)` alone (verified `~1e-3`). Lifting it to the
+  spin-orbital ANTISYMMETRIC `t3` (the ccgen convention) is the remaining
+  convention work: a naive "spin-conserving fill + antisymmetrize/6" lift got the
+  **energy** right to 1e-9 (evaluating ccgen's GCC energy at the lifted amps ==
+  `cc.e_corr`) but left the **residual** at ~1e-4 (not the ~1e-8 a correct lift
+  gives), because the RCC-symmetric `t3full` is not the "mixed abab block" the
+  way `t2ab` is — the inverse of RCC's spatial reduction for `t3` must be applied.
+  So the oracle is real and the energy already cross-validates the lift; the
+  residual-level rank-6 identity needs that `t3` lift convention pinned (the same
+  class of work as `_real_antisym_tensors`' `t2` lift, one rank up).
+
+  (b) the rank-2n splitters (#2). (c) the higher-rank collapse coefficient check
+  (#3). Engine-agnostic is already effectively there — the layer operates on
+  `AlgebraTerm`s and the diagram-engine manifolds feed the same
   `ucc_integrate_term_antisym` unchanged.
 
 ## Honest boundaries
