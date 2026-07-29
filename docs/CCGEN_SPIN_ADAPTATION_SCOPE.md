@@ -600,19 +600,27 @@ spin-blocked RCC kernels reaching the PySCF energy).
     GCC-CCSDT converged `t3` (Jacobi-iterate the GCC residual to self-consistency
     on the real integrals) or the true spin-summation inverse of `t3full`.
 
-  *Scoped sub-steps (revised again per S4a.0a):*
-  - **S4a.0b — derive the spin-summation inverse for `t3` (~M, the core).** The
-    forward map (spin-orbital antisym `t3` → RCC symmetric `t3full`) is the
-    standard closed-shell spin summation; invert it. Cleanest validation: pick a
-    small random SPATIAL seed, build a spin-orbital antisym `t3` from it by a
-    candidate inverse rule, spin-sum it forward, and require it round-trips to the
-    seed. *Gate:* forward∘inverse == identity on random spatial `t3`
-    (PySCF-free, algebraic).
-  - **S4a.0c — numeric gate on the strong-correlation fixture (~S).** Apply the
-    S4a.0b inverse to PySCF's `t3full` and require the GCC triples residual at
-    RCCSDT amps < 1e-7 on N2 (`|t3|` large enough to expose any error), AND
-    energy still 1e-9. Oracle: PySCF RCCSDT (the fixture is built; only the lift
-    rule changes).
+  **S4a.0b IN PROGRESS — a MUCH better oracle found: PySCF `uccsdt`.** Instead of
+  inverting RCCSDT's symmetric `t3full`, use **`pyscf.cc.uccsdt.UCCSDT`** (also
+  in 2.13.0). On a closed-shell UHF≡RHF reference it converges to the same
+  `e_corr` (N2: −0.2194) and stores `t3` in explicit SPIN BLOCKS
+  (`aaa`, `aab`, `abb`, `bbb`); `tamps_tri2full_uhf(cc, cc.t3)` unpacks them to
+  full tensors. Crucially the `aaa` block is **genuinely antisymmetric** (verified
+  `aaa == −aaa.T` in both `(i,j)` and `(a,b)`, unlike RCCSDT's symmetric
+  `t3full`). So the antisym spin-orbital `t3` assembles DIRECTLY from these
+  blocks — no spin-summation inverse to derive. Progress: assembled `t3so` from
+  the 4 blocks (norm 0.11, nonzero as it should be); antisymmetry is down to
+  ~0.007 — the remaining error is the **mixed-block index layout** (`aab` is
+  `[i,j,a,b,k,c]` = alpha `i,j,a,b` / beta `k,c`; the `abb` layout + the
+  line-reorder-parity sign in the assembly need pinning). *Remaining S4a.0b
+  work:* fix the `aab`/`abb` index map so `t3so` is antisym to ~1e-12, mechanical
+  block-layout bookkeeping. *Gate:* `t3so` fully antisym + `t3so` reduces to
+  `aaa`/`aab` on the pure blocks.
+  - **S4a.0c — numeric gate on the strong-correlation fixture (~S).** With the
+    correct `t3so` from S4a.0b's UCCSDT assembly, require the GCC triples residual
+    < 1e-7 on N2 (`|t3|` large enough to expose any error). Oracle: the residual
+    vanishing at the converged UCCSDT amps (a self-consistent full `t1/t2/t3`
+    set). No RCCSDT `t3full` inversion needed at all.
   - **S4a.1 — the rank-6 S1' identity (~S).** With S4a.0's correct `t3` fixture,
     gate `ucc_integrate_term_antisym` == GCC triples slice on the real
     closed-shell antisym integrals (~1e-11). This is the numeric proof the S4
