@@ -621,22 +621,64 @@ spin-blocked RCC kernels reaching the PySCF energy).
     `[i,j,a,b,k,c]` (verified antisym in axes (0,1) alpha-occ and (2,3)
     alpha-vir; beta `k,c` last); `abb` is `[k,l,c,d,i,a]` = beta-occ,beta-occ,
     beta-vir,beta-vir,alpha-occ,alpha-vir (antisym in (0,1)&(2,3)).
-  - **Assembly status:** same-spin-swap antisymmetry is EXACT (0.0); the residual
-    error is only in the mixed blocks — the physical **line-swap** antisymmetry
-    `(a,i)↔(b,j)` ACROSS spins is still ~0.013. Ruled out: it is NOT a global sign
-    or alpha-line occ-ordering — all four {±sign}×{occ-order} combos give the
-    identical 0.013, so the error is structural in the mixed-block slot mapping,
-    not a sign. The likely culprit is how a cross-spin line-swap maps `aab`→`aba`
-    (a *different* index arrangement of the same block) and whether PySCF's `aab`
-    has the antisymmetry I'm assuming under that particular swap — this needs
-    checking the `aab` block's OWN transposition symmetries directly (which axis
-    swaps it is/ isn't invariant under) and building the mixed t3so entry as the
-    correctly-signed image, rather than a canonical-order lookup. ALSO: uccsdt
-    `t2ab` has a different layout than rccsd's — the fixture's `so_t2` fill needs
-    the uccsdt `t2ab` convention (its direct reuse index-overflowed). *Gate:*
-    `t3so` line-swap-antisym ~1e-12 + reduces to `aaa`/`aab` on pure blocks.
-    This is bounded but genuinely fiddly PySCF-convention archaeology — not a
-    quick finish; best done methodically against each block's measured symmetries.
+  **Mixed-block mapping — measured facts + the precise remaining derivation.**
+  Same-spin-swap antisymmetry is EXACT (0.0); the error is the physical LINE-SWAP
+  antisymmetry (swap two `(vir,occ)` line pairs together). Measured `aab`/`abb`
+  symmetries (both blocks identical structure): **antisym under the occ-pair swap
+  (axes 0,1) ALONE and the vir-pair swap (axes 2,3) ALONE, SYMMETRIC under the
+  joint swap.** That joint-symmetry is the trap: a physical line-swap of two
+  same-spin lines is exactly the joint (occ+vir) swap → the block returns the
+  SAME value, but the spin-orbital `t3` needs a `−1`. Failing example pinned:
+  `t3so[1,3,0, 7,13,8]` (spins ββα/ββα, abb-type) vs its line-swap partner —
+  both read `−0.00629` instead of ±.
+
+  So the value must be `sign(P) × blk[canonical-line-order]` where `P` is the
+  permutation of the THREE LINES (not axes) from the entry to canonical, and
+  `sign(P)` is its parity. The block's own single-axis antisymmetry must NOT be
+  relied on for the within-group swap (it's symmetric under the joint one);
+  instead the explicit line-permutation parity supplies every sign. Attempts so
+  far conflate the two — patching one swap's sign breaks another (fixing the
+  same-spin transposition left the cross-spin `(a,i)↔(c,k)` at 0.002 while
+  `(a,i)↔(b,j)` stayed 0.015).
+
+  *Scoped sub-steps for the mapping:*
+  - **map.1 — pin the canonical read (~S).** For a canonical entry (lines already
+    in `[maj, maj, min]` order, occ indices ascending within the majority group),
+    define `t3so = blk[occ_maj0, occ_maj1, vir_maj0, vir_maj1, occ_min, vir_min]`.
+    *Gate:* on canonical entries only, `t3so` reproduces the block exactly and is
+    antisym under the single occ-pair and single vir-pair swaps (which it
+    inherits from the block).
+  - **map.2 — the line-permutation sign. PARTLY DONE (0.015 → 0.006), NOT
+    closed.** The unified `sign(P_lines) ×` (block read of lines sorted to
+    `[maj, maj, min]`) structure improved things but the assembled `t3so` still
+    fails the INDEPENDENT bra/ket antisymmetry that `residual_einsum` requires
+    (bra `(a,b)` swap ~0.006, ket `(i,j)` swap ~0.011). Facts pinned this turn:
+    - The block antisymmetries are the trap: `aaa/bbb/aab/abb` are each antisym
+      under the occ-pair swap ALONE and the vir-pair swap ALONE, but SYMMETRIC
+      under the joint (occ+vir) swap (verified `bbb + bbb.T(1,0,2,4,3,5) =
+      0.00212`, i.e. joint is symmetric). A direct read `aaa[i,j,k,a,b,c]` is
+      correct for bra-only/ket-only antisym but needs an extra `−1` the block
+      doesn't supply for combined permutations — and applying a blanket
+      line-parity to `aaa/bbb` OVER-corrects (breaks them: 0→0.010). So `aaa/bbb`
+      want the direct read; the mixed blocks want the line-parity — the two
+      conventions must be reconciled, which is the unclosed part.
+    - `aaa==bbb` 7e-19, `aab==abb` 5e-17 — blocks are perfectly closed-shell, so
+      the error is purely the index/sign mapping.
+    - Ruled out: sort-by-occ vs -vir; vir-pair ordering in the read; blanket
+      line-parity on all blocks. Each leaves a ~0.002–0.01 floor.
+    *Assessment:* this needs a ground-up derivation of PySCF UCCSDT's exact
+    electron-pairing convention for `aab`/`abb` (which axis pairs form the lines,
+    and the induced sign for a general spin-orbital entry) rather than
+    trial-and-error — it is real reverse-engineering, the same class as the t2/v
+    fixture convention work. *Gate unchanged:* independent bra/ket antisym
+    ~1e-12, then GCC triples residual < 1e-7.
+  - **map.3 — fix the fixture `t2ab` layout (~XS).** uccsdt `t2ab` is
+    `[i,a,j,b]` (shape `(7,3,7,3)` on N2 = alpha `i,a` / beta `j,b`), NOT rccsd's
+    `[i,j,a,b]`; the `so_t2` fill index-overflowed on the direct reuse. Use the
+    uccsdt `[i,a,j,b]` layout in the N2 fixture. *Gate:* doubles residual at
+    UCCSDT amps consistent with triples.
+  *Then S4a.0c gate:* `t3so` fully line-antisym ~1e-12 AND GCC triples residual
+  < 1e-7 at UCCSDT amps on N2.
   - **S4a.0c — numeric gate on the strong-correlation fixture (~S).** With the
     correct `t3so` from S4a.0b's UCCSDT assembly, require the GCC triples residual
     < 1e-7 on N2 (`|t3|` large enough to expose any error). Oracle: the residual
