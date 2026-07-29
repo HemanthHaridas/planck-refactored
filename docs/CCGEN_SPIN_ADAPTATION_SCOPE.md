@@ -469,12 +469,24 @@ spin-blocked RCC kernels reaching the PySCF energy).
     layout, not a numeric round-trip; the numeric proof is the S3.2 energy gate.
     Mutation-verified (corrupting the block-glyph map fails it). Since the terms
     are already spatial RCC, lowering acts as layout-only, exactly as intended.
-  - **S3.2 — emit + end-to-end energy (~M).** Run `planck_tensor_cpp` on the
-    lowered RCC terms; confirm the emitted C++ compiles against the real CC
-    headers (the `tau` A1 work already established this compile harness). *Gate:*
-    the emitted RCC kernel (or its Python-evaluated equivalent) reaches the PySCF
-    RCCSD `E_corr` via the energy-at-amps trick (~1e-9 on water/STO-3G). Do
-    doubles first, then singles.
+  - **S3.2 — end-to-end energy + emit. NUMERIC HALF LANDED; C++ emission
+    remains.**
+    - *Numeric (LANDED, `S32EnergyTests`).* The spin-adapted RCC ENERGY
+      expression (`E = f_ia t1 + ¼ t2 v + ½ t1 t1 v`) runs through the same
+      pipeline with an EMPTY external block (fully contracted scalar) and reaches
+      PySCF's RCCSD `E_corr` to **~1e-8** at converged amps on real water/STO-3G
+      integrals. `_rcc_pipeline` now handles `block="energy"`. Together with the
+      singles+doubles residuals vanishing (`S22dEndToEndTests`), this is the
+      convention-robust "evaluate at PySCF amps" end-to-end proof of the WHOLE
+      adapted RCC equation set (energy + both residuals) — the numeric gate the
+      doc called for.
+    - *C++ emission (remaining).* Route the adapted RCC `AlgebraTerm` dict
+      (energy/singles/doubles from `spinterm_to_algebraterm` on the pipeline
+      output) through `emit_planck_translation_unit`, and confirm the emitted C++
+      compiles against the real CC headers (the `tau` A1
+      `test_generated_source_compiles` harness is the template). This is
+      mechanical codegen wiring, not new algebra — the correctness is already
+      proven numerically above.
 
   A UCC lowering (distinct α/β blocks) is deferred — RCC is the closed-shell
   production target and the harder coefficient case; UCC reuses the same bridge

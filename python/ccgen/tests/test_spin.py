@@ -1184,16 +1184,18 @@ class S1AntisymIntegrationTests(unittest.TestCase):
 
 
 def _rcc_pipeline(method, block):
-    """The full S2.2a->d spatial RCC residual for one block, built on the
-    antisymmetry-correct integration: antisym-integrate the external block, then
-    canonicalize -> collapse amplitudes -> collapse integrals -> merge. ``block``
-    is "singles" or "doubles"; the collapse steps are block-agnostic (they act on
-    t2[aaaa]/v[aaaa] factors regardless of the residual's own externals). Returns
-    the merged spatial SpinTerms."""
+    """The full S2.2a->d spatial RCC residual (or energy) for one manifold, built
+    on the antisymmetry-correct integration: antisym-integrate the external block,
+    then canonicalize -> collapse amplitudes -> collapse integrals -> merge.
+    ``block`` is "energy", "singles", or "doubles"; the collapse steps are
+    block-agnostic (they act on t2[aaaa]/v[aaaa] factors regardless of the
+    residual's own externals). "energy" has an empty external block (a fully
+    contracted scalar). Returns the merged spatial SpinTerms."""
     from ccgen.spin import (ucc_integrate_term_antisym, canonicalize_spin_blocks,
                             collapse_amplitudes, collapse_integrals, merge_terms)
-    ext = ({"a": "a", "i": "a"} if block == "singles"
-           else {"a": "a", "b": "b", "i": "a", "j": "b"})
+    ext = {"energy": {},
+           "singles": {"a": "a", "i": "a"},
+           "doubles": {"a": "a", "b": "b", "i": "a", "j": "b"}}[block]
     manifold = []
     for t in generate_cc_equations(method)[block]:
         manifold.extend(ucc_integrate_term_antisym(t, ext))
@@ -1353,9 +1355,6 @@ class S22dEndToEndTests(unittest.TestCase):
         import numpy as np
         tn, no, nv, mf, cc = _real_antisym_tensors()
         n = no + nv
-        ve, oe = list(range(0, nv, 2)), list(range(0, no, 2))
-        vo, oo = list(range(1, nv, 2)), list(range(1, no, 2))
-
         merged = _rcc_doubles_pipeline("ccsd")
         acc = np.zeros((nv // 2, nv // 2, no // 2, no // 2))
         for st in merged:
@@ -1407,6 +1406,31 @@ class S22dEndToEndTests(unittest.TestCase):
         # vanishes at converged amps (Rb itself is the residual at the solution)
         self.assertLess(np.max(np.abs(acc)), 1e-6,
                         "merged RCC singles residual should vanish at converged amps")
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S32EnergyTests(unittest.TestCase):
+    """S3.2 (numeric half): the spin-adapted RCC ENERGY expression reaches the
+    PySCF RCCSD correlation energy.
+
+    The energy manifold (`E = f_ia t1 + 1/4 t2 v + 1/2 t1 t1 v`) runs through the
+    same S2.2a→d pipeline with an EMPTY external block (a fully contracted
+    scalar). Evaluated on the real antisymmetric water/STO-3G tensors at PySCF's
+    converged RCCSD amplitudes, the merged RCC energy equals `cc.e_corr` to
+    ~1e-8. This is the convention-robust "evaluate at PySCF amps" scalar gate --
+    it, together with the singles+doubles residuals vanishing (S22dEndToEndTests),
+    is the numeric end-to-end proof of the whole adapted RCC equation set. The
+    remaining S3.2 work is C++ EMISSION (route the adapted AlgebraTerms through
+    `emit_planck_translation_unit` and compile), not this numeric check.
+    """
+
+    def test_ccsd_rcc_energy_matches_pyscf(self):
+        tn, no, nv, mf, cc = _real_antisym_tensors()
+        n = no + nv
+        merged = _rcc_pipeline("ccsd", "energy")
+        E = sum(float(_eval_spinterm(st, tn, no, n, [])) for st in merged)
+        self.assertLess(abs(E - cc.e_corr), 1e-6,
+                        f"adapted RCC energy {E} != PySCF e_corr {cc.e_corr}")
 
 
 if __name__ == "__main__":
