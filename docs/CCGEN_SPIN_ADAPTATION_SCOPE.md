@@ -457,12 +457,18 @@ spin-blocked RCC kernels reaching the PySCF energy).
     doubles. Coefficient-mutation-verified. (Per-term evaluation equivalence to
     the SpinTerm was confirmed manually via matched slicing; the structural gate
     is the durable check.)
-  - **S3.1 — lower the bridged terms (~S).** Feed the converted RCC
-    `AlgebraTerm`s through `lower_term_restricted_closed_shell`; confirm it
-    produces valid `RestrictedClosedShellTerm` IR (block signatures + slot
-    permutations) without error and that the lowered form still evaluates to the
-    same residual. Since the terms are already spatial, this exercises lowering
-    as layout-only. *Gate:* lowered-IR evaluation == S3.0 residual.
+  - **S3.1 — lower the bridged terms. LANDED.** The converted RCC `AlgebraTerm`s
+    lower cleanly through `lower_term_restricted_closed_shell` — coefficient
+    carried, canonical free indices in the manifold occ/vir signature, every
+    factor gets a valid block signature (o/v glyphs, length = rank), amplitude
+    factors in their canonical block (`t1→ov`, `t2→oovv` — note a singles
+    residual still contains `t2` factors), and `v` factors mapped to a canonical
+    ERI block (`oovv/ovov/…`) with a ±1 phase. *Gate* (`S31LoweringTests`,
+    PySCF-free): matches the STRUCTURAL house style of the existing
+    `test_restricted_closed_shell_lowering_*` regressions — block/space/phase
+    layout, not a numeric round-trip; the numeric proof is the S3.2 energy gate.
+    Mutation-verified (corrupting the block-glyph map fails it). Since the terms
+    are already spatial RCC, lowering acts as layout-only, exactly as intended.
   - **S3.2 — emit + end-to-end energy (~M).** Run `planck_tensor_cpp` on the
     lowered RCC terms; confirm the emitted C++ compiles against the real CC
     headers (the `tau` A1 work already established this compile harness). *Gate:*

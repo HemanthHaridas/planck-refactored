@@ -1281,6 +1281,61 @@ class S30BridgeTests(unittest.TestCase):
         self._check("ccsd", "singles", {"a", "i"}, ["a", "i"])
 
 
+class S31LoweringTests(unittest.TestCase):
+    """S3.1: the bridged RCC AlgebraTerms lower cleanly through
+    `lower_term_restricted_closed_shell` to emit-ready spatial IR.
+
+    Follows the house style of the existing lowering regressions (structural, not
+    numeric — the numeric proof is the S3.2 energy gate). Confirms every bridged
+    RCC term lowers without error, the canonical free indices carry the right
+    occ/vir spaces for the manifold, every factor gets a valid block signature
+    (only o/v glyphs), amplitude factors land in the expected block, and `v`
+    factors are mapped to a canonical ERI block. PySCF-free.
+    """
+
+    _ERI_BLOCKS = {"oooo", "ooov", "oovv", "ovov", "ovvo", "ovvv", "vvvv"}
+
+    # each amplitude tensor lands in one canonical block regardless of which
+    # residual it appears in (a singles residual still contains t2 factors).
+    _AMP_BLOCK = {"t1": "ov", "t2": "oovv"}
+
+    def _check(self, method, block, free_spaces):
+        from ccgen.spin import spinterm_to_algebraterm
+        from ccgen.lowering import lower_term_restricted_closed_shell
+        externals = {"doubles": {"a", "b", "i", "j"},
+                     "singles": {"a", "i"}}[block]
+        merged = _rcc_pipeline_filtered(method, block)
+        self.assertTrue(merged)
+        for st in merged:
+            at = spinterm_to_algebraterm(st, externals)
+            lt = lower_term_restricted_closed_shell(at, block)
+            # coefficient carried through
+            self.assertEqual(lt.coeff, st.coeff)
+            # canonical free indices have the manifold's occ/vir signature
+            self.assertEqual(
+                tuple(i.space for i in lt.canonical_free_indices), free_spaces)
+            for f in lt.factors:
+                # block signature is only o/v glyphs, length = factor rank
+                self.assertTrue(set(f.spatial_block) <= {"o", "v"}, f.spatial_block)
+                self.assertEqual(len(f.spatial_block), len(f.source.indices))
+                self.assertIn(f.phase, (1, -1))
+                if f.name in self._AMP_BLOCK:
+                    self.assertEqual(f.spatial_block, self._AMP_BLOCK[f.name],
+                                     f"{f.name} block {f.spatial_block}")
+                if f.name == "v":
+                    self.assertIn(f.spatial_block, self._ERI_BLOCKS,
+                                  f"v block {f.spatial_block} not canonical")
+
+    def test_ccd_doubles_lowering(self):
+        self._check("ccd", "doubles", ("occ", "occ", "vir", "vir"))
+
+    def test_ccsd_doubles_lowering(self):
+        self._check("ccsd", "doubles", ("occ", "occ", "vir", "vir"))
+
+    def test_ccsd_singles_lowering(self):
+        self._check("ccsd", "singles", ("occ", "vir"))
+
+
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
 class S22dEndToEndTests(unittest.TestCase):
     """S2.2d-2: the whole S2.2a->d collapse, built on the antisym integration,
