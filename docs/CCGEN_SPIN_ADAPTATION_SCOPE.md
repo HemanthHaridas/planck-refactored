@@ -559,22 +559,46 @@ spin-blocked RCC kernels reaching the PySCF energy).
     `so_t2` exactly): `t3so` IS antisymmetric (0), ENERGY still ~1e-9, residual
     still ~1e-4/1e-3.
 
-    Both get the energy (a robust full contraction) but not the residual — so
-    the lift is CLOSE but structurally incomplete. The gap is almost certainly a
-    missing **spin-summation weight**: PySCF's own `t3_spin_summation_inplace_`
-    applies a `P3_full` pattern with a `-1/6` factor (seen in
-    `update_amps_rccsdt_tri_`), i.e. the RCC-symmetric `t3full` carries a
-    normalization that the antisymmetrizer must undo. The correct lift is the
-    inverse of RCC's forward spatial reduction, not a blanket antisymmetrization.
+    Both get the energy (a robust full contraction) but not the residual.
 
-  *Scoped sub-steps:*
-  - **S4a.0 — nail the `t3` lift numerically (~M).** Derive/curve-fit the exact
-    weight so the lift reproduces the GCC residual at PySCF amps to ~1e-8 (not
-    just the energy). Fastest path: compare the lifted `t3so`'s mixed
-    (`aab/aba/…`) and same-spin (`aaa`) blocks directly against a *reference*
-    spin-orbital antisym `t3` — obtain one from PySCF `gccsd_t`/a GHF triples
-    amplitude if extractable, or from `t3_spin_summation_inplace_`'s inverse.
-    *Gate:* GCC triples residual at PySCF RCCSDT amps < 1e-7 with the lifted `t3`.
+  *Diagnostics gathered (these reshape S4a.0 — the earlier "missing scalar
+  weight" hypothesis is DISPROVEN):*
+  - Scaling the lifted `t3so` by any factor (0.25…6) leaves the triples residual
+    **unchanged** at ~2.4e-3 — so the error is NOT a scalar weight.
+  - With `t3so = 0` the triples residual is the **same** ~2.4e-3, and even a
+    `t3` solved directly from the residual (`t3corr = R0/e_ijkabc`) only drops it
+    to ~5e-4 — so on this system `t3` barely moves the residual.
+  - Root reason: **LiH/STO-3G is too weakly correlated** — `|t3full| ≈ 0.0019`,
+    the same order as the residual floor. A ~few-% lift error is invisible
+    against a near-zero `t3`. Strong-correlation systems have `|t3| ≈ 0.03`
+    (`N2/STO-3G` 0.0315; linear `H4` stretched 0.0416) — **~20× larger**, so a
+    lift error there shows up ~20× more clearly. HF-stretched has `t3 ≈ 0` (bad
+    fixture). So the gate needs a strong-correlation system, not LiH.
+  - PySCF's `t3_spin_summation_inplace_` is C-backed pattern code
+    (`P3_full`/`P3_201`/`P3_422`) used *inside* its iteration, NOT a clean
+    "give me the antisym `t3`" bridge (applying `P3_full` `-1/6, beta=1` to
+    `t3full` barely changes it), so reverse-engineering it is the wrong lever.
+
+  *Scoped sub-steps (revised):*
+  - **S4a.0a — a strong-correlation triples fixture + t3-sensitivity check
+    (~S).** Build `_real_antisym_tensors`-style tensors from `RCCSDT` on `N2` or
+    linear stretched `H4` (`|t3| ≈ 0.03`), with the current (imperfect) `t3so`
+    lift. *Gate:* confirm the triples residual is now t3-DOMINATED — i.e. it
+    changes materially between `t3so=0` and `t3so`, and the `t3corr = R0/e`
+    (residual-solved `t3`) drives the full residual to ~1e-10. This proves the
+    fixture exposes the lift error (unlike LiH) and gives `t3corr`, the exact
+    target the lift must reproduce.
+  - **S4a.0b — diff the lift against `t3corr`, block by block (~S).** With
+    `t3corr` (the correct spin-orbital antisym `t3` in ccgen's convention) in
+    hand, compute `t3so_lift − t3corr` per spin block (`aaa`, `aab`, `aba`, …).
+    *Gate:* identify whether the discrepancy is a per-block sign/permutation
+    (structural) or a per-block scalar. This turns "fix the lift" into a concrete
+    finite table of corrections.
+  - **S4a.0c — corrected lift + numeric gate (~M).** Apply the S4a.0b finding to
+    the lift rule (the same-spin-group antisymmetrizer plus whatever per-block
+    correction b reveals). *Gate:* GCC triples residual at RCCSDT amps < 1e-7 on
+    the strong-correlation system, AND still energy-correct to 1e-9. `t3corr` is
+    the oracle throughout — no reverse-engineering of PySCF internals.
   - **S4a.1 — the rank-6 S1' identity (~S).** With S4a.0's correct `t3` fixture,
     gate `ucc_integrate_term_antisym` == GCC triples slice on the real
     closed-shell antisym integrals (~1e-11). This is the numeric proof the S4
