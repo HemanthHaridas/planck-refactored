@@ -465,20 +465,52 @@ def canonicalize_spin_blocks(spinterm: SpinTerm) -> SpinTerm:
 # INTEGRAL same-spin block v[aaaa] is deferred to S2.2c (the 2J-K step).
 
 
-def _split_t2aaaa(factor: SpinFactor) -> list[tuple[object, SpinFactor]]:
-    """Expand a same-spin t2[aaaa] factor into the two abab factors of the S2.0
-    relation, each as a (sign, SpinFactor) pair. Slots are [v,v,o,o]; the second
-    term swaps the two virtual slots and carries -1. The emitted factors are abab
-    (per-slot spins a,b,a,b) over the (unswapped / virtual-swapped) spatial
-    indices."""
-    A, B, I, J = factor.indices  # SpinIndex, all spin 'a'
-    abab_spins = ("a", "b", "a", "b")
+def _split_same_spin_amplitude(factor: SpinFactor) -> list[tuple[object, SpinFactor]]:
+    """Expand a same-spin all-alpha amplitude factor `t_n[a..a]` (slots
+    [v*n, o*n]) into the mixed block via the pinned S4b.0 relation, as a list of
+    (sign, SpinFactor) pairs.
 
-    def mk(order):
-        idx = tuple(SpinIndex(si.base, s) for si, s in zip(order, abab_spins))
-        return SpinFactor(name="t2", block="abab", indices=idx)
+    The mixed block has bra spins (a,..,a,b) and ket spins (a,..,a,b) -- a single
+    beta on the last bra and last ket slot. The all-alpha block is reconstructed
+    by BRA-ONLY antisymmetrization: one term per bra position p in 0..n-1 that
+    receives the beta bra-slot (moved from position n-1), with the transposition
+    sign; the KET is fixed. At n=2 this is exactly the old `_split_t2aaaa`
+    (t2[aaaa] = t2[abab] - t2[abab](bra swap)); rank-6/8 fall out unchanged.
+    Numerically pinned at n=2,3 to ~1e-17 (`S4bZeroCollapseRelationTests`)."""
+    idx = factor.indices                      # SpinIndex, all spin 'a'
+    n = len(idx) // 2
+    vbra = [si.base for si in idx[:n]]         # virtual (bra) base indices
+    ket = [si.base for si in idx[n:]]          # occupied (ket) base -- FIXED
+    # Fixed mixed block: bra spins (a,..,a,b), ket spins (a,..,a,b) -- the single
+    # beta on the last bra slot and last ket slot. Block string is those per-slot
+    # spins (n=2 -> "abab"; n=3 -> "aabaab").
+    spins = tuple("a" if k != n - 1 else "b" for k in range(n)) * 2
+    block = "".join(spins)
 
-    return [(1, mk((A, B, I, J))), (-1, mk((B, A, I, J)))]
+    def mk(bra_order):
+        bases = tuple(vbra[o] for o in bra_order) + tuple(ket)
+        new_idx = tuple(SpinIndex(b, s) for b, s in zip(bases, spins))
+        return SpinFactor(name=factor.name, block=block, indices=new_idx)
+
+    # Move each virtual into the beta slot (last bra position) in turn: base order
+    # places virtual `q` at slot n-1. The identity (q = n-1) leads. Sign = parity
+    # of that base permutation. This is the base-permutation form of the old
+    # `_split_t2aaaa` (n=2: virtual swap), generalized to rank-2n and pinned
+    # numerically at n=2,3 (S4bSplitterTests).
+    out = []
+    for q in range(n - 1, -1, -1):
+        order = [x for x in range(n) if x != q] + [q]   # q occupies slot n-1
+        sign = 1
+        for a in range(n):
+            for b in range(a + 1, n):
+                if order[a] > order[b]:
+                    sign = -sign
+        out.append((sign, mk(order)))
+    return out
+
+
+# Back-compat alias: the rank-4 entry name kept for existing callers/tests.
+_split_t2aaaa = _split_same_spin_amplitude
 
 
 def collapse_amplitudes(spinterm: SpinTerm) -> list[SpinTerm]:
@@ -492,12 +524,24 @@ def collapse_amplitudes(spinterm: SpinTerm) -> list[SpinTerm]:
     # choices[k] is the list of (sign, factor) alternatives for factor k
     choices = []
     for f in spinterm.factors:
-        if f.name == "t2" and f.block == "aaaa":
-            choices.append(_split_t2aaaa(f))
+        if _is_same_spin_amplitude(f):
+            choices.append(_split_same_spin_amplitude(f))
         else:
             choices.append([(1, f)])
 
     return _product_over_choices(spinterm, choices)
+
+
+def _is_same_spin_amplitude(f: SpinFactor) -> bool:
+    """A rank-2n (n>=2) cluster amplitude in the all-alpha same-spin block --
+    the factors the S2.0 collapse splits. t1 (rank-2) is already a single spatial
+    block (`aa`) and is left alone; v/f are handled by the integral collapse and
+    the single-block pass-through. Generalizes the old `t2 && aaaa` check to
+    t2/t3/t4/... via the block being a nonempty all-'a' string of even length >=4."""
+    return (f.name.startswith("t")
+            and len(f.block) >= 4
+            and len(f.block) % 2 == 0
+            and set(f.block) == {"a"})
 
 
 # ── S2.2c integral collapse: v[aaaa] -> v[abab] - P(v[abab]) ───────────

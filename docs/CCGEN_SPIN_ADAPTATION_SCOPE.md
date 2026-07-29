@@ -530,7 +530,33 @@ spin-blocked RCC kernels reaching the PySCF energy).
      rank ≤ 4 fails the gate).
   2. **`_split_t2aaaa` / `_split_vaaaa`** are still hardcoded 4-index — the
      same-spin higher-rank amplitude blocks (`t3[aaaaaa]` etc.) need their own
-     antisym split, or a general rank-2n splitter. NOT yet done.
+     antisym split, or a general rank-2n splitter. **The rank-2n relation is now
+     PINNED (S4b.0, LANDED):** the all-alpha same-spin block `t_n[a..a]`
+     reconstructs from the mixed block whose bra spins are `(a,..,a,b)` (single
+     beta bra-slot at position n-1) by **BRA-ONLY antisymmetrization** — the
+     signed sum over placing that beta bra-slot in each of the n bra positions,
+     with the transposition sign, **ket FIXED**. At n=2 this is exactly
+     `_split_t2aaaa`'s `t2[aaaa] = t2[abab] − t2[abab](bra swap)`; at n=3 it is a
+     3-term sum reproducing `t3[aaaaaa]` from the `aab` block. Verified on the
+     real UCCSDT closed-shell antisym fixture to ~1e-17 at both ranks
+     (`S4bZeroCollapseRelationTests`); a JOINT bra+ket swap does NOT reproduce it
+     (~0.014), so bra-only is load-bearing.
+
+     **S4b.1 + S4b.2 LANDED.** `_split_same_spin_amplitude` in `ccgen/spin.py`
+     replaces `_split_t2aaaa` (kept as a back-compat alias): a same-spin all-alpha
+     `t_n[a..a]` factor (any rank-2n) splits into the fixed mixed block (bra/ket
+     spins `(a,..,a,b)`, block `"abab"` at n=2, `"aabaab"` at n=3) by permuting the
+     VIRTUAL base indices so each virtual takes a turn in the beta slot (ket base
+     fixed), sign = the base-permutation parity. `collapse_amplitudes` now
+     dispatches via `_is_same_spin_amplitude` (name starts `t`, even block length
+     >= 4, all-`a`) so t3/t4 collapse too, not just t2. *Gates*
+     (`S4bSplitterTests`): the summed split reproduces the all-alpha block on the
+     real fixture at rank-4 AND rank-6 (~1e-12); `collapse_amplitudes` leaves no
+     all-alpha t3 factor (3 terms out); t1 is not split; tag/spin consistency
+     holds. **Byte-identical to the old `_split_t2aaaa` at n=2**, so the S2.2b
+     rank-4 regression (`S22bAmplitudeCollapseTests`) stays green. The integral
+     splitter `_split_vaaaa` (S4c) is separate; scan first whether any rank>4 `v`
+     even appears (likely a no-op — `v` stays rank-4 across CCSDT/CCSDTQ).
   3. The closed-shell block relations generalize (`t3aa… = t3 mixed − P`) but the
      coefficient collapse for rank ≥ 6 is unverified.
 
@@ -772,11 +798,18 @@ spin-blocked RCC kernels reaching the PySCF energy).
     way. Deliverable: a single `closed_shell_antisym_lift(spatial, n)` replacing
     the hand-written `so_t2`.
 
-  Then: **(b)** the rank-2n splitters (`_split_t2aaaa`/`_split_vaaaa` still
-  4-index — generalize `_split_t2aaaa` to a rank-2n same-spin antisym splitter);
-  **(c)** the higher-rank collapse coefficient check. Engine-agnostic is already
-  effectively there — the layer operates on `AlgebraTerm`s and the diagram-engine
-  manifolds feed the same `ucc_integrate_term_antisym` unchanged.
+  Then: **(b)** the rank-2n splitters. **The AMPLITUDE splitter is LANDED (S4b):**
+  `_split_same_spin_amplitude` generalizes `_split_t2aaaa` to rank-2n (byte-
+  identical at n=2), wired into `collapse_amplitudes`; pinned at rank-4/6. **The
+  INTEGRAL splitter (`_split_vaaaa`) is a CONFIRMED NO-OP (S4c):** the two-electron
+  integral is fundamentally rank-4, so every `v` factor is rank-4 across CCSDT and
+  CCSDTQ — no rank-6/8 integral exists in CC theory, so `_split_vaaaa` needs no
+  generalization (`S4cIntegralRankTests` pins it). **(c)** the higher-rank collapse
+  coefficient check + the rank-8 (`t4`/CCSDTQ) end-to-end gate (S4d) remain.
+  Engine-agnostic is already effectively there — the layer operates on
+  `AlgebraTerm`s and the diagram-engine manifolds feed the same
+  `ucc_integrate_term_antisym` unchanged (and S4a.1 now runs on the diagram engine,
+  proven equivalent to wick by S4a.0c).
 
 ## Honest boundaries
 

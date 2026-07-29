@@ -1987,6 +1987,10 @@ class S4a1Rank6IdentityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tn, cls.no, cls.nv, cls.cc = _uccsdt_so_tensors()
+        # Diagram engine: ~equivalent to wick for CCSDT (proven residual-vanishing
+        # both ways in S4a0cTriplesResidualTests) and much faster to generate.
+        # Generate once and share across the two external-block checks.
+        cls.triples = generate_cc_equations("ccsdt", engine="diagram")["triples"]
 
     def _check_external(self, ext, vir_pat, occ_pat):
         import numpy as np
@@ -1994,15 +1998,15 @@ class S4a1Rank6IdentityTests(unittest.TestCase):
         from ccgen.tests.residual_eval import residual_einsum
         tn, no, nv = self.tn, self.no, self.nv
         n = no + nv
-        eqs = generate_cc_equations("ccsdt")
-        Rg = sum(residual_einsum(t, no, nv, tensors=tn) for t in eqs["triples"])
+        triples = self.triples
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn) for t in triples)
         # R layout is [a,b,c,i,j,k]; slice each axis to its spin (a=even, b=odd)
         vsl = {"a": list(range(0, nv, 2)), "b": list(range(1, nv, 2))}
         osl = {"a": list(range(0, no, 2)), "b": list(range(1, no, 2))}
         Rb = Rg[np.ix_(vsl[vir_pat[0]], vsl[vir_pat[1]], vsl[vir_pat[2]],
                        osl[occ_pat[0]], osl[occ_pat[1]], osl[occ_pat[2]])]
         acc = np.zeros_like(Rb)
-        for t in eqs["triples"]:
+        for t in triples:
             for st in ucc_integrate_term_antisym(t, ext):
                 acc += _eval_spinterm(st, tn, no, n,
                                       ["a", "b", "c", "i", "j", "k"])
@@ -2019,6 +2023,198 @@ class S4a1Rank6IdentityTests(unittest.TestCase):
         self._check_external(
             {"a": "a", "b": "a", "c": "b", "i": "a", "j": "a", "k": "b"},
             "aab", "aab")
+
+
+def _collapse_same_spin_block(t_mixed, n):
+    """S4b.0: reconstruct the all-alpha same-spin block t_n[a..a] from the mixed
+    block whose bra spins are (a,..,a,b) (the single beta bra-slot at position
+    n-1). BRA-ONLY antisymmetrization: sum over placing the beta bra-slot in each
+    of the n bra positions, with the transposition sign; the ket is FIXED.
+
+    This is the rank-2n generalization of `_split_t2aaaa`'s S2.0 relation
+    (t2[aaaa] = t2[abab] - t2[abab](bra swap)) -- there n=2, one beta bra-slot
+    over 2 positions -> 2 terms. `t_mixed` is spatial [v*n, o*n]."""
+    import numpy as np
+    out = np.zeros_like(t_mixed)
+    for pos in range(n):
+        bra = [x for x in range(n) if x != n - 1]
+        bra.insert(pos, n - 1)                      # move the beta-slot to `pos`
+        sign = 1
+        for a in range(n):
+            for b in range(a + 1, n):
+                if bra[a] > bra[b]:
+                    sign = -sign
+        axes = tuple(bra) + tuple(range(n, 2 * n))  # bra permuted, ket fixed
+        out += sign * t_mixed.transpose(axes)
+    return out
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S4bZeroCollapseRelationTests(unittest.TestCase):
+    """S4b.0: pin the rank-2n same-spin amplitude-collapse relation numerically,
+    BEFORE writing the general splitter (same discipline as S2.0 / map.1).
+
+    The all-alpha same-spin block collapses to the mixed block by BRA-ONLY
+    antisymmetrization of the single beta bra-slot across the n bra positions
+    (ket fixed). Verified on the real closed-shell antisym UCCSDT fixture at:
+      - rank-4 (t2[aaaa] from t2[abab]) -- anchors the existing `_split_t2aaaa`
+        relation as the n=2 case,
+      - rank-6 (t3[aaaaaa] from the aab block) -- the new rank-6 content.
+    A joint (bra+ket) swap does NOT reproduce it (checked in scoping: ~0.014), so
+    the bra-only rule is load-bearing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tn, cls.no, cls.nv, cls.cc = _uccsdt_so_tensors()
+        cls.ve = list(range(0, cls.nv, 2))
+        cls.vo = list(range(1, cls.nv, 2))
+        cls.oe = list(range(0, cls.no, 2))
+        cls.oo = list(range(1, cls.no, 2))
+
+    def test_rank4_t2_relation(self):
+        import numpy as np
+        t2 = self.tn["t2"]
+        ve, vo, oe, oo = self.ve, self.vo, self.oe, self.oo
+        t2_abab = t2[np.ix_(ve, vo, oe, oo)]        # abab: bra (a,b), ket (a,b)
+        t2_aaaa = t2[np.ix_(ve, ve, oe, oe)]
+        recon = _collapse_same_spin_block(t2_abab, 2)
+        self.assertLess(np.abs(recon - t2_aaaa).max(), 1e-12,
+                        "rank-4 same-spin collapse relation broken")
+
+    def test_rank6_t3_relation(self):
+        import numpy as np
+        t3 = self.tn["t3"]
+        ve, vo, oe, oo = self.ve, self.vo, self.oe, self.oo
+        # mixed aab: bra (a,a,b), ket (a,a,b) -- beta at bra slot 2 and ket slot 2
+        t3_aab = t3[np.ix_(ve, ve, vo, oe, oe, oo)]
+        t3_aaa = t3[np.ix_(ve, ve, ve, oe, oe, oe)]
+        recon = _collapse_same_spin_block(t3_aab, 3)
+        self.assertLess(np.abs(recon - t3_aaa).max(), 1e-12,
+                        "rank-6 same-spin collapse relation broken")
+
+    def test_joint_swap_is_wrong(self):
+        # pins the finding: a JOINT (bra+ket) antisymmetrization does NOT give the
+        # all-alpha block, so the bra-only rule cannot be replaced by a line swap.
+        import numpy as np
+        t3 = self.tn["t3"]
+        ve, vo, oe, oo = self.ve, self.vo, self.oe, self.oo
+        t3_aab = t3[np.ix_(ve, ve, vo, oe, oe, oo)]
+        t3_aaa = t3[np.ix_(ve, ve, ve, oe, oe, oe)]
+        out = np.zeros_like(t3_aab)
+        for pos, vp, sign in [(2, (0, 1, 2), 1), (1, (0, 2, 1), -1),
+                              (0, (2, 1, 0), -1)]:
+            out += sign * t3_aab.transpose(vp[0], vp[1], vp[2],
+                                           3 + vp[0], 3 + vp[1], 3 + vp[2])
+        self.assertGreater(np.abs(out - t3_aaa).max(), 1e-3,
+                           "joint swap unexpectedly matched -- rule ambiguous")
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S4bSplitterTests(unittest.TestCase):
+    """S4b.1 + S4b.2: the general rank-2n same-spin amplitude splitter and its
+    wiring into `collapse_amplitudes`.
+
+    S4b.1: `_split_same_spin_amplitude` emits the pinned S4b.0 relation as
+    SpinFactors -- summed over the split (with signs) it reproduces the all-alpha
+    block, at rank-4 (t2) and rank-6 (t3), evaluated on the real UCCSDT fixture.
+    S4b.2: `_is_same_spin_amplitude` / `collapse_amplitudes` fire on t3 too, not
+    just t2 (no all-alpha amplitude block survives)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tn, cls.no, cls.nv, cls.cc = _uccsdt_so_tensors()
+
+    def _eval_split(self, factor):
+        """Sum the splitter's (sign, SpinFactor) output, sliced from the fixture,
+        into the all-alpha block layout keyed by the factor's base names."""
+        import numpy as np
+        from ccgen.spin import SpinTerm, _split_same_spin_amplitude
+        out_names = [si.base.name for si in factor.indices]
+        acc = None
+        for sign, sf in _split_same_spin_amplitude(factor):
+            st = SpinTerm(coeff=sign, external_block="", factors=(sf,))
+            arr = _eval_spinterm(st, self.tn, self.no, self.no + self.nv,
+                                 out_names)
+            acc = arr if acc is None else acc + arr
+        return acc
+
+    def _all_alpha_block(self, name, n):
+        import numpy as np
+        arr = self.tn[name]
+        ve = list(range(0, self.nv, 2))
+        oe = list(range(0, self.no, 2))
+        return arr[np.ix_(*([ve] * n + [oe] * n))]
+
+    def test_rank4_splitter_reproduces_block(self):
+        import numpy as np
+        from ccgen.spin import SpinFactor, SpinIndex
+        idx = tuple(SpinIndex(b, "a") for b in
+                    (make_vir("a"), make_vir("b"), make_occ("i"), make_occ("j")))
+        f = SpinFactor(name="t2", block="aaaa", indices=idx)
+        got = self._eval_split(f)
+        ref = self._all_alpha_block("t2", 2)
+        self.assertLess(np.abs(got - ref).max(), 1e-12,
+                        "rank-4 splitter != t2[aaaa]")
+
+    def test_rank6_splitter_reproduces_block(self):
+        import numpy as np
+        from ccgen.spin import SpinFactor, SpinIndex
+        idx = tuple(SpinIndex(b, "a") for b in
+                    (make_vir("a"), make_vir("b"), make_vir("c"),
+                     make_occ("i"), make_occ("j"), make_occ("k")))
+        f = SpinFactor(name="t3", block="aaaaaa", indices=idx)
+        got = self._eval_split(f)
+        ref = self._all_alpha_block("t3", 3)
+        self.assertLess(np.abs(got - ref).max(), 1e-12,
+                        "rank-6 splitter != t3[aaaaaa]")
+        # the split has n=3 terms
+        from ccgen.spin import _split_same_spin_amplitude
+        self.assertEqual(len(_split_same_spin_amplitude(f)), 3)
+
+    def test_collapse_fires_on_t3(self):
+        # S4b.2: collapse_amplitudes dispatches the same-spin t3 block through the
+        # general splitter -- no all-alpha t3 factor survives.
+        from ccgen.spin import (SpinFactor, SpinIndex, SpinTerm,
+                                collapse_amplitudes, _is_same_spin_amplitude)
+        t3 = SpinFactor(name="t3", block="aaaaaa", indices=tuple(
+            SpinIndex(b, "a") for b in
+            (make_vir("a"), make_vir("b"), make_vir("c"),
+             make_occ("i"), make_occ("j"), make_occ("k"))))
+        self.assertTrue(_is_same_spin_amplitude(t3))
+        st = SpinTerm(coeff=1, external_block="aaaaaa", factors=(t3,))
+        collapsed = collapse_amplitudes(st)
+        blocks = {f.block for c in collapsed for f in c.factors if f.name == "t3"}
+        self.assertNotIn("aaaaaa", blocks, f"same-spin t3 survived: {blocks}")
+        self.assertEqual(len(collapsed), 3)
+        # tag/spin consistency preserved
+        for c in collapsed:
+            for f in c.factors:
+                self.assertEqual(f.block, "".join(si.spin for si in f.indices))
+
+    def test_t1_not_split(self):
+        # t1 (rank-2, block 'aa') is already single-block -- must NOT be split.
+        from ccgen.spin import SpinFactor, SpinIndex, _is_same_spin_amplitude
+        t1 = SpinFactor(name="t1", block="aa", indices=(
+            SpinIndex(make_vir("a"), "a"), SpinIndex(make_occ("i"), "a")))
+        self.assertFalse(_is_same_spin_amplitude(t1))
+
+
+class S4cIntegralRankTests(unittest.TestCase):
+    """S4c.0: the integral splitter `_split_vaaaa` needs NO rank-2n generalization
+    -- the two-electron integral is fundamentally rank-4, so every `v` factor is
+    rank-4 across CCSDT and CCSDTQ (no rank-6/8 integral exists in CC theory).
+    S4c is therefore a confirmed no-op, not deferred work. Pinned so a future
+    manifold change can't silently introduce a higher-rank `v` the 4-index
+    `_split_vaaaa` would mis-handle. Diagram engine (fast, equivalent to wick)."""
+
+    def test_v_is_always_rank4(self):
+        for method in ("ccsdt", "ccsdtq"):
+            eqs = generate_cc_equations(method, engine="diagram")
+            ranks = {len(f.indices)
+                     for terms in eqs.values() for t in terms
+                     for f in t.factors if f.name == "v"}
+            self.assertEqual(ranks, {4},
+                             f"{method}: v factors not all rank-4: {ranks}")
 
 
 if __name__ == "__main__":
