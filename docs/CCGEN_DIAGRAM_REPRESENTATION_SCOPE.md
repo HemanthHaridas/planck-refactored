@@ -359,6 +359,60 @@ state. So D7 is critical-path, alongside the spin-adaptation layer
 **not** need the default engine flipped: dressing operates on the
 diagram-produced equations regardless.
 
+#### D7 vs the spin-adaptation layer — dress in GCC, NOT in RCC/UCC (decided)
+
+**Question:** the production kernel is spatial RCC/UCC, so is it better to search
+for dressed intermediates in the RCC/UCC residual instead of GCC?
+
+**Answer: dress GCC first, then spin-adapt the dressed equation.** The pipeline is
+`GCC → dress (D7) → adapt (spin layer) → dressed spatial RCC/UCC`, not "dress the
+RCC directly." Three load-bearing reasons, all measured:
+
+1. **The recognition substrate only exists in GCC.** D7.2 (subgraph recognition,
+   the hard core) runs on `diagram_representative` / `build_line_graph` — the
+   assembled spin-orbital diagram. RCC/UCC terms are post-adaptation `SpinTerm`s
+   with **no diagram and no line graph**, so dressing RCC directly would first
+   require building the whole diagram substrate for spatial terms — rebuilding
+   D4's machinery on the wrong side. The seeded operators (`Wmnij/Wabef/Fae/…`)
+   are also *defined* in spin-orbital form (`dressing.py::seeded_operators`), so
+   they match the GCC substrate as-is; their RCC spatial forms (with `2J−K`
+   coefficients) do not exist as clean definitions.
+
+2. **The RCC surface is strictly harder to search.** Measured on CCSD doubles
+   (diagram engine): GCC = **68 terms / 11 distinct contraction shapes**; the
+   merged RCC doubles = **124 terms / 11 shapes**. Spin adaptation *splits* each
+   GCC term across spin blocks (the `t2[aaaa]→t2ab−P` splits, `abab`/`aaaa`
+   proliferation) — ~1.8× more terms — and stamps every factor with a spin block,
+   so a single `Wmnij` becomes several block-variants (`Wmnij[abab]`,
+   `Wmnij[aaaa]`, …). Same operator, more matches to find, on a substrate that
+   would have to be built. The distinct-shape count is UNCHANGED (11→11), which is
+   the next point.
+
+3. **Adaptation preserves contraction topology, so dressing survives it for
+   free.** Spin adaptation is a linear, per-term rewrite that preserves each
+   term's contraction *shape* (11 GCC shapes → 11 RCC shapes; only coefficients
+   and block tags change). And the adapter is **name-agnostic** —
+   `_line_pairs`/`_antisym_to_allowed`/`block_exists` key on `len(indices)` and
+   slot structure, not the factor name — so a dressed `W` intermediate flows
+   through spin adaptation exactly like a bare `v` (verified: `_line_pairs` reads
+   only rank). Therefore `adapt(dress(GCC))` yields the dressed spatial RCC kernel
+   directly: the recognized operators carry through, becoming `Wmnij·τ` etc. with
+   `2J−K` coefficients, and the FLOP win transfers because the shape is preserved.
+
+**The one caveat (per-operator, not a blocker).** A dressed operator may carry
+DIFFERENT symmetry than a bare ERI (e.g. `Wabef`'s exchange structure differs from
+`⟨ab||ef⟩`), so the adapter's block treatment of each dressed factor needs a
+per-operator check when it first flows through — the same `ucc_integrate_term_antisym`
+== GCC-slice identity gate used for `t2`/`v`, applied to the dressed factor. That is
+validation, not new machinery.
+
+**Consequence for sequencing.** D7 and the spin layer compose cleanly in the order
+`D7 ∘ adapt`, and the spin layer is already proven arbitrary-order
+(`S4a2ArbitraryOrderTests`). So D7 can be built and gated entirely on the GCC
+diagram surface (where its substrate lives), and the existing spin-adaptation
+pipeline turns its output into the production spatial kernel with no D7-side spatial
+work. Do NOT open a parallel "dress RCC" track.
+
 ---
 
 ## 3. Rewrite-from-scratch verdict — DO NOT
