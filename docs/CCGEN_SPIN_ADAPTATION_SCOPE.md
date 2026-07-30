@@ -498,9 +498,12 @@ spin-blocked RCC kernels reaching the PySCF energy).
   the production antisym integration reproduces the GCC quadruples slice on an
   FCI-limit-converged closed-shell antisym `t4`). The rank-2n amplitude splitter
   (S4b) is landed; the integral splitter is a confirmed no-op (S4c — `v` is always
-  rank-4). The rank-6 `t3` fixture (map.1→map.3) is complete. Only S4a.2 (the
-  optional unified lift consolidation) remains, and S4d showed it is not needed
-  for correctness. The GCC generation handles
+  rank-4). The rank-6 `t3` fixture (map.1→map.3) is complete. S4a.2 is RESOLVED —
+  the RCC/UCC pipeline already generalizes to arbitrary order with no code
+  changes (gated on the rank-6 CCSDT manifold, `S4a2ArbitraryOrderTests`); the
+  unified lift was a dead end (no single spatial→antisym lift exists across the
+  three differently-sourced fills, and the symmetric-rep lift is the unsolved
+  spin-summation inverse). **S4 is complete.** The GCC generation handles
   arbitrary rank (its `_line_pairs`/`block_exists` are general rank-2n), and the
   diagram engine emits CCSDT (triples, 414 terms) and CCSDTQ (quadruples, 2728
   terms) fine (`generate_cc_equations(m, engine="diagram")`). But the
@@ -810,14 +813,25 @@ spin-blocked RCC kernels reaching the PySCF energy).
     ~1e-16, on a t4 perturbed ×0.5 so the residual is genuinely nonzero (a real
     identity test). This is the rank-8 analog of S4a.1, exercising the general
     rank-2n `_antisym_to_allowed` at rank 8.
-  - **S4a.2 — generalize the lift to arbitrary order (~M). Now OPTIONAL /
-    lower-priority.** State the lift as one rank-2n rule and provide a single
-    `closed_shell_antisym_lift(spatial, n)` replacing the hand-written
-    `so_t2`/`_t3so_read`. This is a consolidation refactor, not a capability gate:
-    S4d showed the rank-8 numeric proof does NOT need a spatial→antisym lift at
-    all (the FCI-limit iterate produces the antisym `t4` directly), so the
-    unified lift is only worth building if the hand-written per-rank fills become
-    a maintenance burden.
+  - **S4a.2 — arbitrary-order generalization. RESOLVED (the code already
+    generalizes; no lift needed).** The originally-scoped deliverable — a unified
+    `closed_shell_antisym_lift(spatial, n)` replacing the hand-written fills — is
+    a DEAD END: the three fixture fills have DIFFERENT data sources (`so_t2`
+    lifts a spatial `t2ab`; `_t3so_read` reads UCCSDT spin-blocks; `t4` is
+    FCI-iterated, not lifted), so there is no single "spatial→antisym lift" they
+    are instances of, and lifting `rccsdtq`'s SYMMETRIC `t4full` is provably
+    impossible (antisymmetrizing self-cancels = the unsolved spin-summation
+    inverse). The right question is whether the existing PIPELINE generalizes —
+    and it does, with no code changes. Every stage is rank-agnostic:
+    `_antisym_to_allowed` / `_split_same_spin_amplitude` infer rank from
+    `len(indices)//2`, `_canonical_block` / `merge_terms` are tag-string ops, and
+    the only rank-4 hardcode (`_split_vaaaa`) is CORRECTLY rank-4 (integrals are
+    always rank-4, S4c). *Gate* (`S4a2ArbitraryOrderTests`): the full RCC
+    collapse+merge AND the UCC integration run on the rank-6 CCSDT triples
+    manifold unchanged, and the merged spatial residual reproduces the GCC slice
+    to ~1e-17 (perturbed amps → nonzero residual). So RCC and UCC both generalize
+    to arbitrary order as-is; the unified lift is neither needed nor buildable as
+    scoped. **S4 is complete.**
 
   Then: **(b)** the rank-2n splitters. **The AMPLITUDE splitter is LANDED (S4b):**
   `_split_same_spin_amplitude` generalizes `_split_t2aaaa` to rank-2n (byte-

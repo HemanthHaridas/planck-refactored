@@ -2369,5 +2369,100 @@ class S4dRank8IdentityTests(unittest.TestCase):
                         f"{np.abs(acc - Rb).max()}")
 
 
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class S4a2ArbitraryOrderTests(unittest.TestCase):
+    """S4a.2 (reframed): the RCC/UCC spin-adaptation PIPELINE already generalizes
+    to arbitrary order -- no per-rank `closed_shell_antisym_lift` is needed.
+
+    The originally-scoped deliverable (a unified spatial->antisym lift) turned out
+    to be a dead end: the three fixture fills have different data sources (so_t2
+    lifts a spatial t2ab, _t3so_read reads UCCSDT spin-blocks, t4 is FCI-iterated),
+    and a spatial->antisym lift of the SYMMETRIC rccsdtq t4full is provably
+    impossible (antisymmetrizing self-cancels -- the spin-summation inverse).
+    S4d already showed the lift is unnecessary for correctness.
+
+    The right question is whether the existing code generalizes. It does: every
+    pipeline stage is written on rank-agnostic SpinFactor/SpinIndex operations
+    (`_antisym_to_allowed` and `_split_same_spin_amplitude` infer rank from
+    `len(indices)//2`; `_canonical_block`/`merge_terms` are tag-string ops; the
+    only rank-4 hardcode, `_split_vaaaa`, is CORRECTLY rank-4 because integrals
+    are always rank-4, S4c). This gate runs the FULL RCC collapse+merge and the
+    UCC integration on the rank-6 CCSDT triples manifold with NO code changes and
+    requires the numeric result to match the GCC slice (perturbed amps -> nonzero
+    residual, a real identity test)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import numpy as np
+        tn, cls.no, cls.nv, cls.cc = _uccsdt_so_tensors()
+        # perturb so the triples residual is genuinely nonzero
+        tn = dict(tn)
+        tn["t3"] = 0.5 * tn["t3"]
+        tn["t2"] = 0.7 * tn["t2"]
+        cls.tn = tn
+        cls.triples = generate_cc_equations("ccsdt", engine="diagram")["triples"]
+
+    def _gcc_slice(self, ext):
+        import numpy as np
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv = self.no, self.nv
+        Rg = sum(residual_einsum(t, no, nv, tensors=self.tn) for t in self.triples)
+        v_ = {"a": list(range(0, nv, 2)), "b": list(range(1, nv, 2))}
+        o_ = {"a": list(range(0, no, 2)), "b": list(range(1, no, 2))}
+        idx = [v_[ext[x]] for x in "abc"] + [o_[ext[x]] for x in "ijk"]
+        return Rg[np.ix_(*idx)]
+
+    def test_ucc_integration_generalizes_rank6(self):
+        # UCC = antisym integration into a spin block, no collapse. Same-spin (aaa)
+        # and mixed (aab) externals both reproduce the GCC slice at rank 6.
+        import numpy as np
+        from ccgen.spin import ucc_integrate_term_antisym
+        no, nv, n = self.no, self.nv, self.no + self.nv
+        for ext in ({"a": "a", "b": "a", "c": "a",
+                     "i": "a", "j": "a", "k": "a"},
+                    {"a": "a", "b": "a", "c": "b",
+                     "i": "a", "j": "a", "k": "b"}):
+            acc = None
+            for t in self.triples:
+                for st in ucc_integrate_term_antisym(t, ext):
+                    arr = _eval_spinterm(st, self.tn, no, n,
+                                         ["a", "b", "c", "i", "j", "k"])
+                    acc = arr if acc is None else acc + arr
+            Rb = self._gcc_slice(ext)
+            self.assertGreater(np.abs(Rb).max(), 1e-6, "residual should be nonzero")
+            self.assertLess(np.abs(acc - Rb).max(), 1e-10,
+                            f"UCC rank-6 integration != GCC slice for {ext}")
+
+    def test_rcc_pipeline_generalizes_rank6(self):
+        # The FULL RCC collapse+merge (canonicalize -> collapse amps -> collapse
+        # integrals -> merge) runs on the rank-6 triples manifold unchanged and the
+        # merged spatial residual reproduces the GCC slice.
+        import numpy as np
+        from ccgen.spin import (ucc_integrate_term_antisym,
+                                canonicalize_spin_blocks, collapse_amplitudes,
+                                collapse_integrals, merge_terms)
+        no, nv, n = self.no, self.nv, self.no + self.nv
+        ext = {"a": "a", "b": "a", "c": "b", "i": "a", "j": "a", "k": "b"}
+        manifold = []
+        for t in self.triples:
+            manifold.extend(ucc_integrate_term_antisym(t, ext))
+        canon = [canonicalize_spin_blocks(st) for st in manifold]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        coll = [c for st in amp for c in collapse_integrals(st)]
+        merged = merge_terms(coll, set(ext))
+        # every merged factor is a single spatial block (t2/v abab, t1/f aa)
+        for st in merged:
+            for f in st.factors:
+                self.assertIn(set(f.block), ({"a"}, {"a", "b"}))
+        acc = None
+        for st in merged:
+            arr = _eval_spinterm(st, self.tn, no, n,
+                                 ["a", "b", "c", "i", "j", "k"])
+            acc = arr if acc is None else acc + arr
+        Rb = self._gcc_slice(ext)
+        self.assertLess(np.abs(acc - Rb).max(), 1e-10,
+                        "merged RCC rank-6 residual != GCC aab slice")
+
+
 if __name__ == "__main__":
     unittest.main()
