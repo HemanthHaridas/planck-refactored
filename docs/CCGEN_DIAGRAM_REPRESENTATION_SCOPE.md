@@ -380,6 +380,38 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
   (topological + species-consistent match on the line graph). Subgraph iso is
   NP-hard in general, but the graphs are tiny (≤4 operators, bounded lines), so
   this is a bounded search — the term-algebra intractability does not carry over.
+  Scoped into small verifiable steps (the residual and the operator are BOTH
+  AlgebraTerms, so both encode with the D7.1 machinery):
+  - **D7.2.0 — residual-term fragment encoding. LANDED.**
+    `residual_term_to_fragment(term)` = `term_to_fragment(term, term.free_indices)`
+    — the residual's FREE indices play the operator-block role (become ports),
+    its summed indices become internal lines. A summed index in a CC residual
+    always appears on exactly two factors (a contraction is one edge — verified
+    across the whole CCSD singles+doubles manifold), so the 2-endpoint invariant
+    holds with no special-casing. *Gate* (`ResidualTermToFragmentTests`): the
+    `½ t2 v` term encodes (4 ports i,j,a,b; 2 internal k,l lines), EVERY residual
+    term encodes without raising, and the `v` factor's port-species match Wmnij's
+    bare-`v` fragment (a D7.2.2 preview).
+  - **D7.2.1 — τ-expanded operator fragments.** `operator_fragments(
+    tau_expanded_operator(op))` — the raw residual carries NO literal `tau`
+    (measured: doubles shapes are `t2·v` / `t1·t1·v`, never `tau·v`), so the
+    operator patterns must be matched in raw tensors. `tau_expanded_operator`
+    already exists; D7.2.1 is composing it with the encoder. NOT yet done.
+  - **D7.2.2 — single-fragment containment match (~L, the core).**
+    `match_fragment(op_frag, residual_frag) → bindings`: does the operator
+    fragment occur as a sub-fragment (species-consistent factor-node map + port
+    wiring)? Bounded backtracking (≤4 op factors). NOT yet done.
+  - **D7.2.3 — full-operator occurrence.** An operator is recognized only if ALL
+    its (τ-expanded) defining-term fragments are found, consistently bound to one
+    block. `find_operator_occurrences`. NOT yet done.
+  - **D7.2.4 — coefficient consistency.** The covered residual coefficients must
+    match the operator's up to a common scalar (the A3 firewall analog, now on a
+    recognized subgraph). Check whether the retired `verify_occurrence` is
+    reusable. NOT yet done.
+  - De-risk: gate D7.2.2–2.4 on `Wmnij` first (cleanest; exercises τ expansion),
+    then the family. False positives from PARTIAL matches are the real risk —
+    D7.2.3 (all-terms) + D7.2.4 (coeffs) guard it, and `verify_dressed_equation`
+    (already built) is the D7.3 backstop.
 - **D7.3 — factorization + emit (~M).** Rewrite the residual to reference the
   recognized operators, order the intermediate DAG (`Wmnij` needs `τ`), emit
   through the existing builder path. *Gate:* the dressed residual expanded via

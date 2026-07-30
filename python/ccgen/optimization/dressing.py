@@ -234,6 +234,25 @@ def term_to_fragment(term, block) -> FragmentLineGraph:
 
 
 # ---------------------------------------------------------------------------
+# D7.2.0 -- residual-term fragment encoding (the match substrate)
+# ---------------------------------------------------------------------------
+#
+# The residual side of the D7.2 match is an AlgebraTerm too, so it encodes with
+# the SAME machinery: its FREE (external) indices play the operator-block role
+# (they become ports), and its summed indices become internal lines.  A summed
+# index in a CC residual always appears on exactly two factors (a contraction
+# is one edge -- verified across the CCSD singles+doubles manifold), so the
+# term_to_fragment 2-endpoint invariant holds without special-casing.
+
+
+def residual_term_to_fragment(term) -> FragmentLineGraph:
+    """D7.2.0: encode a residual AlgebraTerm as a FragmentLineGraph, with its
+    free indices as the ports.  This is the substrate a D7.2 subgraph match runs
+    against; an operator fragment (D7.1.3) is recognized as a sub-fragment of it."""
+    return term_to_fragment(term, term.free_indices)
+
+
+# ---------------------------------------------------------------------------
 # D7.1.3 -- operator fragment set
 # ---------------------------------------------------------------------------
 

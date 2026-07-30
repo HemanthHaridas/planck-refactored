@@ -25,6 +25,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     factor_to_fragment,
     fragment_signature,
     operator_fragments,
+    residual_term_to_fragment,
     term_to_fragment,
     _eri_canonical,
     bind_definition_term,
@@ -1040,6 +1041,64 @@ class FragmentFidelityTests(unittest.TestCase):
         self.assertIn(frozenset({"t1", "v"}), sigs)   # the t1,t1,v term
         self.assertNotEqual(sigs[frozenset({"t2", "v"})],
                             sigs[frozenset({"t1", "v"})])
+
+
+class ResidualTermToFragmentTests(unittest.TestCase):
+    """D7.2.0: a residual AlgebraTerm encodes to a FragmentLineGraph via the same
+    machinery, with its free indices as ports and summed indices as internal
+    lines. The substrate a D7.2 subgraph match runs against."""
+
+    def _find_term(self, shape, v_all_occ=False):
+        from ccgen.generate import generate_cc_equations
+        for t in generate_cc_equations("ccsd", engine="diagram")["doubles"]:
+            if sorted(f.name for f in t.factors) != shape:
+                continue
+            if v_all_occ:
+                vf = [f for f in t.factors if f.name == "v"][0]
+                if [i.space for i in vf.indices] != ["occ"] * 4:
+                    continue
+            return t
+        self.fail(f"no doubles term with shape {shape}")
+
+    def test_t2v_term_encodes(self):
+        # 1/2 t2(a,b,k,l) v(i,j,k,l): 4 external ports (i,j hole; a,b particle),
+        # 2 internal hole lines (k,l joining t2<->v)
+        term = self._find_term(["t2", "v"], v_all_occ=True)
+        fr = residual_term_to_fragment(term)
+        self.assertEqual(fr.n_factors, 2)
+        self.assertEqual(fr.n_ports, 4)
+        self.assertEqual(fr.factor_names, ("t2", "v"))
+        self.assertEqual(len(fr.internal_lines), 2)
+        self.assertTrue(all(sp == "h" for sp, _, _ in fr.internal_lines))
+        # external ports: i,j occ -> hole; a,b vir -> particle
+        self.assertEqual(sorted(fr.port_species.values()), ["h", "h", "p", "p"])
+
+    def test_every_residual_term_encodes(self):
+        # the contraction-is-one-edge property holds across the manifold, so no
+        # residual term trips the 2-endpoint guard
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        for name in ("singles", "doubles"):
+            for t in eqs[name]:
+                fr = residual_term_to_fragment(t)   # must not raise
+                self.assertEqual(fr.n_factors, len(t.factors))
+                self.assertEqual(fr.n_ports, len(t.free_indices))
+
+    def test_bare_v_operator_piece_species_match(self):
+        # preview of D7.2.2: the v factor of the t2*v residual term has the same
+        # port-species multiset as Wmnij's bare-v defining fragment (all hole).
+        term = self._find_term(["t2", "v"], v_all_occ=True)
+        # isolate the v factor as its own residual-style fragment
+        vf = [f for f in term.factors if f.name == "v"][0]
+        from ccgen.project import AlgebraTerm
+        v_term = AlgebraTerm(coeff=term.coeff, factors=(vf,),
+                             free_indices=vf.indices, summed_indices=(),
+                             connected=True)
+        v_frag = residual_term_to_fragment(v_term)
+        wmnij_bare = operator_fragments(_build_wmnij()).fragments[0][1]  # bare v
+        self.assertEqual(sorted(v_frag.port_species.values()),
+                         sorted(wmnij_bare.port_species.values()))
+        self.assertEqual(v_frag.factor_names, wmnij_bare.factor_names)  # ("v",)
 
 
 if __name__ == "__main__":
