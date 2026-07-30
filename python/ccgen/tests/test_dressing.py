@@ -27,6 +27,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     candidate_factor_subsets,
     collect_fragment_occurrences,
     fragments_match,
+    hypothesize_operator_term,
     induced_subfragment,
     match_fragment,
     operator_fragments,
@@ -1140,6 +1141,51 @@ class TauExpandedFragmentsTests(unittest.TestCase):
         self.assertEqual(len(t2v_op.internal_lines), 2)
         self.assertTrue(all(sp == "h" for sp in t2v_op.port_species.values()))
         self.assertEqual(sorted(fragment_signature(t2v_op)[0]), ["t2", "v"])
+
+
+class HypothesizeOperatorTermTests(unittest.TestCase):
+    """D7.2.3b: build the dressed W*rest term implied by one anchor fragment
+    match. The coefficient divides out the anchor's operator-internal coeff; the
+    W factor carries the residual indices its block bound to; rest = the factors
+    outside the anchor subset."""
+
+    def _wmnij_bare_v_anchor(self):
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        terms = eqs["doubles"]
+        op = _build_wmnij()
+        occ = collect_fragment_occurrences(op, terms)
+        # the bare-v anchor (frag_id 0) inside 1/2 t2 v
+        anchor = next(o for o in occ if o["frag_id"] == 0)
+        return op, anchor, terms[anchor["term_id"]]
+
+    def test_hypothesis_is_W_times_rest(self):
+        op, anchor, term = self._wmnij_bare_v_anchor()
+        hyp = hypothesize_operator_term(op, anchor, term)
+        names = [f.name for f in hyp.factors]
+        self.assertEqual(names[0], "Wmnij")
+        self.assertIn("t2", names[1:])                 # the outer t2 rest
+        # coeff = term_coeff / anchor op_coeff (bare v op_coeff = 1)
+        self.assertEqual(hyp.coeff, term.coeff / anchor["op_coeff"])
+
+    def test_W_block_indices_from_binding(self):
+        op, anchor, term = self._wmnij_bare_v_anchor()
+        hyp = hypothesize_operator_term(op, anchor, term)
+        w = hyp.factors[0]
+        bound = [anchor["port_index"][s] for s in range(len(op.block))]
+        self.assertEqual([i.name for i in w.indices], bound)
+
+    def test_expands_to_operator_definition(self):
+        from ccgen.optimization.dressed_equation import expand_dressed_term
+        op, anchor, term = self._wmnij_bare_v_anchor()
+        hyp = hypothesize_operator_term(op, anchor, term)
+        expanded = expand_dressed_term(hyp, {op.name: op})
+        # Wmnij (tau-expanded) has 5 raw pieces
+        self.assertEqual(len(expanded), 5)
+        # no operator or pseudo-amplitude factor survives the expansion
+        for e in expanded:
+            for f in e.factors:
+                self.assertIn(f.name, ("t1", "t2", "v", "f"))
 
 
 class CollectFragmentOccurrencesTests(unittest.TestCase):

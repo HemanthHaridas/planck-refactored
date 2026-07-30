@@ -399,8 +399,6 @@ def fragments_match(op_frag: FragmentLineGraph, induced: FragmentLineGraph):
 
     op_names = op_frag.factor_names
     ind_names = induced.factor_names
-    op_port_sp = op_frag.port_species
-    ind_port_sp = induced.port_species
 
     # candidate node maps: permutations that preserve factor species
     for perm in itertools.permutations(range(n)):
@@ -517,6 +515,57 @@ def collect_fragment_occurrences(op: "DressedOperator", terms) -> list[dict]:
                     "port_index": m["port_index"],
                 })
     return out
+
+
+# ---------------------------------------------------------------------------
+# D7.2.3b -- hypothesize W*rest from an anchor fragment match
+# ---------------------------------------------------------------------------
+#
+# The 5 defining fragments of one operator instance scatter across residual
+# terms with different bindings (D7.2.3a finding), so they cannot be grouped
+# structurally.  Instead HYPOTHESIZE: from ONE anchor fragment match, build the
+# dressed term  (term_coeff / anchor_op_coeff) * W(bound block) * rest,  where
+# `rest` is the residual factors outside the anchor subset and the block indices
+# come from the anchor's port_index.  expand_dressed_term then regenerates all
+# the operator's raw pieces (D7.2.3c verifies they are in the residual).
+#
+# The coefficient divides out the anchor fragment's own coefficient in the
+# operator definition: if the anchor is Wmnij's bare-v piece (op_coeff 1) sitting
+# in a residual term with coeff 1/2, the operator prefactor is 1/2.
+
+
+def hypothesize_operator_term(op: "DressedOperator", occurrence: dict, term):
+    """D7.2.3b: build the dressed AlgebraTerm ``c * W(block) * rest`` implied by
+    one anchor fragment ``occurrence`` (from :func:`collect_fragment_occurrences`)
+    in residual ``term``.
+
+    ``c = term.coeff / occurrence["op_coeff"]`` -- the residual coefficient with
+    the anchor fragment's operator-internal coefficient divided out.  The W factor
+    carries the residual indices its block bound to (via ``port_index``); ``rest``
+    is the residual factors outside the anchor subset.  Returns the AlgebraTerm to
+    feed :func:`expand_dressed_term`."""
+    name_to_index = {}
+    for fac in term.factors:
+        for idx in fac.indices:
+            name_to_index[idx.name] = idx
+    block_indices = tuple(name_to_index[occurrence["port_index"][s]]
+                          for s in range(len(op.block)))
+    # bra/ket pairing for the antisymmetry of a rank-2n operator (rank-2 -> none)
+    n = len(block_indices) // 2
+    antisym = tuple((k, k + n) for k in range(n)) if n >= 1 and len(block_indices) >= 4 \
+        else ()
+    w_factor = Tensor(op.name, block_indices,
+                      antisym_groups=antisym if antisym else None)
+    rest = tuple(f for k, f in enumerate(term.factors)
+                 if k not in set(occurrence["subset"]))
+    coeff = term.coeff / occurrence["op_coeff"]
+    return AlgebraTerm(
+        coeff=coeff,
+        factors=(w_factor,) + rest,
+        free_indices=term.free_indices,
+        summed_indices=term.summed_indices,
+        connected=term.connected,
+    )
 
 
 # ---------------------------------------------------------------------------

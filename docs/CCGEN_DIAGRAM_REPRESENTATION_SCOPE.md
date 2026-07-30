@@ -453,9 +453,15 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
       coefficient. No need to group all 5 structurally — expansion does the
       re-assembly and the coefficient check is the firewall. Reuses existing
       `expand_dressed_term`.
-      - **D7.2.3b — hypothesize `W·rest` from an anchor match.** Build the dressed
-        `AlgebraTerm` `c · W(bound block) · rest` from a chosen anchor occurrence.
-        NOT yet done.
+      - **D7.2.3b — hypothesize `W·rest` from an anchor match. LANDED.**
+        `hypothesize_operator_term(op, occurrence, term)` builds the dressed
+        `AlgebraTerm` `c · W(block) · rest`: `c = term.coeff / op_coeff` (the
+        anchor fragment's operator-internal coefficient divided out), the `W`
+        factor carries the residual indices its block bound to (`port_index`),
+        `rest` = residual factors outside the anchor subset. *Gate*
+        (`HypothesizeOperatorTermTests`): from the bare-`v` anchor in `½ t2 v`,
+        the hypothesis is `½ Wmnij(i,j,k,l) t2(a,b,k,l)`, and `expand_dressed_term`
+        regenerates all 5 raw Wmnij pieces (only `t1/t2/v/f` survive).
       - **D7.2.3c — verify by expansion.** `expand_dressed_term(hypothesis)` ⊆
         residual, coefficient-consistent; reject partial/mismatched. NOT yet done.
       - **D7.2.3d — `find_operator_occurrences` driver.** Enumerate anchor
