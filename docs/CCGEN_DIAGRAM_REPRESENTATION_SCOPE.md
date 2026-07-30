@@ -392,11 +392,16 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     `½ t2 v` term encodes (4 ports i,j,a,b; 2 internal k,l lines), EVERY residual
     term encodes without raising, and the `v` factor's port-species match Wmnij's
     bare-`v` fragment (a D7.2.2 preview).
-  - **D7.2.1 — τ-expanded operator fragments.** `operator_fragments(
+  - **D7.2.1 — τ-expanded operator fragments. LANDED.**
+    `tau_expanded_operator_fragments(op)` = `operator_fragments(
     tau_expanded_operator(op))` — the raw residual carries NO literal `tau`
     (measured: doubles shapes are `t2·v` / `t1·t1·v`, never `tau·v`), so the
-    operator patterns must be matched in raw tensors. `tau_expanded_operator`
-    already exists; D7.2.1 is composing it with the encoder. NOT yet done.
+    operator patterns must be matched in raw tensors. τ expands to `t2 + t1t1`
+    (fixed point), so e.g. Wmnij's 4 defining terms become 5 (the `¼ τ v` splits
+    into `¼ t2·v` + `½ t1·t1·v`). *Gate* (`TauExpandedFragmentsTests`): all six
+    operators expand to raw tensors (`f`/`t1`/`t2`/`v` only, no `tau`/`tau_tilde`,
+    `uses` empty), Wmnij grew 4→5, and the expanded `t2·v` fragment has the same
+    signature shape as the residual `t2·v` term (a D7.2.2 preview).
   - **D7.2.2 — single-fragment containment match (~L, the core).**
     `match_fragment(op_frag, residual_frag) → bindings`: does the operator
     fragment occur as a sub-fragment (species-consistent factor-node map + port

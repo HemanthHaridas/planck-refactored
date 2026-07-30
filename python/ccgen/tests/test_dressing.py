@@ -26,6 +26,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     fragment_signature,
     operator_fragments,
     residual_term_to_fragment,
+    tau_expanded_operator_fragments,
     term_to_fragment,
     _eri_canonical,
     bind_definition_term,
@@ -1099,6 +1100,41 @@ class ResidualTermToFragmentTests(unittest.TestCase):
         self.assertEqual(sorted(v_frag.port_species.values()),
                          sorted(wmnij_bare.port_species.values()))
         self.assertEqual(v_frag.factor_names, wmnij_bare.factor_names)  # ("v",)
+
+
+class TauExpandedFragmentsTests(unittest.TestCase):
+    """D7.2.1: the operator patterns, tau-expanded to raw tensors -- the set a
+    D7.2.2 match searches for in the raw residual (which never carries tau)."""
+
+    def test_no_pseudo_amplitude_survives(self):
+        for op in seeded_operators():
+            of = tau_expanded_operator_fragments(op)
+            self.assertEqual(of.uses, frozenset())
+            for _, fr in of.fragments:
+                self.assertNotIn("tau", fr.factor_names)
+                self.assertNotIn("tau_tilde", fr.factor_names)
+
+    def test_wmnij_tau_split_grew_fragments(self):
+        # raw Wmnij has 4 defining terms (one is 1/4 tau v); tau -> t2 + t1t1
+        # splits it, so the expanded form has 5.
+        raw = operator_fragments(_build_wmnij())
+        exp = tau_expanded_operator_fragments(_build_wmnij())
+        self.assertEqual(len(raw.fragments), 4)
+        self.assertEqual(len(exp.fragments), 5)
+        names = sorted(fr.factor_names for _, fr in exp.fragments)
+        self.assertIn(("t2", "v"), names)          # from 1/4 tau v
+        self.assertIn(("t1", "t1", "v"), names)    # from 1/4 tau v
+
+    def test_expanded_t2v_matches_residual_signature(self):
+        # D7.2.2 preview: the tau-expanded Wmnij t2*v fragment has the SAME
+        # signature as the residual t2*v term restricted to its Wmnij piece.
+        # Both are t2*v with 2 internal hole lines and all-hole ports.
+        exp = tau_expanded_operator_fragments(_build_wmnij())
+        t2v_op = next(fr for _, fr in exp.fragments
+                      if fr.factor_names == ("t2", "v"))
+        self.assertEqual(len(t2v_op.internal_lines), 2)
+        self.assertTrue(all(sp == "h" for sp in t2v_op.port_species.values()))
+        self.assertEqual(sorted(fragment_signature(t2v_op)[0]), ["t2", "v"])
 
 
 if __name__ == "__main__":

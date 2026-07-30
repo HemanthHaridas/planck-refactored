@@ -1198,6 +1198,25 @@ def tau_expanded_operator(op: DressedOperator) -> DressedOperator:
 
 
 # ---------------------------------------------------------------------------
+# D7.2.1 -- tau-expanded operator fragments (the raw-tensor pattern set)
+# ---------------------------------------------------------------------------
+#
+# The raw residual carries NO literal tau/tau_tilde (a doubles term is t2*v or
+# t1*t1*v, never tau*v), so the operator patterns a D7.2 match looks for must be
+# in raw tensors.  D7.2.1 = operator_fragments o tau_expanded_operator: expand
+# every pseudo-amplitude into t2 + t1t1 (fixed point), then encode the resulting
+# raw-tensor definition terms as fragments.
+
+
+def tau_expanded_operator_fragments(op: "DressedOperator") -> OperatorFragments:
+    """D7.2.1: the operator's defining terms, tau/tau_tilde expanded to raw
+    tensors, encoded as line-graph fragments.  This is the pattern set a D7.2.2
+    match searches for in the raw residual (which never carries a literal tau).
+    ``uses`` comes back empty -- the expanded form references no pseudo-amplitude."""
+    return operator_fragments(tau_expanded_operator(op))
+
+
+# ---------------------------------------------------------------------------
 # A3.3 -- exact-coefficient firewall for a bound occurrence
 # ---------------------------------------------------------------------------
 #
