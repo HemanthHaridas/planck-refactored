@@ -402,10 +402,32 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     operators expand to raw tensors (`f`/`t1`/`t2`/`v` only, no `tau`/`tau_tilde`,
     `uses` empty), Wmnij grew 4→5, and the expanded `t2·v` fragment has the same
     signature shape as the residual `t2·v` term (a D7.2.2 preview).
-  - **D7.2.2 — single-fragment containment match (~L, the core).**
-    `match_fragment(op_frag, residual_frag) → bindings`: does the operator
-    fragment occur as a sub-fragment (species-consistent factor-node map + port
-    wiring)? Bounded backtracking (≤4 op factors). NOT yet done.
+  - **D7.2.2 — single-fragment containment match (~L, the core). LANDED (a–d).**
+    `match_fragment(op_frag, residual_term)` finds every occurrence of an operator
+    fragment as an EXACT induced sub-fragment. Sub-steps:
+    - **D7.2.2a — `candidate_factor_subsets`:** the factor-name prefilter — only
+      residual subsets whose name multiset equals the operator's survive (a `t2·v`
+      op → only `{t2,v}` residual pairs). Bounds the search.
+    - **D7.2.2b — `induced_subfragment`:** the sub-fragment a subset induces —
+      within-subset shared indices → internal lines, outward/external indices →
+      ports, factor nodes renumbered 0..n-1 (comparable to an operator fragment).
+      Makes the "extra shared line" explicit: `t2(c,d,j,l) v(c,d,k,l)` shares
+      `c,d` AND `l` → 3 internal lines, one more than the operator's 2.
+    - **D7.2.2c — `fragments_match` (the core):** an EXACT isomorphism — a
+      species-consistent node bijection carrying the op's internal lines onto the
+      induced ones as equal multisets, and ports species-matched. The extra
+      `l`-line makes the internal-line multisets unequal → correctly NO match.
+      This exactness is what prevents the false positives that killed the retired
+      exact-cover route. Bounded backtracking (≤4 nodes → ≤24 perms, prefiltered).
+    - **D7.2.2d — `match_fragment` driver:** compose a→c; each occurrence records
+      `subset` + `nodes` + `port_index` (op port slot → the RESIDUAL index name it
+      bound to, so D7.2.3 can check consistent block binding across an operator's
+      defining terms).
+    *Gates* (`CandidateSubsets` / `InducedSubfragment` / `FragmentsMatch` /
+    `MatchFragment`, PySCF-free): bare-`v` matches `v(i,j,k,l)` with the index
+    binding; the `t2·v` operator finds NO occurrence in `t2·t2·v` (extra-line
+    rejection, the load-bearing correctness case); species mismatch blocks a
+    match; the driver runs clean over the whole doubles manifold.
   - **D7.2.3 — full-operator occurrence.** An operator is recognized only if ALL
     its (τ-expanded) defining-term fragments are found, consistently bound to one
     block. `find_operator_occurrences`. NOT yet done.

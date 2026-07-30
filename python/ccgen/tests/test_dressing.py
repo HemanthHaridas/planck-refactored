@@ -24,6 +24,10 @@ from ccgen.optimization.dressing import (  # noqa: E402
     _build_wmnij,
     factor_to_fragment,
     fragment_signature,
+    candidate_factor_subsets,
+    fragments_match,
+    induced_subfragment,
+    match_fragment,
     operator_fragments,
     residual_term_to_fragment,
     tau_expanded_operator_fragments,
@@ -1135,6 +1139,200 @@ class TauExpandedFragmentsTests(unittest.TestCase):
         self.assertEqual(len(t2v_op.internal_lines), 2)
         self.assertTrue(all(sp == "h" for sp in t2v_op.port_species.values()))
         self.assertEqual(sorted(fragment_signature(t2v_op)[0]), ["t2", "v"])
+
+
+class MatchFragmentTests(unittest.TestCase):
+    """D7.2.2d: the match driver -- every occurrence of an operator fragment in a
+    residual term, with the residual index each port bound to (for D7.2.3)."""
+
+    def _doubles_term(self, shape, v_all_occ=False):
+        from ccgen.generate import generate_cc_equations
+        for t in generate_cc_equations("ccsd", engine="diagram")["doubles"]:
+            if sorted(f.name for f in t.factors) != shape:
+                continue
+            if v_all_occ:
+                vf = [f for f in t.factors if f.name == "v"][0]
+                if [i.space for i in vf.indices] != ["occ"] * 4:
+                    continue
+            return t
+        self.fail(f"no doubles term {shape}")
+
+    def test_bare_v_occurrence_binds_indices(self):
+        term = self._doubles_term(["t2", "v"], v_all_occ=True)  # 1/2 t2 v(i,j,k,l)
+        bare = operator_fragments(_build_wmnij()).fragments[0][1]
+        occ = match_fragment(bare, term)
+        self.assertEqual(len(occ), 1)
+        o = occ[0]
+        # subset is the v factor; ports bind to v's four occ indices
+        self.assertEqual([term.factors[k].name for k in o["subset"]], ["v"])
+        self.assertEqual(set(o["port_index"].values()),
+                         {i.name for i in term.factors[o["subset"][0]].indices})
+
+    def test_t2v_operator_no_false_occurrence(self):
+        # the t2*v operator fragment finds NO occurrence in t2*t2*v (extra l-line)
+        term = self._doubles_term(["t2", "t2", "v"])
+        op = next(fr for _, fr in
+                  tau_expanded_operator_fragments(_build_wmnij()).fragments
+                  if fr.factor_names == ("t2", "v"))
+        self.assertEqual(match_fragment(op, term), [])
+
+    def test_no_crash_over_full_manifold(self):
+        # the driver runs cleanly over every doubles term for every Wmnij fragment
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        frags = [fr for _, fr in
+                 tau_expanded_operator_fragments(_build_wmnij()).fragments]
+        for t in eqs["doubles"]:
+            for fr in frags:
+                for o in match_fragment(fr, t):
+                    # every reported occurrence has a full port binding
+                    self.assertEqual(set(o["port_index"]),
+                                     set(range(fr.n_ports)))
+
+
+class FragmentsMatchTests(unittest.TestCase):
+    """D7.2.2c: the exact induced-sub-fragment isomorphism test -- the core of
+    D7.2. A match is a species-consistent node bijection carrying the operator's
+    internal lines and ports onto the induced ones exactly. The load-bearing
+    property: an extra induced contraction line (the l-line) blocks the match."""
+
+    def _doubles_term(self, shape, v_all_occ=False):
+        from ccgen.generate import generate_cc_equations
+        for t in generate_cc_equations("ccsd", engine="diagram")["doubles"]:
+            if sorted(f.name for f in t.factors) != shape:
+                continue
+            if v_all_occ:
+                vf = [f for f in t.factors if f.name == "v"][0]
+                if [i.space for i in vf.indices] != ["occ"] * 4:
+                    continue
+            return t
+        self.fail(f"no doubles term {shape}")
+
+    def test_bare_v_matches_with_binding(self):
+        term = self._doubles_term(["t2", "v"], v_all_occ=True)
+        v_pos = [k for k, f in enumerate(term.factors) if f.name == "v"][0]
+        ind = induced_subfragment(term, (v_pos,))
+        bare = operator_fragments(_build_wmnij()).fragments[0][1]
+        b = fragments_match(bare, ind)
+        self.assertIsNotNone(b)
+        self.assertEqual(b["nodes"], {("factor", 0): ("factor", 0)})
+        self.assertEqual(set(b["ports"]), {0, 1, 2, 3})
+
+    def test_extra_line_blocks_match(self):
+        # the t2*v operator fragment (2 internal particle lines) must NOT match
+        # any t2*t2*v subset -- one shares 1 line, the other shares 3 (l-line).
+        term = self._doubles_term(["t2", "t2", "v"])
+        op = next(fr for _, fr in
+                  tau_expanded_operator_fragments(_build_wmnij()).fragments
+                  if fr.factor_names == ("t2", "v"))
+        for s in candidate_factor_subsets(op, term):
+            ind = induced_subfragment(term, s)
+            self.assertIsNone(fragments_match(op, ind),
+                              f"subset {s} wrongly matched t2*v operator")
+
+    def test_species_mismatch_no_match(self):
+        # a t1*v operator fragment cannot match a t2*v induced fragment even if
+        # both had one internal line -- factor species disagree
+        term = self._doubles_term(["t2", "v"], v_all_occ=True)
+        ind = induced_subfragment(term, tuple(range(len(term.factors))))
+        t1v = next(fr for _, fr in operator_fragments(_build_wmnij()).fragments
+                   if fr.factor_names == ("t1", "v"))
+        self.assertIsNone(fragments_match(t1v, ind))
+
+
+class InducedSubfragmentTests(unittest.TestCase):
+    """D7.2.2b: the sub-fragment a residual factor subset induces. Within-subset
+    shared indices are internal lines; outward/external indices are ports. The
+    load-bearing case: a subset that shares MORE lines than the operator (the
+    l-line) must show the extra internal line so D7.2.2c can reject it."""
+
+    def _doubles_term(self, shape, v_all_occ=False):
+        from ccgen.generate import generate_cc_equations
+        for t in generate_cc_equations("ccsd", engine="diagram")["doubles"]:
+            if sorted(f.name for f in t.factors) != shape:
+                continue
+            if v_all_occ:
+                vf = [f for f in t.factors if f.name == "v"][0]
+                if [i.space for i in vf.indices] != ["occ"] * 4:
+                    continue
+            return t
+        self.fail(f"no doubles term {shape}")
+
+    def test_bare_v_subset_matches_operator(self):
+        term = self._doubles_term(["t2", "v"], v_all_occ=True)
+        v_pos = [k for k, f in enumerate(term.factors) if f.name == "v"][0]
+        fr = induced_subfragment(term, (v_pos,))
+        bare = operator_fragments(_build_wmnij()).fragments[0][1]
+        self.assertEqual(len(fr.internal_lines), 0)
+        self.assertEqual(fragment_signature(fr), fragment_signature(bare))
+
+    def test_extra_line_subset_has_extra_internal(self):
+        # t2(c,d,j,l) v(c,d,k,l) shares c,d AND l -> 3 internal lines (2 p + 1 h),
+        # more than the operator t2*v's 2 -> must NOT match (rejected in D7.2.2c).
+        term = self._doubles_term(["t2", "t2", "v"])
+        # the t2 that shares c,d,l with v (the induced 3-internal case)
+        subs = candidate_factor_subsets(
+            next(fr for _, fr in
+                 tau_expanded_operator_fragments(_build_wmnij()).fragments
+                 if fr.factor_names == ("t2", "v")), term)
+        found_extra = False
+        for s in subs:
+            fr = induced_subfragment(term, s)
+            if len(fr.internal_lines) == 3:
+                found_extra = True
+                species = sorted(sp for sp, _, _ in fr.internal_lines)
+                self.assertEqual(species, ["h", "p", "p"])
+        self.assertTrue(found_extra, "expected an extra-line induced subset")
+
+    def test_node_renumbering_is_local(self):
+        # induced factor nodes are 0..n-1 by subset position, so the result is
+        # directly comparable to an operator fragment
+        term = self._doubles_term(["t2", "t2", "v"])
+        fr = induced_subfragment(term, (1, 2))
+        nodes = {e for _, a, b in fr.lines for e in (a, b)
+                 if isinstance(e, tuple) and e[0] == "factor"}
+        self.assertEqual(nodes, {("factor", 0), ("factor", 1)})
+
+
+class CandidateSubsetsTests(unittest.TestCase):
+    """D7.2.2a: the factor-name prefilter -- only residual factor subsets whose
+    name multiset equals the operator fragment's survive."""
+
+    def _doubles_term(self, shape):
+        from ccgen.generate import generate_cc_equations
+        for t in generate_cc_equations("ccsd", engine="diagram")["doubles"]:
+            if sorted(f.name for f in t.factors) == shape:
+                return t
+        self.fail(f"no doubles term {shape}")
+
+    def test_t2v_op_on_t2t2v_term(self):
+        # residual t2*t2*v: a t2*v operator fragment can pair EITHER t2 with the
+        # v -> exactly 2 candidate subsets; never the (t2,t2) pair.
+        term = self._doubles_term(["t2", "t2", "v"])
+        # Wmnij's raw t2*v piece only exists after tau expansion (D7.2.1)
+        op = next(fr for _, fr in
+                  tau_expanded_operator_fragments(_build_wmnij()).fragments
+                  if fr.factor_names == ("t2", "v"))
+        subs = candidate_factor_subsets(op, term)
+        self.assertEqual(len(subs), 2)
+        # each surviving subset is one t2 + the v
+        v_pos = [k for k, f in enumerate(term.factors) if f.name == "v"][0]
+        for s in subs:
+            self.assertIn(v_pos, s)
+            self.assertEqual(len(s), 2)
+
+    def test_bare_v_op_matches_the_v(self):
+        term = self._doubles_term(["t2", "v"])
+        bare_v = operator_fragments(_build_wmnij()).fragments[0][1]  # ("v",)
+        subs = candidate_factor_subsets(bare_v, term)
+        self.assertEqual(len(subs), 1)
+        self.assertEqual([term.factors[k].name for k in subs[0]], ["v"])
+
+    def test_t1v_op_no_match_on_t2v_term(self):
+        term = self._doubles_term(["t2", "v"])
+        t1v = next(fr for _, fr in operator_fragments(_build_wmnij()).fragments
+                   if fr.factor_names == ("t1", "v"))
+        self.assertEqual(candidate_factor_subsets(t1v, term), [])
 
 
 if __name__ == "__main__":

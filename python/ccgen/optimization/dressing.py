@@ -253,6 +253,239 @@ def residual_term_to_fragment(term) -> FragmentLineGraph:
 
 
 # ---------------------------------------------------------------------------
+# D7.2.2a -- factor-subset enumeration + species prefilter
+# ---------------------------------------------------------------------------
+#
+# A match places the operator's n factor nodes onto n of the residual term's
+# factors.  The cheap prefilter that bounds the search: only subsets whose
+# factor-NAME multiset equals the operator's can possibly match (D7.1.4 -- a
+# t2*v operator can only sit on a {t2,v} residual pair, never a {t1,v} one).
+# The induced-subfragment + isomorphism test (D7.2.2b/c) then filters the
+# survivors by wiring.
+
+
+def candidate_factor_subsets(op_frag: FragmentLineGraph, term) -> list[tuple[int, ...]]:
+    """D7.2.2a: the residual-factor index subsets whose factor-name multiset
+    equals ``op_frag``'s.  Each is a sorted tuple of positions into
+    ``term.factors``.  A cheap necessary condition for a match -- the wiring
+    tests (D7.2.2b/c) run only on these survivors."""
+    import itertools
+    from collections import Counter
+
+    want = Counter(op_frag.factor_names)
+    n = len(op_frag.factor_names)
+    out = []
+    for combo in itertools.combinations(range(len(term.factors)), n):
+        if Counter(term.factors[k].name for k in combo) == want:
+            out.append(combo)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# D7.2.2b -- induced sub-fragment of a residual factor subset
+# ---------------------------------------------------------------------------
+#
+# The sub-fragment a candidate subset induces: an index shared by TWO factors
+# WITHIN the subset is an internal line; an index that also touches a factor
+# OUTSIDE the subset, or is a residual external, is a dangling port (it connects
+# the operator to the rest).  This is where the "extra shared line" case is made
+# explicit -- if the subset shares MORE contraction lines than the operator has
+# internal lines, the induced fragment carries them and D7.2.2c will reject the
+# match (the l-line in t2(c,d,j,l) v(c,d,k,l), which shares c,d AND l).
+#
+# Factor nodes are renumbered 0..n-1 by position within the subset, so the
+# induced FragmentLineGraph is directly comparable to an operator fragment.
+
+
+def _induce(term, subset: tuple[int, ...]):
+    """Core of D7.2.2b: return ``(FragmentLineGraph, slot_to_index_name)``.  The
+    second value maps each port slot to the residual index name that dangles
+    there -- needed so a match can report WHICH residual index each operator port
+    bound to (D7.2.3 cross-term consistency)."""
+    from collections import Counter
+
+    local = {k: pos for pos, k in enumerate(subset)}   # residual pos -> local node
+    within = Counter()
+    for k in subset:
+        for idx in term.factors[k].indices:
+            within[idx.name] += 1
+
+    internal_lines = []
+    port_lines = []
+    port_slot: dict[str, int] = {}
+    seen_internal: set[str] = set()
+    for k in subset:
+        node = ("factor", local[k])
+        for idx in term.factors[k].indices:
+            sp = "h" if idx.space == "occ" else "p"
+            if within[idx.name] == 2:
+                if idx.name in seen_internal:
+                    continue
+                seen_internal.add(idx.name)
+                others = [local[j] for j in subset
+                          if j != k and any(i.name == idx.name
+                                            for i in term.factors[j].indices)]
+                internal_lines.append((sp, node, ("factor", others[0])))
+            else:
+                slot = port_slot.setdefault(idx.name, len(port_slot))
+                port_lines.append((sp, node, ("port", slot)))
+
+    frag = FragmentLineGraph(
+        lines=tuple(internal_lines) + tuple(port_lines),
+        n_factors=len(subset),
+        n_ports=len(port_slot),
+        factor_names=tuple(term.factors[k].name for k in subset),
+    )
+    slot_to_index = {slot: name for name, slot in port_slot.items()}
+    return frag, slot_to_index
+
+
+def induced_subfragment(term, subset: tuple[int, ...]) -> FragmentLineGraph:
+    """D7.2.2b: the FragmentLineGraph induced on ``subset`` (positions into
+    ``term.factors``).  Within-subset shared indices -> internal lines; every
+    other index of a subset factor (shared with an outside factor, or external)
+    -> a port.  Ports are numbered by first appearance so distinct outward
+    indices get distinct slots."""
+    return _induce(term, subset)[0]
+
+
+# ---------------------------------------------------------------------------
+# D7.2.2c -- fragment isomorphism test (the core)
+# ---------------------------------------------------------------------------
+#
+# Does the operator fragment occur as EXACTLY the induced sub-fragment?  A match
+# is a node bijection sigma (op factor -> induced factor) that agrees on factor
+# species and carries the op's internal lines onto the induced internal lines
+# AND the op's ports onto the induced ports, both as species-matched bijections.
+# "Exactly" is load-bearing: the internal-line MULTISETS must be equal, so an
+# induced fragment with an extra contraction line (the l-line) cannot match --
+# it has an internal line the operator does not.  Bounded backtracking over the
+# <=4 factor nodes.
+
+
+def _line_multiset(lines, node_map=None):
+    """Canonical multiset of internal lines under an optional node relabel.  Each
+    internal line -> (species, frozenset of its two mapped factor-node ids)."""
+    from collections import Counter
+    out = []
+    for sp, a, b in lines:
+        na = node_map[a] if node_map else a
+        nb = node_map[b] if node_map else b
+        out.append((sp, frozenset((na, nb))))
+    return Counter(out)
+
+
+def fragments_match(op_frag: FragmentLineGraph, induced: FragmentLineGraph):
+    """D7.2.2c: is ``op_frag`` isomorphic to ``induced`` (an exact induced-
+    sub-fragment match)?  Returns a binding dict or None.
+
+    The binding maps op ports to induced port slots:
+    ``{"nodes": {op_node: induced_node}, "ports": {op_slot: induced_slot}}``.
+    None if no species-consistent bijection carries the op's internal lines and
+    ports onto the induced ones exactly (equal internal-line multisets -- an
+    extra induced line rules the match out)."""
+    from collections import Counter as _C
+    import itertools
+
+    n = op_frag.n_factors
+    if (induced.n_factors != n or induced.n_ports != op_frag.n_ports
+            or _C(op_frag.factor_names) != _C(induced.factor_names)):
+        return None
+
+    op_int = op_frag.internal_lines
+    ind_int = induced.internal_lines
+    if len(op_int) != len(ind_int):
+        return None                                # different line count -> no
+
+    op_names = op_frag.factor_names
+    ind_names = induced.factor_names
+    op_port_sp = op_frag.port_species
+    ind_port_sp = induced.port_species
+
+    # candidate node maps: permutations that preserve factor species
+    for perm in itertools.permutations(range(n)):
+        node_map = {("factor", k): ("factor", perm[k]) for k in range(n)}
+        if any(op_names[k] != ind_names[perm[k]] for k in range(n)):
+            continue
+        # internal lines must map exactly (species + endpoint set multiset)
+        if _line_multiset(op_int, node_map) != _line_multiset(ind_int):
+            continue
+        # ports: match op port slots to induced port slots by (species, the
+        # species of the factor node each attaches to)
+        pm = _match_ports(op_frag, induced, node_map)
+        if pm is None:
+            continue
+        return {"nodes": {("factor", k): ("factor", perm[k]) for k in range(n)},
+                "ports": pm}
+    return None
+
+
+def _match_ports(op_frag, induced, node_map):
+    """Bijection op-port-slot -> induced-port-slot consistent with species and
+    the mapped factor node each dangling line attaches to.  None if impossible."""
+    import itertools
+
+    def port_desc(frag, mapped=None):
+        # slot -> (species, mapped-factor-node) for each dangling line
+        d = {}
+        for sp, a, b in frag.dangling_lines:
+            port = a if frag._is_port(a) else b
+            node = b if frag._is_port(a) else a
+            nn = mapped[node] if mapped else node
+            d.setdefault(port[1], []).append((sp, nn))
+        return d
+
+    op_d = port_desc(op_frag, node_map)
+    ind_d = port_desc(induced)
+    op_slots = sorted(op_d)
+    ind_slots = sorted(ind_d)
+    if len(op_slots) != len(ind_slots):
+        return None
+    # each port here is a single dangling line (one index) -> desc list len 1
+    for perm in itertools.permutations(ind_slots):
+        ok = True
+        for os_, is_ in zip(op_slots, perm):
+            if sorted(op_d[os_]) != sorted(ind_d[is_]):
+                ok = False
+                break
+        if ok:
+            return {os_: is_ for os_, is_ in zip(op_slots, perm)}
+    return None
+
+
+# ---------------------------------------------------------------------------
+# D7.2.2d -- match driver
+# ---------------------------------------------------------------------------
+
+
+def match_fragment(op_frag: FragmentLineGraph, term) -> list[dict]:
+    """D7.2.2d: every occurrence of ``op_frag`` in residual ``term``.  Composes
+    the prefilter (D7.2.2a), the induced sub-fragment (D7.2.2b), and the exact
+    isomorphism test (D7.2.2c).
+
+    Each occurrence is a dict:
+        ``subset``      -- residual factor positions the fragment sits on
+        ``nodes``       -- op factor-node -> induced (subset-local) factor-node
+        ``port_index``  -- op port slot -> the RESIDUAL index NAME it bound to
+                           (so D7.2.3 can check the same operator block binds
+                           consistently across all its defining-term fragments)."""
+    out = []
+    for subset in candidate_factor_subsets(op_frag, term):
+        induced, slot_to_index = _induce(term, subset)
+        binding = fragments_match(op_frag, induced)
+        if binding is None:
+            continue
+        port_index = {op_slot: slot_to_index[ind_slot]
+                      for op_slot, ind_slot in binding["ports"].items()}
+        out.append({
+            "subset": subset,
+            "nodes": binding["nodes"],
+            "port_index": port_index,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # D7.1.3 -- operator fragment set
 # ---------------------------------------------------------------------------
 
