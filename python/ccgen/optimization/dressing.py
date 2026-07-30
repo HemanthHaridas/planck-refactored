@@ -86,11 +86,18 @@ class FragmentLineGraph:
     (``("port", 0..n_ports-1)``).  A line touching a ``("port", _)`` endpoint is
     dangling (a block index that wires to the rest of the residual); a line
     between two ``("factor", _)`` endpoints is internal (a summed index).
+
+    ``factor_names[k]`` is the tensor species of factor node k (``v`` / ``t1`` /
+    ``t2`` / ``tau`` / ``f`` / ...).  Load-bearing for D7.2: line topology alone
+    does NOT distinguish ``t2*v`` from ``t1*t1*v`` (found in D7.1.4 -- they can
+    wire identically), so a subgraph match must agree on factor species, not just
+    wiring.
     """
 
     lines: tuple[tuple[str, object, object], ...]
     n_factors: int
     n_ports: int
+    factor_names: tuple[str, ...] = ()
 
     def _is_port(self, e) -> bool:
         return isinstance(e, tuple) and len(e) == 2 and e[0] == "port"
@@ -132,6 +139,136 @@ class OperatorFragments:
     block: tuple[Index, ...]
     fragments: tuple[tuple[Fraction, FragmentLineGraph], ...]
     uses: frozenset[str] = frozenset()
+
+
+# ---------------------------------------------------------------------------
+# D7.1.1 -- single-factor fragment encoder
+# ---------------------------------------------------------------------------
+#
+# One factor's contribution to the fragment: one line per index.  A block index
+# becomes a dangling line to its ("port", slot); a summed index becomes a
+# half-line to a ("stub", name) endpoint that D7.1.2 later fuses with the
+# matching stub on the partner factor (same summed name).  Species: occ -> "h"
+# (hole), vir -> "p" (particle) -- the diagram engine's convention.
+#
+# The ("stub", name) endpoint is intentionally the raw INDEX NAME so the D7.1.2
+# assembler can join two factors' stubs by name; it does not survive into the
+# final FragmentLineGraph (which has only ("factor",_) and ("port",_) ends).
+
+
+def _index_species(idx: Index) -> str:
+    """Line species of an index: occupied -> hole "h", virtual -> particle "p"."""
+    return "h" if idx.space == "occ" else "p"
+
+
+def factor_to_fragment(factor, node, block):
+    """D7.1.1: the lines contributed by a single factor at ``node`` = ("factor",
+    k).  ``block`` is the operator's block tuple (index order fixes port slots).
+
+    Returns a tuple of ``(species, node, other_end)`` lines -- one per factor
+    index.  ``other_end`` is ``("port", slot)`` if the index is a block index
+    (``slot`` = its position in ``block``), else ``("stub", index_name)`` for a
+    summed index awaiting the D7.1.2 join.  A factor index that is neither in
+    the block nor a genuine summed dummy would be a malformed definition; the
+    caller (D7.1.2) supplies only well-formed definition terms."""
+    block_slot = {idx.name: s for s, idx in enumerate(block)}
+    lines = []
+    for idx in factor.indices:
+        sp = _index_species(idx)
+        if idx.name in block_slot:
+            lines.append((sp, node, ("port", block_slot[idx.name])))
+        else:
+            lines.append((sp, node, ("stub", idx.name)))
+    return tuple(lines)
+
+
+# ---------------------------------------------------------------------------
+# D7.1.2 -- definition-term fragment assembler
+# ---------------------------------------------------------------------------
+#
+# Compose the single-factor fragments of one definition term into a closed
+# FragmentLineGraph, JOINING the ("stub", name) half-lines that share a summed
+# index.  A summed index appears on exactly two factors (a contraction line), so
+# its two stubs fuse into one internal line ("factor", a) <-> ("factor", b).
+# tau is treated as one ATOMIC factor node (its own contraction to t2/t1t1 is
+# D7.3's expansion, not D7.1's).
+
+
+def term_to_fragment(term, block) -> FragmentLineGraph:
+    """D7.1.2: assemble one definition term into a FragmentLineGraph.
+
+    Each factor contributes its lines (D7.1.1); block indices land on ports, and
+    each summed index -- which appears on exactly two factors -- fuses its two
+    ("stub", name) half-lines into one internal factor<->factor line.  Raises if
+    a summed name does not appear on exactly two factor endpoints (a malformed
+    definition term: an uncontracted or over-contracted dummy)."""
+    port_lines = []
+    # stub_ends[name] collects (species, factor_node) for each half-line on `name`
+    stub_ends: dict[str, list[tuple[str, object]]] = {}
+    for k, factor in enumerate(term.factors):
+        node = ("factor", k)
+        for sp, nd, other in factor_to_fragment(factor, node, block):
+            if other[0] == "port":
+                port_lines.append((sp, nd, other))
+            else:                                   # ("stub", name)
+                stub_ends.setdefault(other[1], []).append((sp, nd))
+
+    internal_lines = []
+    for name, ends in stub_ends.items():
+        if len(ends) != 2:
+            raise ValueError(
+                f"summed index {name!r} appears on {len(ends)} factor endpoints, "
+                f"expected exactly 2 (a contraction line)")
+        (sp_a, node_a), (sp_b, node_b) = ends
+        if sp_a != sp_b:
+            raise ValueError(
+                f"summed index {name!r} joins mismatched species {sp_a}/{sp_b}")
+        internal_lines.append((sp_a, node_a, node_b))
+
+    return FragmentLineGraph(
+        lines=tuple(internal_lines) + tuple(port_lines),
+        n_factors=len(term.factors),
+        n_ports=len(block),
+        factor_names=tuple(f.name for f in term.factors),
+    )
+
+
+# ---------------------------------------------------------------------------
+# D7.1.3 -- operator fragment set
+# ---------------------------------------------------------------------------
+
+
+def fragment_signature(fr: FragmentLineGraph) -> tuple:
+    """A match-relevant canonical signature of a fragment: the factor-species
+    multiset, the internal-line species multiset (summed contractions), and the
+    per-slot (port, species, factor-species-at-the-other-end) wiring.  Two
+    fragments with the same signature are indistinguishable to a D7.2 subgraph
+    match; D7.1.4 requires distinct definition terms to have distinct signatures
+    (no false-collision).  Factor-node identities are abstracted to their species
+    so the signature is invariant under factor relabeling but sensitive to WHAT
+    each node is -- the property line topology alone lacked (D7.1.4 finding)."""
+    names = fr.factor_names
+    factor_species = tuple(sorted(names))
+    internal = tuple(sorted(sp for sp, _, _ in fr.internal_lines))
+    # port wiring: (slot, species, species-of-the-factor the port attaches to)
+    port_wiring = []
+    for sp, a, b in fr.dangling_lines:
+        port = a if fr._is_port(a) else b
+        node = b if fr._is_port(a) else a
+        node_species = names[node[1]] if node[0] == "factor" and node[1] < len(names) else "?"
+        port_wiring.append((port[1], sp, node_species))
+    return (factor_species, internal, tuple(sorted(port_wiring)))
+
+
+def operator_fragments(op: "DressedOperator") -> OperatorFragments:
+    """D7.1.3: encode a whole dressed operator as line-graph fragments -- one
+    ``(coeff, FragmentLineGraph)`` per defining term.  This is the D7.1
+    deliverable: the representation D7.2's subgraph match consumes.  Carries the
+    operator's name / block / uses so the recognizer knows what it matched."""
+    frags = tuple((term.coeff, term_to_fragment(term, op.block))
+                  for term in op.definition_terms)
+    return OperatorFragments(name=op.name, block=op.block,
+                             fragments=frags, uses=op.uses)
 
 
 def tau_tilde(a: Index, b: Index, i: Index, j: Index) -> Tensor:

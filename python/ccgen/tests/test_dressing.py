@@ -22,6 +22,10 @@ from ccgen.optimization.dressing import (  # noqa: E402
     OperatorFragments,
     TAU_TILDE_NAME,
     _build_wmnij,
+    factor_to_fragment,
+    fragment_signature,
+    operator_fragments,
+    term_to_fragment,
     _eri_canonical,
     bind_definition_term,
     bind_occurrence,
@@ -853,6 +857,189 @@ class FragmentLineGraphModelTests(unittest.TestCase):
         self.assertEqual(len(of.fragments), 1)
         self.assertEqual(of.fragments[0][0], Fraction(1, 4))
         self.assertIn("tau", of.uses)
+
+
+class FactorToFragmentTests(unittest.TestCase):
+    """D7.1.1: the single-factor encoder emits one line per index -- a dangling
+    ("port", slot) for a block index, a ("stub", name) for a summed index, with
+    occ->hole / vir->particle species. Checked against the concrete factors of
+    the Wmnij definition."""
+
+    def setUp(self):
+        self.w = _build_wmnij()
+        self.block = self.w.block          # (m, n, i, j), all occ
+
+    def _term(self, k):
+        return self.w.definition_terms[k]
+
+    def test_bare_v_all_ports(self):
+        # term 0: v(m,n,i,j) -- every index is a block port, all hole
+        v_factor = self._term(0).factors[0]
+        lines = factor_to_fragment(v_factor, ("factor", 0), self.block)
+        self.assertEqual(len(lines), 4)
+        self.assertTrue(all(sp == "h" for sp, _, _ in lines))
+        ends = {e for _, _, e in lines}
+        self.assertEqual(ends, {("port", 0), ("port", 1), ("port", 2), ("port", 3)})
+
+    def test_t1_one_stub_one_port(self):
+        # term 1: t1(e,j) -- e summed (vir->p stub), j block (occ->h port slot 3)
+        t1_factor = self._term(1).factors[0]
+        self.assertEqual(t1_factor.name, "t1")
+        lines = factor_to_fragment(t1_factor, ("factor", 0), self.block)
+        self.assertIn(("p", ("factor", 0), ("stub", "e")), lines)
+        self.assertIn(("h", ("factor", 0), ("port", 3)), lines)  # j is block slot 3
+
+    def test_tau_two_stubs_two_ports(self):
+        # term 3: tau(e,f,i,j) -- e,f summed (p stubs), i,j block (h ports 2,3)
+        tau_factor = self._term(3).factors[0]
+        self.assertEqual(tau_factor.name, "tau")
+        lines = factor_to_fragment(tau_factor, ("factor", 0), self.block)
+        stubs = {e for sp, _, e in lines if e[0] == "stub"}
+        ports = {e for sp, _, e in lines if e[0] == "port"}
+        self.assertEqual(stubs, {("stub", "e"), ("stub", "f")})
+        self.assertEqual(ports, {("port", 2), ("port", 3)})
+        # e,f are virtual -> particle stubs
+        self.assertTrue(all(sp == "p" for sp, _, e in lines if e[0] == "stub"))
+
+    def test_interaction_v_ports_and_stubs(self):
+        # term 3 factor 1: v(m,n,e,f) -- m,n block (h ports 0,1), e,f summed (p stubs)
+        v_factor = self._term(3).factors[1]
+        lines = factor_to_fragment(v_factor, ("factor", 1), self.block)
+        ports = {e for _, _, e in lines if e[0] == "port"}
+        stubs = {e for _, _, e in lines if e[0] == "stub"}
+        self.assertEqual(ports, {("port", 0), ("port", 1)})
+        self.assertEqual(stubs, {("stub", "e"), ("stub", "f")})
+
+
+class TermToFragmentTests(unittest.TestCase):
+    """D7.1.2: assemble a definition term into a FragmentLineGraph, joining
+    summed-index stubs into internal factor<->factor lines. Checked against the
+    Wmnij definition terms, including the tau*v term (the D7.1.0 oracle)."""
+
+    def setUp(self):
+        self.w = _build_wmnij()
+        self.block = self.w.block
+
+    def test_bare_v_term_all_ports(self):
+        # term 0: v(m,n,i,j) -> 4 dangling hole ports, no internal lines
+        fr = term_to_fragment(self.w.definition_terms[0], self.block)
+        self.assertEqual(len(fr.internal_lines), 0)
+        self.assertEqual(len(fr.dangling_lines), 4)
+        self.assertEqual(fr.port_species, {0: "h", 1: "h", 2: "h", 3: "h"})
+
+    def test_t1v_term_one_internal(self):
+        # term 1: t1(e,j) v(m,n,i,e) -> one internal particle line (e), plus
+        # dangling ports for j (t1) and m,n,i (v)
+        fr = term_to_fragment(self.w.definition_terms[1], self.block)
+        self.assertEqual(len(fr.internal_lines), 1)
+        self.assertEqual(fr.internal_lines[0][0], "p")   # e is virtual
+        self.assertEqual(len(fr.dangling_lines), 4)      # j + m,n,i
+
+    def test_tauv_term_matches_oracle(self):
+        # term 3: 1/4 tau(e,f,i,j) v(m,n,e,f) -> the D7.1.0 hand-built fragment:
+        # 2 internal particle lines (e,f) + 4 dangling hole ports.
+        fr = term_to_fragment(self.w.definition_terms[3], self.block)
+        self.assertEqual(len(fr.internal_lines), 2)
+        self.assertTrue(all(sp == "p" for sp, _, _ in fr.internal_lines))
+        self.assertEqual(fr.port_species, {0: "h", 1: "h", 2: "h", 3: "h"})
+        # internal lines both connect tau (factor 0) <-> v (factor 1)
+        for sp, a, b in fr.internal_lines:
+            self.assertEqual({a, b}, {("factor", 0), ("factor", 1)})
+
+    def test_uncontracted_dummy_raises(self):
+        # a definition term with a dangling summed index (appears once) is
+        # malformed -- the assembler must reject it rather than emit a half-line.
+        from ccgen.project import AlgebraTerm
+        from ccgen.tensors import t1
+        from ccgen.indices import make_occ, make_vir
+        e = make_vir("e", dummy=True)
+        m, n, i, j = self.block
+        bad = AlgebraTerm(coeff=Fraction(1), factors=(t1(e, j),),
+                          free_indices=self.block, summed_indices=(e,),
+                          connected=True)
+        with self.assertRaises(ValueError):
+            term_to_fragment(bad, self.block)
+
+
+class OperatorFragmentsTests(unittest.TestCase):
+    """D7.1.3: every seeded operator encodes to line-graph fragments -- one per
+    definition term, with ports matching the operator block. Exercises the whole
+    family (Wmnij/Wabef/Wmbej + Fae/Fmi/Fme), so f-tensor factors, tau_tilde, and
+    the P(ab) virtual-block operators all pass through the encoder."""
+
+    def test_all_seeded_operators_encode(self):
+        for op in seeded_operators():
+            of = operator_fragments(op)
+            self.assertEqual(of.name, op.name)
+            self.assertEqual(of.block, op.block)
+            self.assertEqual(of.uses, op.uses)
+            # one fragment per defining term
+            self.assertEqual(len(of.fragments), len(op.definition_terms))
+            for coeff, fr in of.fragments:
+                # ports span the whole block, correct arity
+                self.assertEqual(fr.n_ports, len(op.block))
+                # every block slot is wired by some dangling line
+                self.assertEqual(set(fr.port_species), set(range(len(op.block))))
+                # port species agree with the block's occ/vir pattern
+                for slot, idx in enumerate(op.block):
+                    want = "h" if idx.space == "occ" else "p"
+                    self.assertEqual(fr.port_species[slot], want,
+                                     f"{op.name} slot {slot} species")
+
+    def test_wabef_virtual_block_ports(self):
+        # Wabef block = (a,b,e,f) all virtual -> all ports are particle species
+        (of,) = [operator_fragments(o) for o in seeded_operators()
+                 if o.name == "Wabef"]
+        for _, fr in of.fragments:
+            self.assertTrue(all(sp == "p" for sp in fr.port_species.values()))
+
+
+class FragmentFidelityTests(unittest.TestCase):
+    """D7.1.4: the fragment encoding is lossless enough for matching -- distinct
+    definition terms across the whole seeded family have DISTINCT signatures (no
+    false collision).
+
+    This gate DROVE a data-model fix: line topology alone collides t2*v with
+    t1*t1*v (both wire identically) -- caught here -- so FragmentLineGraph carries
+    factor_names and fragment_signature keys on factor species. Without it a D7.2
+    match could mis-recognize one operator term as another."""
+
+    def _all_fragments(self):
+        out = []
+        for op in seeded_operators():
+            for k, (coeff, fr) in enumerate(operator_fragments(op).fragments):
+                out.append((op.name, k, fr))
+        return out
+
+    def test_factor_names_carried(self):
+        # every fragment records the tensor species of each factor node
+        for op in seeded_operators():
+            for k, (_, fr) in enumerate(operator_fragments(op).fragments):
+                self.assertEqual(len(fr.factor_names), fr.n_factors)
+                self.assertEqual(
+                    fr.factor_names,
+                    tuple(f.name for f in op.definition_terms[k].factors))
+
+    def test_signatures_distinct_within_operator(self):
+        # within one operator, no two defining terms share a signature (else the
+        # match would double-count / mis-attribute a term)
+        for op in seeded_operators():
+            sigs = [fragment_signature(fr)
+                    for _, fr in operator_fragments(op).fragments]
+            self.assertEqual(len(sigs), len(set(sigs)),
+                             f"{op.name} has colliding definition-term fragments")
+
+    def test_t2v_vs_t1t1v_distinguished(self):
+        # the D7.1.4 finding: Wmbej's t2*v and t1*t1*v terms wire identically but
+        # must be distinguished by factor species. Their signatures differ.
+        wmbej = next(o for o in seeded_operators() if o.name == "Wmbej")
+        frags = operator_fragments(wmbej).fragments
+        sigs = {frozenset(fr.factor_names): fragment_signature(fr)
+                for _, fr in frags}
+        self.assertIn(frozenset({"t2", "v"}), sigs)
+        self.assertIn(frozenset({"t1", "v"}), sigs)   # the t1,t1,v term
+        self.assertNotEqual(sigs[frozenset({"t2", "v"})],
+                            sigs[frozenset({"t1", "v"})])
 
 
 if __name__ == "__main__":

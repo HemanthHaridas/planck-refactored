@@ -343,17 +343,34 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     fragment splits into 2 internal particle lines + 4 dangling hole ports, ports
     read back `{0:h,1:h,2:h,3:h}`, and the line format constructs a `LineGraph`
     unchanged (shape-compatible). Data model only; encoders are D7.1.1/1.2.
-  - **D7.1.1 — single-factor fragment encoder** (`factor_to_fragment`): one
-    tensor factor → its p/h lines, each index to a port (if in block) or an
-    internal stub (if summed). NOT yet done.
-  - **D7.1.2 — definition-term assembler** (`term_to_fragment`): compose the
-    single-factor fragments, joining internal stubs that share a summed index.
-    The real wiring work. NOT yet done.
-  - **D7.1.3 — operator fragment set** (`operator_fragments`): map over
-    `definition_terms` → `OperatorFragments`. NOT yet done.
-  - **D7.1.4 — encoding-fidelity round-trip**: `fragment_to_term ∘ term_to_fragment
-    == identity` (canonical) for all seeded operators — proves the encoding is
-    lossless before D7.2 matches against it. NOT yet done.
+  - **D7.1.1 — single-factor fragment encoder. LANDED.** `factor_to_fragment`:
+    one tensor factor → its p/h lines, each index a dangling `("port", slot)`
+    (block index) or a `("stub", name)` half-line (summed index) awaiting the
+    D7.1.2 join; occ→hole, vir→particle. *Gate* (`FactorToFragmentTests`): the
+    concrete Wmnij factors (`v`, `t1`, `τ`, interaction `v`) emit the right
+    port/stub/species pattern.
+  - **D7.1.2 — definition-term assembler. LANDED.** `term_to_fragment`: compose
+    the single-factor fragments, fusing the two `("stub", name)` half-lines of
+    each summed index into one internal factor↔factor line; raises on a dummy
+    that is not exactly 2-contracted. *Gate* (`TermToFragmentTests`): the Wmnij
+    `τ·v` term reproduces the D7.1.0 hand-built oracle (2 internal particle lines
+    + 4 dangling hole ports), and a malformed uncontracted-dummy term is
+    rejected.
+  - **D7.1.3 — operator fragment set. LANDED.** `operator_fragments`: map
+    `term_to_fragment` over the definition terms → `OperatorFragments`. *Gate*
+    (`OperatorFragmentsTests`): all six seeded operators (incl. Wabef's all-virtual
+    block and the F-operators / `tau_tilde` / `f` factors) encode, one fragment
+    per term, ports matching the block's occ/vir pattern.
+  - **D7.1.4 — encoding fidelity (injectivity). LANDED — and it drove a
+    data-model fix.** `fragment_signature` + the injectivity gate
+    (`FragmentFidelityTests`): distinct definition terms across the family must
+    have distinct signatures. The gate CAUGHT that line topology alone collides
+    `t2·v` with `t1·t1·v` (Wmbej — they wire identically), so `FragmentLineGraph`
+    now carries `factor_names` and the signature keys on factor SPECIES, not just
+    wiring. Without this a D7.2 match could mis-recognize one operator term as
+    another. (Chosen over a full `fragment_to_term` inverse: injectivity across
+    the seeded family is the property D7.2 actually needs, and cheaper.)
+  - **D7.1 is COMPLETE.** `operator_fragments(op)` is the D7.2 input.
   - YAGNI notes: treat `tau` as an ATOMIC factor node (don't expand — that's
     D7.3); use a direct `factor→lines` encoder, NOT the whole-diagram
     Kallay-Surjan `DiagramString` machinery (which is built for closed diagrams,
