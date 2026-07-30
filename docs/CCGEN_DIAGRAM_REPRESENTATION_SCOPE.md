@@ -326,6 +326,38 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
 - **D7.1 — operator-diagram encoding (~M).** Express each seeded operator as a
   diagram fragment (partial line-graph / index-wiring pattern) rather than a term
   list. Reuses the definitions; the work is casting them in the diagram encoding.
+  Scoped into small verifiable steps:
+  - **D7.1.0 — fragment line-graph data model. LANDED.** `FragmentLineGraph` +
+    `OperatorFragments` in `optimization/dressing.py`. A `FragmentLineGraph` is an
+    OPEN line graph: the same `(species, endpoint_a, endpoint_b)` edge format as
+    `diagram.LineGraph` (so D7.2 matches one homogeneous representation), but its
+    block indices are dangling `("port", slot)` endpoints instead of `"bra"`.
+    Endpoints are `("factor", k)` (a definition-term factor: v/t1/tau/f) or
+    `("port", s)` (a block index wiring outward). A line between two factor nodes
+    is internal (a summed index); a line touching a port is dangling (a block
+    index). occ→hole "h", vir→particle "p" (same species convention as the
+    engine). Read-backs: `internal_lines` / `dangling_lines` / `port_species`.
+    `OperatorFragments` is the D7.1.3 container (one `(coeff, FragmentLineGraph)`
+    per defining term + name/block/uses). *Gate*
+    (`FragmentLineGraphModelTests`, PySCF-free): a hand-built Wmnij `¼ τ v` term
+    fragment splits into 2 internal particle lines + 4 dangling hole ports, ports
+    read back `{0:h,1:h,2:h,3:h}`, and the line format constructs a `LineGraph`
+    unchanged (shape-compatible). Data model only; encoders are D7.1.1/1.2.
+  - **D7.1.1 — single-factor fragment encoder** (`factor_to_fragment`): one
+    tensor factor → its p/h lines, each index to a port (if in block) or an
+    internal stub (if summed). NOT yet done.
+  - **D7.1.2 — definition-term assembler** (`term_to_fragment`): compose the
+    single-factor fragments, joining internal stubs that share a summed index.
+    The real wiring work. NOT yet done.
+  - **D7.1.3 — operator fragment set** (`operator_fragments`): map over
+    `definition_terms` → `OperatorFragments`. NOT yet done.
+  - **D7.1.4 — encoding-fidelity round-trip**: `fragment_to_term ∘ term_to_fragment
+    == identity` (canonical) for all seeded operators — proves the encoding is
+    lossless before D7.2 matches against it. NOT yet done.
+  - YAGNI notes: treat `tau` as an ATOMIC factor node (don't expand — that's
+    D7.3); use a direct `factor→lines` encoder, NOT the whole-diagram
+    Kallay-Surjan `DiagramString` machinery (which is built for closed diagrams,
+    not open fragments).
 - **D7.2 — subgraph recognition (~L, the core).** Find occurrences of each
   operator fragment as a subgraph of a diagram's assembled contraction
   (topological + species-consistent match on the line graph). Subgraph iso is

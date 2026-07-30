@@ -18,6 +18,8 @@ if str(ROOT) not in sys.path:
 
 from ccgen.optimization.dressing import (  # noqa: E402
     DressedOperator,
+    FragmentLineGraph,
+    OperatorFragments,
     TAU_TILDE_NAME,
     _build_wmnij,
     _eri_canonical,
@@ -788,6 +790,69 @@ class ExactCoverDisprovenTests(unittest.TestCase):
         )
         # Most of the equation is outside the instance form.
         self.assertGreater(len(untouched), len(residual_keys) / 2)
+
+
+class FragmentLineGraphModelTests(unittest.TestCase):
+    """D7.1.0: the fragment line-graph data model round-trips.
+
+    Data model only -- no encoder yet (D7.1.1/1.2). Uses a hand-built fragment
+    for the Wmnij ``1/4 tau_ijef v_mnef`` term: 2 internal particle lines
+    (tau<->v on e,f) + 4 dangling hole lines (block ports m,n,i,j). Confirms the
+    internal/dangling split, port-species read-back, and the line format is
+    identical in shape to diagram.LineGraph (species, endpoint_a, endpoint_b)."""
+
+    def _tau_v_fragment(self):
+        # factor 0 = tau(e,f,i,j) [p,p,h,h]; factor 1 = v(m,n,e,f) [h,h,p,p]
+        # block = (m, n, i, j) -> ports 0,1,2,3.  Internal lines: e (p), f (p)
+        # between tau and v.  Dangling: tau's i,j -> ports 2,3 (h); v's m,n ->
+        # ports 0,1 (h).
+        F0, F1 = ("factor", 0), ("factor", 1)
+        lines = (
+            ("p", F0, F1),                 # e: tau <-> v
+            ("p", F0, F1),                 # f: tau <-> v
+            ("h", F0, ("port", 2)),        # i (tau) -> port 2
+            ("h", F0, ("port", 3)),        # j (tau) -> port 3
+            ("h", F1, ("port", 0)),        # m (v)  -> port 0
+            ("h", F1, ("port", 1)),        # n (v)  -> port 1
+        )
+        return FragmentLineGraph(lines=lines, n_factors=2, n_ports=4)
+
+    def test_internal_dangling_split(self):
+        fr = self._tau_v_fragment()
+        self.assertEqual(len(fr.internal_lines), 2)
+        self.assertEqual(len(fr.dangling_lines), 4)
+        # internal lines are particle (the summed e,f); dangling are hole
+        self.assertTrue(all(sp == "p" for sp, _, _ in fr.internal_lines))
+        self.assertTrue(all(sp == "h" for sp, _, _ in fr.dangling_lines))
+
+    def test_port_species(self):
+        fr = self._tau_v_fragment()
+        # all four Wmnij block ports are occupied -> hole species
+        self.assertEqual(fr.port_species, {0: "h", 1: "h", 2: "h", 3: "h"})
+
+    def test_line_format_matches_linegraph(self):
+        # each line is a 3-tuple (species, endpoint_a, endpoint_b) with species
+        # in {"p","h"} -- identical shape to diagram.LineGraph.lines, so a
+        # subgraph match runs on one representation.
+        from ccgen.diagram import LineGraph
+        fr = self._tau_v_fragment()
+        for line in fr.lines:
+            self.assertEqual(len(line), 3)
+            self.assertIn(line[0], ("p", "h"))
+        # LineGraph accepts the same tuple shape (constructs without error)
+        LineGraph(lines=fr.lines, bra_level=0, h_rank=2)
+
+    def test_operator_fragments_container(self):
+        # the D7.1.3 container holds (coeff, FragmentLineGraph) pairs + metadata
+        fr = self._tau_v_fragment()
+        of = OperatorFragments(
+            name="Wmnij", block=_build_wmnij().block,
+            fragments=((Fraction(1, 4), fr),),
+            uses=frozenset({"tau"}))
+        self.assertEqual(of.name, "Wmnij")
+        self.assertEqual(len(of.fragments), 1)
+        self.assertEqual(of.fragments[0][0], Fraction(1, 4))
+        self.assertIn("tau", of.uses)
 
 
 if __name__ == "__main__":

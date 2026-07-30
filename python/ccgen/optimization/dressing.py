@@ -46,6 +46,94 @@ from .tau import TAU_NAME, TAU_SPEC, tau, _canonical_key, _canonical_fixed_point
 TAU_TILDE_NAME = "tau_tilde"
 
 
+# ---------------------------------------------------------------------------
+# D7.1.0 -- fragment line-graph data model
+# ---------------------------------------------------------------------------
+#
+# D7 recognizes a dressed operator as a SUBGRAPH of a residual diagram's line
+# graph.  For that, each operator (more precisely, each of its definition terms)
+# must be expressed as a line-graph *fragment*: the same edge-list form as
+# diagram.LineGraph, but OPEN -- its block indices are dangling "ports" that the
+# match will wire to the rest of the residual, in place of LineGraph's "bra".
+#
+# Line format is deliberately identical to diagram.LineGraph.lines so a subgraph
+# match (D7.2) runs on one homogeneous representation:
+#
+#     (species, endpoint_a, endpoint_b)      species in {"p", "h"}
+#
+# Endpoints:
+#   ("factor", k)  -- the k-th factor of the definition term (v / t1 / tau / f)
+#   ("port",   s)  -- a dangling block port; s is the slot position in the
+#                     operator's block tuple (the index that connects outward)
+#
+# A line with two factor endpoints is INTERNAL (a summed index shared by two
+# factors); a line with one port endpoint is DANGLING (a block index). Occupied
+# indices are hole lines ("h"), virtual indices are particle lines ("p") -- the
+# same species convention as the diagram engine.
+#
+# D7.1.0 is the data model only; the encoders that populate it are D7.1.1
+# (single factor) and D7.1.2 (whole definition term).
+
+
+@dataclass(frozen=True)
+class FragmentLineGraph:
+    """Open edge-list form of one dressed-operator definition term.
+
+    ``lines`` is a tuple of ``(species, endpoint_a, endpoint_b)`` -- the same
+    shape as :class:`ccgen.diagram.LineGraph`, so D7.2's subgraph match is a
+    homogeneous graph match.  ``n_factors`` is the number of factor nodes
+    (``("factor", 0..n_factors-1)``); ``n_ports`` is the operator's block size
+    (``("port", 0..n_ports-1)``).  A line touching a ``("port", _)`` endpoint is
+    dangling (a block index that wires to the rest of the residual); a line
+    between two ``("factor", _)`` endpoints is internal (a summed index).
+    """
+
+    lines: tuple[tuple[str, object, object], ...]
+    n_factors: int
+    n_ports: int
+
+    def _is_port(self, e) -> bool:
+        return isinstance(e, tuple) and len(e) == 2 and e[0] == "port"
+
+    @property
+    def internal_lines(self) -> tuple[tuple[str, object, object], ...]:
+        """Lines between two factor nodes (summed indices)."""
+        return tuple(l for l in self.lines
+                     if not self._is_port(l[1]) and not self._is_port(l[2]))
+
+    @property
+    def dangling_lines(self) -> tuple[tuple[str, object, object], ...]:
+        """Lines with a port endpoint (block indices)."""
+        return tuple(l for l in self.lines
+                     if self._is_port(l[1]) or self._is_port(l[2]))
+
+    @property
+    def port_species(self) -> dict[int, str]:
+        """Slot -> species ("p"/"h") for each block port, read off the dangling
+        lines.  The match must connect a residual line of the same species."""
+        out: dict[int, str] = {}
+        for sp, a, b in self.dangling_lines:
+            port = a if self._is_port(a) else b
+            out[port[1]] = sp
+        return out
+
+
+@dataclass(frozen=True)
+class OperatorFragments:
+    """A dressed operator encoded as line-graph fragments (D7.1.3 output).
+
+    One ``(coeff, FragmentLineGraph)`` per defining term; ``name`` / ``block`` /
+    ``uses`` carried from the :class:`DressedOperator` so the recognizer knows
+    what it matched and the build-order dependencies.  Populated by
+    :func:`operator_fragments` (D7.1.3); this dataclass is the D7.1.0 container.
+    """
+
+    name: str
+    block: tuple[Index, ...]
+    fragments: tuple[tuple[Fraction, FragmentLineGraph], ...]
+    uses: frozenset[str] = frozenset()
+
+
 def tau_tilde(a: Index, b: Index, i: Index, j: Index) -> Tensor:
     """The tau~ pseudo-amplitude tau~_{ij}^{ab} = t2 + 1/2 P(t1 t1).
 
