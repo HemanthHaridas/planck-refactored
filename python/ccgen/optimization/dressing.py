@@ -486,6 +486,40 @@ def match_fragment(op_frag: FragmentLineGraph, term) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# D7.2.3a -- per-fragment occurrence collection
+# ---------------------------------------------------------------------------
+
+
+def collect_fragment_occurrences(op: "DressedOperator", terms) -> list[dict]:
+    """D7.2.3a: fan ``match_fragment`` out over every residual term for each of
+    the operator's tau-expanded defining fragments.
+
+    Returns a flat list of occurrence dicts, one per (fragment, term, subset)
+    hit, each carrying enough to group into whole-operator instances (D7.2.3c)
+    and later rewrite (D7.3):
+        ``frag_id``    -- index into the tau-expanded fragment list
+        ``op_coeff``   -- the fragment's coefficient in the operator definition
+        ``term_id``    -- index into ``terms``
+        ``term_coeff`` -- the residual term's coefficient
+        ``subset``     -- residual factor positions the fragment sits on
+        ``port_index`` -- op port slot -> residual index name."""
+    frags = tau_expanded_operator_fragments(op).fragments
+    out = []
+    for term_id, term in enumerate(terms):
+        for frag_id, (op_coeff, fr) in enumerate(frags):
+            for m in match_fragment(fr, term):
+                out.append({
+                    "frag_id": frag_id,
+                    "op_coeff": op_coeff,
+                    "term_id": term_id,
+                    "term_coeff": term.coeff,
+                    "subset": m["subset"],
+                    "port_index": m["port_index"],
+                })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # D7.1.3 -- operator fragment set
 # ---------------------------------------------------------------------------
 

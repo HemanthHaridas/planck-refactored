@@ -428,17 +428,46 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     binding; the `t2·v` operator finds NO occurrence in `t2·t2·v` (extra-line
     rejection, the load-bearing correctness case); species mismatch blocks a
     match; the driver runs clean over the whole doubles manifold.
-  - **D7.2.3 — full-operator occurrence.** An operator is recognized only if ALL
-    its (τ-expanded) defining-term fragments are found, consistently bound to one
-    block. `find_operator_occurrences`. NOT yet done.
-  - **D7.2.4 — coefficient consistency.** The covered residual coefficients must
-    match the operator's up to a common scalar (the A3 firewall analog, now on a
-    recognized subgraph). Check whether the retired `verify_occurrence` is
-    reusable. NOT yet done.
-  - De-risk: gate D7.2.2–2.4 on `Wmnij` first (cleanest; exercises τ expansion),
-    then the family. False positives from PARTIAL matches are the real risk —
-    D7.2.3 (all-terms) + D7.2.4 (coeffs) guard it, and `verify_dressed_equation`
-    (already built) is the D7.3 backstop.
+  - **D7.2.3 — full-operator occurrence. RE-SCOPED to hypothesize-and-verify
+    (a structural finding forced it).**
+    - **D7.2.3a — `collect_fragment_occurrences`. LANDED.** Fan `match_fragment`
+      out over every residual term for each τ-expanded operator fragment; each
+      hit carries `frag_id` / `op_coeff` / `term_id` / `term_coeff` / `subset` /
+      `port_index`. *Gate* (`CollectFragmentOccurrencesTests`): Wmnij's 5
+      fragments all collect occurrences (2/4/4/2/4 = 16), records carry the
+      coefficients + full port binding.
+    - **THE FINDING (why 3b/3c changed).** The original plan — group the fragment
+      matches by a shared `(block-binding, rest-signature)` anchor and require all
+      5 present — DOES NOT WORK: measured on CCSD doubles, **no single group
+      covers all 5 Wmnij fragments**. Wmnij enters `R2` as `½ Wmnij(kl,ij)
+      t2(ab,kl)`; expanding its definition, the outer `t2` attaches to DIFFERENT
+      block slots per piece (bare `v(k,l,i,j)` carries `k,l` on the `v`; the
+      `t2·v` piece splits them), so the pieces scatter across bindings/rests.
+      Structural grouping cannot cleanly re-assemble one operator instance — this
+      is exactly the wall the retired exact-cover route hit.
+    - **The corrected approach: hypothesize-and-verify** (the same direction
+      `verify_dressed_equation` / `expand_dressed_term` already work in). From one
+      ANCHOR fragment match (e.g. the bare `v`) + its rest, HYPOTHESIZE a
+      `W·rest` dressed term; `expand_dressed_term` regenerates all its raw pieces;
+      require every expanded piece to be present in the residual with matching
+      coefficient. No need to group all 5 structurally — expansion does the
+      re-assembly and the coefficient check is the firewall. Reuses existing
+      `expand_dressed_term`.
+      - **D7.2.3b — hypothesize `W·rest` from an anchor match.** Build the dressed
+        `AlgebraTerm` `c · W(bound block) · rest` from a chosen anchor occurrence.
+        NOT yet done.
+      - **D7.2.3c — verify by expansion.** `expand_dressed_term(hypothesis)` ⊆
+        residual, coefficient-consistent; reject partial/mismatched. NOT yet done.
+      - **D7.2.3d — `find_operator_occurrences` driver.** Enumerate anchor
+        matches, hypothesize+verify each, return the verified occurrences (covered
+        residual terms + block binding + rest) for D7.3 to rewrite. NOT yet done.
+  - **D7.2.4 — coefficient consistency.** Folded into D7.2.3c's verify step (the
+    hypothesize-and-verify path checks coefficients as it expands), rather than a
+    separate pass on a structural group. `verify_dressed_equation` is the exact
+    backstop.
+  - De-risk: gate on `Wmnij` first (cleanest; exercises τ expansion), then the
+    family. The hypothesize-and-verify path is inherently sound — a false anchor
+    fails the expansion/coefficient check — so over-proposing anchors is safe.
 - **D7.3 — factorization + emit (~M).** Rewrite the residual to reference the
   recognized operators, order the intermediate DAG (`Wmnij` needs `τ`), emit
   through the existing builder path. *Gate:* the dressed residual expanded via

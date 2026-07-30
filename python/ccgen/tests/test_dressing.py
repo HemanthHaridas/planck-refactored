@@ -25,6 +25,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     factor_to_fragment,
     fragment_signature,
     candidate_factor_subsets,
+    collect_fragment_occurrences,
     fragments_match,
     induced_subfragment,
     match_fragment,
@@ -1139,6 +1140,36 @@ class TauExpandedFragmentsTests(unittest.TestCase):
         self.assertEqual(len(t2v_op.internal_lines), 2)
         self.assertTrue(all(sp == "h" for sp in t2v_op.port_species.values()))
         self.assertEqual(sorted(fragment_signature(t2v_op)[0]), ["t2", "v"])
+
+
+class CollectFragmentOccurrencesTests(unittest.TestCase):
+    """D7.2.3a: fan the fragment matcher out over the whole residual, per operator
+    fragment. Each occurrence carries the fragment/term coefficients + binding
+    needed to group into whole-operator instances (D7.2.3c) and rewrite (D7.3)."""
+
+    def test_wmnij_covers_all_fragments(self):
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        occ = collect_fragment_occurrences(_build_wmnij(), eqs["doubles"])
+        n_frags = len(tau_expanded_operator_fragments(_build_wmnij()).fragments)
+        covered = {o["frag_id"] for o in occ}
+        # every tau-expanded Wmnij fragment has at least one occurrence
+        self.assertEqual(covered, set(range(n_frags)))
+
+    def test_records_carry_coeffs_and_binding(self):
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        occ = collect_fragment_occurrences(_build_wmnij(), eqs["doubles"])
+        self.assertTrue(occ)
+        for o in occ:
+            self.assertIn("op_coeff", o)
+            self.assertIn("term_coeff", o)
+            self.assertIn("term_id", o)
+            self.assertIn("subset", o)
+            self.assertIn("port_index", o)
+            # port_index binds every operator block slot
+            self.assertEqual(set(o["port_index"]),
+                             set(range(len(_build_wmnij().block))))
 
 
 class MatchFragmentTests(unittest.TestCase):
