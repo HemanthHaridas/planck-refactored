@@ -28,6 +28,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     collect_fragment_occurrences,
     enumerate_hypotheses,
     fragments_match,
+    hypothesis_is_consistent,
     hypothesize_operator_term,
     induced_subfragment,
     match_fragment,
@@ -1142,6 +1143,52 @@ class TauExpandedFragmentsTests(unittest.TestCase):
         self.assertEqual(len(t2v_op.internal_lines), 2)
         self.assertTrue(all(sp == "h" for sp in t2v_op.port_species.values()))
         self.assertEqual(sorted(fragment_signature(t2v_op)[0]), ["t2", "v"])
+
+
+class HypothesisConsistencyTests(unittest.TestCase):
+    """D7.2.3c-1: the sound containment filter. A hypothesis is consistent iff
+    every expansion primitive is in the residual with matching sign and magnitude
+    <= the residual's. The correct Wmnij(k,l,i,j) orientations pass; wrong
+    orientations (primitive absent) fail. Exactness is deferred to the
+    whole-equation verify (D7.3), so partial-but-consistent hypotheses (rest=t2)
+    also pass -- that is sound, not a false accept."""
+
+    def _setup(self):
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        terms = eqs["doubles"]
+        op = _build_wmnij()
+        anchor = next(o for o in collect_fragment_occurrences(op, terms)
+                      if o["frag_id"] == 0)
+        return op, anchor, terms[anchor["term_id"]], terms
+
+    def test_correct_hypothesis_passes(self):
+        op, anchor, term, terms = self._setup()
+        good = [h for h in enumerate_hypotheses(op, anchor, term)
+                if hypothesis_is_consistent(h, terms)]
+        self.assertTrue(good)
+        # every consistent candidate is a correct orientation (m,n->k,l external
+        # i,j): the W indices end in i,j
+        for h in good:
+            names = [i.name for i in h.factors[0].indices]
+            self.assertEqual(names[2:], ["i", "j"])
+        # the correct tau-rest hypothesis is among them
+        self.assertTrue(any(f.name == "tau" for h in good for f in h.factors[1:]))
+
+    def test_wrong_orientation_rejected(self):
+        op, anchor, term, terms = self._setup()
+        for h in enumerate_hypotheses(op, anchor, term):
+            names = [i.name for i in h.factors[0].indices]
+            if names == ["i", "j", "k", "l"]:      # the wrong orientation
+                self.assertFalse(hypothesis_is_consistent(h, terms))
+
+    def test_filter_is_selective(self):
+        # the filter must reject the vast majority (only the 4 antisym-equivalent
+        # correct orientations x rests survive of 48 enumerated)
+        op, anchor, term, terms = self._setup()
+        hyps = list(enumerate_hypotheses(op, anchor, term))
+        good = [h for h in hyps if hypothesis_is_consistent(h, terms)]
+        self.assertLess(len(good), len(hyps) // 4)
 
 
 class EnumerateHypothesesTests(unittest.TestCase):

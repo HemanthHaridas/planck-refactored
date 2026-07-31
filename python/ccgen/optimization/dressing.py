@@ -659,6 +659,60 @@ def _rest_variants(rest):
 
 
 # ---------------------------------------------------------------------------
+# D7.2.3c-1 -- sound containment verify
+# ---------------------------------------------------------------------------
+#
+# A hypothesis W*rest is CONSISTENT with the residual iff every primitive its
+# expansion produces is present in the residual, with the same sign and a
+# magnitude no larger than the residual's for that primitive.  This is a SOUND
+# NECESSARY filter, not an exactness check: a primitive shared by several
+# operator instances carries only PART of the residual coefficient in any one
+# hypothesis (measured: 2 of Wmnij*tau's 10 keys are half the residual's), so
+# requiring equality would wrongly reject the correct hypothesis.  The exact
+# arbiter is the whole-equation verify_dressed_equation at D7.3; here we only
+# reject hypotheses that produce a primitive ABSENT from the residual or of the
+# WRONG SIGN (a false anchor / wrong orientation), which the correct one never
+# does.
+
+
+def hypothesis_is_consistent(hyp, residual_terms, operators=None) -> bool:
+    """D7.2.3c-1: is the dressed term ``hyp`` consistent with ``residual_terms``?
+
+    Expands ``hyp`` to primitives and requires every ERI-canonical key to be
+    present in the residual with the same sign and ``|hyp_coeff| <= |raw_coeff|``.
+    True for the correct ``W*rest``, False for a wrong orientation / rest (a key
+    absent from the residual or of the wrong sign)."""
+    from fractions import Fraction
+    from .dressed_equation import expand_dressed_term, raw_multiset
+    ops = operators or {hyp.factors[0].name: _seeded_by_name(hyp.factors[0].name)}
+    raw = raw_multiset(residual_terms)
+    acc: dict[tuple, Fraction] = {}
+    for prim in expand_dressed_term(hyp, ops):
+        key, coeff = _eri_canonical(prim)
+        acc[key] = acc.get(key, Fraction(0)) + coeff
+    for key, coeff in acc.items():
+        if coeff == 0:
+            continue
+        rc = raw.get(key)
+        if rc is None:                              # primitive not in residual
+            return False
+        if (rc > 0) != (coeff > 0):                 # wrong sign
+            return False
+        if abs(coeff) > abs(rc):                    # over-covers a shared key
+            return False
+    return True
+
+
+def _seeded_by_name(name: str) -> "DressedOperator":
+    """The seeded operator with this name (helper for the default operator
+    table of a single-operator hypothesis)."""
+    for op in seeded_operators():
+        if op.name == name:
+            return op
+    raise KeyError(f"no seeded operator named {name!r}")
+
+
+# ---------------------------------------------------------------------------
 # D7.1.3 -- operator fragment set
 # ---------------------------------------------------------------------------
 

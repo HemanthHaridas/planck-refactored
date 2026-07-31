@@ -489,10 +489,21 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
         primitives get contributions from multiple operator instances; the
         whole-equation `verify_dressed_equation` at D7.3 is the exact arbiter, so
         D7.2.3c-1 only needs a SOUND containment filter.)
-      - **D7.2.3c-1 — sound containment verify.** Every expansion key present in
-        the residual, coefficient sign-consistent and magnitude ≤ the residual's
-        (a hypothesis may cover part of a shared key). The correct `Wmnij·τ`
-        passes; wrong orientations / raw-t2 rest fail. NOT yet done.
+      - **D7.2.3c-1 — sound containment verify. LANDED.**
+        `hypothesis_is_consistent(hyp, residual)`: expand `hyp` to primitives;
+        every ERI-canonical key must be present in the residual with the same
+        sign and `|hyp_coeff| ≤ |raw_coeff|`. A SOUND NECESSARY filter, not an
+        exactness check — a primitive shared by several operator instances carries
+        only PART of the residual coefficient in one hypothesis (2 of Wmnij·τ's 10
+        keys are half the residual's), so equality would wrongly reject the
+        correct one; the whole-equation `verify_dressed_equation` at D7.3 is the
+        exact arbiter. *Gate* (`HypothesisConsistencyTests`): of the 48
+        enumerated candidates only 4 survive — the antisym-equivalent correct
+        orientations `Wmnij(k,l,i,j)`/`(l,k,i,j)` × {t2, τ rests} — the wrong
+        `(i,j,k,l)` orientation is rejected (a primitive absent), and the filter
+        is selective (<¼ survive). The τ-rest correct hypothesis is among the
+        survivors; the partial t2-rest also passes (sound, not a false accept —
+        D7.2.3d/D7.3 prefer the complete τ form).
       - **D7.2.3d — `find_operator_occurrences` driver.** Enumerate anchors →
         enumerate_hypotheses → sound-verify, return verified occurrences for D7.3
         to rewrite. NOT yet done.
