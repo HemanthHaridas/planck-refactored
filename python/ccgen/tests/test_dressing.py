@@ -27,6 +27,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     candidate_factor_subsets,
     collect_fragment_occurrences,
     enumerate_hypotheses,
+    find_operator_occurrences,
     fragments_match,
     hypothesis_is_consistent,
     hypothesize_operator_term,
@@ -1143,6 +1144,41 @@ class TauExpandedFragmentsTests(unittest.TestCase):
         self.assertEqual(len(t2v_op.internal_lines), 2)
         self.assertTrue(all(sp == "h" for sp in t2v_op.port_species.values()))
         self.assertEqual(sorted(fragment_signature(t2v_op)[0]), ["t2", "v"])
+
+
+class FindOperatorOccurrencesTests(unittest.TestCase):
+    """D7.2.3d: the driver -- enumerate anchors, verify, dedup to maximal covers.
+    The payoff: Wmnij is AUTOMATICALLY recognized as 1/2 Wmnij*tau, matching the
+    previously hand-transcribed ccsd_dressed_r2 reference."""
+
+    def _doubles(self):
+        from ccgen.generate import generate_cc_equations
+        return generate_cc_equations("ccsd", engine="diagram")["doubles"]
+
+    def test_recognizes_single_wmnij_tau(self):
+        occs = find_operator_occurrences(_build_wmnij(), self._doubles())
+        self.assertEqual(len(occs), 1)                 # deduped to one occurrence
+        term = occs[0]["term"]
+        self.assertEqual(term.coeff, Fraction(1, 2))
+        self.assertEqual(sorted(f.name for f in term.factors), ["Wmnij", "tau"])
+        self.assertEqual(len(occs[0]["cover"]), 10)    # the complete cover
+
+    def test_maximal_cover_beats_partial(self):
+        # the partial Wmnij*t2 / Wmnij*t1t1 covers (size 5 each) are subsets of
+        # the tau cover (size 10) and must be dropped
+        occs = find_operator_occurrences(_build_wmnij(), self._doubles())
+        for o in occs:
+            rest = [f.name for f in o["term"].factors[1:]]
+            self.assertEqual(rest, ["tau"], "a partial rest survived dedup")
+
+    def test_matches_hand_transcribed_reference(self):
+        from ccgen.optimization.dressed_equation import ccsd_dressed_r2
+        found = find_operator_occurrences(_build_wmnij(), self._doubles())[0]["term"]
+        truth = next(t for t in ccsd_dressed_r2()
+                     if any(f.name == "Wmnij" for f in t.factors))
+        self.assertEqual(found.coeff, truth.coeff)
+        self.assertEqual(sorted(f.name for f in found.factors),
+                         sorted(f.name for f in truth.factors))
 
 
 class HypothesisConsistencyTests(unittest.TestCase):

@@ -713,6 +713,59 @@ def _seeded_by_name(name: str) -> "DressedOperator":
 
 
 # ---------------------------------------------------------------------------
+# D7.2.3d -- find_operator_occurrences driver
+# ---------------------------------------------------------------------------
+#
+# Enumerate anchors -> enumerate_hypotheses -> hypothesis_is_consistent, then
+# dedup.  A partial hypothesis (Wmnij*t2 or Wmnij*t1t1) covers a SUBSET of the
+# primitives the complete one (Wmnij*tau) covers -- measured tau_cover =
+# t2_cover | t1t1_cover.  So keep only MAXIMAL-cover hypotheses: those whose
+# primitive-cover is not a subset of another consistent hypothesis's.  That
+# selects the complete dressing (rest = tau) with no arbitrary preference rule.
+
+
+def _hypothesis_cover(hyp, op) -> frozenset:
+    """The set of nonzero ERI-canonical primitive keys ``hyp`` expands to."""
+    from fractions import Fraction
+    from .dressed_equation import expand_dressed_term
+    ks = set()
+    for prim in expand_dressed_term(hyp, {op.name: op}):
+        key, coeff = _eri_canonical(prim)
+        if coeff != 0:
+            ks.add(key)
+    return frozenset(ks)
+
+
+def find_operator_occurrences(op: "DressedOperator", terms) -> list[dict]:
+    """D7.2.3d: the verified occurrences of ``op`` in ``terms``.
+
+    Enumerates every anchor's hypotheses (D7.2.3c-0), keeps the consistent ones
+    (D7.2.3c-1), and dedups to MAXIMAL primitive covers -- discarding a partial
+    hypothesis whose cover is contained in a fuller one (so the complete
+    ``W*tau`` wins over ``W*t2`` / ``W*t1t1``).  Each returned occurrence is a
+    dict ``{"term": AlgebraTerm, "cover": frozenset}`` -- the dressed ``W*rest``
+    term for D7.3 to rewrite, plus the residual primitives it accounts for."""
+    consistent = []
+    for anchor in collect_fragment_occurrences(op, terms):
+        for hyp in enumerate_hypotheses(op, anchor, terms[anchor["term_id"]]):
+            if hypothesis_is_consistent(hyp, terms):
+                consistent.append((hyp, _hypothesis_cover(hyp, op)))
+
+    # keep only maximal covers (drop any strictly contained in another)
+    covers = [c for _, c in consistent]
+    occurrences = []
+    seen: set = set()
+    for hyp, cover in consistent:
+        if cover in seen:
+            continue
+        if any(cover < other for other in covers):   # strictly contained
+            continue
+        seen.add(cover)
+        occurrences.append({"term": hyp, "cover": cover})
+    return occurrences
+
+
+# ---------------------------------------------------------------------------
 # D7.1.3 -- operator fragment set
 # ---------------------------------------------------------------------------
 

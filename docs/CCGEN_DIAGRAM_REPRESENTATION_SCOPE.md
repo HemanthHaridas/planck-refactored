@@ -375,7 +375,10 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     D7.3); use a direct `factor→lines` encoder, NOT the whole-diagram
     Kallay-Surjan `DiagramString` machinery (which is built for closed diagrams,
     not open fragments).
-- **D7.2 — subgraph recognition (~L, the core).** Find occurrences of each
+- **D7.2 — subgraph recognition (~L, the core). LANDED (Wmnij end-to-end).**
+  `find_operator_occurrences(op, terms)` automatically recognizes `½ Wmnij·τ`
+  in the CCSD doubles residual, matching the hand-transcribed reference. Find
+  occurrences of each
   operator fragment as a subgraph of a diagram's assembled contraction
   (topological + species-consistent match on the line graph). Subgraph iso is
   NP-hard in general, but the graphs are tiny (≤4 operators, bounded lines), so
@@ -504,9 +507,19 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
         is selective (<¼ survive). The τ-rest correct hypothesis is among the
         survivors; the partial t2-rest also passes (sound, not a false accept —
         D7.2.3d/D7.3 prefer the complete τ form).
-      - **D7.2.3d — `find_operator_occurrences` driver.** Enumerate anchors →
-        enumerate_hypotheses → sound-verify, return verified occurrences for D7.3
-        to rewrite. NOT yet done.
+      - **D7.2.3d — `find_operator_occurrences` driver. LANDED — D7.2 COMPLETE.**
+        Enumerate every anchor's hypotheses (c-0), keep the consistent ones
+        (c-1), and dedup to MAXIMAL primitive covers: a partial hypothesis
+        (`W·t2` or `W·t1t1`, cover 5) is dropped because its cover is contained in
+        the complete `W·τ` (cover 10 = t2 ∪ t1t1 covers, measured) — no arbitrary
+        "prefer τ" rule, just "keep covers not strictly contained in another."
+        Each occurrence is `{"term": W·rest, "cover": frozenset}`. *Gate*
+        (`FindOperatorOccurrencesTests`): Wmnij is recognized as EXACTLY ONE
+        occurrence `½ Wmnij(k,l,i,j) τ(a,b,k,l)` (cover 10), the partial rests are
+        deduped away, and it **matches the hand-transcribed `ccsd_dressed_r2`
+        reference** (same coeff `½`, same `Wmnij`+`τ` factors) — the automatic
+        recognition D7 exists to provide. This validates the whole
+        recognize-then-rewrite premise end-to-end for one operator.
   - **D7.2.4 — coefficient consistency.** Folded into D7.2.3c's verify step (the
     hypothesize-and-verify path checks coefficients as it expands), rather than a
     separate pass on a structural group. `verify_dressed_equation` is the exact
