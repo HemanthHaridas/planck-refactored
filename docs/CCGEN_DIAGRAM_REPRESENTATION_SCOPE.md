@@ -462,11 +462,40 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
         (`HypothesizeOperatorTermTests`): from the bare-`v` anchor in `½ t2 v`,
         the hypothesis is `½ Wmnij(i,j,k,l) t2(a,b,k,l)`, and `expand_dressed_term`
         regenerates all 5 raw Wmnij pieces (only `t1/t2/v/f` survive).
-      - **D7.2.3c — verify by expansion.** `expand_dressed_term(hypothesis)` ⊆
-        residual, coefficient-consistent; reject partial/mismatched. NOT yet done.
-      - **D7.2.3d — `find_operator_occurrences` driver.** Enumerate anchor
-        matches, hypothesize+verify each, return the verified occurrences (covered
-        residual terms + block binding + rest) for D7.3 to rewrite. NOT yet done.
+      - **D7.2.3c-0 — hypothesis enumeration. LANDED (a scoping finding forced
+        it).** A single anchor UNDERDETERMINES the hypothesis, in two ways found
+        by tracing the correct target `½ Wmnij(m,n,i,j) τ(a,b,m,n)`:
+        (1) **block orientation** — a symmetric fragment (bare `v`, all-hole
+        ports) admits several port bindings; `match_fragment` returned only ONE,
+        and it was the wrong one (`Wmnij(i,j,k,l)`, 1/4 present) — the correct
+        orientation is `Wmnij(k,l,i,j)` with `(m,n)→summed`, `(i,j)→external`.
+        (2) **rest interpretation** — the true rest is a DRESSED `τ` (`Wmnij·τ`),
+        not a raw `t2`; the raw residual carries `τ` only as `t2 + t1t1`.
+        `enumerate_hypotheses(op, occurrence, term)` yields `W·rest` over
+        {all valid port orientations} × {rest=t2, rest=τ} (`_all_port_bindings`
+        gives every orientation; `_rest_variants` adds the τ variant of a single
+        `t2` rest). *Gate* (`EnumerateHypothesesTests`): the enumeration CONTAINS
+        the correct hypothesis (`Wmnij(k,l,i,j) τ`, expands to 10 keys ALL present
+        in the residual), both orientations+rests appear, and the wrong
+        `(i,j,k,l)+t2` orientation is confirmed NOT fully present (why the
+        enumeration was necessary).
+
+        **This also corrected the "canonicalization convention" framing.** The
+        earlier "3 missing keys" was NOT a canonicalization gap — `_eri_canonical`
+        (ERI 8-fold + free-order) is adequate: the CORRECT `Wmnij·τ` expansion's
+        10 keys all match residual keys. The blocker was hypothesis
+        underdetermination, not incomplete canonical form. (The 2-of-10 keys where
+        the Wmnij coefficient is HALF the residual's are correct — those
+        primitives get contributions from multiple operator instances; the
+        whole-equation `verify_dressed_equation` at D7.3 is the exact arbiter, so
+        D7.2.3c-1 only needs a SOUND containment filter.)
+      - **D7.2.3c-1 — sound containment verify.** Every expansion key present in
+        the residual, coefficient sign-consistent and magnitude ≤ the residual's
+        (a hypothesis may cover part of a shared key). The correct `Wmnij·τ`
+        passes; wrong orientations / raw-t2 rest fail. NOT yet done.
+      - **D7.2.3d — `find_operator_occurrences` driver.** Enumerate anchors →
+        enumerate_hypotheses → sound-verify, return verified occurrences for D7.3
+        to rewrite. NOT yet done.
   - **D7.2.4 — coefficient consistency.** Folded into D7.2.3c's verify step (the
     hypothesize-and-verify path checks coefficients as it expands), rather than a
     separate pass on a structural group. `verify_dressed_equation` is the exact

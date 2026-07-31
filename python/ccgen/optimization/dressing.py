@@ -451,6 +451,34 @@ def _match_ports(op_frag, induced, node_map):
     return None
 
 
+def _all_port_bindings(op_frag, induced, node_map):
+    """Like :func:`_match_ports` but yields EVERY valid op-slot -> induced-slot
+    bijection, not just the first.  A symmetric fragment (e.g. bare v, all-hole
+    ports, no internal lines) admits several -- each is a distinct block
+    orientation the hypothesis enumeration (D7.2.3c-0) must try."""
+    import itertools
+
+    def port_desc(frag, mapped=None):
+        d = {}
+        for sp, a, b in frag.dangling_lines:
+            port = a if frag._is_port(a) else b
+            node = b if frag._is_port(a) else a
+            nn = mapped[node] if mapped else node
+            d.setdefault(port[1], []).append((sp, nn))
+        return d
+
+    op_d = port_desc(op_frag, node_map)
+    ind_d = port_desc(induced)
+    op_slots = sorted(op_d)
+    ind_slots = sorted(ind_d)
+    if len(op_slots) != len(ind_slots):
+        return
+    for perm in itertools.permutations(ind_slots):
+        if all(sorted(op_d[os_]) == sorted(ind_d[is_])
+               for os_, is_ in zip(op_slots, perm)):
+            yield {os_: is_ for os_, is_ in zip(op_slots, perm)}
+
+
 # ---------------------------------------------------------------------------
 # D7.2.2d -- match driver
 # ---------------------------------------------------------------------------
@@ -566,6 +594,68 @@ def hypothesize_operator_term(op: "DressedOperator", occurrence: dict, term):
         summed_indices=term.summed_indices,
         connected=term.connected,
     )
+
+
+# ---------------------------------------------------------------------------
+# D7.2.3c-0 -- hypothesis enumeration (block orientation x rest interpretation)
+# ---------------------------------------------------------------------------
+#
+# A single anchor UNDERDETERMINES the hypothesis (found while scoping D7.2.3c):
+#   (1) block orientation -- a symmetric fragment (bare v: all-hole ports) admits
+#       several port bindings; match_fragment returns only one, but the CORRECT
+#       Wmnij orientation binds (m,n)->summed and (i,j)->external, a DIFFERENT
+#       orientation.  Enumerate all valid orientations.
+#   (2) rest interpretation -- the true rest is often a DRESSED tau (Wmnij*tau),
+#       not a raw t2; the raw residual carries tau only as t2 + t1t1.  So offer
+#       both rest=t2 and rest=tau for a single-t2 rest.
+# D7.2.3c-1 then verifies each candidate; the correct one passes, the rest fail.
+
+
+def enumerate_hypotheses(op: "DressedOperator", occurrence: dict, term):
+    """D7.2.3c-0: candidate ``W*rest`` dressed terms for one anchor occurrence,
+    over {block orientations} x {rest as-is, rest-as-tau}.
+
+    Yields AlgebraTerms.  Orientation comes from every valid port binding of the
+    anchor fragment on its subset (not just the one match_fragment returned); the
+    tau-rest variant replaces a single raw ``t2`` rest factor with ``tau`` (the
+    residual carries tau expanded, so the true rest may be dressed)."""
+    frags = tau_expanded_operator_fragments(op).fragments
+    op_frag = frags[occurrence["frag_id"]][1]
+    op_coeff = occurrence["op_coeff"]
+    subset = occurrence["subset"]
+    induced, slot_to_index = _induce(term, subset)
+    # node map: the isomorphism that placed the fragment (recompute)
+    binding = fragments_match(op_frag, induced)
+    if binding is None:
+        return
+    name_to_index = {}
+    for fac in term.factors:
+        for idx in fac.indices:
+            name_to_index[idx.name] = idx
+    rest = tuple(f for k, f in enumerate(term.factors) if k not in set(subset))
+    coeff = term.coeff / op_coeff
+    n = len(op.block)
+    antisym = tuple((k, k + n // 2) for k in range(n // 2)) if n >= 4 else None
+
+    for port_map in _all_port_bindings(op_frag, induced, binding["nodes"]):
+        port_index = {os_: slot_to_index[is_] for os_, is_ in port_map.items()}
+        block_indices = tuple(name_to_index[port_index[s]] for s in range(n))
+        w = Tensor(op.name, block_indices, antisym_groups=antisym)
+        for rest_variant in _rest_variants(rest):
+            yield AlgebraTerm(
+                coeff=coeff, factors=(w,) + rest_variant,
+                free_indices=term.free_indices,
+                summed_indices=term.summed_indices, connected=term.connected)
+
+
+def _rest_variants(rest):
+    """The rest as-is, plus a tau-dressed variant if it is a single ``t2``
+    factor (the true rest of an operator collapse is often the pseudo-amplitude
+    tau, which the raw residual only ever carries expanded)."""
+    from .tau import tau
+    yield rest
+    if len(rest) == 1 and rest[0].name == "t2":
+        yield (tau(*rest[0].indices),)
 
 
 # ---------------------------------------------------------------------------

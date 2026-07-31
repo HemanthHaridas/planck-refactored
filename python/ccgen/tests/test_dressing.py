@@ -26,6 +26,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     fragment_signature,
     candidate_factor_subsets,
     collect_fragment_occurrences,
+    enumerate_hypotheses,
     fragments_match,
     hypothesize_operator_term,
     induced_subfragment,
@@ -1141,6 +1142,67 @@ class TauExpandedFragmentsTests(unittest.TestCase):
         self.assertEqual(len(t2v_op.internal_lines), 2)
         self.assertTrue(all(sp == "h" for sp in t2v_op.port_species.values()))
         self.assertEqual(sorted(fragment_signature(t2v_op)[0]), ["t2", "v"])
+
+
+class EnumerateHypothesesTests(unittest.TestCase):
+    """D7.2.3c-0: a single anchor underdetermines the hypothesis, so enumerate
+    {block orientation} x {rest as-is, rest-as-tau}. The CORRECT Wmnij*tau
+    (block (m,n,i,j)->(k,l,i,j), rest tau) must be among the candidates -- its
+    expansion is fully present in the residual, while the wrong orientations /
+    raw-t2 rest are not."""
+
+    def _setup(self):
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        terms = eqs["doubles"]
+        op = _build_wmnij()
+        occ = collect_fragment_occurrences(op, terms)
+        anchor = next(o for o in occ if o["frag_id"] == 0)  # bare-v
+        return op, anchor, terms[anchor["term_id"]], terms
+
+    def _fully_present(self, hyp, terms):
+        from fractions import Fraction
+        from ccgen.optimization.dressed_equation import (expand_dressed_term,
+                                                         raw_multiset)
+        from ccgen.optimization.dressing import _eri_canonical
+        raw = raw_multiset(terms)
+        hm = {}
+        for e in expand_dressed_term(hyp, {"Wmnij": _build_wmnij()}):
+            k, c = _eri_canonical(e)
+            hm[k] = hm.get(k, Fraction(0)) + c
+        return all(k in raw for k in hm), len(hm)
+
+    def test_enumeration_includes_correct_hypothesis(self):
+        op, anchor, term, terms = self._setup()
+        hyps = list(enumerate_hypotheses(op, anchor, term))
+        # some candidate expands fully into the residual (the correct Wmnij*tau)
+        good = [h for h in hyps if self._fully_present(h, terms)[0]]
+        self.assertTrue(good, "no fully-present hypothesis enumerated")
+        # the correct one has a tau rest and 10 expansion keys
+        best = max(good, key=lambda h: self._fully_present(h, terms)[1])
+        self.assertEqual(self._fully_present(best, terms)[1], 10)
+        self.assertTrue(any(f.name == "tau" for f in best.factors))
+
+    def test_both_orientations_and_rests_enumerated(self):
+        op, anchor, term, terms = self._setup()
+        hyps = list(enumerate_hypotheses(op, anchor, term))
+        rests = {tuple(sorted(f.name for f in h.factors[1:])) for h in hyps}
+        self.assertIn(("t2",), rests)       # raw rest
+        self.assertIn(("tau",), rests)      # dressed rest
+        # multiple distinct block orientations
+        orients = {tuple(i.name for i in h.factors[0].indices) for h in hyps}
+        self.assertGreater(len(orients), 1)
+
+    def test_wrong_orientation_not_fully_present(self):
+        # the orientation match_fragment originally returned (i,j,k,l) is NOT a
+        # full collapse -- confirms the enumeration was necessary
+        op, anchor, term, terms = self._setup()
+        for h in enumerate_hypotheses(op, anchor, term):
+            names = [i.name for i in h.factors[0].indices]
+            if names == ["i", "j", "k", "l"] and h.factors[1].name == "t2":
+                self.assertFalse(self._fully_present(h, terms)[0])
+                return
+        self.fail("expected the (i,j,k,l)+t2 candidate in the enumeration")
 
 
 class HypothesizeOperatorTermTests(unittest.TestCase):
