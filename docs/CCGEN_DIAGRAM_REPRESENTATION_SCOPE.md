@@ -375,10 +375,15 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     D7.3); use a direct `factor→lines` encoder, NOT the whole-diagram
     Kallay-Surjan `DiagramString` machinery (which is built for closed diagrams,
     not open fragments).
-- **D7.2 — subgraph recognition (~L, the core). LANDED (Wmnij end-to-end).**
+- **D7.2 — subgraph recognition (~L, the core). LANDED for Wmnij end-to-end;
+  family generalization deferred (D7.2.5, 4 diagnosed gaps).**
   `find_operator_occurrences(op, terms)` automatically recognizes `½ Wmnij·τ`
-  in the CCSD doubles residual, matching the hand-transcribed reference. Find
-  occurrences of each
+  in the CCSD doubles residual, matching the hand-transcribed reference — the
+  machinery (encode → match → hypothesize → verify → dedup) is proven and
+  operator-agnostic. Extending to the other five operators is NOT free: it hits
+  4 concrete convention gaps (a real `v`-sign bug in `_eri_canonical`, antisym
+  dedup, Wmbej's combined term, Fmi), scoped under D7.2.5. Find occurrences of
+  each
   operator fragment as a subgraph of a diagram's assembled contraction
   (topological + species-consistent match on the line graph). Subgraph iso is
   NP-hard in general, but the graphs are tiny (≤4 operators, bounded lines), so
@@ -527,6 +532,42 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
   - De-risk: gate on `Wmnij` first (cleanest; exercises τ expansion), then the
     family. The hypothesize-and-verify path is inherently sound — a false anchor
     fails the expansion/coefficient check — so over-proposing anchors is safe.
+
+  - **D7.2.5 — family generalization. NOT "just validation" — 4 distinct gaps,
+    diagnosed, deferred.** Running `find_operator_occurrences` on all six seeded
+    operators: only **Wmnij** (rank-4 `oooo`) fully recognizes; **Fme** (rank-2)
+    partially. The other four each hit a concrete, bounded gap:
+    1. **`v` antisymmetry SIGN in `_eri_canonical` (the shared root, blocks
+       Fae + Wabef).** `_eri_normalize_factor` reorders a `v` factor to its
+       canonical arrangement but **discards the reordering's parity**, though the
+       `_eri_canonical` docstring claims it folds it. So a `v` reachable only by
+       an ODD intra-pair swap compares with the WRONG sign: the correct Fae/Wabef
+       hypothesis has all keys present but ~4 sign-flipped, and the sound filter
+       rejects them. Fix = return `(factor, sign)` from `_eri_normalize_factor`
+       (parity of the chosen permutation — intra-pair swaps odd, bra↔ket exchange
+       even) and fold it into the coefficient. Generalize to any antisym-in-pairs
+       rank-4 factor: `v` gets the full 8-fold, the `W` operators get intra-pair
+       ONLY (bra↔ket `<pq|rs>=<rs|pq>` is a symmetry of the integral, NOT of a
+       dressed operator like `Wmnij(m,n,i,j)`). **Prototyped and confirmed to
+       unblock Fae; reverted because it exposed gap 2.**
+    2. **Antisymmetry-aware dedup / filter (exposed by fix 1).** Once the sign
+       fold admits more orientations, `Wmnij` returns TWO occurrences
+       (`Wmnij(k,l,i,j)τ` and `Wmnij(l,k,j,i)τ`) that expand to DIFFERENT
+       multisets — so the sound containment filter is now too permissive (admits
+       an orientation it shouldn't), and the cover-set dedup doesn't fold
+       operator-antisym-equivalent hypotheses. Needs the dedup keyed on the
+       antisym-canonical dressed term, and the filter tightened so only the
+       genuine orientation passes. This is why fix 1 can't land alone — it must
+       land WITH the dedup/filter fix.
+    3. **Wmbej combined term.** Its defining term `−(½ t2 + t1t1) ⟨mn||ef⟩`
+       bundles two amplitude structures; the fragment encoder / hypothesis path
+       assumes one amplitude per defining term.
+    4. **Fmi** still 0 after fix 1 — needs its own trace (likely another
+       sign/orientation case in the `oo` block).
+    The `Wmnij` end-to-end result (D7.2.3d) stands as the validated proof of the
+    machinery; family generalization is a deliberate multi-part follow-up
+    (sign fold + antisym dedup as ONE unit first, then Wmbej, then Fmi), not the
+    quick sweep it first appeared.
 - **D7.3 — factorization + emit (~M).** Rewrite the residual to reference the
   recognized operators, order the intermediate DAG (`Wmnij` needs `τ`), emit
   through the existing builder path. *Gate:* the dressed residual expanded via
