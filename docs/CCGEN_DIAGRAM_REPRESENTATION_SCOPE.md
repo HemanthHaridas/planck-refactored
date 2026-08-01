@@ -538,36 +538,201 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     operators: only **Wmnij** (rank-4 `oooo`) fully recognizes; **Fme** (rank-2)
     partially. The other four each hit a concrete, bounded gap:
     1. **`v` antisymmetry SIGN in `_eri_canonical` (the shared root, blocks
-       Fae + Wabef).** `_eri_normalize_factor` reorders a `v` factor to its
-       canonical arrangement but **discards the reordering's parity**, though the
-       `_eri_canonical` docstring claims it folds it. So a `v` reachable only by
-       an ODD intra-pair swap compares with the WRONG sign: the correct Fae/Wabef
-       hypothesis has all keys present but ~4 sign-flipped, and the sound filter
-       rejects them. Fix = return `(factor, sign)` from `_eri_normalize_factor`
-       (parity of the chosen permutation — intra-pair swaps odd, bra↔ket exchange
-       even) and fold it into the coefficient. Generalize to any antisym-in-pairs
-       rank-4 factor: `v` gets the full 8-fold, the `W` operators get intra-pair
-       ONLY (bra↔ket `<pq|rs>=<rs|pq>` is a symmetry of the integral, NOT of a
-       dressed operator like `Wmnij(m,n,i,j)`). **Prototyped and confirmed to
-       unblock Fae; reverted because it exposed gap 2.**
-    2. **Antisymmetry-aware dedup / filter (exposed by fix 1).** Once the sign
-       fold admits more orientations, `Wmnij` returns TWO occurrences
-       (`Wmnij(k,l,i,j)τ` and `Wmnij(l,k,j,i)τ`) that expand to DIFFERENT
-       multisets — so the sound containment filter is now too permissive (admits
-       an orientation it shouldn't), and the cover-set dedup doesn't fold
-       operator-antisym-equivalent hypotheses. Needs the dedup keyed on the
-       antisym-canonical dressed term, and the filter tightened so only the
-       genuine orientation passes. This is why fix 1 can't land alone — it must
-       land WITH the dedup/filter fix.
+       Fae + Wabef). LANDED (D7.2.5.1).** `_eri_normalize_factor` reordered a
+       `v` factor to its canonical arrangement but **discarded the reordering's
+       parity**. So a `v` reachable only by an ODD intra-pair swap compared with
+       the WRONG sign: the correct Fae/Wabef hypothesis had all keys present but
+       ~4 sign-flipped, and the sound filter rejected them. Fix: `_perm_parity` +
+       `_eri_normalize_factor` now returns `(factor, sign)`, and
+       `_eri_normalize_term` folds the accumulated parity into the coefficient.
+       The dressed `W` operators get intra-pair antisym ONLY (bra↔ket
+       `<pq|rs>=<rs|pq>` is a symmetry of the integral, NOT of a dressed
+       operator): both hypothesis-construction sites (`enumerate_hypotheses`,
+       `hypothesize_operator_term`) now stamp `((0,1),(2,3))`, not the earlier
+       ERI-style `((0,2),(1,3))`.
+    2. **Antisymmetry-aware dedup (exposed by fix 1). LANDED (D7.2.5.1, same
+       unit).** With the sign fold, `Wmnij` returned TWO occurrences
+       (`Wmnij(k,l,i,j)τ` and the even double-swap `Wmnij(l,k,j,i)τ`) — the same
+       instance written two ways. `find_operator_occurrences` now dedups on
+       `_dressed_canonical_key`: `_antisym_sort_factor` sorts each antisym
+       factor's indices within its groups (folding the sign) before the
+       free-order-normalize + fixed-point, so antisym-equivalent orientations map
+       to one key. `Wmnij` is back to exactly ONE occurrence; **Fae (0→2) and
+       Wabef (0→3) now recognize.** *Gate:* `test_dressing.py` 88/88, incl. the
+       `test_correct_hypothesis_passes` assertion relaxed to the block-index SETS
+       (both orientations sound at the hypothesis level, deduped at occurrence
+       level) and the `test_wrong_orientation_rejected` guard on `(i,j,k,l)` still
+       holding.
     3. **Wmbej combined term.** Its defining term `−(½ t2 + t1t1) ⟨mn||ef⟩`
        bundles two amplitude structures; the fragment encoder / hypothesis path
-       assumes one amplitude per defining term.
+       assumes one amplitude per defining term. **Still 0. Deferred (D7.2.5.3).**
     4. **Fmi** still 0 after fix 1 — needs its own trace (likely another
-       sign/orientation case in the `oo` block).
+       sign/orientation case in the `oo` block). **Deferred (D7.2.5.4).**
+    Also surfaced (not in the original 4, follow-up): **Wabef assembles only
+    cover-5 PIECES** (a `t2` rest + two un-completed `t1t1` rests), never the full
+    cover-10 `Wabef·τ` the way `Wmnij` does — this is **D7.2.5.2**.
+    - **D7.2.5.2 — Wabef τ-completion. LANDED (V0.4).** Wabef now recognizes as
+      exactly ONE cover-complete occurrence `½ Wabef·tau_c` (gated by
+      `test_wabef_assembles_single_tau_c_occurrence`), matching how Wmnij
+      assembles `½ Wmnij·τ`. Two pieces, both validated against the RAW
+      per-operator oracle (not `ccsd_dressed_r2`):
+      - **W2 — `tau_c` half-weight, threaded by factor name.** A new
+        `TAU_CONTRACTED_NAME = "tau_c"` (`tau.py`) expands its written t1t1 half
+        at weight 1 instead of 2. `_rest_variants` emits `tau_c` (not `tau`) when
+        the rest t2's bra (virtual) pair is BOTH summed AND inside the operator
+        block — the Wabef case where the pair contracts antisymmetrically into the
+        operator's own v, which supplies the P(t1t1) partner the doubled
+        representative would double-count. The name is the carrier because a
+        rest-`tau_c` and an operator-definition `tau` (weight 2) COEXIST in one
+        term after operator expansion, so no local term inspection can separate
+        them — the earlier heuristic attempts all mis-fired (see W1/W2 note
+        below, now superseded). `tau_c` never appears in an operator DEFINITION,
+        so the tau-recognition (A1) path and `ccsd_dressed_r2` are untouched.
+      - **W3 — cover closed under external-pair antisymmetry.** The single
+        written t1t1 representative covers Wabef's residual term 27 but not its
+        i↔j antisym partner term 28, which resurfaced as a spurious standalone
+        `Wabef·t1t1`. `_hypothesis_cover` now unions, for each expanded primitive,
+        the keys reached by swapping the hypothesis's free (external) pairs
+        ((i,j) occ, (a,b) vir) throughout — so the occurrence's cover includes
+        both partners and the standalone t1t1 is strictly contained → dropped.
+        Grows Wmnij's cover 10→12 (correct; the `== 10` assertion was updated).
+      Wmnij stays exactly one occurrence; the full ccgen suite stays green. The W1
+      diagnosis below is retained as the derivation.
+    - **D7.2.5.2 (W1 diagnosis, retained).** The correct
+      `½ Wabef(a,b,c,d)·τ(c,d,i,j)` hypothesis expands to
+      the right 10 canonical keys but **3 are 2× OVER** (coeff `±1` vs the
+      residual's `±½`), so the sound-filter over-cover guard (`|coeff| ≤ |raw|`)
+      rejects the τ rest — only the cover-5 pieces survive. Root cause is
+      `TAU_SPEC.written_t1t1_weight = 2` (`tau.py`): the pipeline writes the
+      SINGLE ordered t1t1 representative at 2× the bare ½ P-weight, correct ONLY
+      when the two P-permutations land on DISTINCT keys — i.e. when τ's amplitude
+      pair is external (Wmnij's `τ(a,b,k,l)`, a,b external doubles). For Wabef the
+      τ's bra pair `(c,d)` is SUMMED and antisymmetrically contracted into
+      `v(c,d,a,b)`, whose OWN antisymmetry already folds the two permutations, so
+      the written weight 2 double-counts against the residual's ½-per-key
+      convention. **Empirically confirmed:** re-expanding Wabef's τ with the t1t1
+      representative at weight **1** makes all 10 keys land `≤ raw` (0 bad); Wmnij
+      still needs **2** (external τ, keys distinct). So the fix is NOT a global
+      constant — the weight is context-dependent.
+
+      **[SUPERSEDED by V0.4 above — the following records why the naive
+      approaches failed, kept as derivation history. The shipped fix is the
+      `tau_c` factor-name carrier + cover closure described under "LANDED
+      (V0.4)".]**
+
+      **W2 discriminator — the hard part, DIAGNOSED, not a local term-inspection.**
+      The naive predicate "halve when τ's amplitude pair is summed AND both
+      indices sit in an antisym `v`" is WRONG: the *identical* structure (summed
+      virtual pair inside an antisym `v`) appears in **both** Wabef's rest-τ
+      (`tau(c,d,i,j)` into the operator's own `v(c,d,a,b)`, needs weight 1) **and**
+      Wmnij's OWN definition term (`¼ tau(e,f,i,j) v(m,n,e,f)`, needs weight 2).
+      Refining to "complementary pair of the contracting `v` is free" also fails:
+      it fires only on Wabef's bare-`v` sub-term and not the `t1`/`t2`-dressed
+      ones, so the halving becomes non-uniform across a single operator's
+      expansion pieces (Wabef went to 3, worse). The expansion is the SHARED
+      `_expand_pseudo_amplitude_in_term`, used identically for a hypothesis rest-τ
+      and for operator-definition τ, so any term-inspection heuristic mis-fires
+      one way or the other. **The correct fix threads the halve decision from the
+      rest-τ substitution site (`_rest_variants`, where "this τ replaced a t2 rest
+      of a hypothesis" is known) through expansion as an explicit flag/weight,
+      leaving operator-definition expansion at the canonical weight 2.** Attempted
+      term-inspection heuristics broke `test_verifies_synthetic_complete_occurrence`
+      (Wmnij's def-τ halved to ⅛ instead of ¼); reverted. A `NOTE` at the halving
+      site records this; no behavior change (default weight preserved, 91/91).
+
+      **W3 — cover-closure under antisymmetry, DESIGNED + PROTOTYPED (also
+      reverted, depends on W2).** Even once W2 makes `½ Wabef·τ` cover-10, a
+      SECOND spurious occurrence survives: the single written t1t1 representative
+      covers residual term 27 (`t1(c,i)t1(d,j)`) but NOT its i↔j antisym partner
+      term 28 (`−t1(c,j)t1(d,i)`), which resurfaces as a standalone `Wabef·t1t1`.
+      The dressed occurrence physically replaces BOTH, so `_hypothesis_cover` must
+      be closed under the residual's external-pair antisymmetry (swap the free
+      (i,j) / (a,b) pairs throughout each expanded primitive, re-canonicalize,
+      union the keys). Prototyped and CONFIRMED to collapse Wabef to exactly ONE
+      occurrence — but it also grows Wmnij's cover 10→12 (correct, but breaks the
+      `== 10` assertion pinned pre-closure), and is meaningless until W2 lands, so
+      reverted with W2. Land W3 *with* W2, updating the
+      `test_recognizes_single_wmnij_tau` cover assertion to the closed size.
+
+      **W4** = gate Wabef = exactly ONE cover-complete `Wabef·τ`. Adjacent to gap
+      3's combined-term handling but independent. **Net: W1 diagnosed and
+      empirically pinned; W2/W3 designed and prototyped-green but reverted — W2's
+      clean implementation is a flag-thread through the τ-expansion API, not the
+      local heuristic first attempted, and that API change is the remaining work.**
     The `Wmnij` end-to-end result (D7.2.3d) stands as the validated proof of the
-    machinery; family generalization is a deliberate multi-part follow-up
-    (sign fold + antisym dedup as ONE unit first, then Wmbej, then Fmi), not the
-    quick sweep it first appeared.
+    machinery; family generalization is a deliberate multi-part follow-up — the
+    sign fold + antisym dedup (gaps 1+2) landed together as **D7.2.5.1**; Wabef
+    completion, Wmbej, and Fmi remain.
+  - **D7.2.5.V0 — the whole-equation oracle is RED, and that reframes the Wabef
+    fix (V0.1/V0.2 LANDED).** Before more per-operator recognition work,
+    `verify_dressed_equation(ccsd_dressed_r2(), diagram_doubles)` must be the
+    exact arbiter — and it currently **fails on 26 keys**. Classifying those (new
+    tripwire `test_r2_mismatch_decomposition_against_diagram` in
+    `tests/test_dressed_equation.py`) shows the Wabef τ-weight issue is the
+    *minority* cause:
+    - **19 keys — STALE TRANSCRIPTION (dominant).** `ccsd_dressed_r2` is an
+      incomplete hand transcription: **8 dressed-only** keys (terms in the
+      reference with no raw counterpart) + **11 raw-only** (raw terms the
+      reference omits). No t1t1 / ratio-2 signature — just wrong or missing terms.
+    - **7 keys — τ WRITTEN-WEIGHT (secondary).** t1t1 pair contracted into a
+      same-space antisym `v`, coming out 2× (or ½×) — exactly the W1 diagnosis.
+    This means chasing the per-operator W2/W3 weight fix against `ccsd_dressed_r2`
+    was building on sand: 19 of 26 mismatches are the reference being stale, not
+    the τ model. **Authority verdict:** the diagram engine is FCI-validated
+    through CCSDT (see the spin-adaptation scope + memory), the hand transcription
+    is not — so the diagram raw is authoritative and `ccsd_dressed_r2` must be
+    re-derived (ideally auto-generated from the diagram residual), not the raw
+    residual bent to fit it. Recommended order: **V0.3** re-derive/auto-generate
+    `ccsd_dressed_r2` from the diagram engine → the 19 structural mismatches go to
+    0; **V0.4** then land the τ-written-weight flag-thread (W2) against the now-
+    trustworthy whole-equation oracle (7 keys → 0), where a mis-fire is caught by
+    all 7 at once instead of Wabef's 3; **V0.5** re-run the family sweep — Wabef
+    (and likely Fae) should assemble for free once the shared expansion is
+    calibrated. The old W2/W3/W4 collapse into V0.4/V0.5 — right mechanism, wrong
+    scope; the whole-equation oracle fixes the class, not the instance.
+    - **V0.3 SCOPED (this is a diff-driven reconciliation, NOT a one-liner).**
+      Investigated the 19 structural mismatches:
+      - All six seeded operator DEFINITIONS are individually self-consistent
+        (`operator_definition_is_consistent` True for all) — so no operator is
+        broken; the defect is in how `ccsd_dressed_r2` COMBINES them.
+      - The 8 dressed-only + 6-of-11 raw-only `(t1,t2,v)` keys trace to the
+        `Fmi` and `Wmbej` transcription terms (rows 5/6/11/13/15/17): their
+        definition `t1·v` correction pieces, times the outer `t2`, emit a `v`
+        orientation/sign the diagram residual distributes differently. This is
+        exactly the "sign conventions on the Fock/ERI terms and the P(pq)
+        antisymmetrizer expansions" the `ccsd_dressed_r2` docstring already flags
+        as unfinished.
+      - The remaining raw-only keys (`t1t1t1v`, `t1t1v`, `t1t1t1t1v`) are the 7
+        τ-weight-class keys (V0.4).
+      - Removing the explicit Fme-correction terms makes it WORSE (26→30), so the
+        transcription is not simply double-counting; each term is load-bearing.
+      **Verdict:** V0.3 (whole-equation reconciliation) IS a genuine multi-term
+      spin-orbital reconciliation — but the critical follow-up finding is that
+      **it is NOT on the critical path for family recognition, so it should be
+      DE-SCOPED from the Wabef effort.** `grep ccsd_dressed_r2` shows it is
+      consumed ONLY by tests, never by production recognition; the recognition
+      machinery (`find_operator_occurrences` / `hypothesis_is_consistent` /
+      `_hypothesis_cover`) validates every hypothesis directly against the RAW
+      residual and never references `ccsd_dressed_r2`. Its one load-bearing test
+      use (`test_matches_hand_transcribed_reference`) pulls only the **Wmnij**
+      term — which is one of the transcription's CORRECT terms (the 26 mismatches
+      are all in Fmi / Wmbej / the τ-weight tail, not Wmnij). So V0's earlier
+      premise ("the oracle must be green before recognition means anything") was
+      half wrong: recognition already has its oracle — the raw residual.
+
+      **Reframed plan.** The whole-equation `verify_dressed_equation` green-ness is
+      a DOWNSTREAM D7.3-era goal (needed only when the *final emitted* dressed
+      equation must be exact-verified), not a Wabef prerequisite. `ccsd_dressed_r2`
+      as a hand transcription is deprecated in favor of eventual auto-generation
+      (which needs D7.3 → this oracle is circular to bootstrap by hand anyway).
+      **The real next step is V0.4 done against the RAW per-operator oracle:** fix
+      the τ-written-weight so `find_operator_occurrences(Wabef, raw)` returns one
+      cover-complete occurrence — validated by the family sweep, not by
+      `ccsd_dressed_r2`. The V0.3 diagnostic detail above (Fmi surplus
+      `t1(e,n)v(m,n,i,e)` piece, factor-2 τ_tilde on Fmi's `f·t1·t2` and
+      `t1t1·t2·v`, the `test_r2_mismatch_decomposition_against_diagram` tripwire)
+      is retained for whoever eventually does the D7.3 whole-equation verify, but
+      it is explicitly NOT blocking Wabef.
 - **D7.3 — factorization + emit (~M).** Rewrite the residual to reference the
   recognized operators, order the intermediate DAG (`Wmnij` needs `τ`), emit
   through the existing builder path. *Gate:* the dressed residual expanded via

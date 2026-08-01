@@ -22,6 +22,10 @@ from ccgen.optimization.dressing import (  # noqa: E402
     OperatorFragments,
     TAU_TILDE_NAME,
     _build_wmnij,
+    _build_fae,
+    _build_wabef,
+    _perm_parity,
+    _antisym_sort_factor,
     factor_to_fragment,
     fragment_signature,
     candidate_factor_subsets,
@@ -1161,7 +1165,10 @@ class FindOperatorOccurrencesTests(unittest.TestCase):
         term = occs[0]["term"]
         self.assertEqual(term.coeff, Fraction(1, 2))
         self.assertEqual(sorted(f.name for f in term.factors), ["Wmnij", "tau"])
-        self.assertEqual(len(occs[0]["cover"]), 10)    # the complete cover
+        # cover is closed under the residual's external-pair antisymmetry
+        # (D7.2.5.2 W3): the 10 directly-expanded keys plus the antisym-partner
+        # keys the single written t1t1 representative omits.
+        self.assertEqual(len(occs[0]["cover"]), 12)
 
     def test_maximal_cover_beats_partial(self):
         # the partial Wmnij*t2 / Wmnij*t1t1 covers (size 5 each) are subsets of
@@ -1203,11 +1210,15 @@ class HypothesisConsistencyTests(unittest.TestCase):
         good = [h for h in enumerate_hypotheses(op, anchor, term)
                 if hypothesis_is_consistent(h, terms)]
         self.assertTrue(good)
-        # every consistent candidate is a correct orientation (m,n->k,l external
-        # i,j): the W indices end in i,j
+        # every consistent candidate is a correct orientation: bra pair -> summed
+        # (k,l), ket pair -> external (i,j).  After the D7.2.5 v-parity sign fold
+        # the antisym-equivalent orientation (l,k,j,i) is ALSO sound (the even
+        # double-swap of (k,l,i,j)), so assert the SETS, not the slot order;
+        # find_operator_occurrences dedups them to one instance.
         for h in good:
             names = [i.name for i in h.factors[0].indices]
-            self.assertEqual(names[2:], ["i", "j"])
+            self.assertEqual(set(names[:2]), {"k", "l"})
+            self.assertEqual(set(names[2:]), {"i", "j"})
         # the correct tau-rest hypothesis is among them
         self.assertTrue(any(f.name == "tau" for h in good for f in h.factors[1:]))
 
@@ -1225,6 +1236,64 @@ class HypothesisConsistencyTests(unittest.TestCase):
         hyps = list(enumerate_hypotheses(op, anchor, term))
         good = [h for h in hyps if hypothesis_is_consistent(h, terms)]
         self.assertLess(len(good), len(hyps) // 4)
+
+
+class VParitySignFoldTests(unittest.TestCase):
+    """D7.2.5.1: the v-antisymmetry sign fold + antisym-aware dedup. The parity
+    primitives are load-bearing (a wrong sign silently rejects correct Fae/Wabef
+    hypotheses), and the family sweep is the payoff the unit exists to deliver."""
+
+    def test_perm_parity_of_generators(self):
+        # identity even; single transposition odd; double-swap even
+        self.assertEqual(_perm_parity((0, 1, 2, 3)), 1)
+        self.assertEqual(_perm_parity((1, 0, 2, 3)), -1)   # swap bra
+        self.assertEqual(_perm_parity((0, 1, 3, 2)), -1)   # swap ket
+        self.assertEqual(_perm_parity((1, 0, 3, 2)), 1)    # both -> even
+
+    def test_antisym_sort_folds_even_double_swap(self):
+        # Wmnij(l,k,j,i) is the EVEN double intra-pair swap of (k,l,i,j): sorting
+        # each group back must recover (k,l,i,j) with sign +1.
+        from ccgen.project import Index, Tensor
+        k, l = Index("k", "occ", True), Index("l", "occ", True)
+        i, j = Index("i", "occ", False), Index("j", "occ", False)
+        w = Tensor("Wmnij", (l, k, j, i), antisym_groups=((0, 1), (2, 3)))
+        sf, sign = _antisym_sort_factor(w)
+        self.assertEqual([x.name for x in sf.indices], ["k", "l", "i", "j"])
+        self.assertEqual(sign, 1)
+        # a single intra-pair swap is odd
+        w1 = Tensor("Wmnij", (l, k, i, j), antisym_groups=((0, 1), (2, 3)))
+        _, s1 = _antisym_sort_factor(w1)
+        self.assertEqual(s1, -1)
+
+    def test_family_sweep_unblocks_fae_and_wabef(self):
+        # the D7.2.5.1 payoff: Fae/Wabef go from 0 occurrences to nonzero once
+        # the v-parity sign is folded; Wmnij stays exactly ONE (dedup guard).
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        n_wmnij = len(find_operator_occurrences(_build_wmnij(), eqs["doubles"]))
+        n_fae = len(find_operator_occurrences(_build_fae(), eqs["doubles"]))
+        n_wabef = len(find_operator_occurrences(_build_wabef(), eqs["doubles"]))
+        self.assertEqual(n_wmnij, 1)
+        self.assertGreater(n_fae, 0)
+        self.assertGreater(n_wabef, 0)
+
+    def test_wabef_assembles_single_tau_c_occurrence(self):
+        # D7.2.5.2 V0.4 payoff: with the tau_c half-weight (W2) and the
+        # antisym-partner cover closure (W3), Wabef recognizes as exactly ONE
+        # cover-complete occurrence 1/2 Wabef*tau_c -- matching how Wmnij assembles
+        # 1/2 Wmnij*tau -- instead of the pre-V0.4 three cover-5 pieces.
+        from fractions import Fraction
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        occs = find_operator_occurrences(_build_wabef(), eqs["doubles"])
+        self.assertEqual(len(occs), 1)
+        term = occs[0]["term"]
+        self.assertEqual(term.coeff, Fraction(1, 2))
+        self.assertEqual(sorted(f.name for f in term.factors), ["Wabef", "tau_c"])
+        # and Wmnij is unchanged -- one occurrence, standard (weight-2) tau
+        wmnij = find_operator_occurrences(_build_wmnij(), eqs["doubles"])
+        self.assertEqual(len(wmnij), 1)
+        self.assertIn("tau", [f.name for f in wmnij[0]["term"].factors])
 
 
 class EnumerateHypothesesTests(unittest.TestCase):

@@ -37,10 +37,25 @@ from ..tensors import Tensor, t1, t2 as make_t2
 # then occupieds, antisymmetric within each pair.  Mirrors tensors.t2.
 TAU_NAME = "tau"
 
+# A "contracted" tau: same pseudo-amplitude, but its written t1t1 representative
+# expands at HALF weight (1, not 2).  Used ONLY as a hypothesis rest whose bra
+# pair is summed and antisymmetrically contracted into the dressed operator's own
+# v -- there the operator's antisymmetry already supplies the P(t1t1) partner, so
+# the standard doubled representative over-counts (the Wabef diagnosis,
+# D7.2.5.2 V0.4).  Never appears in an operator DEFINITION, so the tau-recognition
+# path (A1) is unaffected; only the expansion weight differs.
+TAU_CONTRACTED_NAME = "tau_c"
+
 
 def tau(a: Index, b: Index, i: Index, j: Index) -> Tensor:
     """The tau pseudo-amplitude factor tau_{ij}^{ab} (same shape as t2)."""
     return Tensor(TAU_NAME, (a, b, i, j), antisym_groups=((0, 1), (2, 3)))
+
+
+def tau_contracted(a: Index, b: Index, i: Index, j: Index) -> Tensor:
+    """A tau whose t1t1 half expands at weight 1 (see TAU_CONTRACTED_NAME)."""
+    return Tensor(TAU_CONTRACTED_NAME, (a, b, i, j),
+                  antisym_groups=((0, 1), (2, 3)))
 
 
 @dataclass(frozen=True)

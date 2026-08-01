@@ -41,7 +41,8 @@ from ..canonicalize import canonicalize_term
 from ..indices import Index, make_occ, make_vir
 from ..project import AlgebraTerm
 from ..tensors import Tensor, f, t1, t2, v, reindex_tensors
-from .tau import TAU_NAME, TAU_SPEC, tau, _canonical_key, _canonical_fixed_point
+from .tau import (TAU_NAME, TAU_CONTRACTED_NAME, TAU_SPEC, tau, tau_contracted,
+                  _canonical_key, _canonical_fixed_point)
 
 TAU_TILDE_NAME = "tau_tilde"
 
@@ -578,10 +579,7 @@ def hypothesize_operator_term(op: "DressedOperator", occurrence: dict, term):
             name_to_index[idx.name] = idx
     block_indices = tuple(name_to_index[occurrence["port_index"][s]]
                           for s in range(len(op.block)))
-    # bra/ket pairing for the antisymmetry of a rank-2n operator (rank-2 -> none)
-    n = len(block_indices) // 2
-    antisym = tuple((k, k + n) for k in range(n)) if n >= 1 and len(block_indices) >= 4 \
-        else ()
+    antisym = op.antisym_groups   # derived from the block, not hardcoded
     w_factor = Tensor(op.name, block_indices,
                       antisym_groups=antisym if antisym else None)
     rest = tuple(f for k, f in enumerate(term.factors)
@@ -635,27 +633,42 @@ def enumerate_hypotheses(op: "DressedOperator", occurrence: dict, term):
     rest = tuple(f for k, f in enumerate(term.factors) if k not in set(subset))
     coeff = term.coeff / op_coeff
     n = len(op.block)
-    antisym = tuple((k, k + n // 2) for k in range(n // 2)) if n >= 4 else None
+    antisym = op.antisym_groups or None   # derived from the block, not hardcoded
 
     for port_map in _all_port_bindings(op_frag, induced, binding["nodes"]):
         port_index = {os_: slot_to_index[is_] for os_, is_ in port_map.items()}
         block_indices = tuple(name_to_index[port_index[s]] for s in range(n))
         w = Tensor(op.name, block_indices, antisym_groups=antisym)
-        for rest_variant in _rest_variants(rest):
+        w_indices = {idx.name for idx in w.indices}
+        summed = {idx.name for idx in term.summed_indices}
+        for rest_variant in _rest_variants(rest, w_indices, summed):
             yield AlgebraTerm(
                 coeff=coeff, factors=(w,) + rest_variant,
                 free_indices=term.free_indices,
                 summed_indices=term.summed_indices, connected=term.connected)
 
 
-def _rest_variants(rest):
+def _rest_variants(rest, op_indices=None, summed=None):
     """The rest as-is, plus a tau-dressed variant if it is a single ``t2``
     factor (the true rest of an operator collapse is often the pseudo-amplitude
-    tau, which the raw residual only ever carries expanded)."""
-    from .tau import tau
+    tau, which the raw residual only ever carries expanded).
+
+    The tau variant is a ``tau_c`` (half written-t1t1 weight) when the t2's bra
+    (virtual) pair is SUMMED and lies INSIDE the operator's block -- i.e. the
+    pair is antisymmetrically contracted into the operator's own v, which then
+    supplies the P(t1t1) partner the standard doubled representative would
+    double-count (Wabef).  Otherwise a plain ``tau`` (weight 2, e.g. Wmnij whose
+    tau bra pair is the external doubles indices).  Threading the choice here --
+    rather than inspecting the expanded term -- is load-bearing: after operator
+    expansion a rest-tau and the operator's own definition-tau coexist in one
+    term and are otherwise indistinguishable."""
     yield rest
     if len(rest) == 1 and rest[0].name == "t2":
-        yield (tau(*rest[0].indices),)
+        idx = rest[0].indices
+        bra = {idx[0].name, idx[1].name}
+        contracted = (op_indices is not None and summed is not None
+                      and bra <= op_indices and bra <= summed)
+        yield (tau_contracted(*idx),) if contracted else (tau(*idx),)
 
 
 # ---------------------------------------------------------------------------
@@ -725,15 +738,95 @@ def _seeded_by_name(name: str) -> "DressedOperator":
 
 
 def _hypothesis_cover(hyp, op) -> frozenset:
-    """The set of nonzero ERI-canonical primitive keys ``hyp`` expands to."""
-    from fractions import Fraction
+    """The ERI-canonical primitive keys ``hyp`` accounts for, CLOSED under the
+    residual's external-pair antisymmetry (D7.2.5.2 W3).
+
+    A single written t1t1 representative covers one residual term but not its
+    antisym partner (Wabef's term 28 = the i<->j swap of term 27), which would
+    otherwise resurface as a spurious standalone occurrence.  A dressed
+    occurrence physically REPLACES both partners, so the cover includes both: for
+    each expanded primitive we also add the keys reached by exchanging the
+    hypothesis's free (external) pairs -- (i,j) occ and (a,b) vir, the pairs R2
+    is antisymmetric in -- throughout the whole primitive."""
     from .dressed_equation import expand_dressed_term
+    swaps = _external_antisym_pairs(hyp)
     ks = set()
     for prim in expand_dressed_term(hyp, {op.name: op}):
-        key, coeff = _eri_canonical(prim)
-        if coeff != 0:
-            ks.add(key)
+        for variant in _with_pair_swaps(prim, swaps):
+            key, coeff = _eri_canonical(variant)
+            if coeff != 0:
+                ks.add(key)
     return frozenset(ks)
+
+
+def _external_antisym_pairs(hyp):
+    """The hypothesis's free (external) indices grouped by space, taken
+    pairwise -- the pairs the residual is antisymmetric in (doubles: (i,j) occ,
+    (a,b) vir).  Exchanging such a pair throughout a primitive reaches the
+    antisym-partner term the single written t1t1 representative omitted."""
+    by_space: dict[str, list[Index]] = {}
+    for idx in hyp.free_indices:
+        by_space.setdefault(idx.space, []).append(idx)
+    pairs = []
+    for idxs in by_space.values():
+        for x in range(len(idxs)):
+            for y in range(x + 1, len(idxs)):
+                pairs.append((idxs[x], idxs[y]))
+    return tuple(pairs)
+
+
+def _with_pair_swaps(prim, swaps):
+    """Yield ``prim`` and every variant with one of ``swaps`` (an index pair)
+    exchanged throughout all factors."""
+    yield prim
+    for x, y in swaps:
+        ren = {x: y, y: x}
+        new_factors = tuple(
+            f.with_indices(tuple(ren.get(idx, idx) for idx in f.indices))
+            for f in prim.factors
+        )
+        yield prim.with_factors(new_factors)
+
+
+def _antisym_sort_factor(factor: Tensor) -> tuple[Tensor, int]:
+    """Reorder ``factor``'s indices to sorted order WITHIN each antisym group,
+    returning ``(factor, sign)`` with sign = parity of the reordering.
+
+    Folds an antisym factor's own symmetry to a slot-canonical form so two
+    orientations related by intra-group swaps (e.g. Wmnij(k,l,i,j) vs the even
+    double-swap Wmnij(l,k,j,i)) reach the same index order.  Non-antisym /
+    rank-<2 factors are returned unchanged, sign +1."""
+    groups = factor.antisym_groups
+    if not groups:
+        return factor, 1
+    order = list(range(len(factor.indices)))  # slot -> source position
+    sign = 1
+    for group in groups:
+        pos = list(group)
+        want = sorted(pos, key=lambda p: (factor.indices[p].space,
+                                          factor.indices[p].name))
+        # write sorted sources back into this group's own slots (keeps groups
+        # in place); parity = inversions of the sorted-source sequence
+        sign *= _perm_parity(tuple(want))
+        for slot, src in zip(pos, want):
+            order[slot] = src
+    new_idx = tuple(factor.indices[order[s]] for s in range(len(order)))
+    return factor.with_indices(new_idx), sign
+
+
+def _dressed_canonical_key(term: AlgebraTerm) -> tuple:
+    """Antisym-canonical key for a dressed ``W*rest`` term.
+
+    Sorts each antisym factor's indices within its groups (folding the sign),
+    normalizes free-index listing order, then dummy-relabels to a fixed point.
+    Two occurrences that are the SAME operator instance written in
+    antisym-equivalent orientations map to the same key (D7.2.5 gap 2 dedup)."""
+    new_factors = []
+    for f in term.factors:
+        nf, _ = _antisym_sort_factor(f)
+        new_factors.append(nf)
+    folded = term.with_factors(tuple(new_factors))
+    return _canonical_key(_canonical_fixed_point(_free_order_normalized(folded)))
 
 
 def find_operator_occurrences(op: "DressedOperator", terms) -> list[dict]:
@@ -742,9 +835,12 @@ def find_operator_occurrences(op: "DressedOperator", terms) -> list[dict]:
     Enumerates every anchor's hypotheses (D7.2.3c-0), keeps the consistent ones
     (D7.2.3c-1), and dedups to MAXIMAL primitive covers -- discarding a partial
     hypothesis whose cover is contained in a fuller one (so the complete
-    ``W*tau`` wins over ``W*t2`` / ``W*t1t1``).  Each returned occurrence is a
-    dict ``{"term": AlgebraTerm, "cover": frozenset}`` -- the dressed ``W*rest``
-    term for D7.3 to rewrite, plus the residual primitives it accounts for."""
+    ``W*tau`` wins over ``W*t2`` / ``W*t1t1``).  Antisym-equivalent orientations
+    of the same instance (D7.2.5 gap 2, exposed by the v-parity sign fold) are
+    folded via :func:`_dressed_canonical_key` so each instance is one
+    occurrence.  Each returned occurrence is a dict
+    ``{"term": AlgebraTerm, "cover": frozenset}`` -- the dressed ``W*rest`` term
+    for D7.3 to rewrite, plus the residual primitives it accounts for."""
     consistent = []
     for anchor in collect_fragment_occurrences(op, terms):
         for hyp in enumerate_hypotheses(op, anchor, terms[anchor["term_id"]]):
@@ -756,11 +852,12 @@ def find_operator_occurrences(op: "DressedOperator", terms) -> list[dict]:
     occurrences = []
     seen: set = set()
     for hyp, cover in consistent:
-        if cover in seen:
-            continue
         if any(cover < other for other in covers):   # strictly contained
             continue
-        seen.add(cover)
+        key = _dressed_canonical_key(hyp)
+        if key in seen:
+            continue
+        seen.add(key)
         occurrences.append({"term": hyp, "cover": cover})
     return occurrences
 
@@ -833,6 +930,28 @@ class DressedOperator:
     @property
     def rank(self) -> int:
         return len(self.block)
+
+    @property
+    def antisym_groups(self) -> tuple[tuple[int, int], ...]:
+        """Index-slot antisymmetry of the operator's own factor, derived from
+        its block (NOT hardcoded per call site).
+
+        A dressed W operator is antisymmetric WITHIN its bra pair and WITHIN its
+        ket pair (like tau: Wmnij(m,n,i,j) = -Wmnij(n,m,i,j)) -- NOT under the
+        ERI bra<->ket exchange, which is a symmetry of the integral, not of a
+        dressed operator.  A pair is antisymmetric only when BOTH its slots are
+        the same index space: Wmnij(oooo)/Wabef(vvvv) get ((0,1),(2,3)), but
+        Wmbej(ovvo) has mixed pairs and gets () -- stamping (0,1)/(2,3) on it
+        would be a FALSE symmetry.  Rank-2 operators (Fme/Fae/Fmi) get ().
+        """
+        if self.rank != 4:
+            return ()
+        spaces = [idx.space for idx in self.block]
+        groups = []
+        for a, b in ((0, 1), (2, 3)):
+            if spaces[a] == spaces[b]:
+                groups.append((a, b))
+        return tuple(groups)
 
     def space_sig(self) -> str:
         return "".join(
@@ -1328,30 +1447,56 @@ _ERI_PERMUTATIONS: tuple[tuple[int, int, int, int], ...] = (
 )
 
 
-def _eri_normalize_factor(factor: Tensor) -> Tensor:
+def _perm_parity(perm: tuple[int, ...]) -> int:
+    """Sign (+1/-1) of a permutation given as the image tuple perm[i] = source
+    position feeding output slot i.  Counts inversions."""
+    inv = 0
+    for i in range(len(perm)):
+        for j in range(i + 1, len(perm)):
+            if perm[i] > perm[j]:
+                inv += 1
+    return -1 if inv & 1 else 1
+
+
+def _eri_normalize_factor(factor: Tensor) -> tuple[Tensor, int]:
     """Reorder a v factor's indices to a canonical arrangement under 8-fold ERI
-    symmetry.  Non-v factors are returned unchanged.
+    symmetry, returning ``(reordered_factor, sign)``.  Non-v factors are
+    returned unchanged with sign +1.
 
     Picks the permutation whose resulting (space, index-name) sequence is
     lexicographically smallest, so any two exchange-related v arrangements map
     to the SAME order.  The indices themselves are unchanged (just reordered),
     so the downstream dummy relabel still converges two equivalent terms.
+
+    ``v`` is antisymmetric in each bra/ket pair, so a permutation reached by an
+    ODD number of intra-pair swaps carries a -1; the returned ``sign`` is the
+    parity of the chosen permutation, which the caller folds into the term
+    coefficient.  Discarding it (the pre-D7.2.5 behavior) compared v factors
+    reachable only by an odd swap with the WRONG sign, silently rejecting
+    correct Fae/Wabef hypotheses.
     """
     if factor.name != "v" or len(factor.indices) != 4:
-        return factor
+        return factor, 1
     best = None
     for perm in _ERI_PERMUTATIONS:
         order = tuple(factor.indices[p] for p in perm)
         sig = tuple((x.space, x.name) for x in order)
         if best is None or sig < best[0]:
-            best = (sig, order)
-    return factor.with_indices(best[1])
+            best = (sig, order, _perm_parity(perm))
+    return factor.with_indices(best[1]), best[2]
 
 
 def _eri_normalize_term(term: AlgebraTerm) -> AlgebraTerm:
-    """Normalize every v factor in a term to its canonical ERI arrangement."""
-    new_factors = tuple(_eri_normalize_factor(f) for f in term.factors)
-    return term.with_factors(new_factors)
+    """Normalize every v factor in a term to its canonical ERI arrangement,
+    folding each reordering's antisymmetry parity into the coefficient."""
+    new_factors = []
+    sign = 1
+    for f in term.factors:
+        nf, s = _eri_normalize_factor(f)
+        new_factors.append(nf)
+        sign *= s
+    out = term.with_factors(tuple(new_factors))
+    return out if sign == 1 else out.scaled(sign)
 
 
 def _free_order_normalized(term: AlgebraTerm) -> AlgebraTerm:
@@ -1656,7 +1801,20 @@ def _expand_pseudo_amplitude_in_term(
     call repeatedly (fixed point) if a term carries several.
     """
     tilde_weight = TAU_SPEC.written_t1t1_weight / 2  # tau_tilde carries half
-    weights = {TAU_NAME: TAU_SPEC.written_t1t1_weight, TAU_TILDE_NAME: tilde_weight}
+    # tau_c (contracted tau) carries HALF the standard written t1t1 weight: when
+    # tau's bra pair is summed and antisym-contracted into the dressed operator's
+    # own v (Wabef's tau(c,d,i,j) into v(c,d,a,b)), the v's antisymmetry already
+    # supplies the second P(t1t1) permutation, so the standard doubled
+    # representative over-counts.  This weight rides on the FACTOR NAME (threaded
+    # from _rest_variants), NOT inspected from the term -- because a rest-tau_c and
+    # an operator-definition tau (which keeps weight 2) coexist in the same term
+    # after operator expansion, so no local term inspection can tell them apart.
+    # See tau.py::TAU_CONTRACTED_NAME and D7.2.5.2 V0.4.
+    weights = {
+        TAU_NAME: TAU_SPEC.written_t1t1_weight,
+        TAU_TILDE_NAME: tilde_weight,
+        TAU_CONTRACTED_NAME: TAU_SPEC.written_t1t1_weight / 2,
+    }
 
     pos = next(
         (k for k, f in enumerate(term.factors) if f.name in weights), None
