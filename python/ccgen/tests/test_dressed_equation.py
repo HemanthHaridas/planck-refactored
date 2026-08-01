@@ -116,6 +116,49 @@ class TranscriptionWipTests(unittest.TestCase):
         ok, _diff = verify_dressed_equation(ccsd_dressed_r2(), d)
         self.assertFalse(ok)  # WIP marker -- flip when transcription lands
 
+    def test_r2_mismatch_decomposition_against_diagram(self) -> None:
+        # V0.1/V0.2 tripwire: pins WHY ccsd_dressed_r2 fails to verify against the
+        # FCI-validated diagram engine, decomposed into its two independent
+        # causes so a fix to one is not masked by the other.  Flip / tighten each
+        # count as the corresponding fix lands.
+        #
+        #   (A) STALE TRANSCRIPTION (dominant): ccsd_dressed_r2 is an incomplete
+        #       hand transcription -- it carries terms the raw residual does not
+        #       (dressed-only) and omits terms the raw residual has (raw-only).
+        #       These have NO t1t1-pair / ratio-2 signature; they are just wrong
+        #       or missing terms.  Fix = re-transcribe (or auto-generate) R2.
+        #   (B) TAU WRITTEN-WEIGHT (secondary): keys with a t1t1 pair contracted
+        #       into a same-space antisym `v` come out 2x (or 1/2x) because
+        #       TAU_SPEC.written_t1t1_weight=2 is only correct for an EXTERNAL tau
+        #       pair; a summed-and-antisym-contracted pair needs weight 1 (the
+        #       Wabef diagnosis, D7.2.5.2 W1).
+        from ccgen.generate import generate_cc_equations
+
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        raw = raw_multiset(eqs["doubles"])
+        full = dressed_multiset(ccsd_dressed_r2())
+        ok, diff = verify_dressed_equation(ccsd_dressed_r2(), eqs["doubles"])
+        self.assertFalse(ok)
+
+        tau_weight = struct = 0
+        for k in diff:
+            shape = [name for name, _ in k[0]]
+            r = raw.get(k, Fraction(0))
+            f = full.get(k, Fraction(0))
+            ratio = (f / r) if r != 0 else None
+            if shape.count("t1") >= 2 and ratio in (2, Fraction(1, 2)):
+                tau_weight += 1
+            else:
+                struct += 1
+
+        # Current pinned state (diagram engine): 7 tau-weight + 19 structural.
+        # These are the numbers the fix must drive to 0; assert the split so a
+        # partial fix that only closes one class is visibly reflected here.
+        self.assertEqual(tau_weight + struct, len(diff))
+        self.assertEqual(len(diff), 26)
+        self.assertEqual(tau_weight, 7)
+        self.assertEqual(struct, 19)
+
 
 class GeneratedResidualIntegrityTests(unittest.TestCase):
     """The generated residual has proper (non-degenerate) contractions.
