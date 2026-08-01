@@ -563,9 +563,31 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
        (both orientations sound at the hypothesis level, deduped at occurrence
        level) and the `test_wrong_orientation_rejected` guard on `(i,j,k,l)` still
        holding.
-    3. **Wmbej combined term.** Its defining term `−(½ t2 + t1t1) ⟨mn||ef⟩`
-       bundles two amplitude structures; the fragment encoder / hypothesis path
-       assumes one amplitude per defining term. **Still 0. Deferred (D7.2.5.3).**
+    3. **Wmbej — DIAGNOSED, deferred (D7.2.5.3). The original "combined term"
+       framing was WRONG** (like Fmi's turned out to be): Wmbej's definition
+       already writes `−½ t2·v` and `−t1t1·v` as SEPARATE defining terms, so
+       nothing bundles two amplitudes. The real cause is an **`ovvo`-block
+       fragment/port-binding sign issue**. Wmbej is the ONLY seeded operator with
+       an asymmetric ket — its bare `v(m,b,e,j)` is `⟨mb|ej⟩`, ket `(e,j)` =
+       `(vir,occ)` — while the diagram engine writes every such integral in the
+       `ovov` `(occ,vir)`-ket orientation (residual terms 9–12 are
+       `±t2(a,c,i,k) v(j,c,k,b)`, an `ovov` pattern; NO residual term has Wmbej's
+       `ovvo` pattern). The hand transcription `ccsd_dressed_r2` binds the
+       PHYSICAL contraction `+t2(a,e,i,m) Wmbej(m,b,e,j)` and its bare `t2·v`
+       expands to the correct sign (matches raw). But `find_operator_occurrences`
+       enumerates block orientations via `_all_port_bindings` on the `ovvo`
+       fragment and every orientation it produces binds the summed contraction
+       indices to the wrong slots, so the bare `t2·v` comes out `+1` where the
+       residual is `−1` — no orientation matches in any of the 81 anchors.
+       Verified this is NOT an `_eri_canonical` sign bug: `⟨kb|cj⟩ = −⟨jc|kb⟩` is
+       genuinely a sign difference, correctly folded; and a global definition
+       negation is a self-consistency-preserving no-op for recognition (the
+       hypothesis coeff `term.coeff/op_coeff` cancels it), so it does NOT fix the
+       binding. The fix is in the **`ovvo` fragment port-binding**: enumerate the
+       block orientation that reproduces the physical `t2(a,e,i,m)·Wmbej(m,b,e,j)`
+       contraction (summed `(e,m)` into the operator, `(b,j)` external), with the
+       ket-antisymmetry sign carried into the hypothesis coefficient. Structural
+       (port-binding layer), so deferred — distinct from the four already landed.
     4. **Fmi** — **LANDED (D7.2.5.2 Fmi).** Root cause was NOT an Fmi-specific
        sign case but an ORDERING bug in the shared `_eri_canonical`: it folded a
        `v`'s bra↔ket exchange (`_eri_normalize_factor`, which picks the
