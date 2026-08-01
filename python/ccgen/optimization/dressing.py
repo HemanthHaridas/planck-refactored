@@ -1534,9 +1534,19 @@ def _eri_canonical(term: AlgebraTerm) -> tuple[tuple, Fraction]:
     listing order so two terms with the same externals in a different order
     compare equal.  Any antisymmetry sign from reordering v is folded into the
     returned coefficient via the fixed point.
+
+    Ordering is load-bearing (D7.2.5.2 Fmi): the bra<->ket normalization
+    (_eri_normalize_factor) picks the lexicographically smallest (space, name)
+    arrangement, so it MUST run on CANONICAL index names -- otherwise two terms
+    that are the same integral but carry differently-named dummies (Fmi's
+    t1(e,n)v(m,n,i,e) vs the residual's t1(b,k)v(i,b,j,k)) normalize their v to
+    DIFFERENT orientations and never fold.  So: relabel dummies to a fixed point
+    FIRST, then fold bra<->ket, then settle the fixed point again to absorb any
+    normalization-induced sign/relabel.
     """
-    normalized = _free_order_normalized(_eri_normalize_term(term))
-    cf = _canonical_fixed_point(normalized)
+    settled = _canonical_fixed_point(_free_order_normalized(term))
+    folded = _eri_normalize_term(settled)
+    cf = _canonical_fixed_point(folded)
     return _canonical_key(cf), cf.coeff
 
 

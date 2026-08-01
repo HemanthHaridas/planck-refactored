@@ -23,6 +23,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     TAU_TILDE_NAME,
     _build_wmnij,
     _build_fae,
+    _build_fmi,
     _build_wabef,
     _perm_parity,
     _antisym_sort_factor,
@@ -1294,6 +1295,25 @@ class VParitySignFoldTests(unittest.TestCase):
         wmnij = find_operator_occurrences(_build_wmnij(), eqs["doubles"])
         self.assertEqual(len(wmnij), 1)
         self.assertIn("tau", [f.name for f in wmnij[0]["term"].factors])
+
+    def test_fmi_recognized(self):
+        # D7.2.5.2 Fmi (gap 4): unblocked by the _eri_canonical ordering fix
+        # (fold bra<->ket AFTER dummy relabel, so Fmi's t1(e,n)v(m,n,i,e) piece
+        # canonicalizes to the same v orientation as the residual's t1v terms).
+        # Fmi recognizes as -Fmi*t1 in singles and the -P(ij) Fmi*t2 pair in
+        # doubles (the same legitimate P-antisymmetrizer multiplicity as Fae).
+        from fractions import Fraction
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        singles = find_operator_occurrences(_build_fmi(), eqs["singles"])
+        doubles = find_operator_occurrences(_build_fmi(), eqs["doubles"])
+        self.assertEqual(len(singles), 1)
+        self.assertEqual(sorted(f.name for f in singles[0]["term"].factors),
+                         ["Fmi", "t1"])
+        self.assertEqual(len(doubles), 2)
+        for o in doubles:
+            self.assertEqual(sorted(f.name for f in o["term"].factors),
+                             ["Fmi", "t2"])
 
 
 class EnumerateHypothesesTests(unittest.TestCase):

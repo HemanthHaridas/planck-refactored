@@ -566,8 +566,21 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     3. **Wmbej combined term.** Its defining term `−(½ t2 + t1t1) ⟨mn||ef⟩`
        bundles two amplitude structures; the fragment encoder / hypothesis path
        assumes one amplitude per defining term. **Still 0. Deferred (D7.2.5.3).**
-    4. **Fmi** still 0 after fix 1 — needs its own trace (likely another
-       sign/orientation case in the `oo` block). **Deferred (D7.2.5.4).**
+    4. **Fmi** — **LANDED (D7.2.5.2 Fmi).** Root cause was NOT an Fmi-specific
+       sign case but an ORDERING bug in the shared `_eri_canonical`: it folded a
+       `v`'s bra↔ket exchange (`_eri_normalize_factor`, which picks the
+       lexicographically smallest (space,name) arrangement) BEFORE dummy
+       relabeling, so Fmi's `t1(e,n)v(m,n,i,e)` piece and the residual's
+       `t1(b,k)v(i,b,j,k)` — the same integral with differently-named dummies —
+       normalized their `v` to DIFFERENT orientations and never folded, leaving
+       a MISSING key that failed the sound filter. Fix: canonicalize (relabel
+       dummies) FIRST, then fold bra↔ket, then settle. Fmi now recognizes as
+       `−Fmi·t1` (singles) and the `−P(ij) Fmi·t2` pair (doubles) — the same
+       legitimate P-antisymmetrizer multiplicity as Fae. Gated by
+       `test_fmi_recognized`. **Bonus:** the same fix cut the whole-equation
+       oracle's structural mismatches 19→7 (bra↔ket folding was inflating the
+       count), pinned by the updated `test_r2_mismatch_decomposition_against_diagram`
+       (now 14 = 7 τ-weight + 7 structural). Only **Wmbej (gap 3)** remains.
     Also surfaced (not in the original 4, follow-up): **Wabef assembles only
     cover-5 PIECES** (a `t2` rest + two un-completed `t1t1` rests), never the full
     cover-10 `Wabef·τ` the way `Wmnij` does — this is **D7.2.5.2**.

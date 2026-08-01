@@ -151,13 +151,16 @@ class TranscriptionWipTests(unittest.TestCase):
             else:
                 struct += 1
 
-        # Current pinned state (diagram engine): 7 tau-weight + 19 structural.
-        # These are the numbers the fix must drive to 0; assert the split so a
-        # partial fix that only closes one class is visibly reflected here.
+        # Current pinned state (diagram engine): 7 tau-weight + 7 structural.
+        # (Was 7 + 19 = 26; the D7.2.5.2 Fmi fix to _eri_canonical -- fold
+        # bra<->ket AFTER dummy relabel, not before -- cut the structural class
+        # 19->7 by making name-independent v orientations compare equal.)
+        # These are the numbers a further fix must drive to 0; assert the split
+        # so a partial fix that only closes one class is visibly reflected here.
         self.assertEqual(tau_weight + struct, len(diff))
-        self.assertEqual(len(diff), 26)
+        self.assertEqual(len(diff), 14)
         self.assertEqual(tau_weight, 7)
-        self.assertEqual(struct, 19)
+        self.assertEqual(struct, 7)
 
 
 class GeneratedResidualIntegrityTests(unittest.TestCase):
