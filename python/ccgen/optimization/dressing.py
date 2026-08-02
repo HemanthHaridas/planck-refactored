@@ -634,18 +634,47 @@ def enumerate_hypotheses(op: "DressedOperator", occurrence: dict, term):
     coeff = term.coeff / op_coeff
     n = len(op.block)
     antisym = op.antisym_groups or None   # derived from the block, not hardcoded
+    asym_block = _block_is_asymmetric(op)
 
     for port_map in _all_port_bindings(op_frag, induced, binding["nodes"]):
         port_index = {os_: slot_to_index[is_] for os_, is_ in port_map.items()}
         block_indices = tuple(name_to_index[port_index[s]] for s in range(n))
         w = Tensor(op.name, block_indices, antisym_groups=antisym)
+        # For an asymmetric-block operator (Wmbej, ovvo) the block reorientation
+        # this binding applies carries the bare-v antisymmetry sign, which the
+        # bare coeff omits (D7.2.5.3 S1).  Fold it in -- but ONLY for asymmetric
+        # blocks: for oooo/vvvv every genuine orientation is bare-v sign +1, and
+        # signing there would rescue the spurious same-space-swap orientations the
+        # unsigned filter correctly rejects (verified: would double Wmnij/Wabef).
+        sign = _binding_sign(block_indices) if asym_block else 1
         w_indices = {idx.name for idx in w.indices}
         summed = {idx.name for idx in term.summed_indices}
         for rest_variant in _rest_variants(rest, w_indices, summed):
             yield AlgebraTerm(
-                coeff=coeff, factors=(w,) + rest_variant,
+                coeff=coeff * sign, factors=(w,) + rest_variant,
                 free_indices=term.free_indices,
                 summed_indices=term.summed_indices, connected=term.connected)
+
+
+def _block_is_asymmetric(op) -> bool:
+    """True if the operator's rank-4 block has a mixed-space (asymmetric) bra or
+    ket pair (e.g. Wmbej ovvo).  Such a block has no bare-v-sign-+1 canonical
+    orientation, so its genuine bindings need the reorientation sign folded in;
+    oooo/vvvv blocks never do (D7.2.5.3 S1)."""
+    ss = op.space_sig()
+    return len(ss) == 4 and (ss[0] != ss[1] or ss[2] != ss[3])
+
+
+def _binding_sign(block_indices) -> int:
+    """The bare-v antisymmetry sign of this block orientation -- the parity the
+    bra/ket intra-pair antisymmetry of the operator's defining ERI picks up when
+    reoriented to `block_indices`.  Computed self-calibrating as the canonical
+    signed coefficient of a bare v over these indices."""
+    from ccgen.tensors import v as _vfac
+    vt = AlgebraTerm(coeff=Fraction(1), factors=(_vfac(*block_indices),),
+                     free_indices=tuple(block_indices), summed_indices=(),
+                     connected=True)
+    return _eri_canonical(vt)[1]
 
 
 def _rest_variants(rest, op_indices=None, summed=None):

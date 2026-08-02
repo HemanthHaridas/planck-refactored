@@ -563,7 +563,16 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
        (both orientations sound at the hypothesis level, deduped at occurrence
        level) and the `test_wrong_orientation_rejected` guard on `(i,j,k,l)` still
        holding.
-    3. **Wmbej — DIAGNOSED, deferred (D7.2.5.3). The original "combined term"
+    3. **Wmbej — LANDED (D7.2.5.3).** Recognizes as `+Wmbej·t1` (singles) and the
+       `P(ij)P(ab) Wmbej·t2` quartet (doubles, 4 branches, alternating sign), via
+       the asymmetric-block binding sign (S1 design below, implemented in
+       `enumerate_hypotheses` + `_block_is_asymmetric` + `_binding_sign`). Gated by
+       `test_wmbej_recognized`; the whole family is now guarded by
+       `test_full_operator_family_recognized` (Fme 2, Fae 2, Fmi 2, Wmnij 1,
+       Wabef 1, Wmbej 4 in doubles). **All six seeded operators now recognize.**
+       Full derivation retained below.
+
+       ~~DIAGNOSED, deferred~~ **The original "combined term"
        framing was WRONG** (like Fmi's turned out to be): Wmbej's definition
        already writes `−½ t2·v` and `−t1t1·v` as SEPARATE defining terms, so
        nothing bundles two amplitudes. The real cause is an **`ovvo`-block
@@ -586,8 +595,26 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
        binding. The fix is in the **`ovvo` fragment port-binding**: enumerate the
        block orientation that reproduces the physical `t2(a,e,i,m)·Wmbej(m,b,e,j)`
        contraction (summed `(e,m)` into the operator, `(b,j)` external), with the
-       ket-antisymmetry sign carried into the hypothesis coefficient. Structural
-       (port-binding layer), so deferred — distinct from the four already landed.
+       ket-antisymmetry sign carried into the hypothesis coefficient.
+
+       **S1 SCOPED (design validated in simulation, ready to implement).** The
+       sign fix is smaller and safer than "structural port-binding rewrite":
+       - Naive "multiply `coeff` by the bound bare-v canonical sign" COLLIDES:
+         Wmbej 0→4 ✓ but Wmnij 6→12, Wabef 8→16 ✗ — it rescues spurious
+         `−1`-bare-v orientations the current unsigned filter correctly rejects
+         (verified they don't dedup away: 3 distinct dressed keys for Wmnij).
+       - The distinguisher is **structural, from `space_sig` alone**: every
+         ACCEPTED Wmnij/Wabef orientation has bare-v sign `+1`; only an operator
+         whose block has an ASYMMETRIC (mixed-space) bra or ket pair
+         (`ss[0]!=ss[1] or ss[2]!=ss[3]`) is forced to a non-`+1` genuine
+         orientation. `oooo`/`vvvv` → never; `ovvo` → yes.
+       - **Validated design:** apply the bare-v binding sign to `coeff` GATED on
+         block asymmetry (`block_is_asymmetric(op)`), at the single site
+         [dressing.py] where `coeff = term.coeff / op_coeff` is set. Full-pipeline
+         simulation: Wmnij→1 (`tau`, unchanged), Wabef→1 (`tau_c`, unchanged),
+         **Wmbej→4** (`t2` P(ij)P(ab) branches) — the fix, no collision.
+       Remaining: S3 implement the gated sign, S4 add `test_wmbej_recognized` +
+       run the full suite (invariant: the other five operators unchanged).
     4. **Fmi** — **LANDED (D7.2.5.2 Fmi).** Root cause was NOT an Fmi-specific
        sign case but an ORDERING bug in the shared `_eri_canonical`: it folded a
        `v`'s bra↔ket exchange (`_eri_normalize_factor`, which picks the

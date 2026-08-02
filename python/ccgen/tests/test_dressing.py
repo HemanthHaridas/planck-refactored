@@ -25,6 +25,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     _build_fae,
     _build_fmi,
     _build_wabef,
+    _build_wmbej,
     _perm_parity,
     _antisym_sort_factor,
     factor_to_fragment,
@@ -1314,6 +1315,39 @@ class VParitySignFoldTests(unittest.TestCase):
         for o in doubles:
             self.assertEqual(sorted(f.name for f in o["term"].factors),
                              ["Fmi", "t2"])
+
+    def test_wmbej_recognized(self):
+        # D7.2.5.3 Wmbej (gap 3): unblocked by the asymmetric-block binding sign.
+        # Wmbej is the only ovvo operator; its genuine block orientations carry
+        # the bare-v antisymmetry sign the bare coeff omitted, so every hypothesis
+        # was sign-flipped vs the residual (0 occurrences). Applying the binding
+        # sign GATED on block asymmetry recovers recognition without disturbing
+        # the symmetric-block operators (oooo/vvvv, where signing would over-admit
+        # spurious orientations). Wmbej now recognizes as +Wmbej*t1 (singles) and
+        # the P(ij)P(ab) Wmbej*t2 quartet (doubles).
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        singles = find_operator_occurrences(_build_wmbej(), eqs["singles"])
+        doubles = find_operator_occurrences(_build_wmbej(), eqs["doubles"])
+        self.assertEqual(len(singles), 1)
+        self.assertEqual(sorted(f.name for f in singles[0]["term"].factors),
+                         ["Wmbej", "t1"])
+        self.assertEqual(len(doubles), 4)   # P(ij)P(ab) -> 4 branches
+        for o in doubles:
+            self.assertEqual(sorted(f.name for f in o["term"].factors),
+                             ["Wmbej", "t2"])
+
+    def test_full_operator_family_recognized(self):
+        # D7.2.5 complete: all six seeded CCSD operators now recognize in the
+        # doubles residual (Fmi/Fae also in singles). Guards the whole family
+        # against a regression in any one operator's recognition path.
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.dressing import seeded_operators
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        counts = {op.name: len(find_operator_occurrences(op, eqs["doubles"]))
+                  for op in seeded_operators()}
+        self.assertEqual(counts, {"Fme": 2, "Fae": 2, "Fmi": 2,
+                                  "Wmnij": 1, "Wabef": 1, "Wmbej": 4})
 
 
 class EnumerateHypothesesTests(unittest.TestCase):
