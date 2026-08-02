@@ -989,7 +989,19 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
       (b) dressed-only `f_ov` keys the operators still expand but the canonical raw
       drops (physically inert; also removed if the operator definitions are
       generated canonical). Effectively DONE for the canonical target.
-  - **D7.3.1** occurrence→`IntermediateSpec` bridge (~S; `_build_tau_spec` template).
+  - **D7.3.1** occurrence→`IntermediateSpec` bridge. **1a+1b+1c LANDED**
+    (`operator_to_intermediate_spec` in `dressing.py`): maps a `DressedOperator`
+    to the emit pipeline's `IntermediateSpec` (name/block→indices/space_sig→
+    index_space_sig/definition_terms, generalizing `tau_intermediate_spec`).
+    Faithfulness gate (1b): each spec's definition_terms expand to the SAME
+    primitive multiset as the operator (all 6). Canonical-Fock filtering (1c):
+    `canonical_fock=True` drops `f_ov`/`f_vo` def terms — Fme 2→1 (bare f_ov
+    gone, `t1·oovv` kept), Fae/Fmi 4→3 (lose `f_ov·t1`), W's unchanged; no
+    surviving term carries an f_ov factor. Gate
+    `OperatorToIntermediateSpecTests` (3 tests). Remaining: **1d** usage
+    annotation (`usage_count`/`usage_targets` from the P-branch-consolidated
+    occurrences) and **1e** τ/τ̃ dependency surfacing (from `op.uses`) — both
+    pure annotation, ~S.
   - **D7.3.2** multi-term rewrite (~M; drop `_try_substitute`'s single-term guard),
     driven by the D7.3.0-reconciled occurrence set.
   - **D7.3.3** dependency-ordered emit (~S; topo-sort `uses`, the `factorize_tau` slot).

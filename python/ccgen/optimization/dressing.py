@@ -1352,6 +1352,45 @@ def seeded_operators() -> list[DressedOperator]:
     ]
 
 
+def operator_to_intermediate_spec(op: DressedOperator, canonical_fock: bool = False):
+    """D7.3.1: bridge a recognized ``DressedOperator`` to the ``IntermediateSpec``
+    the emit pipeline (``emit_planck_translation_unit(intermediates=...)``)
+    materializes into a ``build_<name>`` function.
+
+    Generalizes ``tau.tau_intermediate_spec`` (proven end-to-end for tau) to the
+    seeded W/F family.  The mapping is direct -- ``op.definition_terms`` are
+    already the right ``AlgebraTerm`` shape, ``op.block`` -> ``indices``,
+    ``op.space_sig()`` -> ``index_space_sig`` (same convention tau uses, e.g.
+    "vvoo") -- so this carries no algebra of its own; correctness is the
+    faithfulness gate (the spec expands to the same primitives as the operator).
+
+    ``usage_count`` / ``usage_targets`` are left at their defaults here (0 / ())
+    -- they are per-residual annotation, filled by the usage pass (D7.3.1d) from
+    the P-branch-consolidated occurrences.
+
+    ``canonical_fock=True`` drops Brillouin-zero ``f_ov``/``f_vo`` definition
+    terms (Planck always feeds a canonical Fock, so those are runtime-inert; see
+    ``generate._drops_under_canonical_fock``).  Under it, Fme collapses to its
+    ``t1*oovv`` piece and Fae/Fmi lose their ``f_ov*t1`` corrections, while
+    diagonal-``f`` and tau/tau_tilde terms survive.
+    """
+    from .intermediates import IntermediateSpec
+    from ..generate import _drops_under_canonical_fock
+
+    terms = op.definition_terms
+    if canonical_fock:
+        terms = tuple(t for t in terms if not _drops_under_canonical_fock(t))
+
+    return IntermediateSpec(
+        name=op.name,
+        indices=tuple(op.block),
+        definition_terms=terms,
+        usage_count=0,
+        index_space_sig=op.space_sig(),
+        usage_targets=(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # A2.1 -- definition self-consistency gate
 # ---------------------------------------------------------------------------

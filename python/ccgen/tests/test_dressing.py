@@ -51,6 +51,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     find_operator_pieces,
     footprints_are_distinct,
     operator_definition_is_consistent,
+    operator_to_intermediate_spec,
     operator_footprint,
     seeded_operators,
     tau_expanded_operator,
@@ -167,6 +168,62 @@ class DefinitionConsistencyTests(unittest.TestCase):
         t2f = t2(a, b, i, j)
         self.assertEqual(tt.indices, t2f.indices)
         self.assertEqual(tt.antisym_groups, t2f.antisym_groups)
+
+
+class OperatorToIntermediateSpecTests(unittest.TestCase):
+    """D7.3.1: bridge a DressedOperator to the emit pipeline's IntermediateSpec."""
+
+    def test_field_mapping(self):
+        # D7.3.1a: name/indices/index_space_sig/definition_terms map directly.
+        for op in seeded_operators():
+            spec = operator_to_intermediate_spec(op)
+            self.assertEqual(spec.name, op.name)
+            self.assertEqual(spec.indices, tuple(op.block))
+            self.assertEqual(spec.index_space_sig, op.space_sig())
+            self.assertEqual(spec.definition_terms, op.definition_terms)
+            self.assertEqual(spec.rank, len(op.block))
+
+    def test_round_trip_faithful(self):
+        # D7.3.1b: the spec is a lossless re-encoding -- its definition_terms
+        # expand to the same primitive multiset as the operator's.
+        from fractions import Fraction
+        from ccgen.optimization.dressed_equation import expand_dressed_term
+
+        def prims(terms):
+            acc: dict = {}
+            for t in terms:
+                for p in expand_dressed_term(t, {}):
+                    k, c = _eri_canonical(p)
+                    if c:
+                        acc[k] = acc.get(k, Fraction(0)) + c
+            return {k: v for k, v in acc.items() if v}
+
+        for op in seeded_operators():
+            spec = operator_to_intermediate_spec(op)
+            self.assertEqual(prims(spec.definition_terms), prims(op.definition_terms),
+                             op.name)
+
+    def test_canonical_fock_drops_only_fov_defterms(self):
+        # D7.3.1c: canonical_fock drops f_ov/f_vo definition terms (runtime-inert
+        # in Planck's canonical-Fock CC) and keeps everything else. Fme collapses
+        # to its t1*oovv piece; Fae/Fmi lose their f_ov*t1 correction; the
+        # f-free / diagonal-f / tau-bearing operators are unchanged.
+        expected_defterm_counts = {  # (general, canonical)
+            "Fme": (2, 1), "Fae": (4, 3), "Fmi": (4, 3),
+            "Wmnij": (4, 4), "Wabef": (4, 4), "Wmbej": (5, 5),
+        }
+        for op in seeded_operators():
+            gen = operator_to_intermediate_spec(op)
+            canon = operator_to_intermediate_spec(op, canonical_fock=True)
+            exp_gen, exp_canon = expected_defterm_counts[op.name]
+            self.assertEqual(len(gen.definition_terms), exp_gen, op.name)
+            self.assertEqual(len(canon.definition_terms), exp_canon, op.name)
+            # no surviving canonical term carries an f_ov factor
+            for t in canon.definition_terms:
+                for f in t.factors:
+                    if f.name == "f" and len(f.indices) == 2:
+                        self.assertNotEqual(
+                            {i.space for i in f.indices}, {"occ", "vir"}, op.name)
 
 
 def _factor_names(key) -> list[str]:
