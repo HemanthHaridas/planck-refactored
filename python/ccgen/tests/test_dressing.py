@@ -52,6 +52,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
     footprints_are_distinct,
     operator_definition_is_consistent,
     operator_to_intermediate_spec,
+    intermediate_dependencies,
     operator_footprint,
     seeded_operators,
     tau_expanded_operator,
@@ -224,6 +225,51 @@ class OperatorToIntermediateSpecTests(unittest.TestCase):
                     if f.name == "f" and len(f.indices) == 2:
                         self.assertNotEqual(
                             {i.space for i in f.indices}, {"occ", "vir"}, op.name)
+
+    def test_usage_annotation(self):
+        # D7.3.1d: usage_count = total INSTANCES (P-branch-consolidated
+        # occurrences summed over manifolds), usage_targets = manifolds present.
+        from ccgen.generate import generate_cc_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        res = {"singles": eqs["singles"], "doubles": eqs["doubles"]}
+        expected = {  # (usage_count, sorted targets)
+            "Fme": (2, ["doubles", "singles"]),
+            "Fae": (1, ["doubles"]),
+            "Fmi": (2, ["doubles", "singles"]),
+            "Wmnij": (1, ["doubles"]),
+            "Wabef": (1, ["doubles"]),
+            "Wmbej": (2, ["doubles", "singles"]),
+        }
+        for op in seeded_operators():
+            spec = operator_to_intermediate_spec(op, residuals_by_manifold=res)
+            exp_count, exp_targets = expected[op.name]
+            self.assertEqual(spec.usage_count, exp_count, op.name)
+            self.assertEqual(sorted(spec.usage_targets), exp_targets, op.name)
+
+    def test_usage_default_zero_without_residuals(self):
+        # Pure-spec case: no residuals -> usage stays at defaults.
+        for op in seeded_operators():
+            spec = operator_to_intermediate_spec(op)
+            self.assertEqual(spec.usage_count, 0)
+            self.assertEqual(spec.usage_targets, ())
+
+    def test_dependencies(self):
+        # D7.3.1e: tau/tau_tilde deps (the emit topo-sort edges) read from the
+        # spec's definition terms, matching op.uses.
+        for op in seeded_operators():
+            spec = operator_to_intermediate_spec(op)
+            self.assertEqual(intermediate_dependencies(spec), frozenset(op.uses),
+                             op.name)
+
+    def test_dependencies_track_canonical_filtering(self):
+        # deps are read from the (possibly filtered) definition terms, so a
+        # canonical spec whose only tau-bearing term survived still reports it;
+        # here canonical filtering removes only f_ov terms, so deps are unchanged.
+        for op in seeded_operators():
+            gen = intermediate_dependencies(operator_to_intermediate_spec(op))
+            canon = intermediate_dependencies(
+                operator_to_intermediate_spec(op, canonical_fock=True))
+            self.assertEqual(gen, canon, op.name)
 
 
 def _factor_names(key) -> list[str]:

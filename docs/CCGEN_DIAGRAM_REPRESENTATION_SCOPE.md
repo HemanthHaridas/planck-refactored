@@ -997,11 +997,18 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     primitive multiset as the operator (all 6). Canonical-Fock filtering (1c):
     `canonical_fock=True` drops `f_ov`/`f_vo` def terms — Fme 2→1 (bare f_ov
     gone, `t1·oovv` kept), Fae/Fmi 4→3 (lose `f_ov·t1`), W's unchanged; no
-    surviving term carries an f_ov factor. Gate
-    `OperatorToIntermediateSpecTests` (3 tests). Remaining: **1d** usage
-    annotation (`usage_count`/`usage_targets` from the P-branch-consolidated
-    occurrences) and **1e** τ/τ̃ dependency surfacing (from `op.uses`) — both
-    pure annotation, ~S.
+    surviving term carries an f_ov factor.
+    **1d+1e LANDED** too — D7.3.1 COMPLETE. 1d (usage): pass
+    `residuals_by_manifold` to fill `usage_count` (total INSTANCES = P-branch-
+    consolidated occurrences summed over manifolds) and `usage_targets` (the
+    manifolds present) — Fme 2/{s,d}, Fae 1/{d}, Fmi 2/{s,d}, Wmnij 1/{d},
+    Wabef 1/{d}, Wmbej 2/{s,d}; defaults to 0/() when residuals omitted. 1e
+    (deps): `intermediate_dependencies(spec)` reads the τ/τ̃ factor names from the
+    spec's definition terms (the emit topo-sort edges D7.3.3 consumes) — {tau}
+    for Wmnij/Wabef, {tau_tilde} for Fae/Fmi, {} for Fme/Wmbej, matching
+    `op.uses`; read from terms so it stays correct under canonical filtering.
+    Gate `OperatorToIntermediateSpecTests` (7 tests: mapping, faithfulness,
+    canonical filtering, usage, usage-default, deps, deps-track-filtering).
   - **D7.3.2** multi-term rewrite (~M; drop `_try_substitute`'s single-term guard),
     driven by the D7.3.0-reconciled occurrence set.
   - **D7.3.3** dependency-ordered emit (~S; topo-sort `uses`, the `factorize_tau` slot).

@@ -1352,7 +1352,11 @@ def seeded_operators() -> list[DressedOperator]:
     ]
 
 
-def operator_to_intermediate_spec(op: DressedOperator, canonical_fock: bool = False):
+def operator_to_intermediate_spec(
+    op: DressedOperator,
+    canonical_fock: bool = False,
+    residuals_by_manifold: dict | None = None,
+):
     """D7.3.1: bridge a recognized ``DressedOperator`` to the ``IntermediateSpec``
     the emit pipeline (``emit_planck_translation_unit(intermediates=...)``)
     materializes into a ``build_<name>`` function.
@@ -1364,15 +1368,18 @@ def operator_to_intermediate_spec(op: DressedOperator, canonical_fock: bool = Fa
     "vvoo") -- so this carries no algebra of its own; correctness is the
     faithfulness gate (the spec expands to the same primitives as the operator).
 
-    ``usage_count`` / ``usage_targets`` are left at their defaults here (0 / ())
-    -- they are per-residual annotation, filled by the usage pass (D7.3.1d) from
-    the P-branch-consolidated occurrences.
-
     ``canonical_fock=True`` drops Brillouin-zero ``f_ov``/``f_vo`` definition
     terms (Planck always feeds a canonical Fock, so those are runtime-inert; see
     ``generate._drops_under_canonical_fock``).  Under it, Fme collapses to its
     ``t1*oovv`` piece and Fae/Fmi lose their ``f_ov*t1`` corrections, while
     diagonal-``f`` and tau/tau_tilde terms survive.
+
+    D7.3.1d -- usage annotation: pass ``residuals_by_manifold`` (``{"singles":
+    terms, "doubles": terms}``) to fill ``usage_count`` (total INSTANCES, i.e.
+    P-branch-consolidated occurrences summed across manifolds -- an operator is
+    materialized once per antisymmetrized instance, not once per branch) and
+    ``usage_targets`` (the manifolds it occurs in).  Omit it to leave usage at
+    the defaults (0 / ()) for the pure-spec case.
     """
     from .intermediates import IntermediateSpec
     from ..generate import _drops_under_canonical_fock
@@ -1381,13 +1388,41 @@ def operator_to_intermediate_spec(op: DressedOperator, canonical_fock: bool = Fa
     if canonical_fock:
         terms = tuple(t for t in terms if not _drops_under_canonical_fock(t))
 
+    usage_count = 0
+    usage_targets: tuple[str, ...] = ()
+    if residuals_by_manifold is not None:
+        targets = []
+        for manifold, res_terms in residuals_by_manifold.items():
+            groups = consolidate_p_branches(
+                op, find_operator_occurrences(op, res_terms))
+            if groups:
+                usage_count += len(groups)
+                targets.append(manifold)
+        usage_targets = tuple(targets)
+
     return IntermediateSpec(
         name=op.name,
         indices=tuple(op.block),
         definition_terms=terms,
-        usage_count=0,
+        usage_count=usage_count,
         index_space_sig=op.space_sig(),
-        usage_targets=(),
+        usage_targets=usage_targets,
+    )
+
+
+def intermediate_dependencies(spec) -> frozenset:
+    """D7.3.1e: the pseudo-amplitude intermediates ``spec`` depends on --
+    the ``tau`` / ``tau_tilde`` factor names appearing in its definition terms.
+
+    These are the edges the emit dependency ordering (D7.3.3) topo-sorts:
+    ``tau`` must be built before Wmnij/Wabef, ``tau_tilde`` before Fae/Fmi.
+    Read from the definition terms (not a separate declaration) so it stays
+    correct after any canonical-Fock / term filtering."""
+    return frozenset(
+        f.name
+        for t in spec.definition_terms
+        for f in t.factors
+        if f.name in (TAU_NAME, TAU_TILDE_NAME)
     )
 
 
