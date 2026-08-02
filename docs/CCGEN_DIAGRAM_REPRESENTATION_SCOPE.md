@@ -953,13 +953,30 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
           upstream: **is the diagram engine's general-Fock `f_ov·t1·t2`
           coefficient correct?** — a diagram-engine correctness question the whole
           canonical-Fock test suite cannot answer.
-      Decision: 0d(i) is BLOCKED on validating the diagram engine's general-Fock
-      `f_ov` terms (needs a general-Fock oracle, e.g. a non-canonical FD-of-energy
-      or a symbolic cross-check), NOT on an Fmi coefficient. 0d(ii) (τ̃-contracted
-      weight) stays principled and ready but is not landed alone (leaves 0d 2/4).
-      Fmi coefficient UNCHANGED. Tree clean (throwaway scripts only).
-    - **0e** exact-partition gate: after 0c/0d, 20 → the 14 uncovered remainder
-      wired as bare terms, tripwire → 0.
+      **(i) DISSOLVED — the `f_ov` terms are runtime-zero in Planck, so the
+      coefficient is irrelevant. Confirmed against the codebase.** Planck only
+      ever passes a CANONICAL Fock to the CC kernels: every CC reference is built
+      by `build_rhf_reference` / `build_uhf_reference` (RHF/UHF only; ROHF is
+      FCI/CASSCF-only, never CC) from the CONVERGED SCF, and
+      `build_canonical_rhf_cc_reference` sets `f_ov(i,a) = (Cᵀ F C)(i, n_occ+a)`
+      where `C` diagonalizes `F` — so `f_ov = 0` by construction (to SCF
+      convergence), a mathematical identity, not an accident. The generated
+      kernels DO contain the `f_ov·t1·t2` terms (e.g.
+      `build/generated/cc/ccsd_planck_generated.cpp:609`), but with `f_ov = 0`
+      they evaluate to exactly zero regardless of coefficient. Verified: of the
+      4 remaining Fmi mismatches, **2 are `f_ov` terms (runtime-zero, exempt)**
+      and only **2 are real** (the `t1t1·t2·v` τ̃ half, 0d-ii). So 0d(i) is NOT a
+      blocker and NOT a diagram-engine bug to chase — the suspect general-Fock
+      coefficient sits on a term Planck never evaluates. The Fmi coefficient
+      stays at the textbook ½ (unchanged).
+      Decision: the exact-partition gate (0e) must EXEMPT `f_ov`-bearing keys
+      (`f` factor with mixed occ/vir indices) — they are physically inert in
+      Planck's canonical-Fock CC. Real remaining assembly work is only 0d-ii
+      (2 τ̃ keys, the principled `tau_tilde_contracted` variant). 0d(i) closed.
+    - **0e** exact-partition gate: after 0c + 0d-ii, the only nonzero-recon
+      mismatches are gone; the gate asserts recon == raw on all NON-`f_ov` keys
+      (the 14 uncovered remainder are wired as bare terms), `f_ov` keys exempt
+      (runtime-zero). Tripwire → 0 on the real (canonical-Fock) partition.
   - **D7.3.1** occurrence→`IntermediateSpec` bridge (~S; `_build_tau_spec` template).
   - **D7.3.2** multi-term rewrite (~M; drop `_try_substitute`'s single-term guard),
     driven by the D7.3.0-reconciled occurrence set.
