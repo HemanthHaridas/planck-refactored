@@ -911,19 +911,34 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
         doubling brings it to the full written weight). Same 4-site mechanism as
         `tau_c`, but τ̃ appears in operator DEFINITIONS not `_rest_variants`, so
         the contracted-variant must be emitted during definition expansion.
-      - **(i) `f·t1` half — STILL the open derivation, and NOT what earlier
-        notes guessed.** Checked: the 2 `f·t1·t2` keys are **Fmi-only** (no Fme
-        contribution after 0c-1+0c-2), so it is NOT a double-counted Fme
-        correction; and term1's `f·t1` has NO antisym factor (`f` is plain
-        rank-2 Fock), so it is NOT the tau_c summed-antisym-contracted pattern
-        either. It is genuinely Fmi's own `½ f·t1` correction landing at raw
-        coeff 1 under the `−P(ij)` antisymmetrizer — a factor between the
-        operator-definition normalization and the diagram convention that has no
-        derivation yet. The grid ×2 works but is a hardcode; **not committed.**
+      - **(i) `f·t1` half — DERIVED (this pass): it is a DEFINITION-COEFFICIENT
+        correction, not a mysterious P-doubling, and not a hardcoded ×2.** The 2
+        `f·t1·t2` keys are Fmi-only (no Fme, no other operator contributes — the
+        raw coeff 1 must come entirely from Fmi's own `f·t1` term), yet ccgen's
+        `_build_fmi` writes that term at **½**, giving ½ ≠ raw 1. Setting Fmi's
+        `f·t1` coefficient to **1** closes both keys, and — verified — leaves
+        0c-1 intact (Fme still derives to ½, Fae unchanged) and Fmi still
+        self-consistent + recognizing (1 singles + 2 doubles): total 18→16, only
+        the 2 τ̃ keys (ii) remaining. **Cross-check vs the authority:** the
+        PySCF-validated `gccsd_reference.py` Fmi is `f_oo + t1·ooov + ½ τ̃·oovv`
+        — it has **NO `f·t1` term at all** (that `−½ t1·Fme`-style correction is a
+        convention choice; the reference folds it elsewhere). So ccgen uses a
+        different-but-equivalent convention (`f·t1` inside Fmi), and in THAT
+        convention the coefficient must be 1, not ½, to reconstruct the raw
+        residual. It is thus a coefficient correction verifiable against raw, not
+        a tuning knob. **Caveat before landing:** because this changes a
+        `_build_fmi` DEFINITION coefficient (not just assembly bookkeeping), it
+        should be gated by the whole-equation NUMERIC oracle (D7.3.5,
+        `gccsd_reference.py` / PySCF), not only the algebraic `verify_dressed_
+        equation` — a definition-coeff change deserves the numeric backstop.
+        Deferred to land WITH (ii) under the numeric gate.
       Decision: NOT partially implementing (ii) alone — a τ̃-only fix adds the
       `tau_tilde_contracted` machinery (4 sites) but leaves 0d incomplete (2 keys
-      of 4), moving the tripwire 18→16 without a milestone. Land (i)+(ii)
-      together once (i)'s rule is derived. Tree clean (throwaway scripts only).
+      of 4), moving the tripwire 18→16 without a milestone. Both (i) and (ii) are
+      now DERIVED — (i) = Fmi `f·t1` coeff ½→1, (ii) = τ̃-contracted weight — so
+      land them TOGETHER (18→16→14) under the D7.3.5 numeric gate, since (i)
+      changes a `_build_fmi` definition coefficient. Tree clean (throwaway
+      scripts only).
     - **0e** exact-partition gate: after 0c/0d, 20 → the 14 uncovered remainder
       wired as bare terms, tripwire → 0.
   - **D7.3.1** occurrence→`IntermediateSpec` bridge (~S; `_build_tau_spec` template).
