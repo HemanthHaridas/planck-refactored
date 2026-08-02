@@ -925,20 +925,39 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
         convention choice; the reference folds it elsewhere). So ccgen uses a
         different-but-equivalent convention (`f·t1` inside Fmi), and in THAT
         convention the coefficient must be 1, not ½, to reconstruct the raw
-        residual. It is thus a coefficient correction verifiable against raw, not
-        a tuning knob. **Caveat before landing:** because this changes a
-        `_build_fmi` DEFINITION coefficient (not just assembly bookkeeping), it
-        should be gated by the whole-equation NUMERIC oracle (D7.3.5,
-        `gccsd_reference.py` / PySCF), not only the algebraic `verify_dressed_
-        equation` — a definition-coeff change deserves the numeric backstop.
-        Deferred to land WITH (ii) under the numeric gate.
-      Decision: NOT partially implementing (ii) alone — a τ̃-only fix adds the
-      `tau_tilde_contracted` machinery (4 sites) but leaves 0d incomplete (2 keys
-      of 4), moving the tripwire 18→16 without a milestone. Both (i) and (ii) are
-      now DERIVED — (i) = Fmi `f·t1` coeff ½→1, (ii) = τ̃-contracted weight — so
-      land them TOGETHER (18→16→14) under the D7.3.5 numeric gate, since (i)
-      changes a `_build_fmi` definition coefficient. Tree clean (throwaway
-      scripts only).
+        residual.
+
+        **(i) OVERTURNED — the ½→1 "fix" contradicts the textbook and rests on
+        an UNVALIDATED general-Fock diagram-raw coefficient. DO NOT change the
+        Fmi coefficient.** Deeper investigation (numeric, via the pyscf venv):
+        - The 2 Fmi `f·t1·t2` over-keys involve `f["ov"]` (`f_ov`).  The
+          PySCF-validated `gccsd_reference.py` / `gccsd.update_amps` residual has
+          **ZERO dependence on `f_ov`** (verified: scaling `f["ov"]` leaves R2
+          bit-identical) — because PySCF uses CANONICAL HF where `f_ov = 0`.  So
+          the numeric oracle is **structurally blind** to these terms and cannot
+          validate the coefficient either way.
+        - Textbook Stanton-Gauss (JCP 94, 4334): `Fmi = f_mi + ½ Σ_e t_i^e f_me +
+          …`, i.e. the `f·t1` coefficient IS **½** (ccgen's `_build_fmi` already
+          matches), and R2 = `−Σ_m t_im^ab F_mj` with **no extra factor**, so the
+          physical `f·t1·t2` contribution is **½, not 1**.  Setting it to 1 would
+          make ccgen DISAGREE with the textbook.
+        - The Fae/Fme `f·t1·t2` family (2 keys) correctly reaches raw 1 as
+          Fme(1)+Fae(½) → via 0c-1's Fme=½ (½+½), which is the two-source ½+½
+          the textbook predicts.  But the Fmi family (2 keys) has Fmi as the ONLY
+          source at ½, with **no second source** to reach the raw's 1.
+        - Conclusion: the diagram raw's coeff-1 on the Fmi `f·t1·t2` keys is
+          **suspect — most likely a diagram-engine artifact on general-Fock
+          `f_ov` terms** (which FCI validation, being canonical, never exercised),
+          NOT an Fmi definition error.  Chasing it by bumping the Fmi coeff would
+          "fix" recognition against a wrong target.  The real open question is
+          upstream: **is the diagram engine's general-Fock `f_ov·t1·t2`
+          coefficient correct?** — a diagram-engine correctness question the whole
+          canonical-Fock test suite cannot answer.
+      Decision: 0d(i) is BLOCKED on validating the diagram engine's general-Fock
+      `f_ov` terms (needs a general-Fock oracle, e.g. a non-canonical FD-of-energy
+      or a symbolic cross-check), NOT on an Fmi coefficient. 0d(ii) (τ̃-contracted
+      weight) stays principled and ready but is not landed alone (leaves 0d 2/4).
+      Fmi coefficient UNCHANGED. Tree clean (throwaway scripts only).
     - **0e** exact-partition gate: after 0c/0d, 20 → the 14 uncovered remainder
       wired as bare terms, tripwire → 0.
   - **D7.3.1** occurrence→`IntermediateSpec` bridge (~S; `_build_tau_spec` template).
