@@ -1622,6 +1622,36 @@ class VParitySignFoldTests(unittest.TestCase):
         self.assertTrue({"Wmnij", "Wabef", "Wmbej"} <= names)
 
 
+class DressOperatorsEmitTests(unittest.TestCase):
+    """D7.3.2d/e: print_cpp_planck(dress_operators=True) emits a valid TU with
+    dependency-ordered build_<name> functions for the recognized intermediates."""
+
+    def test_default_off_is_byte_identical(self):
+        # The load-bearing safety property.
+        from ccgen.generate import print_cpp_planck
+        base = print_cpp_planck("ccsd")
+        off = print_cpp_planck("ccsd", dress_operators=False)
+        self.assertEqual(base, off)
+
+    def test_dress_operators_emits_builders(self):
+        from ccgen.generate import print_cpp_planck
+        tu = print_cpp_planck("ccsd", dress_operators=True)
+        for builder in ("build_tau(", "build_tau_c(", "build_Wmnij(",
+                        "build_Wabef(", "build_Wmbej("):
+            self.assertIn(builder, tu, builder)
+        # differs from the undressed emit
+        self.assertNotEqual(tu, print_cpp_planck("ccsd"))
+
+    def test_intermediate_builders_are_dependency_ordered(self):
+        # D7.3.3: tau/tau_c builders (no deps) precede the W builders that use
+        # them, so there is no forward reference.
+        from ccgen.generate import print_cpp_planck
+        tu = print_cpp_planck("ccsd", dress_operators=True)
+        pos = lambda s: tu.index(s)
+        self.assertLess(pos("build_tau("), pos("build_Wmnij("))
+        self.assertLess(pos("build_tau_c("), pos("build_Wabef("))
+
+
 class EnumerateHypothesesTests(unittest.TestCase):
     """D7.2.3c-0: a single anchor underdetermines the hypothesis, so enumerate
     {block orientation} x {rest as-is, rest-as-tau}. The CORRECT Wmnij*tau

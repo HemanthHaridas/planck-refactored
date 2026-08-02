@@ -809,6 +809,46 @@ def tau_intermediate_spec(usage_count: int, usage_targets: tuple[str, ...]):
     )
 
 
+def tau_contracted_intermediate_spec(usage_count: int,
+                                     usage_targets: tuple[str, ...]):
+    """IntermediateSpec for tau_c (the contracted-tau variant, D7.2.5.2).
+
+    Same shape as tau but its written t1t1 half carries HALF the weight
+    (``written_t1t1_weight / 2``): tau_c is used where tau's bra pair is summed
+    and antisym-contracted into the operator's own v (Wabef), so the v's
+    antisymmetry already supplies the second P(t1t1) permutation.  Definition:
+
+        tau_c(a,b,i,j) = t2(a,b,i,j) + (written_t1t1_weight/2) * t1(a,i) t1(b,j)
+    """
+    from .intermediates import IntermediateSpec
+    from ..indices import make_vir, make_occ
+
+    a = make_vir("a", dummy=True)
+    b = make_vir("b", dummy=True)
+    i = make_occ("i", dummy=True)
+    j = make_occ("j", dummy=True)
+    block = (a, b, i, j)
+
+    t2_term = AlgebraTerm(
+        coeff=TAU_SPEC.t2_coeff,
+        factors=(make_t2(a, b, i, j),),
+        free_indices=block, summed_indices=(), connected=True,
+    )
+    t1t1_term = AlgebraTerm(
+        coeff=TAU_SPEC.written_t1t1_weight / 2,
+        factors=(t1(a, i), t1(b, j)),
+        free_indices=block, summed_indices=(), connected=True,
+    )
+    return IntermediateSpec(
+        name=TAU_CONTRACTED_NAME,
+        indices=block,
+        definition_terms=(t2_term, t1t1_term),
+        usage_count=usage_count,
+        index_space_sig="vvoo",
+        usage_targets=usage_targets,
+    )
+
+
 def factorize_tau_equations(
     equations: dict[str, list[AlgebraTerm]],
 ) -> tuple[dict[str, list[AlgebraTerm]], object | None]:

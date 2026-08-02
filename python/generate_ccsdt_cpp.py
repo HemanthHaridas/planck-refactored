@@ -229,6 +229,14 @@ def main() -> None:
              "are runtime-inert; dropping them shrinks the emitted kernel.",
     )
     parser.add_argument(
+        "--dress-operators",
+        action="store_true",
+        help="(planck emit only) Rewrite the residual to reference the recognized "
+             "CC intermediates (Wmnij/Wabef/Wmbej + tau/tau_c) and emit their "
+             "build_<name> functions, dependency-ordered. Generates against the "
+             "canonical-Fock residual and is exact vs the undressed residual.",
+    )
+    parser.add_argument(
         "--opt-einsum",
         action="store_true",
         help="Use opt_einsum for contraction path optimization (einsum mode).",
@@ -264,7 +272,8 @@ def main() -> None:
     print(f"Generating {method.upper()} equations...", file=sys.stderr)
 
     if args.planck:
-        result = print_cpp_planck(method, **gen_kwargs)
+        result = print_cpp_planck(
+            method, dress_operators=args.dress_operators, **gen_kwargs)
     elif args.pretty:
         result = print_equations(method, **gen_kwargs)
     elif args.pretty_full:
