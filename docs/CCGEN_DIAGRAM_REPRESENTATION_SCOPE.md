@@ -831,6 +831,16 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
   - **D7.3.4** exact algebra gate: `verify_dressed_equation(rewrite(raw), raw)` == 0.
   - **D7.3.5** numeric energy gate vs `gccsd_reference.py` (PySCF-validated numpy
     dressed reference) — no C++ compile needed.
+  - **Oracles (important — `ccsd_dressed_r2` is NOT one).** Both D7.3 gates check
+    against authoritative references that are INDEPENDENT of the stale hand
+    transcription: (1) the raw diagram residual (`generate_cc_equations(
+    engine="diagram")`, FCI-validated through CCSDT) is the algebraic target of
+    `verify_dressed_equation(candidate, raw)`; (2) `gccsd_reference.py` (validated
+    directly against PySCF `gccsd.update_amps` in `test_reference_vs_pyscf.py`) is
+    the numeric target. `ccsd_dressed_r2` is only ever a CANDIDATE passed as the
+    first arg to `verify_dressed_equation` — being stale just makes it a bad
+    candidate (14 mismatches); D7.3 emits from recognition and is never checked
+    against it, so there is no circularity.
   Best first step: **D7.3.0** — it is the one open question (can the sound-but-
   overlapping occurrence set be reconciled to an exact partition?); the rest is
   mechanical once it is.
