@@ -824,6 +824,24 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     term-algebra route hit before; here it is bounded (12 occurrences, 6 operators)
     and gated by the exact oracle, so it is tractable but genuinely ~M, not the
     ~S "apply all rewrites" the original scope implied.
+    - **D7.3.0a + 0b — LANDED.** The overlap has two halves; 0b removes the
+      same-operator half. *0a (DAG):* the τ/τ̃ deps come straight from `op.uses`
+      (Fme≺{Fae,Fmi} via τ̃, τ≺{Wmnij,Wabef}); the Fme-nesting (Fae/Fmi's `−½ f·t1`
+      correction) is structural, needed by 0c not 0b. *0b (P-branch consolidation,
+      `consolidate_p_branches`):* an operator's multiple occurrences are the
+      branches of ONE antisymmetrized dressed term — Fae `P(ab)`, Fmi `P(ij)`,
+      Fme `P(ab)`, Wmbej `P(ij)P(ab)` (verified: each branch is a signed
+      external-pair image of the base on the dressed-canonical key). Consolidation
+      folds the 12 occurrences into 6 per-operator groups `{base, antisym_pairs,
+      branches, cover}`, **lossless** (partitions the occurrences exactly, no
+      loss/dup; covers preserved — gated by `test_p_branch_consolidation`). NOTE:
+      consolidation is STRUCTURAL — on its own it does not change the 24-mismatch
+      count (a group re-expands to the same branches); its value is giving 0c ONE
+      clean handle per operator with the P-structure exposed, and removing the
+      same-operator shared-primitive bookkeeping (Fae&Fae=10, Fmi&Fmi=10,
+      Fme&Fme=4 pairwise overlaps) from 0c's cross-operator problem. Remaining:
+      0c (cross-operator nesting coeffs, the 6+2 `{Fae,Fme}`/`{Wabef,Wmnij}`
+      keys), 0d (Fmi τ̃ tail, 4 keys), 0e (exact-partition gate 24→0).
   - **D7.3.1** occurrence→`IntermediateSpec` bridge (~S; `_build_tau_spec` template).
   - **D7.3.2** multi-term rewrite (~M; drop `_try_substitute`'s single-term guard),
     driven by the D7.3.0-reconciled occurrence set.

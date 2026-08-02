@@ -892,6 +892,91 @@ def find_operator_occurrences(op: "DressedOperator", terms) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# D7.3.0b -- P-branch consolidation
+# ---------------------------------------------------------------------------
+#
+# An operator's multiple occurrences in a residual are the branches of a single
+# antisymmetrized dressed term: e.g. Fae's `+Fae(b,c)t2(a,c,ij)` and
+# `-Fae(a,c)t2(b,c,ij)` are `P(ab)[Fae(b,c)t2(a,c,ij)]`, and Wmbej's four are
+# `P(ij)P(ab)[...]`.  Treating them as independent occurrences double-counts the
+# primitives they share (the non-antisymmetrized common part), the same-operator
+# half of the D7.3.0 over-count.  Consolidation folds the branches back into one
+# `{base term, antisymmetrizer pairs}` so downstream assembly counts the shared
+# part once.
+
+
+def consolidate_p_branches(op: "DressedOperator", occurrences) -> list[dict]:
+    """Group ``occurrences`` of ``op`` into antisymmetrized dressed terms.
+
+    Two occurrences belong to the same P-group iff one is a signed external-pair
+    (i<->j / a<->b) image of the other -- checked on the dressed-canonical key.
+    Each returned group is ``{"base": AlgebraTerm, "antisym_pairs": (...),
+    "branch_signs": {pair-subset: sign}}``: the base branch, the external pairs it
+    is antisymmetrized over (the pairs whose swap maps the base onto ANOTHER
+    branch), and the sign each pair-subset image carries (== the branch coeff /
+    base coeff).  A lone occurrence yields a group with no antisym pairs."""
+    from itertools import chain, combinations
+
+    def powerset(s):
+        return chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
+
+    remaining = list(occurrences)
+    groups: list[dict] = []
+    while remaining:
+        base_occ = remaining.pop(0)
+        base = base_occ["term"]
+        base_key = _dressed_canonical_key(base)
+        all_pairs = _external_antisym_pairs(base)
+        # map every P-image key of base -> the antisym sign of that image
+        image_sign = {}
+        for subset in powerset(all_pairs):
+            img, sgn = _apply_external_swaps(base, subset)
+            image_sign.setdefault(_dressed_canonical_key(img), (subset, sgn))
+        # collect branches (base + any remaining occ that is a P-image)
+        members = [base_occ]
+        active_pairs = set()
+        still = []
+        for occ in remaining:
+            k = _dressed_canonical_key(occ["term"])
+            if k in image_sign and k != base_key:
+                subset, sgn = image_sign[k]
+                # verify the branch's coeff matches the antisym sign
+                if occ["term"].coeff == base.coeff * sgn:
+                    members.append(occ)
+                    active_pairs.update(subset)
+                    continue
+            still.append(occ)
+        remaining = still
+        groups.append({
+            "base": base,
+            "antisym_pairs": tuple(sorted(active_pairs,
+                                          key=lambda p: (p[0].space, p[0].name))),
+            "branches": len(members),
+            "cover": frozenset().union(*(m["cover"] for m in members)),
+        })
+    return groups
+
+
+def _apply_external_swaps(term, pairs):
+    """Return (term with each (x,y) in ``pairs`` exchanged throughout, sign),
+    where sign = (-1)**len(pairs) -- each external-pair swap is a P antisymmetry."""
+    ren = {}
+    for x, y in pairs:
+        ren[x] = y
+        ren[y] = x
+    new_factors = tuple(
+        f.with_indices(tuple(ren.get(i, i) for i in f.indices))
+        for f in term.factors
+    )
+    swapped = AlgebraTerm(
+        coeff=term.coeff, factors=new_factors,
+        free_indices=term.free_indices, summed_indices=term.summed_indices,
+        connected=term.connected,
+    )
+    return swapped, (-1) ** len(pairs)
+
+
+# ---------------------------------------------------------------------------
 # D7.1.3 -- operator fragment set
 # ---------------------------------------------------------------------------
 

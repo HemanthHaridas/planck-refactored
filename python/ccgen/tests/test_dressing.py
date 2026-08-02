@@ -1349,6 +1349,36 @@ class VParitySignFoldTests(unittest.TestCase):
         self.assertEqual(counts, {"Fme": 2, "Fae": 2, "Fmi": 2,
                                   "Wmnij": 1, "Wabef": 1, "Wmbej": 4})
 
+    def test_p_branch_consolidation(self):
+        # D7.3.0b: an operator's occurrences fold into ONE antisymmetrized dressed
+        # term (its P(ij)/P(ab) branches), giving a single per-operator handle for
+        # D7.3.0c's cross-operator coefficient reconciliation. Consolidation is
+        # lossless: it partitions the occurrences (every branch in exactly one
+        # group, no loss/dup) and preserves covers.
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.dressing import (seeded_operators,
+                                                 consolidate_p_branches)
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        expected_pairs = {
+            "Fme": {("a", "b")}, "Fae": {("a", "b")}, "Fmi": {("i", "j")},
+            "Wmnij": set(), "Wabef": set(),
+            "Wmbej": {("i", "j"), ("a", "b")},
+        }
+        for op in seeded_operators():
+            occs = find_operator_occurrences(op, eqs["doubles"])
+            groups = consolidate_p_branches(op, occs)
+            # exactly one group per operator here (all its occurrences are one
+            # antisymmetrized term)
+            self.assertEqual(len(groups), 1, op.name)
+            g = groups[0]
+            # lossless partition: branch count == occurrence count
+            self.assertEqual(g["branches"], len(occs), op.name)
+            pairs = {(x.name, y.name) for x, y in g["antisym_pairs"]}
+            self.assertEqual(pairs, expected_pairs[op.name], op.name)
+            # cover preserved
+            occ_cover = frozenset().union(*(o["cover"] for o in occs))
+            self.assertEqual(g["cover"], occ_cover, op.name)
+
 
 class EnumerateHypothesesTests(unittest.TestCase):
     """D7.2.3c-0: a single anchor underdetermines the hypothesis, so enumerate
