@@ -850,11 +850,29 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
       scale is entirely determined by the overlap, and ½ is the unique value
       across all of them. Applying it drops the over-count **24 → 20** (the 4
       Fme/Fae keys close). Gate `test_nesting_scale_reconciliation`.
-    - **Remaining: 0c-2** — the `{Wabef,Wmnij}` 2-key τ-overlap: 2 shared
-      `t1t1·t2·v` / `t1t1t1t1·v` keys where Wmnij(`tau`, wt 2) and Wabef(`tau_c`,
-      wt 1) double-count their shared t1t1-expansion (3/8 vs ¼, ¾ vs ½). NOT a
-      per-operator scale (Wmnij=½ breaks its other keys) — needs per-key overlap
-      subtraction on exactly those 2 keys.
+    - **0c-2 — the `{Wabef,Wmnij}` τ-overlap. DIAGNOSED with a PRINCIPLED rule
+      (ready to implement).** Wabef & Wmnij share **4** primitive keys; **2 are
+      genuinely additive** (`Wa=Wn`, the τ-t2 pieces — `raw = Wa+Wn`, correct)
+      and **2 over-count** (`t1t1·t2·v` raw ¼ vs ⅛+¼=3/8; `t1t1t1t1·v` raw ½ vs
+      ¼+½=¾). Ruled out: NOT a per-operator scale (Wmnij's shared keys need
+      inconsistent ½/1 and its own keys need 1); NOT re-weighting either operator
+      (both are individually CORRECT — Wmnij's τ is `τ(a,b,k,l)`, a,b EXTERNAL →
+      correctly weight 2; Wabef's is `τ_c`, correctly weight 1). The over-count is
+      purely two correct operators landing t1t1 on ONE shared primitive that the
+      raw residual writes ONCE. **Principled rule (derived, not raw-peeking):** on
+      the 2 over keys the excess equals EXACTLY Wabef's contribution, and
+      `raw = Wmnij` — i.e. the external-τ operator (Wmnij, weight-2 τ) OWNS the
+      shared t1t1 primitive, and the contracted-τ operator (Wabef, τ_c) has it
+      already folded via its lower weight and must NOT re-add it. So 0c-2 =
+      cross-operator per-primitive dependency subtraction on the t1t1-half shared
+      keys, keyed on τ(weight-2, external) vs τ_c(weight-1, contracted). The 2
+      genuinely-additive keys are left untouched (the rule fires only where one
+      operator's τ is weight-2-external and the other's is τ_c). Verified:
+      subtracting Wabef's contribution on exactly the 2 over keys → 20→18. This is
+      the same dependency-order-subtraction principle as 0c-1, applied at the
+      primitive level. Implementation is the remaining work (intricate but the
+      rule is exact); these 2 keys are also 2 of the hand `ccsd_dressed_r2`'s own
+      τ-weight mismatches, so fixing them here is strictly ahead of the hand form.
     - **0d — Fmi correction tail (4 keys, ratio ½). DIAGNOSED, NOT a simple
       tau_c reuse.** Both Fmi occurrences summed still under-count 4 keys by ½ —
       genuinely a weight under-count in Fmi's CORRECTION terms, not a missing
