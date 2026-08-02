@@ -899,6 +899,31 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
       So 0d = (i) derive the Fock-correction P-doubling + (ii) extend the tau_c
       contracted-weight to τ̃. Deferred pending the principled rule for (i) rather
       than a grid-searched ×2.
+
+      **0d — deeper investigation (this pass).** Confirmed the numeric fix
+      (term1 ×2 AND τ̃ t1t1 at weight 2 → 0 bad of 10), and separated the two
+      halves cleanly + ruled out the tempting cross-op explanation:
+      - **(ii) τ̃ half — PRINCIPLED, ready.** τ̃ t1t1 at weight 2 closes its 2
+        `t1t1·t2·v` keys, leaving exactly the 2 `f·t1·t2`. This is the genuine
+        tau_c-analog: Fmi's `½ τ̃(e,f,i,n) v(m,n,e,f)` has the τ̃ pair `(e,f)`
+        summed and antisym-contracted into `v` — the Wabef condition — so it
+        needs a `tau_tilde_contracted` variant (τ̃ starts at half, the contracted
+        doubling brings it to the full written weight). Same 4-site mechanism as
+        `tau_c`, but τ̃ appears in operator DEFINITIONS not `_rest_variants`, so
+        the contracted-variant must be emitted during definition expansion.
+      - **(i) `f·t1` half — STILL the open derivation, and NOT what earlier
+        notes guessed.** Checked: the 2 `f·t1·t2` keys are **Fmi-only** (no Fme
+        contribution after 0c-1+0c-2), so it is NOT a double-counted Fme
+        correction; and term1's `f·t1` has NO antisym factor (`f` is plain
+        rank-2 Fock), so it is NOT the tau_c summed-antisym-contracted pattern
+        either. It is genuinely Fmi's own `½ f·t1` correction landing at raw
+        coeff 1 under the `−P(ij)` antisymmetrizer — a factor between the
+        operator-definition normalization and the diagram convention that has no
+        derivation yet. The grid ×2 works but is a hardcode; **not committed.**
+      Decision: NOT partially implementing (ii) alone — a τ̃-only fix adds the
+      `tau_tilde_contracted` machinery (4 sites) but leaves 0d incomplete (2 keys
+      of 4), moving the tripwire 18→16 without a milestone. Land (i)+(ii)
+      together once (i)'s rule is derived. Tree clean (throwaway scripts only).
     - **0e** exact-partition gate: after 0c/0d, 20 → the 14 uncovered remainder
       wired as bare terms, tripwire → 0.
   - **D7.3.1** occurrence→`IntermediateSpec` bridge (~S; `_build_tau_spec` template).
