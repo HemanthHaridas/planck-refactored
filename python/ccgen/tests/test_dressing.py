@@ -1410,6 +1410,40 @@ class VParitySignFoldTests(unittest.TestCase):
                    if recon.get(k, Fraction(0)) != raw.get(k, Fraction(0)))
         self.assertEqual(mism, 20)
 
+    def test_tau_overlap_correction(self):
+        # D7.3.0c-2: the {Wabef,Wmnij} tau/tau_c overlap. On a primitive shared
+        # between the external-tau operator (Wmnij, weight 2) and the contracted
+        # tau_c operator (Wabef, weight 1), the t1t1-half is over-counted -- the
+        # tau contribution is exactly DOUBLE the tau_c one and raw == tau, so the
+        # external-tau operator owns it and the tau_c duplicate is subtracted. The
+        # genuinely-additive shared keys (ratio 1) are untouched. Applying 0c-1 +
+        # 0c-2 drops the over-count 24 -> 18 (leaving 14 uncovered + 4 Fmi/0d).
+        from fractions import Fraction
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.dressing import (seeded_operators,
+            reconcile_operator_scales, tau_overlap_corrections,
+            _operator_unit_expansion)
+        from ccgen.optimization.dressed_equation import raw_multiset
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        terms = eqs["doubles"]
+        ops = seeded_operators()
+        scale = reconcile_operator_scales(ops, terms)
+        corr = tau_overlap_corrections(ops, terms, scale)
+        # exactly 2 over keys, each subtracting the tau_c duplicate (negative)
+        self.assertEqual(len(corr), 2)
+        self.assertTrue(all(v < 0 for v in corr.values()))
+        raw = raw_multiset(terms)
+        units = {op.name: _operator_unit_expansion(op, terms) for op in ops}
+        recon: dict = {}
+        for n, u in units.items():
+            for k, c in u.items():
+                recon[k] = recon.get(k, Fraction(0)) + c * scale[n]
+        for k, d in corr.items():
+            recon[k] = recon.get(k, Fraction(0)) + d
+        mism = sum(1 for k in set(recon) | set(raw)
+                   if recon.get(k, Fraction(0)) != raw.get(k, Fraction(0)))
+        self.assertEqual(mism, 18)
+
 
 class EnumerateHypothesesTests(unittest.TestCase):
     """D7.2.3c-0: a single anchor underdetermines the hypothesis, so enumerate

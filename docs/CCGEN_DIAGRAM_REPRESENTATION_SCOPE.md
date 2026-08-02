@@ -850,8 +850,18 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
       scale is entirely determined by the overlap, and ½ is the unique value
       across all of them. Applying it drops the over-count **24 → 20** (the 4
       Fme/Fae keys close). Gate `test_nesting_scale_reconciliation`.
-    - **0c-2 — the `{Wabef,Wmnij}` τ-overlap. DIAGNOSED with a PRINCIPLED rule
-      (ready to implement).** Wabef & Wmnij share **4** primitive keys; **2 are
+    - **0c-2 — the `{Wabef,Wmnij}` τ-overlap. LANDED.** `tau_overlap_corrections`
+      returns per-primitive corrections: for a key shared between a τ-operator
+      (`_operator_tau_role` == `tau`, weight 2) and a τ_c-operator (`tau_c`,
+      weight 1), it fires exactly when the τ contribution == 2× the τ_c one (the
+      t1t1-half doubling; the ratio-1 τ-t2 additive keys are left alone) and
+      subtracts the redundant τ_c contribution (the external-τ operator owns the
+      shared primitive). Structural, derived from the rest-factor role, not
+      hardcoded. 2 corrections (−⅛, −¼) → over-count **20→18** (leaving 14
+      uncovered + 4 Fmi/0d). Gate `test_tau_overlap_correction`. Original
+      diagnosis retained below.
+    - **0c-2 (diagnosis, retained).** DIAGNOSED with a PRINCIPLED rule
+      (ready to implement). Wabef & Wmnij share **4** primitive keys; **2 are
       genuinely additive** (`Wa=Wn`, the τ-t2 pieces — `raw = Wa+Wn`, correct)
       and **2 over-count** (`t1t1·t2·v` raw ¼ vs ⅛+¼=3/8; `t1t1t1t1·v` raw ½ vs
       ¼+½=¾). Ruled out: NOT a per-operator scale (Wmnij's shared keys need

@@ -1043,6 +1043,57 @@ def _is_nesting_root(name, operators):
     return True
 
 
+def _operator_tau_role(op, terms):
+    """Which pseudo-amplitude an operator's occurrences carry: 'tau' (external,
+    written weight 2), 'tau_c' (contracted, weight 1), or None.  Structural --
+    read from the recognized occurrence rest factors, not the operator name."""
+    for occ in find_operator_occurrences(op, terms):
+        for f in occ["term"].factors[1:]:
+            if f.name in (TAU_NAME, TAU_CONTRACTED_NAME):
+                return f.name
+    return None
+
+
+def tau_overlap_corrections(operators, terms, scales=None):
+    """D7.3.0c-2: per-primitive corrections for the τ/τ_c cross-operator overlap.
+
+    A primitive shared between a τ-operator (Wmnij, external τ, written weight 2)
+    and a τ_c-operator (Wabef, contracted, weight 1) is over-counted when both
+    land their t1t1 half on it: the raw residual writes that shared primitive
+    ONCE, but both dressed terms produce it.  On such a key the τ-operator's
+    contribution is exactly DOUBLE the τ_c-operator's (the weight-2 vs weight-1
+    t1t1 half), and ``raw == τ-operator's contribution`` -- i.e. the external-τ
+    operator OWNS the shared primitive and the τ_c operator's duplicate must be
+    removed.  Genuinely-additive shared keys (the τ-t2 pieces, where the two
+    contributions are EQUAL, ratio 1) are left untouched.
+
+    Returns ``{key: delta}`` to ADD to the assembled recon (delta is negative --
+    it subtracts the redundant τ_c contribution).  Derived, not raw-peeking: the
+    fired keys are exactly those with τ/τ_c ratio == 2, and the subtracted amount
+    is the τ_c operator's own contribution."""
+    scales = scales or {op.name: Fraction(1) for op in operators}
+    tau_expand: dict[tuple, Fraction] = {}
+    tauc_expand: dict[tuple, Fraction] = {}
+    for op in operators:
+        role = _operator_tau_role(op, terms)
+        if role is None:
+            continue
+        target = tau_expand if role == TAU_NAME else tauc_expand
+        s = scales.get(op.name, Fraction(1))
+        for key, coeff in _operator_unit_expansion(op, terms).items():
+            target[key] = target.get(key, Fraction(0)) + coeff * s
+
+    corrections: dict[tuple, Fraction] = {}
+    for key, tau_c in tauc_expand.items():
+        tau_v = tau_expand.get(key, Fraction(0))
+        if tau_c == 0 or tau_v == 0:
+            continue
+        # fire only on the doubling (t1t1-half) overlap, ratio exactly 2
+        if tau_v == 2 * tau_c:
+            corrections[key] = -tau_c   # remove the redundant tau_c duplicate
+    return corrections
+
+
 def _apply_external_swaps(term, pairs):
     """Return (term with each (x,y) in ``pairs`` exchanged throughout, sign),
     where sign = (-1)**len(pairs) -- each external-pair swap is a P antisymmetry."""
