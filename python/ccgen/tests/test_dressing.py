@@ -1444,6 +1444,50 @@ class VParitySignFoldTests(unittest.TestCase):
                    if recon.get(k, Fraction(0)) != raw.get(k, Fraction(0)))
         self.assertEqual(mism, 18)
 
+    def test_canonical_fock_recon_is_exact_partition(self):
+        # D7.3.0 payoff: Planck feeds only a CANONICAL Fock (f_ov=0 by
+        # construction), so the assembly target is the canonical-Fock diagram
+        # residual. Against it, 0c-1 + 0c-2 reconstruct EXACTLY -- zero
+        # non-uncovered mismatches -- with no 0d work needed: the former 4 real
+        # general-Fock mismatches were all f_ov-entangled (2 direct f_ov terms,
+        # 2 tau~ t1t1*t2*v keys) and dissolve in canonical mode. The only residual
+        # mismatches are the legitimate uncovered remainder (stay as bare terms)
+        # plus dressed-only f_ov keys the operators still expand but the canonical
+        # raw drops -- both physically inert.
+        from fractions import Fraction
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.dressing import (seeded_operators,
+            reconcile_operator_scales, tau_overlap_corrections,
+            _operator_unit_expansion)
+        from ccgen.optimization.dressed_equation import raw_multiset
+
+        def has_fov(key):
+            for name, idx in key[0]:
+                spaces = {s[0] for s in idx}
+                if name == "f" and spaces == {"occ", "vir"}:
+                    return True
+            return False
+
+        eqs = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
+        terms = eqs["doubles"]
+        ops = seeded_operators()
+        scale = reconcile_operator_scales(ops, terms)
+        corr = tau_overlap_corrections(ops, terms, scale)
+        raw = raw_multiset(terms)
+        units = {op.name: _operator_unit_expansion(op, terms) for op in ops}
+        recon: dict = {}
+        for n, u in units.items():
+            for k, c in u.items():
+                recon[k] = recon.get(k, Fraction(0)) + c * scale[n]
+        for k, d in corr.items():
+            recon[k] = recon.get(k, Fraction(0)) + d
+        # non-uncovered, non-f_ov mismatches must be ZERO: the exact partition
+        real = [k for k in set(recon) | set(raw)
+                if recon.get(k, Fraction(0)) != raw.get(k, Fraction(0))
+                and recon.get(k, Fraction(0)) != 0
+                and not has_fov(k)]
+        self.assertEqual(real, [])
+
 
 class EnumerateHypothesesTests(unittest.TestCase):
     """D7.2.3c-0: a single anchor underdetermines the hypothesis, so enumerate

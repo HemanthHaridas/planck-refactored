@@ -969,14 +969,26 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
       blocker and NOT a diagram-engine bug to chase — the suspect general-Fock
       coefficient sits on a term Planck never evaluates. The Fmi coefficient
       stays at the textbook ½ (unchanged).
-      Decision: the exact-partition gate (0e) must EXEMPT `f_ov`-bearing keys
-      (`f` factor with mixed occ/vir indices) — they are physically inert in
-      Planck's canonical-Fock CC. Real remaining assembly work is only 0d-ii
-      (2 τ̃ keys, the principled `tau_tilde_contracted` variant). 0d(i) closed.
-    - **0e** exact-partition gate: after 0c + 0d-ii, the only nonzero-recon
-      mismatches are gone; the gate asserts recon == raw on all NON-`f_ov` keys
-      (the 14 uncovered remainder are wired as bare terms), `f_ov` keys exempt
-      (runtime-zero). Tripwire → 0 on the real (canonical-Fock) partition.
+      **0d — FULLY RESOLVED by generating against the canonical-Fock residual
+      (`canonical_fock=True`), no `tau_tilde_contracted` machinery needed.**
+      The emit gap (the Planck emit script never passed `canonical_fock`) is
+      fixed: `python/generate_ccsdt_cpp.py` now has `--canonical-fock`, and the
+      generator's existing (tested) `canonical_fock` mode drops the Brillouin-zero
+      `f_ov`/`f_vo` terms. When the DIAGRAM RAW is generated canonical
+      (`generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)`),
+      0c-1 + 0c-2 reconstruct it **EXACTLY** — verified `0` non-uncovered
+      non-`f_ov` mismatches (gate `test_canonical_fock_recon_is_exact_partition`).
+      Both former "real" mismatches dissolve: the 2 `f_ov` terms are dropped, and
+      the 2 τ̃ `t1t1·t2·v` keys (the presumed 0d-ii) were general-Fock artifacts
+      entangled with the `f_ov` terms — they come out correct in canonical mode.
+      So 0d(i) AND 0d(ii) are both closed by the canonical constraint; the Fmi
+      coefficient stays textbook ½ (unchanged) and no new τ̃ variant is required.
+    - **0e** exact-partition gate: against the CANONICAL diagram raw, recon == raw
+      on every covered key already (0 real mismatches, above). The only residual
+      diffs are (a) the legitimate uncovered remainder — wired as bare terms — and
+      (b) dressed-only `f_ov` keys the operators still expand but the canonical raw
+      drops (physically inert; also removed if the operator definitions are
+      generated canonical). Effectively DONE for the canonical target.
   - **D7.3.1** occurrence→`IntermediateSpec` bridge (~S; `_build_tau_spec` template).
   - **D7.3.2** multi-term rewrite (~M; drop `_try_substitute`'s single-term guard),
     driven by the D7.3.0-reconciled occurrence set.
