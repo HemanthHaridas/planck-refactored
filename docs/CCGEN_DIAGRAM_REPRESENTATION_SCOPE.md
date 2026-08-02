@@ -854,9 +854,25 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
       `t1t1·t2·v` / `t1t1t1t1·v` keys where Wmnij(`tau`, wt 2) and Wabef(`tau_c`,
       wt 1) double-count their shared t1t1-expansion (3/8 vs ¼, ¾ vs ½). NOT a
       per-operator scale (Wmnij=½ breaks its other keys) — needs per-key overlap
-      subtraction on exactly those 2 keys. **0d** Fmi τ̃ tail (4 keys, ratio ½,
-      the τ̃ analog of Wabef's tau_c). **0e** exact-partition gate: 20 → the 14
-      uncovered remainder wired as bare terms, tripwire → 0.
+      subtraction on exactly those 2 keys.
+    - **0d — Fmi correction tail (4 keys, ratio ½). DIAGNOSED, NOT a simple
+      tau_c reuse.** Both Fmi occurrences summed still under-count 4 keys by ½ —
+      genuinely a weight under-count in Fmi's CORRECTION terms, not a missing
+      antisym partner (W3-closure makes it worse: 10/10 bad), not a per-operator
+      scale (Fmi keys are mixed ½/1, so a global scale breaks the ok ones). It
+      splits into TWO under-weighted correction terms:
+      (i) Fmi's `½ f·t1` Fock-correction → the 2 `f·t1·t2` keys, fixed by ×2 on
+          that term (found by grid, needs a PRINCIPLED derivation — likely the
+          P(ij) antisymmetrizer doubling, not a hardcode);
+      (ii) Fmi's τ̃ t1t1 half → the 2 `t1t1·t2·v` keys, at ½ vs raw 1 — the
+          tau_c-analog for τ̃ (summed-antisym-contracted t1t1 pair, exactly the
+          Wabef condition but on the τ̃ path), NOT the term's outer coeff (it's
+          inside `expand_dressed_term`'s τ̃ `written_t1t1_weight/2`).
+      So 0d = (i) derive the Fock-correction P-doubling + (ii) extend the tau_c
+      contracted-weight to τ̃. Deferred pending the principled rule for (i) rather
+      than a grid-searched ×2.
+    - **0e** exact-partition gate: after 0c/0d, 20 → the 14 uncovered remainder
+      wired as bare terms, tripwire → 0.
   - **D7.3.1** occurrence→`IntermediateSpec` bridge (~S; `_build_tau_spec` template).
   - **D7.3.2** multi-term rewrite (~M; drop `_try_substitute`'s single-term guard),
     driven by the D7.3.0-reconciled occurrence set.
