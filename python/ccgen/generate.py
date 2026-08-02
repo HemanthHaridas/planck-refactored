@@ -907,6 +907,82 @@ def print_cpp_blas(
     )
 
 
+def _dress_operator_equations(eqs):
+    """D7.3.2d: rewrite each manifold of ``eqs`` into its dressed form (recognized
+    W/F operators + tau/tau_c pseudo-amplitudes + bare remainder) and return
+    ``(dressed_eqs, ordered_intermediates)``.
+
+    The intermediates list is dependency-ordered (D7.3.3): the tau/tau_c
+    pseudo-amplitude specs come first, then the operator specs that reference
+    them, so the emitter materializes ``build_tau``/``build_tau_c`` before
+    ``build_Wmnij`` etc. -- no forward reference.
+
+    Assumes ``eqs`` was generated with ``canonical_fock=True`` (Planck feeds only
+    a canonical Fock; f_ov terms are runtime-inert -- see cc_canonical_fock_only).
+    """
+    from .optimization.dressing import (
+        seeded_operators,
+        assemble_dressed_equation,
+        operator_to_intermediate_spec,
+        intermediate_dependencies,
+        TAU_NAME,
+        TAU_CONTRACTED_NAME,
+    )
+    from .optimization.tau import (
+        tau_intermediate_spec,
+        tau_contracted_intermediate_spec,
+    )
+    from .optimization.intermediates import IntermediateSpec
+
+    ops = seeded_operators()
+    dressed = {m: assemble_dressed_equation(ops, terms) for m, terms in eqs.items()}
+
+    # which intermediates does the dressed equation actually reference?
+    primitives = {"t1", "t2", "v", "f"}
+    referenced: set = set()
+    for terms in dressed.values():
+        for t in terms:
+            for f in t.factors:
+                if f.name not in primitives:
+                    referenced.add(f.name)
+
+    # usage: count references and record manifolds, per referenced intermediate
+    def usage(name):
+        count = 0
+        targets = []
+        for m, terms in dressed.items():
+            n = sum(1 for t in terms for f in t.factors if f.name == name)
+            if n:
+                count += n
+                targets.append(m)
+        return count, tuple(targets)
+
+    pseudo_specs = []
+    if TAU_NAME in referenced:
+        pseudo_specs.append(tau_intermediate_spec(*usage(TAU_NAME)))
+    if TAU_CONTRACTED_NAME in referenced:
+        pseudo_specs.append(tau_contracted_intermediate_spec(*usage(TAU_CONTRACTED_NAME)))
+
+    op_specs = []
+    for op in ops:
+        if op.name in referenced:
+            c, tg = usage(op.name)
+            spec = operator_to_intermediate_spec(op, canonical_fock=True)
+            op_specs.append(
+                IntermediateSpec(
+                    name=spec.name, indices=spec.indices,
+                    definition_terms=spec.definition_terms,
+                    usage_count=c, index_space_sig=spec.index_space_sig,
+                    usage_targets=tg,
+                )
+            )
+
+    # pseudo (tau/tau_c) have no operator deps -> first; operators after.
+    # (An operator's intermediate_dependencies are all pseudo, so this two-level
+    # order is a valid topological sort of the whole DAG.)
+    return dressed, pseudo_specs + op_specs
+
+
 def print_cpp_planck(
     method: str,
     include_intermediates: bool = False,
@@ -914,9 +990,31 @@ def print_cpp_planck(
     intermediate_memory_budget_bytes: int | None = None,
     intermediate_peak_memory_budget_bytes: int | None = None,
     factorize_tau: bool = False,
+    dress_operators: bool = False,
     **kwargs: Any,
 ) -> str:
-    """Generate Planck-compatible C++ tensor kernels."""
+    """Generate Planck-compatible C++ tensor kernels.
+
+    ``dress_operators=True`` (D7.3) rewrites the residual to reference the
+    recognized CC intermediates (Wmnij/Wabef/Wmbej + tau/tau_c) and emits their
+    ``build_<name>`` functions, dependency-ordered.  It generates against the
+    CANONICAL-Fock residual (Planck feeds only a canonical Fock; see
+    cc_canonical_fock_only) and is exact vs the undressed residual.  Supersedes
+    ``factorize_tau`` (which only collapses tau); the two are mutually exclusive.
+    Default off -> byte-identical to the undressed emit.
+    """
+    if dress_operators:
+        # Dressing requires the diagram engine + canonical Fock; override any
+        # conflicting caller kwargs rather than error on a duplicate.
+        dress_kwargs = dict(kwargs)
+        dress_kwargs.pop("engine", None)
+        dress_kwargs.pop("canonical_fock", None)
+        eqs = generate_cc_equations(
+            method, engine="diagram", canonical_fock=True, **dress_kwargs)
+        eqs, intermediates = _dress_operator_equations(eqs)
+        return emit_planck_translation_unit(
+            method, eqs, intermediates=intermediates or None)
+
     eqs = generate_cc_equations(method, **kwargs)
 
     tau_spec = None

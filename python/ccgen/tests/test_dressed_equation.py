@@ -116,6 +116,87 @@ class TranscriptionWipTests(unittest.TestCase):
         ok, _diff = verify_dressed_equation(ccsd_dressed_r2(), d)
         self.assertFalse(ok)  # WIP marker -- flip when transcription lands
 
+    def test_r2_mismatch_decomposition_against_diagram(self) -> None:
+        # V0.1/V0.2 tripwire: pins WHY ccsd_dressed_r2 fails to verify against the
+        # FCI-validated diagram engine, decomposed into its two independent
+        # causes so a fix to one is not masked by the other.  Flip / tighten each
+        # count as the corresponding fix lands.
+        #
+        #   (A) STALE TRANSCRIPTION (dominant): ccsd_dressed_r2 is an incomplete
+        #       hand transcription -- it carries terms the raw residual does not
+        #       (dressed-only) and omits terms the raw residual has (raw-only).
+        #       These have NO t1t1-pair / ratio-2 signature; they are just wrong
+        #       or missing terms.  Fix = re-transcribe (or auto-generate) R2.
+        #   (B) TAU WRITTEN-WEIGHT (secondary): keys with a t1t1 pair contracted
+        #       into a same-space antisym `v` come out 2x (or 1/2x) because
+        #       TAU_SPEC.written_t1t1_weight=2 is only correct for an EXTERNAL tau
+        #       pair; a summed-and-antisym-contracted pair needs weight 1 (the
+        #       Wabef diagnosis, D7.2.5.2 W1).
+        from ccgen.generate import generate_cc_equations
+
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        raw = raw_multiset(eqs["doubles"])
+        full = dressed_multiset(ccsd_dressed_r2())
+        ok, diff = verify_dressed_equation(ccsd_dressed_r2(), eqs["doubles"])
+        self.assertFalse(ok)
+
+        tau_weight = struct = 0
+        for k in diff:
+            shape = [name for name, _ in k[0]]
+            r = raw.get(k, Fraction(0))
+            f = full.get(k, Fraction(0))
+            ratio = (f / r) if r != 0 else None
+            if shape.count("t1") >= 2 and ratio in (2, Fraction(1, 2)):
+                tau_weight += 1
+            else:
+                struct += 1
+
+        # Current pinned state (diagram engine): 7 tau-weight + 7 structural.
+        # (Was 7 + 19 = 26; the D7.2.5.2 Fmi fix to _eri_canonical -- fold
+        # bra<->ket AFTER dummy relabel, not before -- cut the structural class
+        # 19->7 by making name-independent v orientations compare equal.)
+        # These are the numbers a further fix must drive to 0; assert the split
+        # so a partial fix that only closes one class is visibly reflected here.
+        self.assertEqual(tau_weight + struct, len(diff))
+        self.assertEqual(len(diff), 14)
+        self.assertEqual(tau_weight, 7)
+        self.assertEqual(struct, 7)
+
+    def test_recognition_recon_overcounts_shared_primitives(self) -> None:
+        # D7.3.0 tripwire: D7.2 recognition is SOUND per-occurrence but the 12
+        # occurrences are NOT a partition -- naive summation of every occurrence's
+        # expansion over-counts primitives shared between overlapping operator
+        # definitions (Fae's -1/2 t1*Fme correction vs Fme itself, both tau pieces
+        # of Wabef/Wmnij, Fmi's own corrections). Pins the current 24-mismatch
+        # state so D7.3.0's coefficient reconciliation drives it to 0.
+        from fractions import Fraction
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.dressing import (seeded_operators,
+                                                  find_operator_occurrences)
+        from ccgen.optimization.dressed_equation import expand_dressed_term
+
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        raw = raw_multiset(eqs["doubles"])
+        recon: dict[tuple, Fraction] = {}
+        for op in seeded_operators():
+            for occ in find_operator_occurrences(op, eqs["doubles"]):
+                for prim in expand_dressed_term(occ["term"], {op.name: op}):
+                    key, coeff = self._eri_key_coeff(prim)
+                    if coeff:
+                        recon[key] = recon.get(key, Fraction(0)) + coeff
+
+        mismatched = [k for k in set(recon) | set(raw)
+                      if recon.get(k, Fraction(0)) != raw.get(k, Fraction(0))]
+        # Sound recognition would give 0; the over-count gives 24 today. This is
+        # the D7.3.0 gap, NOT a recognition bug -- flip to assertEqual(...,0) when
+        # D7.3.0 coefficient reconciliation lands.
+        self.assertEqual(len(mismatched), 24)
+
+    @staticmethod
+    def _eri_key_coeff(term):
+        from ccgen.optimization.dressing import _eri_canonical
+        return _eri_canonical(term)
+
 
 class GeneratedResidualIntegrityTests(unittest.TestCase):
     """The generated residual has proper (non-degenerate) contractions.

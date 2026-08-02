@@ -30,7 +30,7 @@ from ..indices import Index, make_occ, make_vir
 from ..project import AlgebraTerm
 from ..tensors import Tensor, reindex_tensors
 from ..tensors import t1 as _t1, t2 as _t2, v as _v, f as _f
-from .tau import TAU_NAME, tau
+from .tau import TAU_NAME, TAU_CONTRACTED_NAME, tau
 from .dressing import (
     TAU_TILDE_NAME,
     DressedOperator,
@@ -118,7 +118,8 @@ def expand_dressed_term(
                 changed = True
                 continue
             has_pseudo = any(
-                f.name in (TAU_NAME, TAU_TILDE_NAME) for f in t.factors
+                f.name in (TAU_NAME, TAU_TILDE_NAME, TAU_CONTRACTED_NAME)
+                for f in t.factors
             )
             if has_pseudo:
                 pieces = _expand_pseudo_amplitude_in_term(t)

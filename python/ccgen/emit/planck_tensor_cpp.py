@@ -173,7 +173,10 @@ def _map_eri_tensor(tensor: Tensor | LoweredTensorFactor) -> tuple[int, str]:
     )
 
 
-def _map_factor(tensor: Tensor | LoweredTensorFactor) -> tuple[int, str]:
+def _map_factor(
+    tensor: Tensor | LoweredTensorFactor,
+    intermediate_names: frozenset[str] | None = None,
+) -> tuple[int, str]:
     tensor_obj = _source_tensor(tensor)
     indices = _access_indices(tensor)
     amplitude_match = re.fullmatch(r"t(\d+)", tensor_obj.name)
@@ -232,9 +235,17 @@ def _map_factor(tensor: Tensor | LoweredTensorFactor) -> tuple[int, str]:
         left, right = indices
         return 1, f"(({left.name} == {right.name}) ? 1.0 : 0.0)"
 
-    # Extracted intermediates (CSE "W_*" and the tau pseudo-amplitude) are
-    # materialized locals built once per kernel; reference them by name.
-    if tensor_obj.name.startswith("W_") or tensor_obj.name == "tau":
+    # Extracted intermediates -- CSE "W_*", the tau/tau_c pseudo-amplitudes, and
+    # (D7.3) the recognized dressed operators (Wmnij/Wabef/Wmbej/Fae/...) -- are
+    # materialized locals built once per kernel; reference them by name.  Any
+    # factor named in ``intermediate_names`` (the specs passed to the kernel)
+    # resolves as such a local; the W_/tau prefixes stay as a fallback for the
+    # CSE path that does not thread the name set.
+    if (
+        tensor_obj.name.startswith("W_")
+        or tensor_obj.name == "tau"
+        or (intermediate_names is not None and tensor_obj.name in intermediate_names)
+    ):
         return 1, _target_expr(tensor_obj.name, indices)
 
     raise NotImplementedError(f"Unsupported tensor factor {tensor_obj!r}")
@@ -244,8 +255,12 @@ def emit_planck_term(
     term: AlgebraTerm | RestrictedClosedShellTerm,
     lhs: str = "result",
     indent: int = 4,
+    intermediate_names: frozenset[str] | None = None,
 ) -> str:
-    """Emit a single algebraic term using Planck tensor accessors."""
+    """Emit a single algebraic term using Planck tensor accessors.
+
+    ``intermediate_names`` lists the materialized intermediates in scope (the
+    kernel's specs) so their factors resolve as local references (D7.3)."""
     pad = " " * indent
     lines: list[str] = []
 
@@ -268,7 +283,7 @@ def emit_planck_term(
     sign = 1
     factor_exprs: list[str] = []
     for factor in factors:
-        factor_sign, factor_expr = _map_factor(factor)
+        factor_sign, factor_expr = _map_factor(factor, intermediate_names)
         sign *= factor_sign
         factor_exprs.append(factor_expr)
 
@@ -391,16 +406,23 @@ def _emit_kernel(
     lines.append(f"    // {target} kernel ({len(terms)} terms)")
     emitted_terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm]
     emitted_terms = lowered_terms if lowered_terms else terms
+    intermediate_names = frozenset(intermediate_map)
     for i, term in enumerate(emitted_terms, start=1):
         lines.append(f"    // Term {i}")
-        lines.append(emit_planck_term(term, lhs="result", indent=4))
+        lines.append(emit_planck_term(
+            term, lhs="result", indent=4,
+            intermediate_names=intermediate_names))
         lines.append("")
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
 
 
-def _emit_intermediate_builder(method: str, spec: IntermediateSpec) -> str:
+def _emit_intermediate_builder(
+    method: str,
+    spec: IntermediateSpec,
+    sibling_names: frozenset[str] | None = None,
+) -> str:
     result_type = _tensor_type(spec.rank)
     amplitude_type = _amplitude_type(method)
     denominator_type = _denominator_type(method)
@@ -431,7 +453,8 @@ def _emit_intermediate_builder(method: str, spec: IntermediateSpec) -> str:
     )
     for i, term in enumerate(lowered_definition_terms, start=1):
         lines.append(f"    // Definition term {i}")
-        lines.append(emit_planck_term(term, lhs="result", indent=4))
+        lines.append(emit_planck_term(
+            term, lhs="result", indent=4, intermediate_names=sibling_names))
         lines.append("")
     lines.append("    return result;")
     lines.append("}")
@@ -504,10 +527,11 @@ def emit_planck_translation_unit(
     lines.append("")
 
     if intermediates:
+        sibling_names = frozenset(spec.name for spec in intermediates)
         for spec in intermediates:
             if not _is_supported_tensor_rank(spec.rank):
                 continue
-            lines.append(_emit_intermediate_builder(method, spec))
+            lines.append(_emit_intermediate_builder(method, spec, sibling_names))
             lines.append("")
 
     for target, terms in equations.items():
