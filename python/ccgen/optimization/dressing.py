@@ -1094,6 +1094,62 @@ def tau_overlap_corrections(operators, terms, scales=None):
     return corrections
 
 
+def assemble_dressed_equation(operators, terms):
+    """D7.3.2: assemble one manifold's dressed residual as a list of AlgebraTerms
+    that re-expands to ``terms`` (the raw residual) exactly.
+
+    Result = bare + dressed:
+    - **bare**: every raw term whose ERI-canonical key is NOT in any operator
+      occurrence's EXPANSION FOOTPRINT (the keys the ``W*rest`` term actually
+      produces).  NOTE: this uses the expansion footprint, NOT the occurrence
+      ``cover`` -- the cover was antisym-closed for dedup (D7.2.5.2 W3) and
+      over-claims antisym-partner keys the single written ``W*rest`` form does not
+      emit; partitioning on ``cover`` would drop those partner terms.
+    - **dressed**: each recognized ``W*rest`` occurrence term, scaled by the
+      per-operator nesting scale (0c-1, ``reconcile_operator_scales``), plus the
+      τ/τ_c overlap corrections (0c-2, ``tau_overlap_corrections``) materialized
+      as scaled copies of their raw representative term.
+
+    Exact to SCF convergence for a canonical-Fock residual (the only kind Planck
+    feeds CC -- see ``cc_canonical_fock_only``): ``f_ov`` keys, being runtime
+    zero, are not special-cased here; generate ``terms`` with
+    ``canonical_fock=True`` so they are absent from both sides."""
+    from .dressed_equation import expand_dressed_term
+
+    scale = reconcile_operator_scales(operators, terms)
+    corr = tau_overlap_corrections(operators, terms, scale)
+
+    footprint: set = set()
+    dressed: list = []
+    for op in operators:
+        for occ in find_operator_occurrences(op, terms):
+            t = occ["term"]
+            s = scale[op.name]
+            dressed.append(t.scaled(s) if s != 1 else t)
+            for prim in expand_dressed_term(t, {op.name: op}):
+                key, coeff = _eri_canonical(prim)
+                if coeff:
+                    footprint.add(key)
+
+    bare = [t for t in terms if _eri_canonical(t)[0] not in footprint]
+
+    # Materialize each 0c-2 correction as a scaled copy of a raw term carrying the
+    # same canonical key (delta = scale * raw_coeff, so the copy contributes delta).
+    raw_by_key: dict = {}
+    for t in terms:
+        raw_by_key.setdefault(_eri_canonical(t)[0], t)
+    corr_terms: list = []
+    for key, delta in corr.items():
+        rep = raw_by_key.get(key)
+        if rep is None:
+            continue  # nothing to anchor the correction on (shouldn't happen)
+        rc = _eri_canonical(rep)[1]
+        if rc:
+            corr_terms.append(rep.scaled(delta / rc))
+
+    return bare + dressed + corr_terms
+
+
 def _apply_external_swaps(term, pairs):
     """Return (term with each (x,y) in ``pairs`` exchanged throughout, sign),
     where sign = (-1)**len(pairs) -- each external-pair swap is a P antisymmetry."""

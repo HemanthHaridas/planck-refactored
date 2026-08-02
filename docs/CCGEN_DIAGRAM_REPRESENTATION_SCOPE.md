@@ -1009,8 +1009,31 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
     `op.uses`; read from terms so it stays correct under canonical filtering.
     Gate `OperatorToIntermediateSpecTests` (7 tests: mapping, faithfulness,
     canonical filtering, usage, usage-default, deps, deps-track-filtering).
-  - **D7.3.2** multi-term rewrite (~M; drop `_try_substitute`'s single-term guard),
-    driven by the D7.3.0-reconciled occurrence set.
+  - **D7.3.2** dressed-equation assembly. **SCOPE CORRECTED + 3.2a/3.2c LANDED.**
+    The earlier "extend `_try_substitute`'s single-term guard" framing was WRONG:
+    `_try_substitute` is CSE subfactor-DETECTION, but D7.2 recognition already
+    produced finished `W*rest` occurrence terms + covers — assembly consumes
+    those, it does not re-detect. `assemble_dressed_equation(operators, terms)`
+    (in `dressing.py`) returns the dressed manifold = bare + dressed + corrections:
+    - **bare** = raw terms whose canonical key is NOT in any occurrence's
+      EXPANSION FOOTPRINT (the keys `W*rest` actually expands to). Load-bearing
+      subtlety: partition on the expansion footprint, NOT the occurrence `cover` —
+      the cover was antisym-closed for dedup (W3) and over-claims partner keys the
+      single written form does not emit, so partitioning on `cover` drops 5 Wabef
+      antisym-partner terms (found + fixed this pass).
+    - **dressed** = each `W*rest` term × the 0c-1 nesting scale.
+    - **corrections** = the 0c-2 τ/τ_c overlap deltas, materialized as scaled
+      copies of the raw term carrying the same key (delta = scale·raw_coeff).
+    Verified: `dressed_multiset(assemble_dressed_equation(...)) == raw` EXACTLY on
+    all non-`f_ov` keys (canonical mode), 38 terms, references Wmnij/Wabef/Wmbej/
+    τ/τ_c + bare primitives. Gate `test_assemble_dressed_equation_reproduces_raw`.
+    De-risk done: the emit lowering (`lower_equations_restricted_closed_shell`)
+    ACCEPTS operator/τ factors as intermediate references (no error), so 3.2d
+    stays ~M. Remaining: **3.2d** wire a `dress_operators` mode into
+    `print_cpp_planck` (parallel to `factorize_tau`, default off → byte-identical),
+    passing the assembled eqs + the D7.3.1 `IntermediateSpec`s; **3.2e** the
+    topo-ordered intermediates list (τ before W/F, via `intermediate_dependencies`
+    — really D7.3.3).
   - **D7.3.3** dependency-ordered emit (~S; topo-sort `uses`, the `factorize_tau` slot).
   - **D7.3.4** exact algebra gate: `verify_dressed_equation(rewrite(raw), raw)` == 0.
   - **D7.3.5** numeric energy gate vs `gccsd_reference.py` (PySCF-validated numpy

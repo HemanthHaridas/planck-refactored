@@ -1591,6 +1591,36 @@ class VParitySignFoldTests(unittest.TestCase):
                 and not has_fov(k)]
         self.assertEqual(real, [])
 
+    def test_assemble_dressed_equation_reproduces_raw(self):
+        # D7.3.2a+c: assemble_dressed_equation builds the dressed residual (bare
+        # uncovered terms + scaled W*rest occurrence terms + 0c-2 corrections) and
+        # it re-expands to the canonical raw residual EXACTLY.
+        from fractions import Fraction
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.dressing import (seeded_operators,
+                                                 assemble_dressed_equation)
+        from ccgen.optimization.dressed_equation import (raw_multiset,
+                                                         dressed_multiset)
+
+        def has_fov(key):
+            for name, idx in key[0]:
+                if name == "f" and {s[0] for s in idx} == {"occ", "vir"}:
+                    return True
+            return False
+
+        eqs = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
+        terms = eqs["doubles"]
+        raw = raw_multiset(terms)
+        assembled = assemble_dressed_equation(seeded_operators(), terms)
+        dm = dressed_multiset(assembled)
+        mism = [k for k in set(dm) | set(raw)
+                if dm.get(k, Fraction(0)) != raw.get(k, Fraction(0))
+                and not has_fov(k)]
+        self.assertEqual(mism, [])
+        # the dressed equation actually references the recognized operators
+        names = {f.name for t in assembled for f in t.factors}
+        self.assertTrue({"Wmnij", "Wabef", "Wmbej"} <= names)
+
 
 class EnumerateHypothesesTests(unittest.TestCase):
     """D7.2.3c-0: a single anchor underdetermines the hypothesis, so enumerate
