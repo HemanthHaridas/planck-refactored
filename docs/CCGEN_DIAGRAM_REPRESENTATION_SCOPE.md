@@ -795,11 +795,45 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
       `t1t1·t2·v`, the `test_r2_mismatch_decomposition_against_diagram` tripwire)
       is retained for whoever eventually does the D7.3 whole-equation verify, but
       it is explicitly NOT blocking Wabef.
-- **D7.3 — factorization + emit (~M).** Rewrite the residual to reference the
-  recognized operators, order the intermediate DAG (`Wmnij` needs `τ`), emit
-  through the existing builder path. *Gate:* the dressed residual expanded via
-  `verify_dressed_equation` equals the undressed residual exactly, AND the
-  emitted kernel reaches the same energy (reuse the AR3.3 / FCI harness).
+- **D7.3 — factorization + emit (~M–L, rescoped after D7.3.0 investigation).**
+  Rewrite the residual to reference the recognized operators, order the
+  intermediate DAG (`Wmnij` needs `τ`), emit through the existing builder path.
+  *Gate:* the dressed residual expanded via `verify_dressed_equation` equals the
+  undressed residual exactly, AND the emitted kernel reaches the same energy.
+  - **D7.3.0 — occurrence assembly / coefficient reconciliation (INVESTIGATED —
+    this is the real linchpin, larger than the original "just rewrite" framing).**
+    D7.2 recognition is sound (each occurrence's primitives are all present in raw
+    with `|coeff| ≤ raw`), but the occurrence set is **NOT a partition**: naive
+    summation of all 12 occurrences' expansions gives **24 mismatches** vs raw
+    (worse than the hand `ccsd_dressed_r2`'s 14). Measured cause — dressed
+    operators' definitions OVERLAP, so a shared primitive is over-counted:
+    - `{Fae, Fme}` (6 keys, recon 3/2× raw): Fae's Stanton-Gauss `−½ t1·Fme`
+      correction shares `t1·t2·v` primitives with the independently-recognized
+      Fme occurrence.
+    - `{Wabef, Wmnij}` (2 keys, 3/2×): shared `t2t2v`/`t1t1t2v` from both τ pieces.
+    - `Fmi` (4 keys, 1/2× — under-counted): its `½ f·t1` and `½ τ̃·v` corrections.
+    - 9 keys covered by NO occurrence — the genuine un-dressed remainder (stay
+      bare). 44 of 59 covered keys are shared across up to 4 occurrences.
+    **Key finding:** on a Fae/Fme-shared key the HAND `ccsd_dressed_r2` gives the
+    correct raw coeff (1) while recognition-recon gives 3/2 — so the correct
+    dressed form resolves the overlap through JOINTLY-tuned coefficients, which
+    recognition (choosing each occurrence's coeff locally) breaks. So D7.3.0 must
+    select/reconcile occurrence coefficients so their summed expansion equals raw
+    EXACTLY — driven by the `verify_dressed_equation` diff (24→0), the same
+    tripwire pattern. This is the exact-cover-with-coefficients problem the flat
+    term-algebra route hit before; here it is bounded (12 occurrences, 6 operators)
+    and gated by the exact oracle, so it is tractable but genuinely ~M, not the
+    ~S "apply all rewrites" the original scope implied.
+  - **D7.3.1** occurrence→`IntermediateSpec` bridge (~S; `_build_tau_spec` template).
+  - **D7.3.2** multi-term rewrite (~M; drop `_try_substitute`'s single-term guard),
+    driven by the D7.3.0-reconciled occurrence set.
+  - **D7.3.3** dependency-ordered emit (~S; topo-sort `uses`, the `factorize_tau` slot).
+  - **D7.3.4** exact algebra gate: `verify_dressed_equation(rewrite(raw), raw)` == 0.
+  - **D7.3.5** numeric energy gate vs `gccsd_reference.py` (PySCF-validated numpy
+    dressed reference) — no C++ compile needed.
+  Best first step: **D7.3.0** — it is the one open question (can the sound-but-
+  overlapping occurrence set be reconciled to an exact partition?); the rest is
+  mechanical once it is.
 - **D7.4 — scaling assertion (~S, the honest check).** The dressed residual must
   actually drop the FLOP exponent, not merely rename subexpressions — else the
   pass was cosmetic. Assert the dressed leading cost < undressed.

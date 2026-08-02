@@ -162,6 +162,41 @@ class TranscriptionWipTests(unittest.TestCase):
         self.assertEqual(tau_weight, 7)
         self.assertEqual(struct, 7)
 
+    def test_recognition_recon_overcounts_shared_primitives(self) -> None:
+        # D7.3.0 tripwire: D7.2 recognition is SOUND per-occurrence but the 12
+        # occurrences are NOT a partition -- naive summation of every occurrence's
+        # expansion over-counts primitives shared between overlapping operator
+        # definitions (Fae's -1/2 t1*Fme correction vs Fme itself, both tau pieces
+        # of Wabef/Wmnij, Fmi's own corrections). Pins the current 24-mismatch
+        # state so D7.3.0's coefficient reconciliation drives it to 0.
+        from fractions import Fraction
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.dressing import (seeded_operators,
+                                                  find_operator_occurrences)
+        from ccgen.optimization.dressed_equation import expand_dressed_term
+
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        raw = raw_multiset(eqs["doubles"])
+        recon: dict[tuple, Fraction] = {}
+        for op in seeded_operators():
+            for occ in find_operator_occurrences(op, eqs["doubles"]):
+                for prim in expand_dressed_term(occ["term"], {op.name: op}):
+                    key, coeff = self._eri_key_coeff(prim)
+                    if coeff:
+                        recon[key] = recon.get(key, Fraction(0)) + coeff
+
+        mismatched = [k for k in set(recon) | set(raw)
+                      if recon.get(k, Fraction(0)) != raw.get(k, Fraction(0))]
+        # Sound recognition would give 0; the over-count gives 24 today. This is
+        # the D7.3.0 gap, NOT a recognition bug -- flip to assertEqual(...,0) when
+        # D7.3.0 coefficient reconciliation lands.
+        self.assertEqual(len(mismatched), 24)
+
+    @staticmethod
+    def _eri_key_coeff(term):
+        from ccgen.optimization.dressing import _eri_canonical
+        return _eri_canonical(term)
+
 
 class GeneratedResidualIntegrityTests(unittest.TestCase):
     """The generated residual has proper (non-degenerate) contractions.
