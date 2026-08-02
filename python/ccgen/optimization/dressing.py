@@ -957,6 +957,92 @@ def consolidate_p_branches(op: "DressedOperator", occurrences) -> list[dict]:
     return groups
 
 
+def _operator_unit_expansion(op, terms):
+    """The summed ERI-canonical primitive contribution of ALL of ``op``'s
+    occurrences in ``terms``, at their recognized coefficients (scale 1)."""
+    from .dressed_equation import expand_dressed_term
+    acc: dict[tuple, Fraction] = {}
+    for occ in find_operator_occurrences(op, terms):
+        for prim in expand_dressed_term(occ["term"], {op.name: op}):
+            key, coeff = _eri_canonical(prim)
+            if coeff:
+                acc[key] = acc.get(key, Fraction(0)) + coeff
+    return acc
+
+
+def reconcile_operator_scales(operators, terms):
+    """D7.3.0c-1: per-operator coefficient scales that remove the CROSS-operator
+    over-count from nesting (Fme nested in Fae/Fmi).
+
+    Operators that nest inside another (Fme, via the enclosing operator's
+    ``-1/2 f*t1`` = Fme-correction) are over-counted when recognized standalone:
+    the enclosing operator already accounts for part of the shared primitive.  The
+    correct scale for a nested operator is the COMPLEMENT -- what the residual
+    needs beyond what the outer operators (at their already-fixed scales) supply.
+
+    Processes operators in dependency order (roots at scale 1, then inners), and
+    for each inner operator solves ``scale = (raw - already_accounted) / own`` on
+    every key it touches.  Self-calibrating (the 1/2 for Fme is derived, not
+    hardcoded); requires a single consistent scale across the operator's keys
+    (raises if inconsistent -- that would mean the nesting model is wrong for it).
+    Returns ``{op_name: Fraction}``.  Only 0c-1 (Fme nesting); the residual
+    {Wabef,Wmnij} tau-overlap (0c-2) and Fmi tau-tilde tail (0d) are separate."""
+    from .dressed_equation import raw_multiset
+    raw = raw_multiset(terms)
+    units = {op.name: _operator_unit_expansion(op, terms) for op in operators}
+    order = _operator_dependency_order(operators)  # roots first, inners last
+    scale = {op.name: Fraction(1) for op in operators}
+    for name in order:
+        if _is_nesting_root(name, operators):
+            continue  # roots stay at 1
+        needed: set[Fraction] = set()
+        for key, own in units[name].items():
+            if own == 0:
+                continue
+            accounted = sum(scale[o] * units[o].get(key, Fraction(0))
+                            for o in units if o != name)
+            needed.add((raw.get(key, Fraction(0)) - accounted) / own)
+        if len(needed) > 1:
+            raise ValueError(
+                f"operator {name} has no single consistent nesting scale: {needed}"
+            )
+        if needed:
+            scale[name] = next(iter(needed))
+    return scale
+
+
+def _operator_dependency_order(operators):
+    """Operator names outer(root)->inner, so an inner operator's scale is solved
+    after the operators that enclose it are fixed.  Fme is inner to Fae/Fmi (they
+    carry the -1/2 f*t1 Fme-correction); everything else is a root here."""
+    roots = [op.name for op in operators if _is_nesting_root(op.name, operators)]
+    inners = [op.name for op in operators
+              if not _is_nesting_root(op.name, operators)]
+    return roots + inners
+
+
+def _is_nesting_root(name, operators):
+    """True unless ``name`` is nested inside another operator's definition as a
+    same-block correction (currently only Fme, whose bare f(occ,vir) block appears
+    as a `-1/2 f*t1`-style correction term inside Fae and Fmi)."""
+    by_name = {op.name: op for op in operators}
+    target = by_name.get(name)
+    if target is None or target.rank != 2:
+        return True  # only rank-2 Fock ops can nest as an f-correction
+    tgt_bare = target.definition_terms[0]
+    if not (len(tgt_bare.factors) == 1 and tgt_bare.factors[0].name == "f"):
+        return True
+    tgt_spaces = tuple(i.space for i in tgt_bare.factors[0].indices)
+    for op in operators:
+        if op.name == name:
+            continue
+        for t in op.definition_terms:
+            fs = [f for f in t.factors if f.name == "f" and len(t.factors) > 1]
+            if any(tuple(i.space for i in f.indices) == tgt_spaces for f in fs):
+                return False  # name's bare block appears as a correction elsewhere
+    return True
+
+
 def _apply_external_swaps(term, pairs):
     """Return (term with each (x,y) in ``pairs`` exchanged throughout, sign),
     where sign = (-1)**len(pairs) -- each external-pair swap is a P antisymmetry."""

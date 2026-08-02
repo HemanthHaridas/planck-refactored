@@ -1379,6 +1379,37 @@ class VParitySignFoldTests(unittest.TestCase):
             occ_cover = frozenset().union(*(o["cover"] for o in occs))
             self.assertEqual(g["cover"], occ_cover, op.name)
 
+    def test_nesting_scale_reconciliation(self):
+        # D7.3.0c-1: the Fme nesting scale is DERIVED (not hardcoded) as the
+        # complement of the -1/2 f*t1 Fme-correction that Fae/Fmi already carry.
+        # Fme is over-counted standalone; its correct scale is 1/2, uniquely
+        # consistent across all its keys. Applying it drops the recognition-recon
+        # over-count 24 -> 20 (the 4 Fme/Fae keys close; the 4 Fmi tau~-tail keys
+        # (0d) and 2 Wabef/Wmnij tau-overlap keys (0c-2) plus the 14 uncovered
+        # remainder stay).
+        from fractions import Fraction
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.dressing import (seeded_operators,
+            reconcile_operator_scales, _operator_unit_expansion)
+        from ccgen.optimization.dressed_equation import raw_multiset
+        eqs = generate_cc_equations("ccsd", engine="diagram")
+        terms = eqs["doubles"]
+        ops = seeded_operators()
+        scale = reconcile_operator_scales(ops, terms)
+        self.assertEqual(scale["Fme"], Fraction(1, 2))
+        for n in ("Fae", "Fmi", "Wmnij", "Wabef", "Wmbej"):
+            self.assertEqual(scale[n], Fraction(1), n)
+        # applying the scales reduces the over-count 24 -> 20
+        raw = raw_multiset(terms)
+        units = {op.name: _operator_unit_expansion(op, terms) for op in ops}
+        recon: dict = {}
+        for n, u in units.items():
+            for k, c in u.items():
+                recon[k] = recon.get(k, Fraction(0)) + c * scale[n]
+        mism = sum(1 for k in set(recon) | set(raw)
+                   if recon.get(k, Fraction(0)) != raw.get(k, Fraction(0)))
+        self.assertEqual(mism, 20)
+
 
 class EnumerateHypothesesTests(unittest.TestCase):
     """D7.2.3c-0: a single anchor underdetermines the hypothesis, so enumerate

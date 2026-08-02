@@ -839,9 +839,24 @@ of the A2/A3 stack is a separate deferred decision — doc-only retirement now.)
       count (a group re-expands to the same branches); its value is giving 0c ONE
       clean handle per operator with the P-structure exposed, and removing the
       same-operator shared-primitive bookkeeping (Fae&Fae=10, Fmi&Fmi=10,
-      Fme&Fme=4 pairwise overlaps) from 0c's cross-operator problem. Remaining:
-      0c (cross-operator nesting coeffs, the 6+2 `{Fae,Fme}`/`{Wabef,Wmnij}`
-      keys), 0d (Fmi τ̃ tail, 4 keys), 0e (exact-partition gate 24→0).
+      Fme&Fme=4 pairwise overlaps) from 0c's cross-operator problem.
+    - **D7.3.0c-1 — Fme nesting scale. LANDED.** `reconcile_operator_scales`
+      DERIVES (not hardcodes) each operator's coefficient scale by dependency-
+      order subtraction: roots (Fae/Fmi/Wmnij/Wabef/Wmbej) at 1, then the nested
+      Fme solved as `(raw − already_accounted)/own` over its keys — a unique,
+      consistent **½** (the complement of the `−½ f·t1` Fme-correction Fae/Fmi
+      carry; `_is_nesting_root` detects the nesting structurally from the
+      definitions). Fme has NO own-only keys — every Fme key is shared — so its
+      scale is entirely determined by the overlap, and ½ is the unique value
+      across all of them. Applying it drops the over-count **24 → 20** (the 4
+      Fme/Fae keys close). Gate `test_nesting_scale_reconciliation`.
+    - **Remaining: 0c-2** — the `{Wabef,Wmnij}` 2-key τ-overlap: 2 shared
+      `t1t1·t2·v` / `t1t1t1t1·v` keys where Wmnij(`tau`, wt 2) and Wabef(`tau_c`,
+      wt 1) double-count their shared t1t1-expansion (3/8 vs ¼, ¾ vs ½). NOT a
+      per-operator scale (Wmnij=½ breaks its other keys) — needs per-key overlap
+      subtraction on exactly those 2 keys. **0d** Fmi τ̃ tail (4 keys, ratio ½,
+      the τ̃ analog of Wabef's tau_c). **0e** exact-partition gate: 20 → the 14
+      uncovered remainder wired as bare terms, tripwire → 0.
   - **D7.3.1** occurrence→`IntermediateSpec` bridge (~S; `_build_tau_spec` template).
   - **D7.3.2** multi-term rewrite (~M; drop `_try_substitute`'s single-term guard),
     driven by the D7.3.0-reconciled occurrence set.
