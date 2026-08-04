@@ -33,6 +33,7 @@ from ccgen.optimization.factorize import (  # noqa: E402
     node_key,
     footprint_inventory,
     manifold_operators,
+    factored_builder_steps,
     node_to_term,
     operator_bytes,
     operator_density,
@@ -787,6 +788,81 @@ class CostModelTests(unittest.TestCase):
             self.assertEqual(
                 proc.returncode, 0,
                 f"memory-budgeted CCSDT failed to compile:\n{proc.stderr[-2000:]}",
+            )
+        finally:
+            os.unlink(src)
+
+    # ── M3.0: builder-body factorization ───────────────────────────
+
+    def test_builder_steps_cut_flat_cost(self):
+        """M3.0 gate: factoring an operator's own definition drops its peak
+        loop-nest cost below the flat n-ary emit (10/24 CCSDT builders improve);
+        each step's cost equals the operator's best contraction tree."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        improved = 0
+        for op in ops:
+            flat = nary_cost(op.definition_terms[0]).total
+            steps = factored_builder_steps(op)
+            tree = max(nary_cost(t).total for _, t in steps)
+            self.assertLessEqual(tree, flat)  # never worse
+            if tree < flat:
+                improved += 1
+        self.assertGreaterEqual(improved, 8)  # measured 10
+
+    def test_builder_steps_are_exact(self):
+        """M3.0: the factored steps preserve the algebra — the non-scratch leaves
+        equal the definition's factors, and every definition summed index is
+        consumed exactly once across the steps."""
+        from collections import Counter
+        ops = manifold_operators(self.triples, include_reuse=False)
+        for op in ops:
+            defn = op.definition_terms[0]
+            steps = factored_builder_steps(op)
+            leaves, consumed = Counter(), Counter()
+            for lhs, t in steps:
+                for f in t.factors:
+                    if not f.name.startswith("X"):
+                        leaves[f.name] += 1
+                consumed.update(i.name for i in t.summed_indices)
+            self.assertEqual(leaves, Counter(f.name for f in defn.factors))
+            self.assertEqual(set(consumed),
+                             {i.name for i in defn.summed_indices})
+            self.assertTrue(all(v == 1 for v in consumed.values()))
+
+    def test_factored_builder_tu_compiles(self):
+        """M3.0 gate: the TU with factored builder bodies compiles (scratch
+        tensors declared and typed correctly)."""
+        import os
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present")
+
+        from ccgen.optimization.factorize import emit_factorized_translation_unit
+        code = emit_factorized_translation_unit("ccsdt", factor_builder_bodies=True)
+        self.assertTrue(re.search(r"Tensor\dD X\d\(", code))  # scratch emitted
+        with tempfile.NamedTemporaryFile(
+            suffix=".cpp", mode="w", delete=False
+        ) as fh:
+            fh.write(code)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=300,
+            )
+            self.assertEqual(
+                proc.returncode, 0,
+                f"factored-builder CCSDT failed to compile:\n{proc.stderr[-2000:]}",
             )
         finally:
             os.unlink(src)

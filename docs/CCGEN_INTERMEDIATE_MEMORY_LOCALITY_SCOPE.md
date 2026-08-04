@@ -243,15 +243,18 @@ shape its locality** — you cannot tile a loop nest that should not exist. B3
 
 Sub-steps:
 
-- **M3.0 — builder-body factorization (~M, the load-bearing layer).** Apply the
-  existing tree search to each operator's DEFINITION term: emit the `build_W` as
-  the sequence of pairwise contractions its `best_contraction_tree` gives (an
-  inner intermediate + a final assembly), not one flat nest. Reuses
-  `best_contraction_tree_full` / `rewrite_term_factorized` — the same machinery,
-  now applied one level down (the operator's body instead of the residual term).
-  *Gate:* every emitted builder's peak loop-nest exponent equals its
-  `best_contraction_tree` cost (the 3/8 over-cost builders drop to their factored
-  cost); the TU still compiles; re-expansion exact (E0.1 at the builder level).
+- **M3.0 — builder-body factorization (~M, the load-bearing layer). LANDED.**
+  `factored_builder_steps(spec)` decomposes an operator's definition into the
+  pairwise contraction steps its best tree gives (inner scratch tensors + final
+  assembly); `emit_factorized_translation_unit(factor_builder_bodies=True)` (via
+  `_emit_intermediate_builder(factor_body=)`) emits them as scratch-step loops
+  instead of one flat n-ary nest. Measured on CCSDT: **10 of 24 builders improve**
+  — `W_t2t2v_oooovv` total-degree o⁹→o⁷, `W_t1t1t1v_ooov` o⁷→o⁵, `W_t1t2v_oooovv`
+  o⁵v³→o⁵v². Scratch is ~0.3× the operator's own footprint, so it is a FLOP win at
+  no peak-memory cost. Default off → byte-identical flat emit. *Gate (in
+  `CostModelTests`):* `test_builder_steps_cut_flat_cost` (≥8 improve, none worse),
+  `test_builder_steps_are_exact` (leaves + summed-index consumption preserved),
+  `test_factored_builder_tu_compiles` (scratch tensors declared/typed, compiles).
 - **M3.1 — stride metric (~S).** A function scoring a builder's innermost-loop
   access pattern: for each factor accessor, is the innermost loop index its
   last (unit-stride) axis, a strided axis, or absent (loop-invariant, hoistable)?

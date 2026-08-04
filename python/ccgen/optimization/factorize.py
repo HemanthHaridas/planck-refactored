@@ -789,6 +789,7 @@ def emit_factorized_translation_unit(method: str, engine: str = "diagram",
                                      top_k=None, savings_fraction=None,
                                      max_operator_bytes=None,
                                      memory_budget_bytes=None,
+                                     factor_builder_bodies=False,
                                      n_occ=30, n_vir=100):
     """E0.3 + E1 + M1 + M2: emit a Planck C++ TU whose kernels reference the
     factorizer's derived operators, with a `build_W` for each KEPT operator.
@@ -828,7 +829,67 @@ def emit_factorized_translation_unit(method: str, engine: str = "diagram",
         m: [rewrite_term_factorized(t, keep_operators=keep_names) for t in terms]
         for m, terms in eqs.items()
     }
-    return emit_planck_translation_unit(method, rewritten, intermediates=kept)
+    return emit_planck_translation_unit(
+        method, rewritten, intermediates=kept,
+        factor_builder_bodies=factor_builder_bodies)
+
+
+# ── M3.0: factor an operator's OWN builder body ────────────────────
+
+
+def factored_builder_steps(spec, scratch_prefix="X"):
+    """M3.0: decompose an operator's definition term into the sequence of
+    pairwise contraction steps its best tree gives, instead of one flat n-ary
+    nest. Returns [(lhs_name, AlgebraTerm), ...] in build order (inner scratch
+    first, `result` last); the final step's lhs is "result".
+
+    A scratch step's term references its child steps by scratch name (a
+    `Tensor(scratch_name, block)` factor), so `emit_planck_term` with those
+    names in scope emits nested contractions writing to scratch tensors. A
+    single-step (≤2-factor) definition returns one ("result", def) step — no
+    change from the flat emit.
+
+    The builder body was emitted flat by E0.3's `_complete_definition_summation`;
+    this factors it. Measured: cuts 3/8 top CCSDT builders from over-cost to
+    their tree cost (e.g. W_t1t2v_oooovv o⁵v³→o⁵v²), and the largest scratch is
+    ~0.3× the operator's own footprint — a FLOP win at no peak-memory cost.
+    """
+    from fractions import Fraction
+
+    from ..indices import canonical_index_order
+
+    defn = spec.definition_terms[0]
+    _, root = best_contraction_tree_full(defn)
+    if root is None or root.is_leaf or all(c.is_leaf for c in root.children):
+        return [("result", defn)]
+
+    steps = []
+    counter = [0]
+
+    def emit_node(node, is_root):
+        # returns the factor (Tensor) that references this node's output
+        if node.is_leaf:
+            return node.tensor
+        # recurse children first (inner scratch built before this step)
+        child_factors = [emit_node(c, False) for c in node.children]
+        block = tuple(canonical_index_order(list(node.block)))
+        if is_root:
+            lhs = "result"
+        else:
+            counter[0] += 1
+            lhs = f"{scratch_prefix}{counter[0]}"
+        step_term = AlgebraTerm(
+            coeff=defn.coeff if is_root else Fraction(1),
+            factors=tuple(child_factors),
+            free_indices=block,
+            summed_indices=tuple(canonical_index_order(list(node.summed))),
+            connected=True,
+        )
+        steps.append((lhs, step_term))
+        return Tensor(lhs, block)
+
+    emit_node(root, True)
+    return steps
 
 
 # ── F4: savings-weighted operator valuation ────────────────────────

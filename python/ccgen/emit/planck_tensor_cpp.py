@@ -422,6 +422,7 @@ def _emit_intermediate_builder(
     method: str,
     spec: IntermediateSpec,
     sibling_names: frozenset[str] | None = None,
+    factor_body: bool = False,
 ) -> str:
     result_type = _tensor_type(spec.rank)
     amplitude_type = _amplitude_type(method)
@@ -451,11 +452,32 @@ def _emit_intermediate_builder(
     lines.append(
         f"    // Intermediate {spec.name} ({spec.index_space_sig}, usage={spec.usage_count})"
     )
-    for i, term in enumerate(lowered_definition_terms, start=1):
-        lines.append(f"    // Definition term {i}")
-        lines.append(emit_planck_term(
-            term, lhs="result", indent=4, intermediate_names=sibling_names))
-        lines.append("")
+
+    # M3.0: emit the builder body as a factored contraction tree (scratch-step
+    # pairwise contractions) instead of one flat n-ary nest, when it factors
+    # below the flat cost. Cuts the builder's own FLOP scaling (e.g.
+    # W_t1t2v_oooovv o^5v^3 -> o^5v^2) at ~0.3x scratch memory. Falls back to the
+    # flat lowered emit for single-step (<=2-factor) definitions.
+    from ..optimization.factorize import factored_builder_steps
+    steps = factored_builder_steps(spec)
+    if factor_body and len(steps) > 1:
+        scratch_names = frozenset(
+            lhs for lhs, _ in steps if lhs != "result")
+        names_in_scope = (sibling_names or frozenset()) | scratch_names
+        for lhs, step in steps:
+            if lhs != "result":
+                stype = _tensor_type(len(step.free_indices))
+                lines.append(
+                    f"    {stype} {lhs}({_dims_expr(step.free_indices, stype)});")
+            lines.append(emit_planck_term(
+                step, lhs=lhs, indent=4, intermediate_names=names_in_scope))
+            lines.append("")
+    else:
+        for i, term in enumerate(lowered_definition_terms, start=1):
+            lines.append(f"    // Definition term {i}")
+            lines.append(emit_planck_term(
+                term, lhs="result", indent=4, intermediate_names=sibling_names))
+            lines.append("")
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
@@ -508,8 +530,14 @@ def emit_planck_translation_unit(
     equations: dict[str, list[AlgebraTerm]],
     intermediates: Sequence[IntermediateSpec] | None = None,
     lowered_equations: dict[str, list[RestrictedClosedShellTerm]] | None = None,
+    factor_builder_bodies: bool = False,
 ) -> str:
-    """Emit a Planck-compatible C++ translation unit."""
+    """Emit a Planck-compatible C++ translation unit.
+
+    ``factor_builder_bodies`` (M3.0): emit each intermediate's `build_W` as a
+    factored contraction tree (scratch-step pairwise contractions) instead of one
+    flat n-ary loop nest, cutting the builder's own FLOP scaling. Default off ->
+    byte-identical flat emit."""
     method = method.lower()
     lowered_equations = lowered_equations or lower_equations_restricted_closed_shell(
         equations
@@ -531,7 +559,8 @@ def emit_planck_translation_unit(
         for spec in intermediates:
             if not _is_supported_tensor_rank(spec.rank):
                 continue
-            lines.append(_emit_intermediate_builder(method, spec, sibling_names))
+            lines.append(_emit_intermediate_builder(
+                method, spec, sibling_names, factor_body=factor_builder_bodies))
             lines.append("")
 
     for target, terms in equations.items():
