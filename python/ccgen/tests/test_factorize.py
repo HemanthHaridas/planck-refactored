@@ -1229,6 +1229,42 @@ class CCSDTQTests(unittest.TestCase):
         for op in s["higher_only"]:
             self.assertIn("t4", op)
 
+    # ── M4: the joint verdict (M1–M3 vs baseline, one budget) ──────
+
+    def test_optimized_beats_baseline_all_axes(self):
+        """M4 gate: at a fixed CCSDTQ budget the M1–M3 optimized emit beats the
+        memory-blind baseline on BOTH the FLOP-savings and memory axes at once,
+        and the stride-shaped builders score below the flat baseline. The single
+        verdict of the memory/locality investigation."""
+        from ccgen.optimization.factorize import (
+            select_under_memory_budget, select_best_of_both,
+            builder_stride_score,
+        )
+        terms = [t for m in ("doubles", "triples", "quadruples")
+                 for t in generate_cc_equations(
+                     "ccsdtq", engine="diagram", canonical_fock=True)[m]]
+        ops = manifold_operators(terms, include_reuse=False)
+        by_name = {o.name: o for o in ops}
+        B = 850 * 10**9
+
+        def sv(names):
+            return sum(operator_savings(by_name[n], 30, 100) for n in names)
+
+        def by(names):
+            return sum(operator_bytes(by_name[n], 30, 100) for n in names)
+
+        _, base = select_under_memory_budget(ops, B, "savings")  # B1 baseline
+        _, opt = select_best_of_both(ops, B)                     # M2 joint
+        # B1: more savings at no more memory
+        self.assertGreater(sv(opt), sv(base))
+        self.assertLessEqual(by(opt), by(base))
+        # B3: stride-shaped builders score strictly below flat on the opt set
+        base_stride = sum(builder_stride_score(by_name[n], reorder=False)
+                          for n in opt)
+        opt_stride = sum(builder_stride_score(by_name[n], reorder=True)
+                         for n in opt)
+        self.assertLess(opt_stride, base_stride)
+
 
 class RankLocalityTheoremTests(unittest.TestCase):
     """Rank-locality theorem within the F3 optimization model (see the doc).
