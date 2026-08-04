@@ -453,7 +453,8 @@ def _node_operator_name(node: Node, fingerprints) -> str:
 
 
 def rewrite_term_factorized(
-    term: AlgebraTerm, fingerprints=None, derived_only: bool = True
+    term: AlgebraTerm, fingerprints=None, derived_only: bool = True,
+    keep_operators=None,
 ) -> AlgebraTerm:
     """Rewrite a term into its ROOT contraction step: the root's children as
     factors, each internal child replaced by a reference to the operator it
@@ -489,20 +490,29 @@ def rewrite_term_factorized(
             new_factors.append(child.tensor)
             continue
         r = identify_node(node_to_term(child), fingerprints)
-        if derived_only and isinstance(r, Reuse):
-            # Do NOT hoist a CCSD (Reuse) child — its dressing is D7.3's job, and
-            # its definition needs tau/tau_tilde builders the factorizer does not
-            # own. Inline its leaf tensors and re-absorb its consumed indices.
-            new_factors.extend(_leaf_tensors(child))
-            extra_summed |= set(child.summed)
-        else:
-            name = r.op_name if isinstance(r, Reuse) else r.spec.name
+        name = r.op_name if isinstance(r, Reuse) else r.spec.name
+        # Hoist a child ONLY if it is a Derived operator we are keeping:
+        #  - Reuse (CCSD) children are always inlined (dressing is D7.3's job,
+        #    their definitions need tau/tau_tilde builders the factorizer lacks);
+        #  - a Derived child not in `keep_operators` (E1 budget) is inlined too.
+        hoist = (not isinstance(r, Reuse)) and (
+            keep_operators is None or name in keep_operators
+        )
+        if hoist:
             block = tuple(canonical_index_order(list(child.block)))
             new_factors.append(Tensor(name, block))
             hoisted_any = True
+        else:
+            # Inline the child's leaves and re-absorb its FULL internal summation
+            # (all subtree-consumed indices = used - block), not just its top
+            # step's — a deep child otherwise leaves loop vars undeclared.
+            leaves = _leaf_tensors(child)
+            new_factors.extend(leaves)
+            used = {i for f in leaves for i in f.indices}
+            extra_summed |= (used - set(child.block))
 
     if not hoisted_any:
-        return term  # nothing Derived to hoist -> leave the term as-is
+        return term  # nothing hoisted -> leave the term as-is
 
     return AlgebraTerm(
         coeff=term.coeff,
@@ -604,37 +614,80 @@ def manifold_operators(terms, fingerprints=None, include_reuse=True):
     return out
 
 
+# ── E1: savings-budgeted operator selection ────────────────────────
+
+
+def operator_savings(spec) -> int:
+    """Savings of materializing an emittable operator once vs rebuilding it at
+    every reference site: (usage_count - 1) × build_flops, where build_flops is
+    the scaling-dominated flop magnitude of the operator's own contraction."""
+    return max(0, spec.usage_count - 1) * nary_cost(spec.definition_terms[0]).flops()
+
+
+def select_operators_by_savings(specs, top_k=None, savings_fraction=None):
+    """Rank emittable operator specs by savings and keep the worthwhile ones.
+
+    - `top_k`: keep the k highest-savings operators.
+    - `savings_fraction`: keep operators until the cumulative savings reach this
+      fraction (0..1) of the total (e.g. 0.99 keeps ~99% of the win).
+    Pass at most one; with neither, all specs are kept (sorted). The measured
+    concentration is extreme — on CCSDT the top 5 of 24 operators carry >98%,
+    so a small budget inlines the long tail for ~free.
+
+    Returns (kept_specs, kept_names) with kept_specs sorted savings-descending.
+    """
+    ranked = sorted(specs, key=operator_savings, reverse=True)
+    if top_k is not None:
+        kept = ranked[:top_k]
+    elif savings_fraction is not None:
+        total = sum(operator_savings(s) for s in ranked) or 1
+        kept, cum = [], 0
+        for s in ranked:
+            kept.append(s)
+            cum += operator_savings(s)
+            if cum / total >= savings_fraction:
+                break
+    else:
+        kept = ranked
+    return kept, frozenset(s.name for s in kept)
+
+
 # ── E0.3: emit a factorized translation unit ───────────────────────
 
 
 def emit_factorized_translation_unit(method: str, engine: str = "diagram",
-                                     canonical_fock: bool = True):
-    """E0.3: emit a Planck C++ TU whose kernels reference the factorizer's
-    derived operators, with a `build_W` for each.
+                                     canonical_fock: bool = True,
+                                     top_k=None, savings_fraction=None):
+    """E0.3 + E1: emit a Planck C++ TU whose kernels reference the factorizer's
+    derived operators, with a `build_W` for each KEPT operator.
 
-    Pipeline: generate the residual, rewrite every term through its contraction
-    tree (`rewrite_term_factorized`, derived-only — CCSD dressing stays D7.3's
-    job), collect the manifold's derived operators (`manifold_operators`,
-    `include_reuse=False`), and hand both to `emit_planck_translation_unit`.
+    Pipeline: generate the residual, collect the manifold's derived operators
+    (`manifold_operators`, `include_reuse=False`), select the worthwhile ones by
+    savings (E1: `top_k` or `savings_fraction`; both None keeps all), rewrite
+    every term hoisting only the kept operators (the rest stay inline, along with
+    the CCSD/Reuse children which are always inlined — D7.3's job), and hand the
+    rewritten equations + kept specs to `emit_planck_translation_unit`.
 
-    Returns the TU string. The emitted kernels name the derived operators as
-    local factors, which the emitter materializes once per kernel via the
-    build_W functions."""
+    The savings concentration is extreme (CCSDT: top 5 of 24 ops > 98%), so a
+    small budget inlines the long tail at ~no FLOP cost while cutting builders.
+    Returns the TU string."""
     from ..generate import generate_cc_equations
     from ..emit.planck_tensor_cpp import emit_planck_translation_unit
 
     eqs = generate_cc_equations(method, engine=engine, canonical_fock=canonical_fock)
-    rewritten = {
-        m: [rewrite_term_factorized(t) for t in terms]
-        for m, terms in eqs.items()
-    }
     substitutable = [
         t for m, terms in eqs.items()
         if m not in ("energy", "reference")
         for t in terms
     ]
-    ops = manifold_operators(substitutable, include_reuse=False)
-    return emit_planck_translation_unit(method, rewritten, intermediates=ops)
+    all_ops = manifold_operators(substitutable, include_reuse=False)
+    kept, keep_names = select_operators_by_savings(
+        all_ops, top_k=top_k, savings_fraction=savings_fraction)
+    rewritten = {
+        m: [rewrite_term_factorized(t, keep_operators=keep_names) for t in terms]
+        for m, terms in eqs.items()
+    }
+    return emit_planck_translation_unit(method, rewritten, intermediates=kept)
 
 
 # ── F4: savings-weighted operator valuation ────────────────────────

@@ -33,9 +33,11 @@ from ccgen.optimization.factorize import (  # noqa: E402
     node_key,
     manifold_operators,
     node_to_term,
+    operator_savings,
     recursion_summary,
     rewrite_term_factorized,
     seeded_fingerprints,
+    select_operators_by_savings,
     tree_preserves_term,
     tree_terms,
     value_operators,
@@ -525,6 +527,63 @@ class CostModelTests(unittest.TestCase):
             )
         finally:
             os.unlink(src)
+
+    # ── E1: savings-budgeted selection ─────────────────────────────
+
+    def test_savings_concentration(self):
+        """E1 premise: savings concentrate hard — the top 5 of the CCSDT
+        emittable operators carry >98% of the total savings."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        total = sum(operator_savings(o) for o in ops)
+        top5 = sum(
+            operator_savings(o)
+            for o in sorted(ops, key=operator_savings, reverse=True)[:5]
+        )
+        self.assertGreater(top5 / total, 0.98)
+
+    def test_select_top_k_and_fraction(self):
+        """E1: top_k keeps exactly k; savings_fraction keeps a prefix reaching
+        the target cumulative fraction."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        kept, names = select_operators_by_savings(ops, top_k=5)
+        self.assertEqual(len(kept), 5)
+        self.assertEqual(len(names), 5)
+        kept99, _ = select_operators_by_savings(ops, savings_fraction=0.99)
+        total = sum(operator_savings(o) for o in ops)
+        self.assertGreaterEqual(sum(operator_savings(o) for o in kept99) / total, 0.99)
+        self.assertLessEqual(len(kept99), len(ops))
+
+    def test_budgeted_rewrite_is_exact(self):
+        """E1: budgeting must not change the algebra — a budgeted rewrite (only
+        top-k operators hoisted, the rest inlined) still re-expands to the
+        original term across the manifold. 0 failures."""
+        from collections import Counter
+        ops = manifold_operators(self.triples, include_reuse=False)
+        opdef = {o.name: o for o in ops}
+        _, keep = select_operators_by_savings(ops, top_k=3)
+        for t in self.triples:
+            r = rewrite_term_factorized(t, keep_operators=keep)
+            expanded = Counter()
+            for f in r.factors:
+                if f.name in opdef:
+                    expanded.update(
+                        ff.name for ff in opdef[f.name].definition_terms[0].factors
+                    )
+                else:
+                    expanded[f.name] += 1
+            self.assertEqual(
+                expanded, Counter(f.name for f in t.factors),
+                f"budgeted rewrite changed the algebra for {t!r}",
+            )
+
+    def test_budgeted_tu_has_k_builders(self):
+        """E1 gate: emitting with top_k=5 produces exactly 5 build_W functions
+        (the long tail is inlined)."""
+        import re
+        from ccgen.optimization.factorize import emit_factorized_translation_unit
+        tu = emit_factorized_translation_unit("ccsdt", top_k=5)
+        self.assertEqual(len(set(re.findall(r"build_(W_\w+)\(", tu))), 5)
+        self.assertEqual(tu.count("{"), tu.count("}"))
 
 
 class CCSDTQTests(unittest.TestCase):
