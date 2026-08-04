@@ -914,6 +914,75 @@ class CostModelTests(unittest.TestCase):
                 break
         self.assertTrue(found, "no step benefits from inner-index reorder")
 
+    # ── M3.2: stride-driven loop-order shaping ─────────────────────
+
+    def test_stride_reorder_reduces_penalty(self):
+        """M3.2 gate (answers B3): reordering the summed loops so the min-stride
+        index is innermost cuts the aggregate stride penalty materially (measured
+        ~55%), and never increases it."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        base = sum(builder_stride_score(o, reorder=False) for o in ops)
+        opt = sum(builder_stride_score(o, reorder=True) for o in ops)
+        self.assertLess(opt, base)
+        self.assertGreater((base - opt) / base, 0.30)  # measured 55%
+        for o in ops:
+            self.assertLessEqual(
+                builder_stride_score(o, reorder=True),
+                builder_stride_score(o, reorder=False),
+            )
+
+    def test_stride_reorder_is_exact(self):
+        """M3.2: the reorder only permutes each step's summed indices (same set,
+        factors, coeff, free) — the sum is provably unchanged. 0 divergences."""
+        from collections import Counter
+        ops = manifold_operators(self.triples, include_reuse=False)
+        for op in ops:
+            base = factored_builder_steps(op, stride_order=False)
+            reord = factored_builder_steps(op, stride_order=True)
+            for (l1, t1), (l2, t2) in zip(base, reord):
+                self.assertEqual(l1, l2)
+                self.assertEqual(Counter(f.name for f in t1.factors),
+                                 Counter(f.name for f in t2.factors))
+                self.assertEqual(set(t1.summed_indices), set(t2.summed_indices))
+                self.assertEqual(t1.coeff, t2.coeff)
+                self.assertEqual(set(t1.free_indices), set(t2.free_indices))
+
+    def test_stride_ordered_builder_tu_compiles(self):
+        """M3.2 gate: the stride-ordered TU compiles (reordering loops is a
+        source-order change only)."""
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present")
+
+        from ccgen.optimization.factorize import emit_factorized_translation_unit
+        code = emit_factorized_translation_unit("ccsdt", factor_builder_bodies=True)
+        with tempfile.NamedTemporaryFile(
+            suffix=".cpp", mode="w", delete=False
+        ) as fh:
+            fh.write(code)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=300,
+            )
+            self.assertEqual(
+                proc.returncode, 0,
+                f"stride-ordered CCSDT failed to compile:\n{proc.stderr[-2000:]}",
+            )
+        finally:
+            os.unlink(src)
+
 
 class CCSDTQTests(unittest.TestCase):
     """F5 — generalize the factorizer to CCSDTQ (t4). The engine is

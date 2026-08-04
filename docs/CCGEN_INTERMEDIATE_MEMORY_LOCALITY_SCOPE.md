@@ -269,14 +269,19 @@ Sub-steps:
   (unit-stride fixture scores 0, strided scores higher),
   `test_builder_stride_score_is_baseline` (nonzero baseline + a step that
   benefits from inner-index reorder exists).
-- **M3.2 — layout + loop-order shaping (~M, answers B3).** Choose the summed-loop
-  order (contraction index innermost against the largest factor's unit-stride
-  axis) and set `memory_layout` / `blocking_hint` on the spec from the
-  contraction structure; thread them through `_emit_intermediate_builder` (which
-  ignores both today). *Gate:* the M3.1 stride score improves vs the M3.0 output
-  on the operator set; TU compiles; energy-equivalence unchanged (structural, via
-  the re-expansion gate — reordering loops and choosing layout cannot change the
-  sum).
+- **M3.2 — loop-order shaping (~M, answers B3). LANDED.** `stride_ordered_summed`
+  / `stride_inner_index` reorder each step's summed loops so the min-stride index
+  is innermost; `factored_builder_steps(stride_order=True)` applies it and the
+  emitter rides it on `factor_builder_bodies=True`. Measured on CCSDT: the
+  aggregate stride penalty drops **55% (3.4e14 → 1.5e14)**, 9/24 builders improve
+  — from pure loop reordering, no algebra change, no cost. `builder_stride_score(
+  reorder=True)` scores the shaped version. *Gate (in `CostModelTests`):*
+  `test_stride_reorder_reduces_penalty` (> 30% aggregate cut, never worse),
+  `test_stride_reorder_is_exact` (only the summed-index ORDER changes — same set,
+  factors, coeff, free — so the sum is unchanged), `test_stride_ordered_builder_tu_compiles`.
+  Default off → byte-identical. **B3 answered.** (Not attempted: `memory_layout`/
+  `blocking_hint` tiling — the loop-order lever alone captures the measurable
+  static-stride win; tiling is a compiled-binary concern, the E2 boundary.)
 
 **Honest ceiling for M3.** The stride metric is a static model of the access
 pattern, not a measured cache-miss rate (that needs the compiled binary — same

@@ -423,6 +423,7 @@ def _emit_intermediate_builder(
     spec: IntermediateSpec,
     sibling_names: frozenset[str] | None = None,
     factor_body: bool = False,
+    stride_order: bool = False,
 ) -> str:
     result_type = _tensor_type(spec.rank)
     amplitude_type = _amplitude_type(method)
@@ -459,7 +460,7 @@ def _emit_intermediate_builder(
     # W_t1t2v_oooovv o^5v^3 -> o^5v^2) at ~0.3x scratch memory. Falls back to the
     # flat lowered emit for single-step (<=2-factor) definitions.
     from ..optimization.factorize import factored_builder_steps
-    steps = factored_builder_steps(spec)
+    steps = factored_builder_steps(spec, stride_order=stride_order)
     if factor_body and len(steps) > 1:
         scratch_names = frozenset(
             lhs for lhs, _ in steps if lhs != "result")
@@ -560,7 +561,8 @@ def emit_planck_translation_unit(
             if not _is_supported_tensor_rank(spec.rank):
                 continue
             lines.append(_emit_intermediate_builder(
-                method, spec, sibling_names, factor_body=factor_builder_bodies))
+                method, spec, sibling_names, factor_body=factor_builder_bodies,
+                stride_order=factor_builder_bodies))
             lines.append("")
 
     for target, terms in equations.items():

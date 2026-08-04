@@ -837,11 +837,14 @@ def emit_factorized_translation_unit(method: str, engine: str = "diagram",
 # ── M3.0: factor an operator's OWN builder body ────────────────────
 
 
-def factored_builder_steps(spec, scratch_prefix="X"):
+def factored_builder_steps(spec, scratch_prefix="X", stride_order=False):
     """M3.0: decompose an operator's definition term into the sequence of
     pairwise contraction steps its best tree gives, instead of one flat n-ary
     nest. Returns [(lhs_name, AlgebraTerm), ...] in build order (inner scratch
     first, `result` last); the final step's lhs is "result".
+
+    ``stride_order`` (M3.2): order each step's summed loops so the min-stride
+    index is innermost. Pure reorder — no factor/coeff/free change — so exact.
 
     A scratch step's term references its child steps by scratch name (a
     `Tensor(scratch_name, block)` factor), so `emit_planck_term` with those
@@ -885,6 +888,14 @@ def factored_builder_steps(spec, scratch_prefix="X"):
             summed_indices=tuple(canonical_index_order(list(node.summed))),
             connected=True,
         )
+        if stride_order:
+            step_term = AlgebraTerm(
+                coeff=step_term.coeff,
+                factors=step_term.factors,
+                free_indices=step_term.free_indices,
+                summed_indices=stride_ordered_summed(step_term),
+                connected=True,
+            )
         steps.append((lhs, step_term))
         return Tensor(lhs, block)
 
@@ -928,20 +939,50 @@ def step_stride_penalty(term, inner_index, n_occ=30, n_vir=100):
     return dist * vol
 
 
-def builder_stride_score(spec, n_occ=30, n_vir=100):
-    """M3.1: aggregate stride penalty of a builder's emitted loops, over its
-    factored steps. Innermost loop = the step's last summed index (the emitter's
-    order today). Lower is better; 0 = every factor reads the innermost index
-    unit-stride in every step. This is the baseline the M3.2 loop-order/layout
-    shaping must improve."""
+def builder_stride_score(spec, n_occ=30, n_vir=100, reorder=False):
+    """M3.1 (and M3.2 when reorder=True): aggregate stride penalty of a builder's
+    emitted loops, over its factored steps. Innermost loop = the step's last
+    summed index. With `reorder=False` (baseline) this is the emitter's current
+    order; with `reorder=True` the summed loops are reordered so the min-penalty
+    index is innermost (M3.2). Lower is better; 0 = every factor reads the
+    innermost index unit-stride in every step."""
     total = 0
     for _lhs, term in factored_builder_steps(spec):
         if not term.summed_indices:
             continue  # no inner loop
-        from ..indices import canonical_index_order
-        inner = canonical_index_order(list(term.summed_indices))[-1]
+        inner = stride_inner_index(term) if reorder \
+            else term.summed_indices[-1]
         total += step_stride_penalty(term, inner, n_occ, n_vir)
     return total
+
+
+# ── M3.2: shape the summed-loop order for stride ───────────────────
+
+
+def stride_inner_index(term, n_occ=30, n_vir=100):
+    """The summed index that should be INNERMOST to minimize the step's stride
+    penalty — the one closest to unit-stride across the step's factors. Ties
+    resolve to the canonical order for determinism."""
+    from ..indices import canonical_index_order
+    ordered = canonical_index_order(list(term.summed_indices))
+    if not ordered:
+        return None
+    return min(ordered, key=lambda s: (step_stride_penalty(term, s, n_occ, n_vir),
+                                       s.space, s.name))
+
+
+def stride_ordered_summed(term, n_occ=30, n_vir=100):
+    """The step's summed indices reordered for stride: the min-penalty index
+    LAST (innermost loop). Outer summed loops keep the canonical order — only the
+    innermost placement affects the metric, and pinning the rest keeps the emit
+    deterministic. Pure reorder: no factor/coeff/free change, so algebra-exact."""
+    from ..indices import canonical_index_order
+    ordered = canonical_index_order(list(term.summed_indices))
+    if len(ordered) < 2:
+        return tuple(ordered)
+    inner = stride_inner_index(term, n_occ, n_vir)
+    rest = [s for s in ordered if s != inner]
+    return tuple(rest + [inner])
 
 
 # ── F4: savings-weighted operator valuation ────────────────────────
