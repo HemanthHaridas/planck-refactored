@@ -126,12 +126,60 @@ algebra). *Gate (in `CostModelTests`):* `test_footprint_guard_drops_over_budget`
 `test_footprint_guarded_tu_compiles`. Answers B2.
 
 ### M2 — joint selection objective (~M, the real modeling piece)
-Replace/augment `select_operators_by_savings` with a joint objective: maximize
-FLOP savings subject to a total memory budget (a knapsack on `savings` vs
-`bytes`), or rank by `selection_density` above a savings floor. *Gate:* on a
-fixed memory budget the joint objective retains more FLOP savings than either the
-flops-only or the density-only ranking alone; the selection provably differs from
-B1. Answers B1.
+
+Replace the per-operator M1 guard + flops-only rank with a **total-memory
+budget**: maximize FLOP savings subject to `Σ bytes(kept) ≤ B` — a 0/1 knapsack
+on `(savings, bytes)`. M1 answered "does each operator fit"; M2 answers "given a
+fixed total memory, which SET maximizes savings."
+
+**Measured relevance first (grounds the whole step).** How much M2 can beat the
+existing greedy is not assumed — it is measured, and the answer is
+rank-dependent:
+- **CCSDT (24 ops): almost nothing.** flops-greedy and density-greedy diverge at
+  exactly ONE budget point across a full sweep, by Δ=2e11 / 8.8e16 = **0.0002%**.
+  The operators cluster hard by footprint (many at 64.8 GB, a few tiny), so the
+  budget almost always fits a whole cluster or not — no room to trade. For CCSDT,
+  "the flops-only selection is already at the memory optimum" is the honest
+  result.
+- **CCSDTQ (43 ops): real.** Footprints span 7e-6 GB → 194,000 GB across **14
+  tiers**, so the budget frequently forces a genuine trade: greedy rankings
+  diverge in **66/286 budget points (23%)**, max relative savings difference
+  **16.7%**. This is where a joint objective earns its place.
+
+So M2 is a CCSDTQ-and-up feature; on CCSDT it should measurably match the baseline
+(a correctness check, not a win).
+
+Sub-steps:
+
+- **M2.0 — total-budget feasibility + greedy baseline (~S).** A
+  `select_under_memory_budget(specs, total_bytes, key="savings"|"density")` that
+  greedily fills the budget in `key` order (the two existing rankings, now under a
+  *total* not per-operator cap). *Gate:* returns a set with `Σ bytes ≤ budget`;
+  reproduces the measured CCSDT no-divergence and the CCSDTQ 23%/16.7% divergence
+  between the two keys.
+- **M2.1 — exact knapsack (~M, the modeling core).** An exact 0/1 knapsack over
+  the operator set. **NOT an integer-weight DP** — the footprints span 3000×
+  (0.02 GB → 64.8 GB at CCSDT, worse at CCSDTQ), so rounding bytes to GB weights
+  zeros the small high-density operators and corrupts the table (verified: a
+  GB-rounded DP undercounts by 3× on CCSDT). Use either exact branch-and-bound
+  (the set is small: 24 / 43 items) or a DP on a fine byte-quantum. *Gate:* on a
+  budget where greedy is provably suboptimal, knapsack ≥ greedy; on the CCSDT
+  set (no room to trade) knapsack == greedy == baseline.
+- **M2.2 — wire into emit (~S given M2.0/M2.1).** `emit_factorized_translation_unit`
+  takes `memory_budget_bytes=` (total) selecting via M2.1, falling back to the M1
+  per-operator guard / E1 top-k when not given. Non-selected operators inline
+  (E1 path). *Gate:* the budgeted TU compiles, re-expands exactly (E0.1), and its
+  materialized `Σ bytes ≤ budget`.
+- **M2.3 — measured win vs baseline (~S).** On a CCSDTQ budget in the divergence
+  regime, report FLOP savings retained by knapsack vs flops-greedy vs
+  density-greedy, and the memory used by each. *Gate:* knapsack ≥ both greedies;
+  the selection differs from the flops-only B1 pick. Answers B1 with a number.
+
+**Honest ceiling for M2.** The win is bounded by what the divergence measurement
+shows — ~17% of savings on CCSDTQ at the tightest budgets, ~0 on CCSDT. If the
+CCSDTQ knapsack also lands within noise of greedy, M2's result is "greedy is
+enough, no exact solver needed" — still a valid, useful answer that retires the
+knapsack idea.
 
 ### M3 — locality shaping of the emitted loop (~M)
 For each materialized operator, choose `memory_layout` + `blocking_hint` from the
