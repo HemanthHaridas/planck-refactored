@@ -1112,11 +1112,67 @@ An earlier effort tried to recognize *dressed* intermediates (`Wmnij`, `Wabef`,
 τ) by index-binding + exact cover over the flat term list
 (`optimization/dressing.py`, `optimization/tau.py`). It was a dead end. The
 diagram representation makes each dressed operator an *identifiable subgraph*, so
-that recognition becomes topological (the future "D7" work). The exact-cover code
-and its two `@expectedFailure` tests are kept only as the record of the abandoned
-route.
+that recognition becomes topological. That realization is
+`optimization/factorize.py` (§22 below); the exact-cover code and its two
+`@expectedFailure` tests are kept only as the record of the abandoned route.
 
-### 22. Mental Model for Contributors
+### 22. Factorization and Operator Derivation (`optimization/factorize.py`)
+
+Recognition (§11's intermediate detection) starts from a *curated* operator set
+and folds matching sub-contractions out. Factorization comes at the same
+operators from the other direction: **re-associate each residual contraction into
+the binary tree that minimizes the FLOP exponent; the reused sub-contractions
+those trees expose ARE the operators** — matched against the CCSD set when they
+coincide (reuse), recorded as new when they do not (derivation).
+
+#### The cost model
+
+A contraction term `c · f₁·f₂·…·fₖ` summed over its dummy indices is evaluated as
+one n-ary blob at a peak cost equal to the number of distinct occ/vir indices it
+touches. `Cost(n_occ, n_vir)` is that loop-nest exponent; `Cost.flops(o,v) =
+o^a·v^b` is its scaling-dominated magnitude (v>o, so scaling dominates — this is
+real path cost, unlike `IntermediateSpec.estimated_build_flops`, an element
+count). `best_contraction_tree(term)` searches all binary associations (≤5
+factors ⇒ exhaustive) for the minimum-peak tree. Example: `t2·t3·v` drops from
+`o⁵v⁵` (n-ary) to `o⁴v³` when `(t3·v)` is contracted first — the FLOP win and the
+intermediate are the same act of factoring.
+
+#### Tree → operator → classification
+
+`best_contraction_tree_full` returns the actual `Node` tree; each internal node
+is a sub-contraction. `node_to_term` lowers a node to an `AlgebraTerm` (its
+subtree's leaf factors, the indices consumed at that step, its output block), and
+`node_key` gives it a canonical, factor-order-independent key via
+`_eri_canonical`. `identify_node` compares the key against
+`seeded_fingerprints()` (the six CCSD operators' definition terms, block-signature
+prefiltered): a match is `Reuse(op)`, no match mints a `Derived(IntermediateSpec)`
+with a sorted order-invariant name. `identify_tree` classifies every node;
+`value_operators` ranks operators by `savings = (uses−1)·build_flops`;
+`recursion_summary` reports cross-rank containment.
+
+#### Two invariants that took work
+
+- **Exactness (`tree_preserves_term`).** A tree is valid iff every raw factor is
+  one leaf and every summed index is consumed at exactly one node — associativity
+  then guarantees it equals the raw n-ary contraction, coefficient untouched. All
+  399 CCSDT-triples and 2672 CCSDTQ-quadruples trees pass.
+- **Determinism.** 41% of triples terms admit more than one minimum-peak tree, so
+  the selection needs a *total order* —
+  `(peak.total, peak.n_vir, −max_intermediate_build_flops, canonical_tree_signature)`
+  — or operator identity would depend on factor input order. With sorted derived
+  names the operator multiset is a deterministic function of the terms.
+
+#### The result: rank locality
+
+Running this over CCSDT and CCSDTQ produces a rank-locality theorem: each
+excitation rank reuses every lower-rank operator verbatim and adds only its own
+`V·Tₙ` family (the `t3·v` operators at rank 3, `t4·v` at rank 4). A high-rank
+*term* can still reuse a *low-rank* operator (association order routes it through
+a low-rank intermediate first) — operator composition, operator reuse, and
+excitation rank are three distinct concepts. Full statement, proofs, and tables
+in `docs/CCGEN_HIGHER_OPERATOR_REUSE.md`; gated by `tests/test_factorize.py`.
+
+### 23. Mental Model for Contributors
 
 The easiest way to understand `ccgen` is to think of it as six stacked layers:
 

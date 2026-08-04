@@ -1,0 +1,739 @@
+"""Tests for F0/F1 — contraction-path cost model + term inventory
+(docs/CCGEN_HIGHER_OPERATOR_REUSE.md).
+
+Offline: no generated code. Generates CCSDT triples via the diagram engine
+and checks the cost model's de-risk gate.
+"""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ccgen.generate import generate_cc_equations  # noqa: E402
+from ccgen.optimization.factorize import (  # noqa: E402
+    Cost,
+    Derived,
+    Reuse,
+    best_contraction_tree,
+    best_contraction_tree_full,
+    block_signature,
+    contraction_tree_cost,
+    emittable_operators,
+    identify_node,
+    identify_tree,
+    internal_nodes,
+    inventory,
+    nary_cost,
+    node_key,
+    manifold_operators,
+    node_to_term,
+    recursion_summary,
+    rewrite_term_factorized,
+    seeded_fingerprints,
+    tree_preserves_term,
+    tree_terms,
+    value_operators,
+)
+
+
+class CostModelTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        eqs = generate_cc_equations(
+            "ccsdt", engine="diagram", canonical_fock=True
+        )
+        cls.triples = eqs["triples"]
+
+    def _find(self, names):
+        want = sorted(names)
+        for t in self.triples:
+            if sorted(f.name for f in t.factors) == want:
+                return t
+        self.fail(f"no {names} term in triples")
+
+    def test_t2t3v_factors_below_nary(self):
+        """The F1 de-risk gate: n-ary o^5 v^5 -> best tree total-degree 7."""
+        t = self._find(["t2", "t3", "v"])
+        nary, best = contraction_tree_cost(t)
+        self.assertEqual(nary, Cost(5, 5))
+        self.assertEqual(best.total, 7)
+        self.assertLess(best.total, nary.total)
+
+    def test_two_factor_term_does_not_factor(self):
+        """A single pairwise step has no cheaper association: best == n-ary."""
+        two = next(t for t in self.triples if len(t.factors) == 2)
+        nary, best = contraction_tree_cost(two)
+        self.assertEqual(nary, best)
+
+    def test_inventory_matches_raw(self):
+        """F0: every multi-factor triples term is inventoried."""
+        inv = inventory(self.triples)
+        multi = [t for t in self.triples if len(t.factors) >= 2]
+        self.assertEqual(len(inv), len(multi))
+
+    def test_t3_shapes_present(self):
+        """F0 probe: the t3-bearing shape counts match the scope doc."""
+        from collections import Counter
+
+        counts = Counter(
+            tuple(sorted(f.name for f in t.factors))
+            for t in self.triples
+        )
+        self.assertEqual(counts[("t2", "t3", "v")], 39)
+        self.assertEqual(counts[("t1", "t3", "v")], 36)
+        self.assertEqual(counts[("t1", "t1", "t3", "v")], 24)
+
+    def test_best_never_exceeds_nary(self):
+        """A binary tree is never costlier than the n-ary blob."""
+        for t in self.triples:
+            nary = nary_cost(t)
+            best = best_contraction_tree(t)
+            self.assertLessEqual(best.total, nary.total)
+
+    # ── F2.0: tree → AlgebraTerm ───────────────────────────────────
+
+    def test_tree_root_reproduces_term_free(self):
+        """F2.0 gate: the tree computes the right object — the root node exposes
+        exactly the term's free indices (and gathers all its leaf factors)."""
+        t = self._find(["t2", "t3", "v"])
+        _, root = best_contraction_tree_full(t)
+        root_term = node_to_term(root)
+        self.assertEqual(
+            sorted(f.name for f in root_term.factors),
+            ["t2", "t3", "v"],
+        )
+        self.assertEqual(set(root_term.free_indices), set(t.free_indices))
+
+    def test_t2t3v_intermediate_node_block(self):
+        """F2.0 gate: the (t3·v) intermediate is o^3 v^1 (block j,k,l,c),
+        the would-be operator F2.1+ keys."""
+        t = self._find(["t2", "t3", "v"])
+        nodes = tree_terms(t)
+        # two internal nodes: the (t3·v) intermediate and the root.
+        inter = [n for n in nodes if sorted(f.name for f in n.factors) == ["t3", "v"]]
+        self.assertEqual(len(inter), 1)
+        block = inter[0].free_indices
+        self.assertEqual(
+            sorted((i.name, i.space) for i in block),
+            [("c", "vir"), ("j", "occ"), ("k", "occ"), ("l", "occ")],
+        )
+        # the intermediate's index signature is o^3 v^1 (its block, i.e. the
+        # would-be operator's rank); its build STEP costs o^4 v^3 (block +
+        # the m,d,e it sums), which is the F1 peak.
+        self.assertEqual(Cost(3, 1).total, len(block))
+
+    def test_node_step_cost_bounded_by_nary(self):
+        """F2.0: every internal node's own step cost is <= the term's n-ary
+        cost (the tree never introduces a costlier step than the blob)."""
+        t = self._find(["t2", "t3", "v"])
+        nb = nary_cost(t)
+        for nt in tree_terms(t):
+            self.assertLessEqual(nary_cost(nt).total, nb.total)
+
+    def test_every_internal_node_is_a_term(self):
+        """F2.0: every t3-bearing term's tree lowers to well-formed node terms
+        (no leaf slips through node_to_term)."""
+        t3_terms = [
+            t for t in self.triples
+            if any(f.name == "t3" for f in t.factors)
+        ]
+        self.assertGreater(len(t3_terms), 0)
+        for t in t3_terms:
+            for nt in tree_terms(t):
+                self.assertGreaterEqual(len(nt.factors), 2)
+
+    # ── F2.1: canonical node key ───────────────────────────────────
+
+    def _t3v_nodes(self):
+        """All (t3·v) intermediate node-terms across the t2·t3·v family whose
+        best tree contracts (t3·v) first."""
+        out = []
+        for t in self.triples:
+            if sorted(f.name for f in t.factors) != ["t2", "t3", "v"]:
+                continue
+            out += [
+                nt for nt in tree_terms(t)
+                if sorted(f.name for f in nt.factors) == ["t3", "v"]
+            ]
+        return out
+
+    @staticmethod
+    def _sig(term):
+        occ = sum(1 for i in term.free_indices if i.space == "occ")
+        vir = sum(1 for i in term.free_indices if i.space == "vir")
+        return (occ, vir)
+
+    def test_t3v_node_key_collapses_by_block_signature(self):
+        """F2.1 gate: (t3·v) nodes sharing an index-space block signature (the
+        same operator, externals relabeled on the t2 factor) collapse to ONE
+        key; distinct signatures stay distinct. Here three t3·v operators
+        appear — o^3v^1, o^1v^3, o^5v^1 — one key each."""
+        nodes = self._t3v_nodes()
+        self.assertGreaterEqual(len(nodes), 2)
+        by_sig = {}
+        for nt in nodes:
+            by_sig.setdefault(self._sig(nt), set()).add(node_key(nt))
+        # each block signature is exactly one operator (one key)
+        for sig, keys in by_sig.items():
+            self.assertEqual(len(keys), 1, f"signature {sig} split into {len(keys)} keys")
+        # and the family really does expose more than one operator
+        self.assertGreaterEqual(len(by_sig), 2)
+
+    def test_node_key_accepts_node_and_term(self):
+        """F2.1: node_key takes a Node or its AlgebraTerm, same result."""
+        t = self._find(["t2", "t3", "v"])
+        _, root = best_contraction_tree_full(t)
+        inter = [
+            n for n in internal_nodes(root)
+            if sorted(f.name for f in node_to_term(n).factors) == ["t3", "v"]
+        ][0]
+        self.assertEqual(node_key(inter), node_key(node_to_term(inter)))
+
+    # ── F2.2: seeded-operator fingerprints ─────────────────────────
+
+    def test_six_operators_distinct_block_sigs(self):
+        """F2.2 gate: the six CCSD operators carry six distinct block sigs."""
+        fps = seeded_fingerprints()
+        sigs = {fp.op_name: fp.op_block_sig for fp in fps}
+        self.assertEqual(len(sigs), 6)
+        self.assertEqual(
+            set(sigs.values()),
+            {"ov", "vv", "oo", "oooo", "vvvv", "oovv"},  # Wmbej ovvo -> oovv
+        )
+
+    def test_fingerprint_keys_roundtrip_from_definition(self):
+        """F2.2: each fingerprint key equals its definition term's node key
+        (so node<->operator comparison is apples to apples)."""
+        from ccgen.optimization.dressing import seeded_operators
+        by_op = {op.name: op for op in seeded_operators()}
+        for fp in seeded_fingerprints():
+            dt = next(
+                d for d in by_op[fp.op_name].definition_terms
+                if tuple(sorted(f.name for f in d.factors)) == fp.term_factors
+                and node_key(d) == fp.key
+            )
+            self.assertEqual(node_key(dt), fp.key)
+
+    def test_t3v_operators_are_not_ccsd_reuse(self):
+        """F2.2 measured fact: no seeded fingerprint carries a t3·v operator's
+        block sig (o3v1 / o1v3 / o5v1) or a t3 factor — so the three t3·v
+        intermediates CANNOT be CCSD reuse; F2.3 will mint them as new."""
+        fps = seeded_fingerprints()
+        seeded_sigs = {fp.op_block_sig for fp in fps}
+        for sig in ("ooov", "ovvv", "ooooov"):  # o3v1, o1v3, o5v1
+            self.assertNotIn(sig, seeded_sigs)
+        # and no seeded definition term contains t3
+        self.assertFalse(
+            any("t3" in fp.term_factors for fp in fps)
+        )
+
+    # ── F2.3: match or derive ──────────────────────────────────────
+
+    def test_t3v_node_is_derived(self):
+        """F2.3 gate: the (t3·v) node classifies as Derived (F2.2 proved it
+        can't be CCSD reuse), and its spec's block == the node's block."""
+        t = self._find(["t2", "t3", "v"])
+        inter = next(
+            nt for nt in tree_terms(t)
+            if sorted(f.name for f in nt.factors) == ["t3", "v"]
+        )
+        r = identify_node(inter)
+        self.assertIsInstance(r, Derived)
+        self.assertEqual(r.spec.indices, inter.free_indices)
+        self.assertEqual(r.spec.index_space_sig, block_signature(inter))
+
+    def test_derived_name_stable_across_family(self):
+        """F2.3: the same operator (block sig) mints the same derived name in
+        every term it appears — the downstream reuse key."""
+        names_by_sig = {}
+        for t in self.triples:
+            if sorted(f.name for f in t.factors) != ["t2", "t3", "v"]:
+                continue
+            for nt in tree_terms(t):
+                if sorted(f.name for f in nt.factors) != ["t3", "v"]:
+                    continue
+                r = identify_node(nt)
+                if isinstance(r, Derived):
+                    names_by_sig.setdefault(block_signature(nt), set()).add(r.name)
+        self.assertTrue(names_by_sig)
+        for sig, names in names_by_sig.items():
+            self.assertEqual(len(names), 1, f"{sig} minted names {names}")
+
+    def test_seeded_definition_term_classifies_as_reuse(self):
+        """F2.3: feeding a seeded operator's OWN definition term back in must
+        return Reuse(that op) — the matcher is sound on its own fingerprints."""
+        from ccgen.optimization.dressing import seeded_operators
+        for op in seeded_operators():
+            for dt in op.definition_terms:
+                if len(dt.factors) < 2:
+                    continue  # a bare f/v leaf isn't a contraction node
+                r = identify_node(dt)
+                self.assertIsInstance(r, Reuse, f"{op.name}: {dt!r}")
+
+    def test_ccsd_operators_reused_in_triples(self):
+        """F2.3 measured: the triples tree reuses CCSD operators (Wmbej at
+        least) and derives the three t3·v operators as new — no false reuse
+        (a derived name never equals a seeded op name)."""
+        seeded_names = {fp.op_name for fp in seeded_fingerprints()}
+        reused, derived = set(), set()
+        for t in self.triples:
+            for _, r in identify_tree(t):
+                if isinstance(r, Reuse):
+                    reused.add(r.op_name)
+                else:
+                    derived.add(r.name)
+        self.assertIn("Wmbej", reused)
+        self.assertTrue(derived.isdisjoint(seeded_names))
+        # the three t3·v operators are among the derived set
+        self.assertIn("W_t3v_ooov", derived)
+        self.assertIn("W_t3v_ovvv", derived)
+
+    # ── F4: savings-weighted valuation ─────────────────────────────
+
+    def test_savings_metric_beats_raw_count(self):
+        """F4 gate: a high-cost t3·v operator outranks Wmbej by SAVINGS even
+        though Wmbej recurs far more often — the whole point of weighting by
+        build cost, not frequency."""
+        vals = value_operators(self.triples)
+        by_name = {v.name: v for v in vals}
+        wmbej = by_name["Wmbej"]
+        # the top-ranked operator is a t3·v (expensive build step).
+        top = vals[0]
+        self.assertTrue(top.name.startswith("W_t3v"))
+        # Wmbej is used more but saves less (cheaper build step).
+        self.assertGreater(wmbej.uses, top.uses)
+        self.assertGreater(top.savings, wmbej.savings)
+        self.assertGreater(top.build_flops, wmbej.build_flops)
+
+    def test_savings_zero_for_single_use(self):
+        """F4: a once-used operator saves nothing (no rebuild avoided)."""
+        vals = value_operators(self.triples)
+        for v in vals:
+            if v.uses == 1:
+                self.assertEqual(v.savings, 0)
+
+    def test_flops_scaling_dominated(self):
+        """F4: o^3v^5 dwarfs o^3v^3 — the additive total-degree metric would
+        rate them close; the flop metric must not."""
+        self.assertGreater(Cost(3, 5).flops(), 100 * Cost(3, 3).flops())
+
+    # ── F3: deterministic operator identity ────────────────────────
+
+    def test_operator_set_invariant_under_factor_order(self):
+        """F3 gate: the derived+reused operator multiset over the manifold is
+        a function of the terms, NOT of factor input order. Tie-break +
+        canonical/sorted names make it order-invariant (the 41%-ambiguous-tie
+        wobble is gone)."""
+        import random
+        from collections import Counter
+
+        from ccgen.project import AlgebraTerm
+
+        def opset(terms):
+            c = Counter()
+            for t in terms:
+                for _, r in identify_tree(t):
+                    c[r.op_name if isinstance(r, Reuse) else r.name] += 1
+            return c
+
+        base = opset(self.triples)
+        for seed in range(4):
+            random.seed(seed)
+            shuffled = [
+                AlgebraTerm(
+                    t.coeff,
+                    tuple(random.sample(list(t.factors), len(t.factors))),
+                    t.free_indices, t.summed_indices, t.connected, t.provenance,
+                )
+                for t in self.triples
+            ]
+            self.assertEqual(base, opset(shuffled), f"seed {seed} diverged")
+
+    # ── F3: exact gate (associativity bookkeeping) ─────────────────
+
+    def test_every_tree_preserves_its_term(self):
+        """F3 exact gate: every triples term's best contraction tree evaluates
+        to the raw term — each factor is one leaf, each summed index consumed
+        once. Associativity then guarantees numeric equality."""
+        for t in self.triples:
+            self.assertTrue(
+                tree_preserves_term(t),
+                f"tree does not reproduce {t!r}",
+            )
+
+    # ── E0.0: emittable (non-root) operators ───────────────────────
+
+    def test_emittable_drops_root_operator(self):
+        """E0.0 gate: for a t2·t3·v term, emittable_operators returns only the
+        inner (t3·v) operator — NOT the whole-term root, which would collapse
+        the term to a rename instead of factoring it."""
+        t = self._find(["t2", "t3", "v"])
+        names = [
+            r.name if isinstance(r, Derived) else r.op_name
+            for _, r in emittable_operators(t)
+        ]
+        self.assertEqual(names, ["W_t3v_ooov"])
+        self.assertNotIn("W_t2t3v_ooovvv", names)
+
+    def test_no_emittable_operator_equals_its_term(self):
+        """E0.0 invariant across the manifold: no emitted operator has the same
+        factor multiset as its source term (that would be a leaked root — a
+        rename, not a factorization)."""
+        from collections import Counter
+        for t in self.triples:
+            term_facs = Counter(f.name for f in t.factors)
+            for node_term, _ in emittable_operators(t):
+                self.assertNotEqual(
+                    Counter(f.name for f in node_term.factors),
+                    term_facs,
+                    f"root leaked as operator for {t!r}",
+                )
+
+    # ── E0.1: hierarchical (root-step) factorized rewrite ──────────
+
+    def test_rewrite_factors_t2t3v(self):
+        """E0.1 gate: a t2·t3·v term rewrites to t2 · W_t3v_ooov (root step over
+        the leaf t2 and the inner operator), NOT a whole-term collapse. The
+        inner summed indices move into the operator; only l survives."""
+        t = self._find(["t2", "t3", "v"])
+        r = rewrite_term_factorized(t)
+        names = sorted(f.name for f in r.factors)
+        self.assertEqual(names, ["W_t3v_ooov", "t2"])
+        self.assertEqual(r.coeff, t.coeff)
+        self.assertEqual(set(r.free_indices), set(t.free_indices))
+        self.assertEqual(len(r.summed_indices), 1)  # only the root step's l
+
+    def test_rewrite_single_step_term_unchanged(self):
+        """E0.1: a 2-factor (single pairwise step) term has no inner operator to
+        hoist, so it is returned unchanged."""
+        two = next(t for t in self.triples if len(t.factors) == 2)
+        r = rewrite_term_factorized(two)
+        self.assertEqual(
+            [f.name for f in r.factors], [f.name for f in two.factors]
+        )
+
+    def test_rewrite_is_exact_over_manifold(self):
+        """E0.1 exactness: re-expanding each factored term (root leaves + the
+        operator's definition leaves) reproduces the original term's factor
+        multiset, across the whole triples manifold. 0 failures."""
+        from collections import Counter
+        from ccgen.optimization.factorize import (
+            best_contraction_tree_full, _leaf_tensors,
+        )
+        for t in self.triples:
+            _, root = best_contraction_tree_full(t)
+            if root.is_leaf or all(c.is_leaf for c in root.children):
+                continue  # unchanged by rewrite
+            expanded = Counter()
+            for c in root.children:
+                expanded.update(f.name for f in _leaf_tensors(c))
+            self.assertEqual(
+                expanded, Counter(f.name for f in t.factors),
+                f"factored form does not re-expand to {t!r}",
+            )
+
+    # ── E0.2: manifold operator dedup ──────────────────────────────
+
+    def test_manifold_operators_deduped_by_name(self):
+        """E0.2 gate: the CCSDT triples yield 24 distinct DERIVED operators
+        (deduped by name), each unique, none a CCSD reuse. With include_reuse
+        the CCSD operators the rewrite references are added (29 total)."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        names = [o.name for o in ops]
+        self.assertEqual(len(names), len(set(names)))  # distinct
+        self.assertEqual(len(ops), 24)
+        seeded = {"Fae", "Fme", "Fmi", "Wmnij", "Wabef", "Wmbej"}
+        self.assertTrue({o.name for o in ops}.isdisjoint(seeded))
+        # include_reuse adds only seeded ops, nothing new-derived
+        with_reuse = manifold_operators(self.triples, include_reuse=True)
+        self.assertTrue({o.name for o in with_reuse} - {o.name for o in ops}
+                        <= seeded)
+
+    def test_manifold_operator_usage_counts_reference_sites(self):
+        """E0.2: usage_count sums the reference sites — equals the total number
+        of Derived emittable nodes across the manifold."""
+        from ccgen.optimization.factorize import emittable_operators
+        sites = sum(
+            1
+            for t in self.triples
+            for _, r in emittable_operators(t)
+            if isinstance(r, Derived)
+        )
+        ops = manifold_operators(self.triples, include_reuse=False)
+        self.assertEqual(sum(o.usage_count for o in ops), sites)
+
+    def test_manifold_operator_indices_match_signature(self):
+        """E0.2: each operator's index count equals its block-signature length
+        (the emitted build_W rank)."""
+        for o in manifold_operators(self.triples, include_reuse=False):
+            self.assertEqual(len(o.indices), len(o.index_space_sig))
+            self.assertEqual(len(o.definition_terms), 1)
+
+    # ── E0.3: emit a factorized translation unit ───────────────────
+
+    def test_factorized_tu_is_wellformed(self):
+        """E0.3 gate: the factorized emit produces a balanced C++ TU with one
+        build_W per derived operator and no un-emittable CCSD-operator factors
+        (those stay inline; dressing is D7.3's job)."""
+        import re
+        from ccgen.optimization.factorize import emit_factorized_translation_unit
+        tu = emit_factorized_translation_unit("ccsdt")
+        self.assertEqual(tu.count("{"), tu.count("}"))
+        builders = set(re.findall(r"build_(W_\w+)\(", tu))
+        self.assertEqual(len(builders), 24)
+        # no raw CCSD-operator factor leaked into a kernel body
+        self.assertFalse(re.search(r"\b(Fme|Fae|Fmi|Wmnij|Wabef)\(", tu))
+
+    def test_factorized_tu_compiles(self):
+        """E0.3 gate: the factorized CCSDT TU is valid C++ against the real CC
+        headers. Skipped if a C++23 compiler or the Eigen fetch is absent."""
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present (configure the build first)")
+
+        from ccgen.optimization.factorize import emit_factorized_translation_unit
+        code = emit_factorized_translation_unit("ccsdt")
+        with tempfile.NamedTemporaryFile(
+            suffix=".cpp", mode="w", delete=False
+        ) as fh:
+            fh.write(code)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=300,
+            )
+            self.assertEqual(
+                proc.returncode, 0,
+                f"factorized CCSDT failed to compile:\n{proc.stderr[-2000:]}",
+            )
+        finally:
+            os.unlink(src)
+
+
+class CCSDTQTests(unittest.TestCase):
+    """F5 — generalize the factorizer to CCSDTQ (t4). The engine is
+    rank-agnostic; these run the CCSDT tools on the quadruples manifold."""
+
+    @classmethod
+    def setUpClass(cls):
+        eqs = generate_cc_equations(
+            "ccsdtq", engine="diagram", canonical_fock=True
+        )
+        cls.quadruples = eqs["quadruples"]
+        cls.q_triples = eqs["triples"]
+        cls.t4 = [
+            t for t in cls.quadruples
+            if any(f.name == "t4" for f in t.factors)
+        ]
+        # CCSDT triples, for the cross-rank reuse verdict (F5.2).
+        cls.ccsdt_triples = generate_cc_equations(
+            "ccsdt", engine="diagram", canonical_fock=True
+        )["triples"]
+
+    @staticmethod
+    def _derived_ops(terms):
+        return {
+            r.name
+            for t in terms
+            for _, r in identify_tree(t)
+            if isinstance(r, Derived)
+        }
+
+    # ── F5.0: t4 inventory + exact gate ────────────────────────────
+
+    def test_t4_shapes_present(self):
+        """F5.0: the t4-bearing shapes are the CCSDT t3 table one rank up."""
+        from collections import Counter
+
+        counts = Counter(
+            tuple(sorted(f.name for f in t.factors)) for t in self.t4
+        )
+        self.assertEqual(counts[("t2", "t4", "v")], 84)
+        self.assertEqual(counts[("t1", "t4", "v")], 64)
+        self.assertEqual(counts[("t1", "t1", "t4", "v")], 42)
+        self.assertEqual(counts[("t4", "v")], 28)
+
+    def test_t2t4v_factors_below_nary(self):
+        """F5.0: the FLOP lever holds at rank 4 — t2·t4·v drops o^6v^6 -> a
+        strictly lower total degree, mirroring t2·t3·v at rank 3."""
+        t = next(
+            t for t in self.t4
+            if sorted(f.name for f in t.factors) == ["t2", "t4", "v"]
+        )
+        nary, best = contraction_tree_cost(t)
+        self.assertEqual(nary, Cost(6, 6))
+        self.assertLess(best.total, nary.total)
+
+    def test_every_quadruples_tree_preserves_its_term(self):
+        """F5.0 exact gate: all 2672 quadruples terms' trees reproduce their
+        raw term (F3 associativity check at rank 4)."""
+        for t in self.quadruples:
+            self.assertTrue(
+                tree_preserves_term(t),
+                f"tree does not reproduce {t!r}",
+            )
+
+    # ── F5.1: t4 operator family + savings ─────────────────────────
+
+    def test_t4v_operator_tops_savings(self):
+        """F5.1: the top-savings operator in the t4 manifold is a derived
+        t4·v intermediate (rank-8 block), and it dwarfs the best CCSD reuse —
+        the savings-over-frequency inversion, sharper at rank 4."""
+        vals = value_operators(self.t4)
+        top = vals[0]
+        self.assertEqual(top.kind, "derived")
+        self.assertTrue(top.name.startswith("W_t4v"))
+        by_name = {v.name: v for v in vals}
+        wmbej = by_name.get("Wmbej")
+        self.assertIsNotNone(wmbej)
+        # the expensive t4·v build swamps Wmbej's cheap o^3v^3 despite Wmbej's
+        # comparable use count.
+        self.assertGreater(top.savings, 1000 * wmbej.savings)
+        self.assertGreater(top.build_flops, wmbej.build_flops)
+
+    def test_t4v_family_derived_not_reused(self):
+        """F5.1: the t4·v operators are all newly derived (no CCSD operator has
+        a t4 factor or a rank-8 block) — the rank-4 curated set."""
+        seeded = {fp.op_name for fp in seeded_fingerprints()}
+        t4v = {
+            r.name
+            for t in self.t4
+            for _, r in identify_tree(t)
+            if isinstance(r, Derived) and r.name.startswith("W_t4v")
+        }
+        self.assertTrue(t4v)
+        self.assertTrue(t4v.isdisjoint(seeded))
+
+    # ── F5.2: cross-rank reuse verdict ─────────────────────────────
+
+    def test_ccsdt_operators_reused_in_ccsdtq_triples(self):
+        """F5.2(b) — cross-manifold recursion: EVERY operator CCSDT's triples
+        derives reappears in CCSDTQ's triples (full containment, no CCSDT-only
+        operator). CCSDTQ triples add only t4-bearing ops on top. So a lower-
+        rank operator is reused verbatim solving a higher method."""
+        t_der = self._derived_ops(self.ccsdt_triples)
+        q_der = self._derived_ops(self.q_triples)
+        self.assertTrue(t_der)
+        self.assertTrue(
+            t_der <= q_der,
+            f"CCSDT-only operators not reused: {sorted(t_der - q_der)}",
+        )
+        # the extra CCSDTQ-triples ops are t4-bearing (the new rank's content).
+        for extra in q_der - t_der:
+            self.assertIn("t4", extra)
+
+    def test_t3v_operators_recur_in_ccsdtq_quadruples(self):
+        """F5.2(a) — intra-method recursion: the CCSDT-derived t3·v operators
+        recur inside CCSDTQ's own quadruples manifold (from its non-t4 terms
+        like t3·t3·v). Reuse compounds down the manifold hierarchy, not just
+        across methods."""
+        q_der = self._derived_ops(self.quadruples)
+        w3 = {o for o in q_der if o.startswith("W_t3v")}
+        self.assertIn("W_t3v_ooovvv", w3)
+        self.assertIn("W_t3v_oooovv", w3)
+
+    # ── F5.3: cumulative-across-rank verdict ───────────────────────
+
+    def test_recursion_summary_is_cumulative(self):
+        """F5.3: the derived operator set is cumulative across rank — CCSDT's
+        triples set is fully contained in CCSDTQ's triples set, and every new
+        operator at the higher rank is t4-bearing. `recursion_summary` reports
+        the verdict as data."""
+        s = recursion_summary(self.ccsdt_triples, self.q_triples)
+        self.assertTrue(s["cumulative"])
+        self.assertEqual(s["lower_only"], [])
+        self.assertEqual(s["shared"], s["lower_derived"])
+        for op in s["higher_only"]:
+            self.assertIn("t4", op)
+
+
+class RankLocalityTheoremTests(unittest.TestCase):
+    """Rank-locality theorem within the F3 optimization model (see the doc).
+    Parts 1-3 are structural theorems; these checks are exhaustive-enumeration
+    VERIFICATION of them over diagram/canonical-Fock manifolds. Part 4 is an
+    observed CCSDT->CCSDTQ property, gated separately in CCSDTQTests. Parametrized
+    over (method, manifold, Tn) for CCSDT (n=3) and CCSDTQ (n=4)."""
+
+    CASES = [("ccsdt", "triples", "t3"), ("ccsdtq", "quadruples", "t4")]
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifolds = {}
+        for method, man, tn in cls.CASES:
+            eqs = generate_cc_equations(
+                method, engine="diagram", canonical_fock=True
+            )
+            cls.manifolds[(method, man)] = eqs[man]
+
+    @staticmethod
+    def _op_amps(node_result):
+        """Amplitude factor names in a Derived operator's definition."""
+        return {
+            f.name
+            for f in node_result.spec.definition_terms[0].factors
+            if f.name.startswith("t")
+        }
+
+    def test_part1_and_2_Vtn_ops_only_in_Tn_terms(self):
+        """Parts 1 & 2: an operator whose DEFINITION contains Tn is neither
+        generated nor reused in a Tn-free term (0 across the manifold)."""
+        for method, man, tn in self.CASES:
+            terms = self.manifolds[(method, man)]
+            violations = 0
+            seen_vtn = set()
+            for t in terms:
+                has_tn = any(f.name == tn for f in t.factors)
+                for _, r in identify_tree(t):
+                    if not isinstance(r, Derived):
+                        continue
+                    if tn in self._op_amps(r):
+                        seen_vtn.add(r.name)
+                        if not has_tn:
+                            violations += 1
+            self.assertGreater(len(seen_vtn), 0, f"{method}: no V·{tn} ops")
+            self.assertEqual(
+                violations, 0,
+                f"{method}: V·{tn} op appeared in a {tn}-free term",
+            )
+
+    def test_part3_lower_ops_do_appear_in_Tn_terms(self):
+        """Part 3 (refutation): lower-rank V·Tm operators (definition has a
+        lower amplitude, not Tn) ARE reused in Tn-bearing terms — the conjecture's
+        'only in Tn-free terms' is false. Nonzero count is the disproof."""
+        for method, man, tn in self.CASES:
+            terms = self.manifolds[(method, man)]
+            lower_in_tn = 0
+            for t in terms:
+                if not any(f.name == tn for f in t.factors):
+                    continue
+                for _, r in identify_tree(t):
+                    if not isinstance(r, Derived):
+                        continue
+                    amps = self._op_amps(r)
+                    if amps and tn not in amps and all(a < tn for a in amps):
+                        lower_in_tn += 1
+            self.assertGreater(
+                lower_in_tn, 0,
+                f"{method}: expected lower-rank ops reused in {tn}-terms",
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

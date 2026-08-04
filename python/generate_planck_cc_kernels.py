@@ -37,6 +37,14 @@ def main() -> None:
              "(experimental; default off).",
     )
     parser.add_argument(
+        "--engine",
+        choices=["diagram", "wick"],
+        default="diagram",
+        help="Equation-generation engine. 'diagram' is canonical-by-construction "
+             "and ~200x faster at high rank (CCSDTQ ~3s vs ~600s), residual-equal "
+             "to 'wick'. Default: diagram.",
+    )
+    parser.add_argument(
         "--intermediate-threshold",
         type=int,
         default=5,
@@ -62,6 +70,7 @@ def main() -> None:
     for method in args.methods:
         code = print_cpp_planck(
             method.lower(),
+            engine=args.engine,
             include_intermediates=args.include_intermediates,
             factorize_tau=args.factorize_tau,
             intermediate_threshold=args.intermediate_threshold,

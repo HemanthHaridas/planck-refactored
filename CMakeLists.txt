@@ -32,10 +32,22 @@ option(PLANCK_CC_INCLUDE_INTERMEDIATES
     "Emit ccgen intermediate builders in generated CC kernels" ON)
 set(PLANCK_CC_INTERMEDIATE_THRESHOLD "5" CACHE STRING
     "Min usage count for extracted ccgen intermediates")
+# ccgen equation-generation engine. 'diagram' is canonical-by-construction and
+# ~200x faster at high rank (CCSDTQ ~4s vs ~600s for 'wick'), residual-equal to
+# 'wick' (gated by the wick-vs-diagram equality test in
+# python/ccgen/tests/test_regressions.py). Default 'diagram' so a MAXORDER=4
+# build finishes in seconds instead of minutes.
+set(PLANCK_CC_ENGINE "diagram" CACHE STRING
+    "ccgen generation engine: diagram (default, fast) or wick (textbook)")
 
 if(NOT PLANCK_CC_MAXORDER MATCHES "^[2-6]$")
     message(FATAL_ERROR
         "PLANCK_CC_MAXORDER must be an integer in [2, 6]; got '${PLANCK_CC_MAXORDER}'")
+endif()
+
+if(NOT PLANCK_CC_ENGINE MATCHES "^(diagram|wick)$")
+    message(FATAL_ERROR
+        "PLANCK_CC_ENGINE must be 'diagram' or 'wick'; got '${PLANCK_CC_ENGINE}'")
 endif()
 
 # Build the ccgen method list up to PLANCK_CC_MAXORDER.
@@ -401,6 +413,7 @@ if(Python3_Interpreter_FOUND)
     set(_ccgen_planck_kernel_args
         --output-dir ${CMAKE_BINARY_DIR}/generated/cc
         --methods ${PLANCK_CC_METHODS}
+        --engine ${PLANCK_CC_ENGINE}
         --intermediate-threshold ${PLANCK_CC_INTERMEDIATE_THRESHOLD}
     )
     if(PLANCK_CC_INCLUDE_INTERMEDIATES)
@@ -416,7 +429,7 @@ if(Python3_Interpreter_FOUND)
         COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${PLANCK_CC_METHODS})"
     )
 
-    message(STATUS "ccgen     : emitting Planck CC kernels up to rank ${PLANCK_CC_MAXORDER} [${PLANCK_CC_METHODS}]")
+    message(STATUS "ccgen     : emitting Planck CC kernels up to rank ${PLANCK_CC_MAXORDER} [${PLANCK_CC_METHODS}] via ${PLANCK_CC_ENGINE} engine")
 endif()
 
 if(Python3_Interpreter_FOUND)
