@@ -905,6 +905,31 @@ class CCSDTQTests(unittest.TestCase):
                 worst_gap = max(worst_gap, (opt - joint) / opt)
         self.assertLess(worst_gap, 1e-4)  # < 0.01% — greedy is enough
 
+    # ── M2.3: measured joint-vs-baseline verdict ───────────────────
+
+    def test_joint_beats_flops_only_baseline(self):
+        """M2.3 gate (answers B1 with a number): at a budget in the divergence
+        regime the joint selection retains MORE FLOP savings than the flops-only
+        baseline (B1), at NO more memory. Measured: at 850 GB, +5.68% savings
+        using 691 vs 850 GB (26 smaller ops vs 15 big ones)."""
+        eqs = generate_cc_equations("ccsdtq", engine="diagram", canonical_fock=True)
+        terms = [t for m in ("doubles", "triples", "quadruples") for t in eqs[m]]
+        ops = manifold_operators(terms, include_reuse=False)
+
+        def sv(names):
+            return sum(operator_savings(o, 30, 100) for o in ops if o.name in names)
+
+        def by(names):
+            return sum(operator_bytes(o, 30, 100) for o in ops if o.name in names)
+
+        B = 850 * 10**9
+        _, joint = select_best_of_both(ops, B)
+        _, b1 = select_under_memory_budget(ops, B, key="savings")  # flops-only
+        self.assertGreater(sv(joint), sv(b1))                 # more savings
+        self.assertLessEqual(by(joint), by(b1))               # ≤ the memory
+        self.assertGreater((sv(joint) - sv(b1)) / sv(b1), 0.05)  # > 5%
+        self.assertNotEqual(set(joint), set(b1))              # different pick
+
     # ── F5.0: t4 inventory + exact gate ────────────────────────────
 
     def test_t4_shapes_present(self):

@@ -186,18 +186,27 @@ Sub-steps:
   Scaling note (measured while validating): `manifold_operators` at cc5 (20,375
   quintuples terms) takes ~38 s and the residual ~90 s to generate — the emit
   selection is cheap, the per-term tree search is the cost at high rank.
-- **M2.3 — measured verdict vs baseline (~S).** On a CCSDTQ budget in the
-  divergence regime, report FLOP savings retained by `select_best_of_both` vs
-  flops-greedy alone (the B1 selection), and the memory each uses. *Gate:* the
-  joint selection retains ≥ flops-greedy's savings at ≤ its memory, and differs
-  from the flops-only B1 pick — B1 answered with a number.
+- **M2.3 — measured verdict vs baseline (~S). LANDED — B1 answered with a
+  number.** At a CCSDTQ budget in the divergence regime the joint selection
+  (`select_best_of_both`) beats the flops-only baseline (B1, savings-greedy)
+  **both ways at once**: at **850 GB it retains +5.68% more FLOP savings using
+  LESS memory (691 GB vs 850 GB)** — 26 smaller operators instead of 15 big
+  ones. That is the memory-blind→memory-aware inversion (B1) quantified
+  end-to-end: the density ranking finds a strictly better set that the
+  flops-only ranking cannot see. (The 16.7% figure from M2.0 is the gap *between
+  the two keys*; the joint-vs-flops-only gain is up to 5.68%, since best-of-both
+  takes the max and only improves where density wins.) *Gate (in `CCSDTQTests`):*
+  `test_joint_beats_flops_only_baseline` (more savings, ≤ memory, > 5%, different
+  pick at 850 GB).
 
 **M2 verdict (measured, was the honest-ceiling case).** The exact knapsack is
 **not worth building**: best-of-both-greedy is optimal to within 0.002% on
 CCSDTQ. M2's real content is (a) the total-budget framing (M2.0), (b) running
-*both* rankings and taking the max (M2.1), and (c) that this differs from the
-flops-only baseline where the keys diverge (23% of CCSDTQ budgets). The
-"greedy is enough" outcome the scope anticipated is the one that landed.
+*both* rankings and taking the max (M2.1), (c) wiring it into emit (M2.2), and
+(d) that this beats the flops-only baseline by up to **5.68% savings at less
+memory** where the keys diverge (M2.3). The "greedy is enough" outcome the scope
+anticipated is the one that landed — but "run both keys" is a genuine,
+measured win over the flops-only baseline, not a no-op.
 
 ### M3 — locality shaping of the emitted loop (~M)
 For each materialized operator, choose `memory_layout` + `blocking_hint` from the
