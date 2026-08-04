@@ -892,6 +892,58 @@ def factored_builder_steps(spec, scratch_prefix="X"):
     return steps
 
 
+# ── M3.1: static stride metric for the emitted builder loop ────────
+
+
+def _factor_access_stride(factor, inner_index):
+    """How a factor's accessor strides against the innermost loop index:
+      0  -> unit stride  (inner index is the factor's LAST axis)
+      k>0 -> strided     (inner index is k axes from the last; bigger = worse)
+      None -> invariant  (factor does not depend on the inner index — hoistable)
+    """
+    axes = [i for i, idx in enumerate(factor.indices) if idx == inner_index]
+    if not axes:
+        return None
+    last = len(factor.indices) - 1
+    return min(last - a for a in axes)  # closest occurrence to the last axis
+
+
+def step_stride_penalty(term, inner_index, n_occ=30, n_vir=100):
+    """Penalty for ONE contraction step's innermost-loop access pattern: sum over
+    the step's factors of (distance of the inner index from each factor's last
+    axis), i.e. how far from unit-stride each read is. 0 = every factor reads the
+    inner index unit-stride; invariant factors contribute 0 (hoistable).
+
+    Weighted by the step's loop volume (∏ index sizes) so a badly-strided large
+    step outweighs a small one — a strided read in an o⁵v² loop matters more than
+    in an o²v² loop."""
+    vol = 1
+    for idx in list(term.free_indices) + list(term.summed_indices):
+        vol *= n_occ if idx.space == "occ" else n_vir
+    dist = 0
+    for f in term.factors:
+        s = _factor_access_stride(f, inner_index)
+        if s is not None:
+            dist += s
+    return dist * vol
+
+
+def builder_stride_score(spec, n_occ=30, n_vir=100):
+    """M3.1: aggregate stride penalty of a builder's emitted loops, over its
+    factored steps. Innermost loop = the step's last summed index (the emitter's
+    order today). Lower is better; 0 = every factor reads the innermost index
+    unit-stride in every step. This is the baseline the M3.2 loop-order/layout
+    shaping must improve."""
+    total = 0
+    for _lhs, term in factored_builder_steps(spec):
+        if not term.summed_indices:
+            continue  # no inner loop
+        from ..indices import canonical_index_order
+        inner = canonical_index_order(list(term.summed_indices))[-1]
+        total += step_stride_penalty(term, inner, n_occ, n_vir)
+    return total
+
+
 # ── F4: savings-weighted operator valuation ────────────────────────
 
 

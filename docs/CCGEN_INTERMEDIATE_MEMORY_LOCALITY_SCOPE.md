@@ -255,12 +255,20 @@ Sub-steps:
   `CostModelTests`):* `test_builder_steps_cut_flat_cost` (≥8 improve, none worse),
   `test_builder_steps_are_exact` (leaves + summed-index consumption preserved),
   `test_factored_builder_tu_compiles` (scratch tensors declared/typed, compiles).
-- **M3.1 — stride metric (~S).** A function scoring a builder's innermost-loop
-  access pattern: for each factor accessor, is the innermost loop index its
-  last (unit-stride) axis, a strided axis, or absent (loop-invariant, hoistable)?
-  Aggregate to a per-builder stride score. *Gate:* the metric ranks a
-  hand-written unit-stride loop above a transposed one on a fixture; reproduces
-  the baseline (pre-M3.0) flat-nest scores.
+- **M3.1 — stride metric (~S). LANDED.** `builder_stride_score(spec)` (via
+  `step_stride_penalty` / `_factor_access_stride`) scores a builder's
+  innermost-loop access: for each factor, the distance of the innermost loop
+  index from that factor's LAST axis (0 = unit stride, k>0 = strided, absent =
+  loop-invariant/hoistable), summed over factors and weighted by loop volume.
+  Innermost loop = the step's last summed index, the emitter's current
+  (alphabetical) order. **The metric proves M3.2 has a free lever**: e.g. the
+  `W_t2t2v_oooovv` X1 step (`t2·v` summed over `m,e`) scores **0** with `m`
+  innermost (both factors read `m` last) but **1.08e11** with the emitter's
+  current `e` — reordering the summed loops alone (no algebra change) removes the
+  penalty. *Gate (in `CostModelTests`):* `test_stride_metric_ranks_unit_below_strided`
+  (unit-stride fixture scores 0, strided scores higher),
+  `test_builder_stride_score_is_baseline` (nonzero baseline + a step that
+  benefits from inner-index reorder exists).
 - **M3.2 — layout + loop-order shaping (~M, answers B3).** Choose the summed-loop
   order (contraction index innermost against the largest factor's unit-stride
   axis) and set `memory_layout` / `blocking_hint` on the spec from the

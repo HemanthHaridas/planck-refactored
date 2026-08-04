@@ -33,6 +33,7 @@ from ccgen.optimization.factorize import (  # noqa: E402
     node_key,
     footprint_inventory,
     manifold_operators,
+    builder_stride_score,
     factored_builder_steps,
     node_to_term,
     operator_bytes,
@@ -866,6 +867,52 @@ class CostModelTests(unittest.TestCase):
             )
         finally:
             os.unlink(src)
+
+    # ── M3.1: static stride metric ─────────────────────────────────
+
+    def test_stride_metric_ranks_unit_below_strided(self):
+        """M3.1 gate: on a fixture, a unit-stride access (inner index is the
+        factor's LAST axis) scores below a transposed one."""
+        from fractions import Fraction
+        from ccgen.indices import make_occ, make_vir
+        from ccgen.project import AlgebraTerm
+        from ccgen.tensors import Tensor
+        from ccgen.optimization.factorize import step_stride_penalty
+        i = make_occ("i")
+        a, k = make_vir("a"), make_occ("k")  # k = the contraction (inner) index
+        # unit: BOTH factors read k at their LAST axis -> dist 0 each.
+        unit = AlgebraTerm(Fraction(1), (Tensor("A", (i, k)), Tensor("B", (a, k))),
+                           (i, a), (k,), True)
+        # strided: A reads k at axis 0 (dist 1) -> nonzero penalty.
+        strided = AlgebraTerm(Fraction(1), (Tensor("A", (k, i)), Tensor("B", (a, k))),
+                              (i, a), (k,), True)
+        self.assertEqual(step_stride_penalty(unit, k), 0)
+        self.assertGreater(step_stride_penalty(strided, k),
+                           step_stride_penalty(unit, k))
+
+    def test_builder_stride_score_is_baseline(self):
+        """M3.1 gate: the emitted builders carry a nonzero aggregate stride
+        penalty today (loops ordered alphabetically, not for stride) — the
+        baseline M3.2 must reduce. And the metric is sensitive to inner-index
+        choice, so there IS room: some step scores 0 under a better inner index
+        but nonzero under the emitter's current one."""
+        from ccgen.optimization.factorize import step_stride_penalty
+        ops = manifold_operators(self.triples, include_reuse=False)
+        total = sum(builder_stride_score(o) for o in ops)
+        self.assertGreater(total, 0)  # baseline has stride penalty to remove
+        # sensitivity: find a step where reordering the inner index beats current
+        found = False
+        for op in ops:
+            for _lhs, t in factored_builder_steps(op):
+                if len(t.summed_indices) < 2:
+                    continue
+                pens = [step_stride_penalty(t, s) for s in t.summed_indices]
+                if min(pens) < max(pens):
+                    found = True
+                    break
+            if found:
+                break
+        self.assertTrue(found, "no step benefits from inner-index reorder")
 
 
 class CCSDTQTests(unittest.TestCase):
