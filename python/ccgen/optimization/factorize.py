@@ -617,11 +617,67 @@ def manifold_operators(terms, fingerprints=None, include_reuse=True):
 # ── E1: savings-budgeted operator selection ────────────────────────
 
 
-def operator_savings(spec) -> int:
+def operator_savings(spec, n_occ: int = 10, n_vir: int = 50) -> int:
     """Savings of materializing an emittable operator once vs rebuilding it at
     every reference site: (usage_count - 1) × build_flops, where build_flops is
     the scaling-dominated flop magnitude of the operator's own contraction."""
-    return max(0, spec.usage_count - 1) * nary_cost(spec.definition_terms[0]).flops()
+    build = nary_cost(spec.definition_terms[0]).flops(n_occ, n_vir)
+    return max(0, spec.usage_count - 1) * build
+
+
+# ── M0: footprint + density inventory (memory/locality investigation) ──
+
+
+def operator_bytes(spec, n_occ: int = 30, n_vir: int = 100,
+                   dtype_bytes: int = 8) -> int:
+    """Storage footprint of the materialized operator TENSOR (its block), at the
+    given orbital-space sizes. This is what selection currently ignores (B1).
+
+    Defaults O=30/V=100 to match `IntermediateSpec.estimated_bytes`; pass
+    explicit sizes to sweep. Note the factorizer's `operator_savings` defaults to
+    O=10/V=50 (`Cost.flops`), so mixing the two at their defaults compares
+    inconsistent scales — pass matching sizes to both when ranking by density."""
+    n = 1
+    for idx in spec.indices:
+        n *= n_occ if idx.space == "occ" else n_vir
+    return n * dtype_bytes
+
+
+def operator_density(spec, n_occ: int = 30, n_vir: int = 100) -> float:
+    """FLOP savings per byte of storage — the joint metric the flops-only
+    selection ignores. Savings and bytes computed at the SAME sizes."""
+    b = operator_bytes(spec, n_occ, n_vir)
+    return operator_savings(spec, n_occ, n_vir) / max(1, b)
+
+
+@dataclass(frozen=True)
+class FootprintEntry:
+    name: str
+    rank: int
+    sig: str
+    uses: int
+    savings: int
+    bytes: int
+    density: float
+
+
+def footprint_inventory(specs, n_occ: int = 30, n_vir: int = 100):
+    """M0: per-operator savings + footprint + density, at fixed O/V. The
+    reproducible form of the baseline B1/B2 tables. Sorted by savings desc."""
+    out = [
+        FootprintEntry(
+            name=s.name,
+            rank=len(s.indices),
+            sig=s.index_space_sig,
+            uses=s.usage_count,
+            savings=operator_savings(s, n_occ, n_vir),
+            bytes=operator_bytes(s, n_occ, n_vir),
+            density=operator_density(s, n_occ, n_vir),
+        )
+        for s in specs
+    ]
+    out.sort(key=lambda e: e.savings, reverse=True)
+    return out
 
 
 def select_operators_by_savings(specs, top_k=None, savings_fraction=None):
@@ -846,6 +902,19 @@ def _demo():
     for v in value_operators(triples)[:12]:
         print(f"  {v.savings:10.2e} {v.uses:4d} {str(v.build_step):>8}  "
               f"[{v.kind}] {v.name}")
+
+    # M0: footprint + density inventory — the memory/locality baseline. Savings
+    # and density are memory-blind vs memory-aware views of the SAME operators.
+    ops = manifold_operators(triples, include_reuse=False)
+    inv_fp = footprint_inventory(ops, n_occ=30, n_vir=100)
+    print("\nM0 footprint inventory (O=30,V=100) — savings vs bytes vs density:")
+    print(f"  {'savings':>10} {'GB':>8} {'flops/byte':>11}  operator")
+    for e in inv_fp[:8]:
+        print(f"  {e.savings:10.2e} {e.bytes/1e9:8.2f} {e.density:11.2e}  {e.name}")
+    top_s = inv_fp[0].name
+    top_d = max(inv_fp, key=lambda e: e.density).name
+    print(f"  savings-top={top_s}  density-top={top_d}  "
+          f"(disagree: {top_s != top_d})")
 
 
 if __name__ == "__main__":

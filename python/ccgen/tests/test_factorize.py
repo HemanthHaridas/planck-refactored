@@ -31,8 +31,11 @@ from ccgen.optimization.factorize import (  # noqa: E402
     inventory,
     nary_cost,
     node_key,
+    footprint_inventory,
     manifold_operators,
     node_to_term,
+    operator_bytes,
+    operator_density,
     operator_savings,
     recursion_summary,
     rewrite_term_factorized,
@@ -584,6 +587,41 @@ class CostModelTests(unittest.TestCase):
         tu = emit_factorized_translation_unit("ccsdt", top_k=5)
         self.assertEqual(len(set(re.findall(r"build_(W_\w+)\(", tu))), 5)
         self.assertEqual(tu.count("{"), tu.count("}"))
+
+    # ── M0: footprint + density inventory (memory/locality) ────────
+
+    def test_footprint_reproduces_baseline(self):
+        """M0 gate (B2): the inventory reproduces the measured footprints — a
+        rank-6 CCSDT operator is 64.8 GB at O=30/V=100."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        inv = footprint_inventory(ops)  # O=30, V=100
+        r6 = next(e for e in inv if e.rank == 6)
+        self.assertEqual(r6.bytes, 30**4 * 100**2 * 8)  # oooovv
+        self.assertAlmostEqual(r6.bytes / 1e9, 64.8, places=1)
+
+    def test_savings_and_density_rankings_disagree(self):
+        """M0 gate (B1): flops-only and savings/byte rankings pick DIFFERENT top
+        operators — the joint metric the current selection ignores."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        top_savings = max(ops, key=lambda o: operator_savings(o, 30, 100)).name
+        top_density = max(ops, key=lambda o: operator_density(o, 30, 100)).name
+        self.assertNotEqual(top_savings, top_density)
+        # the savings winner is a big rank-6 block; the density winner is smaller
+        self.assertGreater(
+            operator_bytes(next(o for o in ops if o.name == top_savings), 30, 100),
+            operator_bytes(next(o for o in ops if o.name == top_density), 30, 100),
+        )
+
+    def test_operator_bytes_scales_with_sizes(self):
+        """M0: footprint is size-parametrized (not the hardcoded 30/100), so the
+        inventory can sweep — doubling V multiplies a v-bearing op's bytes."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        vbearing = next(o for o in ops if "v" in o.index_space_sig
+                        and o.index_space_sig.count("v") >= 1)
+        nv_pow = vbearing.index_space_sig.count("v")
+        b1 = operator_bytes(vbearing, 30, 50)
+        b2 = operator_bytes(vbearing, 30, 100)
+        self.assertEqual(b2 // b1, 2**nv_pow)
 
 
 class CCSDTQTests(unittest.TestCase):

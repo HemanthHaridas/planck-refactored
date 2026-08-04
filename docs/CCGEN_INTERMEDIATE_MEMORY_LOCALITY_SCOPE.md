@@ -96,11 +96,21 @@ materialized is inlined and the term still re-expands to the original).
 The engine is a byte/stride cost model layered onto the existing savings model;
 each step returns a concrete measurement against the baseline above.
 
-### M0 — footprint + density inventory (~S)
-Tabulate every emittable operator with `estimated_bytes`, `operator_savings`, and
-`selection_density` at a representative O/V. Output: the baseline B1/B2 tables
-made reproducible. *Gate:* the inventory reproduces the measured 64.8 GB rank-6 /
-194,400 GB rank-8 footprints and the flops-only-vs-density ranking disagreement.
+### M0 — footprint + density inventory (~S). LANDED.
+`operator_bytes(spec, n_occ, n_vir)`, `operator_density(spec, …)`, and
+`footprint_inventory(specs, …)` in `factorize.py` tabulate every emittable
+operator's savings, footprint, and flops/byte at parametrized O/V (not the
+hardcoded 30/100 in `IntermediateSpec.estimated_bytes` — so the inventory can
+sweep). Reproduces the baseline exactly: CCSDT rank-6 `oooovv` = **64.8 GB**,
+CCSDTQ rank-8 `ooooovvv` = **194,400 GB**; savings-top (`W_t2t2v_oooovv`, 64.8
+GB) ≠ density-top (`W_t1t2v_ooov`, 0.02 GB — 3000× smaller, highest density).
+*Gate (in `CostModelTests`):* `test_footprint_reproduces_baseline` (rank-6 =
+64.8 GB), `test_savings_and_density_rankings_disagree` (B1: different top
+operators, savings-winner has more bytes), `test_operator_bytes_scales_with_sizes`
+(footprint is size-parametrized). One inconsistency surfaced and is documented:
+`operator_savings` defaults to `Cost.flops()`'s O=10/V=50 while `operator_bytes`
+defaults to O=30/V=100 — `operator_density` passes MATCHED sizes to both, and the
+ranking disagreement holds at matched sizes.
 
 ### M1 — feasibility guard (~S)
 Add a `max_operator_bytes` budget to selection: an operator over budget is never
