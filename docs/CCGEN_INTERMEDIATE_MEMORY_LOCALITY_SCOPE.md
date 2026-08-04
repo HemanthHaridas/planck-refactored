@@ -151,12 +151,15 @@ So M2 is a CCSDTQ-and-up feature; on CCSDT it should measurably match the baseli
 
 Sub-steps:
 
-- **M2.0 — total-budget feasibility + greedy baseline (~S).** A
-  `select_under_memory_budget(specs, total_bytes, key="savings"|"density")` that
-  greedily fills the budget in `key` order (the two existing rankings, now under a
-  *total* not per-operator cap). *Gate:* returns a set with `Σ bytes ≤ budget`;
-  reproduces the measured CCSDT no-divergence and the CCSDTQ 23%/16.7% divergence
-  between the two keys.
+- **M2.0 — total-budget feasibility + greedy baseline (~S). LANDED.**
+  `select_under_memory_budget(specs, total_bytes, key="savings"|"density")`
+  greedily fills a TOTAL budget (`Σ bytes ≤ total_bytes`) in `key` order — the two
+  rankings M2.1 is measured against. Reproduces the measured divergence exactly:
+  CCSDTQ **66/286 budgets divergent, max 16.7%** savings gap between the keys;
+  CCSDT < 1% (operators cluster by footprint). *Gate:* `test_total_budget_respected`
+  (Σ bytes ≤ budget, both keys), `test_ccsdt_keys_barely_diverge` (< 1% gap — flops
+  greedy already near the memory optimum on CCSDT), `test_ccsdtq_keys_diverge_materially`
+  (> 10% of budgets divergent, worst-case > 10% — where M2.1 earns its place).
 - **M2.1 — exact knapsack (~M, the modeling core).** An exact 0/1 knapsack over
   the operator set. **NOT an integer-weight DP** — the footprints span 3000×
   (0.02 GB → 64.8 GB at CCSDT, worse at CCSDTQ), so rounding bytes to GB weights

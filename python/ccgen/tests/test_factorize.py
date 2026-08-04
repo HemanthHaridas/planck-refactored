@@ -41,6 +41,7 @@ from ccgen.optimization.factorize import (  # noqa: E402
     rewrite_term_factorized,
     seeded_fingerprints,
     select_operators_by_savings,
+    select_under_memory_budget,
     tree_preserves_term,
     tree_terms,
     value_operators,
@@ -693,6 +694,34 @@ class CostModelTests(unittest.TestCase):
         finally:
             os.unlink(src)
 
+    # ── M2.0: total-memory-budget greedy ───────────────────────────
+
+    def test_total_budget_respected(self):
+        """M2.0 gate: greedy fill bounds the SUM of footprints ≤ budget (unlike
+        M1's per-operator cap), for both keys."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        budget = 100 * 10**9
+        for key in ("savings", "density"):
+            kept, _ = select_under_memory_budget(ops, budget, key=key)
+            self.assertLessEqual(
+                sum(operator_bytes(o, 30, 100) for o in kept), budget
+            )
+
+    def test_ccsdt_keys_barely_diverge(self):
+        """M2.0 gate (measured): on CCSDT the operators cluster by footprint, so
+        savings-greedy and density-greedy pick near-identical savings under a
+        total budget — flops-only is already near the memory optimum here."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        worst = 0.0
+        for gb in range(1, 400, 3):
+            b = gb * 10**9
+            _, sk = select_under_memory_budget(ops, b, key="savings")
+            _, dk = select_under_memory_budget(ops, b, key="density")
+            sv = sum(operator_savings(o, 30, 100) for o in ops if o.name in sk)
+            dv = sum(operator_savings(o, 30, 100) for o in ops if o.name in dk)
+            worst = max(worst, abs(sv - dv) / max(1, max(sv, dv)))
+        self.assertLess(worst, 0.01)  # < 1% — negligible on CCSDT
+
 
 class CCSDTQTests(unittest.TestCase):
     """F5 — generalize the factorizer to CCSDTQ (t4). The engine is
@@ -722,6 +751,32 @@ class CCSDTQTests(unittest.TestCase):
             for _, r in identify_tree(t)
             if isinstance(r, Derived)
         }
+
+    # ── M2.0: total-budget greedy divergence (the M2 motivation) ───
+
+    def test_ccsdtq_keys_diverge_materially(self):
+        """M2.0 gate (measured, the reason M2 exists): on CCSDTQ the 14 footprint
+        tiers force real trades, so savings-greedy and density-greedy pick
+        materially different savings under a total budget — divergent in a
+        meaningful fraction of budgets, worst case > 10%. This is where the
+        joint objective (M2.1) earns its place; CCSDT has ~no such gap."""
+        eqs = generate_cc_equations("ccsdtq", engine="diagram", canonical_fock=True)
+        terms = [t for m in ("doubles", "triples", "quadruples")
+                 for t in eqs[m]]
+        ops = manifold_operators(terms, include_reuse=False)
+        div, tot, worst = 0, 0, 0.0
+        for gb in range(1, 2000, 7):
+            b = gb * 10**9
+            _, sk = select_under_memory_budget(ops, b, key="savings")
+            _, dk = select_under_memory_budget(ops, b, key="density")
+            sv = sum(operator_savings(o, 30, 100) for o in ops if o.name in sk)
+            dv = sum(operator_savings(o, 30, 100) for o in ops if o.name in dk)
+            tot += 1
+            if sk != dk:
+                div += 1
+                worst = max(worst, abs(sv - dv) / max(1, max(sv, dv)))
+        self.assertGreater(div / tot, 0.10)   # divergent in >10% of budgets
+        self.assertGreater(worst, 0.10)       # worst-case gap > 10%
 
     # ── F5.0: t4 inventory + exact gate ────────────────────────────
 

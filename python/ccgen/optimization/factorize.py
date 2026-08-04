@@ -719,6 +719,43 @@ def select_operators_by_savings(specs, top_k=None, savings_fraction=None,
     return kept, frozenset(s.name for s in kept)
 
 
+# ── M2.0: total-memory-budget greedy selection ─────────────────────
+
+
+def select_under_memory_budget(specs, total_bytes, key="savings",
+                               n_occ=30, n_vir=100):
+    """Greedily fill a TOTAL memory budget with operators, in `key` order.
+
+    Unlike M1 (a per-operator cap), this bounds the SUM of materialized operator
+    footprints: `Σ bytes(kept) ≤ total_bytes`. `key` is "savings" (flops-greedy)
+    or "density" (savings/byte-greedy) — the two rankings M2 compares. An
+    operator that would overflow the remaining budget is skipped (inlined via the
+    E1 keep-set), and later smaller operators may still fit.
+
+    This is the greedy baseline M2.1's exact knapsack is measured against.
+    Measured divergence between the two keys: ~0 on CCSDT (operators cluster by
+    footprint), 23% of budgets / up to 16.7% savings on CCSDTQ.
+
+    Returns (kept_specs, kept_names), kept sorted by the chosen key descending.
+    """
+    if key == "savings":
+        order = sorted(specs, key=lambda s: operator_savings(s, n_occ, n_vir),
+                       reverse=True)
+    elif key == "density":
+        order = sorted(specs, key=lambda s: operator_density(s, n_occ, n_vir),
+                       reverse=True)
+    else:
+        raise ValueError(f"key must be 'savings' or 'density', got {key!r}")
+
+    kept, used = [], 0
+    for s in order:
+        b = operator_bytes(s, n_occ, n_vir)
+        if used + b <= total_bytes:
+            kept.append(s)
+            used += b
+    return kept, frozenset(s.name for s in kept)
+
+
 # ── E0.3: emit a factorized translation unit ───────────────────────
 
 
