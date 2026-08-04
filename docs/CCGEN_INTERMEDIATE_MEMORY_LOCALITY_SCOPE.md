@@ -175,6 +175,20 @@ Sub-steps:
   *Gate:* `select_best_of_both` is within ≤ 0.01% of the branch-and-bound optimum
   across the CCSDTQ sweep, and ≥ each individual greedy; on CCSDT it equals the
   flops-greedy baseline.
+
+  **Rank-5 stress test (cc5 / CCSDTQP) — reinforces the verdict.** On the 59-op
+  cc5 set the *exact oracle itself does not scale*: with footprints spanning
+  7e-6 GB → 6e8 GB (11 orders), the fractional bound goes loose at large budgets
+  and branch-and-bound degenerates — it ran 8+ min with no result before being
+  killed. The fractional-LP upper bound is also uninformative here (worst
+  best-of-both/LP gap ≈ 1.0, a pure artifact of taking a fraction of a 6e8 GB
+  operator that integral greedy correctly cannot). Checking the real question
+  directly — does density-greedy ever beat savings-greedy on cc5 — the answer at
+  log-spaced budgets is **0.00%** (best-of-both ≡ flops-greedy there, like CCSDT).
+  So greedy is not failing; the scary LP gap was purely the relaxation artifact.
+  Net: neither exact bound is tractable-or-informative at rank 5, and greedy is
+  provably fine where it can be checked. The CCSDTQ within-0.002%-of-exact result
+  settles "greedy is enough"; rank 5 gives no structural reason to differ.
 - **M2.2 — wire into emit (~S given M2.1). LANDED.**
   `emit_factorized_translation_unit(memory_budget_bytes=B)` selects via
   `select_best_of_both` (M2), taking precedence over the M1 per-operator guard /
@@ -208,13 +222,56 @@ memory** where the keys diverge (M2.3). The "greedy is enough" outcome the scope
 anticipated is the one that landed — but "run both keys" is a genuine,
 measured win over the flops-only baseline, not a no-op.
 
-### M3 — locality shaping of the emitted loop (~M)
-For each materialized operator, choose `memory_layout` + `blocking_hint` from the
-contraction structure (contraction index → inner loop, tile the reused
-dimensions), and thread them through `_emit_intermediate_builder`. *Gate:* a
-stride/access-pattern metric on the emitted `build_W` improves vs the baseline
-row-major loop; the TU still compiles; energy-equivalence unchanged (structural).
-Answers B3.
+### M3 — shape the emitted builder loop (~M)
+
+**A deeper problem than B3 surfaced when reading the emitted `build_W`.** The
+operator builders are emitted as ONE flat n-ary loop nest, not as a binary
+contraction tree — `_complete_definition_summation` (E0.3) declares every
+internal contraction index as a single fused nest. Concretely
+`build_W_t2t2v_oooovv` emits
+
+```
+for i,j,k,l,b,c:  acc=0; for m,d,e: acc += t2(i,j,b,d)*t2(k,m,c,e)*oovv(l,m,d,e)
+```
+
+i.e. an `o⁵v⁴` triple-summed body — when the operator's OWN best contraction tree
+is `o⁵v²`. Measured: **3 of the top-8 CCSDT builders are emitted above their
+factored cost** (`W_t1t2v_oooovv` `o⁵v³`→`o⁵v²`, a ×V waste *inside* the operator
+meant to save FLOPs). So M3 is two layers: **first factor the builder body, then
+shape its locality** — you cannot tile a loop nest that should not exist. B3
+(row-major, unshaped access) is the second layer.
+
+Sub-steps:
+
+- **M3.0 — builder-body factorization (~M, the load-bearing layer).** Apply the
+  existing tree search to each operator's DEFINITION term: emit the `build_W` as
+  the sequence of pairwise contractions its `best_contraction_tree` gives (an
+  inner intermediate + a final assembly), not one flat nest. Reuses
+  `best_contraction_tree_full` / `rewrite_term_factorized` — the same machinery,
+  now applied one level down (the operator's body instead of the residual term).
+  *Gate:* every emitted builder's peak loop-nest exponent equals its
+  `best_contraction_tree` cost (the 3/8 over-cost builders drop to their factored
+  cost); the TU still compiles; re-expansion exact (E0.1 at the builder level).
+- **M3.1 — stride metric (~S).** A function scoring a builder's innermost-loop
+  access pattern: for each factor accessor, is the innermost loop index its
+  last (unit-stride) axis, a strided axis, or absent (loop-invariant, hoistable)?
+  Aggregate to a per-builder stride score. *Gate:* the metric ranks a
+  hand-written unit-stride loop above a transposed one on a fixture; reproduces
+  the baseline (pre-M3.0) flat-nest scores.
+- **M3.2 — layout + loop-order shaping (~M, answers B3).** Choose the summed-loop
+  order (contraction index innermost against the largest factor's unit-stride
+  axis) and set `memory_layout` / `blocking_hint` on the spec from the
+  contraction structure; thread them through `_emit_intermediate_builder` (which
+  ignores both today). *Gate:* the M3.1 stride score improves vs the M3.0 output
+  on the operator set; TU compiles; energy-equivalence unchanged (structural, via
+  the re-expansion gate — reordering loops and choosing layout cannot change the
+  sum).
+
+**Honest ceiling for M3.** The stride metric is a static model of the access
+pattern, not a measured cache-miss rate (that needs the compiled binary — same
+boundary as E2). M3.0 is the real FLOP win (factoring the builder body); M3.1/M3.2
+are the locality layer B3 named, and their value is bounded by what a static
+stride model can show — a model improvement, not a wall-clock one.
 
 ### M4 — measured joint verdict (~S, only if M1–M3 land)
 Report, on a fixed budget, the baseline vs joint-optimized emit: operators
