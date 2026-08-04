@@ -737,6 +737,60 @@ class CostModelTests(unittest.TestCase):
                 sum(operator_savings(o, 30, 100) for o in ops if o.name in sk),
             )
 
+    # ── M2.2: memory_budget_bytes wired into emit ──────────────────
+
+    def test_emit_memory_budget_selects_best_of_both(self):
+        """M2.2 gate: emit_factorized_translation_unit(memory_budget_bytes=B)
+        emits exactly the best-of-both selection at B, and Σ footprint ≤ B."""
+        import re
+        from ccgen.optimization.factorize import emit_factorized_translation_unit
+        budget = 10**9
+        tu = emit_factorized_translation_unit("ccsdt", memory_budget_bytes=budget)
+        emitted = set(re.findall(r"build_(W_\w+)\(", tu))
+        ops = manifold_operators(self.triples, include_reuse=False)
+        _, names = select_best_of_both(ops, budget)
+        self.assertEqual(emitted, set(names))
+        kept = [o for o in ops if o.name in names]
+        self.assertLessEqual(
+            sum(operator_bytes(o, 30, 100) for o in kept), budget
+        )
+        self.assertEqual(tu.count("{"), tu.count("}"))
+
+    def test_emit_memory_budget_compiles(self):
+        """M2.2 gate: the memory-budgeted CCSDT TU compiles against CC headers."""
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present")
+
+        from ccgen.optimization.factorize import emit_factorized_translation_unit
+        code = emit_factorized_translation_unit("ccsdt", memory_budget_bytes=10**9)
+        with tempfile.NamedTemporaryFile(
+            suffix=".cpp", mode="w", delete=False
+        ) as fh:
+            fh.write(code)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=300,
+            )
+            self.assertEqual(
+                proc.returncode, 0,
+                f"memory-budgeted CCSDT failed to compile:\n{proc.stderr[-2000:]}",
+            )
+        finally:
+            os.unlink(src)
+
 
 class CCSDTQTests(unittest.TestCase):
     """F5 — generalize the factorizer to CCSDTQ (t4). The engine is

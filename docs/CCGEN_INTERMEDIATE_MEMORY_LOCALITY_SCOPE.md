@@ -175,11 +175,17 @@ Sub-steps:
   *Gate:* `select_best_of_both` is within ≤ 0.01% of the branch-and-bound optimum
   across the CCSDTQ sweep, and ≥ each individual greedy; on CCSDT it equals the
   flops-greedy baseline.
-- **M2.2 — wire into emit (~S given M2.1).** `emit_factorized_translation_unit`
-  takes `memory_budget_bytes=` (total) selecting via `select_best_of_both`,
-  falling back to the M1 per-operator guard / E1 top-k when not given.
-  Non-selected operators inline (E1 path). *Gate:* the budgeted TU compiles,
-  re-expands exactly (E0.1), and its materialized `Σ bytes ≤ budget`.
+- **M2.2 — wire into emit (~S given M2.1). LANDED.**
+  `emit_factorized_translation_unit(memory_budget_bytes=B)` selects via
+  `select_best_of_both` (M2), taking precedence over the M1 per-operator guard /
+  E1 top-k; those remain the path when a total budget is not given. Non-selected
+  operators inline (E1 path). Verified: a 1 GB CCSDT budget emits exactly the
+  best-of-both set (15 builders), Σ footprint ≤ budget, and the TU compiles.
+  *Gate (in `CostModelTests`):* `test_emit_memory_budget_selects_best_of_both`
+  (emitted builders == best-of-both, Σ bytes ≤ budget), `test_emit_memory_budget_compiles`.
+  Scaling note (measured while validating): `manifold_operators` at cc5 (20,375
+  quintuples terms) takes ~38 s and the residual ~90 s to generate — the emit
+  selection is cheap, the per-term tree search is the cost at high rank.
 - **M2.3 — measured verdict vs baseline (~S).** On a CCSDTQ budget in the
   divergence regime, report FLOP savings retained by `select_best_of_both` vs
   flops-greedy alone (the B1 selection), and the memory each uses. *Gate:* the
