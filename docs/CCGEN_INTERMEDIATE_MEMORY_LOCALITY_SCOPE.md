@@ -112,11 +112,18 @@ operators, savings-winner has more bytes), `test_operator_bytes_scales_with_size
 defaults to O=30/V=100 — `operator_density` passes MATCHED sizes to both, and the
 ranking disagreement holds at matched sizes.
 
-### M1 — feasibility guard (~S)
-Add a `max_operator_bytes` budget to selection: an operator over budget is never
-materialized (inlined via the existing E1 path). *Gate:* with a budget below the
-rank-6 footprint, no `build_W` above the budget is emitted; the TU still compiles
-and re-expands exactly (E0.1 gate). Answers B2.
+### M1 — feasibility guard (~S). LANDED.
+`select_operators_by_savings(max_operator_bytes=, n_occ=, n_vir=)` filters out any
+operator whose materialized tensor exceeds the budget BEFORE ranking, so it is
+inlined via the existing E1 keep-set path rather than emitted as an un-storable
+`build_W`; `emit_factorized_translation_unit(max_operator_bytes=)` threads it.
+Measured (CCSDT, O=30/V=100): a 1 GB budget drops the 7 over-budget operators
+(all 64.8 GB rank-6) from 24 → 17 kept (largest kept 0.80 GB); a 0.1 GB budget
+keeps 12 (largest 0.07 GB). The guarded TU compiles and the guarded rewrite
+re-expands exactly (0/399 failures — inlining the big operators preserves the
+algebra). *Gate (in `CostModelTests`):* `test_footprint_guard_drops_over_budget`
+(nothing over budget survives), `test_footprint_guard_is_exact`,
+`test_footprint_guarded_tu_compiles`. Answers B2.
 
 ### M2 — joint selection objective (~M, the real modeling piece)
 Replace/augment `select_operators_by_savings` with a joint objective: maximize

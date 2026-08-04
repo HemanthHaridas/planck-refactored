@@ -623,6 +623,76 @@ class CostModelTests(unittest.TestCase):
         b2 = operator_bytes(vbearing, 30, 100)
         self.assertEqual(b2 // b1, 2**nv_pow)
 
+    # ── M1: footprint feasibility guard ────────────────────────────
+
+    def test_footprint_guard_drops_over_budget(self):
+        """M1 gate (B2 fixed): a byte budget below the 64.8 GB rank-6 footprint
+        drops those operators from the kept set — none over budget survives."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        budget = 10**9  # 1 GB, below the 64.8 GB rank-6 ops
+        kept, _ = select_operators_by_savings(ops, max_operator_bytes=budget)
+        self.assertTrue(kept)
+        self.assertLess(len(kept), len(ops))  # something was dropped
+        for o in kept:
+            self.assertLessEqual(operator_bytes(o, 30, 100), budget)
+
+    def test_footprint_guard_is_exact(self):
+        """M1: inlining the over-budget operators preserves the algebra — the
+        guarded rewrite still re-expands to each original term. 0 failures."""
+        from collections import Counter
+        ops = manifold_operators(self.triples, include_reuse=False)
+        opdef = {o.name: o for o in ops}
+        _, keep = select_operators_by_savings(ops, max_operator_bytes=10**9)
+        for t in self.triples:
+            r = rewrite_term_factorized(t, keep_operators=keep)
+            expanded = Counter()
+            for f in r.factors:
+                if f.name in opdef:
+                    expanded.update(
+                        ff.name for ff in opdef[f.name].definition_terms[0].factors
+                    )
+                else:
+                    expanded[f.name] += 1
+            self.assertEqual(expanded, Counter(f.name for f in t.factors))
+
+    def test_footprint_guarded_tu_compiles(self):
+        """M1 gate: the footprint-guarded CCSDT TU (1 GB) emits only in-budget
+        build_W and compiles against the CC headers."""
+        import os
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present")
+
+        from ccgen.optimization.factorize import emit_factorized_translation_unit
+        code = emit_factorized_translation_unit("ccsdt", max_operator_bytes=10**9)
+        self.assertTrue(re.search(r"build_W_\w+\(", code))
+        with tempfile.NamedTemporaryFile(
+            suffix=".cpp", mode="w", delete=False
+        ) as fh:
+            fh.write(code)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=300,
+            )
+            self.assertEqual(
+                proc.returncode, 0,
+                f"guarded CCSDT failed to compile:\n{proc.stderr[-2000:]}",
+            )
+        finally:
+            os.unlink(src)
+
 
 class CCSDTQTests(unittest.TestCase):
     """F5 — generalize the factorizer to CCSDTQ (t4). The engine is

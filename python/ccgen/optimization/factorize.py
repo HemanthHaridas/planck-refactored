@@ -680,7 +680,8 @@ def footprint_inventory(specs, n_occ: int = 30, n_vir: int = 100):
     return out
 
 
-def select_operators_by_savings(specs, top_k=None, savings_fraction=None):
+def select_operators_by_savings(specs, top_k=None, savings_fraction=None,
+                                max_operator_bytes=None, n_occ=30, n_vir=100):
     """Rank emittable operator specs by savings and keep the worthwhile ones.
 
     - `top_k`: keep the k highest-savings operators.
@@ -690,8 +691,18 @@ def select_operators_by_savings(specs, top_k=None, savings_fraction=None):
     concentration is extreme — on CCSDT the top 5 of 24 operators carry >98%,
     so a small budget inlines the long tail for ~free.
 
+    - `max_operator_bytes` (M1 feasibility guard): drop any operator whose
+      materialized tensor exceeds this footprint at (`n_occ`, `n_vir`) BEFORE
+      ranking, so it is inlined (via the E1 keep-set) rather than emitted as an
+      un-storable `build_W`. The 64.8 GB rank-6 / 194,400 GB rank-8 operators
+      have huge savings; without this guard the savings ranking would materialize
+      them regardless of whether they fit.
+
     Returns (kept_specs, kept_names) with kept_specs sorted savings-descending.
     """
+    if max_operator_bytes is not None:
+        specs = [s for s in specs
+                 if operator_bytes(s, n_occ, n_vir) <= max_operator_bytes]
     ranked = sorted(specs, key=operator_savings, reverse=True)
     if top_k is not None:
         kept = ranked[:top_k]
@@ -713,16 +724,20 @@ def select_operators_by_savings(specs, top_k=None, savings_fraction=None):
 
 def emit_factorized_translation_unit(method: str, engine: str = "diagram",
                                      canonical_fock: bool = True,
-                                     top_k=None, savings_fraction=None):
-    """E0.3 + E1: emit a Planck C++ TU whose kernels reference the factorizer's
-    derived operators, with a `build_W` for each KEPT operator.
+                                     top_k=None, savings_fraction=None,
+                                     max_operator_bytes=None,
+                                     n_occ=30, n_vir=100):
+    """E0.3 + E1 + M1: emit a Planck C++ TU whose kernels reference the
+    factorizer's derived operators, with a `build_W` for each KEPT operator.
 
     Pipeline: generate the residual, collect the manifold's derived operators
     (`manifold_operators`, `include_reuse=False`), select the worthwhile ones by
-    savings (E1: `top_k` or `savings_fraction`; both None keeps all), rewrite
-    every term hoisting only the kept operators (the rest stay inline, along with
-    the CCSD/Reuse children which are always inlined — D7.3's job), and hand the
-    rewritten equations + kept specs to `emit_planck_translation_unit`.
+    savings (E1: `top_k` or `savings_fraction`; both None keeps all) under the
+    optional M1 footprint guard (`max_operator_bytes` at `n_occ`/`n_vir` — an
+    over-budget operator is inlined, never emitted), rewrite every term hoisting
+    only the kept operators (the rest stay inline, along with the CCSD/Reuse
+    children which are always inlined — D7.3's job), and hand the rewritten
+    equations + kept specs to `emit_planck_translation_unit`.
 
     The savings concentration is extreme (CCSDT: top 5 of 24 ops > 98%), so a
     small budget inlines the long tail at ~no FLOP cost while cutting builders.
@@ -738,7 +753,8 @@ def emit_factorized_translation_unit(method: str, engine: str = "diagram",
     ]
     all_ops = manifold_operators(substitutable, include_reuse=False)
     kept, keep_names = select_operators_by_savings(
-        all_ops, top_k=top_k, savings_fraction=savings_fraction)
+        all_ops, top_k=top_k, savings_fraction=savings_fraction,
+        max_operator_bytes=max_operator_bytes, n_occ=n_occ, n_vir=n_vir)
     rewritten = {
         m: [rewrite_term_factorized(t, keep_operators=keep_names) for t in terms]
         for m, terms in eqs.items()
