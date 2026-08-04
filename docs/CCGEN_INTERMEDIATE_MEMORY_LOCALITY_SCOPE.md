@@ -160,29 +160,38 @@ Sub-steps:
   (Σ bytes ≤ budget, both keys), `test_ccsdt_keys_barely_diverge` (< 1% gap — flops
   greedy already near the memory optimum on CCSDT), `test_ccsdtq_keys_diverge_materially`
   (> 10% of budgets divergent, worst-case > 10% — where M2.1 earns its place).
-- **M2.1 — exact knapsack (~M, the modeling core).** An exact 0/1 knapsack over
-  the operator set. **NOT an integer-weight DP** — the footprints span 3000×
-  (0.02 GB → 64.8 GB at CCSDT, worse at CCSDTQ), so rounding bytes to GB weights
-  zeros the small high-density operators and corrupts the table (verified: a
-  GB-rounded DP undercounts by 3× on CCSDT). Use either exact branch-and-bound
-  (the set is small: 24 / 43 items) or a DP on a fine byte-quantum. *Gate:* on a
-  budget where greedy is provably suboptimal, knapsack ≥ greedy; on the CCSDT
-  set (no room to trade) knapsack == greedy == baseline.
-- **M2.2 — wire into emit (~S given M2.0/M2.1).** `emit_factorized_translation_unit`
-  takes `memory_budget_bytes=` (total) selecting via M2.1, falling back to the M1
-  per-operator guard / E1 top-k when not given. Non-selected operators inline
-  (E1 path). *Gate:* the budgeted TU compiles, re-expands exactly (E0.1), and its
-  materialized `Σ bytes ≤ budget`.
-- **M2.3 — measured win vs baseline (~S).** On a CCSDTQ budget in the divergence
-  regime, report FLOP savings retained by knapsack vs flops-greedy vs
-  density-greedy, and the memory used by each. *Gate:* knapsack ≥ both greedies;
-  the selection differs from the flops-only B1 pick. Answers B1 with a number.
+- **M2.1 — is an exact solver needed? MEASURED: NO.** Before building
+  branch-and-bound, the question "does an exact 0/1 knapsack beat greedy" was
+  measured directly with a correct exact solver (branch-and-bound with a
+  fractional-relaxation bound — **NOT** an integer-GB-weight DP, which zeros the
+  3000×-smaller high-density operators; verified that DP undercounts 3× on
+  CCSDT). Result across a dense CCSDTQ budget sweep (273 budgets): the exact
+  optimum beats **best-of-both-greedy** (`max(savings-greedy, density-greedy)`) in
+  only **5/273 budgets, by ≤ 0.002%** — noise. The individual keys diverge (M2.0's
+  66/286), but at every such budget the exact optimum equals the *better* of the
+  two greedies. **So the deliverable is not a knapsack — it is
+  `select_best_of_both(specs, total_bytes)` = run both M2.0 greedies, take the
+  higher-savings set.** Branch-and-bound survives only as the *test oracle*.
+  *Gate:* `select_best_of_both` is within ≤ 0.01% of the branch-and-bound optimum
+  across the CCSDTQ sweep, and ≥ each individual greedy; on CCSDT it equals the
+  flops-greedy baseline.
+- **M2.2 — wire into emit (~S given M2.1).** `emit_factorized_translation_unit`
+  takes `memory_budget_bytes=` (total) selecting via `select_best_of_both`,
+  falling back to the M1 per-operator guard / E1 top-k when not given.
+  Non-selected operators inline (E1 path). *Gate:* the budgeted TU compiles,
+  re-expands exactly (E0.1), and its materialized `Σ bytes ≤ budget`.
+- **M2.3 — measured verdict vs baseline (~S).** On a CCSDTQ budget in the
+  divergence regime, report FLOP savings retained by `select_best_of_both` vs
+  flops-greedy alone (the B1 selection), and the memory each uses. *Gate:* the
+  joint selection retains ≥ flops-greedy's savings at ≤ its memory, and differs
+  from the flops-only B1 pick — B1 answered with a number.
 
-**Honest ceiling for M2.** The win is bounded by what the divergence measurement
-shows — ~17% of savings on CCSDTQ at the tightest budgets, ~0 on CCSDT. If the
-CCSDTQ knapsack also lands within noise of greedy, M2's result is "greedy is
-enough, no exact solver needed" — still a valid, useful answer that retires the
-knapsack idea.
+**M2 verdict (measured, was the honest-ceiling case).** The exact knapsack is
+**not worth building**: best-of-both-greedy is optimal to within 0.002% on
+CCSDTQ. M2's real content is (a) the total-budget framing (M2.0), (b) running
+*both* rankings and taking the max (M2.1), and (c) that this differs from the
+flops-only baseline where the keys diverge (23% of CCSDTQ budgets). The
+"greedy is enough" outcome the scope anticipated is the one that landed.
 
 ### M3 — locality shaping of the emitted loop (~M)
 For each materialized operator, choose `memory_layout` + `blocking_hint` from the

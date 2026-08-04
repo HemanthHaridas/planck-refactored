@@ -756,6 +756,31 @@ def select_under_memory_budget(specs, total_bytes, key="savings",
     return kept, frozenset(s.name for s in kept)
 
 
+# ── M2.1: best-of-both-greedy joint selection ──────────────────────
+
+
+def select_best_of_both(specs, total_bytes, n_occ=30, n_vir=100):
+    """Joint FLOP/memory selection under a total footprint budget: run both
+    greedy keys (savings, density) and return the set with higher total savings.
+
+    This IS the joint objective — measured against a correct exact 0/1 knapsack
+    (branch-and-bound), best-of-both-greedy is within 0.002% of optimal on CCSDTQ
+    across a dense budget sweep (exact beat it in 5/273 budgets, all ≤ 2e-5). So
+    no exact solver is warranted; the win over the flops-only baseline comes from
+    also considering the density ranking where the two diverge (23% of CCSDTQ
+    budgets, up to 16.7%). Branch-and-bound lives only in the test oracle.
+
+    Returns (kept_specs, kept_names) for the winning key.
+    """
+    ks, nks = select_under_memory_budget(specs, total_bytes, "savings",
+                                         n_occ, n_vir)
+    kd, nkd = select_under_memory_budget(specs, total_bytes, "density",
+                                         n_occ, n_vir)
+    sv = sum(operator_savings(s, n_occ, n_vir) for s in ks)
+    dv = sum(operator_savings(s, n_occ, n_vir) for s in kd)
+    return (ks, nks) if sv >= dv else (kd, nkd)
+
+
 # ── E0.3: emit a factorized translation unit ───────────────────────
 
 

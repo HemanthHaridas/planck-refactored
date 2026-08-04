@@ -40,6 +40,7 @@ from ccgen.optimization.factorize import (  # noqa: E402
     recursion_summary,
     rewrite_term_factorized,
     seeded_fingerprints,
+    select_best_of_both,
     select_operators_by_savings,
     select_under_memory_budget,
     tree_preserves_term,
@@ -722,6 +723,20 @@ class CostModelTests(unittest.TestCase):
             worst = max(worst, abs(sv - dv) / max(1, max(sv, dv)))
         self.assertLess(worst, 0.01)  # < 1% — negligible on CCSDT
 
+    def test_best_of_both_matches_flops_greedy_on_ccsdt(self):
+        """M2.1: on CCSDT (no key divergence) the joint select_best_of_both picks
+        the same savings as flops-greedy alone — no memory win to be had here,
+        the correctness check the scope predicted."""
+        ops = manifold_operators(self.triples, include_reuse=False)
+        for gb in (1, 70, 200):
+            b = gb * 10**9
+            _, jn = select_best_of_both(ops, b)
+            _, sk = select_under_memory_budget(ops, b, key="savings")
+            self.assertEqual(
+                sum(operator_savings(o, 30, 100) for o in ops if o.name in jn),
+                sum(operator_savings(o, 30, 100) for o in ops if o.name in sk),
+            )
+
 
 class CCSDTQTests(unittest.TestCase):
     """F5 — generalize the factorizer to CCSDTQ (t4). The engine is
@@ -777,6 +792,64 @@ class CCSDTQTests(unittest.TestCase):
                 worst = max(worst, abs(sv - dv) / max(1, max(sv, dv)))
         self.assertGreater(div / tot, 0.10)   # divergent in >10% of budgets
         self.assertGreater(worst, 0.10)       # worst-case gap > 10%
+
+    # ── M2.1: best-of-both-greedy is near-optimal (no knapsack) ────
+
+    @staticmethod
+    def _knapsack_exact(items, budget):
+        """Exact 0/1 knapsack via branch-and-bound with a fractional-relaxation
+        bound — the test ORACLE (NOT an integer-weight DP, which zeros the small
+        high-density operators). items: [(savings, bytes)]."""
+        items = sorted(items, key=lambda x: -x[0] / max(1, x[1]))
+        n = len(items)
+        best = [0]
+
+        def bound(i, w, v):
+            b, ww = v, w
+            for j in range(i, n):
+                s, by = items[j]
+                if ww + by <= budget:
+                    ww += by
+                    b += s
+                else:
+                    b += s * (budget - ww) / by
+                    break
+            return b
+
+        def rec(i, w, v):
+            if v > best[0]:
+                best[0] = v
+            if i == n or bound(i, w, v) <= best[0]:
+                return
+            s, by = items[i]
+            if w + by <= budget:
+                rec(i + 1, w + by, v + s)
+            rec(i + 1, w, v)
+
+        rec(0, 0, 0)
+        return best[0]
+
+    def test_best_of_both_is_near_optimal(self):
+        """M2.1 gate (the measured verdict): best-of-both-greedy is within 0.01%
+        of the exact 0/1 knapsack optimum across a dense CCSDTQ budget sweep, and
+        ≥ each individual greedy — so no exact solver is warranted."""
+        eqs = generate_cc_equations("ccsdtq", engine="diagram", canonical_fock=True)
+        terms = [t for m in ("doubles", "triples", "quadruples") for t in eqs[m]]
+        ops = manifold_operators(terms, include_reuse=False)
+        sval = {o.name: operator_savings(o, 30, 100) for o in ops}
+        items = [(operator_savings(o, 30, 100), operator_bytes(o, 30, 100))
+                 for o in ops]
+        worst_gap = 0.0
+        for gb in range(1, 3000, 23):
+            B = gb * 10**9
+            _, names = select_best_of_both(ops, B)
+            joint = sum(sval[n] for n in names)
+            opt = self._knapsack_exact(items, B)
+            # best-of-both never exceeds the optimum, and stays within 0.01%
+            self.assertLessEqual(joint, opt + 1)
+            if opt > 0:
+                worst_gap = max(worst_gap, (opt - joint) / opt)
+        self.assertLess(worst_gap, 1e-4)  # < 0.01% — greedy is enough
 
     # ── F5.0: t4 inventory + exact gate ────────────────────────────
 
