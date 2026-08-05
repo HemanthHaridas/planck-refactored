@@ -2584,10 +2584,61 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
         merged = merge_terms(coll, set(ext))
         return merged, spatial, ext
 
+    # Canonical single spatial block each amplitude/integral is stored in (the
+    # block the spin-free bridge reads from). rank -> block; v/f are always rank 4.
+    _REF_BLOCK = {"t1": "aa", "t2": "abab", "t3": "aabaab", "v": "abab", "f": "aa"}
+
+    @classmethod
+    def _mech_spin(cls, st, ext):
+        """P2 mechanism 1 (SPIN). The bridge drops per-index spin and reads each
+        factor from ONE canonical spatial block (`_REF_BLOCK`). True iff that read
+        is wrong on any of three surfaces -- all the same root cause:
+          (a) a factor whose slot spins differ from its ref block;
+          (b) a summed index contracted across slots whose ref-block spins differ
+              (the spatial contraction sums the wrong channel); or
+          (c) a free index landing on a slot whose ref-block spin != its external
+              spin.
+        This is the single spin gap; `_has_mixed_spin_summed_index` was only (b)."""
+        rb = cls._REF_BLOCK
+        for f in st.factors:
+            if "".join(si.spin for si in f.indices) != rb[f.name]:
+                return True
+        occ: dict = {}
+        for f in st.factors:
+            for k, si in enumerate(f.indices):
+                if si.name not in ext:
+                    occ.setdefault(si.name, set()).add(rb[f.name][k])
+        if any(len(s) > 1 for s in occ.values()):
+            return True
+        for f in st.factors:
+            for k, si in enumerate(f.indices):
+                if si.name in ext and rb[f.name][k] != ext[si.name]:
+                    return True
+        return False
+
+    @staticmethod
+    def _bridge_output_layout(at):
+        """The residual axis order `residual_einsum` emits for an AlgebraTerm:
+        [ext_vir..., ext_occ...] in FIRST-APPEARANCE order."""
+        fr = list(at.free_indices)
+        ev = [getattr(i, "name", i) for i in fr if i.space == "vir"]
+        eo = [getattr(i, "name", i) for i in fr if i.space == "occ"]
+        return ev + eo
+
+    @classmethod
+    def _mech_layout(cls, at, names):
+        """P2 mechanism 2 (LAYOUT). Even with consistent spins, the bridge's
+        `free_indices` are in first-appearance order, so `residual_einsum` lays
+        the residual out transposed from the canonical [a,b,c,i,j,k]. A pure
+        output-axis permutation -- value-identical, layout-wrong. This is a bridge
+        bug, NOT a spin-model gap: canonicalizing `free_indices` fixes it."""
+        return cls._bridge_output_layout(at) != names
+
     @staticmethod
     def _has_mixed_spin_summed_index(st, ext):
         """True iff some summed (internal) index appears with DIFFERENT spins in
-        its two factor occurrences -- the P2 mechanism."""
+        its two factor occurrences -- only surface (b) of the spin mechanism.
+        Retained for the historical P2.1 gate below; `_mech_spin` supersedes it."""
         spins = {}
         for f in st.factors:
             for si in f.indices:
@@ -2600,9 +2651,10 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
     def test_p20_bridge_matches_eval_per_term_rank6(self):
         # P2.0: per-term gate. For every merged rank-6 term the bridge
         # (spinterm_to_algebraterm + residual_einsum) must equal _eval_spinterm
-        # (the oracle, which slices each factor per spin block). RED today on the
-        # terms with a mixed-spin summed index. Finer than the whole-residual gate:
-        # it names the failing terms. GREEN when P2.2 encodes summed-index spin.
+        # (the oracle, which slices each factor per spin block). RED today: 718 of
+        # 859 terms disagree, partitioned by P2.1 into the spin + layout
+        # mechanisms. GREEN when the bridge encodes per-index spin (`_mech_spin`)
+        # AND canonicalizes its output layout (`_mech_layout`) -- both required.
         import numpy as np
         from ccgen.spin import spinterm_to_algebraterm
         from ccgen.tests.residual_eval import residual_einsum
@@ -2619,18 +2671,18 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
                 bad += 1
         self.assertEqual(bad, 0, f"{bad}/{len(merged)} merged terms: bridge != eval")
 
-    @unittest.expectedFailure
-    def test_p21_only_mixed_spin_summed_terms_fail_rank6(self):
-        # P2.1: classify -- and it DISPROVED the single-mechanism hypothesis.
-        # ~148 of the failing rank-6 terms have CONSISTENT summed-index spins (e.g.
-        # t2(a↑,c↓,i↑,l↓)·v(j↑,k↓,b↑,l↓), l β in both) yet still disagree with the
-        # oracle. So the mixed-spin summed index is ONE mechanism but not the whole
-        # story; there is a second (the free indices are distributed across both
-        # factors with their own spin structure -- a b↑/c↓ split that the spin-free
-        # bridge also cannot represent). Kept as xfail: the gate correctly fails,
-        # documenting that P2's model is incomplete and must be finished before the
-        # fix. Un-xfail (and it should pass) once every failing term is a known
-        # mechanism.
+    def test_p21_failures_partition_into_spin_and_layout_rank6(self):
+        # P2.1 (RE-SCOPED). The original P2.1 tested a single hypothesis (only
+        # mixed-spin-summed terms fail) and DISPROVED it as xfail. The re-scoped
+        # gate asserts the COMPLETE model: every failing rank-6 bridge term is
+        # explained by at least one of exactly two mechanisms --
+        #   SPIN   (`_mech_spin`): the bridge drops per-index spin, reading the
+        #          wrong spatial block / summing the wrong channel; and
+        #   LAYOUT (`_mech_layout`): the bridge's free-index order transposes the
+        #          canonical residual axes (a value-identical output permutation).
+        # 0 unexplained proves the inventory is exhaustive -- the precondition for
+        # the fix (encode summed/free-index spin AND canonicalize the output
+        # layout). Measured now: 595 both, 116 layout-only, 7 spin-only, 0 other.
         import numpy as np
         from ccgen.spin import spinterm_to_algebraterm
         from ccgen.tests.residual_eval import residual_einsum
@@ -2638,15 +2690,51 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
         nos, nvs = no // 2, nv // 2
         names = ["a", "b", "c", "i", "j", "k"]
         merged, spatial, ext = self._rank6_bridge_spatial()
+        unexplained = []
         for st in merged:
+            at = spinterm_to_algebraterm(st, set(ext))
             A = _eval_spinterm(st, self.tn, no, no + nv, names)
-            B = residual_einsum(spinterm_to_algebraterm(st, set(ext)),
-                                nos, nvs, tensors=spatial)
+            B = residual_einsum(at, nos, nvs, tensors=spatial)
             if np.abs(A - B).max() > 1e-10:
-                self.assertTrue(
-                    self._has_mixed_spin_summed_index(st, ext),
-                    f"a term without a mixed-spin summed index disagrees: "
-                    f"{[(f.name, f.block) for f in st.factors]}")
+                if not (self._mech_spin(st, ext) or self._mech_layout(at, names)):
+                    unexplained.append(
+                        [(f.name, "".join(si.spin for si in f.indices),
+                          "".join(si.name for si in f.indices))
+                         for f in st.factors])
+        self.assertEqual(unexplained, [],
+                         f"{len(unexplained)} failing terms fit neither the spin "
+                         f"nor the layout mechanism, e.g. {unexplained[:3]}")
+
+    def test_p22_layout_only_failures_are_a_pure_transpose_rank6(self):
+        # P2.2. Isolates the LAYOUT mechanism and proves it carries no numeric
+        # error: for every failing term that is layout-only (consistent spins, so
+        # `_mech_spin` is False), transposing the bridge output back to the
+        # canonical [a,b,c,i,j,k] axis order reproduces the oracle to machine eps.
+        # This is why LAYOUT is a bridge bug, not a spin gap -- fixed by
+        # canonicalizing `AlgebraTerm.free_indices`, independently of the spin fix.
+        import numpy as np
+        from ccgen.spin import spinterm_to_algebraterm
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv = self.no, self.nv
+        nos, nvs = no // 2, nv // 2
+        names = ["a", "b", "c", "i", "j", "k"]
+        merged, spatial, ext = self._rank6_bridge_spatial()
+        n_layout = 0
+        for st in merged:
+            at = spinterm_to_algebraterm(st, set(ext))
+            A = _eval_spinterm(st, self.tn, no, no + nv, names)
+            B = residual_einsum(at, nos, nvs, tensors=spatial)
+            if np.abs(A - B).max() <= 1e-10:
+                continue
+            if self._mech_spin(st, ext):
+                continue  # spin error would survive any transpose; not layout-only
+            n_layout += 1
+            layout = self._bridge_output_layout(at)
+            perm = [layout.index(x) for x in names]
+            self.assertLess(np.abs(A - np.transpose(B, perm)).max(), 1e-9,
+                            f"layout-only term not fixed by canonical transpose: "
+                            f"{[(f.name, f.block) for f in st.factors]}")
+        self.assertGreater(n_layout, 0, "expected layout-only failures to exist")
 
 
 if __name__ == "__main__":
