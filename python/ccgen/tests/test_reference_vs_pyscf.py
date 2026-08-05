@@ -738,5 +738,77 @@ class ReferenceVsPyscfTests(unittest.TestCase):
         self.assertEqual(dia - {("bare", 0)}, term - {("bare", 0)})
 
 
+def ccgen_spatial_energy_at_pyscf_amps(method, atom, basis):
+    """R1.2 gate helper. Evaluate the GENERATED energy equation the way the C++
+    runtime does: bind its terms to SPATIAL closed-shell storage (n_occ spatial,
+    chemists' (pq|rs), spatial t1/t2 from a restricted RCCSD) and return
+    (e_corr_ccgen_spatial, rccsd.e_corr).
+
+    Today the generated energy terms carry SPIN-ORBITAL algebra (0.25 t2 v,
+    coeffs +-1/2/4) but this binds them to spatial tensors -- exactly the defect
+    that drives cc4 below FCI. So e_corr_ccgen_spatial != rccsd.e_corr NOW.
+    After R1 (spin-adapt the lowering so the emitted terms are spatial, carrying
+    the 2*(direct)-(exchange) structure), the two must agree. This is the numeric
+    energy gate whose ABSENCE let the defect ship (the arbitrary-solver unit test
+    uses a toy energy kernel).
+    """
+    from pyscf.cc import ccsd as rccsd_mod
+    from ccgen.generate import generate_cc_equations
+    from ccgen.tests.residual_eval import residual_of
+
+    mol = gto.M(atom=atom, basis=basis, spin=0)
+    mf = scf.RHF(mol).run(verbose=0)
+    cc = rccsd_mod.CCSD(mf)
+    cc.conv_tol = 1e-11
+    cc.kernel()
+
+    nocc = cc.nocc
+    nmo = cc.nmo
+    nvir = nmo - nocc
+
+    # Spatial MO two-electron integrals in physicist order <pq|rs>, NOT
+    # antisymmetrized -- this is the spatial (ij|ab)-style binding the C++
+    # runtime feeds the generated kernels via mo_blocks.oovv.
+    eri = mol.intor("int2e")
+    mo = mf.mo_coeff
+    from pyscf import ao2mo
+    eri_mo = ao2mo.kernel(mol, mo, compact=False).reshape(nmo, nmo, nmo, nmo)
+    # chemists (pq|rs) -> physicist <pr|qs>
+    v = eri_mo.transpose(0, 2, 1, 3)
+
+    tensors = {
+        "t1": cc.t1.T,                       # [a,i]
+        "t2": cc.t2.transpose(2, 3, 0, 1),   # [a,b,i,j]
+        "v": v,
+        "f": np.diag(mf.mo_energy),
+    }
+    eqs = generate_cc_equations(method)
+    e_corr = sum(
+        float(residual_of([t], nocc, nvir, tensors=tensors))
+        for t in eqs["energy"]
+    )
+    return e_corr, float(cc.e_corr)
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")
+class GeneratedSpatialEnergyGate(unittest.TestCase):
+    """R1.2 -- the missing NUMERIC energy gate for the SPATIAL binding (the C++
+    runtime path). RED until R1 spin-adapts the lowering; then it must go GREEN.
+    Keep it as expectedFailure so CI records the open defect without a hard red;
+    remove the decorator (turning it into a hard assert) the moment R1 lands."""
+
+    @unittest.expectedFailure
+    def test_ccsd_spatial_energy_matches_rccsd(self):
+        e_corr, e_rccsd = ccgen_spatial_energy_at_pyscf_amps(
+            "ccsd", "H 0 0 0; H 0 0 0.74", "sto-3g"
+        )
+        # RED today: the generated spatial-bound energy comes out at EXACTLY
+        # 0.2500 * rccsd.e_corr (H2/STO-3G: -0.00513 vs -0.02052) -- the spin-
+        # orbital 1/4 coefficient applied to spatial storage with no spin
+        # summation. After R1 (spatial algebra with the 2*(direct)-(exchange)
+        # structure) the ratio becomes 1.0 and this asserts cleanly.
+        self.assertAlmostEqual(e_corr, e_rccsd, places=9)
+
+
 if __name__ == "__main__":
     unittest.main()
