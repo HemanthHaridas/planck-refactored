@@ -162,14 +162,17 @@ namespace HartreeFock::Correlation::CC
         calculator._ccsd_reference_correlation_energy = 0.0;
 
         // Excitation rank for the generated arbitrary-order RCC path (cc4=4,
-        // cc5=5, cc6=6), set from the %posthf `correlation` keyword. The runtime
-        // solver and the registry are both rank-generic, so a single call site
-        // serves every rank the build generated (PLANCK_CC_MAXORDER).
+        // cc5=5, cc6=6, and cc3/ccsdt_gen=3 when the rank-3 companion is built),
+        // set from the %posthf `correlation` keyword. The runtime solver and the
+        // registry are both rank-generic, so a single call site serves every rank
+        // the build generated. Rank 3 through this path (Route B) is what lets a
+        // ccsdt_gen run write a SPATIAL .ccamp that a later cc4 run seeds from.
+        constexpr int generated_floor = PLANCK_CC_ARBITRARY_LOWER_RANKS ? 3 : 4;
         const int rank = calculator._scf._cc_generated_rank;
-        if (rank < 4)
+        if (rank < generated_floor)
             return std::unexpected(std::format(
-                "run_rccsdtq: generated arbitrary-order RCC path requires rank >= 4, got {}.",
-                rank));
+                "run_rccsdtq: generated arbitrary-order RCC path requires rank >= {}, got {}.",
+                generated_floor, rank));
 
         const bool warm_start = calculator._scf._cc_warm_start;
         HartreeFock::Logger::logging(

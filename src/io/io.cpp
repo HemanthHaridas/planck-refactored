@@ -646,6 +646,13 @@ namespace HartreeFock::IO
                 // separately on OptionsSCF._cc_generated_rank (set in the
                 // "correlation" handler), so higher ranks need no new enum member
                 // or driver branch — the ceiling is PLANCK_CC_MAXORDER alone.
+                // cc3 / ccsdt_gen route CCSDT through the GENERATED arbitrary path
+                // (not the hand-written run_rccsdt) so it produces spatial
+                // amplitudes and can write a .ccamp seed for a later cc4 run
+                // (Route B). Only usable when the rank-3 companion is built
+                // (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON).
+                {"cc3", HartreeFock::PostHF::RCCSDTQ},
+                {"ccsdt_gen", HartreeFock::PostHF::RCCSDTQ},
                 {"ccsdtq", HartreeFock::PostHF::RCCSDTQ},
                 {"cc4", HartreeFock::PostHF::RCCSDTQ},
                 {"ccsdtqp", HartreeFock::PostHF::RCCSDTQ},
@@ -730,6 +737,7 @@ namespace HartreeFock::IO
                      {
                          static const std::unordered_map<std::string, int> _cc_rank =
                              {
+                                 {"cc3", 3}, {"ccsdt_gen", 3},
                                  {"ccsdtq", 4}, {"cc4", 4},
                                  {"ccsdtqp", 5}, {"cc5", 5},
                                  {"cc6", 6},
