@@ -297,6 +297,64 @@ red through both failed layout attempts, confirming the gap is coefficient/summa
 algebra. ccsd/ccsdt gates stay green; piece 1 (permutation canonicalization) is a
 correct, kept building block that caused no regressions.
 
+### Piece 2, root cause PINPOINTED to one example (the actual gap)
+
+Isolating the single worst-disagreeing merged term (bridge vs `_eval_spinterm`,
+1.3e-2) gave the exact mechanism — and it is NOT coefficient algebra either:
+
+```
+t2[abab](a↑, c↓, l↑, k↓) · v[abab](i↑, j↓, b↑, l↓)   coeff 1,   summed index: l
+```
+
+**A summed (internal) index carries DIFFERENT spins in its two occurrences:** `l`
+is α in the t2 factor (an α slot of its `abab` block) but β in the v factor (a β
+slot). `_eval_spinterm` handles it by slicing each factor to its own block, so the
+`l`-contraction pairs t2's α-slice with v's β-slice. The bridge drops spin, so
+`residual_of` contracts `l` over ONE spatial range for both factors, pairing the
+wrong slices. BOTH factors are the canonical `abab` block, so piece-1 layout
+canonicalization is irrelevant — the loss is the PER-FACTOR SPIN of a shared
+summed index.
+
+This is a standard closed-shell contraction (an internal line α in one factor, β in
+the other). The AlgebraTerm model has one spin-free index per name; it cannot say
+"`l` is α here, β there." So piece 2 is: **make the spin case of every summed index
+survive into the spatial contraction.**
+
+### Piece 2 in small verifiable steps (all rank-6, seconds)
+
+- **P2.0 — a per-term bridge-vs-eval gate (~S).** Promote the worst-term probe to a
+  test: for each merged rank-6 term, `_eval_spinterm` (oracle) must equal the
+  bridge's `residual_einsum`. Red now on ~the fraction of terms with a spin-split
+  summed index. Finer-grained than the whole-residual gate — it names exactly which
+  terms fail, so P2.2 can be checked term-by-term.
+- **P2.1 — classify the failing terms (~S).** Assert the ONLY failing terms are
+  those with a summed index whose two occurrences have different spin (the census
+  above). Confirms the mechanism is the whole story at rank 6 and there is no
+  second, hidden cause. If any failing term has all-consistent summed spins, the
+  model is incomplete — stop and re-diagnose.
+- **P2.2 — encode summed-index spin in the bridge (~M, the fix).** In
+  `spinterm_to_algebraterm`, a summed index with mixed spin across factors must be
+  emitted so the spatial contraction pairs the right slices. Options: (a) rename the
+  index per spin so `residual_of` contracts α-with-α and β-with-β correctly, and add
+  the missing opposite-spin cross term as its own AlgebraTerm with the right sign/
+  coefficient (the spin sum becomes an explicit sum of spatial terms — the standard
+  RCC 2J−K expansion, one rank up); (b) carry a spin tag on the AlgebraTerm index
+  and teach `residual_of`/emit to slice — larger, touches the evaluator. (a) keeps
+  the evaluator spin-free (matches doubles) and is the likely route. Gate: P2.0 goes
+  green.
+- **P2.3 — the rank-6 whole-residual gate flips green (~S).**
+  `test_rcc_bridge_solve_path_rank6` → 1e-12, un-xfail it.
+- **P2.4 — re-verify ccsdt to TIGHT tolerance (~S).** ccsdt was only ordering-
+  validated; with the summed-spin fix its exact energy should now match a reference.
+  Add a tight ccsdt gate.
+- **P2.5 — confirm rank-8 (~S fast, then ~slow).** The same fix must make the fast
+  rank-8 solve-path gate green; then the R3.0 Be CCSDTQ≡FCI slow gate flips green.
+
+**Effort:** ~M, now that the mechanism is one concrete thing (summed-index spin),
+not an open-ended "coefficient algebra." The doubles case never hit it because a
+2-factor doubles term's single summed index has consistent spin; rank ≥3 introduces
+terms where an internal line is α in one factor and β in another.
+
 - **R3.2 — wire `spin_adapt` into codegen, ALL ranks at once (~S, HELD).** Only after
   R3.1 lands (user decision: no partial binary state). A `--spin-adapt` flag on
   `generate_planck_cc_kernels.py` + a CMake option, plumbed like `--arbitrary-lower-ranks`.
