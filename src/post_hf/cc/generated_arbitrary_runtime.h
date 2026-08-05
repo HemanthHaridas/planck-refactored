@@ -60,6 +60,15 @@ namespace HartreeFock::Correlation::CC
         int max_excitation_rank,
         const std::string &tag = "CC[GENERATED] :");
 
+    // Warm-start seed (W6.0): overwrite the lowest `seed.by_rank.size()` ranks of
+    // the state's zero amplitudes with converged lower-rank amplitudes. Ranks not
+    // covered by the seed stay zero. Each seeded rank's dims must match the state's
+    // slot for that rank (occ/virt shape); a mismatch is an error, not silent.
+    std::expected<void, std::string>
+    seed_arbitrary_order_amplitudes(
+        ArbitraryOrderTensorCCState &state,
+        const ArbitraryOrderRCCAmplitudes &seed);
+
     std::expected<ArbitraryOrderResiduals, std::string>
     evaluate_generated_arbitrary_order_residuals(
         const ArbitraryOrderTensorCCState &state,
@@ -74,7 +83,8 @@ namespace HartreeFock::Correlation::CC
         double tol_residual,
         double damping,
         bool use_diis,
-        int diis_dim);
+        int diis_dim,
+        const std::string &log_tag = "CC[GENERATED] :");
 } // namespace HartreeFock::Correlation::CC
 
 #endif // HF_POSTHF_CC_GENERATED_ARBITRARY_RUNTIME_H

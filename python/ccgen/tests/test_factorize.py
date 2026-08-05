@@ -1311,6 +1311,61 @@ class CCSDTQTests(unittest.TestCase):
         finally:
             os.unlink(src)
 
+    def test_force_arbitrary_lower_rank_tu_compiles_against_runtime(self):
+        """Lower-rank arbitrary companion gate: ccsdt emitted with
+        force_arbitrary=True targets ArbitraryOrderRCCAmplitudes (spatial),
+        emits make_generated_ccsdt_kernels(), and compiles against the real CC
+        headers. This is the codegen half of the cross-rank .ccamp restart: a
+        rank-3 spatial seed source usable by the arbitrary runtime, which the
+        default rank-3 emit (RCCSDTAmplitudes, tensor_backend) is not. The plain
+        emit must stay byte-identical (asserted separately)."""
+        import os
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present")
+
+        from ccgen.generate import print_cpp_planck
+        plain = print_cpp_planck("ccsdt", include_intermediates=True,
+                                 engine="diagram")
+        arb = print_cpp_planck("ccsdt", include_intermediates=True,
+                               engine="diagram", force_arbitrary=True)
+
+        # force_arbitrary flips the amplitude type and adds the runtime bundle.
+        self.assertNotEqual(plain, arb, "force_arbitrary must change the emit")
+        self.assertIn("RCCSDTAmplitudes", plain)          # default rank-3 type
+        self.assertNotIn("RCCSDTAmplitudes", arb)         # replaced by arbitrary
+        self.assertFalse(re.search(r"amplitudes\.t[123]\(", arb))
+        self.assertIn("ArbitraryOrderRCCAmplitudes", arb)
+        self.assertIn("make_generated_ccsdt_kernels", arb)
+        self.assertIn("generated_arbitrary_runtime.h", arb)
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".cpp", mode="w", delete=False
+        ) as fh:
+            fh.write(arb)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=600,
+            )
+            self.assertEqual(
+                proc.returncode, 0,
+                f"arbitrary ccsdt companion TU failed to compile:\n{proc.stderr[-2000:]}",
+            )
+        finally:
+            os.unlink(src)
+
 
 class RankLocalityTheoremTests(unittest.TestCase):
     """Rank-locality theorem within the F3 optimization model (see the doc).

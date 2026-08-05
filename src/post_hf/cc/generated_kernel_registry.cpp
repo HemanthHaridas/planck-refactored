@@ -6,6 +6,26 @@
 // Included per rank, guarded so a build only compiles the ranks it generated
 // (PLANCK_CC_MAXORDER). The rank -> method-name map matches CMakeLists.txt's
 // _planck_cc_method_by_rank: 4=ccsdtq, 5=cc5, 6=cc6.
+//
+// The rank-3 arbitrary-order companion (ccsdt_arbitrary_planck_generated.cpp,
+// emitted only when -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON) is a SPATIAL
+// ArbitraryOrderRCCAmplitudes kernel — a lower-rank seed source for the cc4
+// warm-start (Route A). The plain ccsdt TU (RCCSDTAmplitudes, tensor_backend)
+// is a different consumer and is NOT included here.
+// The rank-3 arbitrary-order companion (emitted only with
+// -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON) is a SPATIAL ArbitraryOrderRCCAmplitudes
+// kernel — a lower-rank seed source for the cc4 warm-start (Route A). It is
+// emitted WITHOUT intermediate builders on purpose: the shape-named builders
+// (build_W_oo_3, ...) carry no method suffix, so co-including it with the
+// ccsdtq TU would collide on those symbols. The residual is self-contained
+// without them. The plain ccsdt TU (RCCSDTAmplitudes, tensor_backend) is a
+// different consumer and is NOT included here.
+#ifndef PLANCK_CC_ARBITRARY_LOWER_RANKS
+#define PLANCK_CC_ARBITRARY_LOWER_RANKS 0
+#endif
+#if PLANCK_CC_ARBITRARY_LOWER_RANKS
+#include "generated/cc/ccsdt_arbitrary_planck_generated.cpp"
+#endif
 #if PLANCK_CC_MAXORDER >= 4
 #include "generated/cc/ccsdtq_planck_generated.cpp"
 #endif
@@ -21,16 +41,23 @@ namespace HartreeFock::Correlation::CC
     std::expected<GeneratedArbitraryOrderKernels, std::string>
     make_generated_rcc_kernels(int rank)
     {
-        // The generated tensor path begins at CCSDTQ (rank 4); ranks 2/3 have
-        // hand-written / tensor backends and never route here.
-        if (rank < 4)
+        // The generated tensor path normally begins at CCSDTQ (rank 4); ranks 2/3
+        // use the hand-written backends. When the rank-3 arbitrary companion is
+        // built (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON) rank 3 also routes here as
+        // a spatial seed source for the cc4 warm-start.
+        constexpr int generated_floor = PLANCK_CC_ARBITRARY_LOWER_RANKS ? 3 : 4;
+        if (rank < generated_floor)
             return std::unexpected(std::format(
                 "make_generated_rcc_kernels: rank {} has no generated tensor "
-                "kernel path (ranks 2/3 use the hand-written backends).",
-                rank));
+                "kernel path (below the generated floor {}).",
+                rank, generated_floor));
 
         switch (rank)
         {
+#if PLANCK_CC_ARBITRARY_LOWER_RANKS
+        case 3:
+            return make_generated_ccsdt_kernels();
+#endif
 #if PLANCK_CC_MAXORDER >= 4
         case 4:
             return make_generated_ccsdtq_kernels();

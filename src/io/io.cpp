@@ -776,6 +776,14 @@ namespace HartreeFock::IO
                      scf._cc_max_memory_gb = std::stod(value);
                      return std::expected<void, std::string>{};
                  }},
+                {"cc_warm_start", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = toBool(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._cc_warm_start = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
                 {"mp2_ri_basis", [&mp2](const std::string &value) -> std::expected<void, std::string>
                  {
                      mp2.ri_basis_name = value;

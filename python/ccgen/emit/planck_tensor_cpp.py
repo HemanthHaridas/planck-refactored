@@ -321,9 +321,9 @@ def emit_planck_term(
     return "\n".join(lines)
 
 
-def _amplitude_type(method: str) -> str:
+def _amplitude_type(method: str, force_arbitrary: bool = False) -> str:
     max_rank = max(parse_cc_level(method), default=0)
-    if max_rank >= 4:
+    if force_arbitrary or max_rank >= 4:
         return "ArbitraryOrderRCCAmplitudes"
     if max_rank >= 3:
         return "RCCSDTAmplitudes"
@@ -354,9 +354,9 @@ def _amplitude_view_bindings(terms, indent: int = 4) -> list[str]:
     ]
 
 
-def _denominator_type(method: str) -> str:
+def _denominator_type(method: str, force_arbitrary: bool = False) -> str:
     max_rank = max(parse_cc_level(method), default=0)
-    if max_rank >= 4:
+    if force_arbitrary or max_rank >= 4:
         return "ArbitraryOrderDenominatorCache"
     return "DenominatorCache"
 
@@ -396,6 +396,7 @@ def _emit_kernel(
     lowered_terms: Sequence[RestrictedClosedShellTerm] | None = None,
     intermediates: Sequence[IntermediateSpec] | None = None,
     free_indices: Sequence[Index] | None = None,
+    force_arbitrary: bool = False,
 ) -> str:
     lowered_terms = tuple(lowered_terms or ())
     if free_indices is None:
@@ -406,8 +407,8 @@ def _emit_kernel(
     free_indices = tuple(free_indices)
     result_rank = len(free_indices)
     result_type = _tensor_type(result_rank)
-    amplitude_type = _amplitude_type(method)
-    denominator_type = _denominator_type(method)
+    amplitude_type = _amplitude_type(method, force_arbitrary)
+    denominator_type = _denominator_type(method, force_arbitrary)
     intermediate_map = {spec.name: spec for spec in intermediates or ()}
 
     lines: list[str] = []
@@ -469,10 +470,11 @@ def _emit_intermediate_builder(
     sibling_names: frozenset[str] | None = None,
     factor_body: bool = False,
     stride_order: bool = False,
+    force_arbitrary: bool = False,
 ) -> str:
     result_type = _tensor_type(spec.rank)
-    amplitude_type = _amplitude_type(method)
-    denominator_type = _denominator_type(method)
+    amplitude_type = _amplitude_type(method, force_arbitrary)
+    denominator_type = _denominator_type(method, force_arbitrary)
     lowered_definition_terms = tuple(
         lower_term_restricted_closed_shell(term, "reference")
         for term in spec.definition_terms
@@ -545,9 +547,10 @@ def _emit_arbitrary_order_kernel_bundle(
     method: str,
     equations: dict[str, list[AlgebraTerm]],
     lowered_equations: dict[str, list[RestrictedClosedShellTerm]],
+    force_arbitrary: bool = False,
 ) -> str:
     max_rank = max(parse_cc_level(method), default=0)
-    if max_rank < 4:
+    if max_rank < 4 and not force_arbitrary:
         return ""
 
     ranked_targets: list[tuple[int, str]] = []
@@ -589,6 +592,7 @@ def emit_planck_translation_unit(
     intermediates: Sequence[IntermediateSpec] | None = None,
     lowered_equations: dict[str, list[RestrictedClosedShellTerm]] | None = None,
     factor_builder_bodies: bool = False,
+    force_arbitrary: bool = False,
 ) -> str:
     """Emit a Planck-compatible C++ translation unit.
 
@@ -605,7 +609,7 @@ def emit_planck_translation_unit(
     lines.append(f"// Planck tensor kernels for {method.upper()}")
     lines.append("")
     lines.append('#include "post_hf/cc/tensor_backend.h"')
-    if max(parse_cc_level(method), default=0) >= 4:
+    if force_arbitrary or max(parse_cc_level(method), default=0) >= 4:
         lines.append('#include "post_hf/cc/generated_arbitrary_runtime.h"')
     lines.append("")
     lines.append("namespace HartreeFock::Correlation::CC")
@@ -619,7 +623,7 @@ def emit_planck_translation_unit(
                 continue
             lines.append(_emit_intermediate_builder(
                 method, spec, sibling_names, factor_body=factor_builder_bodies,
-                stride_order=factor_builder_bodies))
+                stride_order=factor_builder_bodies, force_arbitrary=force_arbitrary))
             lines.append("")
 
     for target, terms in equations.items():
@@ -630,6 +634,7 @@ def emit_planck_translation_unit(
                 terms,
                 lowered_terms=lowered_equations.get(target),
                 intermediates=intermediates,
+                force_arbitrary=force_arbitrary,
             )
         )
         lines.append("")
@@ -638,6 +643,7 @@ def emit_planck_translation_unit(
         method,
         equations,
         lowered_equations,
+        force_arbitrary=force_arbitrary,
     )
     if bundle_code:
         lines.append(bundle_code)

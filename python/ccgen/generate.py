@@ -991,6 +991,7 @@ def print_cpp_planck(
     intermediate_peak_memory_budget_bytes: int | None = None,
     factorize_tau: bool = False,
     dress_operators: bool = False,
+    force_arbitrary: bool = False,
     **kwargs: Any,
 ) -> str:
     """Generate Planck-compatible C++ tensor kernels.
@@ -1055,6 +1056,7 @@ def print_cpp_planck(
         method,
         eqs,
         intermediates=intermediates,
+        force_arbitrary=force_arbitrary,
     )
 
 

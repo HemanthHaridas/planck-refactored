@@ -1,6 +1,7 @@
 #include "post_hf/cc/generated_arbitrary_runtime.h"
 
 #include <exception>
+#include <format>
 
 namespace HartreeFock::Correlation::CC
 {
@@ -51,5 +52,25 @@ namespace HartreeFock::Correlation::CC
             return std::unexpected(
                 "prepare_generated_arbitrary_order_state: " + std::string(ex.what()));
         }
+    }
+
+    std::expected<void, std::string>
+    seed_arbitrary_order_amplitudes(
+        ArbitraryOrderTensorCCState &state,
+        const ArbitraryOrderRCCAmplitudes &seed)
+    {
+        if (seed.by_rank.size() > state.amplitudes.by_rank.size())
+            return std::unexpected(std::format(
+                "seed_arbitrary_order_amplitudes: seed has {} ranks but state holds {}.",
+                seed.by_rank.size(), state.amplitudes.by_rank.size()));
+
+        for (std::size_t r = 0; r < seed.by_rank.size(); ++r)
+        {
+            if (seed.by_rank[r].dims != state.amplitudes.by_rank[r].dims)
+                return std::unexpected(std::format(
+                    "seed_arbitrary_order_amplitudes: rank-{} dim mismatch.", r + 1));
+            state.amplitudes.by_rank[r] = seed.by_rank[r];
+        }
+        return {};
     }
 } // namespace HartreeFock::Correlation::CC

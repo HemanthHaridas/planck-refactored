@@ -1,6 +1,10 @@
 #include "post_hf/cc/generated_arbitrary_runtime.h"
 
+#include <chrono>
 #include <cmath>
+#include <format>
+
+#include "io/logging.h"
 namespace HartreeFock::Correlation::CC
 {
     namespace
@@ -116,7 +120,8 @@ namespace HartreeFock::Correlation::CC
         double tol_residual,
         double damping,
         bool use_diis,
-        int diis_dim)
+        int diis_dim,
+        const std::string &log_tag)
     {
         if (max_iterations == 0)
             return std::unexpected("run_generated_arbitrary_order_iterations: max_iterations must be positive.");
@@ -141,6 +146,8 @@ namespace HartreeFock::Correlation::CC
 
         for (unsigned int iter = 1; iter <= max_iterations; ++iter)
         {
+            const auto iter_start = std::chrono::steady_clock::now();
+
             auto residuals_res =
                 evaluate_generated_arbitrary_order_residuals(result.state, kernels);
             if (!residuals_res)
@@ -170,6 +177,16 @@ namespace HartreeFock::Correlation::CC
             result.metrics = std::move(*metrics_res);
 
             previous_energy = energy;
+
+            const double time_sec =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - iter_start).count();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                log_tag + " Iter :",
+                std::format(
+                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  rms(res)={:.3e}  rms(step)={:.3e}  diis={}  t={:.3f}s",
+                    iter, energy, result.energy_change, result.metrics.residual_rms,
+                    result.metrics.update_rms, diis.size(), time_sec));
 
             if (std::abs(result.energy_change) < tol_energy &&
                 result.metrics.residual_rms < tol_residual)
