@@ -179,13 +179,24 @@ verifiable steps, registration first.
   `ctest`; the MAXORDER=3 job is unchanged. YAML validated
   (matrix `cc_maxorder=[3,4]`, flag wired).
 
-- **W3 — arbitrary-order generated-CC regression cases (~S given W2).** Add small
-  closed-shell inputs where CCSDTQ (and cc5 where feasible) ≡ FCI, gated on the
-  generated energy matching the FCI/hand reference to ~1e-8 — the first runtime
-  test of the generated kernels (the A4 tier), parameterized over rank rather than
-  pinned to 4. *Gate:* `run_regressions.py` runs each rank's case and the energy
-  matches; a case is **skipped** (not failed) when the binary's MAXORDER is below
-  its rank.
+- **W3 — arbitrary-order generated-CC regression case (~S given W2). LANDED
+  (rank 4).** `be_rccsdtq_sto3g` — Be/STO-3G, `correlation cc4`. Be has 4
+  electrons, so CCSDTQ ≡ FCI exactly; the case checks `rccsdtq_total_energy`
+  against the FCI reference **-14.4036550465** (the same binary's `fci` path) to
+  `atol 1e-8`. This is the first *runtime* test of the generated kernels (the A4
+  tier) — it exercises W1's `cc4`→rank-4 parse/dispatch, W0's registry, and
+  W0.1's runtime-compiled kernels together. **The build itself validated the
+  chain**: reconfiguring to `-DPLANCK_CC_MAXORDER=4` and building `hartree-fock`
+  compiled + linked the generated ccsdtq TU (exit 0). New infrastructure: an
+  `rccsdtq_total_energy` metric and a `skip_if_contains` field in
+  `run_regressions.py` — a case whose output contains its skip marker is reported
+  PASS-with-note rather than failed, so `be_rccsdtq_sto3g` **skips** on a
+  MAXORDER=3 binary (which prints "Generated rank-4 CC kernels are not available
+  …") instead of failing. Chose Be over LiH: LiH/STO-3G with the teaching-scale
+  generated solver ran > 5 min; Be (4 e⁻, 5 orbitals) is the smallest 4-electron
+  closed shell. *Gate:* `run_regressions.py -k be_rccsdtq_sto3g` passes on a
+  MAXORDER≥4 binary (energy matches FCI) and skips on a lower one. Ranks 5/6 cases
+  wait on the W2 opt-in high-MAXORDER job.
 
 - **W4 — a self-contained generated-kernel unit harness (~M).** For the
   factorized / memory-aware TUs (which are `#include`d nowhere), the cheapest
