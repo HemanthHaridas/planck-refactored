@@ -1,9 +1,11 @@
 # R3.1.2: the higher-rank SpinTerm→AlgebraTerm bridge — two-mechanism scope
 
-**Status: RESOLVED.** Both halves landed; the bridge now reproduces the oracle
-per-term (P2.0 green) and whole-residual (`test_rcc_bridge_solve_path_rank6`
-green) on the rank-6 CCSDT triples manifold. This note is the finished
-diagnosis + fix record.
+**Status: rank-6 RESOLVED; rank-8 (t4) has a further gap — see R3.1.3 below.**
+Both rank-6 halves landed; the bridge reproduces the oracle per-term (P2.0
+green) and whole-residual (`test_rcc_bridge_solve_path_rank6` green) on the
+rank-6 CCSDT triples manifold. At rank 8 a distinct, larger gap remains (t4's
+independent Sz sectors), pinned by `test_rank8_bridge_solve_path` (xfail). This
+note is the rank-6 diagnosis + fix record, then the rank-8 scope.
 
 Companion to `CCGEN_SPIN_ADAPTATION_SCOPE.md` (S3.0 landed the bridge;
 `S4a2ArbitraryOrderTests` gates the arbitrary-order pipeline). It scoped the last
@@ -142,3 +144,55 @@ The S3.0 bridge (`spinterm_to_algebraterm`), the S2 collapse+merge pipeline
 `[ext_vir…, ext_occ…]` first-appearance order — the layout mechanism's origin).
 See `CCGEN_SPIN_ADAPTATION_SCOPE.md` S3/S4 and the
 `ccgen_r312_bridge_spin_layout` memory note.
+
+---
+
+## R3.1.3: the rank-8 (t4) gap — t4's independent Sz sectors
+
+The rank-6 fix is exact, but the rank-8 CCSDTQ **quadruples** solve path is still
+wrong (~5e-4, `test_rank8_bridge_solve_path`, xfail). This is the defect the Be
+CCSDTQ run caught: the generated arbitrary-order kernel gives a spin-orbital
+answer against spatial storage, so CCSDTQ misses FCI (Be `-0.0517714927` vs the
+required `~1e-8` match). Rank 6 was necessary but not sufficient.
+
+**Root cause.** After `canonicalize_spin_blocks`, the merged quadruples reference
+**three** distinct t4 blocks: `aabbaabb` (the reference, 2α2β per half, ~358
+occurrences), `aaabaaab` (3α1β, ~48), and `abbbabbb` (1α3β, ~48). `aaab` and
+`abbb` differ from the reference in their **α-count per half** (Sz sector), so
+they are **not** a permutation and **not** a spin-flip of `aabb` — the two
+transforms the rank-6 fix (`_canonicalize_amplitude_factor`) applies. All 140
+per-term rank-8 failures read a t4 factor in `aaab`/`abbb` from the single stored
+`aabbaabb` block. This is real, not a fixture artifact: the bridge reads a
+nonzero (`~1e-3`) block where the true `aaab`/`abbb` value is `~1e-18` (the
+4-electron fixture zeros the higher-Sz sectors, but the *bridge injects nonzero
+error regardless*), so the solve residual is wrong and the Be solve cannot reach
+FCI.
+
+Why rank 6 was clean: t3 has only two blocks per half — `aab` (2α1β, reference)
+and `abb` (1α2β) — and `abb` **is** the reference's spin-flip partner (same |Sz|,
+opposite sign), so the rank-6 flip closed it. t4 first exposes a third block with
+a genuinely different Sz.
+
+**What the fix needs (open, ~L).** `collapse_amplitudes` currently splits only the
+**all-α** block (`_is_same_spin_amplitude` requires `set(block)=={"a"}`), via
+`_split_same_spin_amplitude` — which reduces `aaaaaaaa` to the *one-β* block
+`aaabaaab`, not to the reference `aabbaabb`. The missing step is a closed-shell
+spin relation that reduces the off-reference Sz blocks (`aaab`, `abbb`) to
+combinations of the reference `aabb` (or provides them as their own spatial
+storage). This is the multi-Sz-sector work: the spatial RCC t4 is one object, and
+`aaab`/`abbb`/`aabb` are different spin projections of it, related by
+antisymmetrization relations that are **not** bare permutations. It is genuine
+unfinished S4 algebra, not a bridge tweak — deriving the `aaab→aabb` reduction
+needs care (a naive per-line spin-conserving fill self-cancels under
+antisymmetrization, so the relation must be derived symbolically, then
+numerically pinned like `_split_same_spin_amplitude` was at n=2,3).
+
+**Iterate here, not on Be.** `test_rank8_bridge_solve_path` (rank-8, ~30s) is the
+fast red gate for this — the t4 analog of `test_rcc_bridge_solve_path_rank6`.
+Never iterate on `spin_adapt_equations('ccsdtq')` or the Be CCSDTQ solve
+(`GeneratedCcsdtqFciGate`, ~15min) until this gate is green.
+
+*Gates:* `test_rank8_bridge_solve_path` (xfail, the R3.1.3 red gate);
+`test_rank8_full_collapse_pipeline` and `test_rank8_aabb_identity` stay green
+(per-block collapse is correct — the gap is the cross-block assembly the solver
+needs, exactly as at rank 6 for the layout/spin split).

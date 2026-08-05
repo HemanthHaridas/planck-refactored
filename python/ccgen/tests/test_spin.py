@@ -2407,6 +2407,70 @@ class S4dRank8IdentityTests(unittest.TestCase):
                         f"rank-8 collapse+merge != GCC aabb slice: "
                         f"{np.abs(acc - Rb).max()}")
 
+    @unittest.expectedFailure
+    def test_rank8_bridge_solve_path(self):
+        # R3.1.3 fast red gate: the rank-8 analog of
+        # test_rcc_bridge_solve_path_rank6. The SOLVE path (spinterm_to_algebraterm
+        # + residual_einsum reading ONE spatial block per amplitude) must match the
+        # aabb GCC slice, like the per-spin-block oracle does. RED (~5e-4): the
+        # R3.1.2 bridge fix (layout + β-majority spin-flip) is EXACT at rank 6 but
+        # INCOMPLETE at rank 8. Root cause: t4 has THREE independent Sz sectors per
+        # half -- aabb (reference, 2α2β), aaab (3α1β), abbb (1α3β) -- and aaab/abbb
+        # are NOT a permutation or spin-flip of aabb (different Sz), so the fixed
+        # `_canonicalize_amplitude_factor` cannot map them onto the single stored
+        # reference. All 140 failing terms read t4 in aaab/abbb from the aabbaabb
+        # block. This is the genuine multi-Sz-sector (R3.1) work: those factors must
+        # read their own block, not fold onto aabb. GREEN when the bridge/storage
+        # provides the independent t4 Sz sectors. Rank-8, ~30s -- iterate here, not
+        # the ~15min Be CCSDTQ solve. See docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md.
+        import numpy as np
+        from ccgen.spin import (ucc_integrate_term_antisym,
+                                canonicalize_spin_blocks, collapse_amplitudes,
+                                collapse_integrals, merge_terms,
+                                spinterm_to_algebraterm)
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv, n = self.no, self.nv, self.no + self.nv
+        nos, nvs = no // 2, nv // 2
+        tn = dict(self.tn)
+        tn["t4"] = 0.5 * tn["t4"]
+        tn["t3"] = 0.7 * tn["t3"]
+        tn["t2"] = 0.9 * tn["t2"]
+
+        def block_slice(so, block):
+            sets = [[p for p in range(so.shape[k])
+                     if p % 2 == (0 if s == "a" else 1)]
+                    for k, s in enumerate(block)]
+            return so[np.ix_(*sets)]
+
+        spatial = {
+            "t1": block_slice(tn["t1"], "aa"),
+            "t2": block_slice(tn["t2"], "abab"),
+            "t3": block_slice(tn["t3"], "aabaab"),
+            "t4": block_slice(tn["t4"], "aabbaabb"),
+            "v": block_slice(tn["v"], "abab"),
+            "f": block_slice(tn["f"], "aa"),
+        }
+        eqs = generate_cc_equations("ccsdtq", engine="diagram")
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn)
+                 for t in eqs["quadruples"])
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+        Rb = Rg[np.ix_(ve, ve, vo, vo, oe, oe, oo, oo)]
+        ext = {"a": "a", "b": "a", "c": "b", "d": "b",
+               "i": "a", "j": "a", "k": "b", "l": "b"}
+        manifold = []
+        for t in eqs["quadruples"]:
+            manifold.extend(ucc_integrate_term_antisym(t, ext))
+        canon = [canonicalize_spin_blocks(st) for st in manifold]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        coll = [c for st in amp for c in collapse_integrals(st)]
+        merged = merge_terms(coll, set(ext))
+        alg = [spinterm_to_algebraterm(st, set(ext)) for st in merged]
+        R = sum(residual_einsum(t, nos, nvs, tensors=spatial) for t in alg)
+        self.assertLess(np.abs(R - Rb).max(), 1e-10,
+                        f"rank-8 bridge solve-path != GCC aabb slice: "
+                        f"{np.abs(R - Rb).max()}")
+
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
 class S4a2ArbitraryOrderTests(unittest.TestCase):
