@@ -2502,6 +2502,55 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
         self.assertLess(np.abs(acc - Rb).max(), 1e-10,
                         "merged RCC rank-6 residual != GCC aab slice")
 
+    @unittest.expectedFailure
+    def test_rcc_bridge_solve_path_rank6(self):
+        # R3.1.2 fast red gate: the SOLVE path (spinterm_to_algebraterm +
+        # residual_einsum on ONE spatial tensor per amplitude) must match the GCC
+        # slice, like the _eval_spinterm path does. RED today (~4.8e-3): the bridge
+        # drops the spin block, so t3 factors surviving in aabaab/abbabb are read
+        # from the full spatial t3 instead of their block slice -- the cross-target
+        # spatial-block inconsistency. GREEN when R3.1.2 makes the spatial layout
+        # consistent (extend the same-spin collapse to mixed blocks / canonicalize
+        # in the bridge). Rank-6, seconds -- the R3.1.2 inner loop.
+        import numpy as np
+        from ccgen.spin import (ucc_integrate_term_antisym,
+                                canonicalize_spin_blocks, collapse_amplitudes,
+                                collapse_integrals, merge_terms,
+                                spinterm_to_algebraterm)
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv = self.no, self.nv
+        nos, nvs = no // 2, nv // 2
+        ext = {"a": "a", "b": "a", "c": "b", "i": "a", "j": "a", "k": "b"}
+
+        def block_slice(so, block):
+            sets = [[p for p in range(so.shape[k]) if p % 2 == (0 if s == "a" else 1)]
+                    for k, s in enumerate(block)]
+            return so[np.ix_(*sets)]
+
+        # one spatial tensor per amplitude, on its own OUTPUT block
+        spatial = {
+            "t1": block_slice(self.tn["t1"], "aa"),
+            "t2": block_slice(self.tn["t2"], "abab"),
+            "t3": block_slice(self.tn["t3"], "abaaba"),
+            "v": self.tn["v"][np.ix_(*[[p for p in range(self.tn["v"].shape[k])
+                                        if p % 2 == 0] for k in range(4)])],
+            "f": self.tn["f"][np.ix_(*[[p for p in range(self.tn["f"].shape[k])
+                                        if p % 2 == 0] for k in range(2)])],
+        }
+        manifold = []
+        for t in self.triples:
+            manifold.extend(ucc_integrate_term_antisym(t, ext))
+        canon = [canonicalize_spin_blocks(st) for st in manifold]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        coll = [c for st in amp for c in collapse_integrals(st)]
+        merged = merge_terms(coll, set(ext))
+        alg = [spinterm_to_algebraterm(st, set(ext)) for st in merged]
+        R = sum(residual_einsum(t, nos, nvs, tensors=spatial) for t in alg)
+        Rb = self._gcc_slice(ext)
+        self.assertLess(np.abs(R - Rb).max(), 1e-10,
+                        f"bridge solve-path rank-6 != GCC aab slice: "
+                        f"{np.abs(R - Rb).max()}")
+
 
 if __name__ == "__main__":
     unittest.main()
