@@ -144,53 +144,60 @@ contributes ~0); CCSDTQ − FCI = 3.14e-6, but Be (4e) requires CCSDTQ ≡ FCI t
 t4-bearing terms — R4 is non-empty. The terms are **numerically wrong**, so the
 solve converges to a T4 that nets ~0.
 
-**Root cause — the higher-rank closed-shell reduction was never end-to-end
-validated, and my `spin_adapt_equations` extended it past where it holds:**
+**Root cause (refined after experiment) — `spin_adapt_equations` integrates each
+target on a SINGLE representative external block, but the higher-rank amplitude
+residual needs the full set of independent spatial blocks summed.**
 
-1. **The whole S2 collapse pipeline is doubles-only-validated.** Every S2 test
-   (`test_spin.py`) drives `ucc_manifold(...)["abab"]` on the **doubles** template
-   `R2` alone. `collapse_amplitudes`/`collapse_integrals`/`merge_terms` are written
-   rank-generically, but the only end-to-end numeric gate is the doubles abab block.
-   `spin_adapt_equations` runs them on singles/doubles/triples/quadruples; ccsd and
-   ccsdt happened to validate, quadruples does not.
-2. **Representative-block convention mismatch (the concrete bug).**
-   `_closed_shell_representative_block` integrates the manifold on the *alternating*
-   external block (rank-4 → `abababab`), but the amplitude splitter
-   `_split_same_spin_amplitude` reconstructs same-spin blocks against the
-   *single-beta* mixed block ((a…a,b)×2, rank-4 → `aaabaaab`). They **coincide only
-   at n≤2** (`abab`), so doubles/triples pass but rank-4 T4 coupling is fed the
-   wrong block.
-3. **The amplitude splitter itself is only numerically pinned at n≤3.**
-   `_split_same_spin_amplitude`'s docstring: *"Numerically pinned at n=2,3"*. n=4
-   (the rank-4 amplitude, 8 slots) is structural-only. The S4 workstream
-   (memory: `ccgen_spin_adaptation_s4a_t3`) deliberately validated t3/t4 via a
-   **different** FCI-limit iterate route, not via making this full-manifold
-   closed-shell adaptation correct at rank 4.
+What the experiments ruled IN and OUT:
+
+- **RULED OUT — the block convention.** Swapping `_closed_shell_representative_block`
+  from alternating (`abababab`) to the splitter's single-beta block (`aaabaaab`)
+  gives the *identical* wrong CCSDTQ (−0.0517714927, T4 ≈ 0, gap 3.14e-6). So it is
+  not a one-line block swap.
+- **RULED OUT — the amplitude splitter.** `_split_same_spin_amplitude` and the whole
+  collapse+merge pipeline are numerically validated **per block** through rank-6
+  (t3): `S4bSplitterTests` (rank-4 t2, rank-6 t3 same-spin relations, 13/13 pass)
+  and `test_rcc_pipeline_generalizes_rank6` — the latter runs the FULL
+  canonicalize→collapse→merge on the triples manifold and matches the GCC slice to
+  1e-10, but **on one specific external block** `{a:a,b:a,c:b,i:a,j:a,k:b}` (=aabaab).
+- **THE ACTUAL GAP.** `test_rcc_pipeline_generalizes_rank6` proves one block's
+  residual is reproduced. `spin_adapt_equations` uses exactly one block per target —
+  which is correct for the **energy** (a single scalar) and for ranks where one
+  spatial block spans the residual, but the **rank-4 amplitude residual has multiple
+  independent spatial components** (quadruples has 8 valid external blocks:
+  aaaaaaaa, aaabaaab, aabaaaba, aabbaabb, abaaabaa, abababab, abbaabba, abbbabbb).
+  Integrating on one representative and deriving the rest via the same-spin collapse
+  is complete for doubles (2 blocks, 1 relation) but **not** for quadruples. T4 ends
+  up under-driven → contributes ~0. Note: adapted CCSDT *passed* only a LOOSE gate
+  (CCSD < CCSDT < FCI ordering), which one-block integration happens to satisfy; the
+  exact Be CCSDTQ≡FCI oracle is what exposed the incompleteness.
 
 **Fix, in order:**
 
-- **R3.0 — a rank-4 numeric gate first (~S).** The Be CCSDTQ≡FCI solve is the
-  oracle (adapted spatial CCSDTQ must reach FCI to ~1e-8). It is slow (~10 min:
-  the 4557-term quadruples adaptation + t4 Jacobi), so gate it behind
-  `CCGEN_SLOW_TESTS=1` like the AR1 ccsdtq gate. Red now, green when R3 lands.
-- **R3.1 — reconcile the representative block with the splitter convention (~M).**
-  Either (a) integrate the manifold on the single-beta block the splitter expects,
-  or (b) drive the collapse off whatever block the integration used. Whichever, the
-  external-block choice in `_closed_shell_representative_block` and the amplitude
-  block in `_split_same_spin_amplitude` must be one convention. This is the operative
-  bug and likely the bulk of the fix.
-- **R3.2 — numerically validate `_split_same_spin_amplitude` at n=4 (~M).** Promote
-  its n≤3 numeric pin to n=4 (rank-8 amplitude): the same-spin reconstruction must
-  reproduce the sliced GCC block on real tensors. If it fails, the splitter relation
-  itself (not just the block choice) needs the rank-4 generalization the S4 notes
-  deferred.
-- **R3.3 — re-run the ladder (~S).** ccsd/ccsdt gates stay green; the R3.0 Be
-  CCSDTQ gate flips green. Only then wire `spin_adapt` into the CMake codegen
-  default and confirm the real binary Be cc4 → -14.4036550465.
+- **R3.0 — a rank-4 numeric gate. DONE (xfail).** `GeneratedCcsdtqFciGate`
+  (`test_reference_vs_pyscf.py`, `CCGEN_SLOW_TESTS`-gated): adapted spatial CCSDTQ on
+  Be must reach FCI to 1e-8. Red now (T4≈0), green when R3.1 lands. Uses the shared
+  `solve_spin_adapted_spatial` helper.
+- **R3.1 — sum the full independent-block set per target (~L, the real fix).**
+  `spin_adapt_equations` must, for each target, integrate the residual over ALL its
+  independent closed-shell external blocks (not one representative) and assemble the
+  spatial residual from them — the many-block generalization of the doubles
+  "abab + derive aaaa" reduction. This is genuine S4 algebra: enumerate the
+  independent blocks (`external_blocks` gives the 8), integrate each
+  (`ucc_integrate_term_antisym`), collapse+merge, and combine into the spatial
+  amplitude components. The per-block machinery already works (the rank-6 test proves
+  it); what's missing is the multi-block assembly.
+- **R3.2 — extend `test_rcc_pipeline_generalizes_rank6` to rank-8 (~M).** A rank-8
+  analog of the per-block pipeline gate on the S4d t4 fixture (already exists,
+  `_uccsdtq_so_tensors`), then the multi-block assembly gate.
+- **R3.3 — re-run the ladder (~S).** ccsd/ccsdt stay green; R3.0 flips green; only
+  then wire `spin_adapt` into the CMake default and confirm binary Be cc4 →
+  -14.4036550465.
 
-**Effort:** ~M–L, in the S4 spin-collapse machinery. This is real symbolic work, not
-wiring — the opposite of R1.0 (which was mostly pre-built). Until it lands, the
-`spin_adapt` path is correct for ranks ≤3 only, and cc4+ stays wrong.
+**Effort:** ~L, in the S4 multi-block assembly. This is real symbolic work — the
+per-block reduction exists and is validated to t3; the missing piece is assembling
+the full spatial residual from all independent blocks at rank 4. Until it lands, the
+`spin_adapt` path is correct for the energy and ranks ≤3, and cc4+ stays wrong.
 
 ## What NOT to do
 

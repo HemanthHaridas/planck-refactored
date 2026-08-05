@@ -13,6 +13,7 @@ default env). Run with that interpreter:
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -738,6 +739,68 @@ class ReferenceVsPyscfTests(unittest.TestCase):
         self.assertEqual(dia - {("bare", 0)}, term - {("bare", 0)})
 
 
+def solve_spin_adapted_spatial(method, atom, basis, targets, damping=0.5,
+                               maxiter=800, tol=1e-10):
+    """Solve the SPIN-ADAPTED (spatial, restricted) CC equations by damped Jacobi
+    on a closed-shell RHF reference. Returns (e_corr, mf, converged). Uses
+    chemists' spatial integrals (n_occ spatial) -- the same binding the C++
+    runtime uses -- so a correct spin-adaptation reproduces the true RCC energy.
+    Damping is needed for higher rank (plain Jacobi diverges on stiff manifolds)."""
+    import itertools
+    from pyscf import ao2mo
+    from ccgen.generate import generate_cc_equations
+    from ccgen.spin import spin_adapt_equations
+    from ccgen.tests.residual_eval import residual_einsum
+
+    mol = gto.M(atom=atom, basis=basis, spin=0)
+    mf = scf.RHF(mol).run(verbose=0)
+    nocc = mol.nelectron // 2
+    nmo = mf.mo_coeff.shape[1]
+    nvir = nmo - nocc
+    eri = ao2mo.kernel(mol, mf.mo_coeff, compact=False).reshape(nmo, nmo, nmo, nmo)
+    v = eri.transpose(0, 2, 1, 3)
+    e = mf.mo_energy
+    eo, ev = e[:nocc], e[nocc:]
+    f = np.diag(e)
+    adapted = spin_adapt_equations(generate_cc_equations(method))
+
+    rk = {"singles": 1, "doubles": 2, "triples": 3, "quadruples": 4}
+    tnm = {"singles": "t1", "doubles": "t2", "triples": "t3", "quadruples": "t4"}
+
+    def den(r):
+        shp = [nvir] * r + [nocc] * r
+        D = np.zeros(shp)
+        for idx in itertools.product(*[range(s) for s in shp]):
+            D[idx] = (sum(eo[o] for o in idx[r:]) - sum(ev[a] for a in idx[:r]))
+        return D
+
+    D = {rk[m]: den(rk[m]) for m in targets}
+    amps = {tnm[m]: np.zeros((nvir,) * rk[m] + (nocc,) * rk[m]) for m in targets}
+    if "doubles" in targets:
+        amps["t2"] = v[:nocc, :nocc, nocc:, nocc:].transpose(2, 3, 0, 1) / D[2]
+
+    converged = False
+    for _ in range(maxiter):
+        tn = {"v": v, "f": f, **amps}
+        delta = 0.0
+        upd = {}
+        for m in targets:
+            R = sum(residual_einsum(t, nocc, nvir, tensors=tn) for t in adapted[m])
+            new = amps[tnm[m]] + damping * R / D[rk[m]]
+            upd[tnm[m]] = new
+            delta = max(delta, float(np.max(np.abs(new - amps[tnm[m]]))))
+        amps.update(upd)
+        if not np.isfinite(delta):
+            break
+        if delta < tol:
+            converged = True
+            break
+    tn = {"v": v, "f": f, **amps}
+    e_corr = sum(float(residual_einsum(t, nocc, nvir, tensors=tn))
+                 for t in adapted["energy"])
+    return e_corr, mf, converged
+
+
 def ccgen_spatial_energy_at_pyscf_amps(method, atom, basis, spin_adapt=False):
     """R1.2 gate helper. Evaluate the GENERATED energy equation the way the C++
     runtime does: bind its terms to SPATIAL closed-shell storage (n_occ spatial,
@@ -923,6 +986,35 @@ class GeneratedSpatialEnergyGate(unittest.TestCase):
                         "adapted CCSDT must be at or below CCSD")
         self.assertGreater(e_ccsdt, e_fci - 1e-12,
                            "adapted CCSDT must not undershoot FCI")
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")
+@unittest.skipUnless(
+    os.environ.get("CCGEN_SLOW_TESTS"),
+    "R3.0 Be CCSDTQ==FCI gate is slow (~10min: 4557-term quadruples adaptation + "
+    "t4 Jacobi); set CCGEN_SLOW_TESTS=1 to run",
+)
+class GeneratedCcsdtqFciGate(unittest.TestCase):
+    """R3.0 -- the rank-4 numeric oracle. Be has 4 electrons, so CCSDTQ == FCI
+    exactly. The spin-adapted (spatial) CCSDTQ energy must reach the FCI e_corr.
+
+    RED until R3.1 fixes the higher-rank closed-shell reduction: today T4
+    contributes ~0 (adapted CCSDTQ == adapted CCSDT), leaving CCSDTQ - FCI ~3e-6
+    from the missing T4. GREEN when the representative-block convention is
+    reconciled with the amplitude splitter and the n=4 splitter is validated."""
+
+    @unittest.expectedFailure
+    def test_ccsdtq_spin_adapted_reaches_fci(self):
+        from pyscf import fci
+
+        e_ccsdtq, mf, converged = solve_spin_adapted_spatial(
+            "ccsdtq", "Be 0 0 0", "sto-3g",
+            ["singles", "doubles", "triples", "quadruples"],
+        )
+        self.assertTrue(converged, "adapted CCSDTQ Jacobi did not converge")
+        e_fci = fci.FCI(mf).kernel()[0] - mf.e_tot
+        # Be 4e => CCSDTQ is exact. RED today (T4 ~0 leaves a ~3e-6 gap).
+        self.assertAlmostEqual(e_ccsdtq, e_fci, places=8)
 
 
 if __name__ == "__main__":
