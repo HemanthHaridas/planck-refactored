@@ -117,17 +117,32 @@ solver and the codegen are already arbitrary-order (see Background); only the
 registration, the `PostHF` enum, and the io.cpp options are rank-hardcoded. Small
 verifiable steps, registration first.
 
-- **W0 — a rank-parameterized registry (~M, the core generalization).** Replace
-  the single `make_generated_rccsdtq_kernels()` / `#if >= 4` with a per-rank
-  registration driven by `PLANCK_CC_MAXORDER`. Concretely: a
-  `make_generated_rcc_kernels(int rank)` that dispatches to the compiled generated
-  TU for `rank`, and a registry that `#include`s each `<method>_planck_generated.cpp`
-  for every rank ≤ MAXORDER behind its own `#if PLANCK_CC_MAXORDER >= N` (ccsdtq,
-  cc5, cc6). The `_planck_cc_method_by_rank` list already gives the file names.
-  Keep `make_generated_rccsdtq_kernels()` as a rank-4 alias for the existing
-  driver call site. *Gate:* at MAXORDER=6 the registry exposes runnable kernels
-  for ranks 4/5/6; at MAXORDER=3 all report "not available" (unchanged default);
-  `make_generated_rcc_kernels(rank)` returns the right bundle per rank.
+- **W0 — a rank-parameterized registry (~M, the core generalization). LANDED
+  (registry) — but exposed a downstream emitter defect (W0.1).** Replaced the
+  single `make_generated_rccsdtq_kernels()` / `#if >= 4` with
+  `make_generated_rcc_kernels(int rank)`: a per-rank `switch`, each case behind its
+  own `#if PLANCK_CC_MAXORDER >= N`, calling the TU's `make_generated_<method>_kernels()`
+  (4=ccsdtq, 5=cc5, 6=cc6, matching `_planck_cc_method_by_rank`).
+  `make_generated_rccsdtq_kernels()` kept as a rank-4 alias for `run_rccsdtq`.
+  Rank<4 and unbuilt-rank return errors naming the reconfigure. **Compiles at the
+  default MAXORDER=3** (all cases guarded off; unchanged behavior). The header is
+  extended, the driver call site is untouched.
+
+- **W0.1 — fix the rank-≥4 amplitude-accessor emit (~S, BLOCKER for the MAXORDER≥4
+  gate).** Building the registry at MAXORDER=4 surfaced a pre-existing emitter
+  defect that the `#if >= 4` guard had always hidden: the generated ccsdtq kernels
+  call `amplitudes.t1(i,a)` / `.t2(...)` / `.t3(...)`, but the arbitrary-order
+  runtime type `ArbitraryOrderRCCAmplitudes` (which the emitted bundle's residual
+  lambdas take) exposes only `.tensor(rank)(...)` — no `t1`/`t2`/`t3` members. So
+  the ccsdtq TU has never actually compiled against the runtime; the guard kept
+  anyone from finding out. `_map_factor` (`emit/planck_tensor_cpp.py:205-214`)
+  emits the `t1/t2/t3` shortcut unconditionally; it must emit `.tensor(n)(...)`
+  when the target amplitude type is the arbitrary-order one (rank ≥ 4). *Gate:*
+  the emitted ccsdtq TU compiles against `ArbitraryOrderRCCAmplitudes`; the
+  rank ≤ 3 tensor_backend `#include` (which uses `RCCSDTAmplitudes`, where `.t1`
+  is valid) is unchanged. This is the true unblock for the MAXORDER≥4 registry
+  gate — the registry (W0) is correct; the emitted TU it includes is what did not
+  compile.
 
 - **W1 — arbitrary-order `%posthf` options (~S given W0).** The `PostHF` enum
   stops at `RCCSDTQ`; extend the CC path so `correlation cc5` / `cc6` (and the
