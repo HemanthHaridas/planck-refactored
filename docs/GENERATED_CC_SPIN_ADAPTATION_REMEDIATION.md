@@ -178,26 +178,63 @@ What the experiments ruled IN and OUT:
   (`test_reference_vs_pyscf.py`, `CCGEN_SLOW_TESTS`-gated): adapted spatial CCSDTQ on
   Be must reach FCI to 1e-8. Red now (T4≈0), green when R3.1 lands. Uses the shared
   `solve_spin_adapted_spatial` helper.
-- **R3.1 — sum the full independent-block set per target (~L, the real fix).**
-  `spin_adapt_equations` must, for each target, integrate the residual over ALL its
-  independent closed-shell external blocks (not one representative) and assemble the
-  spatial residual from them — the many-block generalization of the doubles
-  "abab + derive aaaa" reduction. This is genuine S4 algebra: enumerate the
-  independent blocks (`external_blocks` gives the 8), integrate each
-  (`ucc_integrate_term_antisym`), collapse+merge, and combine into the spatial
-  amplitude components. The per-block machinery already works (the rank-6 test proves
-  it); what's missing is the multi-block assembly.
-- **R3.2 — extend `test_rcc_pipeline_generalizes_rank6` to rank-8 (~M).** A rank-8
-  analog of the per-block pipeline gate on the S4d t4 fixture (already exists,
-  `_uccsdtq_so_tensors`), then the multi-block assembly gate.
-- **R3.3 — re-run the ladder (~S).** ccsd/ccsdt stay green; R3.0 flips green; only
-  then wire `spin_adapt` into the CMake default and confirm binary Be cc4 →
-  -14.4036550465.
+### R3.1 in small verifiable steps
 
-**Effort:** ~L, in the S4 multi-block assembly. This is real symbolic work — the
-per-block reduction exists and is validated to t3; the missing piece is assembling
-the full spatial residual from all independent blocks at rank 4. Until it lands, the
-`spin_adapt` path is correct for the energy and ranks ≤3, and cc4+ stays wrong.
+The narrowed root cause (after all three block choices gave the identical wrong
+answer): **the full collapse+merge pipeline is validated only through rank-6 (t3).
+`test_rcc_pipeline_generalizes_rank6` runs canonicalize→collapse_amplitudes→
+collapse_integrals→merge on the triples manifold and matches the GCC slice to
+1e-10 — but there is NO rank-8 (quadruples) analog.** The rank-8 tests
+(`test_rank8_aabb_identity`) run *integration only*, never the collapse. So the
+untested/broken boundary is the **rank-8 collapse**, not the block choice or the
+integration.
+
+Iterate against a FAST per-block rank-8 gate (seconds, one block, no solve), NOT
+the ~15-20 min Be CCSDTQ solve. The Be solve is the final confirmation only.
+
+- **R3.1.0 — the fast rank-8 collapse gate (~S). RED-first.** Extend
+  `test_rcc_pipeline_generalizes_rank6` to rank-8: run the full collapse+merge on the
+  **quadruples** manifold, on the `aabbaabb` block, against the S4d t4 fixture
+  (`_uccsdtq_so_tensors`, already exists) GCC slice. This runs in seconds (one block,
+  einsum, no Jacobi) and is RED today — it pinpoints that the rank-8 collapsed
+  residual ≠ its GCC slice. This is the R3.1 inner-loop harness.
+- **R3.1.1 — localize which collapse stage breaks (~S).** With R3.1.0 red, compare
+  post-integration (should match, per `test_rank8_aabb_identity`) vs
+  post-`collapse_amplitudes` vs post-`collapse_integrals` vs post-`merge`. The first
+  stage whose output diverges from the GCC slice is the bug. Candidates:
+  `collapse_amplitudes` (the t4[aaaa…] same-spin split — the rank-8 amplitude
+  relation `_split_same_spin_amplitude` is structural-only past t3), `collapse_integrals`
+  (rank-4 hardcoded, should be fine), or an interaction of multiple same-spin factors
+  in one rank-8 term (the Cartesian product in `_product_over_choices`).
+- **R3.1.2 — fix the identified stage (~M–L).** Most likely the rank-8 amplitude
+  same-spin collapse: `_split_same_spin_amplitude` at n=4 needs its numeric pin
+  (currently n≤3) and possibly a corrected relation. Fix, then R3.1.0 goes green.
+- **R3.1.3 — the rank-8 amplitude-splitter numeric gate (~S).** Promote the S4b
+  splitter pin from n≤3 to n=4 against the S4d t4 fixture (the rank-8 same-spin block
+  from the mixed block), mirroring `S4bSplitterTests`. Guards the R3.1.2 fix.
+- **R3.1.4 — confirm end-to-end (~S, slow).** The R3.0 Be CCSDTQ≡FCI gate flips
+  green. ccsd/ccsdt stay green.
+
+- **R3.2 — wire `spin_adapt` into codegen, ALL ranks at once (~S, HELD).** Only after
+  R3.1 lands (user decision: no partial binary state). A `--spin-adapt` flag on
+  `generate_planck_cc_kernels.py` + a CMake option, plumbed like `--arbitrary-lower-ranks`.
+  Confirmed trivial: `print_cpp_planck(spin_adapt=True)` already emits the spatial
+  `1.5/-0.5 oovv` + `2/-1 t1t1` structure for ccsd. Then rebuild and confirm the
+  binary Be cc4 → -14.4036550465, and remove the raw xfail.
+
+**Coupling note (Gap A vs Gap B).** Gap A (codegen never applies `spin_adapt`) and
+Gap B (rank-4 adaptation incomplete) meet at `spin_adapt_equations`: the emitted C++
+is exactly its output. Flipping A propagates B's per-rank quality into the binary —
+so a correct cc4 binary needs BOTH, while a correct ccsd/ccsdt binary needs only A.
+Per user decision, A is HELD until B lands, then wired for all ranks together (no
+partial state). The Be cc4 binary run was wrong at every rank because A was never
+flipped (the cc3 warm-start seed used a raw, un-adapted cc3 kernel) — do not read
+that binary number as evidence about the Python adaptation.
+
+**Effort:** R3.1 is ~M–L concentrated in the rank-8 amplitude collapse (R3.1.2), but
+the fast red-first gate (R3.1.0) makes it iterable in seconds instead of 20-min
+solves. Until it lands, `spin_adapt` is correct for the energy and ranks ≤3; the
+binary stays uniformly wrong (A held).
 
 ## What NOT to do
 
