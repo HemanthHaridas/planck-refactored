@@ -2705,13 +2705,16 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
                          f"{len(unexplained)} failing terms fit neither the spin "
                          f"nor the layout mechanism, e.g. {unexplained[:3]}")
 
-    def test_p22_layout_only_failures_are_a_pure_transpose_rank6(self):
-        # P2.2. Isolates the LAYOUT mechanism and proves it carries no numeric
-        # error: for every failing term that is layout-only (consistent spins, so
-        # `_mech_spin` is False), transposing the bridge output back to the
-        # canonical [a,b,c,i,j,k] axis order reproduces the oracle to machine eps.
-        # This is why LAYOUT is a bridge bug, not a spin gap -- fixed by
-        # canonicalizing `AlgebraTerm.free_indices`, independently of the spin fix.
+    def test_p22_layout_mechanism_is_fixed_rank6(self):
+        # P2.2 (post-fix regression gate). R3.1.2 half (ii) canonicalizes the
+        # bridge's `free_indices` (virtuals before occupieds, then by base name),
+        # so `residual_einsum` emits the canonical [a,b,c,i,j,k] residual layout.
+        # This must eliminate the LAYOUT mechanism entirely: no failing term is
+        # `_mech_layout`, AND every remaining failure is a spin error (so the two
+        # mechanisms are now disjoint -- layout resolved, only spin left).
+        # Pre-fix this was 718 failures (595 both, 116 layout-only); post-fix it
+        # is 52, all spin-only. Guards against a regression that reintroduces a
+        # per-term output ordering.
         import numpy as np
         from ccgen.spin import spinterm_to_algebraterm
         from ccgen.tests.residual_eval import residual_einsum
@@ -2719,22 +2722,19 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
         nos, nvs = no // 2, nv // 2
         names = ["a", "b", "c", "i", "j", "k"]
         merged, spatial, ext = self._rank6_bridge_spatial()
-        n_layout = 0
         for st in merged:
             at = spinterm_to_algebraterm(st, set(ext))
+            # the bridge output layout is now always canonical
+            self.assertFalse(self._mech_layout(at, names),
+                             f"bridge still emits a non-canonical layout: "
+                             f"{self._bridge_output_layout(at)}")
             A = _eval_spinterm(st, self.tn, no, no + nv, names)
             B = residual_einsum(at, nos, nvs, tensors=spatial)
-            if np.abs(A - B).max() <= 1e-10:
-                continue
-            if self._mech_spin(st, ext):
-                continue  # spin error would survive any transpose; not layout-only
-            n_layout += 1
-            layout = self._bridge_output_layout(at)
-            perm = [layout.index(x) for x in names]
-            self.assertLess(np.abs(A - np.transpose(B, perm)).max(), 1e-9,
-                            f"layout-only term not fixed by canonical transpose: "
-                            f"{[(f.name, f.block) for f in st.factors]}")
-        self.assertGreater(n_layout, 0, "expected layout-only failures to exist")
+            if np.abs(A - B).max() > 1e-10:
+                # every surviving failure must be a spin error
+                self.assertTrue(self._mech_spin(st, ext),
+                                f"a non-spin term still fails after the layout fix: "
+                                f"{[(f.name, f.block) for f in st.factors]}")
 
 
 if __name__ == "__main__":

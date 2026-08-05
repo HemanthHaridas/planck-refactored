@@ -776,6 +776,15 @@ def spinterm_to_algebraterm(spinterm: SpinTerm, externals):
             elif si.name not in seen_summed:
                 seen_summed.add(si.name)
                 summed.append(si.base)
+    # R3.1.2 half (ii): order free indices canonically (virtuals before
+    # occupieds, then by base name) instead of per-term first-appearance. The
+    # residual layout `residual_einsum` emits is [ext_vir..., ext_occ...] in the
+    # order of `free_indices`; first-appearance order differs between terms with
+    # the same externals, transposing their residual arrays so a manifold sum
+    # over them is wrong. The external naming convention (bra virtuals a,b,c...,
+    # ket occupieds i,j,k...) makes name-sort within each space the canonical
+    # residual layout, matching the oracle. See docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md.
+    free.sort(key=lambda b: (0 if b.space == "vir" else 1, b.name))
     return AlgebraTerm(Fraction(spinterm.coeff), factors,
                        tuple(free), tuple(summed), True)
 
