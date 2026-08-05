@@ -125,6 +125,73 @@ amplitudes); the ccsd/ccsdt evidence plus the rank-agnostic emit path cover it.
 5. Re-enable `be_rccsdtq_sto3g` as an **asserting** case (not `skip_if_contains`),
    pinning -14.4036550465, once warm-start makes it tractable.
 
+## R1 status (landed)
+
+- **ccsd** — DONE, validated. `spin_adapt_equations` energy = PySCF RCCSD to 1e-9;
+  singles+doubles residual vanishes at the converged RCCSD amps (fa0f088).
+- **ccsdt** — DONE, validated. Adapted spatial CCSDT solves CCSD < CCSDT < FCI on
+  Be, recovering ~28% of the CCSD→FCI gap (the T3 part) (ce33301).
+- **ccsdtq / cc4** — **NOT fixed.** This is the actual broken binary path. See R3.
+
+---
+
+## R3 — finish the higher-rank (≥4) closed-shell reduction (the cc4 blocker)
+
+**Symptom.** Adapted CCSDTQ on Be gives e_corr **identical to adapted CCSDT** (T4
+contributes ~0); CCSDTQ − FCI = 3.14e-6, but Be (4e) requires CCSDTQ ≡ FCI to ~1e-8.
+
+**Not structural.** The adapted quadruples manifold has 4033 T4-source terms + 524
+t4-bearing terms — R4 is non-empty. The terms are **numerically wrong**, so the
+solve converges to a T4 that nets ~0.
+
+**Root cause — the higher-rank closed-shell reduction was never end-to-end
+validated, and my `spin_adapt_equations` extended it past where it holds:**
+
+1. **The whole S2 collapse pipeline is doubles-only-validated.** Every S2 test
+   (`test_spin.py`) drives `ucc_manifold(...)["abab"]` on the **doubles** template
+   `R2` alone. `collapse_amplitudes`/`collapse_integrals`/`merge_terms` are written
+   rank-generically, but the only end-to-end numeric gate is the doubles abab block.
+   `spin_adapt_equations` runs them on singles/doubles/triples/quadruples; ccsd and
+   ccsdt happened to validate, quadruples does not.
+2. **Representative-block convention mismatch (the concrete bug).**
+   `_closed_shell_representative_block` integrates the manifold on the *alternating*
+   external block (rank-4 → `abababab`), but the amplitude splitter
+   `_split_same_spin_amplitude` reconstructs same-spin blocks against the
+   *single-beta* mixed block ((a…a,b)×2, rank-4 → `aaabaaab`). They **coincide only
+   at n≤2** (`abab`), so doubles/triples pass but rank-4 T4 coupling is fed the
+   wrong block.
+3. **The amplitude splitter itself is only numerically pinned at n≤3.**
+   `_split_same_spin_amplitude`'s docstring: *"Numerically pinned at n=2,3"*. n=4
+   (the rank-4 amplitude, 8 slots) is structural-only. The S4 workstream
+   (memory: `ccgen_spin_adaptation_s4a_t3`) deliberately validated t3/t4 via a
+   **different** FCI-limit iterate route, not via making this full-manifold
+   closed-shell adaptation correct at rank 4.
+
+**Fix, in order:**
+
+- **R3.0 — a rank-4 numeric gate first (~S).** The Be CCSDTQ≡FCI solve is the
+  oracle (adapted spatial CCSDTQ must reach FCI to ~1e-8). It is slow (~10 min:
+  the 4557-term quadruples adaptation + t4 Jacobi), so gate it behind
+  `CCGEN_SLOW_TESTS=1` like the AR1 ccsdtq gate. Red now, green when R3 lands.
+- **R3.1 — reconcile the representative block with the splitter convention (~M).**
+  Either (a) integrate the manifold on the single-beta block the splitter expects,
+  or (b) drive the collapse off whatever block the integration used. Whichever, the
+  external-block choice in `_closed_shell_representative_block` and the amplitude
+  block in `_split_same_spin_amplitude` must be one convention. This is the operative
+  bug and likely the bulk of the fix.
+- **R3.2 — numerically validate `_split_same_spin_amplitude` at n=4 (~M).** Promote
+  its n≤3 numeric pin to n=4 (rank-8 amplitude): the same-spin reconstruction must
+  reproduce the sliced GCC block on real tensors. If it fails, the splitter relation
+  itself (not just the block choice) needs the rank-4 generalization the S4 notes
+  deferred.
+- **R3.3 — re-run the ladder (~S).** ccsd/ccsdt gates stay green; the R3.0 Be
+  CCSDTQ gate flips green. Only then wire `spin_adapt` into the CMake codegen
+  default and confirm the real binary Be cc4 → -14.4036550465.
+
+**Effort:** ~M–L, in the S4 spin-collapse machinery. This is real symbolic work, not
+wiring — the opposite of R1.0 (which was mostly pre-built). Until it lands, the
+`spin_adapt` path is correct for ranks ≤3 only, and cc4+ stays wrong.
+
 ## What NOT to do
 
 - Do not patch the energy kernel's `0.25` in isolation — the residuals carry the same
@@ -135,3 +202,7 @@ amplitudes); the ccsd/ccsdt evidence plus the rank-agnostic emit path cover it.
   R1.0 connects it; it does not reinvent it.
 - Do not ship any generated-kernel numeric result until R1.2 exists — the toy energy
   kernel in `tests/cc_arbitrary_solver.cpp` is why this shipped wrong.
+- Do not make `spin_adapt` the CMake codegen default until R3 lands — it would fix
+  ccsd/ccsdt but silently keep cc4+ wrong, trading a loud defect for a quiet one.
+- Do not assume the rank-generic collapse code is validated because it runs — only
+  the doubles abab block has an end-to-end numeric gate; ranks ≥4 need R3.0/R3.2.
