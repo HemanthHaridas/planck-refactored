@@ -192,27 +192,38 @@ integration.
 Iterate against a FAST per-block rank-8 gate (seconds, one block, no solve), NOT
 the ~15-20 min Be CCSDTQ solve. The Be solve is the final confirmation only.
 
-- **R3.1.0 — the fast rank-8 collapse gate (~S). RED-first.** Extend
-  `test_rcc_pipeline_generalizes_rank6` to rank-8: run the full collapse+merge on the
-  **quadruples** manifold, on the `aabbaabb` block, against the S4d t4 fixture
-  (`_uccsdtq_so_tensors`, already exists) GCC slice. This runs in seconds (one block,
-  einsum, no Jacobi) and is RED today — it pinpoints that the rank-8 collapsed
-  residual ≠ its GCC slice. This is the R3.1 inner-loop harness.
-- **R3.1.1 — localize which collapse stage breaks (~S).** With R3.1.0 red, compare
-  post-integration (should match, per `test_rank8_aabb_identity`) vs
-  post-`collapse_amplitudes` vs post-`collapse_integrals` vs post-`merge`. The first
-  stage whose output diverges from the GCC slice is the bug. Candidates:
-  `collapse_amplitudes` (the t4[aaaa…] same-spin split — the rank-8 amplitude
-  relation `_split_same_spin_amplitude` is structural-only past t3), `collapse_integrals`
-  (rank-4 hardcoded, should be fine), or an interaction of multiple same-spin factors
-  in one rank-8 term (the Cartesian product in `_product_over_choices`).
-- **R3.1.2 — fix the identified stage (~M–L).** Most likely the rank-8 amplitude
-  same-spin collapse: `_split_same_spin_amplitude` at n=4 needs its numeric pin
-  (currently n≤3) and possibly a corrected relation. Fix, then R3.1.0 goes green.
-- **R3.1.3 — the rank-8 amplitude-splitter numeric gate (~S).** Promote the S4b
-  splitter pin from n≤3 to n=4 against the S4d t4 fixture (the rank-8 same-spin block
-  from the mixed block), mirroring `S4bSplitterTests`. Guards the R3.1.2 fix.
-- **R3.1.4 — confirm end-to-end (~S, slow).** The R3.0 Be CCSDTQ≡FCI gate flips
+- **R3.1.0 — the fast rank-8 collapse gate. DONE, and it PASSES (overturned the
+  hypothesis).** `test_rank8_full_collapse_pipeline` (`S4dRank8IdentityTests`) runs
+  the full collapse+merge on the quadruples manifold, aabb block, vs the S4d t4
+  fixture GCC slice — in ~27s, and it MATCHES to 1e-10. So the per-block collapse is
+  NOT the bug. This gate is the R3.1 inner-loop harness (seconds, no Jacobi).
+- **R3.1.1 — localize the bug. DONE — it's the SpinTerm→AlgebraTerm BRIDGE, not the
+  collapse.** `spinterm_to_algebraterm` builds `Tensor(f.name, tuple(si.base for si
+  in f.indices))` — it **drops the spin block label**, keeping only spatial indices.
+  For doubles/triples this is lossless because every surviving amplitude factor is in
+  a block where spatial-tensor == block (`t1[aa]`, `t2[abab]`). **At rank 4 the
+  higher amplitudes survive in MIXED same-spin blocks the collapse does NOT reduce:**
+  census of merged quadruples factors —
+  `t3[aabaab]`, `t3[abbabb]`, `t4[aaabaaab]`, `t4[aabbaabb]`, `t4[abbbabbb]`.
+  For these the spatial tensor is NOT the block, so dropping spin makes the solver
+  contract the full spatial t3/t4 instead of the intended spin slice → T4
+  mis-evaluated → ~0. The R3.1.0 test passes only because `_eval_spinterm` SLICES
+  each factor by its spin block (`_slice_spinterm_factor`); the solve path (bridge +
+  `residual_of`) discards it. Root cause: **`collapse_amplitudes` only splits the
+  ALL-same-spin block** (`_is_same_spin_amplitude` requires `set(block)=={'a'}`), so
+  mixed blocks like `aabaab`/`aabbaabb` pass through un-reduced and the bridge then
+  loses them.
+- **R3.1.2 — reduce mixed same-spin amplitude blocks to canonical (~M–L, the fix).**
+  Extend the amplitude collapse so t3/t4 factors in mixed same-spin blocks
+  (`aab`, `aabb`, `abbb`, …) are reduced to the canonical fully-mixed block
+  (abab…-representative), the way `collapse_amplitudes` already reduces the all-alpha
+  block — so every surviving factor is a block where spatial-tensor == block and the
+  bridge is lossless. Equivalent alternative: make `spinterm_to_algebraterm` emit the
+  correct spatial permutation/antisymmetry for a non-canonical block instead of
+  dropping it. The former (finish the collapse) matches the doubles design; the
+  latter (fix the bridge) is more localized. R3.1.0 (fast) gates the fix; then a new
+  fast gate: assert every merged rank-8 factor is in a canonical single block.
+- **R3.1.3 — confirm end-to-end (~S, slow).** The R3.0 Be CCSDTQ≡FCI gate flips
   green. ccsd/ccsdt stay green.
 
 - **R3.2 — wire `spin_adapt` into codegen, ALL ranks at once (~S, HELD).** Only after

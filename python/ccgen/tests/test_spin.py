@@ -2368,6 +2368,45 @@ class S4dRank8IdentityTests(unittest.TestCase):
                         f"rank-8 antisym != GCC aabb slice: "
                         f"{np.abs(acc - Rb).max()}")
 
+    def test_rank8_full_collapse_pipeline(self):
+        # R3.1.0 -- fast rank-8 gate for the FULL collapse+merge pipeline
+        # (canonicalize -> collapse_amplitudes -> collapse_integrals -> merge),
+        # the rank-8 analog of test_rcc_pipeline_generalizes_rank6. GREEN: the
+        # per-block collapse+merge DOES reproduce the GCC aabb slice at rank 8.
+        # So the rank-8 collapse is NOT the bug -- the Be CCSDTQ failure is
+        # downstream (how spin_adapt_equations assembles the spatial residual the
+        # solver iterates, not per-block correctness). Seconds to run.
+        import numpy as np
+        from ccgen.spin import (ucc_integrate_term_antisym,
+                                canonicalize_spin_blocks, collapse_amplitudes,
+                                collapse_integrals, merge_terms)
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv, n = self.no, self.nv, self.no + self.nv
+        tn = dict(self.tn)
+        tn["t4"] = 0.5 * tn["t4"]
+        eqs = generate_cc_equations("ccsdtq", engine="diagram")
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn)
+                 for t in eqs["quadruples"])
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+        Rb = Rg[np.ix_(ve, ve, vo, vo, oe, oe, oo, oo)]
+        ext = {"a": "a", "b": "a", "c": "b", "d": "b",
+               "i": "a", "j": "a", "k": "b", "l": "b"}
+        manifold = []
+        for t in eqs["quadruples"]:
+            manifold.extend(ucc_integrate_term_antisym(t, ext))
+        canon = [canonicalize_spin_blocks(st) for st in manifold]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        coll = [c for st in amp for c in collapse_integrals(st)]
+        merged = merge_terms(coll, set(ext))
+        acc = np.zeros_like(Rb)
+        for st in merged:
+            acc += _eval_spinterm(st, tn, no, n,
+                                  ["a", "b", "c", "d", "i", "j", "k", "l"])
+        self.assertLess(np.abs(acc - Rb).max(), 1e-10,
+                        f"rank-8 collapse+merge != GCC aabb slice: "
+                        f"{np.abs(acc - Rb).max()}")
+
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
 class S4a2ArbitraryOrderTests(unittest.TestCase):
