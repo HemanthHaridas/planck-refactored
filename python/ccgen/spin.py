@@ -724,3 +724,74 @@ def spinterm_to_algebraterm(spinterm: SpinTerm, externals):
                 summed.append(si.base)
     return AlgebraTerm(Fraction(spinterm.coeff), factors,
                        tuple(free), tuple(summed), True)
+
+
+# ── S3/R1.0: full spin-adaptation of a residual manifold to spatial AlgebraTerms ──
+#
+# Chains the S2 pipeline end to end, per target, on the closed-shell representative
+# external block, then bridges to AlgebraTerms the emit path consumes:
+#
+#   ucc_manifold -> canonicalize_spin_blocks -> collapse_amplitudes
+#     -> collapse_integrals -> merge_terms -> spinterm_to_algebraterm
+#
+# This is what replaces the relabel-only `lowering/restricted_closed_shell` in the
+# planck emit path: the coefficients become the spatial 2*(direct)-(exchange)
+# structure, the term count drops to the spatial count, and the emitted kernel is
+# a genuine restricted (spatial) contraction rather than spin-orbital algebra bound
+# to spatial storage. Gated numerically by GeneratedSpatialEnergyGate (R1.2).
+
+
+def _residual_template(target: str, terms):
+    """Build the residual `Tensor` template for a target from its terms' free
+    indices (virtuals first, then occupieds, first-appearance order). Energy
+    (rank 0) has no free indices and yields an index-less template."""
+    from .tensors import Tensor
+
+    if not terms:
+        return Tensor("R", ())
+    free = terms[0].free_indices
+    vir = [i for i in free if i.space == "vir"]
+    occ = [i for i in free if i.space == "occ"]
+    return Tensor("R", tuple(vir) + tuple(occ))
+
+
+def _closed_shell_representative_block(template):
+    """The mixed closed-shell external block (abab...-style) used as the RCC
+    representative: alternate a/b across the virtual slots and again across the
+    occupied slots so each occ/vir line is spin-balanced. Energy -> {} (scalar)."""
+    names = [i.name for i in template.indices]
+    n = len(names) // 2
+    # virtuals then occupieds; alternate spins within each half so the mixed
+    # (not all-same-spin) block is selected — the abab representative.
+    spins = ["a" if k % 2 == 0 else "b" for k in range(n)] * 2
+    return {nm: sp for nm, sp in zip(names, spins)}
+
+
+def spin_adapt_equations(equations):
+    """Spin-adapt a whole GCC residual manifold to restricted (spatial)
+    ``AlgebraTerm``s, per target (R1.0). Returns ``{target: [AlgebraTerm]}`` with
+    spatial coefficients and the reduced spatial term count, ready for the emit
+    path. Pure symbolic transform; gated numerically by R1.2."""
+    out: dict = {}
+    for target, terms in equations.items():
+        template = _residual_template(target, terms)
+        block = _closed_shell_representative_block(template)
+        externals = frozenset(block)
+        # S2 pipeline on the closed-shell representative block.
+        canon = [canonicalize_spin_blocks(st)
+                 for st in ucc_integrate_target(terms, block)]
+        collapsed = [c for st in canon for c in collapse_amplitudes(st)]
+        collapsed = [c for st in collapsed for c in collapse_integrals(st)]
+        merged = merge_terms(collapsed, externals)
+        out[target] = [spinterm_to_algebraterm(st, externals) for st in merged]
+    return out
+
+
+def ucc_integrate_target(terms, block):
+    """All surviving integrated SpinTerms of `terms` for one external `block`
+    (a {name: spin} dict). The per-block slice of :func:`ucc_manifold`, factored
+    out so :func:`spin_adapt_equations` can drive a single representative block."""
+    acc: list = []
+    for term in terms:
+        acc.extend(ucc_integrate_term_antisym(term, block))
+    return acc

@@ -738,7 +738,7 @@ class ReferenceVsPyscfTests(unittest.TestCase):
         self.assertEqual(dia - {("bare", 0)}, term - {("bare", 0)})
 
 
-def ccgen_spatial_energy_at_pyscf_amps(method, atom, basis):
+def ccgen_spatial_energy_at_pyscf_amps(method, atom, basis, spin_adapt=False):
     """R1.2 gate helper. Evaluate the GENERATED energy equation the way the C++
     runtime does: bind its terms to SPATIAL closed-shell storage (n_occ spatial,
     chemists' (pq|rs), spatial t1/t2 from a restricted RCCSD) and return
@@ -751,6 +751,11 @@ def ccgen_spatial_energy_at_pyscf_amps(method, atom, basis):
     the 2*(direct)-(exchange) structure), the two must agree. This is the numeric
     energy gate whose ABSENCE let the defect ship (the arbitrary-solver unit test
     uses a toy energy kernel).
+
+    ``spin_adapt=True`` runs the R1.0 spin-adaptation (`spin_adapt_equations`) so
+    the terms are genuine spatial RCC -- then the two agree. ``spin_adapt=False``
+    (default) uses the raw spin-orbital terms -- the defect -- so they disagree by
+    exactly the missing spin summation.
     """
     from pyscf.cc import ccsd as rccsd_mod
     from ccgen.generate import generate_cc_equations
@@ -769,7 +774,6 @@ def ccgen_spatial_energy_at_pyscf_amps(method, atom, basis):
     # Spatial MO two-electron integrals in physicist order <pq|rs>, NOT
     # antisymmetrized -- this is the spatial (ij|ab)-style binding the C++
     # runtime feeds the generated kernels via mo_blocks.oovv.
-    eri = mol.intor("int2e")
     mo = mf.mo_coeff
     from pyscf import ao2mo
     eri_mo = ao2mo.kernel(mol, mo, compact=False).reshape(nmo, nmo, nmo, nmo)
@@ -783,6 +787,9 @@ def ccgen_spatial_energy_at_pyscf_amps(method, atom, basis):
         "f": np.diag(mf.mo_energy),
     }
     eqs = generate_cc_equations(method)
+    if spin_adapt:
+        from ccgen.spin import spin_adapt_equations
+        eqs = spin_adapt_equations(eqs)
     e_corr = sum(
         float(residual_of([t], nocc, nvir, tensors=tensors))
         for t in eqs["energy"]
@@ -792,22 +799,57 @@ def ccgen_spatial_energy_at_pyscf_amps(method, atom, basis):
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")
 class GeneratedSpatialEnergyGate(unittest.TestCase):
-    """R1.2 -- the missing NUMERIC energy gate for the SPATIAL binding (the C++
-    runtime path). RED until R1 spin-adapts the lowering; then it must go GREEN.
-    Keep it as expectedFailure so CI records the open defect without a hard red;
-    remove the decorator (turning it into a hard assert) the moment R1 lands."""
+    """R1.2 -- the numeric energy gate for the SPATIAL binding (the C++ runtime
+    path). The raw (un-adapted) path is the DEFECT (xfail); the spin-adapted path
+    (R1.0) is the FIX and must be GREEN."""
 
     @unittest.expectedFailure
-    def test_ccsd_spatial_energy_matches_rccsd(self):
+    def test_ccsd_spatial_energy_raw_is_wrong(self):
+        # Documents the defect: raw spin-orbital terms bound to spatial storage
+        # give EXACTLY 0.25 * rccsd.e_corr (the spin-orbital 1/4 with no spin sum).
         e_corr, e_rccsd = ccgen_spatial_energy_at_pyscf_amps(
-            "ccsd", "H 0 0 0; H 0 0 0.74", "sto-3g"
+            "ccsd", "H 0 0 0; H 0 0 0.74", "sto-3g", spin_adapt=False
         )
-        # RED today: the generated spatial-bound energy comes out at EXACTLY
-        # 0.2500 * rccsd.e_corr (H2/STO-3G: -0.00513 vs -0.02052) -- the spin-
-        # orbital 1/4 coefficient applied to spatial storage with no spin
-        # summation. After R1 (spatial algebra with the 2*(direct)-(exchange)
-        # structure) the ratio becomes 1.0 and this asserts cleanly.
         self.assertAlmostEqual(e_corr, e_rccsd, places=9)
+
+    def test_ccsd_spatial_energy_spin_adapted_matches_rccsd(self):
+        # R1.0 FIX: spin-adapted terms are genuine spatial RCC, so the energy
+        # equals PySCF restricted RCCSD e_corr exactly.
+        e_corr, e_rccsd = ccgen_spatial_energy_at_pyscf_amps(
+            "ccsd", "H 0 0 0; H 0 0 0.74", "sto-3g", spin_adapt=True
+        )
+        self.assertAlmostEqual(e_corr, e_rccsd, places=9)
+
+    def test_ccsd_spin_adapted_residual_vanishes_at_rccsd_amps(self):
+        # R1.0 FIX: at PySCF's converged restricted amplitudes the spin-adapted
+        # singles+doubles residual is ~0 -- the RCCSD solution is a fixed point of
+        # the adapted equations (energy AND amplitudes correct, not just energy).
+        from pyscf import ao2mo
+        from pyscf.cc import ccsd as rccsd_mod
+        from ccgen.generate import generate_cc_equations
+        from ccgen.spin import spin_adapt_equations
+        from ccgen.tests.residual_eval import residual_of
+
+        mol = gto.M(atom="H 0 0 0; H 0 0 0.74", basis="sto-3g", spin=0)
+        mf = scf.RHF(mol).run(verbose=0)
+        cc = rccsd_mod.CCSD(mf)
+        cc.conv_tol = 1e-11
+        cc.kernel()
+        nocc, nmo = cc.nocc, cc.nmo
+        nvir = nmo - nocc
+        eri_mo = ao2mo.kernel(mol, mf.mo_coeff, compact=False).reshape(
+            nmo, nmo, nmo, nmo)
+        tensors = {
+            "t1": cc.t1.T,
+            "t2": cc.t2.transpose(2, 3, 0, 1),
+            "v": eri_mo.transpose(0, 2, 1, 3),
+            "f": np.diag(mf.mo_energy),
+        }
+        adapted = spin_adapt_equations(generate_cc_equations("ccsd"))
+        for tgt in ("singles", "doubles"):
+            R = residual_of(adapted[tgt], nocc, nvir, tensors=tensors)
+            self.assertLess(float(np.max(np.abs(R))), 1e-8,
+                            f"{tgt} residual should vanish at converged RCCSD amps")
 
 
 if __name__ == "__main__":

@@ -992,6 +992,7 @@ def print_cpp_planck(
     factorize_tau: bool = False,
     dress_operators: bool = False,
     force_arbitrary: bool = False,
+    spin_adapt: bool = False,
     **kwargs: Any,
 ) -> str:
     """Generate Planck-compatible C++ tensor kernels.
@@ -1017,6 +1018,13 @@ def print_cpp_planck(
             method, eqs, intermediates=intermediates or None)
 
     eqs = generate_cc_equations(method, **kwargs)
+
+    if spin_adapt:
+        # R1.0: spin-adapt the GCC manifold to restricted (spatial) terms so the
+        # emitted kernel is a genuine spatial contraction (2*(direct)-(exchange)),
+        # not spin-orbital algebra bound to spatial storage (the defect).
+        from .spin import spin_adapt_equations
+        eqs = spin_adapt_equations(eqs)
 
     tau_spec = None
     if factorize_tau:
