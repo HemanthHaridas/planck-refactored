@@ -213,18 +213,64 @@ the ~15-20 min Be CCSDTQ solve. The Be solve is the final confirmation only.
   ALL-same-spin block** (`_is_same_spin_amplitude` requires `set(block)=={'a'}`), so
   mixed blocks like `aabaab`/`aabbaabb` pass through un-reduced and the bridge then
   loses them.
-- **R3.1.2 — reduce mixed same-spin amplitude blocks to canonical (~M–L, the fix).**
-  Extend the amplitude collapse so t3/t4 factors in mixed same-spin blocks
-  (`aab`, `aabb`, `abbb`, …) are reduced to the canonical fully-mixed block
-  (abab…-representative), the way `collapse_amplitudes` already reduces the all-alpha
-  block — so every surviving factor is a block where spatial-tensor == block and the
-  bridge is lossless. Equivalent alternative: make `spinterm_to_algebraterm` emit the
-  correct spatial permutation/antisymmetry for a non-canonical block instead of
-  dropping it. The former (finish the collapse) matches the doubles design; the
-  latter (fix the bridge) is more localized. R3.1.0 (fast) gates the fix; then a new
-  fast gate: assert every merged rank-8 factor is in a canonical single block.
+  **R3.1.1 refined — the bug is CROSS-TARGET spatial-block inconsistency.** A key
+  experiment: even within the TRIPLES target, the merged t3 factors are in blocks
+  `aabaab`/`abbabb` (not one canonical block), yet `_eval_spinterm` reproduces the
+  GCC slice to 2e-17 and the *triples* residual output is on the `aab` block. So
+  WITHIN one target, input-factor blocks and the output block are self-consistent,
+  and the solve works (this is why ccsdt validated). The break is ACROSS targets:
+  the quadruples residual output is on the `aabb` block but READS t3 in `aabaab` and
+  t2 in `abab` — while the spatial t3 tensor the solver holds was DEFINED by the
+  triples residual on ITS block. Same spatial `t3` name, different spin-block
+  layout at definition vs use ⇒ the dropped-spin bridge reads the wrong slice ⇒ T4
+  wrong. Doubles never hits this because t2 is `abab` at both definition and every
+  use.
+- **R3.1.2 — make the spatial amplitude layout consistent across targets (~L, the
+  fix — genuine spin-algebra).** Every amplitude `t_n` must have ONE fixed
+  spin-block → spatial-index layout, used identically whether it is a residual
+  OUTPUT (its own target) or an input FACTOR (in higher targets). Two shapes:
+  (a) pick one canonical block per rank and, in `spinterm_to_algebraterm` (and the
+  residual-output layout), apply the block→canonical spatial permutation/sign so a
+  factor in `aabaab` is reordered/signed into the canonical layout before the spin
+  label is dropped — the `spatial_permutation` idea, but keyed on the SPIN block,
+  which `restricted_closed_shell` does NOT compute (it canonicalizes by occ/vir
+  space only); or (b) emit each amplitude in its own per-block spatial tensor and
+  key the solver on (name, block). (a) is closer to standard RCC (one spatial t_n);
+  (b) is mechanical but multiplies tensors. Iterate with a FAST gate:
+  `spinterm_to_algebraterm`+`residual_of` on the quadruples aabb block must match
+  the GCC slice (the solve path, not `_eval_spinterm`) — seconds, red now.
 - **R3.1.3 — confirm end-to-end (~S, slow).** The R3.0 Be CCSDTQ≡FCI gate flips
   green. ccsd/ccsdt stay green.
+
+**Status:** root cause FULLY diagnosed (cross-target spatial-block inconsistency in
+the spin→algebra bridge); R3.1.0 fast gate landed and passing (per-block collapse is
+correct); R3.1.2 (the fix) is genuine ~L spin-algebra, not yet started.
+
+**The inconsistency, made symbolic (fast, no solve).** Per target, the residual
+OUTPUT block vs the block each amplitude is USED in as a factor:
+
+| target | output block | amplitude usage |
+|---|---|---|
+| ccsd/doubles | `abab` | t2 used in `abab` — CONSISTENT |
+| ccsdt/triples | `abaaba` | t3 used in `aabaab`, `abbabb` — INCONSISTENT |
+
+Doubles: output block == usage block (`abab`), so the dropped-spin bridge is exact —
+ccsd is correct. Triples: the t3 residual is emitted on `abaaba` but t3 appears as a
+factor on `aabaab`/`abbabb` — a DIFFERENT spatial-index layout for the same `t3`
+tensor. **This means ccsdt is ALSO affected**; it passed only the LOOSE
+CCSD<CCSDT<FCI ordering gate, which tolerates the resulting small error. At
+quadruples the same class of inconsistency leaves T4≈0 and the exact Be CCSDTQ≡FCI
+oracle exposes it. So the ccsd/ccsdt "validated" status is: ccsd exact, ccsdt
+ordering-correct but NOT exact — re-verify ccsdt to tight tolerance after R3.1.2.
+
+**The fix (R3.1.2) precisely.** `spinterm_to_algebraterm` must canonicalize each
+amplitude factor's spatial-index order to its target's single output-block layout
+(applying the block→output permutation and antisymmetry sign) BEFORE dropping the
+spin label — so every `t_n` reference, as output or factor, uses one consistent
+spatial layout. Fast red gate for the fix: `spinterm_to_algebraterm`+`residual_of`
+on the triples `abaaba` block must match the GCC slice to ~1e-12 (currently it does
+not, because t3 factors are read on the wrong block). This is a rank-6 test — fast,
+no ccsdtq solve — and is the R3.1.2 inner loop.
 
 - **R3.2 — wire `spin_adapt` into codegen, ALL ranks at once (~S, HELD).** Only after
   R3.1 lands (user decision: no partial binary state). A `--spin-adapt` flag on
