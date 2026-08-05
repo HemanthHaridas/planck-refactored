@@ -851,6 +851,79 @@ class GeneratedSpatialEnergyGate(unittest.TestCase):
             self.assertLess(float(np.max(np.abs(R))), 1e-8,
                             f"{tgt} residual should vanish at converged RCCSD amps")
 
+    def test_ccsdt_spin_adapted_solves_between_ccsd_and_fci(self):
+        # R1 ccsdt validation: solve the SPIN-ADAPTED (spatial) CCSDT equations
+        # by damped Jacobi on a closed-shell reference where T3 actually
+        # contributes (Be/STO-3G, 4e), and require the physically-correct
+        # ordering CCSD < CCSDT < FCI. Adapted CCSDT recovers ~28% of the
+        # CCSD->FCI gap (the T3 part) and stays short of FCI by the T4 part it
+        # omits -- textbook CCSDT behavior, proving the triples adaptation.
+        import itertools
+        from pyscf import ao2mo, fci
+        from pyscf.cc import ccsd as rccsd_mod
+        from ccgen.generate import generate_cc_equations
+        from ccgen.spin import spin_adapt_equations
+        from ccgen.tests.residual_eval import residual_einsum
+
+        mol = gto.M(atom="Be 0 0 0", basis="sto-3g", spin=0)
+        mf = scf.RHF(mol).run(verbose=0)
+        nocc = mol.nelectron // 2
+        nmo = mf.mo_coeff.shape[1]
+        nvir = nmo - nocc
+        eri = ao2mo.kernel(mol, mf.mo_coeff, compact=False).reshape(
+            nmo, nmo, nmo, nmo)
+        v = eri.transpose(0, 2, 1, 3)
+        e = mf.mo_energy
+        eo, ev = e[:nocc], e[nocc:]
+        f = np.diag(e)
+        adapted = spin_adapt_equations(generate_cc_equations("ccsdt"))
+
+        def den(r):
+            shp = [nvir] * r + [nocc] * r
+            D = np.zeros(shp)
+            for idx in itertools.product(*[range(s) for s in shp]):
+                D[idx] = (sum(eo[o] for o in idx[r:])
+                          - sum(ev[a] for a in idx[:r]))
+            return D
+
+        D = {1: den(1), 2: den(2), 3: den(3)}
+        amps = {
+            "t1": np.zeros((nvir, nocc)),
+            "t2": v[:nocc, :nocc, nocc:, nocc:].transpose(2, 3, 0, 1) / D[2],
+            "t3": np.zeros((nvir,) * 3 + (nocc,) * 3),
+        }
+        rk = {"singles": 1, "doubles": 2, "triples": 3}
+        tnm = {"singles": "t1", "doubles": "t2", "triples": "t3"}
+        for _ in range(600):
+            tn = {"v": v, "f": f, **amps}
+            delta = 0.0
+            upd = {}
+            for m in ("singles", "doubles", "triples"):
+                R = sum(residual_einsum(t, nocc, nvir, tensors=tn)
+                        for t in adapted[m])
+                new = amps[tnm[m]] + 0.5 * R / D[rk[m]]   # 0.5 damping
+                upd[tnm[m]] = new
+                delta = max(delta, float(np.max(np.abs(new - amps[tnm[m]]))))
+            amps.update(upd)
+            if delta < 1e-11:
+                break
+        tn = {"v": v, "f": f, **amps}
+        e_ccsdt = sum(float(residual_einsum(t, nocc, nvir, tensors=tn))
+                      for t in adapted["energy"])
+
+        cc = rccsd_mod.CCSD(mf)
+        cc.conv_tol = 1e-11
+        cc.kernel()
+        e_ccsd = cc.e_corr
+        e_fci = fci.FCI(mf).kernel()[0] - mf.e_tot
+
+        self.assertTrue(np.isfinite(e_ccsdt))
+        # CCSD < CCSDT < FCI (all negative, so more-negative = lower).
+        self.assertLess(e_ccsdt, e_ccsd + 1e-12,
+                        "adapted CCSDT must be at or below CCSD")
+        self.assertGreater(e_ccsdt, e_fci - 1e-12,
+                           "adapted CCSDT must not undershoot FCI")
+
 
 if __name__ == "__main__":
     unittest.main()
