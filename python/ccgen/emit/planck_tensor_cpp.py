@@ -176,6 +176,7 @@ def _map_eri_tensor(tensor: Tensor | LoweredTensorFactor) -> tuple[int, str]:
 def _map_factor(
     tensor: Tensor | LoweredTensorFactor,
     intermediate_names: frozenset[str] | None = None,
+    arbitrary_amplitudes: bool = False,
 ) -> tuple[int, str]:
     tensor_obj = _source_tensor(tensor)
     indices = _access_indices(tensor)
@@ -202,6 +203,15 @@ def _map_factor(
         vir = [idx.name for idx in indices if idx.space == "vir"]
         if len(occ) != excitation_rank or len(vir) != excitation_rank:
             raise ValueError(f"Invalid amplitude tensor layout for {tensor_obj!r}")
+        # The arbitrary-order runtime type (ArbitraryOrderRCCAmplitudes, rank ≥ 4
+        # methods) exposes only `.tensor(rank)` — returning std::expected<view> —
+        # with no t1/t2/t3 members. The view is bound ONCE per kernel/builder as a
+        # local `t<rank>` (see _amplitude_view_bindings); the factor then indexes
+        # that local with an initializer-list `t<rank>({...})`. The rank ≤ 3
+        # tensor_backend types (RCCSD/RCCSDTAmplitudes) have direct t1/t2/t3(...)
+        # accessors instead.
+        if arbitrary_amplitudes:
+            return 1, f"t{excitation_rank}({{{', '.join(occ + vir)}}})"
         if excitation_rank == 1:
             return 1, f"amplitudes.t1({occ[0]}, {vir[0]})"
         if excitation_rank == 2:
@@ -256,11 +266,14 @@ def emit_planck_term(
     lhs: str = "result",
     indent: int = 4,
     intermediate_names: frozenset[str] | None = None,
+    arbitrary_amplitudes: bool = False,
 ) -> str:
     """Emit a single algebraic term using Planck tensor accessors.
 
     ``intermediate_names`` lists the materialized intermediates in scope (the
-    kernel's specs) so their factors resolve as local references (D7.3)."""
+    kernel's specs) so their factors resolve as local references (D7.3).
+    ``arbitrary_amplitudes`` routes t-amplitude accessors through
+    ``.tensor(rank)(...)`` for the arbitrary-order runtime type (rank ≥ 4)."""
     pad = " " * indent
     lines: list[str] = []
 
@@ -283,7 +296,8 @@ def emit_planck_term(
     sign = 1
     factor_exprs: list[str] = []
     for factor in factors:
-        factor_sign, factor_expr = _map_factor(factor, intermediate_names)
+        factor_sign, factor_expr = _map_factor(
+            factor, intermediate_names, arbitrary_amplitudes)
         sign *= factor_sign
         factor_exprs.append(factor_expr)
 
@@ -314,6 +328,30 @@ def _amplitude_type(method: str) -> str:
     if max_rank >= 3:
         return "RCCSDTAmplitudes"
     return "RCCSDAmplitudes"
+
+
+def _amplitude_ranks_used(terms) -> list[int]:
+    """Distinct t-amplitude excitation ranks referenced across `terms`, sorted.
+    Drives the per-kernel view bindings for the arbitrary-order runtime."""
+    ranks: set[int] = set()
+    for term in terms:
+        for factor in term.factors:
+            m = re.fullmatch(r"t(\d+)", _source_tensor(factor).name)
+            if m:
+                ranks.add(int(m.group(1)))
+    return sorted(ranks)
+
+
+def _amplitude_view_bindings(terms, indent: int = 4) -> list[str]:
+    """C++ lines binding one `const auto t<rank> = amplitudes.tensor(rank).value();`
+    per amplitude rank used — the arbitrary-order runtime returns std::expected
+    from `.tensor()`, so the view is unwrapped once here and indexed in the loops.
+    `.value()` is safe: the solver constructs every rank ≤ max before calling."""
+    pad = " " * indent
+    return [
+        f"{pad}const auto t{r} = amplitudes.tensor({r}).value();"
+        for r in _amplitude_ranks_used(terms)
+    ]
 
 
 def _denominator_type(method: str) -> str:
@@ -407,11 +445,18 @@ def _emit_kernel(
     emitted_terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm]
     emitted_terms = lowered_terms if lowered_terms else terms
     intermediate_names = frozenset(intermediate_map)
+    arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
+    if arbitrary:
+        bindings = _amplitude_view_bindings(emitted_terms)
+        if bindings:
+            lines.append("")
+            lines.extend(bindings)
     for i, term in enumerate(emitted_terms, start=1):
         lines.append(f"    // Term {i}")
         lines.append(emit_planck_term(
             term, lhs="result", indent=4,
-            intermediate_names=intermediate_names))
+            intermediate_names=intermediate_names,
+            arbitrary_amplitudes=arbitrary))
         lines.append("")
     lines.append("    return result;")
     lines.append("}")
@@ -461,6 +506,16 @@ def _emit_intermediate_builder(
     # flat lowered emit for single-step (<=2-factor) definitions.
     from ..optimization.factorize import factored_builder_steps
     steps = factored_builder_steps(spec, stride_order=stride_order)
+    arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
+    if arbitrary:
+        # bind amplitude views once; the factored steps and the flat definition
+        # both reference the same leaf amplitudes, so bind from the definition.
+        binding_terms = ([s for _, s in steps] if (factor_body and len(steps) > 1)
+                         else lowered_definition_terms)
+        bindings = _amplitude_view_bindings(binding_terms)
+        if bindings:
+            lines.extend(bindings)
+            lines.append("")
     if factor_body and len(steps) > 1:
         scratch_names = frozenset(
             lhs for lhs, _ in steps if lhs != "result")
@@ -471,13 +526,15 @@ def _emit_intermediate_builder(
                 lines.append(
                     f"    {stype} {lhs}({_dims_expr(step.free_indices, stype)});")
             lines.append(emit_planck_term(
-                step, lhs=lhs, indent=4, intermediate_names=names_in_scope))
+                step, lhs=lhs, indent=4, intermediate_names=names_in_scope,
+                arbitrary_amplitudes=arbitrary))
             lines.append("")
     else:
         for i, term in enumerate(lowered_definition_terms, start=1):
             lines.append(f"    // Definition term {i}")
             lines.append(emit_planck_term(
-                term, lhs="result", indent=4, intermediate_names=sibling_names))
+                term, lhs="result", indent=4, intermediate_names=sibling_names,
+                arbitrary_amplitudes=arbitrary))
             lines.append("")
     lines.append("    return result;")
     lines.append("}")

@@ -128,21 +128,26 @@ verifiable steps, registration first.
   default MAXORDER=3** (all cases guarded off; unchanged behavior). The header is
   extended, the driver call site is untouched.
 
-- **W0.1 — fix the rank-≥4 amplitude-accessor emit (~S, BLOCKER for the MAXORDER≥4
-  gate).** Building the registry at MAXORDER=4 surfaced a pre-existing emitter
-  defect that the `#if >= 4` guard had always hidden: the generated ccsdtq kernels
-  call `amplitudes.t1(i,a)` / `.t2(...)` / `.t3(...)`, but the arbitrary-order
-  runtime type `ArbitraryOrderRCCAmplitudes` (which the emitted bundle's residual
-  lambdas take) exposes only `.tensor(rank)(...)` — no `t1`/`t2`/`t3` members. So
-  the ccsdtq TU has never actually compiled against the runtime; the guard kept
-  anyone from finding out. `_map_factor` (`emit/planck_tensor_cpp.py:205-214`)
-  emits the `t1/t2/t3` shortcut unconditionally; it must emit `.tensor(n)(...)`
-  when the target amplitude type is the arbitrary-order one (rank ≥ 4). *Gate:*
-  the emitted ccsdtq TU compiles against `ArbitraryOrderRCCAmplitudes`; the
-  rank ≤ 3 tensor_backend `#include` (which uses `RCCSDTAmplitudes`, where `.t1`
-  is valid) is unchanged. This is the true unblock for the MAXORDER≥4 registry
-  gate — the registry (W0) is correct; the emitted TU it includes is what did not
-  compile.
+- **W0.1 — fix the rank-≥4 amplitude-accessor emit (~S, was the BLOCKER). LANDED.**
+  Building the registry at MAXORDER=4 surfaced a pre-existing emitter defect the
+  `#if >= 4` guard had always hidden: the generated ccsdtq kernels called
+  `amplitudes.t1/.t2/.t3(...)`, but the arbitrary-order runtime type
+  `ArbitraryOrderRCCAmplitudes` (which the emitted bundle's residual lambdas take)
+  exposes only `.tensor(rank)` — and that returns `std::expected<view>`, so even
+  `.tensor(rank)(...)` does not compile. The ccsdtq TU had **never** compiled
+  against the runtime; the guard kept anyone from finding out. **Fix (two parts):**
+  (1) `_map_factor` emits a local `t<rank>({...})` for the arbitrary target instead
+  of the `t1/t2/t3` shortcut; (2) `_emit_kernel` / `_emit_intermediate_builder`
+  emit a per-kernel prologue binding each used rank's view once —
+  `const auto t<rank> = amplitudes.tensor(rank).value();`
+  (`_amplitude_view_bindings`), unwrapping the `expected` outside the loops.
+  Gated on `arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"`, so the
+  rank ≤ 3 tensor_backend path (`RCCSDTAmplitudes`, direct `.t1`) is
+  **byte-unchanged** (verified: ccsdt still emits `.t1`, zero view-bindings).
+  *Gate:* `test_generated_ccsdtq_tu_compiles_against_runtime` — the generated
+  CCSDTQ TU compiles against the real CC headers, uses no `amplitudes.t[123](`,
+  and binds views instead. This is the true unblock: the MAXORDER=4 registry +
+  ccsdtq now compile together (verified `exit 0`).
 
 - **W1 — arbitrary-order `%posthf` options (~S given W0).** The `PostHF` enum
   stops at `RCCSDTQ`; extend the CC path so `correlation cc5` / `cc6` (and the

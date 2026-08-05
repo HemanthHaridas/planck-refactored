@@ -1265,6 +1265,52 @@ class CCSDTQTests(unittest.TestCase):
                          for n in opt)
         self.assertLess(opt_stride, base_stride)
 
+    # ── W0.1: the generated CCSDTQ TU compiles against the runtime ──
+
+    def test_generated_ccsdtq_tu_compiles_against_runtime(self):
+        """W0.1 gate: the generated CCSDTQ translation unit compiles against the
+        real CC headers, i.e. against ArbitraryOrderRCCAmplitudes. This is the
+        rank-≥4 emit path — its t-amplitude factors must route through the bound
+        `.tensor(rank).value()` views, not the t1/t2/t3 accessors that type lacks.
+        The #if>=4 registry guard had always hidden that this never compiled."""
+        import os
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present")
+
+        from ccgen.generate import print_cpp_planck
+        code = print_cpp_planck("ccsdtq", include_intermediates=True,
+                                engine="diagram", canonical_fock=True)
+        # the rank-≥4 emit must not use the t1/t2/t3 shortcut accessors
+        self.assertFalse(re.search(r"amplitudes\.t[123]\(", code))
+        self.assertIn("amplitudes.tensor(", code)  # bound views instead
+        with tempfile.NamedTemporaryFile(
+            suffix=".cpp", mode="w", delete=False
+        ) as fh:
+            fh.write(code)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=600,
+            )
+            self.assertEqual(
+                proc.returncode, 0,
+                f"generated CCSDTQ TU failed to compile:\n{proc.stderr[-2000:]}",
+            )
+        finally:
+            os.unlink(src)
+
 
 class RankLocalityTheoremTests(unittest.TestCase):
     """Rank-locality theorem within the F3 optimization model (see the doc).
