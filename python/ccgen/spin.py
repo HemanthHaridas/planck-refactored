@@ -709,15 +709,35 @@ def _canonicalize_amplitude_factor(f):
     the product of the bra-half and ket-half sort parities. Numerically exact:
     the reordered block equals the reference block's slice (verified 0.0 on the
     UCCSDT t3 fixture). Non-amplitude factors (v/f) and t1 (single `aa` block)
-    are returned unchanged with sign +1."""
+    are returned unchanged with sign +1.
+
+    R3.1.2 half (i): a β-majority block (e.g. t3 `abbabb`, 1α/2β per half) is not
+    a permutation of the α-majority reference (`aabaab`, 2α/1β) -- it is the
+    reference's SPIN-FLIP partner. A closed-shell amplitude is spin-flip
+    symmetric (t[σ] = t[flip σ] index-for-index), so mapping a β-majority factor
+    onto the stored reference block is a two-step slot permutation: flip α↔β,
+    then sort α-before-β. Both halves flip together (a spin-balanced amplitude
+    has na_bra == na_ket, so both are the same majority). The flip touches only
+    the slot-ORDER used to read the single stored block; the base (spatial)
+    indices keep their identities and spins as seen by the rest of the term, so
+    shared/summed indices stay consistent across factors."""
     idx = f.indices
     n = len(idx) // 2
     if not (f.name.startswith("t") and len(idx) >= 4 and len(idx) % 2 == 0):
         return 1, idx
 
+    # β-majority in the bra half => this block is the reference's spin-flip
+    # partner; flip the sort key so α-before-β lands on the reference layout.
+    flip = sum(1 for si in idx[:n] if si.spin == "a") * 2 < n
+
     def sort_half(slots):
-        # stable sort by spin (a<b); return new order + parity of the permutation
-        order = sorted(range(len(slots)), key=lambda k: (slots[k].spin, k))
+        # stable sort by (flipped) spin (a<b); return new order + permutation parity
+        def spin_key(si):
+            s = si.spin
+            if flip:
+                s = "b" if s == "a" else "a"
+            return s
+        order = sorted(range(len(slots)), key=lambda k: (spin_key(slots[k]), k))
         sign = 1
         for a in range(len(order)):
             for b in range(a + 1, len(order)):

@@ -2502,16 +2502,15 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
         self.assertLess(np.abs(acc - Rb).max(), 1e-10,
                         "merged RCC rank-6 residual != GCC aab slice")
 
-    @unittest.expectedFailure
     def test_rcc_bridge_solve_path_rank6(self):
-        # R3.1.2 fast red gate: the SOLVE path (spinterm_to_algebraterm +
+        # R3.1.2 whole-residual gate: the SOLVE path (spinterm_to_algebraterm +
         # residual_einsum on ONE spatial tensor per amplitude) must match the GCC
-        # slice, like the _eval_spinterm path does. RED today (~4.8e-3): the bridge
-        # drops the spin block, so t3 factors surviving in aabaab/abbabb are read
-        # from the full spatial t3 instead of their block slice -- the cross-target
-        # spatial-block inconsistency. GREEN when R3.1.2 makes the spatial layout
-        # consistent (extend the same-spin collapse to mixed blocks / canonicalize
-        # in the bridge). Rank-6, seconds -- the R3.1.2 inner loop.
+        # slice, like the _eval_spinterm path does. GREEN as of R3.1.2 (was
+        # ~4.8e-3): the bridge now (i) canonicalizes its output layout and (ii)
+        # maps every amplitude factor onto its stored reference block via the
+        # spin-flip in `_canonicalize_amplitude_factor`, so reading one spatial
+        # tensor per amplitude reproduces the per-spin-block oracle. Rank-6,
+        # seconds -- the R3.1.2 inner loop.
         import numpy as np
         from ccgen.spin import (ucc_integrate_term_antisym,
                                 canonicalize_spin_blocks, collapse_amplitudes,
@@ -2647,14 +2646,15 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
                 spins.setdefault(si.name, set()).add(si.spin)
         return any(len(s) > 1 for s in spins.values())
 
-    @unittest.expectedFailure
     def test_p20_bridge_matches_eval_per_term_rank6(self):
         # P2.0: per-term gate. For every merged rank-6 term the bridge
         # (spinterm_to_algebraterm + residual_einsum) must equal _eval_spinterm
-        # (the oracle, which slices each factor per spin block). RED today: 718 of
-        # 859 terms disagree, partitioned by P2.1 into the spin + layout
-        # mechanisms. GREEN when the bridge encodes per-index spin (`_mech_spin`)
-        # AND canonicalizes its output layout (`_mech_layout`) -- both required.
+        # (the oracle, which slices each factor per spin block). GREEN as of
+        # R3.1.2: the two mechanisms P2.1 partitioned the failures into are both
+        # fixed -- half (ii) canonicalizes the output layout, and half (i)
+        # (`_canonicalize_amplitude_factor`'s spin-flip of β-majority blocks)
+        # maps every amplitude factor onto its stored reference block. Was 718 of
+        # 859 failing (595 both, 116 layout-only, 7 spin-only); now 0.
         import numpy as np
         from ccgen.spin import spinterm_to_algebraterm
         from ccgen.tests.residual_eval import residual_einsum
