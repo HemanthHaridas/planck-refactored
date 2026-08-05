@@ -2531,7 +2531,7 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
         spatial = {
             "t1": block_slice(self.tn["t1"], "aa"),
             "t2": block_slice(self.tn["t2"], "abab"),
-            "t3": block_slice(self.tn["t3"], "abaaba"),
+            "t3": block_slice(self.tn["t3"], "aabaab"),
             "v": self.tn["v"][np.ix_(*[[p for p in range(self.tn["v"].shape[k])
                                         if p % 2 == 0] for k in range(4)])],
             "f": self.tn["f"][np.ix_(*[[p for p in range(self.tn["f"].shape[k])

@@ -693,22 +693,76 @@ def merge_terms(terms, externals) -> list[SpinTerm]:
 # (the converted term contracts to the same residual as the SpinTerm).
 
 
+def _canonicalize_amplitude_factor(f):
+    """Reorder a cluster-amplitude factor's slots to ONE reference spin-block
+    layout per rank, returning ``(sign, reordered_SpinIndices)`` (R3.1.2).
+
+    A rank-2n amplitude is antisymmetric within its bra (first n slots) and within
+    its ket (last n slots) independently. Different surviving spin blocks of the
+    SAME spatial tensor (e.g. t3 in `aabaab` vs `abaaba`) are therefore signed
+    permutations of one reference layout. The spin→AlgebraTerm bridge drops the
+    spin label, so unless every factor is first mapped to that one reference
+    layout, a factor read in a non-reference block indexes the wrong slice of the
+    single spatial tensor -- the cross-target inconsistency that leaves T4≈0.
+
+    Reference layout = each half stably sorted by spin (α before β). The sign is
+    the product of the bra-half and ket-half sort parities. Numerically exact:
+    the reordered block equals the reference block's slice (verified 0.0 on the
+    UCCSDT t3 fixture). Non-amplitude factors (v/f) and t1 (single `aa` block)
+    are returned unchanged with sign +1."""
+    idx = f.indices
+    n = len(idx) // 2
+    if not (f.name.startswith("t") and len(idx) >= 4 and len(idx) % 2 == 0):
+        return 1, idx
+
+    def sort_half(slots):
+        # stable sort by spin (a<b); return new order + parity of the permutation
+        order = sorted(range(len(slots)), key=lambda k: (slots[k].spin, k))
+        sign = 1
+        for a in range(len(order)):
+            for b in range(a + 1, len(order)):
+                if order[a] > order[b]:
+                    sign = -sign
+        return order, sign
+
+    bra_order, s_bra = sort_half(idx[:n])
+    ket_order, s_ket = sort_half(idx[n:])
+    new_idx = (tuple(idx[o] for o in bra_order)
+               + tuple(idx[n + o] for o in ket_order))
+    return s_bra * s_ket, new_idx
+
+
 def spinterm_to_algebraterm(spinterm: SpinTerm, externals):
     """Convert a spatial ``SpinTerm`` to an ``AlgebraTerm`` for the emit path
     (S3.0). ``externals`` is the set of free-index names (e.g.
     ``{"a","b","i","j"}``). Each factor becomes a ``Tensor`` over the spatial base
     indices; free and summed indices are split by name (de-duplicated,
-    first-appearance order). The coefficient is carried as a ``Fraction``."""
+    first-appearance order). The coefficient is carried as a ``Fraction``.
+
+    Each amplitude factor is first canonicalized to one reference spin-block
+    layout (:func:`_canonicalize_amplitude_factor`) so every reference to a given
+    spatial tensor -- output or input factor -- uses the SAME layout; the factor
+    permutation sign is folded into the coefficient (R3.1.2)."""
     from fractions import Fraction
 
     from .project import AlgebraTerm
     from .tensors import Tensor
 
     externals = set(externals)
+    sign = 1
+    canon_factors = []
+    for f in spinterm.factors:
+        s, new_idx = _canonicalize_amplitude_factor(f)
+        sign *= s
+        canon_factors.append(SpinFactor(name=f.name, block=f.block, indices=new_idx))
+
     factors = tuple(
         Tensor(f.name, tuple(si.base for si in f.indices))
-        for f in spinterm.factors
+        for f in canon_factors
     )
+    spinterm = SpinTerm(coeff=spinterm.coeff * sign,
+                        external_block=spinterm.external_block,
+                        factors=tuple(canon_factors))
     free: list = []
     summed: list = []
     seen_free: set = set()
@@ -756,14 +810,19 @@ def _residual_template(target: str, terms):
 
 
 def _closed_shell_representative_block(template):
-    """The mixed closed-shell external block (abab...-style) used as the RCC
-    representative: alternate a/b across the virtual slots and again across the
-    occupied slots so each occ/vir line is spin-balanced. Energy -> {} (scalar)."""
+    """The canonical closed-shell external block: within each half (bra virtuals,
+    ket occupieds) put all α slots before all β slots (α = ceil(n/2)). Each occ/vir
+    residual line is spin-balanced (bra[k]==ket[k]), so the block is spin-valid, and
+    it is the SAME reference layout `_canonicalize_amplitude_factor` sorts every
+    amplitude factor into (α-before-β per half) -- so the residual OUTPUT and every
+    input amplitude factor share one spatial layout and the spin→AlgebraTerm bridge
+    is lossless (R3.1.2). n=2 -> abab, n=3 -> aabaab, n=4 -> aabbaabb. Energy (n=0)
+    -> {} (scalar)."""
     names = [i.name for i in template.indices]
     n = len(names) // 2
-    # virtuals then occupieds; alternate spins within each half so the mixed
-    # (not all-same-spin) block is selected — the abab representative.
-    spins = ["a" if k % 2 == 0 else "b" for k in range(n)] * 2
+    n_alpha = (n + 1) // 2
+    half = ["a" if k < n_alpha else "b" for k in range(n)]
+    spins = half * 2
     return {nm: sp for nm, sp in zip(names, spins)}
 
 

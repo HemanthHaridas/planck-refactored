@@ -263,14 +263,34 @@ quadruples the same class of inconsistency leaves T4≈0 and the exact Be CCSDTQ
 oracle exposes it. So the ccsd/ccsdt "validated" status is: ccsd exact, ccsdt
 ordering-correct but NOT exact — re-verify ccsdt to tight tolerance after R3.1.2.
 
-**The fix (R3.1.2) precisely.** `spinterm_to_algebraterm` must canonicalize each
-amplitude factor's spatial-index order to its target's single output-block layout
-(applying the block→output permutation and antisymmetry sign) BEFORE dropping the
-spin label — so every `t_n` reference, as output or factor, uses one consistent
-spatial layout. Fast red gate for the fix: `spinterm_to_algebraterm`+`residual_of`
-on the triples `abaaba` block must match the GCC slice to ~1e-12 (currently it does
-not, because t3 factors are read on the wrong block). This is a rank-6 test — fast,
-no ccsdtq solve — and is the R3.1.2 inner loop.
+**The fix (R3.1.2) — two pieces; piece 1 landed, piece 2 is the remaining work.**
+
+*Piece 1 (LANDED): permutation canonicalization within a β-count sector.*
+`_canonicalize_amplitude_factor` sorts each amplitude half (bra, ket) to α-before-β,
+folding the antisymmetry sign into the coefficient; `_closed_shell_representative_block`
+now emits the SAME α-first-per-half reference (n=2 `abab`, n=3 `aabaab`, n=4
+`aabbaabb`) so output and factors share a layout. Verified exact: `t3[aabaab]` =
+signed-perm(`t3[abaaba]`) to 0.0 on the UCCSDT fixture. This is necessary and
+correct but NOT sufficient.
+
+*Piece 2 (REMAINING): same-spin-sector reduction (extend the collapse).* Sorting
+only canonicalizes WITHIN a fixed β-count. At rank 3 the surviving t3 factors span
+TWO β-count sectors — `aabaab` (1 β per half) AND `abbabb` (2 β per half) — which
+are NOT permutations of each other (different β-counts) and NOT global-flip images.
+A single spatial t3 cannot represent both by permutation alone; the higher-β-count
+sector must be REDUCED to the reference sector via the closed-shell same-spin
+relation. `collapse_amplitudes`/`_split_same_spin_amplitude` currently fire only on
+the ALL-α block (`set(block)=={'a'}`); they must be extended to reduce any half
+containing a same-spin PAIR (e.g. the `bb` in `abb`, the `aa` in `aab`) toward the
+reference. For odd-per-half ranks (t3) one same-spin pair is unavoidable, so the
+reference itself carries one — the reduction must target that specific convention.
+This is the genuine ~M–L S4 algebra still open.
+
+Fast red gate (LANDED): `test_rcc_bridge_solve_path_rank6` — the solve path
+(`spinterm_to_algebraterm`+`residual_einsum` on one spatial tensor per amplitude,
+`aabaab` reference) vs the GCC slice. ~7s, still RED (~7e-3 after piece 1, was
+4.8e-3) until piece 2 reduces the `abbabb` sector. ccsd/ccsdt gates stay green;
+piece 1 caused no regressions.
 
 - **R3.2 — wire `spin_adapt` into codegen, ALL ranks at once (~S, HELD).** Only after
   R3.1 lands (user decision: no partial binary state). A `--spin-adapt` flag on
