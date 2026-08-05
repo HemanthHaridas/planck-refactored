@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   build:
+    name: build (${{ matrix.os }}, ${{ matrix.c_compiler }}, CC_MAXORDER=${{ matrix.cc_maxorder }})
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -29,6 +30,10 @@ jobs:
         os: [ubuntu-latest]
         build_type: [Release]
         c_compiler: [gcc]
+        # PLANCK_CC_MAXORDER: 3 (default) builds the shipping CC path; 4 also
+        # compiles the ccgen-generated arbitrary-order RCCSDTQ kernel + registry
+        # (guarded off at 3), so the generated path is actually exercised in CI.
+        cc_maxorder: [3, 4]
         include:
           - os: ubuntu-latest
             c_compiler: gcc
@@ -60,6 +65,7 @@ jobs:
         -DCMAKE_CXX_STANDARD=23
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        -DPLANCK_CC_MAXORDER=${{ matrix.cc_maxorder }}
         -S ${{ github.workspace }}
 
     - name: Build

@@ -166,11 +166,18 @@ verifiable steps, registration first.
   "reconfigure with -DPLANCK_CC_MAXORDER=5" message — not a parse error, not a
   crash.
 
-- **W2 — CI builds a high-MAXORDER configuration (~S given W0/W1).** Add a CMake/CI
-  configuration that builds `hartree-fock` at `-DPLANCK_CC_MAXORDER=4` (and,
-  behind a slower opt-in job, 5/6) so the generated ranks are actually compiled
-  and the W3 tests can run. *Gate:* the high-MAXORDER build links and starts; the
-  arbitrary-order options from W1 are live.
+- **W2 — CI builds a high-MAXORDER configuration (~S given W0/W1). LANDED.**
+  `.github/workflows/cmake-multi-platform.yml` gains a `cc_maxorder: [3, 4]` matrix
+  dimension, passed as `-DPLANCK_CC_MAXORDER=${{ matrix.cc_maxorder }}` and named
+  into the job (`CC_MAXORDER=…`). At 4 the `Build` step's `--target hartree-fock`
+  pulls in its `ccgen-planck-kernels` dependency (CMake:437), which emits
+  `ccsdtq_planck_generated.cpp`; the registry `#include`s and compiles it — so
+  W0/W0.1's generated path is exercised in CI for the first time, and `ctest` runs
+  against both configs. Ranks 5/6 are intentionally left to a slower opt-in job
+  (high-rank codegen + the large TU compile). *Gate:* the MAXORDER=4 job
+  configures, builds `hartree-fock` (generated ccsdtq compiled in), and runs
+  `ctest`; the MAXORDER=3 job is unchanged. YAML validated
+  (matrix `cc_maxorder=[3,4]`, flag wired).
 
 - **W3 — arbitrary-order generated-CC regression cases (~S given W2).** Add small
   closed-shell inputs where CCSDTQ (and cc5 where feasible) ≡ FCI, gated on the
