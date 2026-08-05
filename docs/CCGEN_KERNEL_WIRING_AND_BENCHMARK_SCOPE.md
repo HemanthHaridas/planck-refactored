@@ -30,13 +30,35 @@ factory returns:
 > "Generated RCCSDTQ kernels are not available in this build. Reconfigure with
 > -DPLANCK_CC_MAXORDER=4 (or higher) and rebuild."
 
-So the mechanism to run the generated CCSDTQ kernel **already exists** — it is one
-CMake cache variable. The gap is not "how do we register them" (that is done); it
-is (1) nothing exercises the MAXORDER≥4 path in CI, and (2) there is no runtime
-regression case that runs a generated CCSDTQ energy to compare against a
-reference. The dressed/factorized/memory-aware translation units from the
-factorization and memory investigations are a *separate*, fully-unwired path
-(they are emitted by `emit_factorized_translation_unit` but `#include`d nowhere).
+### The registration is rank-hardcoded, but the runtime is not
+
+The mechanism to run the generated CCSDTQ kernel exists, but it is pinned to
+rank 4 in four C++ places even though the layers above and below it are already
+arbitrary-order:
+
+- **Generation is arbitrary-order.** `generate_cc_equations` and
+  `emit_factorized_translation_unit` handle any rank; the CMake codegen already
+  maps ranks 2–6 to method names (`_planck_cc_method_by_rank = ccsd ccsdt ccsdtq
+  cc5 cc6`) and `PLANCK_CC_MAXORDER` accepts 2–6. **Nothing stops a user
+  generating a cc6 kernel today.**
+- **The runtime solver is arbitrary-order.** `prepare_generated_arbitrary_order_state`
+  takes `max_excitation_rank` as a parameter (validates `≥ 1`), and
+  `GeneratedArbitraryOrderKernels` is a rank-generic bundle. The engine that runs
+  the kernels does not care about rank.
+- **But the registration + options ceiling at rank 4:**
+  1. `generated_kernel_registry.cpp` has a single `make_generated_rccsdtq_kernels()`
+     behind `#if PLANCK_CC_MAXORDER >= 4`, `#include`ing only
+     `ccsdtq_planck_generated.cpp`. No cc5/cc6 include, no per-rank factory.
+  2. `enum class PostHF` (`src/base/types.h`) stops at `RCCSDTQ` — no `RCC5`/`RCC6`.
+  3. The io.cpp option table stops at `{"cc4", RCCSDTQ}` — no `cc5`/`cc6` keyword.
+  4. The driver hardcodes `run_rccsdtq` → `prepare_generated_arbitrary_order_state(
+     …, 4, …)` and `make_generated_rccsdtq_kernels()`.
+
+So a user can emit a cc6 kernel but has no `PostHF` option to select it and no
+registration to run it. **Part B is therefore not "build the MAXORDER=4 path" —
+it is "make registration and the `%posthf` options arbitrary-order," so any rank
+the codegen emits is automatically runnable.** The dressed/factorized/memory-aware
+TUs are a further, fully-unwired path (`#include`d nowhere).
 
 ---
 
@@ -86,58 +108,83 @@ This is the tier Part B unblocks and Part C benchmarks.
 
 ---
 
-## Part B — scope: register the generated kernels so they run
+## Part B — scope: arbitrary-order kernel registration
 
-The goal: make a generated CCSDTQ energy runnable and checkable in CI, and make
-the factorized/memory-aware TUs runnable so their *numeric* (not just
-compile-only) gates can exist. Small verifiable steps.
+The goal is **registration that scales with the codegen, not a per-rank ceiling**:
+whatever rank `PLANCK_CC_MAXORDER` emits (up to 6) should be automatically
+registered and selectable in `%posthf`, with no new C++ per rank. The runtime
+solver and the codegen are already arbitrary-order (see Background); only the
+registration, the `PostHF` enum, and the io.cpp options are rank-hardcoded. Small
+verifiable steps, registration first.
 
-- **W0 — CI builds the MAXORDER=4 path (~S).** The registration is already
-  correct; nothing exercises it. Add a CMake/CI configuration that builds
-  `hartree-fock` with `-DPLANCK_CC_MAXORDER=4` so
-  `ccsdtq_planck_generated.cpp` is compiled and `make_generated_rccsdtq_kernels()`
-  returns real kernels. *Gate:* the MAXORDER=4 build links and
-  `hartree-fock` starts; a `correlation ccsdtq` input no longer prints the
-  "not available" stub.
+- **W0 — a rank-parameterized registry (~M, the core generalization).** Replace
+  the single `make_generated_rccsdtq_kernels()` / `#if >= 4` with a per-rank
+  registration driven by `PLANCK_CC_MAXORDER`. Concretely: a
+  `make_generated_rcc_kernels(int rank)` that dispatches to the compiled generated
+  TU for `rank`, and a registry that `#include`s each `<method>_planck_generated.cpp`
+  for every rank ≤ MAXORDER behind its own `#if PLANCK_CC_MAXORDER >= N` (ccsdtq,
+  cc5, cc6). The `_planck_cc_method_by_rank` list already gives the file names.
+  Keep `make_generated_rccsdtq_kernels()` as a rank-4 alias for the existing
+  driver call site. *Gate:* at MAXORDER=6 the registry exposes runnable kernels
+  for ranks 4/5/6; at MAXORDER=3 all report "not available" (unchanged default);
+  `make_generated_rcc_kernels(rank)` returns the right bundle per rank.
 
-- **W1 — a generated-CCSDTQ regression case (~S given W0).** Add a small
-  closed-shell `cc4` input (e.g. a 4-electron system where CCSDTQ ≡ FCI) to
-  `regression_cases.json`, gated on the generated energy matching the FCI/hand
-  reference to ~1e-8. This is the first runtime test of the generated kernels —
-  the A4 tier. *Gate:* `run_regressions.py` runs the case and the energy matches;
-  the case is skipped (not failed) when the binary was built at MAXORDER<4.
+- **W1 — arbitrary-order `%posthf` options (~S given W0).** The `PostHF` enum
+  stops at `RCCSDTQ`; extend the CC path so `correlation cc5` / `cc6` (and the
+  `ccsdtqp`/… aliases) parse and dispatch. Two shapes are possible — add `RCC5`/
+  `RCC6` enum members, or (cleaner) carry the rank as an integer alongside a
+  single `RCCGeneratedArbitrary` PostHF value so no enum edit is needed per rank.
+  The driver then calls `run_rcc_generated(rank)` (a rank-parameterized
+  generalization of `run_rccsdtq`) → `prepare_generated_arbitrary_order_state(…,
+  rank, …)` (already rank-generic) → `make_generated_rcc_kernels(rank)` (W0).
+  *Gate:* `correlation cc5` at MAXORDER=5 runs the generated rank-5 kernel;
+  `correlation cc5` at MAXORDER=3 fails with the "reconfigure with
+  -DPLANCK_CC_MAXORDER=5" message (not a parse error, not a crash).
 
-- **W2 — a self-contained generated-kernel unit harness (~M).** For the
+- **W2 — CI builds a high-MAXORDER configuration (~S given W0/W1).** Add a CMake/CI
+  configuration that builds `hartree-fock` at `-DPLANCK_CC_MAXORDER=4` (and,
+  behind a slower opt-in job, 5/6) so the generated ranks are actually compiled
+  and the W3 tests can run. *Gate:* the high-MAXORDER build links and starts; the
+  arbitrary-order options from W1 are live.
+
+- **W3 — arbitrary-order generated-CC regression cases (~S given W2).** Add small
+  closed-shell inputs where CCSDTQ (and cc5 where feasible) ≡ FCI, gated on the
+  generated energy matching the FCI/hand reference to ~1e-8 — the first runtime
+  test of the generated kernels (the A4 tier), parameterized over rank rather than
+  pinned to 4. *Gate:* `run_regressions.py` runs each rank's case and the energy
+  matches; a case is **skipped** (not failed) when the binary's MAXORDER is below
+  its rank.
+
+- **W4 — a self-contained generated-kernel unit harness (~M).** For the
   factorized / memory-aware TUs (which are `#include`d nowhere), the cheapest
   runnable route is a standalone unit executable, not driver integration: a
   `tests/generated_kernel_energy.cpp` that builds a tiny reference, calls the
   emitted `build_W` + residual kernels, and checks the CC energy. The emitted TU
   is compiled into this one executable (an `add_executable` mirroring
-  `planck-cc-arbitrary-solver`, plus the emitted `.cpp`). This turns every A3
+  `planck-cc-arbitrary-solver` plus the emitted `.cpp`). This turns every A3
   compile-only gate into a numeric one without touching the driver or the default
-  build. *Gate:* the harness links the emitted TU, runs, and matches the
-  arbitrary-order solver / FCI energy; default build untouched.
+  build, and works at any rank. *Gate:* the harness links the emitted TU, runs,
+  and matches the arbitrary-order solver / FCI energy; default build untouched.
 
-- **W3 — factorized/memory-aware emit selectable at generation (~S given W2).**
-  The build-time codegen (`generate_planck_cc_kernels.py`, invoked by the
-  `ccgen-planck-kernels` CMake target) emits the *plain* TU today. Add
-  pass-through flags so it can emit the factorized / budgeted / stride-shaped TU
-  (the `emit_factorized_translation_unit` options), selectable by CMake cache
-  vars mirroring `PLANCK_CC_ENGINE`. *Gate:* the generated `.cpp` reflects the
-  requested optimization and W2's harness runs it to the same energy (exactness
-  is already Python-gated; this confirms it survives compilation + execution).
+- **W5 — factorized/memory-aware emit selectable at codegen (~S given W4).** The
+  build-time codegen (`generate_planck_cc_kernels.py`, the `ccgen-planck-kernels`
+  target) emits the *plain* TU today. Add pass-through flags so it can emit the
+  factorized / budgeted / stride-shaped TU (the `emit_factorized_translation_unit`
+  options) per rank, via CMake cache vars mirroring `PLANCK_CC_ENGINE`. *Gate:*
+  the generated `.cpp` reflects the requested optimization and W4's harness runs
+  it to the same energy.
 
-**Sequencing / risk.** W0+W1 are the low-risk unblock — they use the registration
-that already exists and add the first runtime CCSDTQ test. W2 is the ~M piece (a
-new test harness that compiles an emitted TU), and it is what converts the
-memory/factorization investigations' compile-only gates into numeric ones —
-i.e. it is the route to the "E2 / numeric energy" boundary both prior
-investigations flagged as out of scope. W3 is polish on top.
+**Sequencing / risk.** W0 is the ~M core — the per-rank registry; once it lands,
+W1–W3 make any emitted rank selectable and testable. W4 is the other ~M piece (a
+harness compiling an emitted TU), the route to the numeric-energy ("E2") boundary
+the prior investigations flagged. W5 is polish.
 
-**What NOT to do.** Do not flip the default `PLANCK_CC_MAXORDER` to 4 — it changes
-what every default build compiles and slows the build (the ccsdtq generation is
-the slow codegen step). Keep the generated-kernel execution opt-in behind the
-existing cache variable; CI builds one extra configuration.
+**What NOT to do.** Do not flip the default `PLANCK_CC_MAXORDER` — it changes and
+slows every default build (high-rank codegen is the slow step). Registration stays
+compile-time gated per rank; CI opts into the higher configurations. Do not add a
+bespoke factory or driver path per rank (`run_rccsdtq`, `run_rcc5`, …) — that
+recreates the ceiling one rank higher; W0/W1 parameterize on rank so the ceiling
+is `PLANCK_CC_MAXORDER` alone.
 
 ---
 
@@ -149,14 +196,14 @@ not a new test framework.
 
 - **C0 — enumerate & run the compiled-binary tests (~S).** A script
   (`tests/benchmark_generated_kernels.py`) that: (1) configures + builds
-  `hartree-fock` at MAXORDER=3 and MAXORDER=4 (two build dirs), (2) runs the
-  `ctest` C++ unit tests and the `run_regressions.py` CC cases against each, (3)
-  runs the W2 generated-kernel harness. Report: per-test pass/fail + wall time,
-  and the MAXORDER=3-vs-4 delta. *Gate:* the script runs end to end on a machine
-  with a C++23 compiler; it skips (not fails) configurations whose binary is
-  absent.
+  `hartree-fock` at a baseline MAXORDER=3 and at a high MAXORDER (4, optionally
+  5/6) — one build dir each, (2) runs the `ctest` C++ unit tests and the
+  `run_regressions.py` CC cases against each, (3) runs the W4 generated-kernel
+  harness. Report: per-test pass/fail + wall time, and the per-rank deltas.
+  *Gate:* the script runs end to end on a machine with a C++23 compiler; it skips
+  (not fails) ranks whose binary is absent.
 
-- **C1 — timing the generated vs hand-written CC path (~S given C0 + W1).** For
+- **C1 — timing the generated vs hand-written CC path (~S given C0 + W3).** For
   the one method where both exist (CCSDT: hand-written determinant/tensor backend
   vs generated tensor-optimized), run the same input through
   `PLANCK_RCCSDT_BACKEND={determinant,tensor,optimized}` and report energies
@@ -164,7 +211,7 @@ not a new test framework.
   generated path was built for. *Gate:* energies agree to ~1e-8 across backends;
   timings reported.
 
-- **C2 — the memory/factorization emit, timed (~S given W2/W3).** Run W2's
+- **C2 — the memory/factorization emit, timed (~S given W4/W5).** Run W4's
   harness on the plain vs factorized vs memory-budgeted emitted TU for the same
   method, reporting energy (agree) + build-flop proxy + wall time — the runtime
   confirmation of the symbolic FLOP/stride wins from the memory investigation.
