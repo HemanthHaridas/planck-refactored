@@ -273,24 +273,29 @@ now emits the SAME α-first-per-half reference (n=2 `abab`, n=3 `aabaab`, n=4
 signed-perm(`t3[abaaba]`) to 0.0 on the UCCSDT fixture. This is necessary and
 correct but NOT sufficient.
 
-*Piece 2 (REMAINING): same-spin-sector reduction (extend the collapse).* Sorting
-only canonicalizes WITHIN a fixed β-count. At rank 3 the surviving t3 factors span
-TWO β-count sectors — `aabaab` (1 β per half) AND `abbabb` (2 β per half) — which
-are NOT permutations of each other (different β-counts) and NOT global-flip images.
-A single spatial t3 cannot represent both by permutation alone; the higher-β-count
-sector must be REDUCED to the reference sector via the closed-shell same-spin
-relation. `collapse_amplitudes`/`_split_same_spin_amplitude` currently fire only on
-the ALL-α block (`set(block)=={'a'}`); they must be extended to reduce any half
-containing a same-spin PAIR (e.g. the `bb` in `abb`, the `aa` in `aab`) toward the
-reference. For odd-per-half ranks (t3) one same-spin pair is unavoidable, so the
-reference itself carries one — the reduction must target that specific convention.
-This is the genuine ~M–L S4 algebra still open.
+*Piece 2 (REMAINING): the gap is INTERNAL-SPIN-SUM coefficient algebra, NOT factor
+layout.* Two factor-layout mechanisms were tried and BOTH verified exact in
+isolation yet BOTH left the rank-6 solve-path gate at ~7.5e-3:
+  - permutation canonicalization within a β-count sector (piece 1, landed);
+  - global α↔β flip to the reference β-count then sort — verified
+    `t3[abbabb]==flip==t3[baabaa]` to 1.9e-17 and `sort(baabaa)==t3[aabaab]` to 0.0,
+    yet wiring it into the bridge did NOT reduce the gate error.
+The conclusion: the residual is a SUM over the spin cases of the SUMMED (internal)
+indices, and `_eval_spinterm` gets it right because it slices every factor —
+including summed-index spins — per case. The AlgebraTerm bridge + `residual_of`
+re-sum the summed indices over spatial ranges, which mis-weights the spin cases;
+canonicalizing FACTOR layout cannot fix a SUMMATION-weight error. This is the same
+"does the block model make the coefficients come out right" question the code
+comments flag as settled only by numeric gates — settled at doubles, NOT at rank
+≥3. So piece 2 is genuine ~M–L S2/S4 COEFFICIENT algebra: derive how the
+internal-index spin sum maps to spatial-tensor coefficients per surviving block at
+rank ≥3, not a layout canonicalization.
 
-Fast red gate (LANDED): `test_rcc_bridge_solve_path_rank6` — the solve path
-(`spinterm_to_algebraterm`+`residual_einsum` on one spatial tensor per amplitude,
-`aabaab` reference) vs the GCC slice. ~7s, still RED (~7e-3 after piece 1, was
-4.8e-3) until piece 2 reduces the `abbabb` sector. ccsd/ccsdt gates stay green;
-piece 1 caused no regressions.
+Fast red gate (LANDED): `test_rcc_bridge_solve_path_rank6` — the solve path vs the
+GCC slice, ~7s, RED (~7.5e-3). It is the correct inner loop and correctly stayed
+red through both failed layout attempts, confirming the gap is coefficient/summation
+algebra. ccsd/ccsdt gates stay green; piece 1 (permutation canonicalization) is a
+correct, kept building block that caused no regressions.
 
 - **R3.2 — wire `spin_adapt` into codegen, ALL ranks at once (~S, HELD).** Only after
   R3.1 lands (user decision: no partial binary state). A `--spin-adapt` flag on
