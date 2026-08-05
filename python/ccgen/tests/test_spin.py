@@ -2532,10 +2532,10 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
             "t1": block_slice(self.tn["t1"], "aa"),
             "t2": block_slice(self.tn["t2"], "abab"),
             "t3": block_slice(self.tn["t3"], "aabaab"),
-            "v": self.tn["v"][np.ix_(*[[p for p in range(self.tn["v"].shape[k])
-                                        if p % 2 == 0] for k in range(4)])],
-            "f": self.tn["f"][np.ix_(*[[p for p in range(self.tn["f"].shape[k])
-                                        if p % 2 == 0] for k in range(2)])],
+            # v/f are over the n-space; their RCC spatial tensor is the abab / aa
+            # spin block, NOT an all-α slice (v[abab] has spins a,b,a,b).
+            "v": block_slice(self.tn["v"], "abab"),
+            "f": block_slice(self.tn["f"], "aa"),
         }
         manifold = []
         for t in self.triples:
@@ -2550,6 +2550,103 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
         self.assertLess(np.abs(R - Rb).max(), 1e-10,
                         f"bridge solve-path rank-6 != GCC aab slice: "
                         f"{np.abs(R - Rb).max()}")
+
+    def _rank6_bridge_spatial(self):
+        """Shared rank-6 setup: the merged SpinTerms and the one-spatial-tensor-
+        per-amplitude dict the solve path uses (P2 harness)."""
+        import numpy as np
+        from ccgen.spin import (ucc_integrate_term_antisym,
+                                canonicalize_spin_blocks, collapse_amplitudes,
+                                collapse_integrals, merge_terms)
+        no, nv = self.no, self.nv
+        ext = {"a": "a", "b": "a", "c": "b", "i": "a", "j": "a", "k": "b"}
+
+        def block_slice(so, block):
+            sets = [[p for p in range(so.shape[k]) if p % 2 == (0 if s == "a" else 1)]
+                    for k, s in enumerate(block)]
+            return so[np.ix_(*sets)]
+
+        spatial = {
+            "t1": block_slice(self.tn["t1"], "aa"),
+            "t2": block_slice(self.tn["t2"], "abab"),
+            "t3": block_slice(self.tn["t3"], "aabaab"),
+            # v/f are over the n-space; their RCC spatial tensor is the abab / aa
+            # spin block, NOT an all-α slice (v[abab] has spins a,b,a,b).
+            "v": block_slice(self.tn["v"], "abab"),
+            "f": block_slice(self.tn["f"], "aa"),
+        }
+        manifold = []
+        for t in self.triples:
+            manifold.extend(ucc_integrate_term_antisym(t, ext))
+        canon = [canonicalize_spin_blocks(st) for st in manifold]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        coll = [c for st in amp for c in collapse_integrals(st)]
+        merged = merge_terms(coll, set(ext))
+        return merged, spatial, ext
+
+    @staticmethod
+    def _has_mixed_spin_summed_index(st, ext):
+        """True iff some summed (internal) index appears with DIFFERENT spins in
+        its two factor occurrences -- the P2 mechanism."""
+        spins = {}
+        for f in st.factors:
+            for si in f.indices:
+                if si.name in ext:
+                    continue
+                spins.setdefault(si.name, set()).add(si.spin)
+        return any(len(s) > 1 for s in spins.values())
+
+    @unittest.expectedFailure
+    def test_p20_bridge_matches_eval_per_term_rank6(self):
+        # P2.0: per-term gate. For every merged rank-6 term the bridge
+        # (spinterm_to_algebraterm + residual_einsum) must equal _eval_spinterm
+        # (the oracle, which slices each factor per spin block). RED today on the
+        # terms with a mixed-spin summed index. Finer than the whole-residual gate:
+        # it names the failing terms. GREEN when P2.2 encodes summed-index spin.
+        import numpy as np
+        from ccgen.spin import spinterm_to_algebraterm
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv = self.no, self.nv
+        nos, nvs = no // 2, nv // 2
+        names = ["a", "b", "c", "i", "j", "k"]
+        merged, spatial, ext = self._rank6_bridge_spatial()
+        bad = 0
+        for st in merged:
+            A = _eval_spinterm(st, self.tn, no, no + nv, names)
+            B = residual_einsum(spinterm_to_algebraterm(st, set(ext)),
+                                nos, nvs, tensors=spatial)
+            if np.abs(A - B).max() > 1e-10:
+                bad += 1
+        self.assertEqual(bad, 0, f"{bad}/{len(merged)} merged terms: bridge != eval")
+
+    @unittest.expectedFailure
+    def test_p21_only_mixed_spin_summed_terms_fail_rank6(self):
+        # P2.1: classify -- and it DISPROVED the single-mechanism hypothesis.
+        # ~148 of the failing rank-6 terms have CONSISTENT summed-index spins (e.g.
+        # t2(a↑,c↓,i↑,l↓)·v(j↑,k↓,b↑,l↓), l β in both) yet still disagree with the
+        # oracle. So the mixed-spin summed index is ONE mechanism but not the whole
+        # story; there is a second (the free indices are distributed across both
+        # factors with their own spin structure -- a b↑/c↓ split that the spin-free
+        # bridge also cannot represent). Kept as xfail: the gate correctly fails,
+        # documenting that P2's model is incomplete and must be finished before the
+        # fix. Un-xfail (and it should pass) once every failing term is a known
+        # mechanism.
+        import numpy as np
+        from ccgen.spin import spinterm_to_algebraterm
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv = self.no, self.nv
+        nos, nvs = no // 2, nv // 2
+        names = ["a", "b", "c", "i", "j", "k"]
+        merged, spatial, ext = self._rank6_bridge_spatial()
+        for st in merged:
+            A = _eval_spinterm(st, self.tn, no, no + nv, names)
+            B = residual_einsum(spinterm_to_algebraterm(st, set(ext)),
+                                nos, nvs, tensors=spatial)
+            if np.abs(A - B).max() > 1e-10:
+                self.assertTrue(
+                    self._has_mixed_spin_summed_index(st, ext),
+                    f"a term without a mixed-spin summed index disagrees: "
+                    f"{[(f.name, f.block) for f in st.factors]}")
 
 
 if __name__ == "__main__":
