@@ -641,8 +641,16 @@ namespace HartreeFock::IO
                 {"uccsd", HartreeFock::PostHF::UCCSD},
                 {"ccsdt", HartreeFock::PostHF::RCCSDT},
                 {"uccsdt", HartreeFock::PostHF::UCCSDT},
+                // The generated arbitrary-order RCC path. All of these map to the
+                // single RCCSDTQ enum value; the excitation rank is carried
+                // separately on OptionsSCF._cc_generated_rank (set in the
+                // "correlation" handler), so higher ranks need no new enum member
+                // or driver branch — the ceiling is PLANCK_CC_MAXORDER alone.
                 {"ccsdtq", HartreeFock::PostHF::RCCSDTQ},
                 {"cc4", HartreeFock::PostHF::RCCSDTQ},
+                {"ccsdtqp", HartreeFock::PostHF::RCCSDTQ},
+                {"cc5", HartreeFock::PostHF::RCCSDTQ},
+                {"cc6", HartreeFock::PostHF::RCCSDTQ},
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
                 {"fci", HartreeFock::PostHF::FCI},
@@ -708,12 +716,27 @@ namespace HartreeFock::IO
                      return std::expected<void, std::string>{};
                  }},
 
-                {"correlation", [&correlation](const std::string &value) -> std::expected<void, std::string>
+                {"correlation", [&correlation, &scf](const std::string &value) -> std::expected<void, std::string>
                  {
                      auto parsed = map_string_enum<HartreeFock::PostHF>(value);
                      if (!parsed)
                          return std::unexpected(parsed.error());
                      correlation = *parsed;
+                     // For the generated arbitrary-order RCC path (all spellings
+                     // map to RCCSDTQ), carry the requested excitation rank so the
+                     // driver dispatches to the right generated kernel without a
+                     // per-rank enum/branch. Ranks not listed keep the default (4).
+                     if (*parsed == HartreeFock::PostHF::RCCSDTQ)
+                     {
+                         static const std::unordered_map<std::string, int> _cc_rank =
+                             {
+                                 {"ccsdtq", 4}, {"cc4", 4},
+                                 {"ccsdtqp", 5}, {"cc5", 5},
+                                 {"cc6", 6},
+                             };
+                         if (auto it = _cc_rank.find(value); it != _cc_rank.end())
+                             scf._cc_generated_rank = it->second;
+                     }
                      return std::expected<void, std::string>{};
                  }},
                 {"engine", [&integral](const std::string &value) -> std::expected<void, std::string>

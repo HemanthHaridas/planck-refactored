@@ -149,17 +149,22 @@ verifiable steps, registration first.
   and binds views instead. This is the true unblock: the MAXORDER=4 registry +
   ccsdtq now compile together (verified `exit 0`).
 
-- **W1 — arbitrary-order `%posthf` options (~S given W0).** The `PostHF` enum
-  stops at `RCCSDTQ`; extend the CC path so `correlation cc5` / `cc6` (and the
-  `ccsdtqp`/… aliases) parse and dispatch. Two shapes are possible — add `RCC5`/
-  `RCC6` enum members, or (cleaner) carry the rank as an integer alongside a
-  single `RCCGeneratedArbitrary` PostHF value so no enum edit is needed per rank.
-  The driver then calls `run_rcc_generated(rank)` (a rank-parameterized
-  generalization of `run_rccsdtq`) → `prepare_generated_arbitrary_order_state(…,
-  rank, …)` (already rank-generic) → `make_generated_rcc_kernels(rank)` (W0).
-  *Gate:* `correlation cc5` at MAXORDER=5 runs the generated rank-5 kernel;
-  `correlation cc5` at MAXORDER=3 fails with the "reconfigure with
-  -DPLANCK_CC_MAXORDER=5" message (not a parse error, not a crash).
+- **W1 — arbitrary-order `%posthf` options (~S given W0). LANDED.** Chose the
+  rank-as-integer shape over per-rank enum members (the latter would touch all
+  six `== RCCSDTQ` sites in `hf_driver.cpp` per rank — the ceiling-one-rank-up
+  antipattern). `correlation cc5` / `cc6` / `ccsdtqp` now parse to the single
+  `PostHF::RCCSDTQ` value, and the `correlation` handler sets a new
+  `OptionsSCF._cc_generated_rank` (4/5/6) from the keyword (default 4). `run_rccsdtq`
+  reads that rank and calls `prepare_generated_arbitrary_order_state(…, rank, …)`
+  (already rank-generic) → `make_generated_rcc_kernels(rank)` (W0), with a
+  `rank >= 4` guard. No new enum member, no new driver branch, no per-rank `run_*`
+  — the print/guard logic keyed on the one `RCCSDTQ` value is untouched. *Gate:*
+  `types.h` / `io.cpp` / `ccsdtq.cpp` compile; the keyword→rank mapping is
+  exercised end-to-end by W3's regression case (there is no io-parse unit harness,
+  so the runtime gate is the regression run, not a Python parse test). At
+  MAXORDER=3 a `cc5` input parses fine and fails at run time with the registry's
+  "reconfigure with -DPLANCK_CC_MAXORDER=5" message — not a parse error, not a
+  crash.
 
 - **W2 — CI builds a high-MAXORDER configuration (~S given W0/W1).** Add a CMake/CI
   configuration that builds `hartree-fock` at `-DPLANCK_CC_MAXORDER=4` (and,

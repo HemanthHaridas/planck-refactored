@@ -19,15 +19,25 @@ namespace HartreeFock::Correlation::CC
         calculator._have_ccsd_reference_energy = false;
         calculator._ccsd_reference_correlation_energy = 0.0;
 
+        // Excitation rank for the generated arbitrary-order RCC path (cc4=4,
+        // cc5=5, cc6=6), set from the %posthf `correlation` keyword. The runtime
+        // solver and the registry are both rank-generic, so a single call site
+        // serves every rank the build generated (PLANCK_CC_MAXORDER).
+        const int rank = calculator._scf._cc_generated_rank;
+        if (rank < 4)
+            return std::unexpected(std::format(
+                "run_rccsdtq: generated arbitrary-order RCC path requires rank >= 4, got {}.",
+                rank));
+
         auto state_res = prepare_generated_arbitrary_order_state(
             calculator,
             shell_pairs,
-            4,
+            rank,
             "RCCSDTQ[TENSOR] :");
         if (!state_res)
             return std::unexpected("run_rccsdtq: " + state_res.error());
 
-        auto kernels_res = make_generated_rccsdtq_kernels();
+        auto kernels_res = make_generated_rcc_kernels(rank);
         if (!kernels_res)
             return std::unexpected("run_rccsdtq: " + kernels_res.error());
 
