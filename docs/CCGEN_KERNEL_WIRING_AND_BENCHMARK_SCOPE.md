@@ -217,10 +217,58 @@ verifiable steps, registration first.
   the generated `.cpp` reflects the requested optimization and W4's harness runs
   it to the same energy.
 
+- **W6 — warm-start the generated arbitrary-order path from a lower-rank solve
+  (~M, a SPEED gap, not a correctness one).** The generated path currently
+  cold-starts: `prepare_generated_arbitrary_order_state` fills `state.amplitudes`
+  with `make_zero_rcc_amplitudes(...)`, so at `cc4` every rank (T1…T4) iterates
+  from zero. The hand-written CCSDT backend does NOT — `seed_triples_from_rccsd`
+  (`tensor_backend.cpp:1474`) converges RCCSD first and copies its T1/T2 into the
+  triples workspace, so only T3 starts at zero. That asymmetry is why the
+  generated `cc4` run is slow (measured: LiH/STO-3G > 5 min cold; Be chosen for W3
+  precisely to keep the cold solve tractable). Convergence, not correctness, is
+  affected — a cold start reaches the same energy.
+
+  The fix is contained; no new solver machinery. Two measured facts make it a
+  direct copy: (1) the arbitrary amplitudes are **spatial RCC** (rank-r store is
+  `[n_occ…, n_virt…]`, no spin factor — `amplitudes.cpp:58-62`), the same layout a
+  generated *lower-rank* RCC solve produces, so seeding needs no spin→spatial
+  projection; (2) the solver already iterates all ranks jointly over the packed
+  `by_rank` store and takes `state.amplitudes` as its starting point
+  (`generated_arbitrary_runtime.cpp:120+`), so the only change is what that field
+  holds before the first iteration.
+
+  Sub-steps:
+  - **W6.0 — seed hook (~S).** `prepare_generated_arbitrary_order_state` (or a thin
+    wrapper) accepts optional seed amplitudes and copies them into
+    `state.amplitudes.by_rank[0..k-2]` instead of leaving them zero, validating
+    dims per rank. *Gate:* a hand-built seed lands in the state; a dim-mismatched
+    seed errors; no seed → unchanged zero start (byte-identical to today).
+  - **W6.1 — lower-rank generated solve as the seed source (~M).** Before the
+    rank-`n` iteration, run the rank-`(n−1)` generated solve
+    (`make_generated_rcc_kernels(n-1)` + the same iteration loop) and feed its
+    converged `by_rank` amplitudes as the W6.0 seed. For `n=4` this seeds T1/T2/T3
+    from a converged CCSDT; the CCSDTQ loop then mostly iterates T4 — mirroring the
+    hand-written path one rank higher. Recurse for cc5/cc6. *Gate:* the warm-started
+    `cc4` reaches the same energy as the cold one (W3's Be case) in **materially
+    fewer iterations / less wall time**; the energy match is unchanged.
+  - **W6.2 — wire + default (~S).** Route `run_rccsdtq` through the warm-start
+    path, default on (it is strictly faster at equal accuracy), with an escape
+    hatch (`cc_warm_start .false.`) for the cold-start baseline used in W6.1's
+    comparison. *Gate:* `be_rccsdtq_sto3g` still passes; a timing line shows
+    warm < cold.
+
+  **Honest ceiling.** W6 is a convergence-rate win with a symbolic cost today; the
+  wall-clock confirmation is the same compiled-binary measurement W4/C-series
+  provide. It also assumes the lower-rank generated solve is itself available at
+  the build's `PLANCK_CC_MAXORDER` (it is — every rank ≤ MAXORDER is registered by
+  W0), so no extra codegen.
+
 **Sequencing / risk.** W0 is the ~M core — the per-rank registry; once it lands,
 W1–W3 make any emitted rank selectable and testable. W4 is the other ~M piece (a
 harness compiling an emitted TU), the route to the numeric-energy ("E2") boundary
-the prior investigations flagged. W5 is polish.
+the prior investigations flagged. W5 is polish. W6 (~M) is the warm-start
+speed-parity with the hand-written kernels — independent of W4/W5, and the most
+user-visible fix since it makes higher-rank runs practical.
 
 **What NOT to do.** Do not flip the default `PLANCK_CC_MAXORDER` — it changes and
 slows every default build (high-rank codegen is the slow step). Registration stays
