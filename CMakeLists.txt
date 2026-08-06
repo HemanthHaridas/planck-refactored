@@ -30,6 +30,17 @@ set(PLANCK_CC_MAXORDER "3" CACHE STRING
     "Max CC excitation rank to generate Planck kernels for (2=CCSD, 3=CCSDT, 4=CCSDTQ, 5=CC5, 6=CC6)")
 option(PLANCK_CC_INCLUDE_INTERMEDIATES
     "Emit ccgen intermediate builders in generated CC kernels" ON)
+# Emit genuine spatial (restricted) RCC kernels via the R1.0 spin-adaptation
+# instead of raw spin-orbital algebra bound to spatial storage. Without this the
+# generated energy carries the 0.25*t2*oovv defect and the correlation energy is
+# ~4x wrong (the Be-CCSDTQ defect). For CCSDT (rank 3, single Sz sector) the
+# spin-adapted path is complete and correct; for CCSDTQ (rank 4) it additionally
+# emits the t4 second-Sz-sector kernels, whose full multi-sector SOLVE is the
+# still-open runtime work (Gap B, docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md).
+# Default OFF for byte-compatibility with the historical (defective) emit until
+# Gap B lands; opt in with -DPLANCK_CC_SPIN_ADAPT=ON.
+option(PLANCK_CC_SPIN_ADAPT
+    "Emit spatial (spin-adapted) RCC kernels instead of the raw spin-orbital defect" OFF)
 option(PLANCK_CC_ARBITRARY_LOWER_RANKS
     "Also emit rank<4 methods (ccsd/ccsdt) in arbitrary-order spatial form as \
 <method>_arbitrary_planck_generated.cpp, for cross-rank .ccamp restart seeds" OFF)
@@ -432,6 +443,9 @@ if(Python3_Interpreter_FOUND)
     endif()
     if(PLANCK_CC_ARBITRARY_LOWER_RANKS)
         list(APPEND _ccgen_planck_kernel_args --arbitrary-lower-ranks)
+    endif()
+    if(PLANCK_CC_SPIN_ADAPT)
+        list(APPEND _ccgen_planck_kernel_args --spin-adapt)
     endif()
 
     add_custom_target(ccgen-planck-kernels

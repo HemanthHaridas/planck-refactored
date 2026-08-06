@@ -1132,6 +1132,51 @@ class SpinAdaptedEmitTests(unittest.TestCase):
         self.assertNotIn("0.25", energy_kernel(adapted),
                          "--spin-adapt must emit the spatial 2J-K energy")
 
+    def test_registry_compiles_with_spin_adapted_ccsdtq(self):
+        # A2: the REAL build path. generated_kernel_registry.cpp #includes the
+        # generated ccsdtq TU (guarded by PLANCK_CC_MAXORDER>=4) and defines
+        # make_generated_rccsdtq_kernels(), which the driver's run_rccsdtq calls.
+        # Generate the spin-adapted TUs (as -DPLANCK_CC_SPIN_ADAPT=ON would) and
+        # syntax-check the registry against them -- validates the multi-sector
+        # sector_tensor reads compile in the linked-binary context, not just the
+        # standalone TU.
+        import os
+        import shutil
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present (configure the build first)")
+        script = repo / "python" / "generate_planck_cc_kernels.py"
+
+        with tempfile.TemporaryDirectory() as gen:
+            gcc_dir = Path(gen) / "generated" / "cc"
+            gcc_dir.mkdir(parents=True)
+            proc = subprocess.run(
+                [sys.executable, str(script), "--output-dir", str(gcc_dir),
+                 "--methods", "ccsd", "ccsdt", "ccsdtq",
+                 "--engine", "diagram", "--spin-adapt", "--include-intermediates"],
+                capture_output=True, text=True, timeout=600)
+            self.assertEqual(proc.returncode, 0,
+                             f"spin-adapted codegen failed:\n{proc.stderr[-1500:]}")
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-DPLANCK_CC_MAXORDER=4",
+                 "-I", str(repo / "src"), "-I", gen, "-I", str(eigen),
+                 str(repo / "src" / "post_hf" / "cc" /
+                     "generated_kernel_registry.cpp")],
+                capture_output=True, text=True, timeout=600)
+            self.assertEqual(proc.returncode, 0,
+                             f"registry failed to compile with spin-adapted "
+                             f"ccsdtq TU:\n{proc.stderr[-2000:]}")
+
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")
 @unittest.skipUnless(

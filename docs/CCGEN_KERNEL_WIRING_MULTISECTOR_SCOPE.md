@@ -41,13 +41,25 @@ is populating/updating those sectors and flipping the codegen switch.
   historical (defective) emit — A2/B flip production to on. *Gate:*
   `SpinAdaptedEmitTests::test_codegen_cli_spin_adapt_switch` (subprocess) — default
   CCSD energy keeps the raw `0.25`; `--spin-adapt` emits spatial 2J-K (no `0.25`).
-- **A2 — regenerate + wire the ccsdtq TU into a binary.** Today the generated
-  ccsdtq TU is not `#include`d into any target (only compiled with
-  `-fsyntax-only`). CMake (`CMakeLists.txt:440`, the
-  `generate_planck_cc_kernels.py` custom command) must emit the spin-adapted TU
-  and the driver's `PostHF::RCCSDTQ` path must call
-  `make_generated_ccsdtq_kernels()`. *Gate:* the binary links; a Be
-  `correlation rccsdtq` run produces a finite energy (correctness is B's gate).
+- **A2 — build with the spin-adapted TUs. LANDED (switch + compile gate);
+  binary-run acceptance pending a build.** The wiring the doc feared missing was
+  already there: `generated_kernel_registry.cpp` `#include`s the generated
+  ccsdtq TU (guarded `PLANCK_CC_MAXORDER >= 4`) and defines
+  `make_generated_rccsdtq_kernels()`, which the driver's `run_rccsdtq`
+  (`src/post_hf/cc/ccsdtq.cpp`) already calls through `make_generated_rcc_kernels(4)`
+  → `run_generated_arbitrary_order_iterations`. So the only gap was that CMake
+  emitted the **defective** TU. Added the `PLANCK_CC_SPIN_ADAPT` CMake option
+  (default OFF for byte-compatibility until Gap B lands) that passes `--spin-adapt`
+  to the generator. *Gate:*
+  `SpinAdaptedEmitTests::test_registry_compiles_with_spin_adapted_ccsdtq` —
+  generate spin-adapted ccsd/ccsdt/ccsdtq TUs and syntax-check
+  `generated_kernel_registry.cpp` (the real link path, `MAXORDER=4`) against them,
+  so the multi-sector `sector_tensor` reads compile in the binary context.
+  *Remaining acceptance (needs an actual build):* configure
+  `-DPLANCK_CC_MAXORDER=4 -DPLANCK_CC_SPIN_ADAPT=ON`, build `hartree-fock`, and
+  confirm a Be `correlation rccsdt` run matches PySCF CCSDT (CCSDT has one Sz
+  sector → Gap-B-independent, the cheap early win); Be `rccsdtq` gives the
+  CCSDT-level answer until Gap B drives the second t4 sector.
 
 Gap A alone fixes cc3 (CCSDT: one Sz sector, no Gap B) — so after A, a Be CCSDT
 run through the generated path should already match PySCF CCSDT. That is the
