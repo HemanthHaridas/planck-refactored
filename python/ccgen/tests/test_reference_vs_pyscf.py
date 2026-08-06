@@ -981,11 +981,120 @@ class GeneratedSpatialEnergyGate(unittest.TestCase):
         e_fci = fci.FCI(mf).kernel()[0] - mf.e_tot
 
         self.assertTrue(np.isfinite(e_ccsdt))
-        # CCSD < CCSDT < FCI (all negative, so more-negative = lower).
-        self.assertLess(e_ccsdt, e_ccsd + 1e-12,
-                        "adapted CCSDT must be at or below CCSD")
-        self.assertGreater(e_ccsdt, e_fci - 1e-12,
-                           "adapted CCSDT must not undershoot FCI")
+        # CCSD <= CCSDT <= FCI (all negative, so more-negative = lower). The
+        # ordering margin must be the SOLVE's convergence tolerance, not tighter:
+        # the Jacobi loop stops at delta < 1e-11, so the amplitudes -- and hence
+        # e_ccsdt -- carry ~1e-11 error. For Be the T3 contribution is genuinely
+        # ~1e-11 (CCSDT ~= CCSD), so a 1e-12 margin sits below the noise floor and
+        # flakes on the sign of that last digit. 1e-10 (10x the conv tol) is the
+        # honest bound: CCSDT is at or below CCSD to within how well we solved.
+        tol = 1e-10
+        self.assertLess(e_ccsdt, e_ccsd + tol,
+                        f"adapted CCSDT must be at or below CCSD "
+                        f"(e_ccsdt={e_ccsdt}, e_ccsd={e_ccsd})")
+        self.assertGreater(e_ccsdt, e_fci - tol,
+                           f"adapted CCSDT must not undershoot FCI "
+                           f"(e_ccsdt={e_ccsdt}, e_fci={e_fci})")
+
+
+class SpinAdaptedEmitTests(unittest.TestCase):
+    """R3.1.3d/emit: `print_cpp_planck(spin_adapt=True)` emits genuine spatial
+    kernels. With `spin_adapt`, `emit_planck_translation_unit` skips the
+    relabel-only `lower_equations_restricted_closed_shell` (the defect) and emits
+    the spin-adapted AlgebraTerms directly (spatial 2J-K). Multi-Sz targets
+    (`quadruples_aaabaaab`) emit their own kernel + read the sector view; the
+    arbitrary-order bundle registers only the reference sector per rank."""
+
+    def test_spin_adapted_energy_has_no_raw_quarter(self):
+        # the emitted CCSD energy kernel is spatial (2*(ia|jb)-(ib|ja)), NOT the
+        # raw spin-orbital 0.25*t2*oovv that was the defect.
+        from ccgen.generate import print_cpp_planck
+        cpp = print_cpp_planck("ccsd", spin_adapt=True)
+        energy = cpp[cpp.index("compute_ccsd_energy"):]
+        end = energy.find("compute_ccsd_singles")
+        energy = energy[:end] if end > 0 else energy
+        self.assertNotIn("0.25", energy,
+                         "spin-adapted energy still emits the raw 0.25 defect")
+
+    def test_ccsdtq_emits_both_t4_sectors_and_reads(self):
+        from ccgen.generate import print_cpp_planck
+        cpp = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram")
+        # both sector residual kernels emitted
+        self.assertIn("compute_ccsdtq_quadruples_residual", cpp)
+        self.assertIn("compute_ccsdtq_quadruples_aaabaaab_residual", cpp)
+        # the second sector is read via the sector view
+        self.assertIn('sector_tensor(4, "aaabaaab")', cpp)
+        # bundle registers one residual per rank (1..4), NOT the extra sector
+        self.assertEqual(cpp.count("kernels.residuals_by_rank.push_back"), 4)
+
+    def test_spin_adapted_ccsdt_compiles(self):
+        # end-to-end: the spin-adapted CCSDT TU is valid C++ against the real CC
+        # headers (no t4, so exercises skip-lowering + spatial emit cleanly).
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present (configure the build first)")
+
+        from ccgen.generate import print_cpp_planck
+        code = print_cpp_planck("ccsdt", spin_adapt=True, engine="diagram")
+        with tempfile.NamedTemporaryFile(suffix=".cpp", mode="w",
+                                         delete=False) as fh:
+            fh.write(code)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=300)
+            self.assertEqual(proc.returncode, 0,
+                             f"spin-adapted CCSDT failed to compile:\n"
+                             f"{proc.stderr[-2000:]}")
+        finally:
+            os.unlink(src)
+
+    def test_spin_adapted_ccsdtq_compiles_with_sector_accessor(self):
+        # the CCSDTQ TU (with the t4_aaabaaab sector reads) compiles against the
+        # real headers -- validates the ArbitraryOrderRCCAmplitudes::sector_tensor
+        # accessor the sector kernels bind.
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present (configure the build first)")
+
+        from ccgen.generate import print_cpp_planck
+        code = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram")
+        with tempfile.NamedTemporaryFile(suffix=".cpp", mode="w",
+                                         delete=False) as fh:
+            fh.write(code)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=600)
+            self.assertEqual(proc.returncode, 0,
+                             f"spin-adapted CCSDTQ failed to compile:\n"
+                             f"{proc.stderr[-2000:]}")
+        finally:
+            os.unlink(src)
 
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")

@@ -1065,6 +1065,7 @@ def print_cpp_planck(
         eqs,
         intermediates=intermediates,
         force_arbitrary=force_arbitrary,
+        spin_adapted=spin_adapt,
     )
 
 

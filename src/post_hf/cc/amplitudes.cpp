@@ -172,6 +172,31 @@ namespace HartreeFock::Correlation::CC
         return make_tensor_view(by_rank[static_cast<std::size_t>(excitation_rank - 1)]);
     }
 
+    // R3.1.3d: a higher Sz sector's dense view, looked up by (rank, tag). Errors
+    // if not allocated (reference-only / CCSDT runs never populate `sectors`, and
+    // never ask). Linear scan is fine: at most floor(n/2)-1 extra sectors per rank.
+    std::expected<DenseTensorView, std::string>
+    ArbitraryOrderRCCAmplitudes::sector_tensor(int excitation_rank, const std::string &tag)
+    {
+        for (auto &entry : sectors)
+            if (entry.first.first == excitation_rank && entry.first.second == tag)
+                return make_tensor_view(entry.second);
+        return std::unexpected(
+            "Requested amplitude Sz sector (" + std::to_string(excitation_rank) +
+            ", " + tag + ") is not allocated");
+    }
+
+    std::expected<ConstDenseTensorView, std::string>
+    ArbitraryOrderRCCAmplitudes::sector_tensor(int excitation_rank, const std::string &tag) const
+    {
+        for (const auto &entry : sectors)
+            if (entry.first.first == excitation_rank && entry.first.second == tag)
+                return make_tensor_view(entry.second);
+        return std::unexpected(
+            "Requested amplitude Sz sector (" + std::to_string(excitation_rank) +
+            ", " + tag + ") is not allocated");
+    }
+
     std::expected<DenominatorCache, std::string> build_denominator_cache(
         const RHFReference &reference,
         bool include_triples)

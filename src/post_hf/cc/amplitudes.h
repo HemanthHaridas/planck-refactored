@@ -61,10 +61,26 @@ namespace HartreeFock::Correlation::CC
     {
         std::vector<TensorND> by_rank; // rank r stored at by_rank[r-1]
 
+        // R3.1.3d: higher independent Sz sectors of a rank-2n amplitude
+        // (n >= 4). `by_rank` holds the reference (balanced) sector; a rank-2n
+        // amplitude also has floor(n/2) sectors, keyed here by (rank, tag) where
+        // tag is the alpha-before-beta block string, e.g. {4, "aaabaaab"}. The
+        // spin-adapted generated kernels read a sector via `sector_tensor`. Empty
+        // for methods <= CCSDT, so the default arbitrary-order path is unaffected.
+        std::vector<std::pair<std::pair<int, std::string>, TensorND>> sectors;
+
         [[nodiscard]] int max_rank() const noexcept;
         [[nodiscard]] bool has_rank(int excitation_rank) const noexcept;
         [[nodiscard]] std::expected<DenseTensorView, std::string> tensor(int excitation_rank);
         [[nodiscard]] std::expected<ConstDenseTensorView, std::string> tensor(int excitation_rank) const;
+
+        // A higher Sz sector's dense view (R3.1.3d). Errors if the sector was not
+        // allocated (the multi-sector solver populates it; a CCSDT/reference-only
+        // run never asks). The generated kernels bind this once per kernel.
+        [[nodiscard]] std::expected<DenseTensorView, std::string>
+        sector_tensor(int excitation_rank, const std::string &tag);
+        [[nodiscard]] std::expected<ConstDenseTensorView, std::string>
+        sector_tensor(int excitation_rank, const std::string &tag) const;
     };
 
     // `include_triples=false` is useful for the current teaching code paths that

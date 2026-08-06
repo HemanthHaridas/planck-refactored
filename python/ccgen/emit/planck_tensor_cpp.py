@@ -180,7 +180,11 @@ def _map_factor(
 ) -> tuple[int, str]:
     tensor_obj = _source_tensor(tensor)
     indices = _access_indices(tensor)
-    amplitude_match = re.fullmatch(r"t(\d+)", tensor_obj.name)
+    # `t<rank>` is the reference Sz sector; `t<rank>_<tag>` (R3.1.3d) is a higher
+    # independent Sz sector of the same amplitude (t4_aaabaaab), stored/read as a
+    # distinct block. Both are rank-`\d+` amplitudes; the tag routes the read to
+    # the sector's own tensor.
+    amplitude_match = re.fullmatch(r"t(\d+)(?:_([ab]+))?", tensor_obj.name)
 
     if tensor_obj.name == "f":
         left, right = indices
@@ -199,6 +203,7 @@ def _map_factor(
 
     if amplitude_match is not None:
         excitation_rank = int(amplitude_match.group(1))
+        sector_tag = amplitude_match.group(2)      # None for the reference sector
         occ = [idx.name for idx in indices if idx.space == "occ"]
         vir = [idx.name for idx in indices if idx.space == "vir"]
         if len(occ) != excitation_rank or len(vir) != excitation_rank:
@@ -211,7 +216,11 @@ def _map_factor(
         # tensor_backend types (RCCSD/RCCSDTAmplitudes) have direct t1/t2/t3(...)
         # accessors instead.
         if arbitrary_amplitudes:
-            return 1, f"t{excitation_rank}({{{', '.join(occ + vir)}}})"
+            # R3.1.3d: a higher Sz sector reads from its own bound view
+            # `t<rank>_<tag>` (sector_tag), the reference from `t<rank>`.
+            view = (f"t{excitation_rank}_{sector_tag}" if sector_tag
+                    else f"t{excitation_rank}")
+            return 1, f"{view}({{{', '.join(occ + vir)}}})"
         if excitation_rank == 1:
             return 1, f"amplitudes.t1({occ[0]}, {vir[0]})"
         if excitation_rank == 2:
@@ -330,28 +339,37 @@ def _amplitude_type(method: str, force_arbitrary: bool = False) -> str:
     return "RCCSDAmplitudes"
 
 
-def _amplitude_ranks_used(terms) -> list[int]:
-    """Distinct t-amplitude excitation ranks referenced across `terms`, sorted.
-    Drives the per-kernel view bindings for the arbitrary-order runtime."""
-    ranks: set[int] = set()
+def _amplitude_ranks_used(terms) -> list[tuple[int, str | None]]:
+    """Distinct t-amplitude `(rank, sector_tag)` pairs referenced across `terms`,
+    sorted. `sector_tag` is None for the reference Sz sector (`t<rank>`) and the
+    tag string for a higher sector (`t<rank>_<tag>`, R3.1.3d). Drives the
+    per-kernel view bindings for the arbitrary-order runtime."""
+    used: set[tuple[int, str | None]] = set()
     for term in terms:
         for factor in term.factors:
-            m = re.fullmatch(r"t(\d+)", _source_tensor(factor).name)
+            m = re.fullmatch(r"t(\d+)(?:_([ab]+))?", _source_tensor(factor).name)
             if m:
-                ranks.add(int(m.group(1)))
-    return sorted(ranks)
+                used.add((int(m.group(1)), m.group(2)))
+    return sorted(used, key=lambda rt: (rt[0], rt[1] or ""))
 
 
 def _amplitude_view_bindings(terms, indent: int = 4) -> list[str]:
-    """C++ lines binding one `const auto t<rank> = amplitudes.tensor(rank).value();`
-    per amplitude rank used — the arbitrary-order runtime returns std::expected
-    from `.tensor()`, so the view is unwrapped once here and indexed in the loops.
-    `.value()` is safe: the solver constructs every rank ≤ max before calling."""
+    """C++ lines binding one amplitude view per (rank, sector) used — the
+    arbitrary-order runtime returns std::expected from its accessors, so the view
+    is unwrapped once here and indexed in the loops. `.value()` is safe: the
+    solver constructs every rank ≤ max before calling. The reference sector binds
+    `t<rank> = amplitudes.tensor(rank)`; a higher Sz sector (R3.1.3d) binds
+    `t<rank>_<tag> = amplitudes.sector_tensor(rank, "<tag>")`."""
     pad = " " * indent
-    return [
-        f"{pad}const auto t{r} = amplitudes.tensor({r}).value();"
-        for r in _amplitude_ranks_used(terms)
-    ]
+    lines: list[str] = []
+    for rank, tag in _amplitude_ranks_used(terms):
+        if tag is None:
+            lines.append(f"{pad}const auto t{rank} = amplitudes.tensor({rank}).value();")
+        else:
+            lines.append(
+                f'{pad}const auto t{rank}_{tag} = '
+                f'amplitudes.sector_tensor({rank}, "{tag}").value();')
+    return lines
 
 
 def _denominator_type(method: str, force_arbitrary: bool = False) -> str:
@@ -557,6 +575,18 @@ def _emit_arbitrary_order_kernel_bundle(
     for target, terms in equations.items():
         if target == "energy":
             continue
+        # R3.1.3d: a higher-Sz-sector residual (`quadruples_aaabaaab`) is emitted
+        # as its own kernel function, but the arbitrary-order bundle's
+        # `residuals_by_rank` holds ONE residual per rank -- multi-sector solve
+        # (allocate the sector amplitude block, evaluate its residual, update it)
+        # is a runtime-storage change (ArbitraryOrderRCCAmplitudes.sector_tensor,
+        # a per-sector denominator + DIIS slot) beyond this emitter. So the bundle
+        # registers only the reference-sector residual per rank; the sector kernel
+        # functions are emitted and available, wired in when the runtime grows
+        # sector storage. See docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md ("What
+        # remains").
+        if re.search(r"_[ab]+$", target):
+            continue
         rank = _target_rank(target, terms, lowered_equations.get(target))
         ranked_targets.append((rank, target))
     ranked_targets.sort()
@@ -593,17 +623,28 @@ def emit_planck_translation_unit(
     lowered_equations: dict[str, list[RestrictedClosedShellTerm]] | None = None,
     factor_builder_bodies: bool = False,
     force_arbitrary: bool = False,
+    spin_adapted: bool = False,
 ) -> str:
     """Emit a Planck-compatible C++ translation unit.
 
     ``factor_builder_bodies`` (M3.0): emit each intermediate's `build_W` as a
     factored contraction tree (scratch-step pairwise contractions) instead of one
     flat n-ary loop nest, cutting the builder's own FLOP scaling. Default off ->
-    byte-identical flat emit."""
+    byte-identical flat emit.
+
+    ``spin_adapted`` (R3.1.3d): the ``equations`` are ALREADY spatial RCC
+    ``AlgebraTerm``s from ``spin_adapt_equations`` -- the genuine spatial
+    contraction (2*(direct)-(exchange)), the whole point of the spin adaptation.
+    Skip the relabel-only ``lower_equations_restricted_closed_shell`` (which would
+    both re-apply the defect it was meant to replace AND crash on the multi-Sz
+    target names like ``quadruples_aaabaaab``); emit the AlgebraTerms directly."""
     method = method.lower()
-    lowered_equations = lowered_equations or lower_equations_restricted_closed_shell(
-        equations
-    )
+    if spin_adapted:
+        lowered_equations = {}                  # emit AlgebraTerms directly
+    else:
+        lowered_equations = lowered_equations or lower_equations_restricted_closed_shell(
+            equations
+        )
     lines: list[str] = []
     lines.append("// Auto-generated by ccgen")
     lines.append(f"// Planck tensor kernels for {method.upper()}")
