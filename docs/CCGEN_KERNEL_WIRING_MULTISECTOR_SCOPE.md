@@ -33,11 +33,14 @@ is populating/updating those sectors and flipping the codegen switch.
 
 ## Gap A — flip codegen to spin-adapted (small, do first)
 
-- **A1 — add `--spin-adapt` to `generate_planck_cc_kernels.py`** and pass it into
-  `print_cpp_planck(spin_adapt=...)`. Default it **on** for the production emit
-  once A2/B land; keep an escape hatch for the historical raw path (the
-  warm-start `.inc` uses a genuinely spin-orbital reference and is correct as-is,
-  so it must NOT be spin-adapted — scope the switch to the tensor-backend TUs).
+- **A1 — add `--spin-adapt` to `generate_planck_cc_kernels.py`. LANDED.** The
+  flag threads into `print_cpp_planck(spin_adapt=...)` for both TUs this script
+  emits (tensor-backend + `--arbitrary-lower-ranks` companion); it does NOT touch
+  the warm-start `.inc` (emitted by `planck_rccsd_warm_start.py`, correct on a
+  spin-orbital reference). Default **off** for byte-compatibility with the
+  historical (defective) emit — A2/B flip production to on. *Gate:*
+  `SpinAdaptedEmitTests::test_codegen_cli_spin_adapt_switch` (subprocess) — default
+  CCSD energy keeps the raw `0.25`; `--spin-adapt` emits spatial 2J-K (no `0.25`).
 - **A2 — regenerate + wire the ccsdtq TU into a binary.** Today the generated
   ccsdtq TU is not `#include`d into any target (only compiled with
   `-fsyntax-only`). CMake (`CMakeLists.txt:440`, the

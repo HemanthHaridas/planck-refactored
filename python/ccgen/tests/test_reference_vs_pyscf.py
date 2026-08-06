@@ -1096,6 +1096,42 @@ class SpinAdaptedEmitTests(unittest.TestCase):
         finally:
             os.unlink(src)
 
+    def test_codegen_cli_spin_adapt_switch(self):
+        # A1: `generate_planck_cc_kernels.py --spin-adapt` emits spatial kernels;
+        # without it the CCSD energy carries the raw 0.25 spin-orbital defect. The
+        # default stays defective (byte-compatible with the historical emit), the
+        # switch is opt-in. Exercised via subprocess to cover the CLI wiring.
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+
+        script = (Path(__file__).resolve().parents[2]
+                  / "generate_planck_cc_kernels.py")
+
+        def emit(extra):
+            with tempfile.TemporaryDirectory() as d:
+                proc = subprocess.run(
+                    [sys.executable, str(script), "--output-dir", d,
+                     "--methods", "ccsd", *extra],
+                    capture_output=True, text=True, timeout=300)
+                self.assertEqual(proc.returncode, 0,
+                                 f"codegen failed:\n{proc.stderr[-1500:]}")
+                return (Path(d) / "ccsd_planck_generated.cpp").read_text()
+
+        raw = emit([])
+        adapted = emit(["--spin-adapt"])
+
+        def energy_kernel(src):
+            start = src.index("compute_ccsd_energy")
+            end = src.find("compute_ccsd_singles", start)
+            return src[start:end] if end > 0 else src[start:]
+
+        self.assertIn("0.25", energy_kernel(raw),
+                      "default codegen should keep the raw spin-orbital defect")
+        self.assertNotIn("0.25", energy_kernel(adapted),
+                         "--spin-adapt must emit the spatial 2J-K energy")
+
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")
 @unittest.skipUnless(

@@ -37,6 +37,19 @@ def main() -> None:
              "(experimental; default off).",
     )
     parser.add_argument(
+        "--spin-adapt",
+        action="store_true",
+        help="Emit genuine spatial (restricted) RCC kernels via the R1.0 "
+             "spin-adaptation instead of raw spin-orbital algebra bound to "
+             "spatial storage. Without this the emitted energy carries the "
+             "0.25*t2*oovv defect (spin-orbital 1/4 with no spin sum), which "
+             "drives the correlation energy ~4x wrong. Applies to BOTH the "
+             "tensor-backend and arbitrary-order TUs this script emits; it does "
+             "NOT touch the warm-start .inc (emitted elsewhere, correct on a "
+             "spin-orbital reference). Default off for byte-compatibility with "
+             "the historical (defective) emit.",
+    )
+    parser.add_argument(
         "--engine",
         choices=["diagram", "wick"],
         default="diagram",
@@ -88,6 +101,7 @@ def main() -> None:
             engine=args.engine,
             include_intermediates=include_intermediates,
             factorize_tau=args.factorize_tau,
+            spin_adapt=args.spin_adapt,
             force_arbitrary=force_arbitrary,
             intermediate_threshold=args.intermediate_threshold,
             intermediate_memory_budget_bytes=(
