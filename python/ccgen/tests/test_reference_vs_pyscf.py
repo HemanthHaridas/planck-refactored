@@ -739,6 +739,31 @@ class ReferenceVsPyscfTests(unittest.TestCase):
         self.assertEqual(dia - {("bare", 0)}, term - {("bare", 0)})
 
 
+def spin_adapted_solve_blocks(adapted_keys):
+    """V1 (CCSDTQ=FCI verification): map the keys `spin_adapt_equations` returns to
+    the amplitude blocks a multi-Sz-sector solver must carry. Returns a list of
+    ``(key, rank, tensor_name, sector_tag)``, one per residual manifold (excluding
+    ``energy``), ordered by (rank, tag). A bare manifold (``quadruples``) is the
+    reference sector -> amplitude ``t<rank>`` (tag None); a tagged manifold
+    (``quadruples_aaabaaab``) is a higher Sz sector -> amplitude ``t<rank>_<tag>``.
+    The residual key and its amplitude tensor name share the sector, so the solver
+    reads/updates each block against its own residual. This is the executable spec
+    the C++ multi-sector runtime (Gap B) mirrors block-for-block."""
+    from ccgen.project import manifold_rank
+
+    blocks = []
+    for key in adapted_keys:
+        if key == "energy":
+            continue
+        base, _, tag = key.partition("_")     # "quadruples_aaabaaab" -> tag
+        rank = manifold_rank(base)
+        tag = tag or None
+        tensor_name = f"t{rank}" if tag is None else f"t{rank}_{tag}"
+        blocks.append((key, rank, tensor_name, tag))
+    blocks.sort(key=lambda b: (b[1], b[3] or ""))
+    return blocks
+
+
 def solve_spin_adapted_spatial(method, atom, basis, targets, damping=0.5,
                                maxiter=800, tol=1e-10):
     """Solve the SPIN-ADAPTED (spatial, restricted) CC equations by damped Jacobi
@@ -1176,6 +1201,45 @@ class SpinAdaptedEmitTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0,
                              f"registry failed to compile with spin-adapted "
                              f"ccsdtq TU:\n{proc.stderr[-2000:]}")
+
+    def test_v1_solve_block_enumeration(self):
+        # V1 (CCSDTQ=FCI verification): the multi-Sz solver's block table, keyed
+        # off spin_adapt_equations' output, not a fixed targets list. CCSDTQ must
+        # yield distinct amplitude tensors per (rank, sector): t1..t4 plus the
+        # second t4 sector t4_aaabaaab. Pure, seconds.
+        from ccgen.generate import generate_cc_equations
+        from ccgen.spin import spin_adapt_equations
+        adapted = spin_adapt_equations(
+            generate_cc_equations("ccsdtq", engine="diagram"))
+        blocks = spin_adapted_solve_blocks(adapted.keys())
+        # (key, rank, tensor_name, tag)
+        got = {(k, r, tn, tag) for (k, r, tn, tag) in blocks}
+        self.assertEqual(got, {
+            ("singles", 1, "t1", None),
+            ("doubles", 2, "t2", None),
+            ("triples", 3, "t3", None),
+            ("quadruples", 4, "t4", None),
+            ("quadruples_aaabaaab", 4, "t4_aaabaaab", "aaabaaab"),
+        })
+        # every amplitude tensor name is distinct (no two blocks share storage)
+        names = [tn for (_, _, tn, _) in blocks]
+        self.assertEqual(len(names), len(set(names)))
+        # energy is excluded
+        self.assertNotIn("energy", {k for (k, _, _, _) in blocks})
+
+    def test_v1_blocks_backward_compatible_for_ccsdt(self):
+        # CCSDT (<=rank 3) has one sector per rank -> the block table is exactly
+        # t1/t2/t3, no tagged entries. Guards that the multi-block enumeration is
+        # a no-op below rank 4 (so the existing CCSDT solve path is unchanged).
+        from ccgen.generate import generate_cc_equations
+        from ccgen.spin import spin_adapt_equations
+        adapted = spin_adapt_equations(
+            generate_cc_equations("ccsdt", engine="diagram"))
+        blocks = spin_adapted_solve_blocks(adapted.keys())
+        self.assertEqual([(k, tn, tag) for (k, r, tn, tag) in blocks],
+                         [("singles", "t1", None),
+                          ("doubles", "t2", None),
+                          ("triples", "t3", None)])
 
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")

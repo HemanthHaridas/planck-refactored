@@ -43,14 +43,16 @@ blocks; the solver must store and update two blocks.
 Small, verifiable steps against the FCI oracle. Iterate on a **cheap** system
 first (see "Fast inner loop" below) — never the ~10 min Be CCSDTQ solve.
 
-- **V1 — enumerate the residual/amplitude blocks the solver must carry.** Drive
-  the loop off the keys `spin_adapt_equations` returns, not a fixed `targets`
-  list. Each key is either a bare manifold (`quadruples` → amplitude `t4`) or a
-  tagged sector (`quadruples_aaabaaab` → amplitude `t4_aaabaaab`). Map each key
-  to `(rank, tensor_name, sector_tag)` via `_amplitude_block_tag` /
-  `independent_spin_blocks`. *Gate:* a unit assertion that the CCSDTQ key set is
-  `{singles, doubles, triples, quadruples, quadruples_aaabaaab, energy}` and each
-  non-energy key maps to a distinct amplitude tensor name.
+- **V1 — enumerate the residual/amplitude blocks the solver must carry. LANDED.**
+  `spin_adapted_solve_blocks(adapted.keys())` maps each residual key to
+  `(key, rank, tensor_name, sector_tag)`: a bare manifold (`quadruples`) → `t4`
+  (tag None), a tagged sector (`quadruples_aaabaaab`) → `t4_aaabaaab`. Drives the
+  solve loop off the actual keys, not a fixed `targets` list. *Gates:*
+  `test_v1_solve_block_enumeration` — CCSDTQ yields exactly
+  `{singles→t1, doubles→t2, triples→t3, quadruples→t4,
+  quadruples_aaabaaab→t4_aaabaaab}` with distinct tensor names, energy excluded;
+  `test_v1_blocks_backward_compatible_for_ccsdt` — CCSDT is `t1/t2/t3`, no tags
+  (the multi-block enumeration is a no-op below rank 4).
 
 - **V2 — allocate + zero-init every amplitude block, keyed by tensor name.**
   `amps["t4"]` and `amps["t4_aaabaaab"]` each get their own array and their own
