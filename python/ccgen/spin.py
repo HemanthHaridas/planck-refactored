@@ -822,8 +822,25 @@ def spinterm_to_algebraterm(spinterm: SpinTerm, externals):
         sign *= s
         canon_factors.append(SpinFactor(name=f.name, block=f.block, indices=new_idx))
 
+    # R3.1.3c: name each amplitude factor by its independent Sz sector. A rank-2n
+    # amplitude with n >= 4 has more than one independent block (t4: aabbaabb +
+    # aaabaaab); the reference sector keeps the bare name (`t4`), a higher sector
+    # is read from its own stored tensor (`t4_aaabaaab`). The canonicalizer's
+    # spin-flip already reorders the base indices + folds the sign so the read of
+    # the tagged block's tensor is exact; the tag just routes it to the right
+    # storage. Lower ranks (t1/t2/t3) have a single independent block, so the tag
+    # equals the reference and the name is unchanged -- byte-identical there.
+    def _factor_tensor_name(f):
+        if not (f.name.startswith("t") and len(f.block) >= 8):
+            return f.name                      # t1/t2/t3, v, f: single block
+        blocks = independent_spin_blocks(len(f.block))
+        tag = _amplitude_block_tag(f.block)
+        if tag == blocks[0]:                   # reference sector
+            return f.name
+        return f"{f.name}_{tag}"
+
     factors = tuple(
-        Tensor(f.name, tuple(si.base for si in f.indices))
+        Tensor(_factor_tensor_name(f), tuple(si.base for si in f.indices))
         for f in canon_factors
     )
     spinterm = SpinTerm(coeff=spinterm.coeff * sign,

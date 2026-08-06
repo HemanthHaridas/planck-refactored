@@ -2453,22 +2453,18 @@ class S4dRank8IdentityTests(unittest.TestCase):
                         f"rank-8 collapse+merge != GCC aabb slice: "
                         f"{np.abs(acc - Rb).max()}")
 
-    @unittest.expectedFailure
     def test_rank8_bridge_solve_path(self):
-        # R3.1.3 fast red gate: the rank-8 analog of
-        # test_rcc_bridge_solve_path_rank6. The SOLVE path (spinterm_to_algebraterm
-        # + residual_einsum reading ONE spatial block per amplitude) must match the
-        # aabb GCC slice, like the per-spin-block oracle does. RED (~5e-4): the
-        # R3.1.2 bridge fix (layout + β-majority spin-flip) is EXACT at rank 6 but
-        # INCOMPLETE at rank 8. Root cause: t4 has THREE independent Sz sectors per
-        # half -- aabb (reference, 2α2β), aaab (3α1β), abbb (1α3β) -- and aaab/abbb
-        # are NOT a permutation or spin-flip of aabb (different Sz), so the fixed
-        # `_canonicalize_amplitude_factor` cannot map them onto the single stored
-        # reference. All 140 failing terms read t4 in aaab/abbb from the aabbaabb
-        # block. This is the genuine multi-Sz-sector (R3.1) work: those factors must
-        # read their own block, not fold onto aabb. GREEN when the bridge/storage
-        # provides the independent t4 Sz sectors. Rank-8, ~30s -- iterate here, not
-        # the ~15min Be CCSDTQ solve. See docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md.
+        # R3.1.3 gate: the rank-8 analog of test_rcc_bridge_solve_path_rank6. The
+        # SOLVE path (spinterm_to_algebraterm + residual_einsum) must match the
+        # aabb GCC slice, like the per-spin-block oracle does. GREEN as of R3.1.3c:
+        # t4 has TWO independent Sz sectors -- aabbaabb (reference) and aaabaaab --
+        # and aaab is NOT a permutation or spin-flip of aabb (proven: not even a
+        # signed-perm combination from one shared spatial tau). So it cannot be
+        # folded onto the reference; the bridge now NAMES the second-sector factors
+        # `t4_aaabaaab` (abbbabbb folds onto it via the existing flip), and the
+        # solve reads that block from its own stored tensor. Rank-8, ~30s -- iterate
+        # here, not the ~15min Be CCSDTQ solve. See
+        # docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md (R3.1.3).
         import numpy as np
         from ccgen.spin import (ucc_integrate_term_antisym,
                                 canonicalize_spin_blocks, collapse_amplitudes,
@@ -2493,6 +2489,8 @@ class S4dRank8IdentityTests(unittest.TestCase):
             "t2": block_slice(tn["t2"], "abab"),
             "t3": block_slice(tn["t3"], "aabaab"),
             "t4": block_slice(tn["t4"], "aabbaabb"),
+            # R3.1.3c: the second independent t4 Sz sector, stored separately.
+            "t4_aaabaaab": block_slice(tn["t4"], "aaabaaab"),
             "v": block_slice(tn["v"], "abab"),
             "f": block_slice(tn["f"], "aa"),
         }
