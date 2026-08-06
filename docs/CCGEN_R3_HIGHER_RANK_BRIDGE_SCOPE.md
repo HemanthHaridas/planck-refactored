@@ -173,26 +173,86 @@ and `abb` (1α2β) — and `abb` **is** the reference's spin-flip partner (same 
 opposite sign), so the rank-6 flip closed it. t4 first exposes a third block with
 a genuinely different Sz.
 
-**What the fix needs (open, ~L).** `collapse_amplitudes` currently splits only the
-**all-α** block (`_is_same_spin_amplitude` requires `set(block)=={"a"}`), via
-`_split_same_spin_amplitude` — which reduces `aaaaaaaa` to the *one-β* block
-`aaabaaab`, not to the reference `aabbaabb`. The missing step is a closed-shell
-spin relation that reduces the off-reference Sz blocks (`aaab`, `abbb`) to
-combinations of the reference `aabb` (or provides them as their own spatial
-storage). This is the multi-Sz-sector work: the spatial RCC t4 is one object, and
-`aaab`/`abbb`/`aabb` are different spin projections of it, related by
-antisymmetrization relations that are **not** bare permutations. It is genuine
-unfinished S4 algebra, not a bridge tweak — deriving the `aaab→aabb` reduction
-needs care (a naive per-line spin-conserving fill self-cancels under
-antisymmetrization, so the relation must be derived symbolically, then
-numerically pinned like `_split_same_spin_amplitude` was at n=2,3).
+### The reduction does not exist — the sectors are independent (measured)
 
-**Iterate here, not on Be.** `test_rank8_bridge_solve_path` (rank-8, ~30s) is the
-fast red gate for this — the t4 analog of `test_rcc_bridge_solve_path_rank6`.
-Never iterate on `spin_adapt_equations('ccsdtq')` or the Be CCSDTQ solve
-(`GeneratedCcsdtqFciGate`, ~15min) until this gate is green.
+The tempting fix, "reduce `aaab`/`abbb` to the reference `aabb`", is **impossible**.
+A least-squares fit of `t4[aaab]` from all 4!·4! signed bra/ket permutations of
+`t4[aabb]` leaves residual `0.69 / 0.74` (norm), and even when both blocks are
+built from one shared spatial `tau`, `0.196 / 0.253`. `aaab` (Sz=3 per half) and
+`aabb` (Sz=2) are **genuinely independent Sz sectors** — `aabb` alone does not
+carry the full t4 amplitude. This is not unfinished algebra to derive; it is a
+storage-model fact, and it matches how production RCC codes hold t4 (multiple
+spin cases, not one).
 
-*Gates:* `test_rank8_bridge_solve_path` (xfail, the R3.1.3 red gate);
-`test_rank8_full_collapse_pipeline` and `test_rank8_aabb_identity` stay green
-(per-block collapse is correct — the gap is the cross-block assembly the solver
-needs, exactly as at rank 6 for the layout/spin split).
+The full block census, per amplitude (Sz = α-count per half):
+
+| amp | blocks (Sz) | independent set | maps to reference by |
+|---|---|---|---|
+| t2 | `abab` (1) | 1 | — |
+| t3 | `aabaab` (2), `abbabb` (1) | 1 | `abbabb`→`aabaab` **spin-flip** (rank-6 fix) |
+| t4 | `aabbaabb` (2), `aaabaaab` (3), `abbbabbb` (1) | **2** | `abbb`→`aaab` spin-flip; `aaab` **independent** of `aabb` |
+
+So t4 needs **two** stored spatial blocks: `aabbaabb` (the balanced reference) and
+`aaabaaab` (the Sz-max sector). `abbbabbb` folds onto `aaabaaab` by the existing
+rank-6 spin-flip (they are flip partners, both Sz≠2). The rank-6 fix already
+collapses 3 t4 blocks to these 2; what's missing is that the **second** block is
+read from the reference instead of its own storage.
+
+### The fix, in small verifiable steps (R3.1.3)
+
+Everything gates on `test_rank8_bridge_solve_path` (~30s). Never iterate on
+`spin_adapt_equations('ccsdtq')` or the Be solve (`GeneratedCcsdtqFciGate`,
+~15min) until it is green.
+
+- **R3.1.3a — enumerate the independent block set per amplitude rank.** A pure
+  function `independent_spin_blocks(rank) -> [block_str]`: the reference
+  (α-before-β, ⌈n/2⌉ α per half) plus each higher-Sz sector not reachable from it
+  by spin-flip. n=2→{`abab`}; n=3→{`aabaab`}; n=4→{`aabbaabb`,`aaabaaab`}. *Gate:*
+  a unit test asserting these three, and that every block appearing in the merged
+  rank-6/rank-8 manifold spin-flips into the set (so the set is complete). No
+  numerics, seconds.
+
+- **R3.1.3b — extend the factor canonicalizer to a (block, permutation, sign)
+  target.** `_canonicalize_amplitude_factor` today returns `(sign, reordered)`
+  assuming ONE reference. Change it to return **which** independent block the
+  factor belongs to after the spin-flip+sort, i.e. `(sign, reordered, block_tag)`.
+  For `aaab` the tag is `aaabaaab`, not `aabbaabb`. *Gate:* per-factor unit test —
+  `aabb`→(`aabbaabb`,+), `abbb`→(`aaabaaab` via flip, sign), `aaab`→(`aaabaaab`,
+  identity/perm), and the existing t3 cases unchanged. Rank-agnostic, seconds.
+
+- **R3.1.3c — carry the block tag through the bridge into the AlgebraTerm.**
+  `spinterm_to_algebraterm` currently emits `Tensor(name, base_indices)`. Emit
+  `Tensor(name + "_" + block_tag, base_indices)` (or an equivalent tag on the
+  Tensor) for any amplitude whose independent block ≠ the reference, so the term
+  names the sector it reads. *Gate:* the rank-8 per-term check (the body of
+  `test_rank8_bridge_solve_path`) with a `tensors` dict carrying both `t4` and
+  `t4_aaabaaab` blocks → the 140 failing terms now read the right block. Turn
+  `test_rank8_bridge_solve_path` from xfail to a passing whole-residual gate.
+
+- **R3.1.3d — teach `spin_adapt_equations` / the emit path the block set.** The
+  spatial residual now references `t4` and `t4_aaabaaab`; `spin_adapt_equations`
+  must integrate on **each** independent block's representative external and emit
+  a residual per stored block (the Sz-max block has its own external template).
+  *Gate:* the Be CCSDTQ solve (`GeneratedCcsdtqFciGate`) reaches FCI to 1e-8 —
+  the final confirmation, run once, not in the loop.
+
+### Generalize to arbitrary order (R3.1.4)
+
+The steps above are already written rank-agnostically except the *choice* of
+independent set, which is `independent_spin_blocks(rank)`. The general rule:
+the independent blocks of a rank-2n amplitude are its distinct **Sz sectors**
+`k = n, n−1, …, ⌈n/2⌉` (α-count per half), one representative each, since
+spin-flip pairs `k ↔ n−k` and permutations exhaust the rest. Counts: n=1→1,
+n=2→1, n=3→1, n=4→2, n=5→2, n=6→3 — i.e. `⌊n/2⌋+1 − ⌊n/2⌋`... concretely
+`floor(n/2)+1` sectors folded by flip to `ceil((floor(n/2)+1)/2)` independent
+(t4: sectors {2,3,4-impossible-at-4e}→ measured 2). *Gate:* extend
+`independent_spin_blocks` with a rank-10 (t5) unit assertion, and — if a t5
+fixture is tractable — a rank-10 analog of `test_rank8_bridge_solve_path`.
+Otherwise the rank-8 pass plus the pure-function block enumeration is the
+arbitrary-order evidence, exactly as `_split_same_spin_amplitude` generalized
+from its n=2,3 numeric pins to all ranks structurally.
+
+*Standing gates:* `test_rank8_bridge_solve_path` (the R3.1.3 red gate, xfail →
+pass at R3.1.3c); `test_rank8_full_collapse_pipeline` and
+`test_rank8_aabb_identity` stay green throughout (per-block collapse is already
+correct — the gap is only that the second independent block isn't stored/read).

@@ -2308,6 +2308,52 @@ def _ccsdtq_fci_limit_tensors(atom="H 0 0 0; H 0 0 1.0; H 0 0 2.0; H 0 0 3.0",
             float(e_fci), float(mf.e_tot))
 
 
+class R313IndependentBlocksTests(unittest.TestCase):
+    """R3.1.3a: the independent spin-block enumeration -- a pure-function gate
+    (no PySCF, seconds). `independent_spin_blocks(rank)` lists one representative
+    per Sz sector; `_amplitude_block_tag(block)` folds any block to its sector.
+    These are the precondition for storing/reading t4's second Sz sector."""
+
+    def test_independent_blocks_low_ranks(self):
+        from ccgen.spin import independent_spin_blocks
+        self.assertEqual(independent_spin_blocks(2), ["aa"])         # t1
+        self.assertEqual(independent_spin_blocks(4), ["abab"])       # t2
+        self.assertEqual(independent_spin_blocks(6), ["aabaab"])     # t3, one
+        self.assertEqual(independent_spin_blocks(8),                 # t4, TWO
+                         ["aabbaabb", "aaabaaab"])
+        self.assertEqual(independent_spin_blocks(10),                # t5, TWO
+                         ["aaabbaaabb", "aaaabaaaab"])
+
+    def test_block_tag_folds_flip_partners(self):
+        from ccgen.spin import _amplitude_block_tag
+        # t2: one component
+        self.assertEqual(_amplitude_block_tag("abab"), "abab")
+        # t3: aabaab reference, abbabb is its flip partner -> same component
+        self.assertEqual(_amplitude_block_tag("aabaab"), "aabaab")
+        self.assertEqual(_amplitude_block_tag("abbabb"), "aabaab")
+        # t4: aabb reference; aaab its own sector; abbb folds to aaab
+        self.assertEqual(_amplitude_block_tag("aabbaabb"), "aabbaabb")
+        self.assertEqual(_amplitude_block_tag("aaabaaab"), "aaabaaab")
+        self.assertEqual(_amplitude_block_tag("abbbabbb"), "aaabaaab")
+
+    def test_census_blocks_fold_into_the_independent_set(self):
+        # every amplitude block that appears in the merged rank-6/rank-8 manifold
+        # must fold (via _amplitude_block_tag) into independent_spin_blocks(rank).
+        # This proves the enumeration is COMPLETE for the manifolds we emit.
+        from ccgen.spin import independent_spin_blocks, _amplitude_block_tag
+        census = {
+            4: {"abab"},                                   # t2
+            6: {"aabaab", "abbabb"},                       # t3
+            8: {"aabbaabb", "aaabaaab", "abbbabbb"},       # t4
+        }
+        for rank, blocks in census.items():
+            allowed = set(independent_spin_blocks(rank))
+            for blk in blocks:
+                self.assertIn(_amplitude_block_tag(blk), allowed,
+                              f"rank-{rank} block {blk} folds to "
+                              f"{_amplitude_block_tag(blk)} not in {allowed}")
+
+
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
 class S4dRank8IdentityTests(unittest.TestCase):
     """S4d: the rank-8 numeric gate. On a closed-shell antisymmetric `t4` obtained

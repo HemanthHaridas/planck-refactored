@@ -693,6 +693,52 @@ def merge_terms(terms, externals) -> list[SpinTerm]:
 # (the converted term contracts to the same residual as the SpinTerm).
 
 
+def independent_spin_blocks(rank):
+    """The independent spin-orbital blocks of a rank-`rank` (= 2n) closed-shell
+    cluster amplitude, one representative per Sz sector (R3.1.3a).
+
+    A physical (Sz-conserving) block has equal α-count `k` in its bra and ket
+    halves. Spin-flip pairs sector `k` with `n-k`; permutations exhaust the rest.
+    So the independent sectors are `k = ⌈n/2⌉ … n` (the α-majority half of each
+    flip pair), each written α-before-β per half. The α-count-⌈n/2⌉ sector is the
+    balanced *reference*; higher-k sectors are the extra independent blocks that
+    must be stored/read separately -- `aabb` alone does NOT carry a rank-8 t4
+    (measured: `aaab` is not a signed-permutation combination of `aabb`, even
+    from one shared spatial amplitude).
+
+    The all-α sector (`k = n`) is EXCLUDED: `collapse_amplitudes` /
+    `_split_same_spin_amplitude` already reduce the all-α block into the lower-Sz
+    ones, so it never survives to the bridge. The surviving independent sectors
+    are therefore `k = ⌈n/2⌉ … n-1`. Returns the balanced reference first, in
+    α-before-β per-half layout: n=2→[`abab`], n=3→[`aabaab`],
+    n=4→[`aabbaabb`,`aaabaaab`], n=5→[`aaabbaaabb`,`aaaabaaaab`].
+    """
+    n = rank // 2
+    ref_k = -(-n // 2)                      # ceil(n/2)
+    hi = max(ref_k, n - 1)                  # up to n-1 (all-α k=n is split away)
+    blocks = []
+    for k in range(ref_k, hi + 1):
+        half = "a" * k + "b" * (n - k)
+        blocks.append(half + half)
+    return blocks
+
+
+def _amplitude_block_tag(block):
+    """Fold a spin-block string to its independent-sector tag (R3.1.3a): the
+    α-majority half of its spin-flip pair, α-before-β per half. Blocks with the
+    same tag are the same independent amplitude component (a spin-flip and/or a
+    slot permutation apart); blocks with different tags are genuinely independent
+    Sz sectors that need separate storage. t3 `aabaab`/`abbabb` → `aabaab`
+    (one component); t4 `aabbaabb`→`aabbaabb`, `aaabaaab`/`abbbabbb`→`aaabaaab`
+    (two components)."""
+    n = len(block) // 2
+    k = block[:n].count("a")
+    if k < n - k:                           # β-majority -> flip to α-majority
+        k = n - k
+    half = "a" * k + "b" * (n - k)
+    return half + half
+
+
 def _canonicalize_amplitude_factor(f):
     """Reorder a cluster-amplitude factor's slots to ONE reference spin-block
     layout per rank, returning ``(sign, reordered_SpinIndices)`` (R3.1.2).
