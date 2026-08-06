@@ -2353,6 +2353,56 @@ class R313IndependentBlocksTests(unittest.TestCase):
                               f"rank-{rank} block {blk} folds to "
                               f"{_amplitude_block_tag(blk)} not in {allowed}")
 
+    def test_representative_block_for_sector(self):
+        # R3.1.3d: the external residual block for a given Sz sector k. The
+        # reference (k=ceil(n/2)) reproduces _closed_shell_representative_block;
+        # the second t4 sector (k=3) is the 3α1β external the aaabaaab residual
+        # integrates on.
+        from ccgen.spin import (_representative_block_for_sector,
+                                _closed_shell_representative_block, _residual_template)
+        from ccgen import generate_cc_equations
+        from ccgen.spin import spin_adapt_equations  # noqa: F401  (import guard)
+        eqs = generate_cc_equations("ccsdtq", engine="diagram")
+        tmpl = _residual_template("quadruples", eqs["quadruples"])
+        names = [i.name for i in tmpl.indices]
+        n = len(names) // 2
+        # k=2 (reference) == the existing helper
+        ref = _closed_shell_representative_block(tmpl)
+        self.assertEqual(_representative_block_for_sector(tmpl, (n + 1) // 2), ref)
+        # k=3 second sector: 3 alpha then 1 beta per half
+        sec = _representative_block_for_sector(tmpl, 3)
+        bra_spins = [sec[names[j]] for j in range(n)]
+        self.assertEqual(bra_spins, ["a", "a", "a", "b"])
+        ket_spins = [sec[names[n + j]] for j in range(n)]
+        self.assertEqual(ket_spins, ["a", "a", "a", "b"])
+
+    def test_ccsd_ccsdt_adapt_keys_unchanged(self):
+        # R3.1.3d must be byte-identical for n<=3 targets: no extra Sz sector, so
+        # the key set is exactly the targets (backward-compatible with the emit
+        # path). Only quadruples (n=4) gains a `_aaabaaab` key.
+        from ccgen.spin import spin_adapt_equations
+        from ccgen import generate_cc_equations
+        self.assertEqual(set(spin_adapt_equations(generate_cc_equations("ccsd"))),
+                         {"energy", "singles", "doubles"})
+        self.assertEqual(set(spin_adapt_equations(generate_cc_equations("ccsdt"))),
+                         {"energy", "singles", "doubles", "triples"})
+
+    def test_ccsdtq_adapt_emits_both_t4_sectors(self):
+        # R3.1.3d: the ccsdtq quadruples residual is emitted as TWO blocks -- the
+        # reference `quadruples` (aabbaabb) and `quadruples_aaabaaab` (the second
+        # independent Sz sector) -- so both stored t4 blocks get their own residual
+        # to iterate. ~5s (diagram engine cached). Both must be non-empty.
+        from ccgen.spin import spin_adapt_equations
+        from ccgen import generate_cc_equations
+        adapted = spin_adapt_equations(generate_cc_equations("ccsdtq",
+                                                             engine="diagram"))
+        self.assertEqual(
+            set(adapted),
+            {"energy", "singles", "doubles", "triples",
+             "quadruples", "quadruples_aaabaaab"})
+        self.assertGreater(len(adapted["quadruples"]), 0)
+        self.assertGreater(len(adapted["quadruples_aaabaaab"]), 0)
+
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
 class S4dRank8IdentityTests(unittest.TestCase):

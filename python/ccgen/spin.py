@@ -918,24 +918,60 @@ def _closed_shell_representative_block(template):
     return {nm: sp for nm, sp in zip(names, spins)}
 
 
+def _representative_block_for_sector(template, k_alpha):
+    """External block for a target with `k_alpha` α slots per half, α-before-β --
+    the residual sector matching amplitude tag `('a'*k+'b'*(n-k))*2` (R3.1.3d).
+    `k_alpha = ceil(n/2)` reproduces `_closed_shell_representative_block` (the
+    reference)."""
+    names = [i.name for i in template.indices]
+    n = len(names) // 2
+    half = ["a" if j < k_alpha else "b" for j in range(n)]
+    spins = half * 2
+    return {nm: sp for nm, sp in zip(names, spins)}
+
+
 def spin_adapt_equations(equations):
     """Spin-adapt a whole GCC residual manifold to restricted (spatial)
-    ``AlgebraTerm``s, per target (R1.0). Returns ``{target: [AlgebraTerm]}`` with
-    spatial coefficients and the reduced spatial term count, ready for the emit
-    path. Pure symbolic transform; gated numerically by R1.2."""
+    ``AlgebraTerm``s (R1.0). Returns ``{key: [AlgebraTerm]}``; `key` is the target
+    for the reference Sz sector, and `target + "_" + tag` for each additional
+    independent sector a rank-2n (n>=4) residual carries (R3.1.3d) -- e.g.
+    ``quadruples`` (aabbaabb) and ``quadruples_aaabaaab``. Each stored amplitude
+    block gets its own residual, integrated on that sector's external block. The
+    bridge already names the second-sector *input* factors `t4_aaabaaab`
+    (R3.1.3c), so the residual sets close on the same block vocabulary. Pure
+    symbolic transform; gated numerically by R1.2 (reference) and the rank-8
+    solve-path gate (both sectors)."""
     out: dict = {}
     for target, terms in equations.items():
         template = _residual_template(target, terms)
-        block = _closed_shell_representative_block(template)
-        externals = frozenset(block)
-        # S2 pipeline on the closed-shell representative block.
-        canon = [canonicalize_spin_blocks(st)
-                 for st in ucc_integrate_target(terms, block)]
-        collapsed = [c for st in canon for c in collapse_amplitudes(st)]
-        collapsed = [c for st in collapsed for c in collapse_integrals(st)]
-        merged = merge_terms(collapsed, externals)
-        out[target] = [spinterm_to_algebraterm(st, externals) for st in merged]
+        n = len(template.indices) // 2
+        if n == 0:
+            # energy: scalar, single block
+            block = _closed_shell_representative_block(template)
+            out[target] = _adapt_on_block(terms, block)
+            continue
+        ref_k = -(-n // 2)                          # ceil(n/2)
+        hi = max(ref_k, n - 1)                       # sectors ceil(n/2)..n-1
+        for k in range(ref_k, hi + 1):
+            block = _representative_block_for_sector(template, k)
+            adapted = _adapt_on_block(terms, block)
+            tag = _amplitude_block_tag(("a" * k + "b" * (n - k)) * 2)
+            key = target if k == ref_k else f"{target}_{tag}"
+            out[key] = adapted
     return out
+
+
+def _adapt_on_block(terms, block):
+    """The S2 spin-adaptation pipeline for one external `block`, returning the
+    bridged spatial ``AlgebraTerm``s (R3.1.3d helper -- the body
+    :func:`spin_adapt_equations` runs per independent sector)."""
+    externals = frozenset(block)
+    canon = [canonicalize_spin_blocks(st)
+             for st in ucc_integrate_target(terms, block)]
+    collapsed = [c for st in canon for c in collapse_amplitudes(st)]
+    collapsed = [c for st in collapsed for c in collapse_integrals(st)]
+    merged = merge_terms(collapsed, externals)
+    return [spinterm_to_algebraterm(st, externals) for st in merged]
 
 
 def ucc_integrate_target(terms, block):
