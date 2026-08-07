@@ -2865,8 +2865,10 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
 
     def test_p22_layout_mechanism_is_fixed_rank6(self):
         # P2.2 (post-fix regression gate). R3.1.2 half (ii) canonicalizes the
-        # bridge's `free_indices` (virtuals before occupieds, then by base name),
-        # so `residual_einsum` emits the canonical [a,b,c,i,j,k] residual layout.
+        # bridge's `free_indices` (name-sorted within each space; occ-first
+        # between spaces to match the C++ runtime -- see the note in
+        # spinterm_to_algebraterm). `residual_einsum` re-splits by space so its
+        # output stays the canonical [a,b,c,i,j,k] (vir+occ) layout regardless.
         # This must eliminate the LAYOUT mechanism entirely: no failing term is
         # `_mech_layout`, AND every remaining failure is a spin error (so the two
         # mechanisms are now disjoint -- layout resolved, only spin left).

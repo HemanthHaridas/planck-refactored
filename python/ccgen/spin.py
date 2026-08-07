@@ -859,15 +859,20 @@ def spinterm_to_algebraterm(spinterm: SpinTerm, externals):
             elif si.name not in seen_summed:
                 seen_summed.add(si.name)
                 summed.append(si.base)
-    # R3.1.2 half (ii): order free indices canonically (virtuals before
-    # occupieds, then by base name) instead of per-term first-appearance. The
-    # residual layout `residual_einsum` emits is [ext_vir..., ext_occ...] in the
-    # order of `free_indices`; first-appearance order differs between terms with
-    # the same externals, transposing their residual arrays so a manifold sum
-    # over them is wrong. The external naming convention (bra virtuals a,b,c...,
-    # ket occupieds i,j,k...) makes name-sort within each space the canonical
-    # residual layout, matching the oracle. See docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md.
-    free.sort(key=lambda b: (0 if b.space == "vir" else 1, b.name))
+    # R3.1.2 half (ii): order free indices canonically (occupieds before
+    # virtuals, then by base name) instead of per-term first-appearance. The
+    # load-bearing part is the NAME-SORT WITHIN each space: first-appearance order
+    # differs between terms with the same externals (a,c,b vs a,b,c), transposing
+    # their residual arrays so a manifold sum over them is wrong; name-sort makes
+    # every term agree. The occ-vs-vir BETWEEN-space order is chosen occ-first to
+    # match the C++ runtime's amplitude/denominator/residual layout (rank_dims:
+    # t_r(i1..ir, a1..ar), occupied first) so the emitted spatial kernel's result
+    # buffer lines up with the runtime without a transpose. This between-space
+    # choice is invariant for the Python oracle (`residual_einsum` re-splits by
+    # space internally -> always [vir,occ] output) and for the P2 bridge gates
+    # (`_bridge_output_layout` re-derives vir+occ), so only the C++ path cares.
+    # See docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md.
+    free.sort(key=lambda b: (0 if b.space == "occ" else 1, b.name))
     return AlgebraTerm(Fraction(spinterm.coeff), factors,
                        tuple(free), tuple(summed), True)
 

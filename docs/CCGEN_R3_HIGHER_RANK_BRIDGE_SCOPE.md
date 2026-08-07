@@ -104,11 +104,24 @@ error** — it is a bookkeeping bug in the bridge, entirely independent of spin.
 It made the fix decomposable and each half independently gateable. Both landed:
 
 - **(ii) LAYOUT fix (landed first).** Canonicalize the bridge's `free_indices`
-  to the external-block order (all bra virtuals `a,b,c` then all ket occupieds
-  `i,j,k`, matching `_closed_shell_representative_block`) —
-  `free.sort(key=(0 if vir else 1, name))` in `spinterm_to_algebraterm`. Purely
+  with `free.sort(key=(space_rank, name))` in `spinterm_to_algebraterm`. Purely
   structural; cleared the 116 layout-only failures on its own (718 → 52, all
   now spin-only), shrinking the search for half (i) to the spin terms.
+
+  **The load-bearing part is the name-sort WITHIN each space** — first-appearance
+  order differs between terms with the same externals (`a,c,b` vs `a,b,c`),
+  transposing their residual arrays so a manifold sum is wrong; name-sort makes
+  every term agree. The occ-vs-vir **between-space** order is **occ-first**
+  (`space_rank = 0 if occ else 1`), matching the C++ runtime's amplitude /
+  denominator / residual layout (`rank_dims`: `t_r(i1..ir, a1..ar)`, occupied
+  first) so the emitted spatial kernel's result buffer lines up with the runtime
+  **without a transpose**. This between-space choice is provably invariant for the
+  other consumers — `residual_einsum` re-splits by space internally (always
+  `[vir, occ]` output) and the P2 gates' `_bridge_output_layout` re-derives
+  `vir+occ` — so only the C++ path cares, and it needs occ-first. (An earlier
+  draft sorted vir-first to cosmetically match the oracle's `[a,b,c,i,j,k]`
+  printout; that emitted a transposed residual and broke the runtime with a
+  rank-1 shape mismatch. Contract audit: occ-first is the one hard contract.)
 - **(i) SPIN fix (landed).** Map every amplitude factor onto its single stored
   reference block. `_canonicalize_amplitude_factor` already sorted α-before-β;
   the gap was β-majority blocks (t3 `abbabb`), which are the reference's
