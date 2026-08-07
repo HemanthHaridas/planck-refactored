@@ -69,22 +69,28 @@ cheap early win and the first end-to-end binary gate.
 
 Mirror the Python solver (V1–V3 in the verification doc) block-for-block. Steps:
 
-- **B1 — sector amplitude storage.** `ArbitraryOrderRCCAmplitudes.sectors`
-  (already declared: `vector<pair<pair<int,string>, TensorND>>`) must be
-  allocated + zero-init by `make_zero_rcc_amplitudes` for every independent
-  sector of every rank ≥ 4. The sector set per rank comes from the generated
-  metadata (emit a `sector_tags_by_rank` table alongside the kernel bundle, from
-  `independent_spin_blocks`), so the runtime does not re-derive spin algebra.
-  Its dims: the sector's own occ/vir shape from its external Sz block. *Gate:*
-  `sector_tensor(4, "aaabaaab")` returns a correctly-shaped zero view after
-  prepare on a CCSDTQ state.
+- **B1 — sector amplitude storage. LANDED.** `make_zero_rcc_amplitudes` gains an
+  overload taking a sector list `vector<pair<int,string>>`; it zero-inits each
+  `ArbitraryOrderRCCAmplitudes.sectors` entry keyed `(rank, tag)` alongside the
+  per-rank reference blocks. A sector block is `rank_dims(rank)`-shaped — the same
+  occ/vir dims as its rank's reference, since the spin projection lives in the
+  algebra, not the shape (confirmed against the Python V2 array shapes). The
+  no-sector overload delegates with an empty list (unchanged for ≤ CCSDT). The
+  sector list is supplied by the generated bundle (B3), so the allocator does not
+  re-derive spin algebra. *Gate:*
+  `cc_arbitrary_solver::test_make_zero_amplitudes_allocates_sectors` —
+  `sector_tensor(4, "aaabaaab")` returns a correctly-shaped (`rank_dims(4)`) zero
+  view, reference blocks intact, and an **unrequested** sector errors rather than
+  silently zero-filling.
 
-- **B2 — sector denominators.** `ArbitraryOrderDenominatorCache` gains a matching
-  `sectors` map (or the solve builds the sector denominator on demand). The
-  denominator is `Σε_occ − Σε_vir` over the sector's slot layout — same formula,
-  the sector's external block fixes which ε sits in which slot. *Gate:* the
-  sector denominator equals the Python `den()` built on the sector template
-  (cross-checked to 1e-12 on a toy).
+- **B2 — sector denominators. RESOLVED (no new storage needed).** The Python V2
+  audit proved the sector denominator is **identical** to its rank's reference
+  denominator: for an RHF reference the orbital energies are spin-free, so
+  `Σε_occ − Σε_vir` over the spatial slots is the same for `aabb` and `aaab`
+  (both rank-4). So the solve reuses the existing `denominators.tensor(rank)` for
+  every sector of that rank — no `ArbitraryOrderDenominatorCache.sectors` map is
+  required. (Kept as an explicit note so B4's update divides each sector residual
+  by its rank denominator, not a per-sector one.)
 
 - **B3 — sector residual kernels in the bundle.** Extend
   `GeneratedArbitraryOrderKernels` with a `sector_residuals` list keyed by
