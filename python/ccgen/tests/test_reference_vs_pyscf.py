@@ -764,13 +764,21 @@ def spin_adapted_solve_blocks(adapted_keys):
     return blocks
 
 
-def solve_spin_adapted_spatial(method, atom, basis, targets, damping=0.5,
+def solve_spin_adapted_spatial(method, atom, basis, targets=None, damping=0.5,
                                maxiter=800, tol=1e-10):
     """Solve the SPIN-ADAPTED (spatial, restricted) CC equations by damped Jacobi
     on a closed-shell RHF reference. Returns (e_corr, mf, converged). Uses
     chemists' spatial integrals (n_occ spatial) -- the same binding the C++
     runtime uses -- so a correct spin-adaptation reproduces the true RCC energy.
-    Damping is needed for higher rank (plain Jacobi diverges on stiff manifolds)."""
+    Damping is needed for higher rank (plain Jacobi diverges on stiff manifolds).
+
+    V2: the solver is driven off `spin_adapted_solve_blocks`, so it carries a
+    distinct amplitude tensor PER (rank, Sz sector) -- t4 AND t4_aaabaaab -- each
+    read/updated against its own residual manifold. Denominators are shared per
+    rank: for an RHF reference the orbital energies are spin-free, so a sector's
+    denominator equals the reference rank denominator (same spatial-slot formula).
+    `targets` is accepted for back-compat but ignored -- the block set now comes
+    from the adapted equations (every manifold the method produces)."""
     import itertools
     from pyscf import ao2mo
     from ccgen.generate import generate_cc_equations
@@ -789,19 +797,26 @@ def solve_spin_adapted_spatial(method, atom, basis, targets, damping=0.5,
     f = np.diag(e)
     adapted = spin_adapt_equations(generate_cc_equations(method))
 
-    rk = {"singles": 1, "doubles": 2, "triples": 3, "quadruples": 4}
-    tnm = {"singles": "t1", "doubles": "t2", "triples": "t3", "quadruples": "t4"}
+    blocks = spin_adapted_solve_blocks(adapted.keys())
 
     def den(r):
+        # residual_einsum output layout is [vir..., occ...]; the denominator must
+        # match. For RHF eps is spin-free, so this rank-r denominator serves every
+        # Sz sector of rank r (reference and t*_<tag> alike).
         shp = [nvir] * r + [nocc] * r
         D = np.zeros(shp)
         for idx in itertools.product(*[range(s) for s in shp]):
             D[idx] = (sum(eo[o] for o in idx[r:]) - sum(ev[a] for a in idx[:r]))
         return D
 
-    D = {rk[m]: den(rk[m]) for m in targets}
-    amps = {tnm[m]: np.zeros((nvir,) * rk[m] + (nocc,) * rk[m]) for m in targets}
-    if "doubles" in targets:
+    # V2: allocate + zero-init one amplitude array per block (keyed by tensor
+    # name), and one shared denominator per rank present.
+    ranks = sorted({rank for (_, rank, _, _) in blocks})
+    D = {r: den(r) for r in ranks}
+    amps = {tn: np.zeros((nvir,) * rank + (nocc,) * rank)
+            for (_, rank, tn, _) in blocks}
+    # MP2 seed for the reference doubles amplitude (accelerates convergence).
+    if "t2" in amps:
         amps["t2"] = v[:nocc, :nocc, nocc:, nocc:].transpose(2, 3, 0, 1) / D[2]
 
     converged = False
@@ -809,11 +824,12 @@ def solve_spin_adapted_spatial(method, atom, basis, targets, damping=0.5,
         tn = {"v": v, "f": f, **amps}
         delta = 0.0
         upd = {}
-        for m in targets:
-            R = sum(residual_einsum(t, nocc, nvir, tensors=tn) for t in adapted[m])
-            new = amps[tnm[m]] + damping * R / D[rk[m]]
-            upd[tnm[m]] = new
-            delta = max(delta, float(np.max(np.abs(new - amps[tnm[m]]))))
+        for (key, rank, tensor_name, _tag) in blocks:
+            R = sum(residual_einsum(t, nocc, nvir, tensors=tn)
+                    for t in adapted[key])
+            new = amps[tensor_name] + damping * R / D[rank]
+            upd[tensor_name] = new
+            delta = max(delta, float(np.max(np.abs(new - amps[tensor_name]))))
         amps.update(upd)
         if not np.isfinite(delta):
             break
@@ -1240,6 +1256,21 @@ class SpinAdaptedEmitTests(unittest.TestCase):
                          [("singles", "t1", None),
                           ("doubles", "t2", None),
                           ("triples", "t3", None)])
+
+    @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")
+    def test_v2_block_keyed_solver_matches_pyscf_ccsdt(self):
+        # V2/V3: the block-keyed solver (one amplitude array per (rank, sector),
+        # shared per-rank denominators, residual reads every block + updates each
+        # from its own residual) reproduces PySCF on the SINGLE-sector case. CCSDT
+        # (~seconds) is the fast backward-compat proof; the CCSDTQ multi-sector
+        # solve is the slow Be=FCI gate (GeneratedCcsdtqFciGate).
+        from pyscf import cc
+        e, mf, converged = solve_spin_adapted_spatial(
+            "ccsdt", "Be 0 0 0", "sto-3g", maxiter=400)
+        self.assertTrue(converged, "block-keyed CCSDT Jacobi did not converge")
+        rccsd = cc.CCSD(mf); rccsd.conv_tol = 1e-11; rccsd.kernel()
+        # Be correlation is ~all doubles; CCSDT ~= CCSD to the solver tolerance.
+        self.assertAlmostEqual(e, rccsd.e_corr, places=7)
 
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")
