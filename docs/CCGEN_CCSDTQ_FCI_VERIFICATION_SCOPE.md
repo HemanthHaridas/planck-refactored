@@ -54,23 +54,25 @@ first (see "Fast inner loop" below) — never the ~10 min Be CCSDTQ solve.
   `test_v1_blocks_backward_compatible_for_ccsdt` — CCSDT is `t1/t2/t3`, no tags
   (the multi-block enumeration is a no-op below rank 4).
 
-- **V2 — allocate + zero-init every amplitude block, keyed by tensor name.**
-  `amps["t4"]` and `amps["t4_aaabaaab"]` each get their own array and their own
-  denominator. The sector denominator uses the **sector's** external Sz layout
-  (3α1β per half for `aaabaaab`), not the reference's — the orbital-energy
-  denominator `Σε_occ − Σε_vir` is layout-dependent only through which
-  occ/vir indices sit in which slot, so build it from the sector's external
-  block template (`_representative_block_for_sector`). *Gate:* the sector
-  denominator has the right shape and its diagonal matches a hand-built
-  3α1β/3α1β denominator on a 2-orbital toy.
+- **V2 — allocate + zero-init every amplitude block, keyed by tensor name.
+  LANDED.** `amps` holds one array per block from `spin_adapted_solve_blocks`
+  (`t4` AND `t4_aaabaaab`, each `(nv,…,no,…)`), and one denominator **per rank**.
+  Correction to the original plan: the sector denominator is **identical** to the
+  reference rank denominator, NOT built from the sector's Sz layout — for an RHF
+  reference the orbital energies are spin-free, so `Σε_occ − Σε_vir` over the
+  spatial slots is the same for `aabb` and `aaab` (both rank-4). So `D` is keyed
+  by rank alone; `den(r)` stays `[vir…,occ…]` to match `residual_einsum`. The MP2
+  seed applies to the reference `t2` only.
 
 - **V3 — the residual reads all blocks; the update writes each block from its
-  own residual.** Each iteration: build `tn` carrying **every** amplitude tensor
-  by name (`t1, t2, t3, t4, t4_aaabaaab, v, f`); for each block key evaluate its
-  residual `adapted[key]` and Jacobi-update its own amplitude
-  `amps[name] += damping · R / D[name]`. The energy reads the converged blocks.
-  *Gate:* the fast-system CCSDTQ energy now moves OFF the CCSDT value (T4 no
-  longer ~0) — the direct symptom that the second sector is being driven.
+  own residual. LANDED.** Each iteration builds `tn` carrying **every** amplitude
+  block by name, so the reference `quadruples` residual can read its
+  `t4_aaabaaab` factors (R3.1.3c); each block is Jacobi-updated from its own
+  residual `adapted[key]`. Fell out of the V2 block-keyed restructure (once every
+  block is in `amps`, `tn` carries them all and the loop iterates every block).
+  *Gate:* `test_v2_block_keyed_solver_matches_pyscf_ccsdt` — the block-keyed
+  solver reproduces PySCF on the single-sector CCSDT case (~seconds,
+  backward-compat + allocation proof). The multi-sector CCSDTQ drive is V4.
 
 - **V4 — the Be oracle.** With V1–V3, `test_ccsdtq_spin_adapted_reaches_fci`
   reaches FCI to 1e-8. Remove the `@expectedFailure`. Run once, not in the loop.
