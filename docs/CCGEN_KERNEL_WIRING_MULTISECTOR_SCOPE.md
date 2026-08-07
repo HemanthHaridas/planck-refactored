@@ -92,14 +92,18 @@ Mirror the Python solver (V1–V3 in the verification doc) block-for-block. Step
   required. (Kept as an explicit note so B4's update divides each sector residual
   by its rank denominator, not a per-sector one.)
 
-- **B3 — sector residual kernels in the bundle.** Extend
-  `GeneratedArbitraryOrderKernels` with a `sector_residuals` list keyed by
-  `(rank, tag)` (the emit currently registers only `residuals_by_rank`; the
-  sector kernel `compute_ccsdtq_quadruples_aaabaaab_residual` is emitted but not
-  bundled — see the skip in `_emit_arbitrary_order_kernel_bundle`). The emitted
-  `make_generated_<method>_kernels()` populates both. *Gate:* the bundle carries
-  4 rank residuals + 1 sector residual for CCSDTQ; `validate_kernel_bundle`
-  accepts the sector entries.
+- **B3 — sector residual kernels in the bundle. LANDED.**
+  `GeneratedArbitraryOrderKernels` gained `sector_tags`
+  (`vector<pair<int,string>>` — feeds B1's allocator) and `sector_residuals`
+  (`vector<SectorResidual{rank, tag, kernel}>` — feeds B4). The emit
+  (`_emit_arbitrary_order_kernel_bundle`) splits targets into reference residuals
+  (`residuals_by_rank`) and sector residuals (`quadruples_aaabaaab` →
+  `(4, "aaabaaab")`), registering the latter instead of skipping. Empty for
+  ≤ CCSDT. *Gates:* `test_ccsdtq_bundle_registers_the_sector` /
+  `test_ccsdt_bundle_has_no_sectors` (emit); `cc_arbitrary_solver::
+  test_bundle_carries_sector_residual` (C++: struct holds the keyed sector
+  residual, tag matches, kernel invokable); registry + standalone TU still
+  compile with the sector-registering bundle.
 
 - **B4 — evaluate + update per block.** `evaluate_generated_arbitrary_order_residuals`
   evaluates each rank residual AND each sector residual;
