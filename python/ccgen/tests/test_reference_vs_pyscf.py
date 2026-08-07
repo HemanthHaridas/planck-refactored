@@ -1043,8 +1043,9 @@ class SpinAdaptedEmitTests(unittest.TestCase):
     kernels. With `spin_adapt`, `emit_planck_translation_unit` skips the
     relabel-only `lower_equations_restricted_closed_shell` (the defect) and emits
     the spin-adapted AlgebraTerms directly (spatial 2J-K). Multi-Sz targets
-    (`quadruples_aaabaaab`) emit their own kernel + read the sector view; the
-    arbitrary-order bundle registers only the reference sector per rank."""
+    (`quadruples_aaabaaab`) emit their own kernel + read the sector view, and the
+    arbitrary-order bundle registers them in sector_tags / sector_residuals (B3)
+    alongside the per-rank reference residuals."""
 
     def test_spin_adapted_energy_has_no_raw_quarter(self):
         # the emitted CCSD energy kernel is spatial (2*(ia|jb)-(ib|ja)), NOT the
@@ -1065,8 +1066,34 @@ class SpinAdaptedEmitTests(unittest.TestCase):
         self.assertIn("compute_ccsdtq_quadruples_aaabaaab_residual", cpp)
         # the second sector is read via the sector view
         self.assertIn('sector_tensor(4, "aaabaaab")', cpp)
-        # bundle registers one residual per rank (1..4), NOT the extra sector
+        # bundle registers one REFERENCE residual per rank (1..4)
         self.assertEqual(cpp.count("kernels.residuals_by_rank.push_back"), 4)
+
+    def test_ccsdtq_bundle_registers_the_sector(self):
+        # B3: the generated bundle registers the second t4 Sz sector -- a
+        # sector_tags entry (feeds B1 allocation) and a sector_residuals entry
+        # (feeds B4 evaluate/update), wiring the emitted sector kernel to the
+        # runtime.
+        from ccgen.generate import print_cpp_planck
+        cpp = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram")
+        i = cpp.index("make_generated_ccsdtq_kernels")
+        bundle = cpp[i:cpp.index("return kernels;", i)]
+        self.assertIn('kernels.sector_tags.push_back({4, "aaabaaab"});', bundle)
+        self.assertIn("kernels.sector_residuals.push_back(", bundle)
+        # exactly one sector for CCSDTQ (t4 has 2 independent sectors: ref + this)
+        self.assertEqual(bundle.count("kernels.sector_residuals.push_back"), 1)
+        self.assertEqual(bundle.count("kernels.sector_tags.push_back"), 1)
+
+    def test_ccsdt_bundle_has_no_sectors(self):
+        # <= CCSDT (single Sz sector per rank): no sector registration, so the
+        # bundle is unchanged (backward-compatible). ccsdt in arbitrary form.
+        from ccgen.generate import print_cpp_planck
+        cpp = print_cpp_planck("ccsdt", spin_adapt=True, engine="diagram",
+                               force_arbitrary=True)
+        i = cpp.index("make_generated_ccsdt_kernels")
+        bundle = cpp[i:cpp.index("return kernels;", i)]
+        self.assertNotIn("sector_tags", bundle)
+        self.assertNotIn("sector_residuals", bundle)
 
     def test_spin_adapted_ccsdt_compiles(self):
         # end-to-end: the spin-adapted CCSDT TU is valid C++ against the real CC

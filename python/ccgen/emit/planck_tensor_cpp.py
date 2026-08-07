@@ -571,25 +571,37 @@ def _emit_arbitrary_order_kernel_bundle(
     if max_rank < 4 and not force_arbitrary:
         return ""
 
+    # Split targets into the per-rank REFERENCE residuals (residuals_by_rank) and
+    # the higher-Sz SECTOR residuals (`quadruples_aaabaaab`, R3.1.3d), keyed
+    # (rank, tag). The sector kernels are emitted as their own functions; B3
+    # registers them in the bundle's `sector_residuals` + `sector_tags` so B1
+    # allocates the sector amplitude block and B4 evaluates/updates it.
     ranked_targets: list[tuple[int, str]] = []
+    sector_targets: list[tuple[int, str, str]] = []   # (rank, tag, target)
     for target, terms in equations.items():
         if target == "energy":
             continue
-        # R3.1.3d: a higher-Sz-sector residual (`quadruples_aaabaaab`) is emitted
-        # as its own kernel function, but the arbitrary-order bundle's
-        # `residuals_by_rank` holds ONE residual per rank -- multi-sector solve
-        # (allocate the sector amplitude block, evaluate its residual, update it)
-        # is a runtime-storage change (ArbitraryOrderRCCAmplitudes.sector_tensor,
-        # a per-sector denominator + DIIS slot) beyond this emitter. So the bundle
-        # registers only the reference-sector residual per rank; the sector kernel
-        # functions are emitted and available, wired in when the runtime grows
-        # sector storage. See docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md ("What
-        # remains").
-        if re.search(r"_[ab]+$", target):
-            continue
         rank = _target_rank(target, terms, lowered_equations.get(target))
-        ranked_targets.append((rank, target))
+        m = re.search(r"_([ab]+)$", target)
+        if m:
+            sector_targets.append((rank, m.group(1), target))
+        else:
+            ranked_targets.append((rank, target))
     ranked_targets.sort()
+    sector_targets.sort()
+
+    def _residual_lambda(target: str, indent: str) -> list[str]:
+        return [
+            f"{indent}[](",
+            f"{indent}    const CanonicalRHFCCReference &reference,",
+            f"{indent}    const TensorCCBlockCache &mo_blocks,",
+            f"{indent}    const ArbitraryOrderDenominatorCache &denominators,",
+            f"{indent}    const ArbitraryOrderRCCAmplitudes &amplitudes) -> TensorND",
+            f"{indent}{{",
+            f"{indent}    return to_tensor_nd("
+            f"{_kernel_name(method, target)}(reference, mo_blocks, denominators, amplitudes));",
+            f"{indent}}}",
+        ]
 
     lines: list[str] = []
     lines.append(f"GeneratedArbitraryOrderKernels make_generated_{method}_kernels()")
@@ -600,16 +612,13 @@ def _emit_arbitrary_order_kernel_bundle(
     lines.append(f"    kernels.residuals_by_rank.reserve({max_rank});")
     for rank, target in ranked_targets:
         lines.append("    kernels.residuals_by_rank.push_back(")
-        lines.append("        [](")
-        lines.append("            const CanonicalRHFCCReference &reference,")
-        lines.append("            const TensorCCBlockCache &mo_blocks,")
-        lines.append("            const ArbitraryOrderDenominatorCache &denominators,")
-        lines.append("            const ArbitraryOrderRCCAmplitudes &amplitudes) -> TensorND")
-        lines.append("        {")
-        lines.append(
-            "            return to_tensor_nd("
-            f"{_kernel_name(method, target)}(reference, mo_blocks, denominators, amplitudes));"
-        )
+        lines.extend(_residual_lambda(target, "        "))
+        lines.append("        );")
+    for rank, tag, target in sector_targets:
+        lines.append(f'    kernels.sector_tags.push_back({{{rank}, "{tag}"}});')
+        lines.append("    kernels.sector_residuals.push_back(")
+        lines.append(f'        {{{rank}, "{tag}",')
+        lines.extend(_residual_lambda(target, "         "))
         lines.append("        });")
     lines.append("    return kernels;")
     lines.append("}")

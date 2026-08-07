@@ -33,9 +33,27 @@ namespace HartreeFock::Correlation::CC
             const ArbitraryOrderDenominatorCache &,
             const ArbitraryOrderRCCAmplitudes &)>;
 
+        // R3.1.3d / Gap B3: a residual kernel for a higher independent Sz sector
+        // of a rank-2n amplitude (n >= 4). `residuals_by_rank` holds the reference
+        // sector per rank; `sector_residuals` holds the extra sectors, each tagged
+        // (excitation_rank, tag) so B4 updates the matching amplitude block
+        // (`ArbitraryOrderRCCAmplitudes::sector_tensor`). Empty for <= CCSDT.
+        struct SectorResidual
+        {
+            int excitation_rank = 0;
+            std::string tag;
+            ResidualKernel kernel;
+        };
+
         int max_excitation_rank = 0;
         EnergyKernel energy;
         std::vector<ResidualKernel> residuals_by_rank; // rank r at [r-1]
+
+        // The independent Sz sectors this method carries, (excitation_rank, tag).
+        // Feeds make_zero_rcc_amplitudes so the state allocates the sector blocks
+        // (Gap B1) that `sector_residuals` evaluate and B4 updates.
+        std::vector<std::pair<int, std::string>> sector_tags;
+        std::vector<SectorResidual> sector_residuals;
     };
 
     struct GeneratedArbitraryOrderSolveResult

@@ -218,6 +218,47 @@ namespace
         return expect(!metrics.has_value(), "Layout mismatch should return an error");
     }
 
+    bool test_bundle_carries_sector_residual()
+    {
+        // Gap B3: the bundle holds sector residuals keyed (rank, tag) alongside
+        // the per-rank reference residuals, and the matching sector_tags entry
+        // that feeds the allocator (B1). The sector kernel is invokable and its
+        // (rank, tag) route it to the correct amplitude block for B4.
+        GeneratedArbitraryOrderKernels kernels;
+        kernels.max_excitation_rank = 4;
+        kernels.sector_tags.push_back({4, "aaabaaab"});
+        kernels.sector_residuals.push_back(
+            {4, "aaabaaab",
+             [](const CanonicalRHFCCReference &,
+                const TensorCCBlockCache &,
+                const ArbitraryOrderDenominatorCache &,
+                const ArbitraryOrderRCCAmplitudes &) -> TensorND
+             {
+                 return TensorND({1, 1, 1, 1, 1, 1, 1, 1},
+                                 std::vector<double>{0.5});
+             }});
+
+        if (!expect(kernels.sector_tags.size() == 1 &&
+                        kernels.sector_tags[0] == std::pair<int, std::string>{4, "aaabaaab"},
+                    "Bundle must carry the (4, aaabaaab) sector tag"))
+            return false;
+        if (!expect(kernels.sector_residuals.size() == 1, "Bundle must carry one sector residual"))
+            return false;
+        const auto &sr = kernels.sector_residuals[0];
+        if (!expect(sr.excitation_rank == 4 && sr.tag == "aaabaaab",
+                    "Sector residual must be keyed (4, aaabaaab)"))
+            return false;
+        // the kernel is callable and returns the sector-shaped residual
+        CanonicalRHFCCReference ref;
+        TensorCCBlockCache blocks;
+        ArbitraryOrderDenominatorCache denoms;
+        ArbitraryOrderRCCAmplitudes amps;
+        TensorND out = sr.kernel(ref, blocks, denoms, amps);
+        return expect(out.dims == std::vector<int>({1, 1, 1, 1, 1, 1, 1, 1}) &&
+                          out.data.size() == 1 && out.data[0] == 0.5,
+                      "Sector residual kernel must return its rank-4 residual");
+    }
+
     bool test_generated_runtime_driver_converges_with_mock_kernels()
     {
         ArbitraryOrderTensorCCState state;
@@ -301,6 +342,7 @@ int main()
     ok = test_jacobi_update_across_ranks() && ok;
     ok = test_diis_path_runs_for_arbitrary_rank() && ok;
     ok = test_layout_mismatch_is_reported() && ok;
+    ok = test_bundle_carries_sector_residual() && ok;
     ok = test_generated_runtime_driver_converges_with_mock_kernels() && ok;
     return ok ? 0 : 1;
 }
