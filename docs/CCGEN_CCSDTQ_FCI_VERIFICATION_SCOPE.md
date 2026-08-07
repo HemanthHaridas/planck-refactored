@@ -7,15 +7,15 @@ the spin-orbital-vs-spatial defect ship (the arbitrary-solver unit test uses a
 toy energy kernel). Passing it is the proof that the whole ccgen CCSDTQ chain —
 generation → spin adaptation → multi-Sz-sector bridge → solve — is correct.
 
-**Status: RED (`GeneratedCcsdtqFciGate.test_ccsdtq_spin_adapted_reaches_fci`,
-xfail, `CCGEN_SLOW_TESTS`).** Today the adapted CCSDTQ equals adapted CCSDT
-(T4 ≈ 0), leaving CCSDTQ − FCI ≈ 3e-6. The R3.1.3 work (see
-`CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md`) fixed the **algebra** — the residual is
-now exact and multi-sector — but the **solver** this gate runs
-(`solve_spin_adapted_spatial`) still under-drives T4. This doc scopes closing
-that gap. It is coupled to `CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md`: the Python
-verification solver and the C++ runtime need the **same** multi-sector storage +
-update logic, so the two land together.
+**Status: GREEN (`GeneratedCcsdtqFciGate.test_ccsdtq_spin_adapted_reaches_fci`,
+`CCGEN_SLOW_TESTS`).** V1–V4 landed: the block-keyed multi-Sz-sector solver drives
+both t4 blocks and reaches FCI on Be/STO-3G — `E_corr = -0.0517746318` vs FCI
+`-0.0517746319`, **gap 6.4e-11**. Before, the adapted CCSDTQ equalled adapted
+CCSDT (T4 ≈ 0), ≈3e-6 short; R3.1.3 fixed the **algebra** (exact multi-sector
+residual, see `CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md`) and V1–V3 fixed the
+**solver** (carry + drive the second t4 sector). This is the Python verification
+half; the C++ runtime half is `CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md` (Gap B),
+which mirrors this solver block-for-block, with Be = FCI as the shared acceptance.
 
 ---
 
@@ -74,8 +74,14 @@ first (see "Fast inner loop" below) — never the ~10 min Be CCSDTQ solve.
   solver reproduces PySCF on the single-sector CCSDT case (~seconds,
   backward-compat + allocation proof). The multi-sector CCSDTQ drive is V4.
 
-- **V4 — the Be oracle.** With V1–V3, `test_ccsdtq_spin_adapted_reaches_fci`
-  reaches FCI to 1e-8. Remove the `@expectedFailure`. Run once, not in the loop.
+- **V4 — the Be oracle. LANDED (PASSES).** With V1–V3 the multi-sector solver
+  drives both t4 blocks, so `test_ccsdtq_spin_adapted_reaches_fci` reaches FCI:
+  measured Be/STO-3G `E_corr = -0.0517746318` vs FCI `-0.0517746319`, **gap
+  6.4e-11** (669s solve). The T4 contribution `-4.4e-6` — exactly what the
+  single-sector solver missed — is now recovered. `@expectedFailure` removed; the
+  gate stays `CCGEN_SLOW_TESTS`-guarded (~11 min), run once, not in the loop.
+  **This is the end-to-end proof of the whole R3.1.3 + V1–V3 chain** (generation
+  → spin adaptation → two-Sz-sector bridge → block-keyed solve → FCI).
 
 ## Fast inner loop (do not iterate on Be)
 

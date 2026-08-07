@@ -1307,25 +1307,24 @@ class SpinAdaptedEmitTests(unittest.TestCase):
     "t4 Jacobi); set CCGEN_SLOW_TESTS=1 to run",
 )
 class GeneratedCcsdtqFciGate(unittest.TestCase):
-    """R3.0 -- the rank-4 numeric oracle. Be has 4 electrons, so CCSDTQ == FCI
+    """R3.0 / V4 -- the rank-4 numeric oracle. Be has 4 electrons, so CCSDTQ == FCI
     exactly. The spin-adapted (spatial) CCSDTQ energy must reach the FCI e_corr.
 
-    RED until R3.1 fixes the higher-rank closed-shell reduction: today T4
-    contributes ~0 (adapted CCSDTQ == adapted CCSDT), leaving CCSDTQ - FCI ~3e-6
-    from the missing T4. GREEN when the representative-block convention is
-    reconciled with the amplitude splitter and the n=4 splitter is validated."""
+    GREEN as of R3.1.3 + V1-V3: the multi-Sz-sector solver drives BOTH t4 blocks
+    (t4 reference + t4_aaabaaab), so T4 is no longer ~0. Measured Be/STO-3G:
+    E_corr = -0.0517746318 vs FCI -0.0517746319 (gap 6.4e-11), the T4 contribution
+    -4.4e-6 that the single-sector solver missed. Was RED (CCSDTQ == CCSDT, ~3e-6
+    short) before the second t4 Sz sector was stored/driven."""
 
-    @unittest.expectedFailure
     def test_ccsdtq_spin_adapted_reaches_fci(self):
         from pyscf import fci
 
         e_ccsdtq, mf, converged = solve_spin_adapted_spatial(
             "ccsdtq", "Be 0 0 0", "sto-3g",
-            ["singles", "doubles", "triples", "quadruples"],
         )
         self.assertTrue(converged, "adapted CCSDTQ Jacobi did not converge")
         e_fci = fci.FCI(mf).kernel()[0] - mf.e_tot
-        # Be 4e => CCSDTQ is exact. RED today (T4 ~0 leaves a ~3e-6 gap).
+        # Be 4e => CCSDTQ is exact. GREEN: both t4 Sz sectors driven (gap ~6e-11).
         self.assertAlmostEqual(e_ccsdtq, e_fci, places=8)
 
 
