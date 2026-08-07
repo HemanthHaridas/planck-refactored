@@ -67,6 +67,43 @@ namespace
                expect(residuals->by_rank[3].dims == std::vector<int>({2, 2, 2, 2, 1, 1, 1, 1}), "Rank-4 residual dims mismatch");
     }
 
+    bool test_make_zero_amplitudes_allocates_sectors()
+    {
+        // Gap B1: the sector-aware allocator zero-inits both the per-rank
+        // reference blocks and each higher Sz sector, keyed (rank, tag). The
+        // sector block has the same occ/vir dims as its rank's reference.
+        const RHFReference ref{
+            .n_ao = 0,
+            .n_mo = 0,
+            .n_occ = 2,
+            .n_virt = 1,
+        };
+        auto amps = make_zero_rcc_amplitudes(
+            ref, 4, std::vector<std::pair<int, std::string>>{{4, "aaabaaab"}});
+
+        const std::vector<int> rank4_dims{2, 2, 2, 2, 1, 1, 1, 1};
+        // reference blocks still present + zero
+        if (!expect(amps.by_rank.size() == 4, "Expected ranks 1..4 reference storage"))
+            return false;
+        if (!expect(amps.by_rank[3].dims == rank4_dims, "Rank-4 reference dims mismatch"))
+            return false;
+        // the second Sz sector is allocated, correctly shaped, and zero
+        auto sec = amps.sector_tensor(4, "aaabaaab");
+        if (!sec.has_value())
+            return expect(false, "sector_tensor(4, aaabaaab) should be allocated: " + sec.error());
+        if (!expect(sec->dims == rank4_dims, "Sector block dims must match rank-4 reference"))
+            return false;
+        double maxabs = 0.0;
+        for (std::size_t k = 0; k < sec->size(); ++k)
+            maxabs = std::max(maxabs, std::abs(sec->data[k]));
+        if (!expect(maxabs == 0.0, "Sector block must be zero-initialized"))
+            return false;
+        // a sector that was NOT requested errors (does not silently zero-fill)
+        auto missing = amps.sector_tensor(4, "aabbaabb");
+        return expect(!missing.has_value(),
+                      "Unrequested sector must error, not return a view");
+    }
+
     bool test_jacobi_update_across_ranks()
     {
         ArbitraryOrderRCCAmplitudes amps;
@@ -260,6 +297,7 @@ int main()
     bool ok = true;
     ok = test_pack_round_trip() && ok;
     ok = test_make_zero_residuals() && ok;
+    ok = test_make_zero_amplitudes_allocates_sectors() && ok;
     ok = test_jacobi_update_across_ranks() && ok;
     ok = test_diis_path_runs_for_arbitrary_rank() && ok;
     ok = test_layout_mismatch_is_reported() && ok;

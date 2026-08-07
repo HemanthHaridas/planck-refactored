@@ -315,10 +315,27 @@ namespace HartreeFock::Correlation::CC
         const RHFReference &reference,
         int max_excitation_rank)
     {
+        return make_zero_rcc_amplitudes(reference, max_excitation_rank, {});
+    }
+
+    ArbitraryOrderRCCAmplitudes make_zero_rcc_amplitudes(
+        const RHFReference &reference,
+        int max_excitation_rank,
+        const std::vector<std::pair<int, std::string>> &sectors)
+    {
         ArbitraryOrderRCCAmplitudes amps;
         amps.by_rank.reserve(static_cast<std::size_t>(max_excitation_rank));
         for (int rank = 1; rank <= max_excitation_rank; ++rank)
             amps.by_rank.emplace_back(rank_dims(reference, rank), 0.0);
+
+        // Gap B1: each higher Sz sector is a zero block with the same occ/vir
+        // dims as its rank's reference (the spin projection lives in the algebra,
+        // not the shape). Ranks are bounded by max_excitation_rank so a sector
+        // never references an unallocated reference rank.
+        amps.sectors.reserve(sectors.size());
+        for (const auto &[rank, tag] : sectors)
+            amps.sectors.push_back(
+                {{rank, tag}, TensorND(rank_dims(reference, rank), 0.0)});
         return amps;
     }
 } // namespace HartreeFock::Correlation::CC
