@@ -19,6 +19,12 @@ namespace HartreeFock::Correlation::CC
     {
         std::vector<TensorND> by_rank; // rank r stored at by_rank[r-1]
 
+        // R3.1.3d / Gap B4: residuals for the higher Sz sectors, keyed
+        // (rank, tag) in the SAME order as ArbitraryOrderRCCAmplitudes::sectors
+        // (both come from GeneratedArbitraryOrderKernels::sector_tags /
+        // sector_residuals, so they line up index-for-index). Empty for <= CCSDT.
+        std::vector<std::pair<std::pair<int, std::string>, TensorND>> sectors;
+
         [[nodiscard]] int max_rank() const noexcept;
         [[nodiscard]] bool has_rank(int excitation_rank) const noexcept;
         [[nodiscard]] std::expected<DenseTensorView, std::string> tensor(int excitation_rank);

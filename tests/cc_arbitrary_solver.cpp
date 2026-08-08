@@ -151,6 +151,60 @@ namespace
                expect(diis.size() == 1, "Jacobi update should push one DIIS vector");
     }
 
+    bool test_jacobi_update_drives_sector_block()
+    {
+        // Gap B4: a higher Sz sector amplitude block is Jacobi-updated from its
+        // OWN residual, using its rank's reference denominator (B2). Start the
+        // sector at zero; one step should move it to damping * R / D_rank.
+        ArbitraryOrderRCCAmplitudes amps;
+        amps.by_rank = {
+            TensorND({1, 1}, std::vector<double>{0.0}),
+            TensorND({1, 1, 1, 1}, std::vector<double>{0.0}),
+            TensorND({1, 1, 1, 1, 1, 1}, std::vector<double>{0.0}),
+            TensorND({1, 1, 1, 1, 1, 1, 1, 1}, std::vector<double>{0.0}),
+        };
+        // one rank-4 sector, zero-initialized
+        amps.sectors.push_back(
+            {{4, "aaabaaab"}, TensorND({1, 1, 1, 1, 1, 1, 1, 1}, std::vector<double>{0.0})});
+
+        ArbitraryOrderResiduals residuals;
+        residuals.by_rank = {
+            TensorND({1, 1}, std::vector<double>{0.0}),
+            TensorND({1, 1, 1, 1}, std::vector<double>{0.0}),
+            TensorND({1, 1, 1, 1, 1, 1}, std::vector<double>{0.0}),
+            TensorND({1, 1, 1, 1, 1, 1, 1, 1}, std::vector<double>{0.0}),
+        };
+        // nonzero sector residual -> the sector must move off zero
+        residuals.sectors.push_back(
+            {{4, "aaabaaab"}, TensorND({1, 1, 1, 1, 1, 1, 1, 1}, std::vector<double>{9.0})});
+
+        ArbitraryOrderDenominatorCache denoms;
+        denoms.by_rank = {
+            TensorND({1, 1}, std::vector<double>{1.0}),
+            TensorND({1, 1, 1, 1}, std::vector<double>{1.0}),
+            TensorND({1, 1, 1, 1, 1, 1}, std::vector<double>{1.0}),
+            TensorND({1, 1, 1, 1, 1, 1, 1, 1}, std::vector<double>{3.0}),  // D_rank4
+        };
+
+        AmplitudeDIIS diis(4);
+        auto metrics_res = update_amplitudes_with_jacobi_diis(
+            amps, residuals, denoms, diis, 0.5, /*use_diis=*/false);
+        if (!metrics_res.has_value())
+            return expect(false, metrics_res.error());
+
+        // sector step = damping * R / D_rank4 = 0.5 * 9.0 / 3.0 = 1.5
+        auto sec = static_cast<const ArbitraryOrderRCCAmplitudes &>(amps)
+                       .sector_tensor(4, "aaabaaab");
+        if (!sec.has_value())
+            return expect(false, "sector view missing after update: " + sec.error());
+        if (!expect_close(sec->data[0], 1.5, 1e-12,
+                          "Sector block must be Jacobi-updated from its own residual"))
+            return false;
+        // the reference rank-4 block, with a zero residual, stays put
+        return expect_close(amps.by_rank[3].data[0], 0.0, 1e-12,
+                            "Reference rank-4 block should not move on a zero residual");
+    }
+
     bool test_diis_path_runs_for_arbitrary_rank()
     {
         ArbitraryOrderRCCAmplitudes amps;
@@ -331,6 +385,88 @@ namespace
                expect_close(solve.state.amplitudes.by_rank[2].data[0], 0.5, 1e-12, "Rank-3 final amplitude mismatch") &&
                expect_close(solve.state.amplitudes.by_rank[3].data[0], -0.5, 1e-12, "Rank-4 final amplitude mismatch");
     }
+
+    bool test_generated_driver_solves_a_sector_block()
+    {
+        // Gap B4 end-to-end: a bundle with a rank-4 SECTOR residual, driven
+        // through ensure_amplitude_sectors -> validate -> the full solve loop.
+        // The sector amplitude must converge to its own fixed point (residual 0),
+        // proving evaluate + update + DIIS all handle the sector block.
+        ArbitraryOrderTensorCCState state;
+        state.max_excitation_rank = 4;
+        for (int rank = 1; rank <= 4; ++rank)
+        {
+            std::vector<int> dims(static_cast<std::size_t>(2 * rank), 1);
+            state.denominators.by_rank.emplace_back(
+                dims, std::vector<double>{static_cast<double>(1 << rank)});
+            state.amplitudes.by_rank.emplace_back(dims, std::vector<double>{0.0});
+        }
+
+        GeneratedArbitraryOrderKernels kernels;
+        kernels.max_excitation_rank = 4;
+        kernels.energy =
+            [](const CanonicalRHFCCReference &, const TensorCCBlockCache &,
+               const ArbitraryOrderDenominatorCache &,
+               const ArbitraryOrderRCCAmplitudes &amps) -> double
+        {
+            double e = 0.0;
+            for (const auto &t : amps.by_rank)
+                for (double v : t.data)
+                    e += v;
+            for (const auto &s : amps.sectors)
+                for (double v : s.second.data)
+                    e += v;
+            return e;
+        };
+        // reference residuals: drive each rank to 0 amplitude (R = -D*t)
+        for (int rank = 1; rank <= 4; ++rank)
+            kernels.residuals_by_rank.push_back(
+                [rank](const CanonicalRHFCCReference &, const TensorCCBlockCache &,
+                       const ArbitraryOrderDenominatorCache &denoms,
+                       const ArbitraryOrderRCCAmplitudes &amps) -> TensorND
+                {
+                    const TensorND &d = denoms.by_rank[static_cast<std::size_t>(rank - 1)];
+                    const TensorND &a = amps.by_rank[static_cast<std::size_t>(rank - 1)];
+                    TensorND r(d.dims, 0.0);
+                    for (std::size_t i = 0; i < d.size(); ++i)
+                        r.data[i] = -d.data[i] * a.data[i];
+                    return r;
+                });
+        // sector residual: fixed point at t_sector = target / D_rank4.
+        // R = target - D*t  =>  converges to t = target/D = 5.0 / 16.0 = 0.3125.
+        kernels.sector_tags.push_back({4, "aaabaaab"});
+        kernels.sector_residuals.push_back(
+            {4, "aaabaaab",
+             [](const CanonicalRHFCCReference &, const TensorCCBlockCache &,
+                const ArbitraryOrderDenominatorCache &denoms,
+                const ArbitraryOrderRCCAmplitudes &amps) -> TensorND
+             {
+                 const TensorND &d = denoms.by_rank[3];
+                 auto sec = amps.sector_tensor(4, "aaabaaab").value();
+                 TensorND r(d.dims, 0.0);
+                 for (std::size_t i = 0; i < d.size(); ++i)
+                     r.data[i] = 5.0 - d.data[i] * sec.data[i];
+                 return r;
+             }});
+
+        ensure_amplitude_sectors(state, kernels);
+        if (!expect(state.amplitudes.sectors.size() == 1,
+                    "ensure_amplitude_sectors should allocate the bundle's sector"))
+            return false;
+
+        auto solve_res = run_generated_arbitrary_order_iterations(
+            state, kernels, 50, 1e-13, 1e-13, 1.0, false, 4);
+        if (!solve_res.has_value())
+            return expect(false, solve_res.error());
+        const auto &solve = *solve_res;
+        auto sec = static_cast<const ArbitraryOrderRCCAmplitudes &>(solve.state.amplitudes)
+                       .sector_tensor(4, "aaabaaab");
+        if (!sec.has_value())
+            return expect(false, "sector view missing after solve: " + sec.error());
+        return expect(solve.converged, "sector-carrying solve should converge") &&
+               expect_close(sec->data[0], 5.0 / 16.0, 1e-10,
+                            "Sector block must converge to target/D_rank4");
+    }
 } // namespace
 
 int main()
@@ -340,9 +476,11 @@ int main()
     ok = test_make_zero_residuals() && ok;
     ok = test_make_zero_amplitudes_allocates_sectors() && ok;
     ok = test_jacobi_update_across_ranks() && ok;
+    ok = test_jacobi_update_drives_sector_block() && ok;
     ok = test_diis_path_runs_for_arbitrary_rank() && ok;
     ok = test_layout_mismatch_is_reported() && ok;
     ok = test_bundle_carries_sector_residual() && ok;
     ok = test_generated_runtime_driver_converges_with_mock_kernels() && ok;
+    ok = test_generated_driver_solves_a_sector_block() && ok;
     return ok ? 0 : 1;
 }

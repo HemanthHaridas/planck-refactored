@@ -99,6 +99,11 @@ namespace HartreeFock::Correlation::CC
             if (!kernels_res)
                 return std::unexpected(kernels_res.error());
 
+            // Gap B4: allocate the higher Sz sector amplitude blocks the bundle
+            // declares (prepare ran before the bundle was known). No-op for
+            // methods without sectors (<= CCSDT).
+            ensure_amplitude_sectors(*state_res, *kernels_res);
+
             // A sidecar restart supersedes the W6 in-memory recursion: if the file
             // already supplied the lower-rank amplitudes there is no point solving
             // rank-1 again in memory.

@@ -87,6 +87,15 @@ namespace HartreeFock::Correlation::CC
         ArbitraryOrderTensorCCState &state,
         const ArbitraryOrderRCCAmplitudes &seed);
 
+    // Gap B4: allocate the higher Sz sector amplitude blocks the kernel bundle
+    // declares (`kernels.sector_tags`) onto an already-prepared state. `prepare`
+    // runs before the bundle is known, so the state starts with no sectors; this
+    // reconciles them (zero-init) so evaluate/update can drive each sector. A
+    // no-op when the bundle has no sectors (<= CCSDT).
+    void ensure_amplitude_sectors(
+        ArbitraryOrderTensorCCState &state,
+        const GeneratedArbitraryOrderKernels &kernels);
+
     std::expected<ArbitraryOrderResiduals, std::string>
     evaluate_generated_arbitrary_order_residuals(
         const ArbitraryOrderTensorCCState &state,
