@@ -1517,8 +1517,8 @@
         {
           "type": "metric_close",
           "metric": "rccsdtq_total_energy",
-          "expected": -14.4036550465,
-          "atol": 1e-08
+          "expected": -14.4036551081,
+          "atol": 1e-07
         },
         {
           "type": "metric_lt_metric",

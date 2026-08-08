@@ -121,11 +121,28 @@ Mirror the Python solver (V1–V3 in the verification doc) block-for-block. Step
   *Known follow-on (restart):* the `.ccamp` checkpoint serializes only `by_rank`;
   fine for a cold Be solve (sectors start zero), extend for restart later.
 
-- **B5 — end-to-end Be CCSDTQ = FCI.** `correlation rccsdtq` on Be/sto-3g through
-  the generated multi-sector runtime reaches −14.4036550465 (E_corr −0.05177…) to
-  ~1e-8. This is the shared acceptance test with the Python doc's V4. Remove the
-  raw-energy `@expectedFailure` (`GeneratedSpatialEnergyGate`) and delete the
-  relabel-only `restricted_closed_shell` lowering once nothing depends on it.
+- **B5 — end-to-end Be CCSDTQ = FCI. (acceptance scripted; needs a build.)**
+  `correlation cc4` on Be/sto-3g through the generated multi-sector runtime must
+  reach FCI **−14.4036551081** (E_corr −0.0517746319), the shared acceptance with
+  the Python doc's V4 (which lands at 6.4e-11). All B1–B4 machinery is in place;
+  B5 is a build + run + assert:
+
+  ```
+  cmake .. -DPLANCK_CC_MAXORDER=4 -DPLANCK_CC_SPIN_ADAPT=ON
+  cmake --build . --target hartree-fock
+  python tests/ccsdtq_fci_acceptance.py            # or: --binary <path>
+  ```
+
+  `tests/ccsdtq_fci_acceptance.py` runs the binary on
+  `be_rccsdtq_sto3g.hfinp`, parses `Total RCCSDTQ Energy`, and gives a **three-way
+  diagnosis**: PASS (== FCI to atol), NEAR_MISS (~4e-6 short → the t4 second
+  sector isn't being driven, i.e. B1/B4 not active in the build), or DEFECT
+  (total far below FCI → the build isn't `-DPLANCK_CC_SPIN_ADAPT=ON`, the raw 0.25
+  path). The regression case `be_rccsdtq_sto3g` also gates
+  `rccsdtq_total_energy == −14.4036551081` (atol 1e-7), skipping when the rank-4
+  kernels aren't built. Once B5 passes on a build, remove the raw-energy
+  `@expectedFailure` (`GeneratedSpatialEnergyGate`) and delete the relabel-only
+  `restricted_closed_shell` lowering once nothing depends on it.
 
 ## Arbitrary order (cc5, cc6, …)
 
