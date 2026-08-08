@@ -1026,6 +1026,18 @@ def print_cpp_planck(
         from .spin import spin_adapt_equations
         eqs = spin_adapt_equations(eqs)
 
+        # CSE intermediate detection (detect_intermediates / rewrite_equations)
+        # was built for the raw occ-first spin-orbital layout and is NOT validated
+        # on spin-adapted spatial terms: rewriting mislabels indices (occ/vir size
+        # mismatch), and the combination has no numeric gate (the validated V4
+        # CCSDTQ==FCI path used no intermediates). It also explodes compile time
+        # (~1544 build_W_* functions -> a ~26 min -O3 registry compile). So the
+        # two are mutually exclusive: spin-adaptation forces intermediates OFF
+        # until CSE is validated on the spatial layout. See
+        # docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md.
+        if include_intermediates:
+            include_intermediates = False
+
     tau_spec = None
     if factorize_tau:
         # Collapse validated t2 + t1t1 pairs into the tau pseudo-amplitude

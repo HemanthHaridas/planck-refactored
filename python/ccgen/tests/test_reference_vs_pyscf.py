@@ -1058,6 +1058,22 @@ class SpinAdaptedEmitTests(unittest.TestCase):
         self.assertNotIn("0.25", energy,
                          "spin-adapted energy still emits the raw 0.25 defect")
 
+    def test_spin_adapt_forces_intermediates_off(self):
+        # CSE intermediate detection is not validated on spin-adapted spatial
+        # terms (it mislabels occ/vir indices) and explodes compile time (~1544
+        # build_W_* functions -> ~28 min -O3 registry compile). So spin_adapt
+        # forces include_intermediates OFF regardless of the caller's request.
+        from ccgen.generate import print_cpp_planck
+        sa = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram",
+                              include_intermediates=True)
+        self.assertNotIn("build_W_", sa,
+                         "spin-adapted emit must not emit CSE build_W_* intermediates")
+        # the raw (non-spin-adapt) path is unaffected: it still uses intermediates
+        raw = print_cpp_planck("ccsdtq", spin_adapt=False, engine="diagram",
+                               include_intermediates=True)
+        self.assertIn("build_W_", raw,
+                      "the raw path should keep intermediates (guard is spin-adapt-only)")
+
     def test_ccsdtq_emits_both_t4_sectors_and_reads(self):
         from ccgen.generate import print_cpp_planck
         cpp = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram")
