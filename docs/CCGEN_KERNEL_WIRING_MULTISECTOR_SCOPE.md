@@ -105,13 +105,21 @@ Mirror the Python solver (V1–V3 in the verification doc) block-for-block. Step
   residual, tag matches, kernel invokable); registry + standalone TU still
   compile with the sector-registering bundle.
 
-- **B4 — evaluate + update per block.** `evaluate_generated_arbitrary_order_residuals`
-  evaluates each rank residual AND each sector residual;
-  `update_amplitudes_with_jacobi_diis` updates each amplitude block (reference +
-  sectors) from its own residual and denominator, with its own DIIS history.
-  This is the exact port of Python V3. *Gate:* the multi-sector `ArbitraryOrderResiduals`
-  carries the sector block and the update writes it (a single-iteration unit
-  test on a perturbed Be state: the second sector moves off zero).
+- **B4 — evaluate + update per block. LANDED.** `ArbitraryOrderResiduals` gained
+  `sectors`; `evaluate_generated_arbitrary_order_residuals` evaluates each
+  `sector_residuals` entry into it. `pack/unpack_amplitudes` + `pack_residuals`
+  serialize the sector blocks after `by_rank`, so DIIS mixes every block as one
+  vector; `update_amplitudes_with_jacobi_diis` Jacobi-updates each sector from its
+  own residual using its **rank** denominator (B2). `ensure_amplitude_sectors`
+  (in the runtime TU, no driver deps) allocates the bundle's sector blocks onto
+  the prepared state, called from `run_rccsdtq` after the kernels are made;
+  `validate_kernel_bundle` requires a state block for every declared sector.
+  *Gates* (`cc_arbitrary_solver`): `test_jacobi_update_drives_sector_block`
+  (sector → `damping·R/D_rank`, reference with zero residual stays put) and
+  `test_generated_driver_solves_a_sector_block` (full driver ensure→validate→
+  evaluate→update→DIIS converges the sector to `target/D`). Registry compiles.
+  *Known follow-on (restart):* the `.ccamp` checkpoint serializes only `by_rank`;
+  fine for a cold Be solve (sectors start zero), extend for restart later.
 
 - **B5 — end-to-end Be CCSDTQ = FCI.** `correlation rccsdtq` on Be/sto-3g through
   the generated multi-sector runtime reaches −14.4036550465 (E_corr −0.05177…) to
