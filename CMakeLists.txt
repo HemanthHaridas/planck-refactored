@@ -377,6 +377,20 @@ target_link_libraries(hartree-fock
 
 add_dependencies(hartree-fock libmsym)
 
+# The generated CC kernel registry (#includes the spin-adapted ccsdtq TU) is a
+# ~230k-line TU whose two quadruples residuals are single ~5000-statement
+# functions. At -O3 the optimizer is super-linear in function-body size and the
+# compile takes 40+ min (and can appear to hang); the contraction loops here are
+# simple and gain almost nothing from -O3, while the perf-critical work is in
+# Eigen elsewhere. Compile just this object at -O1 so the build finishes in
+# minutes. Applies to hartree-fock, planck-dft, and planck-mpi (all include it
+# via POSTHF_SRC). See docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md.
+# (A proper fix is to chunk the giant residual kernels into sub-functions in the
+# ccgen emit so any optimization level stays cheap; tracked as follow-on.)
+set_source_files_properties(
+    ${SRC_DIR}/post_hf/cc/generated_kernel_registry.cpp
+    PROPERTIES COMPILE_OPTIONS "-O1")
+
 # OpenMP linkage
 if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(hartree-fock OpenMP::OpenMP_CXX)
