@@ -499,9 +499,11 @@ def _emit_kernel(
 
 
 # Terms-per-function threshold above which a residual kernel is split into
-# `_partN` sub-functions (see _emit_kernel). Chosen so the largest CCSDTQ
-# quadruples kernels (4613 / 6871 terms) split into ~a dozen bounded parts.
-_KERNEL_CHUNK_TERMS = 512
+# `_partN` sub-functions (see _emit_kernel). Smaller = smaller functions = faster
+# optimizer, with diminishing returns; measured g++-15 -O1 on the CCSDTQ registry
+# object: 512→176s, 256→135s. 256 is the chosen balance (fewer, but still bounded,
+# functions). The largest kernel (6871-term sector) splits into ~27 parts.
+_KERNEL_CHUNK_TERMS = 256
 
 
 def _emit_chunked_kernel(
