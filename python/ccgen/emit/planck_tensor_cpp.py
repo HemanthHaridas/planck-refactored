@@ -465,6 +465,22 @@ def _emit_kernel(
     emitted_terms = lowered_terms if lowered_terms else terms
     intermediate_names = frozenset(intermediate_map)
     arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
+
+    # Large kernels (the spin-adapted CCSDTQ quadruples residuals are ~5000
+    # statements each) are super-linear to optimize as one function -- an -O3
+    # compile of the containing TU takes 40+ min. Split them into `_partN`
+    # sub-functions each accumulating a slice of the terms into `result` (passed
+    # by reference); the compiler then optimizes N bounded functions in ~linear
+    # total time. Small kernels stay inline (byte-identical). The intermediate
+    # builds and amplitude-view bindings are re-emitted per part -- cheap, local,
+    # and keeps each part self-contained. `result_rank == 0` (energy) stays inline
+    # (a scalar accumulator can't be passed the same way and is always tiny).
+    if result_rank > 0 and len(emitted_terms) > _KERNEL_CHUNK_TERMS:
+        return _emit_chunked_kernel(
+            method, target, lines, emitted_terms, result_type, free_indices,
+            denominator_type, amplitude_type, required_intermediates,
+            intermediate_names, arbitrary)
+
     if arbitrary:
         bindings = _amplitude_view_bindings(emitted_terms)
         if bindings:
@@ -480,6 +496,65 @@ def _emit_kernel(
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
+
+
+# Terms-per-function threshold above which a residual kernel is split into
+# `_partN` sub-functions (see _emit_kernel). Chosen so the largest CCSDTQ
+# quadruples kernels (4613 / 6871 terms) split into ~a dozen bounded parts.
+_KERNEL_CHUNK_TERMS = 512
+
+
+def _emit_chunked_kernel(
+    method, target, header_lines, emitted_terms, result_type, free_indices,
+    denominator_type, amplitude_type, required_intermediates,
+    intermediate_names, arbitrary,
+):
+    """Emit a large residual kernel as `_partN` sub-functions accumulating into a
+    by-reference `result`, plus the main kernel that allocates `result`, calls
+    each part, and returns it. Keeps per-function body size bounded so any -O
+    level compiles in ~linear time. See _emit_kernel for why."""
+    kernel = _kernel_name(method, target)
+    n_parts = (len(emitted_terms) + _KERNEL_CHUNK_TERMS - 1) // _KERNEL_CHUNK_TERMS
+
+    out: list[str] = []
+    for p in range(n_parts):
+        chunk = emitted_terms[p * _KERNEL_CHUNK_TERMS:(p + 1) * _KERNEL_CHUNK_TERMS]
+        out.append(f"static void {kernel}_part{p}(")
+        out.append(f"    {result_type} &result,")
+        out.append("    const CanonicalRHFCCReference &reference,")
+        out.append("    const TensorCCBlockCache &mo_blocks,")
+        out.append(f"    const {denominator_type} &denominators,")
+        out.append(f"    const {amplitude_type} &amplitudes)")
+        out.append("{")
+        out.append("    const int no = reference.orbital_partition.n_occ;")
+        out.append("    const int nv = reference.orbital_partition.n_virt;")
+        out.append("    (void)no; (void)nv;")
+        if required_intermediates:
+            for spec in required_intermediates:
+                out.append(
+                    f"    const auto {spec.name} = build_{spec.name}("
+                    "reference, mo_blocks, denominators, amplitudes);")
+        if arbitrary:
+            bindings = _amplitude_view_bindings(chunk)
+            out.extend(bindings)
+        for i, term in enumerate(chunk, start=1):
+            out.append(emit_planck_term(
+                term, lhs="result", indent=4,
+                intermediate_names=intermediate_names,
+                arbitrary_amplitudes=arbitrary))
+        out.append("}")
+        out.append("")
+
+    # main kernel: allocate result, call the parts, return it. header_lines holds
+    # the signature + result allocation already; strip its trailing setup we don't
+    # reuse (the parts do their own no/nv + intermediates) by appending calls.
+    body = list(header_lines)
+    for p in range(n_parts):
+        body.append(
+            f"    {kernel}_part{p}(result, reference, mo_blocks, denominators, amplitudes);")
+    body.append("    return result;")
+    body.append("}")
+    return "\n".join(out + body)
 
 
 def _emit_intermediate_builder(

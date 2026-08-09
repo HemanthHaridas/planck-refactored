@@ -1085,6 +1085,26 @@ class SpinAdaptedEmitTests(unittest.TestCase):
         # bundle registers one REFERENCE residual per rank (1..4)
         self.assertEqual(cpp.count("kernels.residuals_by_rank.push_back"), 4)
 
+    def test_large_kernels_are_chunked(self):
+        # Compile-time fix: the big CCSDTQ quadruples residuals (4613 / 6871
+        # terms) are split into `_partN` sub-functions so no single function is
+        # ~5000 statements (which makes -O3 super-linear -> 40+ min). The main
+        # kernel calls the parts; small kernels (singles/doubles) stay inline.
+        import re
+        from ccgen.generate import print_cpp_planck
+        cpp = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram")
+        q_parts = set(re.findall(
+            r"compute_ccsdtq_quadruples_residual_part\d+", cpp))
+        s_parts = set(re.findall(
+            r"compute_ccsdtq_quadruples_aaabaaab_residual_part\d+", cpp))
+        self.assertGreater(len(q_parts), 1, "quadruples kernel should be chunked")
+        self.assertGreater(len(s_parts), 1, "sector kernel should be chunked")
+        # the main kernel calls its parts and returns the accumulated result
+        self.assertIn(
+            "compute_ccsdtq_quadruples_residual_part0(result,", cpp)
+        # small kernels are NOT chunked (byte-identical to the pre-chunk emit)
+        self.assertNotIn("compute_ccsdtq_singles_residual_part", cpp)
+
     def test_ccsdtq_bundle_registers_the_sector(self):
         # B3: the generated bundle registers the second t4 Sz sector -- a
         # sector_tags entry (feeds B1 allocation) and a sector_residuals entry
