@@ -185,3 +185,33 @@ binary for B5.
 - `src/post_hf/cc/solver_arbitrary.{h,cpp}` — per-block Jacobi/DIIS (B4).
 - `python/ccgen/emit/planck_tensor_cpp.py` — emit `sector_tags_by_rank` +
   `sector_residuals` into the bundle (B1/B3); the term/read emit is done.
+
+## Compile-time: the spin-adapted ccsdtq TU is huge (build gotcha + follow-on)
+
+The spin-adapted `ccsdtq_planck_generated.cpp` is ~230k lines; its two quadruples
+residuals are single functions of ~5000 statements each (`quadruples` 4613,
+`quadruples_aaabaaab` 6871 — the B4 sector adds the second). At `-O3` the
+optimizer is super-linear in function-body size, so compiling
+`generated_kernel_registry.cpp` (which `#include`s the TU) takes **40+ min and
+can look hung**. This is NOT the `build_W_*` CSE intermediates (those are disabled
+for spin-adapt, see `ccgen_spin_adapt_no_intermediates`) — it is the raw
+statement count of the spatial residual kernels.
+
+**Applied fix:** `set_source_files_properties(... generated_kernel_registry.cpp
+COMPILE_OPTIONS "-O1")` in CMakeLists.txt. The contraction loops gain almost
+nothing from `-O3` (perf-critical work is in Eigen elsewhere), and `-O1` keeps the
+compile bounded. `-O0 -fsyntax-only` is ~5s; `-O3` >40 min.
+
+**Proper follow-on (emit change):** chunk each large residual kernel into
+sub-functions in `planck_tensor_cpp.py` — `compute_..._quadruples_residual` calls
+`..._part0(result, ...)`, `..._part1(...)`, … each accumulating a slice of the
+terms into `result`. Compilers optimize N small functions in ~linear total time
+vs one giant one super-linearly, so this makes any `-O` level cheap and removes
+the need for the per-file `-O1` override. Not yet done.
+
+**Build gotcha (separate):** the generated TU is `#include`d into the registry,
+and `ccgen-planck-kernels` is a phony `add_custom_target` with no `OUTPUT`
+wiring, so an incremental build can link a stale (pre-spin-adapt) binary — the
+`5.3×` E_corr defect (Be `-0.275` vs `-0.0517746319`). A from-scratch build
+(`rm build/`) is the reliable fix; a proper fix is to make the generated files
+real `OUTPUT`s of an `add_custom_command` the registry source depends on.
