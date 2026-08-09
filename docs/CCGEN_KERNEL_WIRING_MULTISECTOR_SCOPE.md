@@ -197,17 +197,25 @@ can look hung**. This is NOT the `build_W_*` CSE intermediates (those are disabl
 for spin-adapt, see `ccgen_spin_adapt_no_intermediates`) — it is the raw
 statement count of the spatial residual kernels.
 
-**Applied fix:** `set_source_files_properties(... generated_kernel_registry.cpp
-COMPILE_OPTIONS "-O1")` in CMakeLists.txt. The contraction loops gain almost
-nothing from `-O3` (perf-critical work is in Eigen elsewhere), and `-O1` keeps the
-compile bounded. `-O0 -fsyntax-only` is ~5s; `-O3` >40 min.
+**Applied fixes (both landed):**
+1. **Chunking (the real fix).** `_emit_kernel` splits any residual kernel with
+   > `_KERNEL_CHUNK_TERMS` (512) terms into `compute_..._residual_partN(result,
+   …)` sub-functions, each accumulating a slice into the by-reference `result`;
+   the main kernel allocates `result`, calls the parts, returns it. Small kernels
+   stay inline (byte-identical). Gate: `test_large_kernels_are_chunked`.
+2. **Per-file `-O1` override.** `set_source_files_properties(...
+   generated_kernel_registry.cpp COMPILE_OPTIONS "-O1")` — the contraction loops
+   gain almost nothing from `-O3` (perf-critical work is Eigen elsewhere).
 
-**Proper follow-on (emit change):** chunk each large residual kernel into
-sub-functions in `planck_tensor_cpp.py` — `compute_..._quadruples_residual` calls
-`..._part0(result, ...)`, `..._part1(...)`, … each accumulating a slice of the
-terms into `result`. Compilers optimize N small functions in ~linear total time
-vs one giant one super-linearly, so this makes any `-O` level cheap and removes
-the need for the per-file `-O1` override. Not yet done.
+Measured (g++-15, the registry object that `#include`s all generated TUs):
+`-O3` unchunked >40 min (looks hung); chunked `-O1` **~176 s** (bounded, object
+built). `-O0 -fsyntax-only` ~5s.
+
+**Remaining scaling lever (not done):** the whole registry is still ONE TU (all
+methods `#include`d), so it can't parallelize across cores. Splitting the
+generated kernels into separate `.cpp` per method/rank would let `make -j`
+compile them in parallel — the next win if ~3 min is still too slow, but a larger
+codegen + CMake change.
 
 **Build gotcha (separate):** the generated TU is `#include`d into the registry,
 and `ccgen-planck-kernels` is a phony `add_custom_target` with no `OUTPUT`
