@@ -991,6 +991,8 @@ def print_cpp_planck(
     intermediate_peak_memory_budget_bytes: int | None = None,
     factorize_tau: bool = False,
     dress_operators: bool = False,
+    force_arbitrary: bool = False,
+    spin_adapt: bool = False,
     **kwargs: Any,
 ) -> str:
     """Generate Planck-compatible C++ tensor kernels.
@@ -1016,6 +1018,25 @@ def print_cpp_planck(
             method, eqs, intermediates=intermediates or None)
 
     eqs = generate_cc_equations(method, **kwargs)
+
+    if spin_adapt:
+        # R1.0: spin-adapt the GCC manifold to restricted (spatial) terms so the
+        # emitted kernel is a genuine spatial contraction (2*(direct)-(exchange)),
+        # not spin-orbital algebra bound to spatial storage (the defect).
+        from .spin import spin_adapt_equations
+        eqs = spin_adapt_equations(eqs)
+
+        # CSE intermediate detection (detect_intermediates / rewrite_equations)
+        # was built for the raw occ-first spin-orbital layout and is NOT validated
+        # on spin-adapted spatial terms: rewriting mislabels indices (occ/vir size
+        # mismatch), and the combination has no numeric gate (the validated V4
+        # CCSDTQ==FCI path used no intermediates). It also explodes compile time
+        # (~1544 build_W_* functions -> a ~26 min -O3 registry compile). So the
+        # two are mutually exclusive: spin-adaptation forces intermediates OFF
+        # until CSE is validated on the spatial layout. See
+        # docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md.
+        if include_intermediates:
+            include_intermediates = False
 
     tau_spec = None
     if factorize_tau:
@@ -1055,6 +1076,8 @@ def print_cpp_planck(
         method,
         eqs,
         intermediates=intermediates,
+        force_arbitrary=force_arbitrary,
+        spin_adapted=spin_adapt,
     )
 
 

@@ -29,6 +29,10 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
         r"^\s*(?:Total UCCSDT Energy|\[INF\]\s+UCCSDT Energy)\s+([-+0-9Ee\.]+)",
         re.MULTILINE,
     ),
+    "rccsdtq_total_energy": re.compile(
+        r"^\s*Total RCCSDTQ Energy\s+([-+0-9Ee\.]+)",
+        re.MULTILINE,
+    ),
     "casscf_corr_energy": re.compile(r"^\s*CASSCF Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_total_energy": re.compile(r"^\s*CASSCF Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "fci_total_energy": re.compile(r"^\s*Total FCI Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
@@ -316,6 +320,21 @@ def run_case(
     metrics = extract_metrics(output)
     details: list[str] = []
     passed = True
+
+    # A case may declare `skip_if_contains`: if the run's output contains this
+    # text, the case is not applicable to this build and is reported as a PASS
+    # with a skip note (rather than a failure). Used by the generated-CCSDTQ case,
+    # which prints a "reconfigure with -DPLANCK_CC_MAXORDER=4" message when the
+    # binary was built at a lower rank — that build simply cannot run it.
+    skip_marker = case.get("skip_if_contains")
+    if skip_marker and skip_marker in output:
+        return CaseResult(
+            case_id=case_id,
+            passed=True,
+            duration_s=duration_s,
+            details=[f"skipped: output contained {skip_marker!r}"],
+            metrics=metrics,
+        )
 
     expected_exit = int(case.get("expected_exit_code", 0))
     if proc.returncode != expected_exit:

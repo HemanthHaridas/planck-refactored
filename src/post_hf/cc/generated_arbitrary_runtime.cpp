@@ -1,6 +1,11 @@
 #include "post_hf/cc/generated_arbitrary_runtime.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <format>
+
+#include "io/logging.h"
 namespace HartreeFock::Correlation::CC
 {
     namespace
@@ -33,6 +38,29 @@ namespace HartreeFock::Correlation::CC
                         "validate_kernel_bundle: residual kernel missing for excitation rank " +
                         std::to_string(rank) + ".");
                 }
+            }
+            // Gap B4: the state must carry an amplitude block for every sector the
+            // bundle declares a residual for (ensure_amplitude_sectors reconciles
+            // this after prepare). A missing sector block would silently drop the
+            // sector's contribution, so fail loudly instead.
+            for (const auto &sr : kernels.sector_residuals)
+            {
+                if (!sr.kernel)
+                    return std::unexpected(std::format(
+                        "validate_kernel_bundle: sector residual kernel missing for (rank {}, tag {}).",
+                        sr.excitation_rank, sr.tag));
+                const bool have = std::any_of(
+                    state.amplitudes.sectors.begin(), state.amplitudes.sectors.end(),
+                    [&](const auto &entry)
+                    {
+                        return entry.first.first == sr.excitation_rank &&
+                               entry.first.second == sr.tag;
+                    });
+                if (!have)
+                    return std::unexpected(std::format(
+                        "validate_kernel_bundle: state has no amplitude block for sector (rank {}, tag {}); "
+                        "call ensure_amplitude_sectors before solving.",
+                        sr.excitation_rank, sr.tag));
             }
             return {};
         }
@@ -71,6 +99,28 @@ namespace HartreeFock::Correlation::CC
         return tensor;
     }
 
+    void ensure_amplitude_sectors(
+        ArbitraryOrderTensorCCState &state,
+        const GeneratedArbitraryOrderKernels &kernels)
+    {
+        for (const auto &[rank, tag] : kernels.sector_tags)
+        {
+            // idempotent: a restart may already have seeded this sector.
+            const bool have = std::any_of(
+                state.amplitudes.sectors.begin(), state.amplitudes.sectors.end(),
+                [&](const auto &entry)
+                { return entry.first.first == rank && entry.first.second == tag; });
+            if (have)
+                continue;
+            // a sector block has the same occ/vir dims as its rank's reference
+            // block (the spin projection lives in the algebra, not the shape).
+            const auto &ref_dims =
+                state.amplitudes.by_rank[static_cast<std::size_t>(rank - 1)].dims;
+            state.amplitudes.sectors.push_back(
+                {{rank, tag}, TensorND(ref_dims, 0.0)});
+        }
+    }
+
     std::expected<ArbitraryOrderResiduals, std::string>
     evaluate_generated_arbitrary_order_residuals(
         const ArbitraryOrderTensorCCState &state,
@@ -104,6 +154,31 @@ namespace HartreeFock::Correlation::CC
             }
             residuals.by_rank.push_back(std::move(tensor));
         }
+
+        // Gap B4: evaluate each higher Sz sector residual, keyed (rank, tag) in
+        // the bundle's order (which matches the state's amplitude sectors), so the
+        // Jacobi/DIIS update lines them up index-for-index. The sector residual's
+        // shape must match its rank's reference (a sector is a rank-2n amplitude
+        // of the same occ/vir dims), so it is validated against that denominator.
+        residuals.sectors.reserve(kernels.sector_residuals.size());
+        for (const auto &sr : kernels.sector_residuals)
+        {
+            TensorND tensor = sr.kernel(
+                state.reference,
+                state.mo_blocks,
+                state.denominators,
+                state.amplitudes);
+            auto denominator = state.denominators.tensor(sr.excitation_rank);
+            if (!denominator)
+                return std::unexpected(
+                    "evaluate_generated_arbitrary_order_residuals: " + denominator.error());
+            if (tensor.dims != denominator->dims)
+                return std::unexpected(std::format(
+                    "evaluate_generated_arbitrary_order_residuals: sector residual shape mismatch at (rank {}, tag {}).",
+                    sr.excitation_rank, sr.tag));
+            residuals.sectors.push_back(
+                {{sr.excitation_rank, sr.tag}, std::move(tensor)});
+        }
         return residuals;
     }
 
@@ -116,7 +191,8 @@ namespace HartreeFock::Correlation::CC
         double tol_residual,
         double damping,
         bool use_diis,
-        int diis_dim)
+        int diis_dim,
+        const std::string &log_tag)
     {
         if (max_iterations == 0)
             return std::unexpected("run_generated_arbitrary_order_iterations: max_iterations must be positive.");
@@ -141,6 +217,8 @@ namespace HartreeFock::Correlation::CC
 
         for (unsigned int iter = 1; iter <= max_iterations; ++iter)
         {
+            const auto iter_start = std::chrono::steady_clock::now();
+
             auto residuals_res =
                 evaluate_generated_arbitrary_order_residuals(result.state, kernels);
             if (!residuals_res)
@@ -170,6 +248,16 @@ namespace HartreeFock::Correlation::CC
             result.metrics = std::move(*metrics_res);
 
             previous_energy = energy;
+
+            const double time_sec =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - iter_start).count();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                log_tag + " Iter :",
+                std::format(
+                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  rms(res)={:.3e}  rms(step)={:.3e}  diis={}  t={:.3f}s",
+                    iter, energy, result.energy_change, result.metrics.residual_rms,
+                    result.metrics.update_rms, diis.size(), time_sec));
 
             if (std::abs(result.energy_change) < tol_energy &&
                 result.metrics.residual_rms < tol_residual)

@@ -30,12 +30,38 @@ set(PLANCK_CC_MAXORDER "3" CACHE STRING
     "Max CC excitation rank to generate Planck kernels for (2=CCSD, 3=CCSDT, 4=CCSDTQ, 5=CC5, 6=CC6)")
 option(PLANCK_CC_INCLUDE_INTERMEDIATES
     "Emit ccgen intermediate builders in generated CC kernels" ON)
+# Emit genuine spatial (restricted) RCC kernels via the R1.0 spin-adaptation
+# instead of raw spin-orbital algebra bound to spatial storage. Without this the
+# generated energy carries the 0.25*t2*oovv defect and the correlation energy is
+# ~4x wrong (the Be-CCSDTQ defect). For CCSDT (rank 3, single Sz sector) the
+# spin-adapted path is complete and correct; for CCSDTQ (rank 4) it additionally
+# emits the t4 second-Sz-sector kernels, whose full multi-sector SOLVE is the
+# still-open runtime work (Gap B, docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md).
+# Default OFF for byte-compatibility with the historical (defective) emit until
+# Gap B lands; opt in with -DPLANCK_CC_SPIN_ADAPT=ON.
+option(PLANCK_CC_SPIN_ADAPT
+    "Emit spatial (spin-adapted) RCC kernels instead of the raw spin-orbital defect" OFF)
+option(PLANCK_CC_ARBITRARY_LOWER_RANKS
+    "Also emit rank<4 methods (ccsd/ccsdt) in arbitrary-order spatial form as \
+<method>_arbitrary_planck_generated.cpp, for cross-rank .ccamp restart seeds" OFF)
 set(PLANCK_CC_INTERMEDIATE_THRESHOLD "5" CACHE STRING
     "Min usage count for extracted ccgen intermediates")
+# ccgen equation-generation engine. 'diagram' is canonical-by-construction and
+# ~200x faster at high rank (CCSDTQ ~4s vs ~600s for 'wick'), residual-equal to
+# 'wick' (gated by the wick-vs-diagram equality test in
+# python/ccgen/tests/test_regressions.py). Default 'diagram' so a MAXORDER=4
+# build finishes in seconds instead of minutes.
+set(PLANCK_CC_ENGINE "diagram" CACHE STRING
+    "ccgen generation engine: diagram (default, fast) or wick (textbook)")
 
 if(NOT PLANCK_CC_MAXORDER MATCHES "^[2-6]$")
     message(FATAL_ERROR
         "PLANCK_CC_MAXORDER must be an integer in [2, 6]; got '${PLANCK_CC_MAXORDER}'")
+endif()
+
+if(NOT PLANCK_CC_ENGINE MATCHES "^(diagram|wick)$")
+    message(FATAL_ERROR
+        "PLANCK_CC_ENGINE must be 'diagram' or 'wick'; got '${PLANCK_CC_ENGINE}'")
 endif()
 
 # Build the ccgen method list up to PLANCK_CC_MAXORDER.
@@ -351,12 +377,34 @@ target_link_libraries(hartree-fock
 
 add_dependencies(hartree-fock libmsym)
 
+# The generated CC kernel registry (#includes the spin-adapted ccsdtq TU) is a
+# ~230k-line TU whose two quadruples residuals are single ~5000-statement
+# functions. At -O3 the optimizer is super-linear in function-body size and the
+# compile takes 40+ min (and can appear to hang); the contraction loops here are
+# simple and gain almost nothing from -O3, while the perf-critical work is in
+# Eigen elsewhere. Compile just this object at -O1 so the build finishes in
+# minutes. Applies to hartree-fock, planck-dft, and planck-mpi (all include it
+# via POSTHF_SRC). See docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md.
+# (A proper fix is to chunk the giant residual kernels into sub-functions in the
+# ccgen emit so any optimization level stays cheap; tracked as follow-on.)
+set_source_files_properties(
+    ${SRC_DIR}/post_hf/cc/generated_kernel_registry.cpp
+    PROPERTIES COMPILE_OPTIONS "-O1")
+
 # OpenMP linkage
 if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(hartree-fock OpenMP::OpenMP_CXX)
     target_compile_definitions(hartree-fock PRIVATE USE_OPENMP)
 endif()
+# Normalize the arbitrary-lower-ranks option to a 0/1 macro so the registry can
+# guard its #include of the companion TU on it.
+if(PLANCK_CC_ARBITRARY_LOWER_RANKS)
+    set(_planck_cc_arb_lower 1)
+else()
+    set(_planck_cc_arb_lower 0)
+endif()
 target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
+target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
 
 add_executable(planck-dft
     ${BASE_SRC}
@@ -401,10 +449,17 @@ if(Python3_Interpreter_FOUND)
     set(_ccgen_planck_kernel_args
         --output-dir ${CMAKE_BINARY_DIR}/generated/cc
         --methods ${PLANCK_CC_METHODS}
+        --engine ${PLANCK_CC_ENGINE}
         --intermediate-threshold ${PLANCK_CC_INTERMEDIATE_THRESHOLD}
     )
     if(PLANCK_CC_INCLUDE_INTERMEDIATES)
         list(APPEND _ccgen_planck_kernel_args --include-intermediates)
+    endif()
+    if(PLANCK_CC_ARBITRARY_LOWER_RANKS)
+        list(APPEND _ccgen_planck_kernel_args --arbitrary-lower-ranks)
+    endif()
+    if(PLANCK_CC_SPIN_ADAPT)
+        list(APPEND _ccgen_planck_kernel_args --spin-adapt)
     endif()
 
     add_custom_target(ccgen-planck-kernels
@@ -416,7 +471,7 @@ if(Python3_Interpreter_FOUND)
         COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${PLANCK_CC_METHODS})"
     )
 
-    message(STATUS "ccgen     : emitting Planck CC kernels up to rank ${PLANCK_CC_MAXORDER} [${PLANCK_CC_METHODS}]")
+    message(STATUS "ccgen     : emitting Planck CC kernels up to rank ${PLANCK_CC_MAXORDER} [${PLANCK_CC_METHODS}] via ${PLANCK_CC_ENGINE} engine")
 endif()
 
 if(Python3_Interpreter_FOUND)
@@ -442,7 +497,7 @@ if(Python3_Interpreter_FOUND)
     add_dependencies(planck-dft ccgen-spinorbital-warm-start)
     add_dependencies(planck-dft ccgen-planck-kernels)
 endif()
-target_compile_definitions(planck-dft PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
+target_compile_definitions(planck-dft PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER} PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
 
 if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(planck-dft OpenMP::OpenMP_CXX)
@@ -498,7 +553,7 @@ if(BUILD_MPI)
         add_dependencies(planck-mpi ccgen-planck-kernels)
     endif()
     # USING_Libxc enables the libxc-backed XC path (same as planck-dft).
-    target_compile_definitions(planck-mpi PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
+    target_compile_definitions(planck-mpi PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER} PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
 
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-mpi OpenMP::OpenMP_CXX)
@@ -734,6 +789,13 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/cc/diis.cpp
         ${SRC_DIR}/post_hf/cc/generated_arbitrary_runtime.cpp
         ${SRC_DIR}/post_hf/cc/solver_arbitrary.cpp
+    )
+
+    add_executable(planck-cc-amplitude-checkpoint
+        ${CMAKE_SOURCE_DIR}/tests/cc_amplitude_checkpoint.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+        ${SRC_DIR}/post_hf/cc/amplitudes.cpp
+        ${SRC_DIR}/post_hf/cc/cc_amplitude_checkpoint.cpp
     )
 
     add_executable(planck-spherical-transform
@@ -1185,6 +1247,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-cc-amplitude-checkpoint PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-group-operations PRIVATE
         ${SRC_DIR}
         ${MSYM_INSTALL_DIR}/include
@@ -1393,6 +1460,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-cc-arbitrary-solver PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-amplitude-checkpoint PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -1631,6 +1704,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-cc-arbitrary-solver
         COMMAND planck-cc-arbitrary-solver
+    )
+
+    add_test(
+        NAME planck-cc-amplitude-checkpoint
+        COMMAND planck-cc-amplitude-checkpoint
     )
 
     add_test(

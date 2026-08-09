@@ -2308,6 +2308,102 @@ def _ccsdtq_fci_limit_tensors(atom="H 0 0 0; H 0 0 1.0; H 0 0 2.0; H 0 0 3.0",
             float(e_fci), float(mf.e_tot))
 
 
+class R313IndependentBlocksTests(unittest.TestCase):
+    """R3.1.3a: the independent spin-block enumeration -- a pure-function gate
+    (no PySCF, seconds). `independent_spin_blocks(rank)` lists one representative
+    per Sz sector; `_amplitude_block_tag(block)` folds any block to its sector.
+    These are the precondition for storing/reading t4's second Sz sector."""
+
+    def test_independent_blocks_low_ranks(self):
+        from ccgen.spin import independent_spin_blocks
+        self.assertEqual(independent_spin_blocks(2), ["aa"])         # t1
+        self.assertEqual(independent_spin_blocks(4), ["abab"])       # t2
+        self.assertEqual(independent_spin_blocks(6), ["aabaab"])     # t3, one
+        self.assertEqual(independent_spin_blocks(8),                 # t4, TWO
+                         ["aabbaabb", "aaabaaab"])
+        self.assertEqual(independent_spin_blocks(10),                # t5, TWO
+                         ["aaabbaaabb", "aaaabaaaab"])
+
+    def test_block_tag_folds_flip_partners(self):
+        from ccgen.spin import _amplitude_block_tag
+        # t2: one component
+        self.assertEqual(_amplitude_block_tag("abab"), "abab")
+        # t3: aabaab reference, abbabb is its flip partner -> same component
+        self.assertEqual(_amplitude_block_tag("aabaab"), "aabaab")
+        self.assertEqual(_amplitude_block_tag("abbabb"), "aabaab")
+        # t4: aabb reference; aaab its own sector; abbb folds to aaab
+        self.assertEqual(_amplitude_block_tag("aabbaabb"), "aabbaabb")
+        self.assertEqual(_amplitude_block_tag("aaabaaab"), "aaabaaab")
+        self.assertEqual(_amplitude_block_tag("abbbabbb"), "aaabaaab")
+
+    def test_census_blocks_fold_into_the_independent_set(self):
+        # every amplitude block that appears in the merged rank-6/rank-8 manifold
+        # must fold (via _amplitude_block_tag) into independent_spin_blocks(rank).
+        # This proves the enumeration is COMPLETE for the manifolds we emit.
+        from ccgen.spin import independent_spin_blocks, _amplitude_block_tag
+        census = {
+            4: {"abab"},                                   # t2
+            6: {"aabaab", "abbabb"},                       # t3
+            8: {"aabbaabb", "aaabaaab", "abbbabbb"},       # t4
+        }
+        for rank, blocks in census.items():
+            allowed = set(independent_spin_blocks(rank))
+            for blk in blocks:
+                self.assertIn(_amplitude_block_tag(blk), allowed,
+                              f"rank-{rank} block {blk} folds to "
+                              f"{_amplitude_block_tag(blk)} not in {allowed}")
+
+    def test_representative_block_for_sector(self):
+        # R3.1.3d: the external residual block for a given Sz sector k. The
+        # reference (k=ceil(n/2)) reproduces _closed_shell_representative_block;
+        # the second t4 sector (k=3) is the 3α1β external the aaabaaab residual
+        # integrates on.
+        from ccgen.spin import (_representative_block_for_sector,
+                                _closed_shell_representative_block, _residual_template)
+        from ccgen import generate_cc_equations
+        from ccgen.spin import spin_adapt_equations  # noqa: F401  (import guard)
+        eqs = generate_cc_equations("ccsdtq", engine="diagram")
+        tmpl = _residual_template("quadruples", eqs["quadruples"])
+        names = [i.name for i in tmpl.indices]
+        n = len(names) // 2
+        # k=2 (reference) == the existing helper
+        ref = _closed_shell_representative_block(tmpl)
+        self.assertEqual(_representative_block_for_sector(tmpl, (n + 1) // 2), ref)
+        # k=3 second sector: 3 alpha then 1 beta per half
+        sec = _representative_block_for_sector(tmpl, 3)
+        bra_spins = [sec[names[j]] for j in range(n)]
+        self.assertEqual(bra_spins, ["a", "a", "a", "b"])
+        ket_spins = [sec[names[n + j]] for j in range(n)]
+        self.assertEqual(ket_spins, ["a", "a", "a", "b"])
+
+    def test_ccsd_ccsdt_adapt_keys_unchanged(self):
+        # R3.1.3d must be byte-identical for n<=3 targets: no extra Sz sector, so
+        # the key set is exactly the targets (backward-compatible with the emit
+        # path). Only quadruples (n=4) gains a `_aaabaaab` key.
+        from ccgen.spin import spin_adapt_equations
+        from ccgen import generate_cc_equations
+        self.assertEqual(set(spin_adapt_equations(generate_cc_equations("ccsd"))),
+                         {"energy", "singles", "doubles"})
+        self.assertEqual(set(spin_adapt_equations(generate_cc_equations("ccsdt"))),
+                         {"energy", "singles", "doubles", "triples"})
+
+    def test_ccsdtq_adapt_emits_both_t4_sectors(self):
+        # R3.1.3d: the ccsdtq quadruples residual is emitted as TWO blocks -- the
+        # reference `quadruples` (aabbaabb) and `quadruples_aaabaaab` (the second
+        # independent Sz sector) -- so both stored t4 blocks get their own residual
+        # to iterate. ~5s (diagram engine cached). Both must be non-empty.
+        from ccgen.spin import spin_adapt_equations
+        from ccgen import generate_cc_equations
+        adapted = spin_adapt_equations(generate_cc_equations("ccsdtq",
+                                                             engine="diagram"))
+        self.assertEqual(
+            set(adapted),
+            {"energy", "singles", "doubles", "triples",
+             "quadruples", "quadruples_aaabaaab"})
+        self.assertGreater(len(adapted["quadruples"]), 0)
+        self.assertGreater(len(adapted["quadruples_aaabaaab"]), 0)
+
+
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
 class S4dRank8IdentityTests(unittest.TestCase):
     """S4d: the rank-8 numeric gate. On a closed-shell antisymmetric `t4` obtained
@@ -2367,6 +2463,107 @@ class S4dRank8IdentityTests(unittest.TestCase):
         self.assertLess(np.abs(acc - Rb).max(), 1e-10,
                         f"rank-8 antisym != GCC aabb slice: "
                         f"{np.abs(acc - Rb).max()}")
+
+    def test_rank8_full_collapse_pipeline(self):
+        # R3.1.0 -- fast rank-8 gate for the FULL collapse+merge pipeline
+        # (canonicalize -> collapse_amplitudes -> collapse_integrals -> merge),
+        # the rank-8 analog of test_rcc_pipeline_generalizes_rank6. GREEN: the
+        # per-block collapse+merge DOES reproduce the GCC aabb slice at rank 8.
+        # So the rank-8 collapse is NOT the bug -- the Be CCSDTQ failure is
+        # downstream (how spin_adapt_equations assembles the spatial residual the
+        # solver iterates, not per-block correctness). Seconds to run.
+        import numpy as np
+        from ccgen.spin import (ucc_integrate_term_antisym,
+                                canonicalize_spin_blocks, collapse_amplitudes,
+                                collapse_integrals, merge_terms)
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv, n = self.no, self.nv, self.no + self.nv
+        tn = dict(self.tn)
+        tn["t4"] = 0.5 * tn["t4"]
+        eqs = generate_cc_equations("ccsdtq", engine="diagram")
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn)
+                 for t in eqs["quadruples"])
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+        Rb = Rg[np.ix_(ve, ve, vo, vo, oe, oe, oo, oo)]
+        ext = {"a": "a", "b": "a", "c": "b", "d": "b",
+               "i": "a", "j": "a", "k": "b", "l": "b"}
+        manifold = []
+        for t in eqs["quadruples"]:
+            manifold.extend(ucc_integrate_term_antisym(t, ext))
+        canon = [canonicalize_spin_blocks(st) for st in manifold]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        coll = [c for st in amp for c in collapse_integrals(st)]
+        merged = merge_terms(coll, set(ext))
+        acc = np.zeros_like(Rb)
+        for st in merged:
+            acc += _eval_spinterm(st, tn, no, n,
+                                  ["a", "b", "c", "d", "i", "j", "k", "l"])
+        self.assertLess(np.abs(acc - Rb).max(), 1e-10,
+                        f"rank-8 collapse+merge != GCC aabb slice: "
+                        f"{np.abs(acc - Rb).max()}")
+
+    def test_rank8_bridge_solve_path(self):
+        # R3.1.3 gate: the rank-8 analog of test_rcc_bridge_solve_path_rank6. The
+        # SOLVE path (spinterm_to_algebraterm + residual_einsum) must match the
+        # aabb GCC slice, like the per-spin-block oracle does. GREEN as of R3.1.3c:
+        # t4 has TWO independent Sz sectors -- aabbaabb (reference) and aaabaaab --
+        # and aaab is NOT a permutation or spin-flip of aabb (proven: not even a
+        # signed-perm combination from one shared spatial tau). So it cannot be
+        # folded onto the reference; the bridge now NAMES the second-sector factors
+        # `t4_aaabaaab` (abbbabbb folds onto it via the existing flip), and the
+        # solve reads that block from its own stored tensor. Rank-8, ~30s -- iterate
+        # here, not the ~15min Be CCSDTQ solve. See
+        # docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md (R3.1.3).
+        import numpy as np
+        from ccgen.spin import (ucc_integrate_term_antisym,
+                                canonicalize_spin_blocks, collapse_amplitudes,
+                                collapse_integrals, merge_terms,
+                                spinterm_to_algebraterm)
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv, n = self.no, self.nv, self.no + self.nv
+        nos, nvs = no // 2, nv // 2
+        tn = dict(self.tn)
+        tn["t4"] = 0.5 * tn["t4"]
+        tn["t3"] = 0.7 * tn["t3"]
+        tn["t2"] = 0.9 * tn["t2"]
+
+        def block_slice(so, block):
+            sets = [[p for p in range(so.shape[k])
+                     if p % 2 == (0 if s == "a" else 1)]
+                    for k, s in enumerate(block)]
+            return so[np.ix_(*sets)]
+
+        spatial = {
+            "t1": block_slice(tn["t1"], "aa"),
+            "t2": block_slice(tn["t2"], "abab"),
+            "t3": block_slice(tn["t3"], "aabaab"),
+            "t4": block_slice(tn["t4"], "aabbaabb"),
+            # R3.1.3c: the second independent t4 Sz sector, stored separately.
+            "t4_aaabaaab": block_slice(tn["t4"], "aaabaaab"),
+            "v": block_slice(tn["v"], "abab"),
+            "f": block_slice(tn["f"], "aa"),
+        }
+        eqs = generate_cc_equations("ccsdtq", engine="diagram")
+        Rg = sum(residual_einsum(t, no, nv, tensors=tn)
+                 for t in eqs["quadruples"])
+        ve, vo = list(range(0, nv, 2)), list(range(1, nv, 2))
+        oe, oo = list(range(0, no, 2)), list(range(1, no, 2))
+        Rb = Rg[np.ix_(ve, ve, vo, vo, oe, oe, oo, oo)]
+        ext = {"a": "a", "b": "a", "c": "b", "d": "b",
+               "i": "a", "j": "a", "k": "b", "l": "b"}
+        manifold = []
+        for t in eqs["quadruples"]:
+            manifold.extend(ucc_integrate_term_antisym(t, ext))
+        canon = [canonicalize_spin_blocks(st) for st in manifold]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        coll = [c for st in amp for c in collapse_integrals(st)]
+        merged = merge_terms(coll, set(ext))
+        alg = [spinterm_to_algebraterm(st, set(ext)) for st in merged]
+        R = sum(residual_einsum(t, nos, nvs, tensors=spatial) for t in alg)
+        self.assertLess(np.abs(R - Rb).max(), 1e-10,
+                        f"rank-8 bridge solve-path != GCC aabb slice: "
+                        f"{np.abs(R - Rb).max()}")
 
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
@@ -2462,6 +2659,242 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
         Rb = self._gcc_slice(ext)
         self.assertLess(np.abs(acc - Rb).max(), 1e-10,
                         "merged RCC rank-6 residual != GCC aab slice")
+
+    def test_rcc_bridge_solve_path_rank6(self):
+        # R3.1.2 whole-residual gate: the SOLVE path (spinterm_to_algebraterm +
+        # residual_einsum on ONE spatial tensor per amplitude) must match the GCC
+        # slice, like the _eval_spinterm path does. GREEN as of R3.1.2 (was
+        # ~4.8e-3): the bridge now (i) canonicalizes its output layout and (ii)
+        # maps every amplitude factor onto its stored reference block via the
+        # spin-flip in `_canonicalize_amplitude_factor`, so reading one spatial
+        # tensor per amplitude reproduces the per-spin-block oracle. Rank-6,
+        # seconds -- the R3.1.2 inner loop.
+        import numpy as np
+        from ccgen.spin import (ucc_integrate_term_antisym,
+                                canonicalize_spin_blocks, collapse_amplitudes,
+                                collapse_integrals, merge_terms,
+                                spinterm_to_algebraterm)
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv = self.no, self.nv
+        nos, nvs = no // 2, nv // 2
+        ext = {"a": "a", "b": "a", "c": "b", "i": "a", "j": "a", "k": "b"}
+
+        def block_slice(so, block):
+            sets = [[p for p in range(so.shape[k]) if p % 2 == (0 if s == "a" else 1)]
+                    for k, s in enumerate(block)]
+            return so[np.ix_(*sets)]
+
+        # one spatial tensor per amplitude, on its own OUTPUT block
+        spatial = {
+            "t1": block_slice(self.tn["t1"], "aa"),
+            "t2": block_slice(self.tn["t2"], "abab"),
+            "t3": block_slice(self.tn["t3"], "aabaab"),
+            # v/f are over the n-space; their RCC spatial tensor is the abab / aa
+            # spin block, NOT an all-α slice (v[abab] has spins a,b,a,b).
+            "v": block_slice(self.tn["v"], "abab"),
+            "f": block_slice(self.tn["f"], "aa"),
+        }
+        manifold = []
+        for t in self.triples:
+            manifold.extend(ucc_integrate_term_antisym(t, ext))
+        canon = [canonicalize_spin_blocks(st) for st in manifold]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        coll = [c for st in amp for c in collapse_integrals(st)]
+        merged = merge_terms(coll, set(ext))
+        alg = [spinterm_to_algebraterm(st, set(ext)) for st in merged]
+        R = sum(residual_einsum(t, nos, nvs, tensors=spatial) for t in alg)
+        Rb = self._gcc_slice(ext)
+        self.assertLess(np.abs(R - Rb).max(), 1e-10,
+                        f"bridge solve-path rank-6 != GCC aab slice: "
+                        f"{np.abs(R - Rb).max()}")
+
+    def _rank6_bridge_spatial(self):
+        """Shared rank-6 setup: the merged SpinTerms and the one-spatial-tensor-
+        per-amplitude dict the solve path uses (P2 harness)."""
+        import numpy as np
+        from ccgen.spin import (ucc_integrate_term_antisym,
+                                canonicalize_spin_blocks, collapse_amplitudes,
+                                collapse_integrals, merge_terms)
+        no, nv = self.no, self.nv
+        ext = {"a": "a", "b": "a", "c": "b", "i": "a", "j": "a", "k": "b"}
+
+        def block_slice(so, block):
+            sets = [[p for p in range(so.shape[k]) if p % 2 == (0 if s == "a" else 1)]
+                    for k, s in enumerate(block)]
+            return so[np.ix_(*sets)]
+
+        spatial = {
+            "t1": block_slice(self.tn["t1"], "aa"),
+            "t2": block_slice(self.tn["t2"], "abab"),
+            "t3": block_slice(self.tn["t3"], "aabaab"),
+            # v/f are over the n-space; their RCC spatial tensor is the abab / aa
+            # spin block, NOT an all-α slice (v[abab] has spins a,b,a,b).
+            "v": block_slice(self.tn["v"], "abab"),
+            "f": block_slice(self.tn["f"], "aa"),
+        }
+        manifold = []
+        for t in self.triples:
+            manifold.extend(ucc_integrate_term_antisym(t, ext))
+        canon = [canonicalize_spin_blocks(st) for st in manifold]
+        amp = [c for st in canon for c in collapse_amplitudes(st)]
+        coll = [c for st in amp for c in collapse_integrals(st)]
+        merged = merge_terms(coll, set(ext))
+        return merged, spatial, ext
+
+    # Canonical single spatial block each amplitude/integral is stored in (the
+    # block the spin-free bridge reads from). rank -> block; v/f are always rank 4.
+    _REF_BLOCK = {"t1": "aa", "t2": "abab", "t3": "aabaab", "v": "abab", "f": "aa"}
+
+    @classmethod
+    def _mech_spin(cls, st, ext):
+        """P2 mechanism 1 (SPIN). The bridge drops per-index spin and reads each
+        factor from ONE canonical spatial block (`_REF_BLOCK`). True iff that read
+        is wrong on any of three surfaces -- all the same root cause:
+          (a) a factor whose slot spins differ from its ref block;
+          (b) a summed index contracted across slots whose ref-block spins differ
+              (the spatial contraction sums the wrong channel); or
+          (c) a free index landing on a slot whose ref-block spin != its external
+              spin.
+        This is the single spin gap; `_has_mixed_spin_summed_index` was only (b)."""
+        rb = cls._REF_BLOCK
+        for f in st.factors:
+            if "".join(si.spin for si in f.indices) != rb[f.name]:
+                return True
+        occ: dict = {}
+        for f in st.factors:
+            for k, si in enumerate(f.indices):
+                if si.name not in ext:
+                    occ.setdefault(si.name, set()).add(rb[f.name][k])
+        if any(len(s) > 1 for s in occ.values()):
+            return True
+        for f in st.factors:
+            for k, si in enumerate(f.indices):
+                if si.name in ext and rb[f.name][k] != ext[si.name]:
+                    return True
+        return False
+
+    @staticmethod
+    def _bridge_output_layout(at):
+        """The residual axis order `residual_einsum` emits for an AlgebraTerm:
+        [ext_vir..., ext_occ...] in FIRST-APPEARANCE order."""
+        fr = list(at.free_indices)
+        ev = [getattr(i, "name", i) for i in fr if i.space == "vir"]
+        eo = [getattr(i, "name", i) for i in fr if i.space == "occ"]
+        return ev + eo
+
+    @classmethod
+    def _mech_layout(cls, at, names):
+        """P2 mechanism 2 (LAYOUT). Even with consistent spins, the bridge's
+        `free_indices` are in first-appearance order, so `residual_einsum` lays
+        the residual out transposed from the canonical [a,b,c,i,j,k]. A pure
+        output-axis permutation -- value-identical, layout-wrong. This is a bridge
+        bug, NOT a spin-model gap: canonicalizing `free_indices` fixes it."""
+        return cls._bridge_output_layout(at) != names
+
+    @staticmethod
+    def _has_mixed_spin_summed_index(st, ext):
+        """True iff some summed (internal) index appears with DIFFERENT spins in
+        its two factor occurrences -- only surface (b) of the spin mechanism.
+        Retained for the historical P2.1 gate below; `_mech_spin` supersedes it."""
+        spins = {}
+        for f in st.factors:
+            for si in f.indices:
+                if si.name in ext:
+                    continue
+                spins.setdefault(si.name, set()).add(si.spin)
+        return any(len(s) > 1 for s in spins.values())
+
+    def test_p20_bridge_matches_eval_per_term_rank6(self):
+        # P2.0: per-term gate. For every merged rank-6 term the bridge
+        # (spinterm_to_algebraterm + residual_einsum) must equal _eval_spinterm
+        # (the oracle, which slices each factor per spin block). GREEN as of
+        # R3.1.2: the two mechanisms P2.1 partitioned the failures into are both
+        # fixed -- half (ii) canonicalizes the output layout, and half (i)
+        # (`_canonicalize_amplitude_factor`'s spin-flip of β-majority blocks)
+        # maps every amplitude factor onto its stored reference block. Was 718 of
+        # 859 failing (595 both, 116 layout-only, 7 spin-only); now 0.
+        import numpy as np
+        from ccgen.spin import spinterm_to_algebraterm
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv = self.no, self.nv
+        nos, nvs = no // 2, nv // 2
+        names = ["a", "b", "c", "i", "j", "k"]
+        merged, spatial, ext = self._rank6_bridge_spatial()
+        bad = 0
+        for st in merged:
+            A = _eval_spinterm(st, self.tn, no, no + nv, names)
+            B = residual_einsum(spinterm_to_algebraterm(st, set(ext)),
+                                nos, nvs, tensors=spatial)
+            if np.abs(A - B).max() > 1e-10:
+                bad += 1
+        self.assertEqual(bad, 0, f"{bad}/{len(merged)} merged terms: bridge != eval")
+
+    def test_p21_failures_partition_into_spin_and_layout_rank6(self):
+        # P2.1 (RE-SCOPED). The original P2.1 tested a single hypothesis (only
+        # mixed-spin-summed terms fail) and DISPROVED it as xfail. The re-scoped
+        # gate asserts the COMPLETE model: every failing rank-6 bridge term is
+        # explained by at least one of exactly two mechanisms --
+        #   SPIN   (`_mech_spin`): the bridge drops per-index spin, reading the
+        #          wrong spatial block / summing the wrong channel; and
+        #   LAYOUT (`_mech_layout`): the bridge's free-index order transposes the
+        #          canonical residual axes (a value-identical output permutation).
+        # 0 unexplained proves the inventory is exhaustive -- the precondition for
+        # the fix (encode summed/free-index spin AND canonicalize the output
+        # layout). Measured now: 595 both, 116 layout-only, 7 spin-only, 0 other.
+        import numpy as np
+        from ccgen.spin import spinterm_to_algebraterm
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv = self.no, self.nv
+        nos, nvs = no // 2, nv // 2
+        names = ["a", "b", "c", "i", "j", "k"]
+        merged, spatial, ext = self._rank6_bridge_spatial()
+        unexplained = []
+        for st in merged:
+            at = spinterm_to_algebraterm(st, set(ext))
+            A = _eval_spinterm(st, self.tn, no, no + nv, names)
+            B = residual_einsum(at, nos, nvs, tensors=spatial)
+            if np.abs(A - B).max() > 1e-10:
+                if not (self._mech_spin(st, ext) or self._mech_layout(at, names)):
+                    unexplained.append(
+                        [(f.name, "".join(si.spin for si in f.indices),
+                          "".join(si.name for si in f.indices))
+                         for f in st.factors])
+        self.assertEqual(unexplained, [],
+                         f"{len(unexplained)} failing terms fit neither the spin "
+                         f"nor the layout mechanism, e.g. {unexplained[:3]}")
+
+    def test_p22_layout_mechanism_is_fixed_rank6(self):
+        # P2.2 (post-fix regression gate). R3.1.2 half (ii) canonicalizes the
+        # bridge's `free_indices` (name-sorted within each space; occ-first
+        # between spaces to match the C++ runtime -- see the note in
+        # spinterm_to_algebraterm). `residual_einsum` re-splits by space so its
+        # output stays the canonical [a,b,c,i,j,k] (vir+occ) layout regardless.
+        # This must eliminate the LAYOUT mechanism entirely: no failing term is
+        # `_mech_layout`, AND every remaining failure is a spin error (so the two
+        # mechanisms are now disjoint -- layout resolved, only spin left).
+        # Pre-fix this was 718 failures (595 both, 116 layout-only); post-fix it
+        # is 52, all spin-only. Guards against a regression that reintroduces a
+        # per-term output ordering.
+        import numpy as np
+        from ccgen.spin import spinterm_to_algebraterm
+        from ccgen.tests.residual_eval import residual_einsum
+        no, nv = self.no, self.nv
+        nos, nvs = no // 2, nv // 2
+        names = ["a", "b", "c", "i", "j", "k"]
+        merged, spatial, ext = self._rank6_bridge_spatial()
+        for st in merged:
+            at = spinterm_to_algebraterm(st, set(ext))
+            # the bridge output layout is now always canonical
+            self.assertFalse(self._mech_layout(at, names),
+                             f"bridge still emits a non-canonical layout: "
+                             f"{self._bridge_output_layout(at)}")
+            A = _eval_spinterm(st, self.tn, no, no + nv, names)
+            B = residual_einsum(at, nos, nvs, tensors=spatial)
+            if np.abs(A - B).max() > 1e-10:
+                # every surviving failure must be a spin error
+                self.assertTrue(self._mech_spin(st, ext),
+                                f"a non-spin term still fails after the layout fix: "
+                                f"{[(f.name, f.block) for f in st.factors]}")
 
 
 if __name__ == "__main__":

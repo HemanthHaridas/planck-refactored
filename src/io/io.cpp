@@ -641,8 +641,23 @@ namespace HartreeFock::IO
                 {"uccsd", HartreeFock::PostHF::UCCSD},
                 {"ccsdt", HartreeFock::PostHF::RCCSDT},
                 {"uccsdt", HartreeFock::PostHF::UCCSDT},
+                // The generated arbitrary-order RCC path. All of these map to the
+                // single RCCSDTQ enum value; the excitation rank is carried
+                // separately on OptionsSCF._cc_generated_rank (set in the
+                // "correlation" handler), so higher ranks need no new enum member
+                // or driver branch — the ceiling is PLANCK_CC_MAXORDER alone.
+                // cc3 / ccsdt_gen route CCSDT through the GENERATED arbitrary path
+                // (not the hand-written run_rccsdt) so it produces spatial
+                // amplitudes and can write a .ccamp seed for a later cc4 run
+                // (Route B). Only usable when the rank-3 companion is built
+                // (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON).
+                {"cc3", HartreeFock::PostHF::RCCSDTQ},
+                {"ccsdt_gen", HartreeFock::PostHF::RCCSDTQ},
                 {"ccsdtq", HartreeFock::PostHF::RCCSDTQ},
                 {"cc4", HartreeFock::PostHF::RCCSDTQ},
+                {"ccsdtqp", HartreeFock::PostHF::RCCSDTQ},
+                {"cc5", HartreeFock::PostHF::RCCSDTQ},
+                {"cc6", HartreeFock::PostHF::RCCSDTQ},
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
                 {"fci", HartreeFock::PostHF::FCI},
@@ -708,12 +723,28 @@ namespace HartreeFock::IO
                      return std::expected<void, std::string>{};
                  }},
 
-                {"correlation", [&correlation](const std::string &value) -> std::expected<void, std::string>
+                {"correlation", [&correlation, &scf](const std::string &value) -> std::expected<void, std::string>
                  {
                      auto parsed = map_string_enum<HartreeFock::PostHF>(value);
                      if (!parsed)
                          return std::unexpected(parsed.error());
                      correlation = *parsed;
+                     // For the generated arbitrary-order RCC path (all spellings
+                     // map to RCCSDTQ), carry the requested excitation rank so the
+                     // driver dispatches to the right generated kernel without a
+                     // per-rank enum/branch. Ranks not listed keep the default (4).
+                     if (*parsed == HartreeFock::PostHF::RCCSDTQ)
+                     {
+                         static const std::unordered_map<std::string, int> _cc_rank =
+                             {
+                                 {"cc3", 3}, {"ccsdt_gen", 3},
+                                 {"ccsdtq", 4}, {"cc4", 4},
+                                 {"ccsdtqp", 5}, {"cc5", 5},
+                                 {"cc6", 6},
+                             };
+                         if (auto it = _cc_rank.find(value); it != _cc_rank.end())
+                             scf._cc_generated_rank = it->second;
+                     }
                      return std::expected<void, std::string>{};
                  }},
                 {"engine", [&integral](const std::string &value) -> std::expected<void, std::string>
@@ -751,6 +782,14 @@ namespace HartreeFock::IO
                 {"cc_max_memory_gb", [&scf](const std::string &value) -> std::expected<void, std::string>
                  {
                      scf._cc_max_memory_gb = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"cc_warm_start", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = toBool(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._cc_warm_start = *parsed;
                      return std::expected<void, std::string>{};
                  }},
                 {"mp2_ri_basis", [&mp2](const std::string &value) -> std::expected<void, std::string>

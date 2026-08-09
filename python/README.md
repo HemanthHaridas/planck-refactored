@@ -260,10 +260,11 @@ ccgen/
     restricted_closed_shell.py Spin-orbital -> spatial-orbital IR
   optimization/
     intermediates.py, subexpression.py, permutation.py, symmetry.py
+    factorize.py                               (contraction-path factorizer + operator derivation; see note)
     tau.py, dressing.py, dressed_equation.py   (retired exact-cover dressing route; see note)
   methods/
     ccd.py, ccsd.py, ccsdt.py                  Convenience drivers
-  tests/                                       10 modules (see Testing)
+  tests/                                       12 modules (see Testing)
 ```
 
 > `optimization/{tau,dressing,dressed_equation}.py` implement the term-algebra
@@ -272,6 +273,17 @@ ccgen/
 > diagram representation, dressed operators are identifiable subgraphs, so
 > recognition becomes topological. The code is kept as the record of the
 > abandoned route.
+>
+> `optimization/factorize.py` is the topological realization: it re-associates
+> each residual contraction into the minimum-FLOP-exponent binary tree and
+> *derives* the dressed operators as the reused sub-contractions those trees
+> expose (`identify_tree`, `value_operators`, `recursion_summary`). Over the
+> diagram/canonical-Fock residuals it lowers the peak exponent on every
+> multi-factor `Tₙ·V` term, classifies each intermediate as CCSD-reuse or
+> newly-derived, and establishes a rank-locality structure (each rank reuses all
+> lower operators + adds only its own `V·Tₙ` family). Full statement, proofs, and
+> measured tables in `docs/CCGEN_HIGHER_OPERATOR_REUSE.md`; gated by
+> `ccgen/tests/test_factorize.py` (33 tests).
 
 ## Testing
 
@@ -281,11 +293,12 @@ python -m pytest ccgen/tests/ -v                          # fast suite (no pyscf
 tests/pyscf/.venv/bin/python -m pytest ccgen/tests/test_reference_vs_pyscf.py   # PySCF/FCI gates
 ```
 
-Ten test modules. The core ones:
+Twelve test modules. The core ones:
 
 - **`test_regressions.py`** — equation stability, numerical CCSD-energy correctness, slot tracking, cross-rank reduction, and the `engine="wick"` vs `engine="diagram"` residual-equality gate.
 - **`test_optimizations.py`** — algebraic equivalence of each optimization pass.
 - **`test_diagram.py`** — the diagram engine: enumeration, assembly, the solve-free weight, and the orbit expansion.
+- **`test_factorize.py`** — the contraction-path factorizer: cost model, tree exactness, operator derivation/reuse, savings ranking, and the rank-locality theorem gates (through CCSDTQ).
 - **`test_reference_vs_pyscf.py`** — the PySCF/FCI validation ladder above (pyscf venv).
 
 ## Integration with Planck

@@ -33,9 +33,27 @@ namespace HartreeFock::Correlation::CC
             const ArbitraryOrderDenominatorCache &,
             const ArbitraryOrderRCCAmplitudes &)>;
 
+        // R3.1.3d / Gap B3: a residual kernel for a higher independent Sz sector
+        // of a rank-2n amplitude (n >= 4). `residuals_by_rank` holds the reference
+        // sector per rank; `sector_residuals` holds the extra sectors, each tagged
+        // (excitation_rank, tag) so B4 updates the matching amplitude block
+        // (`ArbitraryOrderRCCAmplitudes::sector_tensor`). Empty for <= CCSDT.
+        struct SectorResidual
+        {
+            int excitation_rank = 0;
+            std::string tag;
+            ResidualKernel kernel;
+        };
+
         int max_excitation_rank = 0;
         EnergyKernel energy;
         std::vector<ResidualKernel> residuals_by_rank; // rank r at [r-1]
+
+        // The independent Sz sectors this method carries, (excitation_rank, tag).
+        // Feeds make_zero_rcc_amplitudes so the state allocates the sector blocks
+        // (Gap B1) that `sector_residuals` evaluate and B4 updates.
+        std::vector<std::pair<int, std::string>> sector_tags;
+        std::vector<SectorResidual> sector_residuals;
     };
 
     struct GeneratedArbitraryOrderSolveResult
@@ -60,6 +78,24 @@ namespace HartreeFock::Correlation::CC
         int max_excitation_rank,
         const std::string &tag = "CC[GENERATED] :");
 
+    // Warm-start seed (W6.0): overwrite the lowest `seed.by_rank.size()` ranks of
+    // the state's zero amplitudes with converged lower-rank amplitudes. Ranks not
+    // covered by the seed stay zero. Each seeded rank's dims must match the state's
+    // slot for that rank (occ/virt shape); a mismatch is an error, not silent.
+    std::expected<void, std::string>
+    seed_arbitrary_order_amplitudes(
+        ArbitraryOrderTensorCCState &state,
+        const ArbitraryOrderRCCAmplitudes &seed);
+
+    // Gap B4: allocate the higher Sz sector amplitude blocks the kernel bundle
+    // declares (`kernels.sector_tags`) onto an already-prepared state. `prepare`
+    // runs before the bundle is known, so the state starts with no sectors; this
+    // reconciles them (zero-init) so evaluate/update can drive each sector. A
+    // no-op when the bundle has no sectors (<= CCSDT).
+    void ensure_amplitude_sectors(
+        ArbitraryOrderTensorCCState &state,
+        const GeneratedArbitraryOrderKernels &kernels);
+
     std::expected<ArbitraryOrderResiduals, std::string>
     evaluate_generated_arbitrary_order_residuals(
         const ArbitraryOrderTensorCCState &state,
@@ -74,7 +110,8 @@ namespace HartreeFock::Correlation::CC
         double tol_residual,
         double damping,
         bool use_diis,
-        int diis_dim);
+        int diis_dim,
+        const std::string &log_tag = "CC[GENERATED] :");
 } // namespace HartreeFock::Correlation::CC
 
 #endif // HF_POSTHF_CC_GENERATED_ARBITRARY_RUNTIME_H

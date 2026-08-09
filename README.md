@@ -31,7 +31,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 - **Full point-group ERI reduction** — direct-SCF Fock builds exploit the *entire* molecular point group (not just its D2h subgroup) via a petite-list / skeleton-Fock symmetrization scheme: only orbit-representative shell quartets are computed, then the skeleton Fock is projected back to the totally-symmetric component. Available for RHF, UHF, and ROHF in both the Cartesian and real-spherical-harmonic basis, OpenMP-parallel and Schwarz-screened, with the density-independent skeleton persisted across SCF iterations. Validated through d-shells (C2v→C3v→Td) with symmetry-on energies matching symmetry-off
 - **Post-HF** — RMP2 and UMP2 correlation energy corrections; RMP2 natural orbital analysis; analytic RMP2 and UMP2 nuclear gradients; RCCSD for canonical closed-shell RHF references; teaching-oriented determinant-space UCCSD/UCCSDT prototypes for small UHF systems; RCCSDT with automatic backend dispatch across three tiers (determinant-space prototype, tensor production solver, tensor-optimized ccgen-driven backend); CASSCF and RASSCF multireference active-space calculations; full configuration interaction (FCI) over the entire MO space for small RHF references
 - **Coupled cluster** — `RCCSD` is an iterative spin-orbital amplitude solver for canonical RHF references. `RCCSDT` automatically selects between (1) a determinant-space teaching prototype (≤12 spin orbitals and ≤1200 determinants), (2) a tensor production backend (dressed-intermediate CCSD + staged T3 amplitude updates), and (3) a tensor-optimized backend that consumes ccgen-generated warm-start kernels for restricted references. The backend can be forced via the `PLANCK_RCCSDT_BACKEND` environment variable (`determinant`, `tensor`, or `optimized`). `UCCSD` and `UCCSDT` currently use determinant-space prototypes aimed at small teaching examples and validation studies.
-- **ccgen — symbolic coupled-cluster equation generator** — a Python package (`python/ccgen/`) that derives spin-orbital CC residual equations at arbitrary truncation order (CCD through CC6) directly from the normal-ordered Hamiltonian via Baker-Campbell-Hausdorff expansion, Wick contraction, canonicalization, and connectivity filtering. Supports algebraic optimizations (orbital-energy denominator collection, permutation-based term grouping, implicit antisymmetry exploitation), intermediate tensor extraction with layout hints, and four tiers of C++ emission including a Planck-specific tensor emitter that targets `Tensor2D`/`Tensor4D`/`Tensor6D` and the production CC infrastructure in `src/post_hf/cc/`. Used to generate the warm-start kernels consumed by the tensor-optimized RCCSDT backend.
+- **ccgen — symbolic coupled-cluster equation generator** — a Python package (`python/ccgen/`) that derives spin-orbital CC residual equations at arbitrary truncation order (CCD through CC6) directly from the normal-ordered Hamiltonian via Baker-Campbell-Hausdorff expansion, Wick contraction, canonicalization, and connectivity filtering. Supports algebraic optimizations (orbital-energy denominator collection, permutation-based term grouping, implicit antisymmetry exploitation), intermediate tensor extraction with layout hints, a contraction-path factorizer that mechanically derives the dressed-operator set for each rank (see below), and four tiers of C++ emission including a Planck-specific tensor emitter that targets `Tensor2D`/`Tensor4D`/`Tensor6D` and the production CC infrastructure in `src/post_hf/cc/`. Used to generate the warm-start kernels consumed by the tensor-optimized RCCSDT backend.
 - **RMP2 natural orbitals** — natural orbital occupation numbers and coefficients printed after a single-point RMP2 run
 - **CASSCF** — Complete Active Space SCF with full-CI, state-averaged (SA-CASSCF) roots, matrix-free second-order orbital optimization, and a dedicated active-integral-cache transform for the orbital-gradient/response hot path. Runs from either an RHF or an ROHF reference; open-shell (high-spin) systems are supported as long as the unpaired electrons live inside the active space, so the inactive core stays closed-shell and doubly occupied
 - **RASSCF** — Restricted Active Space SCF extending CASSCF with RAS1/RAS2/RAS3 subspace partitioning and configurable hole/electron occupation restrictions; shares the CASSCF reference handling, so it also accepts RHF and ROHF references under the same closed-inactive-core condition
@@ -1138,6 +1138,24 @@ eqs = generate_cc_equations(
 print(print_equations("ccsd"))
 print(print_cpp_planck("ccsdt", include_intermediates=True))
 ```
+
+#### Contraction-path factorization — deriving the dressed operators
+
+<p align="justify">
+<code>ccgen.optimization.factorize</code> re-associates each residual contraction
+into the binary tree that minimizes the FLOP exponent, and in the same step
+<em>derives</em> the dressed operators as the reused sub-contractions those trees
+expose — no hand-seeding per rank. Over the diagram-generated, canonical-Fock
+residuals it (1) lowers the peak exponent on every multi-factor <code>Tₙ·V</code>
+term (e.g. <code>t2·t3·v</code> from <code>o⁵v⁵</code> to <code>o⁴v³</code>,
+<code>t2·t4·v</code> from <code>o⁶v⁶</code> to <code>o⁵v⁴</code>), (2) classifies
+each intermediate as a reuse of a CCSD operator or a newly-derived one, and
+(3) ranks operators by <em>savings</em> = (uses−1)·build-flops rather than raw
+frequency. The result is a rank-locality theorem: each excitation rank reuses
+every lower-rank operator verbatim and adds only its own <code>V·Tₙ</code>
+family. See <code>docs/CCGEN_HIGHER_OPERATOR_REUSE.md</code> for the theorem,
+proofs, and measured tables.
+</p>
 
 ### Cross-basis restart — STO-3G → 6-31G
 

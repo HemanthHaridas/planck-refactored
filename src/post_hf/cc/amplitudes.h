@@ -61,10 +61,26 @@ namespace HartreeFock::Correlation::CC
     {
         std::vector<TensorND> by_rank; // rank r stored at by_rank[r-1]
 
+        // R3.1.3d: higher independent Sz sectors of a rank-2n amplitude
+        // (n >= 4). `by_rank` holds the reference (balanced) sector; a rank-2n
+        // amplitude also has floor(n/2) sectors, keyed here by (rank, tag) where
+        // tag is the alpha-before-beta block string, e.g. {4, "aaabaaab"}. The
+        // spin-adapted generated kernels read a sector via `sector_tensor`. Empty
+        // for methods <= CCSDT, so the default arbitrary-order path is unaffected.
+        std::vector<std::pair<std::pair<int, std::string>, TensorND>> sectors;
+
         [[nodiscard]] int max_rank() const noexcept;
         [[nodiscard]] bool has_rank(int excitation_rank) const noexcept;
         [[nodiscard]] std::expected<DenseTensorView, std::string> tensor(int excitation_rank);
         [[nodiscard]] std::expected<ConstDenseTensorView, std::string> tensor(int excitation_rank) const;
+
+        // A higher Sz sector's dense view (R3.1.3d). Errors if the sector was not
+        // allocated (the multi-sector solver populates it; a CCSDT/reference-only
+        // run never asks). The generated kernels bind this once per kernel.
+        [[nodiscard]] std::expected<DenseTensorView, std::string>
+        sector_tensor(int excitation_rank, const std::string &tag);
+        [[nodiscard]] std::expected<ConstDenseTensorView, std::string>
+        sector_tensor(int excitation_rank, const std::string &tag) const;
     };
 
     // `include_triples=false` is useful for the current teaching code paths that
@@ -88,6 +104,21 @@ namespace HartreeFock::Correlation::CC
     ArbitraryOrderRCCAmplitudes make_zero_rcc_amplitudes(
         const RHFReference &reference,
         int max_excitation_rank);
+
+    // R3.1.3d / Gap B1: zero-init amplitudes carrying, in addition to the
+    // per-rank reference blocks (`by_rank`), the higher independent Sz sectors
+    // listed in `sectors` as (excitation_rank, tag) -- e.g. {{4, "aaabaaab"}}
+    // for CCSDTQ. Each sector block has the same occ/vir dims as its rank's
+    // reference block (only the spin projection it represents differs), so it is
+    // `rank_dims(rank)`-shaped and zero-initialized. The multi-sector solver
+    // reads/updates each via `ArbitraryOrderRCCAmplitudes::sector_tensor`. The
+    // no-sector overload above delegates here with an empty list (unchanged for
+    // <= CCSDT). The sector list is supplied by the generated kernel bundle
+    // (Gap B3); this allocator does not re-derive spin algebra.
+    ArbitraryOrderRCCAmplitudes make_zero_rcc_amplitudes(
+        const RHFReference &reference,
+        int max_excitation_rank,
+        const std::vector<std::pair<int, std::string>> &sectors);
 } // namespace HartreeFock::Correlation::CC
 
 #endif // HF_POSTHF_CC_AMPLITUDES_H

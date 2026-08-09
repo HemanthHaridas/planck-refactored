@@ -37,10 +37,41 @@ def main() -> None:
              "(experimental; default off).",
     )
     parser.add_argument(
+        "--spin-adapt",
+        action="store_true",
+        help="Emit genuine spatial (restricted) RCC kernels via the R1.0 "
+             "spin-adaptation instead of raw spin-orbital algebra bound to "
+             "spatial storage. Without this the emitted energy carries the "
+             "0.25*t2*oovv defect (spin-orbital 1/4 with no spin sum), which "
+             "drives the correlation energy ~4x wrong. Applies to BOTH the "
+             "tensor-backend and arbitrary-order TUs this script emits; it does "
+             "NOT touch the warm-start .inc (emitted elsewhere, correct on a "
+             "spin-orbital reference). Default off for byte-compatibility with "
+             "the historical (defective) emit.",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=["diagram", "wick"],
+        default="diagram",
+        help="Equation-generation engine. 'diagram' is canonical-by-construction "
+             "and ~200x faster at high rank (CCSDTQ ~3s vs ~600s), residual-equal "
+             "to 'wick'. Default: diagram.",
+    )
+    parser.add_argument(
         "--intermediate-threshold",
         type=int,
         default=5,
         help="Min usage count for extracted intermediates.",
+    )
+    parser.add_argument(
+        "--arbitrary-lower-ranks",
+        action="store_true",
+        help="Additionally emit each rank<4 method (ccsd/ccsdt) in "
+             "arbitrary-order (spatial ArbitraryOrderRCCAmplitudes) form as "
+             "<method>_arbitrary_planck_generated.cpp, so the generated runtime "
+             "and .ccamp restart can consume them as spatial seed sources. The "
+             "plain <method>_planck_generated.cpp (tensor_backend types) is still "
+             "emitted unchanged.",
     )
     parser.add_argument(
         "--intermediate-memory-budget-mb",
@@ -59,11 +90,19 @@ def main() -> None:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for method in args.methods:
-        code = print_cpp_planck(
+    def emit(method: str, *, force_arbitrary: bool) -> str:
+        # The arbitrary companion is co-included with the ccsdtq TU in the
+        # kernel registry; its shape-named intermediate builders (build_W_oo_3,
+        # ...) carry no method suffix and would collide there. Emit it WITHOUT
+        # intermediates so the residual is self-contained (no build_W_* symbols).
+        include_intermediates = args.include_intermediates and not force_arbitrary
+        return print_cpp_planck(
             method.lower(),
-            include_intermediates=args.include_intermediates,
+            engine=args.engine,
+            include_intermediates=include_intermediates,
             factorize_tau=args.factorize_tau,
+            spin_adapt=args.spin_adapt,
+            force_arbitrary=force_arbitrary,
             intermediate_threshold=args.intermediate_threshold,
             intermediate_memory_budget_bytes=(
                 None
@@ -76,9 +115,22 @@ def main() -> None:
                 else args.intermediate_peak_memory_budget_mb * 1024 * 1024
             ),
         )
+
+    for method in args.methods:
+        code = emit(method, force_arbitrary=False)
         out_path = output_dir / f"{method.lower()}_planck_generated.cpp"
         out_path.write_text(code + "\n", encoding="utf-8")
         print(out_path)
+
+        # Lower-rank arbitrary-order companion TUs (spatial RCC amplitude type),
+        # for cross-rank .ccamp restart / the generated runtime. Rank >= 4 methods
+        # are already arbitrary-order, so no companion is needed there.
+        from ccgen.cluster import parse_cc_level  # local: avoid import cost when unused
+        if args.arbitrary_lower_ranks and max(parse_cc_level(method.lower()), default=0) < 4:
+            arb_code = emit(method, force_arbitrary=True)
+            arb_path = output_dir / f"{method.lower()}_arbitrary_planck_generated.cpp"
+            arb_path.write_text(arb_code + "\n", encoding="utf-8")
+            print(arb_path)
 
 
 if __name__ == "__main__":

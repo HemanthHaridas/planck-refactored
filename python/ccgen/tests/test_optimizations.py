@@ -967,8 +967,15 @@ class EmissionTests(unittest.TestCase):
             "TensorND result(std::vector<int>{no, no, no, no, nv, nv, nv, nv}, 0.0);",
             code,
         )
+        # The arbitrary-order runtime binds the rank-4 amplitude view once as a
+        # local `t4` (via _amplitude_view_bindings) and indexes that, rather than
+        # calling amplitudes.tensor(4)(...) inline at every use.
         self.assertIn(
-            "amplitudes.tensor(4)({i, j, k, l, a, b, c, d})",
+            "const auto t4 = amplitudes.tensor(4).value();",
+            code,
+        )
+        self.assertIn(
+            "t4({i, j, k, l, a, b, c, d})",
             code,
         )
         self.assertIn(

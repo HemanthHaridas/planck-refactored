@@ -41,14 +41,25 @@ _CANONICAL_ERI_BLOCKS: dict[str, tuple[str, str, str, str]] = {
     "vvvv": ("v", "v", "v", "v"),
 }
 
+# These are the symmetries _map_eri_tensor may use to route an abstract `v`
+# factor to a canonical mo_blocks block. `mo_blocks` holds the NON-antisymmetrized
+# spatial physicist integral <pq|rs> (built by build_tensor_cc_block_cache;
+# rebound to physicist for the generated-kernel path in
+# generated_arbitrary_prepare.cpp). Its only genuine index symmetries for real
+# orbitals are the four +1 relations below: identity, particle swap <qp|sr>,
+# bra<->ket <rs|pq>, and their product <sr|qp>. They cover all 16 four-index o/v
+# patterns (verified), so no coverage is lost.
+#
+# The four antisymmetric single-swap relations <qp|rs> = -<pq|rs> and
+# <pq|sr> = -<pq|rs> hold ONLY for the antisymmetrized <pq||rs> the spin-ORBITAL
+# equations use -- NOT for these spatial blocks. Emitting them produced reads like
+# `oovv(l,k,c,d)` with a bogus sign, which was the residual-emit defect: the
+# energy kernel (identity-perm oovv reads only) was exact while the doubles/
+# quadruples residuals were wrong. Do NOT re-add the -1 perms.
 _ERI_SYMMETRY_PERMUTATIONS: tuple[tuple[tuple[int, int, int, int], int], ...] = (
     ((0, 1, 2, 3), +1),
-    ((1, 0, 2, 3), -1),
-    ((0, 1, 3, 2), -1),
     ((1, 0, 3, 2), +1),
     ((2, 3, 0, 1), +1),
-    ((3, 2, 0, 1), -1),
-    ((2, 3, 1, 0), -1),
     ((3, 2, 1, 0), +1),
 )
 
@@ -176,10 +187,15 @@ def _map_eri_tensor(tensor: Tensor | LoweredTensorFactor) -> tuple[int, str]:
 def _map_factor(
     tensor: Tensor | LoweredTensorFactor,
     intermediate_names: frozenset[str] | None = None,
+    arbitrary_amplitudes: bool = False,
 ) -> tuple[int, str]:
     tensor_obj = _source_tensor(tensor)
     indices = _access_indices(tensor)
-    amplitude_match = re.fullmatch(r"t(\d+)", tensor_obj.name)
+    # `t<rank>` is the reference Sz sector; `t<rank>_<tag>` (R3.1.3d) is a higher
+    # independent Sz sector of the same amplitude (t4_aaabaaab), stored/read as a
+    # distinct block. Both are rank-`\d+` amplitudes; the tag routes the read to
+    # the sector's own tensor.
+    amplitude_match = re.fullmatch(r"t(\d+)(?:_([ab]+))?", tensor_obj.name)
 
     if tensor_obj.name == "f":
         left, right = indices
@@ -198,10 +214,24 @@ def _map_factor(
 
     if amplitude_match is not None:
         excitation_rank = int(amplitude_match.group(1))
+        sector_tag = amplitude_match.group(2)      # None for the reference sector
         occ = [idx.name for idx in indices if idx.space == "occ"]
         vir = [idx.name for idx in indices if idx.space == "vir"]
         if len(occ) != excitation_rank or len(vir) != excitation_rank:
             raise ValueError(f"Invalid amplitude tensor layout for {tensor_obj!r}")
+        # The arbitrary-order runtime type (ArbitraryOrderRCCAmplitudes, rank ≥ 4
+        # methods) exposes only `.tensor(rank)` — returning std::expected<view> —
+        # with no t1/t2/t3 members. The view is bound ONCE per kernel/builder as a
+        # local `t<rank>` (see _amplitude_view_bindings); the factor then indexes
+        # that local with an initializer-list `t<rank>({...})`. The rank ≤ 3
+        # tensor_backend types (RCCSD/RCCSDTAmplitudes) have direct t1/t2/t3(...)
+        # accessors instead.
+        if arbitrary_amplitudes:
+            # R3.1.3d: a higher Sz sector reads from its own bound view
+            # `t<rank>_<tag>` (sector_tag), the reference from `t<rank>`.
+            view = (f"t{excitation_rank}_{sector_tag}" if sector_tag
+                    else f"t{excitation_rank}")
+            return 1, f"{view}({{{', '.join(occ + vir)}}})"
         if excitation_rank == 1:
             return 1, f"amplitudes.t1({occ[0]}, {vir[0]})"
         if excitation_rank == 2:
@@ -256,11 +286,14 @@ def emit_planck_term(
     lhs: str = "result",
     indent: int = 4,
     intermediate_names: frozenset[str] | None = None,
+    arbitrary_amplitudes: bool = False,
 ) -> str:
     """Emit a single algebraic term using Planck tensor accessors.
 
     ``intermediate_names`` lists the materialized intermediates in scope (the
-    kernel's specs) so their factors resolve as local references (D7.3)."""
+    kernel's specs) so their factors resolve as local references (D7.3).
+    ``arbitrary_amplitudes`` routes t-amplitude accessors through
+    ``.tensor(rank)(...)`` for the arbitrary-order runtime type (rank ≥ 4)."""
     pad = " " * indent
     lines: list[str] = []
 
@@ -283,7 +316,8 @@ def emit_planck_term(
     sign = 1
     factor_exprs: list[str] = []
     for factor in factors:
-        factor_sign, factor_expr = _map_factor(factor, intermediate_names)
+        factor_sign, factor_expr = _map_factor(
+            factor, intermediate_names, arbitrary_amplitudes)
         sign *= factor_sign
         factor_exprs.append(factor_expr)
 
@@ -307,18 +341,51 @@ def emit_planck_term(
     return "\n".join(lines)
 
 
-def _amplitude_type(method: str) -> str:
+def _amplitude_type(method: str, force_arbitrary: bool = False) -> str:
     max_rank = max(parse_cc_level(method), default=0)
-    if max_rank >= 4:
+    if force_arbitrary or max_rank >= 4:
         return "ArbitraryOrderRCCAmplitudes"
     if max_rank >= 3:
         return "RCCSDTAmplitudes"
     return "RCCSDAmplitudes"
 
 
-def _denominator_type(method: str) -> str:
+def _amplitude_ranks_used(terms) -> list[tuple[int, str | None]]:
+    """Distinct t-amplitude `(rank, sector_tag)` pairs referenced across `terms`,
+    sorted. `sector_tag` is None for the reference Sz sector (`t<rank>`) and the
+    tag string for a higher sector (`t<rank>_<tag>`, R3.1.3d). Drives the
+    per-kernel view bindings for the arbitrary-order runtime."""
+    used: set[tuple[int, str | None]] = set()
+    for term in terms:
+        for factor in term.factors:
+            m = re.fullmatch(r"t(\d+)(?:_([ab]+))?", _source_tensor(factor).name)
+            if m:
+                used.add((int(m.group(1)), m.group(2)))
+    return sorted(used, key=lambda rt: (rt[0], rt[1] or ""))
+
+
+def _amplitude_view_bindings(terms, indent: int = 4) -> list[str]:
+    """C++ lines binding one amplitude view per (rank, sector) used — the
+    arbitrary-order runtime returns std::expected from its accessors, so the view
+    is unwrapped once here and indexed in the loops. `.value()` is safe: the
+    solver constructs every rank ≤ max before calling. The reference sector binds
+    `t<rank> = amplitudes.tensor(rank)`; a higher Sz sector (R3.1.3d) binds
+    `t<rank>_<tag> = amplitudes.sector_tensor(rank, "<tag>")`."""
+    pad = " " * indent
+    lines: list[str] = []
+    for rank, tag in _amplitude_ranks_used(terms):
+        if tag is None:
+            lines.append(f"{pad}const auto t{rank} = amplitudes.tensor({rank}).value();")
+        else:
+            lines.append(
+                f'{pad}const auto t{rank}_{tag} = '
+                f'amplitudes.sector_tensor({rank}, "{tag}").value();')
+    return lines
+
+
+def _denominator_type(method: str, force_arbitrary: bool = False) -> str:
     max_rank = max(parse_cc_level(method), default=0)
-    if max_rank >= 4:
+    if force_arbitrary or max_rank >= 4:
         return "ArbitraryOrderDenominatorCache"
     return "DenominatorCache"
 
@@ -358,6 +425,7 @@ def _emit_kernel(
     lowered_terms: Sequence[RestrictedClosedShellTerm] | None = None,
     intermediates: Sequence[IntermediateSpec] | None = None,
     free_indices: Sequence[Index] | None = None,
+    force_arbitrary: bool = False,
 ) -> str:
     lowered_terms = tuple(lowered_terms or ())
     if free_indices is None:
@@ -368,8 +436,8 @@ def _emit_kernel(
     free_indices = tuple(free_indices)
     result_rank = len(free_indices)
     result_type = _tensor_type(result_rank)
-    amplitude_type = _amplitude_type(method)
-    denominator_type = _denominator_type(method)
+    amplitude_type = _amplitude_type(method, force_arbitrary)
+    denominator_type = _denominator_type(method, force_arbitrary)
     intermediate_map = {spec.name: spec for spec in intermediates or ()}
 
     lines: list[str] = []
@@ -407,25 +475,112 @@ def _emit_kernel(
     emitted_terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm]
     emitted_terms = lowered_terms if lowered_terms else terms
     intermediate_names = frozenset(intermediate_map)
+    arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
+
+    # Large kernels (the spin-adapted CCSDTQ quadruples residuals are ~5000
+    # statements each) are super-linear to optimize as one function -- an -O3
+    # compile of the containing TU takes 40+ min. Split them into `_partN`
+    # sub-functions each accumulating a slice of the terms into `result` (passed
+    # by reference); the compiler then optimizes N bounded functions in ~linear
+    # total time. Small kernels stay inline (byte-identical). The intermediate
+    # builds and amplitude-view bindings are re-emitted per part -- cheap, local,
+    # and keeps each part self-contained. `result_rank == 0` (energy) stays inline
+    # (a scalar accumulator can't be passed the same way and is always tiny).
+    if result_rank > 0 and len(emitted_terms) > _KERNEL_CHUNK_TERMS:
+        return _emit_chunked_kernel(
+            method, target, lines, emitted_terms, result_type, free_indices,
+            denominator_type, amplitude_type, required_intermediates,
+            intermediate_names, arbitrary)
+
+    if arbitrary:
+        bindings = _amplitude_view_bindings(emitted_terms)
+        if bindings:
+            lines.append("")
+            lines.extend(bindings)
     for i, term in enumerate(emitted_terms, start=1):
         lines.append(f"    // Term {i}")
         lines.append(emit_planck_term(
             term, lhs="result", indent=4,
-            intermediate_names=intermediate_names))
+            intermediate_names=intermediate_names,
+            arbitrary_amplitudes=arbitrary))
         lines.append("")
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
 
 
+# Terms-per-function threshold above which a residual kernel is split into
+# `_partN` sub-functions (see _emit_kernel). Smaller = smaller functions = faster
+# optimizer, with diminishing returns; measured g++-15 -O1 on the CCSDTQ registry
+# object: 512→176s, 256→135s. 256 is the chosen balance (fewer, but still bounded,
+# functions). The largest kernel (6871-term sector) splits into ~27 parts.
+_KERNEL_CHUNK_TERMS = 256
+
+
+def _emit_chunked_kernel(
+    method, target, header_lines, emitted_terms, result_type, free_indices,
+    denominator_type, amplitude_type, required_intermediates,
+    intermediate_names, arbitrary,
+):
+    """Emit a large residual kernel as `_partN` sub-functions accumulating into a
+    by-reference `result`, plus the main kernel that allocates `result`, calls
+    each part, and returns it. Keeps per-function body size bounded so any -O
+    level compiles in ~linear time. See _emit_kernel for why."""
+    kernel = _kernel_name(method, target)
+    n_parts = (len(emitted_terms) + _KERNEL_CHUNK_TERMS - 1) // _KERNEL_CHUNK_TERMS
+
+    out: list[str] = []
+    for p in range(n_parts):
+        chunk = emitted_terms[p * _KERNEL_CHUNK_TERMS:(p + 1) * _KERNEL_CHUNK_TERMS]
+        out.append(f"static void {kernel}_part{p}(")
+        out.append(f"    {result_type} &result,")
+        out.append("    const CanonicalRHFCCReference &reference,")
+        out.append("    const TensorCCBlockCache &mo_blocks,")
+        out.append(f"    const {denominator_type} &denominators,")
+        out.append(f"    const {amplitude_type} &amplitudes)")
+        out.append("{")
+        out.append("    const int no = reference.orbital_partition.n_occ;")
+        out.append("    const int nv = reference.orbital_partition.n_virt;")
+        out.append("    (void)no; (void)nv;")
+        if required_intermediates:
+            for spec in required_intermediates:
+                out.append(
+                    f"    const auto {spec.name} = build_{spec.name}("
+                    "reference, mo_blocks, denominators, amplitudes);")
+        if arbitrary:
+            bindings = _amplitude_view_bindings(chunk)
+            out.extend(bindings)
+        for i, term in enumerate(chunk, start=1):
+            out.append(emit_planck_term(
+                term, lhs="result", indent=4,
+                intermediate_names=intermediate_names,
+                arbitrary_amplitudes=arbitrary))
+        out.append("}")
+        out.append("")
+
+    # main kernel: allocate result, call the parts, return it. header_lines holds
+    # the signature + result allocation already; strip its trailing setup we don't
+    # reuse (the parts do their own no/nv + intermediates) by appending calls.
+    body = list(header_lines)
+    for p in range(n_parts):
+        body.append(
+            f"    {kernel}_part{p}(result, reference, mo_blocks, denominators, amplitudes);")
+    body.append("    return result;")
+    body.append("}")
+    return "\n".join(out + body)
+
+
 def _emit_intermediate_builder(
     method: str,
     spec: IntermediateSpec,
     sibling_names: frozenset[str] | None = None,
+    factor_body: bool = False,
+    stride_order: bool = False,
+    force_arbitrary: bool = False,
 ) -> str:
     result_type = _tensor_type(spec.rank)
-    amplitude_type = _amplitude_type(method)
-    denominator_type = _denominator_type(method)
+    amplitude_type = _amplitude_type(method, force_arbitrary)
+    denominator_type = _denominator_type(method, force_arbitrary)
     lowered_definition_terms = tuple(
         lower_term_restricted_closed_shell(term, "reference")
         for term in spec.definition_terms
@@ -451,11 +606,44 @@ def _emit_intermediate_builder(
     lines.append(
         f"    // Intermediate {spec.name} ({spec.index_space_sig}, usage={spec.usage_count})"
     )
-    for i, term in enumerate(lowered_definition_terms, start=1):
-        lines.append(f"    // Definition term {i}")
-        lines.append(emit_planck_term(
-            term, lhs="result", indent=4, intermediate_names=sibling_names))
-        lines.append("")
+
+    # M3.0: emit the builder body as a factored contraction tree (scratch-step
+    # pairwise contractions) instead of one flat n-ary nest, when it factors
+    # below the flat cost. Cuts the builder's own FLOP scaling (e.g.
+    # W_t1t2v_oooovv o^5v^3 -> o^5v^2) at ~0.3x scratch memory. Falls back to the
+    # flat lowered emit for single-step (<=2-factor) definitions.
+    from ..optimization.factorize import factored_builder_steps
+    steps = factored_builder_steps(spec, stride_order=stride_order)
+    arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
+    if arbitrary:
+        # bind amplitude views once; the factored steps and the flat definition
+        # both reference the same leaf amplitudes, so bind from the definition.
+        binding_terms = ([s for _, s in steps] if (factor_body and len(steps) > 1)
+                         else lowered_definition_terms)
+        bindings = _amplitude_view_bindings(binding_terms)
+        if bindings:
+            lines.extend(bindings)
+            lines.append("")
+    if factor_body and len(steps) > 1:
+        scratch_names = frozenset(
+            lhs for lhs, _ in steps if lhs != "result")
+        names_in_scope = (sibling_names or frozenset()) | scratch_names
+        for lhs, step in steps:
+            if lhs != "result":
+                stype = _tensor_type(len(step.free_indices))
+                lines.append(
+                    f"    {stype} {lhs}({_dims_expr(step.free_indices, stype)});")
+            lines.append(emit_planck_term(
+                step, lhs=lhs, indent=4, intermediate_names=names_in_scope,
+                arbitrary_amplitudes=arbitrary))
+            lines.append("")
+    else:
+        for i, term in enumerate(lowered_definition_terms, start=1):
+            lines.append(f"    // Definition term {i}")
+            lines.append(emit_planck_term(
+                term, lhs="result", indent=4, intermediate_names=sibling_names,
+                arbitrary_amplitudes=arbitrary))
+            lines.append("")
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
@@ -465,18 +653,43 @@ def _emit_arbitrary_order_kernel_bundle(
     method: str,
     equations: dict[str, list[AlgebraTerm]],
     lowered_equations: dict[str, list[RestrictedClosedShellTerm]],
+    force_arbitrary: bool = False,
 ) -> str:
     max_rank = max(parse_cc_level(method), default=0)
-    if max_rank < 4:
+    if max_rank < 4 and not force_arbitrary:
         return ""
 
+    # Split targets into the per-rank REFERENCE residuals (residuals_by_rank) and
+    # the higher-Sz SECTOR residuals (`quadruples_aaabaaab`, R3.1.3d), keyed
+    # (rank, tag). The sector kernels are emitted as their own functions; B3
+    # registers them in the bundle's `sector_residuals` + `sector_tags` so B1
+    # allocates the sector amplitude block and B4 evaluates/updates it.
     ranked_targets: list[tuple[int, str]] = []
+    sector_targets: list[tuple[int, str, str]] = []   # (rank, tag, target)
     for target, terms in equations.items():
         if target == "energy":
             continue
         rank = _target_rank(target, terms, lowered_equations.get(target))
-        ranked_targets.append((rank, target))
+        m = re.search(r"_([ab]+)$", target)
+        if m:
+            sector_targets.append((rank, m.group(1), target))
+        else:
+            ranked_targets.append((rank, target))
     ranked_targets.sort()
+    sector_targets.sort()
+
+    def _residual_lambda(target: str, indent: str) -> list[str]:
+        return [
+            f"{indent}[](",
+            f"{indent}    const CanonicalRHFCCReference &reference,",
+            f"{indent}    const TensorCCBlockCache &mo_blocks,",
+            f"{indent}    const ArbitraryOrderDenominatorCache &denominators,",
+            f"{indent}    const ArbitraryOrderRCCAmplitudes &amplitudes) -> TensorND",
+            f"{indent}{{",
+            f"{indent}    return to_tensor_nd("
+            f"{_kernel_name(method, target)}(reference, mo_blocks, denominators, amplitudes));",
+            f"{indent}}}",
+        ]
 
     lines: list[str] = []
     lines.append(f"GeneratedArbitraryOrderKernels make_generated_{method}_kernels()")
@@ -487,16 +700,13 @@ def _emit_arbitrary_order_kernel_bundle(
     lines.append(f"    kernels.residuals_by_rank.reserve({max_rank});")
     for rank, target in ranked_targets:
         lines.append("    kernels.residuals_by_rank.push_back(")
-        lines.append("        [](")
-        lines.append("            const CanonicalRHFCCReference &reference,")
-        lines.append("            const TensorCCBlockCache &mo_blocks,")
-        lines.append("            const ArbitraryOrderDenominatorCache &denominators,")
-        lines.append("            const ArbitraryOrderRCCAmplitudes &amplitudes) -> TensorND")
-        lines.append("        {")
-        lines.append(
-            "            return to_tensor_nd("
-            f"{_kernel_name(method, target)}(reference, mo_blocks, denominators, amplitudes));"
-        )
+        lines.extend(_residual_lambda(target, "        "))
+        lines.append("        );")
+    for rank, tag, target in sector_targets:
+        lines.append(f'    kernels.sector_tags.push_back({{{rank}, "{tag}"}});')
+        lines.append("    kernels.sector_residuals.push_back(")
+        lines.append(f'        {{{rank}, "{tag}",')
+        lines.extend(_residual_lambda(target, "         "))
         lines.append("        });")
     lines.append("    return kernels;")
     lines.append("}")
@@ -508,18 +718,36 @@ def emit_planck_translation_unit(
     equations: dict[str, list[AlgebraTerm]],
     intermediates: Sequence[IntermediateSpec] | None = None,
     lowered_equations: dict[str, list[RestrictedClosedShellTerm]] | None = None,
+    factor_builder_bodies: bool = False,
+    force_arbitrary: bool = False,
+    spin_adapted: bool = False,
 ) -> str:
-    """Emit a Planck-compatible C++ translation unit."""
+    """Emit a Planck-compatible C++ translation unit.
+
+    ``factor_builder_bodies`` (M3.0): emit each intermediate's `build_W` as a
+    factored contraction tree (scratch-step pairwise contractions) instead of one
+    flat n-ary loop nest, cutting the builder's own FLOP scaling. Default off ->
+    byte-identical flat emit.
+
+    ``spin_adapted`` (R3.1.3d): the ``equations`` are ALREADY spatial RCC
+    ``AlgebraTerm``s from ``spin_adapt_equations`` -- the genuine spatial
+    contraction (2*(direct)-(exchange)), the whole point of the spin adaptation.
+    Skip the relabel-only ``lower_equations_restricted_closed_shell`` (which would
+    both re-apply the defect it was meant to replace AND crash on the multi-Sz
+    target names like ``quadruples_aaabaaab``); emit the AlgebraTerms directly."""
     method = method.lower()
-    lowered_equations = lowered_equations or lower_equations_restricted_closed_shell(
-        equations
-    )
+    if spin_adapted:
+        lowered_equations = {}                  # emit AlgebraTerms directly
+    else:
+        lowered_equations = lowered_equations or lower_equations_restricted_closed_shell(
+            equations
+        )
     lines: list[str] = []
     lines.append("// Auto-generated by ccgen")
     lines.append(f"// Planck tensor kernels for {method.upper()}")
     lines.append("")
     lines.append('#include "post_hf/cc/tensor_backend.h"')
-    if max(parse_cc_level(method), default=0) >= 4:
+    if force_arbitrary or max(parse_cc_level(method), default=0) >= 4:
         lines.append('#include "post_hf/cc/generated_arbitrary_runtime.h"')
     lines.append("")
     lines.append("namespace HartreeFock::Correlation::CC")
@@ -531,7 +759,9 @@ def emit_planck_translation_unit(
         for spec in intermediates:
             if not _is_supported_tensor_rank(spec.rank):
                 continue
-            lines.append(_emit_intermediate_builder(method, spec, sibling_names))
+            lines.append(_emit_intermediate_builder(
+                method, spec, sibling_names, factor_body=factor_builder_bodies,
+                stride_order=factor_builder_bodies, force_arbitrary=force_arbitrary))
             lines.append("")
 
     for target, terms in equations.items():
@@ -542,6 +772,7 @@ def emit_planck_translation_unit(
                 terms,
                 lowered_terms=lowered_equations.get(target),
                 intermediates=intermediates,
+                force_arbitrary=force_arbitrary,
             )
         )
         lines.append("")
@@ -550,6 +781,7 @@ def emit_planck_translation_unit(
         method,
         equations,
         lowered_equations,
+        force_arbitrary=force_arbitrary,
     )
     if bundle_code:
         lines.append(bundle_code)

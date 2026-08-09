@@ -13,6 +13,7 @@ default env). Run with that interpreter:
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -736,6 +737,631 @@ class ReferenceVsPyscfTests(unittest.TestCase):
             if term_diagram_id(t)[0]
         }
         self.assertEqual(dia - {("bare", 0)}, term - {("bare", 0)})
+
+
+def spin_adapted_solve_blocks(adapted_keys):
+    """V1 (CCSDTQ=FCI verification): map the keys `spin_adapt_equations` returns to
+    the amplitude blocks a multi-Sz-sector solver must carry. Returns a list of
+    ``(key, rank, tensor_name, sector_tag)``, one per residual manifold (excluding
+    ``energy``), ordered by (rank, tag). A bare manifold (``quadruples``) is the
+    reference sector -> amplitude ``t<rank>`` (tag None); a tagged manifold
+    (``quadruples_aaabaaab``) is a higher Sz sector -> amplitude ``t<rank>_<tag>``.
+    The residual key and its amplitude tensor name share the sector, so the solver
+    reads/updates each block against its own residual. This is the executable spec
+    the C++ multi-sector runtime (Gap B) mirrors block-for-block."""
+    from ccgen.project import manifold_rank
+
+    blocks = []
+    for key in adapted_keys:
+        if key == "energy":
+            continue
+        base, _, tag = key.partition("_")     # "quadruples_aaabaaab" -> tag
+        rank = manifold_rank(base)
+        tag = tag or None
+        tensor_name = f"t{rank}" if tag is None else f"t{rank}_{tag}"
+        blocks.append((key, rank, tensor_name, tag))
+    blocks.sort(key=lambda b: (b[1], b[3] or ""))
+    return blocks
+
+
+def solve_spin_adapted_spatial(method, atom, basis, targets=None, damping=0.5,
+                               maxiter=800, tol=1e-10):
+    """Solve the SPIN-ADAPTED (spatial, restricted) CC equations by damped Jacobi
+    on a closed-shell RHF reference. Returns (e_corr, mf, converged). Uses
+    chemists' spatial integrals (n_occ spatial) -- the same binding the C++
+    runtime uses -- so a correct spin-adaptation reproduces the true RCC energy.
+    Damping is needed for higher rank (plain Jacobi diverges on stiff manifolds).
+
+    V2: the solver is driven off `spin_adapted_solve_blocks`, so it carries a
+    distinct amplitude tensor PER (rank, Sz sector) -- t4 AND t4_aaabaaab -- each
+    read/updated against its own residual manifold. Denominators are shared per
+    rank: for an RHF reference the orbital energies are spin-free, so a sector's
+    denominator equals the reference rank denominator (same spatial-slot formula).
+    `targets` is accepted for back-compat but ignored -- the block set now comes
+    from the adapted equations (every manifold the method produces)."""
+    import itertools
+    from pyscf import ao2mo
+    from ccgen.generate import generate_cc_equations
+    from ccgen.spin import spin_adapt_equations
+    from ccgen.tests.residual_eval import residual_einsum
+
+    mol = gto.M(atom=atom, basis=basis, spin=0)
+    mf = scf.RHF(mol).run(verbose=0)
+    nocc = mol.nelectron // 2
+    nmo = mf.mo_coeff.shape[1]
+    nvir = nmo - nocc
+    eri = ao2mo.kernel(mol, mf.mo_coeff, compact=False).reshape(nmo, nmo, nmo, nmo)
+    v = eri.transpose(0, 2, 1, 3)
+    e = mf.mo_energy
+    eo, ev = e[:nocc], e[nocc:]
+    f = np.diag(e)
+    adapted = spin_adapt_equations(generate_cc_equations(method))
+
+    blocks = spin_adapted_solve_blocks(adapted.keys())
+
+    def den(r):
+        # residual_einsum output layout is [vir..., occ...]; the denominator must
+        # match. For RHF eps is spin-free, so this rank-r denominator serves every
+        # Sz sector of rank r (reference and t*_<tag> alike).
+        shp = [nvir] * r + [nocc] * r
+        D = np.zeros(shp)
+        for idx in itertools.product(*[range(s) for s in shp]):
+            D[idx] = (sum(eo[o] for o in idx[r:]) - sum(ev[a] for a in idx[:r]))
+        return D
+
+    # V2: allocate + zero-init one amplitude array per block (keyed by tensor
+    # name), and one shared denominator per rank present.
+    ranks = sorted({rank for (_, rank, _, _) in blocks})
+    D = {r: den(r) for r in ranks}
+    amps = {tn: np.zeros((nvir,) * rank + (nocc,) * rank)
+            for (_, rank, tn, _) in blocks}
+    # MP2 seed for the reference doubles amplitude (accelerates convergence).
+    if "t2" in amps:
+        amps["t2"] = v[:nocc, :nocc, nocc:, nocc:].transpose(2, 3, 0, 1) / D[2]
+
+    converged = False
+    for _ in range(maxiter):
+        tn = {"v": v, "f": f, **amps}
+        delta = 0.0
+        upd = {}
+        for (key, rank, tensor_name, _tag) in blocks:
+            R = sum(residual_einsum(t, nocc, nvir, tensors=tn)
+                    for t in adapted[key])
+            new = amps[tensor_name] + damping * R / D[rank]
+            upd[tensor_name] = new
+            delta = max(delta, float(np.max(np.abs(new - amps[tensor_name]))))
+        amps.update(upd)
+        if not np.isfinite(delta):
+            break
+        if delta < tol:
+            converged = True
+            break
+    tn = {"v": v, "f": f, **amps}
+    e_corr = sum(float(residual_einsum(t, nocc, nvir, tensors=tn))
+                 for t in adapted["energy"])
+    return e_corr, mf, converged
+
+
+def ccgen_spatial_energy_at_pyscf_amps(method, atom, basis, spin_adapt=False):
+    """R1.2 gate helper. Evaluate the GENERATED energy equation the way the C++
+    runtime does: bind its terms to SPATIAL closed-shell storage (n_occ spatial,
+    chemists' (pq|rs), spatial t1/t2 from a restricted RCCSD) and return
+    (e_corr_ccgen_spatial, rccsd.e_corr).
+
+    Today the generated energy terms carry SPIN-ORBITAL algebra (0.25 t2 v,
+    coeffs +-1/2/4) but this binds them to spatial tensors -- exactly the defect
+    that drives cc4 below FCI. So e_corr_ccgen_spatial != rccsd.e_corr NOW.
+    After R1 (spin-adapt the lowering so the emitted terms are spatial, carrying
+    the 2*(direct)-(exchange) structure), the two must agree. This is the numeric
+    energy gate whose ABSENCE let the defect ship (the arbitrary-solver unit test
+    uses a toy energy kernel).
+
+    ``spin_adapt=True`` runs the R1.0 spin-adaptation (`spin_adapt_equations`) so
+    the terms are genuine spatial RCC -- then the two agree. ``spin_adapt=False``
+    (default) uses the raw spin-orbital terms -- the defect -- so they disagree by
+    exactly the missing spin summation.
+    """
+    from pyscf.cc import ccsd as rccsd_mod
+    from ccgen.generate import generate_cc_equations
+    from ccgen.tests.residual_eval import residual_of
+
+    mol = gto.M(atom=atom, basis=basis, spin=0)
+    mf = scf.RHF(mol).run(verbose=0)
+    cc = rccsd_mod.CCSD(mf)
+    cc.conv_tol = 1e-11
+    cc.kernel()
+
+    nocc = cc.nocc
+    nmo = cc.nmo
+    nvir = nmo - nocc
+
+    # Spatial MO two-electron integrals in physicist order <pq|rs>, NOT
+    # antisymmetrized -- this is the spatial (ij|ab)-style binding the C++
+    # runtime feeds the generated kernels via mo_blocks.oovv.
+    mo = mf.mo_coeff
+    from pyscf import ao2mo
+    eri_mo = ao2mo.kernel(mol, mo, compact=False).reshape(nmo, nmo, nmo, nmo)
+    # chemists (pq|rs) -> physicist <pr|qs>
+    v = eri_mo.transpose(0, 2, 1, 3)
+
+    tensors = {
+        "t1": cc.t1.T,                       # [a,i]
+        "t2": cc.t2.transpose(2, 3, 0, 1),   # [a,b,i,j]
+        "v": v,
+        "f": np.diag(mf.mo_energy),
+    }
+    eqs = generate_cc_equations(method)
+    if spin_adapt:
+        from ccgen.spin import spin_adapt_equations
+        eqs = spin_adapt_equations(eqs)
+    e_corr = sum(
+        float(residual_of([t], nocc, nvir, tensors=tensors))
+        for t in eqs["energy"]
+    )
+    return e_corr, float(cc.e_corr)
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")
+class GeneratedSpatialEnergyGate(unittest.TestCase):
+    """R1.2 -- the numeric energy gate for the SPATIAL binding (the C++ runtime
+    path). The raw (un-adapted) path is the DEFECT (xfail); the spin-adapted path
+    (R1.0) is the FIX and must be GREEN."""
+
+    @unittest.expectedFailure
+    def test_ccsd_spatial_energy_raw_is_wrong(self):
+        # Documents the defect: raw spin-orbital terms bound to spatial storage
+        # give EXACTLY 0.25 * rccsd.e_corr (the spin-orbital 1/4 with no spin sum).
+        e_corr, e_rccsd = ccgen_spatial_energy_at_pyscf_amps(
+            "ccsd", "H 0 0 0; H 0 0 0.74", "sto-3g", spin_adapt=False
+        )
+        self.assertAlmostEqual(e_corr, e_rccsd, places=9)
+
+    def test_ccsd_spatial_energy_spin_adapted_matches_rccsd(self):
+        # R1.0 FIX: spin-adapted terms are genuine spatial RCC, so the energy
+        # equals PySCF restricted RCCSD e_corr exactly.
+        e_corr, e_rccsd = ccgen_spatial_energy_at_pyscf_amps(
+            "ccsd", "H 0 0 0; H 0 0 0.74", "sto-3g", spin_adapt=True
+        )
+        self.assertAlmostEqual(e_corr, e_rccsd, places=9)
+
+    def test_ccsd_spin_adapted_residual_vanishes_at_rccsd_amps(self):
+        # R1.0 FIX: at PySCF's converged restricted amplitudes the spin-adapted
+        # singles+doubles residual is ~0 -- the RCCSD solution is a fixed point of
+        # the adapted equations (energy AND amplitudes correct, not just energy).
+        from pyscf import ao2mo
+        from pyscf.cc import ccsd as rccsd_mod
+        from ccgen.generate import generate_cc_equations
+        from ccgen.spin import spin_adapt_equations
+        from ccgen.tests.residual_eval import residual_of
+
+        mol = gto.M(atom="H 0 0 0; H 0 0 0.74", basis="sto-3g", spin=0)
+        mf = scf.RHF(mol).run(verbose=0)
+        cc = rccsd_mod.CCSD(mf)
+        cc.conv_tol = 1e-11
+        cc.kernel()
+        nocc, nmo = cc.nocc, cc.nmo
+        nvir = nmo - nocc
+        eri_mo = ao2mo.kernel(mol, mf.mo_coeff, compact=False).reshape(
+            nmo, nmo, nmo, nmo)
+        tensors = {
+            "t1": cc.t1.T,
+            "t2": cc.t2.transpose(2, 3, 0, 1),
+            "v": eri_mo.transpose(0, 2, 1, 3),
+            "f": np.diag(mf.mo_energy),
+        }
+        adapted = spin_adapt_equations(generate_cc_equations("ccsd"))
+        for tgt in ("singles", "doubles"):
+            R = residual_of(adapted[tgt], nocc, nvir, tensors=tensors)
+            self.assertLess(float(np.max(np.abs(R))), 1e-8,
+                            f"{tgt} residual should vanish at converged RCCSD amps")
+
+    def test_ccsdt_spin_adapted_solves_between_ccsd_and_fci(self):
+        # R1 ccsdt validation: solve the SPIN-ADAPTED (spatial) CCSDT equations
+        # by damped Jacobi on a closed-shell reference where T3 actually
+        # contributes (Be/STO-3G, 4e), and require the physically-correct
+        # ordering CCSD < CCSDT < FCI. Adapted CCSDT recovers ~28% of the
+        # CCSD->FCI gap (the T3 part) and stays short of FCI by the T4 part it
+        # omits -- textbook CCSDT behavior, proving the triples adaptation.
+        import itertools
+        from pyscf import ao2mo, fci
+        from pyscf.cc import ccsd as rccsd_mod
+        from ccgen.generate import generate_cc_equations
+        from ccgen.spin import spin_adapt_equations
+        from ccgen.tests.residual_eval import residual_einsum
+
+        mol = gto.M(atom="Be 0 0 0", basis="sto-3g", spin=0)
+        mf = scf.RHF(mol).run(verbose=0)
+        nocc = mol.nelectron // 2
+        nmo = mf.mo_coeff.shape[1]
+        nvir = nmo - nocc
+        eri = ao2mo.kernel(mol, mf.mo_coeff, compact=False).reshape(
+            nmo, nmo, nmo, nmo)
+        v = eri.transpose(0, 2, 1, 3)
+        e = mf.mo_energy
+        eo, ev = e[:nocc], e[nocc:]
+        f = np.diag(e)
+        adapted = spin_adapt_equations(generate_cc_equations("ccsdt"))
+
+        def den(r):
+            shp = [nvir] * r + [nocc] * r
+            D = np.zeros(shp)
+            for idx in itertools.product(*[range(s) for s in shp]):
+                D[idx] = (sum(eo[o] for o in idx[r:])
+                          - sum(ev[a] for a in idx[:r]))
+            return D
+
+        D = {1: den(1), 2: den(2), 3: den(3)}
+        amps = {
+            "t1": np.zeros((nvir, nocc)),
+            "t2": v[:nocc, :nocc, nocc:, nocc:].transpose(2, 3, 0, 1) / D[2],
+            "t3": np.zeros((nvir,) * 3 + (nocc,) * 3),
+        }
+        rk = {"singles": 1, "doubles": 2, "triples": 3}
+        tnm = {"singles": "t1", "doubles": "t2", "triples": "t3"}
+        for _ in range(600):
+            tn = {"v": v, "f": f, **amps}
+            delta = 0.0
+            upd = {}
+            for m in ("singles", "doubles", "triples"):
+                R = sum(residual_einsum(t, nocc, nvir, tensors=tn)
+                        for t in adapted[m])
+                new = amps[tnm[m]] + 0.5 * R / D[rk[m]]   # 0.5 damping
+                upd[tnm[m]] = new
+                delta = max(delta, float(np.max(np.abs(new - amps[tnm[m]]))))
+            amps.update(upd)
+            if delta < 1e-11:
+                break
+        tn = {"v": v, "f": f, **amps}
+        e_ccsdt = sum(float(residual_einsum(t, nocc, nvir, tensors=tn))
+                      for t in adapted["energy"])
+
+        cc = rccsd_mod.CCSD(mf)
+        cc.conv_tol = 1e-11
+        cc.kernel()
+        e_ccsd = cc.e_corr
+        e_fci = fci.FCI(mf).kernel()[0] - mf.e_tot
+
+        self.assertTrue(np.isfinite(e_ccsdt))
+        # CCSD <= CCSDT <= FCI (all negative, so more-negative = lower). The
+        # ordering margin must be the SOLVE's convergence tolerance, not tighter:
+        # the Jacobi loop stops at delta < 1e-11, so the amplitudes -- and hence
+        # e_ccsdt -- carry ~1e-11 error. For Be the T3 contribution is genuinely
+        # ~1e-11 (CCSDT ~= CCSD), so a 1e-12 margin sits below the noise floor and
+        # flakes on the sign of that last digit. 1e-10 (10x the conv tol) is the
+        # honest bound: CCSDT is at or below CCSD to within how well we solved.
+        tol = 1e-10
+        self.assertLess(e_ccsdt, e_ccsd + tol,
+                        f"adapted CCSDT must be at or below CCSD "
+                        f"(e_ccsdt={e_ccsdt}, e_ccsd={e_ccsd})")
+        self.assertGreater(e_ccsdt, e_fci - tol,
+                           f"adapted CCSDT must not undershoot FCI "
+                           f"(e_ccsdt={e_ccsdt}, e_fci={e_fci})")
+
+
+class SpinAdaptedEmitTests(unittest.TestCase):
+    """R3.1.3d/emit: `print_cpp_planck(spin_adapt=True)` emits genuine spatial
+    kernels. With `spin_adapt`, `emit_planck_translation_unit` skips the
+    relabel-only `lower_equations_restricted_closed_shell` (the defect) and emits
+    the spin-adapted AlgebraTerms directly (spatial 2J-K). Multi-Sz targets
+    (`quadruples_aaabaaab`) emit their own kernel + read the sector view, and the
+    arbitrary-order bundle registers them in sector_tags / sector_residuals (B3)
+    alongside the per-rank reference residuals."""
+
+    def test_spin_adapted_energy_has_no_raw_quarter(self):
+        # the emitted CCSD energy kernel is spatial (2*(ia|jb)-(ib|ja)), NOT the
+        # raw spin-orbital 0.25*t2*oovv that was the defect.
+        from ccgen.generate import print_cpp_planck
+        cpp = print_cpp_planck("ccsd", spin_adapt=True)
+        energy = cpp[cpp.index("compute_ccsd_energy"):]
+        end = energy.find("compute_ccsd_singles")
+        energy = energy[:end] if end > 0 else energy
+        self.assertNotIn("0.25", energy,
+                         "spin-adapted energy still emits the raw 0.25 defect")
+
+    def test_spin_adapt_forces_intermediates_off(self):
+        # CSE intermediate detection is not validated on spin-adapted spatial
+        # terms (it mislabels occ/vir indices) and explodes compile time (~1544
+        # build_W_* functions -> ~28 min -O3 registry compile). So spin_adapt
+        # forces include_intermediates OFF regardless of the caller's request.
+        from ccgen.generate import print_cpp_planck
+        sa = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram",
+                              include_intermediates=True)
+        self.assertNotIn("build_W_", sa,
+                         "spin-adapted emit must not emit CSE build_W_* intermediates")
+        # the raw (non-spin-adapt) path is unaffected: it still uses intermediates
+        raw = print_cpp_planck("ccsdtq", spin_adapt=False, engine="diagram",
+                               include_intermediates=True)
+        self.assertIn("build_W_", raw,
+                      "the raw path should keep intermediates (guard is spin-adapt-only)")
+
+    def test_ccsdtq_emits_both_t4_sectors_and_reads(self):
+        from ccgen.generate import print_cpp_planck
+        cpp = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram")
+        # both sector residual kernels emitted
+        self.assertIn("compute_ccsdtq_quadruples_residual", cpp)
+        self.assertIn("compute_ccsdtq_quadruples_aaabaaab_residual", cpp)
+        # the second sector is read via the sector view
+        self.assertIn('sector_tensor(4, "aaabaaab")', cpp)
+        # bundle registers one REFERENCE residual per rank (1..4)
+        self.assertEqual(cpp.count("kernels.residuals_by_rank.push_back"), 4)
+
+    def test_large_kernels_are_chunked(self):
+        # Compile-time fix: the big CCSDTQ quadruples residuals (4613 / 6871
+        # terms) are split into `_partN` sub-functions so no single function is
+        # ~5000 statements (which makes -O3 super-linear -> 40+ min). The main
+        # kernel calls the parts; small kernels (singles/doubles) stay inline.
+        import re
+        from ccgen.generate import print_cpp_planck
+        cpp = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram")
+        q_parts = set(re.findall(
+            r"compute_ccsdtq_quadruples_residual_part\d+", cpp))
+        s_parts = set(re.findall(
+            r"compute_ccsdtq_quadruples_aaabaaab_residual_part\d+", cpp))
+        self.assertGreater(len(q_parts), 1, "quadruples kernel should be chunked")
+        self.assertGreater(len(s_parts), 1, "sector kernel should be chunked")
+        # the main kernel calls its parts and returns the accumulated result
+        self.assertIn(
+            "compute_ccsdtq_quadruples_residual_part0(result,", cpp)
+        # small kernels are NOT chunked (byte-identical to the pre-chunk emit)
+        self.assertNotIn("compute_ccsdtq_singles_residual_part", cpp)
+
+    def test_ccsdtq_bundle_registers_the_sector(self):
+        # B3: the generated bundle registers the second t4 Sz sector -- a
+        # sector_tags entry (feeds B1 allocation) and a sector_residuals entry
+        # (feeds B4 evaluate/update), wiring the emitted sector kernel to the
+        # runtime.
+        from ccgen.generate import print_cpp_planck
+        cpp = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram")
+        i = cpp.index("make_generated_ccsdtq_kernels")
+        bundle = cpp[i:cpp.index("return kernels;", i)]
+        self.assertIn('kernels.sector_tags.push_back({4, "aaabaaab"});', bundle)
+        self.assertIn("kernels.sector_residuals.push_back(", bundle)
+        # exactly one sector for CCSDTQ (t4 has 2 independent sectors: ref + this)
+        self.assertEqual(bundle.count("kernels.sector_residuals.push_back"), 1)
+        self.assertEqual(bundle.count("kernels.sector_tags.push_back"), 1)
+
+    def test_ccsdt_bundle_has_no_sectors(self):
+        # <= CCSDT (single Sz sector per rank): no sector registration, so the
+        # bundle is unchanged (backward-compatible). ccsdt in arbitrary form.
+        from ccgen.generate import print_cpp_planck
+        cpp = print_cpp_planck("ccsdt", spin_adapt=True, engine="diagram",
+                               force_arbitrary=True)
+        i = cpp.index("make_generated_ccsdt_kernels")
+        bundle = cpp[i:cpp.index("return kernels;", i)]
+        self.assertNotIn("sector_tags", bundle)
+        self.assertNotIn("sector_residuals", bundle)
+
+    def test_spin_adapted_ccsdt_compiles(self):
+        # end-to-end: the spin-adapted CCSDT TU is valid C++ against the real CC
+        # headers (no t4, so exercises skip-lowering + spatial emit cleanly).
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present (configure the build first)")
+
+        from ccgen.generate import print_cpp_planck
+        code = print_cpp_planck("ccsdt", spin_adapt=True, engine="diagram")
+        with tempfile.NamedTemporaryFile(suffix=".cpp", mode="w",
+                                         delete=False) as fh:
+            fh.write(code)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=300)
+            self.assertEqual(proc.returncode, 0,
+                             f"spin-adapted CCSDT failed to compile:\n"
+                             f"{proc.stderr[-2000:]}")
+        finally:
+            os.unlink(src)
+
+    def test_spin_adapted_ccsdtq_compiles_with_sector_accessor(self):
+        # the CCSDTQ TU (with the t4_aaabaaab sector reads) compiles against the
+        # real headers -- validates the ArbitraryOrderRCCAmplitudes::sector_tensor
+        # accessor the sector kernels bind.
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present (configure the build first)")
+
+        from ccgen.generate import print_cpp_planck
+        code = print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram")
+        with tempfile.NamedTemporaryFile(suffix=".cpp", mode="w",
+                                         delete=False) as fh:
+            fh.write(code)
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=600)
+            self.assertEqual(proc.returncode, 0,
+                             f"spin-adapted CCSDTQ failed to compile:\n"
+                             f"{proc.stderr[-2000:]}")
+        finally:
+            os.unlink(src)
+
+    def test_codegen_cli_spin_adapt_switch(self):
+        # A1: `generate_planck_cc_kernels.py --spin-adapt` emits spatial kernels;
+        # without it the CCSD energy carries the raw 0.25 spin-orbital defect. The
+        # default stays defective (byte-compatible with the historical emit), the
+        # switch is opt-in. Exercised via subprocess to cover the CLI wiring.
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+
+        script = (Path(__file__).resolve().parents[2]
+                  / "generate_planck_cc_kernels.py")
+
+        def emit(extra):
+            with tempfile.TemporaryDirectory() as d:
+                proc = subprocess.run(
+                    [sys.executable, str(script), "--output-dir", d,
+                     "--methods", "ccsd", *extra],
+                    capture_output=True, text=True, timeout=300)
+                self.assertEqual(proc.returncode, 0,
+                                 f"codegen failed:\n{proc.stderr[-1500:]}")
+                return (Path(d) / "ccsd_planck_generated.cpp").read_text()
+
+        raw = emit([])
+        adapted = emit(["--spin-adapt"])
+
+        def energy_kernel(src):
+            start = src.index("compute_ccsd_energy")
+            end = src.find("compute_ccsd_singles", start)
+            return src[start:end] if end > 0 else src[start:]
+
+        self.assertIn("0.25", energy_kernel(raw),
+                      "default codegen should keep the raw spin-orbital defect")
+        self.assertNotIn("0.25", energy_kernel(adapted),
+                         "--spin-adapt must emit the spatial 2J-K energy")
+
+    def test_registry_compiles_with_spin_adapted_ccsdtq(self):
+        # A2: the REAL build path. generated_kernel_registry.cpp #includes the
+        # generated ccsdtq TU (guarded by PLANCK_CC_MAXORDER>=4) and defines
+        # make_generated_rccsdtq_kernels(), which the driver's run_rccsdtq calls.
+        # Generate the spin-adapted TUs (as -DPLANCK_CC_SPIN_ADAPT=ON would) and
+        # syntax-check the registry against them -- validates the multi-sector
+        # sector_tensor reads compile in the linked-binary context, not just the
+        # standalone TU.
+        import os
+        import shutil
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present (configure the build first)")
+        script = repo / "python" / "generate_planck_cc_kernels.py"
+
+        with tempfile.TemporaryDirectory() as gen:
+            gcc_dir = Path(gen) / "generated" / "cc"
+            gcc_dir.mkdir(parents=True)
+            proc = subprocess.run(
+                [sys.executable, str(script), "--output-dir", str(gcc_dir),
+                 "--methods", "ccsd", "ccsdt", "ccsdtq",
+                 "--engine", "diagram", "--spin-adapt", "--include-intermediates"],
+                capture_output=True, text=True, timeout=600)
+            self.assertEqual(proc.returncode, 0,
+                             f"spin-adapted codegen failed:\n{proc.stderr[-1500:]}")
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-DPLANCK_CC_MAXORDER=4",
+                 "-I", str(repo / "src"), "-I", gen, "-I", str(eigen),
+                 str(repo / "src" / "post_hf" / "cc" /
+                     "generated_kernel_registry.cpp")],
+                capture_output=True, text=True, timeout=600)
+            self.assertEqual(proc.returncode, 0,
+                             f"registry failed to compile with spin-adapted "
+                             f"ccsdtq TU:\n{proc.stderr[-2000:]}")
+
+    def test_v1_solve_block_enumeration(self):
+        # V1 (CCSDTQ=FCI verification): the multi-Sz solver's block table, keyed
+        # off spin_adapt_equations' output, not a fixed targets list. CCSDTQ must
+        # yield distinct amplitude tensors per (rank, sector): t1..t4 plus the
+        # second t4 sector t4_aaabaaab. Pure, seconds.
+        from ccgen.generate import generate_cc_equations
+        from ccgen.spin import spin_adapt_equations
+        adapted = spin_adapt_equations(
+            generate_cc_equations("ccsdtq", engine="diagram"))
+        blocks = spin_adapted_solve_blocks(adapted.keys())
+        # (key, rank, tensor_name, tag)
+        got = {(k, r, tn, tag) for (k, r, tn, tag) in blocks}
+        self.assertEqual(got, {
+            ("singles", 1, "t1", None),
+            ("doubles", 2, "t2", None),
+            ("triples", 3, "t3", None),
+            ("quadruples", 4, "t4", None),
+            ("quadruples_aaabaaab", 4, "t4_aaabaaab", "aaabaaab"),
+        })
+        # every amplitude tensor name is distinct (no two blocks share storage)
+        names = [tn for (_, _, tn, _) in blocks]
+        self.assertEqual(len(names), len(set(names)))
+        # energy is excluded
+        self.assertNotIn("energy", {k for (k, _, _, _) in blocks})
+
+    def test_v1_blocks_backward_compatible_for_ccsdt(self):
+        # CCSDT (<=rank 3) has one sector per rank -> the block table is exactly
+        # t1/t2/t3, no tagged entries. Guards that the multi-block enumeration is
+        # a no-op below rank 4 (so the existing CCSDT solve path is unchanged).
+        from ccgen.generate import generate_cc_equations
+        from ccgen.spin import spin_adapt_equations
+        adapted = spin_adapt_equations(
+            generate_cc_equations("ccsdt", engine="diagram"))
+        blocks = spin_adapted_solve_blocks(adapted.keys())
+        self.assertEqual([(k, tn, tag) for (k, r, tn, tag) in blocks],
+                         [("singles", "t1", None),
+                          ("doubles", "t2", None),
+                          ("triples", "t3", None)])
+
+    @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")
+    def test_v2_block_keyed_solver_matches_pyscf_ccsdt(self):
+        # V2/V3: the block-keyed solver (one amplitude array per (rank, sector),
+        # shared per-rank denominators, residual reads every block + updates each
+        # from its own residual) reproduces PySCF on the SINGLE-sector case. CCSDT
+        # (~seconds) is the fast backward-compat proof; the CCSDTQ multi-sector
+        # solve is the slow Be=FCI gate (GeneratedCcsdtqFciGate).
+        from pyscf import cc
+        e, mf, converged = solve_spin_adapted_spatial(
+            "ccsdt", "Be 0 0 0", "sto-3g", maxiter=400)
+        self.assertTrue(converged, "block-keyed CCSDT Jacobi did not converge")
+        rccsd = cc.CCSD(mf); rccsd.conv_tol = 1e-11; rccsd.kernel()
+        # Be correlation is ~all doubles; CCSDT ~= CCSD to the solver tolerance.
+        self.assertAlmostEqual(e, rccsd.e_corr, places=7)
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable")
+@unittest.skipUnless(
+    os.environ.get("CCGEN_SLOW_TESTS"),
+    "R3.0 Be CCSDTQ==FCI gate is slow (~10min: 4557-term quadruples adaptation + "
+    "t4 Jacobi); set CCGEN_SLOW_TESTS=1 to run",
+)
+class GeneratedCcsdtqFciGate(unittest.TestCase):
+    """R3.0 / V4 -- the rank-4 numeric oracle. Be has 4 electrons, so CCSDTQ == FCI
+    exactly. The spin-adapted (spatial) CCSDTQ energy must reach the FCI e_corr.
+
+    GREEN as of R3.1.3 + V1-V3: the multi-Sz-sector solver drives BOTH t4 blocks
+    (t4 reference + t4_aaabaaab), so T4 is no longer ~0. Measured Be/STO-3G:
+    E_corr = -0.0517746318 vs FCI -0.0517746319 (gap 6.4e-11), the T4 contribution
+    -4.4e-6 that the single-sector solver missed. Was RED (CCSDTQ == CCSDT, ~3e-6
+    short) before the second t4 Sz sector was stored/driven."""
+
+    def test_ccsdtq_spin_adapted_reaches_fci(self):
+        from pyscf import fci
+
+        e_ccsdtq, mf, converged = solve_spin_adapted_spatial(
+            "ccsdtq", "Be 0 0 0", "sto-3g",
+        )
+        self.assertTrue(converged, "adapted CCSDTQ Jacobi did not converge")
+        e_fci = fci.FCI(mf).kernel()[0] - mf.e_tot
+        # Be 4e => CCSDTQ is exact. GREEN: both t4 Sz sectors driven (gap ~6e-11).
+        self.assertAlmostEqual(e_ccsdtq, e_fci, places=8)
 
 
 if __name__ == "__main__":

@@ -99,3 +99,6 @@ docs/DFT_FUSED_JK_SCOPE.md
 build-mpi
 
 docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md
+
+# ccgen optimizer plot cache (regenerable)
+python/.optimizer_hierarchy_cache.json

@@ -693,22 +693,159 @@ def merge_terms(terms, externals) -> list[SpinTerm]:
 # (the converted term contracts to the same residual as the SpinTerm).
 
 
+def independent_spin_blocks(rank):
+    """The independent spin-orbital blocks of a rank-`rank` (= 2n) closed-shell
+    cluster amplitude, one representative per Sz sector (R3.1.3a).
+
+    A physical (Sz-conserving) block has equal α-count `k` in its bra and ket
+    halves. Spin-flip pairs sector `k` with `n-k`; permutations exhaust the rest.
+    So the independent sectors are `k = ⌈n/2⌉ … n` (the α-majority half of each
+    flip pair), each written α-before-β per half. The α-count-⌈n/2⌉ sector is the
+    balanced *reference*; higher-k sectors are the extra independent blocks that
+    must be stored/read separately -- `aabb` alone does NOT carry a rank-8 t4
+    (measured: `aaab` is not a signed-permutation combination of `aabb`, even
+    from one shared spatial amplitude).
+
+    The all-α sector (`k = n`) is EXCLUDED: `collapse_amplitudes` /
+    `_split_same_spin_amplitude` already reduce the all-α block into the lower-Sz
+    ones, so it never survives to the bridge. The surviving independent sectors
+    are therefore `k = ⌈n/2⌉ … n-1`. Returns the balanced reference first, in
+    α-before-β per-half layout: n=2→[`abab`], n=3→[`aabaab`],
+    n=4→[`aabbaabb`,`aaabaaab`], n=5→[`aaabbaaabb`,`aaaabaaaab`].
+    """
+    n = rank // 2
+    ref_k = -(-n // 2)                      # ceil(n/2)
+    hi = max(ref_k, n - 1)                  # up to n-1 (all-α k=n is split away)
+    blocks = []
+    for k in range(ref_k, hi + 1):
+        half = "a" * k + "b" * (n - k)
+        blocks.append(half + half)
+    return blocks
+
+
+def _amplitude_block_tag(block):
+    """Fold a spin-block string to its independent-sector tag (R3.1.3a): the
+    α-majority half of its spin-flip pair, α-before-β per half. Blocks with the
+    same tag are the same independent amplitude component (a spin-flip and/or a
+    slot permutation apart); blocks with different tags are genuinely independent
+    Sz sectors that need separate storage. t3 `aabaab`/`abbabb` → `aabaab`
+    (one component); t4 `aabbaabb`→`aabbaabb`, `aaabaaab`/`abbbabbb`→`aaabaaab`
+    (two components)."""
+    n = len(block) // 2
+    k = block[:n].count("a")
+    if k < n - k:                           # β-majority -> flip to α-majority
+        k = n - k
+    half = "a" * k + "b" * (n - k)
+    return half + half
+
+
+def _canonicalize_amplitude_factor(f):
+    """Reorder a cluster-amplitude factor's slots to ONE reference spin-block
+    layout per rank, returning ``(sign, reordered_SpinIndices)`` (R3.1.2).
+
+    A rank-2n amplitude is antisymmetric within its bra (first n slots) and within
+    its ket (last n slots) independently. Different surviving spin blocks of the
+    SAME spatial tensor (e.g. t3 in `aabaab` vs `abaaba`) are therefore signed
+    permutations of one reference layout. The spin→AlgebraTerm bridge drops the
+    spin label, so unless every factor is first mapped to that one reference
+    layout, a factor read in a non-reference block indexes the wrong slice of the
+    single spatial tensor -- the cross-target inconsistency that leaves T4≈0.
+
+    Reference layout = each half stably sorted by spin (α before β). The sign is
+    the product of the bra-half and ket-half sort parities. Numerically exact:
+    the reordered block equals the reference block's slice (verified 0.0 on the
+    UCCSDT t3 fixture). Non-amplitude factors (v/f) and t1 (single `aa` block)
+    are returned unchanged with sign +1.
+
+    R3.1.2 half (i): a β-majority block (e.g. t3 `abbabb`, 1α/2β per half) is not
+    a permutation of the α-majority reference (`aabaab`, 2α/1β) -- it is the
+    reference's SPIN-FLIP partner. A closed-shell amplitude is spin-flip
+    symmetric (t[σ] = t[flip σ] index-for-index), so mapping a β-majority factor
+    onto the stored reference block is a two-step slot permutation: flip α↔β,
+    then sort α-before-β. Both halves flip together (a spin-balanced amplitude
+    has na_bra == na_ket, so both are the same majority). The flip touches only
+    the slot-ORDER used to read the single stored block; the base (spatial)
+    indices keep their identities and spins as seen by the rest of the term, so
+    shared/summed indices stay consistent across factors."""
+    idx = f.indices
+    n = len(idx) // 2
+    if not (f.name.startswith("t") and len(idx) >= 4 and len(idx) % 2 == 0):
+        return 1, idx
+
+    # β-majority in the bra half => this block is the reference's spin-flip
+    # partner; flip the sort key so α-before-β lands on the reference layout.
+    flip = sum(1 for si in idx[:n] if si.spin == "a") * 2 < n
+
+    def sort_half(slots):
+        # stable sort by (flipped) spin (a<b); return new order + permutation parity
+        def spin_key(si):
+            s = si.spin
+            if flip:
+                s = "b" if s == "a" else "a"
+            return s
+        order = sorted(range(len(slots)), key=lambda k: (spin_key(slots[k]), k))
+        sign = 1
+        for a in range(len(order)):
+            for b in range(a + 1, len(order)):
+                if order[a] > order[b]:
+                    sign = -sign
+        return order, sign
+
+    bra_order, s_bra = sort_half(idx[:n])
+    ket_order, s_ket = sort_half(idx[n:])
+    new_idx = (tuple(idx[o] for o in bra_order)
+               + tuple(idx[n + o] for o in ket_order))
+    return s_bra * s_ket, new_idx
+
+
 def spinterm_to_algebraterm(spinterm: SpinTerm, externals):
     """Convert a spatial ``SpinTerm`` to an ``AlgebraTerm`` for the emit path
     (S3.0). ``externals`` is the set of free-index names (e.g.
     ``{"a","b","i","j"}``). Each factor becomes a ``Tensor`` over the spatial base
     indices; free and summed indices are split by name (de-duplicated,
-    first-appearance order). The coefficient is carried as a ``Fraction``."""
+    first-appearance order). The coefficient is carried as a ``Fraction``.
+
+    Each amplitude factor is first canonicalized to one reference spin-block
+    layout (:func:`_canonicalize_amplitude_factor`) so every reference to a given
+    spatial tensor -- output or input factor -- uses the SAME layout; the factor
+    permutation sign is folded into the coefficient (R3.1.2)."""
     from fractions import Fraction
 
     from .project import AlgebraTerm
     from .tensors import Tensor
 
     externals = set(externals)
+    sign = 1
+    canon_factors = []
+    for f in spinterm.factors:
+        s, new_idx = _canonicalize_amplitude_factor(f)
+        sign *= s
+        canon_factors.append(SpinFactor(name=f.name, block=f.block, indices=new_idx))
+
+    # R3.1.3c: name each amplitude factor by its independent Sz sector. A rank-2n
+    # amplitude with n >= 4 has more than one independent block (t4: aabbaabb +
+    # aaabaaab); the reference sector keeps the bare name (`t4`), a higher sector
+    # is read from its own stored tensor (`t4_aaabaaab`). The canonicalizer's
+    # spin-flip already reorders the base indices + folds the sign so the read of
+    # the tagged block's tensor is exact; the tag just routes it to the right
+    # storage. Lower ranks (t1/t2/t3) have a single independent block, so the tag
+    # equals the reference and the name is unchanged -- byte-identical there.
+    def _factor_tensor_name(f):
+        if not (f.name.startswith("t") and len(f.block) >= 8):
+            return f.name                      # t1/t2/t3, v, f: single block
+        blocks = independent_spin_blocks(len(f.block))
+        tag = _amplitude_block_tag(f.block)
+        if tag == blocks[0]:                   # reference sector
+            return f.name
+        return f"{f.name}_{tag}"
+
     factors = tuple(
-        Tensor(f.name, tuple(si.base for si in f.indices))
-        for f in spinterm.factors
+        Tensor(_factor_tensor_name(f), tuple(si.base for si in f.indices))
+        for f in canon_factors
     )
+    spinterm = SpinTerm(coeff=spinterm.coeff * sign,
+                        external_block=spinterm.external_block,
+                        factors=tuple(canon_factors))
     free: list = []
     summed: list = []
     seen_free: set = set()
@@ -722,5 +859,131 @@ def spinterm_to_algebraterm(spinterm: SpinTerm, externals):
             elif si.name not in seen_summed:
                 seen_summed.add(si.name)
                 summed.append(si.base)
+    # R3.1.2 half (ii): order free indices canonically (occupieds before
+    # virtuals, then by base name) instead of per-term first-appearance. The
+    # load-bearing part is the NAME-SORT WITHIN each space: first-appearance order
+    # differs between terms with the same externals (a,c,b vs a,b,c), transposing
+    # their residual arrays so a manifold sum over them is wrong; name-sort makes
+    # every term agree. The occ-vs-vir BETWEEN-space order is chosen occ-first to
+    # match the C++ runtime's amplitude/denominator/residual layout (rank_dims:
+    # t_r(i1..ir, a1..ar), occupied first) so the emitted spatial kernel's result
+    # buffer lines up with the runtime without a transpose. This between-space
+    # choice is invariant for the Python oracle (`residual_einsum` re-splits by
+    # space internally -> always [vir,occ] output) and for the P2 bridge gates
+    # (`_bridge_output_layout` re-derives vir+occ), so only the C++ path cares.
+    # See docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md.
+    free.sort(key=lambda b: (0 if b.space == "occ" else 1, b.name))
     return AlgebraTerm(Fraction(spinterm.coeff), factors,
                        tuple(free), tuple(summed), True)
+
+
+# ── S3/R1.0: full spin-adaptation of a residual manifold to spatial AlgebraTerms ──
+#
+# Chains the S2 pipeline end to end, per target, on the closed-shell representative
+# external block, then bridges to AlgebraTerms the emit path consumes:
+#
+#   ucc_manifold -> canonicalize_spin_blocks -> collapse_amplitudes
+#     -> collapse_integrals -> merge_terms -> spinterm_to_algebraterm
+#
+# This is what replaces the relabel-only `lowering/restricted_closed_shell` in the
+# planck emit path: the coefficients become the spatial 2*(direct)-(exchange)
+# structure, the term count drops to the spatial count, and the emitted kernel is
+# a genuine restricted (spatial) contraction rather than spin-orbital algebra bound
+# to spatial storage. Gated numerically by GeneratedSpatialEnergyGate (R1.2).
+
+
+def _residual_template(target: str, terms):
+    """Build the residual `Tensor` template for a target from its terms' free
+    indices (virtuals first, then occupieds, first-appearance order). Energy
+    (rank 0) has no free indices and yields an index-less template."""
+    from .tensors import Tensor
+
+    if not terms:
+        return Tensor("R", ())
+    free = terms[0].free_indices
+    vir = [i for i in free if i.space == "vir"]
+    occ = [i for i in free if i.space == "occ"]
+    return Tensor("R", tuple(vir) + tuple(occ))
+
+
+def _closed_shell_representative_block(template):
+    """The canonical closed-shell external block: within each half (bra virtuals,
+    ket occupieds) put all α slots before all β slots (α = ceil(n/2)). Each occ/vir
+    residual line is spin-balanced (bra[k]==ket[k]), so the block is spin-valid, and
+    it is the SAME reference layout `_canonicalize_amplitude_factor` sorts every
+    amplitude factor into (α-before-β per half) -- so the residual OUTPUT and every
+    input amplitude factor share one spatial layout and the spin→AlgebraTerm bridge
+    is lossless (R3.1.2). n=2 -> abab, n=3 -> aabaab, n=4 -> aabbaabb. Energy (n=0)
+    -> {} (scalar)."""
+    names = [i.name for i in template.indices]
+    n = len(names) // 2
+    n_alpha = (n + 1) // 2
+    half = ["a" if k < n_alpha else "b" for k in range(n)]
+    spins = half * 2
+    return {nm: sp for nm, sp in zip(names, spins)}
+
+
+def _representative_block_for_sector(template, k_alpha):
+    """External block for a target with `k_alpha` α slots per half, α-before-β --
+    the residual sector matching amplitude tag `('a'*k+'b'*(n-k))*2` (R3.1.3d).
+    `k_alpha = ceil(n/2)` reproduces `_closed_shell_representative_block` (the
+    reference)."""
+    names = [i.name for i in template.indices]
+    n = len(names) // 2
+    half = ["a" if j < k_alpha else "b" for j in range(n)]
+    spins = half * 2
+    return {nm: sp for nm, sp in zip(names, spins)}
+
+
+def spin_adapt_equations(equations):
+    """Spin-adapt a whole GCC residual manifold to restricted (spatial)
+    ``AlgebraTerm``s (R1.0). Returns ``{key: [AlgebraTerm]}``; `key` is the target
+    for the reference Sz sector, and `target + "_" + tag` for each additional
+    independent sector a rank-2n (n>=4) residual carries (R3.1.3d) -- e.g.
+    ``quadruples`` (aabbaabb) and ``quadruples_aaabaaab``. Each stored amplitude
+    block gets its own residual, integrated on that sector's external block. The
+    bridge already names the second-sector *input* factors `t4_aaabaaab`
+    (R3.1.3c), so the residual sets close on the same block vocabulary. Pure
+    symbolic transform; gated numerically by R1.2 (reference) and the rank-8
+    solve-path gate (both sectors)."""
+    out: dict = {}
+    for target, terms in equations.items():
+        template = _residual_template(target, terms)
+        n = len(template.indices) // 2
+        if n == 0:
+            # energy: scalar, single block
+            block = _closed_shell_representative_block(template)
+            out[target] = _adapt_on_block(terms, block)
+            continue
+        ref_k = -(-n // 2)                          # ceil(n/2)
+        hi = max(ref_k, n - 1)                       # sectors ceil(n/2)..n-1
+        for k in range(ref_k, hi + 1):
+            block = _representative_block_for_sector(template, k)
+            adapted = _adapt_on_block(terms, block)
+            tag = _amplitude_block_tag(("a" * k + "b" * (n - k)) * 2)
+            key = target if k == ref_k else f"{target}_{tag}"
+            out[key] = adapted
+    return out
+
+
+def _adapt_on_block(terms, block):
+    """The S2 spin-adaptation pipeline for one external `block`, returning the
+    bridged spatial ``AlgebraTerm``s (R3.1.3d helper -- the body
+    :func:`spin_adapt_equations` runs per independent sector)."""
+    externals = frozenset(block)
+    canon = [canonicalize_spin_blocks(st)
+             for st in ucc_integrate_target(terms, block)]
+    collapsed = [c for st in canon for c in collapse_amplitudes(st)]
+    collapsed = [c for st in collapsed for c in collapse_integrals(st)]
+    merged = merge_terms(collapsed, externals)
+    return [spinterm_to_algebraterm(st, externals) for st in merged]
+
+
+def ucc_integrate_target(terms, block):
+    """All surviving integrated SpinTerms of `terms` for one external `block`
+    (a {name: spin} dict). The per-block slice of :func:`ucc_manifold`, factored
+    out so :func:`spin_adapt_equations` can drive a single representative block."""
+    acc: list = []
+    for term in terms:
+        acc.extend(ucc_integrate_term_antisym(term, block))
+    return acc
