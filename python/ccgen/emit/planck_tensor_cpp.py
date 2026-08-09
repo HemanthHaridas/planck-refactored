@@ -41,14 +41,25 @@ _CANONICAL_ERI_BLOCKS: dict[str, tuple[str, str, str, str]] = {
     "vvvv": ("v", "v", "v", "v"),
 }
 
+# These are the symmetries _map_eri_tensor may use to route an abstract `v`
+# factor to a canonical mo_blocks block. `mo_blocks` holds the NON-antisymmetrized
+# spatial physicist integral <pq|rs> (built by build_tensor_cc_block_cache;
+# rebound to physicist for the generated-kernel path in
+# generated_arbitrary_prepare.cpp). Its only genuine index symmetries for real
+# orbitals are the four +1 relations below: identity, particle swap <qp|sr>,
+# bra<->ket <rs|pq>, and their product <sr|qp>. They cover all 16 four-index o/v
+# patterns (verified), so no coverage is lost.
+#
+# The four antisymmetric single-swap relations <qp|rs> = -<pq|rs> and
+# <pq|sr> = -<pq|rs> hold ONLY for the antisymmetrized <pq||rs> the spin-ORBITAL
+# equations use -- NOT for these spatial blocks. Emitting them produced reads like
+# `oovv(l,k,c,d)` with a bogus sign, which was the residual-emit defect: the
+# energy kernel (identity-perm oovv reads only) was exact while the doubles/
+# quadruples residuals were wrong. Do NOT re-add the -1 perms.
 _ERI_SYMMETRY_PERMUTATIONS: tuple[tuple[tuple[int, int, int, int], int], ...] = (
     ((0, 1, 2, 3), +1),
-    ((1, 0, 2, 3), -1),
-    ((0, 1, 3, 2), -1),
     ((1, 0, 3, 2), +1),
     ((2, 3, 0, 1), +1),
-    ((3, 2, 0, 1), -1),
-    ((2, 3, 1, 0), -1),
     ((3, 2, 1, 0), +1),
 )
 

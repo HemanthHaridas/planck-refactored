@@ -5,6 +5,50 @@
 
 namespace HartreeFock::Correlation::CC
 {
+    namespace
+    {
+        // The generated spin-adapted kernels index every ERI block as PHYSICIST
+        // <pq|rs> (ccgen derives in v=<pq||rs>), but build_tensor_cc_block_cache
+        // returns CHEMISTS (pq|rs) -- the convention the hand-written tensor
+        // backend consumes. The exact bridge is <pq|rs> = (pr|qs): a physicist
+        // block is the chemists tensor with its middle two axes swapped,
+        //   phys_block(p,q,r,s) = chem_source(p,r,q,s).
+        // Swapping o/v labels means each PHYSICIST block's data lives in a
+        // DIFFERENT chemists block: physicist oovv <ij|ab> = chemists (ia|jb) =
+        // the chemists OVOV block (and vice versa); oooo/ooov/ovvv/vvvv are
+        // self-sourced. So this is not an in-place transpose per name -- the
+        // oovv<->ovov sources cross. (The shared chemists cache is left untouched
+        // so the hand-written RCCSDT[TENSOR] path is unaffected.) All seven blocks
+        // are rebound -- ovvo IS referenced once the emit uses only the valid +1
+        // symmetries (the -1 antisym perms that used to route around ovvo are gone).
+        Tensor4D swap_mid_axes(const Tensor4D &c)
+        {
+            // out(p,q,r,s) = c(p,r,q,s); out dims = (d1, d3, d2, d4).
+            Tensor4D out(c.dim1, c.dim3, c.dim2, c.dim4, 0.0);
+            for (int p = 0; p < c.dim1; ++p)
+                for (int q = 0; q < c.dim3; ++q)
+                    for (int r = 0; r < c.dim2; ++r)
+                        for (int s = 0; s < c.dim4; ++s)
+                            out(p, q, r, s) = c(p, r, q, s);
+            return out;
+        }
+
+        TensorCCBlockCache rebind_physicist(TensorCCBlockCache chem)
+        {
+            TensorCCBlockCache phys;
+            phys.oooo = swap_mid_axes(chem.oooo); // <ij|kl> = (ik|jl)
+            phys.ooov = swap_mid_axes(chem.ooov); // <ij|ka> = (ik|ja)
+            phys.oovv = swap_mid_axes(chem.ovov); // <ij|ab> = (ia|jb)  <- OVOV
+            phys.ovov = swap_mid_axes(chem.oovv); // <ia|jb> = (ij|ab)  <- OOVV
+            phys.ovvo = swap_mid_axes(chem.ovvo); // <ia|bj> = (ib|aj)
+            phys.ovvv = swap_mid_axes(chem.ovvv); // <ia|bc> = (ib|ac)
+            phys.vvvv = swap_mid_axes(chem.vvvv); // <ab|cd> = (ac|bd)
+            phys.memory_report = std::move(chem.memory_report);
+            phys.total_bytes = chem.total_bytes;
+            return phys;
+        }
+    } // namespace
+
     std::expected<ArbitraryOrderTensorCCState, std::string>
     prepare_generated_arbitrary_order_state(
         HartreeFock::Calculator &calculator,
@@ -38,7 +82,7 @@ namespace HartreeFock::Correlation::CC
             const RHFReference partition = ref_res->orbital_partition;
             ArbitraryOrderTensorCCState state{
                 .reference = std::move(*ref_res),
-                .mo_blocks = std::move(*blocks_res),
+                .mo_blocks = rebind_physicist(std::move(*blocks_res)),
                 .denominators = std::move(*denom_res),
                 .amplitudes = make_zero_rcc_amplitudes(
                     partition,
