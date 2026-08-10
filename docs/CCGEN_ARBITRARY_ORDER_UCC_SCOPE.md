@@ -1,0 +1,338 @@
+# Arbitrary-order UCC kernel generation and execution
+
+Scopes one capability: **generate and run arbitrary-order *unrestricted* CC
+kernels (UCC) alongside the existing arbitrary-order RCC path** — so an
+open-shell reference can drive `ucc4`/`ucc5` the way a closed-shell reference
+drives `cc4`/`cc5` today.
+
+Everything below is grounded in the current tree. Nothing here is landed.
+
+---
+
+## The one-sentence framing
+
+UCC is **not a parallel pipeline**. RCC is *UCC plus a collapse step*: the
+spin-adaptation layer already integrates every GCC term into spin-resolved
+blocks (`ucc_manifold`, landed and PySCF-transitively validated), and then RCC
+throws the block resolution away via three closed-shell steps. UCC is what you
+get by **not** running those three steps and keeping the block tag on the
+tensor name.
+
+So the Python work is mostly *subtraction*, and the C++ work is mostly
+*reusing the multi-sector machinery that already exists for the t4 `aaabaaab`
+Sz sector*.
+
+---
+
+## What already exists (the reuse surface)
+
+### Python (`python/ccgen/spin.py`, 989 lines)
+
+- **`ucc_manifold(terms, residual_template)`** — the UCC block manifold. Returns
+  `{block_tag: [SpinTerm]}` for **every** surviving external block, α/β
+  distinct. This is the UCC equation set. It is validated: the scope doc records
+  the decision that no separate PySCF `uccsd.update_amps` gate is needed because
+  `ucc_manifold == GCC-sliced` and `GCC == PySCF-gccsd`, so
+  `ucc_manifold == PySCF-uccsd` transitively.
+- **`ucc_integrate_term_antisym(term, external_spins)`** — the per-term spin
+  integration that carries the exchange (−K) correctly. Rank-general
+  (`_antisym_to_allowed` gated numerically at rank-6 and rank-8).
+- **`block_exists` / `resolve_block`** — spin conservation per line, one rule for
+  every tensor kind, arbitrary rank. No per-tensor table.
+- **`spinterm_to_algebraterm(spinterm, externals)`** — the bridge from spin-
+  resolved `SpinTerm` to the flat `AlgebraTerm` the lowering/emit layers consume.
+  Exact as of `ef42800` + `cfe302a` (718/859 → 0 failures). **The bridge drops
+  the spin label** — that is precisely the thing UCC must change (see U1).
+- **`independent_spin_blocks(rank)` / `_amplitude_block_tag(block)`** — the
+  Sz-sector folding built for the closed-shell t4 case. The *machinery* is
+  reusable for UCC block enumeration; the *policy* (fold β-majority to
+  α-majority, exclude all-α) is closed-shell-specific.
+
+### The three RCC-only collapse steps (what UCC drops)
+
+| Step | Function | What it assumes |
+|---|---|---|
+| S2.2a | `canonicalize_spin_blocks` | flips a↔b freely — i.e. **α and β orbitals are identical** |
+| S2.2b | `collapse_amplitudes` / `_split_same_spin_amplitude` | `t[aa..a]` is a signed combination of the mixed block — closed-shell only |
+| S2.2c | `collapse_integrals` / `_split_vaaaa` | `v[aaaa] = v[abab] − v[abab](ket swap)` — closed-shell only |
+
+`_adapt_on_block` runs all three in sequence. `spin_adapt_equations` calls
+`_adapt_on_block` per sector. **UCC needs a sibling of `_adapt_on_block` that
+runs neither collapse and keeps the block tag** — that is the core of U1.
+
+### C++ (the part that is already multi-block)
+
+The runtime is **already sector-keyed**, built for the closed-shell t4
+`aaabaaab` case (commits `26041d7`…`dd45c1b`, gaps B1–B4):
+
+- `ArbitraryOrderRCCAmplitudes::sectors` — `vector<pair<pair<int,string>, TensorND>>`,
+  i.e. amplitude blocks keyed by **(rank, tag)** on top of the reference
+  `by_rank` (`amplitudes.h:64-70`).
+- `ArbitraryOrderRCCAmplitudes::sector_tensor(rank, tag)` — dense view of a
+  tagged block, `expected`-returning.
+- `GeneratedArbitraryOrderKernels::sector_tags` and `::sector_residuals`
+  (`generated_arbitrary_runtime.h:36-56`) — the bundle declares which tagged
+  blocks a method carries and supplies a residual kernel per tag.
+- `ensure_amplitude_sectors(...)` — reconciles a prepared state's blocks against
+  the bundle's declared tags, zero-init.
+- `make_zero_rcc_amplitudes(..., sectors)` — sector-aware allocation.
+- The solver evaluates each sector residual and Jacobi/DIIS-updates the matching
+  block (B4, `993ca7d`).
+
+**This is the exact shape UCC needs.** A UCC amplitude set is "one tagged block
+per spin block per rank" — `t2aa`, `t2ab`, `t2bb` are three (rank=2, tag)
+entries, structurally identical to `(4, "aaabaaab")`. **No new container, no new
+solver loop, no new allocation path.** What is missing is dimensions (U3) and
+the reference (U2).
+
+### What is genuinely RHF-only (the real C++ work)
+
+- `ArbitraryOrderTensorCCState::reference` is a `CanonicalRHFCCReference`;
+  `generated_arbitrary_prepare.cpp:82` takes `RHFReference orbital_partition`
+  with scalar `n_occ` / `n_virt`.
+- `solver_arbitrary.{h,cpp}` takes `const RHFReference &reference` — the
+  denominator cache is built from one spin-free `eps`.
+- `MOBlockCache` (`mo_blocks.h:15-21`) holds **one** `oovv` / `ovov` — no spin
+  blocks. UCC needs `oovv_aaaa/abab/bbbb` etc.
+- `UHFReference` **exists** (`common.h:141-148`, with
+  `n_occ_alpha/n_occ_beta/n_virt_alpha/n_virt_beta`) and is already used by the
+  hand-written UCCSD/UCCSDT solvers — so the reference builder is not new work,
+  only its wiring into the generated path is.
+
+---
+
+## Scope (small verifiable steps)
+
+Ordered so each step is independently gated and the risky algebra lands before
+the C++ plumbing.
+
+### U0 — pin the UCC block vocabulary (~S, pure Python, no codegen)
+
+Write `ucc_independent_blocks(rank)`: the UCC blocks of a rank-2n amplitude that
+must be **stored** (as opposed to derived). Unlike the closed-shell case there is
+no a↔b flip available, so the α-count sectors `k = 0…n` are **all** independent
+and the all-α / all-β blocks do **not** split away. For n=2 that is
+`{aaaa, abab, bbbb}` (matching PySCF UCCSD's `t2aa/t2ab/t2bb`); for n=3,
+`{aaaaaa, aabaab, abbabb, bbbbbb}`.
+
+The within-half antisymmetry still folds slot permutations, so the tag is still
+"α-before-β per half" — reuse `_amplitude_block_tag`'s *layout* convention but
+**not** its β-majority flip.
+
+*Gate:* `ucc_independent_blocks(4) == ["aaaa","abab","bbbb"]` and the rank-6/8
+counts match `n+1` sectors; every block returned by `external_blocks` for that
+rank folds into exactly one returned tag. Assert `ucc_independent_blocks(4)`
+matches PySCF UCCSD's block set by name. Seconds, no PySCF solve.
+
+**Why first:** every later step keys off this vocabulary, and it is the one place
+a closed-shell assumption could silently leak in.
+
+### U1 — the UCC adapt entry (~M, the core algebra step)
+
+Add `ucc_adapt_equations(equations)`, the UCC sibling of
+`spin_adapt_equations`, returning `{target_tag: [AlgebraTerm]}` — e.g.
+`doubles_aaaa`, `doubles_abab`, `doubles_bbbb`.
+
+Two sub-parts:
+
+- **U1.0 — a no-collapse `_adapt_on_block`.** A sibling that runs
+  `ucc_integrate_target` → `merge_terms` → `spinterm_to_algebraterm` and
+  **skips** `canonicalize_spin_blocks`, `collapse_amplitudes`,
+  `collapse_integrals`. Driven once per block from `ucc_independent_blocks`
+  rather than once per Sz sector.
+- **U1.1 — spin-resolved factor names in the bridge.** `spinterm_to_algebraterm`
+  currently drops the spin label, which is *correct* for RCC (everything lives
+  in one spatial tensor) and *wrong* for UCC (`t2aa` and `t2ab` are different
+  arrays). The bridge must fold each factor's block into its **name** —
+  `t2` + block → `t2_aaaa`, `v` + block → `v_abab` — exactly as R3.1.3c already
+  does for `t4_aaabaaab`. That precedent means the naming hook exists; UCC
+  applies it to every factor rather than only to a higher sector.
+
+  **The `_canonicalize_amplitude_factor` interaction is the risk.** It reorders
+  slots to one reference layout per rank and returns a sign. For RCC that maps
+  every block onto a single stored tensor. For UCC it must map each block onto
+  **its own** stored tensor's canonical layout — same within-half sort, but the
+  target tag is the factor's own block, not a global reference. Getting this
+  wrong reproduces the R3.1.2 failure mode (a factor indexing the wrong slice,
+  leaving a residual ≈0), so it needs its own assertion.
+
+*Gate (structural):* for a closed-shell-degenerate input the UCC block set
+reproduces the RCC term set after applying the collapse relations by hand
+(i.e. U1 ∘ collapse == `spin_adapt_equations`) at rank 4. Plus: every emitted
+`AlgebraTerm`'s factor names are drawn from the U0 vocabulary, and no factor
+carries an unresolved block.
+
+*Gate (numeric, the load-bearing one):* evaluate the U1 `doubles_aaaa` /
+`doubles_abab` / `doubles_bbbb` residuals **at PySCF UCCSD's own converged
+`t1a/t1b/t2aa/t2ab/t2bb`** on an open-shell case, and compare against
+`pyscf.cc.uccsd.update_amps`. This is the same "evaluate at PySCF amps"
+convention-robust pattern the RCC S3.2 gate used, and it is the one place UCC
+gets a *direct* oracle rather than a transitive one. Do this at rank 4 before
+touching any C++.
+
+### U2 — the UHF reference in the generated runtime (~M, C++)
+
+Thread `UHFReference` through the generated arbitrary-order path.
+`ArbitraryOrderTensorCCState::reference` and `solver_arbitrary`'s
+`const RHFReference &` become a variant/parameterized partition carrying
+`n_occ_alpha/n_occ_beta/n_virt_alpha/n_virt_beta`. The denominator cache becomes
+spin-resolved: a rank-2n block with α-count `k` per half draws its
+`eps` from the α set for the first `k` slots and the β set for the rest.
+
+`UHFReference` and its builder already exist (used by hand-written UCCSD), so
+this is wiring plus a spin-aware denominator, not new physics.
+
+*Gate:* an open-shell MP2-limit check — the rank-2 UCC denominators reproduce the
+existing UMP2 correlation energy from a single Jacobi step. That isolates the
+denominator from the residual algebra.
+
+**Sequencing note.** Do U2 *after* U1's numeric gate. If U1 is wrong, a UCC C++
+run fails and you cannot tell whether the algebra or the reference is at fault.
+
+### U3 — spin-blocked MO integrals (~M, C++)
+
+`MOBlockCache` gains spin-blocked ERI blocks (`oovv_aaaa`, `oovv_abab`,
+`oovv_bbbb`, and the `ovov` partners). The AO→MO transform is the existing
+`Correlation::transform_eri` run per spin-block pair of coefficient matrices —
+no new integral engine, and the transform is already OpenMP-parallel.
+
+**Memory:** UCC roughly triples the ERI block footprint versus RCC. Worth
+stating up front because it, not FLOPs, is what caps the reachable rank.
+
+*Gate:* for an RHF-degenerate UHF reference (α coefficients == β), every spin
+block equals the RCC block bytewise. That is a free, exact regression that
+catches a transposed spin index immediately.
+
+### U4 — emit + registry for UCC blocks (~S given U1/U3)
+
+`emit_planck_translation_unit` already emits one kernel per residual key and the
+registry already carries `sector_tags` / `sector_residuals`. UCC blocks map onto
+that: each `doubles_aaaa`-style key becomes a `(rank, tag)` sector residual, and
+`ensure_amplitude_sectors` allocates the blocks.
+
+Add a `--ucc` CLI switch and a `PLANCK_CC_UCC` build gate, **default OFF**, so
+the default build stays byte-identical (the pattern `--factorize-tau` /
+`--spin-adapt` / `--dress-operators` all follow).
+
+**Compile-time caution:** the spin-adapt path already forced
+`--include-intermediates` OFF because ~1544 `build_W_*` functions took ~28 min at
+`-O3` (`e0f3849`), and the registry is now compiled at `-O1` with 256-term
+chunking (`a690014`, `c48a253`). UCC multiplies the residual count by the number
+of blocks — **assume the registry compile time is the binding constraint on
+reachable rank** and measure it at rank 4 before scoping rank 5+.
+
+*Gate:* the emitted UCC TU compiles against the real CC headers (the `tau` A1
+`test_generated_source_compiles` harness is the template).
+
+### U5 — driver routing + the end-to-end gate (~S given U2–U4)
+
+A `correlation ucc4` keyword routing to the same `solve_generated_rcc` call site
+with a UHF reference. The solver loop is unchanged — it already iterates tagged
+blocks.
+
+*Gate (the one that matters):* **open-shell UCCSDTQ == FCI.** The closed-shell
+analog is landed and is the strongest gate in the whole ccgen effort
+(`0970e21` / `ce03048`: Be CCSDTQ vs FCI, gap 6.4e-11). Pick a small open-shell
+system where UCC at rank = n_elec is the full CI limit — e.g. the Li atom or
+BeH — and assert the same equality. If U0–U4 have a bug, this catches it; if it
+passes, UCC is right.
+
+Cheaper intermediate gate: UCC rank 2 (`ucc2`) against the existing hand-written
+UCCSD energy on a radical cation. Land that first — it exercises the whole stack
+at the smallest rank and reuses an in-tree oracle.
+
+---
+
+## What this reuses (summary)
+
+| Reused | From |
+|---|---|
+| UCC spin integration, block existence, exchange handling | `ucc_manifold`, `ucc_integrate_term_antisym`, `block_exists` (landed, PySCF-transitive) |
+| Spin→AlgebraTerm bridge | `spinterm_to_algebraterm` (exact as of `cfe302a`) |
+| Per-block tagged amplitude storage + solver update | `sectors` / `sector_tensor` / `sector_tags` / `sector_residuals` / `ensure_amplitude_sectors` (gaps B1–B4) |
+| UHF reference struct + builder | `UHFReference` (`common.h:141`), already driving hand-written UCCSD |
+| AO→MO transform | `Correlation::transform_eri` (parallel) |
+| Codegen default-off switch pattern | `--spin-adapt` / `PLANCK_CC_SPIN_ADAPT` |
+| FCI-equality gate pattern | Be CCSDTQ == FCI (`0970e21`) |
+
+**Net new:** the no-collapse adapt entry + spin-resolved factor naming (U1), a
+spin-resolved denominator (U2), spin-blocked ERI blocks (U3). Everything else is
+wiring.
+
+---
+
+## What NOT to do
+
+- **Do not fork the pipeline.** UCC is RCC-minus-collapse. A parallel
+  `ucc/` module duplicates `ucc_integrate_term_antisym` and the bridge, and the
+  two copies will drift — the R3.1.2 bridge bug took two commits to get exact and
+  you do not want to fix it twice.
+- **Do not add a new amplitude container or solver loop.** The `(rank, tag)`
+  sector machinery is already the general case. A `UCCAmplitudes` type would be a
+  second thing to keep in sync with `ensure_amplitude_sectors`.
+- **Do not reuse `_amplitude_block_tag`'s β-majority flip.** It folds `abbabb`
+  into `aabaab`, which is valid **only** when α and β orbitals coincide. In UCC
+  those are different amplitudes. This is the single easiest way to introduce a
+  silent wrong answer.
+- **Do not enable `--include-intermediates` on the UCC path** until it is
+  validated there — the RCC spin-adapt path disabled it for both correctness
+  (CSE mislabels occ/vir on spatial spin-adapted terms) and compile time
+  (`e0f3849`). UCC has strictly more terms.
+- **Do not skip the U1 numeric gate before writing C++.** PySCF
+  `uccsd.update_amps` is a direct oracle at rank 4 and it costs minutes. Debugging
+  a wrong UCC residual through the C++ runtime costs days — the B5 physicist-ERI
+  convention bug is the precedent (found only by injecting an FCI-correct oracle
+  into live C++ state).
+- **Do not scope rank ≥ 5 UCC before measuring the rank-4 registry compile.**
+  Compile time, not FLOPs, is the demonstrated wall.
+
+---
+
+## Dressed UCC kernels (U6, scoped separately)
+
+U0–U5 deliver **raw** (undressed) UCC kernels — the same validation altitude the
+RCC generated path sits at today. Dressing UCC is scoped as V5/V6 in
+`CCGEN_DRESSED_KERNEL_VALIDATION_SCOPE.md`, and two of its findings constrain
+choices **inside** U1, so they are not deferrable design-wise:
+
+- **Decision 5 is `GCC → dress → adapt`.** Dressing runs on the spin-orbital
+  residual and is spin-adapted afterward, because recognition needs the diagram
+  line-graph that post-adaptation `SpinTerm`s do not have. So `ucc_adapt_equations`
+  (U1) is the thing a dressed manifold gets routed *through* — meaning **U1 must
+  accept an already-dressed GCC manifold**, not assume a raw one. Concretely: do
+  not hard-wire U1 to `generate_cc_equations` output; take the equation dict as a
+  parameter. One-line difference now, a restructure later.
+- **V1.1 requires block-keyed intermediate specs.** Under UCC one dressed
+  operator becomes several spin-block variants (`Wmnij` yields an `oooo` variant
+  per surviving block), each needing its own spec and builder. If U1.1's
+  spin-resolved factor naming is built block-keyed — which it must be anyway for
+  `t2_aaaa` vs `t2_abab` — dressed operators reuse the identical mechanism for
+  free. **Use one naming path for amplitudes, ERIs, and intermediates.**
+
+Also flagged there: `Wmbej`'s asymmetric-block (`ovvo`) binding sign is gated on
+`_block_is_asymmetric`, and under UCC that predicate must key on the
+*spin-resolved* block rather than the space pattern alone — the highest-risk
+single item in dressed UCC.
+
+## Open question worth settling early
+
+**Does UCC need the dressed-operator work first?** RCC's generated path carries
+worse-than-optimal FLOP scaling because the generated residuals are CSE'd but not
+factored (`ccgen_dressed_intermediates`). UCC multiplies the term count by the
+block count, so it inherits that with a larger constant. If the target is
+*production* open-shell CC, dressing is on the critical path — as it already is
+for RCC (`ccgen_generated_kernels_to_production`). If the target is validation
+(UCCSDTQ == FCI on a tiny open-shell system), scaling does not matter and UCC can
+land first.
+
+Recommendation: treat U0–U5 as the **validation** deliverable (small systems,
+FCI-gated), and take dressed UCC via V5/V6 afterward — while honoring the two
+U1 constraints above so V5 stays a switch rather than a rewrite.
+
+---
+
+See `CCGEN_SPIN_ADAPTATION_SCOPE.md` (the S0–S4 layer this extends; UCC is the
+deferral noted at its S3 close), `CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md` (the
+bridge exactness and the multi-sector precedent), and
+`CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md` (gaps B1–B4, the sector runtime UCC
+reuses wholesale).
