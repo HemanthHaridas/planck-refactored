@@ -930,6 +930,24 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Nuclear attraction done");
         HartreeFock::Logger::blank();
 
+        // F2 debug dump: CARTESIAN S,T,V (pre cart→sph), where the AO component
+        // order is standard and there is no spherical-convention confound. Lets us
+        // split kinetic vs nuclear at the f-block vs PySCF int1e_kin/int1e_nuc.
+        if (const char *ao_dir = std::getenv("PLANCK_DUMP_AO_INTEGRALS"))
+        {
+            auto dc = [&](const char *name, const Eigen::MatrixXd &M) {
+                std::ofstream f(std::string(ao_dir) + "/" + name + ".txt");
+                f.precision(16);
+                f << M.rows() << " " << M.cols() << "\n";
+                for (int i = 0; i < M.rows(); ++i)
+                    for (int j = 0; j < M.cols(); ++j)
+                        f << std::scientific << M(i, j) << "\n";
+            };
+            dc("Scart", S);
+            dc("Tcart", T);
+            dc("Vcart", V);
+        }
+
         // One-electron integrals are computed in the Cartesian basis. In spherical
         // mode, map them into the (2L+1)-per-shell spherical basis with the block-
         // diagonal transform C: M_sph = C · M_cart · Cᵀ. C was normalized right after
@@ -945,6 +963,26 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         {
             calculator._overlap = S;
             calculator._hcore = T + V;
+        }
+
+        // F1 debug dump (env-gated): write the WORKING-basis overlap (spherical
+        // after the cart→sph transform, or Cartesian) for f-block inspection vs
+        // PySCF. diag must be 1; a contaminated f-transform breaks that.
+        if (const char *ao_dir = std::getenv("PLANCK_DUMP_AO_INTEGRALS"))
+        {
+            auto dumpM = [&](const char *name, const Eigen::MatrixXd &M) {
+                std::ofstream f(std::string(ao_dir) + "/" + name + ".txt");
+                f.precision(16);
+                f << M.rows() << " " << M.cols() << "\n";
+                for (int i = 0; i < M.rows(); ++i)
+                    for (int j = 0; j < M.cols(); ++j)
+                        f << std::scientific << M(i, j) << "\n";
+            };
+            dumpM("Sw", calculator._overlap);
+            dumpM("Hw", calculator._hcore);
+            // G1: dump the runtime cart→sph transform C so Python can recompute
+            // C·S_cart·Cᵀ / C·H_cart·Cᵀ and check they equal Sw/Hw (same C for both).
+            dumpM("Cw", calculator._shells._cart_to_sph);
         }
     }
 
