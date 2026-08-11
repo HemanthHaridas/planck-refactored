@@ -913,14 +913,50 @@ def intermediate_template(spec):
     Feed to ``spin_adapt_equations(..., templates={spec.name: intermediate_template(spec)})``
     so the operator adapts on a block that respects its physical line pairing.
     `Wmbej` is the case that forces this: its `ovvo` slots are [m,b,e,j] with lines
-    m-e and b-j, but the virtuals-first default reorders them to [b,e,m,j], making
-    the adapter pair b-m and e-j and integrate the whole operator to zero. The four
-    space-homogeneous operators (`oooo`/`vvvv`/`vv`/`oo`) are unaffected because
-    their own order already agrees; `Fme` (`ov`) is reordered but survives, so
-    agreement there is coincidence, not a property to rely on."""
+    m-e and b-j, but the virtuals-first default reorders them to [b,e,m,j], so the
+    external block is applied to factors carrying the operator's real pairing --
+    `v(m,b,e,j)` takes tag `aabb`, whose m-e line has m=a/e=b, and is rejected. Every
+    spin case of every term dies the same way, so the operator adapts to zero.
+
+    `Wmbej` is the only operator the default ZEROES, but agreement elsewhere is not a
+    property to rely on: whether a reorder is harmful depends on the adapter's
+    relabeling, not on space homogeneity. Measured post-adaptation, the free-index
+    order differs from `spec.indices` for `Fmi`, `Wmnij`, and `Wmbej` -- while `Fme`
+    (mixed-space `ov`) agrees. So always pass the own-order template for an
+    intermediate; do not special-case by block pattern."""
     from .tensors import Tensor
 
     return Tensor(spec.name, tuple(spec.indices))
+
+
+def adapt_intermediate_spec(spec, adapter=None):
+    """Spin-adapt a dressed-intermediate ``IntermediateSpec``'s definition terms
+    (V1.1a), returning a new spec with the adapted terms.
+
+    ``adapter`` is a ``{target: [AlgebraTerm]} -> {key: [AlgebraTerm]}`` callable
+    taking a ``templates`` keyword; defaults to :func:`spin_adapt_equations` (RCC).
+    Pass ``ucc_adapt_equations`` for UCC -- the point of the parameter is that V5
+    becomes a substitution, not a second code path.
+
+    Adaptation runs on the spec's OWN slot order via :func:`intermediate_template`,
+    so the operator's physical line pairing survives (V1.0). Metadata is carried
+    through unchanged here: re-deriving ``indices``/``index_space_sig`` from the
+    adapted terms is V1.1b, block-keying the name is V1.1c, and recounting usage
+    against the adapted residual is V1.1d. Keeping those separate is deliberate --
+    V1.1a is the step whose only claim is "the terms adapt", and the V1.0 zero-guard
+    already makes a silent vanish impossible."""
+    from dataclasses import replace
+
+    fn = adapter or spin_adapt_equations
+    adapted = fn({spec.name: list(spec.definition_terms)},
+                 templates={spec.name: intermediate_template(spec)})
+    if spec.name not in adapted:
+        raise ValueError(
+            f"adapt_intermediate_spec: adapter returned no manifold for "
+            f"{spec.name!r} (got keys {sorted(adapted)}). A dressed intermediate "
+            f"has one target; a split result means the adapter treated it as a "
+            f"multi-sector residual.")
+    return replace(spec, definition_terms=tuple(adapted[spec.name]))
 
 
 def _closed_shell_representative_block(template):

@@ -35,15 +35,29 @@ from ccgen.optimization.dressing import (  # noqa: E402
 )
 from ccgen.spin import (  # noqa: E402
     _residual_template,
+    adapt_intermediate_spec,
     intermediate_template,
     spin_adapt_equations,
 )
+
+# The operators the assembled dressed CCSD residual actually references (V1.1
+# Finding A). Fme/Fae/Fmi are recognized but fold away under canonical Fock, so
+# they are out of V1.1's scope -- adapting them would be dead code.
+REFERENCED = ("Wmnij", "Wabef", "Wmbej")
+
+# Adapted definition-term counts for the referenced operators (V1.1 Finding D).
+# Wmbej's 5 -> 8 growth is the adapter splitting terms across spin cases.
+ADAPTED_TERM_COUNTS = {"Wmnij": 4, "Wabef": 4, "Wmbej": 8}
 
 
 def _specs():
     """The six seeded CCSD operators as canonical-Fock IntermediateSpecs."""
     return [operator_to_intermediate_spec(op, canonical_fock=True)
             for op in seeded_operators()]
+
+
+def _spec(name):
+    return next(s for s in _specs() if s.name == name)
 
 
 class DressedIntermediateAdaptationTests(unittest.TestCase):
@@ -195,6 +209,89 @@ class ResidualPathUnchangedTests(unittest.TestCase):
             self.assertEqual(len(base[key]), len(with_empty[key]))
             self.assertEqual([str(t) for t in base[key]],
                              [str(t) for t in with_empty[key]])
+
+
+class SpecAdaptationTests(unittest.TestCase):
+    """V1.1a: a dressed intermediate's definition terms adapt to spatial form.
+
+    Scope is the three REFERENCED operators (Finding A). V1.1a's only claim is that
+    the terms adapt at the expected counts -- re-deriving indices/sig is V1.1b,
+    block-keying the name V1.1c, recounting usage V1.1d, and the faithfulness gate
+    V1.1e.
+    """
+
+    def test_referenced_operators_adapt_at_expected_counts(self):
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                adapted = adapt_intermediate_spec(_spec(name))
+                self.assertEqual(len(adapted.definition_terms),
+                                 ADAPTED_TERM_COUNTS[name])
+
+    def test_adaptation_never_empties_a_referenced_operator(self):
+        """The V1.0 guard makes a silent vanish impossible, but assert the outcome
+        directly too -- an empty builder compiles and computes zero."""
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                self.assertGreater(
+                    len(adapt_intermediate_spec(_spec(name)).definition_terms), 0)
+
+    def test_metadata_is_carried_through_unchanged(self):
+        """V1.1a changes ONLY definition_terms. If a later step (b/c/d) starts
+        moving indices/sig/name/usage, it should do so deliberately, not as a side
+        effect of V1.1a."""
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                spec = _spec(name)
+                adapted = adapt_intermediate_spec(spec)
+                self.assertEqual(adapted.name, spec.name)
+                self.assertEqual(adapted.indices, spec.indices)
+                self.assertEqual(adapted.index_space_sig, spec.index_space_sig)
+                self.assertEqual(adapted.usage_count, spec.usage_count)
+                self.assertEqual(adapted.usage_targets, spec.usage_targets)
+                self.assertNotEqual(adapted.definition_terms,
+                                    spec.definition_terms)
+
+    def test_adapted_terms_are_spatial(self):
+        """The adapted terms must be plain AlgebraTerms (bridged out of SpinTerm),
+        which is what the lowering/emit layers consume."""
+        from ccgen.project import AlgebraTerm
+
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                for term in adapt_intermediate_spec(_spec(name)).definition_terms:
+                    self.assertIsInstance(term, AlgebraTerm)
+
+    def test_all_six_adapt_even_though_three_are_unreferenced(self):
+        """Fme/Fae/Fmi are out of scope but must not be BROKEN -- a later method may
+        reference them, and V1.1a should apply unchanged when it does."""
+        for spec in _specs():
+            with self.subTest(operator=spec.name):
+                self.assertGreater(
+                    len(adapt_intermediate_spec(spec).definition_terms), 0)
+
+    def test_adapter_is_injectable(self):
+        """The `adapter` parameter is what makes V5 (UCC) a substitution rather
+        than a second code path, so pin that it is actually used."""
+        calls = []
+
+        def fake(equations, templates=None):
+            calls.append((sorted(equations), sorted(templates or {})))
+            return {k: list(v) for k, v in equations.items()}
+
+        spec = _spec("Wmnij")
+        out = adapt_intermediate_spec(spec, adapter=fake)
+        self.assertEqual(calls, [(["Wmnij"], ["Wmnij"])])
+        self.assertEqual(out.definition_terms, spec.definition_terms)
+
+    def test_adapter_returning_a_split_manifold_is_an_error(self):
+        """A dressed intermediate has exactly one target. If an adapter splits it
+        into sectors (the multi-Sz residual path), that is a bug, not a result."""
+        def splitter(equations, templates=None):
+            return {f"{k}_aaabaaab": list(v) for k, v in equations.items()}
+
+        with self.assertRaises(ValueError) as ctx:
+            adapt_intermediate_spec(_spec("Wmnij"), adapter=splitter)
+        self.assertIn("Wmnij", str(ctx.exception))
 
 
 if __name__ == "__main__":
