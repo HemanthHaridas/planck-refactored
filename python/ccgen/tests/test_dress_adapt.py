@@ -236,13 +236,13 @@ class SpecAdaptationTests(unittest.TestCase):
                     len(adapt_intermediate_spec(_spec(name)).definition_terms), 0)
 
     def test_metadata_is_carried_through_unchanged(self):
-        """V1.1a changes ONLY definition_terms. If a later step (b/c/d) starts
-        moving indices/sig/name/usage, it should do so deliberately, not as a side
-        effect of V1.1a."""
+        """V1.1a (relayout=False) changes ONLY definition_terms. If a later step
+        starts moving name/usage, it should do so deliberately, not as a side effect
+        of V1.1a."""
         for name in REFERENCED:
             with self.subTest(operator=name):
                 spec = _spec(name)
-                adapted = adapt_intermediate_spec(spec)
+                adapted = adapt_intermediate_spec(spec, relayout=False)
                 self.assertEqual(adapted.name, spec.name)
                 self.assertEqual(adapted.indices, spec.indices)
                 self.assertEqual(adapted.index_space_sig, spec.index_space_sig)
@@ -292,6 +292,99 @@ class SpecAdaptationTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             adapt_intermediate_spec(_spec("Wmnij"), adapter=splitter)
         self.assertIn("Wmnij", str(ctx.exception))
+
+
+class SpecRelayoutTests(unittest.TestCase):
+    """V1.1b: the adapted spec's declared layout must be what the EMITTER builds.
+
+    `_emit_intermediate_builder` shapes `build_<op>`'s result from
+    `lower_term_restricted_closed_shell(definition_terms[0]).canonical_free_indices`,
+    not from `spec.indices`. Asserting equality against that exact expression is the
+    check whose absence let the declared order drift.
+    """
+
+    def _builder_layout(self, spec):
+        """Recompute what the emitter will do, from the emitter's own source of
+        truth -- deliberately not routed through emitted_intermediate_layout, so
+        this gate would catch that helper drifting."""
+        from ccgen.lowering.restricted_closed_shell import (
+            lower_term_restricted_closed_shell,
+        )
+
+        lowered = lower_term_restricted_closed_shell(
+            spec.definition_terms[0], "reference")
+        return tuple(lowered.canonical_free_indices)
+
+    def test_declared_indices_equal_builder_indices(self):
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                adapted = adapt_intermediate_spec(_spec(name))
+                self.assertEqual(adapted.indices, self._builder_layout(adapted))
+
+    def test_sig_matches_declared_indices(self):
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                adapted = adapt_intermediate_spec(_spec(name))
+                expected = "".join(
+                    "o" if i.space == "occ" else "v" for i in adapted.indices)
+                self.assertEqual(adapted.index_space_sig, expected)
+
+    def test_relayout_fixes_the_three_mismatched_operators(self):
+        """The measured mismatch set is Fmi/Wmnij/Wmbej -- NOT the mixed-space
+        operators (Fme, `ov`, agrees). Pin both halves: these three are corrected by
+        relayout, and the set is what it is for the reason recorded (the adapter's
+        relabeling, not space homogeneity)."""
+        mismatched = set()
+        for spec in _specs():
+            raw = adapt_intermediate_spec(spec, relayout=False)
+            if raw.indices != self._builder_layout(raw):
+                mismatched.add(spec.name)
+        self.assertEqual(mismatched, {"Fmi", "Wmnij", "Wmbej"})
+
+        # ...and relayout makes every one of them agree
+        for name in sorted(mismatched):
+            with self.subTest(operator=name):
+                fixed = adapt_intermediate_spec(_spec(name))
+                self.assertEqual(fixed.indices, self._builder_layout(fixed))
+
+    def test_wmbej_signature_is_corrected_not_just_permuted(self):
+        """Wmbej is the case where the declared SIG is wrong, not merely reordered:
+        `ovvo` declared vs `oovv` emitted. So relayout corrects which spaces sit
+        where, which is what a downstream consumer of index_space_sig would get
+        wrong."""
+        spec = _spec("Wmbej")
+        self.assertEqual(spec.index_space_sig, "ovvo")
+        self.assertEqual(adapt_intermediate_spec(spec).index_space_sig, "oovv")
+
+    def test_relayout_preserves_rank_and_index_identity(self):
+        """Relayout permutes slots; it must never add, drop, or substitute an
+        index."""
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                spec = _spec(name)
+                adapted = adapt_intermediate_spec(spec)
+                self.assertEqual(adapted.rank, spec.rank)
+                self.assertEqual({i.name for i in adapted.indices},
+                                 {i.name for i in spec.indices})
+                self.assertEqual(len({i.name for i in adapted.indices}),
+                                 len(adapted.indices), "duplicate slot")
+
+    def test_rank_change_is_rejected(self):
+        """An adapter that alters the external slot count is a bug; relayout must
+        not silently accept the new rank."""
+        def rank_bender(equations, templates=None):
+            from dataclasses import replace
+
+            from ccgen.indices import make_occ
+            return {
+                k: [replace(t, free_indices=t.free_indices + (make_occ("zz"),))
+                    for t in terms]
+                for k, terms in equations.items()
+            }
+
+        with self.assertRaises(ValueError) as ctx:
+            adapt_intermediate_spec(_spec("Wmnij"), adapter=rank_bender)
+        self.assertIn("rank", str(ctx.exception))
 
 
 if __name__ == "__main__":

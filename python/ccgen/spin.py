@@ -929,9 +929,31 @@ def intermediate_template(spec):
     return Tensor(spec.name, tuple(spec.indices))
 
 
-def adapt_intermediate_spec(spec, adapter=None):
+def emitted_intermediate_layout(definition_terms):
+    """The slot layout the EMITTER will give a `build_<op>` result, as
+    ``(indices, index_space_sig)`` (V1.1b).
+
+    Read out of the emitter's own normalization rather than re-derived:
+    ``_emit_intermediate_builder`` shapes the builder from
+    ``lower_term_restricted_closed_shell(definition_terms[0]).canonical_free_indices``,
+    and the consumer side (``_map_factor`` -> ``_target_expr``) emits usage-site
+    indices that went through the same lowering. Reusing that one normalizer is what
+    keeps the two ends agreeing BY CONSTRUCTION instead of by luck -- a second sort
+    that agrees today and drifts later is exactly how the spec/term desynchronization
+    arose in the first place."""
+    from .lowering.restricted_closed_shell import lower_term_restricted_closed_shell
+
+    if not definition_terms:
+        return (), ""
+    lowered = lower_term_restricted_closed_shell(definition_terms[0], "reference")
+    indices = tuple(lowered.canonical_free_indices)
+    sig = "".join("o" if i.space == "occ" else "v" for i in indices)
+    return indices, sig
+
+
+def adapt_intermediate_spec(spec, adapter=None, relayout=True):
     """Spin-adapt a dressed-intermediate ``IntermediateSpec``'s definition terms
-    (V1.1a), returning a new spec with the adapted terms.
+    (V1.1a) and re-derive its declared layout from them (V1.1b).
 
     ``adapter`` is a ``{target: [AlgebraTerm]} -> {key: [AlgebraTerm]}`` callable
     taking a ``templates`` keyword; defaults to :func:`spin_adapt_equations` (RCC).
@@ -939,12 +961,25 @@ def adapt_intermediate_spec(spec, adapter=None):
     becomes a substitution, not a second code path.
 
     Adaptation runs on the spec's OWN slot order via :func:`intermediate_template`,
-    so the operator's physical line pairing survives (V1.0). Metadata is carried
-    through unchanged here: re-deriving ``indices``/``index_space_sig`` from the
-    adapted terms is V1.1b, block-keying the name is V1.1c, and recounting usage
-    against the adapted residual is V1.1d. Keeping those separate is deliberate --
-    V1.1a is the step whose only claim is "the terms adapt", and the V1.0 zero-guard
-    already makes a silent vanish impossible."""
+    so the operator's physical line pairing survives (V1.0).
+
+    ``relayout=True`` (V1.1b) replaces ``indices``/``index_space_sig`` with
+    :func:`emitted_intermediate_layout` of the adapted terms. Without it the spec
+    keeps the operator's declared slot order, which disagrees with what the emitter
+    builds for `Fmi`, `Wmnij`, and `Wmbej` -- and for `Wmbej` the SIGNATURE differs
+    too (`ovvo` declared vs `oovv` emitted), so the metadata is not merely permuted
+    but wrong about which spaces sit where.
+
+    This corrects metadata, NOT the emitted code: the emit path already normalizes
+    both the builder and the usage sites through the same lowering, so it is
+    self-consistent today. The danger is downstream consumers that trust
+    ``indices``/``index_space_sig`` -- dependency ordering, block-keyed identity
+    (V1.1c), memory estimates. Do not "fix" the mismatch by forcing the declared
+    order INTO the builder; that would create a miscompile that does not exist.
+
+    Block-keying the name is V1.1c; recounting usage against the adapted residual is
+    V1.1d. ``relayout=False`` keeps V1.1a-only behavior for tests that isolate the
+    steps."""
     from dataclasses import replace
 
     fn = adapter or spin_adapt_equations
@@ -956,7 +991,19 @@ def adapt_intermediate_spec(spec, adapter=None):
             f"{spec.name!r} (got keys {sorted(adapted)}). A dressed intermediate "
             f"has one target; a split result means the adapter treated it as a "
             f"multi-sector residual.")
-    return replace(spec, definition_terms=tuple(adapted[spec.name]))
+    terms = tuple(adapted[spec.name])
+    if not relayout:
+        return replace(spec, definition_terms=terms)
+
+    indices, sig = emitted_intermediate_layout(terms)
+    if len(indices) != len(spec.indices):
+        raise ValueError(
+            f"adapt_intermediate_spec: {spec.name!r} adapted to rank "
+            f"{len(indices)} but was declared rank {len(spec.indices)} -- the "
+            f"adapter changed the operator's external slot count, which it must "
+            f"never do.")
+    return replace(spec, definition_terms=terms, indices=indices,
+                   index_space_sig=sig)
 
 
 def _closed_shell_representative_block(template):
