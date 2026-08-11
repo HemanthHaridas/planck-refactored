@@ -292,26 +292,40 @@ dressed-operator problem, which is why it did not show up in D7.
   The gate asserts the **exact** count (`{"doubles": 14}`) rather than "is exact", so
   e.2 landing will require updating it deliberately.
 
-- **V1.1e.2 — make the comparison orientation-insensitive, or the adapter
-  orientation-invariant (~M, the decision point).** Two routes; they are not
-  equivalent and the choice should be deliberate:
+- **V1.1e.2 — make `ucc_integrate_term_antisym` orientation-invariant (~M).**
+  **Route (b) chosen. Scoped in detail in
+  `CCGEN_V11E2_ORIENTATION_INVARIANCE_SCOPE.md` (e.2.0–e.2.4).**
 
-  - **(a) Normalize `v` orientation before adapting.** Fold every `v` factor to one
-    canonical bra↔ket orientation (carrying the antisymmetry sign) as a pre-pass on
-    both manifolds, so the adapter sees one writing per algebraic term. Cheap, local,
-    and reuses the fold `_eri_canonical` already implements. Risk: the fold's sign
-    convention must match what `ucc_integrate_term_antisym` expects, or it trades 14
-    mismatches for wrong signs — which is worse, being silent.
-  - **(b) Make `ucc_integrate_term_antisym` orientation-invariant.** Principled, and
-    would retire a whole class of write-order sensitivity (V1.0's defect included).
-    But it touches the validated adapter that the CCSDTQ==FCI gate depends on, so it
-    needs that gate re-run, not just the dressing tests.
+  The two routes were: (a) normalize `v` orientation as a pre-pass at the dress/adapt
+  boundary, or (b) fix the adapter itself. This document originally recommended (a) on
+  cost grounds — ~S change, validated adapter untouched. **Overruled deliberately:**
+  (a) fixes the one caller that currently hurts and leaves the adapter write-order
+  sensitive for the next one, accumulating a per-caller patch for a defect that lives
+  in one function.
 
-  **Recommendation: (a), gated by (b)'s test set.** Normalizing at the boundary is a
-  ~S change to a ~M problem, and it leaves the validated adapter untouched. Revisit
-  (b) only if a second orientation-sensitivity surfaces.
+  Root-caused since that recommendation, which strengthens the case for (b): **the
+  defect is not introduced by V1.** It is latent in `ucc_integrate_term_antisym`
+  today, and any caller writing its `v` factors differently from the diagram generator
+  hits it. Minimal reproducer, verbatim from the doubles manifold:
 
-  *Gate:* doubles → 0, and the `test_spin` + CCSDTQ==FCI gates unchanged.
+  ```
+  expansion:      v(k,b,c,j) t2(a,c,i,k)   integrates to 2
+  raw:         -1 v(j,c,k,b) t2(a,c,i,k)   integrates to 0
+  ```
+
+  Same term (exchange + bra-swap, and the raw `−1` is exactly that swap's sign; GCC
+  matches at 0 mismatches). But `_line_pairs` reads slot `k` with `k+n`, so the two
+  writings present different line structures — `k–c, b–j` versus `j–k, c–b`. All 16
+  spin cases survive identically in both; the four mixed-spin cases carry **opposite
+  signs**, because `_antisym_to_allowed` re-derives its sign from written slot order.
+
+  Also measured and ruled out, so the fix does not go looking there: the bra↔ket
+  exchange **alone** never diverges (0 in a 256-case sweep — it maps lines `p–r, q–s`
+  to `r–p, s–q`, the same lines). The defect needs exchange *composed with* a
+  within-group swap.
+
+  *Gate:* doubles → 0, and `test_spin` + the spatial emit + Be CCSDTQ==FCI all
+  unchanged.
 
 - **V1.1e.3 — per-operator localization (~S, once the manifold gate passes).** Run the
   gate with one operator's definition adapted at a time (`Wmnij`, `Wabef`, `Wmbej`) so
@@ -355,7 +369,8 @@ V1.1a (adapt terms)               LANDED
                   └→ V1.1e (faithfulness)   ROOT-CAUSED, NOT PASSING  ← ~M
                        ├─ e.0 clean GCC baseline        LANDED (was a real defect)
                        ├─ e.1 pin expansion order       LANDED
-                       ├─ e.2 v-orientation invariance   ~M  ← the decision point, NEXT
+                       ├─ e.2 adapter orientation-invariance  ~M  ← NEXT, route (b)
+                       │      scoped as e.2.0-e.2.4 in its own doc
                        └─ e.3 per-operator localization  ~S
                        └→ V1.1f (index-space validity)
                             │
