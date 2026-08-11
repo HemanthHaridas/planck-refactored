@@ -272,11 +272,25 @@ dressed-operator problem, which is why it did not show up in D7.
   partial-coverage defect; fixed, gated, and it took singles to 0 in both the GCC and
   the expand-then-adapt configurations.
 
-- **V1.1e.1 — pin the expansion order (~S).** Gate expand-in-GCC-then-adapt: it is
-  both the closer configuration (14 vs 61) and the Decision-5-consistent one
-  (`GCC → dress → adapt`). Record the adapt-then-verify numbers as the **rejected**
-  alternative so the ordering is not silently revisited. Do this first — it fixes the
-  gate's shape before the remaining algebra is touched.
+- **V1.1e.1 — pin the expansion order. LANDED.** `expand_then_adapt` and
+  `verify_adapted_dressed_equation` (`dressed_equation.py`) implement the chosen
+  order; `AdaptedExpansionOrderTests` gates **both** configurations, so the choice
+  cannot be silently revisited. The verifier returns per-manifold diffs, so a failure
+  names `doubles` rather than "the equation".
+
+  Two mechanical reasons for the order are asserted, not just the counts: expansion is
+  what introduces the operator-internal dummies (`__Wmnij_e`, `__Wabef_m`), so doing it
+  in GCC keeps them out of the adapter (a test walks the adapted output and fails if
+  any operator factor survives to it); and an adapted operator table adapts the same
+  operator once per definition and again per usage site, applying the orientation
+  sensitivity twice, inconsistently.
+
+  Also gated: **adaptation is additive** over term partitions. That is the precondition
+  making any expansion order meaningful, and it is what establishes the residue as a
+  write-order sensitivity rather than a `merge_terms` failure.
+
+  The gate asserts the **exact** count (`{"doubles": 14}`) rather than "is exact", so
+  e.2 landing will require updating it deliberately.
 
 - **V1.1e.2 — make the comparison orientation-insensitive, or the adapter
   orientation-invariant (~M, the decision point).** Two routes; they are not
@@ -340,8 +354,8 @@ V1.1a (adapt terms)               LANDED
              └→ V1.1d (recount)   LANDED  ← bidirectional closure
                   └→ V1.1e (faithfulness)   ROOT-CAUSED, NOT PASSING  ← ~M
                        ├─ e.0 clean GCC baseline        LANDED (was a real defect)
-                       ├─ e.1 pin expansion order       ~S
-                       ├─ e.2 v-orientation invariance   ~M  ← the decision point
+                       ├─ e.1 pin expansion order       LANDED
+                       ├─ e.2 v-orientation invariance   ~M  ← the decision point, NEXT
                        └─ e.3 per-operator localization  ~S
                        └→ V1.1f (index-space validity)
                             │
