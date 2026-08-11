@@ -63,22 +63,35 @@ measured rather than hypothesized.
 ### Finding 2 — the spec's `indices` desynchronize from the adapted terms
 
 `operator_to_intermediate_spec` sets `indices` from `op.block` in the operator's
-own order (`Wmbej` → `[m, b, e, j]`; `Fme` → `[m, e]`). `_residual_template`
-independently derives virtuals-first order (`[b, e, m, j]`; `[e, m]`). After
-adaptation the terms' free-index order is the template's, but the spec still
-carries the operator's — and the spec is what emits `build_<op>`'s signature and
-loop nest.
+own order. The adapted terms' free-index order comes from the adapter's
+relabeling. The two disagree, and nothing asserts they agree.
 
-So even for the five operators that *do* adapt, `Fme` and `Wmbej` have a spec
-whose declared index order disagrees with the residual's usage. `Wmnij` /
-`Wabef` / `Fae` / `Fmi` happen to agree because their blocks are already
-space-homogeneous (`oooo`, `vvvv`, `vv`, `oo`) — **the two mixed-space operators
-are exactly the two that disagree.** That is a coincidence of the seeded set, not
-a property to rely on.
+**Superseded in detail by `CCGEN_V11_SPEC_ADAPTATION_SCOPE.md`, which measured
+this properly and corrected two claims made here:**
 
-**Consequence for sequencing:** V1.0 (the ordering contract) must land before
-V1.1 (adapting the specs), because V1.1's faithfulness gate cannot pass while the
-`Wmbej` manifold is empty.
+- **The mismatched set is not the mixed-space operators.** This scope predicted
+  `Fme` and `Wmbej` on the theory that space-homogeneous blocks agree by
+  construction. Measured, the mismatched set is **`Fmi`, `Wmnij`, `Wmbej`** — and
+  `Fme` (mixed-space, `ov`) *agrees*. The mismatch tracks the adapter's
+  relabeling, not space homogeneity.
+- **`spec.indices` is metadata, not the emitted layout.**
+  `_emit_intermediate_builder` shapes the builder from
+  `lower_term_restricted_closed_shell(definition_terms[0]).canonical_free_indices`,
+  **not** from `spec.indices`; the consumer side goes through the same lowering.
+  So both ends normalize identically and the dressed-GCC emit is self-consistent
+  (verified in the emitted C++: `Wmbej` allocates `(o,o,v,v)` and every usage site
+  indexes `(o,o,v,v)`). This is a latent trap, not a live miscompile — and it means
+  **forcing `spec.indices` into the builder would create the bug that currently
+  does not exist.**
+
+Also measured there: only **three** operators (`Wmnij`, `Wabef`, `Wmbej`) plus
+τ/τ_c are actually referenced by the assembled dressed CCSD residual;
+`Fme`/`Fae`/`Fmi` recognize but fold away under canonical Fock, so they are out of
+V1.1's scope.
+
+**Consequence for sequencing:** V1.0 (the ordering contract) had to land before
+V1.1, because V1.1's faithfulness gate cannot pass while the `Wmbej` manifold is
+empty.
 
 ---
 
@@ -150,6 +163,11 @@ convention that the C++ runtime's `rank_dims` depends on — pinned by `02364db`
 intermediate-layout bug.
 
 ### V1.1 — adapt the intermediate specs (~M, the core step)
+
+> **Broken out into steps V1.1a–V1.1f in `CCGEN_V11_SPEC_ADAPTATION_SCOPE.md`**,
+> which measured the surface and corrected two claims below (see Finding 2 above):
+> only three operators are in scope, and the emit path already normalizes both
+> sides so no layout rewrite is needed. The sketch below stands as the rationale.
 
 Fix Finding 2 and deliver the actual composition for intermediates.
 
