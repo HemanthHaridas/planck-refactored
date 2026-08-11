@@ -4,11 +4,13 @@ The adapter's output must depend on what the algebra IS, not on how it is WRITTE
 Two `AlgebraTerm`s equal under the 8-fold ERI symmetry fold (`_eri_canonical`) must
 spin-integrate to the same total coefficient per (block, spatial content).
 
-Today they do not. Minimal reproducer, lifted verbatim from the dressed-CCSD doubles
-manifold (the expansion side vs the raw side of one ERI-canonical key):
+LANDED (e.2.1): `_orientation_normalized` reorients every rank-4 `v` to one canonical
+member of its 8-fold ERI orbit before the lines are read, folding that reorientation's
+parity into the returned sign. Minimal reproducer, lifted verbatim from the dressed-CCSD
+doubles manifold (the expansion side vs the raw side of one ERI-canonical key):
 
-    expansion:      v(k,b,c,j) t2(a,c,i,k)   integrates to  2
-    raw:         -1 v(j,c,k,b) t2(a,c,i,k)   integrates to  0
+    expansion:      v(k,b,c,j) t2(a,c,i,k)   integrated to  2, now 0
+    raw:         -1 v(j,c,k,b) t2(a,c,i,k)   integrated to  0, still 0
 
 These are the same term: `v(j,c,k,b)` is `v(k,b,c,j)` bra<->ket-exchanged (2,3,0,1)
 and then bra-swapped, and for antisymmetric `v` that swap costs -1 -- exactly the -1
@@ -19,10 +21,18 @@ The mechanism is `_line_pairs`, which pairs slot k with slot k+n (the physicist
 structures -- `k-c, b-j` versus `j-k, c-b` -- so `_antisym_to_allowed` re-derives its
 sign from written slot order and treats one integral as two independent inputs.
 
-Per spin case the divergence is precise, and this file pins it that way rather than
-only pinning totals: the SAME 6 of 16 cases survive in both writings, into the SAME
-blocks, but 4 of those 6 carry OPPOSITE SIGNS. A fix that made the totals agree by
-changing which cases survive would be wrong and is caught here.
+Per spin case the pre-fix divergence was precise, and this file pins the mechanism
+rather than only pinning totals: the SAME 6 of 16 cases survived in both writings, into
+the SAME blocks, but 4 of those 6 carried OPPOSITE SIGNS -- a writing-dependent,
+inconsistent pattern. Post-fix the flip is UNIFORM across all 6 (the orbit parity), and
+the per-TERM totals agree. A fix that made the totals agree by changing which cases
+survive would be wrong and is still caught here.
+
+SCOPE OF THE FIX. This makes the adapter orientation-invariant, which was necessary but
+is NOT sufficient to close V1.1e: the dressed-vs-raw adapted doubles residual still
+shows 14 mismatches, unchanged by this fix, with the repeated-same-name-factor signature
+(t1t1v, t2t2v, t1t1t1t1v). That is a separate defect -- see e.2.5 in
+docs/CCGEN_V11E2_ORIENTATION_INVARIANCE_SCOPE.md.
 
 Also pinned: the bra<->ket exchange ALONE is harmless (a 256-case sweep finds no
 divergence), because it maps lines p-r, q-s to r-p, s-q -- the same lines. The defect
@@ -156,8 +166,19 @@ class PremiseTests(unittest.TestCase):
 
 
 class OrientationDivergenceMechanismTests(unittest.TestCase):
-    """Pin the divergence as SIGNS, not survival -- so a fix that balances the
-    totals by changing which spin cases survive is caught rather than accepted."""
+    """Per-FACTOR behavior after the e.2.1 fix.
+
+    Note what is and is not required here. Per-factor verdicts still DIFFER between
+    the two writings, and correctly so: `v(j,c,k,b) = -v(k,b,c,j)` as a factor, and
+    the raw term carries the compensating -1 in its own coefficient. The invariant is
+    per-TERM (see :class:`OrientationInvarianceTests`), which is why a per-factor
+    equality assertion would be the wrong target.
+
+    What the fix guarantees per factor is that both writings are reoriented to the
+    SAME canonical member of their 8-fold ERI orbit, so the block each lands in --
+    and hence which spatial tensor slice the kernel reads -- no longer depends on how
+    the caller wrote it.
+    """
 
     def setUp(self):
         self.f1 = _verdicts(v(K, B, C, J))
@@ -173,42 +194,51 @@ class OrientationDivergenceMechanismTests(unittest.TestCase):
         self.assertEqual(sum(1 for d in self.f1.values() if d is not None), 6)
 
     def test_blocks_are_identical_where_both_survive(self):
+        """The load-bearing per-factor guarantee: same block, so the same spatial
+        slice is read regardless of writing."""
         for spins, d1 in self.f1.items():
             if d1 is None:
                 continue
             with self.subTest(spins=spins):
                 self.assertEqual(d1[1], self.f2[spins][1])
 
-    def test_exactly_four_surviving_cases_have_opposite_signs(self):
-        """The measured signature. `aaaa`/`bbbb` agree; the four mixed cases flip."""
+    def test_factor_signs_still_differ_by_the_orbit_parity(self):
+        """Not a defect: the two writings differ by one antisymmetry sign as factors,
+        so every surviving case flips. The term coefficient carries the compensating
+        sign, and `OrientationInvarianceTests` is where that is checked.
+
+        Before the fix only 4 of the 6 flipped (the mixed-spin ones) -- an
+        inconsistent, writing-dependent pattern. A UNIFORM flip is the signature of a
+        clean global reorientation."""
         flipped = {
             spins for spins, d1 in self.f1.items()
             if d1 is not None and d1[0] != self.f2[spins][0]
         }
-        self.assertEqual(flipped, {"abab", "abba", "baab", "baba"})
-        self.assertEqual(self.f1["aaaa"][0], self.f2["aaaa"][0])
-        self.assertEqual(self.f1["bbbb"][0], self.f2["bbbb"][0])
+        surviving = {s for s, d in self.f1.items() if d is not None}
+        self.assertEqual(flipped, surviving,
+                         "the orbit-parity flip should be uniform across all "
+                         "surviving cases, not restricted to the mixed-spin ones")
 
 
 class OrientationInvarianceTests(unittest.TestCase):
-    """The invariant V1.1e.2 must establish.
+    """The invariant V1.1e.2 establishes: equal algebra integrates equally.
 
-    EXPECTED TO FAIL until e.2.1 lands: measured 2 vs 0. Kept xfail only for the
-    commits between e.2.0 and e.2.1 -- a permanently-xfailed reproducer is how a known
-    defect turns into folklore, so e.2.1 must un-xfail it, not extend it.
+    Was 2 vs 0 before e.2.1; now both integrate to 0.
     """
 
-    @unittest.expectedFailure
     def test_equal_algebra_integrates_equally(self):
         self.assertEqual(
             _integrated_sum(EXPANSION_WRITING),
             _integrated_sum(RAW_WRITING),
         )
 
-    def test_the_measured_divergence_is_two_versus_zero(self):
-        """The current wrong behavior, pinned exactly so e.2.1 has a target and any
-        drift in the meantime is visible."""
-        self.assertEqual(_integrated_sum(EXPANSION_WRITING), 2)
+    def test_both_writings_integrate_to_zero(self):
+        """Pinned absolutely, not just relatively: a fix that made both sides agree on
+        some other value would satisfy the equality above while changing answers.
+        Zero is what the pre-fix raw writing already gave, and the full pyscf
+        `test_spin` suite (93 tests, S1/S2/S4 + rank-6/rank-8 FCI-limit gates) confirms
+        the adapted residual is semantically unchanged."""
+        self.assertEqual(_integrated_sum(EXPANSION_WRITING), 0)
         self.assertEqual(_integrated_sum(RAW_WRITING), 0)
 
 

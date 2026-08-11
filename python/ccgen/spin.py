@@ -253,10 +253,81 @@ def _permutation_parity(order) -> int:
     return parity
 
 
+def _orientation_normalized(factor):
+    """Reorient a rank-4 ``v`` factor to one canonical arrangement of its 8-fold ERI
+    orbit, returning ``(factor, sign)`` (V1.1e.2).
+
+    Non-``v`` and non-rank-4 factors pass through with sign ``+1``.
+
+    WHY THIS EXISTS. :func:`_line_pairs` reads the interaction lines off SLOT POSITION
+    (slot k pairs with slot k+n, the physicist ``<pq|rs>`` convention), so two writings
+    of the SAME integral that differ by a bra<->ket exchange composed with a
+    within-group swap present different line structures to the adapter and integrate
+    differently. Measured on the dressed-CCSD doubles manifold:
+
+        v(k,b,c,j) t2(a,c,i,k)  and  -1 v(j,c,k,b) t2(a,c,i,k)
+
+    are one term (equal under ``_eri_canonical``: same key, same folded coefficient),
+    yet integrated to 2 and 0. Normalizing here makes the adapter a function of the
+    algebra rather than of how it was written.
+
+    Note the bra<->ket exchange ALONE is harmless -- it maps lines ``p-r, q-s`` to
+    ``r-p, s-q``, the same lines (verified over all 256 space x spin cases). It is the
+    composition with a within-group swap that re-pairs the lines, which is why the fix
+    must canonicalize over the full 8-fold orbit rather than just try the exchange.
+
+    KEY CHOICE (load-bearing). The representative is the lexicographically smallest
+    ``(space, name)`` arrangement -- the same rule ``_eri_normalize_factor`` uses in
+    ``dressing.py``, whose group and parity helper are reused here rather than
+    reimplemented. A ``(space, spin)`` key was tried first, to avoid depending on index
+    names, and is WRONG: it is degenerate (several orbit members tie on it), so the
+    tie-break decides the representative and two writings land on different ones --
+    measured, that made all 6 surviving spin cases disagree instead of 4. Names are
+    what break the tie deterministically.
+
+    The consequence is the constraint ``_eri_canonical`` already documents (D7.2.5.2
+    Fmi): this normalization is only meaningful on consistently-named indices. Within a
+    single term that holds by construction -- both writings of one integral carry the
+    same dummy names, only arranged differently -- which is exactly the scope this fix
+    needs. It does NOT make two terms with differently-named dummies converge; that is
+    ``canonicalize_term``'s job and is applied upstream.
+
+    The returned sign is the parity of the chosen permutation. ``v`` is antisymmetric
+    within each bra/ket pair, so a representative reached by an odd number of intra-pair
+    swaps carries -1. The caller folds it into the term coefficient alongside the
+    within-group parity, which is where the invariant actually lives: two writings of
+    one integral can legitimately disagree PER FACTOR (``f2 = -f1`` here) and still
+    agree PER TERM, because the term's own coefficient carries the difference.
+    """
+    # `getattr` rather than `.name`: this runs on every factor the adapter sees, and
+    # rank-6+ callers legitimately pass lightweight index-only factor objects. Anything
+    # without a name is not a `v`, so it needs no reorientation. Reordering also needs
+    # `with_indices`, so require that too rather than assuming the full Tensor API.
+    if getattr(factor, "name", None) != "v" or len(factor.indices) != 4:
+        return factor, 1
+    if not hasattr(factor, "with_indices"):
+        return factor, 1
+
+    from .optimization.dressing import _ERI_PERMUTATIONS, _perm_parity
+
+    best = None
+    for perm in _ERI_PERMUTATIONS:
+        order = tuple(factor.indices[p] for p in perm)
+        sig = tuple((x.space, x.name) for x in order)
+        if best is None or sig < best[0]:
+            best = (sig, order, _perm_parity(perm))
+    return factor.with_indices(best[1]), best[2]
+
+
 def _antisym_to_allowed(factor, label):
     """Map a spin-labeled factor to its allowed (spin-conserving-per-line) block
     via antisymmetry, returning ``(sign, indices)`` or ``None`` if genuinely zero.
     General rank-2n.
+
+    Rank-4 ``v`` factors are first reoriented to one canonical member of their 8-fold
+    ERI orbit (:func:`_orientation_normalized`), with that reorientation's parity folded
+    into the returned sign, so the result does not depend on which exchange-related
+    arrangement the caller happened to write (V1.1e.2).
 
     A rank-2n amplitude/integral is antisymmetric WITHIN its bra group (slots
     ``0..n-1``) and WITHIN its ket group (``n..2n-1``); the lines pair slot k with
@@ -274,6 +345,7 @@ def _antisym_to_allowed(factor, label):
     the two are related by exactly a bra-swap + ket-swap and evaluate identically;
     validated to reproduce GCC at rank-4 raw and through the full collapse+merge
     pipeline (~1e-17)."""
+    factor, orient_sign = _orientation_normalized(factor)
     idx = [label[i.name] for i in factor.indices]
     n = len(idx) // 2
     bra, ket = idx[:n], idx[n:]
@@ -283,7 +355,9 @@ def _antisym_to_allowed(factor, label):
         return None
     bra_order = sorted(range(n), key=lambda k: bra_spins[k])
     ket_order = sorted(range(n), key=lambda k: ket_spins[k])
-    sign = _permutation_parity(bra_order) * _permutation_parity(ket_order)
+    sign = (orient_sign
+            * _permutation_parity(bra_order)
+            * _permutation_parity(ket_order))
     new_idx = [bra[k] for k in bra_order] + [ket[k] for k in ket_order]
     return (sign, new_idx)
 
