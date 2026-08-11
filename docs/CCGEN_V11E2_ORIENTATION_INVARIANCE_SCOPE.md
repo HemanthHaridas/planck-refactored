@@ -117,7 +117,36 @@ becomes folklore.
 checked against in milliseconds, and it pins the *mechanism* (signs, not survival) so
 a fix that accidentally changes which cases survive is caught.
 
-### e.2.1 — canonicalize `v` orientation *inside* `_antisym_to_allowed` (~M, the fix)
+### e.2.1 — canonicalize `v` orientation *inside* `_antisym_to_allowed` — **LANDED**
+
+`_orientation_normalized` reorients every rank-4 `v` to one canonical member of its
+8-fold ERI orbit before the lines are read, folding that reorientation's parity into
+the returned sign. Reuses `_ERI_PERMUTATIONS` / `_perm_parity` from `dressing.py`.
+Reproducer holds: both writings integrate to 0 (were 2 and 0).
+
+**The wrong turn, recorded because the scope recommended it.** The direction note below
+preferred a name-independent key (`(space, spin)`) over relying on index names. That was
+tried first and **is wrong**: the key is degenerate — several orbit members tie on it —
+so the tie-break decides the representative and the two writings land on *different*
+ones. Measured, it made all 6 surviving spin cases disagree instead of 4, i.e. strictly
+worse than no fix. Names are what break the tie deterministically, so the landed fix
+uses the same lexicographic `(space, name)` rule `_eri_normalize_factor` uses. Within a
+single term that is sound by construction: both writings of one integral carry the same
+dummy names, only arranged differently. The documented constraint (this normalization is
+only meaningful on consistently-named indices) is therefore *accepted*, not circumvented.
+
+**Per-factor verdicts still differ, and that is correct.** `v(j,c,k,b) = −v(k,b,c,j)` as
+a factor; the raw term's own `−1` compensates. The invariant is per-**term**. What did
+change per factor is that the flip is now **uniform** across all 6 surviving cases (the
+orbit parity) rather than the pre-fix inconsistent 4-of-6 — the signature of a clean
+global reorientation, and the gate asserts that uniformity.
+
+**Unexpected side effect, verified benign.** The spatial emit *shrank*: 73260 → 65431
+bytes (doubles 120 → 113 terms). With the adapted residual multisets identical
+before/after (0 mismatched keys on every manifold), this is the normalization merging
+orientation-duplicate terms — the same answer in fewer terms.
+
+### e.2.1 — original scoping (retained for the rationale)
 
 Make the function normalize each `v` factor's orientation before reading its lines,
 folding the antisymmetry sign of that normalization into its returned sign. The
@@ -150,7 +179,62 @@ duplicate `canonicalize.py`'s job in a hot path; the line structure is what the
 adapter actually reads, so keying on it is both cheaper and more honest about the
 invariant.
 
-### e.2.2 — re-gate the validated adapter (~S, non-negotiable)
+### e.2.2 — re-gate the validated adapter — **LANDED**
+
+**The numeric gates were silently skipping.** In the default interpreter every pyscf
+gate in `test_spin` reports `skipped 'pyscf not importable'` — so the "93 tests OK" of
+earlier steps never exercised S1/S2/S4 or the FCI-limit fixtures. pyscf 2.13.0 lives in
+`tests/pyscf/.venv`; run through it the gates execute.
+
+**Record this: validate the adapter with
+`tests/pyscf/.venv/bin/python -W ignore -m unittest ...`, not the default interpreter.**
+A green default-interpreter run is not evidence for anything in this area.
+
+Results, with the pre-change baseline captured by stashing so the comparison is real:
+
+| gate | baseline | with fix |
+|---|---|---|
+| `test_spin` (pyscf) | 93 OK | 93 OK |
+| adapted residual multiset (energy/singles/doubles) | — | 0 mismatched keys |
+| spatial emit | 73260 | 65431 (fewer terms, same multiset) |
+| `test_spin_orientation` + `test_spin` + `test_dress_adapt` + `test_dressed_equation` + `test_dressing` | — | 267 OK |
+
+### e.2.5 — the residue is NOT orientation (~M, **NEW, next**)
+
+**e.2.1 was necessary but not sufficient.** The dressed-vs-raw adapted doubles residual
+is still **14 mismatches, completely unchanged** by the orientation fix, and still
+carries the repeated-same-name-factor signature:
+
+```
+4 x (t1, t1, t1, v)      2 x (t1, t1, v)
+4 x (t2, t2, v)          2 x (t1, t1, t1, t1, v)
+2 x (t1, t1, t2, v)      onlyD 7, onlyR 6
+```
+
+So the earlier draft's collapse-commutation hypothesis — which this document
+demoted to "the symptom, not the cause" when the orientation mechanism was found —
+is **back in scope as a genuinely separate defect.** Orientation sensitivity was real,
+measurable, and is now fixed; it simply was not what produced the 14.
+
+What is now known, and narrows e.2.5 considerably:
+
+- Not orientation (fixed; residue unchanged).
+- Not additivity (gated in e.1).
+- Not the dressed assembly (GCC exact, 0 on every manifold since e.0).
+- Not the adapter's spatial semantics (multisets identical before/after e.2.1).
+
+That leaves the closed-shell collapse's Cartesian product over **multiple collapsible
+factors** (`collapse_amplitudes` / `collapse_integrals` / `_product_over_choices`) as
+the remaining candidate, which is exactly what the factor signature points at: a term
+with *k* collapsible factors expands into 2^k spatial terms, and a dressed term hides
+some of its collapsible factors inside `W`/`τ` — so the two sides carry different *k*
+for the same algebra.
+
+Do **not** restate that as established. It is the leading hypothesis with the other
+four ruled out; e.2.5 starts by finding a minimal two-writing reproducer that differs
+in collapsible-factor count, the way e.2.0 did for orientation.
+
+### e.2.2 — original scoping (retained)
 
 `ucc_integrate_term_antisym` is load-bearing for the whole spin-adaptation stack, so
 its own validation must be re-run, not just the dressing tests:
@@ -166,38 +250,57 @@ its own validation must be re-run, not just the dressing tests:
 *Gate:* all unchanged. If the spatial emit moves, stop — the fix changed the validated
 path and needs to be understood before proceeding.
 
-### e.2.3 — update the V1.1e.1 residue assertion (~S)
+### e.2.3 — update the V1.1e.1 residue assertion — **no change needed yet**
 
-`AdaptedExpansionOrderTests.test_expansion_order_is_pinned` asserts
-`{"doubles": 14}` deliberately, so a partial fix cannot pass silently. Update it to
-the post-fix count — **0 if e.2.1 is complete.** If it lands somewhere between 0 and
-14, that is a second, distinct defect: record it with its own reproducer rather than
-relaxing the assertion.
+`AdaptedExpansionOrderTests.test_expansion_order_is_pinned` asserts `{"doubles": 14}`
+deliberately. e.2.1 left the count at exactly 14, so the assertion still holds
+unchanged — and it did its job: it is *why* we know the orientation fix did not close
+V1.1e, rather than assuming it had.
+
+This is the branch the original scoping anticipated: "if it lands somewhere between 0
+and 14, that is a second, distinct defect: record it with its own reproducer rather
+than relaxing the assertion." It landed at 14, i.e. the residue is entirely a distinct
+defect — recorded as **e.2.5**. Update this assertion when e.2.5 lands, not before.
 
 Keep the rejected adapt-then-verify contrast in that test. Its numbers will also move;
 re-measure rather than delete, since the ordering rationale survives the fix.
 
-### e.2.4 — retire the boundary workaround, if any exists (~S)
+### e.2.4 — no double normalization — **SATISFIED**
 
-None exists yet — e.1 pinned the order but added no `v` normalization at the boundary.
-This step is a checkpoint: if e.2.1 turns out to need a boundary pre-pass after all,
-**say so and delete the in-adapter half** rather than shipping both. Two overlapping
-normalizations is precisely the spaghetti this route was chosen to avoid.
+Exactly one `v`-orientation fold ships, and it is inside the adapter
+(`_orientation_normalized`, called from `_antisym_to_allowed`). No boundary pre-pass was
+added: e.1 pinned the expansion order but introduced no normalization, and e.2.1 did not
+need one. So every caller of the adapter gets orientation invariance for free, which was
+the whole point of route (b) over route (a).
+
+The reused pieces (`_ERI_PERMUTATIONS`, `_perm_parity`) are *imported* from
+`dressing.py`, not copied — so the 8-fold group and its parity have one definition in
+the tree. `_eri_normalize_factor` remains a separate function because it operates on
+`Tensor` for the canonical-key path; it shares the group and the lexicographic rule with
+`_orientation_normalized` but not the call site. If a third consumer appears, extract the
+shared representative-picking step rather than adding a third copy.
 
 ---
 
 ## Sequencing
 
 ```
-e.2.0 (failing reproducer, ~S)
-   └→ e.2.1 (normalize inside _antisym_to_allowed, ~M)   ← the fix
-        ├→ e.2.2 (re-gate test_spin + spatial emit + Be CCSDTQ==FCI, ~S)
-        ├→ e.2.3 (update the pinned residue to 0, ~S)
-        └→ e.2.4 (checkpoint: no double normalization, ~S)
+e.2.0 (failing reproducer)              LANDED
+   └→ e.2.1 (normalize in the adapter)  LANDED  ← orientation invariance
+        ├→ e.2.2 (re-gate via the pyscf venv)  LANDED  (93 OK, multisets identical)
+        ├→ e.2.3 (residue assertion)    no change — still 14, which is the finding
+        ├→ e.2.4 (no double normalization)  satisfied: one fold, in the adapter
+        └→ e.2.5 (the actual 14: collapse over multiple collapsible factors)  ~M, NEXT
              │
              ▼
         e.3 (per-operator localization) → V1.1f → V1.2
 ```
+
+**Honest status.** e.2.1 fixed a real, measured, latent defect in
+`ucc_integrate_term_antisym` — one that would have bitten any future caller writing its
+`v` factors differently, which is the argument that made route (b) right. It did **not**
+close V1.1e. The 14 are a separate defect (e.2.5), and the deliberately-exact residue
+assertion is what made that visible instead of assumed.
 
 ---
 

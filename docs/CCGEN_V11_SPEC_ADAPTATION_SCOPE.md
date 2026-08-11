@@ -324,8 +324,29 @@ dressed-operator problem, which is why it did not show up in D7.
   to `r–p, s–q`, the same lines). The defect needs exchange *composed with* a
   within-group swap.
 
-  *Gate:* doubles → 0, and `test_spin` + the spatial emit + Be CCSDTQ==FCI all
-  unchanged.
+  **LANDED, and it did not close V1.1e.** `_orientation_normalized` fixed the measured
+  defect — the reproducer now integrates to 0 on both writings — and `test_spin` is
+  93/93 with the adapted residual multisets identical before/after (0 mismatched keys on
+  every manifold). The spatial emit *shrank* 73260 → 65431 bytes, which is the
+  normalization merging orientation-duplicate terms: same answer, fewer terms.
+
+  **But the doubles residue is still exactly 14, unchanged.** So orientation sensitivity
+  was a real latent defect worth fixing on its own terms — it would have bitten any
+  future caller writing its `v` factors differently — and it was *not* what produced the
+  14. That residue is a separate defect, now scoped as **e.2.5** (the closed-shell
+  collapse's Cartesian product over multiple collapsible factors), with orientation,
+  additivity, the dressed assembly, and the adapter's spatial semantics all ruled out
+  by measurement.
+
+  Two process notes worth carrying forward:
+
+  - **The numeric gates were silently skipping.** `test_spin`'s pyscf gates report
+    `skipped 'pyscf not importable'` in the default interpreter, so earlier "93 OK" runs
+    never exercised S1/S2/S4 or the FCI-limit fixtures. Validate via
+    `tests/pyscf/.venv/bin/python` (pyscf 2.13.0). A green default-interpreter run is
+    not evidence here.
+  - **The deliberately-exact `{"doubles": 14}` assertion earned its keep.** It is why we
+    know the fix was incomplete rather than assuming it worked.
 
 - **V1.1e.3 — per-operator localization (~S, once the manifold gate passes).** Run the
   gate with one operator's definition adapted at a time (`Wmnij`, `Wabef`, `Wmbej`) so
@@ -369,8 +390,9 @@ V1.1a (adapt terms)               LANDED
                   └→ V1.1e (faithfulness)   ROOT-CAUSED, NOT PASSING  ← ~M
                        ├─ e.0 clean GCC baseline        LANDED (was a real defect)
                        ├─ e.1 pin expansion order       LANDED
-                       ├─ e.2 adapter orientation-invariance  ~M  ← NEXT, route (b)
-                       │      scoped as e.2.0-e.2.4 in its own doc
+                       ├─ e.2 adapter orientation-invariance  LANDED (route b)
+                       │      e.2.0-e.2.4 landed; residue was NOT orientation
+                       ├─ e.2.5 collapse over multiple collapsible factors  ~M, NEXT
                        └─ e.3 per-operator localization  ~S
                        └→ V1.1f (index-space validity)
                             │
