@@ -201,23 +201,81 @@ reference, no orphan spec). This bidirectional closure is cheap and catches a
 rename that only landed on one side — the exact failure mode V1.1c could
 introduce.
 
-### V1.1e — the faithfulness gate (~S, the one that matters)
+### V1.1e — the faithfulness gate (~M, **upgraded from ~S: probed, not yet passing**)
 
-The parent scope's V1.1 gate, now reachable. Per operator, one at a time so a
-failure localizes:
+The parent scope's V1.1 gate. **Substituting an adapted spec's definition back into
+the adapted dressed residual must reproduce the adapted raw residual**, term-by-term
+after canonicalization.
 
-**Substituting an adapted spec's definition back into the adapted dressed residual
-must reproduce the adapted raw residual**, term-by-term after canonicalization.
+`dressed_equation.py`'s `verify_dressed_equation(dressed, raw, operators)` is the
+reuse surface — its `operators` dict is fully substitutable, so an adapted-definition
+operator table drops straight in. **Reuse it; do not write a second verifier.**
 
-This is V2.0's whole-manifold gate restricted to a single operator. Run it
-per-operator first (`Wmnij`, then `Wabef`, then `Wmbej` — cheapest and most
-structured first, the 5→8 one last), then once with all three.
+**Probed against the tree. It does not pass yet, and the ordering matters:**
 
-`dressed_equation.py` already has the expansion/verification machinery that proved
-the GCC assembly exact with 0 mismatches; V1.1e is that same check with adaptation
-applied to both sides. **Reuse it — do not write a second verifier.**
+| configuration | singles | doubles |
+|---|---|---|
+| GCC baseline (no adaptation) | 1 | **0** |
+| adapt-then-verify (adapted operator table) | 13 | 61 |
+| expand-in-GCC-then-adapt | 2 | 14 |
 
-*Gate:* 0 mismatches per operator and 0 for the combined manifold.
+Three things this establishes:
+
+1. **The GCC doubles baseline is clean (0), so the verifier is a valid zero-reference
+   there.** The GCC *singles* baseline is already 1 before any adaptation — a
+   pre-existing canonicalization artifact (`$free0`/`$free1` tokens from
+   `_free_order_normalized` landing in a summed slot), **not** caused by this work.
+   So singles must be gated against its own baseline of 1, or that artifact fixed
+   first; a naive "expect 0" gate on singles would fail for reasons unrelated to V1.1.
+2. **Expansion order is load-bearing.** Expanding the dressed manifold in GCC and
+   adapting the expansion is dramatically closer (61→14, 13→2) than adapting the
+   operator definitions and the residual separately and then expanding. That is
+   consistent with Decision 5 (`GCC → dress → adapt`) and says the gate should
+   expand **before** adapting, not after.
+3. **The residue is not a coefficient nudge.** The adapt-then-verify doubles diff has
+   30 keys only-in-dressed and 12 only-in-raw — structurally different terms. Even in
+   the better ordering, 7 of the 14 are only-in-dressed.
+
+**The signature of the remaining 14.** Every one involves *repeated same-name
+factors* — `t1·t1·v`, `t2·t2·v`, `t1·t1·t1·v`, `t1·t1·t1·t1·v`, `t1·t1·t2·v`. That is
+the fingerprint of the closed-shell collapse's **Cartesian product over multiple
+splittable factors** (`collapse_amplitudes` / `collapse_integrals` /
+`_product_over_choices`): a term with two collapsible factors expands into 2×2 spatial
+terms, and the count depends on how many collapsible factors a term carries. A dressed
+term and its raw counterpart carry *different numbers* of them — the dressed one hides
+some inside `W`/`τ` — so collapsing before vs after expansion is not commutative.
+
+**So the real V1.1e question is not "does the verifier agree" but "does
+expand ∘ collapse == collapse ∘ expand for terms with repeated collapsible
+factors".** That is an algebra question about the RCC collapse, not about spec
+plumbing, and it is why this step is ~M rather than ~S.
+
+Sub-steps:
+
+- **V1.1e.0 — fix or baseline the `$free` singles artifact (~S).** Decide whether
+  it is a genuine `_free_order_normalized` bug (a free index colliding with a
+  summed one) or benign. Until then, gate singles against its measured baseline
+  rather than 0, and say so explicitly in the test.
+- **V1.1e.1 — pin the expansion order (~S).** Gate expand-in-GCC-then-adapt, which
+  is both the closer configuration and the Decision-5-consistent one. Record the
+  adapt-then-verify numbers as the rejected alternative so the ordering is not
+  silently revisited.
+- **V1.1e.2 — resolve the repeated-collapsible-factor commutation (~M, the real
+  work).** Establish whether the 14 are (a) a genuine non-commutation that the
+  gate must account for by expanding first *always*, (b) a τ/τ_c double-count where
+  a collapsed `t1t1` inside `τ` is also collapsed outside it, or (c) a bug in the
+  dressed assembly that only adaptation exposes. Option (b) is the most likely
+  given `tau_overlap_corrections` already exists to handle exactly this class of
+  overlap in GCC — the corrections may need re-deriving post-adaptation.
+- **V1.1e.3 — per-operator localization (~S given the above).** Once the manifold
+  gate passes, run it per operator (`Wmnij`, `Wabef`, `Wmbej`) so a future
+  regression names one operator.
+
+*Gate:* 0 mismatches on doubles; singles at 0 or its justified baseline. Per-operator
+and combined.
+
+**Do not weaken the gate to make it pass.** A tolerance on term counts, or excluding
+the repeated-factor keys, would discard exactly the terms most likely to be wrong.
 
 ### V1.1f — index-space validity (the CSE trap) (~S)
 
@@ -239,19 +297,26 @@ character-for-character, and no index appears twice.
 ## Sequencing
 
 ```
-V1.1a (adapt terms)
-   └→ V1.1b (re-derive indices/sig)   ← the assertion that would have caught Finding B
-        └→ V1.1c (block-key names)    ← byte-identical on RCC
-             └→ V1.1d (recount usage) ← bidirectional closure
-                  └→ V1.1e (faithfulness, per-operator)   ← the gate that matters
+V1.1a (adapt terms)               LANDED
+   └→ V1.1b (re-derive layout)    LANDED  ← the assertion that would have caught Finding B
+        └→ V1.1c (block-key)      LANDED  ← byte-identical on RCC
+             └→ V1.1d (recount)   LANDED  ← bidirectional closure
+                  └→ V1.1e (faithfulness)   PROBED, NOT PASSING  ← ~M, the real work
                        └→ V1.1f (index-space validity)
                             │
                             ▼
                        V1.2 (restructure print_cpp_planck)
 ```
 
-a→b→c→d are each ~S and mechanical. V1.1e is where a real algebra error would
-surface; it is last because it needs a/b/c/d to be right to be interpretable.
+a→b→c→d were each ~S and mechanical, and are landed: emit byte-identical throughout
+(37216 / 73260 / 27561), since none of them is wired into `print_cpp_planck` yet —
+that is V1.2.
+
+V1.1e is where the real algebra question lives and it is **~M, not ~S**: probing
+showed the naive gate fails 61/13 and the better ordering still fails 14/2, with the
+residue localized to terms carrying repeated collapsible factors. It is last because
+it needs a–d correct to be interpretable, and it should be treated as the step that
+may reveal something about the RCC collapse rather than about spec plumbing.
 
 ---
 
@@ -295,12 +360,21 @@ naming scheme, no new normalizer.
 
 ## Why V1.1 is ~M
 
-Six sub-steps, five of them ~S and mechanical, one (V1.1e) carrying the real risk.
-The measurements moved it *down* from the parent scope's estimate in two ways —
+Six sub-steps. Four (a–d) were ~S, mechanical, and are landed. V1.1f is ~S. V1.1e
+carries all the risk and has been **upgraded to ~M after probing** — the faithfulness
+gate does not pass in any configuration yet, and the residue points at a
+collapse-commutation question (repeated collapsible factors), not at spec plumbing.
+
+The measurements moved the step *down* from the parent scope's estimate in two ways —
 only three operators are in scope (Finding A), and the emit path is already
-self-consistent so no layout rewrite is needed (Finding C) — and up in one: the
-metadata is dishonest for two referenced operators and nothing currently checks it
-(Finding B).
+self-consistent so no layout rewrite is needed (Finding C) — and up in two: the
+metadata was dishonest for three referenced operators with nothing checking it
+(Finding B), and V1.1e is harder than "run the existing verifier".
+
+**Honest status:** V1.1a–d are landed and gated, but they are *plumbing*. Nothing is
+validated end-to-end until V1.1e passes, and V1.1e is where a real error in the
+dressed-adapted algebra would live. Do not treat a–d landing as evidence the
+composition is correct.
 
 ---
 
