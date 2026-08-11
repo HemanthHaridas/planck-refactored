@@ -951,7 +951,25 @@ def emitted_intermediate_layout(definition_terms):
     return indices, sig
 
 
-def adapt_intermediate_spec(spec, adapter=None, relayout=True):
+def block_keyed_intermediate_name(name, block=None):
+    """A dressed intermediate's storage name for one spin block (V1.1c).
+
+    ``block=None`` (the RCC reference sector) keeps the bare name, so the RCC emit
+    is byte-identical; a non-reference block appends its tag -- ``Wmnij`` ->
+    ``Wmnij_abab``. Same ``f"{name}_{tag}"`` shape the bridge already uses for
+    amplitude sectors (``t4_aaabaaab``, R3.1.3c) and that U1.1 uses for UCC
+    amplitudes (``t2_aaaa``): ONE naming mechanism for amplitudes, ERIs, and
+    intermediates.
+
+    Needed because ``IntermediateSpec`` hashes/compares on
+    ``(name, indices, index_space_sig)``. Under RCC each operator adapts to a single
+    spec so nothing collides, but under UCC one ``Wmnij`` becomes several spin-block
+    variants that would collide into one. Costs nothing on the consumer side --
+    ``_map_factor`` already resolves any name in ``intermediate_names`` as a local."""
+    return name if block is None else f"{name}_{block}"
+
+
+def adapt_intermediate_spec(spec, adapter=None, relayout=True, block=None):
     """Spin-adapt a dressed-intermediate ``IntermediateSpec``'s definition terms
     (V1.1a) and re-derive its declared layout from them (V1.1b).
 
@@ -977,9 +995,12 @@ def adapt_intermediate_spec(spec, adapter=None, relayout=True):
     (V1.1c), memory estimates. Do not "fix" the mismatch by forcing the declared
     order INTO the builder; that would create a miscompile that does not exist.
 
-    Block-keying the name is V1.1c; recounting usage against the adapted residual is
-    V1.1d. ``relayout=False`` keeps V1.1a-only behavior for tests that isolate the
-    steps."""
+    ``block`` (V1.1c) tags the returned spec's name for a non-reference spin block,
+    via :func:`block_keyed_intermediate_name`; ``None`` keeps the bare name so the
+    RCC path is byte-identical.
+
+    Recounting usage against the adapted residual is V1.1d. ``relayout=False`` keeps
+    V1.1a-only behavior for tests that isolate the steps."""
     from dataclasses import replace
 
     fn = adapter or spin_adapt_equations
@@ -992,8 +1013,9 @@ def adapt_intermediate_spec(spec, adapter=None, relayout=True):
             f"has one target; a split result means the adapter treated it as a "
             f"multi-sector residual.")
     terms = tuple(adapted[spec.name])
+    name = block_keyed_intermediate_name(spec.name, block)
     if not relayout:
-        return replace(spec, definition_terms=terms)
+        return replace(spec, name=name, definition_terms=terms)
 
     indices, sig = emitted_intermediate_layout(terms)
     if len(indices) != len(spec.indices):
@@ -1002,7 +1024,7 @@ def adapt_intermediate_spec(spec, adapter=None, relayout=True):
             f"{len(indices)} but was declared rank {len(spec.indices)} -- the "
             f"adapter changed the operator's external slot count, which it must "
             f"never do.")
-    return replace(spec, definition_terms=terms, indices=indices,
+    return replace(spec, name=name, definition_terms=terms, indices=indices,
                    index_space_sig=sig)
 
 

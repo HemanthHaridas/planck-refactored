@@ -36,6 +36,7 @@ from ccgen.optimization.dressing import (  # noqa: E402
 from ccgen.spin import (  # noqa: E402
     _residual_template,
     adapt_intermediate_spec,
+    block_keyed_intermediate_name,
     intermediate_template,
     spin_adapt_equations,
 )
@@ -385,6 +386,72 @@ class SpecRelayoutTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             adapt_intermediate_spec(_spec("Wmnij"), adapter=rank_bender)
         self.assertIn("rank", str(ctx.exception))
+
+
+class BlockKeyedIdentityTests(unittest.TestCase):
+    """V1.1c: distinct spin blocks of one operator must be distinct specs.
+
+    `IntermediateSpec` hashes/compares on (name, indices, index_space_sig). Under
+    RCC each operator adapts to a single spec so nothing collides; under UCC one
+    `Wmnij` becomes several block-variants that WOULD collide into one.
+    """
+
+    def test_reference_block_keeps_the_bare_name(self):
+        self.assertEqual(block_keyed_intermediate_name("Wmnij"), "Wmnij")
+        self.assertEqual(block_keyed_intermediate_name("Wmnij", None), "Wmnij")
+
+    def test_non_reference_block_is_tagged(self):
+        self.assertEqual(
+            block_keyed_intermediate_name("Wmnij", "abab"), "Wmnij_abab")
+
+    def test_naming_matches_the_amplitude_sector_convention(self):
+        """Same f"{name}_{tag}" shape the bridge uses for t4_aaabaaab (R3.1.3c) and
+        U1.1 will use for t2_aaaa -- one mechanism, not three."""
+        self.assertEqual(block_keyed_intermediate_name("t4", "aaabaaab"),
+                         "t4_aaabaaab")
+
+    def test_rcc_default_is_byte_identical_to_v11b(self):
+        """V1.1c must not change the RCC path: block=None reproduces V1.1b exactly."""
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                spec = _spec(name)
+                self.assertEqual(adapt_intermediate_spec(spec),
+                                 adapt_intermediate_spec(spec, block=None))
+                self.assertEqual(adapt_intermediate_spec(spec).name, name)
+
+    def test_distinct_blocks_do_not_collide(self):
+        """The actual point: two blocks of one operator must be unequal AND hash
+        differently, so a dict/set of specs keeps both."""
+        spec = _spec("Wmnij")
+        a = adapt_intermediate_spec(spec, block="abab")
+        b = adapt_intermediate_spec(spec, block="aabb")
+        self.assertNotEqual(a, b)
+        self.assertNotEqual(hash(a), hash(b))
+        self.assertEqual(len({a, b}), 2)
+
+    def test_block_variant_is_distinct_from_the_reference(self):
+        spec = _spec("Wmbej")
+        ref = adapt_intermediate_spec(spec)
+        tagged = adapt_intermediate_spec(spec, block="abab")
+        self.assertNotEqual(ref, tagged)
+        self.assertEqual(len({ref, tagged}), 2)
+
+    def test_tagging_changes_only_the_name(self):
+        """A tag routes storage; it must not perturb the adapted algebra or layout."""
+        spec = _spec("Wmbej")
+        ref = adapt_intermediate_spec(spec)
+        tagged = adapt_intermediate_spec(spec, block="abab")
+        self.assertEqual(tagged.name, "Wmbej_abab")
+        self.assertEqual(tagged.indices, ref.indices)
+        self.assertEqual(tagged.index_space_sig, ref.index_space_sig)
+        self.assertEqual(tagged.definition_terms, ref.definition_terms)
+
+    def test_tagging_applies_without_relayout_too(self):
+        """The two flags are independent; V1.1c should not be entangled with V1.1b."""
+        spec = _spec("Wmnij")
+        out = adapt_intermediate_spec(spec, relayout=False, block="abab")
+        self.assertEqual(out.name, "Wmnij_abab")
+        self.assertEqual(out.indices, spec.indices)
 
 
 if __name__ == "__main__":
