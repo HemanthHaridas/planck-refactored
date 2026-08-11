@@ -969,6 +969,64 @@ def block_keyed_intermediate_name(name, block=None):
     return name if block is None else f"{name}_{block}"
 
 
+def recount_intermediate_usage(specs, equations):
+    """Recount each spec's ``usage_count`` / ``usage_targets`` against the ADAPTED
+    residual (V1.1d), returning new specs.
+
+    The counts on a freshly dressed spec are computed from the GCC residual in
+    ``_dress_operator_equations``, and adaptation changes them -- measured on dressed
+    CCSD, ``Wmbej`` goes 5 -> 10 as the adapter splits its usage sites across spin
+    cases (the other four are unchanged at 1). A stale count is a trap rather than a
+    live bug today (it only feeds the emitted comment), but it is the natural input to
+    any materialize-once-vs-inline decision, so it must not be left describing a
+    different equation set than the one being emitted."""
+    from dataclasses import replace
+
+    names = {s.name for s in specs}
+    out = []
+    for spec in specs:
+        count = 0
+        targets = []
+        for manifold, terms in equations.items():
+            n = sum(1 for t in terms for f in t.factors if f.name == spec.name)
+            if n:
+                count += n
+                targets.append(manifold)
+        out.append(replace(spec, usage_count=count, usage_targets=tuple(targets)))
+
+    # Bidirectional closure: every referenced intermediate needs a spec, and every
+    # spec needs a reference. A one-sided rename (the failure mode V1.1c's tagging
+    # could introduce) shows up here as a dangling reference or an orphan spec.
+    def _is_primitive(fname):
+        # v/f/delta, plus any cluster amplitude `t<rank>` or sector-tagged
+        # `t<rank>_<tag>` (R3.1.3c) -- those are runtime state, not intermediates.
+        if fname in {"v", "f", "delta"}:
+            return True
+        stem = fname.split("_", 1)[0]
+        return stem.startswith("t") and stem[1:].isdigit()
+
+    referenced = {
+        f.name
+        for terms in equations.values()
+        for t in terms
+        for f in t.factors
+        if not _is_primitive(f.name)
+    }
+    dangling = referenced - names
+    if dangling:
+        raise ValueError(
+            f"recount_intermediate_usage: the adapted residual references "
+            f"{sorted(dangling)} with no matching spec -- an intermediate was "
+            f"renamed on one side only.")
+    orphans = [s.name for s in out if s.usage_count == 0]
+    if orphans:
+        raise ValueError(
+            f"recount_intermediate_usage: spec(s) {sorted(orphans)} are never "
+            f"referenced by the adapted residual -- they would emit an unused "
+            f"build_<op>, or their name drifted from the usage sites.")
+    return out
+
+
 def adapt_intermediate_spec(spec, adapter=None, relayout=True, block=None):
     """Spin-adapt a dressed-intermediate ``IntermediateSpec``'s definition terms
     (V1.1a) and re-derive its declared layout from them (V1.1b).

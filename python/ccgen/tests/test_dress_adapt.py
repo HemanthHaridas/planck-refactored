@@ -1,6 +1,7 @@
-"""V1.0 gate: the slot-ordering contract at the dress/adapt boundary.
+"""Gates for the dress/adapt boundary: V1.0 (slot-ordering contract) and V1.1a-d
+(adapting a dressed intermediate's spec).
 
-`spin_adapt_equations` assigns an external spin block by slot POSITION, and
+V1.0 -- `spin_adapt_equations` assigns an external spin block by slot POSITION, and
 `_line_pairs` pairs slot k with slot k+n. The default template
 (`_residual_template`) reorders free indices virtuals-first, which is the
 convention the C++ runtime's `rank_dims` depends on -- correct for residual
@@ -17,6 +18,11 @@ Same silent-wrong-answer class as the R3.1.2 bridge and B5 ERI-convention defect
 
 These tests pin the fix (`intermediate_template` + the `templates` override) and
 the guard that makes a zero adaptation loud instead of silent.
+
+V1.1a-d build on that: adapt a spec's definition terms (a), re-derive its declared
+layout from the emitter's own normalization (b), block-key its identity so UCC's
+per-block variants cannot collide (c), and recount usage against the adapted
+residual with bidirectional closure (d).
 """
 
 from __future__ import annotations
@@ -38,6 +44,7 @@ from ccgen.spin import (  # noqa: E402
     adapt_intermediate_spec,
     block_keyed_intermediate_name,
     intermediate_template,
+    recount_intermediate_usage,
     spin_adapt_equations,
 )
 
@@ -452,6 +459,77 @@ class BlockKeyedIdentityTests(unittest.TestCase):
         out = adapt_intermediate_spec(spec, relayout=False, block="abab")
         self.assertEqual(out.name, "Wmnij_abab")
         self.assertEqual(out.indices, spec.indices)
+
+
+class UsageRecountTests(unittest.TestCase):
+    """V1.1d: usage counts must describe the ADAPTED residual, not the GCC one."""
+
+    @classmethod
+    def setUpClass(cls):
+        from ccgen.generate import _dress_operator_equations, generate_cc_equations
+
+        eqs = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
+        cls.dressed, cls.specs = _dress_operator_equations(eqs)
+        cls.adapted = spin_adapt_equations(cls.dressed)
+
+    def test_wmbej_count_is_recounted(self):
+        """The measured drift: adaptation splits Wmbej's usage sites across spin
+        cases, 5 -> 10. The other four are unchanged at 1, so this operator is the
+        whole reason the recount is not a no-op."""
+        before = {s.name: s.usage_count for s in self.specs}
+        after = {s.name: s.usage_count
+                 for s in recount_intermediate_usage(self.specs, self.adapted)}
+        self.assertEqual(before["Wmbej"], 5)
+        self.assertEqual(after["Wmbej"], 10)
+        for name in ("tau", "tau_c", "Wmnij", "Wabef"):
+            self.assertEqual(after[name], before[name], name)
+
+    def test_every_spec_is_referenced(self):
+        for spec in recount_intermediate_usage(self.specs, self.adapted):
+            with self.subTest(operator=spec.name):
+                self.assertGreater(spec.usage_count, 0)
+                self.assertTrue(spec.usage_targets)
+
+    def test_targets_are_real_manifolds(self):
+        for spec in recount_intermediate_usage(self.specs, self.adapted):
+            with self.subTest(operator=spec.name):
+                for target in spec.usage_targets:
+                    self.assertIn(target, self.adapted)
+
+    def test_recount_changes_only_usage_fields(self):
+        for old, new in zip(self.specs,
+                            recount_intermediate_usage(self.specs, self.adapted)):
+            with self.subTest(operator=old.name):
+                self.assertEqual(new.name, old.name)
+                self.assertEqual(new.indices, old.indices)
+                self.assertEqual(new.index_space_sig, old.index_space_sig)
+                self.assertEqual(new.definition_terms, old.definition_terms)
+
+    def test_dangling_reference_is_an_error(self):
+        """A one-sided rename — the failure mode V1.1c's tagging could introduce —
+        leaves the residual referencing a name no spec provides."""
+        with self.assertRaises(ValueError) as ctx:
+            recount_intermediate_usage(
+                [s for s in self.specs if s.name != "Wmbej"], self.adapted)
+        self.assertIn("Wmbej", str(ctx.exception))
+
+    def test_orphan_spec_is_an_error(self):
+        """The other direction: a spec nothing references would emit an unused
+        build_<op>, or its name drifted away from the usage sites."""
+        from dataclasses import replace
+
+        orphan = replace(self.specs[0], name="Wnope")
+        with self.assertRaises(ValueError) as ctx:
+            recount_intermediate_usage(list(self.specs) + [orphan], self.adapted)
+        self.assertIn("Wnope", str(ctx.exception))
+
+    def test_amplitudes_are_not_mistaken_for_intermediates(self):
+        """t1/t2 and sector-tagged t4_aaabaaab are runtime state, so they must not
+        register as dangling intermediate references."""
+        specs = recount_intermediate_usage(self.specs, self.adapted)
+        self.assertNotIn("t1", {s.name for s in specs})
+        # closure held despite t1/t2 appearing all over the adapted residual
+        self.assertTrue(specs)
 
 
 if __name__ == "__main__":
