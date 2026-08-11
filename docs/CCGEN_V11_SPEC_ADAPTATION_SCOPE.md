@@ -201,7 +201,7 @@ reference, no orphan spec). This bidirectional closure is cheap and catches a
 rename that only landed on one side — the exact failure mode V1.1c could
 introduce.
 
-### V1.1e — the faithfulness gate (~M, **upgraded from ~S: probed, not yet passing**)
+### V1.1e — the faithfulness gate (~M, **root-caused; not yet passing**)
 
 The parent scope's V1.1 gate. **Substituting an adapted spec's definition back into
 the adapted dressed residual must reproduce the adapted raw residual**, term-by-term
@@ -211,71 +211,108 @@ after canonicalization.
 reuse surface — its `operators` dict is fully substitutable, so an adapted-definition
 operator table drops straight in. **Reuse it; do not write a second verifier.**
 
-**Probed against the tree. It does not pass yet, and the ordering matters:**
+#### Measured state
 
 | configuration | singles | doubles |
 |---|---|---|
-| GCC baseline (no adaptation) | 1 | **0** |
+| GCC baseline (no adaptation) | **0** | **0** |
 | adapt-then-verify (adapted operator table) | 13 | 61 |
-| expand-in-GCC-then-adapt | 2 | 14 |
+| expand-in-GCC-then-adapt | **0** | 14 |
 
-Three things this establishes:
+The GCC baseline is now clean on every manifold: its one singles mismatch was a real
+lost coefficient in `assemble_dressed_equation` (an all-or-nothing bare/dressed
+partition dropping a partially-covered key), **fixed and gated** by
+`PartialCoverageRemainderTests`. That fix also took expand-then-adapt singles 2 → 0.
+So the whole residue is now **one number: doubles = 14**.
 
-1. **The GCC doubles baseline is clean (0), so the verifier is a valid zero-reference
-   there.** The GCC *singles* baseline is already 1 before any adaptation — a
-   pre-existing canonicalization artifact (`$free0`/`$free1` tokens from
-   `_free_order_normalized` landing in a summed slot), **not** caused by this work.
-   So singles must be gated against its own baseline of 1, or that artifact fixed
-   first; a naive "expect 0" gate on singles would fail for reasons unrelated to V1.1.
-2. **Expansion order is load-bearing.** Expanding the dressed manifold in GCC and
-   adapting the expansion is dramatically closer (61→14, 13→2) than adapting the
-   operator definitions and the residual separately and then expanding. That is
-   consistent with Decision 5 (`GCC → dress → adapt`) and says the gate should
-   expand **before** adapting, not after.
-3. **The residue is not a coefficient nudge.** The adapt-then-verify doubles diff has
-   30 keys only-in-dressed and 12 only-in-raw — structurally different terms. Even in
-   the better ordering, 7 of the 14 are only-in-dressed.
+#### Root cause (measured, not hypothesized)
 
-**The signature of the remaining 14.** Every one involves *repeated same-name
-factors* — `t1·t1·v`, `t2·t2·v`, `t1·t1·t1·v`, `t1·t1·t1·t1·v`, `t1·t1·t2·v`. That is
-the fingerprint of the closed-shell collapse's **Cartesian product over multiple
-splittable factors** (`collapse_amplitudes` / `collapse_integrals` /
-`_product_over_choices`): a term with two collapsible factors expands into 2×2 spatial
-terms, and the count depends on how many collapsible factors a term carries. A dressed
-term and its raw counterpart carry *different numbers* of them — the dressed one hides
-some inside `W`/`τ` — so collapsing before vs after expansion is not commutative.
+An earlier draft of this scope blamed the closed-shell collapse's Cartesian product
+over repeated collapsible factors. **That was the symptom, not the cause.** Probing
+established:
 
-**So the real V1.1e question is not "does the verifier agree" but "does
-expand ∘ collapse == collapse ∘ expand for terms with repeated collapsible
-factors".** That is an algebra question about the RCC collapse, not about spec
-plumbing, and it is why this step is ~M rather than ~S.
+1. **In GCC, the dressed expansion and the raw residual are identical** — 0 mismatches
+   under `_eri_canonical`. So the dressed assembly is exact, and the 14 appear *only*
+   after adaptation.
+2. **Adaptation is additive** over term partitions: `adapt(A+B) == adapt(A)+adapt(B)`,
+   0 mismatches on a split-in-half doubles manifold. So the 14 are **not** a linearity
+   or merge failure.
+3. **The two manifolds are equal only under the ERI bra↔ket fold.** Comparing them
+   with the plain `canonicalize_term` instead of `_eri_canonical`:
 
-Sub-steps:
+   ```
+   WITHOUT the v bra<->ket fold : 72 mismatched keys
+   WITH the fold (_eri_canonical):  0 mismatched keys
+   ```
 
-- **V1.1e.0 — fix or baseline the `$free` singles artifact (~S).** Decide whether
-  it is a genuine `_free_order_normalized` bug (a free index colliding with a
-  summed one) or benign. Until then, gate singles against its measured baseline
-  rather than 0, and say so explicitly in the test.
-- **V1.1e.1 — pin the expansion order (~S).** Gate expand-in-GCC-then-adapt, which
-  is both the closer configuration and the Decision-5-consistent one. Record the
-  adapt-then-verify numbers as the rejected alternative so the ordering is not
-  silently revisited.
-- **V1.1e.2 — resolve the repeated-collapsible-factor commutation (~M, the real
-  work).** Establish whether the 14 are (a) a genuine non-commutation that the
-  gate must account for by expanding first *always*, (b) a τ/τ_c double-count where
-  a collapsed `t1t1` inside `τ` is also collapsed outside it, or (c) a bug in the
-  dressed assembly that only adaptation exposes. Option (b) is the most likely
-  given `tau_overlap_corrections` already exists to handle exactly this class of
-  overlap in GCC — the corrections may need re-deriving post-adaptation.
-- **V1.1e.3 — per-operator localization (~S given the above).** Once the manifold
-  gate passes, run it per operator (`Wmnij`, `Wabef`, `Wmbej`) so a future
-  regression names one operator.
+   The expansion writes 72 terms where raw writes 64; the extra 8 (all at 4 summed
+   indices) are bra↔ket-flipped orientations of terms raw writes the other way, plus
+   operator-internal dummies (`__Wmnij_e`, `__Wabef_m`).
 
-*Gate:* 0 mismatches on doubles; singles at 0 or its justified baseline. Per-operator
-and combined.
+**So: `_eri_canonical` folds a symmetry of the integral that `ucc_integrate_term_antisym`
+does not.** The adapter assigns spin blocks by reading each `v` factor's *written*
+slot orientation (`resolve_block` / `block_exists` key on slot position). Two writings
+that are bra↔ket-equivalent — hence identical in GCC, where the fold is applied —
+adapt to *different* spin-block sets. Adaptation is therefore a function of how the
+algebra is **written**, not only of what it **is**.
+
+Concrete instance found: one canonical key carries total ½ on both sides, written as
+**3 terms** in the expansion (`½ t1t1t1t1v` + `¼ …` − `¼ …`, with `__Wmnij_e` /
+`__Wabef_m` dummies) versus **1 term** in raw. Adapted in isolation each side gives 1
+— they only diverge in the full manifold, where the differing orientations interact
+with the spin enumeration.
+
+This is the same class as V1.0's defect (the adapter reading slot position rather than
+physical structure) and the same class as the R3.1.2 bridge bug. It is **not** a
+dressed-operator problem, which is why it did not show up in D7.
+
+#### Sub-steps
+
+- **V1.1e.0 — clean GCC baseline. LANDED.** Was the `assemble_dressed_equation`
+  partial-coverage defect; fixed, gated, and it took singles to 0 in both the GCC and
+  the expand-then-adapt configurations.
+
+- **V1.1e.1 — pin the expansion order (~S).** Gate expand-in-GCC-then-adapt: it is
+  both the closer configuration (14 vs 61) and the Decision-5-consistent one
+  (`GCC → dress → adapt`). Record the adapt-then-verify numbers as the **rejected**
+  alternative so the ordering is not silently revisited. Do this first — it fixes the
+  gate's shape before the remaining algebra is touched.
+
+- **V1.1e.2 — make the comparison orientation-insensitive, or the adapter
+  orientation-invariant (~M, the decision point).** Two routes; they are not
+  equivalent and the choice should be deliberate:
+
+  - **(a) Normalize `v` orientation before adapting.** Fold every `v` factor to one
+    canonical bra↔ket orientation (carrying the antisymmetry sign) as a pre-pass on
+    both manifolds, so the adapter sees one writing per algebraic term. Cheap, local,
+    and reuses the fold `_eri_canonical` already implements. Risk: the fold's sign
+    convention must match what `ucc_integrate_term_antisym` expects, or it trades 14
+    mismatches for wrong signs — which is worse, being silent.
+  - **(b) Make `ucc_integrate_term_antisym` orientation-invariant.** Principled, and
+    would retire a whole class of write-order sensitivity (V1.0's defect included).
+    But it touches the validated adapter that the CCSDTQ==FCI gate depends on, so it
+    needs that gate re-run, not just the dressing tests.
+
+  **Recommendation: (a), gated by (b)'s test set.** Normalizing at the boundary is a
+  ~S change to a ~M problem, and it leaves the validated adapter untouched. Revisit
+  (b) only if a second orientation-sensitivity surfaces.
+
+  *Gate:* doubles → 0, and the `test_spin` + CCSDTQ==FCI gates unchanged.
+
+- **V1.1e.3 — per-operator localization (~S, once the manifold gate passes).** Run the
+  gate with one operator's definition adapted at a time (`Wmnij`, `Wabef`, `Wmbej`) so
+  a future regression names a single operator rather than "doubles".
+
+*Gate:* 0 mismatches on every manifold, per-operator and combined.
 
 **Do not weaken the gate to make it pass.** A tolerance on term counts, or excluding
-the repeated-factor keys, would discard exactly the terms most likely to be wrong.
+the repeated-factor keys, would discard exactly the terms most likely to be wrong —
+and per the root cause above, those keys are where the orientation sensitivity lives.
+
+**Do not "fix" this by comparing with `_eri_canonical` and calling it done.** The fold
+makes the *comparison* agree while the *adapted output* still depends on writing —
+which is what actually ships into the kernel. The gate must constrain the adapted
+manifold, not just the verifier's view of it.
 
 ### V1.1f — index-space validity (the CSE trap) (~S)
 
@@ -301,7 +338,11 @@ V1.1a (adapt terms)               LANDED
    └→ V1.1b (re-derive layout)    LANDED  ← the assertion that would have caught Finding B
         └→ V1.1c (block-key)      LANDED  ← byte-identical on RCC
              └→ V1.1d (recount)   LANDED  ← bidirectional closure
-                  └→ V1.1e (faithfulness)   PROBED, NOT PASSING  ← ~M, the real work
+                  └→ V1.1e (faithfulness)   ROOT-CAUSED, NOT PASSING  ← ~M
+                       ├─ e.0 clean GCC baseline        LANDED (was a real defect)
+                       ├─ e.1 pin expansion order       ~S
+                       ├─ e.2 v-orientation invariance   ~M  ← the decision point
+                       └─ e.3 per-operator localization  ~S
                        └→ V1.1f (index-space validity)
                             │
                             ▼
@@ -312,11 +353,11 @@ a→b→c→d were each ~S and mechanical, and are landed: emit byte-identical t
 (37216 / 73260 / 27561), since none of them is wired into `print_cpp_planck` yet —
 that is V1.2.
 
-V1.1e is where the real algebra question lives and it is **~M, not ~S**: probing
-showed the naive gate fails 61/13 and the better ordering still fails 14/2, with the
-residue localized to terms carrying repeated collapsible factors. It is last because
-it needs a–d correct to be interpretable, and it should be treated as the step that
-may reveal something about the RCC collapse rather than about spec plumbing.
+V1.1e is where the real question lives and it is **~M, not ~S**. Its baseline defect
+(e.0) turned out to be a genuine lost coefficient in `assemble_dressed_equation` and is
+fixed; the remaining residue is one number (doubles = 14) and is root-caused to
+**`v` bra↔ket orientation sensitivity in the adapter**, not to the dressed operators
+and not to the collapse. It is last because it needs a–d correct to be interpretable.
 
 ---
 
