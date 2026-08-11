@@ -292,5 +292,74 @@ class GeneratedResidualIntegrityTests(unittest.TestCase):
                         )
 
 
+class PartialCoverageRemainderTests(unittest.TestCase):
+    """`assemble_dressed_equation` must keep the UNCOVERED part of a raw term whose
+    key the operator expansions supply only partially.
+
+    The bare/dressed partition used to be an all-or-nothing membership test on the
+    expansion footprint: a key any expansion touched was dropped entirely. In CCSD
+    singles the raw term `t1(b,j) t2(a,c,i,k) v(b,c,j,k)` has coefficient 1 while
+    Wmbej's textbook `-1/2 t2*v` definition supplies only 1/2 of it through
+    `Wmbej*t1`, so the missing 1/2 vanished -- the one mismatch in the GCC singles
+    baseline. It is now emitted as a scaled remainder.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from ccgen.generate import _dress_operator_equations, generate_cc_equations
+
+        cls.raw = generate_cc_equations(
+            "ccsd", engine="diagram", canonical_fock=True)
+        cls.dressed, _ = _dress_operator_equations(cls.raw)
+
+    def test_every_manifold_reexpands_exactly(self):
+        """The headline: the dressed CCSD equation is exact on ALL manifolds. Singles
+        was 1 mismatch before this fix; energy and doubles were already 0 and must
+        stay there."""
+        for manifold in self.raw:
+            with self.subTest(manifold=manifold):
+                ok, diff = verify_dressed_equation(
+                    self.dressed[manifold], self.raw[manifold])
+                self.assertTrue(ok, f"{manifold}: {len(diff)} mismatch(es): {diff}")
+
+    def test_ccd_reexpands_exactly(self):
+        """A second method, to pin that the remainder logic is not CCSD-shaped."""
+        from ccgen.generate import _dress_operator_equations, generate_cc_equations
+
+        raw = generate_cc_equations("ccd", engine="diagram", canonical_fock=True)
+        dressed, _ = _dress_operator_equations(raw)
+        for manifold in raw:
+            with self.subTest(manifold=manifold):
+                ok, diff = verify_dressed_equation(dressed[manifold], raw[manifold])
+                self.assertTrue(ok, f"{manifold}: {diff}")
+
+    def test_the_partial_term_is_actually_emitted(self):
+        """Pin the mechanism, not just the outcome: the recovered remainder appears
+        in the dressed singles manifold as a t1*t2*v term at +1/2. If a future
+        refactor makes the totals balance some other way, this says whether the
+        remainder path is still the reason."""
+        from fractions import Fraction
+
+        found = [
+            t for t in self.dressed["singles"]
+            if tuple(sorted(f.name for f in t.factors)) == ("t1", "t2", "v")
+            and t.coeff == Fraction(1, 2)
+        ]
+        self.assertTrue(
+            found, "the +1/2 t1*t2*v remainder is missing from dressed singles")
+
+    def test_fully_covered_keys_are_not_duplicated(self):
+        """The other side of the remainder: a key the expansions cover EXACTLY must
+        contribute no bare term. Otherwise every dressed term would be double
+        counted -- which would show up as a mismatch above, but assert the count
+        directly so the failure is legible."""
+        ok, diff = verify_dressed_equation(
+            self.dressed["doubles"], self.raw["doubles"])
+        self.assertTrue(ok)
+        # doubles carries the tau/tau_c overlap corrections; if the remainder logic
+        # ignored them it would re-add their share (measured: -1/8 and -1/4).
+        self.assertEqual(len(diff), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

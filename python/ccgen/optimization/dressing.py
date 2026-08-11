@@ -1099,12 +1099,24 @@ def assemble_dressed_equation(operators, terms):
     that re-expands to ``terms`` (the raw residual) exactly.
 
     Result = bare + dressed:
-    - **bare**: every raw term whose ERI-canonical key is NOT in any operator
-      occurrence's EXPANSION FOOTPRINT (the keys the ``W*rest`` term actually
-      produces).  NOTE: this uses the expansion footprint, NOT the occurrence
-      ``cover`` -- the cover was antisym-closed for dedup (D7.2.5.2 W3) and
+    - **bare**: the part of each raw term the operator expansions do NOT already
+      supply.  Computed as a per-key REMAINDER (raw coefficient minus the
+      coefficient the scaled ``W*rest`` expansions contribute), not as an
+      all-or-nothing membership test on the EXPANSION FOOTPRINT.  A key the
+      expansions cover exactly drops out (remainder 0, the common case); a key they
+      cover only PARTIALLY keeps a scaled copy carrying the difference.
+
+      The partial case is real, not hypothetical: in CCSD singles the raw term
+      ``t1(b,j) t2(a,c,i,k) v(b,c,j,k)`` has coefficient 1, while ``Wmbej``'s
+      textbook ``-1/2 t2*v`` definition term supplies only 1/2 of it through
+      ``Wmbej*t1``.  Under the old membership test the whole term was dropped as
+      "covered" and the missing 1/2 silently vanished -- the single mismatch in the
+      GCC singles baseline.
+
+      NOTE on why the footprint (not the occurrence ``cover``) is the right basis
+      for this: the cover was antisym-closed for dedup (D7.2.5.2 W3) and
       over-claims antisym-partner keys the single written ``W*rest`` form does not
-      emit; partitioning on ``cover`` would drop those partner terms.
+      emit; keying on ``cover`` would drop those partner terms entirely.
     - **dressed**: each recognized ``W*rest`` occurrence term, scaled by the
       per-operator nesting scale (0c-1, ``reconcile_operator_scales``), plus the
       τ/τ_c overlap corrections (0c-2, ``tau_overlap_corrections``) materialized
@@ -1119,19 +1131,56 @@ def assemble_dressed_equation(operators, terms):
     scale = reconcile_operator_scales(operators, terms)
     corr = tau_overlap_corrections(operators, terms, scale)
 
-    footprint: set = set()
+    # Coefficient each key receives from the dressed side. Accumulated from the
+    # SCALED occurrence term (what actually lands in `dressed`), so the remainder
+    # below is computed against what the assembled equation really contributes --
+    # expanding the unscaled term would misstate it whenever scale != 1.
+    covered: dict = {}
     dressed: list = []
     for op in operators:
         for occ in find_operator_occurrences(op, terms):
             t = occ["term"]
             s = scale[op.name]
-            dressed.append(t.scaled(s) if s != 1 else t)
-            for prim in expand_dressed_term(t, {op.name: op}):
+            scaled = t.scaled(s) if s != 1 else t
+            dressed.append(scaled)
+            for prim in expand_dressed_term(scaled, {op.name: op}):
                 key, coeff = _eri_canonical(prim)
                 if coeff:
-                    footprint.add(key)
+                    covered[key] = covered.get(key, Fraction(0)) + coeff
 
-    bare = [t for t in terms if _eri_canonical(t)[0] not in footprint]
+    # The τ/τ_c overlap corrections (below) also land on specific keys, as scaled
+    # copies of a raw representative. Count them as covered too, so a key that is
+    # exactly accounted for by expansion + correction leaves no remainder -- without
+    # this the remainder double-counts the correction's share and reintroduces the
+    # very overlap `tau_overlap_corrections` exists to remove.
+    for key, delta in corr.items():
+        covered[key] = covered.get(key, Fraction(0)) + delta
+
+    # Raw coefficient per key, and one representative term to anchor a remainder on.
+    raw_total: dict = {}
+    raw_first: dict = {}
+    for t in terms:
+        key, coeff = _eri_canonical(t)
+        raw_total[key] = raw_total.get(key, Fraction(0)) + coeff
+        raw_first.setdefault(key, t)
+
+    bare: list = []
+    emitted: set = set()
+    for t in terms:
+        key, coeff = _eri_canonical(t)
+        if key not in covered:
+            bare.append(t)                       # untouched by any operator
+            continue
+        if key in emitted:
+            continue                             # remainder is per KEY, not per term
+        emitted.add(key)
+        remainder = raw_total[key] - covered[key]
+        if remainder == 0:
+            continue                             # fully supplied by the expansions
+        rep = raw_first[key]
+        rc = _eri_canonical(rep)[1]
+        if rc:
+            bare.append(rep.scaled(remainder / rc))
 
     # Materialize each 0c-2 correction as a scaled copy of a raw term carrying the
     # same canonical key (delta = scale * raw_coeff, so the copy contributes delta).
