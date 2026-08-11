@@ -28,15 +28,21 @@ Wabef    sig=vvvv   tpl=[a:vir, b:vir, e:vir, f:vir]  -> 4 terms
 Wmbej    sig=ovvo   tpl=[b:vir, e:vir, m:occ, j:occ]  -> 0 terms   ← DEFECT
 ```
 
-### Finding 1 — `Wmbej` adapts to **zero terms**, silently
+### Finding 1 — `Wmbej` adapts to **zero terms**, silently — **FIXED (V1.0)**
 
 `_residual_template` (`spin.py:895`) builds the free-index template as
 **virtuals first, then occupieds**. For `Wmbej` that reorders the operator's own
-slot order `[m, b, e, j]` (`ovvo`) into `[b, e, m, j]`. The adapter then pairs
-slot `k` with slot `k+n` — i.e. `b↔m` and `e↔j` — but `Wmbej`'s physical lines
-are `m↔e` and `b↔j`. `_closed_shell_representative_block` assigns
-`{b:a, e:b, m:a, j:b}`, which violates spin conservation on **every** physical
-line, so `block_exists` rejects every term. Result: 0 survivors, no exception.
+slot order `[m, b, e, j]` (`ovvo`) into `[b, e, m, j]`, and
+`_representative_block_for_sector` assigns `{b:a, e:b, m:a, j:b}`.
+
+**The mechanism is one level below the output block** (this scope's first draft
+said the output block was itself invalid — it is not, and the distinction matters
+for where the fix goes). That reordered block *is* spin-valid on the reordered
+slots (`b↔m`, `e↔j` both conserve), so nothing rejects it. It is then applied to
+**factors** carrying the operator's real pairing: the bare integral `v(m,b,e,j)`
+takes tag `aabb`, whose `m↔e` line has `m=a`/`e=b`, and fails `block_exists`.
+Every spin case of every term dies the same way. Result: 0 survivors, no
+exception — because dropping a forbidden block is the normal discard path.
 
 The operator itself is fine. Enumerating all 16 blocks over `[m,b,e,j]` in the
 operator's own order:
@@ -99,39 +105,49 @@ Today `print_cpp_planck` returns early in the `dress_operators` branch
 Ordered so each is independently checkable and the two measured defects are fixed
 before anything is composed.
 
-### V1.0 — pin the slot-ordering contract at the dress/adapt boundary (~S)
+### V1.0 — pin the slot-ordering contract at the dress/adapt boundary — **LANDED**
 
-Fix Finding 1. The adapter pairs slot `k` with slot `k+n`; a dressed operator's
-`indices` must be presented in an order where that pairing matches its physical
-lines.
+Fixed Finding 1, via option (a) below. `spin_adapt_equations` gained an optional
+`templates` override, and a new `intermediate_template(spec)` supplies a spec's
+own declared slot order. Residual targets pass nothing and keep the virtuals-first
+convention untouched.
 
-Two candidate fixes — **prefer (a)**:
+Landed result — all six operators adapt non-empty:
+
+```
+Fme    ov     raw=1 -> 2      Wmnij  oooo   raw=4 -> 4
+Fae    vv     raw=3 -> 8      Wabef  vvvv   raw=4 -> 4
+Fmi    oo     raw=3 -> 5      Wmbej  ovvo   raw=5 -> 8   (was 0)
+```
+
+Also landed: a guard raising when a non-empty GCC manifold adapts to zero, naming
+the likely cause and the fix. A genuinely empty input still returns empty.
+Silence is what made the defect invisible.
+
+Gate: `python/ccgen/tests/test_dress_adapt.py`, 8 tests — every operator adapts
+non-empty; `Wmbej` zero on the default and non-zero on its own order; the exact
+factor-level mechanism (`v` → `aabb` rejected); only `Fme`/`Wmbej` are reordered
+at all, so the four space-homogeneous operators agreeing is coincidence rather
+than a property; and the residual path is byte-identical with `templates`
+absent/empty/`None`. Full ccgen suite 648 OK (65 skipped, 3 expected failures,
+all pre-existing).
+
+The two options considered, for the record — **(a) was taken**:
 
 - **(a) Adapt each operator on its own block order**, bypassing
   `_residual_template` for intermediates. `_representative_block_for_sector`
-  already takes a template, so the change is to build that template from
-  `spec.indices` (the operator's declared order) rather than re-deriving it
-  virtuals-first. Keeps `_residual_template` untouched, so the residual path is
-  byte-identical.
+  already takes a template, so the change was to build that template from
+  `spec.indices` rather than re-deriving it virtuals-first. Keeps
+  `_residual_template` untouched, so the residual path is byte-identical.
 - **(b) Permute each operator's slots to virtuals-first and carry the sign.**
-  Mirrors what `_canonicalize_amplitude_factor` does for amplitudes. Strictly more
-  work and introduces a sign that must then be threaded into the emitted builder —
-  more places to be wrong, for no gain.
+  Mirrors `_canonicalize_amplitude_factor`. Strictly more work, and introduces a
+  sign that must then be threaded into the emitted builder — more places to be
+  wrong, for no gain.
 
 **Do not "fix" `_residual_template`.** It encodes the occ-first/virtuals-first
 convention that the C++ runtime's `rank_dims` depends on — pinned by `02364db`
 (R3.1.2 half (ii)). Changing it would move the residual layout contract to fix an
 intermediate-layout bug.
-
-*Gate:* every seeded operator adapts to a **non-empty** term list, and the
-operator's physical line pairing is preserved (assert `block_exists` accepts the
-chosen representative block for each). Specifically: `Wmbej` yields 6 survivors,
-not 0. This is a seconds-long pure-Python test and it is the single highest-value
-assertion in V1 — it is the one that is currently failing.
-
-*Also assert:* a regression guard that no operator silently adapts to zero terms.
-An empty manifold must be an **error**, not a valid result. Silence is what made
-this defect invisible.
 
 ### V1.1 — adapt the intermediate specs (~M, the core step)
 
@@ -235,18 +251,18 @@ the emitted TU, not on the spec list, so it catches an emit-layer reordering too
 ## Sequencing
 
 ```
-V1.0 (ordering contract, ~S) ──→ V1.1 (adapt specs, ~M) ──→ V1.2 (restructure, ~S)
-       │                                                          │
-       └─ fixes the measured Wmbej-zero defect                    ├─→ V1.3 (force_arbitrary, ~S)
-                                                                  └─→ V1.4 (dep order, ~S)
-                                                                            │
-                                                                            ▼
-                                                                     V2 (symbolic gates)
+V1.0 (ordering contract) ──→ V1.1 (adapt specs, ~M) ──→ V1.2 (restructure, ~S)
+   LANDED                                                     │
+                                                              ├─→ V1.3 (force_arbitrary, ~S)
+                                                              └─→ V1.4 (dep order, ~S)
+                                                                        │
+                                                                        ▼
+                                                                 V2 (symbolic gates)
 ```
 
-V1.0 first and alone — it is ~S, it fixes a measured defect, and V1.1's gate
-cannot pass while `Wmbej` is empty. V1.1 is the only ~M step. V1.2–V1.4 are
-mechanical once the algebra is right.
+V1.0 landed first and alone — it fixed a measured defect, and V1.1's gate could
+not pass while `Wmbej` was empty. **V1.1 is next, and is the only ~M step.**
+V1.2–V1.4 are mechanical once the algebra is right.
 
 ---
 
