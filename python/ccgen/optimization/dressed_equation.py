@@ -131,6 +131,73 @@ def expand_dressed_term(
     return frontier
 
 
+def expand_then_adapt(equations, adapter=None, operators=None):
+    """Expand a dressed manifold to primitives in GCC, THEN spin-adapt it (V1.1e.1).
+
+    This is the pinned order for validating a dressed spatial equation, and it is the
+    one Decision 5 implies (``GCC -> dress -> adapt``). The rejected alternative --
+    adapting the operator definitions and the residual separately, then expanding the
+    adapted dressed manifold against an adapted operator table -- is measurably worse
+    on dressed CCSD (mismatches vs the adapted raw residual):
+
+        configuration                    energy  singles  doubles
+        adapt-then-verify  (REJECTED)         0       13       61
+        expand-then-adapt  (THIS)             0        0       14
+
+    Two reasons beyond the raw counts. (1) Expansion introduces operator-internal
+    dummy indices (``__Wmnij_e``, ``__Wabef_m``); doing it in GCC keeps those out of
+    the adapter, which keys spin blocks on slot structure. (2) An adapted operator
+    table means the SAME operator is adapted once per definition and again per usage
+    site, so any orientation sensitivity is applied twice, inconsistently.
+
+    ``adapter`` defaults to :func:`ccgen.spin.spin_adapt_equations`; pass
+    ``ucc_adapt_equations`` for UCC. Returns the adapted primitive manifold, directly
+    comparable to ``adapter(raw)`` via :func:`raw_multiset`.
+
+    NOTE: the residual doubles=14 is a real open defect, root-caused to `v` bra<->ket
+    orientation sensitivity in the adapter (V1.1e.2), NOT to this ordering. Pinning the
+    order here is what makes that residue a single reproducible number."""
+    from ..spin import spin_adapt_equations
+
+    fn = adapter or spin_adapt_equations
+    expanded = {
+        manifold: [p for t in terms for p in expand_dressed_term(t, operators)]
+        for manifold, terms in equations.items()
+    }
+    return fn(expanded)
+
+
+def verify_adapted_dressed_equation(dressed, raw, adapter=None, operators=None):
+    """Does a dressed manifold, expanded-then-adapted, equal the adapted raw residual?
+
+    Returns ``{manifold: {key: delta}}`` holding only the manifolds that mismatch, so
+    an empty dict means exact. The per-manifold split is what lets a failure name
+    ``doubles`` instead of "the equation" (V1.1e.1); per-OPERATOR localization is
+    V1.1e.3.
+
+    Both sides go through the same adapter, so this compares adapted-to-adapted -- the
+    dressed side is never credited with a symmetry fold the adapted output does not
+    actually carry."""
+    from ..spin import spin_adapt_equations
+
+    fn = adapter or spin_adapt_equations
+    got = expand_then_adapt(dressed, adapter=fn, operators=operators)
+    want = fn(raw)
+
+    out: dict = {}
+    for manifold in set(got) | set(want):
+        a = raw_multiset(got.get(manifold, []))
+        b = raw_multiset(want.get(manifold, []))
+        diff = {}
+        for key in set(a) | set(b):
+            d = a.get(key, Fraction(0)) - b.get(key, Fraction(0))
+            if d:
+                diff[key] = d
+        if diff:
+            out[manifold] = diff
+    return out
+
+
 def dressed_multiset(
     terms: Sequence[AlgebraTerm],
     operators: dict[str, DressedOperator] | None = None,
