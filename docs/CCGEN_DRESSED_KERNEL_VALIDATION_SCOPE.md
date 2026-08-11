@@ -117,6 +117,24 @@ CSE-style shape agreement alone.
 
 ### V1 — compose dress ∘ adapt (~M, the real work)
 
+> **Broken out in detail in `CCGEN_DRESS_ADAPT_COMPOSITION_SCOPE.md`** (steps
+> V1.0–V1.4), which also records **two defects reproduced against the current
+> tree** while scoping it:
+>
+> 1. **`Wmbej` adapts to zero terms, silently.** `_residual_template` reorders
+>    its `ovvo` slots virtuals-first (`[m,b,e,j]` → `[b,e,m,j]`), so the adapter
+>    pairs `b↔m`/`e↔j` instead of the physical `m↔e`/`b↔j`; every term fails
+>    `block_exists`. The operator is fine — on its own slot order the `abab` block
+>    yields 6 survivors. A slot-ordering contract bug at the dress/adapt boundary.
+> 2. **Spec `indices` desynchronize from the adapted terms.** The spec carries the
+>    operator's order, the adapted terms carry the template's. The two mixed-space
+>    operators (`Fme`, `Wmbej`) are exactly the two that disagree; the four
+>    space-homogeneous ones agree only by coincidence of the seeded set.
+>
+> Both are silent — no exception, a kernel that compiles and runs. This confirms
+> V1.1 below as the predicted failure point, and adds the ordering contract (V1.0)
+> as a prerequisite.
+
 Make `print_cpp_planck(dress_operators=True, spin_adapt=True)` produce a dressed
 **spatial** TU. Restructure the early return so the dressed manifold flows into
 the `spin_adapt` branch instead of bypassing it:
@@ -134,13 +152,15 @@ own contracts:
 - **V1.0 — dressed factors must survive `ucc_integrate_term_antisym`.** The
   adapter is name-agnostic (`_line_pairs` / `block_exists` key on rank + slot
   structure, not factor name), which is why Decision 5 claims the FLOP win
-  transfers for free. But Decision 5 also flags the caveat: *a dressed operator
-  may carry different symmetry than a bare ERI*. `Wmnij` (`oooo`) and `Wabef`
-  (`vvvv`) are symmetric-block; `Wmbej` (`ovvo`) is the asymmetric one whose
-  binding sign is applied **gated on block asymmetry** (`_block_is_asymmetric`) —
-  precisely the case where a bare-`v` antisymmetry assumption could be wrong.
-  Each dressed factor needs the same GCC-slice-vs-antisym-integration check `t2`
-  and `v` got when they first flowed through.
+  transfers for free. **Measured: it does not transfer for free.** Being
+  name-agnostic is precisely the problem — the adapter keys on *slot position*,
+  and a dressed operator's slot order is not the residual's virtuals-first
+  convention, so `Wmbej` (`ovvo`) adapts to zero terms. Decision 5's caveat (*a
+  dressed operator may carry different symmetry than a bare ERI*) points at the
+  right operator for the wrong reason: `Wmbej` is the one that breaks, but on slot
+  ordering, before its `_block_is_asymmetric` binding sign is ever reached. Fix
+  the ordering contract first (composition scope V1.0), then re-check the
+  asymmetry caveat on top.
 - **V1.1 — the intermediate specs must be adapted too.** Adaptation rewrites the
   residual's factor blocks, so a spec describing `Wmnij` in GCC form describes the
   wrong tensor after adaptation. The specs are what emit `build_<op>`, so if they
