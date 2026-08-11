@@ -906,6 +906,23 @@ def _residual_template(target: str, terms):
     return Tensor("R", tuple(vir) + tuple(occ))
 
 
+def intermediate_template(spec):
+    """The adaptation output template for a dressed-intermediate ``IntermediateSpec``
+    (V1.0): the spec's OWN declared slot order, not virtuals-first.
+
+    Feed to ``spin_adapt_equations(..., templates={spec.name: intermediate_template(spec)})``
+    so the operator adapts on a block that respects its physical line pairing.
+    `Wmbej` is the case that forces this: its `ovvo` slots are [m,b,e,j] with lines
+    m-e and b-j, but the virtuals-first default reorders them to [b,e,m,j], making
+    the adapter pair b-m and e-j and integrate the whole operator to zero. The four
+    space-homogeneous operators (`oooo`/`vvvv`/`vv`/`oo`) are unaffected because
+    their own order already agrees; `Fme` (`ov`) is reordered but survives, so
+    agreement there is coincidence, not a property to rely on."""
+    from .tensors import Tensor
+
+    return Tensor(spec.name, tuple(spec.indices))
+
+
 def _closed_shell_representative_block(template):
     """The canonical closed-shell external block: within each half (bra virtuals,
     ket occupieds) put all α slots before all β slots (α = ceil(n/2)). Each occ/vir
@@ -935,7 +952,7 @@ def _representative_block_for_sector(template, k_alpha):
     return {nm: sp for nm, sp in zip(names, spins)}
 
 
-def spin_adapt_equations(equations):
+def spin_adapt_equations(equations, templates=None):
     """Spin-adapt a whole GCC residual manifold to restricted (spatial)
     ``AlgebraTerm``s (R1.0). Returns ``{key: [AlgebraTerm]}``; `key` is the target
     for the reference Sz sector, and `target + "_" + tag` for each additional
@@ -945,10 +962,21 @@ def spin_adapt_equations(equations):
     bridge already names the second-sector *input* factors `t4_aaabaaab`
     (R3.1.3c), so the residual sets close on the same block vocabulary. Pure
     symbolic transform; gated numerically by R1.2 (reference) and the rank-8
-    solve-path gate (both sectors)."""
+    solve-path gate (both sectors).
+
+    ``templates`` (V1.0) optionally supplies an explicit output `Tensor` template
+    per target, overriding the virtuals-first :func:`_residual_template` default.
+    Required for DRESSED INTERMEDIATES: the external block is assigned by slot
+    POSITION and lines pair slot k with k+n, so a target whose own slot order is
+    not virtuals-first (e.g. Wmbej, `ovvo`, lines m-e and b-j) is assigned a block
+    that violates spin conservation on every line and integrates to ZERO. Passing
+    the operator's declared index order keeps its physical line pairing intact.
+    Residual targets pass ``None`` and keep the virtuals-first convention the C++
+    runtime's `rank_dims` depends on (R3.1.2 half (ii), 02364db) -- this override
+    exists so that contract does NOT have to move to accommodate intermediates."""
     out: dict = {}
     for target, terms in equations.items():
-        template = _residual_template(target, terms)
+        template = (templates or {}).get(target) or _residual_template(target, terms)
         n = len(template.indices) // 2
         if n == 0:
             # energy: scalar, single block
@@ -962,6 +990,21 @@ def spin_adapt_equations(equations):
             adapted = _adapt_on_block(terms, block)
             tag = _amplitude_block_tag(("a" * k + "b" * (n - k)) * 2)
             key = target if k == ref_k else f"{target}_{tag}"
+            if terms and not adapted:
+                # V1.0 guard: a non-empty GCC manifold that integrates to nothing
+                # is a slot-ordering/block bug, not a physical result -- it emits a
+                # kernel that compiles, runs, and is silently wrong (the class of
+                # the R3.1.2 bridge and B5 ERI-convention defects). Fail loudly
+                # instead. See `templates` above for the dressed-intermediate fix.
+                raise ValueError(
+                    f"spin_adapt_equations: target {key!r} has {len(terms)} GCC "
+                    f"term(s) but adapted to ZERO on block "
+                    f"{''.join(block[i.name] for i in template.indices)!r} "
+                    f"(slots {[i.name for i in template.indices]}). The external "
+                    f"block is assigned by slot position and lines pair k with "
+                    f"k+n, so this usually means the target's slot order is not "
+                    f"the virtuals-first convention -- pass an explicit template "
+                    f"via `templates` to preserve its own line pairing.")
             out[key] = adapted
     return out
 
