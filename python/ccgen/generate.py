@@ -907,10 +907,16 @@ def print_cpp_blas(
     )
 
 
-def _dress_operator_equations(eqs):
+def _dress_operator_equations(eqs, operators=None):
     """D7.3.2d: rewrite each manifold of ``eqs`` into its dressed form (recognized
     W/F operators + tau/tau_c pseudo-amplitudes + bare remainder) and return
     ``(dressed_eqs, ordered_intermediates)``.
+
+    ``operators`` selects which dressed operators to recognize; ``None`` (default)
+    uses the full seeded CCSD family, so every existing caller is unchanged. Passing
+    a subset dresses only those operators and leaves the rest bare -- used by the
+    V1.1e.3 per-operator gate so a regression names one operator rather than a whole
+    manifold.
 
     The intermediates list is dependency-ordered (D7.3.3): the tau/tau_c
     pseudo-amplitude specs come first, then the operator specs that reference
@@ -934,7 +940,7 @@ def _dress_operator_equations(eqs):
     )
     from .optimization.intermediates import IntermediateSpec
 
-    ops = seeded_operators()
+    ops = seeded_operators() if operators is None else list(operators)
     dressed = {m: assemble_dressed_equation(ops, terms) for m, terms in eqs.items()}
 
     # which intermediates does the dressed equation actually reference?
