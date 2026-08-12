@@ -406,13 +406,27 @@ def ucc_integrate_term_antisym(term, external_spins: dict):
 # exercises the physicist->chemist ERI mapping) is a separate later step.
 
 
-def external_blocks(residual_template) -> list[dict]:
-    """The canonical UCC external spin blocks for a residual, as
-    {free-index-name: spin} dicts. Enumerates the spin patterns that conserve
-    spin along the residual's lines (:func:`block_exists`), then keeps one
-    representative per block up to a global a<->b flip (so doubles -> aaaa, abab,
-    bbbb, not also baba)."""
-    n = len(residual_template.indices) // 2
+def external_blocks(residual_template, fold_spin_flip: bool = True) -> list[dict]:
+    """The external spin blocks of a residual, as {free-index-name: spin} dicts.
+
+    Enumerates the spin patterns that conserve spin along the residual's lines
+    (:func:`block_exists`), then keeps one representative per block.
+
+    ``fold_spin_flip`` selects the equivalence used for "per block":
+
+    - ``True`` (default, RCC): fold under the global a<->b flip, so doubles gives
+      ``aaaa, abab`` -- ``bbbb`` is dropped as the flip image of ``aaaa``. Valid only
+      when alpha and beta orbitals coincide (closed shell), which is exactly RCC's
+      premise.
+    - ``False`` (UCC): no folding. Doubles gives ``aaaa, abab, baba, bbbb`` and singles
+      ``aa, bb``. In UCC alpha and beta are different orbitals, so ``bbbb`` is an
+      independent amplitude, not a relabeling of ``aaaa``.
+
+    The default is ``True`` so every existing RCC caller is unchanged. UCC block
+    enumeration goes through :func:`ucc_independent_blocks`, which wraps this with
+    ``fold_spin_flip=False`` and additionally folds the within-half antisymmetry
+    (``baba`` -> ``abab``) that this function does not touch.
+    """
     names = [i.name for i in residual_template.indices]
     seen = set()
     blocks = []
@@ -421,8 +435,11 @@ def external_blocks(residual_template) -> list[dict]:
                  for nm, idx, s in zip(names, residual_template.indices, combo)}
         if not block_exists(residual_template, label):
             continue
-        flip = tuple("b" if s == "a" else "a" for s in combo)
-        key = min(combo, flip)  # canonical under global a<->b
+        if fold_spin_flip:
+            flip = tuple("b" if s == "a" else "a" for s in combo)
+            key = min(combo, flip)  # canonical under global a<->b
+        else:
+            key = combo
         if key in seen:
             continue
         seen.add(key)
@@ -811,6 +828,51 @@ def _amplitude_block_tag(block):
         k = n - k
     half = "a" * k + "b" * (n - k)
     return half + half
+
+
+def _ucc_block_tag(block: str) -> str:
+    """Fold a spin-block string to its UCC storage tag (U0).
+
+    Same α-before-β-per-half layout convention as :func:`_amplitude_block_tag`, but
+    **without** the β-majority flip. That flip identifies a block with its spin-flip
+    image, which is valid only when α and β orbitals coincide; in UCC they do not, so
+    `bbbb` is its own stored amplitude rather than a relabeling of `aaaa`.
+
+    Folds only the within-half antisymmetry (a slot permutation of one stored tensor):
+    `baba` -> `abab`, `bbaa`(t3-style halves) -> sorted per half. Leaves the α-count of
+    each half intact, so the surviving tags are the `n+1` α-count sectors per rank.
+    """
+    n = len(block) // 2
+    return "".join(sorted(block[:n])) + "".join(sorted(block[n:]))
+
+
+def ucc_independent_blocks(rank: int) -> list[str]:
+    """The UCC spin blocks of a rank-``rank`` amplitude that must be STORED (U0).
+
+    ``rank`` is the number of index slots (rank 2 = t1, rank 4 = t2, rank 6 = t3), so a
+    rank-2n amplitude has ``n`` slots per half.
+
+    Unlike the closed-shell case there is no global a<->b flip available, so all ``n+1``
+    α-count sectors are independent and the all-α / all-β blocks do not fold away::
+
+        rank 2 (t1) -> ["aa", "bb"]
+        rank 4 (t2) -> ["aaaa", "abab", "bbbb"]          (PySCF t2aa / t2ab / t2bb)
+        rank 6 (t3) -> ["aaaaaa", "aabaab", "abbabb", "bbbbbb"]
+
+    Spin is conserved per line (slot k with slot k+n), so a stored block always has the
+    same α-count in both halves -- which is why the answer is indexed by that one count.
+    Within-half antisymmetry is folded by :func:`_ucc_block_tag`, so `baba` is not a
+    separate entry.
+
+    Deliberately NOT built on :func:`external_blocks`: that enumerates blocks of a
+    residual template (and folds a<->b by default), whereas this is a property of the
+    amplitude rank alone. Callers needing the residual's own blocks want
+    ``external_blocks(tpl, fold_spin_flip=False)``.
+    """
+    if rank < 2 or rank % 2 != 0:
+        raise ValueError(f"amplitude rank must be even and >= 2, got {rank}")
+    n = rank // 2
+    return [("a" * k + "b" * (n - k)) * 2 for k in range(n, -1, -1)]
 
 
 def _canonicalize_amplitude_factor(f):
