@@ -9,6 +9,81 @@ Everything below is grounded in the current tree. Nothing here is landed.
 
 ---
 
+## Rescope against the current tree (2026-08-12, post-V1.1e)
+
+Re-verified after the V1.1e work (e.2.1 adapter orientation invariance, e.2.5 fixture
+fix). **The plan holds; three corrections and one simplification.**
+
+Verified still true — every claimed Python entry exists (`ucc_manifold`,
+`ucc_integrate_term_antisym`, `block_exists`/`resolve_block`,
+`spinterm_to_algebraterm`, `independent_spin_blocks`, `_amplitude_block_tag`, all three
+collapse steps, `_adapt_on_block`), and so does every claimed C++ hook
+(`ArbitraryOrderRCCAmplitudes::sectors` at `amplitudes.h:70`, `sector_tensor` at `:81`,
+`sector_tags`/`sector_residuals` at `generated_arbitrary_runtime.h:55-56`,
+`UHFReference`'s four spin counts at `common.h:145-148`, and `MOBlockCache`'s spin-free
+single `oovv`/`ovov` at `mo_blocks.h:20-21`). The reuse surface is intact.
+
+### Correction 1 — `external_blocks` folds a↔b, so U0 cannot build on it as written
+
+Measured on the current tree:
+
+```
+singles: ['aa']                    ← no 'bb'
+doubles: ['aaaa', 'abab']          ← no 'bbbb'
+```
+
+`external_blocks` (`spin.py:409`) dedups **up to a global a↔b flip**
+(`key = min(combo, flip)`, line 425) — a closed-shell assumption, and precisely the leak
+U0 exists to prevent. PySCF UCCSD stores `t1a/t1b` and `t2aa/t2ab/t2bb`, so UCC needs
+`{aa, bb}` and `{aaaa, abab, bbbb}`.
+
+**Consequence for U0's gate as written.** It says "every block returned by
+`external_blocks` for that rank folds into exactly one returned tag" — which *passes
+vacuously* while `bbbb` never appears, because `external_blocks` already folded it away.
+U0 must therefore either add an unfolded sibling (`ucc_external_blocks`, no `min(combo,
+flip)`) or take a `fold_spin_flip=False` flag, and the gate must assert **against PySCF's
+block names directly** (`{aaaa, abab, bbbb}`), never against `external_blocks`'s output.
+
+This raises U0 from ~S to **~S/M** — still small, but it is now a real code change plus a
+gate rewrite rather than a pure addition. It also confirms U0's stated rationale
+("the one place a closed-shell assumption could silently leak in") was right, and that
+the leak is already there.
+
+### Correction 2 — U1's numeric gate now has a working fixture (and needs its symmetry)
+
+The `residual_eval` fixture violated `<pq||rs> = <rs||pq>` until e.2.5.0. Any UCC gate
+comparing two written forms on that fixture would have reported spurious differences.
+Fixed, with all symmetries asserted by `test_residual_symmetry.py`.
+
+**For U1: the "evaluate at PySCF's converged amps" gate is the right instrument** (it
+compares *values*, not written forms), and it is now safe to also use symmetry-correct
+random tensors as a cheap pre-check before the PySCF solve. Do **not** gate UCC on a
+symbolic term-multiset comparison — V1.1e spent e.2.0–e.2.5 learning that such a
+comparison reports differences that are not there whenever both sides may choose among
+symmetry-equivalent writings.
+
+### Correction 3 — the orientation fix is inherited, so one U1 risk is already retired
+
+`ucc_integrate_term_antisym` calls `_antisym_to_allowed` (`spin.py:382`), which since
+e.2.1 normalizes every rank-4 `v` to one canonical member of its 8-fold ERI orbit. **The
+whole UCC path inherits orientation invariance for free** — no UCC-specific work, and the
+class of bug where two writings of one integral land in different blocks cannot recur
+here.
+
+This does not retire the `_canonicalize_amplitude_factor` risk U1.1 names, which is about
+**amplitude** slot layout per block, a different mechanism. That one still needs its own
+assertion.
+
+### Simplification — `independent_spin_blocks` is closer to reusable than stated
+
+The doc says the *machinery* is reusable but the *policy* (β-majority fold, exclude
+all-α) is closed-shell-specific. Confirmed. Worth stating positively: U0's job is
+literally "`independent_spin_blocks` minus the two policy lines", so the natural shape is
+a shared enumerator with the fold as a parameter, not a second parallel function. Fewer
+places for the closed-shell assumption to hide.
+
+---
+
 ## The one-sentence framing
 
 UCC is **not a parallel pipeline**. RCC is *UCC plus a collapse step*: the
@@ -26,7 +101,7 @@ Sz sector*.
 
 ## What already exists (the reuse surface)
 
-### Python (`python/ccgen/spin.py`, 989 lines)
+### Python (`python/ccgen/spin.py`, 1269 lines)
 
 - **`ucc_manifold(terms, residual_template)`** — the UCC block manifold. Returns
   `{block_tag: [SpinTerm]}` for **every** surviving external block, α/β
@@ -106,7 +181,14 @@ the reference (U2).
 Ordered so each step is independently gated and the risky algebra lands before
 the C++ plumbing.
 
-### U0 — pin the UCC block vocabulary (~S, pure Python, no codegen)
+### U0 — pin the UCC block vocabulary (~S/M, pure Python, no codegen)
+
+> **Rescoped.** `external_blocks` already folds a↔b (measured: doubles →
+> `['aaaa','abab']`, no `bbbb`), so this step must *also* provide an unfolded
+> enumerator, and its gate must assert against PySCF's block names — **not** against
+> `external_blocks`'s output, which would pass vacuously. See Correction 1. Prefer adding
+> `fold_spin_flip=False` to the existing enumerator over writing a parallel one.
+
 
 Write `ucc_independent_blocks(rank)`: the UCC blocks of a rank-2n amplitude that
 must be **stored** (as opposed to derived). Unlike the closed-shell case there is
@@ -119,10 +201,16 @@ The within-half antisymmetry still folds slot permutations, so the tag is still
 "α-before-β per half" — reuse `_amplitude_block_tag`'s *layout* convention but
 **not** its β-majority flip.
 
-*Gate:* `ucc_independent_blocks(4) == ["aaaa","abab","bbbb"]` and the rank-6/8
-counts match `n+1` sectors; every block returned by `external_blocks` for that
-rank folds into exactly one returned tag. Assert `ucc_independent_blocks(4)`
-matches PySCF UCCSD's block set by name. Seconds, no PySCF solve.
+*Gate:* `ucc_independent_blocks(4) == ["aaaa","abab","bbbb"]`, `(2) == ["aa","bb"]`, and
+the rank-6/8 counts match `n+1` sectors. Assert the rank-4 set matches PySCF UCCSD's block
+names (`t2aa/t2ab/t2bb`) **by name, directly** — this is the load-bearing assertion.
+Seconds, no PySCF solve.
+
+*Do NOT gate on* "every block from `external_blocks` folds into exactly one tag" (the
+original wording): `external_blocks` folds a↔b itself, so that assertion passes while
+`bbbb` is missing entirely. If a relationship to `external_blocks` is wanted, assert the
+opposite direction — that the unfolded enumerator returns **strictly more** blocks than
+`external_blocks`, and that folding its output by a↔b reproduces `external_blocks` exactly.
 
 **Why first:** every later step keys off this vocabulary, and it is the one place
 a closed-shell assumption could silently leak in.
@@ -148,7 +236,14 @@ Two sub-parts:
   does for `t4_aaabaaab`. That precedent means the naming hook exists; UCC
   applies it to every factor rather than only to a higher sector.
 
-  **The `_canonicalize_amplitude_factor` interaction is the risk.** It reorders
+  **The `_canonicalize_amplitude_factor` interaction is the risk — and it is now the
+  *only* one of U1's two orientation-shaped risks left.** The `v`-orientation half is
+  already handled: `ucc_integrate_term_antisym` → `_antisym_to_allowed` normalizes every
+  rank-4 `v` to a canonical orbit member since e.2.1, so UCC inherits that invariance
+  (Correction 3). What follows is a different mechanism — amplitude slot layout per
+  block — and still needs its own assertion.
+
+  It reorders
   slots to one reference layout per rank and returns a sign. For RCC that maps
   every block onto a single stored tensor. For UCC it must map each block onto
   **its own** stored tensor's canonical layout — same within-half sort, but the
@@ -156,11 +251,17 @@ Two sub-parts:
   wrong reproduces the R3.1.2 failure mode (a factor indexing the wrong slice,
   leaving a residual ≈0), so it needs its own assertion.
 
-*Gate (structural):* for a closed-shell-degenerate input the UCC block set
-reproduces the RCC term set after applying the collapse relations by hand
-(i.e. U1 ∘ collapse == `spin_adapt_equations`) at rank 4. Plus: every emitted
-`AlgebraTerm`'s factor names are drawn from the U0 vocabulary, and no factor
-carries an unresolved block.
+*Gate (structural):* for a closed-shell-degenerate input, U1 ∘ collapse ==
+`spin_adapt_equations` at rank 4. Plus: every emitted `AlgebraTerm`'s factor names are
+drawn from the U0 vocabulary, and no factor carries an unresolved block.
+
+**Compare this NUMERICALLY, not as a term multiset** — evaluate both sides on
+symmetry-correct random tensors (`residual_of` + `random_tensors`, both fixed in e.2.5.0)
+and require agreement to ~1e-12 relative. V1.1e's entire e.2.0–e.2.5 arc was spent
+learning that a symbolic term-by-term comparison reports differences that are not there
+whenever two sides may choose among symmetry-equivalent written forms — `{"doubles": 14}`
+was exactly that false alarm. The name/vocabulary half of this gate stays structural;
+the equality half must be numeric.
 
 *Gate (numeric, the load-bearing one):* evaluate the U1 `doubles_aaaa` /
 `doubles_abab` / `doubles_bbbb` residuals **at PySCF UCCSD's own converged
@@ -285,6 +386,18 @@ wiring.
   into live C++ state).
 - **Do not scope rank ≥ 5 UCC before measuring the rank-4 registry compile.**
   Compile time, not FLOPs, is the demonstrated wall.
+- **Do not build U0 on `external_blocks`, and do not gate against its output.** It folds
+  a↔b (`key = min(combo, flip)`, `spin.py:425`), so it returns `['aaaa','abab']` with no
+  `bbbb` — measured on the current tree. Any gate phrased as "every `external_blocks`
+  block maps to a tag" passes vacuously while the β-majority blocks are simply absent.
+  Assert against PySCF's `t2aa/t2ab/t2bb` names instead.
+- **Do not gate UCC equality on a symbolic term-multiset comparison.** Compare numeric
+  residuals on symmetry-correct tensors. A multiset comparison cannot tell "different
+  algebra" from "same algebra, different symmetry-equivalent writing" — that distinction
+  cost V1.1e five sub-steps and one phantom defect (`{"doubles": 14}`).
+- **Do not run the numeric gates in the default interpreter.** They skip silently (pyscf
+  not importable) and a green run means nothing. Use `tests/pyscf/.venv/bin/python`
+  (pyscf 2.13.0).
 
 ---
 
