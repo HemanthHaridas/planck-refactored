@@ -405,20 +405,44 @@ makes the *comparison* agree while the *adapted output* still depends on writing
 which is what actually ships into the kernel. The gate must constrain the adapted
 manifold, not just the verifier's view of it.
 
-### V1.1f — index-space validity (the CSE trap) (~S)
+### V1.1f — index-space validity (the CSE trap) — **LANDED**
 
-Assert every adapted spec's slot spaces match its `index_space_sig` and its dims
-match the reference partition. This is the assertion `--spin-adapt` never got for
-CSE intermediates, and the reason `include_intermediates` is force-disabled there
-(`e0f3849`).
+`validate_intermediate_spec` / `validate_intermediate_specs` in
+`optimization/intermediates.py`, gated by `test_intermediate_validity.py` (17 tests).
 
-Dressed operators *should* be immune — their indices come from a recognized
-physical operator with a declared block, not a syntactic pattern match — but the
-two ride the same `IntermediateSpec` machinery, and "should" is what an assertion
-is for.
+Checks: sig matches slot spaces **positionally**, rank agrees, no repeated slot, every
+definition term carries the spec's own free indices **in order**, slots buildable against
+the reference partition, plus two list-level checks (duplicate names; forward/self
+reference, since the emitter materializes builders in list order).
 
-*Gate:* per adapted spec, `len(indices) == rank`, spaces match the sig
-character-for-character, and no index appears twice.
+Two ordering details a weaker check would miss, and the reason both are positional: the sig
+comparison is not a character multiset (`oovv` vs `vvoo` has the same characters in the
+wrong order and would emit transposed dimensions), and definition-term free indices are
+compared in order, not as a set (a permuted term writes a transpose into the buffer).
+
+**All five dressed specs validate clean** (`tau`, `tau_c`, `Wmnij`, `Wabef`, `Wmbej`), so
+this is a guard for whatever rides `IntermediateSpec` next, not a fix — as the scope
+predicted ("*should* be immune … 'should' is what an assertion is for").
+
+**New measurement, and a correction to my own first reading of it.** The validator was run
+against both CSE paths: `detect_intermediates` yields 7 specs on the raw GCC equations and
+16 on the spin-adapted ones — **all 23 clean**. My first conclusion from the GCC-only run
+("so the mislabeling is specific to the spin-adapted path") was wrong; checking that path
+too shows it clean as well.
+
+What this actually establishes: index-space validity is **not** the live blocker for
+`include_intermediates`. It does **not** establish CSE is correct — this validator checks
+metadata self-consistency, not whether an intermediate computes the right value. Settling
+that needs a numeric gate (CSE-rewritten residual vs un-rewritten), per the e.2.5 lesson.
+The documented compile-time half of `e0f3849` (~1544 `build_W_*`, ~28 min at `-O3`) stands
+regardless.
+
+Nine of the 17 tests are negative cases, one per check — a validator that never fires is
+worthless. Two anti-vacuity guards on the gate itself (the five expected spec names must be
+present; `tau`/`tau_c` must precede their consumers).
+
+*Gate:* zero problems on the real dressed spec list, and each check demonstrated to fire on
+a spec broken in exactly that one way. **Passing.**
 
 ---
 
@@ -437,10 +461,10 @@ V1.1a (adapt terms)               LANDED
                        │      fixture fixed; numeric gate passes ~1e-14
                        └─ e.3 numeric per-operator localization  LANDED
                               W-operators localized; F inert under canonical Fock
-                       └→ V1.1f (index-space validity)   ~S, NEXT
-                            │
+                       └→ V1.1f (index-space validity)   LANDED
+                            │      dressed specs clean; CSE-on-GCC also clean
                             ▼
-                       V1.2 (restructure print_cpp_planck)
+                       V1.2 (restructure print_cpp_planck)   NEXT
 ```
 
 **V1.1e is closed.** Of its four sub-steps, two fixed real defects (e.0's
@@ -449,15 +473,18 @@ resolved a phantom (e.2.5 — the residue was a comparison artifact, and the act
 in a shared test fixture), and one is pure localization (e.3). The recurring lesson, now
 applied in three places: **gate on numeric residual values, not symbolic term counts.**
 
-a→b→c→d were each ~S and mechanical, and are landed: emit byte-identical throughout
-(37216 / 73260 / 27561), since none of them is wired into `print_cpp_planck` yet —
-that is V1.2.
+**All of V1.1 (a–f) is landed.** Emit is byte-identical throughout — currently
+37216 / 65431 / 27960 — since none of it is wired into `print_cpp_planck` yet; that is V1.2.
+(The spin-adapt figure moved 73260 → 65431 at e.2.1, when `v`-orientation normalization
+merged orientation-duplicate terms: same algebra, fewer terms.)
 
-V1.1e is where the real question lives and it is **~M, not ~S**. Its baseline defect
-(e.0) turned out to be a genuine lost coefficient in `assemble_dressed_equation` and is
-fixed; the remaining residue is one number (doubles = 14) and is root-caused to
-**`v` bra↔ket orientation sensitivity in the adapter**, not to the dressed operators
-and not to the collapse. It is last because it needs a–d correct to be interpretable.
+V1.1e was where the real question lived, and it was **~M, not ~S** as re-estimated. Final
+accounting of its four sub-steps: e.0 fixed a genuine lost coefficient in
+`assemble_dressed_equation`; e.2 fixed a latent, pre-existing `v` bra↔ket orientation
+sensitivity in the adapter; e.2.5 resolved the remaining `doubles = 14` as **not a defect
+at all** — a comparison artifact, with the real bug in a shared test fixture; e.3 localized
+the gate per operator. It was correctly sequenced last: none of that residue would have been
+interpretable without a–d correct.
 
 ---
 
@@ -497,25 +524,52 @@ naming scheme, no new normalizer.
 - **Do not enable CSE `include_intermediates` alongside this.** Off under
   `--spin-adapt` already; mixing it in confounds V1.1e/V1.1f.
 
+  V1.1f measured both CSE paths, and **neither shows the mislabeling**:
+  `detect_intermediates` yields 7 specs on the raw GCC equations and 16 on the
+  spin-adapted ones, and **all 23 pass `validate_intermediate_specs`**.
+
+  So index-space validity is *not* the live blocker for `include_intermediates`, and the
+  remaining reason to keep it off under `--spin-adapt` is the other half of `e0f3849`:
+  **compile time** (~1544 `build_W_*` functions, ~28 min at `-O3`). Anyone re-enabling it
+  should treat the correctness concern as *unreproduced by this check* — which is not the
+  same as absent, since `validate_intermediate_specs` checks metadata self-consistency, not
+  whether the intermediate computes the right value. A numeric gate (evaluate the
+  CSE-rewritten residual against the un-rewritten one, per the e.2.5 lesson) is what would
+  actually settle it.
+
 ---
 
-## Why V1.1 is ~M
+## Why V1.1 was ~M (retrospective — all six sub-steps landed)
 
-Six sub-steps. Four (a–d) were ~S, mechanical, and are landed. V1.1f is ~S. V1.1e
-carries all the risk and has been **upgraded to ~M after probing** — the faithfulness
-gate does not pass in any configuration yet, and the residue points at a
-collapse-commutation question (repeated collapsible factors), not at spec plumbing.
+Six sub-steps: a–d ~S and mechanical, f ~S, and e carrying all the risk at ~M.
 
-The measurements moved the step *down* from the parent scope's estimate in two ways —
-only three operators are in scope (Finding A), and the emit path is already
-self-consistent so no layout rewrite is needed (Finding C) — and up in two: the
-metadata was dishonest for three referenced operators with nothing checking it
-(Finding B), and V1.1e is harder than "run the existing verifier".
+**The estimate was right about where the risk was and wrong about what it was.** V1.1e was
+upgraded to ~M on the belief that the residue pointed at a collapse-commutation question
+(repeated collapsible factors). **Probing disproved that** — the collapse is not implicated
+(both sides sum identically through the full pipeline on the minimal reproducer), and the
+repeated-factor signature was incidental: those terms simply have the most written forms,
+hence the most opportunities for two sides to choose different ones. The ~M was nonetheless
+warranted, just spent differently: on one real adapter defect (e.2), one phantom (e.2.5),
+and the fixture bug underneath it.
 
-**Honest status:** V1.1a–d are landed and gated, but they are *plumbing*. Nothing is
-validated end-to-end until V1.1e passes, and V1.1e is where a real error in the
-dressed-adapted algebra would live. Do not treat a–d landing as evidence the
-composition is correct.
+Findings that moved the estimate, revisited:
+
+- **Finding A** (only three operators in scope) — **confirmed and now pinned.** Under
+  canonical Fock no F operator is referenced at all; e.3 asserts it.
+- **Finding C** (emit path already self-consistent) — confirmed; no layout rewrite needed.
+- **Finding B** (dishonest metadata, nothing checking it) — addressed by V1.1f, which found
+  the current specs clean. So the exposure was real but unrealized.
+- **"V1.1e is harder than running the existing verifier"** — true, but not for the
+  anticipated reason. The existing verifier was the *wrong instrument*, not an insufficient
+  one.
+
+**Status:** all of a–f landed and gated, and V1.1e's numeric gate validates the composition
+end-to-end at ~1e-14. The earlier warning here — "do not treat a–d landing as evidence the
+composition is correct" — has been discharged by e.2.5/e.3 rather than merely asserted away.
+
+The one caveat that remains: none of V1.1 is wired into `print_cpp_planck` yet (emit is
+byte-identical), so this validates the *algebra and metadata*, not the emitted kernel. That
+is V1.2.
 
 ---
 

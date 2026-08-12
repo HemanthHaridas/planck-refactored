@@ -200,6 +200,26 @@ class DressedSpecsAreValidTests(unittest.TestCase):
         self.assertEqual({s.name for s in self.specs},
                          {"tau", "tau_c", "Wmnij", "Wabef", "Wmbej"})
 
+    def test_cse_specs_are_also_valid_on_both_paths(self):
+        """Measured, and worth pinning: CSE-derived specs validate clean on BOTH the raw
+        GCC and the spin-adapted equations (7 and 16 specs respectively).
+
+        So index-space validity is not the live blocker for `include_intermediates`. It
+        does NOT show CSE is correct -- this checks metadata self-consistency, not whether
+        an intermediate computes the right value -- and the compile-time half of `e0f3849`
+        stands regardless. If this test ever fails, the mislabeling `e0f3849` describes has
+        become reproducible, which is useful news either way.
+        """
+        from ccgen.optimization.intermediates import detect_intermediates
+        from ccgen.spin import spin_adapt_equations
+
+        raw = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
+        for label, equations in (("gcc", raw), ("spin-adapted", spin_adapt_equations(raw))):
+            specs = detect_intermediates(equations, threshold=5)
+            with self.subTest(path=label):
+                self.assertTrue(specs, "no CSE specs detected -- gate would be vacuous")
+                self.assertEqual(validate_intermediate_specs(specs, PARTITION), [])
+
     def test_dependency_order_puts_tau_before_its_consumers(self):
         order = [s.name for s in self.specs]
         for consumer in ("Wmnij", "Wabef", "Wmbej"):
