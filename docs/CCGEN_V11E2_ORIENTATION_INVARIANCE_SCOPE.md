@@ -317,7 +317,7 @@ e.2.0 (failing reproducer)              LANDED
         └→ e.2.5 (the 14 are a comparison artifact, not a defect)  RESOLVED
              │      fixture fixed + numeric gate; own doc
              ▼
-        e.3 (numeric per-operator localization) → V1.1f → V1.2
+        e.3 (numeric per-operator localization)  LANDED → V1.1f (~S, NEXT) → V1.2
 ```
 
 **Honest status.** e.2.1 fixed a real, measured, latent defect in

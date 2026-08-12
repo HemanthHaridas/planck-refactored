@@ -201,11 +201,21 @@ reference, no orphan spec). This bidirectional closure is cheap and catches a
 rename that only landed on one side — the exact failure mode V1.1c could
 introduce.
 
-### V1.1e — the faithfulness gate (~M, **root-caused; not yet passing**)
+### V1.1e — the faithfulness gate (**PASSING**, e.0–e.3 all landed)
 
 The parent scope's V1.1 gate. **Substituting an adapted spec's definition back into
-the adapted dressed residual must reproduce the adapted raw residual**, term-by-term
-after canonicalization.
+the adapted dressed residual must reproduce the adapted raw residual.**
+
+**Status: met.** Adapted dressed == adapted raw to ~1e-14 relative on energy/singles/
+doubles across three `(no, nv, seed)` triples, per-operator and combined
+(`test_residual_symmetry.py`, `test_dress_per_operator.py`).
+
+**One correction to how this section is written.** The original phrasing — "term-by-term
+after canonicalization" — is the instrument e.2.5 disproved. A symbolic term multiset
+cannot distinguish *different algebra* from *the same algebra written in a
+symmetry-equivalent form*, which is why it reported `{"doubles": 14}` while the algebra
+was exact. **The gate is numeric residual equality on symmetry-correct tensors.** Treat
+any symbolic count in this section as a diagnostic, never as the pass criterion.
 
 `dressed_equation.py`'s `verify_dressed_equation(dressed, raw, operators)` is the
 reuse surface — its `operators` dict is fully substitutable, so an adapted-definition
@@ -363,11 +373,28 @@ dressed-operator problem, which is why it did not show up in D7.
     compared two exchange-related writings until dressing did. When adding a numeric gate,
     assert the fixture's invariants too — not just the result.
 
-- **V1.1e.3 — per-operator localization (~S, once the manifold gate passes).** Run the
-  gate with one operator's definition adapted at a time (`Wmnij`, `Wabef`, `Wmbej`) so
-  a future regression names a single operator rather than "doubles".
+- **V1.1e.3 — per-operator localization — LANDED.** `_dress_operator_equations` gained an
+  `operators` parameter (`None` = full seeded family, so callers are byte-unchanged), and
+  `test_dress_per_operator.py` runs the numeric comparison one operator at a time.
+  Measured vs adapted raw: `Wmnij` 7.11e-14, `Wabef` 5.33e-14, `Wmbej` 1.28e-13 (doubles).
 
-*Gate:* 0 mismatches on every manifold, per-operator and combined.
+  **The gate is numeric, not the scoped "0 mismatches".** That phrasing meant the symbolic
+  term multiset, which e.2.5 disproved as an instrument — it sat at 14 while the algebra
+  was exact. Residual values on symmetry-correct tensors replace it.
+
+  Two guards so it cannot pass for the wrong reason: an assertion that each operator is
+  genuinely *referenced* (otherwise "nothing dressed" trivially equals raw and the gate is
+  vacuous — the same failure mode U0's original gate had), and a verified teeth check —
+  corrupting one `Wmnij` definition coefficient moves doubles 7.11e-14 → 3.32e+01.
+
+  **Measured aside now pinned:** under `canonical_fock=True` — the only mode Planck feeds
+  CC — *no F operator is referenced at all*, alone or with the family. Their `f_ov` terms
+  are Brillouin-zero and drop, so the dressed equation references exactly
+  `{Wmnij, Wabef, Wmbej, tau, tau_c}`. Recorded as intended behavior so the three inert
+  operators don't read as a gap.
+
+*Gate:* per-operator and combined numeric agreement ≤1e-12 relative on every manifold,
+over two `(no, nv, seed)` triples. **Passing.**
 
 **Do not weaken the gate to make it pass.** A tolerance on term counts, or excluding
 the repeated-factor keys, would discard exactly the terms most likely to be wrong —
@@ -402,18 +429,25 @@ V1.1a (adapt terms)               LANDED
    └→ V1.1b (re-derive layout)    LANDED  ← the assertion that would have caught Finding B
         └→ V1.1c (block-key)      LANDED  ← byte-identical on RCC
              └→ V1.1d (recount)   LANDED  ← bidirectional closure
-                  └→ V1.1e (faithfulness)   ROOT-CAUSED, NOT PASSING  ← ~M
+                  └→ V1.1e (faithfulness)   PASSING (~1e-14, numeric)
                        ├─ e.0 clean GCC baseline        LANDED (was a real defect)
                        ├─ e.1 pin expansion order       LANDED
                        ├─ e.2 adapter orientation-invariance  LANDED (route b)
                        ├─ e.2.5 the 14 were a comparison artifact  RESOLVED
                        │      fixture fixed; numeric gate passes ~1e-14
-                       └─ e.3 numeric per-operator localization  ~S, NEXT
-                       └→ V1.1f (index-space validity)
+                       └─ e.3 numeric per-operator localization  LANDED
+                              W-operators localized; F inert under canonical Fock
+                       └→ V1.1f (index-space validity)   ~S, NEXT
                             │
                             ▼
                        V1.2 (restructure print_cpp_planck)
 ```
+
+**V1.1e is closed.** Of its four sub-steps, two fixed real defects (e.0's
+`assemble_dressed_equation` bug, e.2's latent adapter orientation sensitivity), one
+resolved a phantom (e.2.5 — the residue was a comparison artifact, and the actual bug was
+in a shared test fixture), and one is pure localization (e.3). The recurring lesson, now
+applied in three places: **gate on numeric residual values, not symbolic term counts.**
 
 a→b→c→d were each ~S and mechanical, and are landed: emit byte-identical throughout
 (37216 / 73260 / 27561), since none of them is wired into `print_cpp_planck` yet —
