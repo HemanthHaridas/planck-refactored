@@ -199,7 +199,31 @@ Results, with the pre-change baseline captured by stashing so the comparison is 
 | spatial emit | 73260 | 65431 (fewer terms, same multiset) |
 | `test_spin_orientation` + `test_spin` + `test_dress_adapt` + `test_dressed_equation` + `test_dressing` | — | 267 OK |
 
-### e.2.5 — the residue is NOT orientation (~M, **NEW, next**)
+### e.2.5 — the residue is NOT a defect at all — **RESOLVED, see `CCGEN_V11E25_RESIDUE_SCOPE.md`**
+
+**This section's diagnosis below is superseded.** It was written before the residue was
+probed numerically, and its leading hypothesis (the closed-shell collapse's Cartesian
+product over multiple collapsible factors) is **wrong**. Retained because the ruling-out
+list is still valid and because the wrong turn is worth recording.
+
+What probing found: with a **symmetry-correct** `v`, the adapted dressed and adapted raw
+residuals agree to **~1e-14 on every manifold**, across three `(no, nv, seed)` triples.
+V1.1e's requirement was already met. The 14 symbolic "mismatches" are an artifact of
+comparing *written forms* — a term-by-term multiset comparison cannot see that two sides
+picked different, symmetry-equivalent writings of the same algebra.
+
+The real defect was in the **test fixture**: `residual_eval.random_tensors` built `v`
+with intra-pair antisymmetry only, violating `<pq||rs> = <rs||pq>` (residual 2.35, where
+real integrals give ~1e-16 — checked against pyscf on H2/STO-3G). Since
+`_ERI_PERMUTATIONS` folds by that symmetry, any numeric comparison of two exchange-related
+writings reported a spurious difference. Fixed in e.2.5.0; gate added in e.2.5.1.
+
+Also corrected: the collapse is **not** implicated — on the minimal reproducer both sides
+sum to the same coefficient after the full pipeline. The factor-count signature
+(`t1t1v`, `t2t2v`, `t1t1t1t1v`) was real but incidental: those terms simply have the most
+written forms, hence the most opportunities to differ in choice.
+
+### e.2.5 — original diagnosis (SUPERSEDED, retained for the ruled-out list)
 
 **e.2.1 was necessary but not sufficient.** The dressed-vs-raw adapted doubles residual
 is still **14 mismatches, completely unchanged** by the orientation fix, and still
@@ -290,17 +314,24 @@ e.2.0 (failing reproducer)              LANDED
         ├→ e.2.2 (re-gate via the pyscf venv)  LANDED  (93 OK, multisets identical)
         ├→ e.2.3 (residue assertion)    no change — still 14, which is the finding
         ├→ e.2.4 (no double normalization)  satisfied: one fold, in the adapter
-        └→ e.2.5 (the actual 14: collapse over multiple collapsible factors)  ~M, NEXT
-             │
+        └→ e.2.5 (the 14 are a comparison artifact, not a defect)  RESOLVED
+             │      fixture fixed + numeric gate; own doc
              ▼
-        e.3 (per-operator localization) → V1.1f → V1.2
+        e.3 (numeric per-operator localization) → V1.1f → V1.2
 ```
 
 **Honest status.** e.2.1 fixed a real, measured, latent defect in
 `ucc_integrate_term_antisym` — one that would have bitten any future caller writing its
-`v` factors differently, which is the argument that made route (b) right. It did **not**
-close V1.1e. The 14 are a separate defect (e.2.5), and the deliberately-exact residue
-assertion is what made that visible instead of assumed.
+`v` factors differently, which is the argument that made route (b) right.
+
+It did not close V1.1e *as measured by the symbolic count*, and I initially read that as
+a second defect. It was not: e.2.5 showed the algebra was already correct and the
+**symbolic count was the wrong instrument**. So e.2.1 was both necessary and sufficient
+for the algebra.
+
+The deliberately-exact residue assertion still earned its keep — it stopped me declaring
+victory on e.2.1 — but it then pointed at a defect that did not exist, which is the cost
+of pinning a proxy rather than the property. e.2.5.2 replaces it accordingly.
 
 ---
 

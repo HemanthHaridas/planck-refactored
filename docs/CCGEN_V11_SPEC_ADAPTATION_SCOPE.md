@@ -330,13 +330,20 @@ dressed-operator problem, which is why it did not show up in D7.
   every manifold). The spatial emit *shrank* 73260 → 65431 bytes, which is the
   normalization merging orientation-duplicate terms: same answer, fewer terms.
 
-  **But the doubles residue is still exactly 14, unchanged.** So orientation sensitivity
-  was a real latent defect worth fixing on its own terms — it would have bitten any
-  future caller writing its `v` factors differently — and it was *not* what produced the
-  14. That residue is a separate defect, now scoped as **e.2.5** (the closed-shell
-  collapse's Cartesian product over multiple collapsible factors), with orientation,
-  additivity, the dressed assembly, and the adapter's spatial semantics all ruled out
-  by measurement.
+  **The doubles residue stayed at exactly 14 — and that turned out not to be a defect.**
+  e.2.5 (`CCGEN_V11E25_RESIDUE_SCOPE.md`) resolved it: with a **symmetry-correct** `v` the
+  adapted dressed and adapted raw residuals agree to **~1e-14 on every manifold**, across
+  three `(no, nv, seed)` triples. **V1.1e's requirement is met.**
+
+  The 14 are an artifact of the *comparison*: a term-by-term symbolic multiset cannot see
+  that two sides chose different, symmetry-equivalent writings of the same algebra. The
+  real defect was in `residual_eval.random_tensors`, which built `v` violating
+  `<pq||rs> = <rs||pq>` (residual 2.35 vs ~1e-16 for real integrals, checked against
+  pyscf) — so it silently defeated any numeric comparison of exchange-related writings.
+  Fixed, with all four symmetries now gated.
+
+  So orientation sensitivity was a real latent defect worth fixing on its own terms, and
+  e.2.1 was both necessary *and* sufficient for the algebra.
 
   Two process notes worth carrying forward:
 
@@ -345,8 +352,16 @@ dressed-operator problem, which is why it did not show up in D7.
     never exercised S1/S2/S4 or the FCI-limit fixtures. Validate via
     `tests/pyscf/.venv/bin/python` (pyscf 2.13.0). A green default-interpreter run is
     not evidence here.
-  - **The deliberately-exact `{"doubles": 14}` assertion earned its keep.** It is why we
-    know the fix was incomplete rather than assuming it worked.
+  - **The deliberately-exact `{"doubles": 14}` assertion earned its keep** — it stopped a
+    premature "fixed" call on e.2.1 — **but it pinned a proxy, not the property.** A
+    symbolic term-by-term multiset is the wrong instrument whenever both sides may pick
+    among symmetry-equivalent written forms; it reports differences that are not there.
+    Gate the *numeric* residual on symmetry-correct tensors instead, and treat symbolic
+    counts as diagnostics only. e.2.5.2 makes that change.
+  - **A numeric gate is only as good as its fixture's symmetry.** `random_tensors` was
+    missing `<pq||rs> = <rs||pq>` for years without any test noticing, because nothing
+    compared two exchange-related writings until dressing did. When adding a numeric gate,
+    assert the fixture's invariants too — not just the result.
 
 - **V1.1e.3 — per-operator localization (~S, once the manifold gate passes).** Run the
   gate with one operator's definition adapted at a time (`Wmnij`, `Wabef`, `Wmbej`) so
@@ -391,9 +406,9 @@ V1.1a (adapt terms)               LANDED
                        ├─ e.0 clean GCC baseline        LANDED (was a real defect)
                        ├─ e.1 pin expansion order       LANDED
                        ├─ e.2 adapter orientation-invariance  LANDED (route b)
-                       │      e.2.0-e.2.4 landed; residue was NOT orientation
-                       ├─ e.2.5 collapse over multiple collapsible factors  ~M, NEXT
-                       └─ e.3 per-operator localization  ~S
+                       ├─ e.2.5 the 14 were a comparison artifact  RESOLVED
+                       │      fixture fixed; numeric gate passes ~1e-14
+                       └─ e.3 numeric per-operator localization  ~S, NEXT
                        └→ V1.1f (index-space validity)
                             │
                             ▼
