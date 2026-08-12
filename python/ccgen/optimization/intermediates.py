@@ -748,3 +748,116 @@ def annotate_layout_hints(
         ))
 
     return result
+
+
+def _space_char(index) -> str:
+    """The `index_space_sig` character for one index: o(cc) / v(ir) / g(eneral)."""
+    return "o" if index.space == "occ" else "v" if index.space == "vir" else "g"
+
+
+def validate_intermediate_spec(spec, reference_partition=None) -> list[str]:
+    """Check one :class:`IntermediateSpec`'s index metadata for self-consistency
+    (V1.1f). Returns a list of human-readable problems -- empty means valid.
+
+    This is the assertion the ``--spin-adapt`` CSE path never got, and the reason
+    ``include_intermediates`` is force-disabled there (``e0f3849``): CSE derives an
+    intermediate's indices from a *syntactic* pattern match, so it can mislabel
+    occ/vir and nothing notices until the emitted kernel indexes the wrong slice.
+    Dressed operators *should* be immune -- their indices come from a recognized
+    physical operator with a declared block -- but both ride the same
+    ``IntermediateSpec``, and "should" is what an assertion is for.
+
+    Checks, in order of how silently each would fail:
+
+    1. ``index_space_sig`` matches the slot spaces character-for-character. A
+       mismatch here is the CSE trap directly: the sig drives the emitted buffer's
+       dimensions, so a sig claiming ``oooo`` for a ``vvoo`` tensor allocates and
+       indexes the wrong shape.
+    2. ``len(indices) == len(index_space_sig)`` -- rank agreement.
+    3. No repeated index in ``indices``. A duplicate means a slot is not an
+       independent axis, so the tensor is really a lower-rank trace and every
+       consumer contracting it as full-rank is wrong.
+    4. Every definition term carries exactly ``spec.indices`` as its free indices,
+       *in the same order*. Order matters because the builder writes into the
+       buffer in slot order; a permuted definition term writes a transpose.
+    5. Optionally, that each slot's space exists in ``reference_partition``
+       (a ``{"occ": n, "vir": n}``-style mapping) with a nonzero extent -- catches
+       a spec that is internally consistent but unbuildable against the reference.
+
+    Deliberately returns problems rather than raising: callers gate a whole spec
+    list and want every failure named at once, not just the first.
+    """
+    problems: list[str] = []
+    where = f"{spec.name}"
+
+    actual_sig = "".join(_space_char(i) for i in spec.indices)
+    if actual_sig != spec.index_space_sig:
+        problems.append(
+            f"{where}: index_space_sig {spec.index_space_sig!r} does not match slot "
+            f"spaces {actual_sig!r}")
+    if len(spec.indices) != len(spec.index_space_sig):
+        problems.append(
+            f"{where}: rank {len(spec.indices)} != len(index_space_sig) "
+            f"{len(spec.index_space_sig)}")
+
+    names = [i.name for i in spec.indices]
+    if len(set(names)) != len(names):
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        problems.append(f"{where}: repeated index slot(s) {dupes} in {tuple(names)}")
+
+    expected = tuple(names)
+    for pos, term in enumerate(spec.definition_terms):
+        got = tuple(i.name for i in term.free_indices)
+        if got != expected:
+            kind = ("order differs from" if set(got) == set(expected)
+                    else "does not match")
+            problems.append(
+                f"{where}: definition term {pos} free indices {got} {kind} "
+                f"spec.indices {expected}")
+
+    if reference_partition is not None:
+        for index in spec.indices:
+            extent = reference_partition.get(index.space)
+            if not extent:
+                problems.append(
+                    f"{where}: slot {index.name!r} has space {index.space!r} with "
+                    f"extent {extent!r} in the reference partition")
+
+    return problems
+
+
+def validate_intermediate_specs(specs, reference_partition=None) -> list[str]:
+    """Run :func:`validate_intermediate_spec` over an ordered spec list and return
+    every problem found (V1.1f). Empty means the whole list is valid.
+
+    Also checks list-level consistency that per-spec checks cannot see: duplicate
+    names (two specs claiming one buffer), and dependency order -- a spec must not
+    reference an intermediate defined later in the list, since the emitter
+    materializes builders in list order and a forward reference is a use-before-def.
+    """
+    problems: list[str] = []
+
+    seen: set[str] = set()
+    for spec in specs:
+        if spec.name in seen:
+            problems.append(f"{spec.name}: duplicate spec name")
+        seen.add(spec.name)
+
+    defined: set[str] = set()
+    names = {s.name for s in specs}
+    for spec in specs:
+        for term in spec.definition_terms:
+            for factor in term.factors:
+                if factor.name in names and factor.name not in defined:
+                    if factor.name == spec.name:
+                        problems.append(
+                            f"{spec.name}: definition references itself")
+                    else:
+                        problems.append(
+                            f"{spec.name}: definition references {factor.name!r}, "
+                            f"which is defined later in the list")
+        defined.add(spec.name)
+
+    for spec in specs:
+        problems.extend(validate_intermediate_spec(spec, reference_partition))
+    return problems
