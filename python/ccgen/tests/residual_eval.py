@@ -45,10 +45,17 @@ def random_tensors(no: int, nv: int, seed: int = 0):
     t4 = _antisymmetrize_block(t4, (4, 5, 6, 7))
 
     v = rng.random((n, n, n, n))
+    v = v + v.transpose(2, 3, 0, 1)
     v = v - v.transpose(1, 0, 2, 3)
     v = v - v.transpose(0, 1, 3, 2)
+    # Re-impose: the two antisym projections above do not commute with the
+    # bra<->ket one, so a single pass leaves a residual. Real <pq||rs> satisfies
+    # all three (checked against pyscf); without this, any comparison of two
+    # writings related by the exchange reports a spurious difference.
+    v = v + v.transpose(2, 3, 0, 1)
 
     f = rng.random((n, n))
+    f = f + f.T
 
     return {"t1": t1, "t2": t2, "t3": t3, "t4": t4, "v": v, "f": f}
 
