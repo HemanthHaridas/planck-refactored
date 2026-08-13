@@ -1,9 +1,10 @@
 # V1.3 remainder — link and run a dressed generated kernel
 
-> **PARTLY LANDED — still live.** V1.3.0/.1/.3/.4 are done: the dressed kernel generates from the
-> build, compiles, links, and runs matching the undressed energy and iteration count. **V1.3.2**
-> (builder naming for the co-included registry path) and **V1.3.5** (regression-pin the dressed
-> config) remain open, and their sections below are the plan of record.
+> **PARTLY LANDED — still live.** V1.3.0/.1/.2/.3/.4 are done: the dressed kernel generates from
+> the build, compiles, links, runs matching the undressed energy and iteration count, and its
+> builders are method-suffixed so two dressed TUs can share the registry's translation unit.
+> **V1.3.5** (regression-pin the dressed config) is the only step left, and its section below is
+> the plan of record.
 >
 > For overall state see [`CCGEN_DRESSED_KERNEL_COMPLETION.md`](CCGEN_DRESSED_KERNEL_COMPLETION.md).
 
@@ -95,7 +96,30 @@ the user set.
 *Gate:* `-DPLANCK_CC_DRESS_OPERATORS=OFF` regenerates byte-identical kernels (default build
 must not move); `=ON` emits TUs containing the five `build_<op>` functions.
 
-### V1.3.2 — resolve the single-dressed-rank constraint, deliberately (~S–M, the real decision)
+### V1.3.2 — **DECIDED: route (b), method-suffixed builders — LANDED**
+
+`_builder_symbol(method, name)` → `build_<name>_<method>`, with all four emission sites (the
+definition plus three call sites) routed through the one helper.
+
+**Measured on the configuration that failed:** two dressed TUs co-included with
+`force_arbitrary=True` object-compile at `rc=0`, 0 redefinitions — where they produced 5.
+
+**Route (b) over (a), overruling this document's own recommendation.** It recommended (a)
+(restrict dressing to one rank and enforce it) as "cheapest and honest". Rejected for the same
+reason V1.1e.2 chose route (b): the collision is a property of the **naming scheme**, not of how
+many ranks are enabled, so a scope restriction leaves the trap armed for whoever enables a second
+dressed rank. Fix the mechanism, not the callers.
+
+Two consequences worth noting:
+
+- **`factorize_tau`'s baseline moved too** (37413 → 37433), deliberately. Tau's builder is
+  suffixed like every other, so there is **one naming rule with no exceptions** rather than a
+  special case for the tau-only path.
+- **The rank-4 registry path is no longer blocked.** With the cost objection gone post-D1 and the
+  naming collision now gone, dressing rank 4 is available — the anchor stays rank 3 only because
+  that is where the validated end-to-end run is.
+
+### V1.3.2 — original scoping (retained for the rejected alternative)
 
 Two options; they are not equivalent and the choice should be explicit rather than discovered
 by a build failure.

@@ -116,11 +116,17 @@ needed** — one factor was the whole story, so a correctness-affecting change w
 
 | item | status | blocks? |
 |---|---|---|
-| **V1.3.2** — builder naming for the co-included registry path | undecided: restrict-to-one-rank vs per-method suffixing | Only dressing the **registry** (rank ≥ 4) path. The validated rank-3 path is a single non-co-included TU, so the collision cannot arise for it. |
 | **V1.3.5** — pin the dressed config in `regression_cases.json` | not started (~S) | Nothing. Without it the V1.3.4 result can rot. |
 
-Rank 4 is now viable on **cost** (61.6 s post-D1); it is still gated on V1.3.2 for the
-**structural** reason.
+**V1.3.2 is decided and landed** (route b): `_builder_symbol` names every builder
+`build_<name>_<method>`, so two dressed TUs co-include cleanly — measured `rc=0`, 0 redefinitions
+on the configuration that previously produced 5. Chosen over restricting dressing to one rank,
+because the collision is a property of the naming scheme rather than of how many ranks are
+enabled; a restriction would have left the trap armed for the next person to enable one.
+
+**Rank 4 is therefore unblocked on both counts** — cost (61.6 s post-D1) and naming. The anchor
+stays rank 3 only because that is where the validated end-to-end run is, not because rank 4 is
+prevented.
 
 ---
 
@@ -164,6 +170,17 @@ Recorded because each cost real time and each recurred:
    is the one that found the oldest defect. Run the gate you wrote down.
 6. **"Already mutually exclusive" deserves a check.** V1.2.4's exclusion was unreachability, not
    a guard, and removing an early return silently activated the excluded flag.
+7. **Never write spaghetti: when a defect lives in one mechanism, fix that mechanism.** Not a
+   per-caller patch, not a boundary pre-pass, not a scope restriction that dodges it. Decided
+   twice here against my own cost-based recommendation, and right both times:
+   **V1.1e.2** (fix `ucc_integrate_term_antisym` rather than normalize `v` at the dress/adapt
+   boundary — the defect turned out to be latent and pre-existing, so any future caller would have
+   hit it) and **V1.3.2** (suffix the builder names rather than restrict dressing to one rank — the
+   collision is a property of the naming scheme, not of the rank count). The corollary that keeps
+   paying: prefer **one mechanism with a parameter** over two parallel paths
+   (`adapt_intermediate_spec(adapter=…)`, `external_blocks(fold_spin_flip=…)`,
+   `_dress_operator_equations(operators=…)`, `_builder_symbol(method, name)`), and never ship two
+   overlapping normalizations of the same thing.
 
 ---
 
