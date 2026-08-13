@@ -104,6 +104,17 @@ historical design context, but they are no longer the source of truth for
 - Arbitrary-order RCC solver via ccgen-generated residuals
 - Tensor-backed and determinant-space coupled-cluster paths, including the
   optimized RCCSDT warm-start route
+- **Dressed ccgen CC kernels** (the Stanton-Gauss `Wmnij`/`Wabef`/`Wmbej` +
+  `tau`/`tau_c` operators, recognized diagrammatically rather than by CSE).
+  Opt-in via `-DPLANCK_CC_DRESS_OPERATORS=ON`; default OFF so the default build
+  is byte-identical. Generates from the build, compiles, links, and runs
+  reproducing the undressed correlation energy **and** iteration count at rank 3
+  (`h2` 12/12, `lih` 16/16, `bh3` 26/26 iterations, energies identical to 10
+  digits), pinned by `dressed_kernel_equivalence_rccsdt`. Builder symbols are
+  method-suffixed (`build_tau_ccsdt`) so two dressed TUs can share the kernel
+  registry's single translation unit. Rank 4 is available (61.6 s of generation)
+  but not the validated anchor. Full record:
+  `docs/CCGEN_DRESSED_KERNEL_COMPLETION.md`
 
 ### CASSCF / SA-CASSCF status
 
@@ -242,6 +253,20 @@ historical design context, but they are no longer the source of truth for
   CASSCF orbital-action solver already warns and falls back to the diagonal
   preconditioner when >20% of orbital-Hessian eigenvalues are clamped
   (`src/post_hf/casscf/response.cpp`).
+- ccgen dressed-operator recognition was quadratic in manifold size and is fixed.
+  `hypothesis_is_consistent` rebuilt `raw_multiset(residual_terms)` on every call
+  — 7461 times on `ccsdt` triples, over an input that never changes — so the cost
+  was `n_hypotheses × n_terms`. Hoisted into `find_operator_occurrences` and
+  threaded down (not memoized: the redundancy is structural, and a cache keyed on
+  large term tuples would live for the process). Triples 94.7 s → 6.9 s with the
+  `raw_multiset` call count flat at ~19 regardless of term count; rank-3
+  end-to-end 293.7 s → 9.1 s, and rank 4 went from ">25 min, abandoned" to
+  61.6 s, which is what made rank-4 dressing viable at all. Output byte-identical.
+  Gated by `test_dressing_scaling` on the **call count**, not wall-clock —
+  deterministic, and it names this defect if it returns. Two dead ends recorded in
+  `docs/CCGEN_DRESSING_SUPERLINEAR_SCOPE.md`: `_eri_canonical` showed the largest
+  profile number (864 s *cumulative*) but memoizing it bought 6 %, and the
+  self-time ranking is diffuse — the win was structural, not micro-optimization.
 - ERI / transform parallelization pass (profiled, all bitwise-verified):
   the two serial 4-index transforms (`Correlation::transform_eri`,
   `BasisFunctions::transform_eri_cart_to_sph`) are now parallel; the one-shot

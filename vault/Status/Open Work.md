@@ -116,84 +116,24 @@ not block this. Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`.
 
 ## ccgen dressed intermediates
 
-### Problem
+**LANDED. Only the UCC follow-on remains.** See `docs/CCGEN_DRESSED_KERNEL_COMPLETION.md` for the
+full record.
 
-The ccgen-generated CC kernels (`build/generated/cc/*_planck_generated.cpp`,
-consumed by the arbitrary-order tensor solver) do **not** carry the
-dressed-operator intermediates the hand-written `tensor_backend.cpp`
-CCSD/CCSDT paths use — the Stanton–Gauss `τ`/`τ̃`, `Fae`/`Fmi`/`Fme`, and
-`Wmnij`/`Wabef`/`Wmbej`. What ccgen *does* extract
-(`optimization/intermediates.py::detect_intermediates`) is **syntactic CSE**:
-any leaf sub-contraction recurring ≥ `--intermediate-threshold` (default 5)
-times is hoisted into a generic shape-tagged builder (`build_W_oov`,
-`build_W_ovv_3`, …). That removes duplicate leaves but leaves the residual
-*term structure* un-factored, so the generated residual keeps the higher-cost
-contraction pattern. Same energy, worse asymptotic scaling. This is the real
-content behind the "experimental / phase-4" status of the generated path.
+The problem this section used to describe — generated kernels carrying only *syntactic* CSE, never
+the Stanton-Gauss dressed operators — is solved. Dressed CC kernels now generate from the build
+(`-DPLANCK_CC_DRESS_OPERATORS=ON`), compile, link, and run, reproducing the undressed correlation
+energy **and** iteration count at rank 3, pinned by the
+`dressed_kernel_equivalence_rccsdt` regression case.
 
-CSE cannot produce dressing: CSE is term-local verbatim-pattern hoisting,
-whereas dressing is a global refactorization — introduce a *new named operator*
-(`τ = t2 + ½·P(t1t1)`, `Wmnij = ⟨mn|ij⟩ + P(t1·…) + τ⟨mn|ef⟩`), then rewrite
-every residual term that is (part of) its expansion to reference it, including
-terms only equivalent *after* the substitution.
+Route note, because this section previously scoped the wrong one: the retired plan was Option A's
+exact-cover term algebra (A1-A4). What actually shipped is diagrammatic recognition — dressed
+operators are matched as a topological subgraph property, which made A3's subgraph-isomorphism
+problem the *mechanism* rather than an obstacle. `dressing.py`/`dressed_equation.py` carry it;
+the old `tau.py` exact-cover route is history.
 
-### Option A — automatic factorization (this note's scope)
-
-Discover the dressed factorization from the canonicalized residual terms with
-no per-method human recipe. Pipeline insertion:
-`… → canonicalize → [NEW: factorize] → detect_intermediates(CSE) → rewrite →
-lower → emit` (CSE becomes cleanup on whatever the factorizer leaves).
-
-Four sub-problems, effort/risk as scoped:
-
-- **A1 — τ-recognition (substitution matching). LANDED (behind a flag).**
-  Detect `t2 + ½·P(t1t1)` groupings and collapse to `τ`. Implemented in
-  `python/ccgen/optimization/tau.py` + `tests/test_tau.py`, in eight verifiable
-  steps: τ spec + external-skeleton fingerprint (A1.0/A1.1), the bare-half
-  predicate `match_t1t1_half` (A1.2), residue-based pairing `find_tau_matches`
-  (A1.3), the exact-coefficient firewall `validate_tau_match` (A1.4 — proved the
-  written t1t1 rep carries weight **2** per unit τ, not ½, and that
-  `canonicalize_term` is not idempotent when its relabel reorders an antisym
-  factor, handled by a fixed-point loop), the rewrite `apply_tau` (A1.5), the
-  offline algebra-preservation gate `tau_rewrite_preserves_algebra` (A1.6 — the
-  proof that wiring it in cannot change answers), and emit wiring (A1.7/A1.8).
-  τ rides the **existing** intermediate machinery: `factorize_tau_equations`
-  synthesizes a `tau` `IntermediateSpec`, so the emitter's `build_<name>` path
-  materializes `build_tau` and the residual `tau` factors resolve to the local
-  (one-line `_map_factor` hook). Gated by `print_cpp_planck(factorize_tau=…)`,
-  CLI `--factorize-tau`, and CMake `PLANCK_CC_FACTORIZE_TAU` — **all default
-  OFF**, so the default build is byte-identical. The tau-on generated CCSD
-  compiles against the real CC headers (verified in-test). A full bit-identical
-  *energy* run is not yet possible because `ccsd_planck_generated.cpp` is not
-  `#include`d into any binary (only ccsdt/ccsdtq are); when it is wired, add the
-  energy gate. τ alone barely moves flops — its value is proving the
-  factorization→emit plumbing end-to-end before A2/A3 add the load-bearing
-  `Wmnij`/`Wabef` operators.
-- **A2 — dressed-operator hypothesis generation.** (a) seeded from the known
-  finite `Ŵ`/`F̂` family per rank (tractable, edges toward Option B), or
-  (b) discovered by clustering terms on shared sub-contraction topology (the
-  genuinely automatic, research-grade part). **XL, high risk** for (b).
-- **A3 — subgraph-isomorphism rewrite (core).** For each hypothesized operator,
-  find every residual term that is part of its expansion and rewrite to a
-  reference. Graph isomorphism over `Tensor`-factor sets with index-space
-  typing, permutation/antisymmetry bookkeeping, and `Fraction`-coefficient
-  consistency — the same equivalence machinery as `canonicalize.py` +
-  `_wickaccel.cpp`, applied to sub-terms. **XL, high risk.**
-- **A4 — dependency-ordered emit.** Dressed ops form a DAG (`Wmnij` needs `τ`).
-  Topo-sort builders, thread through kernel signature, manage lifetimes; beyond
-  today's append-CSE-blob model in `emit/planck_tensor_cpp.py`. **M, low risk.**
-
-Supporting: a scaling-aware cost model (extend `estimated_build_flops` to model
-the flop *exponent*, not element count); a bit-identical energy gate vs the
-hand-written CCSD/CCSDT on the Be/H2O CC regression set; an asymptotic-scaling
-assertion (dressed residual must drop the exponent, else the pass was
-cosmetic); and a safe-fallback guarantee (degrade to CSE-only output when a
-term can't be factored — never emit wrong algebra).
-
-De-risked ordering: build A1, A3, A4 and the gates against a **seeded** operator
-set (A2a), prove bit-identical + scaling win on CCSD, then attempt A2b as a
-research spike. If A2b doesn't converge, working dressed CCSD/CCSDT still ships
-and the operator set is just "curated."
+What remains open on the dressed path: **nothing in V1**. The follow-on is UCC
+(`docs/CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md`, `docs/CCGEN_U1_UCC_ADAPT_SCOPE.md`) — U0 landed, U1
+scoped as U1.0-U1.5, U2-U5 (the C++ side) ahead.
 
 ### ccgen parallel generation is not equivalence-safe (separate defect)
 
@@ -225,13 +165,6 @@ fix = make the extension spawn-safe (rebuild `_wickaccel.cpp`) and lift the
 raw-merge global; deferred as parallel generation is unused by the default
 build. No bearing on the dressed-intermediate work above (that runs on the
 serial path).
-
-### Option B — curated dressing templates (fallback, not this note's scope)
-
-Hand-encode the known Stanton–Gauss factorization per method (CCSD, CCSDT) as a
-substitution recipe ccgen applies mechanically. Drops A3 from XL to M; days per
-method; deterministic. How PySCF/CFOUR actually got there. Kept as the fallback
-if Option A's automatic-discovery core (A2b) stalls.
 
 ## BSSE follow-up
 
