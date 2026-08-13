@@ -527,7 +527,7 @@ class FactorizeTauEmitTests(unittest.TestCase):
             "ccsd", include_intermediates=True, factorize_tau=False
         )
         self.assertEqual(base, explicit_off)
-        self.assertNotIn("build_tau(", base)
+        self.assertNotIn("build_tau_ccsd(", base)  # V1.3.2 suffixed symbol
 
     def test_flag_emits_tau_builder_and_reference(self) -> None:
         from ccgen.generate import print_cpp_planck
@@ -535,8 +535,8 @@ class FactorizeTauEmitTests(unittest.TestCase):
         code = print_cpp_planck(
             "ccsd", include_intermediates=True, factorize_tau=True
         )
-        self.assertIn("Tensor4D build_tau(", code)          # the builder
-        self.assertIn("const auto tau = build_tau", code)   # built per kernel
+        self.assertIn("Tensor4D build_tau_ccsd(", code)     # the builder (V1.3.2)
+        self.assertIn("const auto tau = build_tau_ccsd", code)  # built per kernel
         # tau definition materializes t2 + written-weight t1 t1
         self.assertIn("amplitudes.t2(", code)
         self.assertIn("amplitudes.t1(", code)

@@ -418,6 +418,28 @@ def _target_rank(
     raise ValueError(f"Cannot infer excitation rank for target {target!r}")
 
 
+def _builder_symbol(method: str, name: str) -> str:
+    """The C++ symbol for intermediate ``name``'s builder in ``method``'s TU (V1.3.2).
+
+    Method-suffixed (``build_tau_ccsdt``), because the kernel registry ``#include``s several
+    generated TUs into ONE translation unit. Unsuffixed builders collide there: in
+    arbitrary-order form every method's builders take ``ArbitraryOrderRCCAmplitudes``, so the
+    signatures are identical and co-inclusion is a REDEFINITION, not an overload -- measured, 5
+    errors, one per dressed builder (gated by ``test_dressed_tu_coinclusion``). In the plain
+    per-method TUs the amplitude type differs, so those happen to overload cleanly; the suffix
+    makes both cases correct by construction instead of relying on that accident.
+
+    Chosen over restricting dressing to one rank and enforcing it: the collision is a property of
+    the NAMING SCHEME, not of how many ranks are enabled, so a scope restriction would leave the
+    trap armed for whoever enables a second dressed rank. Same reasoning as V1.1e.2 -- fix the
+    mechanism, not each caller.
+
+    One function for all four emission sites (the definition plus three call sites), so a
+    definition and its calls cannot drift apart.
+    """
+    return f"build_{name}_{method.lower()}"
+
+
 def _emit_kernel(
     method: str,
     target: str,
@@ -467,7 +489,7 @@ def _emit_kernel(
         lines.append("    // Build reused intermediates once for this kernel")
         for spec in required_intermediates:
             lines.append(
-                f"    const auto {spec.name} = build_{spec.name}("
+                f"    const auto {spec.name} = {_builder_symbol(method, spec.name)}("
                 "reference, mo_blocks, denominators, amplitudes);"
             )
     lines.append("")
@@ -545,7 +567,7 @@ def _emit_chunked_kernel(
         if required_intermediates:
             for spec in required_intermediates:
                 out.append(
-                    f"    const auto {spec.name} = build_{spec.name}("
+                    f"    const auto {spec.name} = {_builder_symbol(method, spec.name)}("
                     "reference, mo_blocks, denominators, amplitudes);")
         if arbitrary:
             bindings = _amplitude_view_bindings(chunk)
@@ -592,7 +614,7 @@ def _emit_intermediate_builder(
         builder_indices = spec.indices
 
     lines: list[str] = []
-    lines.append(f"{result_type} build_{spec.name}(")
+    lines.append(f"{result_type} {_builder_symbol(method, spec.name)}(")
     lines.append("    const CanonicalRHFCCReference &reference,")
     lines.append("    const TensorCCBlockCache &mo_blocks,")
     lines.append(f"    const {denominator_type} &denominators,")
@@ -632,7 +654,7 @@ def _emit_intermediate_builder(
         if referenced:
             for name in referenced:
                 lines.append(
-                    f"    const auto {name} = build_{name}("
+                    f"    const auto {name} = {_builder_symbol(method, name)}("
                     "reference, mo_blocks, denominators, amplitudes);"
                 )
             lines.append("")

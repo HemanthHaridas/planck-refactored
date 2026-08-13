@@ -1636,8 +1636,10 @@ class DressOperatorsEmitTests(unittest.TestCase):
     def test_dress_operators_emits_builders(self):
         from ccgen.generate import print_cpp_planck
         tu = print_cpp_planck("ccsd", dress_operators=True)
-        for builder in ("build_tau(", "build_tau_c(", "build_Wmnij(",
-                        "build_Wabef(", "build_Wmbej("):
+        # V1.3.2: builder symbols are method-suffixed so two dressed TUs can share the
+        # registry's single translation unit.
+        for builder in ("build_tau_ccsd(", "build_tau_c_ccsd(", "build_Wmnij_ccsd(",
+                        "build_Wabef_ccsd(", "build_Wmbej_ccsd("):
             self.assertIn(builder, tu, builder)
         # differs from the undressed emit
         self.assertNotEqual(tu, print_cpp_planck("ccsd"))
@@ -1648,8 +1650,8 @@ class DressOperatorsEmitTests(unittest.TestCase):
         from ccgen.generate import print_cpp_planck
         tu = print_cpp_planck("ccsd", dress_operators=True)
         pos = lambda s: tu.index(s)
-        self.assertLess(pos("build_tau("), pos("build_Wmnij("))
-        self.assertLess(pos("build_tau_c("), pos("build_Wabef("))
+        self.assertLess(pos("build_tau_ccsd("), pos("build_Wmnij_ccsd("))
+        self.assertLess(pos("build_tau_c_ccsd("), pos("build_Wabef_ccsd("))
 
 
 class EnumerateHypothesesTests(unittest.TestCase):

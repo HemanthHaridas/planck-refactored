@@ -41,8 +41,10 @@ BASELINES = (
      "af74826e253415a261f9b57efd4ed906827ef0c70cb9da6989e0f941d3b9f656"),
     ("spin_adapt", {"spin_adapt": True}, 65431,
      "44705c8ad85f951cbebb532a2fe60ea5418feddfbc28b8523ee2768fd12e0fd4"),
-    ("factorize_tau", {"factorize_tau": True}, 37413,
-     "05a0b6d055700c7f3e2ae929dc14e2a8a8f8a010e668b7e249c2999e6e441765"),
+    # Moved at V1.3.2 (37413 -> 37433): tau's builder is now method-suffixed
+    # (`build_tau_ccsd`) like every other builder -- one naming rule, no exceptions.
+    ("factorize_tau", {"factorize_tau": True}, 37433,
+     "b8ecaa6711793302be21d9e9e1cdc3fbc154acc2d5f57d98692c9e10a9926495"),
     ("force_arbitrary", {"force_arbitrary": True}, 37175,
      "bf1e083d5759120621369de2fe1572a926fbf96d21d886387d452d81afe6363e"),
     ("spin_adapt+force_arbitrary",
@@ -52,8 +54,10 @@ BASELINES = (
     # bind it (`const auto tau = build_tau(...)`), which is what made the dressed TU
     # compile for the first time. The four undressed baselines above are unchanged, so the
     # fix is confined to sibling-referencing builders.
-    ("dress_operators", {"dress_operators": True}, 28122,
-     "5f899efb2dcd63cdaa0856f1b10387e3b322b798d2c0a2a6c5aa84f15236688d"),
+    # Moved again at V1.3.2 (28122 -> 28187): builders are method-suffixed so two dressed
+    # TUs can share the registry's single translation unit.
+    ("dress_operators", {"dress_operators": True}, 28187,
+     "1d342cd1002f25645b5b0f8f3fff39c5e62a6be0af3e5d8607acfdf5ce232c6b"),
 )
 
 
@@ -147,7 +151,8 @@ class MutualExclusionTests(unittest.TestCase):
         """Anchors what the dressed path is, so a regression in V1.2.1 that emitted an
         undressed TU at the right byte count could not slip through."""
         text = _emit(dress_operators=True)
-        for builder in ("build_tau", "build_Wmnij", "build_Wabef", "build_Wmbej"):
+        for builder in (f"build_tau_{METHOD}", f"build_Wmnij_{METHOD}",
+                        f"build_Wabef_{METHOD}", f"build_Wmbej_{METHOD}"):
             with self.subTest(builder=builder):
                 self.assertIn(builder, text)
 
@@ -275,13 +280,15 @@ class DressedTranslationUnitCompileTests(unittest.TestCase):
         the reference at all -- this pins that the binding accompanies the use.
         """
         text = _emit(dress_operators=True)
-        for consumer in ("build_Wmnij", "build_Wabef"):
+        # V1.3.2: builders are method-suffixed (`build_Wmnij_ccsd`).
+        for consumer in (f"build_Wmnij_{METHOD}", f"build_Wabef_{METHOD}"):
             start = text.index(f"{consumer}(")
             body = text[start:text.index("\n}", start)]
+            binding = f"const auto tau = build_tau_{METHOD}("
             with self.subTest(consumer=consumer):
                 self.assertIn("tau(", body, "expected this builder to reference tau")
-                self.assertIn("const auto tau = build_tau(", body)
-                self.assertLess(body.index("const auto tau = build_tau("),
+                self.assertIn(binding, body)
+                self.assertLess(body.index(binding),
                                 body.index("* tau(") if "* tau(" in body
                                 else body.index("tau("),
                                 "tau must be bound before first use")
@@ -327,12 +334,16 @@ class EmittedBuilderOrderTests(unittest.TestCase):
                     seen.add(name)
 
     def test_tau_precedes_its_consumers_in_the_emitted_text(self):
+        """`tau` is matched by suffix, since V1.3.2 names builders `build_tau_<method>`."""
         defined, deps = self._builder_order_and_deps(dress_operators=True)
-        consumers = [n for n, d in deps.items() if "tau" in d]
+        tau_names = {n for n in defined if n.startswith("tau")}
+        self.assertTrue(tau_names, f"expected a tau builder among {defined}")
+        consumers = [n for n, d in deps.items() if d & tau_names]
         self.assertTrue(consumers, "expected tau to have consumers")
+        first_tau = min(defined.index(n) for n in tau_names)
         for consumer in consumers:
             with self.subTest(consumer=consumer):
-                self.assertLess(defined.index("tau"), defined.index(consumer))
+                self.assertLess(first_tau, defined.index(consumer))
 
 
 class ComposedNumericTests(unittest.TestCase):
