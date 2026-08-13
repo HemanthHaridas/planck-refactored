@@ -1561,6 +1561,21 @@
       ]
     },
     {
+      "id": "dressed_kernel_equivalence_rccsdt",
+      "input": "tests/inputs/regression/post_hf/h2_rccsdt_sto3g.hfinp",
+      "executable": "tests/dressed_kernel_equivalence.py",
+      "tags": [
+        "extended",
+        "generated-kernel"
+      ],
+      "timeout_s": 1800,
+      "expected_exit_code": 0,
+      "skip_if_contains": "SKIP: dressed-kernel comparison needs",
+      "contains": [
+        "PASS: dressed and undressed kernels agree"
+      ]
+    },
+    {
       "id": "b_uccsd_sto3g",
       "input": "tests/inputs/regression/post_hf/b_uccsd_sto3g.hfinp",
       "tags": [

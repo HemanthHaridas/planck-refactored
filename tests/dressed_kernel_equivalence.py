@@ -20,6 +20,22 @@ is verified: the case must actually show the backstop marker, or this script fai
 
 Usage:
     dressed_kernel_equivalence.py --dressed <build_dir> --undressed <build_dir>
+    dressed_kernel_equivalence.py <input.hfinp>      # regression-runner form
+
+The second form is what `run_regressions.py` uses: it invokes a case's `executable` with exactly
+one positional input path (`build_command`), so the two build directories come from the
+environment instead — `PLANCK_DRESSED_BUILD` and `PLANCK_UNDRESSED_BUILD`. Without both set the
+case **skips** rather than fails, because a dressed build is opt-in
+(`-DPLANCK_CC_DRESS_OPERATORS=ON`) and most checkouts will not have one.
+
+The positional input is accepted and then ignored: this comparison drives its own fixed case list
+(the rank-3 cases that reach the generated kernel), and a single input cannot express "run these
+three in two builds". The case's `input` field therefore only documents which family it covers.
+
+**Why this cannot be an ordinary single-binary regression case.** A dressed build's output is
+byte-comparable to an undressed one — verified: same correlation energy, same iteration count, no
+marker distinguishing them. So `skip_if_contains`, which inspects the run's output, has nothing to
+key on. Detecting dressing requires comparing two builds, which is what this script does.
 """
 
 from __future__ import annotations
@@ -70,17 +86,56 @@ def _iterations(log: str) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dressed", type=Path, required=True,
-                        help="build dir configured with PLANCK_CC_DRESS_OPERATORS=ON")
-    parser.add_argument("--undressed", type=Path, required=True,
-                        help="reference build dir without dressing")
+    parser.add_argument("--dressed", type=Path, default=None,
+                        help="build dir configured with PLANCK_CC_DRESS_OPERATORS=ON "
+                             "(or $PLANCK_DRESSED_BUILD)")
+    parser.add_argument("--undressed", type=Path, default=None,
+                        help="reference build dir without dressing "
+                             "(or $PLANCK_UNDRESSED_BUILD)")
+    parser.add_argument("input", nargs="?", default=None,
+                        help="ignored; accepted so run_regressions.py can invoke this as a "
+                             "case `executable` (it passes one positional input path)")
     args = parser.parse_args()
 
-    dressed = args.dressed / "hartree-fock"
-    undressed = args.undressed / "hartree-fock"
+    dressed_dir = args.dressed or (
+        Path(os.environ["PLANCK_DRESSED_BUILD"])
+        if os.environ.get("PLANCK_DRESSED_BUILD") else None)
+    undressed_dir = args.undressed or (
+        Path(os.environ["PLANCK_UNDRESSED_BUILD"])
+        if os.environ.get("PLANCK_UNDRESSED_BUILD") else None)
+
+    if dressed_dir is None or undressed_dir is None:
+        # SKIP, not fail: a dressed build is opt-in, so most checkouts have nothing to
+        # compare. The marker is what run_regressions.py's `skip_if_contains` keys on.
+        print("SKIP: dressed-kernel comparison needs PLANCK_DRESSED_BUILD and "
+              "PLANCK_UNDRESSED_BUILD (or --dressed/--undressed)")
+        return 0
+
+    dressed = dressed_dir / "hartree-fock"
+    undressed = undressed_dir / "hartree-fock"
     for binary in (dressed, undressed):
         if not binary.is_file():
+            # FAIL, not skip: the caller named these build dirs explicitly, so a missing
+            # binary is a broken invocation rather than an absent opt-in feature. Only the
+            # unset-env case above skips.
             print(f"FAIL: no binary at {binary}")
+            return 1
+
+    # Anti-vacuity: two undressed builds trivially agree. Confirm the "dressed" one really is
+    # dressed, and the reference really is not, by looking for the method-suffixed builder
+    # symbols V1.3.2 emits -- the binaries' RUNTIME OUTPUT is indistinguishable, which is the
+    # whole reason this comparison needs two builds.
+    cache = dressed_dir / "CMakeCache.txt"
+    if cache.is_file():
+        if "PLANCK_CC_DRESS_OPERATORS:BOOL=ON" not in cache.read_text():
+            print(f"FAIL: {dressed_dir} was not configured with "
+                  f"PLANCK_CC_DRESS_OPERATORS=ON; the comparison would be vacuous")
+            return 1
+    ref_cache = undressed_dir / "CMakeCache.txt"
+    if ref_cache.is_file():
+        if "PLANCK_CC_DRESS_OPERATORS:BOOL=ON" in ref_cache.read_text():
+            print(f"FAIL: {undressed_dir} also has dressing ON; there is no reference to "
+                  f"compare against")
             return 1
 
     failures = 0
