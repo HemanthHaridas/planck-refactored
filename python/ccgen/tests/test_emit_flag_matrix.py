@@ -96,27 +96,48 @@ class FlagMatrixBaselineTests(unittest.TestCase):
 
 
 class DressedPathReachabilityTests(unittest.TestCase):
-    """What the early return currently makes unreachable.
+    """The flags are now REACHABLE under dressing (V1.2.1 removed the early return).
 
-    These pin the STATUS QUO, not desired behavior. V1.2.1 removes the early return and
-    V1.2.4 adds explicit guards, at which point these tests should be updated to assert
-    the new contract -- they exist so that transition is deliberate rather than silent.
+    Before V1.2.1 each of these combinations was byte-identical to `dress_operators` alone
+    -- the extra flag was silently dropped. That was pinned here as the status quo, and its
+    flipping is the observable evidence that V1.2.1 did what it claims. The six baseline
+    hashes held across the same change, so the reachability is the *only* behavior that
+    moved.
+
+    `factorize_tau` was the hazard: the parent scope records dress x tau as "already
+    mutually exclusive", but the exclusion was unreachability rather than a guard, so
+    V1.2.1 briefly ACTIVATED tau under dressing. V1.2.4 closed it with an explicit error --
+    found because the collision tripped an assertion added in V1.2.1, not by inspection.
     """
 
-    def test_dress_operators_currently_ignores_other_flags(self):
-        """`factorize_tau` / `spin_adapt` / `force_arbitrary` are silently dropped under
-        dressing today, because the early return fires before any of them is read.
-
-        This is the hazard V1.2.4 addresses: the parent scope records dress x tau as
-        "already mutually exclusive", but the exclusion is unreachability, not a guard --
-        so removing the early return ACTIVATES tau rather than continuing to exclude it.
-        """
+    def test_other_flags_now_reach_the_dressed_path(self):
         dressed_only = _emit(dress_operators=True)
-        for extra in ({"factorize_tau": True},
-                      {"spin_adapt": True},
+        for extra in ({"spin_adapt": True},
                       {"force_arbitrary": True}):
             with self.subTest(extra=extra):
-                self.assertEqual(_emit(dress_operators=True, **extra), dressed_only)
+                self.assertNotEqual(_emit(dress_operators=True, **extra), dressed_only)
+
+
+class MutualExclusionTests(unittest.TestCase):
+    """V1.2.4: excluded flag combinations must be explicit, never silent precedence."""
+
+    def test_dress_operators_and_factorize_tau_raise(self):
+        """Both materialize tau; running both would build it twice through two paths.
+        Raising beats picking a winner -- silent precedence is what disguised this."""
+        with self.assertRaises(ValueError) as caught:
+            _emit(dress_operators=True, factorize_tau=True)
+        self.assertIn("mutually exclusive", str(caught.exception))
+
+    def test_dressing_forces_cse_off_without_failing(self):
+        """Mirrors the spin_adapt precedent: forced off rather than an error, so a caller
+        passing include_intermediates does not get a failed dressed build."""
+        self.assertEqual(_emit(dress_operators=True, include_intermediates=True),
+                         _emit(dress_operators=True))
+
+    def test_spin_adapt_still_forces_cse_off(self):
+        """Unchanged by V1.2.4 -- pinned so the new branch cannot have altered it."""
+        self.assertEqual(_emit(spin_adapt=True, include_intermediates=True),
+                         _emit(spin_adapt=True))
 
     def test_dressed_output_carries_its_builders(self):
         """Anchors what the dressed path is, so a regression in V1.2.1 that emitted an
@@ -125,6 +146,98 @@ class DressedPathReachabilityTests(unittest.TestCase):
         for builder in ("build_tau", "build_Wmnij", "build_Wabef", "build_Wmbej"):
             with self.subTest(builder=builder):
                 self.assertIn(builder, text)
+
+
+class ComposedDressedEmitTests(unittest.TestCase):
+    """V1.2.2 / V1.2.3: the compositions the early return used to make unreachable."""
+
+    def test_dressed_spin_adapted_emits_all_builders(self):
+        text = _emit(dress_operators=True, spin_adapt=True)
+        for builder in ("build_tau", "build_tau_c",
+                        "build_Wmnij", "build_Wabef", "build_Wmbej"):
+            with self.subTest(builder=builder):
+                self.assertIn(builder, text)
+
+    def test_dressed_specs_are_adapted_not_gcc(self):
+        """The miscompile V1.2.2 prevents. Adaptation moves three of the five declared
+        layouts (tau vvoo->oovv, tau_c vvoo->oovv, Wmbej ovvo->oovv), so emitting the GCC
+        specs beside a spin-adapted residual would declare one layout and build another.
+
+        Asserted at the source rather than by grepping the TU: the emitted C++ names the
+        buffer dimensions, not the signature string, so the spec list is where the contract
+        actually lives.
+        """
+        from ccgen.generate import _dress_operator_equations, generate_cc_equations
+        from ccgen.spin import adapt_intermediate_spec
+
+        _, specs = _dress_operator_equations(
+            generate_cc_equations("ccsd", engine="diagram", canonical_fock=True))
+        gcc = {s.name: s.index_space_sig for s in specs}
+        adapted = {s.name: adapt_intermediate_spec(s).index_space_sig for s in specs}
+
+        self.assertEqual(gcc["tau"], "vvoo")
+        self.assertEqual(adapted["tau"], "oovv")
+        self.assertEqual(gcc["Wmbej"], "ovvo")
+        self.assertEqual(adapted["Wmbej"], "oovv")
+        self.assertNotEqual(gcc, adapted,
+                            "if these ever coincide, this test no longer proves anything")
+
+    def test_adapted_specs_pass_the_v11f_validator(self):
+        """The wired assertion's own gate. `print_cpp_planck` raises if this fails, so a
+        green emit already implies it -- asserted directly so a failure names the cause."""
+        from ccgen.generate import _dress_operator_equations, generate_cc_equations
+        from ccgen.optimization.intermediates import validate_intermediate_specs
+        from ccgen.spin import adapt_intermediate_spec
+
+        _, specs = _dress_operator_equations(
+            generate_cc_equations("ccsd", engine="diagram", canonical_fock=True))
+        adapted = [adapt_intermediate_spec(s) for s in specs]
+        self.assertEqual(validate_intermediate_specs(adapted), [])
+
+    def test_force_arbitrary_threads_through_dressing(self):
+        """V1.2.3. Targets the arbitrary-order runtime, which is where the generated
+        production path actually executes."""
+        plain = _emit(dress_operators=True, spin_adapt=True)
+        arbitrary = _emit(dress_operators=True, spin_adapt=True, force_arbitrary=True)
+        self.assertNotEqual(plain, arbitrary)
+        self.assertIn("generated_arbitrary_", arbitrary)
+        for builder in ("build_tau", "build_Wmbej"):
+            with self.subTest(builder=builder):
+                self.assertIn(builder, arbitrary)
+
+
+class ComposedNumericTests(unittest.TestCase):
+    """V1.2.5: the new combination's correctness.
+
+    Byte-identity proves no regression on existing paths and says nothing about the new
+    one, and there is no prior output for it to match -- so the gate is numeric. Not a
+    symbolic term count: V1.1e spent five sub-steps establishing that a term multiset
+    cannot distinguish different algebra from a symmetry-equivalent rewriting.
+    """
+
+    def test_dressed_adapted_residual_matches_adapted_raw(self):
+        import numpy as np
+
+        from ccgen.generate import _dress_operator_equations, generate_cc_equations
+        from ccgen.optimization.dressed_equation import expand_dressed_term
+        from ccgen.spin import spin_adapt_equations
+        from ccgen.tests.residual_eval import random_tensors, residual_of
+
+        raw = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
+        dressed, _ = _dress_operator_equations(raw)
+        expanded = {m: [x for t in ts for x in expand_dressed_term(t)]
+                    for m, ts in dressed.items()}
+        adapted_dressed = spin_adapt_equations(expanded)
+        adapted_raw = spin_adapt_equations(raw)
+
+        for no, nv, seed in ((2, 3, 0), (3, 4, 11)):
+            tensors = random_tensors(no, nv, seed=seed)
+            for manifold in ("energy", "singles", "doubles"):
+                a = residual_of(adapted_dressed[manifold], no, nv, tensors=tensors)
+                b = residual_of(adapted_raw[manifold], no, nv, tensors=tensors)
+                scale = max(float(np.abs(b).max()), 1.0)
+                with self.subTest(manifold=manifold, no=no, seed=seed):
+                    self.assertLess(float(np.abs(a - b).max()) / scale, 1e-12)
 
 
 if __name__ == "__main__":

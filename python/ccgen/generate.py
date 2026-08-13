@@ -1011,6 +1011,24 @@ def print_cpp_planck(
     ``factorize_tau`` (which only collapses tau); the two are mutually exclusive.
     Default off -> byte-identical to the undressed emit.
     """
+    # V1.2.4: dressing supersedes tau collapse -- dressing already recognizes tau/tau_c as
+    # pseudo-amplitudes, so running `factorize_tau` too would materialize tau twice through
+    # two different code paths. Before V1.2.1 this combination was silently ignored (the
+    # early return fired first), which is why the parent scope recorded it as "already
+    # mutually exclusive" -- it was unreachable, not guarded. Raise rather than pick a
+    # winner: silent precedence is exactly what disguised the hazard.
+    if dress_operators and factorize_tau:
+        raise ValueError(
+            "dress_operators and factorize_tau are mutually exclusive: dressing already "
+            "recognizes tau/tau_c, so factorize_tau would materialize it twice. Pass only "
+            "dress_operators=True.")
+
+    # V1.2.1: dressing feeds the SAME downstream path as every other flag (one exit at
+    # the bottom of this function) rather than returning early. The early return made
+    # spin_adapt / factorize_tau / force_arbitrary silently unreachable under dressing;
+    # composing them is the point of V1.2, and a second emit call site would fork the
+    # composition so V5 (UCC) had to be wired twice.
+    dressed_intermediates = None
     if dress_operators:
         # Dressing requires the diagram engine + canonical Fock; override any
         # conflicting caller kwargs rather than error on a duplicate.
@@ -1019,11 +1037,10 @@ def print_cpp_planck(
         dress_kwargs.pop("canonical_fock", None)
         eqs = generate_cc_equations(
             method, engine="diagram", canonical_fock=True, **dress_kwargs)
-        eqs, intermediates = _dress_operator_equations(eqs)
-        return emit_planck_translation_unit(
-            method, eqs, intermediates=intermediates or None)
-
-    eqs = generate_cc_equations(method, **kwargs)
+        eqs, dressed_intermediates = _dress_operator_equations(eqs)
+        dressed_intermediates = dressed_intermediates or None
+    else:
+        eqs = generate_cc_equations(method, **kwargs)
 
     if spin_adapt:
         # R1.0: spin-adapt the GCC manifold to restricted (spatial) terms so the
@@ -1031,6 +1048,28 @@ def print_cpp_planck(
         # not spin-orbital algebra bound to spatial storage (the defect).
         from .spin import spin_adapt_equations
         eqs = spin_adapt_equations(eqs)
+
+        # V1.2.2: the dressed operator specs must be adapted TOO, not left in GCC form.
+        # Adaptation changes three of the five declared layouts (tau vvoo->oovv, tau_c
+        # vvoo->oovv, Wmbej ovvo->oovv), so emitting the GCC specs alongside a
+        # spin-adapted residual declares one layout and builds another -- the residual
+        # would reference spatially-adapted Wmbej while build_Wmbej built the GCC slot
+        # order. `adapter=` is left at its default here but kept a parameter of
+        # adapt_intermediate_spec so V5 (UCC) is a substitution, not a second path.
+        if dressed_intermediates is not None:
+            from .optimization.intermediates import validate_intermediate_specs
+            from .spin import adapt_intermediate_spec
+
+            dressed_intermediates = [
+                adapt_intermediate_spec(spec) for spec in dressed_intermediates]
+            # V1.1f as a wired assertion, not merely a test: this is the one place a
+            # declared-vs-built layout mismatch would be introduced, so the guard is
+            # load-bearing here rather than precautionary.
+            problems = validate_intermediate_specs(dressed_intermediates)
+            if problems:
+                raise ValueError(
+                    "adapted dressed intermediate specs are invalid: "
+                    + "; ".join(problems))
 
         # CSE intermediate detection (detect_intermediates / rewrite_equations)
         # was built for the raw occ-first spin-orbital layout and is NOT validated
@@ -1043,6 +1082,16 @@ def print_cpp_planck(
         # docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md.
         if include_intermediates:
             include_intermediates = False
+
+    # V1.2.4: same force-off under dressing. CSE and dressing both materialize through the
+    # `intermediates` channel, so running both would need a merge the emitter has no
+    # ordering contract for. Kept off (not an error) to mirror the spin_adapt precedent
+    # above -- a caller passing the default-ish `include_intermediates` should not have a
+    # dressed build fail. V1.1f measured CSE specs clean on both the GCC and spin-adapted
+    # paths (23/23), so the remaining reasons are compile time (~1544 build_W_*, ~28 min at
+    # -O3) and the absence of a numeric gate, NOT a known index defect.
+    if dress_operators and include_intermediates:
+        include_intermediates = False
 
     tau_spec = None
     if factorize_tau:
@@ -1077,6 +1126,17 @@ def print_cpp_planck(
     # its builder is emitted and residual `tau` factors resolve to the local.
     if tau_spec is not None:
         intermediates = [tau_spec] + list(intermediates or [])
+
+    # V1.2.1: the dressed operator specs ride the same `intermediates` channel as CSE
+    # and tau, so the emitter's existing builder/local-resolution path handles them
+    # unchanged. Dressing and CSE are mutually exclusive (V1.2.4), so there is nothing
+    # to merge here -- but assert rather than assume, since a silent overwrite would
+    # drop one set of builders and only show up as a link error.
+    if dressed_intermediates is not None:
+        assert not intermediates, (
+            "dressed operators and CSE/tau intermediates both populated; "
+            "V1.2.4's mutual exclusion is not holding")
+        intermediates = dressed_intermediates
 
     return emit_planck_translation_unit(
         method,
