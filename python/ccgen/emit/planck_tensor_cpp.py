@@ -577,6 +577,7 @@ def _emit_intermediate_builder(
     factor_body: bool = False,
     stride_order: bool = False,
     force_arbitrary: bool = False,
+    sibling_specs: dict[str, IntermediateSpec] | None = None,
 ) -> str:
     result_type = _tensor_type(spec.rank)
     amplitude_type = _amplitude_type(method, force_arbitrary)
@@ -606,6 +607,35 @@ def _emit_intermediate_builder(
     lines.append(
         f"    // Intermediate {spec.name} ({spec.index_space_sig}, usage={spec.usage_count})"
     )
+
+    # V1.3: bind the SIBLING intermediates this definition references, the same way
+    # `_emit_kernel` binds the ones its residual terms reference. `sibling_names` only
+    # makes such a factor RENDER as a bare identifier; without a binding the emitted C++
+    # said `tau(i, j, e, f)` with no `tau` in scope, so the dressed TU never compiled
+    # (Wmnij and Wabef both reference tau). Emitted before the amplitude-view bindings
+    # and the body so the declaration precedes every use.
+    #
+    # Ordering is the caller's responsibility: `intermediates` is dependency-ordered
+    # (pseudo-amplitude specs first, then the operators referencing them), so a sibling's
+    # own `build_` is already declared above this function. `sibling_specs` is passed as
+    # an ordered mapping rather than recomputed here to keep that single source of truth.
+    if sibling_specs:
+        referenced: list[str] = []
+        seen: set[str] = set()
+        for term in lowered_definition_terms or spec.definition_terms:
+            for factor in term.factors:
+                name = getattr(factor, "name", None)
+                if (name in sibling_specs and name != spec.name
+                        and name not in seen):
+                    seen.add(name)
+                    referenced.append(name)
+        if referenced:
+            for name in referenced:
+                lines.append(
+                    f"    const auto {name} = build_{name}("
+                    "reference, mo_blocks, denominators, amplitudes);"
+                )
+            lines.append("")
 
     # M3.0: emit the builder body as a factored contraction tree (scratch-step
     # pairwise contractions) instead of one flat n-ary nest, when it factors
@@ -756,12 +786,16 @@ def emit_planck_translation_unit(
 
     if intermediates:
         sibling_names = frozenset(spec.name for spec in intermediates)
+        # Ordered by construction: `intermediates` is dependency-ordered, so a sibling
+        # referenced by a later spec already has its `build_` emitted above it (V1.3).
+        sibling_spec_map = {spec.name: spec for spec in intermediates}
         for spec in intermediates:
             if not _is_supported_tensor_rank(spec.rank):
                 continue
             lines.append(_emit_intermediate_builder(
                 method, spec, sibling_names, factor_body=factor_builder_bodies,
-                stride_order=factor_builder_bodies, force_arbitrary=force_arbitrary))
+                stride_order=factor_builder_bodies, force_arbitrary=force_arbitrary,
+                sibling_specs=sibling_spec_map))
             lines.append("")
 
     for target, terms in equations.items():

@@ -48,8 +48,12 @@ BASELINES = (
     ("spin_adapt+force_arbitrary",
      {"spin_adapt": True, "force_arbitrary": True}, 64265,
      "f3a85400f3178fabb06f1ba674e51a5fb9e963d437b70ffda32f900c98e7ca2f"),
-    ("dress_operators", {"dress_operators": True}, 27960,
-     "1c52c36178906c9b1916a9cfca67b6cf7da8176f35b7e50033fc3229a91c01b5"),
+    # Moved at V1.3 (27960 -> 28122): builders that reference a sibling intermediate now
+    # bind it (`const auto tau = build_tau(...)`), which is what made the dressed TU
+    # compile for the first time. The four undressed baselines above are unchanged, so the
+    # fix is confined to sibling-referencing builders.
+    ("dress_operators", {"dress_operators": True}, 28122,
+     "5f899efb2dcd63cdaa0856f1b10387e3b322b798d2c0a2a6c5aa84f15236688d"),
 )
 
 
@@ -207,22 +211,19 @@ class ComposedDressedEmitTests(unittest.TestCase):
 
 
 class DressedTranslationUnitCompileTests(unittest.TestCase):
-    """V1.2.2's compile gate — currently FAILING, and pre-existing.
+    """V1.3: the dressed TU must be valid C++.
 
-    The dressed TU is not valid C++: `build_Wmnij` and `build_Wabef` reference `tau(...)`
-    but their signatures take only `(reference, mo_blocks, denominators, amplitudes)`. `tau`
-    is a SIBLING intermediate, and the emitter has no mechanism to pass one intermediate
-    into another's builder -- it resolves intermediate factors as locals only within the
-    residual kernel, not inside another `build_<op>`.
+    It was not, and had never been. `build_Wmnij` and `build_Wabef` reference `tau(...)`,
+    but `sibling_names` only made such a factor RENDER as a bare identifier -- nothing
+    declared it, so the emitted C++ used `tau` with no `tau` in scope. Pre-existing:
+    verified by rebuilding at V1.2's parent, where it fails identically. V1.2 made the
+    dressed path reachable, which is what exposed it.
 
-    Verified pre-existing by stashing V1.2 and rebuilding: `dress_operators=True` fails
-    identically at 5603650's parent, so dressing has never emitted compilable C++. V1.2 made
-    the dressed path *reachable*, which is what exposed this; it did not cause it.
-
-    Why an xfail rather than a fix here: threading inter-intermediate dependencies through
-    builder signatures is an emitter change with its own dependency-ordering contract
-    (V1.4's subject), not wiring. Left failing and named so it cannot be mistaken for done --
-    the alternative was a doc sentence nobody runs.
+    Fixed in `_emit_intermediate_builder` by binding referenced siblings the same way
+    `_emit_kernel` already binds the intermediates its residual terms reference
+    (`const auto tau = build_tau(...)`). Correct by the existing dependency order --
+    `intermediates` is ordered pseudo-specs-first, so a sibling's own builder is declared
+    above its consumer.
     """
 
     def _syntax_check(self, **kwargs):
@@ -253,17 +254,85 @@ class DressedTranslationUnitCompileTests(unittest.TestCase):
         finally:
             os.unlink(src)
 
-    @unittest.expectedFailure
     def test_dressed_only_tu_compiles(self):
         self._syntax_check(dress_operators=True)
 
-    @unittest.expectedFailure
     def test_dressed_spin_adapted_tu_compiles(self):
         self._syntax_check(dress_operators=True, spin_adapt=True)
 
+    def test_dressed_spin_adapted_arbitrary_tu_compiles(self):
+        """The combination the arbitrary-order runtime actually executes."""
+        self._syntax_check(dress_operators=True, spin_adapt=True, force_arbitrary=True)
+
     def test_the_undressed_paths_still_compile(self):
-        """Bounds the defect: it is specific to dressing, not general emit breakage."""
         self._syntax_check()
+
+    def test_sibling_builders_are_bound_before_use(self):
+        """The specific defect, asserted at the source rather than only via the compiler:
+        every builder that references a sibling must declare it first.
+
+        A compile check alone would regress silently if the emitter later stopped emitting
+        the reference at all -- this pins that the binding accompanies the use.
+        """
+        text = _emit(dress_operators=True)
+        for consumer in ("build_Wmnij", "build_Wabef"):
+            start = text.index(f"{consumer}(")
+            body = text[start:text.index("\n}", start)]
+            with self.subTest(consumer=consumer):
+                self.assertIn("tau(", body, "expected this builder to reference tau")
+                self.assertIn("const auto tau = build_tau(", body)
+                self.assertLess(body.index("const auto tau = build_tau("),
+                                body.index("* tau(") if "* tau(" in body
+                                else body.index("tau("),
+                                "tau must be bound before first use")
+
+
+class EmittedBuilderOrderTests(unittest.TestCase):
+    """V1.4: the emitted builder order must be a valid topological sort.
+
+    Asserted on the emitted TU rather than the spec list, per the scope, so it also catches
+    an emit-layer reordering that left the spec list intact. Only meaningful now that V1.3
+    emits the sibling bindings -- before that there were no cross-builder references in the
+    text to order.
+    """
+
+    def _builder_order_and_deps(self, **kwargs):
+        import re
+
+        text = _emit(**kwargs)
+        defined = [m.group(1)
+                   for m in re.finditer(r"^\w[\w:<>, ]*? build_(\w+)\($", text, re.M)]
+        deps = {}
+        for name in defined:
+            start = text.index(f"build_{name}(\n")
+            body = text[start:text.index("\n}", start)]
+            deps[name] = {m.group(2) for m
+                          in re.finditer(r"const auto (\w+) = build_(\w+)\(", body)}
+        return defined, deps
+
+    def test_no_builder_references_one_defined_later(self):
+        for kwargs in ({"dress_operators": True},
+                       {"dress_operators": True, "spin_adapt": True},
+                       {"dress_operators": True, "spin_adapt": True,
+                        "force_arbitrary": True}):
+            defined, deps = self._builder_order_and_deps(**kwargs)
+            with self.subTest(flags=tuple(sorted(kwargs))):
+                self.assertTrue(defined, "no builders emitted -- gate would be vacuous")
+                seen: set[str] = set()
+                for name in defined:
+                    for dep in deps[name]:
+                        self.assertIn(dep, seen,
+                                      f"build_{name} references build_{dep} before it is "
+                                      f"defined (order: {defined})")
+                    seen.add(name)
+
+    def test_tau_precedes_its_consumers_in_the_emitted_text(self):
+        defined, deps = self._builder_order_and_deps(dress_operators=True)
+        consumers = [n for n, d in deps.items() if "tau" in d]
+        self.assertTrue(consumers, "expected tau to have consumers")
+        for consumer in consumers:
+            with self.subTest(consumer=consumer):
+                self.assertLess(defined.index("tau"), defined.index(consumer))
 
 
 class ComposedNumericTests(unittest.TestCase):
