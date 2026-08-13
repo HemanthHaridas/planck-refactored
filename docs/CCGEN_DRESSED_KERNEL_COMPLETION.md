@@ -6,9 +6,9 @@ state" — those remain for design history and for the reasoning behind specific
 
 Last updated: 2026-08-13.
 
-**One-line status:** dressed CC kernels generate, compile, link, and run, reproducing the
-undressed correlation energy *and* iteration count at rank 3. Two items remain open (V1.3.2,
-V1.3.5), neither blocking the validated path.
+**One-line status: V1 is complete.** Dressed CC kernels generate from the build, compile, link,
+and run, reproducing the undressed correlation energy *and* iteration count at rank 3 — pinned as
+a regression case. V1.0 through V1.4 all landed; nothing remains open.
 
 ---
 
@@ -112,11 +112,17 @@ needed** — one factor was the whole story, so a correctness-affecting change w
 
 ---
 
-## What remains open
+## What remains open — nothing in V1
 
-| item | status | blocks? |
-|---|---|---|
-| **V1.3.5** — pin the dressed config in `regression_cases.json` | not started (~S) | Nothing. Without it the V1.3.4 result can rot. |
+**Nothing. V1 is complete** — V1.0 through V1.4, including all of V1.3.0–V1.3.5.
+
+**V1.3.5 landed** as `dressed_kernel_equivalence_rccsdt` in `regression_cases.json`, via the
+runner's per-case `executable` hook. It could not be an ordinary regression case: a dressed build's
+output is indistinguishable from an undressed one (same energy, same iteration count, no backend
+marker), so `skip_if_contains` has nothing to key on and one binary cannot reveal whether dressing
+was enabled. The case skips without `PLANCK_DRESSED_BUILD`/`PLANCK_UNDRESSED_BUILD` (dressing is
+opt-in), fails if those name a missing binary, and fails if either build is misconfigured — two
+undressed builds would otherwise agree vacuously.
 
 **V1.3.2 is decided and landed** (route b): `_builder_symbol` names every builder
 `build_<name>_<method>`, so two dressed TUs co-include cleanly — measured `rc=0`, 0 redefinitions

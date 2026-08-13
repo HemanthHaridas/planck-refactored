@@ -11,15 +11,14 @@ The `CCGEN_*_SCOPE.md` files are per-effort design history and are **not** relia
 current state — several describe work that has since landed or been overturned. Read the
 consolidated record first:
 
-- `docs/CCGEN_DRESSED_KERNEL_COMPLETION.md` — dressed CC kernels (V1.0–V1.3, D0–D2): what works,
-  what validates it, what remains open.
+- `docs/CCGEN_DRESSED_KERNEL_COMPLETION.md` — dressed CC kernels (V1.0–V1.4, D0–D2). **Complete:**
+  they generate from the build, compile, link, and run reproducing the undressed energy and
+  iteration count, pinned by `dressed_kernel_equivalence_rccsdt`.
 
 Live scope documents, i.e. work not yet finished:
 
-- `docs/CCGEN_V13_LINK_AND_RUN_SCOPE.md` — V1.3.2 (registry builder naming) and V1.3.5
-  (regression-pin) remain.
 - `docs/CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md` + `docs/CCGEN_U1_UCC_ADAPT_SCOPE.md` — arbitrary-order
-  UCC; U0 landed, U1 scoped.
+  UCC; U0 landed, U1 scoped (U1.0-U1.5), U2-U5 ahead.
 
 To export it as a standalone static webpage:
 

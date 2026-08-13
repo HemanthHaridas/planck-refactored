@@ -1,12 +1,10 @@
 # V1.3 remainder — link and run a dressed generated kernel
 
-> **PARTLY LANDED — still live.** V1.3.0/.1/.2/.3/.4 are done: the dressed kernel generates from
-> the build, compiles, links, runs matching the undressed energy and iteration count, and its
-> builders are method-suffixed so two dressed TUs can share the registry's translation unit.
-> **V1.3.5** (regression-pin the dressed config) is the only step left, and its section below is
-> the plan of record.
->
-> For overall state see [`CCGEN_DRESSED_KERNEL_COMPLETION.md`](CCGEN_DRESSED_KERNEL_COMPLETION.md).
+> **FULLY LANDED (V1.3.0–V1.3.5).** The dressed kernel generates from the build, compiles, links,
+> runs matching the undressed energy and iteration count, has method-suffixed builders so two
+> dressed TUs can share the registry's translation unit, and is pinned as
+> `dressed_kernel_equivalence_rccsdt`. Design history only — status lives in
+> [`CCGEN_DRESSED_KERNEL_COMPLETION.md`](CCGEN_DRESSED_KERNEL_COMPLETION.md).
 
 Scopes the last open piece of V1. V1.1 validated the algebra and metadata; V1.2 made the
 dressed+adapted composition reachable from `print_cpp_planck`; V1.3's emit half fixed the
