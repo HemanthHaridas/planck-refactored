@@ -748,7 +748,9 @@ class CostModelTests(unittest.TestCase):
         from ccgen.optimization.factorize import emit_factorized_translation_unit
         budget = 10**9
         tu = emit_factorized_translation_unit("ccsdt", memory_budget_bytes=budget)
-        emitted = set(re.findall(r"build_(W_\w+)\(", tu))
+        # V1.3.2: builder symbols are method-suffixed (`build_W_oo_ccsdt`), so strip the
+        # trailing `_<method>` to recover the operator name the selector returns.
+        emitted = set(re.findall(r"build_(W_\w+?)_ccsdt\(", tu))
         ops = manifold_operators(self.triples, include_reuse=False)
         _, names = select_best_of_both(ops, budget)
         self.assertEqual(emitted, set(names))
