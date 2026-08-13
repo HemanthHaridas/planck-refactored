@@ -5,20 +5,26 @@ The main teaching document is:
 - `docs/PLANCK_TEACHING_GUIDE.md`
 - `docs/CCGEN_TEACHING_GUIDE.md` documents the Python coupled-cluster equation generator
 
-## ccgen status records
+## Conventions for this directory
 
-The `CCGEN_*_SCOPE.md` files are per-effort design history and are **not** reliable statements of
-current state — several describe work that has since landed or been overturned. Read the
-consolidated record first:
+Every file here **answers one architecture question** or is a teaching guide. The sole exception is
+a doc scoping work that is still in progress, which may carry the scope and its steps — and which
+must be rewritten into an architecture answer as soon as that work lands and is verified.
 
-- `docs/CCGEN_DRESSED_KERNEL_COMPLETION.md` — dressed CC kernels (V1.0–V1.4, D0–D2). **Complete:**
-  they generate from the build, compile, link, and run reproducing the undressed energy and
-  iteration count, pinned by `dressed_kernel_equivalence_rccsdt`.
+**Status does not live here.** What is done and what is open are recorded in
+`vault/Status/Completion.md` and `vault/Status/Open Work.md`, which are canonical and regenerate
+`CLAUDE.md`.
 
-Live scope documents, i.e. work not yet finished:
+### Answered questions — dressed CC kernels
 
-- `docs/CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md` + `docs/CCGEN_U1_UCC_ADAPT_SCOPE.md` — arbitrary-order
-  UCC; U0 landed, U1 scoped (U1.0-U1.5), U2-U5 ahead.
+- `CCGEN_DRESSED_KERNEL_PIPELINE.md` — how does a dressed CC residual become a running C++ kernel?
+- `CCGEN_SPIN_ADAPTER_CONTRACT.md` — what does the spin adapter guarantee, and how do you check it?
+- `CCGEN_DRESSING_COST.md` — why does dressed-operator recognition cost what it costs?
+
+### In-progress scopes
+
+- `CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md` + `CCGEN_U1_UCC_ADAPT_SCOPE.md` — arbitrary-order UCC;
+  U0 landed, U1 scoped (U1.0–U1.5), U2–U5 ahead.
 
 To export it as a standalone static webpage:
 

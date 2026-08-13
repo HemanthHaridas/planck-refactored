@@ -117,7 +117,7 @@ CSE-style shape agreement alone.
 
 ### V1 — compose dress ∘ adapt (~M, the real work)
 
-> **Broken out in detail in `CCGEN_DRESS_ADAPT_COMPOSITION_SCOPE.md`** (steps
+> **Broken out in detail in `CCGEN_DRESSED_KERNEL_PIPELINE.md`** (steps
 > V1.0–V1.4), which also records **two defects reproduced against the current
 > tree** while scoping it:
 >

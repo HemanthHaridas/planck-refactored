@@ -114,7 +114,7 @@ historical design context, but they are no longer the source of truth for
   method-suffixed (`build_tau_ccsdt`) so two dressed TUs can share the kernel
   registry's single translation unit. Rank 4 is available (61.6 s of generation)
   but not the validated anchor. Full record:
-  `docs/CCGEN_DRESSED_KERNEL_COMPLETION.md`
+  `docs/CCGEN_DRESSED_KERNEL_PIPELINE.md`
 
 ### CASSCF / SA-CASSCF status
 
@@ -264,7 +264,7 @@ historical design context, but they are no longer the source of truth for
   61.6 s, which is what made rank-4 dressing viable at all. Output byte-identical.
   Gated by `test_dressing_scaling` on the **call count**, not wall-clock —
   deterministic, and it names this defect if it returns. Two dead ends recorded in
-  `docs/CCGEN_DRESSING_SUPERLINEAR_SCOPE.md`: `_eri_canonical` showed the largest
+  `docs/CCGEN_DRESSING_COST.md`: `_eri_canonical` showed the largest
   profile number (864 s *cumulative*) but memoizing it bought 6 %, and the
   self-time ranking is diffuse — the win was structural, not micro-optimization.
 - ERI / transform parallelization pass (profiled, all bitwise-verified):

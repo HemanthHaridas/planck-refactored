@@ -222,5 +222,5 @@ to be worth the step, given PySCF has no UCCSDT `update_amps`. Decide that at U1
 ---
 
 See `CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md` (U0 landed, U2–U5 ahead, and the rescope that corrected
-`external_blocks`), `CCGEN_V11_SPEC_ADAPTATION_SCOPE.md` (the numeric-over-symbolic lesson), and
+`external_blocks`), `CCGEN_SPIN_ADAPTER_CONTRACT.md` (the numeric-over-symbolic lesson), and
 `spin.py:955` (`_factor_tensor_name`) / `spin.py:1088` (`block_keyed_intermediate_name`).

@@ -116,7 +116,7 @@ not block this. Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`.
 
 ## ccgen dressed intermediates
 
-**LANDED. Only the UCC follow-on remains.** See `docs/CCGEN_DRESSED_KERNEL_COMPLETION.md` for the
+**LANDED. Only the UCC follow-on remains.** See `docs/CCGEN_DRESSED_KERNEL_PIPELINE.md` for the
 full record.
 
 The problem this section used to describe — generated kernels carrying only *syntactic* CSE, never
