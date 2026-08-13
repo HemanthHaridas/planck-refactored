@@ -126,27 +126,84 @@ builder declared and called but never emitted would pass every check so far.
 Execute a CC calculation with the dressed kernel and require the **same energy** as the
 undressed build.
 
-**Rank mismatch to resolve first.** The established generated-kernel anchor is
-`be_rccsdtq_sto3g` — rank **4**, gated at `rccsdtq_total_energy = -14.4036551081` (atol 1e-7),
-tagged `extended`/`generated-kernel`, with a 600 s timeout. But the dressed operators
-recognized today are the **CCSD** family (`Wmnij`/`Wabef`/`Wmbej` + `tau`/`tau_c`), and every
-V1 measurement has been on `ccsd`. So either:
+**Anchor: rank 3 (`ccsdt` via `tensor_backend.cpp`), settled by measurement** — see the two
+subsections below. Not `be_rccsdtq_sto3g` (rank-4 dressing costs hours) and not rank 2
+(`ccsd_planck_generated.cpp` has no consumer, so there is nothing to run).
 
-- dress at rank 4 and confirm the CCSD-family operators still recognize in the CCSDTQ
-  residual (they should — `Wmbej` had usage 5 in the ccsd probe, but rank-4 recognition is
-  unmeasured), or
-- add a rank-2/3 generated-kernel case, which means checking whether `PLANCK_CC_MAXORDER=2`
-  produces a registry-included TU at all (the registry only includes rank ≥ 4 plus the
-  optional rank-3 arbitrary companion).
+Existing rank-3 regression cases to anchor against: `h2_rccsdt_sto3g`, `lih_rccsdt_sto3g`,
+`water_rccsdt_sto3g`. Pick the cheapest that exercises the dressed operators.
 
-**Settle this before V1.3.1**, because it determines which `MAXORDER` the option must work at
-and therefore whether V1.3.2's single-rank restriction bites immediately.
+**Rank-3 recognition confirmed** — the check that dressing is not vacuous there. Measured
+(294 s total, generation + dressing):
 
-*Measurement in progress:* rank-4 dressed recognition (`_dress_operator_equations` on
-`ccsdtq`) did **not** finish within 10 minutes, versus seconds at rank 2. That is itself a
-finding for V1.3.1 — if dressing at rank 4 is minutes-slow, it lands in the build's critical
-path (the `ccgen-planck-kernels` custom target), and the CMake option's cost needs stating.
-Confirm the runtime before committing to rank 4 as the anchor.
+```
+specs: tau(1), tau_c(1), Wmnij(13), Wabef(13), Wmbej(32)
+manifolds: energy 2, singles 9, doubles 47, triples 330
+```
+
+Usage is *higher* than rank 2 (`Wmnij` 13 vs 1, `Wabef` 13 vs 1, `Wmbej` 32 vs 5), so the
+dressed rank-3 kernel exercises all five builders substantially — V1.3.4 cannot pass vacuously
+on an unrecognized operator set. 294 s is tolerable for an opt-in build step, and it bounds
+what V1.3.1's help string should warn about.
+
+**Measured: rank 4 is not viable as the anchor, and the cost is in *recognition*, not
+generation.** Profiled per manifold:
+
+| step | terms | time |
+|---|---|---|
+| generation (diagram engine, whole `ccsdtq`) | 3172 | **3.5 s** |
+| `assemble_dressed_equation` energy | 2 | 0.0 s |
+| … singles | 12 | 0.2 s |
+| … doubles | 74 | **16.5 s** |
+| … triples | 412 | **307.6 s** |
+| … quadruples | 2672 | abandoned (>25 min, killed) |
+
+The diagram engine is **not** the problem — 3.5 s for all four manifolds. All the cost is
+`_dress_operator_equations`, whose per-manifold time scales **super-linearly in term count**
+(5.6× the terms from doubles→triples costs 19× the time), so quadruples' 2672 terms extrapolate
+to hours. The run was killed rather than waited out.
+
+**Consequences, and they change two steps:**
+
+- **V1.3.4 must use a rank-2/3 anchor, not `be_rccsdtq_sto3g`.** Dressing rank 4 is not a
+  build-time operation at this cost. This makes the rank-mismatch question above moot in the
+  other direction: rather than checking whether CCSD-family operators recognize at rank 4, the
+  answer is that we should not dress rank 4 at all yet.
+- **V1.3.1's CMake option must not put dressing in the unconditional build path.** Even rank 3
+  costs ~5 min for triples alone. Default OFF is necessary but not sufficient — the option's
+  cost belongs in its help string, so someone enabling it at `MAXORDER=4` is not surprised by an
+  apparently-hung build.
+
+**A recognition-performance fix is out of V1.3's scope** but is now a known, quantified item:
+the subgraph matching in `assemble_dressed_equation` is the hot spot, and it is the thing that
+would have to improve before dressing is usable at rank ≥ 4. Recorded here rather than
+attempted, since V1.3's goal is one dressed kernel that runs.
+
+### Which TU to target — measured, and it resolves the collision too
+
+`ccsd_planck_generated.cpp` **has no consumer**: nothing in `src/` includes it. Only rank 3 and
+rank ≥ 4 are wired, by two different mechanisms:
+
+| TU | included by | amplitude type | co-included with others? |
+|---|---|---|---|
+| `ccsd_planck_generated.cpp` | **nothing** | — | — |
+| `ccsdt_planck_generated.cpp` | `tensor_backend.cpp:17`, unconditional | `RCCSDTAmplitudes` | **no** — its own TU |
+| `ccsdt_arbitrary_planck_generated.cpp` | registry, `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` | `ArbitraryOrderRCCAmplitudes` | yes |
+| `ccsdtq` / `cc5` / `cc6` | registry, `#if PLANCK_CC_MAXORDER >= N` | `ArbitraryOrderRCCAmplitudes` | yes |
+
+**So `ccsdt_planck_generated.cpp` via `tensor_backend.cpp` is the V1.3 target.** It is a single
+non-co-included TU with a method-specific amplitude type, which means:
+
+- **The V1.3.2 collision does not arise for it.** The 5-redefinition failure needs two dressed
+  TUs sharing `ArbitraryOrderRCCAmplitudes` in one translation unit; this path has neither.
+  V1.3.2 still needs deciding before the *registry* path is dressed, but it stops blocking
+  V1.3.3–V1.3.5.
+- Dressing cost is the rank-3 figure (~5 min, dominated by triples), not rank 4's hours.
+
+That also explains why the earlier tau work could not add an energy gate: `ccsd_...generated.cpp`
+is generated but never compiled into a binary, so there was nothing to run. Same constraint
+applies here, and it is why the anchor is rank 3 rather than the rank-2 case every V1
+measurement used.
 
 *Gate:* dressed vs undressed energy agreement at the anchor's own tolerance (1e-7 for
 `be_rccsdtq_sto3g`; tighter if a smaller case is used), plus matching iteration count — a
