@@ -181,8 +181,18 @@ V1.2.0 (pin byte-identities)          LANDED  ← net before the refactor; earne
              └→ V1.2.5 (numeric gate)      LANDED (≤1e-12, two triples)
                   │
                   ▼
-             V1.3 (runtime link/run)  NEXT → V1.4 (dependency order) → V2+
+             V1.3 (compile: LANDED / link+run: OPEN) → V1.4 (dep order) LANDED → V2+
 ```
+
+**V1.3's scoping was wrong about the blocker.** It was written as the runtime link-and-run
+checkpoint, on the assumption that emitting already worked. Emitting did not work — the
+blocker was a one-binding emitter gap. That half is fixed; link-and-run is still open and is
+now the whole of what V1.3 has left.
+
+**V1.4 landed alongside it**, because its gate ("assert on the emitted TU, not the spec
+list") only becomes meaningful once cross-builder references exist in the text. Measured
+order across all three dressed combinations: `tau`, `tau_c`, `Wmnij`, `Wabef`, `Wmbej`, zero
+forward references.
 
 Both predicted risks materialized and both were caught mechanically rather than by review:
 V1.2.2's declared-vs-built layout mismatch (three of five specs) and V1.2.4's
@@ -238,12 +248,20 @@ V1.2 is landed: the composition is reachable from `print_cpp_planck`, and both w
 wiring could go wrong are now guarded (spec layout via the wired V1.1f assertion, flag
 interactions via explicit exclusions).
 
-It still does **not** validate the emitted kernel end-to-end. The TU is emitted and its
-builders are present, but **nothing has run it** — and one gate from the scope was not
-delivered: V1.2.2 lists "the emitted TU compiles against the real CC headers", which was not
-run. The dressed+adapted TU is asserted to *contain* its five `build_<op>` functions, not to
-compile. That compile check belongs with V1.3's link-and-run work, where a toolchain is
-needed anyway; it is called out here rather than left implied.
+**The compile gate has since been delivered, and it failed.** V1.2.2 listed "the emitted TU
+compiles against the real CC headers"; running it showed the dressed TU had *never* been
+valid C++ — `build_Wmnij`/`build_Wabef` referenced `tau(...)` with no `tau` in scope, because
+`sibling_names` made the factor render as a bare identifier without anything declaring it.
+Pre-existing (fails identically at V1.2's parent); V1.2 made the path reachable, which
+exposed it.
+
+Fixed under V1.3 (`955ea33`): `_emit_intermediate_builder` now binds referenced siblings the
+same way `_emit_kernel` already did. All three dressed TUs compile — dress-only 28122 B,
+`+spin_adapt` 45682 B, `+force_arbitrary` 46203 B. The dressed baseline moved
+27960 → 28122; the four undressed baselines are byte-identical.
+
+**Still not validated: link-and-run.** The TU compiles (`-fsyntax-only`), but nothing has
+linked or executed it. That is the remainder of V1.3's original intent.
 
 ---
 

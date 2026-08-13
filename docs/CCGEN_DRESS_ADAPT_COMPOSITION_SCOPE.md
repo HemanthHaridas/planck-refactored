@@ -233,7 +233,26 @@ only after V4 passes.
 today's (no regression to the GCC dressed path); `dress_operators=False` is
 byte-identical to today's undressed path (the default build must not move).
 
-### V1.3 — `force_arbitrary` composition (~S)
+### V1.3 — `force_arbitrary` composition — **emit LANDED, link+run OPEN**
+
+Two corrections to this section, both from measurement.
+
+**The emit-side concern here was already satisfied.** This section worried the arbitrary-order
+emit path must resolve dressed intermediate factors as locals; probing showed it already does,
+so V1.2.3 covered it — `dress+spin_adapt+force_arbitrary` emits at 46203 B with the
+arbitrary-runtime symbols and all five builders present, and compiles.
+
+**But the real blocker was elsewhere and this section did not anticipate it.** The dressed TU
+had never been valid C++: `build_Wmnij`/`build_Wabef` referenced `tau(...)` with nothing
+declaring it, because `sibling_names` only controls *rendering*. Fixed by binding referenced
+siblings in `_emit_intermediate_builder`, mirroring `_emit_kernel`. So "mostly covered by
+V1.2's flag threading" was right about the flags and wrong about readiness.
+
+**What remains is the literal claim below:** a dressed TU that can *execute* in the
+arbitrary-order runtime. Compiling with `-fsyntax-only` is not linking, and nothing has run
+it. That is V1.3's entire remainder.
+
+### V1.3 — original scoping (retained)
 
 The validation scope flagged this as settle-before-V1, and it is: the generated
 production path **is** the arbitrary-order runtime (`run_rccsdtq` drives it, and
@@ -251,7 +270,20 @@ the GCC dressed emit.
 whose kernel signature matches the arbitrary-order runtime's, and whose dressed
 `build_<op>` functions are present and dependency-ordered.
 
-### V1.4 — dependency order re-derived post-adaptation (~S)
+### V1.4 — dependency order re-derived post-adaptation — **LANDED**
+
+Gated on the **emitted TU** as this section requires, not the spec list, so an emit-layer
+reordering is caught too: no `build_<op>` may reference one defined later. Measured across
+all three dressed flag combinations — order `tau`, `tau_c`, `Wmnij`, `Wabef`, `Wmbej`, zero
+forward references.
+
+Landed together with V1.3 because the gate only becomes meaningful once cross-builder
+references exist in the emitted text — before V1.3's sibling binding there were none to
+order. The two-level `pseudo_specs + op_specs` order held; no topological re-sort was needed,
+since adaptation is a per-term rewrite and introduced no cross-operator references (as this
+section predicted).
+
+### V1.4 — original scoping (retained)
 
 `_dress_operator_equations` returns `pseudo_specs + op_specs` — a two-level order
 valid because every operator's dependencies are pseudo (τ/τ_c). After adaptation
@@ -269,18 +301,35 @@ the emitted TU, not on the spec list, so it catches an emit-layer reordering too
 ## Sequencing
 
 ```
-V1.0 (ordering contract) ──→ V1.1 (adapt specs, ~M) ──→ V1.2 (restructure, ~S)
-   LANDED                                                     │
-                                                              ├─→ V1.3 (force_arbitrary, ~S)
-                                                              └─→ V1.4 (dep order, ~S)
+V1.0 (ordering contract) ──→ V1.1 (adapt specs) ──→ V1.2 (restructure)
+   LANDED                       LANDED (a-f)          LANDED (V1.2.0-.5)
+                                                              │
+                                                              ├─→ V1.3  emit LANDED
+                                                              │         link+run OPEN  ← NEXT
+                                                              └─→ V1.4 (dep order)  LANDED
                                                                         │
                                                                         ▼
                                                                  V2 (symbolic gates)
 ```
 
-V1.0 landed first and alone — it fixed a measured defect, and V1.1's gate could
-not pass while `Wmbej` was empty. **V1.1 is next, and is the only ~M step.**
-V1.2–V1.4 are mechanical once the algebra is right.
+**All of V1 is landed except V1.3's link-and-run.** Full ccgen suite: 753 tests OK, 4
+pre-existing expected failures.
+
+The "V1.2–V1.4 are mechanical once the algebra is right" prediction was **half right**. The
+algebra was right, and the flag threading was mechanical — but three defects surfaced in the
+"mechanical" steps, each caught by a gate rather than by review:
+
+- **V1.2.2** — dressed specs emitted in GCC form beside a spin-adapted residual; three of
+  five declared layouts disagreed (`tau` `vvoo` vs `oovv`, `tau_c` likewise, `Wmbej` `ovvo`
+  vs `oovv`). A live miscompile.
+- **V1.2.4** — removing the early return *activated* `factorize_tau` under dressing. The
+  "already mutually exclusive" claim was unreachability, not a guard. Caught by an assertion
+  added in V1.2.1.
+- **V1.3** — the dressed TU had never compiled at all (`tau` referenced with nothing
+  declaring it). Caught only by actually running the compile gate that V1.2.2 listed.
+
+The lesson matches V1.1e's: **the wiring steps needed gates as much as the algebra did**, and
+the one gate I listed but skipped is the one that found the oldest defect.
 
 ---
 
