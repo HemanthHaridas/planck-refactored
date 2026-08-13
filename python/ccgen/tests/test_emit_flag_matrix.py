@@ -206,6 +206,66 @@ class ComposedDressedEmitTests(unittest.TestCase):
                 self.assertIn(builder, arbitrary)
 
 
+class DressedTranslationUnitCompileTests(unittest.TestCase):
+    """V1.2.2's compile gate — currently FAILING, and pre-existing.
+
+    The dressed TU is not valid C++: `build_Wmnij` and `build_Wabef` reference `tau(...)`
+    but their signatures take only `(reference, mo_blocks, denominators, amplitudes)`. `tau`
+    is a SIBLING intermediate, and the emitter has no mechanism to pass one intermediate
+    into another's builder -- it resolves intermediate factors as locals only within the
+    residual kernel, not inside another `build_<op>`.
+
+    Verified pre-existing by stashing V1.2 and rebuilding: `dress_operators=True` fails
+    identically at 5603650's parent, so dressing has never emitted compilable C++. V1.2 made
+    the dressed path *reachable*, which is what exposed this; it did not cause it.
+
+    Why an xfail rather than a fix here: threading inter-intermediate dependencies through
+    builder signatures is an emitter change with its own dependency-ordering contract
+    (V1.4's subject), not wiring. Left failing and named so it cannot be mistaken for done --
+    the alternative was a doc sentence nobody runs.
+    """
+
+    def _syntax_check(self, **kwargs):
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present (configure the build first)")
+
+        with tempfile.NamedTemporaryFile(suffix=".cpp", mode="w", delete=False) as fh:
+            fh.write(_emit(**kwargs))
+            src = fh.name
+        try:
+            proc = subprocess.run(
+                [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(repo / "src"), "-I", str(eigen), src],
+                capture_output=True, text=True, timeout=600,
+            )
+            self.assertEqual(proc.returncode, 0,
+                             f"did not compile:\n{proc.stderr[-1500:]}")
+        finally:
+            os.unlink(src)
+
+    @unittest.expectedFailure
+    def test_dressed_only_tu_compiles(self):
+        self._syntax_check(dress_operators=True)
+
+    @unittest.expectedFailure
+    def test_dressed_spin_adapted_tu_compiles(self):
+        self._syntax_check(dress_operators=True, spin_adapt=True)
+
+    def test_the_undressed_paths_still_compile(self):
+        """Bounds the defect: it is specific to dressing, not general emit breakage."""
+        self._syntax_check()
+
+
 class ComposedNumericTests(unittest.TestCase):
     """V1.2.5: the new combination's correctness.
 

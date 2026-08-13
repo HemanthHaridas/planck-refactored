@@ -10,6 +10,28 @@ in those measurements.
 
 ---
 
+## Status: V1.2 LANDED (V1.2.0–V1.2.5)
+
+All six steps landed; `V1.2.3` needed no work beyond the single exit path. Emitted sizes
+match the hand-probed values exactly: `dress+spin_adapt` 45520 B, `+force_arbitrary`
+46041 B, `dress_operators` alone unchanged at 27960 B.
+
+**The six pinned baselines held byte-for-byte** across the refactor, so the only behavior
+that moved is the intended reachability. Full suite: **748 tests OK**, 4 expected failures —
+the same 4 as before, so no pre-existing test changed status.
+
+**V1.2.4 was promoted ahead of schedule, because a guard caught the hazard rather than
+inspection.** The assertion added in V1.2.1 (dressed and CSE/tau intermediates must not both
+populate the channel) fired immediately on `dress+factorize_tau`: V1.2.1 had *activated* tau
+under dressing, exactly as this scope predicted it would. Now an explicit `ValueError`.
+
+**V1.2.2's miscompile was real, not hypothetical.** Before the fix, `dress+spin_adapt`
+emitted GCC specs beside a spin-adapted residual — three of five layouts disagreeing
+(`tau` `vvoo` vs `oovv`, `tau_c` likewise, `Wmbej` `ovvo` vs `oovv`). The residual referenced
+spatially-adapted `Wmbej` while `build_Wmbej` built the GCC slot order.
+
+---
+
 ## What the probe established
 
 Called manually on `ccsd` (diagram engine, canonical Fock):
@@ -151,19 +173,26 @@ term multiset cannot distinguish different algebra from a symmetry-equivalent re
 ## Sequencing
 
 ```
-V1.2.0 (pin byte-identities)          ~S  ← net before the refactor
-   └→ V1.2.1 (remove early return)    ~S  ← mechanical; one emit call site
-        └→ V1.2.2 (adapt the specs)   ~S  ← the actual composition + V1.1f assertion
-             ├→ V1.2.3 (force_arbitrary)  ~S  ← absorbs most of V1.3
-             ├→ V1.2.4 (mutual exclusions) ~S  ← factorize_tau becomes reachable
-             └→ V1.2.5 (numeric gate)      ~S  ← the new path's correctness
+V1.2.0 (pin byte-identities)          LANDED  ← net before the refactor; earned its keep
+   └→ V1.2.1 (remove early return)    LANDED  ← one emit call site; 6 baselines held
+        └→ V1.2.2 (adapt the specs)   LANDED  ← fixed a REAL layout miscompile
+             ├→ V1.2.3 (force_arbitrary)  LANDED (no work needed — single exit path)
+             ├→ V1.2.4 (mutual exclusions) LANDED (promoted: a guard tripped it)
+             └→ V1.2.5 (numeric gate)      LANDED (≤1e-12, two triples)
                   │
                   ▼
-             V1.3 (runtime link/run) → V1.4 (dependency order) → V2+
+             V1.3 (runtime link/run)  NEXT → V1.4 (dependency order) → V2+
 ```
 
-All ~S. V1.2.2 carries the only real risk (declared-vs-built layout), and V1.2.4 the only
-new hazard (`factorize_tau` becoming reachable).
+Both predicted risks materialized and both were caught mechanically rather than by review:
+V1.2.2's declared-vs-built layout mismatch (three of five specs) and V1.2.4's
+`factorize_tau` activation. The V1.2.0 net is what made the first distinguishable from
+ordinary churn, and the V1.2.1 assertion is what surfaced the second.
+
+**V1.3 is now narrower than the parent scope describes.** Its emit-side substance was
+absorbed by V1.2.3 — the arbitrary-order path already resolves dressed factors as locals.
+What remains is the runtime question: does a dressed TU *link and run* against
+`ArbitraryOrderRCCAmplitudes`? Emitting does not answer that.
 
 ---
 
@@ -205,10 +234,16 @@ emitter, no new adapter, no second composition path.
 
 ## Honest status
 
-The composition already works; V1.2 makes it reachable and guards the two ways the wiring
-could go wrong (spec layout, flag interactions). It still does **not** validate the emitted
-kernel end-to-end — the TU is emitted and compiles, but nothing runs it. That is V1.3's
-runtime checkpoint and V2+.
+V1.2 is landed: the composition is reachable from `print_cpp_planck`, and both ways the
+wiring could go wrong are now guarded (spec layout via the wired V1.1f assertion, flag
+interactions via explicit exclusions).
+
+It still does **not** validate the emitted kernel end-to-end. The TU is emitted and its
+builders are present, but **nothing has run it** — and one gate from the scope was not
+delivered: V1.2.2 lists "the emitted TU compiles against the real CC headers", which was not
+run. The dressed+adapted TU is asserted to *contain* its five `build_<op>` functions, not to
+compile. That compile check belongs with V1.3's link-and-run work, where a toolchain is
+needed anyway; it is called out here rather than left implied.
 
 ---
 
