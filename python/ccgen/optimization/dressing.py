@@ -717,17 +717,28 @@ def _rest_variants(rest, op_indices=None, summed=None):
 # does.
 
 
-def hypothesis_is_consistent(hyp, residual_terms, operators=None) -> bool:
+def hypothesis_is_consistent(hyp, residual_terms, operators=None, raw=None) -> bool:
     """D7.2.3c-1: is the dressed term ``hyp`` consistent with ``residual_terms``?
 
     Expands ``hyp`` to primitives and requires every ERI-canonical key to be
     present in the residual with the same sign and ``|hyp_coeff| <= |raw_coeff|``.
     True for the correct ``W*rest``, False for a wrong orientation / rest (a key
-    absent from the residual or of the wrong sign)."""
+    absent from the residual or of the wrong sign).
+
+    ``raw`` optionally supplies the precomputed ``raw_multiset(residual_terms)``.
+    That multiset is INVARIANT across a hypothesis search -- ``residual_terms`` is
+    the whole manifold and never changes -- but it used to be rebuilt on every
+    call: 7461 calls on ccsdt triples at ~0.036 s each, i.e. ~270 s of a ~300 s
+    manifold recomputing a fixed value. The ``n_hypotheses x n_terms`` product was
+    the super-linear term in dressing, and both factors grow with rank. Callers in
+    a loop should hoist it (see :func:`find_operator_occurrences`); ``None`` keeps
+    the standalone behaviour for one-off callers and tests.
+    """
     from fractions import Fraction
     from .dressed_equation import expand_dressed_term, raw_multiset
     ops = operators or {hyp.factors[0].name: _seeded_by_name(hyp.factors[0].name)}
-    raw = raw_multiset(residual_terms)
+    if raw is None:
+        raw = raw_multiset(residual_terms)
     acc: dict[tuple, Fraction] = {}
     for prim in expand_dressed_term(hyp, ops):
         key, coeff = _eri_canonical(prim)
@@ -858,7 +869,7 @@ def _dressed_canonical_key(term: AlgebraTerm) -> tuple:
     return _canonical_key(_canonical_fixed_point(_free_order_normalized(folded)))
 
 
-def find_operator_occurrences(op: "DressedOperator", terms) -> list[dict]:
+def find_operator_occurrences(op: "DressedOperator", terms, raw=None) -> list[dict]:
     """D7.2.3d: the verified occurrences of ``op`` in ``terms``.
 
     Enumerates every anchor's hypotheses (D7.2.3c-0), keeps the consistent ones
@@ -869,11 +880,21 @@ def find_operator_occurrences(op: "DressedOperator", terms) -> list[dict]:
     folded via :func:`_dressed_canonical_key` so each instance is one
     occurrence.  Each returned occurrence is a dict
     ``{"term": AlgebraTerm, "cover": frozenset}`` -- the dressed ``W*rest`` term
-    for D7.3 to rewrite, plus the residual primitives it accounts for."""
+    for D7.3 to rewrite, plus the residual primitives it accounts for.
+
+    ``raw`` optionally supplies a precomputed ``raw_multiset(terms)``; when omitted it
+    is computed ONCE here and shared across every hypothesis check below (D1). It was
+    previously rebuilt per check, which made recognition scale as
+    ``n_hypotheses x n_terms`` -- ~270 s of the ~300 s ccsdt-triples cost. Pure
+    function of ``terms``, so sharing it cannot change which hypotheses pass."""
+    from .dressed_equation import raw_multiset
+
+    if raw is None:
+        raw = raw_multiset(terms)
     consistent = []
     for anchor in collect_fragment_occurrences(op, terms):
         for hyp in enumerate_hypotheses(op, anchor, terms[anchor["term_id"]]):
-            if hypothesis_is_consistent(hyp, terms):
+            if hypothesis_is_consistent(hyp, terms, raw=raw):
                 consistent.append((hyp, _hypothesis_cover(hyp, op)))
 
     # keep only maximal covers (drop any strictly contained in another)
