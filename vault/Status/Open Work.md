@@ -29,6 +29,46 @@ truth for what remains.
 - Revalidate the CASSCF/PySCF gate suite after future optimizer work; the current tree matches the documented state, but the 11/11 suite was not freshly rerun during the May 25 consolidation review
 - Keep documentation comments aligned with the implemented spherical symmetry representation; stale comments have already drifted once
 
+## docs/ hygiene — five ccgen scope docs owe an architecture rewrite
+
+A file in `docs/` answers one architecture question or is a teaching guide; scoping **in-flight**
+work is the only exception, and it expires when that work lands. Audited 2026-08-13 — five docs
+cover landed work but are still step ladders (~1871 lines):
+
+| doc | lines | landed work |
+|---|---|---|
+| `CCGEN_SPIN_ADAPTATION_SCOPE.md` | 892 | S0–S4 |
+| `CCGEN_KERNEL_WIRING_AND_BENCHMARK_SCOPE.md` | 331 | kernel wiring + benchmarks |
+| `CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md` | 295 | R3.1.2 / R3.1.3 bridge |
+| `CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md` | 225 | Gap A–B multisector |
+| `CCGEN_CCSDTQ_FCI_VERIFICATION_SCOPE.md` | 128 | Be CCSDTQ == FCI |
+
+**Deliberately deferred until the UCC work (U1–U5) lands.** `CCGEN_SPIN_ADAPTATION_SCOPE.md` is the
+reference U1 works against, so rewriting it into an answer now risks discarding scope that is still
+load-bearing for unstarted work. The other four are rewritable at any time but are held with it so
+the regrouping happens once.
+
+Proposed target — 5 docs → 3 questions, because these were split by *effort* and merge when
+regrouped by *question* (the same collapse the V1.1e trio showed):
+
+- **`CCGEN_SPIN_ADAPTATION.md`** — how does a spin-orbital CC equation become a spatial one?
+  (absorbs the R3 bridge; the bridge is a stage of that answer, not a separate question)
+- **`CCGEN_KERNEL_WIRING.md`** — how does a generated kernel reach a runnable binary, and what does
+  it cost? (absorbs multisector; sectors are a case of wiring)
+- **`CCGEN_CCSDTQ_FCI_EQUIVALENCE.md`** — how do we know a generated CCSDTQ kernel is exact?
+
+When doing it: read `CCGEN_SPIN_ADAPTATION_SCOPE.md` in full first, and move any still-live UCC
+scope into `CCGEN_U1_UCC_ADAPT_SCOPE.md` rather than dropping it. Keep the measured numbers, the
+ruled-out hypotheses and the wrong turns — they are part of each answer. Drop step numbering,
+gates-to-write and sequencing diagrams.
+
+Judged compliant in the same audit, for the record: `CCGEN_TEACHING_GUIDE`, `CCGEN_REPORT`,
+`CCGEN_GENERATION_AND_VALIDATION` (teaching/report); `CCGEN_HIGHER_OPERATOR_REUSE`,
+`CCGEN_DIAGRAM_REPRESENTATION_SCOPE`, `CCGEN_INTERMEDIATE_MEMORY_LOCALITY_SCOPE` (already
+question-shaped, work unstarted); `CCGEN_ARBITRARY_ORDER_UCC_SCOPE`, `CCGEN_U1_UCC_ADAPT_SCOPE`,
+`CCGEN_DRESSED_KERNEL_VALIDATION_SCOPE` (genuine in-flight scope — the last has V1 landed but
+V2–V6 ahead, and already delegates V1's detail to `CCGEN_DRESSED_KERNEL_PIPELINE.md`).
+
 ## Spherical-basis work still intentionally guarded off
 
 - Spherical analytic gradients (and therefore geomopt / freq) for the post-HF
