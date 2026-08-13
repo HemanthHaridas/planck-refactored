@@ -44,6 +44,19 @@ option(PLANCK_CC_SPIN_ADAPT
 option(PLANCK_CC_ARBITRARY_LOWER_RANKS
     "Also emit rank<4 methods (ccsd/ccsdt) in arbitrary-order spatial form as \
 <method>_arbitrary_planck_generated.cpp, for cross-rank .ccamp restart seeds" OFF)
+# Rewrite the generated residual to reference the recognized CC intermediates
+# (Wmnij/Wabef/Wmbej + tau/tau_c) and emit their build_<name> functions, instead of
+# the flat undressed residual. Costs ~9s at rank 3 / ~62s at rank 4 of extra
+# generation time. Forces intermediates off (CSE and dressing share one emission
+# channel), and is rejected by the generator alongside --factorize-tau (which no
+# CMake option currently sets, so there is nothing to guard here at configure time).
+# Applies only to the plain per-method TUs: the arbitrary-order companions emitted by
+# PLANCK_CC_ARBITRARY_LOWER_RANKS stay undressed, because every method's dressed
+# builders would then share one signature and collide in the co-including registry.
+# Default OFF so the default build stays byte-identical; the dressed kernel's
+# link-and-run validation is the open V1.3 work.
+option(PLANCK_CC_DRESS_OPERATORS
+    "Emit dressed CC kernels (W/tau intermediates) instead of the flat residual" OFF)
 set(PLANCK_CC_INTERMEDIATE_THRESHOLD "5" CACHE STRING
     "Min usage count for extracted ccgen intermediates")
 # ccgen equation-generation engine. 'diagram' is canonical-by-construction and
@@ -460,6 +473,9 @@ if(Python3_Interpreter_FOUND)
     endif()
     if(PLANCK_CC_SPIN_ADAPT)
         list(APPEND _ccgen_planck_kernel_args --spin-adapt)
+    endif()
+    if(PLANCK_CC_DRESS_OPERATORS)
+        list(APPEND _ccgen_planck_kernel_args --dress-operators)
     endif()
 
     add_custom_target(ccgen-planck-kernels

@@ -74,6 +74,17 @@ def main() -> None:
              "emitted unchanged.",
     )
     parser.add_argument(
+        "--dress-operators",
+        action="store_true",
+        help="Rewrite the residual to reference the recognized CC intermediates "
+             "(Wmnij/Wabef/Wmbej + tau/tau_c) and emit their build_<name> "
+             "functions. Requires the diagram engine + canonical Fock (both "
+             "forced). Mutually exclusive with --factorize-tau (dressing already "
+             "recognizes tau) and forces intermediates off (CSE and dressing "
+             "share the same emission channel). Adds ~9s at rank 3 and ~62s at "
+             "rank 4 to generation.",
+    )
+    parser.add_argument(
         "--intermediate-memory-budget-mb",
         type=int,
         default=None,
@@ -87,6 +98,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.dress_operators and args.factorize_tau:
+        parser.error(
+            "--dress-operators and --factorize-tau are mutually exclusive: dressing "
+            "already recognizes tau/tau_c, so factorize_tau would materialize it twice")
+
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -96,11 +112,23 @@ def main() -> None:
         # ...) carry no method suffix and would collide there. Emit it WITHOUT
         # intermediates so the residual is self-contained (no build_W_* symbols).
         include_intermediates = args.include_intermediates and not force_arbitrary
+        # Same collision, one step further (V1.3.1): the dressed builders (build_tau,
+        # build_Wmnij, ...) are also unsuffixed, and in ARBITRARY-ORDER form every
+        # method's take ArbitraryOrderRCCAmplitudes -- identical signatures, so
+        # co-including two dressed companions in the registry is a redefinition, not an
+        # overload (5 errors; gated by test_dressed_tu_coinclusion). In the plain
+        # non-arbitrary TUs the amplitude type differs per method, so they overload
+        # cleanly. Hence dressing is suppressed on the companion only.
+        dress_operators = args.dress_operators and not force_arbitrary
+        # `dress_operators` supersedes tau collapse and forces CSE off inside
+        # print_cpp_planck; passing factorize_tau alongside it raises, so drop it here
+        # (the CLI already rejects the combination outright).
         return print_cpp_planck(
             method.lower(),
             engine=args.engine,
             include_intermediates=include_intermediates,
-            factorize_tau=args.factorize_tau,
+            factorize_tau=args.factorize_tau and not dress_operators,
+            dress_operators=dress_operators,
             spin_adapt=args.spin_adapt,
             force_arbitrary=force_arbitrary,
             intermediate_threshold=args.intermediate_threshold,
