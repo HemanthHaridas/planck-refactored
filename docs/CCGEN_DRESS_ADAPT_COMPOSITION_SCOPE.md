@@ -270,6 +270,10 @@ the GCC dressed emit.
 whose kernel signature matches the arbitrary-order runtime's, and whose dressed
 `build_<op>` functions are present and dependency-ordered.
 
+> **V1.0–V1.4 all landed.** Consolidated status:
+> [`CCGEN_DRESSED_KERNEL_COMPLETION.md`](CCGEN_DRESSED_KERNEL_COMPLETION.md). Only V1.3.2 and
+> V1.3.5 remain open (see `CCGEN_V13_LINK_AND_RUN_SCOPE.md`). This document is design history.
+
 ### V1.4 — dependency order re-derived post-adaptation — **LANDED**
 
 Gated on the **emitted TU** as this section requires, not the spec list, so an emit-layer

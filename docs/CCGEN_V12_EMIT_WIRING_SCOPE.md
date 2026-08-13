@@ -1,5 +1,10 @@
 # V1.2 — wire the dressed+adapted composition into `print_cpp_planck`
 
+> **LANDED — design history.** Status lives in [`CCGEN_DRESSED_KERNEL_COMPLETION.md`](CCGEN_DRESSED_KERNEL_COMPLETION.md); read that
+> first. This document is kept for the reasoning behind specific choices (including the
+> wrong turns), not as a statement of current state.
+
+
 Scopes **V1.2** in small verifiable steps. V1.1 (a–f) validated the *algebra and metadata*;
 nothing is reachable from the public entry point yet. V1.2 is the wiring that makes it
 reachable.

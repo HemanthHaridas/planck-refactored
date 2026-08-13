@@ -1,5 +1,10 @@
 # V1.1 — adapting the dressed intermediate specs, in small verifiable steps
 
+> **LANDED — design history.** Status lives in [`CCGEN_DRESSED_KERNEL_COMPLETION.md`](CCGEN_DRESSED_KERNEL_COMPLETION.md); read that
+> first. This document is kept for the reasoning behind specific choices (including the
+> wrong turns), not as a statement of current state.
+
+
 Scopes **V1.1** of `CCGEN_DRESS_ADAPT_COMPOSITION_SCOPE.md`: route each dressed
 operator's `IntermediateSpec` through the spin adapter so the emitted
 `build_<op>` computes a **spatial** operator that the adapted residual can index.

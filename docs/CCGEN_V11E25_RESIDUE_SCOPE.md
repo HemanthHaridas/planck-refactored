@@ -1,5 +1,10 @@
 # V1.1e.2.5 — the doubles=14 residue is a comparison artifact, not a defect
 
+> **LANDED — design history.** Status lives in [`CCGEN_DRESSED_KERNEL_COMPLETION.md`](CCGEN_DRESSED_KERNEL_COMPLETION.md); read that
+> first. This document is kept for the reasoning behind specific choices (including the
+> wrong turns), not as a statement of current state.
+
+
 Scopes **e.2.5**, the residue left after the orientation fix. Probing resolved it before
 scoping, and the answer inverts the premise: **the adapted dressed residual is already
 correct.** The 14 symbolic "mismatches" are an artifact of comparing *written forms*

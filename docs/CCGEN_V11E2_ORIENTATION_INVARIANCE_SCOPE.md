@@ -1,5 +1,10 @@
 # V1.1e.2 — making `ucc_integrate_term_antisym` orientation-invariant
 
+> **LANDED — design history.** Status lives in [`CCGEN_DRESSED_KERNEL_COMPLETION.md`](CCGEN_DRESSED_KERNEL_COMPLETION.md); read that
+> first. This document is kept for the reasoning behind specific choices (including the
+> wrong turns), not as a statement of current state.
+
+
 Scopes **V1.1e.2**: make the spin adapter's output depend only on *what the algebra
 is*, not on *how it is written*. This is route (b) from
 `CCGEN_V11_SPEC_ADAPTATION_SCOPE.md` — the principled fix, chosen over normalizing

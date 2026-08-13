@@ -1,5 +1,10 @@
 # Why dressed-operator recognition scales super-linearly — investigation
 
+> **LANDED — design history.** Status lives in [`CCGEN_DRESSED_KERNEL_COMPLETION.md`](CCGEN_DRESSED_KERNEL_COMPLETION.md); read that
+> first. This document is kept for the reasoning behind specific choices (including the
+> wrong turns), not as a statement of current state.
+
+
 Scopes a research investigation into the super-linear cost of `_dress_operator_equations`,
 the blocker that forced V1.3's anchor down from rank 4 to rank 3.
 
