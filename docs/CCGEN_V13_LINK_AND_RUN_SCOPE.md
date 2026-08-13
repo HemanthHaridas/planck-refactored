@@ -127,8 +127,11 @@ Execute a CC calculation with the dressed kernel and require the **same energy**
 undressed build.
 
 **Anchor: rank 3 (`ccsdt` via `tensor_backend.cpp`), settled by measurement** — see the two
-subsections below. Not `be_rccsdtq_sto3g` (rank-4 dressing costs hours) and not rank 2
-(`ccsd_planck_generated.cpp` has no consumer, so there is nothing to run).
+subsections below. Not rank 2 (`ccsd_planck_generated.cpp` has no consumer, so there is nothing
+to run), and not `be_rccsdtq_sto3g` — originally because rank-4 dressing cost hours, now
+because the rank-4 path is **co-included in the registry** and would hit the 5-redefinition
+collision that V1.3.2 has yet to resolve. Post-D1 the cost objection is gone (rank 4 = 61.6 s);
+the structural one stands.
 
 Existing rank-3 regression cases to anchor against: `h2_rccsdt_sto3g`, `lih_rccsdt_sto3g`,
 `water_rccsdt_sto3g`. Pick the cheapest that exercises the dressed operators.
@@ -143,11 +146,29 @@ manifolds: energy 2, singles 9, doubles 47, triples 330
 
 Usage is *higher* than rank 2 (`Wmnij` 13 vs 1, `Wabef` 13 vs 1, `Wmbej` 32 vs 5), so the
 dressed rank-3 kernel exercises all five builders substantially — V1.3.4 cannot pass vacuously
-on an unrecognized operator set. 294 s is tolerable for an opt-in build step, and it bounds
-what V1.3.1's help string should warn about.
+on an unrecognized operator set.
 
-**Measured: rank 4 is not viable as the anchor, and the cost is in *recognition*, not
-generation.** Profiled per manifold:
+*Post-D1 the same run takes **9.1 s**, with identical specs and manifold sizes* — so the
+recognition figures above are unchanged and V1.3.1's help string no longer needs a cost warning
+at rank 3.
+
+> **SUPERSEDED by D1 (`b25b896`).** The cost below was a single loop-invariant rebuild inside
+> the hypothesis search, now hoisted: rank-4 dressing is **61.6 s** (was >25 min, abandoned) and
+> rank-3 is **9.1 s** (was 293.7 s). See `CCGEN_DRESSING_SUPERLINEAR_SCOPE.md`.
+>
+> **What this changes for V1.3:** the cost argument against a rank-4 anchor is gone. The
+> *structural* arguments still stand and still point to rank 3 — `ccsdt_planck_generated.cpp` is
+> a single non-co-included TU with a method-specific amplitude type, so the 5-redefinition
+> collision cannot arise for it, while the rank-4 registry path is co-included and would hit it.
+> So the anchor stays rank 3, but now **by choice rather than by necessity**, and dressing at
+> rank 4 becomes a real option once V1.3.2 is decided.
+>
+> Also gone: the "dressing lands in the build's critical path" concern. At 61.6 s for rank 4 it
+> is a normal build step, not an apparently-hung one, which softens what V1.3.1's help string
+> needs to warn about.
+
+**Measured before D1 — retained for the record: rank 4 was not viable as the anchor, and the
+cost was in *recognition*, not generation.** Profiled per manifold:
 
 | step | terms | time |
 |---|---|---|
@@ -163,21 +184,17 @@ The diagram engine is **not** the problem — 3.5 s for all four manifolds. All 
 (5.6× the terms from doubles→triples costs 19× the time), so quadruples' 2672 terms extrapolate
 to hours. The run was killed rather than waited out.
 
-**Consequences, and they change two steps:**
+**Consequences as assessed at the time — both since resolved by D1:**
 
-- **V1.3.4 must use a rank-2/3 anchor, not `be_rccsdtq_sto3g`.** Dressing rank 4 is not a
-  build-time operation at this cost. This makes the rank-mismatch question above moot in the
-  other direction: rather than checking whether CCSD-family operators recognize at rank 4, the
-  answer is that we should not dress rank 4 at all yet.
-- **V1.3.1's CMake option must not put dressing in the unconditional build path.** Even rank 3
-  costs ~5 min for triples alone. Default OFF is necessary but not sufficient — the option's
-  cost belongs in its help string, so someone enabling it at `MAXORDER=4` is not surprised by an
-  apparently-hung build.
+- V1.3.4 must use a rank-2/3 anchor. *Still rank 3, but now for the structural reason (single
+  non-co-included TU), not the cost one.*
+- V1.3.1's option must stay off the unconditional build path. *Default OFF is still right, but
+  61.6 s at rank 4 is an ordinary build cost, not a hazard.*
 
-**A recognition-performance fix is out of V1.3's scope** but is now a known, quantified item:
-the subgraph matching in `assemble_dressed_equation` is the hot spot, and it is the thing that
-would have to improve before dressing is usable at rank ≥ 4. Recorded here rather than
-attempted, since V1.3's goal is one dressed kernel that runs.
+The "recognition-performance fix is out of V1.3's scope" note was correct to defer it and wrong
+about its size: it turned out to be **one hoisted loop invariant**, not a subgraph-matching
+rewrite. Investigated and fixed separately in `CCGEN_DRESSING_SUPERLINEAR_SCOPE.md` (D0–D2)
+rather than inside V1.3.
 
 ### Which TU to target — measured, and it resolves the collision too
 

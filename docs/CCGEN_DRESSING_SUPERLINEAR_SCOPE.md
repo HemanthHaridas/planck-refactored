@@ -9,6 +9,35 @@ fix exposes. Everything below is measured on the current tree.
 
 ---
 
+## Status: D0/D1 LANDED, D2 ANSWERED (`b25b896`)
+
+Fixed via the scope's option (a) — the multiset is computed once in
+`find_operator_occurrences` and threaded down as an optional `raw` parameter.
+
+`assemble_dressed_equation` per manifold, before → after:
+
+| manifold | terms | time | `raw_multiset` calls |
+|---|---|---|---|
+| singles | 12 | 0.1 s → 0.1 s | 139 → **19** |
+| doubles | 73 | 4.3 s → **2.0 s** | 2452 → **21** |
+| triples | 399 | 94.7 s → **6.9 s** | ~7461 → **19** |
+
+**The flat call count is the fix; the timing follows from it.** End-to-end rank-3 dressing:
+293.7 s → **9.1 s (32×)**, with specs and manifold sizes byte-identical.
+
+**D2: rank 4 is now viable — 61.6 s, from ">25 min, abandoned".** Generation 3.3 s + dressing
+61.6 s; specs `tau(1) tau_c(1) Wmnij(79) Wabef(79) Wmbej(240)`; manifolds 2/9/48/343/1910. The
+scope warned against extrapolating rank 3's 38× into a rank-4 claim, so this was measured
+rather than inferred — and the answer is favourable, which is *not* what the D3 contingency
+was written for.
+
+**Consequence: D3 is not needed.** It existed in case the remaining scaling was still
+super-linear after D1. It is not — one quadratic factor was the whole story, so pruning the
+7,461-hypothesis search (a correctness-affecting change) is unnecessary. Left scoped, not
+started, in case a higher rank revives the question.
+
+---
+
 ## The measured scaling
 
 `assemble_dressed_equation`, one manifold at a time, `ccsdt` (diagram engine, canonical Fock):
@@ -153,11 +182,11 @@ of this cost) and the "recognition-performance fix is out of scope" note in
 ## Sequencing
 
 ```
-D0 (pin redundancy + scaling proxy)   ~S   ← before any change
-   └→ D1 (hoist the invariant)        ~S   ← the fix; byte-identical required
-        └→ D2 (re-measure; try rank 4) ~S  ← answers V1.3's real question
-             ├→ D3 (hypothesis count) scope-only, ~M+ if D2 demands it
-             └→ D4 (update V1.3)      ~S
+D0 (pin redundancy + scaling proxy)   LANDED  ← call-count gates, not wall-clock
+   └→ D1 (hoist the invariant)        LANDED  ← option (a); output byte-identical
+        └→ D2 (re-measure; try rank 4) ANSWERED: rank 4 = 61.6 s, viable
+             ├→ D3 (hypothesis count) NOT NEEDED — one factor was the whole story
+             └→ D4 (update V1.3)      LANDED
 ```
 
 ---
@@ -197,10 +226,18 @@ D0 (pin redundancy + scaling proxy)   ~S   ← before any change
 
 ## Honest status
 
-The hard part — finding the cause — is done, with a 38× confirmation. D1 is a small, safe,
-byte-identical change. The genuinely open question is **D2: whether removing this one factor
-makes rank 4 viable**, and that cannot be answered by extrapolation from rank 3. D3 exists
-because it might not.
+Done. One loop-invariant hoist, 32× end-to-end at rank 3, and rank 4 went from unusable to
+61.6 s. Output byte-identical, 175 dressing tests green — and that suite now runs in 73 s
+instead of 350 s, so the fix pays for itself in CI too.
+
+Two things worth keeping from how this went:
+
+- **The largest number in the profile was the wrong target.** `_eri_canonical`'s 864 s was
+  cumulative; memoizing it bought 6 %. The real cause was a redundant *outer loop*, which no
+  amount of inner-function optimization would have reached.
+- **The fix is a call count, not a duration.** D0's gates assert `raw_multiset` is called a
+  bounded number of times, independent of manifold size. That is what actually regressed, and
+  unlike a timing threshold it is deterministic and self-diagnosing.
 
 ---
 
