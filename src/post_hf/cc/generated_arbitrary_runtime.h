@@ -71,6 +71,17 @@ namespace HartreeFock::Correlation::CC
     [[nodiscard]] TensorND to_tensor_nd(const Tensor6D &tensor);
     [[nodiscard]] TensorND to_tensor_nd(const TensorND &tensor);
 
+    // Rebind a chemists' (pq|rs) block cache to the physicist <pq|rs> convention that
+    // ccgen-generated kernels index. EVERY consumer of a generated kernel needs this: the
+    // arbitrary-order path has always called it, and the plain rank-3 path did not, which
+    // is why `compute_ccsdt_triples_residual` read the wrong integrals the first time it
+    // was ever executed. Exposed rather than duplicated so there is one definition of the
+    // convention -- the oovv<->ovov sources cross, so a re-derivation is easy to get wrong.
+    //
+    // Returns a NEW cache; the caller's chemists' cache is left untouched, because the
+    // hand-written RCCSDT[TENSOR] path reads it and expects chemists' order.
+    [[nodiscard]] TensorCCBlockCache rebind_physicist(TensorCCBlockCache chem);
+
     std::expected<ArbitraryOrderTensorCCState, std::string>
     prepare_generated_arbitrary_order_state(
         HartreeFock::Calculator &calculator,

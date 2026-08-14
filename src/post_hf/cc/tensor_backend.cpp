@@ -12,6 +12,8 @@
 #include "io/logging.h"
 #include "post_hf/cc/determinant_space.h"
 #include "post_hf/cc/diis.h"
+// rebind_physicist: generated kernels index physicist <pq|rs> (T1b).
+#include "post_hf/cc/generated_arbitrary_runtime.h"
 #include "post_hf/integrals.h"
 
 #include "generated/cc/ccsdt_planck_generated.cpp"
@@ -2262,7 +2264,8 @@ namespace
         const ProductionSpinOrbitalChemistsSystem &system,
         const RHFReference &reference,
         RCCSDTAmplitudes &amps,
-        bool use_generated_kernels)
+        bool use_generated_kernels,
+        const TensorCCBlockCache &physicist_blocks)
     {
         RestrictedRCCSDTUpdateMetrics metrics;
         RCCSDResiduals residuals;
@@ -2320,8 +2323,19 @@ namespace
 
         if (use_generated_kernels)
         {
+            // T1b: ccgen emits against the physicist <pq|rs> convention, but `state.mo_blocks`
+            // holds chemists' (pq|rs). The arbitrary-order path has always rebound before
+            // calling a generated kernel; this path did not, so the first execution of
+            // `compute_ccsdt_triples_residual` read permuted integrals -- a wrong-but-plausible
+            // T3 that still converged, 1.8e-4 Eh off.
+            //
+            // `physicist_blocks` is rebound ONCE by the caller and passed in, not cached here:
+            // this function runs every iteration, and a function-local static would both repeat
+            // the transform and (worse) leak one molecule's integrals into the next run in the
+            // same process. The shared `state.mo_blocks` stays chemists', because the
+            // hand-written branch below and `build_spin_orbital_blocks` read it.
             triples_residual = HartreeFock::Correlation::CC::compute_ccsdt_triples_residual(
-                state.reference, state.mo_blocks, state.denominators, amps);
+                state.reference, physicist_blocks, state.denominators, amps);
             restore_restricted_t3_structure(triples_residual);
             metrics.r3_residual_rms = triples_residual_rms(triples_residual);
         }
@@ -2420,13 +2434,22 @@ namespace
         double previous_energy =
             compute_restricted_rccsdt_correlation_energy(system, amps);
 
+        // T1b: rebind ONCE, outside the loop. ccgen kernels index physicist <pq|rs> while
+        // `state.mo_blocks` is chemists' (pq|rs); only the generated branch consumes this, and
+        // the shared cache must stay chemists' for the hand-written branch. Built
+        // unconditionally (a few tensor transposes) rather than lazily, to keep the loop body
+        // free of a first-iteration special case.
+        const TensorCCBlockCache physicist_blocks =
+            HartreeFock::Correlation::CC::rebind_physicist(state.mo_blocks);
+
         for (unsigned int iter = 1; iter <= max_iter; ++iter)
         {
             const Eigen::VectorXd unique_before =
                 pack_restricted_unique_rccsdt_amplitudes(amps);
             const RestrictedRCCSDTUpdateMetrics update_metrics =
                 update_restricted_rccsdt_amplitudes_once(
-                    state, system, reference, amps, use_generated_kernels);
+                    state, system, reference, amps, use_generated_kernels,
+                    physicist_blocks);
             Eigen::VectorXd unique_after =
                 pack_restricted_unique_rccsdt_amplitudes(amps);
             const Eigen::VectorXd unique_step = unique_after - unique_before;

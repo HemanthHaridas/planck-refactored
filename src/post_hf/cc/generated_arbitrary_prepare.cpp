@@ -33,8 +33,12 @@ namespace HartreeFock::Correlation::CC
             return out;
         }
 
-        TensorCCBlockCache rebind_physicist(TensorCCBlockCache chem)
-        {
+    } // namespace (anonymous)
+
+    // Declared in generated_arbitrary_runtime.h: every generated-kernel consumer needs this,
+    // not just the arbitrary-order path (V1.3/T1b).
+    TensorCCBlockCache rebind_physicist(TensorCCBlockCache chem)
+    {
             TensorCCBlockCache phys;
             phys.oooo = swap_mid_axes(chem.oooo); // <ij|kl> = (ik|jl)
             phys.ooov = swap_mid_axes(chem.ooov); // <ij|ka> = (ik|ja)
@@ -44,10 +48,9 @@ namespace HartreeFock::Correlation::CC
             phys.ovvv = swap_mid_axes(chem.ovvv); // <ia|bc> = (ib|ac)
             phys.vvvv = swap_mid_axes(chem.vvvv); // <ab|cd> = (ac|bd)
             phys.memory_report = std::move(chem.memory_report);
-            phys.total_bytes = chem.total_bytes;
-            return phys;
-        }
-    } // namespace
+        phys.total_bytes = chem.total_bytes;
+        return phys;
+    }
 
     std::expected<ArbitraryOrderTensorCCState, std::string>
     prepare_generated_arbitrary_order_state(
