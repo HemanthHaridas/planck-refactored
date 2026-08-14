@@ -5,6 +5,25 @@ uncovered. In-flight scope: to be rewritten as an architecture answer once the w
 
 ---
 
+## Status (updated after T1b)
+
+**T1b landed and was most of D-A.** Rebinding `mo_blocks` to the physicist convention for the
+generated rank-3 kernel took the error from **1.82e-4 → ~2.7e-5 Eh**.
+
+**D-A is not closed, and the failure mode changed.** The solve now *oscillates* instead of
+converging to a wrong value:
+
+```
+iter 33  E_corr=-0.0533339197  dE=+8.465e-07  rms(R3)=2.566e-04  rms(R1[T3])=4.240e-04
+iter 38  E_corr=-0.0533366904  dE=-2.510e-06  rms(R3)=7.388e-04  rms(R1[T3])=5.191e-04
+```
+
+`dE` alternates sign and `rms(R3)` **grows**. That is more diagnostic than the original symptom:
+a residual that is merely scaled or permuted converges to a wrong number, whereas one that is
+inconsistent with the amplitude update cycles. **T0 is now the right next step**, and its value
+went up — it separates "the residual value is still wrong" from "the values agree but the solver
+path diverges".
+
 ## The measurement
 
 `bh3_rccsdt_sto3g`, three builds differing only as noted:
@@ -67,10 +86,42 @@ the solve diverges", and it is the difference between debugging one function and
 iterative loop. A full solve is ~21 minutes; this is one evaluation.
 
 *Gate:* a recorded max/rms elementwise difference, and the index pattern where it is largest —
-whether it concentrates in a spin block, an occ/vir pattern, or the diagonal (`i==j`, `a==b`)
-elements `restore_restricted_t3_structure` manipulates.
+whether it concentrates in a spin block, an occ/vir pattern, or the repeated-index elements
+(`i==j`, `a==b`) the restricted-T3 convention pre-scales.
 
-### T1 — is `restore_restricted_t3_structure` the cause? (~S, immediately after T0)
+**Sharpened by the post-T1b oscillation.** Two outcomes, and they point in opposite directions:
+
+- **Residuals differ at fixed amplitudes** → a value error remains in the generated kernel; the
+  index pattern localizes the term class (→ T2).
+- **Residuals AGREE at fixed amplitudes** → the kernel is correct and the divergence is in the
+  solver path. Then the suspect is the restricted-T3 *convention*: both branches call
+  `restore_restricted_t3_structure`, but the hand-written kernel produces a residual already in
+  the repeated-index-prescaled form the ×6 sum expects, while the generated one may not. That
+  would be consistent and self-cancelling for one branch and inconsistent for the other — and it
+  would explain oscillation rather than a fixed offset, since the amplitude update would then keep
+  re-introducing what the symmetrization removes.
+
+Run the comparison **both with and without** `restore_restricted_t3_structure` applied, since the
+difference between those two tells you whether the convention is the remaining gap.
+
+### T1 — is `restore_restricted_t3_structure` the cause? — **ANSWERED: no**
+
+Investigated while implementing T1b; both halves of the suspicion are disproven, recorded so
+neither is re-run.
+
+**It is not generated-only.** `restore_restricted_t3_structure` is called on the hand-written
+branch too (`tensor_backend.cpp:2360, 2650, 2657, 2674`), and that path converges to the reference
+value. The asymmetry I claimed in the original scoping does not exist — I had matched on the
+generated call site at 2339 and not checked the others.
+
+**Its non-idempotent 6× is not a bug.** `apply_restricted_t3_permutation_symmetry` sums over all 6
+simultaneous permutations without dividing, so it returns 6× an already-symmetric tensor (verified
+numerically). But that is compensated by the repeated-index pre-scaling at line ~2010 (`1/6` for
+`i==j==k`, `1/2` for one repeat), so the convention is self-consistent across both branches.
+
+*Original scoping retained below for the reasoning.*
+
+#### T1 — original scoping
 
 Re-run T0 with the call bypassed on the generated branch.
 
@@ -84,7 +135,24 @@ Three outcomes, each conclusive:
 *Gate:* the outcome recorded explicitly. **Do not skip to T2** — this is one recompile and it
 decides whether ccgen is implicated at all.
 
-### T1b — the missing physicist rebind (~S, MEASURED — check before T2)
+### T1b — the missing physicist rebind — **LANDED, most of D-A** (`eb1c611`)
+
+Confirmed by measurement: 1.82e-4 → ~2.7e-5 Eh on bh3.
+
+`rebind_physicist` was **exposed** from its anonymous namespace via
+`generated_arbitrary_runtime.h` rather than copied — the `oovv`↔`ovov` sources cross, so an
+independent re-derivation is easy to get subtly wrong. It rebinds into a **local** cache; the
+shared `state.mo_blocks` stays chemists', because `build_spin_orbital_blocks` and the hand-written
+branch both read it.
+
+The rebind is hoisted **outside** the iteration loop. A first version used a function-local
+`static thread_local` inside `update_restricted_rccsdt_amplitudes_once`, which runs per iteration —
+that would have repeated the transform and leaked one molecule's integrals into the next run in the
+same process.
+
+*Original scoping retained below.*
+
+#### T1b — original scoping
 
 `grep -c rebind_physicist src/post_hf/cc/tensor_backend.cpp` returns **0**. The definition and its
 only call site live in `generated_arbitrary_prepare.cpp`, so:
