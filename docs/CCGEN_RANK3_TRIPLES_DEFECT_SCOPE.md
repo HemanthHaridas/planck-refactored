@@ -177,7 +177,40 @@ hand-written value) if this is the whole of D-A.
 **Do this before T2.** It is a small change to one call site, and it is the difference between a
 C++ wiring fix and a generator investigation.
 
-### T2 — locate the defect in the generated algebra (~M, only if T1b does not resolve it)
+### T0 — **ANSWERED: the generated residual value is wrong**
+
+Measured with the `PLANCK_CC_T3_DIFF=1` probe on bh3, both residuals from identical amplitudes:
+
+```
+raw (no restore): max|gen-hand| = 2.045e-02   rms = 1.222e-03   max|hand| = 2.034e-02
+after restore   : max|gen-hand| = 1.865e-03   rms = 1.576e-04   max|hand| = 2.779e-02
+```
+
+**The raw residuals differ by ~100 % of the hand-written magnitude.** That is not a scale factor, a convention, or a permutation — the generated kernel computes a substantially different function. So the remaining gap is a **value error in the generated kernel** (→ T2), not a C++ consumer issue, and the alternative branch of T0's gate (residuals agree, solver path diverges) is ruled out.
+
+`restore_restricted_t3_structure` **masks** it: the visible difference drops ~11× to 1.87e-3, about 6.7 % of magnitude. That explains the whole earlier picture — the converged energy was only 2.7e-5 off despite a wholly different residual, because the symmetrization projects out most of the error, and the surviving 6.7 % is what makes the solve oscillate instead of settling.
+
+**Corollary worth keeping:** any future gate on this kernel must compare the **raw** residual. A post-`restore` comparison understates the error by an order of magnitude and would have called a badly wrong kernel nearly right.
+
+### T2 — locate the defect in the generated algebra (~M — NOW THE ACTIVE STEP)
+
+Ruled out so far, by measurement:
+
+- **The emit is faithful to the generator.** A fresh `print_cpp_planck("ccsdt", spin_adapt=True, dress_operators=True)` reproduces the built TU's amplitude-read counts exactly (t1 465, t2 935, t3 217), so the defect is upstream of emit — in the equations or in lowering, not in codegen.
+- **`_ERI_SYMMETRY_PERMUTATIONS` is already the corrected +1-only form** from B5, so suspect 2 in the original list is out.
+- **Dressing is not implicated**: dressed and raw rank-3 residuals agree to 8.4e-13 symbolically.
+
+**What is still needed is an oracle**, and this is the honest blocker. Comparisons attempted so far were not decisive: GCC vs spin-adapted residuals are different objects (spin-orbital vs spatial) and not directly comparable, and the arbitrary-order vs plain rank-3 emits are close in size with similar term counts, so neither localizes the error.
+
+The tractable oracle is the one the CCSDTQ==FCI gate already relies on: the **arbitrary-order** rank-3 path is exercised as the CCSDTQ warm start and is validated, whereas the **plain** rank-3 TU is the one that had no caller. Both are emitted from the same equations. So the decisive experiment is to run the *arbitrary-order* rank-3 kernel on bh3 (`-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`) and
+compare its T3 residual against the hand-written one with the same probe:
+
+- **arbitrary agrees with hand-written** → the equations are right and the defect is specific to the plain TU's lowering/emit path;
+- **arbitrary also differs** → the defect is in the shared rank-3 equations, and the CCSDTQ gate does not cover it because CCSDTQ's own triples residual is a separately-emitted function.
+
+*Gate:* that comparison run, and a term class named from where the raw difference concentrates.
+
+#### T2 — original suspect list (retained)
 
 Compare the generated rank-3 triples residual against a Python oracle at fixed amplitudes, the way
 `residual_eval` already does for the symbolic manifolds, and bisect by term class.
