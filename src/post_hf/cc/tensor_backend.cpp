@@ -2336,6 +2336,70 @@ namespace
             // hand-written branch below and `build_spin_orbital_blocks` read it.
             triples_residual = HartreeFock::Correlation::CC::compute_ccsdt_triples_residual(
                 state.reference, physicist_blocks, state.denominators, amps);
+
+            // T0 probe (PLANCK_CC_T3_DIFF=1): compute the HAND-WRITTEN residual from the same
+            // amplitudes and report the elementwise difference, both before and after
+            // `restore_restricted_t3_structure`. One evaluation, not a ~21-minute solve, and it
+            // separates "the generated residual value is wrong" from "the values agree but the
+            // solver path diverges". The before/after pair additionally says whether the
+            // restricted-T3 convention is the remaining gap. Diagnostic only -- off by default,
+            // and it does not alter `triples_residual`.
+            if (const char *probe = std::getenv("PLANCK_CC_T3_DIFF");
+                probe != nullptr && probe[0] == '1')
+            {
+                Tensor6D raw_generated(
+                    triples_residual.dim1, triples_residual.dim2, triples_residual.dim3,
+                    triples_residual.dim4, triples_residual.dim5, triples_residual.dim6, 0.0);
+                raw_generated.data = triples_residual.data;
+
+                const DressedSinglesDoublesIntermediates probe_sd =
+                    build_dressed_sd_intermediates(system, dressed, amps.t2);
+                DressedTriplesIntermediates probe_ints =
+                    build_dressed_triples_intermediates(system, dressed, probe_sd, amps.t2);
+                add_dressed_triples_feedback_into_triples_intermediates(
+                    system, dressed, amps.t3, probe_ints);
+                TensorTriplesWorkspace probe_ws{
+                    .amplitudes = clone_rccsdt_amplitudes(amps),
+                    .r3 = Tensor6D(
+                        amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
+                        amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0),
+                    .allocated = true,
+                };
+                build_dressed_triples_residual(system, probe_ints, amps, probe_ws);
+
+                const auto report = [](const char *label,
+                                       const Tensor6D &a, const Tensor6D &b) {
+                    double max_abs = 0.0, sum_sq = 0.0, ref_max = 0.0;
+                    for (std::size_t i = 0; i < a.data.size(); ++i)
+                    {
+                        const double d = a.data[i] - b.data[i];
+                        max_abs = std::max(max_abs, std::abs(d));
+                        sum_sq += d * d;
+                        ref_max = std::max(ref_max, std::abs(b.data[i]));
+                    }
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info,
+                        "RCCSDT[T3-DIFF] :",
+                        std::format("{}: max|gen-hand|={:.6e} rms={:.6e} max|hand|={:.6e}",
+                                    label, max_abs,
+                                    std::sqrt(sum_sq / static_cast<double>(a.data.size())),
+                                    ref_max));
+                };
+
+                report("raw (no restore)", raw_generated, probe_ws.r3);
+                Tensor6D restored_generated(
+                    raw_generated.dim1, raw_generated.dim2, raw_generated.dim3,
+                    raw_generated.dim4, raw_generated.dim5, raw_generated.dim6, 0.0);
+                restored_generated.data = raw_generated.data;
+                restore_restricted_t3_structure(restored_generated);
+                Tensor6D restored_hand(
+                    probe_ws.r3.dim1, probe_ws.r3.dim2, probe_ws.r3.dim3,
+                    probe_ws.r3.dim4, probe_ws.r3.dim5, probe_ws.r3.dim6, 0.0);
+                restored_hand.data = probe_ws.r3.data;
+                restore_restricted_t3_structure(restored_hand);
+                report("after restore   ", restored_generated, restored_hand);
+            }
+
             restore_restricted_t3_structure(triples_residual);
             metrics.r3_residual_rms = triples_residual_rms(triples_residual);
         }
