@@ -112,14 +112,18 @@ def main() -> None:
         # ...) carry no method suffix and would collide there. Emit it WITHOUT
         # intermediates so the residual is self-contained (no build_W_* symbols).
         include_intermediates = args.include_intermediates and not force_arbitrary
-        # Same collision, one step further (V1.3.1): the dressed builders (build_tau,
-        # build_Wmnij, ...) are also unsuffixed, and in ARBITRARY-ORDER form every
-        # method's take ArbitraryOrderRCCAmplitudes -- identical signatures, so
-        # co-including two dressed companions in the registry is a redefinition, not an
-        # overload (5 errors; gated by test_dressed_tu_coinclusion). In the plain
-        # non-arbitrary TUs the amplitude type differs per method, so they overload
-        # cleanly. Hence dressing is suppressed on the companion only.
-        dress_operators = args.dress_operators and not force_arbitrary
+        # Dressing DOES apply to the arbitrary-order TUs, and must: those are the ones the
+        # kernel registry actually executes (rank >= 4, or rank 3 under
+        # -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON). The plain per-method TUs are compiled but
+        # their residual kernels have no caller -- `generated_kernel_registry.cpp` says so
+        # outright: "rank 2 and 3 use the hand-written backends".
+        #
+        # V1.3.1 suppressed dressing here, because two dressed arbitrary-order TUs shared
+        # unsuffixed builder names and collided when co-included in the registry (5
+        # redefinitions). V1.3.2 removed that collision by method-suffixing every builder
+        # (`build_tau_ccsdtq`), so the suppression now only prevents dressing from reaching
+        # the one path that runs. Gated by test_dressed_tu_coinclusion.
+        dress_operators = args.dress_operators
         # `dress_operators` supersedes tau collapse and forces CSE off inside
         # print_cpp_planck; passing factorize_tau alongside it raises, so drop it here
         # (the CLI already rejects the combination outright).

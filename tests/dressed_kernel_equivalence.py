@@ -10,13 +10,18 @@ share a fixed point. Equal iteration count shows they take the same trajectory t
 much closer to "the residual is the same function". Dressing is supposed to be a pure
 refactorization of the residual, so anything else is a real difference.
 
+WHICH BACKEND ACTUALLY RUNS -- the thing an earlier version of this gate failed to check.
+`choose_rccsdt_backend` picks `DeterminantPrototype` for small systems and `TensorProduction`
+otherwise; only `TensorOptimized` calls the ccgen-GENERATED triples kernel. So a comparison that
+looks only at energies can pass while BOTH builds run a hand-written residual and dressing
+touches nothing that executes -- which is exactly what happened, and is why every case here now
+asserts `GENERATED_MARKERS` in the dressed log before its numbers are believed.
+
 WHY NOT EVERY rccsdt CASE. `water_rccsdt_sto3g` falls back to the determinant-space backstop
-(`RCCSDT[DET-BACKSTOP]` in its log) in BOTH builds, so it never reaches the generated kernel and
-tells us nothing about dressing. It converges to the same energy either way but in a different
-number of iterations (26 vs 54) -- a property of the backstop path, not of dressing. Including
-it would have produced a false failure; excluding it silently would have hidden the fact that
-one case does not exercise the feature at all. So it is excluded EXPLICITLY, and the exclusion
-is verified: the case must actually show the backstop marker, or this script fails.
+(`RCCSDT[DET-BACKSTOP]`) in BOTH builds, so it never reaches the generated kernel. It converges
+to the same energy either way but in a different number of iterations (26 vs 54) -- a property
+of the backstop path, not of dressing. Excluded EXPLICITLY, and the exclusion is verified: the
+case must actually show the backstop marker, or this script fails.
 
 Usage:
     dressed_kernel_equivalence.py --dressed <build_dir> --undressed <build_dir>
@@ -32,10 +37,9 @@ The positional input is accepted and then ignored: this comparison drives its ow
 (the rank-3 cases that reach the generated kernel), and a single input cannot express "run these
 three in two builds". The case's `input` field therefore only documents which family it covers.
 
-**Why this cannot be an ordinary single-binary regression case.** A dressed build's output is
-byte-comparable to an undressed one — verified: same correlation energy, same iteration count, no
-marker distinguishing them. So `skip_if_contains`, which inspects the run's output, has nothing to
-key on. Detecting dressing requires comparing two builds, which is what this script does.
+**Why this cannot be an ordinary single-binary regression case.** Dressing is a build-time option,
+so detecting whether it changed anything requires two builds. A single binary cannot tell you which
+kernel its numbers came from.
 """
 
 from __future__ import annotations
@@ -56,6 +60,14 @@ GENERATED_KERNEL_CASES = ("h2", "lih", "bh3")
 BACKSTOP_CASES = ("water",)
 
 BACKSTOP_MARKER = "DET-BACKSTOP"
+
+# The dressed build MUST report these, or the generated kernel did not run and the
+# comparison is meaningless. `RCCSDT[OPT]` is the TensorOptimized backend -- the only one
+# that calls `compute_ccsdt_triples_residual` -- and `kernels=ccgen-generated` distinguishes
+# the generated warm start from the hand-optimized one. Checking only the ENERGY is what
+# made the first version of this gate pass while both builds silently ran the hand-written
+# backend.
+GENERATED_MARKERS = ("RCCSDT[OPT]", "kernels=ccgen-generated")
 
 
 def _run(binary: Path, input_path: Path) -> str:
@@ -155,6 +167,14 @@ def main() -> int:
         # backstop, this case is not testing dressing at all.
         if BACKSTOP_MARKER in dressed_log:
             print(f"FAIL {case}: expected the generated kernel, got {BACKSTOP_MARKER}")
+            failures += 1
+            continue
+
+        missing = [m for m in GENERATED_MARKERS if m not in dressed_log]
+        if missing:
+            print(f"FAIL {case}: dressed run did not reach the generated kernel "
+                  f"(missing {missing}); it ran a hand-written backend, so equal "
+                  f"energies would prove nothing")
             failures += 1
             continue
 

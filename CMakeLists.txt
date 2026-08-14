@@ -418,6 +418,14 @@ else()
 endif()
 target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
 target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
+# Reaches choose_rccsdt_backend: a dressed build must select the TensorOptimized backend,
+# since that is the only one that runs the ccgen-generated triples kernel dressing rewrites.
+if(PLANCK_CC_DRESS_OPERATORS)
+    set(_planck_cc_dressed 1)
+else()
+    set(_planck_cc_dressed 0)
+endif()
+target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
 
 add_executable(planck-dft
     ${BASE_SRC}
@@ -513,7 +521,7 @@ if(Python3_Interpreter_FOUND)
     add_dependencies(planck-dft ccgen-spinorbital-warm-start)
     add_dependencies(planck-dft ccgen-planck-kernels)
 endif()
-target_compile_definitions(planck-dft PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER} PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
+target_compile_definitions(planck-dft PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER} PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower} PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
 
 if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(planck-dft OpenMP::OpenMP_CXX)

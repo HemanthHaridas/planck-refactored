@@ -2739,6 +2739,20 @@ namespace HartreeFock::Correlation::CC
         constexpr int kPrototypeMaxSpinOrbitals = 12;
         constexpr std::size_t kPrototypeMaxDeterminants = 1200;
 
+        // TensorOptimized is the only backend that runs the ccgen-GENERATED restricted
+        // triples kernel; the other two run hand-written residuals. It is therefore what a
+        // build configured with -DPLANCK_CC_DRESS_OPERATORS=ON is asking for: dressing
+        // rewrites the generated kernel, so selecting a hand-written backend would silently
+        // ignore the option and report numbers from code the flag never touched.
+        //
+        // Selected by build configuration rather than by system size, because it is a
+        // statement about which kernel to exercise, not about cost. Without the option the
+        // size-based choice below is unchanged, so default builds do not move.
+#ifdef PLANCK_CC_DRESS_OPERATORS
+        if constexpr (PLANCK_CC_DRESS_OPERATORS)
+            return RCCSDTBackend::TensorOptimized;
+#endif
+
         const int n_spin_orb = 2 * reference.n_mo;
         const int n_electrons = 2 * reference.n_occ;
         const std::size_t ndet = binomial(
@@ -2953,7 +2967,15 @@ namespace HartreeFock::Correlation::CC
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
             "RCCSDT[OPT] :",
-            "Using the Planck-style ccgen RCCSD warm start with the native restricted CCSDT triples solver. The generated restricted triples kernel remains experimental until a restricted derivation is available.");
-        return run_tensor_rccsdt_impl(calculator, shell_pairs, true, false);
+            "Using the ccgen-generated RCCSD warm start AND the ccgen-generated restricted "
+            "CCSDT triples kernel.");
+        // Both flags true. The second was `false`, which made this backend indistinguishable
+        // from TensorProduction for the triples residual: `compute_ccsdt_triples_residual`
+        // (the generated kernel) has exactly one call site, guarded by
+        // `use_generated_triples_kernel`, and no caller passed true -- so the generated
+        // rank-3 residual was compiled, linked, and never executed. Anything claiming to
+        // validate the generated kernel through this path was in fact measuring the
+        // hand-written one.
+        return run_tensor_rccsdt_impl(calculator, shell_pairs, true, true);
     }
 } // namespace HartreeFock::Correlation::CC
