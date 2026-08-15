@@ -185,7 +185,52 @@ export BASIS_PATH=$PWD/basis-sets
 build/hartree-fock <input> 2>&1 | tee run.log | grep -E "Total RCCSDTQ Energy|RCCSDTQ\["
 ```
 
-**Reference** — generate with the same geometry/basis, `mol.cart = True`, `mf.conv_tol = 1e-12`:
+#### The CH4 reference, already computed
+
+Run with `mol.cart = True`, `mf.conv_tol = 1e-12`, so it is directly comparable to Planck's
+`basis_type cartesian`:
+
+```
+CH4/sto-3g cart, no=5 nv=4, distinct quadruples = 5
+
+  RHF     = -39.7267328266
+  RCCSDTQ = -39.8058872460      <-- COMPARE PLANCK AGAINST THIS
+  e_corr  =  -0.0791544194
+```
+
+**Compare against RCCSDTQ, not FCI.** On a system with distinct quadruples the two differ, and
+matching FCI would be the wrong target — the question is whether Planck's rank-4 kernel reproduces
+rank-4 theory, not whether rank-4 theory is exact.
+
+*Pass:* Planck's `Total RCCSDTQ Energy` ≈ **−39.8058872460** to ~1e-7, the tolerance the existing
+`be_rccsdtq_sto3g` gate uses.
+
+**Compare the TOTAL, not `e_corr`.** Measured on Be/sto-3g cart, where both numbers are known:
+
+```
+             Planck            PySCF             diff
+RHF       -14.3518804007   -14.3518804762    +7.55e-08
+total     -14.4036551081   -14.4036551082    +1.00e-10   <- agrees
+e_corr     -0.0517747074    -0.0517746320    -7.54e-08   <- does NOT agree
+```
+
+Planck's RHF sits ~7.5e-08 above PySCF's (basis-exponent precision, present from HF onward). That
+offset propagates into `e_corr` with the opposite sign and **cancels in the total** — so the totals
+agree to 1e-10 while the correlation energies differ at 7.5e-08.
+
+This is the reverse of the rule that applies when comparing two *Planck* builds against each other
+(there the shared HF offset cancels in the difference, so `e_corr` is the right comparand). Against
+PySCF the offset is not shared, and the total is the quantity that agrees. Do not carry the
+Planck-vs-Planck habit over to this comparison.
+
+FCI for CH4/sto-3g was not computed here — the CCSDTQ-vs-FCI gap is not needed for the verdict, only
+the distinct-quadruple count, which is 5 > 0.
+
+The H2O/6-31g reference is not precomputed: it is the larger run and PySCF's own RCCSDTQ on
+`no=5 nv=8` is itself expensive. Generate it with `tests/inputs/investigation/p2_reference.py`, which
+emits both systems.
+
+**Reference script** — same geometry/basis, `mol.cart = True`, `mf.conv_tol = 1e-12`:
 
 ```python
 from pyscf import gto, scf, fci
