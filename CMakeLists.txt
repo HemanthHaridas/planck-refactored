@@ -815,6 +815,11 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/cc/solver_arbitrary.cpp
     )
 
+    add_executable(planck-cc-tensor-index
+        ${CMAKE_SOURCE_DIR}/tests/cc_tensor_index.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+    )
+
     add_executable(planck-cc-amplitude-checkpoint
         ${CMAKE_SOURCE_DIR}/tests/cc_amplitude_checkpoint.cpp
         ${SRC_DIR}/post_hf/cc/common.cpp
@@ -1271,6 +1276,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-cc-tensor-index PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-cc-amplitude-checkpoint PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -1484,6 +1494,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-cc-arbitrary-solver PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-tensor-index PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -1728,6 +1744,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-cc-arbitrary-solver
         COMMAND planck-cc-arbitrary-solver
+    )
+
+    add_test(
+        NAME planck-cc-tensor-index
+        COMMAND planck-cc-tensor-index
     )
 
     add_test(
