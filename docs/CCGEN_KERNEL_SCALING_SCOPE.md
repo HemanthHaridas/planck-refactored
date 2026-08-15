@@ -1,6 +1,145 @@
 # Does the generated-vs-hand-written CC gap grow with system size?
 
-**Scope for P3, the open item left by `CCGEN_KERNEL_PERFORMANCE_SCOPE.md`.** Not started.
+**Answered: it grows. It is a scaling defect, not a constant tax.** H3 confirmed, H1 not
+implicated (and not testable on this ladder). The ratio rises from 21.8× to 34.2× across the
+measured range and both indices contribute.
+
+## The answer
+
+Five ladder points, rank-3 triples residual, `-O3`, single-threaded, repeats averaged, generated
+and hand-written evaluated from identical amplitudes:
+
+| case | o | v | o/v | generated | hand-written | ratio |
+|---|---|---|---|---|---|---|
+| BH3/STO-3G | 4 | 4 | 1.00 | 0.0309 s | 0.00142 s | 21.8× |
+| CH4/STO-3G | 5 | 4 | 1.25 | 0.0930 s | 0.00347 s | 26.8× |
+| HF/6-31G | 5 | 6 | 0.83 | 0.5681 s | 0.01779 s | 31.9× |
+| H2O/6-31G | 5 | 8 | 0.62 | 1.7232 s | 0.06316 s | 27.3× |
+| BH3/6-31G | 4 | 11 | 0.36 | 3.3287 s | 0.09741 s | 34.2× |
+| C2H4/STO-3G | 8 | 6 | 1.33 | 5.9509 s | 0.11875 s | **50.1×** |
+
+### Per-index exponents
+
+Six points, `log o` spread 0.693, `log v` spread 1.012, design-matrix condition number 26.1:
+
+| | fit | max residual |
+|---|---|---|
+| hand-written | **`o^3.94 v^4.18`** | 4.5% |
+| generated | **`o^4.87 v^4.52`** | 21.4% |
+| **ratio** | **`o^0.93 v^0.34`** | — |
+
+Leave-one-out on the ratio exponents, which is the check that matters here:
+
+| dropped point | ratio fit |
+|---|---|
+| BH3/STO-3G | `o^+0.94 v^+0.35` |
+| CH4/STO-3G | `o^+0.93 v^+0.35` |
+| HF/6-31G | `o^+0.93 v^+0.34` |
+| H2O/6-31G | `o^+0.94 v^+0.45` |
+| BH3/6-31G | `o^+1.18 v^+0.04` |
+| C2H4/STO-3G | `o^+0.40 v^+0.32` |
+
+Four of six variants agree to two decimals, and the `o` exponent keeps its sign in all six
+(+0.40 .. +1.18). That is a usable result — but note the two variants that move it are exactly the
+two points that extend the ladder's reach (BH3/6-31G at max `v`, C2H4 at max `o`), i.e. the fit is
+still leaning on its endpoints. Treat `o^0.9 v^0.3` as indicative, not settled.
+
+**Both indices contribute, with `o` roughly 3× the exponent of `v`.**
+
+#### Two earlier drafts of this section quoted wrong exponents — recorded, because the failure mode is reusable
+
+1. **Four points (before BH3/6-31G): `o^1.12 v^0.05`**, concluded as "the entire gap is in the
+   occupied index — the generated kernels traverse one extra occupied loop." **Three of those four
+   shared `o=5`**, so least squares had nothing to separate and loaded all divergence onto `o`.
+   The 6.5% residual looked reassuring precisely *because* it was overfitting a nearly-fixed
+   variable.
+2. **Five points (adding BH3/6-31G, `o=4 v=11` — lowest `o`, second-highest ratio): `o^0.40
+   v^0.32`**, quoted as the correction. But leave-one-out on those five swung the `o` exponent
+   across **−0.65 .. +1.12** — it did not even hold its sign — with `log o` spanning only 0.223 and
+   condition number 46.6. So the "correction" was no better established than what it replaced.
+
+The sixth point (C2H4, `o=8`) tripled the `log o` spread and is what made the exponents stable.
+
+The reusable lesson is about ladder design: **a power-law fit in k variables needs all k varied
+independently, and the diagnostic is leave-one-out or the design-matrix condition number — never
+the residual**, which is what made both bad fits look good. The square-system warning further down
+is the same trap in a different guise.
+
+#### Where the generated fit is bad, and why that is informative
+
+The generated-side residual (21.4%) is not scattered — it is concentrated at high `v`:
+
+| case | actual | fit | error |
+|---|---|---|---|
+| BH3/STO-3G | 0.0309 s | 0.0307 s | −0.8% |
+| CH4/STO-3G | 0.0930 s | 0.0910 s | −2.1% |
+| HF/6-31G | 0.5681 s | 0.5696 s | +0.3% |
+| C2H4/STO-3G | 5.9509 s | 5.6233 s | −5.5% |
+| BH3/6-31G | 3.3287 s | 2.9781 s | −10.5% |
+| H2O/6-31G | 1.7232 s | 2.0922 s | **+21.4%** |
+
+The four lowest-`v` points fit to ≤5.5%; the two highest-`v` points (v=8, v=11) are where it breaks
+down, in opposite directions. The hand-written kernel has no such pattern (4.5% max). So a single
+`o^a v^b` term does not describe the generated cost — there is more than one contraction regime in
+it, which is consistent with different terms in the residual having different optimal orders and
+the emitter picking none of them.
+
+Do **not** extrapolate to production sizes. An earlier draft quoted ~69× at `o=10 v=40` and ~156×
+at `o=20 v=80` off the four-point fit; with a 21.4% residual and endpoint-sensitive exponents,
+projecting 2–4× beyond the measured range is not supportable. By the same token the carried "~180×
+on `bh3`" folklore figure can be neither explained nor dismissed from this data.
+
+### What the ladder does support
+
+- **The ratio grows, and steeply.** 21.8× → 50.1× across the six points, with no plateau. Measured
+  directly, not fitted. This is the answer to P3: a scaling defect, not a constant tax. H3
+  confirmed.
+- **The hand-written kernel is textbook.** `o^3.94 v^4.18` at 4.5% max residual — `o³v³` output
+  elements × one contracted index, which is what it should be.
+- **Both indices contribute, `o` about 3× more than `v`** (`o^0.93 v^0.34`, sign-stable across all
+  leave-one-out variants). Consistent with the known `t2·t3·v` case in
+  `CCGEN_HIGHER_OPERATOR_REUSE.md` (`o⁵v⁵` n-ary vs `o³v⁴` factored), which is superlinear in both.
+- **The generated kernel does not obey a single power law** (21.4% residual, concentrated at high
+  `v`) while the hand-written one does. Evidence of multiple contraction regimes in the generated
+  code — see above.
+
+## What this makes worth doing
+
+Per the outcome table below, this is the "grows polynomially" row: **consume
+`_optimal_contraction_order` in the emitter** (`python/ccgen/tensor_ir.py:283`, currently computed
+and discarded — `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` returns nothing). That is
+the asymptotic fix and it outranks loop fusion, which the P2 measurement already showed buys
+nothing at small size.
+
+The fit no longer localizes the defect to one index, so it does not hand you a single loop to go
+delete. The productive next step is the term-level one `CCGEN_HIGHER_OPERATOR_REUSE.md` already
+frames: find which generated terms are evaluated n-arily where a factored order is cheaper — the
+recorded `t2·t3·v` case is `o⁵v⁵` n-ary against `o³v⁴` factored, which is superlinear in *both*
+indices and therefore consistent with the measured `o^0.40 v^0.32`. Enumerate those terms and
+their cost gap before writing any emitter change.
+
+## Still open
+
+- **H1 remains untested, by construction.** The whole reachable ladder tops out at 0.49 MiB `t3`,
+  which never leaves L2, so the cache-transition prediction cannot fire here. Testing it needs
+  cc-pVDZ-class systems (H2O/cc-pVDZ is 6.5 MiB `t3`); at ~30× generated-kernel slowdown that run
+  should be time-boxed before committing to it. Note H1 and H3 are not exclusive — H1 could still
+  add a term on top of the `o^1.1` growth once the working set spills.
+- **Rank 4 has no point on this ladder.** Different tensor types, different path, plus the `-O1`
+  registry pin (`CMakeLists.txt:402`) that rank 3 lacks. The fixed-rank-only accessor pass already
+  proved rank 3 is not a proxy for rank 4; do not assume `o^1.1` transfers.
+- **Per-index exponents, blocked on `o` range.** `o` spans only 4→5 across all five points (see
+  the leave-one-out table). Points at larger `o` are required before any `o^a v^b` claim is
+  meaningful. C2H4/STO-3G (`o=8 v=6`, 0.84 MiB `t3`) is the cheapest next point and roughly
+  quadruples the `log o` spread; a run was launched but had not returned when this was written.
+  Two or three points in the `o=8..12` range would settle it.
+- **The 13.6% generated-side residual is itself a finding.** The hand-written kernel fits a clean
+  power law (4.3%); the generated one does not. Something in it is not a simple `o^a v^b` — worth
+  understanding before trusting any exponent from it too far.
+
+---
+
+## Original scope (retained)
 
 The accessor fix (`CCGEN_TENSOR_ACCESSOR_FIX_SCOPE.md`) removed the per-access allocation that
 dominated every earlier measurement, leaving a residual **22×** generated-vs-hand-written ratio at
@@ -44,12 +183,36 @@ section).
 Record `o`, `v`, `o/v`, both residual times, the ratio, **and** the working-set size in bytes, so
 an H1 cache transition is visible rather than inferred.
 
-### The ladder
+### The determinant backstop constrains which systems are usable at all
 
-In-tree cases give a non-square contrast immediately — `bh3` is `nocc=8 nvirt=8` (ratio 1.0),
-`water_rccsdt_sto3g` is `nocc=10 nvirt=4` (ratio 0.4, and *inverted* vs `bh3`). That pair alone
-tests shape at nearly fixed cost. Extending `o` and `v` upward needs larger bases (6-31G on the
-same molecules) rather than new molecules, so the comparison stays like-for-like.
+**Found while starting P3, and it invalidates the obvious ladder.** `choose_determinant_backstop`
+(`tensor_backend.cpp:241`) routes any case with `n_spin_orb <= 16` **and** `ndet <= 10000` to the
+determinant-space teaching backstop, which never calls the generated tensor triples kernel. So a
+system below that threshold produces **no timing at all**, regardless of what the backend override
+says.
+
+`water_rccsdt_sto3g` — the obvious non-square partner to `bh3` — is `nso=14 ndet=1001` and is
+therefore unusable for P3: it silently takes the backstop path. `bh3`/STO-3G clears the gate only
+via `ndet=12870 > 10000` at `nso=16`.
+
+Any P3 ladder point must satisfy `nso > 16 || ndet > 10000`. Candidates, with the generated kernel
+actually reachable:
+
+| case | occ | vir | o/v | nso | ndet | t3 (MiB) |
+|---|---|---|---|---|---|---|
+| BH3/STO-3G (baseline) | 4 | 4 | 1.00 | 16 | 12870 | 0.03 |
+| CH4/STO-3G | 5 | 4 | 1.25 | 18 | 43758 | 0.06 |
+| HF/6-31G | 5 | 6 | 0.83 | 22 | 646646 | 0.21 |
+| BH3/6-31G | 4 | 11 | 0.36 | 30 | 5852925 | 0.65 |
+| H2O/6-31G | 5 | 8 | 0.62 | 26 | 5311735 | 0.49 |
+| C2H4/STO-3G | 8 | 6 | 1.33 | 28 | 30421755 | 0.84 |
+
+That spans `o/v` from 0.36 to 1.33 and `t3` from 0.03 to 0.84 MiB — enough to vary shape at
+near-fixed size (CH4 vs HF/6-31G) and size at near-fixed shape (BH3/STO-3G vs C2H4/STO-3G).
+
+Note none of these leave L2 (0.84 MiB t3 at the top), so the H1 cache-transition prediction is
+**not** testable on this ladder alone; reaching it needs cc-pVDZ-class cases (H2O/cc-pVDZ is
+6.5 MiB t3) whose runtime must be checked before committing to them.
 
 Minimum useful set:
 

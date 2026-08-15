@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <format>
 #include <limits>
@@ -2336,6 +2337,82 @@ namespace
             // hand-written branch below and `build_spin_orbital_blocks` read it.
             triples_residual = HartreeFock::Correlation::CC::compute_ccsdt_triples_residual(
                 state.reference, physicist_blocks, state.denominators, amps);
+
+            // P3 probe (PLANCK_CC_T3_TIME=N, N>=1 repeats): time the generated and hand-written
+            // T3 residual evaluations from identical amplitudes and report the ratio alongside
+            // o, v and the t3 working-set size. Separate from T3_DIFF because P3 wants the
+            // timing on cases where the value comparison is uninteresting, and because at post-
+            // accessor-fix speeds (~1e-3 s) a single shot is noise; N repeats are averaged.
+            // Diagnostic only -- it re-evaluates into scratch and does not touch
+            // `triples_residual`. See docs/CCGEN_KERNEL_SCALING_SCOPE.md.
+            if (const char *timing = std::getenv("PLANCK_CC_T3_TIME");
+                timing != nullptr && timing[0] != '\0' && timing[0] != '0')
+            {
+                const int repeats = std::max(1, std::atoi(timing));
+                const int no = state.reference.orbital_partition.n_occ;
+                const int nv = state.reference.orbital_partition.n_virt;
+
+                double gen_seconds = 0.0;
+                for (int r = 0; r < repeats; ++r)
+                {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    auto scratch = HartreeFock::Correlation::CC::compute_ccsdt_triples_residual(
+                        state.reference, physicist_blocks, state.denominators, amps);
+                    gen_seconds +=
+                        std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - t0).count();
+                    HartreeFock::Correlation::CC::Tensor6D sink = std::move(scratch);
+                    (void)sink;
+                }
+                gen_seconds /= repeats;
+
+                // Intermediates are built once outside the timed loop: the generated kernel
+                // builds none, so charging their cost per-repeat to the hand-written side
+                // would overstate it. Their one-off cost is reported separately.
+                const auto ti = std::chrono::steady_clock::now();
+                const DressedSinglesDoublesIntermediates time_sd =
+                    build_dressed_sd_intermediates(system, dressed, amps.t2);
+                DressedTriplesIntermediates time_ints =
+                    build_dressed_triples_intermediates(system, dressed, time_sd, amps.t2);
+                add_dressed_triples_feedback_into_triples_intermediates(
+                    system, dressed, amps.t3, time_ints);
+                const double int_seconds =
+                    std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - ti).count();
+
+                TensorTriplesWorkspace time_ws{
+                    .amplitudes = clone_rccsdt_amplitudes(amps),
+                    .r3 = Tensor6D(
+                        amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
+                        amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0),
+                    .allocated = true,
+                };
+                double hand_seconds = 0.0;
+                for (int r = 0; r < repeats; ++r)
+                {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    build_dressed_triples_residual(system, time_ints, amps, time_ws);
+                    hand_seconds +=
+                        std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - t0).count();
+                }
+                hand_seconds /= repeats;
+
+                const double t3_mib =
+                    static_cast<double>(amps.t3.data.size() * sizeof(double)) / (1024.0 * 1024.0);
+
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "RCCSDT[T3-TIME] :",
+                    std::format(
+                        "no={} nv={} o/v={:.3f} t3={:.3f}MiB reps={} "
+                        "gen={:.6f}s hand={:.6f}s ints={:.6f}s ratio={:.1f}x",
+                        no, nv,
+                        nv > 0 ? static_cast<double>(no) / nv : 0.0,
+                        t3_mib, repeats,
+                        gen_seconds, hand_seconds, int_seconds,
+                        gen_seconds / std::max(hand_seconds, 1e-12)));
+            }
 
             // T0 probe (PLANCK_CC_T3_DIFF=1): compute the HAND-WRITTEN residual from the same
             // amplitudes and report the elementwise difference, both before and after
