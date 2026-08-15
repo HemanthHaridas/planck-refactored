@@ -56,8 +56,16 @@ BASELINES = (
     # fix is confined to sibling-referencing builders.
     # Moved again at V1.3.2 (28122 -> 28187): builders are method-suffixed so two dressed
     # TUs can share the registry's single translation unit.
+    # Digest moved again (length UNCHANGED at 28187) when `_dress_operator_equations`
+    # began counting definition-site uses: an operator's definition can reference a
+    # pseudo-amplitude (`Wmnij`/`Wabef` both read `tau`), so a name can be needed by the
+    # emitted code while appearing nowhere in the residual. Without that, a
+    # definition-only pseudo-amplitude gets usage_count=0 and is dropped as an orphan
+    # while its builder is still called. The only emitted difference is the count in
+    # `// Intermediate tau (oovv, usage=N)`: 1 -> 3, a comment. Byte length is identical,
+    # which is why `test_byte_lengths_are_unchanged` did not move and this digest did.
     ("dress_operators", {"dress_operators": True}, 28187,
-     "1d342cd1002f25645b5b0f8f3fff39c5e62a6be0af3e5d8607acfdf5ce232c6b"),
+     "03871d2557945049d0890975c73116b698e61bcef8012edcbf986600791375be"),
 )
 
 

@@ -474,14 +474,22 @@ class UsageRecountTests(unittest.TestCase):
 
     def test_wmbej_count_is_recounted(self):
         """The measured drift: adaptation splits Wmbej's usage sites across spin
-        cases, 5 -> 10. The other four are unchanged at 1, so this operator is the
-        whole reason the recount is not a no-op."""
+        cases, 5 -> 10, which is the main reason the recount is not a no-op.
+
+        `tau` also moves, for an unrelated reason: `_dress_operator_equations` counts
+        DEFINITION-site uses (`Wmnij`/`Wabef` both read `tau`) so a definition-only
+        pseudo-amplitude is not dropped as an orphan, giving 3. `recount_intermediate_usage`
+        counts against the adapted RESIDUAL only, where `tau` appears once. Both counts are
+        correct for what they measure; only `Wmbej`'s change is caused by adaptation.
+        """
         before = {s.name: s.usage_count for s in self.specs}
         after = {s.name: s.usage_count
                  for s in recount_intermediate_usage(self.specs, self.adapted)}
         self.assertEqual(before["Wmbej"], 5)
         self.assertEqual(after["Wmbej"], 10)
-        for name in ("tau", "tau_c", "Wmnij", "Wabef"):
+        self.assertEqual(before["tau"], 3)      # includes Wmnij + Wabef definition uses
+        self.assertEqual(after["tau"], 1)       # residual-only
+        for name in ("tau_c", "Wmnij", "Wabef"):
             self.assertEqual(after[name], before[name], name)
 
     def test_every_spec_is_referenced(self):

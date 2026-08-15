@@ -944,15 +944,43 @@ def _dress_operator_equations(eqs, operators=None):
     dressed = {m: assemble_dressed_equation(ops, terms) for m, terms in eqs.items()}
 
     # which intermediates does the dressed equation actually reference?
+    #
+    # The residual is not the only consumer. An operator's own DEFINITION can reference
+    # a pseudo-amplitude (`Wmnij` and `Wabef` are both defined in terms of `tau`), so a
+    # name can be needed by the emitted code while appearing nowhere in the residual.
+    # Scanning only the residual then emits an operator whose builder calls `build_tau`
+    # with no `tau` spec to emit it -- a dangling reference.
+    #
+    # It happens not to bite on the GCC path, where `tau` also appears in the residual
+    # directly, but it does on a spatial (already-adapted) input where those residual
+    # uses have been collapsed away. Closing over definitions rather than special-casing
+    # that input keeps one rule for both.
     primitives = {"t1", "t2", "v", "f"}
-    referenced: set = set()
-    for terms in dressed.values():
-        for t in terms:
-            for f in t.factors:
-                if f.name not in primitives:
-                    referenced.add(f.name)
+    op_definitions = {op.name: op.definition_terms for op in ops}
 
-    # usage: count references and record manifolds, per referenced intermediate
+    def _names_in(terms):
+        return {f.name for t in terms for f in t.factors if f.name not in primitives}
+
+    referenced: set = set()
+    frontier = set()
+    for terms in dressed.values():
+        frontier |= _names_in(terms)
+    while frontier:
+        name = frontier.pop()
+        if name in referenced:
+            continue
+        referenced.add(name)
+        # follow into the operator's definition, so its dependencies are emitted too
+        frontier |= _names_in(op_definitions.get(name, ()))
+
+    # usage: count references and record manifolds, per referenced intermediate.
+    #
+    # Counts definition-site uses alongside residual ones, matching the closure above.
+    # Without this a pseudo-amplitude referenced ONLY by an operator definition gets
+    # usage_count=0, which `recount_intermediate_usage` rejects as an orphan -- so the
+    # emitted spec would be dropped for being unused while its builder is still called.
+    # The target list stays residual-only: `usage_targets` names the residual manifolds
+    # a spec serves, and a definition-site use belongs to no manifold.
     def usage(name):
         count = 0
         targets = []
@@ -961,6 +989,9 @@ def _dress_operator_equations(eqs, operators=None):
             if n:
                 count += n
                 targets.append(m)
+        for owner, terms in op_definitions.items():
+            if owner in referenced:
+                count += sum(1 for t in terms for f in t.factors if f.name == name)
         return count, tuple(targets)
 
     pseudo_specs = []
