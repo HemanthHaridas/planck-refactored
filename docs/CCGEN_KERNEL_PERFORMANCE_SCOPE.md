@@ -126,9 +126,9 @@ rank's output re-arms the defect at every other rank.
 
 ## Still open
 
-- **P3 — ratio vs system size.** All ratio numbers above are `no=nv=4`. `bh3`/STO-3G is also square
-  (`no == nv`), which the rank-3 defect work already flagged as able to mask index-order errors;
-  it is a poor size to generalize from. Re-run on a non-square, larger case. This is the next step.
+- **P3 — ratio vs system size.** Scoped in `docs/CCGEN_KERNEL_SCALING_SCOPE.md`. All ratio numbers
+  above come from one point (`bh3`/STO-3G, `nocc=8 nvirt=8`, square), which cannot distinguish a
+  constant 22× tax from a scaling defect — and H1 and H3 make opposite predictions there.
 - **Rank 4 is still subject to the `-O1` registry pin** (`CMakeLists.txt:402`), which the rank-3
   path is not. Now that the accessor no longer dominates, that asymmetry is worth re-checking —
   the pin exists because a ~230k-line TU is super-linear to optimize at `-O3`, and the standing
