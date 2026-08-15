@@ -58,6 +58,14 @@ quantity, consumed identically. Audited statically.
 | The probe compares mismatched quantities | **No.** Audited statically. |
 | The passing CCSDTQ==FCI gate proves the rank-3 equations sound | **No.** Rank 4 emits its **own** `compute_ccsdtq_triples_residual`; no emitted triples code is shared with rank 3. |
 
+## Coupled: is the defect rank-parity dependent?
+
+Rank 4 (CCSDTQ) reaches FCI while rank 3 fails. If even ranks are correct and odd ranks wrong,
+the suspect list below narrows to the two odd-rank-specific entries. But the hypothesis currently
+rests on two data points only — rank 2's generated TU has **no consumer** so it has never run, and
+ranks 5/6 have no gate. Scoped as its own investigation, with the rank-4 exactness confound (Be has
+4 electrons, so CCSDTQ is complete for it) controlled: `CCGEN_RANK_PARITY_INVESTIGATION.md`.
+
 ## Remaining suspects
 
 1. **Lowering of the spatial (spin-adapted) triples terms at rank 3** — the `2·direct − exchange`
