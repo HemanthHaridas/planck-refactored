@@ -201,6 +201,7 @@ def verify_adapted_dressed_equation(dressed, raw, adapter=None, operators=None):
 def dressed_multiset(
     terms: Sequence[AlgebraTerm],
     operators: dict[str, DressedOperator] | None = None,
+    spatial: bool = False,
 ) -> dict[tuple, Fraction]:
     """ERI-canonical multiset of a dressed equation, fully expanded.
 
@@ -213,16 +214,22 @@ def dressed_multiset(
     acc: dict[tuple, Fraction] = {}
     for term in terms:
         for prim in expand_dressed_term(term, operators):
-            key, coeff = _eri_canonical(prim)
+            key, coeff = _eri_canonical(prim, spatial=spatial)
             acc[key] = acc.get(key, Fraction(0)) + coeff
     return {k: v for k, v in acc.items() if v != 0}
 
 
-def raw_multiset(terms: Sequence[AlgebraTerm]) -> dict[tuple, Fraction]:
-    """ERI-canonical multiset of a raw generated residual."""
+def raw_multiset(terms: Sequence[AlgebraTerm],
+                 spatial: bool = False) -> dict[tuple, Fraction]:
+    """ERI-canonical multiset of a raw generated residual.
+
+    ``spatial=True`` folds only the four relations a non-antisymmetrized <pq|rs> has.
+    Required for spin-adapted input; the 8-fold default equates spatial terms that are
+    not equal.
+    """
     acc: dict[tuple, Fraction] = {}
     for term in terms:
-        key, coeff = _eri_canonical(term)
+        key, coeff = _eri_canonical(term, spatial=spatial)
         acc[key] = acc.get(key, Fraction(0)) + coeff
     return {k: v for k, v in acc.items() if v != 0}
 
@@ -231,6 +238,7 @@ def verify_dressed_equation(
     dressed_terms: Sequence[AlgebraTerm],
     raw_terms: Sequence[AlgebraTerm],
     operators: dict[str, DressedOperator] | None = None,
+    spatial: bool = False,
 ) -> tuple[bool, dict[tuple, Fraction]]:
     """Does a transcribed dressed equation equal the raw residual, exactly?
 
@@ -239,8 +247,8 @@ def verify_dressed_equation(
     the actionable output while transcribing -- it names exactly which primitive
     contributions are over- or under-counted.
     """
-    dressed = dressed_multiset(dressed_terms, operators)
-    raw = raw_multiset(raw_terms)
+    dressed = dressed_multiset(dressed_terms, operators, spatial=spatial)
+    raw = raw_multiset(raw_terms, spatial=spatial)
     diff: dict[tuple, Fraction] = {}
     for k in set(dressed) | set(raw):
         d = dressed.get(k, Fraction(0)) - raw.get(k, Fraction(0))

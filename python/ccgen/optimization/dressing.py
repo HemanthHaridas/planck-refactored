@@ -1897,6 +1897,24 @@ _ERI_PERMUTATIONS: tuple[tuple[int, int, int, int], ...] = (
     (2, 3, 0, 1), (3, 2, 0, 1), (2, 3, 1, 0), (3, 2, 1, 0),
 )
 
+# The subset valid for a SPATIAL (non-antisymmetrized) <pq|rs>.
+#
+# The 8-fold set above is the symmetry group of the ANTISYMMETRIZED <pq||rs>. Four of
+# its members are reached by an odd number of intra-pair swaps and rely on
+# <qp|rs> = -<pq|rs>, which holds only for the antisymmetrized integral. A spatial
+# block has just the four +1 relations -- identity, particle swap <qp|sr>, bra<->ket
+# <rs|pq>, and their product <sr|qp> -- the same four
+# `emit/planck_tensor_cpp.py::_ERI_SYMMETRY_PERMUTATIONS` allows, and they are exactly
+# the parity-+1 members here (verified).
+#
+# Folding the full 8 on spatial terms equates terms that are NOT equal: measured on
+# spin-adapted ccsd doubles, `verify_dressed_equation` reported 0 mismatches while the
+# two manifolds evaluated to 983.79 and 1412.22. That blind spot is why a 52 % energy
+# defect passed every symbolic check -- see CCGEN_DRESSING_AND_SPIN_ADAPTATION.md.
+_ERI_PERMUTATIONS_SPATIAL: tuple[tuple[int, int, int, int], ...] = (
+    (0, 1, 2, 3), (1, 0, 3, 2), (2, 3, 0, 1), (3, 2, 1, 0),
+)
+
 
 def _perm_parity(perm: tuple[int, ...]) -> int:
     """Sign (+1/-1) of a permutation given as the image tuple perm[i] = source
@@ -1909,7 +1927,7 @@ def _perm_parity(perm: tuple[int, ...]) -> int:
     return -1 if inv & 1 else 1
 
 
-def _eri_normalize_factor(factor: Tensor) -> tuple[Tensor, int]:
+def _eri_normalize_factor(factor: Tensor, spatial: bool = False) -> tuple[Tensor, int]:
     """Reorder a v factor's indices to a canonical arrangement under 8-fold ERI
     symmetry, returning ``(reordered_factor, sign)``.  Non-v factors are
     returned unchanged with sign +1.
@@ -1928,8 +1946,9 @@ def _eri_normalize_factor(factor: Tensor) -> tuple[Tensor, int]:
     """
     if factor.name != "v" or len(factor.indices) != 4:
         return factor, 1
+    perms = _ERI_PERMUTATIONS_SPATIAL if spatial else _ERI_PERMUTATIONS
     best = None
-    for perm in _ERI_PERMUTATIONS:
+    for perm in perms:
         order = tuple(factor.indices[p] for p in perm)
         sig = tuple((x.space, x.name) for x in order)
         if best is None or sig < best[0]:
@@ -1937,13 +1956,17 @@ def _eri_normalize_factor(factor: Tensor) -> tuple[Tensor, int]:
     return factor.with_indices(best[1]), best[2]
 
 
-def _eri_normalize_term(term: AlgebraTerm) -> AlgebraTerm:
+def _eri_normalize_term(term: AlgebraTerm, spatial: bool = False) -> AlgebraTerm:
     """Normalize every v factor in a term to its canonical ERI arrangement,
-    folding each reordering's antisymmetry parity into the coefficient."""
+    folding each reordering's antisymmetry parity into the coefficient.
+
+    ``spatial=True`` restricts the fold to the four relations a non-antisymmetrized
+    <pq|rs> actually has; the default keeps the 8-fold <pq||rs> group.
+    """
     new_factors = []
     sign = 1
     for f in term.factors:
-        nf, s = _eri_normalize_factor(f)
+        nf, s = _eri_normalize_factor(f, spatial=spatial)
         new_factors.append(nf)
         sign *= s
     out = term.with_factors(tuple(new_factors))
@@ -1975,7 +1998,7 @@ def _free_order_normalized(term: AlgebraTerm) -> AlgebraTerm:
     )
 
 
-def _eri_canonical(term: AlgebraTerm) -> tuple[tuple, Fraction]:
+def _eri_canonical(term: AlgebraTerm, spatial: bool = False) -> tuple[tuple, Fraction]:
     """(ERI-canonical key, signed coefficient) for a term.
 
     Folds v's bra<->ket exchange symmetry (which _canonical_key alone does not,
@@ -1996,7 +2019,7 @@ def _eri_canonical(term: AlgebraTerm) -> tuple[tuple, Fraction]:
     normalization-induced sign/relabel.
     """
     settled = _canonical_fixed_point(_free_order_normalized(term))
-    folded = _eri_normalize_term(settled)
+    folded = _eri_normalize_term(settled, spatial=spatial)
     cf = _canonical_fixed_point(folded)
     return _canonical_key(cf), cf.coeff
 
