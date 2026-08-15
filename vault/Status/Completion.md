@@ -104,17 +104,31 @@ historical design context, but they are no longer the source of truth for
 - Arbitrary-order RCC solver via ccgen-generated residuals
 - Tensor-backed and determinant-space coupled-cluster paths, including the
   optimized RCCSDT warm-start route
-- **Dressed ccgen CC kernels** (the Stanton-Gauss `Wmnij`/`Wabef`/`Wmbej` +
-  `tau`/`tau_c` operators, recognized diagrammatically rather than by CSE).
-  Opt-in via `-DPLANCK_CC_DRESS_OPERATORS=ON`; default OFF so the default build
-  is byte-identical. Generates from the build, compiles, links, and runs
-  reproducing the undressed correlation energy **and** iteration count at rank 3
-  (`h2` 12/12, `lih` 16/16, `bh3` 26/26 iterations, energies identical to 10
-  digits), pinned by `dressed_kernel_equivalence_rccsdt`. Builder symbols are
-  method-suffixed (`build_tau_ccsdt`) so two dressed TUs can share the kernel
-  registry's single translation unit. Rank 4 is available (61.6 s of generation)
-  but not the validated anchor. Full record:
-  `docs/CCGEN_DRESSED_KERNEL_PIPELINE.md`
+- **Dressed ccgen CC kernels — RETIRED as a production route, deliberately.**
+  The Stanton-Gauss `Wmnij`/`Wabef`/`Wmbej` + `tau`/`tau_c` operators are
+  recognized diagrammatically, generate from the build, compile, and link
+  (`-DPLANCK_CC_DRESS_OPERATORS=ON`; default OFF, so the default build is
+  byte-identical and unaffected).
+
+  **The spin-adapted dressed path is unsupported: its RCC kernels are wrong.**
+  Dressing and spin adaptation do not compose — each transform is correct alone
+  and the composition is wrong in **either** order, because recognition
+  subtracts what an operator absorbs against a term set that adaptation then
+  changes. Measured: dressed Be/STO-3G CCSDTQ `E_corr` = −0.0247182895 against
+  an exact −0.0517746319 (52 % short).
+
+  Retired rather than fixed because the payoff does not justify the work: the
+  measured saving is ~1.2–1.5× (spin-orbital, actual) against a research task —
+  deriving a spatial operator set plus a spatial-capable matcher — for a bounded
+  ~1.9–2.8× expected. The ~180× generated-vs-hand-written slowdown is a larger
+  untouched lever. Five fix attempts each passed their gate and made the energy
+  worse. Full answer, with the measurements and what was kept:
+  `docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`.
+
+  An earlier version of this entry claimed a verified rank-3 equivalence
+  (`h2` 12/12, `lih` 16/16, `bh3` 26/26). That comparison never ran the
+  generated kernel — `compute_ccsdt_triples_residual` had no caller until
+  `64d0074`, so both builds executed hand-written code and agreed vacuously.
 
 ### CASSCF / SA-CASSCF status
 

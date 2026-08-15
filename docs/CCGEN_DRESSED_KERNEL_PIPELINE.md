@@ -4,9 +4,17 @@ Answers one question: **what are the stages between a `ccgen` residual and a dre
 inside Planck, what does each stage have to get right, and how is each one checked?**
 
 Short answer: five stages — recognize, adapt, emit, build, run — and the interesting content is that
-each stage has a *different failure mode*, invisible to the stage before it. Three real defects were
-found here, one per new kind of check: a declared-vs-built layout mismatch, a flag interaction, and a
-translation unit that had never compiled.
+each stage has a *different failure mode*, invisible to the stage before it. Four real defects were
+found here, one per new kind of check: a declared-vs-built layout mismatch, a flag interaction, a
+translation unit that had never compiled, and a kernel that had no caller at all.
+
+> **The route this doc describes has been retired.** Stages 1-4 hold and are worth reading -- the
+> defects they found are real and the mechanics still describe how the emitter works. But stage 5
+> never passes: dressing and spin adaptation **do not compose**, in either order, and the
+> spin-adapted dressed kernels are wrong by ~52 % of the correlation energy. The decision, the
+> measurements behind it, and what was kept are in `CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`.
+>
+> Read this document for *how the dressed emit pipeline works*, not as a live plan.
 
 ---
 
