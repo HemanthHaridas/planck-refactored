@@ -5,7 +5,7 @@ kernels (UCC) alongside the existing arbitrary-order RCC path** — so an
 open-shell reference can drive `ucc4`/`ucc5` the way a closed-shell reference
 drives `cc4`/`cc5` today.
 
-Everything below is grounded in the current tree. Nothing here is landed.
+Everything below is grounded in the current tree. **U0 is landed** (`ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)`); U1-U5 are not started, and `ucc_adapt_equations` does not exist in the tree.
 
 ---
 
@@ -404,9 +404,16 @@ wiring.
 ## Dressed UCC kernels (U6, scoped separately)
 
 U0–U5 deliver **raw** (undressed) UCC kernels — the same validation altitude the
-RCC generated path sits at today. Dressing UCC is scoped as V5/V6 in
-`CCGEN_DRESSED_KERNEL_VALIDATION_SCOPE.md`, and two of its findings constrain
-choices **inside** U1, so they are not deferrable design-wise:
+RCC generated path sits at today.
+
+**Dressing is RETIRED as a production route** (dressing and spin adaptation do not
+compose; measured 52 % short on Be — see `CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`),
+so there is no dressed-UCC scope to defer to. The retirement note records that
+*for UCC the mechanism predicts dressing would work*, because UCC keeps per-spin-block
+tensors rather than folding to one spatial tensor — untested, and not on this path.
+
+Two design constraints from that work still bind **inside** U1, so they are recorded
+here rather than left in a retired doc:
 
 - **Decision 5 is `GCC → dress → adapt`.** Dressing runs on the spin-orbital
   residual and is spin-adapted afterward, because recognition needs the diagram
@@ -422,10 +429,10 @@ choices **inside** U1, so they are not deferrable design-wise:
   `t2_aaaa` vs `t2_abab` — dressed operators reuse the identical mechanism for
   free. **Use one naming path for amplitudes, ERIs, and intermediates.**
 
-Also flagged there: `Wmbej`'s asymmetric-block (`ovvo`) binding sign is gated on
-`_block_is_asymmetric`, and under UCC that predicate must key on the
-*spin-resolved* block rather than the space pattern alone — the highest-risk
-single item in dressed UCC.
+One further note, kept in case dressing is ever revisited: `Wmbej`'s
+asymmetric-block (`ovvo`) binding sign is gated on `_block_is_asymmetric`, and under
+UCC that predicate would have to key on the *spin-resolved* block rather than the
+space pattern alone — the highest-risk single item in dressed UCC.
 
 ## Open question worth settling early
 

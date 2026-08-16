@@ -7,7 +7,7 @@ a compiled binary, (B) the route to register the generated kernels so they are
 actually executed, and (C) a benchmark script that runs them. Part B is scoped
 first because the runtime tests in A depend on it.
 
-Everything below is grounded in the current tree; nothing here is landed yet.
+Everything below is grounded in the current tree. **W0 is landed** (the rank-parameterized registry); the remaining steps are not.
 
 ---
 

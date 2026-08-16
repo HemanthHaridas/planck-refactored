@@ -74,9 +74,30 @@ gates-to-write and sequencing diagrams.
 Judged compliant in the same audit, for the record: `CCGEN_TEACHING_GUIDE`, `CCGEN_REPORT`,
 `CCGEN_GENERATION_AND_VALIDATION` (teaching/report); `CCGEN_HIGHER_OPERATOR_REUSE`,
 `CCGEN_DIAGRAM_REPRESENTATION_SCOPE`, `CCGEN_INTERMEDIATE_MEMORY_LOCALITY_SCOPE` (already
-question-shaped, work unstarted); `CCGEN_ARBITRARY_ORDER_UCC_SCOPE`, `CCGEN_U1_UCC_ADAPT_SCOPE`,
-`CCGEN_DRESSED_KERNEL_VALIDATION_SCOPE` (genuine in-flight scope — the last has V1 landed but
-V2–V6 ahead, and already delegates V1's detail to `CCGEN_DRESSED_KERNEL_PIPELINE.md`).
+question-shaped, work unstarted); `CCGEN_ARBITRARY_ORDER_UCC_SCOPE`, `CCGEN_U1_UCC_ADAPT_SCOPE`
+(genuine in-flight scope).
+
+`CCGEN_DRESSED_KERNEL_VALIDATION_SCOPE` was in that list and has been **deleted** (2026-08-16): it
+scoped V2–V6 for the dressed route, which is **retired** (see Completion — dressing and spin
+adaptation do not compose, 52 % short on Be). The doc never acknowledged the retirement, so it read
+as live scope inviting work the project has decided against — the "resumes an abandoned route" harm
+this rule exists to prevent, and worse than a stale header because a full ladder looks actionable.
+Its two still-binding design constraints (U1 must accept an already-dressed manifold; block-keyed
+intermediate naming) were moved into `CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md`, where they apply; the
+retirement answer `CCGEN_DRESSING_AND_SPIN_ADAPTATION.md` already records what was kept and what to
+check first if dressing is ever revisited.
+
+### Active ccgen scopes, audited 2026-08-16 (verified against code, not headers)
+
+| scope | state |
+|---|---|
+| `CCGEN_ARBITRARY_ORDER_UCC_SCOPE` + `CCGEN_U1_UCC_ADAPT_SCOPE` | **in progress** — U0 landed (`ucc_independent_blocks(2)` → `['aa','bb']`, `fold_spin_flip` present); U1–U5 unstarted, `ucc_adapt_equations` absent from the tree |
+| `CCGEN_ARBITRARY_HARNESS_COST_SCOPE` | **research, not started** — H0 profile is blocking |
+| `CCGEN_KERNEL_SCALING_SCOPE` | **research, partly open** — H1 (memory-bound) untestable on the current ladder (tops out at 0.49 MiB `t3`); overlaps the cost scope, which hands off to it |
+
+Two docs carried self-contradicting status lines ("nothing here is landed" above a LANDED entry) and
+were corrected in the same pass: `CCGEN_ARBITRARY_ORDER_UCC_SCOPE` (U0) and
+`CCGEN_KERNEL_WIRING_AND_BENCHMARK_SCOPE` (W0).
 
 ## Spherical-basis work still intentionally guarded off
 
