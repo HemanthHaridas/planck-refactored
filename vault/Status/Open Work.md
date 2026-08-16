@@ -154,6 +154,45 @@ not block this. Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`.
   Cartesian-side — see Completion)
 - The ccgen `TensorOptimized` RCCSDT backend is still treated in-tree as an experimental / phase-4 path
 
+## ccgen generated-kernel performance
+
+The dominant cost — the out-of-line, allocating tensor accessors — is fixed (see Completion).
+What remains is the **scaling defect** the six-point ladder exposed: the generated-vs-hand-written
+ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does not obey a single
+`o^a v^b` power law (21.4% residual, concentrated at high `v`). Full measurement in
+`docs/CCGEN_KERNEL_SCALING_SCOPE.md`.
+
+- **Enumerate the terms whose contraction order is wrong.** The high-`v` residual structure points
+  at multiple contraction regimes — different residual terms wanting different orders, with the
+  emitter picking none. `docs/CCGEN_HIGHER_OPERATOR_REUSE.md` already records `t2·t3·v` as `o⁵v⁵`
+  n-ary against `o³v⁴` factored, superlinear in both indices and consistent with the measured
+  `o^0.93 v^0.34`. Do this term-level enumeration **before** any emitter change.
+- **Then consume `_optimal_contraction_order` in the emitter.** `python/ccgen/tensor_ir.py`
+  defines `BLASHint` (`:66`), `_detect_gemm` (`:198`), and `_optimal_contraction_order` (`:283`),
+  and `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` returns nothing — the emitter computes
+  and discards all of it. This is the asymptotic fix. It outranks loop fusion, which was measured
+  at 0.62× (i.e. no gain) at small size.
+- **Firm up the exponents.** `o` spans only 4→8 across six points and the fit still leans on its
+  endpoints (leave-one-out moves `o` across +0.40..+1.18, though it keeps its sign in all six
+  variants). Two or three points in `o=8..12` would settle it. Treat `o^0.9 v^0.3` as indicative,
+  not settled, until then.
+- **The memory-bound hypothesis is untested, not refuted.** The whole reachable ladder stays under
+  0.85 MiB `t3`, inside L2, so a cache transition cannot fire on it. Testing needs cc-pVDZ-class
+  systems (H2O/cc-pVDZ is 6.5 MiB `t3`); at ~50× generated-kernel slowdown that run should be
+  time-boxed before committing to it. Not exclusive with the scaling defect — it could add a term
+  on top once the working set spills.
+- **Rank 4 has no point on the ladder.** Different tensor types, different code path, plus the
+  `-O1` registry pin (`CMakeLists.txt:402`) that rank 3 does not carry. The fixed-rank-only
+  accessor pass already demonstrated rank 3 is not a proxy for rank 4 — do not assume the rank-3
+  exponents transfer. The standing follow-on behind that pin (chunk the giant residual kernels in
+  the ccgen emit so any optimization level stays cheap) is now worth re-costing, since the accessor
+  no longer dominates.
+- **Ladder-design constraint, for whoever extends this.** `choose_determinant_backstop`
+  (`src/post_hf/cc/tensor_backend.cpp:241`) routes any case with `nso ≤ 16` **and** `ndet ≤ 10000`
+  to the determinant-space teaching backstop, which never calls the generated tensor kernel. Such a
+  case produces **no timing at all**, silently, regardless of `PLANCK_RCCSDT_BACKEND`. Any new
+  ladder point must satisfy `nso > 16 || ndet > 10000`.
+
 ## ccgen dressed intermediates
 
 **LANDED. Only the UCC follow-on remains.** See `docs/CCGEN_DRESSED_KERNEL_PIPELINE.md` for the

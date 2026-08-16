@@ -120,9 +120,11 @@ historical design context, but they are no longer the source of truth for
   Retired rather than fixed because the payoff does not justify the work: the
   measured saving is ~1.2–1.5× (spin-orbital, actual) against a research task —
   deriving a spatial operator set plus a spatial-capable matcher — for a bounded
-  ~1.9–2.8× expected. The ~180× generated-vs-hand-written slowdown is a larger
-  untouched lever. Five fix attempts each passed their gate and made the energy
-  worse. Full answer, with the measurements and what was kept:
+  ~1.9–2.8× expected. The generated-vs-hand-written slowdown is a larger
+  untouched lever (this entry previously cited it as "~180×"; that figure never
+  carried its dimensions and did not reproduce — see the tensor-accessor entry
+  below for the measured numbers). Five fix attempts each passed their gate and
+  made the energy worse. Full answer, with the measurements and what was kept:
   `docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`.
 
   An earlier version of this entry claimed a verified rank-3 equivalence
@@ -212,6 +214,59 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- CC tensor element accessors inlined (`src/post_hf/cc/common.h`), the dominant
+  cost in every CC kernel. `Tensor{2,4,6}D::operator()` and the runtime-rank
+  `TensorND` / `DenseTensorView` / `ConstDenseTensorView` braced-index accessors
+  were defined out-of-line in `common.cpp`; with no LTO configured they could
+  not be inlined away, so each element access was a cross-TU call that
+  heap-allocated one or two `std::vector<int>` and built a `std::expected`
+  before indexing. The generated kernels are dominated by this — 3416 accessor
+  call sites in the rank-3 triples residual, 23338 braced-index accesses in the
+  rank-4 quadruples residual (where the `initializer_list` overload additionally
+  copied into a vector via `to_vector` first). Now flat row-major index
+  computations in the header, with the debug assert retaining both conditions
+  the old `checked_fixed_rank_index` enforced: per-index range **and**
+  `offset < data.size()`. The storage half is not redundant with the
+  constructors — `data` is a public member that call sites assign directly after
+  construction (`tensor_backend.cpp:197-198`), so the size invariant is
+  breakable post-construction by design. In release the check compiles out and
+  an out-of-bounds access becomes UB rather than returning a shared
+  `tensor_error_slot`; acceptable because that slot has no consumers anywhere in
+  `src/` or `tests/` and reaching it already fired `assert(false)`. Measured,
+  energies bitwise-identical throughout: rank-3 generated T3 residual 6.40 s →
+  0.031 s (206×), rank-3 hand-written 0.170 s → 0.0014 s (121×), rank-4 CCSDTQ
+  38.5 s → 11.4 s per iteration (3.4×), `water_rccsdt_sto3g` 44.6 s → 0.39 s.
+  **Fixing only the fixed-rank accessors left rank 4 completely unchanged** —
+  the rank ≥ 4 generated kernels index exclusively through the runtime-rank
+  types — so both halves were required; rank 3 is not a proxy for rank 4. Gated
+  by `planck-cc-tensor-index`, which pins the flat index against an independent
+  row-major reference on **non-square** shapes (a square fixture cannot catch a
+  transposed index), covers the permuted-dims `swap_mid_axes` pattern used by
+  `rebind_physicist`, and cross-checks the braced-index overload against the
+  still-out-of-line `vector<int>` one. Also drops the now-unused `to_vector` and
+  `checked_fixed_rank_index`. See `docs/CCGEN_TENSOR_ACCESSOR_FIX_SCOPE.md`.
+- The generated-vs-hand-written CC kernel gap is characterized: it is a
+  **scaling defect, not a constant tax**. Six rank-3 ladder points (BH3/STO-3G
+  21.8× → C2H4/STO-3G 50.1×, no plateau) with the generated and hand-written
+  residuals evaluated from identical amplitudes. Hand-written fits
+  `o^3.94 v^4.18` at 4.5% residual — textbook `o³v³` output × one contracted
+  index. Generated fits `o^4.87 v^4.52` but at 21.4%, and that residual is
+  **concentrated at high `v`** (the four lowest-`v` points fit to ≤5.5%; `v=8`
+  is +21%, `v=11` is −10%), so a single power law does not describe the
+  generated cost — evidence of multiple contraction regimes, consistent with
+  different residual terms having different optimal orders and the emitter
+  picking none of them. The earlier carried "~180× on `bh3`" figure never
+  recorded its dimensions and did not reproduce (measured 37.6× on actual `bh3`
+  pre-accessor-fix); it can be neither explained nor dismissed from this data,
+  and should not be cited. Adds the opt-in `PLANCK_CC_T3_TIME=N` probe (inert
+  when unset). Two constraints found and recorded: `choose_determinant_backstop`
+  (`tensor_backend.cpp:241`) routes `nso ≤ 16 && ndet ≤ 10000` to the
+  determinant-space backstop, which never calls the generated kernel — so
+  `water_rccsdt_sto3g` silently yields no timing at all and any ladder point
+  needs `nso > 16 || ndet > 10000`; and the whole reachable ladder stays under
+  0.85 MiB `t3`, inside L2, so the memory-bound hypothesis is untested rather
+  than refuted. See `docs/CCGEN_KERNEL_SCALING_SCOPE.md` and
+  `docs/CCGEN_KERNEL_PERFORMANCE_SCOPE.md`.
 - SAD isolated-atom false-convergence fixed in the SCF convergence gate
   (`is_converged`, `src/scf/scf.cpp`). For small lone closed-shell atoms
   (He/cc-pVDZ) the SAD guess drove DIIS to extrapolate a Fock whose
