@@ -11,6 +11,8 @@
 #include <stdexcept>
 
 #include "io/logging.h"
+// run_rccsdtq: the arbitrary-order harness, where the generated kernels are correct.
+#include "post_hf/cc/ccsdtq.h"
 #include "post_hf/cc/determinant_space.h"
 #include "post_hf/cc/diis.h"
 // rebind_physicist: generated kernels index physicist <pq|rs> (T1b).
@@ -2477,6 +2479,12 @@ namespace
                 report("after restore   ", restored_generated, restored_hand);
             }
 
+            // `restore` is REQUIRED here, and is not optional: this solver's DIIS packs only
+            // the unique wedge (i<=j<=k) and rebuilds the rest via
+            // restore_restricted_t3_from_unique, which is information-preserving only if the
+            // amplitudes carry full permutational symmetry. Removing this call diverges --
+            // measured, with both hand-written and generated residual sources. See
+            // docs/CCGEN_RANK3_TENSOR_BACKEND_FIX_SCOPE.md.
             restore_restricted_t3_structure(triples_residual);
             metrics.r3_residual_rms = triples_residual_rms(triples_residual);
         }
@@ -3128,18 +3136,51 @@ namespace HartreeFock::Correlation::CC
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs)
     {
-        HartreeFock::Logger::logging(
-            HartreeFock::LogLevel::Info,
-            "RCCSDT[OPT] :",
-            "Using the ccgen-generated RCCSD warm start AND the ccgen-generated restricted "
-            "CCSDT triples kernel.");
-        // Both flags true. The second was `false`, which made this backend indistinguishable
-        // from TensorProduction for the triples residual: `compute_ccsdt_triples_residual`
-        // (the generated kernel) has exactly one call site, guarded by
-        // `use_generated_triples_kernel`, and no caller passed true -- so the generated
-        // rank-3 residual was compiled, linked, and never executed. Anything claiming to
-        // validate the generated kernel through this path was in fact measuring the
-        // hand-written one.
-        return run_tensor_rccsdt_impl(calculator, shell_pairs, true, true);
+        // This backend used to call `run_tensor_rccsdt_impl(..., true, true)`: the generated
+        // triples kernel inside `tensor_backend`'s solver. That combination is WRONG -- it
+        // converges to a self-consistent but incorrect fixed point (CH4/STO-3G: -39.8059200873
+        // against PySCF rccsdt -39.8058445240, i.e. -7.56e-05, recovering more correlation than
+        // CCSDTQ, which is variationally impossible).
+        //
+        // The cause is a representation mismatch, not a bad kernel. `tensor_backend`'s solver
+        // is built around a SYMMETRY-PACKED amplitude representation: its DIIS packs only the
+        // unique wedge (i<=j for t2, i<=j<=k for t3) and rebuilds the rest on unpack via
+        // `restore_restricted_t{2,3}_from_unique`, which is information-preserving only if the
+        // amplitudes carry full permutational symmetry -- the property
+        // `restore_restricted_t3_structure` imposes on the residual each iteration. The ccgen
+        // kernels instead emit every index permutation explicitly, so they do not produce
+        // residuals in that representation. `restore` and the wedge DIIS are one coupled
+        // convention: removing either half diverges, and no combination of the two residual
+        // sources converges to the right answer. Measured, all on CH4/STO-3G:
+        //
+        //   r1/r2 hand + r3 gen + restore  -> converges, -7.56e-05   (the old behavior)
+        //   r1/r2 gen  + r3 gen + restore  -> converges, +8.23e-05
+        //   r1/r2 gen  + r3 gen, no restore-> diverges
+        //   arbitrary harness (dense pack) -> +1.49e-08   <- correct
+        //
+        // The arbitrary-order harness is the generated kernels' native home: it packs dense
+        // tensors, needs no symmetrization step, and reproduces PySCF. So route there instead
+        // of maintaining a second, subtly-incompatible solver around the same kernels.
+        //
+        // Full record: docs/CCGEN_RANK3_TENSOR_BACKEND_FIX_SCOPE.md.
+        constexpr int kArbitraryLowerRanks = PLANCK_CC_ARBITRARY_LOWER_RANKS;
+        if constexpr (kArbitraryLowerRanks == 0)
+        {
+            return std::unexpected(
+                "run_tensor_optimized_rccsdt: the generated rank-3 CCSDT kernel runs only in the "
+                "arbitrary-order harness, which needs -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON. "
+                "Reconfigure with that option, or use the hand-written tensor backend "
+                "(PLANCK_RCCSDT_BACKEND=tensor), which is PySCF-validated by ch4_rccsdt_sto3g.");
+        }
+        else
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "RCCSDT[OPT] :",
+                "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order "
+                "harness (the representation they are emitted for).");
+            calculator._scf._cc_generated_rank = 3;
+            return run_rccsdtq(calculator, shell_pairs);
+        }
     }
 } // namespace HartreeFock::Correlation::CC

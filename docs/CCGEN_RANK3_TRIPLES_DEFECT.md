@@ -1,6 +1,22 @@
 # The generated rank-3 CCSDT triples residual is wrong — handoff
 
-**Open defect, in-flight.** Rewrite as an architecture answer once fixed.
+> **RESOLVED, AND THIS TITLE IS WRONG.** The generated residual is **correct**. It reproduces
+> PySCF `rccsdt` to +1.49e-08 when run in the arbitrary-order harness, and it produces a
+> **bitwise-identical** residual in both harnesses from identical inputs. What was wrong is the
+> `tensor_backend` solver wrapped around it: that solver is built on a symmetry-packed amplitude
+> representation (wedge-packed DIIS + `restore_restricted_t3_structure`) which the generated
+> kernels do not emit into. Fixed by routing the generated rank-3 kernels to the arbitrary-order
+> harness; `optimized` now lands at +1.44e-08 vs PySCF, against −7.56e-05 before.
+>
+> **Everything below is superseded.** Its measurements are real but its framing —
+> generated-vs-hand-written *within* `tensor_backend`, treating the hand-written side as the
+> reference — is the mistake that cost this investigation five falsified hypotheses: the
+> hand-written tensor path had **no regression gate at all**, so it was never a validated
+> reference. Read `docs/CCGEN_RANK3_TENSOR_BACKEND_FIX_SCOPE.md` instead, which carries the
+> diagnosis, the measurements, and the refuted hypotheses.
+>
+> Retained because the wrong turns are part of the answer. To be merged into the architecture
+> rewrite alongside `CCGEN_RANK3_SURFACE_INVESTIGATION_SCOPE.md`.
 
 `compute_ccsdt_triples_residual` (ccgen-generated, rank 3, **undressed**) does not reproduce the
 hand-written triples residual at identical amplitudes. It is independent of the dressing work — see

@@ -1561,6 +1561,39 @@
       ]
     },
     {
+      "id": "ch4_rccsdt_sto3g",
+      "input": "tests/inputs/regression/post_hf/ch4_rccsdt_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "timeout_s": 600,
+      "expected_exit_code": 0,
+      "contains": [
+        "RCCSDT[TENSOR] :              Standalone restricted tensor RCCSDT converged in",
+        "kernels=hand-optimized",
+        "CCSDT Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -39.7267328271,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_close",
+          "metric": "rccsdt_total_energy",
+          "expected": -39.805844524,
+          "atol": 1e-07
+        },
+        {
+          "type": "metric_lt_metric",
+          "left": "rccsdt_total_energy",
+          "right": "rhf_total_energy"
+        }
+      ]
+    },
+    {
       "id": "b_uccsd_sto3g",
       "input": "tests/inputs/regression/post_hf/b_uccsd_sto3g.hfinp",
       "tags": [

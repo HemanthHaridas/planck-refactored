@@ -4,6 +4,19 @@
 part of the step — this investigation has already produced five fixes that passed a structural
 gate and made the physics worse.
 
+> **PARITY IS DEAD — the premise was false.** This investigation rests on "the rank-3 generated
+> triples residual is wrong". It is **not**: the generated rank-3 residual reproduces PySCF
+> `rccsdt` to +1.49e-08 in the arbitrary-order harness, and is **bitwise identical** across both
+> harnesses at identical inputs. The failure was in the `tensor_backend` solver wrapped around it
+> (a symmetry-packed amplitude representation the generated kernels do not emit into), not in any
+> rank's algebra. See `docs/CCGEN_RANK3_TENSOR_BACKEND_FIX_SCOPE.md`.
+>
+> So the odd/even framing never had a defect to explain, and P3/P4 below are moot. What survives is
+> the coverage finding, which is worth more than the hypothesis was: **the arbitrary-order harness
+> is correct at ranks 2, 3 and 4**, and P1's rank-2 result plus the rank-4 gate still stand as
+> independent validation of the generated equations. The genuinely open item is unchanged — ranks
+> 5/6 have no numeric gate at all.
+
 ## The hypothesis
 
 The rank-3 (CCSDT) generated triples residual is wrong. The rank-4 (CCSDTQ) generated kernel
