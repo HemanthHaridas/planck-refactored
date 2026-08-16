@@ -7,6 +7,18 @@ drives `cc4`/`cc5` today.
 
 Everything below is grounded in the current tree. **U0 is landed** (`ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)`); U1-U5 are not started, and `ucc_adapt_equations` does not exist in the tree.
 
+> **Terminology, and it is a trap.** In this repo "**adapt**" means `spin_adapt_equations` — the
+> **spatial collapse** that folds spin blocks into one tensor per rank. **UCC does the opposite**:
+> it keeps blocks resolved (`t2aa`/`t2ab`/`t2bb` as separate arrays) and its defining property is
+> *skipping* the three collapse steps. The names below (`ucc_adapt_equations`, "the UCC adapt
+> entry", this doc's `_ADAPT_` sibling filename) are inherited from the RCC path and read backwards.
+>
+> **The constraint they obscure: UCC is spin-block resolved, never spatial.** Anything that folds
+> α↔β, folds β-majority onto α-majority, or maps a block onto a single reference layout is a
+> closed-shell assumption and is wrong here — see the audit of the three such mechanisms below.
+> When implementing, prefer a name that says what it does (`ucc_resolve_equations` /
+> `_resolve_on_block`) over the inherited "adapt".
+
 ---
 
 ## Rescope against the current tree (2026-08-12, post-V1.1e)
@@ -228,6 +240,40 @@ Two sub-parts:
   **skips** `canonicalize_spin_blocks`, `collapse_amplitudes`,
   `collapse_integrals`. Driven once per block from `ucc_independent_blocks`
   rather than once per Sz sector.
+### Audited 2026-08-16 — the three spatial assumptions U1 must neutralize
+
+Probed against the tree rather than read. Two were already flagged; **the third was not**, and it
+fires at rank 2 where the docs assumed the machinery was safe.
+
+| # | mechanism | where | measured |
+|---|---|---|---|
+| 1 | `external_blocks` folds a↔b (`key = min(combo, flip)`) | `spin.py:409` | `doubles → ['aaaa','abab']`, no `bbbb` |
+| 2 | `_amplitude_block_tag` folds β-majority onto α-majority | `spin.py` | `abbabb → aabaab` |
+| 3 | **`_canonicalize_amplitude_factor` reorders *every* rank ≥ 2 amplitude onto one reference layout** | `spin.py:878` | `t2 baba` → slots reordered to `[j,i,b,a]`; `t2 aaaa` and `t2 bbbb` both emit as bare `t2` |
+
+**Assumption 3 is the one to design against.** Its docstring is explicit that it exists because "the
+spin→AlgebraTerm bridge drops the spin label, so unless every factor is first mapped to that one
+reference layout, a factor read in a non-reference block indexes the wrong slice of **the single
+spatial tensor**". That premise — one stored tensor per rank — is exactly what UCC removes. Two
+consequences:
+
+- The **α/β flip is only valid closed-shell.** The docstring says so itself: "A closed-shell
+  amplitude is spin-flip symmetric (t[σ] = t[flip σ] index-for-index)". Under UCC `t2aa` and `t2bb`
+  are different arrays and that identity is false.
+- **`_factor_tensor_name`'s gate is `len(f.block) >= 8`**, so t1/t2/t3 can *never* receive a block
+  tag. Measured: `t2 aaaa` and `t2 bbbb` both emit as bare `t2`. U1.1's naming fix must therefore
+  **lower that gate to every rank**, not just generalize the tag — naming alone at rank ≥ 4 leaves
+  rank 2 silently collapsed.
+
+So U1.1 is not only "add the block to the name": it must **also disable the canonicalizer's
+reordering for UCC**, or the name will be right while the slots have been permuted onto another
+block's layout. These are one change — the canonicalizer and the naming both exist to service the
+single-tensor assumption — and doing only the visible half is the failure mode.
+
+Cheap gate, available before any C++: `t2 aaaa` and `t2 bbbb` must emit **distinct** tensor names
+and **unpermuted** slots. Both are one-line assertions on `spinterm_to_algebraterm` output and
+neither needs a solve.
+
 - **U1.1 — spin-resolved factor names in the bridge.** `spinterm_to_algebraterm`
   currently drops the spin label, which is *correct* for RCC (everything lives
   in one spatial tensor) and *wrong* for UCC (`t2aa` and `t2ab` are different

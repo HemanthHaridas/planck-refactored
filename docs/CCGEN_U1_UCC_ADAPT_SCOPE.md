@@ -1,10 +1,17 @@
-# U1 — the UCC adapt entry, scoped as U1.0–U1.5
+# U1 — the UCC block-resolution entry, scoped as U1.0–U1.5
 
 Decides U1's scope against the current tree. **Probed first**, and the probe moved the risk:
 the half I flagged as dangerous is safe at rank 4 and dangerous at rank 6, for a reason the
 original scope did not name.
 
 U0 is landed (`ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)`).
+
+> **"Adapt" reads backwards here.** In this repo it means `spin_adapt_equations`, the **spatial
+> collapse**; U1 is the entry that *skips* that collapse and keeps blocks resolved. The filename and
+> the inherited `_adapt_on_block` naming say the opposite of what this step does. **UCC is
+> spin-block resolved, never spatial** — see the three-assumption audit in
+> `CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md`, one of which (`_canonicalize_amplitude_factor`) fires at
+> rank 2 and is not addressed by U1.1's naming fix alone.
 
 ---
 
