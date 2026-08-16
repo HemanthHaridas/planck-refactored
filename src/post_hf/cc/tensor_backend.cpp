@@ -2484,7 +2484,7 @@ namespace
             // restore_restricted_t3_from_unique, which is information-preserving only if the
             // amplitudes carry full permutational symmetry. Removing this call diverges --
             // measured, with both hand-written and generated residual sources. See
-            // docs/CCGEN_RANK3_TENSOR_BACKEND_FIX_SCOPE.md.
+            // docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md.
             restore_restricted_t3_structure(triples_residual);
             metrics.r3_residual_rms = triples_residual_rms(triples_residual);
         }
@@ -3162,7 +3162,7 @@ namespace HartreeFock::Correlation::CC
         // tensors, needs no symmetrization step, and reproduces PySCF. So route there instead
         // of maintaining a second, subtly-incompatible solver around the same kernels.
         //
-        // Full record: docs/CCGEN_RANK3_TENSOR_BACKEND_FIX_SCOPE.md.
+        // Full record: docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md.
         constexpr int kArbitraryLowerRanks = PLANCK_CC_ARBITRARY_LOWER_RANKS;
         if constexpr (kArbitraryLowerRanks == 0)
         {

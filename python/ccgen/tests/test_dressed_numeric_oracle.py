@@ -33,7 +33,7 @@ Be run could only report as "the number is wrong".
 
 Scope: this file gates the intermediates' VALUES. `test_intermediate_layout_agreement`
 gates their slot layout. Both are needed -- the layout defect is real and separate (see
-docs/CCGEN_RANK3_TRIPLES_DEFECT.md), it is simply not what costs the 52 %.
+docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md), it is simply not what costs the 52 %.
 """
 
 from __future__ import annotations

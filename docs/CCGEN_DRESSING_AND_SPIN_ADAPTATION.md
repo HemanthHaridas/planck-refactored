@@ -143,7 +143,7 @@ Two things to settle first, cheaply, while U1 is being scoped:
 
 The **undressed rank-3 triples residual is independently wrong** — it writes ~45 % of the elements
 it should, with unrelated values on those. That defect predates dressing, is unaffected by turning it
-off, and blocks a path that is in production. See `CCGEN_RANK3_TRIPLES_DEFECT.md`.
+off, and blocks a path that is in production. See `CCGEN_RANK3_KERNEL_AND_SOLVER.md`.
 
 ## Key code locations
 

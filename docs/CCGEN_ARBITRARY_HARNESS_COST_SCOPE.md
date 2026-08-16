@@ -1,7 +1,7 @@
 # What does the correct rank-3 CC path cost, and can it be made cheap?
 
 **Scope. Not started.** Opened by the option-2 decision in
-`CCGEN_RANK3_TENSOR_BACKEND_FIX_SCOPE.md`: the generated rank-3 kernels now run in the
+`CCGEN_RANK3_KERNEL_AND_SOLVER.md`: the generated rank-3 kernels now run in the
 arbitrary-order harness, which is **correct** (CH4/STO-3G +1.49e-08 vs PySCF `rccsdt`) but
 **~500× slower** than the hand-written tensor backend. This doc is about closing that gap.
 
@@ -24,8 +24,8 @@ Two things follow immediately:
   *generated* configurations and mislabelling one as the hand-written path. The honest number
   against the correct hand-written baseline is **~500×**.
 
-Do not carry the older "~180×" figure from `CCGEN_RANK3_TRIPLES_DEFECT.md` either — it predates the
-tensor-accessor fix and never recorded its dimensions.
+Do not carry the older "~180×" figure that circulated in the retired rank-3 defect notes either — it
+predates the tensor-accessor fix and never recorded its dimensions.
 
 ## Where the cost is — hypotheses, none yet measured
 
@@ -140,4 +140,4 @@ produce:
 | unused contraction-order analysis (H1's fix) | `python/ccgen/tensor_ir.py:283` |
 | intermediates-off rationale (H3) | `ccgen_spin_adapt_no_intermediates`, `CMakeLists.txt:402` |
 | the scaling defect this may reduce to | `docs/CCGEN_KERNEL_SCALING_SCOPE.md` |
-| why the correct path is the arbitrary harness | `docs/CCGEN_RANK3_TENSOR_BACKEND_FIX_SCOPE.md` |
+| why the correct path is the arbitrary harness | `docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md` |

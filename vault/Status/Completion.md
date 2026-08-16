@@ -245,6 +245,38 @@ historical design context, but they are no longer the source of truth for
   `rebind_physicist`, and cross-checks the braced-index overload against the
   still-out-of-line `vector<int>` one. Also drops the now-unused `to_vector` and
   `checked_fixed_rank_index`. See `docs/CCGEN_TENSOR_ACCESSOR_FIX_SCOPE.md`.
+- Generated rank-3 CCSDT fixed, and the kernel was never the defect. The ccgen
+  rank-3 triples residual reproduces PySCF `rccsdt` to +1.49e-08 and is
+  **bitwise identical** across both harnesses at identical inputs; what was wrong
+  is the `tensor_backend` solver wrapped around it. That solver uses a
+  symmetry-packed amplitude representation — DIIS packs only the unique wedge
+  (`i<=j` for t2, `i<=j<=k` for t3) and rebuilds the rest via
+  `restore_restricted_t{2,3}_from_unique`, valid only if the amplitudes carry full
+  permutational symmetry, which `restore_restricted_t3_structure` imposes each
+  iteration. The ccgen kernels emit every index permutation explicitly instead, so
+  they never produce residuals in that representation. The wedge packing and
+  `restore` are one coupled convention: removing either half diverges (measured
+  with both residual sources), and no combination of residual sources inside
+  `tensor_backend` converges correctly — hand r1/r2 + gen r3 gives −7.56e-05, all
+  three generated gives +8.23e-05. Fixed by routing generated rank-3 to the
+  arbitrary-order harness, the representation the kernels are emitted for:
+  `optimized` now lands at +1.44e-08 (5247× error reduction) and agrees with the
+  hand-written path to 1.0e-10; without
+  `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` it fails with an actionable message
+  instead of a wrong number. The hand-written path is untouched and bitwise
+  unchanged. **The rank-parity hypothesis is dead** — its premise (rank 3 is
+  wrong) was false; the arbitrary harness is correct at ranks 2, 3 and 4, and
+  ranks 5/6 still have no numeric gate. New gate `ch4_rccsdt_sto3g` (`nso=18
+  ndet=43758`, `no=5 != nv=4`, PySCF −39.8058445240) is the **only** in-tree
+  rank-3 case that clears `choose_determinant_backstop` and therefore the only one
+  that reaches the tensor path at all — every other CC case routes to the
+  determinant prototype, and `water_rccsdt_sto3g` even *asserts* the backstop
+  handoff, so the hand-written tensor solver had no regression gate for its entire
+  life. Verified falsifiable before being trusted. Cost is not addressed: the
+  correct path is ~500× slower (0.19 s vs ~100 s on CH4), per-iteration rather
+  than convergence; see `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`. Full answer,
+  with the eight ruled-out hypotheses:
+  `docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md`.
 - The generated-vs-hand-written CC kernel gap is characterized: it is a
   **scaling defect, not a constant tax**. Six rank-3 ladder points (BH3/STO-3G
   21.8× → C2H4/STO-3G 50.1×, no plateau) with the generated and hand-written
