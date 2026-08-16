@@ -141,7 +141,7 @@ their cost gap before writing any emitter change.
 
 ## Original scope (retained)
 
-The accessor fix (`CCGEN_TENSOR_ACCESSOR_FIX_SCOPE.md`) removed the per-access allocation that
+The accessor fix (`CCGEN_TENSOR_ACCESSOR.md`) removed the per-access allocation that
 dominated every earlier measurement, leaving a residual **22×** generated-vs-hand-written ratio at
 rank 3. That residual is the first number in this investigation that is plausibly *structural* —
 loop shape and contraction order — rather than an artifact of how an element is fetched.

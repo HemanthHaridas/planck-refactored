@@ -2514,7 +2514,7 @@ class S4dRank8IdentityTests(unittest.TestCase):
         # `t4_aaabaaab` (abbbabbb folds onto it via the existing flip), and the
         # solve reads that block from its own stored tensor. Rank-8, ~30s -- iterate
         # here, not the ~15min Be CCSDTQ solve. See
-        # docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md (R3.1.3).
+        # docs/CCGEN_CCSDTQ_MULTISECTOR.md (R3.1.3).
         import numpy as np
         from ccgen.spin import (ucc_integrate_term_antisym,
                                 canonicalize_spin_blocks, collapse_amplitudes,

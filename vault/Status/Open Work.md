@@ -29,33 +29,42 @@ truth for what remains.
 - Revalidate the CASSCF/PySCF gate suite after future optimizer work; the current tree matches the documented state, but the 11/11 suite was not freshly rerun during the May 25 consolidation review
 - Keep documentation comments aligned with the implemented spherical symmetry representation; stale comments have already drifted once
 
-## docs/ hygiene — five ccgen scope docs owe an architecture rewrite
+## docs/ hygiene — two ccgen scope docs still owe an architecture rewrite
 
 A file in `docs/` answers one architecture question or is a teaching guide; scoping **in-flight**
-work is the only exception, and it expires when that work lands. Audited 2026-08-13 — five docs
-cover landed work but are still step ladders (~1871 lines):
+work is the only exception, and it expires when that work lands.
+
+**Three of the original five are done (2026-08-16).** The CCSDTQ trio collapsed into one answer, as
+predicted — they were split by *effort* and merged once regrouped by *question*:
+
+| retired | into |
+|---|---|
+| `CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md` (295) | `docs/CCGEN_CCSDTQ_MULTISECTOR.md` |
+| `CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md` (225) | same |
+| `CCGEN_CCSDTQ_FCI_VERIFICATION_SCOPE.md` (128) | same |
+| `CCGEN_TENSOR_ACCESSOR_FIX_SCOPE.md` (181) | `docs/CCGEN_TENSOR_ACCESSOR.md` |
+
+All three CCSDTQ docs carried **stale headers contradicting their own content** — the bridge doc
+advertised a rank-8 `xfail` that no longer exists in the code, the verification doc kept a "Why it
+is still RED" section under a GREEN status line, and the wiring doc claimed "two gaps, both open"
+when both were closed. Verified before rewriting: 12 bridge tests pass, the Be CCSDTQ==FCI oracle
+passes (12m01s), and `be_rccsdtq_sto3g` passes end-to-end. **Do not trust a status header without
+running its gate** — four such headers were found false in one session.
+
+Remaining, deliberately deferred until the UCC work (U1–U5) lands:
 
 | doc | lines | landed work |
 |---|---|---|
 | `CCGEN_SPIN_ADAPTATION_SCOPE.md` | 892 | S0–S4 |
 | `CCGEN_KERNEL_WIRING_AND_BENCHMARK_SCOPE.md` | 331 | kernel wiring + benchmarks |
-| `CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md` | 295 | R3.1.2 / R3.1.3 bridge |
-| `CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md` | 225 | Gap A–B multisector |
-| `CCGEN_CCSDTQ_FCI_VERIFICATION_SCOPE.md` | 128 | Be CCSDTQ == FCI |
 
-**Deliberately deferred until the UCC work (U1–U5) lands.** `CCGEN_SPIN_ADAPTATION_SCOPE.md` is the
-reference U1 works against, so rewriting it into an answer now risks discarding scope that is still
-load-bearing for unstarted work. The other four are rewritable at any time but are held with it so
-the regrouping happens once.
-
-Proposed target — 5 docs → 3 questions, because these were split by *effort* and merge when
-regrouped by *question* (the same collapse the V1.1e trio showed):
+`CCGEN_SPIN_ADAPTATION_SCOPE.md` is the reference U1 works against, so rewriting it now risks
+discarding scope still load-bearing for unstarted work. Target questions:
 
 - **`CCGEN_SPIN_ADAPTATION.md`** — how does a spin-orbital CC equation become a spatial one?
-  (absorbs the R3 bridge; the bridge is a stage of that answer, not a separate question)
+  (the rank-4 multi-sector half of this is already answered in `CCGEN_CCSDTQ_MULTISECTOR.md`)
 - **`CCGEN_KERNEL_WIRING.md`** — how does a generated kernel reach a runnable binary, and what does
-  it cost? (absorbs multisector; sectors are a case of wiring)
-- **`CCGEN_CCSDTQ_FCI_EQUIVALENCE.md`** — how do we know a generated CCSDTQ kernel is exact?
+  it cost?
 
 When doing it: read `CCGEN_SPIN_ADAPTATION_SCOPE.md` in full first, and move any still-live UCC
 scope into `CCGEN_U1_UCC_ADAPT_SCOPE.md` rather than dropping it. Keep the measured numbers, the

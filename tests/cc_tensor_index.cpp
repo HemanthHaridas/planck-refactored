@@ -2,7 +2,7 @@
 // independent row-major reference.
 //
 // The accessors were moved out of common.cpp into common.h as flat-index computations
-// (docs/CCGEN_TENSOR_ACCESSOR_FIX_SCOPE.md); this asserts the flat form reproduces the
+// (docs/CCGEN_TENSOR_ACCESSOR.md); this asserts the flat form reproduces the
 // original `flatten_index` row-major layout exactly.
 //
 // NON-SQUARE DIMENSIONS ARE THE POINT. With every extent equal (the bh3/STO-3G case is

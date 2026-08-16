@@ -1007,7 +1007,7 @@ def spinterm_to_algebraterm(spinterm: SpinTerm, externals):
     # choice is invariant for the Python oracle (`residual_einsum` re-splits by
     # space internally -> always [vir,occ] output) and for the P2 bridge gates
     # (`_bridge_output_layout` re-derives vir+occ), so only the C++ path cares.
-    # See docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md.
+    # See docs/CCGEN_CCSDTQ_MULTISECTOR.md.
     free.sort(key=lambda b: (0 if b.space == "occ" else 1, b.name))
     return AlgebraTerm(Fraction(spinterm.coeff), factors,
                        tuple(free), tuple(summed), True)

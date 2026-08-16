@@ -244,7 +244,7 @@ historical design context, but they are no longer the source of truth for
   transposed index), covers the permuted-dims `swap_mid_axes` pattern used by
   `rebind_physicist`, and cross-checks the braced-index overload against the
   still-out-of-line `vector<int>` one. Also drops the now-unused `to_vector` and
-  `checked_fixed_rank_index`. See `docs/CCGEN_TENSOR_ACCESSOR_FIX_SCOPE.md`.
+  `checked_fixed_rank_index`. See `docs/CCGEN_TENSOR_ACCESSOR.md`.
 - Generated rank-3 CCSDT fixed, and the kernel was never the defect. The ccgen
   rank-3 triples residual reproduces PySCF `rccsdt` to +1.49e-08 and is
   **bitwise identical** across both harnesses at identical inputs; what was wrong

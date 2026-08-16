@@ -9,7 +9,7 @@ attributed cause were wrong. The dominant cost was `Tensor*::operator()` — an 
 that **heap-allocated `std::vector<int>` per element access**. Loop fission, the thing this doc
 originally hypothesized, is **not** a penalty at the measured size.
 
-The fix landed (`docs/CCGEN_TENSOR_ACCESSOR_FIX_SCOPE.md`): all fixed-rank *and* runtime-rank
+The fix landed (`docs/CCGEN_TENSOR_ACCESSOR.md`): all fixed-rank *and* runtime-rank
 (`TensorND` / `DenseTensorView` / `ConstDenseTensorView`) hot accessors are now inlined in
 `common.h`. Measured result, energies bitwise-identical throughout:
 
@@ -112,7 +112,7 @@ fixing only the fixed-rank accessors moved rank 3 by 76× and rank 4 by nothing 
 
 1. ~~**Make the accessor cheap.**~~ **Done** — inlined in `common.h`, fixed-rank *and* runtime-rank.
    One mechanism covering every rank and both kernel families at once. See
-   `docs/CCGEN_TENSOR_ACCESSOR_FIX_SCOPE.md` for the invariants it had to preserve.
+   `docs/CCGEN_TENSOR_ACCESSOR.md` for the invariants it had to preserve.
 2. **Re-measure the ratio at production `o`/`v` (P3).** ← now the next step. With the accessor
    fixed, the remaining 22× is whatever is genuinely structural. H1 may reappear here.
 3. **Only then consider fusing / consuming the IR hints.** `tensor_ir.py` defines `BLASHint`

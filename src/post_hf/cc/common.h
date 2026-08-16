@@ -21,7 +21,7 @@ namespace HartreeFock::Correlation::CC
         // std::expected; with no LTO configured it could not be inlined away, costing two
         // heap allocations per element read. Measured at 13.5x on the rank-3 triples
         // kernel -- the dominant term in the generated-vs-hand-written gap.
-        // See docs/CCGEN_TENSOR_ACCESSOR_FIX_SCOPE.md.
+        // See docs/CCGEN_TENSOR_ACCESSOR.md.
         //
         // The debug assert keeps BOTH conditions the old checked_fixed_rank_index enforced:
         // per-index range, and offset < data_size. The storage half is not redundant with

@@ -445,7 +445,7 @@ U1 constraints above so V5 stays a switch rather than a rewrite.
 ---
 
 See `CCGEN_SPIN_ADAPTATION_SCOPE.md` (the S0–S4 layer this extends; UCC is the
-deferral noted at its S3 close), `CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md` (the
+deferral noted at its S3 close), `CCGEN_CCSDTQ_MULTISECTOR.md` (the
 bridge exactness and the multi-sector precedent), and
-`CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md` (gaps B1–B4, the sector runtime UCC
+`CCGEN_CCSDTQ_MULTISECTOR.md` (gaps B1–B4, the sector runtime UCC
 reuses wholesale).

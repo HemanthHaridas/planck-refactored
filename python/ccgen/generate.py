@@ -1110,7 +1110,7 @@ def print_cpp_planck(
         # (~1544 build_W_* functions -> a ~26 min -O3 registry compile). So the
         # two are mutually exclusive: spin-adaptation forces intermediates OFF
         # until CSE is validated on the spatial layout. See
-        # docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md.
+        # docs/CCGEN_CCSDTQ_MULTISECTOR.md.
         if include_intermediates:
             include_intermediates = False
 
