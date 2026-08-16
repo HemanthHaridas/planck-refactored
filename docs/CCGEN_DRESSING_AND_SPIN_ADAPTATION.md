@@ -1,7 +1,4 @@
-# Why dressing and spin adaptation do not compose
-
-Answers one question: **can ccgen's dressed-operator factorization be combined with spin
-adaptation, and is it worth doing?**
+# Can ccgen's dressed-operator factorization be combined with spin adaptation, and is it worth doing?
 
 Short answer: **no, and no.** Each transform is correct alone and the composition is wrong in
 either order, for a structural reason. The measured FLOP payoff (~1.2–1.5× actual on
@@ -156,3 +153,7 @@ off, and blocks a path that is in production. See `CCGEN_RANK3_KERNEL_AND_SOLVER
 | spin adaptation | `ccgen/spin.py`, `spin_adapt_equations` |
 | spatial ERI symmetry contract | `ccgen/emit/planck_tensor_cpp.py`, `_ERI_SYMMETRY_PERMUTATIONS` |
 | contraction cost model | `ccgen/optimization/factorize.py`, `contraction_tree_cost` |
+
+---
+
+Status (what is landed, what is open) lives in `vault/Status/Completion.md` and `vault/Status/Open Work.md`, which are canonical.

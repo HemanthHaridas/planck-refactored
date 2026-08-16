@@ -92,3 +92,7 @@ in bounds and fail silently.
 | remaining out-of-line `vector<int>` overloads (non-hot; the gate's cross-check) | `src/post_hf/cc/common.cpp` |
 | direct `.data` assignment that breaks the size invariant | `src/post_hf/cc/tensor_backend.cpp:197,198` |
 | layout gate | `tests/cc_tensor_index.cpp` |
+
+---
+
+Status (what is landed, what is open) lives in `vault/Status/Completion.md` and `vault/Status/Open Work.md`, which are canonical.

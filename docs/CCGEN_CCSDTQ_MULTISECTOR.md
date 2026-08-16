@@ -106,3 +106,7 @@ tolerance question rather than a missing manifold.
 | C++ sector carry + drive | `ensure_amplitude_sectors`, `evaluate_generated_arbitrary_order_residuals` (`generated_arbitrary_runtime.cpp`) |
 | codegen switch | `--spin-adapt` → `print_cpp_planck(spin_adapt=...)`, `python/generate_planck_cc_kernels.py` |
 | end-to-end gate | `be_rccsdtq_sto3g` in `tests/regression_cases.json` |
+
+---
+
+Status (what is landed, what is open) lives in `vault/Status/Completion.md` and `vault/Status/Open Work.md`, which are canonical.

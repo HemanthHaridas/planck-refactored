@@ -153,3 +153,7 @@ Open, with a blocking profile step: `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`
 | the correct harness | `src/post_hf/cc/generated_arbitrary_runtime.cpp`, `solver_arbitrary.cpp` |
 | backstop gate that hid all of this | `choose_determinant_backstop`, same file |
 | the gate that now covers it | `ch4_rccsdt_sto3g` in `tests/regression_cases.json` |
+
+---
+
+Status (what is landed, what is open) lives in `vault/Status/Completion.md` and `vault/Status/Open Work.md`, which are canonical.

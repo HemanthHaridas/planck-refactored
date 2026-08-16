@@ -168,3 +168,7 @@ savings are, and they are retained per the budget.)
 see the `cc_canonical_fock_only` invariant). See
 `CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md` (Decision 4) for the recognition/assembly
 machinery this builds on.
+
+---
+
+Status (what is landed, what is open) lives in `vault/Status/Completion.md` and `vault/Status/Open Work.md`, which are canonical.
