@@ -60,6 +60,71 @@ def random_tensors(no: int, nv: int, seed: int = 0):
     return {"t1": t1, "t2": t2, "t3": t3, "t4": t4, "v": v, "f": f}
 
 
+def ucc_random_tensors(noa: int, nva: int, nob: int, nvb: int, seed: int = 0):
+    """F1 -- a spin-resolved tensor bundle for the UCC numeric gate.
+
+    Sibling of :func:`random_tensors`, not a generalization of it: that one has
+    seven consumers whose signature must not move, and UCC needs per-spin spaces
+    of DIFFERENT sizes plus per-block ERIs.
+
+    Keyed by the names the UCC bridge emits (`t1_aa`, `t2_abab`, `v_aaaa`, ...).
+    Layout follows the bridge's own output -- amplitudes are ``(vir..., occ...)``
+    and a block tag's FIRST half indexes the virtual slots, its SECOND half the
+    occupied ones. So `t2_abab` is ``(nva, nvb, noa, nob)``.
+
+    Symmetry is per block, and getting this wrong is the easiest way to build a
+    fixture that silently disagrees with PySCF:
+
+    * ``aaaa`` / ``bbbb`` are antisymmetric within the bra pair and within the
+      ket pair independently -- both slots are the same spin space, so the swap
+      is a real permutation of identical particles.
+    * ``abab`` is **not** antisymmetrized across the halves: its two slots are
+      different spin spaces. On a non-square case the transpose is not even
+      shape-legal.
+    * ERIs carry ``<pq||rs> = <rs||pq>`` in every block; the within-bra/ket
+      antisymmetry only in the same-spin blocks.
+    """
+    rng = np.random.default_rng(seed)
+    na, nb = noa + nva, nob + nvb
+
+    def _same_spin_t2(nv, no):
+        a = rng.random((nv, nv, no, no))
+        a = a - a.transpose(1, 0, 2, 3)
+        return a - a.transpose(0, 1, 3, 2)
+
+    def _same_spin_v(n):
+        v = rng.random((n, n, n, n))
+        v = v + v.transpose(2, 3, 0, 1)
+        v = v - v.transpose(1, 0, 2, 3)
+        v = v - v.transpose(0, 1, 3, 2)
+        # the antisym projections do not commute with the bra<->ket one, so a
+        # single pass leaves a residual -- same re-impose random_tensors needs.
+        return v + v.transpose(2, 3, 0, 1)
+
+    def _mixed_v(n_bra, n_ket):
+        # <a b || a b>: bra<->ket symmetric, no within-half antisymmetry (the two
+        # slots of each half are different spin spaces).
+        v = rng.random((n_bra, n_ket, n_bra, n_ket))
+        return v + v.transpose(2, 3, 0, 1)
+
+    def _sym_fock(n):
+        f = rng.random((n, n))
+        return f + f.T
+
+    return {
+        "t1_aa": rng.random((nva, noa)),
+        "t1_bb": rng.random((nvb, nob)),
+        "t2_aaaa": _same_spin_t2(nva, noa),
+        "t2_abab": rng.random((nva, nvb, noa, nob)),
+        "t2_bbbb": _same_spin_t2(nvb, nob),
+        "v_aaaa": _same_spin_v(na),
+        "v_bbbb": _same_spin_v(nb),
+        "v_abab": _mixed_v(na, nb),
+        "f_aa": _sym_fock(na),
+        "f_bb": _sym_fock(nb),
+    }
+
+
 def residual_einsum(term, no: int, nv: int, tensors=None, seed: int = 0):
     """Evaluate one term to its residual array via a single ``np.einsum``.
 

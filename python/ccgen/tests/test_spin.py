@@ -3022,3 +3022,99 @@ class U10UccAdaptEntryTests(unittest.TestCase):
         self.assertEqual(sorted(adapted.keys()), ["doubles", "energy", "singles"])
         self.assertEqual({k: len(v) for k, v in adapted.items()},
                          {"singles": 30, "doubles": 113, "energy": 4})
+
+
+class F1UccRandomTensorsTests(unittest.TestCase):
+    """F1 -- the spin-resolved tensor bundle for the UCC numeric gate.
+
+    The RCC fixture (`random_tensors`) carries ONE (no, nv) pair and one
+    spin-free `v`. UCC needs per-spin spaces of DIFFERENT sizes (CH3/STO-3G:
+    noa=5 nva=4, nob=4 nvb=5) and per-block ERIs, so it gets its own bundle
+    rather than a parameter on the shared one -- seven consumers call the RCC
+    fixture and its signature must not move.
+
+    Layout contract, read off the bridge's own output: amplitudes are
+    (vir..., occ...) like RCC, and a block tag's FIRST half indexes the virtual
+    slots, its SECOND half the occupied ones.
+    """
+
+    DIMS = dict(noa=5, nva=4, nob=4, nvb=5)   # non-square in both spins
+
+    def test_amplitude_shapes_match_the_block_tag(self):
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        t = ucc_random_tensors(**self.DIMS, seed=0)
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        self.assertEqual(t["t1_aa"].shape, (nva, noa))
+        self.assertEqual(t["t1_bb"].shape, (nvb, nob))
+        self.assertEqual(t["t2_aaaa"].shape, (nva, nva, noa, noa))
+        self.assertEqual(t["t2_abab"].shape, (nva, nvb, noa, nob))
+        self.assertEqual(t["t2_bbbb"].shape, (nvb, nvb, nob, nob))
+
+    def test_same_spin_blocks_are_antisymmetric(self):
+        """aaaa/bbbb are antisymmetric within bra and within ket independently."""
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        t = ucc_random_tensors(**self.DIMS, seed=0)
+        for name in ("t2_aaaa", "t2_bbbb"):
+            a = t[name]
+            self.assertLess(np.abs(a + a.transpose(1, 0, 2, 3)).max(), 1e-14,
+                            f"{name} not antisymmetric in its virtual pair")
+            self.assertLess(np.abs(a + a.transpose(0, 1, 3, 2)).max(), 1e-14,
+                            f"{name} not antisymmetric in its occupied pair")
+
+    def test_mixed_block_is_NOT_antisymmetrized(self):
+        """t2_abab's two halves are different spin spaces, so swapping them is
+        not a symmetry. Antisymmetrizing it is the easiest way to build a fixture
+        that silently disagrees with PySCF -- and on a non-square case the
+        transpose is not even shape-legal, which is what makes this assertable."""
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        t = ucc_random_tensors(**self.DIMS, seed=0)
+        a = t["t2_abab"]
+        # non-square in BOTH pairs, so a spin-swap transpose is not shape-legal --
+        # which is precisely why an accidental antisymmetrization cannot hide here.
+        self.assertNotEqual(a.shape[0], a.shape[1],
+                            "fixture dims must be non-square to make this check bite")
+        self.assertNotEqual(a.shape[2], a.shape[3])
+        self.assertGreater(np.abs(a).max(), 0.0, "t2_abab is all zeros")
+        # the aa/bb blocks ARE antisymmetric; abab must not have inherited it by
+        # being built from the same code path.
+        self.assertGreater(np.abs(a + a.transpose(0, 1, 2, 3)).max(), 0.0)
+
+    def test_eri_blocks_have_the_right_shapes_and_symmetry(self):
+        """UCC needs per-block ERIs. <pq||rs> antisymmetry holds WITHIN a spin
+        (aaaa/bbbb); the mixed block only carries bra<->ket."""
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        t = ucc_random_tensors(**self.DIMS, seed=0)
+        na = self.DIMS["noa"] + self.DIMS["nva"]
+        nb = self.DIMS["nob"] + self.DIMS["nvb"]
+        self.assertEqual(t["v_aaaa"].shape, (na, na, na, na))
+        self.assertEqual(t["v_bbbb"].shape, (nb, nb, nb, nb))
+        self.assertEqual(t["v_abab"].shape, (na, nb, na, nb))
+        for name in ("v_aaaa", "v_bbbb"):
+            v = t[name]
+            self.assertLess(np.abs(v + v.transpose(1, 0, 2, 3)).max(), 1e-12,
+                            f"{name} missing bra antisymmetry")
+            self.assertLess(np.abs(v - v.transpose(2, 3, 0, 1)).max(), 1e-12,
+                            f"{name} missing bra<->ket symmetry")
+        vab = t["v_abab"]
+        self.assertLess(np.abs(vab - vab.transpose(2, 3, 0, 1)).max(), 1e-12,
+                        "v_abab missing bra<->ket symmetry")
+
+    def test_fock_is_per_spin(self):
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        t = ucc_random_tensors(**self.DIMS, seed=0)
+        na = self.DIMS["noa"] + self.DIMS["nva"]
+        nb = self.DIMS["nob"] + self.DIMS["nvb"]
+        self.assertEqual(t["f_aa"].shape, (na, na))
+        self.assertEqual(t["f_bb"].shape, (nb, nb))
+
+    def test_rcc_fixture_is_unchanged(self):
+        """The seven existing consumers must see byte-identical output."""
+        import numpy as np
+        from ccgen.tests.residual_eval import random_tensors
+        t = random_tensors(3, 4, seed=0)
+        self.assertEqual(sorted(t.keys()), ["f", "t1", "t2", "t3", "t4", "v"])
+        self.assertEqual(t["t2"].shape, (4, 4, 3, 3))
+        self.assertLess(np.abs(t["v"] - t["v"].transpose(2, 3, 0, 1)).max(), 1e-12)
