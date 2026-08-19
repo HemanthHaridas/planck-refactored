@@ -92,7 +92,8 @@ check first if dressing is ever revisited.
 | scope | state |
 |---|---|
 | `CCGEN_ARBITRARY_ORDER_UCC_SCOPE` + `CCGEN_U1_UCC_ADAPT_SCOPE` | **in progress** — U0, **U1.0 and U1.1 landed** (`ucc_adapt_equations`, `ucc_spinterm_to_algebraterm`); U1.2 **blocked** on the fixture below; U1.3–U5 unstarted |
-| `CCGEN_UCC_NUMERIC_FIXTURE_SCOPE` | **not started, blocking U1.2** — `residual_einsum` cannot evaluate mixed-spin blocks (α/β spaces differ in size), so the landed UCC residuals are gated **structurally only** and their values are unverified |
+| `CCGEN_UCC_NUMERIC_FIXTURE_SCOPE` | **F1 landed** (`ucc_random_tensors`); F3 blocked on F2 |
+| `CCGEN_UCC_RESIDUAL_EVALUATOR_SCOPE` | **F2.0 decided** (block-tag `v`/`f`; the emitter dispatches on exact `"v"`/`"f"` and must be loosened, which is part of the decision not a follow-on); F2.0b–F2.4 not started. The landed UCC residuals remain gated **structurally only** — no numeric check of their values yet |
 | `CCGEN_ARBITRARY_HARNESS_COST_SCOPE` | **research, not started** — H0 profile is blocking |
 | `CCGEN_KERNEL_SCALING_SCOPE` | **research, partly open** — H1 (memory-bound) untestable on the current ladder (tops out at 0.49 MiB `t3`); overlaps the cost scope, which hands off to it |
 

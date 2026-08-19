@@ -80,14 +80,68 @@ A that reaches beyond those three is not option A; it is a redesign, and should 
 *Verify:* the decision written down with its consequence for the C++ side, before any evaluator code
 exists. If A, the U1.1 gate extends to `v`/`f` and both baselines above still hold.
 
+#### F2.0 — DECIDED: option A, block-tagged `v`/`f`, **and the emitter must be taught the tag**
+
+Checked against the emitter before committing to it, which changed the answer's shape.
+
+`_map_factor` (`python/ccgen/emit/planck_tensor_cpp.py:200-216`) dispatches on the **exact** strings
+`"f"` and `"v"`:
+
+```python
+amplitude_match = re.fullmatch(r"t(\d+)(?:_([ab]+))?", tensor_obj.name)   # tolerates a tag
+if tensor_obj.name == "f":  ...                                          # exact
+if tensor_obj.name == "v":  return _map_eri_tensor(tensor)               # exact
+```
+
+So the amplitude branch **already** accepts a block suffix — that is why U1.1's `t2_abab` emits
+today without touching the emitter. `v`/`f` do not: a factor named `v_abab` matches neither the `v`
+branch nor the amplitude regex (verified: `re.fullmatch(pattern, "v_abab")` is `None`) and falls
+through to `raise NotImplementedError`.
+
+**Verdict: A, with the emitter change as an explicit part of it** — loosen the two exact-match
+branches to the same `name(?:_([ab]+))?` shape the amplitude branch uses, and thread the tag to the
+block lookup. Not a follow-on to discover later: A is incomplete without it, and discovering that
+during F2.2 would look like an evaluator bug.
+
+Why A survives anyway:
+
+- **The C++ side needs it regardless.** `MOBlockCache` (`src/post_hf/cc/mo_blocks.h:15-25`) is
+  spin-free — `oooo`, `ooov`, `oovv`, … over "the full spatial MO basis". UCC needs `v_aaaa`,
+  `v_abab`, `v_bbbb` with *different shapes*, so a tag has to reach the C++ layer through some
+  route. A makes that route the same one amplitudes already use.
+- **One naming shape, now four consumers** — amplitudes (U1.1), higher Sz sectors (R3.1.3c),
+  intermediates (`block_keyed_intermediate_name`, V1.1c), and now ERIs. B's sidecar would be a
+  fifth mechanism carrying the same information.
+
+**RCC safety is structural, not incidental:** the suffix is emitted only by
+`ucc_spinterm_to_algebraterm`. `spinterm_to_algebraterm` keeps emitting bare `v`/`f`, so the
+loosened regex is a superset that matches the old input identically. The two hash baselines above
+are the proof obligation, not the argument.
+
+*Extra gate this decision earns:* a `v_abab` factor must emit, and a bare `v` must emit **exactly as
+before** — the second is what pins the superset claim.
+
+### F2.0b — block-tag `v`/`f` in the UCC bridge + loosen the emitter (~S, falls out of the verdict)
+
+Two edits, both small, both gated by the baselines above:
+
+1. `ucc_spinterm_to_algebraterm` suffixes `v`/`f` with their `SpinFactor.block` the same way it
+   already suffixes amplitudes. The block is on the factor; nothing needs deriving.
+2. `_map_factor`'s two exact-match branches become `name(?:_([ab]+))?`, and the tag reaches the
+   block lookup.
+
+*Gate:* `v_abab` emits; bare `v` emits **byte-identically to today** (the superset claim); RCC
+manifold hash `e5a08b62…` and RCC fixture hash `4047f5c9…` both unchanged; full ccgen suite green.
+
 ### F2.1 — resolve one factor to its array (~S)
 
 A single function: `(factor, tensors, dims) -> ndarray`, choosing the block by (space, spin) per
 index and slicing within it. No einsum, no terms.
 
-*Verify:* `t2_abab` resolves to shape `(nva, nvb, noa, nob)`; `v` with pattern
-`(occ,vir,occ,vir)` and spins `abab` resolves to the `v_abab` block sliced `[occ_a, vir_b, occ_a,
-vir_b]`. Both are assertable on F1's fixture alone, with no equations involved.
+*Verify:* `t2_abab` resolves to shape `(nva, nvb, noa, nob)`; `v_abab` with space pattern
+`(occ,vir,occ,vir)` resolves to the `v_abab` block sliced `[occ_a, vir_b, occ_a, vir_b]`. Both are
+assertable on F1's fixture alone, with no equations involved. After F2.0b the spin comes from the
+factor's own name, so this step is a lookup and a slice — no inference.
 
 **This is where a slice-assignment bug lives**, so it gets its own gate rather than being debugged
 through a full residual.
