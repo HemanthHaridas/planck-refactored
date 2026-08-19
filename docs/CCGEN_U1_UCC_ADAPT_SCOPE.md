@@ -121,6 +121,16 @@ factor carries an unresolved or bare block; RCC unchanged.
 
 ### U1.2 — rank-4 numeric gate against PySCF UCCSD (~M, load-bearing)
 
+> **BLOCKED on a fixture gap, found while attempting it.** `residual_einsum` assumes one `(no, nv)`
+> pair and one spin-free `v`/`f`; UCC needs per-spin spaces of *different* dimensions
+> (CH3/STO-3G: `noa=5 nva=4`, `nob=4 nvb=5`) and per-block ERIs. Scoped as
+> `docs/CCGEN_UCC_NUMERIC_FIXTURE_SCOPE.md` (F1–F3), which also records two traps that would make
+> this gate pass vacuously: evaluating at *converged* amplitudes (reference `|R|` is then ~0) and
+> using OH/STO-3G (`nva=1`, so the `aaaa` block is trivially zero).
+>
+> **U1.0 and U1.1 are landed but gated STRUCTURALLY ONLY** — distinct names, non-empty blocks,
+> symmetric counts. Nothing has checked their *values*.
+
 Evaluate the `doubles_aaaa` / `doubles_abab` / `doubles_bbbb` residuals **at PySCF UCCSD's own
 converged `t1a/t1b/t2aa/t2ab/t2bb`** on an open-shell case, and compare against
 `pyscf.cc.uccsd.update_amps`.
