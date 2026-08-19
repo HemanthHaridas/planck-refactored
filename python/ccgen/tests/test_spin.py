@@ -2899,3 +2899,126 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class U11BlockResolvedFactorNamesTests(unittest.TestCase):
+    """U1.1 -- under UCC every block-stored amplitude factor must reach the emit
+    layer with its OWN name and its OWN slot order.
+
+    Two mechanisms conspire against that, and both were measured on the tree
+    before this gate existed (see docs/CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md):
+
+    1. `_factor_tensor_name`'s gate is `len(block) >= 8`, so t1/t2/t3 can never
+       receive a block tag -- `t2[aaaa]` and `t2[bbbb]` both emit as bare `t2`.
+    2. `_canonicalize_amplitude_factor` reorders every rank >= 2 amplitude onto
+       one reference layout, because the RCC bridge drops the spin label and all
+       blocks must index one stored spatial tensor. Under UCC they are separate
+       arrays, so that reordering reads the wrong array's layout.
+
+    Naming alone is not enough: fixing (1) without (2) leaves the name right and
+    the slots permuted. These assertions need no solve and no C++.
+    """
+
+    @staticmethod
+    def _t2(block, spins):
+        from ccgen.spin import SpinFactor, SpinIndex
+        bases = (make_occ("i"), make_occ("j"), make_vir("a"), make_vir("b"))
+        return SpinFactor(name="t2", block=block,
+                          indices=tuple(SpinIndex(b, s) for b, s in zip(bases, spins)))
+
+    def _bridged_names(self, factor):
+        from ccgen.spin import SpinTerm, ucc_spinterm_to_algebraterm
+        from fractions import Fraction
+        term = SpinTerm(coeff=Fraction(1), external_block=factor.block,
+                        factors=(factor,))
+        at = ucc_spinterm_to_algebraterm(term, {"i", "j", "a", "b"})
+        return [f.name for f in at.factors], [t.indices for t in at.factors]
+
+    def test_same_spin_blocks_get_distinct_names(self):
+        """t2aa and t2bb are different arrays under UCC; a bare `t2` for both
+        silently sums them into one tensor."""
+        aa_names, _ = self._bridged_names(self._t2("aaaa", "aaaa"))
+        bb_names, _ = self._bridged_names(self._t2("bbbb", "bbbb"))
+        self.assertNotEqual(aa_names, bb_names,
+                            "t2[aaaa] and t2[bbbb] emit the same tensor name")
+        for names in (aa_names, bb_names):
+            self.assertTrue(all("_" in n for n in names),
+                            f"UCC factor emitted without a block tag: {names}")
+
+    def test_mixed_block_slots_are_not_reordered(self):
+        """`baba` must keep its own slot order. The RCC canonicalizer maps it to
+        [j,i,b,a] so it can index the single stored `abab` tensor -- correct
+        there, wrong when `baba`'s own array is what is being read."""
+        _, idx = self._bridged_names(self._t2("baba", "baba"))
+        self.assertEqual([i.name for i in idx[0]], ["i", "j", "a", "b"],
+                         "UCC bridge permuted a block's slots onto another layout")
+
+    def test_rcc_bridge_is_unchanged(self):
+        """The RCC path must stay byte-identical: same names, same slot order."""
+        from ccgen.spin import SpinTerm, spinterm_to_algebraterm
+        from fractions import Fraction
+        f = self._t2("abab", "abab")
+        term = SpinTerm(coeff=Fraction(1), external_block="abab", factors=(f,))
+        at = spinterm_to_algebraterm(term, {"i", "j", "a", "b"})
+        self.assertEqual([t.name for t in at.factors], ["t2"],
+                         "RCC bridge naming changed")
+
+
+class U10UccAdaptEntryTests(unittest.TestCase):
+    """U1.0 -- the no-collapse driver: one residual per UCC block, keyed
+    `{target}_{tag}`.
+
+    RCC drives `_adapt_on_block` once per *Sz sector* and runs three collapse
+    steps that fold spin blocks into one spatial tensor. UCC drives the same
+    integrate/merge/bridge pipeline once per *stored block* from
+    `ucc_independent_blocks` and runs none of them.
+    """
+
+    def _eqs(self, method="ccsd"):
+        return generate_cc_equations(method, engine="diagram", canonical_fock=True)
+
+    def test_every_ucc_block_gets_a_nonempty_residual(self):
+        """A block that integrates to nothing is a routing bug, not a physical
+        result -- the same failure mode spin_adapt_equations guards with its
+        'adapted to ZERO' raise."""
+        from ccgen.spin import ucc_adapt_equations
+        out = ucc_adapt_equations(self._eqs())
+        self.assertIn("doubles_aaaa", out)
+        self.assertIn("doubles_abab", out)
+        self.assertIn("doubles_bbbb", out)
+        for key, terms in out.items():
+            self.assertTrue(terms, f"UCC target {key!r} adapted to zero terms")
+
+    def test_same_spin_blocks_have_equal_term_counts(self):
+        """alpha<->beta is a symmetry of the equations, so aaaa and bbbb must
+        produce the same number of terms. Cheap, and it catches a block-routing
+        bug that a single-block smoke test cannot."""
+        from ccgen.spin import ucc_adapt_equations
+        out = ucc_adapt_equations(self._eqs())
+        self.assertEqual(len(out["doubles_aaaa"]), len(out["doubles_bbbb"]),
+                         "aaaa/bbbb term counts differ -- blocks are misrouted")
+        self.assertEqual(len(out["singles_aa"]), len(out["singles_bb"]),
+                         "singles aa/bb term counts differ")
+
+    def test_factor_names_are_block_resolved(self):
+        """U1.0 must bridge through the UCC bridge (U1.1), not the RCC one."""
+        from ccgen.spin import ucc_adapt_equations
+        out = ucc_adapt_equations(self._eqs())
+        for key, terms in out.items():
+            if key.startswith("energy"):
+                continue
+            for t in terms:
+                for f in t.factors:
+                    if f.name.startswith("t"):
+                        self.assertIn("_", f.name,
+                                      f"{key}: bare amplitude name {f.name!r}")
+
+    def test_rcc_is_untouched(self):
+        """spin_adapt_equations must be byte-identical -- UCC is a sibling, not a
+        modification."""
+        from ccgen.spin import spin_adapt_equations
+        eqs = self._eqs()
+        adapted = spin_adapt_equations(eqs)
+        self.assertEqual(sorted(adapted.keys()), ["doubles", "energy", "singles"])
+        self.assertEqual({k: len(v) for k, v in adapted.items()},
+                         {"singles": 30, "doubles": 113, "energy": 4})

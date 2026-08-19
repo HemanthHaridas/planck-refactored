@@ -1013,6 +1013,66 @@ def spinterm_to_algebraterm(spinterm: SpinTerm, externals):
                        tuple(free), tuple(summed), True)
 
 
+def ucc_spinterm_to_algebraterm(spinterm: SpinTerm, externals):
+    """U1.1 -- the UCC sibling of :func:`spinterm_to_algebraterm`.
+
+    Same bridge, with the two closed-shell mechanisms disabled:
+
+    * **No slot canonicalization.** `_canonicalize_amplitude_factor` maps every
+      rank >= 2 amplitude onto ONE reference layout, because the RCC bridge drops
+      the spin label and every block must then index the single stored spatial
+      tensor. Under UCC `t2aa`/`t2ab`/`t2bb` are separate arrays, so reordering a
+      factor's slots onto another block's layout reads the wrong array. Slots are
+      left exactly as the spin integration produced them.
+    * **Every amplitude factor is suffixed with its UCC block tag**, via U0's
+      `_ucc_block_tag` (which folds only the within-half antisymmetry, never the
+      beta-majority spin flip). RCC keeps its reference sector bare (`t4`) so its
+      emit stays byte-identical; UCC has no privileged reference -- `t2_aaaa` and
+      `t2_bbbb` are peers -- so a bare name would be ambiguous and is never
+      emitted here.
+
+    Non-amplitude factors (`v`, `f`) keep their names: they are spin-free in the
+    MO block cache and carry their spin structure in the block, not the storage.
+
+    Free-index ordering is shared with the RCC bridge (occ-first, then by base
+    name) -- that contract is about matching the C++ runtime's `rank_dims`, not
+    about spin, so it applies unchanged. See docs/CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md.
+    """
+    from fractions import Fraction
+
+    from .project import AlgebraTerm
+    from .tensors import Tensor
+
+    externals = set(externals)
+
+    def _ucc_factor_tensor_name(f):
+        if not f.name.startswith("t"):
+            return f.name                      # v, f: spin-free storage
+        return f"{f.name}_{_ucc_block_tag(f.block)}"
+
+    factors = tuple(
+        Tensor(_ucc_factor_tensor_name(f), tuple(si.base for si in f.indices))
+        for f in spinterm.factors
+    )
+
+    free: list = []
+    summed: list = []
+    seen_free: set = set()
+    seen_summed: set = set()
+    for f in spinterm.factors:
+        for si in f.indices:
+            if si.name in externals:
+                if si.name not in seen_free:
+                    seen_free.add(si.name)
+                    free.append(si.base)
+            elif si.name not in seen_summed:
+                seen_summed.add(si.name)
+                summed.append(si.base)
+    free.sort(key=lambda b: (0 if b.space == "occ" else 1, b.name))
+    return AlgebraTerm(Fraction(spinterm.coeff), factors,
+                       tuple(free), tuple(summed), True)
+
+
 # ── S3/R1.0: full spin-adaptation of a residual manifold to spatial AlgebraTerms ──
 #
 # Chains the S2 pipeline end to end, per target, on the closed-shell representative
@@ -1249,6 +1309,68 @@ def _representative_block_for_sector(template, k_alpha):
     half = ["a" if j < k_alpha else "b" for j in range(n)]
     spins = half * 2
     return {nm: sp for nm, sp in zip(names, spins)}
+
+
+def _ucc_block_for_tag(template, tag):
+    """External block dict assigning `tag`'s spins to `template`'s slots (U1.0).
+
+    `tag` is a UCC storage tag from :func:`ucc_independent_blocks` -- one spin per
+    slot, bra half then ket half, already in the alpha-before-beta-per-half layout
+    `_ucc_block_tag` folds to.
+    """
+    names = [i.name for i in template.indices]
+    return {nm: sp for nm, sp in zip(names, tag)}
+
+
+def ucc_adapt_equations(equations, blocks=None, adapter=None):
+    """U1.0 -- resolve a GCC residual manifold into UNRESTRICTED (spin-block)
+    ``AlgebraTerm``s. Returns ``{f"{target}_{tag}": [AlgebraTerm]}``.
+
+    The UCC sibling of :func:`spin_adapt_equations`, and deliberately not a
+    modification of it: RCC drives one residual per *Sz sector* and runs three
+    collapse steps (`canonicalize_spin_blocks`, `collapse_amplitudes`,
+    `collapse_integrals`) that fold spin blocks into a single spatial tensor. UCC
+    drives one residual per *stored block* and runs **none** of them, because
+    `t2aa`/`t2ab`/`t2bb` are separate arrays.
+
+    Every target is keyed by its block, including the reference: UCC has no
+    privileged sector, so a bare `doubles` would be ambiguous.
+
+    ``blocks`` overrides the per-rank block set (defaults to
+    :func:`ucc_independent_blocks`). ``adapter`` overrides the term bridge and is
+    parameterized rather than hard-wired so a later variant substitutes here
+    instead of forking this driver -- the same shape
+    `adapt_intermediate_spec(adapter=...)` already uses.
+    """
+    bridge = adapter or ucc_spinterm_to_algebraterm
+    out: dict = {}
+    for target, terms in equations.items():
+        template = _residual_template(target, terms)
+        n = len(template.indices) // 2
+        if n == 0:
+            # energy: scalar target, no external block to resolve
+            block = _closed_shell_representative_block(template)
+            externals = frozenset(block)
+            merged = merge_terms(ucc_integrate_target(terms, block), externals)
+            out[target] = [bridge(st, externals) for st in merged]
+            continue
+        for tag in (blocks or ucc_independent_blocks(2 * n)):
+            block = _ucc_block_for_tag(template, tag)
+            externals = frozenset(block)
+            merged = merge_terms(ucc_integrate_target(terms, block), externals)
+            adapted = [bridge(st, externals) for st in merged]
+            if terms and not adapted:
+                # Same guard spin_adapt_equations carries: a non-empty GCC
+                # manifold that integrates to nothing is a slot-ordering or
+                # block-routing bug, and it emits a kernel that compiles, runs and
+                # is silently wrong. Fail loudly.
+                raise ValueError(
+                    f"ucc_adapt_equations: target {target}_{tag} has "
+                    f"{len(terms)} GCC term(s) but resolved to ZERO terms on "
+                    f"block {tag!r} (slots {[i.name for i in template.indices]})."
+                )
+            out[f"{target}_{tag}"] = adapted
+    return out
 
 
 def spin_adapt_equations(equations, templates=None):
