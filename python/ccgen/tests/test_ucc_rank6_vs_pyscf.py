@@ -69,18 +69,55 @@ that both closure conventions coincide. So the remaining ~0.2% is a genuine
 disagreement about the t3-linear part of the T3 residual between ccgen and PySCF,
 with the fixture no longer a candidate explanation.
 
-**The physicist/chemist ERI convention is NOT the cause** — checked explicitly,
-because it is the class of defect the B5 fix was. PySCF's UCCSDT `eris` is a
-`_PhysicistsERIs` holding `pppp`/`pPpP`/`PPPP`, and `pppp` is the
-NON-antisymmetrized `<pq|rs>` (it equals `chemist.transpose(2,0,3,1)`, which is
-the same array as this gate's `transpose(0,2,1,3)` given `(pq|rs) = (rs|pq)` —
-verified to 5.4e-15). This gate's blocks carry the symmetries ccgen requires,
-confirmed against the GCC spin-orbital fixture: `v_aaaa` is ket-antisymmetric
-(exactly 0) and `v_abab` is not (9.5, as it must be, since its two ket slots are
-different spin spaces). PySCF antisymmetrizes internally where its equations need
-it; the raw stored block is not the input convention.
+**Both implementations are independently FCI-exact, so neither T3 is wrong.**
+ccgen's GCC CCSDT reaches the FCI limit (three gates in
+`test_reference_vs_pyscf`) and PySCF's UCCSDT does too -- measured directly on
+H3/6-31g doublet, 3.7e-11 against `fci.FCI`. Whatever this gate measures, it is a
+property of the COMPARISON, not of either residual.
 
-Ruled out as causes, each measured: the denominator (my `D3` matches PySCF's
+**The cleanest statement of what is left.** With PySCF's own untouched t3 on both
+sides, every target agrees at the convergence floor (triples 2.7e-11 against a
+6.2e-11 reference). The disagreement appears only once t3 is perturbed, and it
+does not scale away: at `t1 = t2 = 0`, where PySCF's `F`/`W` intermediates reduce
+to bare integrals and no dressing exists at all, triples still differ by rel
+5.0e-3 with only **30 of 579 terms alive**. Of those, `('t3_aabaab', 'v_abab')`
+-- nine terms, the mixed-spin coupling -- carries the highest alignment with the
+difference (cos 0.74, |S| 6.1e-3 against |D| 3.6e-3).
+
+**Hypotheses falsified, each by measurement** -- recorded so the next pass starts
+past them:
+
+* **The physicist/chemist ERI convention.** The obvious suspect, being the class
+  of the B5 defect. PySCF's UCCSDT `eris` is a `_PhysicistsERIs` whose `pppp` is
+  the NON-antisymmetrized `<pq|rs>`; it equals `chemist.transpose(2,0,3,1)`,
+  the same array as this gate's `transpose(0,2,1,3)` given `(pq|rs) = (rs|pq)`
+  (5.4e-15). This gate's blocks carry the symmetries ccgen requires, checked
+  against the GCC spin-orbital fixture: `v_aaaa` ket-antisymmetric (exactly 0),
+  `v_abab` not (9.5 -- its ket slots are different spin spaces).
+* **T1 dressing.** PySCF builds `r3` from T1-dressed integrals and ccgen carries
+  explicit T1 terms, so this looked structural. Zeroing t1 on both sides leaves
+  the discrepancy unchanged.
+* **F/W dressing.** PySCF's `F_oo`/`F_vv` are dressed and their diagonals differ
+  from bare `eps` by 0.046/0.027, with nonzero off-diagonals -- but at
+  `t1 = t2 = 0` they reduce to `diag(eps)` to 1.1e-7, so the dressing is
+  entirely `t2*v`, which ccgen carries explicitly. The two formulations are
+  equivalent, and the discrepancy survives with all dressing switched off.
+* **The packed wedge.** PySCF fills `r3aaa` only on the strict `i<j<k, a<b<c`
+  wedge. The difference is the same size on and off it, so the unpacking is
+  consistent.
+* **The `t3_aabaab` and `t3_abbabb` block layouts.** Every shape-legal signed
+  permutation of `aabaab` was tried; the current one is the best. `abbabb` read
+  from PySCF's `bba` beats deriving it from `aabaab`, and neither closes the gap.
+* **The denominator.** `D3` matches PySCF's `eijkabc` construction to 2.8e-14;
+  `focka.diagonal()` equals `mo_energy` exactly; `level_shift = 0`.
+
+**What has not been tried, and is where to go next:** compare against PySCF's
+`compute_r3aaa_tri_uhf` term by term rather than through `update_amps_uccsdt_tri_`,
+using its own intermediates. Every hypothesis above was formed by reading one
+side and testing it against the other; the remaining move is to stop inferring
+and evaluate PySCF's individual contractions directly.
+
+Ruled out as causes, each measuredRuled out as causes, each measured: the denominator (my `D3` matches PySCF's
 `eijkabc` construction to 2.8e-14, and `focka.diagonal()` equals `mo_energy`
 exactly, `level_shift = 0`); the packed round-trip (every block survives
 `full->tri->full` to <=3.5e-17, so ccgen and PySCF see the same t3); the closure
