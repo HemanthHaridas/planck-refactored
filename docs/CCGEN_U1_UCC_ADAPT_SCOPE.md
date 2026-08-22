@@ -260,8 +260,38 @@ PySCF fixture is `aabaab.transpose(2,1,0,5,4,3)`.
 | derive the t3 closure | **not work** — pinned at `test_spin.py:2158` |
 | the rank-6 spin-flip symmetry | **not work** — equations are correct, ~7e-16 |
 | the rank-6 oracle plumbing | **not work** — solved while probing, see below |
-| U1.4a — extend the fixture to t3 | ~S |
-| U1.4b — the direct rank-6 oracle vs PySCF UCCSDT | ~M, the deliverable |
+| U1.4a — extend the fixture to t3 | **LANDED** |
+| U1.4b — the direct rank-6 oracle vs PySCF UCCSDT | **LANDED for singles/doubles; triples OPEN at ~1.4e-2** |
+
+#### U1.4 result
+
+`U14RankSixVsPyscfTests` (`python/ccgen/tests/test_ucc_rank6_vs_pyscf.py`):
+
+| target | vs PySCF UCCSDT |
+|---|---|
+| `singles_aa` / `singles_bb` | ~5e-14 ✓ |
+| `doubles_aaaa` / `doubles_bbbb` | ~3e-15 ✓ |
+| `triples_aaaaaa` | **~1.4e-2 — open**, `expectedFailure` |
+
+**The split localizes the remaining defect.** The rank-6 singles and doubles
+residuals *consume* t3, and they are exact — so the t3 blocks and ccgen's reading
+of them are both right, and the discrepancy is confined to the **T3 equation**
+(219 of 579 `triples_aaaaaa` terms carry a t3 factor).
+
+Ruled out for the triples: not a layout or symmetry artifact (both residuals
+bra-antisym to ~4e-16, and so is their difference); not a scale factor or
+transpose (elementwise ratio median 0.9969, 5–95 spread 0.77–1.03 — a small
+*additive* discrepancy); not the fixture t3 blocks (all four satisfy their tag's
+antisymmetry, `aaa == bbb` to 2e-18); not the packing round-trip (bitwise exact).
+
+Two rank-6 conventions found while building it, both traps worth keeping:
+
+- **`update_amps_uccsdt_tri_` is the real CCSDT residual entry**, mutating `tamps`
+  in place by `R/D`. `UCCSDT.update_amps` is the *inherited CCSD* one and silently
+  omits t3 — it exists and runs.
+- **`aab` and `bba` are ONE stored sector.** Perturbing them independently makes
+  PySCF and ccgen see different t3, and it surfaces far from its cause — measured,
+  it moves the *singles* residual from 5e-14 to 8.9e-3.
 
 #### The oracle plumbing, established while probing (reusable when U1.4a lands)
 
@@ -409,10 +439,11 @@ It is that **a measured hazard is not the same as remaining work**, and the gap 
 exactly what a stale scope hides. Re-run a step's own gate before building it: U1.3's gate is four
 lines and passes.
 
-U1 has one open step and it is a gate, not a defect: extend the fixture to t3 and run the direct
-rank-6 oracle. Four candidate blockers were checked and all four dissolved — oracle strength, t3
-closure, oracle plumbing, and a rank-6 equation defect that turned out to be a bug in the test that
-found it.
+U1's gate now runs at rank 6. Singles and doubles reproduce PySCF UCCSDT exactly (~5e-14 / ~3e-15);
+**the triples target is off by ~1.4e-2 and is the one genuinely open item in U1.** Because the
+singles and doubles consume t3 and are exact, that discrepancy is confined to the T3 equation rather
+than to the fixture, the evaluator or the block naming — which is the whole reason the gate reports
+per target instead of in aggregate.
 
 Second lesson, from the same session: the first rescope of U1.4 asserted a blocker ("the t3 closure
 is underived") on the strength of three failed hand-derivations, without checking whether the tree
