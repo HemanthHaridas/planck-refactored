@@ -64,6 +64,59 @@ _ERI_SYMMETRY_PERMUTATIONS: tuple[tuple[tuple[int, int, int, int], int], ...] = 
 )
 
 
+def eri_permutation_preserves_block(block_tag: str, perm: tuple[int, ...]) -> bool:
+    """U3.0 -- is `perm` a valid symmetry of the UCC spin block `block_tag`?
+
+    The four permutations above are symmetries of the SPATIAL physicist integral
+    `<pq|rs>`, and applying them is sound as long as there is one such integral.
+    Under UCC there are three (`v_aaaa`, `v_abab`, `v_bbbb`), and a permutation
+    that reorders the indices also reorders their SPINS. It is therefore usable on
+    a block only when it maps that block's spin string to itself; otherwise it
+    relates the block to a DIFFERENT one and using it silently reads the wrong
+    integral with permuted indices.
+
+    Measured on the current CCSD UCC manifold, with `_ERI_SYMMETRY_PERMUTATIONS`
+    applied spin-blindly as it is today:
+
+        identity          (0,1,2,3)   abab -> abab   valid      92 reads
+        particle <qp|sr>  (1,0,3,2)   abab -> baba   INVALID    24 reads
+        bra<->ket <rs|pq> (2,3,0,1)   abab -> abab   valid      13 reads
+        product <sr|qp>   (3,2,1,0)   abab -> baba   INVALID    13 reads
+
+    i.e. 37 of 142 mixed-block reads currently use a symmetry that holds only for
+    `baba`. Same-spin blocks are unaffected: every permutation of `aaaa` is `aaaa`,
+    which is why this never surfaced on the RCC path (one block, all four valid).
+
+    Verified numerically on random real orbitals rather than by tag algebra alone:
+    `baba == abab.transpose(1,0,3,2)`, `abab` IS invariant under `(2,3,0,1)`, and
+    `abab` is NOT invariant under `(1,0,3,2)`.
+
+    `baba` is deliberately NOT a stored block -- it is `abab` under the particle
+    swap, so storing it would cost ~33% more ERI memory to avoid one explicit swap
+    at the point of use.
+    """
+    if len(perm) != len(block_tag):
+        raise ValueError(
+            f"eri_permutation_preserves_block: permutation of length {len(perm)} "
+            f"cannot apply to block tag {block_tag!r} of length {len(block_tag)}")
+    return "".join(block_tag[i] for i in perm) == block_tag
+
+
+def eri_permutations_for_block(
+    block_tag: str | None,
+) -> tuple[tuple[tuple[int, int, int, int], int], ...]:
+    """The subset of `_ERI_SYMMETRY_PERMUTATIONS` usable on `block_tag`.
+
+    `block_tag=None` is the RCC path (a bare `v` with no spin resolution), which
+    keeps all four -- there is a single spatial tensor and nothing to leave.
+    """
+    if block_tag is None:
+        return _ERI_SYMMETRY_PERMUTATIONS
+    return tuple(
+        (perm, sign) for perm, sign in _ERI_SYMMETRY_PERMUTATIONS
+        if eri_permutation_preserves_block(block_tag, perm))
+
+
 def _space_char(idx: Index) -> str:
     if idx.space == "occ":
         return "o"
