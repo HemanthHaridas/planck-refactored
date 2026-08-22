@@ -1,17 +1,19 @@
-# Validating a spin-blocked CC residual, and the rank-6 gap that is still open
+# Validating a spin-blocked CC residual
 
 Canonical status lives in:
 
 - `vault/Status/Completion.md`
 - `vault/Status/Open Work.md`
 
-This file is a **handoff**: it answers one architecture question and hands over
-one unfinished investigation. It becomes an architecture doc when the
-investigation closes; until then the open half is scoped in place at the end.
+This file answers one architecture question:
 
-**The question:** how do you establish that a generated *unrestricted* (spin-blocked)
-CC residual is correct — including "is it verified against FCI?" — and what does
-the one remaining rank-6 disagreement with PySCF actually mean?
+**How do you establish that a generated *unrestricted* (spin-blocked) CC residual
+is correct?**
+
+It was a handoff while one rank-6 disagreement with PySCF stood open. That closed
+— it was a defect in the comparison harness, not in either code — and the
+investigation is kept below because what it cost is the most reusable part of the
+answer.
 
 ---
 
@@ -33,10 +35,11 @@ sliced, therefore UCC must be right. Sound, but it never ran the UCC equations a
 equations: 25 call sites of `ucc_adapt_equations` existed and none solved to an
 energy. The FCI gate closes that; see *The FCI limit*.
 
-A single disagreement remains: `test_ucc_rank6_vs_pyscf`'s `triples_aaaaaa`
-differs from PySCF by **rel 1.9e-3**, kept as an `expectedFailure`. It is **not**
-a defect in either code — both are independently FCI-exact — and the open half of
-this doc scopes what to do about it.
+Every gate is green. The one disagreement that stood open for a long stretch —
+`test_ucc_rank6_vs_pyscf`'s triples target at rel 1.9e-3 — turned out to be a
+defect in the comparison harness rather than in either code, and is now 2.3e-15.
+That investigation is kept below: what it cost is the most reusable part of this
+answer.
 
 ---
 
@@ -92,8 +95,9 @@ same-spin `t3` blocks are structurally *empty* — three distinct same-spin
 occupieds do not exist — so `aaaaaa` / `bbbbbb` are never exercised. `t3_aabaab`
 needs 2α + 1β and *is* populated. So this route verifies the mixed-spin block
 only, which is why routes 1–3 still carry weight: they reach the same-spin blocks
-that FCI at 3 electrons cannot. (It is also, coincidentally, the block implicated
-in the open gap below.)
+that FCI at 3 electrons cannot. (It is also the block that the
+now-closed rank-6 investigation kept implicating — see below for why that signal
+was misleading.)
 
 ### 1. Direct external oracle — `test_ucc_vs_pyscf` (rank 4)
 
@@ -204,78 +208,70 @@ Two rank-6 storage facts that cost time and are not documented in PySCF:
 
 ---
 
-## OPEN: the residual rank-6 triples gap
+## The rank-6 gap: what it was, and what finding it cost
 
-`test_ucc_rank6_vs_pyscf::test_triples_reproduce_pyscf`, `expectedFailure`.
+For a long stretch `test_ucc_rank6_vs_pyscf`'s triples target disagreed with
+PySCF by rel 1.9e-3 while singles and doubles were exact at ~1e-15. It is now
+**2.3e-15** — machine precision, like everything else.
 
-| target | rel difference |
-|---|---|
-| `singles_aa` / `singles_bb` | 5.5e-15 |
-| `doubles_aaaa` / `doubles_bbbb` | 7.7e-15 |
-| **`triples_aaaaaa`** | **1.9e-3** |
+**The defect was in the comparison harness.** PySCF's
+`update_amps_uccsdt_tri_` runs its T1/T2 half **first** and updates `t1`/`t2`
+**in place**, then builds the T3 intermediates from the already-updated
+amplitudes. Measured: `t1` moves by 9.4e-3 and `t2` by 4.8e-2 before the t3 half
+begins. So `R = (t3_new - t3)·D` recovered through that entry is the residual at
+*different amplitudes* than the ones handed to ccgen.
 
-Down from 8.8e-2 after the four interface fixes.
+The fix is to call `compute_r3_tri_uhf` directly. Singles and doubles keep using
+`update_amps` — their halves run before any in-place mutation, so their round trip
+is faithful and they agree at ~1e-16 either way.
 
-### What is established about it
-
-- **Neither code is wrong.** ccgen's GCC CCSDT is FCI-exact, and PySCF's UCCSDT
-  is too — 3.7e-11 vs `fci.FCI` on H3/6-31g doublet. So this is a property of the
-  comparison.
-- **It vanishes without a t3 perturbation.** With PySCF's own untouched t3 on
-  both sides, triples agree to 2.7e-11 against a 6.2e-11 reference — i.e. at the
-  convergence floor, like everything else.
-- **It survives with all dressing switched off.** At `t1 = t2 = 0`, where PySCF's
-  `F`/`W` intermediates reduce to bare integrals, triples still differ by rel
-  5.0e-3 with only **30 of 579 terms alive**.
-- **The mixed-spin coupling is the best-aligned family.** Of those 30,
-  `('t3_aabaab', 'v_abab')` — nine terms — has cos 0.74 with the difference,
-  |S| 6.1e-3 against |D| 3.6e-3. No single term explains it (max per-term cosine
-  0.22).
-
-### Hypotheses falsified, each by measurement
-
-Start past these:
+**That asymmetry is why the bug survived.** It presented as a triples-only defect
+in a file whose singles and doubles were exact, which is precisely the signature
+of a T3-equation error. Nine hypotheses were formed and falsified against it:
 
 | hypothesis | killed by |
 |---|---|
-| physicist/chemist ERI convention | PySCF's `pppp` is the non-antisymmetrized `<pq|rs>`, equal to this gate's construction to 5.4e-15; the gate's blocks carry the symmetries ccgen requires |
+| physicist/chemist ERI convention | PySCF's `pppp` equals this gate's construction to 5.4e-15 |
 | T1 dressing | zeroing t1 on both sides changes nothing |
-| F/W dressing | `F_oo`/`F_vv` diagonals differ from bare `eps` by 0.046/0.027, but reduce to `diag(eps)` to 1.1e-7 at `t1=t2=0` — the dressing is entirely `t2·v`, which ccgen carries explicitly |
-| the packed wedge | the difference is the same size on and off the strict wedge |
-| `t3_aabaab` / `t3_abbabb` layouts | every shape-legal signed permutation tried; the current ones are best |
-| the denominator | `D3` matches PySCF's `eijkabc` to 2.8e-14; `focka.diagonal() == mo_energy`; `level_shift = 0` |
-| a spurious or over-counted term family | the 18 `t2·v` terms are textbook `P(i/jk)P(a/bc)` expansions; no integer combination fits |
+| F/W dressing | reduces to `diag(eps)` to 1.1e-7 at `t1=t2=0`; the gap survives with dressing off |
+| the packed wedge | difference is the same size on and off the strict wedge |
+| `t3_aabaab` / `t3_abbabb` layouts | every shape-legal signed permutation tried |
+| the denominator | matches PySCF's `eijkabc` to 2.8e-14 |
+| a spurious or over-counted term family | the 18 `t2·v` terms are textbook `P(i/jk)P(a/bc)` expansions |
+| a rank-6 spin-flip defect | a one-line fixture bug, retracted the same day |
+| two inequivalent closures | they are equivalent on valid blocks |
 
-### The next step, and why it is different in kind
+**Every one of those was a hypothesis about a *convention*, and none could have
+been right**, because the two sides were never evaluating at the same amplitudes.
+Bisecting produced real-looking signals that pointed nowhere: the "mixed-spin
+coupling is best-aligned at cos 0.74" observation was a property of the amplitude
+difference, not of any term family.
 
-**Evaluate PySCF's `compute_r3aaa_tri_uhf` contraction by contraction against its
-own intermediates**, rather than through `update_amps_uccsdt_tri_`.
+### What actually found it, and the generalizable rule
 
-Every hypothesis above shares one flaw: it was formed by reading one side and
-testing it against the other. Nine such hypotheses have now been falsified. The
-remaining move is to stop inferring and measure PySCF's individual contractions
-directly — its `r3aaa` is ~30 named `einsum` calls against `F_oo`, `F_vv`,
-`W_oooo`, `W_ovoo`, `W_vvvo`, `W_vvvv`, `W_voov`, `W_vOoV`, each of which can be
-reproduced independently and compared to the matching ccgen term group.
+Driving PySCF's own `compute_r3_tri_uhf` with controlled intermediates and
+comparing the **raw** residual. At `t1 = t2 = 0` it matched ccgen to **1.2e-15**
+immediately, while the harness's reconstruction differed from that same raw
+residual by 3.7e-3 — locating the defect in the reconstruction rather than in
+either equation, in **one measurement**.
 
-**Do not** resume max-norm bisecting on the aggregate residual. The full residual
-shows 38× cancellation, so max-norm cannot separate a small systematic difference
-from a large one that mostly cancels.
+> **When a discrepancy survives repeated narrowing, stop inferring across the
+> interface and drive the other side directly.** Every hypothesis above was formed
+> by reading one implementation and testing it against the other. The decisive
+> move was to stop treating the other side as a black box that emits a residual,
+> and call its residual function.
 
-### Whether it blocks anything
-
-**No.** Rank-4 and rank-6 UCC are both validated by the three routes above. U2+
-should not be held on this. An unexpected PASS on that test is the signal that
-someone diagnosed PySCF's side.
-
----
+The corollary is about instrument design: **a reconstruction is part of the
+instrument, not part of the measurement.** `R = (t_new - t)·D` looks like an
+identity and is one only if `t_new` was computed at `t`. Prefer the quantity the
+other implementation actually computes over anything you have to invert.
 
 ## Where the code is
 
 | what | where |
 |---|---|
 | rank-4 PySCF gate | `python/ccgen/tests/test_ucc_vs_pyscf.py` |
-| rank-6 PySCF gate (the open one) | `python/ccgen/tests/test_ucc_rank6_vs_pyscf.py` |
+| rank-6 PySCF gate | `python/ccgen/tests/test_ucc_rank6_vs_pyscf.py` |
 | closed-shell oracle, rank 4 | `F23ClosedShellOracleTests`, `test_spin.py` |
 | closed-shell oracle, rank 6 | `U14c2RankSixClosedShellOracleTests`, `test_spin.py` |
 | the adaptation identity | `U14c3UccIsGccSlicedAtRankSixTests`, `test_spin.py` |

@@ -4,12 +4,12 @@
 validated at rank 4 (~6e-16 vs PySCF UCCSD) and rank 6 (1.6e-17 vs GCC-sliced, with GCC reaching the
 FCI limit exactly). **U2 is unblocked and in progress.**
 
-One thread stays open and is **not** a ccgen defect: `test_ucc_rank6_vs_pyscf`'s triples target
-differs from PySCF by rel ~2e-3 (`expectedFailure`). ccgen is cleared by two independent routes; the
-undiagnosed side is PySCF's `r3aaa`. The physicist/chemist ERI convention — the obvious suspect,
-being the class of the B5 defect — was checked and eliminated.
+The rank-6 PySCF thread that stood open here is **closed**: it was a defect in the comparison
+harness (`update_amps_uccsdt_tri_` updates t1/t2 in place before building the T3 intermediates, so
+the recovered residual was at different amplitudes), not in either code. Triples now agree at
+2.3e-15.
 
-> **The full account now lives in `docs/CCGEN_UCC_RANK6_PYSCF_GAP_HANDOFF.md`** — how a spin-blocked
+> **The full account now lives in `docs/CCGEN_UCC_NUMERIC_VALIDATION.md`** — how a spin-blocked
 > residual is validated (three independent routes), the four PySCF-interface defects, the nine
 > falsified hypotheses for the open gap, and the named next step. Read that before working on any of
 > it; this doc is the step-by-step record behind it.
