@@ -22,38 +22,44 @@ both right. The discrepancy is confined to the T3 equation.
 on PERTURBED amplitudes — triples to 1.5e-12 against ||R||~1e3. So the T3
 equations are self-consistent, and this file's job is the INTERFACE.
 
-**Three interface defects were found and fixed**, each of which silently moved
-the reference off convergence:
+**Four interface defects were found and fixed**, each of which silently handed
+the two sides different amplitudes:
 
 1. **The re-antisymmetrization was unnormalized.** PySCF's `t2aa`/`t3aaa` blocks
-   arrive ALREADY antisymmetric, so applying `a - a.transpose(...)` to them does
-   not project — it MULTIPLIES, by **4x for t2aa and 36x for t3aaa** (measured).
-   The tell was that at PySCF's own converged amplitudes, where its residual is
-   ~1e-10, this gate reported ||ref|| = 1.7e-1. Fixed by perturbing with noise
-   that already carries each block's symmetry, and normalizing the projector.
-2. **`t2aa`/`t2bb` are not independent of `t2ab`.** PySCF's converged amplitudes
-   satisfy `t2aa = t2ab - t2ab.transpose(0,1,3,2)` (on `[i,j,a,b]`) exactly — the
-   same closure F2.3 uses at rank 4.
-3. **`t3aaa`/`t3bbb` are not independent of `t3aab`** either; they are derived
-   through the U1.4c.1 closure. Perturbing them separately violated it.
+   arrive ALREADY antisymmetric, so re-applying `a - a.transpose(...)` does not
+   project — it MULTIPLIES, by **4x for t2aa and 36x for t3aaa** (measured). The
+   tell was that at PySCF's own converged amplitudes, where its residual is
+   ~1e-10, this gate reported ||ref|| = 1.7e-1.
+2. **`t2aa`/`t2bb` are not independent of `t2ab`** — PySCF's converged amplitudes
+   satisfy `t2aa = t2ab - t2ab.transpose(0,1,3,2)` exactly.
+3. **`t3aaa`/`t3bbb` are not independent of `t3aab`** either, via the same-spin
+   closure.
+4. **A block carrying `aabaab`'s antisymmetries is not thereby a valid amplitude
+   block.** Antisymmetrized noise passes every permutation test the real block
+   passes — verified exhaustively over all 36 signed occ x vir permutations, the
+   real block has exactly the same two symmetries and no others — yet the derived
+   `aaa` is then not a valid same-spin block, and PySCF's packed storage
+   reprojects it by more than the block itself. Fixed by `_valid_t3_blocks`,
+   which builds the perturbation as a slice of a genuine antisymmetric
+   spin-orbital tensor.
 
-**t1 and t2 are therefore left at PySCF's converged values**, and only t3 is
-perturbed. That is not a limitation of the gate but of the amplitude set: t3's
-same-spin blocks can be derived from its own mixed block, but nothing derives t3
-from a perturbed t2, so any t2 perturbation reintroduces a closure violation one
-rank up. Perturbing t3 alone drives every target well off convergence
-(||R|| ~0.02-0.35 against ~1e-9 at convergence), so the gate stays non-vacuous.
+**t1 and t2 are left at PySCF's converged values** and only t3 is perturbed:
+nothing derives t3 from a perturbed t2, so any t2 perturbation reintroduces a
+closure violation one rank up. Perturbing t3 alone still drives every target well
+off convergence (||R|| ~1e-2 to 0.7 against ~1e-9 at convergence).
 
-**Result: singles and doubles are now EXACT (~1e-16, rel ~1e-14). The triples
-target is at rel 1.3e-3, down from 8.8e-2** — a 68x improvement — and is still
-marked `expectedFailure`.
+**Result: singles and doubles are EXACT (rel ~1e-14). Triples sit at rel ~1.9e-3,
+down from 8.8e-2**, and remain `expectedFailure`.
 
-**What the residual 0.1% is, as far as it is characterized:** it is *constant in
-relative terms* across a 100x range of t3 perturbation (rel 1.34e-3 / 1.01e-3 /
-0.97e-3 at noise 0.002 / 0.02 / 0.2), and at zero perturbation both sides agree
-to 2.7e-11 on a ~6e-11 reference. So it is a fixed multiplicative deficit in the
-t3-LINEAR part of the T3 residual, not a missing term and not an additive offset
-(both of which the earlier, badly-normalized version of this gate suggested).
+**What that residual now means, which is the point of all four fixes.** Every
+consistency relation the fixture can be held to is satisfied to ~1e-17: both
+closure forms agree on the perturbed block, both reproduce `t3_aaaaaa`, the
+packed round trip is exact, and the reference vanishes to ~1e-11 at convergence.
+The 3-term closure assumption is NOT baked into ccgen's equations — that was
+checked directly, and the disagreement is unchanged when the fixture is built so
+that both closure conventions coincide. So the remaining ~0.2% is a genuine
+disagreement about the t3-linear part of the T3 residual between ccgen and PySCF,
+with the fixture no longer a candidate explanation.
 
 Ruled out as causes, each measured: the denominator (my `D3` matches PySCF's
 `eijkabc` construction to 2.8e-14, and `focka.diagonal()` equals `mo_energy`
@@ -132,35 +138,22 @@ def _parity(p):
 
 
 def _same_spin_from_mixed(M):
-    """The same-spin t3 block from the mixed one.
+    """The same-spin t3 block from the mixed one: the normalized double
+    antisymmetrizer over all 36 signed bra x ket permutations.
 
-    **Two inequivalent closures exist and each side of this comparison requires a
-    DIFFERENT one. That is the open defect this gate reports.** Measured:
+    **Two forms of this closure exist and they are equivalent ON VALID BLOCKS.**
+    The other is the 3-term form `_split_same_spin_amplitude` implies. On a
+    genuine closed-shell spin-orbital t3 -- built from a spatial kernel with
+    spin-conserving lines, fully antisymmetrized, then sliced -- both reproduce
+    the `aaaaaa` block exactly (1.3e-15 and 2.2e-15), and they agree with each
+    other to 1.8e-15.
 
-        form            ccgen's own oracle      PySCF packed round trip
-        3-term          1.5e-12   PASS          2.5e-2    FAIL
-        36-term / 12    4.6e+01   FAIL          6.9e-18   PASS
-
-    The 3-term form is `_split_same_spin_amplitude` read as arrays (its base
-    reordering is the INVERSE permutation on axes). It antisymmetrizes the bra
-    against the single beta slot only. ccgen's UCC/RCC pair reproduces itself to
-    1.5e-12 with it and diverges by 46 (against ||R||~780) without it, so it is
-    what ccgen's equations assume.
-
-    The 36-term form is the normalized double antisymmetrizer over all signed
-    bra x ket permutations. It is the one that yields a FULLY antisymmetric block
-    from a general mixed block (defect 3e-16, against 1.68 for the 3-term form) --
-    which is what a same-spin amplitude must be, and what PySCF's packed `i<j<k,
-    a<b<c` storage assumes: `full2tri`/`tri2full` leaves it untouched (6.9e-18)
-    while it reprojects the 3-term result by 2.5e-2, larger than the block.
-
-    Both agree exactly on PySCF's CONVERGED amplitudes, because those satisfy
-    every relation at once -- which is why this went unnoticed through several
-    rounds and why the disagreement only appears off the converged manifold.
-
-    This gate uses the 36-term form, so its t3 survives PySCF's storage
-    unmodified. The residual ~2e-3 triples discrepancy is then a genuine
-    disagreement about the t3-linear part of T3, not a fixture artifact.
+    They diverge only on inputs that are NOT valid t3 blocks. Carrying
+    `aabaab`'s two antisymmetries is not sufficient: on antisymmetrized random
+    noise the two forms differ by 0.42 against a norm of 0.37. So
+    `three(M) == full36(M)` is the operational test for whether a candidate block
+    is a real amplitude block, and it is why `_valid_t3_blocks` builds the
+    perturbation from a spin-orbital tensor rather than symmetrizing noise.
     """
     out = np.zeros_like(M)
     for bp in itertools.permutations(range(3)):
@@ -168,6 +161,46 @@ def _same_spin_from_mixed(M):
             out += (_parity(bp) * _parity(kp)
                     * M.transpose(tuple(bp) + tuple(3 + x for x in kp)))
     return out / 12.0
+
+
+def _valid_t3_blocks(noS, nvS, seed, scale):
+    """A VALID t3 perturbation: the `aabaab` and `aaaaaa` blocks of a genuine
+    fully-antisymmetric closed-shell spin-orbital t3.
+
+    Building the perturbation this way rather than antisymmetrizing random noise
+    is what makes the closure relations hold. A block that merely carries
+    `aabaab`'s two antisymmetries is NOT a valid amplitude block: the real one
+    additionally satisfies a linear relation tying its alpha and beta content,
+    and the operational test for it is that the two same-spin closures agree.
+    On a real block they agree to ~2e-15; on antisymmetrized noise they differ by
+    0.42 against a norm of 0.37, and PySCF's packed storage then reprojects the
+    derived `aaa` by more than the block itself.
+
+    Returns `(aabaab, aaaaaa)` in ccgen's `[a,b,c,i,j,k]` layout, scaled.
+    """
+    rng = np.random.default_rng(seed)
+    no, nv = 2 * noS, 2 * nvS
+    K = rng.random((nvS, nvS, nvS, noS, noS, noS))
+    T = np.zeros((nv, nv, nv, no, no, no))
+    idx = np.indices(T.shape)
+    spin_ok = ((idx[0] % 2 == idx[3] % 2) & (idx[1] % 2 == idx[4] % 2)
+               & (idx[2] % 2 == idx[5] % 2))
+    T[spin_ok] = K[idx[0][spin_ok] // 2, idx[1][spin_ok] // 2, idx[2][spin_ok] // 2,
+                   idx[3][spin_ok] // 2, idx[4][spin_ok] // 2, idx[5][spin_ok] // 2]
+    for axes in ((0, 1, 2), (3, 4, 5)):
+        out = np.zeros_like(T)
+        for p in itertools.permutations(range(3)):
+            order = list(range(6))
+            for s, a in enumerate(axes):
+                order[a] = axes[p[s]]
+            out = out + _parity(p) * T.transpose(order)
+        T = out
+    ea, eb = list(range(0, nv, 2)), list(range(1, nv, 2))
+    oa, ob = list(range(0, no, 2)), list(range(1, no, 2))
+    mixed = T[np.ix_(ea, ea, eb, oa, oa, ob)]
+    same = T[np.ix_(ea, ea, ea, oa, oa, oa)]
+    n = np.abs(mixed).max()
+    return mixed * (scale / n), same * (scale / n)
 
 
 def _anti(x, axes):
@@ -235,15 +268,12 @@ def _build(seed: int = 0, return_inputs: bool = False):
     # perturbation), re-impose each block's antisymmetry, then repack.
     full = list(uccsdt.tamps_tri2full_uhf(cc, [x.copy() for x in t3]))
     # aaa/bbb are DERIVED from the mixed block below, not perturbed separately.
-    ny = 0.02 * rng.random(full[1].shape)            # aab: [i,j,a,b,k,c]
-    ny = ny - ny.transpose(1, 0, 2, 3, 4, 5)
-    ny = (ny - ny.transpose(0, 1, 3, 2, 4, 5)) / 4.0
-    y = full[1] + ny
+    dM, dA = _valid_t3_blocks(noa, nva, seed + 1, 0.02)   # ccgen [a,b,c,i,j,k]
+    y = full[1] + dM.transpose(3, 4, 0, 1, 5, 2)          # -> [i,j,a,b,k,c]
     full[1], full[2] = y, y.copy()        # aab and bba are ONE stored sector
     # aaa/bbb are determined by the mixed block through the U1.4c.1 closure --
     # perturbing them independently violates a relation the equations require.
-    _A = _same_spin_from_mixed(y.transpose(2, 3, 5, 0, 1, 4))
-    full[0] = _A.transpose(3, 4, 5, 0, 1, 2)
+    full[0] = full[0] + dA.transpose(3, 4, 5, 0, 1, 2)
     full[3] = full[0].copy()
     t3[:] = list(uccsdt.tamps_full2tri_uhf(cc, full))
 
