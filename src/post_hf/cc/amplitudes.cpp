@@ -291,6 +291,103 @@ namespace HartreeFock::Correlation::CC
         }
     }
 
+    std::expected<TensorND, std::string> build_ucc_block_denominator(
+        const UHFReference &reference,
+        const std::string &block_tag)
+    {
+        if (block_tag.empty() || block_tag.size() % 2 != 0)
+            return std::unexpected(
+                "build_ucc_block_denominator: block tag must have an even, non-zero "
+                "length (one spin per slot, occ half then vir half); got '" + block_tag + "'.");
+
+        const int rank = static_cast<int>(block_tag.size()) / 2;
+
+        for (char spin : block_tag)
+            if (spin != 'a' && spin != 'b')
+                return std::unexpected(
+                    "build_ucc_block_denominator: block tag '" + block_tag +
+                    "' contains a slot that is neither 'a' nor 'b'.");
+
+        // A slot's dimension and its orbital energy both come from its own spin.
+        // Occupied slots index [0, n_occ_s); virtual slots index the virtual part
+        // of the same spin's eps vector, which starts at n_occ_s.
+        const auto occ_count = [&](char spin) {
+            return spin == 'a' ? reference.n_occ_alpha : reference.n_occ_beta;
+        };
+        const auto virt_count = [&](char spin) {
+            return spin == 'a' ? reference.n_virt_alpha : reference.n_virt_beta;
+        };
+        // By value, not `const auto &`: binding a reference to a temporary
+        // lambda leaves it dangling once the full-expression ends.
+        const auto eps = [&](char spin) -> const Eigen::VectorXd & {
+            return spin == 'a' ? reference.eps_alpha : reference.eps_beta;
+        };
+
+        for (int slot = 0; slot < 2 * rank; ++slot)
+        {
+            const char spin = block_tag[static_cast<std::size_t>(slot)];
+            const int needed = occ_count(spin) + virt_count(spin);
+            if (eps(spin).size() < needed)
+                return std::unexpected(
+                    "build_ucc_block_denominator: the reference's eps vector for spin '" +
+                    std::string(1, spin) + "' has " + std::to_string(eps(spin).size()) +
+                    " entries but the partition needs " + std::to_string(needed) + ".");
+        }
+
+        try
+        {
+            std::vector<int> dims;
+            dims.reserve(static_cast<std::size_t>(2 * rank));
+            for (int slot = 0; slot < rank; ++slot)
+                dims.push_back(occ_count(block_tag[static_cast<std::size_t>(slot)]));
+            for (int slot = rank; slot < 2 * rank; ++slot)
+                dims.push_back(virt_count(block_tag[static_cast<std::size_t>(slot)]));
+
+            for (int dim : dims)
+                if (dim <= 0)
+                    return std::unexpected(
+                        "build_ucc_block_denominator: block '" + block_tag +
+                        "' has an empty slot; the reference cannot host it.");
+
+            TensorND tensor(dims, 0.0);
+            std::vector<int> indices(static_cast<std::size_t>(2 * rank), 0);
+
+            const std::size_t total = tensor.size();
+            for (std::size_t linear = 0; linear < total; ++linear)
+            {
+                std::size_t cursor = linear;
+                for (int pos = 2 * rank - 1; pos >= 0; --pos)
+                {
+                    const int dim = tensor.dims[static_cast<std::size_t>(pos)];
+                    indices[static_cast<std::size_t>(pos)] =
+                        static_cast<int>(cursor % static_cast<std::size_t>(dim));
+                    cursor /= static_cast<std::size_t>(dim);
+                }
+
+                double denom = 0.0;
+                for (int occ = 0; occ < rank; ++occ)
+                {
+                    const char spin = block_tag[static_cast<std::size_t>(occ)];
+                    denom += eps(spin)(indices[static_cast<std::size_t>(occ)]);
+                }
+                for (int vir = 0; vir < rank; ++vir)
+                {
+                    const char spin = block_tag[static_cast<std::size_t>(rank + vir)];
+                    const int offset = occ_count(spin) + indices[static_cast<std::size_t>(rank + vir)];
+                    denom -= eps(spin)(offset);
+                }
+
+                tensor(indices) = denom;
+            }
+
+            return tensor;
+        }
+        catch (const std::exception &ex)
+        {
+            return std::unexpected("build_ucc_block_denominator: " + std::string(ex.what()));
+        }
+    }
+
     RCCSDAmplitudes make_zero_rccsd_amplitudes(const RHFReference &reference)
     {
         // The tensor dimensions follow the conventional CC index order `(i,j,a,b)`

@@ -29,7 +29,7 @@ option(USE_CUDA "Enable CUDA GPU acceleration (requires CUDA toolkit)" OFF)
 set(PLANCK_CC_MAXORDER "3" CACHE STRING
     "Max CC excitation rank to generate Planck kernels for (2=CCSD, 3=CCSDT, 4=CCSDTQ, 5=CC5, 6=CC6)")
 option(PLANCK_CC_INCLUDE_INTERMEDIATES
-    "Emit ccgen intermediate builders in generated CC kernels" ON)
+    "Emit ccgen intermediate builders in generated CC kernels" OFF)
 # Emit genuine spatial (restricted) RCC kernels via the R1.0 spin-adaptation
 # instead of raw spin-orbital algebra bound to spatial storage. Without this the
 # generated energy carries the 0.25*t2*oovv defect and the correlation energy is
@@ -820,6 +820,12 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/cc/common.cpp
     )
 
+    add_executable(planck-cc-ucc-denominator
+        ${CMAKE_SOURCE_DIR}/tests/cc_ucc_denominator.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+        ${SRC_DIR}/post_hf/cc/amplitudes.cpp
+    )
+
     add_executable(planck-cc-amplitude-checkpoint
         ${CMAKE_SOURCE_DIR}/tests/cc_amplitude_checkpoint.cpp
         ${SRC_DIR}/post_hf/cc/common.cpp
@@ -1277,6 +1283,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-cc-tensor-index PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-cc-ucc-denominator PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )

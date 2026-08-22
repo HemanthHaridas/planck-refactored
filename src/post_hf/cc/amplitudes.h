@@ -94,6 +94,20 @@ namespace HartreeFock::Correlation::CC
         const RHFReference &reference,
         int max_excitation_rank);
 
+    // U2: the UCC (spin-blocked) denominator for one amplitude block.
+    //
+    // `block_tag` is the per-slot spin string in the SAME order as the tensor's
+    // indices, which is occ-first then vir (`rank_dims`): a rank-2n block tagged
+    // "aab" + "aab" has occ slots (a,a,b) and vir slots (a,a,b). This mirrors
+    // ccgen's UCC tags, whose halves are bra(vir)-then-ket(occ) -- so the caller
+    // converts, and the tag handed here is always occ-half-first.
+    //
+    // Each slot draws its orbital energy from its own spin's set, so a mixed
+    // block's denominator is genuinely spin-resolved rather than a relabeling.
+    std::expected<TensorND, std::string> build_ucc_block_denominator(
+        const UHFReference &reference,
+        const std::string &block_tag);
+
     RCCSDAmplitudes make_zero_rccsd_amplitudes(const RHFReference &reference);
 
     // The dense T3 container is kept for the future tensor-based CCSDT path. The
