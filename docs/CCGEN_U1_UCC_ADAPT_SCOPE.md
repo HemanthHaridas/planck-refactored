@@ -8,11 +8,12 @@ the F2.3 closed-shell oracle (2.45e-15 relative), and **U1.3's hazard was design
 rather than left open — its own gate now passes with 0 violations. Each is recorded in place below
 with what was measured.
 
-U1.4 is rescoped three times, each time by measurement. Its blocker is **not** the oracle *strength*
-this doc assumed (PySCF ships a UCCSDT residual entry), **not** an underived t3 closure relation
-(pinned green at `test_spin.py:2158`), and **not** oracle plumbing (solved). It is a **real defect in
-the landed rank-6 UCC equations**: with α ≡ β inputs the manifold is not spin-flip symmetric —
-~1e-1 relative at rank 6, exact at rank 4. Pinned as an `expectedFailure`. See U1.4.
+U1.4 was rescoped four times, each time by measurement, and **every candidate blocker dissolved**: not the
+oracle *strength* this doc assumed (PySCF ships a UCCSDT residual entry), not an underived t3 closure
+relation (pinned green at `test_spin.py:2158`), not oracle plumbing (solved), and not a rank-6 equation
+defect — that last one was a **fixture bug in the test that found it**, retracted the same day. The
+rank-6 manifold is spin-flip symmetric to **~7e-16**. What remains is a fixture extension and the
+oracle itself. See U1.4.
 
 U0 is landed (`ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)`).
 
@@ -213,39 +214,54 @@ tensor. The failures were real; they measured the construction, not the relation
 "my generalization does not satisfy the symmetry" is weak evidence that a relation is underived, and
 strong evidence only that the guess is wrong — the in-tree gate is the thing to check first.
 
-#### Falsified premise 3 (both rescopes'): "rank 6 just needs a gate"
+#### Falsified premise 3 (mine, and retracted the same day): "rank 6 has a correctness defect"
 
-**Attempting U1.4b found a real defect in the landed rank-6 UCC equations, and it blocks the step.**
+Attempting U1.4b produced a strong signal that the landed rank-6 UCC equations were broken: with
+α ≡ β inputs the manifold was not spin-flip symmetric — ~1e-1 relative, with singles, doubles **and**
+triples all failing together, reproducible with no PySCF involved. It was committed as an
+`expectedFailure`.
 
-With α ≡ β inputs a residual manifold must be spin-flip symmetric — `_aa` equals `_bb`, `aaaa`
-equals `bbbb`. Measured:
+**That was wrong. The equations are correct; the defect was in the test fixture, in one line.**
+Symmetry holds at **~7e-16** once fixed, and the rank-6 test now passes.
 
-| | asymmetry |
-|---|---|
-| rank 4 (`ccsd`) | exact, ~1e-13 against ‖R‖~1e3 |
-| rank 6 (`ccsdt`) | **broken, ~1e-1 relative** — singles, doubles *and* triples |
+`abbabb` is the spin flip of `aabaab`, and a flip is **not** the identity: flipping `aab` → `bba`
+leaves slots `(b,b,a | b,b,a)`, which must then be re-expressed in `abbabb`'s own `(a,b,b | a,b,b)`
+order — a slot reversal within each half.
 
-Pinned as `U14RankSixSpinFlipSymmetryTests` (`test_spin.py`): rank 4 asserts, rank 6 is
-`expectedFailure`. An unexpected PASS is the signal it has been fixed.
+```
+t3_abbabb = t3_aabaab.transpose(2,1,0,5,4,3)
+```
 
-Ruled out already, so the next pass does not repeat it: **not** a wrong block name (the
-`triples_aaaaaa` / `triples_bbbbbb` factor vocabularies are exact spin-flip mirrors); **not** the
-`v_abab` orientation (forcing `v[p,q,r,s] = v[q,p,s,r]`, which makes `abab == baba` identically,
-leaves the relative error unchanged); **not** the evaluator or fixture (same evaluator is exact at
-rank 4 and gated against PySCF UCCSD at ~6e-16). So it is specific to what rank 6 adds — the t3
-blocks and the terms carrying them.
+What made the false signal credible, and what eventually killed it — all three said the manifold was
+structurally sound, which left only the fixture:
 
-This is why the symmetry check is worth running **before** any oracle: it needs no PySCF, and it
-localized the defect to the equations in one measurement.
+- term counts are symmetric (`ccsdt`: 579/579 triples, 469/469 mixed, 25/25 singles);
+- the factor vocabularies of every spin-flip pair are exact mirrors;
+- every emitted factor's slot spins equal its own tag — **0 mismatches across all 2490 terms**.
+
+**The check that would have found it first, and did not exist:** does each fixture block satisfy its
+**own** antisymmetry? A block's antisymmetric slot pairs follow from its tag — `aabaab` is antisym in
+vir (0,1) and occ (3,4), `abbabb` in vir (1,2) and occ (4,5), *different pairs*, which is exactly why
+setting the two equal is wrong. The bad block fails by 1.5e-2 where the right one gives exactly 0.
+It is a property of one array: no equations, no evaluator, no oracle. Now committed as
+`test_every_fixture_block_satisfies_its_own_antisymmetry`.
+
+**Corollary, and a correction to the block mapping recorded below:** PySCF's `bba` block does **not**
+map to `abbabb` by the same axis permutation `aab` maps to `aabaab`. An exhaustive 720-permutation
+search matched `bba` to `aab` and that match is real — but *matching `aabaab`* is not the same as
+*being `abbabb`*, and the search never checked the target block's own symmetry.
+`bba.transpose(2,3,5,0,1,4)` violates `abbabb`'s antisymmetry by 1.5e-2. The correct `abbabb` for the
+PySCF fixture is `aabaab.transpose(2,1,0,5,4,3)`.
 
 #### What is actually left
 
 | step | status |
 |---|---|
 | derive the t3 closure | **not work** — pinned at `test_spin.py:2158` |
+| the rank-6 spin-flip symmetry | **not work** — equations are correct, ~7e-16 |
 | the rank-6 oracle plumbing | **not work** — solved while probing, see below |
-| **U1.4a — fix the rank-6 spin-flip asymmetry** | **~M, and it is now the blocker** |
-| U1.4b — the direct rank-6 oracle vs PySCF UCCSDT | ~S once U1.4a lands |
+| U1.4a — extend the fixture to t3 | ~S |
+| U1.4b — the direct rank-6 oracle vs PySCF UCCSDT | ~M, the deliverable |
 
 #### The oracle plumbing, established while probing (reusable when U1.4a lands)
 
@@ -393,22 +409,29 @@ It is that **a measured hazard is not the same as remaining work**, and the gap 
 exactly what a stale scope hides. Re-run a step's own gate before building it: U1.3's gate is four
 lines and passes.
 
-U1 has one open step and it is a **correctness defect**, not a gate: the rank-6 UCC equations break
-α↔β symmetry at ~1e-1 relative. Three candidate blockers were checked and dissolved (oracle strength,
-t3 closure, oracle plumbing) before the fourth measurement found the real one — which is the argument
-for cheap symmetry checks over oracles: this one needs no PySCF and localized the defect in a single
-run.
+U1 has one open step and it is a gate, not a defect: extend the fixture to t3 and run the direct
+rank-6 oracle. Four candidate blockers were checked and all four dissolved — oracle strength, t3
+closure, oracle plumbing, and a rank-6 equation defect that turned out to be a bug in the test that
+found it.
 
 Second lesson, from the same session: the first rescope of U1.4 asserted a blocker ("the t3 closure
 is underived") on the strength of three failed hand-derivations, without checking whether the tree
 already had one. It did. **A failed guess is evidence about the guess, not about the tree** — the
 same shape of error as trusting a status header, arrived at from the other direction.
 
-Third lesson, and the reason the step is still open: **three dissolved blockers do not mean no
-blocker.** Each rescope here concluded "the remaining work is small" and each was right about the
-thing it checked. The defect that actually blocks U1.4 was found by a symmetry check nobody had
-scoped at all — cheaper than every oracle in this doc, needing no PySCF, and decisive in one run.
-Run the free invariant checks before building the expensive gate.
+Third lesson, and the sharpest of the three: **a cheap invariant check is only as trustworthy as its
+fixture.** The α↔β symmetry check was the right instrument — free, no PySCF, decisive in one run —
+and it fired correctly. The conclusion drawn from it was still wrong, because the fixture feeding it
+had a bad block, and a bad fixture and a bad equation produce the *same* symptom.
+
+What separated them was cheaper than any of the debugging that followed: check the **fixture's own
+invariants** before believing what it says about the code. A block must satisfy the antisymmetry its
+own tag implies; the bad `abbabb` failed that by 1.5e-2, needing no equations and no evaluator. That
+check now exists, and it should be the first thing added whenever a fixture grows a new block.
+
+The three lessons rhyme. Do not trust a status header without running its gate; do not trust a failed
+guess as evidence about the tree; do not trust a passing instrument without checking its inputs. Each
+one cost a wrong conclusion that measurement, one step earlier, would have prevented.
 
 ---
 
