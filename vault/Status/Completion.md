@@ -127,6 +127,30 @@ historical design context, but they are no longer the source of truth for
   made the energy worse. Full answer, with the measurements and what was kept:
   `docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`.
 
+  **The seven tests of this route are `@unittest.expectedFailure` as of
+  2026-08-22**, with the reason inline in each. Four are the composition defect
+  itself (`test_dressed_numeric_oracle`, `test_dressed_spatial_equivalence`);
+  three are the F0 builder-vs-usage layout defect on the mixed-space operators
+  `tau`/`Wmbej` (`test_intermediate_layout_agreement`). All seven were confirmed
+  pre-existing on a clean tree. They are marked rather than fixed (that means
+  investing in an abandoned route) and rather than deleted (they are numeric
+  instruments this note keeps deliberately). **An unexpected PASS is the signal
+  that the composition was genuinely fixed** — at which point this entry, and
+  the notes in those files, should be revisited.
+
+  **A second route exists and also fails, which the retirement never considered.**
+  `factorize.py` *derives* operators from contraction structure rather than
+  matching hand-seeded fingerprints, and is basis-agnostic (GCC and spatial
+  `ccsd` doubles both yield the same 20 operators). Measured 2026-08-22, it does
+  not preserve the residual's value either — **on GCC**, where there is no spin
+  adaptation to blame: 23 of 66 `ccsd` doubles terms disagree
+  (‖diff‖/‖R‖ = 3.73e-01). So the retirement's *decision* is better supported
+  than when it was taken, but its stated *reason* ("dressing and spin adaptation
+  do not compose") is not what the second route demonstrates. The factorizer has
+  **no numeric gate** — its 47 tests compare factor `Counter`s, which are blind
+  to index order by construction. Full record and the three discarded
+  hypotheses: `docs/CCGEN_DRESSING_VS_PRODUCTION_CODES_SCOPE.md`.
+
   An earlier version of this entry claimed a verified rank-3 equivalence
   (`h2` 12/12, `lih` 16/16, `bh3` 26/26). That comparison never ran the
   generated kernel — `compute_ccsdt_triples_residual` had no caller until
