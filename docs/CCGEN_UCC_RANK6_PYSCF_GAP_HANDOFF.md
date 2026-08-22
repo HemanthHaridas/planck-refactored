@@ -10,24 +10,28 @@ one unfinished investigation. It becomes an architecture doc when the
 investigation closes; until then the open half is scoped in place at the end.
 
 **The question:** how do you establish that a generated *unrestricted* (spin-blocked)
-CC residual is correct, and what does the one remaining rank-6 disagreement with
-PySCF actually mean?
+CC residual is correct — including "is it verified against FCI?" — and what does
+the one remaining rank-6 disagreement with PySCF actually mean?
 
 ---
 
 ## The short answer
 
-ccgen's UCC residuals are correct at ranks 4 and 6. This is established by three
+ccgen's UCC residuals are correct at ranks 4 and 6. This is established by four
 mutually independent routes, none of which depends on the others being right:
 
 | route | what it proves | measured |
 |---|---|---|
+| **FCI limit** | the equations, *solved*, give the exact energy | **3.7e-14** |
 | **PySCF UCCSD**, rank 4 | direct external oracle | ~6e-16, all five blocks |
 | **ccgen's own RCC**, closed shell | the blocks are self-consistent | triples 1.5e-12 vs ‖R‖~1e3 |
 | **GCC-sliced**, rank 6 | the *adaptation* is the identity it claims | **1.6e-17** |
 
-The third is the load-bearing one and it was the last to be built, which is the
-central lesson of this investigation — see *What actually settled it*.
+The first is the strongest and was the last to be built. Everything before it was
+a *residual* check or a transitive argument — GCC is FCI-exact and UCC == GCC
+sliced, therefore UCC must be right. Sound, but it never ran the UCC equations as
+equations: 25 call sites of `ucc_adapt_equations` existed and none solved to an
+energy. The FCI gate closes that; see *The FCI limit*.
 
 A single disagreement remains: `test_ucc_rank6_vs_pyscf`'s `triples_aaaaaa`
 differs from PySCF by **rel 1.9e-3**, kept as an `expectedFailure`. It is **not**
@@ -52,6 +56,9 @@ at once that are not true for RCC:
 3. **Structural checks pass on wrong equations.** Names, term counts and slot
    order were all verified at rank 6 long before any value was, and all of them
    were correct while the adaptation itself was ungated.
+4. **A residual check is not an equation check.** Comparing residuals at supplied
+   amplitudes never exercises the equations as a *system*. Until the FCI gate,
+   nothing solved the UCC manifold at all.
 
 Consequence: for UCC, *a fixture that looks valid and a manifold that is valid
 produce the same symptoms*, and a wrong fixture is indistinguishable from a wrong
@@ -59,7 +66,34 @@ equation. Every gate below is built to separate those two.
 
 ---
 
-## The three routes, and what each one is for
+## The four routes, and what each one is for
+
+### 0. The FCI limit — `U15UccReachesFciLimitTests`
+
+For a 3-electron system CCSDT is exact, so solving the generated UCC manifold to
+self-consistency must give `UHF + E_corr == FCI`. Jacobi over all nine spin
+blocks, each with its own spin-resolved denominator.
+
+```
+LiH+/6-31g doublet   UCCSDT  -7.719839924447
+                     FCI     -7.719839924447     diff 3.7e-14
+```
+
+**The system choice is load-bearing, and the obvious pick is a vacuous gate.**
+Li/STO-3G also passes, at 3.8e-14 — but holding `t3` at zero gives a
+*bit-identical* energy. Li is nearly a one-electron correlation problem and its
+`t3` blocks converge to ~1e-19, so a completely broken T3 passes. On LiH+/6-31g
+the triples are worth **8.1e-8**, 2000× the tolerance.
+`test_triples_are_load_bearing` pins this, because without it the gate silently
+degrades to a UCCSD test.
+
+**What a 3-electron gate can and cannot reach.** With `noa=2, nob=1` the
+same-spin `t3` blocks are structurally *empty* — three distinct same-spin
+occupieds do not exist — so `aaaaaa` / `bbbbbb` are never exercised. `t3_aabaab`
+needs 2α + 1β and *is* populated. So this route verifies the mixed-spin block
+only, which is why routes 1–3 still carry weight: they reach the same-spin blocks
+that FCI at 3 electrons cannot. (It is also, coincidentally, the block implicated
+in the open gap below.)
 
 ### 1. Direct external oracle — `test_ucc_vs_pyscf` (rank 4)
 
@@ -245,6 +279,7 @@ someone diagnosed PySCF's side.
 | closed-shell oracle, rank 4 | `F23ClosedShellOracleTests`, `test_spin.py` |
 | closed-shell oracle, rank 6 | `U14c2RankSixClosedShellOracleTests`, `test_spin.py` |
 | the adaptation identity | `U14c3UccIsGccSlicedAtRankSixTests`, `test_spin.py` |
+| **the UCC FCI limit** | `U15UccReachesFciLimitTests`, `test_spin.py` |
 | GCC FCI-limit gates | `test_reference_vs_pyscf.py` (`*_reaches_fci_limit`) |
 | the evaluator | `ucc_residual_einsum`, `python/ccgen/tests/residual_eval.py` |
 | the adaptation | `ucc_adapt_equations`, `python/ccgen/spin.py` |
