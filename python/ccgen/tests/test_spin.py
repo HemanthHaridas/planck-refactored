@@ -3613,37 +3613,48 @@ class U14RankSixSpinFlipSymmetryTests(unittest.TestCase):
 
     A CC residual manifold must be invariant under a global spin flip: feed
     alpha-equal-beta tensors and the `_aa` target must equal its `_bb` partner,
-    `aaaa` must equal `bbbb`, and so on. This needs no PySCF, no converged
-    amplitudes and no oracle — it is a symmetry of the equations themselves, and
-    it is the cheapest check that exists on a block-resolved manifold.
+    `aaaa` must equal `bbbb`. This needs no PySCF, no converged amplitudes and no
+    oracle — it is a symmetry of the equations themselves, and it is the cheapest
+    check that exists on a block-resolved manifold. Both ranks pass: ~1e-13 at
+    rank 4, ~7e-16 at rank 6.
 
-    It was written while building U1.4's PySCF gate, to rule the ccgen side out
-    of a discrepancy. It did not rule it out.
+    **This test was committed for one commit asserting the opposite** — rank 6
+    `expectedFailure`, on the conclusion that the landed rank-6 UCC equations were
+    defective at ~1e-1 relative. That conclusion was wrong, and the way it was
+    wrong is worth keeping, because the false signal was strong and specific:
+    singles, doubles AND triples all broke together, at a magnitude far above
+    noise, reproducible with no PySCF involved.
 
-    **Rank 4 passes (~1e-13 against ||R||~1e3). Rank 6 FAILS at ~1e-1 relative.**
-    The rank-6 case is marked `expectedFailure` below rather than deleted: it is a
-    real defect in the landed rank-6 UCC equations, and it must be understood
-    before rank 6 can be gated numerically against anything. An unexpected PASS is
-    the signal it has been fixed.
+    **The actual defect was in this test's own fixture**, in one line. `abbabb` is
+    the spin flip of `aabaab`, and the flip is NOT the identity: flipping
+    `aab` -> `bba` leaves slots `(b,b,a | b,b,a)`, which must then be re-expressed
+    in `abbabb`'s own `(a,b,b | a,b,b)` order — a slot reversal within each half.
+    Setting the two blocks equal produces an array that violates `abbabb`'s own
+    antisymmetry (it is antisym in vir slots 1,2 and occ 4,5, not 0,1 and 3,4).
 
-    What has been ruled out, so the next investigation does not repeat it:
+    What made it look like an equation defect, and the check that settled it:
 
-    * **Not a wrong block name.** The factor vocabularies of `triples_aaaaaa` and
-      `triples_bbbbbb` are exact spin-flip mirrors of each other
-      (`t3_aaaaaa`/`t2_aaaa`/`f_aa` against `t3_bbbbbb`/`t2_bbbb`/`f_bb`, with the
-      spin-neutral `v_abab`/`t1_aa`/`t1_bb` shared). Same for the singles.
-    * **Not the `v_abab` orientation.** `v_abab` is the one block that is not its
-      own spin-flip mirror — flipping maps it to `v_baba`, an index swap a bare
-      name cannot express — so it was the obvious suspect. Making the fixture's
-      `v_abab` satisfy `v[p,q,r,s] = v[q,p,s,r]` (which makes `abab == baba`
-      identically) leaves the RELATIVE error unchanged at ~1e-1.
-    * **Not the evaluator.** The same evaluator gives exact symmetry at rank 4,
-      and is separately gated against PySCF UCCSD at ~6e-16 (`test_ucc_vs_pyscf`).
+    * The manifold IS structurally symmetric — the factor vocabularies of every
+      spin-flip pair are exact mirrors, term counts match (`ccsdt`: 579/579
+      triples, 469/469 mixed, 25/25 singles), and every emitted factor's slot
+      spins equal its own tag (0 mismatches across all 2490 terms).
+    * Three hypotheses were falsified before the fixture was suspected at all: a
+      wrong block name, the `v_abab` orientation (forcing `v[p,q,r,s]=v[q,p,s,r]`
+      left the relative error unchanged), and the evaluator (exact at rank 4, and
+      gated against PySCF UCCSD at ~6e-16 in `test_ucc_vs_pyscf`).
+    * **The check that would have found it first: does each fixture block satisfy
+      its OWN antisymmetry?** `abbabb` is antisym in (1,2)/(4,5); the wrong block
+      failed that by 1.5e-2 while the right one gives exactly 0. That is a
+      property of one array, needs no equations, and is the same class of check
+      F1 already applies to the rank-4 blocks.
 
-    So the defect is specific to what rank 6 adds: the t3 blocks and the terms
-    carrying them.
+    A corollary that also has to be right, and was not: the PySCF `bba` block does
+    NOT map to `abbabb` by the same axis permutation `aab` maps to `aabaab`. An
+    exhaustive 720-permutation search matched `bba` to `aab` and that match is
+    real — but matching `aabaab` is not the same as BEING `abbabb`, and the search
+    never checked the target block's symmetry. See the U1.4 section of
+    `docs/CCGEN_U1_UCC_ADAPT_SCOPE.md`.
     """
-
     NO, NV = 4, 3       # non-square
 
     def _tensors(self):
@@ -3687,7 +3698,14 @@ class U14RankSixSpinFlipSymmetryTests(unittest.TestCase):
             "t1_aa": t1, "t1_bb": t1,
             "t2_abab": t2, "t2_aaaa": a4(t2), "t2_bbbb": a4(t2),
             "t3_aaaaaa": t3s, "t3_bbbbbb": t3s,
-            "t3_aabaab": t3m, "t3_abbabb": t3m,
+            # abbabb is the SPIN FLIP of aabaab, and a flip is not the identity
+            # here: flipping aab->bba leaves slots (b,b,a|b,b,a), which must be
+            # re-expressed in this block's own (a,b,b|a,b,b) order -- a slot
+            # reversal within each half. Setting them equal (the first thing
+            # tried) gives a block violating abbabb's OWN antisymmetry (antisym
+            # in vir slots 1,2 and occ 4,5, not 0,1 / 3,4), and shows up as a
+            # ~1e-1 spin-flip asymmetry in the residual.
+            "t3_aabaab": t3m, "t3_abbabb": t3m.transpose(2, 1, 0, 5, 4, 3),
             "v_abab": v,
             "v_aaaa": v - v.transpose(0, 1, 3, 2),
             "v_bbbb": v - v.transpose(0, 1, 3, 2),
@@ -3719,11 +3737,11 @@ class U14RankSixSpinFlipSymmetryTests(unittest.TestCase):
                 self.assertLess(diff / scale, 1e-12,
                                 f"{pair[0]} != {pair[1]}: {diff:.3e} vs |R| {scale:.3e}")
 
-    @unittest.expectedFailure
     def test_rank6_is_spin_flip_symmetric(self):
-        """ccsdt. FAILS at ~1e-1 relative — a real defect in the landed rank-6 UCC
-        equations, not in this test. See the class docstring for what is already
-        ruled out. An unexpected PASS means it has been fixed."""
+        """ccsdt. Passes at ~7e-16 once the fixture's `abbabb` block carries the
+        correct flip relation — see `_tensors`. It was an `expectedFailure` for
+        exactly one commit, on the belief that the equations were defective; they
+        are not, and the record of that is in this class's docstring."""
         pairs = (("singles_aa", "singles_bb"),
                  ("doubles_aaaa", "doubles_bbbb"),
                  ("triples_aaaaaa", "triples_bbbbbb"))
@@ -3732,3 +3750,35 @@ class U14RankSixSpinFlipSymmetryTests(unittest.TestCase):
                 self.assertGreater(scale, 1.0, "residual is ~zero; vacuous")
                 self.assertLess(diff / scale, 1e-12,
                                 f"{pair[0]} != {pair[1]}: {diff:.3e} vs |R| {scale:.3e}")
+
+    def test_every_fixture_block_satisfies_its_own_antisymmetry(self):
+        """The check that would have found the `abbabb` defect immediately, and
+        did not exist when it was needed.
+
+        A spin block's antisymmetric slot pairs are determined by its tag: slots
+        sharing a spin within a half are interchangeable, so the block must be
+        antisymmetric in them. `aabaab` is antisym in vir (0,1) and occ (3,4);
+        `abbabb` in vir (1,2) and occ (4,5) — DIFFERENT pairs, which is exactly
+        what makes setting the two blocks equal wrong.
+
+        This is a property of one array. It needs no equations, no evaluator and
+        no oracle, and it localizes to the fixture rather than to the physics.
+        """
+        import numpy as np
+        T = self._tensors()
+        for name, tag in (("t3_aaaaaa", "aaaaaa"), ("t3_bbbbbb", "bbbbbb"),
+                          ("t3_aabaab", "aabaab"), ("t3_abbabb", "abbabb"),
+                          ("t2_aaaa", "aaaa"), ("t2_bbbb", "bbbb")):
+            arr, n = T[name], len(tag) // 2
+            for half in (0, n):                       # bra half, then ket half
+                for p in range(half, half + n - 1):
+                    for q in range(p + 1, half + n):
+                        if tag[p] != tag[q]:
+                            continue                  # different spins: no symmetry
+                        order = list(range(len(tag)))
+                        order[p], order[q] = order[q], order[p]
+                        with self.subTest(block=name, swap=(p, q)):
+                            self.assertLess(
+                                np.abs(arr + arr.transpose(order)).max(), 1e-12,
+                                f"{name}: not antisymmetric in slots {p},{q} — "
+                                f"the block violates its own tag")
