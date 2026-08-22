@@ -14,7 +14,7 @@ done *by accident*, which is a hazard rather than a head start. U5 is untouched.
 | U0 | landed — `ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)` |
 | U1 | **landed** — `ucc_adapt_equations` + `ucc_spinterm_to_algebraterm`, validated against PySCF UCCSD at rank 4 (~6e-16) and against GCC-sliced at rank 6 (1.6e-17). U1.3 turned out to be **dead**, not work: U1.1 designed its hazard out. Detail in `CCGEN_U1_UCC_ADAPT_SCOPE.md` |
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
-| U3 | not started, and **rescoped: it is C++ *and* emitter, one change**. The emitter half is a **silent** wrong-answer path today, pinned RED by `test_ucc_emit_distinct_blocks.py` |
+| U3 | not started; **scoped U3.0–U3.4**. Rescoped twice: it is C++ *and* emitter, and the emitter half carries a **second** defect — 2 of the 4 ERI permutations are invalid for `abab` and **37 of 142** mixed reads use them, so fixing only the array names leaves those wrong. Mixed blocks also need ~2× the space patterns (13 vs 7) and mixed-spin *transforms*, so the cache is not 3 copies of the RCC one |
 | U4 | **~90% already done, by accident** — the emitter emits a complete UCC TU today with no error. That is the hazard, not the win; see U4 |
 | U5 | not started |
 
@@ -411,61 +411,114 @@ needs correct integrals as well as correct denominators.
 **Sequencing note.** Do U2 *after* U1's numeric gate. If U1 is wrong, a UCC C++
 run fails and you cannot tell whether the algebra or the reference is at fault.
 
-### U3 — spin-blocked MO integrals **and the emitter half** (~M, C++ *and* Python)
+### U3 — spin-blocked MO integrals **and the emitter half** (~M/L, C++ *and* Python)
 
-> **Rescoped, and this is the important correction in the doc.** As written this step was
-> C++-only. That is not enough, and stopping there is worse than not starting: the emitter
-> half is a **silent** wrong-answer path that exists on the tree *today*. Doing
-> `MOBlockCache` alone leaves it live while making the step look finished.
+> **Rescoped twice.** As originally written this step was C++-only, which is not enough (the
+> emitter half is a silent wrong-answer path). Scoping it properly then turned up a *second*
+> defect the emitter half was assumed not to have, and a structural fact that makes the C++
+> half bigger than "three copies of the RCC cache". All three are measured below.
 
-**The C++ half (as originally scoped).** `MOBlockCache` gains spin-blocked ERI blocks
-(`oovv_aaaa`, `oovv_abab`, `oovv_bbbb`, and the `ovov` partners). The AO→MO transform is the
-existing `Correlation::transform_eri` run per spin-block pair of coefficient matrices — no
-new integral engine, and the transform is already OpenMP-parallel.
+#### The three measurements this step is built on
 
-**The emitter half (new).** `_map_eri_tensor` in
-`python/ccgen/emit/planck_tensor_cpp.py` never receives the spin tag. The integral branch
-matches `re.fullmatch(r"([vf])(?:_([ab]+))?", name)` and then uses only `group(1)`, so the
-tag is stripped and discarded. Measured on the emitted CCSD UCC TU:
+**(1) The mixed block needs almost twice the space patterns.** Distinct space patterns
+reaching each `v_<tag>` factor in the CCSD UCC manifold:
 
 ```
-v_aaaa, v_abab, v_bbbb  ->  ALL emit as  mo_blocks.oovv   (and .ovov, .ooov, ...)
-f_aa,   f_bb            ->  BOTH emit as reference.f_ov   (and .f_oo, .f_vv)
+v_aaaa   7   oooo ooov oovv ovoo ovov ovvv vvvv
+v_abab  13   + oovo ovvo vooo voov vovo vovv
+v_bbbb   7   (same 7 as aaaa)
 ```
 
-The comment at that strip says the tag "routes STORAGE … and does not change which space
-block it is, so the mapping below is unchanged once the suffix is stripped." The first
-clause is right and the conclusion does not follow: the tag does not change the *space*
-block (`oovv` stays `oovv`) but it absolutely changes the **array** — under UHF `<aa|aa>`,
-`<ab|ab>` and `<bb|bb>` are three different integrals. Stripping the suffix discards
-precisely the routing the first clause says it performs.
+The extra six are the ones the 8-fold ERI symmetry folds away for same-spin and cannot fold
+for mixed spin. Any sizing, memory estimate or block table that assumes "same 7 patterns,
+three times over" is wrong.
 
-**The Fock blocks ride the same fix.** `f_aa`/`f_bb` collapse for the same reason, in the
-same branch. This is why U2's reference-variant idea was withdrawn (see U2): the spin
-resolution `f_oo`/`f_ov`/`f_vv` need is this change, not a new reference type.
+**(2) Two of the emitter's four ERI permutations are INVALID for `abab`, and 37 of 142
+`abab` reads use them today.** `_ERI_SYMMETRY_PERMUTATIONS`
+(`python/ccgen/emit/planck_tensor_cpp.py:59`) is applied spin-blindly. Per block, a
+permutation is valid iff it maps the spin tag to itself:
 
-**Memory:** UCC roughly triples the ERI block footprint versus RCC. Worth
-stating up front because it, not FLOPs, is what caps the reachable rank.
+| permutation | `aaaa` | `abab` | `bbbb` | `abab` reads |
+|---|---|---|---|---|
+| identity `(0,1,2,3)` | ok | ok | ok | 92 |
+| particle `<qp\|sr>` `(1,0,3,2)` | ok | **→ `baba`** | ok | **24** |
+| bra↔ket `<rs\|pq>` `(2,3,0,1)` | ok | ok | ok | 13 |
+| product `<sr\|qp>` `(3,2,1,0)` | ok | **→ `baba`** | ok | **13** |
 
-*Gate (routing, already written and RED):* `python/ccgen/tests/test_ucc_emit_distinct_blocks.py`
-asserts the emitted TU names as many distinct arrays as the algebra names distinct tagged
-tensors. Costs seconds, no C++, no solve, no PySCF. It fails today by design (3 pass, 2
-fail) and turns green when this step lands.
+So **37 of 142** mixed-block reads are currently routed through a symmetry that only holds
+for a *different* spin block. This is a second defect, independent of the name-collapse the
+pre-gate pins — **suffixing the array name without fixing this leaves all 37 wrong**, and
+they would be wrong in the quiet way (right array, permuted indices).
 
-> *Why that gate counts per factor instead of comparing kernels.* The obvious form — "the
-> `aa` singles kernel's Fock reads differ from the `bb` kernel's" — is **wrong**, and a
-> falsifiability probe caught it before it shipped: measured, `singles_aa` and `singles_bb`
-> both reference `f_aa` *and* `f_bb`, because each block couples to the other spin through
-> t1. A correct emitter therefore gives the two kernels *identical* accessor sets, so that
-> assertion would have stayed red forever and eventually been "fixed" by deleting it. The
-> invariant that holds is a counting one, per factor: N distinct tagged tensors in the
-> algebra ⇒ N distinct arrays in the text.
+Verified numerically on random real orbitals, not just by tag algebra:
+`baba == abab.transpose(1,0,3,2)` true; `abab == abab.transpose(2,3,0,1)` true;
+`abab == abab.transpose(1,0,3,2)` **false**.
 
-*Gate (correctness, still to write):* for an RHF-degenerate UHF reference (α coefficients ==
-β), every spin block equals the RCC block bytewise. That is a free, exact regression that
-catches a transposed spin index immediately. **The two gates are complementary and both are
-needed**: the routing gate says distinct blocks reach distinct arrays, the degeneracy gate
-says each block reaches the *correct* array. Neither implies the other.
+**(3) The spin-blocked cache is not three copies of the RCC cache.** The spin lives on the
+**chemists' charge-density pair**, not on the physicist block. Physicist `oovv_abab` is
+chemists `(i_α a_α | j_β b_β)` — a *mixed* (α-pair | β-pair) transform, which is not
+`chem.ovov` of either pure spin. `rebind_physicist`
+(`generated_arbitrary_prepare.cpp:40`) already carries an `oovv`↔`ovov` cross-source, and
+that is exactly where this bites: the source must be chosen by pair spin, not by physicist
+tag.
+
+*Memory:* ~3× the RCC block footprint — three pair-spin variants, since `(a|b) ≡ (b|a)` by
+the chemists' bra↔ket swap. Exactly 3× only when `noa == nob`; it is not FLOPs but memory
+that caps the reachable rank.
+
+**Do not store `baba`.** It is `abab` under the particle swap (verified above), so storing
+it costs ~33% more memory to avoid one explicit swap in the emitter. The emitter must apply
+that swap **knowingly**, which is what U3.0 exists to make possible.
+
+#### Steps
+
+**U3.0 — pin the spin-aware ERI symmetry group (~S, Python, no codegen).** A predicate over
+(block tag, permutation): valid iff the permutation maps the tag to itself. Pure function;
+no emitter change yet.
+
+*Gate:* `aaaa` and `bbbb` admit all four; `abab` admits exactly identity and bra↔ket, and
+the two rejected ones are asserted to map to `baba`. Seconds, no solve.
+
+*Why first, and why not to skip it as obvious:* the 37 invalid reads are precisely what
+happens when this symmetry group is applied without such a predicate. U3.2 keys off it, and
+it is the one place a closed-shell symmetry assumption can leak back in.
+
+**U3.1 — spin-blocked `TensorCCBlockCache` (~M, C++).** Blocks keyed (space pattern, pair
+spin), built by `Correlation::transform_eri` with per-pair coefficient matrices — it already
+takes four independent ones, so no new integral engine and the transform is already
+OpenMP-parallel. `rebind_physicist` becomes spin-aware, picking its source by charge-density
+pair spin (measurement 3).
+
+*Gate:* for an RHF-degenerate UHF reference (`C_α == C_β`), every spin block equals the RCC
+block bytewise. Free and exact, and it catches a transposed spin index immediately.
+
+> **That gate is VACUOUS for the mixed block's pair ordering**, and this is the trap to
+> design against: with `C_α == C_β` the `(a|b)` and `(b|a)` orderings coincide, so a swapped
+> pair passes. Pair it with one asymmetric-reference check (`noa != nob`, distinct α/β
+> energies) — the same reasoning that made U2.1's `noa=4 nva=3 nob=2 nvb=5` fixture
+> load-bearing, and the same class as the `"abab"`-cannot-catch-it note recorded there.
+
+**U3.2 — thread the tag through `_map_eri_tensor` (~M, Python).** Two coupled changes, and
+either alone is worse than neither: route `v_<tag>` to the tagged array, **and** consult
+U3.0's predicate, emitting the explicit bra↔ket recovery for a permutation that would leave
+the block. Doing only the first is the 37-read defect above, now disguised by correct-looking
+array names.
+
+*Gate:* `test_ucc_emit_distinct_blocks.py` goes green — it is red for exactly this. Plus a
+new assertion that the invalid-permutation read count is **zero** (it is 37 today), which is
+the half the existing gate cannot see.
+
+**U3.3 — the same fix for `f_aa` / `f_bb` (~S).** `CanonicalRHFCCReference` gains
+spin-resolved `f_oo`/`f_ov`/`f_vv`; same emitter branch, and no permutation question since
+the Fock is two-index. Small, but it is where the spin resolution withdrawn from U2's
+reference-variant actually belongs.
+
+*Gate:* the Fock half of the pre-gate goes green.
+
+**U3.4 — the open-shell MP2-limit check (~S, the payoff).** The gate U2 deferred: the rank-2
+UCC denominators and integrals reproduce the existing UMP2 correlation energy from a single
+Jacobi step. First end-to-end UCC number, and it needs U3.1–U3.3 — a Jacobi step needs
+correct integrals as well as correct denominators.
 
 ### U4 — emit + registry for UCC blocks (~S given U1/U3) — **mostly done by accident**
 
@@ -573,6 +626,18 @@ wiring.
   UCC TU today and always has; the ERIs and Fock inside it all collapse onto one array. A
   working emit is not evidence here — run `test_ucc_emit_distinct_blocks.py`, which is red
   on purpose until U3 lands.
+- **Do not fix U3's emitter half by suffixing array names alone.** Two of the four
+  `_ERI_SYMMETRY_PERMUTATIONS` are invalid for `abab` (they map it to `baba`), and **37 of
+  142** mixed-block reads currently use them. Name-only routing sends those 37 to the right
+  array with permuted indices — wrong, and quieter than what is there now. Land U3.0's
+  validity predicate first.
+- **Do not store a `baba` ERI family.** It is `abab` under the particle swap (verified
+  numerically on real orbitals), so storing it buys ~33% more memory in exchange for
+  avoiding one explicit swap in the emitter.
+- **Do not accept U3.1's RHF-degenerate gate on its own.** With `C_α == C_β` the `(a|b)` and
+  `(b|a)` pair orderings coincide, so a swapped mixed pair passes it. It needs an
+  asymmetric-reference companion (`noa != nob`), for the same reason U2.1's fixture uses
+  four distinct extents.
 - **Do not land U3's `MOBlockCache` half without the emitter half.** Spin-blocked arrays that
   no emitted kernel ever names change nothing, while making the step look finished and
   turning a loud absence into a silent wrong answer. They are one change.
