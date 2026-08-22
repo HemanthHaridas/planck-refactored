@@ -3365,3 +3365,244 @@ class F22aTermSpinMapTests(unittest.TestCase):
         bare = AlgebraTerm(Fraction(1), (Tensor("t1", (a, i)),), (), (a, i), True)
         with self.assertRaises(ValueError):
             ucc_term_spins(bare)
+
+
+class F22bcUccResidualEinsumTests(unittest.TestCase):
+    """F2.2b+c -- assemble the operands and lay out the result.
+
+    Scoped as two steps, landed as one: F2.2c is a single line of free-index
+    ordering INSIDE F2.2b's function body, with no state between them where a
+    separate gate would localize anything.
+
+    Dims are non-square AND asymmetric -- noa != nva, nob != nvb, and noa != nob.
+    A square case hides a transposed axis (the trap recorded in
+    CCGEN_RANK3_KERNEL_AND_SOLVER.md); a spin-symmetric one additionally hides a
+    swapped alpha/beta slot, which is the failure this step can introduce.
+    """
+
+    DIMS = dict(noa=5, nva=4, nob=4, nvb=5)
+
+    def _tensors(self):
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        return ucc_random_tensors(**self.DIMS, seed=0)
+
+    def _ucc(self, method="ccsd"):
+        from ccgen.spin import ucc_adapt_equations
+        return ucc_adapt_equations(
+            generate_cc_equations(method, engine="diagram", canonical_fock=True))
+
+    def _eval(self, terms):
+        from ccgen.tests.residual_eval import ucc_residual_einsum
+        tensors, out = self._tensors(), None
+        for t in terms:
+            r = ucc_residual_einsum(t, self.DIMS, tensors)
+            out = r if out is None else out + r
+        return out
+
+    def test_one_code_path_yields_different_shapes_per_block(self):
+        """The point of the whole step: doubles_abab and doubles_bbbb go through
+        identical code and come out different shapes, each axis sized from its own
+        index's spin."""
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        out = self._ucc()
+        self.assertEqual(self._eval(out["doubles_abab"]).shape, (nva, nvb, noa, nob))
+        self.assertEqual(self._eval(out["doubles_bbbb"]).shape, (nvb, nvb, nob, nob))
+        self.assertEqual(self._eval(out["doubles_aaaa"]).shape, (nva, nva, noa, noa))
+        self.assertEqual(self._eval(out["singles_aa"]).shape, (nva, noa))
+        self.assertEqual(self._eval(out["singles_bb"]).shape, (nvb, nob))
+
+    def test_layout_is_virtuals_first_like_the_rcc_evaluator(self):
+        """F2.2c. The output layout must be R[vir_ext..., occ_ext...], the same
+        convention residual_einsum uses -- F2.3's oracle compares the two arrays
+        directly, so an occ-first layout would make every element disagree.
+
+        Shape alone does NOT pin this: a doubles block is (vir,vir,occ,occ) and
+        the occ-first swap gives (occ,occ,vir,vir), which at spin-symmetric dims
+        can collide in shape. So this asserts on VALUES, against an independently
+        constructed einsum, on a term whose four free-index axes have four
+        DISTINCT lengths.
+        """
+        import string
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_residual_einsum, ucc_resolve_factor
+
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        out = self._ucc()
+        # the class DIMS give free axes (4,5,5,4) -- not distinct enough to pin a
+        # permuted layout by shape, so use dims where all four differ
+        dims = dict(noa=6, nva=3, nob=5, nvb=4)
+        tensors = ucc_random_tensors(**dims, seed=1)
+
+        for t in out["doubles_abab"][:12]:
+            with self.subTest(term=str(t)[:60]):
+                letters, pool = {}, iter(string.ascii_lowercase + string.ascii_uppercase)
+                for idx in list(t.free_indices) + list(t.summed_indices):
+                    letters[idx] = next(pool)
+                subs = ["".join(letters[i] for i in f.indices)
+                        for f in t.factors]
+                ops = [ucc_resolve_factor(f, tensors, dims) for f in t.factors]
+                ext = [i for i in t.free_indices if i.space == "vir"] + \
+                      [i for i in t.free_indices if i.space == "occ"]
+                want = np.einsum(
+                    ",".join(subs) + "->" + "".join(letters[i] for i in ext),
+                    *ops, optimize=True) * float(t.coeff)
+                got = ucc_residual_einsum(t, dims, tensors)
+                self.assertEqual(got.shape, want.shape)
+                np.testing.assert_allclose(got, want, rtol=0, atol=1e-13)
+
+    def test_free_axes_are_sized_from_their_own_spin(self):
+        """The four free axes of doubles_abab must take four DIFFERENT lengths at
+        dims where noa/nva/nob/nvb are all distinct. This is what a swapped
+        alpha/beta slot breaks, and what the symmetric fixture cannot see."""
+        from ccgen.tests.residual_eval import ucc_random_tensors, ucc_residual_einsum
+        dims = dict(noa=6, nva=3, nob=5, nvb=4)
+        tensors = ucc_random_tensors(**dims, seed=1)
+        acc = None
+        for t in self._ucc()["doubles_abab"]:
+            r = ucc_residual_einsum(t, dims, tensors)
+            acc = r if acc is None else acc + r
+        self.assertEqual(acc.shape, (3, 4, 6, 5))   # (nva, nvb, noa, nob)
+
+    def test_full_manifold_evaluates_without_raising(self):
+        """F2.2d -- every term of every target on F1's fixture. Explicitly NOT a
+        correctness gate: a wrong slice that keeps its shape passes here. F2.3's
+        closed-shell oracle is what catches that, and this split exists so a
+        failure localizes to assembly rather than to physics."""
+        import numpy as np
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        expected = {
+            "energy": (),
+            "singles_aa": (nva, noa), "singles_bb": (nvb, nob),
+            "doubles_aaaa": (nva, nva, noa, noa),
+            "doubles_abab": (nva, nvb, noa, nob),
+            "doubles_bbbb": (nvb, nvb, nob, nob),
+        }
+        out = self._ucc()
+        self.assertEqual(set(out), set(expected))
+        for key, terms in out.items():
+            with self.subTest(target=key):
+                got = self._eval(terms)
+                self.assertEqual(np.asarray(got).shape, expected[key])
+                self.assertTrue(np.all(np.isfinite(got)))
+
+    def test_rejects_a_term_whose_spins_disagree(self):
+        """The evaluator calls ucc_term_spins for its consistency check even
+        though it does not slice by it -- so an unevaluable term is refused here,
+        not silently contracted into a plausible-looking array."""
+        from fractions import Fraction
+        from ccgen.project import AlgebraTerm
+        from ccgen.tensors import Tensor, Index
+        from ccgen.tests.residual_eval import ucc_residual_einsum
+        # Shape-legal on purpose: at noa == nob and nva == nvb the two blocks
+        # contract without complaint, so einsum CANNOT catch this. Only the
+        # ucc_term_spins call refuses it -- which is why the check earns its
+        # place in a function that does not slice by the map.
+        dims = dict(noa=5, nva=4, nob=5, nvb=4)
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        i, a = Index("i", "occ"), Index("a", "vir")
+        clash = AlgebraTerm(
+            Fraction(1),
+            (Tensor("t1_aa", (a, i)), Tensor("t1_bb", (a, i))),
+            (), (a, i), True)
+        with self.assertRaises(ValueError):
+            ucc_residual_einsum(clash, dims, ucc_random_tensors(**dims, seed=0))
+
+
+class F23ClosedShellOracleTests(unittest.TestCase):
+    """F2.3 -- the load-bearing gate: at closed shell the UCC residual must
+    reproduce the EXISTING RCC residual for the same equations.
+
+    Cheap, and it needs no PySCF, no open-shell reference and no converged
+    amplitudes -- both sides compute the same physical quantity by different
+    routes, so a slice-assignment or block-routing error shows up immediately.
+
+    Two things the scope originally got wrong about this, both found by
+    prototyping the comparison before writing it:
+
+    1. It is a PER-TARGET PAIRING, not a sum over blocks. RCC adapts on the
+       closed-shell representative external block (spin.py, the S3/R1.0 note),
+       which for doubles is `abab`. So `doubles_abab` pairs with `doubles`, and
+       `doubles_aaaa` / `doubles_bbbb` have NO RCC counterpart at all --
+       collapse_amplitudes splits the all-alpha sector away rather than storing
+       it. Those two are covered by F2.2d's shape smoke and by F3, not here.
+
+    2. It is not free, and F1's fixture cannot serve it. The UCC blocks must be
+       built FROM the spatial ones through the closure relations -- see
+       ucc_closed_shell_tensors, which exists for exactly this.
+
+    Tolerance is 1e-11, not 1e-12: the measured `doubles` difference is ~1.8e-12
+    over a residual of norm ~1.6e3, so the tighter bound would flake on a
+    contraction this deep.
+    """
+
+    PAIRS = (("energy", "energy"),
+             ("singles_aa", "singles"),
+             ("doubles_abab", "doubles"))
+
+    NO, NV = 5, 4          # non-square: a square case hides a transposed axis
+    ATOL = 1e-11
+
+    def _manifolds(self):
+        from ccgen.spin import ucc_adapt_equations, spin_adapt_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
+        return ucc_adapt_equations(eqs), spin_adapt_equations(eqs)
+
+    def _compare(self, ucc_blocks, spatial):
+        """Return {pair: max abs difference} for the three paired targets."""
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_residual_einsum, residual_einsum
+        u_eqs, r_eqs = self._manifolds()
+        dims = dict(noa=self.NO, nva=self.NV, nob=self.NO, nvb=self.NV)
+        out = {}
+        for ukey, rkey in self.PAIRS:
+            U = sum(ucc_residual_einsum(t, dims, ucc_blocks) for t in u_eqs[ukey])
+            R = sum(residual_einsum(t, self.NO, self.NV, tensors=spatial)
+                    for t in r_eqs[rkey])
+            self.assertEqual(np.asarray(U).shape, np.asarray(R).shape,
+                             f"{ukey} vs {rkey}: shape disagreement")
+            out[(ukey, rkey)] = float(np.abs(np.asarray(U) - np.asarray(R)).max())
+        return out
+
+    def test_ucc_reproduces_rcc_at_closed_shell(self):
+        from ccgen.tests.residual_eval import ucc_closed_shell_tensors
+        ucc_blocks, spatial = ucc_closed_shell_tensors(self.NO, self.NV, seed=7)
+        for pair, diff in self._compare(ucc_blocks, spatial).items():
+            with self.subTest(pair=pair):
+                self.assertLess(diff, self.ATOL,
+                                f"{pair[0]} != {pair[1]} at closed shell: {diff:.3e}")
+
+    def test_the_oracle_is_falsifiable(self):
+        """Committed WITH the gate, not instead of it. A gate that cannot fail is
+        indistinguishable from one that passes, and this one compares two long
+        contractions where an accidental agreement is easy to believe in.
+
+        Transposing one axis of t2_abab must break every paired target by
+        O(||R||) -- measured 1.06e2 / 1.47e3 and the energy off by 4.4, against
+        residual norms ~1.1e3 / 1.6e3.
+        """
+        from ccgen.tests.residual_eval import ucc_closed_shell_tensors
+        ucc_blocks, spatial = ucc_closed_shell_tensors(self.NO, self.NV, seed=7)
+        ucc_blocks = dict(ucc_blocks)
+        ucc_blocks["t2_abab"] = ucc_blocks["t2_abab"].transpose(1, 0, 2, 3)
+        for pair, diff in self._compare(ucc_blocks, spatial).items():
+            with self.subTest(pair=pair):
+                self.assertGreater(diff, 1.0,
+                                   f"{pair[0]}: a corrupted block still agreed "
+                                   f"to {diff:.3e} -- the oracle is vacuous")
+
+    def test_the_independent_fixture_does_NOT_satisfy_the_oracle(self):
+        """Why ucc_closed_shell_tensors exists at all. F1's ucc_random_tensors
+        draws each block independently, so it violates the closure relations and
+        the comparison fails -- for a fixture reason, not an evaluator one.
+
+        Asserted so that a future 'simplification' that reuses the F1 fixture
+        here fails loudly instead of appearing to weaken the tolerance.
+        """
+        from ccgen.tests.residual_eval import ucc_random_tensors, random_tensors
+        ucc_blocks = ucc_random_tensors(noa=self.NO, nva=self.NV,
+                                        nob=self.NO, nvb=self.NV, seed=0)
+        spatial = random_tensors(self.NO, self.NV, seed=0)
+        diffs = self._compare(ucc_blocks, spatial)
+        self.assertTrue(any(d > 1.0 for d in diffs.values()),
+                        "the independent fixture agreed; the closure relations "
+                        "are apparently not needed, which contradicts the scope")

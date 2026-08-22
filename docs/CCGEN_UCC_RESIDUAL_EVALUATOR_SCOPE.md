@@ -1,8 +1,14 @@
 # F2 — evaluating UCC residuals numerically
 
-**Scope. Not started.** F1 landed (`ucc_random_tensors`). F2 is the evaluator that consumes it, and
-it unblocks F3/U1.2 — the PySCF UCCSD gate that is the only thing which will have checked the
-**values** of the landed UCC residuals rather than their structure.
+**F2.0 through F2.3 are LANDED; F2.4 is open.** F1 landed the fixture (`ucc_random_tensors`); F2 is
+the evaluator that consumes it, and it unblocks F3/U1.2 — the PySCF UCCSD gate that is the only
+thing which will have checked the **values** of the landed UCC residuals rather than their
+structure.
+
+The landed surface: `ucc_resolve_factor` + `ucc_residual_einsum` + `ucc_closed_shell_tensors`
+(`python/ccgen/tests/residual_eval.py`), `ucc_term_spins` (`python/ccgen/spin.py`), gated by
+`F21FactorResolutionTests` / `F22aTermSpinMapTests` / `F22bcUccResidualEinsumTests` /
+`F23ClosedShellOracleTests` in `python/ccgen/tests/test_spin.py`.
 
 ## The design problem, measured
 
@@ -146,7 +152,7 @@ factor's own name, so this step is a lookup and a slice — no inference.
 **This is where a slice-assignment bug lives**, so it gets its own gate rather than being debugged
 through a full residual.
 
-### F2.2 — `ucc_residual_einsum` (~M, split into four verifiable steps)
+### F2.2 — `ucc_residual_einsum` (~S) — **LANDED**
 
 Same einsum construction as `residual_einsum`; only the operand lookup changes, via F2.1. Output
 layout must match the RCC evaluator's convention (`[vir_ext…, occ_ext…]`) so the two are comparable.
@@ -154,65 +160,134 @@ layout must match the RCC evaluator's convention (`[vir_ext…, occ_ext…]`) so
 Two properties were **measured** while scoping this, and both turn what looked like risk into an
 assertion:
 
-- **Spin is consistent per index within a term.** Across all 328 emitted `ccsd` UCC terms, **zero**
+- **Spin is consistent per index within a term.** Across every emitted `ccsd` UCC term, **zero**
   have an index name carrying two different spins in different factors. So a single
   `{index_name: spin}` map per term is well-defined, and building it cannot silently pick a winner.
 - **Free-index spins are recoverable from the factors, and match the target's own block.**
-  `doubles_abab`'s free indices resolve to spins `(a, b, a, b)`; `doubles_bbbb` to `(b, b, b, b)`.
-  So the output shape is determined and does not need to be passed in.
+  Re-measured on the current tree: `singles_aa → (a,a)`, `doubles_aaaa → (a,a,a,a)`,
+  `doubles_abab → (a,b,a,b)`, `doubles_bbbb → (b,b,b,b)` — one spin pattern per target, no
+  exceptions. So the output shape is determined and does not need to be passed in.
 
-#### F2.2a — the per-term spin map (~S)
+**Term counts drifted since this doc was first written.** It claimed 328 `ccsd` UCC terms and
+"51 of 82 on `doubles_abab`"; the tree now emits 352 (`singles_aa` 28, `singles_bb` 28,
+`doubles_aaaa` 104, `doubles_abab` 88, `doubles_bbbb` 104, `energy` 8). The 51/82 argument for why
+spin must be carried rather than inferred still holds directionally — do not re-cite the number
+without remeasuring it.
 
-`ucc_term_spins(term) -> {index_name: "a"|"b"}`, built by reading each factor's tag positionally.
+#### F2.2a — the per-term spin map (~S) — **LANDED**
 
-*Verify:* on every emitted `ccsd` UCC term the map is total over the term's indices, and **raises**
-if one index would get two spins. The clash branch is unreachable on today's equations (measured
-0/328) — assert it anyway, because it is the invariant the rest of F2.2 rests on and a future rank
-or method is exactly where it would first break.
+`ucc_term_spins(term) -> {index_name: "a"|"b"}` (`python/ccgen/spin.py:1335`), built by reading each
+factor's tag positionally. Raises on a clash, an untagged factor, or a tag-length mismatch; all
+three branches are unreachable on today's manifolds (measured 0 across ccsd/ccsdt/ccsdtq) and are
+asserted anyway.
 
-#### F2.2b — operand assembly (~S)
+**Note for F2.2b: this is not the operand-lookup path.** F2.1 reads the block tag off each factor's
+*own* name, so the einsum does not need the map to slice. `ucc_term_spins`'s role in the evaluator
+is the per-term consistency **assertion** — call it for that, do not thread it through the operand
+loop.
 
-Swap the `if f.name in ("v", "f")` branch for `ucc_resolve_factor` (F2.1). Nothing else in the
-einsum construction moves.
+#### F2.2b+c — operand assembly and output layout (~S, one step) — **LANDED**
 
-*Verify:* for one hand-picked term, the assembled operand list has the shapes F2.1 predicts, and the
-einsum subscript string is **identical** to what the RCC path would build for the same term — the
-subscripts depend only on index identity, not on spin, so any difference means the swap disturbed
-something it should not have.
-
-#### F2.2c — output layout (~S)
-
-Free indices ordered `[vir…, occ…]` as `residual_einsum` does, with each axis sized from that
+Originally split. They are merged because there is no state between them where a separate gate
+localizes anything: F2.2c is one line of `ext` ordering *inside* the F2.2b function body, and the
+whole function is ~15 lines. Swap the `if f.name in ("v", "f")` branch for `ucc_resolve_factor`
+(F2.1); order free indices `[vir…, occ…]` as `residual_einsum` does, each axis sized from that
 index's own spin.
 
-*Verify:* `doubles_abab` evaluates to `(nva, nvb, noa, nob)` and `doubles_bbbb` to
-`(nvb, nvb, nob, nob)` — different shapes from the same code path, which is the whole point.
-Non-square dims (`noa=5 nva=4 nob=4 nvb=5`) so a transposed axis cannot hide.
+*Verify:*
 
-#### F2.2d — full-manifold smoke (~S)
+- `doubles_abab` evaluates to `(nva, nvb, noa, nob)` and `doubles_bbbb` to `(nvb, nvb, nob, nob)` —
+  different shapes from the same code path, which is the whole point. Dims **non-square and
+  asymmetric** (`noa=5 nva=4 nob=4 nvb=5`) so neither a transposed axis nor a swapped spin can hide.
+- For one hand-picked term, the einsum subscript string is **identical** to what the RCC path would
+  build for the same term — subscripts depend only on index identity, not on spin, so any difference
+  means the swap disturbed something it should not have.
+
+#### F2.2d — full-manifold smoke (~S) — **LANDED** (folded into the F2.2b+c class)
 
 Evaluate **every** term of every UCC target on F1's fixture.
 
-*Verify:* no raise, and every per-target sum has the shape F2.2c predicts. Explicitly **not** a
+*Verify:* no raise, and every per-target sum has the shape F2.2b+c predicts. Explicitly **not** a
 correctness gate — a wrong slice that keeps its shape passes here. F2.3 is what catches that, and
 the split exists so that a failure in F2.2d localizes to assembly rather than to physics.
 
-### F2.3 — the closed-shell oracle (~M, the load-bearing step, no PySCF needed)
+### F2.3 — the closed-shell oracle (~S, the load-bearing step, no PySCF needed) — **LANDED**
 
-**On a closed-shell system** (`noa == nob`, `nva == nvb`, α and β tensors equal), the UCC residual
-summed over its blocks must reproduce the **existing RCC** `residual_einsum` result for the same
-equations.
+**On a closed-shell system** the UCC residual must reproduce the **existing RCC** `residual_einsum`
+result for the same equations. Two things this doc previously got wrong about that, both found by
+prototyping the comparison before scoping it:
 
-This is free — it needs no PySCF, no open-shell reference, no converged amplitudes — and it catches
-a slice-assignment or block-routing error immediately, because both sides are computing the same
-physical quantity by different routes.
+**1. It is a per-target pairing, not a sum over blocks.** RCC adapts on the *closed-shell
+representative external block* (`python/ccgen/spin.py:1088`), which for doubles is `abab`. So the
+oracle is:
 
-*Verify:* ≤1e-12 elementwise, on a **non-square** `(no, nv)`. Square hides transposition errors —
-the trap recorded in `CCGEN_RANK3_KERNEL_AND_SOLVER.md`.
+| UCC target | RCC target |
+|---|---|
+| `energy` | `energy` |
+| `singles_aa` | `singles` |
+| `doubles_abab` | `doubles` |
+
+`doubles_aaaa` / `doubles_bbbb` have **no RCC counterpart** — `collapse_amplitudes` splits the
+all-α sector away rather than storing it — so they are covered by F2.2d's shape smoke and by F3,
+not by this gate.
+
+**2. It is not free, and F1's fixture cannot serve it.** The two sides consume different bundles,
+so the UCC blocks must be built **from** the spatial ones through the closure relations that
+`collapse_amplitudes` / `collapse_integrals` invert:
+
+```
+t2_aaaa = t2_abab - t2_abab.transpose(1,0,2,3)      # same for bbbb
+v_aaaa  = v_abab  - v_abab.transpose(0,1,3,2)       # same for bbbb
+t1_aa = t1_bb = t1   ;   f_aa = f_bb = f
+```
+
+with the spatial `t2` carrying `t2[abij] = t2[baji]` and `v` carrying both `<pq|rs> = <qp|sr>` and
+bra↔ket. `ucc_random_tensors` (F1) draws every block **independently**, so it violates these by
+construction — feed it to both sides and the gate fails for a reason that has nothing to do with the
+evaluator. F2.3 therefore needs a second fixture, `ucc_closed_shell_tensors(no, nv, seed)`,
+returning the UCC bundle and the spatial dict that generated it. That is a step this doc did not
+previously have.
+
+Measured on the prototype at `no=5, nv=4`: `singles_aa` vs `singles` maxdiff **6.8e-13**,
+`doubles_abab` vs `doubles` **1.8e-12** (against ‖R‖ ~1.1e3 / 1.6e3), energy exact.
+
+*Verify:* ≤**1e-11** elementwise on a **non-square** `(no, nv)`. Not 1e-12 — the measured `doubles`
+diff is 1.8e-12 and the tighter bound would flake. Square hides transposition errors, the trap
+recorded in `CCGEN_RANK3_KERNEL_AND_SOLVER.md`.
+
+*And commit the falsifiability check with it:* transposing one axis of `t2_abab` in the fixture must
+break all three targets by O(‖R‖). Without this, the gate can rot into a vacuous pass and nothing
+would say so.
+
+#### What building it found
+
+Measured at `no=5, nv=4`, agreement is at machine precision relative to the residual norm:
+
+| pair | maxdiff | ‖R‖ | relative |
+|---|---|---|---|
+| `energy` | 2.3e-13 | 1.06e3 | 2.2e-16 |
+| `singles_aa` vs `singles` | 4.5e-13 | 1.08e3 | 4.2e-16 |
+| `doubles_abab` vs `doubles` | 3.9e-12 | 1.58e3 | 2.5e-15 |
+
+The `doubles` figure confirms the 1e-11 bound: 1e-12 would flake.
+
+**The spatial symmetries are NOT load-bearing for the oracle, contrary to what this doc assumed.**
+Mutation-tested: removing `t2[abij] = t2[baji]` or `<pq|rs> = <qp|sr>` from the fixture leaves the
+comparison holding to ~8e-13. The RCC/UCC identity is an *algebraic* property of the two term sets,
+not of the tensors they contract. The symmetries are kept so the fixture describes a physically
+reachable reference — do not cite them as why the gate works.
+
+What *is* load-bearing is the **closure relation**: flipping the sign in `v_aaaa` breaks every
+paired target. That is the mutation the gate exists to catch.
+
+Also measured while mutating: `t2 - t2.transpose(1,0,2,3)` and `t2 - t2.transpose(0,1,3,2)` are
+*identical* given the `t2[abij]=t2[baji]` symmetry, so a mutation swapping them is not a defect and
+its survival is not a gate weakness.
 
 **Do this before F3.** If F2.3 fails, the defect is in the evaluator; if F2.3 passes and F3 fails,
 the defect is in the equations. Running them in the other order conflates the two, which is the
-mistake the rank-3 investigation paid five falsified hypotheses for.
+mistake the rank-3 investigation paid five falsified hypotheses for. That argument is *stronger*
+now than when it was written: the oracle needs no PySCF and no converged amplitudes at all.
 
 ### F2.4 — hand F3 a usable entry (~S)
 
