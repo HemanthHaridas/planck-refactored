@@ -1,0 +1,173 @@
+"""U2.0 -- the emitted UCC translation unit must read a DISTINCT array per spin block.
+
+This is a structural pre-gate, and it fails on the tree as of 2026-08-22. It exists
+because the emitter already produces a complete, plausible-looking UCC TU today:
+`ucc_adapt_equations('ccsd')` -> `emit_planck_translation_unit(...)` emits six kernels
+and a correct registry (`sector_tags` {1,"aa"} {1,"bb"} {2,"aaaa"} {2,"abab"}
+{2,"bbbb"}) with no error. The amplitudes are genuinely block-resolved -- U1.1 did its
+job, and `t2_aaaa` / `t2_abab` / `t2_bbbb` each bind their own `sector_tensor` view.
+
+The ERIs and the Fock matrix are NOT. Measured on the emitted CCSD TU: `v_aaaa` and
+`v_abab` BOTH emit as `mo_blocks.oovv`, and `f_aa` and `f_bb` BOTH emit as
+`reference.f_ov`. `_map_eri_tensor` never receives the spin tag at all --
+`planck_tensor_cpp.py`'s integral branch strips the suffix with
+`re.fullmatch(r"([vf])(?:_([ab]+))?", ...)` and then uses only group(1).
+
+The stripping comment there says the tag "routes STORAGE ... and does not change which
+space block it is, so the mapping below is unchanged once the suffix is stripped". The
+first clause is right and the conclusion does not follow: the tag does not change which
+SPACE block it is (`oovv` stays `oovv`), but it absolutely changes which ARRAY -- under
+UHF, <aa|aa>, <ab|ab> and <bb|bb> are three different integrals. Stripping the suffix
+discards precisely the routing the first clause says it performs.
+
+WHY A GATE AND NOT JUST A FIX. The defect is silent in the worst way: the TU compiles,
+links, runs, and returns a plausible correlation energy. It is the B5 physicist-ERI
+failure mode exactly (found only by injecting an FCI-correct oracle into live C++
+state, after days). This gate costs seconds, needs no C++, no solve and no PySCF, and
+it fires TODAY -- so the defect cannot be shipped by someone who sees a working emit
+and reasonably concludes U4 is done.
+
+Deliberately structural, not numeric. The scope doc is emphatic that UCC *equality*
+must be gated numerically (a term-multiset comparison cannot tell "different algebra"
+from "same algebra, different symmetry-equivalent writing" -- that cost V1.1e five
+sub-steps). That warning is about comparing two residual manifolds. This is a
+different question: does the emitted text read two distinct arrays where the algebra
+says two distinct arrays? A distinctness assertion has no symmetry-equivalent-writing
+freedom to be confused by, and every numeric UCC gate is downstream of it.
+
+Scope: this checks storage ROUTING only -- that distinct blocks reach distinct arrays.
+It does NOT check that each block reaches the CORRECT array; that is U3's
+RHF-degenerate bytewise gate.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ccgen.emit.planck_tensor_cpp import emit_planck_translation_unit  # noqa: E402
+from ccgen.generate import generate_cc_equations  # noqa: E402
+from ccgen.spin import ucc_adapt_equations  # noqa: E402
+
+
+def _ucc_tu(method: str = "ccsd") -> str:
+    """The emitted UCC translation unit for `method`.
+
+    `force_arbitrary=True` because UCC rides the arbitrary-order runtime at every
+    rank (the block-tagged amplitudes are `sector_tensor` reads, which only the
+    arbitrary-order path exposes). `spin_adapted=True` because the equations are
+    already resolved AlgebraTerms -- the closed-shell lowering must not run on them.
+    """
+    eqs = ucc_adapt_equations(generate_cc_equations(method))
+    return emit_planck_translation_unit(
+        method, eqs, force_arbitrary=True, spin_adapted=True)
+
+
+class EmitReachesUccAtAllTests(unittest.TestCase):
+    """Pin what already works, so a regression here is not misread as the defect below."""
+
+    def test_emit_succeeds_and_covers_every_block(self):
+        tu = _ucc_tu()
+        for tag in ("singles_aa", "singles_bb",
+                    "doubles_aaaa", "doubles_abab", "doubles_bbbb"):
+            self.assertIn(f"compute_ccsd_{tag}_residual", tu,
+                          f"no kernel emitted for UCC block {tag}")
+
+    def test_registry_declares_every_block_as_a_sector(self):
+        tu = _ucc_tu()
+        declared = set(re.findall(r'sector_tags\.push_back\(\{(\d+), "([ab]+)"\}\)', tu))
+        self.assertEqual(
+            declared,
+            {("1", "aa"), ("1", "bb"), ("2", "aaaa"), ("2", "abab"), ("2", "bbbb")})
+
+    def test_amplitudes_already_read_distinct_arrays(self):
+        """U1.1 landed this; asserted so the failures below are unambiguously v/f."""
+        tu = _ucc_tu()
+        for tag in ("aaaa", "abab", "bbbb"):
+            self.assertIn(f'amplitudes.sector_tensor(2, "{tag}")', tu,
+                          f"t2_{tag} does not bind its own sector view")
+
+
+class DistinctArrayPerBlockTests(unittest.TestCase):
+    """The pre-gate. Both of these fail on the current tree -- that is the point."""
+
+    # WHY THIS IS COUNTED, NOT COMPARED PER KERNEL. The first draft of this gate
+    # asserted "the aa singles kernel's Fock reads differ from the bb kernel's". That
+    # is WRONG and a falsifiability probe caught it: measured, `singles_aa` and
+    # `singles_bb` BOTH reference `f_aa` and `f_bb` (each block's residual couples to
+    # the other spin through t1), so a CORRECTLY emitted TU would give the two kernels
+    # identical accessor SETS. The draft assertion would have stayed red forever and
+    # been "fixed" by deleting it.
+    #
+    # The invariant that actually holds is a counting one, per factor rather than per
+    # kernel: the algebra names N distinct tagged tensors, so the emitted text must
+    # name N distinct arrays. Collapsing any two of them is the defect.
+
+    def _distinct_factor_names(self, root: str) -> set[str]:
+        """The distinct `v_*` / `f_*` factor names the UCC algebra actually uses."""
+        eqs = ucc_adapt_equations(generate_cc_equations("ccsd"))
+        return {f.name for terms in eqs.values() for t in terms for f in t.factors
+                if re.fullmatch(rf"{root}_[ab]+", f.name)}
+
+    def test_eri_blocks_reach_distinct_arrays(self):
+        """`v_aaaa`, `v_abab`, `v_bbbb` must not all collapse onto one array family.
+
+        Counted over the whole TU: the algebra names 3 distinct `v_*` tensors, and
+        each space block (`oovv`, `ovov`, ...) must therefore appear in 3 spin-routed
+        forms, not 1. Today every one of them emits as bare `mo_blocks.<block>`.
+        """
+        tu = _ucc_tu()
+        expected = self._distinct_factor_names("v")
+        self.assertEqual(len(expected), 3, f"fixture drift: expected 3 v blocks, got {sorted(expected)}")
+
+        emitted = set(re.findall(r"mo_blocks\.([a-z_]+)\(", tu))
+        self.assertTrue(emitted, "the TU reads no ERI at all")
+
+        # Group emitted arrays by their space block; a spin-routed emit gives each
+        # space block more than one array, an unrouted one gives exactly one.
+        by_space: dict[str, set[str]] = {}
+        for name in emitted:
+            space = name[:4]
+            by_space.setdefault(space, set()).add(name)
+
+        collapsed = sorted(sp for sp, names in by_space.items() if len(names) == 1)
+        self.assertFalse(
+            collapsed,
+            f"these ERI space blocks emit as a SINGLE array with no spin routing: "
+            f"{collapsed}. The algebra names {sorted(expected)} -- three different "
+            f"integrals under UHF -- so each space block must reach three arrays. "
+            f"The spin tag was stripped and discarded; see this module's docstring.")
+
+    def test_fock_blocks_reach_distinct_arrays(self):
+        """`f_aa` and `f_bb` must not both collapse onto `reference.f_ov`.
+
+        Same counting argument. NOT a per-kernel comparison -- see the class comment:
+        both singles kernels legitimately reference both spin Fock blocks.
+        """
+        tu = _ucc_tu()
+        expected = self._distinct_factor_names("f")
+        self.assertEqual(len(expected), 2, f"fixture drift: expected 2 f blocks, got {sorted(expected)}")
+
+        emitted = set(re.findall(r"reference\.(f_[a-z]+)\(", tu))
+        self.assertTrue(emitted, "the TU reads no Fock element at all")
+
+        by_space: dict[str, set[str]] = {}
+        for name in emitted:
+            by_space.setdefault(name[:4], set()).add(name)
+
+        collapsed = sorted(sp for sp, names in by_space.items() if len(names) == 1)
+        self.assertFalse(
+            collapsed,
+            f"these Fock space blocks emit as a SINGLE accessor with no spin routing: "
+            f"{collapsed}. The algebra names {sorted(expected)} -- f^alpha and f^beta "
+            f"are different matrices under UHF.")
+
+
+if __name__ == "__main__":
+    unittest.main()
