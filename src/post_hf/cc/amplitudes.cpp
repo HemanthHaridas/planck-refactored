@@ -1,5 +1,6 @@
 #include "post_hf/cc/amplitudes.h"
 
+#include <format>
 #include <vector>
 
 namespace HartreeFock::Correlation::CC
@@ -148,6 +149,19 @@ namespace HartreeFock::Correlation::CC
         return make_tensor_view(by_rank[static_cast<std::size_t>(excitation_rank - 1)]);
     }
 
+    std::expected<ConstDenseTensorView, std::string>
+    ArbitraryOrderDenominatorCache::sector_tensor(
+        int excitation_rank, const std::string &tag) const
+    {
+        for (const auto &entry : sectors)
+            if (entry.first.first == excitation_rank && entry.first.second == tag)
+                return make_tensor_view(entry.second);
+        // No per-block entry: an RHF reference, where alpha and beta orbital
+        // energies coincide and every block of a rank shares one denominator.
+        // Falling back keeps the RHF path byte-identical; see the header.
+        return tensor(excitation_rank);
+    }
+
     int ArbitraryOrderRCCAmplitudes::max_rank() const noexcept
     {
         return static_cast<int>(by_rank.size());
@@ -289,6 +303,39 @@ namespace HartreeFock::Correlation::CC
         {
             return std::unexpected("build_arbitrary_order_denominator_cache: " + std::string(ex.what()));
         }
+    }
+
+    std::expected<ArbitraryOrderDenominatorCache, std::string>
+    build_ucc_denominator_cache(
+        const UHFReference &reference,
+        const std::vector<std::pair<int, std::string>> &blocks)
+    {
+        ArbitraryOrderDenominatorCache cache;
+        cache.sectors.reserve(blocks.size());
+
+        for (const auto &[rank, tag] : blocks)
+        {
+            if (rank < 1)
+                return std::unexpected(std::format(
+                    "build_ucc_denominator_cache: block '{}' has non-positive rank {}.",
+                    tag, rank));
+            // The tag carries the rank (one spin per slot, 2*rank slots), and so
+            // does the key. Disagreement means the caller built the pair from two
+            // sources; that is a routing bug and it would otherwise surface as a
+            // shape mismatch deep in the solver.
+            if (tag.size() != static_cast<std::size_t>(2 * rank))
+                return std::unexpected(std::format(
+                    "build_ucc_denominator_cache: block tag '{}' has {} slots but is "
+                    "keyed at rank {} ({} slots expected).",
+                    tag, tag.size(), rank, 2 * rank));
+
+            auto block = build_ucc_block_denominator(reference, tag);
+            if (!block)
+                return std::unexpected(block.error());
+            cache.sectors.push_back({{rank, tag}, std::move(*block)});
+        }
+
+        return cache;
     }
 
     std::expected<TensorND, std::string> build_ucc_block_denominator(

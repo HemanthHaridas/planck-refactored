@@ -112,12 +112,21 @@ namespace HartreeFock::Correlation::CC
                 { return entry.first.first == rank && entry.first.second == tag; });
             if (have)
                 continue;
-            // a sector block has the same occ/vir dims as its rank's reference
-            // block (the spin projection lives in the algebra, not the shape).
-            const auto &ref_dims =
-                state.amplitudes.by_rank[static_cast<std::size_t>(rank - 1)].dims;
+            // U2.2: take the block's shape from its own denominator when one is
+            // stored. For an RHF Sz sector the spin projection lives in the algebra
+            // and not the shape, so a sector really does share its rank's reference
+            // dims -- but for a UCC block it does not: with noa != nob, `abab` is
+            // (noa,nob,nva,nvb) while `aaaa` is (noa,noa,nva,nva). The denominator
+            // is already built per block (build_ucc_block_denominator), so it is
+            // the one place that shape is known; `sector_tensor` falls back to the
+            // rank's reference denominator on the RHF path, which reproduces the
+            // old `ref_dims` exactly.
+            auto denom = state.denominators.sector_tensor(rank, tag);
+            const auto &block_dims =
+                denom ? denom->dims
+                      : state.amplitudes.by_rank[static_cast<std::size_t>(rank - 1)].dims;
             state.amplitudes.sectors.push_back(
-                {{rank, tag}, TensorND(ref_dims, 0.0)});
+                {{rank, tag}, TensorND(block_dims, 0.0)});
         }
     }
 
@@ -168,7 +177,12 @@ namespace HartreeFock::Correlation::CC
                 state.mo_blocks,
                 state.denominators,
                 state.amplitudes);
-            auto denominator = state.denominators.tensor(sr.excitation_rank);
+            // U2.2: validate against the BLOCK's denominator, not the rank's
+            // reference one -- under an unrestricted reference they have different
+            // shapes (see ensure_amplitude_sectors). Falls back to the rank's on
+            // the RHF path, where they are the same tensor.
+            auto denominator =
+                state.denominators.sector_tensor(sr.excitation_rank, sr.tag);
             if (!denominator)
                 return std::unexpected(
                     "evaluate_generated_arbitrary_order_residuals: " + denominator.error());

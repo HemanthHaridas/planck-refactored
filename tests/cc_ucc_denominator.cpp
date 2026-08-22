@@ -22,7 +22,11 @@
 #include <string>
 #include <vector>
 
+using HartreeFock::Correlation::CC::ArbitraryOrderDenominatorCache;
+using HartreeFock::Correlation::CC::build_arbitrary_order_denominator_cache;
 using HartreeFock::Correlation::CC::build_ucc_block_denominator;
+using HartreeFock::Correlation::CC::build_ucc_denominator_cache;
+using HartreeFock::Correlation::CC::RHFReference;
 using HartreeFock::Correlation::CC::UHFReference;
 
 namespace
@@ -228,6 +232,135 @@ int main()
         truncated.eps_beta(0) = 0.0;
         check(!build_ucc_block_denominator(truncated, "abab").has_value(),
               "an eps vector too short for the partition is rejected");
+    }
+
+    // ======================================================================
+    // U2.2 -- the cache, and the lookup the solver actually calls.
+    //
+    // U2.1 built ONE block's denominator. The defect U2.2 removes lives one
+    // layer up: the Gap B4 sector update divided every sector by
+    // `denominators.tensor(rank)` -- the RANK's reference denominator. Its
+    // comment said so outright ("for an RHF reference the orbital energies are
+    // spin-free, so a sector reuses denominators.tensor(rank)"), which is true
+    // for RHF and false the moment the reference is unrestricted.
+    // ======================================================================
+
+    // --- the cache carries one entry per declared block ----------------------
+    {
+        const std::vector<std::pair<int, std::string>> blocks{
+            {1, "aa"}, {1, "bb"}, {2, "aaaa"}, {2, "abab"}, {2, "bbbb"}};
+        const auto cache = build_ucc_denominator_cache(reference, blocks);
+        check(cache.has_value(), "ucc denominator cache builds");
+        if (cache)
+        {
+            check(cache->sectors.size() == blocks.size(),
+                  "cache holds one entry per declared block");
+
+            // by_rank stays EMPTY: a UCC method has no privileged reference
+            // sector (every ccgen target is block-tagged), so there is no rank
+            // whose denominator is the unqualified one. If this ever becomes
+            // non-empty, `sector_tensor`'s fallback would start silently serving
+            // a wrong-shaped tensor for an unlisted block instead of erroring.
+            check(cache->by_rank.empty(), "cache leaves by_rank empty");
+
+            // Each entry must equal the standalone builder for its own tag --
+            // i.e. the cache routes tags to blocks and does not, say, build
+            // every entry from the first tag.
+            for (const auto &[key, tensor] : cache->sectors)
+            {
+                const auto direct = build_ucc_block_denominator(reference, key.second);
+                check(direct.has_value() && direct->dims == tensor.dims
+                          && direct->data == tensor.data,
+                      "cache entry '" + key.second + "' equals the direct build");
+            }
+        }
+    }
+
+    // --- THE defect: distinct blocks of one rank get distinct denominators ---
+    {
+        const auto cache = build_ucc_denominator_cache(
+            reference, {{2, "aaaa"}, {2, "abab"}, {2, "bbbb"}});
+        check(cache.has_value(), "rank-2 cache builds");
+        if (cache)
+        {
+            const auto aaaa = cache->sector_tensor(2, "aaaa");
+            const auto abab = cache->sector_tensor(2, "abab");
+            const auto bbbb = cache->sector_tensor(2, "bbbb");
+            check(aaaa.has_value() && abab.has_value() && bbbb.has_value(),
+                  "every rank-2 block resolves through sector_tensor");
+            if (aaaa && abab && bbbb)
+            {
+                // Shape alone separates them here, which is the strongest form:
+                // the old `tensor(rank)` route could not even have returned a
+                // correctly-shaped tensor for all three at once.
+                check(aaaa->dims != abab->dims && abab->dims != bbbb->dims,
+                      "the three rank-2 blocks have DIFFERENT shapes");
+                check(abab->dims == std::vector<int>{NOA, NOB, NVA, NVB},
+                      "abab keeps its mixed-spin shape through the cache");
+            }
+        }
+    }
+
+    // --- an unlisted block must not be silently served ----------------------
+    {
+        const auto cache = build_ucc_denominator_cache(reference, {{2, "abab"}});
+        check(cache.has_value(), "single-block cache builds");
+        if (cache)
+        {
+            // by_rank is empty, so the RHF fallback has nothing to fall back TO
+            // and the lookup errors. This is the guard that keeps a missing block
+            // from quietly picking up another block's denominator.
+            check(!cache->sector_tensor(2, "aaaa").has_value(),
+                  "an undeclared block errors rather than falling back");
+        }
+    }
+
+    // --- the RHF path is untouched: fallback reproduces tensor(rank) ---------
+    {
+        // The load-bearing compatibility claim. `sector_tensor` is now called
+        // where `tensor(rank)` used to be, on EVERY path including RHF, so an
+        // RHF cache (which stores no sectors) must return exactly what it did
+        // before -- otherwise U2.2 silently changes every landed CC result.
+        RHFReference rhf;
+        rhf.n_occ = 3;
+        rhf.n_virt = 4;
+        rhf.eps_occ = Eigen::VectorXd(3);
+        rhf.eps_virt = Eigen::VectorXd(4);
+        for (int i = 0; i < 3; ++i)
+            rhf.eps_occ(i) = -1.0 - static_cast<double>(i);
+        for (int a = 0; a < 4; ++a)
+            rhf.eps_virt(a) = 2.0 + static_cast<double>(a);
+
+        const auto rhf_cache = build_arbitrary_order_denominator_cache(rhf, 3);
+        check(rhf_cache.has_value(), "rhf denominator cache still builds");
+        if (rhf_cache)
+        {
+            check(rhf_cache->sectors.empty(), "rhf cache stores no sectors");
+            for (int rank = 1; rank <= 3; ++rank)
+            {
+                const auto by_rank = rhf_cache->tensor(rank);
+                // Any tag at all: with no sectors stored the tag is irrelevant
+                // and the rank's denominator must come back unchanged.
+                const auto routed = rhf_cache->sector_tensor(rank, "aaaaaa");
+                check(by_rank.has_value() && routed.has_value()
+                          && by_rank->dims == routed->dims
+                          && by_rank->data == routed->data,
+                      "rhf sector_tensor falls back to tensor(rank) exactly");
+            }
+        }
+    }
+
+    // --- malformed (rank, tag) pairs fail loudly ----------------------------
+    {
+        // A tag carries its own rank (2*rank slots) and so does the key.
+        // Disagreement means the caller assembled the pair from two sources;
+        // caught here rather than as a shape mismatch deep inside the solver.
+        check(!build_ucc_denominator_cache(reference, {{2, "aa"}}).has_value(),
+              "a tag whose slot count contradicts its rank key is rejected");
+        check(!build_ucc_denominator_cache(reference, {{0, ""}}).has_value(),
+              "a non-positive rank is rejected");
+        check(!build_ucc_denominator_cache(reference, {{2, "abax"}}).has_value(),
+              "a malformed tag propagates the builder's rejection");
     }
 
     if (failures == 0)
