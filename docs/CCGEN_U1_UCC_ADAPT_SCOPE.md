@@ -293,6 +293,87 @@ Two rank-6 conventions found while building it, both traps worth keeping:
   PySCF and ccgen see different t3, and it surfaces far from its cause — measured,
   it moves the *singles* residual from 5e-14 to 8.9e-3.
 
+#### U1.4c — the rank-6 triples discrepancy (OPEN, scoped by investigation)
+
+`triples_aaaaaa` disagrees with PySCF UCCSDT by ~1.2e-2 against ‖R‖~3.1, while rank-6 singles and
+doubles are exact at ~1e-15. Bisected on a deterministic probe (amplitudes drawn wholly from the
+seeded RNG — perturbing PySCF's converged ones drifts ~8% per process and makes any bisect
+meaningless).
+
+**Dead hypotheses, each measured:**
+
+| hypothesis | killed by |
+|---|---|
+| T1-dressing convention difference | `t1 = 0` leaves the discrepancy unchanged |
+| a spurious term family in ccgen | the 18 suspect `t2·v` terms are the standard `P(i/jk)P(a/bc)` expansions of two **textbook** T3 terms |
+| a simple over/under-count | no integer combination of the two families fits (best-fit scales +0.23 / −0.10) |
+| the t3 blocks or their reading | rank-6 singles/doubles *consume* t3 and are exact |
+
+At `t1 = t3 = 0`, ccgen gives 4.93e-2 where PySCF gives 3.55e-3 (~14×), and every ccgen triples term
+outside the pure-t2 class evaluates to exactly 0. The two surviving families cancel heavily — each
+~4.5e-2, summing to 1.3e-2, with 38× cancellation across the full residual — so dropping either
+makes agreement *worse*. Max-norm is a poor instrument on a quantity this cancellation-dominated.
+
+**The blocking problem, and it is not what it first looked like.** The third source that would say
+which side is wrong is ccgen's own RCC manifold — independent of both the UCC bridge and PySCF. It
+reproduces `triples_aabaab` to 1.6e-17, but only at converged amplitudes where ‖R‖~1e-10, i.e.
+vacuously. Making it non-vacuous requires perturbed amplitudes, and **that is where the closure
+relations become load-bearing**:
+
+```
+RCC  reads a single spatial  t3
+UCC  triples_aabaab needs    t3_aaaaaa, t3_aabaab, t3_abbabb, t3_bbbbbb
+```
+
+The four UCC blocks are not independent at closed shell — they are determined by the spatial one.
+So a wrong closure relation is **indistinguishable from an equation defect** in this comparison, and
+that is exactly the trap that produced the retracted "rank-6 spin-flip defect" earlier in this
+ladder. This is not a new kind of problem: rank 4 has the identical structure, and F2.3 passes there
+only because its closure (`t2_aaaa = t2 - t2.transpose(1,0,2,3)`) is known and simple.
+
+**What is established about the rank-6 closure:**
+
+```
+t3_aaaaaa = (1/12) * A_bra A_ket t3_aabaab      # all 36 signed perms
+```
+
+It reproduces both real block pairs exactly (1.3e-18, 2.0e-18), and the 1/12 double antisymmetrizer
+maps the mixed block's symmetry onto a fully antisymmetric one for a **generic** random block — so
+that half is structural, not a fixture artifact.
+
+**What is not established: that it is unique** — and the obvious way to settle it does not exist.
+The real `aab` block's 36 permutation images span rank **5** where a generic block gives rank 9, so
+the fit is underdetermined and the uniform-1/12 answer is just the min-norm solution. The
+`bbb`←`bba` cross-check does **not** repair this: a deliberately different exact fit (`c0 + 3·n`,
+`n` in the null space) passes it too, because both pairs share the null space. And refitting on an
+open-shell reference — where α and β would be genuinely independent — is impossible: their spaces
+have **different dimensions** there (CH3/STO-3G: `aaa` (5,5,5,3,3,3) vs `bbb` (4,4,4,4,4,4)), so
+only 4 of 36 images are shape-legal and they span rank 1. **The permutation-fit approach is
+closed-shell-only by construction.**
+
+One wrong turn recorded: the extra degeneracy was guessed to be the joint `(0,1)(3,4)` spin-flip
+symmetry, which the real block does satisfy exactly — but imposing it on a random block still gives
+rank 9, so the source of the rank-5 collapse is unidentified.
+
+**Steps, in order:**
+
+- **U1.4c.1 — derive the closures from the spin integration, not by fitting (~M).** Read
+  `t3_aaaaaa` and `t3_abbabb` in terms of `t3_aabaab` off `ucc_integrate_target` /
+  `collapse_amplitudes`, the code that already performs this reduction at rank 4. The measured 1/12
+  form is a check on the answer, not the answer. *Gate:* the derived relations reproduce both real
+  PySCF pairs, **and** are derived rather than fitted — no least squares anywhere in the
+  justification.
+- **U1.4c.2 — extend F2.3's closed-shell oracle to rank 6 (~S).** With correct closures, feed both
+  sides *perturbed* amplitudes and compare `triples_aabaab` against RCC `triples`. *Gate:* ≤1e-11 on
+  a non-square case, plus the falsifiability check F2.3 carries.
+- **U1.4c.3 — decide which side is wrong (~S, a decision, not code).** If U1.4c.2 passes, ccgen's
+  T3 is self-consistent and the defect is in how this gate reads PySCF's `r3aaa`; if it fails, the
+  defect is in ccgen's T3 and U1.4c.2 localizes it without PySCF at all. **Do not attempt this call
+  before U1.4c.2** — it is the question four wrong answers in this ladder were guesses at.
+
+**Do not** resume the max-norm bisect on the PySCF comparison. With 38× cancellation and an unproven
+closure feeding it, that instrument cannot separate the two candidate causes; U1.4c.2 can.
+
 #### The oracle plumbing, established while probing (reusable when U1.4a lands)
 
 - PySCF's real CCSDT residual entry is **`update_amps_uccsdt_tri_(mycc, tamps, eris)`**, which
@@ -439,8 +520,8 @@ It is that **a measured hazard is not the same as remaining work**, and the gap 
 exactly what a stale scope hides. Re-run a step's own gate before building it: U1.3's gate is four
 lines and passes.
 
-U1's gate now runs at rank 6. Singles and doubles reproduce PySCF UCCSDT exactly (~5e-14 / ~3e-15);
-**the triples target is off by ~1.4e-2 and is the one genuinely open item in U1.** Because the
+U1's gate now runs at rank 6. Singles and doubles reproduce PySCF UCCSDT exactly (~5e-16 / ~1.4e-15);
+**the triples target is off by ~1.2e-2 and is the one genuinely open item in U1.** Because the
 singles and doubles consume t3 and are exact, that discrepancy is confined to the T3 equation rather
 than to the fixture, the evaluator or the block naming — which is the whole reason the gate reports
 per target instead of in aggregate.
