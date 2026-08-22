@@ -4025,3 +4025,156 @@ class U14c3UccIsGccSlicedAtRankSixTests(unittest.TestCase):
                                    f"{ukey}: GCC slice is ~zero — vacuous")
                 self.assertLess(np.abs(got - want).max(), 1e-12,
                                 f"{ukey} != GCC {gkey} sliced")
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class U15UccReachesFciLimitTests(unittest.TestCase):
+    """The decisive UCC gate: solve the generated UCC equations to self-consistency
+    and require the energy to equal FCI.
+
+    **This is the first time the UCC manifold is solved to an ENERGY at all.**
+    Everything before it was either a residual comparison (`test_ucc_vs_pyscf`,
+    `test_ucc_rank6_vs_pyscf`) or a transitive argument -- ccgen's GCC CCSDT is
+    FCI-exact and `U14c3UccIsGccSlicedAtRankSixTests` shows UCC == GCC sliced, so
+    UCC "must" be right. That chain is sound but indirect: it never runs the UCC
+    equations as equations. This does, and it is the analogue of the closed-shell
+    `test_ccgen_ccsdt_reaches_fci_limit` that has anchored the GCC side all along.
+
+    For a 3-electron system CCSDT is exact, so UHF + E_corr must equal FCI.
+
+    **LiH+/6-31g, not Li/STO-3G, and the difference matters.** Both are
+    3-electron doublets and both pass -- but on Li/STO-3G the triples contribute
+    *nothing*: holding t3 at zero gives an energy identical to 3.8e-14, so the
+    test would pass with a completely broken T3. Li is nearly a one-electron
+    correlation problem and its `t3` blocks converge to ~1e-19. On LiH+/6-31g the
+    triples are worth 8.1e-8 -- 2000x the tolerance -- so T3 is genuinely
+    exercised. The `test_triples_are_load_bearing` case below pins that, because
+    without it this gate silently degrades to a UCCSD test.
+
+    Structural note on why 3 electrons still exercises a t3 block at all: with
+    `noa=2, nob=1` the same-spin blocks are empty (`aaaaaa` needs three distinct
+    alpha occupieds), but **`t3_aabaab` is not** -- it needs 2 alpha + 1 beta,
+    which is exactly what is available. That is the mixed-spin block, and it is
+    the same family implicated in the open rank-6 PySCF discrepancy
+    (`docs/CCGEN_UCC_RANK6_PYSCF_GAP_HANDOFF.md`).
+    """
+
+    ATOM = "Li 0 0 0; H 0 0 1.6"
+    BASIS = "6-31g"
+
+    @classmethod
+    def _solve(cls, freeze_triples=False):
+        import numpy as np
+        from pyscf import ao2mo
+        from ccgen.spin import ucc_adapt_equations
+        from ccgen.tests.residual_eval import ucc_residual_einsum
+
+        mol = gto.M(atom=cls.ATOM, basis=cls.BASIS, spin=1, charge=1, verbose=0)
+        mol.cart = True
+        mf = scf.UHF(mol)
+        mf.conv_tol = 1e-13
+        mf.run()
+        Ca, Cb = mf.mo_coeff
+        noa, nob = mol.nelec
+        nmo = Ca.shape[1]
+        nva, nvb = nmo - noa, nmo - nob
+
+        def eri_phys(C1, C2):
+            g = ao2mo.general(mol, (C1, C1, C2, C2), compact=False).reshape(
+                C1.shape[1], C1.shape[1], C2.shape[1], C2.shape[1])
+            return g.transpose(0, 2, 1, 3)              # chemist -> physicist
+
+        vaa, vbb = eri_phys(Ca, Ca), eri_phys(Cb, Cb)
+        fock = mf.get_fock()
+        fa = Ca.T @ fock[0] @ Ca
+        fb = Cb.T @ fock[1] @ Cb
+        integrals = {
+            "v_aaaa": vaa - vaa.transpose(0, 1, 3, 2),  # same spin: antisymmetrized
+            "v_bbbb": vbb - vbb.transpose(0, 1, 3, 2),
+            "v_abab": eri_phys(Ca, Cb),                 # mixed spin: not
+            "f_aa": fa, "f_bb": fb,
+        }
+        dims = dict(noa=noa, nva=nva, nob=nob, nvb=nvb)
+
+        # ccgen block tags are vir-half then occ-half.
+        def blk_dims(tag):
+            n = len(tag) // 2
+            return ([nva if s == "a" else nvb for s in tag[:n]]
+                    + [noa if s == "a" else nob for s in tag[n:]])
+
+        def denominator(tag):
+            n = len(tag) // 2
+            ea, eb = np.diag(fa), np.diag(fb)
+            d = np.zeros(blk_dims(tag))
+            idx = np.indices(d.shape)
+            for k in range(n):
+                d -= (ea[noa:] if tag[k] == "a" else eb[nob:])[idx[k]]
+            for k in range(n):
+                d += (ea[:noa] if tag[n + k] == "a" else eb[:nob])[idx[n + k]]
+            return d
+
+        eqs = ucc_adapt_equations(
+            generate_cc_equations("ccsdt", engine="diagram", canonical_fock=True))
+        targets = [k for k in eqs if k != "energy"]
+
+        def amp_name(target):
+            tag = target.split("_", 1)[1]
+            return f"t{len(tag) // 2}_{tag}", tag
+
+        amps, denoms = {}, {}
+        for target in targets:
+            name, tag = amp_name(target)
+            amps[name] = np.zeros(blk_dims(tag))
+            denoms[target] = denominator(tag)
+
+        delta = float("inf")
+        for _ in range(400):
+            tensors = {**integrals, **amps}
+            updates, delta = {}, 0.0
+            for target in targets:
+                if freeze_triples and target.startswith("triples"):
+                    continue
+                name, _tag = amp_name(target)
+                residual = np.asarray(
+                    sum(ucc_residual_einsum(t, dims, tensors) for t in eqs[target]))
+                nxt = amps[name] + residual / denoms[target]
+                updates[name] = nxt
+                delta = max(delta, float(np.abs(nxt - amps[name]).max()))
+            amps.update(updates)
+            if delta < 1e-11:
+                break
+
+        tensors = {**integrals, **amps}
+        e_corr = float(sum(np.asarray(ucc_residual_einsum(t, dims, tensors))
+                           for t in eqs["energy"]))
+        return mf, e_corr, delta, amps
+
+    @classmethod
+    def setUpClass(cls):
+        from pyscf import fci
+        cls.mf, cls.e_corr, cls.delta, cls.amps = cls._solve()
+        cls.e_fci = fci.FCI(cls.mf).kernel()[0]
+
+    def test_uccsdt_equals_fci(self):
+        """3 electrons => CCSDT is exact. Measured 3.7e-14."""
+        self.assertLess(self.delta, 1e-10, "the UCC Jacobi solve did not converge")
+        self.assertAlmostEqual(self.mf.e_tot + self.e_corr, self.e_fci, places=10)
+
+    def test_triples_are_load_bearing(self):
+        """Without this the gate above silently degrades to a UCCSD test -- which
+        is exactly what happens on Li/STO-3G, where the triples are worth 0 and a
+        broken T3 would pass. Here they are worth ~8e-8, 2000x the tolerance."""
+        _mf, e_sd, delta_sd, _amps = self._solve(freeze_triples=True)
+        self.assertLess(delta_sd, 1e-10)
+        gap = abs((self.mf.e_tot + e_sd) - self.e_fci)
+        self.assertGreater(gap, 1e-9,
+                           f"t3 contributes only {gap:.2e}; this system does not "
+                           f"exercise the triples and the FCI gate is vacuous")
+
+    def test_the_mixed_spin_t3_block_is_populated(self):
+        """With noa=2, nob=1 the same-spin t3 blocks are structurally empty (three
+        distinct same-spin occupieds do not exist), but `t3_aabaab` needs 2 alpha
+        + 1 beta and is populated. Asserted because it is the block the open
+        rank-6 PySCF discrepancy implicates."""
+        import numpy as np
+        self.assertGreater(np.abs(self.amps["t3_aabaab"]).max(), 1e-9)
