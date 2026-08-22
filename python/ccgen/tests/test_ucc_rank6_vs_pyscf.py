@@ -17,24 +17,51 @@ What the split buys: the rank-6 singles and doubles residuals *consume* t3, and
 they are exact, so the t3 blocks handed to ccgen and ccgen's reading of them are
 both right. The discrepancy is confined to the T3 equation.
 
-Localized further by zeroing amplitude classes on both sides:
+Localized further by zeroing amplitude classes on both sides, on a probe made
+FULLY deterministic first (amplitudes drawn entirely from the seeded rng rather
+than perturbing PySCF's converged ones — otherwise both sides drift ~8% per
+process and no bisect means anything):
 
-* **`t1 = 0`** — triples discrepancy UNCHANGED (1.29e-2). So it is not a
-  T1-dressing convention difference, which was the leading hypothesis given PySCF
-  builds `r3` from T1-dressed intermediates.
-* **`t1 = t3 = 0`** — ccgen's `triples_aaaaaa` is **1.27e-2 while PySCF's is
-  3.3e-3**, i.e. ccgen's t2-only contribution to R3 is ~4x the entire reference.
-  Every one of ccgen's 579 triples terms outside the pure-t2 class evaluates to
-  exactly 0 here, so the disagreement is entirely in the 108 pure-t2 terms.
-* Within those 108, split by shape: `t2·v` (18 terms) contributes **1.6e-2**,
-  `t2·t2·v_aaaa` (54 terms) 2.6e-3, `t2·t2·v_abab` (36 terms) 3.0e-3. Dropping the
-  18 `t2·v` terms leaves 4.9e-3 against PySCF's 3.3e-3.
+* **`t1 = 0`** — triples discrepancy UNCHANGED. Kills the leading hypothesis,
+  that this is a T1-dressing convention difference (PySCF builds `r3` from
+  T1-dressed intermediates).
+* **`t1 = t3 = 0`** — ccgen gives **4.93e-2** where PySCF gives **3.55e-3**, a
+  factor of ~14, with singles and doubles still exact at ~1e-15. Every ccgen
+  triples term outside the pure-t2 class evaluates to exactly 0 here.
+* The 18 surviving `t2·v` terms are the standard `P(i/jk)P(a/bc)` expansions of
+  two textbook T3 terms — 9 with `v` in `ooov`, 9 in `ovvv`. **Both are
+  legitimate T3 terms**, so this is not a spurious-term bug: each family alone is
+  ~4.5e-2 and their sum is 1.3e-2, i.e. they cancel heavily (the full residual
+  shows 38x cancellation), and dropping either makes agreement worse.
 
-So the suspect set is **18 terms of shape `t2_aaaa · v_aaaa` in `triples_aaaaaa`**
-— the term that generates T3 from T2. Whether ccgen over-counts them or PySCF
-folds them elsewhere is not yet established, and picking a side by inspection is
-what this session has repeatedly got wrong; the next step is comparing against a
-third source, not re-reading either.
+**No integer combination of the two families reproduces the difference**
+(best-fit scales +0.23 and −0.10, neither residual improving on the original), so
+it is not a simple over- or under-count.
+
+**Third source, and it clears ccgen.** ccgen's own RCC (spin-adapted) manifold is
+independent of both the UCC bridge and PySCF's `uccsdt`. At closed shell on the
+real converged UCCSDT blocks, `triples_aabaab` reproduces RCC `triples` to
+**1.6e-17**, alongside singles (7e-19) and doubles (1.9e-16). That comparison is
+vacuous at converged amplitudes (‖R‖~1e-10), and making it non-vacuous needs the
+t3 closure relation — see below, which is where this stopped.
+
+**The t3 closure relation, derived and cross-validated** (three earlier hand
+guesses were all wrong, each too small a permutation group):
+
+```
+t3_aaaaaa = (1/12) * A_bra A_ket t3_aabaab      # ALL 36 signed bra x ket perms
+```
+
+Exact to 1.3e-18 on the real blocks, and — the check that makes it an identity
+rather than a fit — the same relation reproduces `bbb` from `bba` to 2.0e-18.
+That cross-check matters because the 36 permutation images span a space of rank
+**5**, so a least-squares fit on them is underdetermined and cannot by itself
+establish a relation.
+
+The corresponding relation for `t3_abbabb` is **not** established:
+`X != M.transpose(2,1,0,5,4,3)` (they differ by the full magnitude of X), and the
+rank-5 basis makes the lstsq answer untrustworthy. That is the next thing to
+settle, and it blocks the non-vacuous third-source comparison.
 
 Also ruled out: not a layout or symmetry artifact (both residuals bra-antisym to
 ~4e-16, and so is their difference); not a scale factor (elementwise ratio median
@@ -260,3 +287,79 @@ class U14RankSixVsPyscfTests(unittest.TestCase):
         """OPEN: ~1.4e-2 relative. See the module docstring for what is ruled
         out. An unexpected PASS means it has been resolved."""
         self._check("triples_aaaaaa", 1e-12)
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable (lives in tests/pyscf/.venv)")
+class T3ClosureRelationTests(unittest.TestCase):
+    """The rank-6 closed-shell closure: the all-alpha t3 block from the mixed one.
+
+    Needed to build a NON-VACUOUS third-source comparison (UCC vs ccgen's own
+    RCC), because RCC stores only the spatial `aabaab` block and derives the
+    all-alpha content — so the two are not independent and cannot be perturbed
+    separately.
+
+        t3_aaaaaa = (1/12) * A_bra A_ket t3_aabaab
+
+    i.e. the FULL double antisymmetrizer: all 36 signed bra x ket permutations,
+    each with coefficient 1/12. Three hand-derivations were attempted before this
+    and all three were wrong, each using too small a permutation group (a 3-term
+    sum mirroring `_split_same_spin_amplitude`'s output). The tell each time was
+    that the constructed block failed its own bra-antisymmetry.
+
+    **Why the cross-check below is the load-bearing assertion.** The relation was
+    found by least squares over the 36 permutation images — but those images span
+    a space of rank **5**, so the fit is badly underdetermined and an exact
+    residual proves nothing on its own. What makes it an identity is that the
+    SAME relation, with the same coefficients, reproduces `bbb` from `bba` — an
+    independent pair it was not fitted to.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from ccgen.tests.test_spin import _uccsdt_t3_blocks
+        cls.aaa, cls.aab, cls.bba, cls.bbb, cls.nocc, cls.nvir, _cc = _uccsdt_t3_blocks()
+
+    @staticmethod
+    def _parity(p):
+        s, pl = 1, list(p)
+        for i in range(len(pl)):
+            for j in range(i + 1, len(pl)):
+                if pl[i] > pl[j]:
+                    s = -s
+        return s
+
+    @classmethod
+    def _same_spin_from_mixed(cls, M):
+        out = np.zeros_like(M)
+        for bp in itertools.permutations(range(3)):
+            for kp in itertools.permutations(range(3)):
+                out += (cls._parity(bp) * cls._parity(kp)
+                        * M.transpose(tuple(bp) + tuple(3 + x for x in kp)))
+        return out / 12.0
+
+    def test_aaaaaa_from_aabaab(self):
+        A = self.aaa.transpose(3, 4, 5, 0, 1, 2)
+        M = self.aab.transpose(2, 3, 5, 0, 1, 4)
+        self.assertGreater(np.abs(A).max(), 1e-6, "block is ~zero; vacuous")
+        self.assertLess(np.abs(A - self._same_spin_from_mixed(M)).max(), 1e-14)
+
+    def test_bbbbbb_from_abbabb_is_the_SAME_relation(self):
+        """The assertion that makes this an identity rather than a least-squares
+        artifact: an independent block pair the coefficients were never fitted
+        to. Without it, the rank-5 permutation basis would let many wrong
+        relations fit the first pair exactly."""
+        B = self.bbb.transpose(3, 4, 5, 0, 1, 2)
+        X = self.bba.transpose(2, 3, 5, 0, 1, 4)
+        self.assertGreater(np.abs(B).max(), 1e-6, "block is ~zero; vacuous")
+        self.assertLess(np.abs(B - self._same_spin_from_mixed(X)).max(), 1e-14)
+
+    def test_the_permutation_basis_is_rank_deficient(self):
+        """Pins WHY the cross-check above is required, so nobody later "simplifies"
+        this by refitting. The 36 images span rank 5."""
+        M = self.aab.transpose(2, 3, 5, 0, 1, 4)
+        imgs = [M.transpose(tuple(bp) + tuple(3 + x for x in kp))
+                for bp in itertools.permutations(range(3))
+                for kp in itertools.permutations(range(3))]
+        basis = np.stack([i.ravel() for i in imgs], axis=1)
+        self.assertLess(np.linalg.matrix_rank(basis), 10,
+                        "basis is no longer degenerate; the caveat may be stale")
