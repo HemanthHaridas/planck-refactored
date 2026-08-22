@@ -5,15 +5,18 @@ kernels (UCC) alongside the existing arbitrary-order RCC path** — so an
 open-shell reference can drive `ucc4`/`ucc5` the way a closed-shell reference
 drives `cc4`/`cc5` today.
 
-**Status, 2026-08-22.** **U0 and U1 are landed and numerically validated; U2 is in progress; U3–U5
-are ahead.**
+**Status, 2026-08-22.** **U0, U1 and U2 are landed and numerically validated. U3 is next, and it
+is bigger than this doc originally said — it spans the emitter as well as the C++. U4 is largely
+done *by accident*, which is a hazard rather than a head start. U5 is untouched.**
 
 | step | state |
 |---|---|
 | U0 | landed — `ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)` |
 | U1 | **landed** — `ucc_adapt_equations` + `ucc_spinterm_to_algebraterm`, validated against PySCF UCCSD at rank 4 (~6e-16) and against GCC-sliced at rank 6 (1.6e-17). U1.3 turned out to be **dead**, not work: U1.1 designed its hazard out. Detail in `CCGEN_U1_UCC_ADAPT_SCOPE.md` |
-| U2 | **in progress** — U2.1 landed (`build_ucc_block_denominator` + `planck-cc-ucc-denominator`); threading `UHFReference` through the solver is next |
-| U3–U5 | not started |
+| U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
+| U3 | not started, and **rescoped: it is C++ *and* emitter, one change**. The emitter half is a **silent** wrong-answer path today, pinned RED by `test_ucc_emit_distinct_blocks.py` |
+| U4 | **~90% already done, by accident** — the emitter emits a complete UCC TU today with no error. That is the hazard, not the win; see U4 |
+| U5 | not started |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -332,7 +335,7 @@ convention-robust pattern the RCC S3.2 gate used, and it is the one place UCC
 gets a *direct* oracle rather than a transitive one. Do this at rank 4 before
 touching any C++.
 
-### U2 — the UHF reference in the generated runtime (~M, C++) — **IN PROGRESS**
+### U2 — the UHF reference in the generated runtime (~M, C++) — **LANDED**
 
 **U2.1 landed:** `build_ucc_block_denominator` (`src/post_hf/cc/amplitudes.{h,cpp}`), gated by
 `planck-cc-ucc-denominator`. The spin-aware denominator this section calls for, keyed by block tag.
@@ -349,48 +352,154 @@ factor-100 error rather than a rounding one. **A tag whose two halves share a sp
 (`"abab"` is occ (a,b) *and* vir (a,b)) cannot catch a virtual slot reading the occupied slot's
 spin** — that mutation passed until the `"abba"` case was added, where the halves differ.
 
-**Remaining in U2:** thread `UHFReference` through `ArbitraryOrderTensorCCState::reference` and
-`solver_arbitrary`'s `const RHFReference &`, then the open-shell MP2-limit gate below.
+**U2.2 landed:** `build_ucc_denominator_cache` plus
+`ArbitraryOrderDenominatorCache::{sectors, sector_tensor}`
+(`src/post_hf/cc/amplitudes.{h,cpp}`), same gate binary.
 
-#### Original scope, for the remaining work
+U2.1 built *one block's* denominator. The defect it could not reach was one layer up: the
+Gap B4 sector update divided **every** sector by `denominators.tensor(rank)`, the rank's
+*reference* denominator. The old comment stated the assumption plainly —
 
-Thread `UHFReference` through the generated arbitrary-order path.
-`ArbitraryOrderTensorCCState::reference` and `solver_arbitrary`'s
-`const RHFReference &` become a variant/parameterized partition carrying
-`n_occ_alpha/n_occ_beta/n_virt_alpha/n_virt_beta`. The denominator cache becomes
-spin-resolved: a rank-2n block with α-count `k` per half draws its
-`eps` from the α set for the first `k` slots and the β set for the rest.
+> with the SAME denominator as its rank's reference block (B2: for an RHF reference the
+> orbital energies are spin-free, so a sector reuses `denominators.tensor(rank)`)
 
-`UHFReference` and its builder already exist (used by hand-written UCCSD), so
-this is wiring plus a spin-aware denominator, not new physics.
+— which is true for RHF and false the moment the reference is unrestricted: `eps_alpha !=
+eps_beta`, and with `noa != nob` an `abab` block does not even have the same *shape*
+(`(noa,nob,nva,nvb)` against `(noa,noa,nva,nva)`).
 
-*Gate:* an open-shell MP2-limit check — the rank-2 UCC denominators reproduce the
-existing UMP2 correlation energy from a single Jacobi step. That isolates the
-denominator from the residual algebra.
+Three call sites moved off `tensor(rank)`: the B4 Jacobi update, the sector residual shape
+validation, and `ensure_amplitude_sectors`' block allocation — the last because a UCC
+block's dims are known only from its own denominator.
+
+**One code path, not two.** `sector_tensor` falls back to `tensor(rank)` when no per-block
+entry is stored, which is exactly the RHF case (spin-free energies ⇒ every sector of a rank
+really does share one denominator). So the call sites switched unconditionally rather than
+branching on reference kind — a second sector-update loop would be a second thing to keep in
+sync with `ensure_amplitude_sectors`. `by_rank` is deliberately left **empty** on a UCC
+cache: UCC has no privileged reference sector, so an undeclared block must error rather than
+quietly pick up another block's tensor.
+
+*RHF bit-identity, measured not assumed.* `be_rccsdtq_sto3g` is the only landed method
+carrying a sector (`{4, "aaabaaab"}`), so it is the case that could have moved. Built both
+ways: `-14.4036550465` with the change and `-14.4036550465` without, every digit. Extended
+suite 107/107. (The 6.2e-8 gap to that case's stored expectation is pre-existing, inside its
+own 1e-7 atol, and unrelated.)
+
+*The gate was verified falsifiable* against three mutations, each caught by the assertion
+written for it: `sector_tensor` ignoring the tag (i.e. exactly the pre-U2.2 behavior, 3
+checks); the cache building every entry from the first tag (6 checks); the RHF fallback
+removed (3 checks).
+
+#### The reference *variant* is withdrawn — do not build it
+
+This section used to end by calling for `ArbitraryOrderTensorCCState::reference` and
+`solver_arbitrary`'s `const RHFReference &` to become "a variant/parameterized partition".
+**Do not do this.** Measured against the emitted TU, the generated kernels only ever touch
+`reference.f_oo`, `f_ov`, `f_vv` and `orbital_partition` — never `RHFReference` *as a type*.
+A variant would therefore change every kernel signature and force every generated TU to
+regenerate, and buy nothing: the actual spin-resolution those three Fock blocks need is the
+same split the ERIs need, driven by the same emitter tag. That is U3, and it is one change.
+
+What the variant *was* meant to deliver — spin-resolved denominators — is what U2.2 landed,
+without touching a kernel signature.
+
+*Gate, still open and still worth doing:* the open-shell MP2-limit check — the rank-2 UCC
+denominators reproduce the existing UMP2 correlation energy from a single Jacobi step. It
+isolates the denominator from the residual algebra. It needs U3 first, because a Jacobi step
+needs correct integrals as well as correct denominators.
 
 **Sequencing note.** Do U2 *after* U1's numeric gate. If U1 is wrong, a UCC C++
 run fails and you cannot tell whether the algebra or the reference is at fault.
 
-### U3 — spin-blocked MO integrals (~M, C++)
+### U3 — spin-blocked MO integrals **and the emitter half** (~M, C++ *and* Python)
 
-`MOBlockCache` gains spin-blocked ERI blocks (`oovv_aaaa`, `oovv_abab`,
-`oovv_bbbb`, and the `ovov` partners). The AO→MO transform is the existing
-`Correlation::transform_eri` run per spin-block pair of coefficient matrices —
-no new integral engine, and the transform is already OpenMP-parallel.
+> **Rescoped, and this is the important correction in the doc.** As written this step was
+> C++-only. That is not enough, and stopping there is worse than not starting: the emitter
+> half is a **silent** wrong-answer path that exists on the tree *today*. Doing
+> `MOBlockCache` alone leaves it live while making the step look finished.
+
+**The C++ half (as originally scoped).** `MOBlockCache` gains spin-blocked ERI blocks
+(`oovv_aaaa`, `oovv_abab`, `oovv_bbbb`, and the `ovov` partners). The AO→MO transform is the
+existing `Correlation::transform_eri` run per spin-block pair of coefficient matrices — no
+new integral engine, and the transform is already OpenMP-parallel.
+
+**The emitter half (new).** `_map_eri_tensor` in
+`python/ccgen/emit/planck_tensor_cpp.py` never receives the spin tag. The integral branch
+matches `re.fullmatch(r"([vf])(?:_([ab]+))?", name)` and then uses only `group(1)`, so the
+tag is stripped and discarded. Measured on the emitted CCSD UCC TU:
+
+```
+v_aaaa, v_abab, v_bbbb  ->  ALL emit as  mo_blocks.oovv   (and .ovov, .ooov, ...)
+f_aa,   f_bb            ->  BOTH emit as reference.f_ov   (and .f_oo, .f_vv)
+```
+
+The comment at that strip says the tag "routes STORAGE … and does not change which space
+block it is, so the mapping below is unchanged once the suffix is stripped." The first
+clause is right and the conclusion does not follow: the tag does not change the *space*
+block (`oovv` stays `oovv`) but it absolutely changes the **array** — under UHF `<aa|aa>`,
+`<ab|ab>` and `<bb|bb>` are three different integrals. Stripping the suffix discards
+precisely the routing the first clause says it performs.
+
+**The Fock blocks ride the same fix.** `f_aa`/`f_bb` collapse for the same reason, in the
+same branch. This is why U2's reference-variant idea was withdrawn (see U2): the spin
+resolution `f_oo`/`f_ov`/`f_vv` need is this change, not a new reference type.
 
 **Memory:** UCC roughly triples the ERI block footprint versus RCC. Worth
 stating up front because it, not FLOPs, is what caps the reachable rank.
 
-*Gate:* for an RHF-degenerate UHF reference (α coefficients == β), every spin
-block equals the RCC block bytewise. That is a free, exact regression that
-catches a transposed spin index immediately.
+*Gate (routing, already written and RED):* `python/ccgen/tests/test_ucc_emit_distinct_blocks.py`
+asserts the emitted TU names as many distinct arrays as the algebra names distinct tagged
+tensors. Costs seconds, no C++, no solve, no PySCF. It fails today by design (3 pass, 2
+fail) and turns green when this step lands.
 
-### U4 — emit + registry for UCC blocks (~S given U1/U3)
+> *Why that gate counts per factor instead of comparing kernels.* The obvious form — "the
+> `aa` singles kernel's Fock reads differ from the `bb` kernel's" — is **wrong**, and a
+> falsifiability probe caught it before it shipped: measured, `singles_aa` and `singles_bb`
+> both reference `f_aa` *and* `f_bb`, because each block couples to the other spin through
+> t1. A correct emitter therefore gives the two kernels *identical* accessor sets, so that
+> assertion would have stayed red forever and eventually been "fixed" by deleting it. The
+> invariant that holds is a counting one, per factor: N distinct tagged tensors in the
+> algebra ⇒ N distinct arrays in the text.
+
+*Gate (correctness, still to write):* for an RHF-degenerate UHF reference (α coefficients ==
+β), every spin block equals the RCC block bytewise. That is a free, exact regression that
+catches a transposed spin index immediately. **The two gates are complementary and both are
+needed**: the routing gate says distinct blocks reach distinct arrays, the degeneracy gate
+says each block reaches the *correct* array. Neither implies the other.
+
+### U4 — emit + registry for UCC blocks (~S given U1/U3) — **mostly done by accident**
+
+> **Read this before starting U4, because the step looks finished and is not.** Measured on
+> the current tree, `ucc_adapt_equations('ccsd')` fed to `emit_planck_translation_unit(...,
+> force_arbitrary=True, spin_adapted=True)` **already produces a complete UCC translation
+> unit, with no error**: six kernels (`singles_aa`, `singles_bb`, `doubles_aaaa`,
+> `doubles_abab`, `doubles_bbbb`, energy) and a correct registry declaring
+> `sector_tags` `{1,"aa"} {1,"bb"} {2,"aaaa"} {2,"abab"} {2,"bbbb"}`. The amplitudes are
+> genuinely block-resolved — U1.1 did its job, and `t2_aaaa`/`t2_abab`/`t2_bbbb` each bind
+> their own `sector_tensor` view.
+>
+> **The ERIs and the Fock matrix are not** (see U3). So the emit that looks like a finished
+> U4 is a kernel that compiles, links, runs, and returns a plausible correlation energy
+> while reading the wrong integrals — the B5 physicist-ERI failure mode, which was found
+> only by injecting an FCI-correct oracle into live C++ state. **The accident is the
+> hazard, not the win.** The routing gate in U3 exists so this cannot be shipped by someone
+> who sees a working emit and reasonably concludes the step is done.
 
 `emit_planck_translation_unit` already emits one kernel per residual key and the
 registry already carries `sector_tags` / `sector_residuals`. UCC blocks map onto
 that: each `doubles_aaaa`-style key becomes a `(rank, tag)` sector residual, and
 `ensure_amplitude_sectors` allocates the blocks.
+
+**What is genuinely left in U4**, once U3 lands:
+
+- The `--ucc` CLI switch and build gate below (nothing routes to
+  `ucc_adapt_equations` today — it has **zero** callers outside tests).
+- **Decide what an empty `residuals_by_rank` means to the solver.** Measured: under UCC it
+  gets **zero** pushes, because every UCC target is block-tagged and the emitter's
+  `re.search(r"_([ab]+)$", target)` therefore routes all of them to `sector_targets`. RCC
+  always had a bare reference target per rank; UCC never does. Check
+  `run_generated_arbitrary_order_iterations` and `validate_kernel_bundle` tolerate that
+  before assuming they do — it is the kind of thing that reads as a no-op and is not.
 
 Add a `--ucc` CLI switch and a `PLANCK_CC_UCC` build gate, **default OFF**, so
 the default build stays byte-identical (the pattern `--factorize-tau` /
@@ -460,6 +569,17 @@ wiring.
   validated there — the RCC spin-adapt path disabled it for both correctness
   (CSE mislabels occ/vir on spatial spin-adapted terms) and compile time
   (`e0f3849`). UCC has strictly more terms.
+- **Do not conclude U4 is done because the emitter runs.** It emits a complete, correct-looking
+  UCC TU today and always has; the ERIs and Fock inside it all collapse onto one array. A
+  working emit is not evidence here — run `test_ucc_emit_distinct_blocks.py`, which is red
+  on purpose until U3 lands.
+- **Do not land U3's `MOBlockCache` half without the emitter half.** Spin-blocked arrays that
+  no emitted kernel ever names change nothing, while making the step look finished and
+  turning a loud absence into a silent wrong answer. They are one change.
+- **Do not make the generated runtime's reference a variant.** The scope originally called
+  for it; measured, the kernels never touch `RHFReference` as a type (only `f_oo`/`f_ov`/
+  `f_vv` and `orbital_partition`), so it churns every kernel signature and every generated
+  TU for nothing. U2.2 delivered the spin-resolved denominators it was meant to buy.
 - **Do not skip the U1 numeric gate before writing C++.** PySCF
   `uccsd.update_amps` is a direct oracle at rank 4 and it costs minutes. Debugging
   a wrong UCC residual through the C++ runtime costs days — the B5 physicist-ERI
