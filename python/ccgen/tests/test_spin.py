@@ -3782,3 +3782,120 @@ class U14RankSixSpinFlipSymmetryTests(unittest.TestCase):
                                 np.abs(arr + arr.transpose(order)).max(), 1e-12,
                                 f"{name}: not antisymmetric in slots {p},{q} — "
                                 f"the block violates its own tag")
+
+
+class U14c2RankSixClosedShellOracleTests(unittest.TestCase):
+    """U1.4c.2 — the rank-6 closed-shell oracle, on PERTURBED amplitudes.
+
+    F2.3 one rank up, and the decisive instrument for the open rank-6 triples
+    discrepancy. On a closed-shell system the UCC residual must reproduce ccgen's
+    own RCC residual for the same equations — a third source independent of both
+    the UCC bridge and PySCF's `uccsdt`.
+
+    **Result: all three targets agree to ~1.5e-12 against ||R|| ~1e2-1e3.** So
+    ccgen's rank-6 T3 is SELF-CONSISTENT, and the ~1.1e-2 disagreement with PySCF
+    (`test_ucc_rank6_vs_pyscf`) is in how that gate reads PySCF's `r3aaa`, not in
+    the equations.
+
+    Needs no PySCF: it runs on `ucc_closed_shell_tensors` plus a random spatial
+    `t3`, so it is the cheap localizing gate F2.3 is at rank 4.
+
+    Both closure relations are load-bearing here, which is what makes this a real
+    test rather than a tautology — RCC reads ONE spatial `t3` while UCC's
+    `triples_aabaab` needs all four blocks:
+
+        t3_aaaaaa = sum_q sign(q) * t3_aabaab[bra axes by inverse(order_q)]
+        t3_abbabb = t3_aabaab.transpose(2, 0, 1, 5, 3, 4)
+
+    The first is `_split_same_spin_amplitude` read as arrays (its base reordering
+    is the INVERSE permutation on axes -- see `T3ClosureRelationTests`). The
+    second moves the beta slot to the front of each half, i.e. the alpha-first
+    resort of the global spin flip; it was verified exhaustively over all signed
+    permutations against PySCF's `bba` block.
+
+    Corrupting either breaks the oracle by O(||R||) -- measured 89.0 and 51.3
+    respectively -- so neither is a free parameter, and a wrong closure here is
+    indistinguishable from an equation defect. That is precisely the trap that
+    produced the retracted "rank-6 spin-flip defect" earlier in this ladder, and
+    why the closures had to be derived (U1.4c.1) before this gate could mean
+    anything.
+    """
+
+    NO, NV = 4, 3        # non-square
+
+    @staticmethod
+    def _parity(p):
+        s, pl = 1, list(p)
+        for i in range(len(pl)):
+            for j in range(i + 1, len(pl)):
+                if pl[i] > pl[j]:
+                    s = -s
+        return s
+
+    @classmethod
+    def _same_spin_from_mixed(cls, M, n=3):
+        out = None
+        for q in range(n - 1, -1, -1):
+            order = [x for x in range(n) if x != q] + [q]
+            inv = [order.index(x) for x in range(n)]
+            term = cls._parity(order) * M.transpose(tuple(inv) + tuple(range(n, 2 * n)))
+            out = term if out is None else out + term
+        return out
+
+    def _bundles(self, seed=11):
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_closed_shell_tensors
+        no, nv = self.NO, self.NV
+        ucc, spatial = ucc_closed_shell_tensors(no, nv, seed=7)
+        ucc, spatial = dict(ucc), dict(spatial)
+        rng = np.random.default_rng(seed)
+        t3 = rng.random((nv, nv, nv, no, no, no))
+        t3 = t3 - t3.transpose(1, 0, 2, 3, 4, 5)      # aabaab: antisym in the
+        t3 = t3 - t3.transpose(0, 1, 2, 4, 3, 5)      # alpha bra / ket pairs
+        ucc["t3_aabaab"] = t3
+        ucc["t3_aaaaaa"] = self._same_spin_from_mixed(t3)
+        ucc["t3_bbbbbb"] = self._same_spin_from_mixed(t3)
+        ucc["t3_abbabb"] = t3.transpose(2, 0, 1, 5, 3, 4)
+        spatial["t3"] = t3
+        return ucc, spatial
+
+    def _diffs(self, ucc, spatial):
+        import numpy as np
+        from ccgen.spin import ucc_adapt_equations, spin_adapt_equations
+        from ccgen.tests.residual_eval import ucc_residual_einsum, residual_einsum
+        eqs = generate_cc_equations("ccsdt", engine="diagram", canonical_fock=True)
+        u, r = ucc_adapt_equations(eqs), spin_adapt_equations(eqs)
+        dims = dict(noa=self.NO, nva=self.NV, nob=self.NO, nvb=self.NV)
+        out = {}
+        for uk, rk in (("singles_aa", "singles"), ("doubles_abab", "doubles"),
+                       ("triples_aabaab", "triples")):
+            U = np.asarray(sum(ucc_residual_einsum(t, dims, ucc) for t in u[uk]))
+            R = np.asarray(sum(residual_einsum(t, self.NO, self.NV, tensors=spatial)
+                               for t in r[rk]))
+            self.assertEqual(U.shape, R.shape, f"{uk} vs {rk}: shape disagreement")
+            out[(uk, rk)] = (float(np.abs(U - R).max()), float(np.abs(R).max()))
+        return out
+
+    def test_ucc_reproduces_rcc_at_rank_six(self):
+        """The gate. Tolerance 1e-10 against ||R|| ~1e2-1e3; measured ~1.5e-12."""
+        for pair, (diff, scale) in self._diffs(*self._bundles()).items():
+            with self.subTest(pair=pair):
+                self.assertGreater(scale, 1.0, "residual is ~zero; vacuous")
+                self.assertLess(diff, 1e-10,
+                                f"{pair[0]} != {pair[1]}: {diff:.3e} vs |R| {scale:.3e}")
+
+    def test_both_closures_are_load_bearing(self):
+        """Committed WITH the gate. If either closure could be corrupted without
+        breaking it, the gate would be measuring the fixture rather than the
+        equations -- and a wrong closure is exactly what a real defect looks like
+        here."""
+        for name, corrupt in (
+                ("t3_abbabb", lambda u: u.update(t3_abbabb=u["t3_aabaab"])),
+                ("t3_aaaaaa", lambda u: u.update(t3_aaaaaa=u["t3_aabaab"]))):
+            ucc, spatial = self._bundles()
+            corrupt(ucc)
+            worst = max(d for d, _ in self._diffs(ucc, spatial).values())
+            with self.subTest(corrupted=name):
+                self.assertGreater(worst, 1.0,
+                                   f"corrupting {name} left the oracle passing "
+                                   f"({worst:.3e}); it is not load-bearing")
