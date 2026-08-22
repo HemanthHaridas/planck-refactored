@@ -306,12 +306,39 @@ class T3ClosureRelationTests(unittest.TestCase):
     sum mirroring `_split_same_spin_amplitude`'s output). The tell each time was
     that the constructed block failed its own bra-antisymmetry.
 
-    **Why the cross-check below is the load-bearing assertion.** The relation was
-    found by least squares over the 36 permutation images — but those images span
-    a space of rank **5**, so the fit is badly underdetermined and an exact
-    residual proves nothing on its own. What makes it an identity is that the
-    SAME relation, with the same coefficients, reproduces `bbb` from `bba` — an
-    independent pair it was not fitted to.
+    **What is and is not established here — the first version of this docstring
+    overclaimed, and the correction is the useful part.**
+
+    Established: the 1/12 double antisymmetrizer maps a block with the mixed
+    block's symmetry (antisym in bra (0,1) and ket (3,4)) onto a FULLY
+    antisymmetric one — verified on a generic random block, so it is structural
+    rather than a property of this fixture. And it reproduces both real block
+    pairs exactly.
+
+    NOT established: that it is the unique such relation. The 36 permutation
+    images of the real `aab` block span a space of rank **5**, not the rank 9 a
+    generic block of the same symmetry gives (measured at four sizes) — so the
+    fit is underdetermined, and the uniform-1/12 answer is simply the min-norm
+    solution, which is why it looks canonical.
+
+    The `bbb`<-`bba` cross-check was originally called load-bearing here. **It is
+    weaker than that:** a deliberately different exact fit (`c0 + 3 * n` for `n`
+    in the null space) reproduces `bbb` from `bba` just as exactly, because the
+    two pairs share the same null space. The cross-check rules out fitting noise;
+    it does not pin coefficients.
+
+    So this class pins a relation that WORKS on every case tried, and the obvious
+    way to prove it unique does NOT exist. The natural idea — refit on an
+    open-shell reference where alpha and beta are genuinely independent, so the
+    images are not rank-deficient — was measured and is a dead end: at open shell
+    the alpha and beta spaces have DIFFERENT dimensions (CH3/STO-3G gives `aaa`
+    (5,5,5,3,3,3) against `bbb` (4,4,4,4,4,4)), so only **4 of the 36**
+    permutation images are even shape-legal, and those span rank 1. The
+    permutation-fit approach is closed-shell-only by construction.
+
+    Proving uniqueness therefore needs a different instrument than fitting — the
+    relation read off the spin-integration algebra rather than measured. That is
+    scoped, not attempted here.
     """
 
     @classmethod
@@ -344,22 +371,41 @@ class T3ClosureRelationTests(unittest.TestCase):
         self.assertLess(np.abs(A - self._same_spin_from_mixed(M)).max(), 1e-14)
 
     def test_bbbbbb_from_abbabb_is_the_SAME_relation(self):
-        """The assertion that makes this an identity rather than a least-squares
-        artifact: an independent block pair the coefficients were never fitted
-        to. Without it, the rank-5 permutation basis would let many wrong
-        relations fit the first pair exactly."""
+        """A necessary check, not a sufficient one. It rules out a fit to noise,
+        but NOT a wrong choice of coefficients: the two pairs share a null space,
+        so `c0 + 3*n` passes this too (measured). See the class docstring."""
         B = self.bbb.transpose(3, 4, 5, 0, 1, 2)
         X = self.bba.transpose(2, 3, 5, 0, 1, 4)
         self.assertGreater(np.abs(B).max(), 1e-6, "block is ~zero; vacuous")
         self.assertLess(np.abs(B - self._same_spin_from_mixed(X)).max(), 1e-14)
 
     def test_the_permutation_basis_is_rank_deficient(self):
-        """Pins WHY the cross-check above is required, so nobody later "simplifies"
-        this by refitting. The 36 images span rank 5."""
+        """Pins the caveat itself: the real block's 36 images span rank 5, where a
+        GENERIC block of the same symmetry gives rank 9. That gap is why no fit on
+        this fixture can pin the relation uniquely."""
         M = self.aab.transpose(2, 3, 5, 0, 1, 4)
         imgs = [M.transpose(tuple(bp) + tuple(3 + x for x in kp))
                 for bp in itertools.permutations(range(3))
                 for kp in itertools.permutations(range(3))]
         basis = np.stack([i.ravel() for i in imgs], axis=1)
-        self.assertLess(np.linalg.matrix_rank(basis), 10,
-                        "basis is no longer degenerate; the caveat may be stale")
+        self.assertEqual(np.linalg.matrix_rank(basis), 5,
+                         "rank changed; the underdetermination caveat in the "
+                         "class docstring may be stale")
+
+    def test_the_antisymmetrizer_is_structural_not_fixture_specific(self):
+        """The half that IS established: 1/12 * A_bra A_ket maps the mixed block's
+        symmetry onto a fully antisymmetric one for a GENERIC block, not just for
+        this fixture. Without this, the relation could be an artifact of the
+        rank-5 degeneracy."""
+        rng = np.random.default_rng(4)
+        nv, no = 5, 5
+        M = rng.random((nv, nv, nv, no, no, no))
+        M = M - M.transpose(1, 0, 2, 3, 4, 5)
+        M = M - M.transpose(0, 1, 2, 4, 3, 5)
+        A = self._same_spin_from_mixed(M)
+        self.assertGreater(np.abs(A).max(), 1e-6)
+        for p in itertools.permutations(range(3)):
+            with self.subTest(perm=p):
+                self.assertLess(
+                    np.abs(A - self._parity(p) * A.transpose(tuple(p) + (3, 4, 5))).max(),
+                    1e-12 * np.abs(A).max())
