@@ -69,6 +69,17 @@ that both closure conventions coincide. So the remaining ~0.2% is a genuine
 disagreement about the t3-linear part of the T3 residual between ccgen and PySCF,
 with the fixture no longer a candidate explanation.
 
+**The physicist/chemist ERI convention is NOT the cause** — checked explicitly,
+because it is the class of defect the B5 fix was. PySCF's UCCSDT `eris` is a
+`_PhysicistsERIs` holding `pppp`/`pPpP`/`PPPP`, and `pppp` is the
+NON-antisymmetrized `<pq|rs>` (it equals `chemist.transpose(2,0,3,1)`, which is
+the same array as this gate's `transpose(0,2,1,3)` given `(pq|rs) = (rs|pq)` —
+verified to 5.4e-15). This gate's blocks carry the symmetries ccgen requires,
+confirmed against the GCC spin-orbital fixture: `v_aaaa` is ket-antisymmetric
+(exactly 0) and `v_abab` is not (9.5, as it must be, since its two ket slots are
+different spin spaces). PySCF antisymmetrizes internally where its equations need
+it; the raw stored block is not the input convention.
+
 Ruled out as causes, each measured: the denominator (my `D3` matches PySCF's
 `eijkabc` construction to 2.8e-14, and `focka.diagonal()` equals `mo_energy`
 exactly, `level_shift = 0`); the packed round-trip (every block survives
