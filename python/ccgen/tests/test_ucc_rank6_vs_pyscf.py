@@ -9,24 +9,37 @@ Skipped if PySCF is not importable (it lives in tests/pyscf/.venv). Run with:
 
     tests/pyscf/.venv/bin/python -m unittest ccgen.tests.test_ucc_rank6_vs_pyscf
 
-**Status: singles and doubles agree to ~5e-14 / ~3e-15. The triples target
-disagrees by ~1.4e-2 relative and is marked `expectedFailure`** — an open
-discrepancy, not a passing gate. What that split buys: the singles and doubles
-residuals at rank 6 *consume* t3, and they are exact, so the t3 blocks handed to
-ccgen and the way ccgen reads them are both right. The discrepancy is confined to
-the T3 equation itself (219 of the 579 `triples_aaaaaa` terms carry a t3 factor).
+**Status: singles and doubles agree at MACHINE PRECISION (~5e-16 / ~1.4e-15).
+The triples target disagrees by ~1.2e-2 against a reference of ~3.1 and is marked
+`expectedFailure`** — an open discrepancy, not a passing gate.
 
-Ruled out for the triples discrepancy, so the next pass does not repeat it:
+What the split buys: the rank-6 singles and doubles residuals *consume* t3, and
+they are exact, so the t3 blocks handed to ccgen and ccgen's reading of them are
+both right. The discrepancy is confined to the T3 equation.
 
-* **Not a layout or symmetry artifact.** Both residuals are bra-antisymmetric to
-  ~4e-16, and so is their difference.
-* **Not a scale factor or a transpose.** The elementwise ratio has median 0.9969
-  with a 5-95 spread of 0.77-1.03 — a small additive discrepancy, not a
-  misplaced constant.
-* **Not the fixture's t3 blocks.** All four satisfy their own tag's antisymmetry
-  exactly, and `aaa == bbb` to 2e-18 at closed shell.
-* **Not the packing round-trip.** `tri2full -> full2tri -> tri2full` is bitwise
-  exact.
+Localized further by zeroing amplitude classes on both sides:
+
+* **`t1 = 0`** — triples discrepancy UNCHANGED (1.29e-2). So it is not a
+  T1-dressing convention difference, which was the leading hypothesis given PySCF
+  builds `r3` from T1-dressed intermediates.
+* **`t1 = t3 = 0`** — ccgen's `triples_aaaaaa` is **1.27e-2 while PySCF's is
+  3.3e-3**, i.e. ccgen's t2-only contribution to R3 is ~4x the entire reference.
+  Every one of ccgen's 579 triples terms outside the pure-t2 class evaluates to
+  exactly 0 here, so the disagreement is entirely in the 108 pure-t2 terms.
+* Within those 108, split by shape: `t2·v` (18 terms) contributes **1.6e-2**,
+  `t2·t2·v_aaaa` (54 terms) 2.6e-3, `t2·t2·v_abab` (36 terms) 3.0e-3. Dropping the
+  18 `t2·v` terms leaves 4.9e-3 against PySCF's 3.3e-3.
+
+So the suspect set is **18 terms of shape `t2_aaaa · v_aaaa` in `triples_aaaaaa`**
+— the term that generates T3 from T2. Whether ccgen over-counts them or PySCF
+folds them elsewhere is not yet established, and picking a side by inspection is
+what this session has repeatedly got wrong; the next step is comparing against a
+third source, not re-reading either.
+
+Also ruled out: not a layout or symmetry artifact (both residuals bra-antisym to
+~4e-16, and so is their difference); not a scale factor (elementwise ratio median
+0.9969); not the fixture t3 blocks (all four satisfy their tag's antisymmetry,
+`aaa == bbb` to 2e-18); not the packing round-trip (bitwise exact).
 
 Three conventions this file carries from U1.2, and two more that rank 6 adds:
 
@@ -66,7 +79,20 @@ from ccgen.generate import generate_cc_equations  # noqa: E402
 from ccgen.spin import ucc_adapt_equations  # noqa: E402
 from ccgen.tests.residual_eval import ucc_residual_einsum  # noqa: E402
 
-N2 = "N 0 0 0; N 0 0 1.3"
+# Water, not N2. N2/STO-3G at 1.3 A is degenerate enough that PySCF's converged
+# `t2ab` is NOT reproducible across processes -- measured 0.125 / 0.184 / 0.193 on
+# three runs while e_corr and t2aa stayed put to ~13 digits, i.e. the alpha-beta
+# amplitudes carry a gauge freedom the energy does not see. That made the gate's
+# own reported difference wander (1.56e-2 .. 1.72e-2) and would make any
+# term-level bisect meaningless. Water reproduces to ~12 digits with every block
+# non-trivial.
+#
+# 6-31g, not STO-3G: water/STO-3G has nv=2, so C(2,3)=0 distinct same-spin
+# triples and `triples_aaaaaa` is IDENTICALLY ZERO -- the same vacuous-pass trap
+# the fixture scope recorded for OH/STO-3G, in a new place. 6-31g gives nv=8, and
+# the whole gate still runs in ~1 s.
+WATER = "O 0 0 0; H 0 0.757 0.587; H 0 -0.757 0.587"
+BASIS = "6-31g"
 
 
 def _anti(x, axes):
@@ -84,10 +110,15 @@ def _anti(x, axes):
     return out
 
 
-def _build(seed: int = 0):
+def _build(seed: int = 0, return_inputs: bool = False):
     """Return ({target: ccgen residual}, {target: pyscf residual}), both in
-    ccgen's ``[vir..., occ...]`` layout."""
-    mol = gto.M(atom=N2, basis="sto-3g", spin=0, verbose=0)
+    ccgen's ``[vir..., occ...]`` layout.
+
+    ``return_inputs`` additionally returns ``(tensors, dims, eqs)`` — the block
+    bundle the ccgen side was evaluated on. Used by the term-level bisect of the
+    open triples discrepancy; it changes nothing about what the gate computes.
+    """
+    mol = gto.M(atom=WATER, basis=BASIS, spin=0, verbose=0)
     mol.cart = True
     rhf = scf.RHF(mol)
     rhf.conv_tol = 1e-13
@@ -124,6 +155,17 @@ def _build(seed: int = 0):
     y = y - y.transpose(0, 1, 3, 2, 4, 5)
     full[1], full[2] = y, y.copy()        # aab and bba are ONE stored sector
     t3[:] = list(uccsdt.tamps_full2tri_uhf(cc, full))
+
+    # f_ov zeroed on the PYSCF side too, before its residual is formed. Planck CC
+    # kernels are canonical-Fock by construction so ccgen's f_ov terms are
+    # runtime-zero; PySCF's f_ov is SCF convergence noise that update_amps USES.
+    # Zeroing only one side is worse than zeroing neither (U1.2's measurement),
+    # and here it set a ~7e-10 floor under singles that no amount of tightening
+    # conv_tol removed -- tightening made it worse, which is the tell.
+    eris.focka = eris.focka.copy()
+    eris.fockb = eris.fockb.copy()
+    eris.focka[:noa, noa:] = eris.focka[noa:, :noa] = 0.0
+    eris.fockb[:nob, nob:] = eris.fockb[nob:, :nob] = 0.0
 
     before3 = list(uccsdt.tamps_tri2full_uhf(cc, [x.copy() for x in t3]))
     b1 = [x.copy() for x in t1]
@@ -185,6 +227,8 @@ def _build(seed: int = 0):
     ref = {k: np.asarray(v).transpose(
                tuple(range(v.ndim // 2, v.ndim)) + tuple(range(v.ndim // 2)))
            for k, v in ref.items()}
+    if return_inputs:
+        return got, ref, (tensors, dims, eqs)
     return got, ref
 
 
@@ -209,7 +253,7 @@ class U14RankSixVsPyscfTests(unittest.TestCase):
         below to the T3 equation."""
         for key in ("singles_aa", "singles_bb", "doubles_aaaa", "doubles_bbbb"):
             with self.subTest(target=key):
-                self._check(key, 1e-12)
+                self._check(key, 1e-13)
 
     @unittest.expectedFailure
     def test_triples_reproduce_pyscf(self):
