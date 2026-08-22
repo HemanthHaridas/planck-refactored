@@ -69,66 +69,36 @@ that both closure conventions coincide. So the remaining ~0.2% is a genuine
 disagreement about the t3-linear part of the T3 residual between ccgen and PySCF,
 with the fixture no longer a candidate explanation.
 
-**Both implementations are independently FCI-exact, so neither T3 is wrong.**
-ccgen's GCC CCSDT reaches the FCI limit (three gates in
-`test_reference_vs_pyscf`) and PySCF's UCCSDT does too -- measured directly on
-H3/6-31g doublet, 3.7e-11 against `fci.FCI`. Whatever this gate measures, it is a
-property of the COMPARISON, not of either residual.
+**CLOSED.** All five targets now agree at machine precision (triples ~2.3e-15).
+The disagreement that stood at rel 1.9e-3 through nine falsified hypotheses was
+in this file, and specifically in how the TRIPLES reference was recovered:
 
-**The cleanest statement of what is left.** With PySCF's own untouched t3 on both
-sides, every target agrees at the convergence floor (triples 2.7e-11 against a
-6.2e-11 reference). The disagreement appears only once t3 is perturbed, and it
-does not scale away: at `t1 = t2 = 0`, where PySCF's `F`/`W` intermediates reduce
-to bare integrals and no dressing exists at all, triples still differ by rel
-5.0e-3 with only **30 of 579 terms alive**. Of those, `('t3_aabaab', 'v_abab')`
--- nine terms, the mixed-spin coupling -- carries the highest alignment with the
-difference (cos 0.74, |S| 6.1e-3 against |D| 3.6e-3).
+    `update_amps_uccsdt_tri_` runs its T1/T2 half FIRST and updates t1/t2 IN
+    PLACE, then builds the T3 intermediates from the ALREADY-UPDATED amplitudes.
 
-**Hypotheses falsified, each by measurement** -- recorded so the next pass starts
-past them:
+Measured: t1 moves by 9.4e-3 and t2 by 4.8e-2 before the t3 half starts. So
+`R = (t3_new - t3)*D` recovered through that entry is the residual at *different*
+amplitudes than the ones handed to ccgen, and no convention fix could ever have
+reconciled the two. Calling `compute_r3_tri_uhf` directly makes it exact.
 
-* **The physicist/chemist ERI convention.** The obvious suspect, being the class
-  of the B5 defect. PySCF's UCCSDT `eris` is a `_PhysicistsERIs` whose `pppp` is
-  the NON-antisymmetrized `<pq|rs>`; it equals `chemist.transpose(2,0,3,1)`,
-  the same array as this gate's `transpose(0,2,1,3)` given `(pq|rs) = (rs|pq)`
-  (5.4e-15). This gate's blocks carry the symmetries ccgen requires, checked
-  against the GCC spin-orbital fixture: `v_aaaa` ket-antisymmetric (exactly 0),
-  `v_abab` not (9.5 -- its ket slots are different spin spaces).
-* **T1 dressing.** PySCF builds `r3` from T1-dressed integrals and ccgen carries
-  explicit T1 terms, so this looked structural. Zeroing t1 on both sides leaves
-  the discrepancy unchanged.
-* **F/W dressing.** PySCF's `F_oo`/`F_vv` are dressed and their diagonals differ
-  from bare `eps` by 0.046/0.027, with nonzero off-diagonals -- but at
-  `t1 = t2 = 0` they reduce to `diag(eps)` to 1.1e-7, so the dressing is
-  entirely `t2*v`, which ccgen carries explicitly. The two formulations are
-  equivalent, and the discrepancy survives with all dressing switched off.
-* **The packed wedge.** PySCF fills `r3aaa` only on the strict `i<j<k, a<b<c`
-  wedge. The difference is the same size on and off it, so the unpacking is
-  consistent.
-* **The `t3_aabaab` and `t3_abbabb` block layouts.** Every shape-legal signed
-  permutation of `aabaab` was tried; the current one is the best. `abbabb` read
-  from PySCF's `bba` beats deriving it from `aabaab`, and neither closes the gap.
-* **The denominator.** `D3` matches PySCF's `eijkabc` construction to 2.8e-14;
-  `focka.diagonal()` equals `mo_energy` exactly; `level_shift = 0`.
+Singles and doubles are still recovered through `update_amps`: their halves run
+before any in-place mutation, so for them the round trip is faithful, and they
+agree at ~1e-16 either way. That asymmetry is exactly why the bug presented as a
+triples-only defect and survived so long.
 
-**What has not been tried, and is where to go next:** compare against PySCF's
-`compute_r3aaa_tri_uhf` term by term rather than through `update_amps_uccsdt_tri_`,
-using its own intermediates. Every hypothesis above was formed by reading one
-side and testing it against the other; the remaining move is to stop inferring
-and evaluate PySCF's individual contractions directly.
+**What found it, after nine hypotheses formed by reading one side and testing it
+against the other:** driving PySCF's own `compute_r3_tri_uhf` with controlled
+intermediates and comparing the RAW residual. At `t1 = t2 = 0` it matched ccgen
+to 1.2e-15 immediately, while the gate's reconstruction differed from that same
+raw residual by 3.7e-3 -- which located the defect in the reconstruction rather
+than in either equation, in one measurement. The lesson is in
+`docs/CCGEN_UCC_RANK6_PYSCF_GAP_HANDOFF.md`: when a discrepancy survives repeated
+narrowing, stop inferring across the interface and drive the other side directly.
 
-Ruled out as causes, each measuredRuled out as causes, each measured: the denominator (my `D3` matches PySCF's
-`eijkabc` construction to 2.8e-14, and `focka.diagonal()` equals `mo_energy`
-exactly, `level_shift = 0`); the packed round-trip (every block survives
-`full->tri->full` to <=3.5e-17, so ccgen and PySCF see the same t3); the closure
-relations (`abbabb` holds exactly here, and forcing `aaaaaa` to satisfy its
-closure leaves the discrepancy unchanged); and antisymmetry (both residuals are
-bra- and ket-antisymmetric to ~1e-15, as is their difference).
-
-Also ruled out: not a layout or symmetry artifact (both residuals bra-antisym to
-~4e-16, and so is their difference); not a scale factor (elementwise ratio median
-0.9969); not the fixture t3 blocks (all four satisfy their tag's antisymmetry,
-`aaa == bbb` to 2e-18); not the packing round-trip (bitwise exact).
+Both implementations are independently FCI-exact -- ccgen's GCC CCSDT reaches the
+FCI limit (three gates in `test_reference_vs_pyscf`), ccgen's UCC does too
+(`U15UccReachesFciLimitTests`, 3.7e-14), and PySCF's UCCSDT does (3.7e-11 vs
+`fci.FCI` on H3/6-31g). Neither residual was ever wrong.
 
 Three conventions this file carries from U1.2, and two more that rank 6 adds:
 
@@ -344,26 +314,46 @@ def _build(seed: int = 0, return_inputs: bool = False):
     eris.focka[:noa, noa:] = eris.focka[noa:, :noa] = 0.0
     eris.fockb[:nob, nob:] = eris.fockb[nob:, :nob] = 0.0
 
+    # snapshot BEFORE update_amps, which mutates t1/t2/t3 in place
     before3 = list(uccsdt.tamps_tri2full_uhf(cc, [x.copy() for x in t3]))
     b1 = [x.copy() for x in t1]
     b2 = [x.copy() for x in t2]
+
+    # The TRIPLES reference comes from PySCF's `compute_r3_tri_uhf` DIRECTLY, not
+    # from `update_amps_uccsdt_tri_`.
+    #
+    # This distinction is the whole rank-6 discrepancy that stood at rel ~2e-3.
+    # `update_amps_uccsdt_tri_` runs its T1/T2 half FIRST and updates t1/t2
+    # IN PLACE, then builds the T3 intermediates from the ALREADY-UPDATED
+    # amplitudes -- measured, t1 moves by 9.4e-3 and t2 by 4.8e-2 before the t3
+    # half starts. So `R = (t3_new - t3)*D` recovered through it is not the
+    # residual at the amplitudes handed to ccgen, and no convention fix could
+    # ever have reconciled the two. Calling the residual entry directly makes the
+    # comparison exact.
+    #
+    # Singles and doubles are recovered through `update_amps` as before: their
+    # halves run before any in-place mutation, so for them the round trip is
+    # faithful (they agree at ~1e-16 either way).
+    imds = uccsdt._IMDS()
+    uccsdt.update_t1_fock_eris_uhf(cc, imds, t1, eris)
+    uccsdt.intermediates_t1t2_uhf(cc, imds, t2)
+    uccsdt.intermediates_t3_uhf(cc, imds, t2)
+    uccsdt.intermediates_t3_add_t3_tri_uhf(cc, imds, t3)
+    r3_direct = list(uccsdt.compute_r3_tri_uhf(cc, imds, t2, t3))
+    r3aaa_full = list(uccsdt.tamps_tri2full_uhf(cc, r3_direct))[0]
+
     tamps = [t1, t2, t3]
     uccsdt.update_amps_uccsdt_tri_(cc, tamps, eris)
-    after3 = list(uccsdt.tamps_tri2full_uhf(cc, tamps[2]))
 
     ea, eb = eris.focka.diagonal().real, eris.fockb.diagonal().real
     Dia = ea[:noa, None] - ea[None, noa:]
     DIA = eb[:nob, None] - eb[None, nob:]
-    oa, va = ea[:noa], ea[noa:]
-    D3 = (oa[:, None, None, None, None, None] + oa[None, :, None, None, None, None]
-          + oa[None, None, :, None, None, None] - va[None, None, None, :, None, None]
-          - va[None, None, None, None, :, None] - va[None, None, None, None, None, :])
     ref = {
         "singles_aa": (tamps[0][0] - b1[0]) * Dia,
         "singles_bb": (tamps[0][1] - b1[1]) * DIA,
         "doubles_aaaa": (tamps[1][0] - b2[0]) * (Dia[:, None, :, None] + Dia[None, :, None, :]),
         "doubles_bbbb": (tamps[1][2] - b2[2]) * (DIA[:, None, :, None] + DIA[None, :, None, :]),
-        "triples_aaaaaa": (after3[0] - before3[0]) * D3,
+        "triples_aaaaaa": r3aaa_full,
     }
 
     Ca, Cb = mf.mo_coeff
@@ -443,14 +433,10 @@ class U14RankSixVsPyscfTests(unittest.TestCase):
             with self.subTest(target=key):
                 self._check(key, 1e-13)
 
-    @unittest.expectedFailure
     def test_triples_reproduce_pyscf(self):
-        """OPEN: rel ~1.9e-3, down from 8.8e-2 once four interface defects were
-        fixed. ccgen is cleared by two independent routes (see the module
-        docstring), and every fixture relation holds to ~1e-17, so this is a
-        disagreement about PySCF's `r3aaa` rather than about ccgen's T3. Kept as
-        an expectedFailure because the PySCF side has not been diagnosed -- an
-        unexpected PASS means it has been."""
+        """CLOSED, at rel ~2.3e-15. Was an `expectedFailure` at rel 1.9e-3 for as
+        long as the reference was recovered through `update_amps_uccsdt_tri_`;
+        see `_build` for why that route can never be exact."""
         self._check("triples_aaaaaa", 1e-12)
 
 
