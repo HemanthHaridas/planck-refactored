@@ -195,6 +195,18 @@ class DressedIntermediateOracleTests(unittest.TestCase):
                     np.linalg.norm(spec - self._oracle_value(name)), TOL,
                     f"{name} should match its oracle exactly")
 
+        # XFAIL: dressing and spin adaptation do not compose -- recognition
+        # subtracts what an operator absorbs against a term set that adaptation
+        # then changes. Measured Be/STO-3G CCSDTQ E_corr = -0.0247182895 vs an
+        # exact -0.0517746319 (52 % short). The dressed route is RETIRED
+        # (vault/Status/Completion.md, docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md),
+        # so this is not expected to pass; making it pass would resume an
+        # abandoned route. Kept rather than deleted because the retirement note
+        # keeps this file deliberately -- it is a numeric instrument that catches
+        # VALUE defects structural gates cannot. An unexpected PASS here means
+        # the composition was genuinely fixed and the retirement should be
+        # revisited.
+    @unittest.expectedFailure
     def test_every_intermediate_matches_its_oracle(self):
         """The gate. Pre-fix this FAILS on Wmnij and Wabef -- the two operators whose
         definitions reference `tau`."""
@@ -248,6 +260,18 @@ class DressedResidualOracleTests(unittest.TestCase):
         cls.stored = {n: [_space(i) for i in s.indices]
                       for n, s in cls.adapted.items()}
 
+        # XFAIL: dressing and spin adaptation do not compose -- recognition
+        # subtracts what an operator absorbs against a term set that adaptation
+        # then changes. Measured Be/STO-3G CCSDTQ E_corr = -0.0247182895 vs an
+        # exact -0.0517746319 (52 % short). The dressed route is RETIRED
+        # (vault/Status/Completion.md, docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md),
+        # so this is not expected to pass; making it pass would resume an
+        # abandoned route. Kept rather than deleted because the retirement note
+        # keeps this file deliberately -- it is a numeric instrument that catches
+        # VALUE defects structural gates cannot. An unexpected PASS here means
+        # the composition was genuinely fixed and the retirement should be
+        # revisited.
+    @unittest.expectedFailure
     def test_dressed_doubles_residual_equals_undressed(self):
         """End-to-end value check. Dressing is a refactorization, so the two residuals
         are the same function; any difference is a defect."""

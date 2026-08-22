@@ -125,6 +125,59 @@ def ucc_random_tensors(noa: int, nva: int, nob: int, nvb: int, seed: int = 0):
     }
 
 
+def ucc_resolve_factor(factor, tensors, dims):
+    """F2.1 -- resolve one UCC factor to the array slice it denotes.
+
+    The RCC evaluator picks a factor's array by SPACE alone (`occ`/`vir` slices of
+    one spin-free tensor). Under UCC the array also depends on SPIN, which after
+    F2.0b is carried in the factor's own name: `v_abab`, `t2_aaaa`, `f_bb`.
+
+    The tag is **positional** -- character k is slot k's spin, independent of that
+    slot's space. Verified on the emitted vocabulary: `v_abab` occurs with 13
+    different space patterns, all sharing the one tag.
+
+    So the rule is: look the block up by name, then slice axis k by
+    (space of slot k, spin of slot k). Amplitudes are stored per block with no
+    combined space, so they need no slicing -- only the shape check that their
+    tag and dims agree.
+
+    ``dims`` is ``{"noa","nva","nob","nvb"}``. Raises on a block the fixture does
+    not carry, rather than falling back to a spin-free array: a silent fallback
+    is how a wrong-block read would survive.
+    """
+    name = factor.name
+    if name not in tensors:
+        raise KeyError(
+            f"ucc_resolve_factor: no block {name!r} in the tensor bundle "
+            f"(have {sorted(tensors)}). A UCC factor must name its spin block.")
+    array = tensors[name]
+
+    root, _, tag = name.partition("_")
+    if not tag:
+        raise ValueError(
+            f"ucc_resolve_factor: factor {name!r} carries no spin block; the UCC "
+            f"bridge must tag every factor (F2.0b).")
+    if len(tag) != len(factor.indices):
+        raise ValueError(
+            f"ucc_resolve_factor: block tag {tag!r} has {len(tag)} spins but "
+            f"{name!r} has {len(factor.indices)} slots.")
+
+    if root.startswith("t"):
+        # amplitudes are stored per block, already in (vir..., occ...) layout
+        return array
+
+    # v / f are stored over the combined per-spin orbital space, so each axis is
+    # sliced by that slot's own (space, spin).
+    bounds = {"a": (dims["noa"], dims["nva"]), "b": (dims["nob"], dims["nvb"])}
+    sl = []
+    for idx, spin in zip(factor.indices, tag):
+        if spin not in bounds:
+            raise ValueError(f"ucc_resolve_factor: bad spin {spin!r} in {name!r}")
+        no_s, _nv_s = bounds[spin]
+        sl.append(slice(0, no_s) if idx.space == "occ" else slice(no_s, None))
+    return array[tuple(sl)]
+
+
 def residual_einsum(term, no: int, nv: int, tensors=None, seed: int = 0):
     """Evaluate one term to its residual array via a single ``np.einsum``.
 

@@ -146,13 +146,56 @@ factor's own name, so this step is a lookup and a slice — no inference.
 **This is where a slice-assignment bug lives**, so it gets its own gate rather than being debugged
 through a full residual.
 
-### F2.2 — `ucc_residual_einsum` (~M)
+### F2.2 — `ucc_residual_einsum` (~M, split into four verifiable steps)
 
 Same einsum construction as `residual_einsum`; only the operand lookup changes, via F2.1. Output
 layout must match the RCC evaluator's convention (`[vir_ext…, occ_ext…]`) so the two are comparable.
 
-*Verify:* runs to completion on every emitted UCC term without raising. Not a correctness gate —
-F2.3 is.
+Two properties were **measured** while scoping this, and both turn what looked like risk into an
+assertion:
+
+- **Spin is consistent per index within a term.** Across all 328 emitted `ccsd` UCC terms, **zero**
+  have an index name carrying two different spins in different factors. So a single
+  `{index_name: spin}` map per term is well-defined, and building it cannot silently pick a winner.
+- **Free-index spins are recoverable from the factors, and match the target's own block.**
+  `doubles_abab`'s free indices resolve to spins `(a, b, a, b)`; `doubles_bbbb` to `(b, b, b, b)`.
+  So the output shape is determined and does not need to be passed in.
+
+#### F2.2a — the per-term spin map (~S)
+
+`ucc_term_spins(term) -> {index_name: "a"|"b"}`, built by reading each factor's tag positionally.
+
+*Verify:* on every emitted `ccsd` UCC term the map is total over the term's indices, and **raises**
+if one index would get two spins. The clash branch is unreachable on today's equations (measured
+0/328) — assert it anyway, because it is the invariant the rest of F2.2 rests on and a future rank
+or method is exactly where it would first break.
+
+#### F2.2b — operand assembly (~S)
+
+Swap the `if f.name in ("v", "f")` branch for `ucc_resolve_factor` (F2.1). Nothing else in the
+einsum construction moves.
+
+*Verify:* for one hand-picked term, the assembled operand list has the shapes F2.1 predicts, and the
+einsum subscript string is **identical** to what the RCC path would build for the same term — the
+subscripts depend only on index identity, not on spin, so any difference means the swap disturbed
+something it should not have.
+
+#### F2.2c — output layout (~S)
+
+Free indices ordered `[vir…, occ…]` as `residual_einsum` does, with each axis sized from that
+index's own spin.
+
+*Verify:* `doubles_abab` evaluates to `(nva, nvb, noa, nob)` and `doubles_bbbb` to
+`(nvb, nvb, nob, nob)` — different shapes from the same code path, which is the whole point.
+Non-square dims (`noa=5 nva=4 nob=4 nvb=5`) so a transposed axis cannot hide.
+
+#### F2.2d — full-manifold smoke (~S)
+
+Evaluate **every** term of every UCC target on F1's fixture.
+
+*Verify:* no raise, and every per-target sum has the shape F2.2c predicts. Explicitly **not** a
+correctness gate — a wrong slice that keeps its shape passes here. F2.3 is what catches that, and
+the split exists so that a failure in F2.2d localizes to assembly rather than to physics.
 
 ### F2.3 — the closed-shell oracle (~M, the load-bearing step, no PySCF needed)
 

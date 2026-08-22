@@ -3118,3 +3118,250 @@ class F1UccRandomTensorsTests(unittest.TestCase):
         self.assertEqual(sorted(t.keys()), ["f", "t1", "t2", "t3", "t4", "v"])
         self.assertEqual(t["t2"].shape, (4, 4, 3, 3))
         self.assertLess(np.abs(t["v"] - t["v"].transpose(2, 3, 0, 1)).max(), 1e-12)
+
+
+class F20bBlockTaggedEriTests(unittest.TestCase):
+    """F2.0b -- v/f carry their spin block on the UCC path, and the emitter
+    accepts the tag.
+
+    U1.1 block-tagged the amplitudes; v/f were left bare, so the evaluator has no
+    way to pick between v_aaaa / v_abab / v_bbbb (different shapes). Inference
+    from term context is not available: on doubles_abab, 51 of 82 terms have a
+    v/f index that appears on no amplitude factor.
+
+    The emitter dispatches on the EXACT strings "v" and "f", while its amplitude
+    branch already tolerates a `_<tag>` suffix. So tagging v/f without loosening
+    those two branches would emit a name that falls through to
+    NotImplementedError -- which is why the two edits are one step.
+    """
+
+    def _ucc(self, method="ccsd"):
+        from ccgen.spin import ucc_adapt_equations
+        return ucc_adapt_equations(
+            generate_cc_equations(method, engine="diagram", canonical_fock=True))
+
+    def test_ucc_eri_and_fock_factors_carry_a_block_tag(self):
+        out = self._ucc()
+        bare = set()
+        tagged = set()
+        for key, terms in out.items():
+            for t in terms:
+                for f in t.factors:
+                    root = f.name.split("_", 1)[0]
+                    if root in ("v", "f"):
+                        (tagged if "_" in f.name else bare).add(f.name)
+        self.assertFalse(bare, f"UCC emitted untagged integral factors: {sorted(bare)}")
+        self.assertTrue(tagged, "no tagged v/f factors emitted at all")
+        # every tag must be drawn from U0's vocabulary (a/b strings only)
+        for name in tagged:
+            tag = name.split("_", 1)[1]
+            self.assertTrue(set(tag) <= {"a", "b"},
+                            f"non-spin tag on integral factor: {name!r}")
+
+    def test_rcc_still_emits_bare_v_and_f(self):
+        """The superset claim: the RCC bridge is untouched, so its integral
+        factors must still be exactly `v` and `f`."""
+        from ccgen.spin import spin_adapt_equations
+        out = spin_adapt_equations(
+            generate_cc_equations("ccsd", engine="diagram", canonical_fock=True))
+        seen = set()
+        for terms in out.values():
+            for t in terms:
+                for f in t.factors:
+                    if f.name.split("_", 1)[0] in ("v", "f"):
+                        seen.add(f.name)
+        self.assertEqual(seen, {"v", "f"},
+                         f"RCC integral factor names changed: {sorted(seen)}")
+
+    def test_emitter_accepts_a_tagged_eri_and_is_unchanged_on_bare(self):
+        """Both halves of the emitter gate: a tagged name must map, and a bare
+        name must map EXACTLY as before (byte-identical string)."""
+        from ccgen.emit.planck_tensor_cpp import _map_factor
+        from ccgen.tensors import Tensor, Index
+        ijab = (Index("i", "occ"), Index("j", "occ"),
+                Index("a", "vir"), Index("b", "vir"))
+        sign_bare, expr_bare = _map_factor(Tensor("v", ijab), None, False)
+        sign_tag, expr_tag = _map_factor(Tensor("v_abab", ijab), None, False)
+        self.assertEqual(expr_bare, "mo_blocks.oovv(i, j, a, b)",
+                         "bare v no longer emits what it emitted before")
+        self.assertEqual(sign_bare, sign_tag)
+        self.assertEqual(expr_bare, expr_tag,
+                         "tagged v must resolve to the same block expression; the "
+                         "tag routes storage, it does not change the block")
+        oo = (Index("i", "occ"), Index("j", "occ"))
+        self.assertEqual(_map_factor(Tensor("f", oo), None, False)[1],
+                         "reference.f_oo(i, j)")
+        self.assertEqual(_map_factor(Tensor("f_aa", oo), None, False)[1],
+                         "reference.f_oo(i, j)")
+
+
+class F21FactorResolutionTests(unittest.TestCase):
+    """F2.1 -- resolve ONE factor to its array: pick the block by name, slice
+    each axis by (space, spin).
+
+    Isolated from einsum and from terms on purpose. A slice-assignment bug lives
+    exactly here, and debugging it through a full residual is what the scope
+    warns against.
+
+    The tag is POSITIONAL: character k of the block tag is slot k's spin,
+    independent of that slot's space. Verified on the emitted vocabulary --
+    v_abab appears with (occ,occ,vir,vir), (occ,vir,vir,occ), (vir,occ,vir,vir)
+    and 10 other space patterns, all sharing the one tag.
+    """
+
+    DIMS = dict(noa=5, nva=4, nob=4, nvb=5)   # non-square, and noa != nob
+
+    def _tensors(self):
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        return ucc_random_tensors(**self.DIMS, seed=0)
+
+    def _resolve(self, name, spaces):
+        from ccgen.tests.residual_eval import ucc_resolve_factor
+        from ccgen.tensors import Tensor, Index
+        idx = tuple(Index(f"x{k}", sp) for k, sp in enumerate(spaces))
+        return ucc_resolve_factor(Tensor(name, idx), self._tensors(), self.DIMS)
+
+    def test_amplitude_blocks_resolve_to_their_own_shape(self):
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        self.assertEqual(self._resolve("t1_aa", ("vir", "occ")).shape, (nva, noa))
+        self.assertEqual(self._resolve("t1_bb", ("vir", "occ")).shape, (nvb, nob))
+        self.assertEqual(
+            self._resolve("t2_abab", ("vir", "vir", "occ", "occ")).shape,
+            (nva, nvb, noa, nob))
+        self.assertEqual(
+            self._resolve("t2_bbbb", ("vir", "vir", "occ", "occ")).shape,
+            (nvb, nvb, nob, nob))
+
+    def test_eri_slice_follows_space_AND_spin_per_slot(self):
+        """v_abab with (occ,vir,occ,vir) must slice [occ_a, vir_b, occ_a, vir_b]
+        of the v_abab block -- alpha slots from the alpha space, beta from beta."""
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        got = self._resolve("v_abab", ("occ", "vir", "occ", "vir"))
+        self.assertEqual(got.shape, (noa, nvb, noa, nvb))
+        # and the same block under a different space pattern
+        got2 = self._resolve("v_abab", ("occ", "occ", "vir", "vir"))
+        self.assertEqual(got2.shape, (noa, nob, nva, nvb))
+
+    def test_same_spin_eri_uses_its_own_space(self):
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        self.assertEqual(
+            self._resolve("v_aaaa", ("occ", "occ", "vir", "vir")).shape,
+            (noa, noa, nva, nva))
+        self.assertEqual(
+            self._resolve("v_bbbb", ("occ", "vir", "vir", "occ")).shape,
+            (nob, nvb, nvb, nob))
+
+    def test_fock_blocks(self):
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        self.assertEqual(self._resolve("f_aa", ("occ", "occ")).shape, (noa, noa))
+        self.assertEqual(self._resolve("f_bb", ("vir", "vir")).shape, (nvb, nvb))
+        self.assertEqual(self._resolve("f_aa", ("occ", "vir")).shape, (noa, nva))
+
+    def test_slice_values_match_a_hand_written_index(self):
+        """Shape agreement is necessary, not sufficient: a wrong offset keeps the
+        shape. Pin the actual elements against an explicit slice."""
+        import numpy as np
+        t = self._tensors()
+        noa, nvb = self.DIMS["noa"], self.DIMS["nvb"]
+        got = self._resolve("v_abab", ("occ", "vir", "occ", "vir"))
+        ref = t["v_abab"][0:noa, self.DIMS["nob"]:, 0:noa, self.DIMS["nob"]:]
+        self.assertLess(np.abs(got - ref).max(), 1e-15)
+
+    def test_unknown_block_raises(self):
+        """A missing block must fail loudly, not fall back to a spin-free array."""
+        with self.assertRaises((KeyError, ValueError)):
+            self._resolve("v_aabb", ("occ", "occ", "vir", "vir"))
+
+
+class F22aTermSpinMapTests(unittest.TestCase):
+    """F2.2a -- the per-term spin map: {index_name: 'a'|'b'}, read positionally
+    off each factor's block tag.
+
+    Measured before writing this, on the emitted manifolds:
+
+        ccsd     328 terms   0 spin-clashes   0 untagged
+        ccsdt   2490 terms   0 spin-clashes   0 untagged
+        ccsdtq 18137 terms   0 spin-clashes   0 untagged   0 tag-length mismatches
+
+    So the map is well-defined today at every rank the generator reaches. The
+    clash and tag-length branches are asserted anyway: they are the invariant the
+    rest of F2.2 rests on, and rank 8 -- where RCC's beta-majority fold lost a
+    sector -- is exactly where a future change would break them first.
+
+    Note UCC cannot repeat that RCC defect by construction: ucc_independent_blocks
+    enumerates every alpha-count sector separately (rank 8: five blocks, including
+    aaabaaab and the beta-majority abbbabbb) rather than folding them.
+    """
+
+    def _ucc(self, method):
+        from ccgen.spin import ucc_adapt_equations
+        return ucc_adapt_equations(
+            generate_cc_equations(method, engine="diagram", canonical_fock=True))
+
+    def test_map_is_total_over_every_index(self):
+        from ccgen.spin import ucc_term_spins
+        out = self._ucc("ccsd")
+        for key, terms in out.items():
+            for t in terms:
+                spins = ucc_term_spins(t)
+                for idx in list(t.free_indices) + list(t.summed_indices):
+                    self.assertIn(idx.name, spins,
+                                  f"{key}: index {idx.name!r} has no spin")
+                    self.assertIn(spins[idx.name], ("a", "b"))
+
+    def test_free_index_spins_match_the_target_block(self):
+        """doubles_abab's free indices must resolve to (a,b,a,b) -- the map has to
+        agree with the block the residual is keyed by, or the output shape is wrong."""
+        from ccgen.spin import ucc_term_spins
+        out = self._ucc("ccsd")
+        for key in ("doubles_aaaa", "doubles_abab", "doubles_bbbb"):
+            tag = key.split("_", 1)[1]
+            for t in out[key]:
+                spins = ucc_term_spins(t)
+                # free indices are occ-first; the target tag is bra-half then
+                # ket-half, so compare as a multiset per space
+                occ = [spins[i.name] for i in t.free_indices if i.space == "occ"]
+                vir = [spins[i.name] for i in t.free_indices if i.space == "vir"]
+                n = len(tag) // 2
+                self.assertEqual(sorted(occ), sorted(tag[n:]),
+                                 f"{key}: occ free-index spins {occ} != {tag[n:]}")
+                self.assertEqual(sorted(vir), sorted(tag[:n]),
+                                 f"{key}: vir free-index spins {vir} != {tag[:n]}")
+
+    def test_raises_when_one_index_would_get_two_spins(self):
+        """Unreachable on today's equations (0/18137 at ccsdtq). Asserted because
+        it is the invariant F2.2b/c rest on -- a silent last-write-wins here would
+        surface as a wrong slice much later."""
+        from ccgen.spin import ucc_term_spins
+        from ccgen.project import AlgebraTerm
+        from ccgen.tensors import Tensor, Index
+        from fractions import Fraction
+        i, a = Index("i", "occ"), Index("a", "vir")
+        clash = AlgebraTerm(
+            Fraction(1),
+            (Tensor("t1_aa", (a, i)), Tensor("t1_bb", (a, i))),  # 'a' is both spins
+            (), (a, i), True)
+        with self.assertRaises(ValueError):
+            ucc_term_spins(clash)
+
+    def test_raises_on_tag_length_mismatch(self):
+        """A tag whose length differs from the slot count is an off-by-one in the
+        naming, and rank 8 (eight-character tags) is where it would first appear."""
+        from ccgen.spin import ucc_term_spins
+        from ccgen.project import AlgebraTerm
+        from ccgen.tensors import Tensor, Index
+        from fractions import Fraction
+        i, a = Index("i", "occ"), Index("a", "vir")
+        bad = AlgebraTerm(Fraction(1), (Tensor("t1_aaa", (a, i)),), (), (a, i), True)
+        with self.assertRaises(ValueError):
+            ucc_term_spins(bad)
+
+    def test_raises_on_an_untagged_factor(self):
+        from ccgen.spin import ucc_term_spins
+        from ccgen.project import AlgebraTerm
+        from ccgen.tensors import Tensor, Index
+        from fractions import Fraction
+        i, a = Index("i", "occ"), Index("a", "vir")
+        bare = AlgebraTerm(Fraction(1), (Tensor("t1", (a, i)),), (), (a, i), True)
+        with self.assertRaises(ValueError):
+            ucc_term_spins(bare)

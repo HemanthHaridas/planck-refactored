@@ -197,7 +197,17 @@ def _map_factor(
     # the sector's own tensor.
     amplitude_match = re.fullmatch(r"t(\d+)(?:_([ab]+))?", tensor_obj.name)
 
-    if tensor_obj.name == "f":
+    # F2.0b: v/f may carry a UCC spin-block suffix (`v_abab`, `f_aa`). The tag
+    # routes STORAGE on the UCC path -- which stored array the factor reads --
+    # and does not change which space block it is, so the mapping below is
+    # unchanged once the suffix is stripped. RCC emits bare `v`/`f`, so this is a
+    # strict superset: `re.fullmatch(r"v(?:_([ab]+))?", "v")` matches with a None
+    # tag and takes exactly the old path. The amplitude branch above has accepted
+    # a suffix since R3.1.3c; this brings the integral branches into line.
+    integral_match = re.fullmatch(r"([vf])(?:_([ab]+))?", tensor_obj.name)
+    integral_root = integral_match.group(1) if integral_match else None
+
+    if integral_root == "f":
         left, right = indices
         if left.space == "occ" and right.space == "occ":
             return 1, f"reference.f_oo({left.name}, {right.name})"
@@ -209,7 +219,7 @@ def _map_factor(
             return 1, f"reference.f_ov({occ.name}, {vir.name})"
         raise NotImplementedError(f"Unsupported Fock block for {tensor_obj!r}")
 
-    if tensor_obj.name == "v":
+    if integral_root == "v":
         return _map_eri_tensor(tensor)
 
     if amplitude_match is not None:

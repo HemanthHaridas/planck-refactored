@@ -1046,9 +1046,19 @@ def ucc_spinterm_to_algebraterm(spinterm: SpinTerm, externals):
     externals = set(externals)
 
     def _ucc_factor_tensor_name(f):
-        if not f.name.startswith("t"):
-            return f.name                      # v, f: spin-free storage
-        return f"{f.name}_{_ucc_block_tag(f.block)}"
+        # F2.0b: v/f carry their block too. Under RCC they are spin-free (one
+        # stored tensor sliced by space), but UCC needs v_aaaa / v_abab / v_bbbb
+        # -- different shapes -- and the spin is NOT recoverable downstream: on
+        # doubles_abab, 51 of 82 terms have a v/f index appearing on no amplitude
+        # factor, so inference from term context is a dead end. The block is
+        # already on the SpinFactor; this just stops discarding it.
+        #
+        # Amplitudes fold to their UCC storage tag (within-half antisymmetry is a
+        # slot permutation of one stored array). v/f keep the block verbatim: an
+        # integral block is not an amplitude and has no such folding.
+        if f.name.startswith("t"):
+            return f"{f.name}_{_ucc_block_tag(f.block)}"
+        return f"{f.name}_{f.block}"
 
     factors = tuple(
         Tensor(_ucc_factor_tensor_name(f), tuple(si.base for si in f.indices))
@@ -1320,6 +1330,54 @@ def _ucc_block_for_tag(template, tag):
     """
     names = [i.name for i in template.indices]
     return {nm: sp for nm, sp in zip(names, tag)}
+
+
+def ucc_term_spins(term) -> dict:
+    """F2.2a -- the spin of every index in a UCC ``AlgebraTerm``.
+
+    Returns ``{index_name: "a" | "b"}``. Each factor carries its spin block in
+    its name (F2.0b), and the tag is **positional**: character k is slot k's
+    spin, independent of that slot's space. `v_abab` appears with 13 different
+    space patterns all sharing the one tag, so the space cannot be used to
+    recover it -- the position can.
+
+    This is the map the evaluator slices by. It exists because the spin is not
+    otherwise recoverable downstream: on `doubles_abab`, 51 of 82 terms have a
+    `v`/`f` index that appears on no amplitude factor, so inference from term
+    context is a dead end for the majority of terms.
+
+    Raises rather than resolving a disagreement. Measured across every manifold
+    the generator reaches -- ccsd 328, ccsdt 2490, ccsdtq 18137 terms -- there
+    are **zero** clashes, zero untagged factors and zero tag-length mismatches,
+    so every branch below is unreachable today. They are asserted because this
+    map is what F2.2b/F2.2c rest on, and a silent last-write-wins would surface
+    as a wrong slice far from its cause.
+    """
+    spins: dict = {}
+    for factor in term.factors:
+        name = factor.name
+        root, sep, tag = name.partition("_")
+        if not sep or not tag:
+            raise ValueError(
+                f"ucc_term_spins: factor {name!r} carries no spin block. Every "
+                f"UCC factor is tagged by the bridge (F2.0b); an untagged one "
+                f"means an RCC term reached the UCC evaluator.")
+        if not set(tag) <= {"a", "b"}:
+            raise ValueError(
+                f"ucc_term_spins: factor {name!r} has a non-spin tag {tag!r}.")
+        if len(tag) != len(factor.indices):
+            raise ValueError(
+                f"ucc_term_spins: factor {name!r} has {len(factor.indices)} "
+                f"slots but a {len(tag)}-character tag {tag!r}.")
+        for idx, spin in zip(factor.indices, tag):
+            previous = spins.setdefault(idx.name, spin)
+            if previous != spin:
+                raise ValueError(
+                    f"ucc_term_spins: index {idx.name!r} is {previous!r} in one "
+                    f"factor and {spin!r} in {name!r}. A summed index must carry "
+                    f"one spin throughout a term; two means the spin integration "
+                    f"produced a term that cannot be evaluated block-wise.")
+    return spins
 
 
 def ucc_adapt_equations(equations, blocks=None, adapter=None):

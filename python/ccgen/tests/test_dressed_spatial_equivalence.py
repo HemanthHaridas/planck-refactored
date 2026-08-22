@@ -117,7 +117,26 @@ def _evaluate(term, out_indices, eri, amps, eps, intermediates):
 
 
 class SpatialRecognitionEquivalenceTests(unittest.TestCase):
-    """Recognition must preserve the residual's value on spin-adapted terms."""
+    """Recognition must preserve the residual's value on spin-adapted terms.
+
+    XFAIL, and the failure IS the retirement finding. Dressing and spin
+    adaptation do not compose: recognition subtracts what an operator absorbs
+    against a term set that adaptation then changes, so it alters terms it did
+    not rewrite. Measured end to end as Be/STO-3G CCSDTQ E_corr = -0.0247182895
+    against an exact -0.0517746319 (52 % short). See
+    docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md.
+
+    The dressed route is RETIRED as a production route (vault/Status/Completion.md),
+    so these two gates are NOT expected to pass and making them pass would mean
+    resuming the abandoned route -- five prior fix attempts each passed their own
+    gate and made the energy worse.
+
+    They are kept rather than deleted because the retirement note keeps them
+    deliberately: they are numeric instruments that catch VALUE defects
+    structural gates cannot, and that instrument is reusable beyond dressing.
+    Marked xfail so a real regression still shows -- as a new failure, or as an
+    unexpected PASS if the composition is ever genuinely fixed.
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -144,6 +163,7 @@ class SpatialRecognitionEquivalenceTests(unittest.TestCase):
         return sum(_evaluate(t, out_indices, self.eri, self.amps, self.eps,
                              intermediates) for t in terms)
 
+    @unittest.expectedFailure
     def test_recognition_preserves_the_doubles_residual(self):
         """The gate. Recognition replaces N terms with M; the value must not move."""
         out_ix = list(self.adapted["doubles"][0].free_indices)
@@ -158,6 +178,7 @@ class SpatialRecognitionEquivalenceTests(unittest.TestCase):
             f"({len(self.dressed['doubles'])} terms), ‖diff‖={diff:.4e}. "
             "Recognition must be a pure rewrite.")
 
+    @unittest.expectedFailure
     def test_operator_free_terms_are_untouched(self):
         """Control: terms recognition did not rewrite must evaluate identically.
 
