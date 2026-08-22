@@ -357,12 +357,20 @@ rank 9, so the source of the rank-5 collapse is unidentified.
 
 **Steps, in order:**
 
-- **U1.4c.1 — derive the closures from the spin integration, not by fitting (~M).** Read
-  `t3_aaaaaa` and `t3_abbabb` in terms of `t3_aabaab` off `ucc_integrate_target` /
-  `collapse_amplitudes`, the code that already performs this reduction at rank 4. The measured 1/12
-  form is a check on the answer, not the answer. *Gate:* the derived relations reproduce both real
-  PySCF pairs, **and** are derived rather than fitted — no least squares anywhere in the
-  justification.
+- **U1.4c.1 — derive the closures from the spin integration, not by fitting (~M). LANDED.**
+  `t3_aaaaaa` comes straight from `_split_same_spin_amplitude`, with the one reading that makes it
+  work: **the splitter permutes BASE INDICES, not array axes**, and its output feeds an einsum keyed
+  on index names against a fixed output order — so the base reordering applies the **inverse**
+  permutation to the array. Forward it fails by the block's full magnitude; inverse is exact to
+  4.8e-18. `t3_abbabb = bba.transpose(5,2,3,4,0,1)`, since PySCF's `bba` is 2-β-1-α in layout
+  `[i,j,a,b,k,c]`; the check that picks it out is that it carries `abbabb`'s **own** antisymmetry
+  (the β pairs, vir (1,2) / occ (4,5)) where every earlier candidate carried `aabaab`'s.
+
+  **The previously committed fitted closure was wrong**, and this is the part worth remembering: the
+  uniform-1/12 antisymmetrizer reproduced *both* real block pairs exactly and still is not the
+  closure — on a generic block the two differ by ~80%. It agreed only because the fixture's
+  permutation images span rank 5 against a generic block's 9. A relation that reproduces every case
+  in a degenerate fixture is not thereby derived.
 - **U1.4c.2 — extend F2.3's closed-shell oracle to rank 6 (~S).** With correct closures, feed both
   sides *perturbed* amplitudes and compare `triples_aabaab` against RCC `triples`. *Gate:* ≤1e-11 on
   a non-square case, plus the falsifiability check F2.3 carries.
