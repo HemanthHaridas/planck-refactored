@@ -16,6 +16,24 @@ of this document states that answer, gives the evidence, and lists what is built
 Everything is landed in `python/ccgen/optimization/factorize.py`, gated by
 `python/ccgen/tests/test_factorize.py` (47 tests).
 
+> **Those 47 gates are STRUCTURAL ONLY, and the distinction is load-bearing.**
+> `tree_preserves_term` checks that each factor is one leaf and each summed index is
+> consumed once; `test_budgeted_rewrite_is_exact` checks the rewrite re-expands to the
+> same factor **`Counter`**. A `Counter` of factor names is blind to index order by
+> construction, so neither can see a rewrite that names the right tensors in the wrong
+> slots.
+>
+> Measured 2026-08-22: evaluating the rewritten manifold numerically, **23 of 66 GCC
+> `ccsd` doubles terms do not reproduce their source term** (‖diff‖/‖R‖ = 3.73e-01);
+> 46 of 113 on the spatial manifold. Two contributing shapes are demonstrated —
+> `_derived_name` builds a name from sorted factor names + output block signature, so
+> it is order-blind, and an i↔j exchange pair collapses onto one operator — but
+> neither predicate covers all the disagreements, so the mechanism is not yet fully
+> characterized. See `docs/CCGEN_DRESSING_VS_PRODUCTION_CODES_SCOPE.md` (D0).
+>
+> The rank-locality answer below is about which operators *appear*, and is unaffected.
+> What is unproven is that **hoisting them preserves the residual's value**.
+
 ---
 
 ## The answer, precisely: the rank-locality theorem

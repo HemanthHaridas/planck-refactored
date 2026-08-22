@@ -95,6 +95,7 @@ check first if dressing is ever revisited.
 | `CCGEN_UCC_NUMERIC_FIXTURE_SCOPE` | **F1 landed** (`ucc_random_tensors`); F3 blocked on F2 |
 | `CCGEN_UCC_RESIDUAL_EVALUATOR_SCOPE` | **F2.0 decided** (block-tag `v`/`f`; the emitter dispatches on exact `"v"`/`"f"` and must be loosened, which is part of the decision not a follow-on); F2.0b–F2.4 not started. The landed UCC residuals remain gated **structurally only** — no numeric check of their values yet |
 | `CCGEN_ARBITRARY_HARNESS_COST_SCOPE` | **research, not started** — H0 profile is blocking |
+| `CCGEN_DRESSING_VS_PRODUCTION_CODES_SCOPE` | **research, D0 answered** — opened by "CFOUR/MRCC ship dressing as their only route, why did ccgen's fail?". D0 found the *derivation* route (`factorize.py`) also fails value preservation, **on GCC**, where there is no spin adaptation to blame: 23/66 `ccsd` doubles terms do not reproduce their source (‖diff‖/‖R‖ = 3.73e-01). So the retirement's decision stands but its stated reason does not. **The factorizer has no numeric gate** — its 47 tests compare factor `Counter`s, which cannot see index order. D1–D3 open |
 | `CCGEN_KERNEL_SCALING_SCOPE` | **research, partly open** — H1 (memory-bound) untestable on the current ladder (tops out at 0.49 MiB `t3`); overlaps the cost scope, which hands off to it |
 
 Two docs carried self-contradicting status lines ("nothing here is landed" above a LANDED entry) and
