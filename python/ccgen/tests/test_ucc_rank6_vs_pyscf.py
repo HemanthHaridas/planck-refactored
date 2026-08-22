@@ -228,7 +228,7 @@ def _build(seed: int = 0, return_inputs: bool = False):
     fb = (Cb.T @ mf.get_fock()[1] @ Cb).copy()
     fa[:noa, noa:] = fa[noa:, :noa] = 0.0      # canonical Fock, both sides
     fb[:nob, nob:] = fb[nob:, :nob] = 0.0
-    aaa, aab, _bba, bbb = before3
+    aaa, aab, bba, bbb = before3
     M = aab.transpose(2, 3, 5, 0, 1, 4)        # t3_aabaab
     tensors = {
         "t1_aa": b1[0].T, "t1_bb": b1[1].T,
@@ -238,8 +238,13 @@ def _build(seed: int = 0, return_inputs: bool = False):
         "t3_aaaaaa": aaa.transpose(3, 4, 5, 0, 1, 2),
         "t3_bbbbbb": bbb.transpose(3, 4, 5, 0, 1, 2),
         "t3_aabaab": M,
-        # the spin flip of aabaab is a slot reversal per half, NOT the identity
-        "t3_abbabb": M.transpose(2, 1, 0, 5, 4, 3),
+        # abbabb comes from pyscf's `bba` block, which is 2-BETA-1-alpha in
+        # layout [i,j,a,b,k,c] -- so its ALPHA line is (c,k) at axes 5/4, and
+        # ccgen's alpha-first slot order is [c,a,b, k,i,j]. Verified by the only
+        # check that distinguishes it: this carries abbabb's OWN antisymmetry
+        # (beta pairs, vir (1,2) and occ (4,5)), where every earlier candidate
+        # carried aabaab's (0,1)/(3,4) instead.
+        "t3_abbabb": bba.transpose(5, 2, 3, 4, 0, 1),
         "v_aaaa": vaa - vaa.transpose(0, 1, 3, 2),
         "v_bbbb": vbb - vbb.transpose(0, 1, 3, 2),
         "v_abab": eri_phys(Ca, Cb),
@@ -291,56 +296,47 @@ class U14RankSixVsPyscfTests(unittest.TestCase):
 
 @unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable (lives in tests/pyscf/.venv)")
 class T3ClosureRelationTests(unittest.TestCase):
-    """The rank-6 closed-shell closure: the all-alpha t3 block from the mixed one.
+    """U1.4c.1 — the rank-6 closed-shell closure, DERIVED (not fitted).
 
-    Needed to build a NON-VACUOUS third-source comparison (UCC vs ccgen's own
-    RCC), because RCC stores only the spatial `aabaab` block and derives the
-    all-alpha content — so the two are not independent and cannot be perturbed
-    separately.
+    RCC stores one spatial `t3` and derives the rest, so the four UCC blocks are
+    not independent at closed shell. A non-vacuous third-source comparison needs
+    these relations, and a wrong one is indistinguishable from an equation defect.
 
-        t3_aaaaaa = (1/12) * A_bra A_ket t3_aabaab
+        t3_aaaaaa = sum_q sign(q) * t3_aabaab[bra axes permuted by inverse(order_q)]
 
-    i.e. the FULL double antisymmetrizer: all 36 signed bra x ket permutations,
-    each with coefficient 1/12. Three hand-derivations were attempted before this
-    and all three were wrong, each using too small a permutation group (a 3-term
-    sum mirroring `_split_same_spin_amplitude`'s output). The tell each time was
-    that the constructed block failed its own bra-antisymmetry.
+    with `order_q = [x for x in range(3) if x != q] + [q]` — i.e. exactly what
+    `_split_same_spin_amplitude` emits, read as arrays.
 
-    **What is and is not established here — the first version of this docstring
-    overclaimed, and the correction is the useful part.**
+    **The load-bearing subtlety, and what four earlier hand-derivations all got
+    wrong: the splitter permutes BASE INDICES, not array axes.** Its output feeds
+    an einsum whose subscripts come from index NAMES against a fixed output order,
+    so reordering the bases applies the INVERSE permutation to the array. Read
+    forward it fails by the block's full magnitude (1.2e-2 against |A| 1.1e-3);
+    read as the inverse it is exact to 4.8e-18.
 
-    Established: the 1/12 double antisymmetrizer maps a block with the mixed
-    block's symmetry (antisym in bra (0,1) and ket (3,4)) onto a FULLY
-    antisymmetric one — verified on a generic random block, so it is structural
-    rather than a property of this fixture. And it reproduces both real block
-    pairs exactly.
+    **A fitted relation was committed here first and was wrong.** Least squares
+    over the 36 signed bra x ket permutation images gave a uniform-1/12 double
+    antisymmetrizer that reproduced both real block pairs exactly. It is not the
+    same relation: on a GENERIC block the two differ by ~80% of the magnitude
+    (2.87 against |S| 3.58). They coincide only on this fixture, whose 36 images
+    span rank 5 where a generic block gives rank 9 — so the fit was
+    underdetermined and its agreement meant nothing. The `bbb`<-`bba` cross-check
+    did not catch it: both pairs share a null space, so a deliberately different
+    exact fit passes that too.
 
-    NOT established: that it is the unique such relation. The 36 permutation
-    images of the real `aab` block span a space of rank **5**, not the rank 9 a
-    generic block of the same symmetry gives (measured at four sizes) — so the
-    fit is underdetermined, and the uniform-1/12 answer is simply the min-norm
-    solution, which is why it looks canonical.
+    The moral, since it cost several rounds: **a relation that reproduces every
+    case in a degenerate fixture is not thereby derived.** Check it against a
+    generic instance, or derive it from the code that defines it.
 
-    The `bbb`<-`bba` cross-check was originally called load-bearing here. **It is
-    weaker than that:** a deliberately different exact fit (`c0 + 3 * n` for `n`
-    in the null space) reproduces `bbb` from `bba` just as exactly, because the
-    two pairs share the same null space. The cross-check rules out fitting noise;
-    it does not pin coefficients.
-
-    So this class pins a relation that WORKS on every case tried, and the obvious
-    way to prove it unique does NOT exist. The natural idea — refit on an
-    open-shell reference where alpha and beta are genuinely independent, so the
-    images are not rank-deficient — was measured and is a dead end: at open shell
-    the alpha and beta spaces have DIFFERENT dimensions (CH3/STO-3G gives `aaa`
-    (5,5,5,3,3,3) against `bbb` (4,4,4,4,4,4)), so only **4 of the 36**
-    permutation images are even shape-legal, and those span rank 1. The
-    permutation-fit approach is closed-shell-only by construction.
-
-    Proving uniqueness therefore needs a different instrument than fitting — the
-    relation read off the spin-integration algebra rather than measured. That is
-    scoped, not attempted here.
+    The second relation, for `abbabb`, is settled by symmetry rather than by
+    fitting — see `_build`: PySCF's `bba` is 2-beta-1-alpha in layout
+    `[i,j,a,b,k,c]`, so its alpha line is `(c,k)` and ccgen's alpha-first order is
+    `[c,a,b,k,i,j]`, i.e. `bba.transpose(5,2,3,4,0,1)`. The check that picks it
+    out is that it carries `abbabb`'s OWN antisymmetry (the BETA pairs, vir (1,2)
+    and occ (4,5)); every earlier candidate carried `aabaab`'s (0,1)/(3,4)
+    instead, including the identity map — which matches `aab` exactly on this
+    fixture and is still wrong.
     """
-
     @classmethod
     def setUpClass(cls):
         from ccgen.tests.test_spin import _uccsdt_t3_blocks
@@ -356,7 +352,21 @@ class T3ClosureRelationTests(unittest.TestCase):
         return s
 
     @classmethod
-    def _same_spin_from_mixed(cls, M):
+    def _same_spin_from_mixed(cls, M, n=3):
+        """The DERIVED closure: `_split_same_spin_amplitude`'s relation, with the
+        base reordering read as the INVERSE permutation on the array axes."""
+        out = None
+        for q in range(n - 1, -1, -1):
+            order = [x for x in range(n) if x != q] + [q]
+            inv = [order.index(x) for x in range(n)]
+            term = cls._parity(order) * M.transpose(tuple(inv) + tuple(range(n, 2 * n)))
+            out = term if out is None else out + term
+        return out
+
+    @classmethod
+    def _fitted_antisymmetrizer(cls, M):
+        """The REJECTED fitted form, kept so the test below can show it differs on
+        a generic block. Do not use it as a closure."""
         out = np.zeros_like(M)
         for bp in itertools.permutations(range(3)):
             for kp in itertools.permutations(range(3)):
@@ -392,20 +402,21 @@ class T3ClosureRelationTests(unittest.TestCase):
                          "rank changed; the underdetermination caveat in the "
                          "class docstring may be stale")
 
-    def test_the_antisymmetrizer_is_structural_not_fixture_specific(self):
-        """The half that IS established: 1/12 * A_bra A_ket maps the mixed block's
-        symmetry onto a fully antisymmetric one for a GENERIC block, not just for
-        this fixture. Without this, the relation could be an artifact of the
-        rank-5 degeneracy."""
+    def test_derived_and_fitted_forms_DIFFER_on_a_generic_block(self):
+        """Why the fitted form had to be rejected even though it reproduced every
+        real block pair exactly. On a generic block — no rank-5 degeneracy — the
+        two relations disagree by ~80% of the magnitude. Only one of them can be
+        the closure, and the derived one is the one traceable to the code that
+        performs the reduction."""
         rng = np.random.default_rng(4)
         nv, no = 5, 5
         M = rng.random((nv, nv, nv, no, no, no))
         M = M - M.transpose(1, 0, 2, 3, 4, 5)
         M = M - M.transpose(0, 1, 2, 4, 3, 5)
-        A = self._same_spin_from_mixed(M)
-        self.assertGreater(np.abs(A).max(), 1e-6)
-        for p in itertools.permutations(range(3)):
-            with self.subTest(perm=p):
-                self.assertLess(
-                    np.abs(A - self._parity(p) * A.transpose(tuple(p) + (3, 4, 5))).max(),
-                    1e-12 * np.abs(A).max())
+        derived = self._same_spin_from_mixed(M)
+        fitted = self._fitted_antisymmetrizer(M)
+        self.assertGreater(np.abs(derived).max(), 1e-6)
+        self.assertGreater(np.abs(derived - fitted).max(),
+                           0.1 * np.abs(derived).max(),
+                           "the two forms agree on a generic block; the "
+                           "distinction this test records may be stale")
