@@ -3899,3 +3899,129 @@ class U14c2RankSixClosedShellOracleTests(unittest.TestCase):
                 self.assertGreater(worst, 1.0,
                                    f"corrupting {name} left the oracle passing "
                                    f"({worst:.3e}); it is not load-bearing")
+
+
+def _antisymmetrize_so(x, axes):
+    """Antisymmetrize a spin-orbital tensor over `axes` (used to keep a perturbed
+    t3 valid by construction)."""
+    import itertools as _it
+
+    import numpy as np
+    out = np.zeros_like(x)
+    for p in _it.permutations(range(len(axes))):
+        sign, pl = 1, list(p)
+        for i in range(len(pl)):
+            for j in range(i + 1, len(pl)):
+                if pl[i] > pl[j]:
+                    sign = -sign
+        order = list(range(x.ndim))
+        for s, a in enumerate(axes):
+            order[a] = axes[p[s]]
+        out = out + sign * x.transpose(order)
+    return out
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class U14c3UccIsGccSlicedAtRankSixTests(unittest.TestCase):
+    """U1.4c.3 — the UCC adaptation reproduces the GCC residual, SLICED, at rank 6.
+
+    The third reference, and the one that closes the rank-6 question. The chain:
+
+    1. ccgen's GCC CCSDT reaches the FCI limit exactly for a 3-electron system
+       (`test_reference_vs_pyscf`, three separate gates including the
+       `engine="diagram"` path this manifold is generated through). So the GCC
+       triples equations are correct, independently of anything here.
+    2. The UCC manifold is by definition the GCC one resolved into spin blocks.
+       This test checks that directly: evaluate the GCC triples residual on
+       spin-orbital tensors, slice the all-alpha block, and require the UCC
+       `triples_aaaaaa` residual to equal it.
+
+    Together those make ccgen's rank-6 UCC T3 correct, which is what the standing
+    ~2e-3 disagreement with PySCF in `test_ucc_rank6_vs_pyscf` needed adjudicating
+    against. **22 call sites of `ucc_adapt_equations` existed before this and NONE
+    was gated against an energy or an independent residual** — the adaptation was
+    checked structurally at rank 6 and never numerically.
+
+    Two fixture requirements, both learned the hard way:
+
+    * The spin-orbital tensors must have the real even=alpha/odd=beta interleaved
+      structure (`_uccsdt_so_tensors`). `random_tensors` is spin-FREE, and slicing
+      it by that convention is meaningless — it produces disagreements of order
+      the residual itself, which look exactly like an adaptation defect.
+    * The comparison must be perturbed off convergence. At the converged
+      amplitudes every residual is ~1e-13 and the test passes vacuously. The t3
+      perturbation is applied to the SPIN-ORBITAL tensor and re-antisymmetrized
+      there, so it is valid by construction and both sides see the same tensor.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import numpy as np
+        cls.T, cls.no, cls.nv, _cc = _uccsdt_so_tensors()
+        cls.T = dict(cls.T)
+        rng = np.random.default_rng(9)
+        d3 = _antisymmetrize_so(_antisymmetrize_so(
+            rng.random(cls.T["t3"].shape), (0, 1, 2)), (3, 4, 5))
+        cls.T["t3"] = cls.T["t3"] + 0.002 * d3 / max(np.abs(d3).max(), 1e-30)
+
+    def _blocks(self):
+        import numpy as np
+        no, nv, T = self.no, self.nv, self.T
+        n = no + nv
+
+        def amp(name, spins, nslot):
+            arr = T[name]
+            sets = []
+            for k, sp in enumerate(spins):
+                want = 0 if sp == "a" else 1
+                sets.append([p for p in range(arr.shape[k]) if p % 2 == want])
+            return arr[np.ix_(*sets)]
+
+        def comb(name, spins):
+            arr = T[name]
+            sets = []
+            for sp in spins:
+                want = 0 if sp == "a" else 1
+                occ = [p for p in range(0, no) if p % 2 == want]
+                vir = [p for p in range(no, n) if (p - no) % 2 == want]
+                sets.append(occ + vir)
+            return arr[np.ix_(*sets)]
+
+        blocks = {}
+        for tag in ("aa", "bb"):
+            blocks[f"t1_{tag}"] = amp("t1", tag, 2)
+            blocks[f"f_{tag}"] = comb("f", tag)
+        for tag in ("aaaa", "abab", "bbbb"):
+            blocks[f"t2_{tag}"] = amp("t2", tag, 4)
+            blocks[f"v_{tag}"] = comb("v", tag)
+        for tag in ("aaaaaa", "aabaab", "abbabb", "bbbbbb"):
+            blocks[f"t3_{tag}"] = amp("t3", tag, 6)
+        return blocks
+
+    def test_ucc_equals_gcc_sliced(self):
+        import numpy as np
+        from ccgen.spin import ucc_adapt_equations
+        from ccgen.tests.residual_eval import residual_einsum, ucc_residual_einsum
+        no, nv = self.no, self.nv
+        eqs = generate_cc_equations("ccsdt", engine="diagram", canonical_fock=True)
+        u = ucc_adapt_equations(eqs)
+        blocks = self._blocks()
+        dims = dict(noa=no // 2, nva=nv // 2, nob=no // 2, nvb=nv // 2)
+        ea = list(range(0, nv, 2))
+        oa = list(range(0, no, 2))
+        cases = (("singles", "singles_aa", lambda G: G[np.ix_(ea, oa)]),
+                 ("doubles", "doubles_aaaa", lambda G: G[np.ix_(ea, ea, oa, oa)]),
+                 ("triples", "triples_aaaaaa",
+                  lambda G: G[np.ix_(ea, ea, ea, oa, oa, oa)]))
+        for gkey, ukey, slicer in cases:
+            with self.subTest(target=ukey):
+                G = np.asarray(sum(residual_einsum(t, no, nv, tensors=self.T)
+                                   for t in eqs[gkey]))
+                want = slicer(G)
+                got = np.asarray(sum(ucc_residual_einsum(t, dims, blocks)
+                                     for t in u[ukey]))
+                self.assertEqual(got.shape, want.shape)
+                self.assertGreater(np.abs(want).max(), 1e-5,
+                                   f"{ukey}: GCC slice is ~zero — vacuous")
+                self.assertLess(np.abs(got - want).max(), 1e-12,
+                                f"{ukey} != GCC {gkey} sliced")
