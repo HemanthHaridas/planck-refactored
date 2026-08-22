@@ -3606,3 +3606,129 @@ class F23ClosedShellOracleTests(unittest.TestCase):
         self.assertTrue(any(d > 1.0 for d in diffs.values()),
                         "the independent fixture agreed; the closure relations "
                         "are apparently not needed, which contradicts the scope")
+
+
+class U14RankSixSpinFlipSymmetryTests(unittest.TestCase):
+    """U1.4 — alpha<->beta symmetry of the UCC residual manifold.
+
+    A CC residual manifold must be invariant under a global spin flip: feed
+    alpha-equal-beta tensors and the `_aa` target must equal its `_bb` partner,
+    `aaaa` must equal `bbbb`, and so on. This needs no PySCF, no converged
+    amplitudes and no oracle — it is a symmetry of the equations themselves, and
+    it is the cheapest check that exists on a block-resolved manifold.
+
+    It was written while building U1.4's PySCF gate, to rule the ccgen side out
+    of a discrepancy. It did not rule it out.
+
+    **Rank 4 passes (~1e-13 against ||R||~1e3). Rank 6 FAILS at ~1e-1 relative.**
+    The rank-6 case is marked `expectedFailure` below rather than deleted: it is a
+    real defect in the landed rank-6 UCC equations, and it must be understood
+    before rank 6 can be gated numerically against anything. An unexpected PASS is
+    the signal it has been fixed.
+
+    What has been ruled out, so the next investigation does not repeat it:
+
+    * **Not a wrong block name.** The factor vocabularies of `triples_aaaaaa` and
+      `triples_bbbbbb` are exact spin-flip mirrors of each other
+      (`t3_aaaaaa`/`t2_aaaa`/`f_aa` against `t3_bbbbbb`/`t2_bbbb`/`f_bb`, with the
+      spin-neutral `v_abab`/`t1_aa`/`t1_bb` shared). Same for the singles.
+    * **Not the `v_abab` orientation.** `v_abab` is the one block that is not its
+      own spin-flip mirror — flipping maps it to `v_baba`, an index swap a bare
+      name cannot express — so it was the obvious suspect. Making the fixture's
+      `v_abab` satisfy `v[p,q,r,s] = v[q,p,s,r]` (which makes `abab == baba`
+      identically) leaves the RELATIVE error unchanged at ~1e-1.
+    * **Not the evaluator.** The same evaluator gives exact symmetry at rank 4,
+      and is separately gated against PySCF UCCSD at ~6e-16 (`test_ucc_vs_pyscf`).
+
+    So the defect is specific to what rank 6 adds: the t3 blocks and the terms
+    carrying them.
+    """
+
+    NO, NV = 4, 3       # non-square
+
+    def _tensors(self):
+        import numpy as np
+        import itertools
+        no, nv, n = self.NO, self.NV, self.NO + self.NV
+        rng = np.random.default_rng(1)
+
+        def anti(x, ax):
+            out = np.zeros_like(x)
+            for p in itertools.permutations(range(len(ax))):
+                sg, pl = 1, list(p)
+                for i in range(len(pl)):
+                    for j in range(i + 1, len(pl)):
+                        if pl[i] > pl[j]:
+                            sg = -sg
+                order = list(range(x.ndim))
+                for s, a in enumerate(ax):
+                    order[a] = ax[p[s]]
+                out = out + sg * x.transpose(order)
+            return out
+
+        def a4(x):
+            x = x - x.transpose(1, 0, 2, 3)
+            return x - x.transpose(0, 1, 3, 2)
+
+        t1 = rng.random((nv, no))
+        t2 = rng.random((nv, nv, no, no))
+        t2 = t2 + t2.transpose(1, 0, 3, 2)
+        t3m = rng.random((nv, nv, nv, no, no, no))
+        t3m = t3m - t3m.transpose(1, 0, 2, 3, 4, 5)
+        t3m = t3m - t3m.transpose(0, 1, 2, 4, 3, 5)
+        t3s = anti(anti(rng.random((nv, nv, nv, no, no, no)), (0, 1, 2)), (3, 4, 5))
+        v = rng.random((n, n, n, n))
+        v = v + v.transpose(1, 0, 3, 2)
+        v = v + v.transpose(2, 3, 0, 1)
+        f = rng.random((n, n))
+        f = f + f.T
+        f[:no, no:] = f[no:, :no] = 0.0        # canonical Fock, as every CC kernel gets
+        return {
+            "t1_aa": t1, "t1_bb": t1,
+            "t2_abab": t2, "t2_aaaa": a4(t2), "t2_bbbb": a4(t2),
+            "t3_aaaaaa": t3s, "t3_bbbbbb": t3s,
+            "t3_aabaab": t3m, "t3_abbabb": t3m,
+            "v_abab": v,
+            "v_aaaa": v - v.transpose(0, 1, 3, 2),
+            "v_bbbb": v - v.transpose(0, 1, 3, 2),
+            "f_aa": f, "f_bb": f,
+        }
+
+    def _worst_asymmetry(self, method, pairs):
+        import numpy as np
+        from ccgen.spin import ucc_adapt_equations
+        from ccgen.tests.residual_eval import ucc_residual_einsum
+        T = self._tensors()
+        dims = dict(noa=self.NO, nva=self.NV, nob=self.NO, nvb=self.NV)
+        u = ucc_adapt_equations(
+            generate_cc_equations(method, engine="diagram", canonical_fock=True))
+        worst = {}
+        for a, b in pairs:
+            A = np.asarray(sum(ucc_residual_einsum(t, dims, T) for t in u[a]))
+            B = np.asarray(sum(ucc_residual_einsum(t, dims, T) for t in u[b]))
+            worst[(a, b)] = (float(np.abs(A - B).max()), float(np.abs(A).max()))
+        return worst
+
+    def test_rank4_is_spin_flip_symmetric(self):
+        """ccsd. Passes — and pins that the fixture and evaluator are not the
+        cause of the rank-6 failure below."""
+        pairs = (("singles_aa", "singles_bb"), ("doubles_aaaa", "doubles_bbbb"))
+        for pair, (diff, scale) in self._worst_asymmetry("ccsd", pairs).items():
+            with self.subTest(pair=pair):
+                self.assertGreater(scale, 1.0, "residual is ~zero; vacuous")
+                self.assertLess(diff / scale, 1e-12,
+                                f"{pair[0]} != {pair[1]}: {diff:.3e} vs |R| {scale:.3e}")
+
+    @unittest.expectedFailure
+    def test_rank6_is_spin_flip_symmetric(self):
+        """ccsdt. FAILS at ~1e-1 relative — a real defect in the landed rank-6 UCC
+        equations, not in this test. See the class docstring for what is already
+        ruled out. An unexpected PASS means it has been fixed."""
+        pairs = (("singles_aa", "singles_bb"),
+                 ("doubles_aaaa", "doubles_bbbb"),
+                 ("triples_aaaaaa", "triples_bbbbbb"))
+        for pair, (diff, scale) in self._worst_asymmetry("ccsdt", pairs).items():
+            with self.subTest(pair=pair):
+                self.assertGreater(scale, 1.0, "residual is ~zero; vacuous")
+                self.assertLess(diff / scale, 1e-12,
+                                f"{pair[0]} != {pair[1]}: {diff:.3e} vs |R| {scale:.3e}")
