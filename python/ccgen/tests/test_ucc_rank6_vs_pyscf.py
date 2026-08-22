@@ -17,6 +17,14 @@ What the split buys: the rank-6 singles and doubles residuals *consume* t3, and
 they are exact, so the t3 blocks handed to ccgen and ccgen's reading of them are
 both right. The discrepancy is confined to the T3 equation.
 
+**ccgen is cleared, by two independent routes, so the residual disagreement is on
+PySCF's side of this interface.** (a) `U14c2RankSixClosedShellOracleTests`
+reproduces ccgen's own RCC residual at rank 6 on perturbed amplitudes (triples
+1.5e-12 against ||R||~1e3). (b) `U14c3UccIsGccSlicedAtRankSixTests` shows the UCC
+manifold IS the GCC one sliced into spin blocks (1.6e-17), and ccgen's GCC CCSDT
+reaches the FCI limit exactly for a 3-electron system (three gates in
+`test_reference_vs_pyscf`). GCC correct + UCC == GCC sliced ⇒ UCC correct.
+
 **U1.4c.2 cleared ccgen.** The closed-shell oracle (`U14c2RankSixClosedShellOracleTests`,
 `test_spin.py`, no PySCF involved) reproduces ccgen's own RCC residual at rank 6
 on PERTURBED amplitudes — triples to 1.5e-12 against ||R||~1e3. So the T3
@@ -389,9 +397,12 @@ class U14RankSixVsPyscfTests(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_triples_reproduce_pyscf(self):
-        """OPEN: rel ~1.3e-3, down from 8.8e-2 once the three interface defects
-        were fixed. A fixed multiplicative deficit in the t3-linear part -- see
-        the module docstring. An unexpected PASS means it has been resolved."""
+        """OPEN: rel ~1.9e-3, down from 8.8e-2 once four interface defects were
+        fixed. ccgen is cleared by two independent routes (see the module
+        docstring), and every fixture relation holds to ~1e-17, so this is a
+        disagreement about PySCF's `r3aaa` rather than about ccgen's T3. Kept as
+        an expectedFailure because the PySCF side has not been diagnosed -- an
+        unexpected PASS means it has been."""
         self._check("triples_aaaaaa", 1e-12)
 
 
