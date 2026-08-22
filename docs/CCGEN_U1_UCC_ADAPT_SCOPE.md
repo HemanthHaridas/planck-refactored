@@ -8,10 +8,11 @@ the F2.3 closed-shell oracle (2.45e-15 relative), and **U1.3's hazard was design
 rather than left open — its own gate now passes with 0 violations. Each is recorded in place below
 with what was measured.
 
-U1.4 is rescoped, twice — and the second rescope corrected the first. Its blocker is neither the
-oracle *strength* this doc assumed (PySCF **does** ship `uccsdt.UCCSDT.update_amps`) nor an underived
-t3 closure relation (already pinned green at `test_spin.py:2158`). What remains is a fixture
-extension and the direct oracle itself. See U1.4.
+U1.4 is rescoped three times, each time by measurement. Its blocker is **not** the oracle *strength*
+this doc assumed (PySCF ships a UCCSDT residual entry), **not** an underived t3 closure relation
+(pinned green at `test_spin.py:2158`), and **not** oracle plumbing (solved). It is a **real defect in
+the landed rank-6 UCC equations**: with α ≡ β inputs the manifold is not spin-flip symmetric —
+~1e-1 relative at rank 6, exact at rank 4. Pinned as an `expectedFailure`. See U1.4.
 
 U0 is landed (`ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)`).
 
@@ -212,15 +213,58 @@ tensor. The failures were real; they measured the construction, not the relation
 "my generalization does not satisfy the symmetry" is weak evidence that a relation is underived, and
 strong evidence only that the guess is wrong — the in-tree gate is the thing to check first.
 
+#### Falsified premise 3 (both rescopes'): "rank 6 just needs a gate"
+
+**Attempting U1.4b found a real defect in the landed rank-6 UCC equations, and it blocks the step.**
+
+With α ≡ β inputs a residual manifold must be spin-flip symmetric — `_aa` equals `_bb`, `aaaa`
+equals `bbbb`. Measured:
+
+| | asymmetry |
+|---|---|
+| rank 4 (`ccsd`) | exact, ~1e-13 against ‖R‖~1e3 |
+| rank 6 (`ccsdt`) | **broken, ~1e-1 relative** — singles, doubles *and* triples |
+
+Pinned as `U14RankSixSpinFlipSymmetryTests` (`test_spin.py`): rank 4 asserts, rank 6 is
+`expectedFailure`. An unexpected PASS is the signal it has been fixed.
+
+Ruled out already, so the next pass does not repeat it: **not** a wrong block name (the
+`triples_aaaaaa` / `triples_bbbbbb` factor vocabularies are exact spin-flip mirrors); **not** the
+`v_abab` orientation (forcing `v[p,q,r,s] = v[q,p,s,r]`, which makes `abab == baba` identically,
+leaves the relative error unchanged); **not** the evaluator or fixture (same evaluator is exact at
+rank 4 and gated against PySCF UCCSD at ~6e-16). So it is specific to what rank 6 adds — the t3
+blocks and the terms carrying them.
+
+This is why the symmetry check is worth running **before** any oracle: it needs no PySCF, and it
+localized the defect to the equations in one measurement.
+
 #### What is actually left
 
 | step | status |
 |---|---|
 | derive the t3 closure | **not work** — pinned at `test_spin.py:2158` |
-| U1.4a — extend the fixture to t3 | ~S |
-| U1.4b — the direct rank-6 oracle vs PySCF UCCSDT | ~M, the deliverable |
+| the rank-6 oracle plumbing | **not work** — solved while probing, see below |
+| **U1.4a — fix the rank-6 spin-flip asymmetry** | **~M, and it is now the blocker** |
+| U1.4b — the direct rank-6 oracle vs PySCF UCCSDT | ~S once U1.4a lands |
 
-#### U1.4a — extend the rank-6 tensor bundle (~S)
+#### The oracle plumbing, established while probing (reusable when U1.4a lands)
+
+- PySCF's real CCSDT residual entry is **`update_amps_uccsdt_tri_(mycc, tamps, eris)`**, which
+  mutates `tamps` in place adding `R/D`. `UCCSDT.update_amps` is the *inherited CCSD* one and does
+  **not** include t3 — a trap, since it exists and runs.
+- t3 is stored **packed** (triangular); `tamps_tri2full_uhf` unpacks it. Perturbing the packed array
+  elementwise does **not** correspond to a valid antisymmetric t3, so perturb t1/t2 only.
+- Block mapping to ccgen layout, verified exhaustively over all 720 axis permutations:
+  `aaa` → `transpose(3,4,5,0,1,2)`; `aab` **and** `bba` both → `transpose(2,3,5,0,1,4)` (`bba` is
+  stored spin-flipped in place, matching `aab` to 1.5e-17 at closed shell — the guess that its α line
+  sat in different slots was wrong).
+
+#### U1.4a (superseded) — extend the rank-6 tensor bundle (~S)
+
+> Kept for its content; it is no longer the first step. The fixture work below is small and correct,
+> but the **spin-flip asymmetry above must be fixed first** — a gate built on defective equations
+> would pin the defect.
+
 
 The UCC manifold needs `t3_aaaaaa`, `t3_aabaab`, `t3_abbabb`, `t3_bbbbbb` (measured: exactly these
 four, against RCC's single bare `t3`). Reuse `_uccsdt_so_tensors`' spin-orbital read rather than
@@ -349,14 +393,22 @@ It is that **a measured hazard is not the same as remaining work**, and the gap 
 exactly what a stale scope hides. Re-run a step's own gate before building it: U1.3's gate is four
 lines and passes.
 
-There is no longer an open *question* in U1 — only work. U1.4's two candidate blockers were both
-checked and both dissolved: PySCF ships `uccsdt.UCCSDT.update_amps`, and the t3 closure relation is
-already pinned green. What is left is a fixture extension and a gate that mirrors U1.2.
+U1 has one open step and it is a **correctness defect**, not a gate: the rank-6 UCC equations break
+α↔β symmetry at ~1e-1 relative. Three candidate blockers were checked and dissolved (oracle strength,
+t3 closure, oracle plumbing) before the fourth measurement found the real one — which is the argument
+for cheap symmetry checks over oracles: this one needs no PySCF and localized the defect in a single
+run.
 
 Second lesson, from the same session: the first rescope of U1.4 asserted a blocker ("the t3 closure
 is underived") on the strength of three failed hand-derivations, without checking whether the tree
 already had one. It did. **A failed guess is evidence about the guess, not about the tree** — the
 same shape of error as trusting a status header, arrived at from the other direction.
+
+Third lesson, and the reason the step is still open: **three dissolved blockers do not mean no
+blocker.** Each rescope here concluded "the remaining work is small" and each was right about the
+thing it checked. The defect that actually blocks U1.4 was found by a symmetry check nobody had
+scoped at all — cheaper than every oracle in this doc, needing no PySCF, and decisive in one run.
+Run the free invariant checks before building the expensive gate.
 
 ---
 
