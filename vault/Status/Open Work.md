@@ -58,6 +58,21 @@ Remaining, deliberately deferred until the UCC work (U1–U5) lands:
 | `CCGEN_SPIN_ADAPTATION_SCOPE.md` | 892 | S0–S4 |
 | `CCGEN_KERNEL_WIRING_AND_BENCHMARK_SCOPE.md` | 331 | kernel wiring + benchmarks |
 
+**Two more became due 2026-08-22**, when the UCC numeric ladder completed (F1/F2/F3 all landed, see
+the scope table below). `CCGEN_UCC_NUMERIC_FIXTURE_SCOPE.md` and
+`CCGEN_UCC_RESIDUAL_EVALUATOR_SCOPE.md` are now finished work, so the scoping exemption has expired
+for both. They should merge into **one** answer — they are two halves of a single question, split by
+effort exactly as the CCSDTQ trio was:
+
+- **`CCGEN_UCC_NUMERIC_VALIDATION.md`** — how do you check that a spin-block CC residual is right?
+
+Keep, because each cost real investigation: the per-target-pairing correction to the closed-shell
+oracle; the closure relations and why F1's fixture cannot serve it; the `(occ…,vir…)` vs
+`(vir…,occ…)` transpose; the `f_ov`-on-both-sides measurement table with the falsified first
+hypothesis; and both vacuous-pass traps (converged amplitudes, OH/STO-3G). Drop the F-numbering, the
+per-step *Verify:* lines, and the three-option F2.0 design table now that A is built and proven.
+Deferring only until U1.2 has consumed the evaluator, in case that surfaces more.
+
 `CCGEN_SPIN_ADAPTATION_SCOPE.md` is the reference U1 works against, so rewriting it now risks
 discarding scope still load-bearing for unstarted work. Target questions:
 
@@ -91,9 +106,8 @@ check first if dressing is ever revisited.
 
 | scope | state |
 |---|---|
-| `CCGEN_ARBITRARY_ORDER_UCC_SCOPE` + `CCGEN_U1_UCC_ADAPT_SCOPE` | **in progress** — U0, **U1.0 and U1.1 landed** (`ucc_adapt_equations`, `ucc_spinterm_to_algebraterm`); U1.2 **blocked** on the fixture below; U1.3–U5 unstarted |
-| `CCGEN_UCC_NUMERIC_FIXTURE_SCOPE` | **F1 landed** (`ucc_random_tensors`), and F2's closed-shell sibling `ucc_closed_shell_tensors` alongside it. **F3 is unblocked** — the evaluator it needed (F2.0–F2.3) is landed and value-gated; only F2.4 (accept PySCF's amplitude dict) sits between them, and that is a keying confirmation, not new machinery |
-| `CCGEN_UCC_RESIDUAL_EVALUATOR_SCOPE` | **F2.0–F2.3 landed; only F2.4 open.** The evaluator is complete and gated on *values*, not structure: `ucc_residual_einsum` reproduces the existing RCC `residual_einsum` at closed shell to 3.9e-12 against ‖R‖~1.6e3 (`doubles_abab`↔`doubles`, `singles_aa`↔`singles`, `energy`), on a non-square case. Two scope errors were corrected while building it: the oracle is a **per-target pairing, not a block sum** (RCC adapts on the closed-shell representative block, so `doubles_aaaa`/`doubles_bbbb` have no RCC counterpart), and it needed a **second fixture** (`ucc_closed_shell_tensors`) because F1's independent draws violate the closure relations by construction. Mutation-tested rather than trusted: four evaluator mutations (unsliced operands, occ-first layout, swapped occ/vir slice, dropped coefficient) are all caught. Also measured — the spatial symmetries are **not** load-bearing for the oracle (it holds to ~8e-13 without them); the closure relation is. F2.4 is the PySCF-amplitude entry for F3 |
+| `CCGEN_ARBITRARY_ORDER_UCC_SCOPE` + `CCGEN_U1_UCC_ADAPT_SCOPE` | **in progress** — U0, **U1.0 and U1.1 landed** (`ucc_adapt_equations`, `ucc_spinterm_to_algebraterm`); **U1.2 unblocked** — the numeric ladder below is complete and the residuals are PySCF-validated to ~6e-16; U1.3–U5 unstarted |
+| `CCGEN_UCC_NUMERIC_FIXTURE_SCOPE` + `CCGEN_UCC_RESIDUAL_EVALUATOR_SCOPE` | **COMPLETE — F1, F2.0–F2.4 and F3 all landed.** The UCC residuals are validated against PySCF UCCSD (CH3/STO-3G, all five blocks) to **~6e-16** — machine precision, gated at 1e-13 rather than the scoped 1e-10. Until this, every landed UCC residual was gated structurally only. Three scope claims were corrected by building it: the closed-shell oracle is a **per-target pairing, not a block sum**; the PySCF amplitude mapping is a **transpose, not a pure rename** (PySCF is `(occ…,vir…)`, ccgen is `(vir…,occ…)`); and **`f_ov` must be zeroed on BOTH sides** — one-sided zeroing is *worse* than neither (8e-9 → 9e-9 → 6e-17), since Planck CC kernels are canonical-Fock by construction while PySCF's `f_ov` is convergence noise that `update_amps` uses. Both vacuous-pass traps avoided and asserted. **U1.2 is unblocked; U1.3–U5 are the remaining UCC work** |
 | `CCGEN_ARBITRARY_HARNESS_COST_SCOPE` | **research, not started** — H0 profile is blocking |
 | `CCGEN_DRESSING_VS_PRODUCTION_CODES_SCOPE` | **research, D0 answered** — opened by "CFOUR/MRCC ship dressing as their only route, why did ccgen's fail?". D0 found the *derivation* route (`factorize.py`) also fails value preservation, **on GCC**, where there is no spin adaptation to blame: 23/66 `ccsd` doubles terms do not reproduce their source (‖diff‖/‖R‖ = 3.73e-01). So the retirement's decision stands but its stated reason does not. **The factorizer has no numeric gate** — its 47 tests compare factor `Counter`s, which cannot see index order. D1–D3 open |
 | `CCGEN_KERNEL_SCALING_SCOPE` | **research, partly open** — H1 (memory-bound) untestable on the current ladder (tops out at 0.49 MiB `t3`); overlaps the cost scope, which hands off to it |

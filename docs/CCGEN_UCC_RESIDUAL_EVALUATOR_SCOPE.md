@@ -1,6 +1,6 @@
 # F2 — evaluating UCC residuals numerically
 
-**F2.0 through F2.3 are LANDED; F2.4 is open.** F1 landed the fixture (`ucc_random_tensors`); F2 is
+**F2 is COMPLETE — F2.0 through F2.4 all landed.** F1 landed the fixture (`ucc_random_tensors`); F2 is
 the evaluator that consumes it, and it unblocks F3/U1.2 — the PySCF UCCSD gate that is the only
 thing which will have checked the **values** of the landed UCC residuals rather than their
 structure.
@@ -289,11 +289,20 @@ the defect is in the equations. Running them in the other order conflates the tw
 mistake the rank-3 investigation paid five falsified hypotheses for. That argument is *stronger*
 now than when it was written: the oracle needs no PySCF and no converged amplitudes at all.
 
-### F2.4 — hand F3 a usable entry (~S)
+### F2.4 — hand F3 a usable entry (~S) — **LANDED**, and the mapping is *not* a pure rename
 
-F3/U1.2 needs to evaluate at *PySCF's* amplitudes, not F1's random ones, so `ucc_residual_einsum`
-must accept an externally supplied tensor dict keyed the same way. Confirm the PySCF→ccgen mapping
-is a pure rename (`t2ab → t2_abab`), which was already measured to be true.
+`ucc_residual_einsum` already accepts an externally supplied tensor dict, so the entry needed no
+code. What F2.4 actually produced was a correction: **the PySCF→ccgen mapping is a TRANSPOSE, not a
+rename.** The names correspond one-for-one (`t2ab` ↔ `t2_abab`) — that much was measured correctly —
+but PySCF stores `(occ…, vir…)` while ccgen emits `(vir…, occ…)`, so every array needs its halves
+swapped. The claim that it "was already measured to be true" checked the *names* and not the
+*layout*.
+
+Also corrected: CH3/STO-3G is `noa=5 nva=3, nob=4 nvb=4`, not the `nva=4`/`nvb=5` carried by
+`CCGEN_UCC_NUMERIC_FIXTURE_SCOPE.md`.
+
+The full F3 result, including the `f_ov` convention that took the investigation, lives in
+`CCGEN_UCC_NUMERIC_FIXTURE_SCOPE.md` — F3 is landed at ~6e-16 in every block.
 
 ## What NOT to do
 
