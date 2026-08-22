@@ -17,51 +17,34 @@ What the split buys: the rank-6 singles and doubles residuals *consume* t3, and
 they are exact, so the t3 blocks handed to ccgen and ccgen's reading of them are
 both right. The discrepancy is confined to the T3 equation.
 
-Localized further by zeroing amplitude classes on both sides, on a probe made
-FULLY deterministic first (amplitudes drawn entirely from the seeded rng rather
-than perturbing PySCF's converged ones — otherwise both sides drift ~8% per
-process and no bisect means anything):
+**U1.4c.2 cleared ccgen.** The closed-shell oracle (`U14c2RankSixClosedShellOracleTests`,
+`test_spin.py`, no PySCF involved) reproduces ccgen's own RCC residual at rank 6
+on PERTURBED amplitudes — triples to 1.5e-12 against ||R||~1e3. So the T3
+equations are self-consistent and this disagreement is about the interface to
+PySCF, not the algebra.
 
-* **`t1 = 0`** — triples discrepancy UNCHANGED. Kills the leading hypothesis,
-  that this is a T1-dressing convention difference (PySCF builds `r3` from
-  T1-dressed intermediates).
-* **`t1 = t3 = 0`** — ccgen gives **4.93e-2** where PySCF gives **3.55e-3**, a
-  factor of ~14, with singles and doubles still exact at ~1e-15. Every ccgen
-  triples term outside the pure-t2 class evaluates to exactly 0 here.
-* The 18 surviving `t2·v` terms are the standard `P(i/jk)P(a/bc)` expansions of
-  two textbook T3 terms — 9 with `v` in `ooov`, 9 in `ovvv`. **Both are
-  legitimate T3 terms**, so this is not a spurious-term bug: each family alone is
-  ~4.5e-2 and their sum is 1.3e-2, i.e. they cancel heavily (the full residual
-  shows 38x cancellation), and dropping either makes agreement worse.
+Characterized, on a probe made fully deterministic first (amplitudes drawn wholly
+from the seeded rng — perturbing PySCF's converged ones drifts ~8% per process):
 
-**No integer combination of the two families reproduces the difference**
-(best-fit scales +0.23 and −0.10, neither residual improving on the original), so
-it is not a simple over- or under-count.
+* **It is an ADDITIVE offset, independent of t3.** Scaling the t3 perturbation
+  0 -> 0.08 grows ||R|| by 250x (4.9e-2 -> 12.6) while the difference stays
+  ~1.0e-2 -> 1.9e-2. So it is not a t3-linear term.
+* **It scales with the t1/t2 perturbation** (5.3e-3 at zero, 5.3e-2 at 0.08).
+* **It is present at PySCF's own exactly converged amplitudes**, with nothing
+  perturbed at all: triples differ by **4.3e-3 against ||R|| 4.9e-2 — 8.8%
+  relative** — while singles and doubles agree to ~1e-15 on the same run. That is
+  the cleanest statement of the defect and the case to debug against.
+* The two residuals are nearly parallel: **cos = 0.99999, best scale 0.99925**,
+  and no single term explains the difference (max per-term cosine 0.22). A
+  uniform small deficit, not a missing or extra term.
 
-**Third source, and it clears ccgen.** ccgen's own RCC (spin-adapted) manifold is
-independent of both the UCC bridge and PySCF's `uccsdt`. At closed shell on the
-real converged UCCSDT blocks, `triples_aabaab` reproduces RCC `triples` to
-**1.6e-17**, alongside singles (7e-19) and doubles (1.9e-16). That comparison is
-vacuous at converged amplitudes (‖R‖~1e-10), and making it non-vacuous needs the
-t3 closure relation — see below, which is where this stopped.
-
-**The t3 closure relation, derived and cross-validated** (three earlier hand
-guesses were all wrong, each too small a permutation group):
-
-```
-t3_aaaaaa = (1/12) * A_bra A_ket t3_aabaab      # ALL 36 signed bra x ket perms
-```
-
-Exact to 1.3e-18 on the real blocks, and — the check that makes it an identity
-rather than a fit — the same relation reproduces `bbb` from `bba` to 2.0e-18.
-That cross-check matters because the 36 permutation images span a space of rank
-**5**, so a least-squares fit on them is underdetermined and cannot by itself
-establish a relation.
-
-The corresponding relation for `t3_abbabb` is **not** established:
-`X != M.transpose(2,1,0,5,4,3)` (they differ by the full magnitude of X), and the
-rank-5 basis makes the lstsq answer untrustworthy. That is the next thing to
-settle, and it blocks the non-vacuous third-source comparison.
+Ruled out as causes, each measured: the denominator (my `D3` matches PySCF's
+`eijkabc` construction to 2.8e-14, and `focka.diagonal()` equals `mo_energy`
+exactly, `level_shift = 0`); the packed round-trip (every block survives
+`full->tri->full` to <=3.5e-17, so ccgen and PySCF see the same t3); the closure
+relations (`abbabb` holds exactly here, and forcing `aaaaaa` to satisfy its
+closure leaves the discrepancy unchanged); and antisymmetry (both residuals are
+bra- and ket-antisymmetric to ~1e-15, as is their difference).
 
 Also ruled out: not a layout or symmetry artifact (both residuals bra-antisym to
 ~4e-16, and so is their difference); not a scale factor (elementwise ratio median
