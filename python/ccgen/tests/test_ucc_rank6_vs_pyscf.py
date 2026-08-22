@@ -131,19 +131,43 @@ def _parity(p):
     return s
 
 
-def _same_spin_from_mixed(M, n=3):
-    """The U1.4c.1 closure: the same-spin t3 block from the mixed one.
+def _same_spin_from_mixed(M):
+    """The same-spin t3 block from the mixed one.
 
-    `_split_same_spin_amplitude` read as arrays -- its base reordering is the
-    INVERSE permutation on the axes. See `T3ClosureRelationTests`.
+    **Two inequivalent closures exist and each side of this comparison requires a
+    DIFFERENT one. That is the open defect this gate reports.** Measured:
+
+        form            ccgen's own oracle      PySCF packed round trip
+        3-term          1.5e-12   PASS          2.5e-2    FAIL
+        36-term / 12    4.6e+01   FAIL          6.9e-18   PASS
+
+    The 3-term form is `_split_same_spin_amplitude` read as arrays (its base
+    reordering is the INVERSE permutation on axes). It antisymmetrizes the bra
+    against the single beta slot only. ccgen's UCC/RCC pair reproduces itself to
+    1.5e-12 with it and diverges by 46 (against ||R||~780) without it, so it is
+    what ccgen's equations assume.
+
+    The 36-term form is the normalized double antisymmetrizer over all signed
+    bra x ket permutations. It is the one that yields a FULLY antisymmetric block
+    from a general mixed block (defect 3e-16, against 1.68 for the 3-term form) --
+    which is what a same-spin amplitude must be, and what PySCF's packed `i<j<k,
+    a<b<c` storage assumes: `full2tri`/`tri2full` leaves it untouched (6.9e-18)
+    while it reprojects the 3-term result by 2.5e-2, larger than the block.
+
+    Both agree exactly on PySCF's CONVERGED amplitudes, because those satisfy
+    every relation at once -- which is why this went unnoticed through several
+    rounds and why the disagreement only appears off the converged manifold.
+
+    This gate uses the 36-term form, so its t3 survives PySCF's storage
+    unmodified. The residual ~2e-3 triples discrepancy is then a genuine
+    disagreement about the t3-linear part of T3, not a fixture artifact.
     """
-    out = None
-    for q in range(n - 1, -1, -1):
-        order = [x for x in range(n) if x != q] + [q]
-        inv = [order.index(x) for x in range(n)]
-        term = _parity(order) * M.transpose(tuple(inv) + tuple(range(n, 2 * n)))
-        out = term if out is None else out + term
-    return out
+    out = np.zeros_like(M)
+    for bp in itertools.permutations(range(3)):
+        for kp in itertools.permutations(range(3)):
+            out += (_parity(bp) * _parity(kp)
+                    * M.transpose(tuple(bp) + tuple(3 + x for x in kp)))
+    return out / 12.0
 
 
 def _anti(x, axes):
