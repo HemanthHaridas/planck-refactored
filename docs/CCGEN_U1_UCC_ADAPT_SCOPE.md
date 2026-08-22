@@ -1,8 +1,15 @@
 # U1 — the UCC block-resolution entry, scoped as U1.0–U1.5
 
-Decides U1's scope against the current tree. **Probed first**, and the probe moved the risk:
-the half I flagged as dangerous is safe at rank 4 and dangerous at rank 6, for a reason the
-original scope did not name.
+**U1.0, U1.1, U1.2 and U1.5 are LANDED. U1.3 is DEAD. Only U1.4 remains.**
+
+Re-audited against the tree 2026-08-22, and three of the four steps that were open turned out not to
+be work: U1.2's deliverable arrived through the F1/F2/F3 ladder (~6e-16 vs PySCF UCCSD), U1.5's is
+the F2.3 closed-shell oracle (2.45e-15 relative), and **U1.3's hazard was designed out by U1.1**
+rather than left open — its own gate now passes with 0 violations. Each is recorded in place below
+with what was measured.
+
+U1.4 is rescoped: its blocker is not the oracle *strength* this doc assumed, but a **t3 closure
+relation** that does not generalize from rank 4. See U1.4.
 
 U0 is landed (`ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)`).
 
@@ -83,10 +90,15 @@ and makes the assertion writable.
 it splits cleanly into a rank-4 path that already behaves and a rank-6 path that needs the
 canonicalizer retargeted.
 
+> **Superseded 2026-08-22.** U1.1 landed by *disabling* slot canonicalization on the UCC path rather
+> than retargeting it, so the "rank-6 path that needs the canonicalizer retargeted" does not exist —
+> see U1.3 below, whose gate now passes with 0 violations. The rank-4-then-rank-6 ladder still holds,
+> but rank 6 isolates the **t3 closure relation** (U1.4a), not the canonicalizer.
+
 **Gate at rank 4 first, rank 6 second** — the original scope said "do this at rank 4 before
 touching any C++", which is right, and the probe adds the reason: rank 4 exercises the naming
 end-to-end while avoiding the β-majority hazard, so a rank-4 failure is unambiguously a *naming*
-bug. Rank 6 then isolates the canonicalizer.
+bug.
 
 ---
 
@@ -119,73 +131,138 @@ emitting a bare name on the UCC path: a bare name there would be ambiguous, and 
 *Gate:* every emitted factor name is `<tensor>_<tag>` with the tag drawn from U0's vocabulary; no
 factor carries an unresolved or bare block; RCC unchanged.
 
-### U1.2 — rank-4 numeric gate against PySCF UCCSD (~M, load-bearing)
+### U1.2 — rank-4 numeric gate against PySCF UCCSD (~M) — **LANDED**
 
-> **BLOCKED on a fixture gap, found while attempting it.** `residual_einsum` assumes one `(no, nv)`
-> pair and one spin-free `v`/`f`; UCC needs per-spin spaces of *different* dimensions
-> (CH3/STO-3G: `noa=5 nva=4`, `nob=4 nvb=5`) and per-block ERIs. Scoped as
-> `docs/CCGEN_UCC_NUMERIC_FIXTURE_SCOPE.md` (F1–F3), which also records two traps that would make
-> this gate pass vacuously: evaluating at *converged* amplitudes (reference `|R|` is then ~0) and
-> using OH/STO-3G (`nva=1`, so the `aaaa` block is trivially zero).
->
-> **U1.0 and U1.1 are landed but gated STRUCTURALLY ONLY** — distinct names, non-empty blocks,
-> symmetric counts. Nothing has checked their *values*.
+Evaluate the doubles residuals at PySCF UCCSD's own amplitudes and compare against
+`pyscf.cc.uccsd.update_amps`. Landed as `F3UccVsPyscfTests`
+(`python/ccgen/tests/test_ucc_vs_pyscf.py`), reached through the F1/F2 fixture-and-evaluator ladder
+this step was blocked on.
 
-Evaluate the `doubles_aaaa` / `doubles_abab` / `doubles_bbbb` residuals **at PySCF UCCSD's own
-converged `t1a/t1b/t2aa/t2ab/t2bb`** on an open-shell case, and compare against
-`pyscf.cc.uccsd.update_amps`.
+**Result: ~6e-16 in every block** — machine precision, gated at 1e-13 rather than the scoped 1e-10,
+and covering the two *singles* blocks as well as the three doubles this step asked for.
 
-This is UCC's one **direct** oracle — everything else is transitive through
-`ucc_manifold == GCC-sliced`. Evaluate-at-PySCF-amps is the same convention-robust pattern the
-RCC S3.2 gate used.
+Both vacuous-pass traps this scope named were real, and are asserted rather than commented:
+amplitudes are perturbed off convergence (at PySCF's converged amplitudes the reference residual is
+~1e-8, so a kernel returning zero passes), and CH3/STO-3G is used rather than OH/STO-3G. Three
+evaluator mutations fail the gate.
 
-*Gate:* ≤1e-10 per block. **Not a symbolic term comparison** — V1.1e's e.2.0–e.2.5 established
-that a term multiset cannot distinguish different algebra from a symmetry-equivalent rewriting.
+Corrections this step produced, recorded in `CCGEN_UCC_NUMERIC_FIXTURE_SCOPE.md`: the PySCF
+amplitude mapping is a **transpose**, not a pure rename; and `f_ov` must be zeroed on **both** sides
+(one-sided zeroing is *worse* than neither).
 
-**Do this before any C++.** The B5 precedent (a physicist-ERI convention bug found only by
-injecting an FCI-correct oracle into live C++ state) is what this avoids.
+### U1.3 — retarget the canonicalizer for β-majority blocks — **DEAD. U1.1 designed the hazard out.**
 
-### U1.3 — retarget the canonicalizer for β-majority blocks (~M, the measured hazard)
+This step exists because `_canonicalize_amplitude_factor` folds β-majority blocks toward the RCC
+reference. That measurement still reproduces exactly:
 
-At rank ≥ 6, `_canonicalize_amplitude_factor` maps β-majority blocks toward the RCC reference:
-`abbabb` → slots `bbabba`, RCC tag `aabaab`, UCC tag `abbabb`. Under UCC these are separate
-tensors, so the factor must be canonicalized **within its own block**, and the tag must come from
-`_ucc_block_tag`.
+| block | canon slots | RCC tag | UCC tag |
+|---|---|---|---|
+| `aaaaaa` | `aaaaaa` | `aaaaaa` | `aaaaaa` |
+| `aabaab` | `aabaab` | `aabaab` | `aabaab` |
+| `abbabb` | **`bbabba`** | **`aabaab`** | **`abbabb`** |
+| `bbbbbb` | `bbbbbb` | **`aaaaaa`** | `bbbbbb` |
 
-*Gate:* for every rank-6 block, the canonicalized slot order is the layout of the block's **own**
-UCC tag — assert `tag == _ucc_block_tag(canonicalized_slots)`, which fails today for `abbabb`.
-Plus rank-4 output unchanged (it is already correct, so this must not perturb it).
+**But the UCC path never calls that function.** `ucc_spinterm_to_algebraterm` (`spin.py:1021`)
+disables slot canonicalization outright — "Slots are left exactly as the spin integration produced
+them" — precisely because reordering onto another block's layout would read the wrong array. U1.1
+solved this by *not calling* the canonicalizer, rather than by retargeting it, and this scope
+predates that decision.
 
-**Sequence after U1.2**, not before: a rank-4 gate that passes proves the naming path works, so a
-rank-6 failure is then unambiguously this function.
+This step's own gate — `tag == _ucc_block_tag(canonicalized_slots)`, described here as failing today
+for `abbabb` — **passes at rank 6 with 0 violations across all 2490 `ccsdt` UCC terms**, including
+every `t3_abbabb` factor. Measured 2026-08-22.
 
-### U1.4 — rank-6 numeric gate (~M)
+Retained rather than deleted because the *measurement* is still true and still a trap for anyone who
+later wires the RCC canonicalizer into a UCC path. The step is not work.
 
-Extend U1.2's oracle comparison to triples. PySCF has no UCCSDT `update_amps`, so the oracle is
-weaker — likely a spin-orbital GCC slice comparison rather than a direct one.
+### U1.4 — rank-6 numeric gate (~M) — **the only remaining U1 work; rescoped**
 
-*Gate:* whatever oracle is available, stated explicitly, plus the U1.3 structural assertion.
-**Do not claim a direct oracle where only a transitive one exists** — that distinction is what
-makes U1.2 valuable.
+This scope assumed the blocker was oracle *strength*: "PySCF has no UCCSDT `update_amps`, so the
+oracle is weaker — likely a spin-orbital GCC slice comparison rather than a direct one."
 
-### U1.5 — closed-shell degeneracy check (~S)
+**Probing says the blocker is somewhere else.** The closed-shell oracle F2.3 established *is*
+available at rank 6, needs no PySCF, and pairs `triples_aabaab` against RCC `triples` — the same
+per-target pairing, since RCC adapts on the closed-shell representative block. What it needs is a
+**t3 closure relation**, and that does not fall out of the rank-4 one:
 
-For an α ≡ β input, `ucc_adapt_equations` composed with the three collapse relations must
-reproduce `spin_adapt_equations`. **Compare numerically**, not as term multisets.
+```
+rank 4:  t2_aaaa = t2 - t2.transpose(1,0,2,3)      → bra/ket antisym defect 0.0   ✓
+rank 6:  first-guess 3-term generalization          → bra antisym defect 3.5      ✗
+```
 
-*Gate:* ≤1e-12 relative at rank 4. A useful independent check on U1.0+U1.1 that needs no PySCF.
+A block that is not bra-antisymmetric is not a valid `aaaaaa` block, so the obvious generalization
+is wrong. Deriving the right relation is the actual content of U1.4, and it is the one place in the
+remaining ladder with real uncertainty.
 
----
+Cheap facts confirmed while probing: `ccsdt` generation + UCC adaptation is **0.4 s**, and the
+manifold carries exactly the four expected t3 blocks (`t3_aaaaaa`, `t3_aabaab`, `t3_abbabb`,
+`t3_bbbbbb`) against RCC's single bare `t3`. So nothing here is gated on cost.
+
+#### U1.4a — derive the t3 closure relation (~M, the real content)
+
+Read it off `_split_same_spin_amplitude`'s own construction rather than guessing at it: for `n=3`
+that function emits the `aabaab` block from three signed bra permutations, so what U1.4 needs is its
+inverse. The first guess — mirroring the three permutations directly — is already falsified above,
+which is why this gets its own step instead of being assumed inside the fixture.
+
+*Gate:* the constructed `t3_aaaaaa` is bra- **and** ket-antisymmetric to 1e-14. That is exactly the
+check the wrong guess fails, it needs no equations and no PySCF, and it localizes a closure error to
+the relation rather than to the residual.
+
+#### U1.4b — extend `ucc_closed_shell_tensors` to t3 (~S)
+
+Add the four t3 blocks to the F2.3 fixture using U1.4a's relation.
+
+*Gate:* shapes per block, and each same-spin block satisfies its own antisymmetry — the same shape
+of check F1 uses, for the same reason.
+
+#### U1.4c — the rank-6 closed-shell oracle (~S once a+b land)
+
+`triples_aabaab` against RCC `triples`, by the per-target pairing F2.3 established.
+
+*Gate:* ≤1e-11 elementwise on a **non-square** case, with a committed falsifiability check (a
+corrupted block must break it by O(‖R‖)) — F2.3's pattern, for F2.3's reason.
+
+Note `triples_aaaaaa` / `triples_bbbbbb` / `triples_abbabb` have **no RCC counterpart**, exactly as
+the rank-4 same-spin blocks do not: `collapse_amplitudes` splits the all-α sector away rather than
+storing it. They are covered structurally and by U1.4a's antisymmetry gate, not by this comparison.
+
+#### U1.4d — decide whether a direct rank-6 oracle is worth building (~S, a decision)
+
+This scope defers the decision to U1.4, which is right. **Recommendation after probing: no.** Write
+down that U1.4c is a transitive oracle and stop there. A direct one needs a UCCSDT reference PySCF
+does not have; U1.4c already exercises the rank-6 t3 naming and slot-order path end to end, which is
+what rank 6 adds over rank 4. Cheap to reverse if U2+ surfaces a rank-6 defect.
+
+**Do not claim a direct oracle where only a transitive one exists** — that distinction is what made
+U1.2 valuable, and it is worth more than an extra gate here.
+
+### U1.5 — closed-shell degeneracy check (~S) — **LANDED as F2.3**
+
+For an α ≡ β input, `ucc_adapt_equations` must reproduce `spin_adapt_equations`, compared
+numerically. This is exactly the F2.3 oracle, landed as `F23ClosedShellOracleTests` (`test_spin.py`).
+
+*Scoped:* ≤1e-12 relative at rank 4. *Measured:* **2.45e-15** relative (3.9e-12 absolute against
+‖R‖ ~1.6e3).
+
+Two corrections F2.3 produced, recorded in `CCGEN_UCC_RESIDUAL_EVALUATOR_SCOPE.md`: the comparison is
+a **per-target pairing, not a sum over blocks**; and it needed a **second fixture**
+(`ucc_closed_shell_tensors`), because F1's independently-drawn blocks violate the closure relations
+by construction.
 
 ## Sequencing
 
 ```
 U1.0 (no-collapse entry)        ~S   ← pipeline already works; assembly only
-   └→ U1.1 (block-resolved names) ~M ← the correctness half; rank-4-safe
-        ├→ U1.2 (rank-4 vs PySCF UCCSD)  ~M  ← the one DIRECT oracle; before any C++
-        │    └→ U1.3 (retarget canonicalizer)  ~M  ← the measured rank-6 hazard
-        │         └→ U1.4 (rank-6 numeric)     ~M  ← weaker oracle, say so
-        └→ U1.5 (closed-shell degeneracy) ~S  ← independent, no PySCF needed
+   └→ U1.1 (block-resolved names)  LANDED  ← also designed out U1.3's hazard
+        ├→ U1.2 (rank-4 vs PySCF UCCSD)  LANDED  ~6e-16
+        │    └→ U1.3 (retarget canonicalizer)  DEAD — never called on the UCC path
+        │         └→ U1.4 (rank-6 numeric)  ← THE ONLY REMAINING U1 WORK
+        │              U1.4a derive t3 closure   ~M  ← the real content
+        │              U1.4b extend the fixture  ~S
+        │              U1.4c rank-6 oracle       ~S
+        │              U1.4d direct-oracle call  ~S  ← recommend: no
+        └→ U1.5 (closed-shell degeneracy)  LANDED as F2.3  2.45e-15 rel
               │
               ▼
          U2 (UHF reference, C++) → U3 → U4 → U5
@@ -204,8 +281,12 @@ U1.0 (no-collapse entry)        ~S   ← pipeline already works; assembly only
 | Numeric gating on symmetry-correct tensors | e.2.5 / `residual_eval` |
 | Evaluate-at-PySCF-amps pattern | RCC S3.2 |
 
-**Net new:** one adapt entry, one generalized naming gate, one canonicalizer retarget, and the
-gates.
+| the closed-shell oracle + its fixture | F2.3 (`ucc_closed_shell_tensors`) — U1.4c extends both to t3 |
+| the block-wise evaluator | F2.2 (`ucc_residual_einsum`) — rank-agnostic already |
+
+**Net new, all of it inside U1.4:** one t3 closure relation (the only piece with real uncertainty),
+four t3 blocks on an existing fixture, and one more per-target comparison. The canonicalizer
+retarget this table used to list is **not** net new — it is not needed at all.
 
 ---
 
@@ -214,8 +295,13 @@ gates.
 - **Do not use `_amplitude_block_tag` on the UCC path.** It folds β-majority onto α-majority
   (`abbabb` → `aabaab`, `bbbbbb` → `aaaaaa`), valid only when α ≡ β. U0's `_ucc_block_tag` is the
   UCC-correct one and already exists.
-- **Do not assume the rank-4 canonicalizer behaviour generalizes.** It is block-local at rank 4
-  and not at rank 6 — measured. This is why U1.3 exists and why the gate ladder is 4-then-6.
+- **Do not assume the rank-4 canonicalizer behaviour generalizes.** It is block-local at rank 4 and
+  not at rank 6 — measured, and still true. It is harmless only because the UCC bridge never calls
+  it; wiring `_canonicalize_amplitude_factor` into a UCC path would reintroduce the R3.1.2 failure.
+- **Do not assume the rank-4 *closure relation* generalizes either.** The obvious three-permutation
+  generalization of `t2_aaaa = t2 - t2.transpose(1,0,2,3)` produces a t3 block that is **not**
+  bra-antisymmetric (defect 3.5), so it is not a valid `aaaaaa` block. Derive it; do not pattern-match
+  it. This is U1.4a.
 - **Do not gate U1 on symbolic term comparison.** Numeric, on symmetry-correct tensors.
 - **Do not skip U1.2 to reach C++.** B5's convention bug was found only by an oracle injected
   into live C++ state; U1.2 is the cheap version of that.
@@ -228,13 +314,23 @@ gates.
 
 ## Honest status
 
-U1.0 is nearly free; the probe found its pipeline already working. U1.1 is the real work and is
-well-understood. U1.3 is a **new** step this probe added — the original scope named
-`_canonicalize_amplitude_factor` as U1.1's risk but had it backwards on where: safe at rank 4,
-broken at rank 6, with the tag/slot-order disagreement as the specific mechanism.
+**U1 is one step from done, and that step is smaller than this doc originally implied — but its
+content is not where the doc looked.**
 
-The open question U1 cannot answer by itself is whether the rank-6 oracle (U1.4) is strong enough
-to be worth the step, given PySCF has no UCCSDT `update_amps`. Decide that at U1.4, not now.
+What the 2026-08-22 re-audit changed, and the lesson in it: this doc's own probe added U1.3 as a
+"new step the original scope missed", with a correct measurement attached. U1.1 then solved that
+hazard by a route the probe had not considered — *not calling* the canonicalizer instead of
+retargeting it — and the step was never revisited. A correct measurement produced a step that was
+already unnecessary by the time it was written down.
+
+So the standing caution is not "the measurements were wrong". They were right, all three of them.
+It is that **a measured hazard is not the same as remaining work**, and the gap between them is
+exactly what a stale scope hides. Re-run a step's own gate before building it: U1.3's gate is four
+lines and passes.
+
+The one genuinely open question is now smaller and sharper than "is the rank-6 oracle strong
+enough": it is **what the t3 closure relation actually is**. That is answerable without PySCF, in
+Python, with an antisymmetry check that the first wrong guess already fails.
 
 ---
 
