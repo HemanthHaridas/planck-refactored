@@ -8,8 +8,10 @@ the F2.3 closed-shell oracle (2.45e-15 relative), and **U1.3's hazard was design
 rather than left open — its own gate now passes with 0 violations. Each is recorded in place below
 with what was measured.
 
-U1.4 is rescoped: its blocker is not the oracle *strength* this doc assumed, but a **t3 closure
-relation** that does not generalize from rank 4. See U1.4.
+U1.4 is rescoped, twice — and the second rescope corrected the first. Its blocker is neither the
+oracle *strength* this doc assumed (PySCF **does** ship `uccsdt.UCCSDT.update_amps`) nor an underived
+t3 closure relation (already pinned green at `test_spin.py:2158`). What remains is a fixture
+extension and the direct oracle itself. See U1.4.
 
 U0 is landed (`ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)`).
 
@@ -175,67 +177,86 @@ every `t3_abbabb` factor. Measured 2026-08-22.
 Retained rather than deleted because the *measurement* is still true and still a trap for anyone who
 later wires the RCC canonicalizer into a UCC path. The step is not work.
 
-### U1.4 — rank-6 numeric gate (~M) — **the only remaining U1 work; rescoped**
+### U1.4 — rank-6 numeric gate (~M) — **the only remaining U1 work; rescoped TWICE**
 
-This scope assumed the blocker was oracle *strength*: "PySCF has no UCCSDT `update_amps`, so the
-oracle is weaker — likely a spin-orbital GCC slice comparison rather than a direct one."
+Two premises were falsified here, in opposite directions, and both are recorded because the second
+one was mine.
 
-**Probing says the blocker is somewhere else.** The closed-shell oracle F2.3 established *is*
-available at rank 6, needs no PySCF, and pairs `triples_aabaab` against RCC `triples` — the same
-per-target pairing, since RCC adapts on the closed-shell representative block. What it needs is a
-**t3 closure relation**, and that does not fall out of the rank-4 one:
+#### Falsified premise 1 (this doc's): "PySCF has no UCCSDT `update_amps`"
+
+It has one.
 
 ```
-rank 4:  t2_aaaa = t2 - t2.transpose(1,0,2,3)      → bra/ket antisym defect 0.0   ✓
-rank 6:  first-guess 3-term generalization          → bra antisym defect 3.5      ✗
+pyscf.cc.uccsdt.UCCSDT.update_amps   ->  True
 ```
 
-A block that is not bra-antisymmetric is not a valid `aaaaaa` block, so the obvious generalization
-is wrong. Deriving the right relation is the actual content of U1.4, and it is the one place in the
-remaining ladder with real uncertainty.
+Further, `_uccsdt_so_tensors` (`python/ccgen/tests/test_spin.py:1772`) already builds a **converged
+UCCSDT reference** in-tree and runs it in CI. So a **direct** rank-6 oracle — the same shape as
+U1.2's — is available. The "likely a spin-orbital GCC slice comparison rather than a direct one"
+hedge is unnecessary.
 
-Cheap facts confirmed while probing: `ccsdt` generation + UCC adaptation is **0.4 s**, and the
-manifold carries exactly the four expected t3 blocks (`t3_aaaaaa`, `t3_aabaab`, `t3_abbabb`,
-`t3_bbbbbb`) against RCC's single bare `t3`. So nothing here is gated on cost.
+#### Falsified premise 2 (the first rescope's): "the t3 closure relation is underived"
 
-#### U1.4a — derive the t3 closure relation (~M, the real content)
+An earlier pass at this section claimed U1.4's real content was deriving a t3 closure relation,
+because the obvious generalization of the rank-4 one produced a block that was not bra-antisymmetric
+(defect 3.5).
 
-Read it off `_split_same_spin_amplitude`'s own construction rather than guessing at it: for `n=3`
-that function emits the `aabaab` block from three signed bra permutations, so what U1.4 needs is its
-inverse. The first guess — mirroring the three permutations directly — is already falsified above,
-which is why this gets its own step instead of being assumed inside the fixture.
+**The relation is already derived, pinned, and green.** `_split_same_spin_amplitude` implements it
+for general rank-2n, and `S4bSplitterTests.test_rank6_splitter_reproduces_block`
+(`test_spin.py:2158`) asserts it reproduces `t3[aaaaaa]` to **1e-12** — evaluated against the real
+UCCSDT spin-orbital fixture, not a constructed one.
 
-*Gate:* the constructed `t3_aaaaaa` is bra- **and** ket-antisymmetric to 1e-14. That is exactly the
-check the wrong guess fails, it needs no equations and no PySCF, and it localizes a closure error to
-the relation rather than to the residual.
+The three failed guesses that produced premise 2 shared one mistake: they tried to build a
+closed-shell **spatial** identity, when the pinned relation is a slice of a genuine **spin-orbital**
+tensor. The failures were real; they measured the construction, not the relation. Recorded because
+"my generalization does not satisfy the symmetry" is weak evidence that a relation is underived, and
+strong evidence only that the guess is wrong — the in-tree gate is the thing to check first.
 
-#### U1.4b — extend `ucc_closed_shell_tensors` to t3 (~S)
+#### What is actually left
 
-Add the four t3 blocks to the F2.3 fixture using U1.4a's relation.
+| step | status |
+|---|---|
+| derive the t3 closure | **not work** — pinned at `test_spin.py:2158` |
+| U1.4a — extend the fixture to t3 | ~S |
+| U1.4b — the direct rank-6 oracle vs PySCF UCCSDT | ~M, the deliverable |
 
-*Gate:* shapes per block, and each same-spin block satisfies its own antisymmetry — the same shape
-of check F1 uses, for the same reason.
+#### U1.4a — extend the rank-6 tensor bundle (~S)
 
-#### U1.4c — the rank-6 closed-shell oracle (~S once a+b land)
+The UCC manifold needs `t3_aaaaaa`, `t3_aabaab`, `t3_abbabb`, `t3_bbbbbb` (measured: exactly these
+four, against RCC's single bare `t3`). Reuse `_uccsdt_so_tensors`' spin-orbital read rather than
+constructing spatial blocks — that read is already pinned by `map.3` and is what the splitter gate
+evaluates against.
 
-`triples_aabaab` against RCC `triples`, by the per-target pairing F2.3 established.
+*Gate:* per-block shapes, and each same-spin block satisfies its own bra/ket antisymmetry to 1e-14.
+Same shape of check F1 uses, for the same reason: a fixture that silently violates a block's own
+symmetry makes every downstream comparison meaningless.
 
-*Gate:* ≤1e-11 elementwise on a **non-square** case, with a committed falsifiability check (a
-corrupted block must break it by O(‖R‖)) — F2.3's pattern, for F2.3's reason.
+#### U1.4b — the direct rank-6 oracle against PySCF UCCSDT (~M, the deliverable)
 
-Note `triples_aaaaaa` / `triples_bbbbbb` / `triples_abbabb` have **no RCC counterpart**, exactly as
-the rank-4 same-spin blocks do not: `collapse_amplitudes` splits the all-α sector away rather than
-storing it. They are covered structurally and by U1.4a's antisymmetry gate, not by this comparison.
+Mirror U1.2 exactly: evaluate every rank-6 UCC target at PySCF's perturbed UCCSDT amplitudes and
+compare against `UCCSDT.update_amps`, converting `t_new` back to a residual via `R = (t_new - t)·D`.
 
-#### U1.4d — decide whether a direct rank-6 oracle is worth building (~S, a decision)
+Carry U1.2's three hard-won conventions rather than rediscovering them:
 
-This scope defers the decision to U1.4, which is right. **Recommendation after probing: no.** Write
-down that U1.4c is a transitive oracle and stop there. A direct one needs a UCCSDT reference PySCF
-does not have; U1.4c already exercises the rank-6 t3 naming and slot-order path end to end, which is
-what rank 6 adds over rank 4. Cheap to reverse if U2+ surfaces a rank-6 defect.
+- **`f_ov` zeroed on BOTH sides** — one-sided zeroing is *worse* than neither.
+- **Layout is a transpose**, not a rename — PySCF is `(occ…, vir…)`, ccgen is `(vir…, occ…)`.
+- **Perturb off convergence**, and re-impose each block's antisymmetry after perturbing.
 
-**Do not claim a direct oracle where only a transitive one exists** — that distinction is what made
-U1.2 valuable, and it is worth more than an extra gate here.
+*Gate:* the tolerance U1.2 actually reached (~1e-13), not the 1e-10 originally scoped — unless rank 6
+demonstrably cannot hold it, in which case say so with the measured number rather than loosening
+silently.
+
+**Check `uccsdt`'s amplitude storage before trusting the mapping.** `_uccsdt_so_tensors`' own
+docstring records that UCCSDT stores `t2ab` as `[i,a,j,b]` — unlike both `rccsd` and
+`pyscf.cc.uccsd`'s `[i,j,a,b]`. That is exactly the class of convention defect U1.2's transpose
+correction was, and it is already known to differ in this module.
+
+#### On the closed-shell oracle at rank 6
+
+Optional, and no longer load-bearing now that a direct oracle exists. It stays cheap (`triples_aabaab`
+against RCC `triples`, F2.3's per-target pairing) and it localizes a defect to the evaluator rather
+than the equations, which is why F2.3 was worth doing before F3. Add it if U1.4b fails and the cause
+is unclear; skip it if U1.4b passes.
 
 ### U1.5 — closed-shell degeneracy check (~S) — **LANDED as F2.3**
 
@@ -258,10 +279,9 @@ U1.0 (no-collapse entry)        ~S   ← pipeline already works; assembly only
         ├→ U1.2 (rank-4 vs PySCF UCCSD)  LANDED  ~6e-16
         │    └→ U1.3 (retarget canonicalizer)  DEAD — never called on the UCC path
         │         └→ U1.4 (rank-6 numeric)  ← THE ONLY REMAINING U1 WORK
-        │              U1.4a derive t3 closure   ~M  ← the real content
-        │              U1.4b extend the fixture  ~S
-        │              U1.4c rank-6 oracle       ~S
-        │              U1.4d direct-oracle call  ~S  ← recommend: no
+        │              [t3 closure: NOT work — pinned at test_spin.py:2158]
+        │              U1.4a extend the fixture to t3   ~S
+        │              U1.4b direct oracle vs UCCSDT    ~M  ← the deliverable
         └→ U1.5 (closed-shell degeneracy)  LANDED as F2.3  2.45e-15 rel
               │
               ▼
@@ -298,10 +318,11 @@ retarget this table used to list is **not** net new — it is not needed at all.
 - **Do not assume the rank-4 canonicalizer behaviour generalizes.** It is block-local at rank 4 and
   not at rank 6 — measured, and still true. It is harmless only because the UCC bridge never calls
   it; wiring `_canonicalize_amplitude_factor` into a UCC path would reintroduce the R3.1.2 failure.
-- **Do not assume the rank-4 *closure relation* generalizes either.** The obvious three-permutation
-  generalization of `t2_aaaa = t2 - t2.transpose(1,0,2,3)` produces a t3 block that is **not**
-  bra-antisymmetric (defect 3.5), so it is not a valid `aaaaaa` block. Derive it; do not pattern-match
-  it. This is U1.4a.
+- **Do not hand-derive the rank-6 closure relation.** It exists (`_split_same_spin_amplitude`) and is
+  pinned to 1e-12 against a real UCCSDT fixture. Three hand-derivations were attempted while scoping
+  U1.4 and all three failed the bra-antisymmetry check — because they built a closed-shell *spatial*
+  identity where the pinned relation is a slice of a *spin-orbital* tensor. Check the in-tree gate
+  before concluding a relation is missing.
 - **Do not gate U1 on symbolic term comparison.** Numeric, on symmetry-correct tensors.
 - **Do not skip U1.2 to reach C++.** B5's convention bug was found only by an oracle injected
   into live C++ state; U1.2 is the cheap version of that.
@@ -328,9 +349,14 @@ It is that **a measured hazard is not the same as remaining work**, and the gap 
 exactly what a stale scope hides. Re-run a step's own gate before building it: U1.3's gate is four
 lines and passes.
 
-The one genuinely open question is now smaller and sharper than "is the rank-6 oracle strong
-enough": it is **what the t3 closure relation actually is**. That is answerable without PySCF, in
-Python, with an antisymmetry check that the first wrong guess already fails.
+There is no longer an open *question* in U1 — only work. U1.4's two candidate blockers were both
+checked and both dissolved: PySCF ships `uccsdt.UCCSDT.update_amps`, and the t3 closure relation is
+already pinned green. What is left is a fixture extension and a gate that mirrors U1.2.
+
+Second lesson, from the same session: the first rescope of U1.4 asserted a blocker ("the t3 closure
+is underived") on the strength of three failed hand-derivations, without checking whether the tree
+already had one. It did. **A failed guess is evidence about the guess, not about the tree** — the
+same shape of error as trusting a status header, arrived at from the other direction.
 
 ---
 
