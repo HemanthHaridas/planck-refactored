@@ -9,66 +9,6 @@ Skipped if PySCF is not importable (it lives in tests/pyscf/.venv). Run with:
 
     tests/pyscf/.venv/bin/python -m unittest ccgen.tests.test_ucc_rank6_vs_pyscf
 
-**Status: singles and doubles agree at MACHINE PRECISION (~5e-16 / ~1.4e-15).
-The triples target disagrees by ~1.2e-2 against a reference of ~3.1 and is marked
-`expectedFailure`** — an open discrepancy, not a passing gate.
-
-What the split buys: the rank-6 singles and doubles residuals *consume* t3, and
-they are exact, so the t3 blocks handed to ccgen and ccgen's reading of them are
-both right. The discrepancy is confined to the T3 equation.
-
-**ccgen is cleared, by two independent routes, so the residual disagreement is on
-PySCF's side of this interface.** (a) `U14c2RankSixClosedShellOracleTests`
-reproduces ccgen's own RCC residual at rank 6 on perturbed amplitudes (triples
-1.5e-12 against ||R||~1e3). (b) `U14c3UccIsGccSlicedAtRankSixTests` shows the UCC
-manifold IS the GCC one sliced into spin blocks (1.6e-17), and ccgen's GCC CCSDT
-reaches the FCI limit exactly for a 3-electron system (three gates in
-`test_reference_vs_pyscf`). GCC correct + UCC == GCC sliced ⇒ UCC correct.
-
-**U1.4c.2 cleared ccgen.** The closed-shell oracle (`U14c2RankSixClosedShellOracleTests`,
-`test_spin.py`, no PySCF involved) reproduces ccgen's own RCC residual at rank 6
-on PERTURBED amplitudes — triples to 1.5e-12 against ||R||~1e3. So the T3
-equations are self-consistent, and this file's job is the INTERFACE.
-
-**Four interface defects were found and fixed**, each of which silently handed
-the two sides different amplitudes:
-
-1. **The re-antisymmetrization was unnormalized.** PySCF's `t2aa`/`t3aaa` blocks
-   arrive ALREADY antisymmetric, so re-applying `a - a.transpose(...)` does not
-   project — it MULTIPLIES, by **4x for t2aa and 36x for t3aaa** (measured). The
-   tell was that at PySCF's own converged amplitudes, where its residual is
-   ~1e-10, this gate reported ||ref|| = 1.7e-1.
-2. **`t2aa`/`t2bb` are not independent of `t2ab`** — PySCF's converged amplitudes
-   satisfy `t2aa = t2ab - t2ab.transpose(0,1,3,2)` exactly.
-3. **`t3aaa`/`t3bbb` are not independent of `t3aab`** either, via the same-spin
-   closure.
-4. **A block carrying `aabaab`'s antisymmetries is not thereby a valid amplitude
-   block.** Antisymmetrized noise passes every permutation test the real block
-   passes — verified exhaustively over all 36 signed occ x vir permutations, the
-   real block has exactly the same two symmetries and no others — yet the derived
-   `aaa` is then not a valid same-spin block, and PySCF's packed storage
-   reprojects it by more than the block itself. Fixed by `_valid_t3_blocks`,
-   which builds the perturbation as a slice of a genuine antisymmetric
-   spin-orbital tensor.
-
-**t1 and t2 are left at PySCF's converged values** and only t3 is perturbed:
-nothing derives t3 from a perturbed t2, so any t2 perturbation reintroduces a
-closure violation one rank up. Perturbing t3 alone still drives every target well
-off convergence (||R|| ~1e-2 to 0.7 against ~1e-9 at convergence).
-
-**Result: singles and doubles are EXACT (rel ~1e-14). Triples sit at rel ~1.9e-3,
-down from 8.8e-2**, and remain `expectedFailure`.
-
-**What that residual now means, which is the point of all four fixes.** Every
-consistency relation the fixture can be held to is satisfied to ~1e-17: both
-closure forms agree on the perturbed block, both reproduce `t3_aaaaaa`, the
-packed round trip is exact, and the reference vanishes to ~1e-11 at convergence.
-The 3-term closure assumption is NOT baked into ccgen's equations — that was
-checked directly, and the disagreement is unchanged when the fixture is built so
-that both closure conventions coincide. So the remaining ~0.2% is a genuine
-disagreement about the t3-linear part of the T3 residual between ccgen and PySCF,
-with the fixture no longer a candidate explanation.
-
 **CLOSED.** All five targets now agree at machine precision (triples ~2.3e-15).
 The disagreement that stood at rel 1.9e-3 through nine falsified hypotheses was
 in this file, and specifically in how the TRIPLES reference was recovered:
