@@ -1,6 +1,13 @@
 # U1 — the UCC block-resolution entry, scoped as U1.0–U1.5
 
-**U1.0, U1.1, U1.2 and U1.5 are LANDED. U1.3 is DEAD. Only U1.4 remains.**
+**U1 IS COMPLETE. U1.0–U1.2, U1.4 and U1.5 are LANDED; U1.3 is DEAD.** ccgen's UCC equations are
+validated at rank 4 (~6e-16 vs PySCF UCCSD) and rank 6 (1.6e-17 vs GCC-sliced, with GCC reaching the
+FCI limit exactly). **U2 is unblocked and in progress.**
+
+One thread stays open and is **not** a ccgen defect: `test_ucc_rank6_vs_pyscf`'s triples target
+differs from PySCF by rel ~2e-3 (`expectedFailure`). ccgen is cleared by two independent routes; the
+undiagnosed side is PySCF's `r3aaa`. The physicist/chemist ERI convention — the obvious suspect,
+being the class of the B5 defect — was checked and eliminated.
 
 Re-audited against the tree 2026-08-22, and three of the four steps that were open turned out not to
 be work: U1.2's deliverable arrived through the F1/F2/F3 ladder (~6e-16 vs PySCF UCCSD), U1.5's is
@@ -8,12 +15,17 @@ the F2.3 closed-shell oracle (2.45e-15 relative), and **U1.3's hazard was design
 rather than left open — its own gate now passes with 0 violations. Each is recorded in place below
 with what was measured.
 
-U1.4 was rescoped four times, each time by measurement, and **every candidate blocker dissolved**: not the
-oracle *strength* this doc assumed (PySCF ships a UCCSDT residual entry), not an underived t3 closure
-relation (pinned green at `test_spin.py:2158`), not oracle plumbing (solved), and not a rank-6 equation
-defect — that last one was a **fixture bug in the test that found it**, retracted the same day. The
-rank-6 manifold is spin-flip symmetric to **~7e-16**. What remains is a fixture extension and the
-oracle itself. See U1.4.
+U1.4 was rescoped four times, each time by measurement, and **every candidate blocker dissolved**:
+not the oracle *strength* this doc assumed (PySCF ships a UCCSDT residual entry), not an underived
+t3 closure relation (pinned green at `test_spin.py:2158`), not oracle plumbing (solved), and not a
+rank-6 equation defect — that last one was a **fixture bug in the test that found it**, retracted
+the same day. The rank-6 manifold is spin-flip symmetric to ~7e-16.
+
+**What finally settled rank 6 was none of those: it was noticing that the GCC→UCC adaptation had 22
+call sites and no numeric gate at all.** `U14c3UccIsGccSlicedAtRankSixTests` closes that — the UCC
+manifold *is* the GCC one sliced into spin blocks (1.6e-17 on a perturbed spin-orbital t3) — and
+combined with ccgen's GCC CCSDT reaching the FCI limit exactly, it makes rank-6 UCC correct. See
+U1.4.
 
 U0 is landed (`ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)`).
 
@@ -179,7 +191,7 @@ every `t3_abbabb` factor. Measured 2026-08-22.
 Retained rather than deleted because the *measurement* is still true and still a trap for anyone who
 later wires the RCC canonicalizer into a UCC path. The step is not work.
 
-### U1.4 — rank-6 numeric gate (~M) — **the only remaining U1 work; rescoped TWICE**
+### U1.4 — rank-6 numeric gate — **LANDED**, after four rescopes that each dissolved a different blocker
 
 Two premises were falsified here, in opposite directions, and both are recorded because the second
 one was mine.
@@ -253,189 +265,80 @@ search matched `bba` to `aab` and that match is real — but *matching `aabaab`*
 `bba.transpose(2,3,5,0,1,4)` violates `abbabb`'s antisymmetry by 1.5e-2. The correct `abbabb` for the
 PySCF fixture is `aabaab.transpose(2,1,0,5,4,3)`.
 
-#### What is actually left
+#### What settled rank 6 — U1.4c
+
+**The GCC→UCC adaptation had 22 call sites and no numeric gate.** It was verified structurally at
+rank 6 (names, counts, slot order) and never against a value. That was the actual gap; every other
+step in this ladder was downstream of it, which is why four successive rescopes each dissolved their
+candidate blocker and still left the question open.
+
+`U14c3UccIsGccSlicedAtRankSixTests` (`test_spin.py`) closes it by the adaptation's defining
+property: evaluate the GCC triples residual on spin-orbital tensors, slice the all-alpha block,
+require UCC `triples_aaaaaa` to equal it. **1.6e-17** against ‖G‖ 2.9e-2, with singles and doubles
+likewise exact. Combined with ccgen's GCC CCSDT reaching the FCI limit exactly (three existing gates
+in `test_reference_vs_pyscf`, including the `engine="diagram"` path this manifold comes through),
+**rank-6 UCC is correct**.
+
+Two fixture requirements, both learned by getting them wrong first:
+
+- the spin-orbital tensors must carry the real even=α/odd=β interleaving (`_uccsdt_so_tensors`).
+  `random_tensors` is spin-**free**, and slicing it by that convention produces disagreements of
+  order the residual itself — which look exactly like an adaptation defect (measured 3.1e2 against
+  ‖G‖ 3.6e2);
+- the comparison must be perturbed off convergence, or every residual is ~1e-13 and it passes
+  vacuously. The perturbation goes on the spin-orbital t3 and is re-antisymmetrized there, so it is
+  valid by construction and both sides see the same tensor.
 
 | step | status |
 |---|---|
 | derive the t3 closure | **not work** — pinned at `test_spin.py:2158` |
-| the rank-6 spin-flip symmetry | **not work** — equations are correct, ~7e-16 |
-| the rank-6 oracle plumbing | **not work** — solved while probing, see below |
-| U1.4a — extend the fixture to t3 | **LANDED** |
-| U1.4b — the direct rank-6 oracle vs PySCF UCCSDT | **LANDED for singles/doubles; triples OPEN at ~1.4e-2** |
+| the rank-6 spin-flip symmetry | **not work** — equations correct, ~7e-16 |
+| the rank-6 oracle plumbing | **not work** — solved while probing, kept below |
+| U1.4a/b — fixture + direct PySCF oracle | **LANDED** — `test_ucc_rank6_vs_pyscf` |
+| U1.4c — adjudicate the residual gap | **LANDED** — ccgen cleared; PySCF's `r3aaa` undiagnosed |
 
-#### U1.4 result
+#### The four PySCF-interface defects fixed en route
 
-`U14RankSixVsPyscfTests` (`python/ccgen/tests/test_ucc_rank6_vs_pyscf.py`):
+Each silently handed the two sides different amplitudes, and each reads as an equation defect:
 
-| target | vs PySCF UCCSDT |
-|---|---|
-| `singles_aa` / `singles_bb` | ~5e-14 ✓ |
-| `doubles_aaaa` / `doubles_bbbb` | ~3e-15 ✓ |
-| `triples_aaaaaa` | **~1.4e-2 — open**, `expectedFailure` |
+1. **The re-antisymmetrization was unnormalized.** PySCF's `t2aa`/`t3aaa` arrive *already*
+   antisymmetric, so re-applying `a - a.transpose(...)` **multiplies** them — by 4× and 36×
+   (measured). The tell: ‖ref‖ = 1.7e-1 at converged amplitudes where PySCF's own residual is
+   ~1e-10. **That one number should have been checked before any bisecting.**
+2. `t2aa` is determined by `t2ab` (`t2aa = t2ab - t2ab.transpose(0,1,3,2)`); they cannot be
+   perturbed independently.
+3. `t3aaa` is determined by `t3aab`, through the same-spin closure.
+4. **A block carrying `aabaab`'s antisymmetries is not thereby a valid amplitude block.** The real
+   block has exactly those two signed symmetries and no others — checked exhaustively over all 36
+   signed occ×vir permutations — so **no permutation test separates it from antisymmetrized noise**.
+   What separates them is that the two same-spin closure forms agree on a valid block. Fixed by
+   building the perturbation as a slice of a genuine antisymmetric spin-orbital tensor.
 
-**The split localizes the remaining defect.** The rank-6 singles and doubles
-residuals *consume* t3, and they are exact — so the t3 blocks and ccgen's reading
-of them are both right, and the discrepancy is confined to the **T3 equation**
-(219 of 579 `triples_aaaaaa` terms carry a t3 factor).
+The two closure forms — the 3-term one `_split_same_spin_amplitude` implies, and the 36-term
+normalized double antisymmetrizer — are **equivalent on valid blocks** (both reproduce a genuine
+`aaaaaa` to ~2e-15). They diverge only on inputs that are not amplitude blocks. An earlier claim in
+this ladder that they were inequivalent and side-specific is **retracted**.
 
-Ruled out for the triples: not a layout or symmetry artifact (both residuals
-bra-antisym to ~4e-16, and so is their difference); not a scale factor or
-transpose (elementwise ratio median 0.9969, 5–95 spread 0.77–1.03 — a small
-*additive* discrepancy); not the fixture t3 blocks (all four satisfy their tag's
-antisymmetry, `aaa == bbb` to 2e-18); not the packing round-trip (bitwise exact).
+#### What remains, and it is not ccgen
 
-Two rank-6 conventions found while building it, both traps worth keeping:
+`test_ucc_rank6_vs_pyscf`'s triples target differs from PySCF by rel **~2e-3** (down from 8.8e-2),
+kept as an `expectedFailure`. Every fixture relation holds to ~1e-17, ccgen is cleared by two
+independent routes, and the **physicist/chemist ERI convention is eliminated**: PySCF's UCCSDT
+`eris` is a `_PhysicistsERIs` whose `pppp` is the non-antisymmetrized `<pq|rs>`, equal to this
+gate's construction to 5.4e-15, and the gate's blocks carry the symmetries ccgen requires
+(`v_aaaa` ket-antisymmetric, `v_abab` not). PySCF's `r3aaa` is undiagnosed. An unexpected PASS means
+someone diagnosed it.
 
-- **`update_amps_uccsdt_tri_` is the real CCSDT residual entry**, mutating `tamps`
-  in place by `R/D`. `UCCSDT.update_amps` is the *inherited CCSD* one and silently
-  omits t3 — it exists and runs.
-- **`aab` and `bba` are ONE stored sector.** Perturbing them independently makes
-  PySCF and ccgen see different t3, and it surfaces far from its cause — measured,
-  it moves the *singles* residual from 5e-14 to 8.9e-3.
+#### The oracle plumbing, established while probing
 
-#### U1.4c — the rank-6 triples discrepancy (OPEN, scoped by investigation)
+- PySCF's real CCSDT residual entry is **`update_amps_uccsdt_tri_(mycc, tamps, eris)`**, mutating
+  `tamps` in place by `R/D`. `UCCSDT.update_amps` is the *inherited CCSD* one and silently omits t3
+  — it exists and runs, which is the trap.
+- t3 is stored **packed** (triangular); `tamps_tri2full_uhf` unpacks, `tamps_full2tri_uhf` repacks,
+  and the round trip is exact.
+- `aab` and `bba` are **one stored sector**. Perturbing them independently makes the two sides see
+  different t3, and it surfaces as a **singles** error (5e-14 → 8.9e-3) far from its cause.
 
-`triples_aaaaaa` disagrees with PySCF UCCSDT by ~1.2e-2 against ‖R‖~3.1, while rank-6 singles and
-doubles are exact at ~1e-15. Bisected on a deterministic probe (amplitudes drawn wholly from the
-seeded RNG — perturbing PySCF's converged ones drifts ~8% per process and makes any bisect
-meaningless).
-
-**Dead hypotheses, each measured:**
-
-| hypothesis | killed by |
-|---|---|
-| T1-dressing convention difference | `t1 = 0` leaves the discrepancy unchanged |
-| a spurious term family in ccgen | the 18 suspect `t2·v` terms are the standard `P(i/jk)P(a/bc)` expansions of two **textbook** T3 terms |
-| a simple over/under-count | no integer combination of the two families fits (best-fit scales +0.23 / −0.10) |
-| the t3 blocks or their reading | rank-6 singles/doubles *consume* t3 and are exact |
-
-At `t1 = t3 = 0`, ccgen gives 4.93e-2 where PySCF gives 3.55e-3 (~14×), and every ccgen triples term
-outside the pure-t2 class evaluates to exactly 0. The two surviving families cancel heavily — each
-~4.5e-2, summing to 1.3e-2, with 38× cancellation across the full residual — so dropping either
-makes agreement *worse*. Max-norm is a poor instrument on a quantity this cancellation-dominated.
-
-**The blocking problem, and it is not what it first looked like.** The third source that would say
-which side is wrong is ccgen's own RCC manifold — independent of both the UCC bridge and PySCF. It
-reproduces `triples_aabaab` to 1.6e-17, but only at converged amplitudes where ‖R‖~1e-10, i.e.
-vacuously. Making it non-vacuous requires perturbed amplitudes, and **that is where the closure
-relations become load-bearing**:
-
-```
-RCC  reads a single spatial  t3
-UCC  triples_aabaab needs    t3_aaaaaa, t3_aabaab, t3_abbabb, t3_bbbbbb
-```
-
-The four UCC blocks are not independent at closed shell — they are determined by the spatial one.
-So a wrong closure relation is **indistinguishable from an equation defect** in this comparison, and
-that is exactly the trap that produced the retracted "rank-6 spin-flip defect" earlier in this
-ladder. This is not a new kind of problem: rank 4 has the identical structure, and F2.3 passes there
-only because its closure (`t2_aaaa = t2 - t2.transpose(1,0,2,3)`) is known and simple.
-
-**What is established about the rank-6 closure:**
-
-```
-t3_aaaaaa = (1/12) * A_bra A_ket t3_aabaab      # all 36 signed perms
-```
-
-It reproduces both real block pairs exactly (1.3e-18, 2.0e-18), and the 1/12 double antisymmetrizer
-maps the mixed block's symmetry onto a fully antisymmetric one for a **generic** random block — so
-that half is structural, not a fixture artifact.
-
-**What is not established: that it is unique** — and the obvious way to settle it does not exist.
-The real `aab` block's 36 permutation images span rank **5** where a generic block gives rank 9, so
-the fit is underdetermined and the uniform-1/12 answer is just the min-norm solution. The
-`bbb`←`bba` cross-check does **not** repair this: a deliberately different exact fit (`c0 + 3·n`,
-`n` in the null space) passes it too, because both pairs share the null space. And refitting on an
-open-shell reference — where α and β would be genuinely independent — is impossible: their spaces
-have **different dimensions** there (CH3/STO-3G: `aaa` (5,5,5,3,3,3) vs `bbb` (4,4,4,4,4,4)), so
-only 4 of 36 images are shape-legal and they span rank 1. **The permutation-fit approach is
-closed-shell-only by construction.**
-
-One wrong turn recorded: the extra degeneracy was guessed to be the joint `(0,1)(3,4)` spin-flip
-symmetry, which the real block does satisfy exactly — but imposing it on a random block still gives
-rank 9, so the source of the rank-5 collapse is unidentified.
-
-**Steps, in order:**
-
-- **U1.4c.1 — derive the closures from the spin integration, not by fitting (~M). LANDED.**
-  `t3_aaaaaa` comes straight from `_split_same_spin_amplitude`, with the one reading that makes it
-  work: **the splitter permutes BASE INDICES, not array axes**, and its output feeds an einsum keyed
-  on index names against a fixed output order — so the base reordering applies the **inverse**
-  permutation to the array. Forward it fails by the block's full magnitude; inverse is exact to
-  4.8e-18. `t3_abbabb = bba.transpose(5,2,3,4,0,1)`, since PySCF's `bba` is 2-β-1-α in layout
-  `[i,j,a,b,k,c]`; the check that picks it out is that it carries `abbabb`'s **own** antisymmetry
-  (the β pairs, vir (1,2) / occ (4,5)) where every earlier candidate carried `aabaab`'s.
-
-  **The previously committed fitted closure was wrong**, and this is the part worth remembering: the
-  uniform-1/12 antisymmetrizer reproduced *both* real block pairs exactly and still is not the
-  closure — on a generic block the two differ by ~80%. It agreed only because the fixture's
-  permutation images span rank 5 against a generic block's 9. A relation that reproduces every case
-  in a degenerate fixture is not thereby derived.
-- **U1.4c.2 — extend F2.3's closed-shell oracle to rank 6 (~S).** With correct closures, feed both
-  sides *perturbed* amplitudes and compare `triples_aabaab` against RCC `triples`. *Gate:* ≤1e-11 on
-  a non-square case, plus the falsifiability check F2.3 carries.
-- **U1.4c.3 — decide which side is wrong (~S, a decision, not code).** If U1.4c.2 passes, ccgen's
-  T3 is self-consistent and the defect is in how this gate reads PySCF's `r3aaa`; if it fails, the
-  defect is in ccgen's T3 and U1.4c.2 localizes it without PySCF at all. **Do not attempt this call
-  before U1.4c.2** — it is the question four wrong answers in this ladder were guesses at.
-
-**Do not** resume the max-norm bisect on the PySCF comparison. With 38× cancellation and an unproven
-closure feeding it, that instrument cannot separate the two candidate causes; U1.4c.2 can.
-
-#### The oracle plumbing, established while probing (reusable when U1.4a lands)
-
-- PySCF's real CCSDT residual entry is **`update_amps_uccsdt_tri_(mycc, tamps, eris)`**, which
-  mutates `tamps` in place adding `R/D`. `UCCSDT.update_amps` is the *inherited CCSD* one and does
-  **not** include t3 — a trap, since it exists and runs.
-- t3 is stored **packed** (triangular); `tamps_tri2full_uhf` unpacks it. Perturbing the packed array
-  elementwise does **not** correspond to a valid antisymmetric t3, so perturb t1/t2 only.
-- Block mapping to ccgen layout, verified exhaustively over all 720 axis permutations:
-  `aaa` → `transpose(3,4,5,0,1,2)`; `aab` **and** `bba` both → `transpose(2,3,5,0,1,4)` (`bba` is
-  stored spin-flipped in place, matching `aab` to 1.5e-17 at closed shell — the guess that its α line
-  sat in different slots was wrong).
-
-#### U1.4a (superseded) — extend the rank-6 tensor bundle (~S)
-
-> Kept for its content; it is no longer the first step. The fixture work below is small and correct,
-> but the **spin-flip asymmetry above must be fixed first** — a gate built on defective equations
-> would pin the defect.
-
-
-The UCC manifold needs `t3_aaaaaa`, `t3_aabaab`, `t3_abbabb`, `t3_bbbbbb` (measured: exactly these
-four, against RCC's single bare `t3`). Reuse `_uccsdt_so_tensors`' spin-orbital read rather than
-constructing spatial blocks — that read is already pinned by `map.3` and is what the splitter gate
-evaluates against.
-
-*Gate:* per-block shapes, and each same-spin block satisfies its own bra/ket antisymmetry to 1e-14.
-Same shape of check F1 uses, for the same reason: a fixture that silently violates a block's own
-symmetry makes every downstream comparison meaningless.
-
-#### U1.4b — the direct rank-6 oracle against PySCF UCCSDT (~M, the deliverable)
-
-Mirror U1.2 exactly: evaluate every rank-6 UCC target at PySCF's perturbed UCCSDT amplitudes and
-compare against `UCCSDT.update_amps`, converting `t_new` back to a residual via `R = (t_new - t)·D`.
-
-Carry U1.2's three hard-won conventions rather than rediscovering them:
-
-- **`f_ov` zeroed on BOTH sides** — one-sided zeroing is *worse* than neither.
-- **Layout is a transpose**, not a rename — PySCF is `(occ…, vir…)`, ccgen is `(vir…, occ…)`.
-- **Perturb off convergence**, and re-impose each block's antisymmetry after perturbing.
-
-*Gate:* the tolerance U1.2 actually reached (~1e-13), not the 1e-10 originally scoped — unless rank 6
-demonstrably cannot hold it, in which case say so with the measured number rather than loosening
-silently.
-
-**Check `uccsdt`'s amplitude storage before trusting the mapping.** `_uccsdt_so_tensors`' own
-docstring records that UCCSDT stores `t2ab` as `[i,a,j,b]` — unlike both `rccsd` and
-`pyscf.cc.uccsd`'s `[i,j,a,b]`. That is exactly the class of convention defect U1.2's transpose
-correction was, and it is already known to differ in this module.
-
-#### On the closed-shell oracle at rank 6
-
-Optional, and no longer load-bearing now that a direct oracle exists. It stays cheap (`triples_aabaab`
-against RCC `triples`, F2.3's per-target pairing) and it localizes a defect to the evaluator rather
-than the equations, which is why F2.3 was worth doing before F3. Add it if U1.4b fails and the cause
-is unclear; skip it if U1.4b passes.
 
 ### U1.5 — closed-shell degeneracy check (~S) — **LANDED as F2.3**
 
@@ -453,21 +356,19 @@ by construction.
 ## Sequencing
 
 ```
-U1.0 (no-collapse entry)        ~S   ← pipeline already works; assembly only
-   └→ U1.1 (block-resolved names)  LANDED  ← also designed out U1.3's hazard
-        ├→ U1.2 (rank-4 vs PySCF UCCSD)  LANDED  ~6e-16
+U1.0 (no-collapse entry)          LANDED
+   └→ U1.1 (block-resolved names) LANDED  ← also designed out U1.3's hazard
+        ├→ U1.2 (rank-4 vs PySCF UCCSD)   LANDED  ~6e-16
         │    └→ U1.3 (retarget canonicalizer)  DEAD — never called on the UCC path
-        │         └→ U1.4 (rank-6 numeric)  ← THE ONLY REMAINING U1 WORK
-        │              [t3 closure: NOT work — pinned at test_spin.py:2158]
-        │              U1.4a extend the fixture to t3   ~S
-        │              U1.4b direct oracle vs UCCSDT    ~M  ← the deliverable
-        └→ U1.5 (closed-shell degeneracy)  LANDED as F2.3  2.45e-15 rel
+        │         └→ U1.4 (rank-6 numeric)     LANDED
+        │              U1.4a/b  fixture + direct PySCF oracle
+        │              U1.4c    adjudication: UCC == GCC-sliced, 1.6e-17
+        └→ U1.5 (closed-shell degeneracy) LANDED as F2.3  2.45e-15 rel
               │
               ▼
          U2 (UHF reference, C++) → U3 → U4 → U5
+         U2.1 landed: build_ucc_block_denominator
 ```
-
----
 
 ## What this reuses
 
@@ -514,47 +415,27 @@ retarget this table used to list is **not** net new — it is not needed at all.
 
 ## Honest status
 
-**U1 is one step from done, and that step is smaller than this doc originally implied — but its
-content is not where the doc looked.**
+**U1 is complete.** ccgen's UCC equations are validated at rank 4 against PySCF UCCSD (~6e-16) and
+at rank 6 against GCC-sliced (1.6e-17), with GCC itself FCI-exact. U2 is unblocked and started.
 
-What the 2026-08-22 re-audit changed, and the lesson in it: this doc's own probe added U1.3 as a
-"new step the original scope missed", with a correct measurement attached. U1.1 then solved that
+Three lessons, and they rhyme — each cost a wrong conclusion that one earlier measurement would have
+prevented:
+
+**Do not trust a status header without running its gate.** U1.3 was added by this doc's own probe
+as a "step the original scope missed", with a correct measurement attached. U1.1 then solved the
 hazard by a route the probe had not considered — *not calling* the canonicalizer instead of
-retargeting it — and the step was never revisited. A correct measurement produced a step that was
-already unnecessary by the time it was written down.
+retargeting it — and the step was never revisited. Its gate is four lines and passes.
 
-So the standing caution is not "the measurements were wrong". They were right, all three of them.
-It is that **a measured hazard is not the same as remaining work**, and the gap between them is
-exactly what a stale scope hides. Re-run a step's own gate before building it: U1.3's gate is four
-lines and passes.
+**A failed guess is evidence about the guess, not about the tree.** The first rescope of U1.4
+asserted a blocker ("the t3 closure is underived") from three failed hand-derivations, without
+checking whether the tree already had one. It did.
 
-U1's gate now runs at rank 6. Singles and doubles reproduce PySCF UCCSDT exactly (~5e-16 / ~1.4e-15);
-**the triples target is off by ~1.2e-2 and is the one genuinely open item in U1.** Because the
-singles and doubles consume t3 and are exact, that discrepancy is confined to the T3 equation rather
-than to the fixture, the evaluator or the block naming — which is the whole reason the gate reports
-per target instead of in aggregate.
+**A cheap invariant check is only as trustworthy as its fixture.** The α↔β symmetry check was the
+right instrument and fired correctly; the conclusion drawn from it was still wrong, because a bad
+fixture and a bad equation produce the same symptom. Four of the defects found in U1.4 were in the
+fixture or the interface, none in the equations.
 
-Second lesson, from the same session: the first rescope of U1.4 asserted a blocker ("the t3 closure
-is underived") on the strength of three failed hand-derivations, without checking whether the tree
-already had one. It did. **A failed guess is evidence about the guess, not about the tree** — the
-same shape of error as trusting a status header, arrived at from the other direction.
-
-Third lesson, and the sharpest of the three: **a cheap invariant check is only as trustworthy as its
-fixture.** The α↔β symmetry check was the right instrument — free, no PySCF, decisive in one run —
-and it fired correctly. The conclusion drawn from it was still wrong, because the fixture feeding it
-had a bad block, and a bad fixture and a bad equation produce the *same* symptom.
-
-What separated them was cheaper than any of the debugging that followed: check the **fixture's own
-invariants** before believing what it says about the code. A block must satisfy the antisymmetry its
-own tag implies; the bad `abbabb` failed that by 1.5e-2, needing no equations and no evaluator. That
-check now exists, and it should be the first thing added whenever a fixture grows a new block.
-
-The three lessons rhyme. Do not trust a status header without running its gate; do not trust a failed
-guess as evidence about the tree; do not trust a passing instrument without checking its inputs. Each
-one cost a wrong conclusion that measurement, one step earlier, would have prevented.
-
----
-
-See `CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md` (U0 landed, U2–U5 ahead, and the rescope that corrected
-`external_blocks`), `CCGEN_SPIN_ADAPTER_CONTRACT.md` (the numeric-over-symbolic lesson), and
-`spin.py:955` (`_factor_tensor_name`) / `spin.py:1088` (`block_keyed_intermediate_name`).
+And the one that subsumes them: **U1.4 was rescoped four times, each rescope correctly dissolving
+its candidate blocker, and none of them was the actual gap.** The gap was that the GCC→UCC
+adaptation had 22 call sites and no numeric gate — a fact available from `grep` at any point. When a
+question survives several rounds of narrowing, check what is *unverified* before narrowing again.

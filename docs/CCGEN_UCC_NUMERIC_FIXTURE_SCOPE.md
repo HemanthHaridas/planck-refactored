@@ -2,7 +2,7 @@
 
 **F1, F2 and F3 are all LANDED. This ladder is complete.** The UCC residuals are validated against
 PySCF UCCSD on CH3/STO-3G to **~6e-16** in every block — machine precision, not the scoped 1e-10.
-U1.2 is unblocked.
+U1.2 landed on the back of it, and **U1 is now complete** — see `CCGEN_U1_UCC_ADAPT_SCOPE.md`.
 
 Landed surface: `ucc_random_tensors` + `ucc_closed_shell_tensors` + `ucc_residual_einsum` +
 `ucc_resolve_factor` (`python/ccgen/tests/residual_eval.py`), `ucc_term_spins`

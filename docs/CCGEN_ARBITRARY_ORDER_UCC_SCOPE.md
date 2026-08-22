@@ -5,7 +5,20 @@ kernels (UCC) alongside the existing arbitrary-order RCC path** — so an
 open-shell reference can drive `ucc4`/`ucc5` the way a closed-shell reference
 drives `cc4`/`cc5` today.
 
-Everything below is grounded in the current tree. **U0 is landed** (`ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)`); U1-U5 are not started, and `ucc_adapt_equations` does not exist in the tree.
+**Status, 2026-08-22.** **U0 and U1 are landed and numerically validated; U2 is in progress; U3–U5
+are ahead.**
+
+| step | state |
+|---|---|
+| U0 | landed — `ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)` |
+| U1 | **landed** — `ucc_adapt_equations` + `ucc_spinterm_to_algebraterm`, validated against PySCF UCCSD at rank 4 (~6e-16) and against GCC-sliced at rank 6 (1.6e-17). U1.3 turned out to be **dead**, not work: U1.1 designed its hazard out. Detail in `CCGEN_U1_UCC_ADAPT_SCOPE.md` |
+| U2 | **in progress** — U2.1 landed (`build_ucc_block_denominator` + `planck-cc-ucc-denominator`); threading `UHFReference` through the solver is next |
+| U3–U5 | not started |
+
+One rank-6 thread stays open and is **not** a ccgen defect: `test_ucc_rank6_vs_pyscf`'s triples
+target disagrees with PySCF by rel ~2e-3 (`expectedFailure`). ccgen is cleared by two independent
+routes — its own closed-shell oracle, and UCC == GCC-sliced with GCC reaching the FCI limit exactly.
+The undiagnosed side is PySCF's `r3aaa`.
 
 > **Terminology, and it is a trap.** In this repo "**adapt**" means `spin_adapt_equations` — the
 > **spatial collapse** that folds spin blocks into one tensor per rank. **UCC does the opposite**:
@@ -317,7 +330,27 @@ convention-robust pattern the RCC S3.2 gate used, and it is the one place UCC
 gets a *direct* oracle rather than a transitive one. Do this at rank 4 before
 touching any C++.
 
-### U2 — the UHF reference in the generated runtime (~M, C++)
+### U2 — the UHF reference in the generated runtime (~M, C++) — **IN PROGRESS**
+
+**U2.1 landed:** `build_ucc_block_denominator` (`src/post_hf/cc/amplitudes.{h,cpp}`), gated by
+`planck-cc-ucc-denominator`. The spin-aware denominator this section calls for, keyed by block tag.
+
+*The layout contract, which is the thing a caller gets wrong:* the tag is per-slot spin in the
+**tensor's** index order, which is **occ-first then vir** (`rank_dims`). ccgen's UCC tags are
+bra(vir)-half-then-ket(occ), so the caller converts and the tag reaching the builder is always
+occ-half-first.
+
+*Fixture note for whoever extends this:* the gate uses `noa=4 nva=3 nob=2 nvb=5` — all four extents
+distinct — because with `n_occ == n_virt` a transposed slot still lands in bounds, and with
+`noa == nob` a swapped spin does. Alpha and beta energies are ~100 apart so a spin mix-up is a
+factor-100 error rather than a rounding one. **A tag whose two halves share a spin string
+(`"abab"` is occ (a,b) *and* vir (a,b)) cannot catch a virtual slot reading the occupied slot's
+spin** — that mutation passed until the `"abba"` case was added, where the halves differ.
+
+**Remaining in U2:** thread `UHFReference` through `ArbitraryOrderTensorCCState::reference` and
+`solver_arbitrary`'s `const RHFReference &`, then the open-shell MP2-limit gate below.
+
+#### Original scope, for the remaining work
 
 Thread `UHFReference` through the generated arbitrary-order path.
 `ArbitraryOrderTensorCCState::reference` and `solver_arbitrary`'s
