@@ -9,6 +9,11 @@ differs from PySCF by rel ~2e-3 (`expectedFailure`). ccgen is cleared by two ind
 undiagnosed side is PySCF's `r3aaa`. The physicist/chemist ERI convention — the obvious suspect,
 being the class of the B5 defect — was checked and eliminated.
 
+> **The full account now lives in `docs/CCGEN_UCC_RANK6_PYSCF_GAP_HANDOFF.md`** — how a spin-blocked
+> residual is validated (three independent routes), the four PySCF-interface defects, the nine
+> falsified hypotheses for the open gap, and the named next step. Read that before working on any of
+> it; this doc is the step-by-step record behind it.
+
 Re-audited against the tree 2026-08-22, and three of the four steps that were open turned out not to
 be work: U1.2's deliverable arrived through the F1/F2/F3 ladder (~6e-16 vs PySCF UCCSD), U1.5's is
 the F2.3 closed-shell oracle (2.45e-15 relative), and **U1.3's hazard was designed out by U1.1**

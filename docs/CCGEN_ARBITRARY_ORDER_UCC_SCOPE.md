@@ -15,6 +15,10 @@ are ahead.**
 | U2 | **in progress** — U2.1 landed (`build_ucc_block_denominator` + `planck-cc-ucc-denominator`); threading `UHFReference` through the solver is next |
 | U3–U5 | not started |
 
+**Read `docs/CCGEN_UCC_RANK6_PYSCF_GAP_HANDOFF.md` first** if you are touching the UCC validation
+story: it carries the three independent correctness routes, the interface conventions that cost the
+most time, and the one open thread below.
+
 One rank-6 thread stays open and is **not** a ccgen defect: `test_ucc_rank6_vs_pyscf`'s triples
 target disagrees with PySCF by rel ~2e-3 (`expectedFailure`). ccgen is cleared by two independent
 routes — its own closed-shell oracle, and UCC == GCC-sliced with GCC reaching the FCI limit exactly.
