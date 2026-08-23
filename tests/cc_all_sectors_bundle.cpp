@@ -310,6 +310,56 @@ int main()
         }
     }
 
+    // --- U4.2: allocation reconciles an all-sectors state -------------------
+    {
+        // ensure_amplitude_sectors allocates the blocks a bundle declares. On the
+        // UCC path it takes each block's shape from its own denominator (U2.2),
+        // which is the only place that shape is known.
+        ArbitraryOrderTensorCCState fresh;
+        fresh.max_excitation_rank = 2;
+        for (const auto &[rank, tag] : UCC_BLOCKS)
+            fresh.denominators.sectors.push_back({{rank, tag}, TensorND(dims_for(tag), -1.0)});
+        check(fresh.amplitudes.sectors.empty(), "the fresh state starts with no blocks");
+
+        const auto kernels = make_all_sectors_bundle(UCC_BLOCKS);
+        HartreeFock::Correlation::CC::ensure_amplitude_sectors(fresh, kernels);
+
+        check(fresh.amplitudes.sectors.size() == UCC_BLOCKS.size(),
+              "every declared block is allocated");
+        for (const auto &[key, block] : fresh.amplitudes.sectors)
+        {
+            check(block.dims == dims_for(key.second),
+                  "allocated block '" + key.second + "' takes its OWN shape");
+            bool zeroed = true;
+            for (const double value : block.data)
+                if (value != 0.0)
+                    zeroed = false;
+            check(zeroed, "allocated block '" + key.second + "' is zero-initialized");
+        }
+
+        // Idempotent: a restart may already carry blocks, and re-reconciling must
+        // not duplicate or resize them.
+        HartreeFock::Correlation::CC::ensure_amplitude_sectors(fresh, kernels);
+        check(fresh.amplitudes.sectors.size() == UCC_BLOCKS.size(),
+              "re-reconciling does not duplicate blocks");
+
+        // A declared block with NO denominator cannot be sized on an all-sectors
+        // state -- there is no reference rank to fall back to. It must be left
+        // unallocated (and then rejected by name in validation) rather than read
+        // `by_rank[rank-1]` out of bounds for plausible-garbage dims.
+        ArbitraryOrderTensorCCState missing;
+        missing.max_excitation_rank = 2;
+        missing.denominators.sectors.push_back({{1, "aa"}, TensorND(dims_for("aa"), -1.0)});
+        HartreeFock::Correlation::CC::ensure_amplitude_sectors(missing, kernels);
+        check(missing.amplitudes.sectors.size() == 1,
+              "a block with no denominator is skipped, not sized from nothing");
+
+        const auto rejected =
+            evaluate_generated_arbitrary_order_residuals(missing, kernels);
+        check(!rejected.has_value(),
+              "the unallocated block is then rejected by validation");
+    }
+
     if (failures == 0)
         std::printf("cc_all_sectors_bundle: all checks passed\n");
     return failures == 0 ? 0 : 1;

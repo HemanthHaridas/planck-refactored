@@ -146,7 +146,21 @@ namespace HartreeFock::Correlation::CC
             // the one place that shape is known; `sector_tensor` falls back to the
             // rank's reference denominator on the RHF path, which reproduces the
             // old `ref_dims` exactly.
+            //
+            // U4.2: the fallback indexes `by_rank[rank-1]`, which does not exist
+            // on an ALL-SECTORS state (no reference blocks at all). Reaching it
+            // there would be an out-of-bounds read returning plausible garbage
+            // dims, so the block is skipped instead and left unallocated -- which
+            // `validate_kernel_bundle`'s Gap B4 loop then rejects by name. A
+            // missing denominator on the UCC path is a build bug, and failing in
+            // the validator with the (rank, tag) in the message beats crashing or
+            // silently allocating the wrong shape here.
             auto denom = state.denominators.sector_tensor(rank, tag);
+            const bool have_reference_rank =
+                rank >= 1 &&
+                static_cast<std::size_t>(rank) <= state.amplitudes.by_rank.size();
+            if (!denom && !have_reference_rank)
+                continue;
             const auto &block_dims =
                 denom ? denom->dims
                       : state.amplitudes.by_rank[static_cast<std::size_t>(rank - 1)].dims;
