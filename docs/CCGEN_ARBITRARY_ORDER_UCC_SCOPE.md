@@ -5,10 +5,12 @@ kernels (UCC) alongside the existing arbitrary-order RCC path** — so an
 open-shell reference can drive `ucc4`/`ucc5` the way a closed-shell reference
 drives `cc4`/`cc5` today.
 
-**Status, 2026-08-23.** **U0–U3 are landed and numerically validated.** The remaining work is
-U4 (a `--ucc` switch, plus deciding whether an empty `residuals_by_rank` needs a solver guard) and
-U5 (driver routing and the FCI-limit gate). U4 is largely done *by accident* — that is a hazard
-rather than a head start; see its section.
+**Status, 2026-08-23.** **U0–U4 are landed and numerically validated.** The generator emits a
+runnable UCC translation unit behind `--ucc`, and the runtime accepts, evaluates, updates and
+allocates it. **U5 is all that remains, and it is bigger than this doc said** (`~S` → `~M`): the
+three UCC C++ builders U2–U3 added have **no production callers at all** — `prepare_generated_
+arbitrary_order_state` still builds a `CanonicalRHFCCReference` and the RCC block cache. Wiring
+that, not the keyword, is the work.
 
 | step | state |
 |---|---|
@@ -16,8 +18,8 @@ rather than a head start; see its section.
 | U1 | **landed** — `ucc_adapt_equations` + `ucc_spinterm_to_algebraterm`, validated against PySCF UCCSD at rank 4 (~6e-16) and against GCC-sliced at rank 6 (1.6e-17). U1.3 turned out to be **dead**, not work: U1.1 designed its hazard out. Detail in `CCGEN_U1_UCC_ADAPT_SCOPE.md` |
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
 | U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
-| U4 | **~90% already done, by accident** — the emitter emits a complete UCC TU today with no error. That is the hazard, not the win; see U4 |
-| U5 | not started |
+| U4 | **landed, U4.0–U4.3.** The runtime accepts an ALL-SECTORS bundle (no per-rank reference residual), and `--ucc` reaches it from the build. U4.1 turned out **not to be work** — the update loop already handled it; U4.2 fixed a real out-of-bounds read (segfault, not a wrong number) that U4.0 had made reachable |
+| U5 | not started, and **rescoped ~S → ~M**: `build_ucc_{spin_block_cache,fock_blocks,denominator_cache}` are called **only from tests**, so U5 is prepare-path wiring plus a UHF reference, not just a keyword |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -540,70 +542,110 @@ Both would have certified a broken fix, and neither was visible by reading:
 Also: once both `mo_blocks` and `reference` exposed `spin_block`, the ERI assertions began
 counting Fock views as ERI blocks. Anchor such regexes on the receiver.
 
-### U4 — emit + registry for UCC blocks (~S given U1/U3) — **mostly done by accident**
+### U4 — the runtime accepts an all-sectors bundle (~M, C++ *and* Python) — **LANDED**
 
-> **Read this before starting U4, because the step looks finished and is not.** Measured on
-> the current tree, `ucc_adapt_equations('ccsd')` fed to `emit_planck_translation_unit(...,
-> force_arbitrary=True, spin_adapted=True)` **already produces a complete UCC translation
-> unit, with no error**: six kernels (`singles_aa`, `singles_bb`, `doubles_aaaa`,
-> `doubles_abab`, `doubles_bbbb`, energy) and a correct registry declaring
-> `sector_tags` `{1,"aa"} {1,"bb"} {2,"aaaa"} {2,"abab"} {2,"bbbb"}`. The amplitudes are
-> genuinely block-resolved — U1.1 did its job, and `t2_aaaa`/`t2_abab`/`t2_bbbb` each bind
-> their own `sector_tensor` view.
->
-> **The ERIs and the Fock matrix are not** (see U3). So the emit that looks like a finished
-> U4 is a kernel that compiles, links, runs, and returns a plausible correlation energy
-> while reading the wrong integrals — the B5 physicist-ERI failure mode, which was found
-> only by injecting an FCI-correct oracle into live C++ state. **The accident is the
-> hazard, not the win.** The routing gate in U3 exists so this cannot be shipped by someone
-> who sees a working emit and reasonably concludes the step is done.
+> **Scoped as "~S: add a `--ucc` switch, plus decide whether an empty `residuals_by_rank`
+> needs a solver guard." It was not a guard question.** `validate_kernel_bundle`
+> **required** `residuals_by_rank.size() == max_excitation_rank`, and a UCC bundle pushes
+> **zero** per-rank residuals (every target is block-tagged: `doubles_aaaa`, never a bare
+> `doubles`) against a `max_excitation_rank` of 2. So it was rejected before it could run —
+> a structural mismatch, not a missing check.
 
-`emit_planck_translation_unit` already emits one kernel per residual key and the
-registry already carries `sector_tags` / `sector_residuals`. UCC blocks map onto
-that: each `doubles_aaaa`-style key becomes a `(rank, tag)` sector residual, and
-`ensure_amplitude_sectors` allocates the blocks.
+**The cheaper fix does not work, and was ruled out first.** Promoting one block per rank into
+the reference slot fails because that slot is sized by `rank_dims`, which yields **one shape
+per rank**, while UCC blocks of a single rank have different shapes under UHF: `aaaa` is
+`(noa,noa,nva,nva)`, `abab` is `(noa,nob,nva,nvb)`. Promoting one would silently mis-size the
+other two.
 
-**What is genuinely left in U4**, once U3 lands:
+So `residuals_by_rank` became **optional**: empty declares an all-sectors bundle
+(`is_all_sectors()`) and every excitation is driven through `sector_residuals`. **Empty or
+full, never partial** — a half-filled vector means a bundle lost a kernel, and that rank would
+otherwise evaluate as a silent zero.
 
-- The `--ucc` CLI switch and build gate below (nothing routes to
-  `ucc_adapt_equations` today — it has **zero** callers outside tests).
-- **Decide what an empty `residuals_by_rank` means to the solver.** Measured: under UCC it
-  gets **zero** pushes, because every UCC target is block-tagged and the emitter's
-  `re.search(r"_([ab]+)$", target)` therefore routes all of them to `sector_targets`. RCC
-  always had a bare reference target per rank; UCC never does. Check
-  `run_generated_arbitrary_order_iterations` and `validate_kernel_bundle` tolerate that
-  before assuming they do — it is the kind of thing that reads as a no-op and is not.
+**U4.0 — validation and evaluation.** Two guards narrowed to RCC rather than deleted (the
+residual count, and the "allocated through `max_excitation_rank`" check, which counts
+*reference* blocks and so reads 0 for an all-sectors state by construction — its all-sectors
+equivalent is the Gap B4 loop, which is stricter because it checks per (rank, tag) rather than
+counting). One guard **added**: an all-sectors bundle with no sector residuals is now rejected,
+since it would evaluate nothing and "converge" instantly at the reference energy.
 
-Add a `--ucc` CLI switch and a `PLANCK_CC_UCC` build gate, **default OFF**, so
-the default build stays byte-identical (the pattern `--factorize-tau` /
-`--spin-adapt` / `--dress-operators` all follow).
+**U4.1 — NOT WORK, and worth recording as such.** Scoped as "make pack/unpack and the update
+loop tolerate an empty `by_rank`". Probing first showed they already do: the pack/unpack loops
+iterate `by_rank` then `sectors`, so an empty `by_rank` simply contributes nothing and the
+sector region starts at offset 0; the update's per-rank loop runs `rank <= max_rank()` = 0 and
+is skipped; the rank-coverage guard compares 0 == 0 == 0. **U4.0's own gate had asserted the
+update was unreachable**, inferred from `max_rank()` returning 0 — that inference was wrong and
+the probe corrected it. U4.1 is therefore assertions, not a change. Pinned rather than left
+implicit, because it holds only through two unrelated loops happening to be empty-tolerant.
 
-**Compile-time caution:** the spin-adapt path already forced
-`--include-intermediates` OFF because ~1544 `build_W_*` functions took ~28 min at
-`-O3` (`e0f3849`), and the registry is now compiled at `-O1` with 256-term
-chunking (`a690014`, `c48a253`). UCC multiplies the residual count by the number
-of blocks — **assume the registry compile time is the binding constraint on
-reachable rank** and measure it at rank 4 before scoping rank 5+.
+**U4.2 — allocation, and a real out-of-bounds read.** `ensure_amplitude_sectors` already sized
+UCC blocks correctly (U2.2), but its fallback indexes `by_rank[rank-1]`, which **does not exist**
+on an all-sectors state — reachable the moment U4.0 let one through validation. Confirmed real,
+not theoretical: removing the guard **segfaults** the gate (exit 139). Now skips the block, which
+`validate_kernel_bundle` then rejects *by name* with its (rank, tag).
 
-*Gate:* the emitted UCC TU compiles against the real CC headers (the `tau` A1
-`test_generated_source_compiles` harness is the template).
+**U4.3 — the switch.** `ucc_adapt_equations` had **zero non-test callers** until this: everything
+U0–U3 built was reachable only from the test suite. `--ucc` is mutually exclusive with
+`--spin-adapt` and **raises** rather than picking a winner — the two resolve spin in opposite
+directions (adaptation collapses blocks into one spatial tensor per rank, UCC keeps them
+resolved), so running both would collapse and then attempt to re-resolve, which is not a
+composition in either order. Intermediates are forced off, mirroring the `spin_adapt` precedent.
+Default output verified **byte-identical** by regenerating with the change stashed and diffing —
+not by checking for a marker, which would miss a change elsewhere in the file.
 
-### U5 — driver routing + the end-to-end gate (~S given U2–U4)
+*Gates:* `planck-cc-all-sectors-bundle` (validation, evaluation, update, allocation) and
+`test_ucc_emit_flag.py` (the switch). Both verified falsifiable; the mutations that mattered were
+over-relaxing a guard, a silent skip in the sector update that still returns success, and making
+`--ucc` a no-op.
 
-A `correlation ucc4` keyword routing to the same `solve_generated_rcc` call site
-with a UHF reference. The solver loop is unchanged — it already iterates tagged
-blocks.
+> **Two fixture defects found by mutation**, both making an assertion pass for the wrong reason:
+> `resize(1)` leaves a **null** `std::function`, so a "partial is rejected" case was caught by the
+> missing-kernel guard rather than the count guard; and that fixture then used an all-sectors
+> *state* against a non-all-sectors *bundle*, so rank-coverage fired first. Both assertions now
+> **name the guard** they intend to exercise. Where two guards can reject the same input, asserting
+> only "it was rejected" tests nothing in particular.
 
-*Gate (the one that matters):* **open-shell UCCSDTQ == FCI.** The closed-shell
-analog is landed and is the strongest gate in the whole ccgen effort
-(`0970e21` / `ce03048`: Be CCSDTQ vs FCI, gap 6.4e-11). Pick a small open-shell
-system where UCC at rank = n_elec is the full CI limit — e.g. the Li atom or
-BeH — and assert the same equality. If U0–U4 have a bug, this catches it; if it
-passes, UCC is right.
+### U5 — driver routing + the end-to-end gate (~M, was ~S) — **the only step left**
 
-Cheaper intermediate gate: UCC rank 2 (`ucc2`) against the existing hand-written
-UCCSD energy on a radical cation. Land that first — it exercises the whole stack
-at the smallest rank and reuses an in-tree oracle.
+> **Rescoped `~S` → `~M`.** The original text said "the solver loop is unchanged — it already
+> iterates tagged blocks", which is true and is not the work. **The three UCC C++ builders
+> U2–U3 added have no production callers at all** — measured: `build_ucc_denominator_cache`,
+> `build_ucc_spin_block_cache` and `build_ucc_fock_blocks` are referenced only from
+> `tests/`. `prepare_generated_arbitrary_order_state` still calls
+> `build_canonical_rhf_cc_reference` and `build_tensor_cc_block_cache`, i.e. the RHF path,
+> unconditionally.
+
+So U5 is **prepare-path wiring**, not a keyword:
+
+- `prepare_generated_arbitrary_order_state` needs a UCC branch that builds a `UHFReference`,
+  then drives `build_ucc_fock_blocks`, `build_ucc_spin_block_cache` and
+  `build_ucc_denominator_cache` instead of their RHF counterparts. The block vocabulary it
+  passes must come from the bundle's `sector_tags`, not be enumerated separately — same
+  reasoning as U2.2: one vocabulary, defined in ccgen, rather than two that can drift.
+- The `rebind_physicist` step needs its UCC counterpart. U3.1 stores the mixed blocks in
+  chemists order like the RCC ones, so the transpose is the same, but the **oovv↔ovov
+  cross-source is spin-sensitive** (see U3's measurement 3) and must be re-derived per block
+  rather than copied.
+- A `correlation ucc2` / `ucc4` keyword, and the driver's existing "post-HF needs an RHF
+  reference" guard relaxed for it.
+
+*Cheapest first gate, and it should be landed before the FCI one:* **`ucc2` against the
+existing hand-written UCCSD energy** on a radical cation. It exercises the whole stack at the
+smallest rank and reuses an in-tree oracle, so a failure localizes to the wiring rather than
+to the algebra — which U1–U4 have already gated independently.
+
+*Gate (the one that matters):* **open-shell UCCSDTQ == FCI.** The closed-shell analog is
+landed and is the strongest gate in the whole ccgen effort (`0970e21` / `ce03048`: Be CCSDTQ
+vs FCI, gap 6.4e-11). Pick a small open-shell system where UCC at rank = n_elec is the full
+CI limit — the Li atom or BeH. **Check the system is not vacuous first**: U1.5 found that
+Li/STO-3G makes `t3` worth 0, so a broken T3 passes there; LiH⁺/6-31g was used instead
+because it makes the triples worth 8.1e-8. The same trap applies at rank 4.
+
+**What U5 does NOT need**, because it is already done and gated independently: the spin
+algebra (U1, PySCF-validated to ~6e-16), the denominators (U2), the integrals and their
+emitter routing (U3), and the runtime's ability to accept, evaluate, update and allocate an
+all-sectors bundle (U4). If the first `ucc2` run disagrees with hand-written UCCSD, the
+wiring is the first place to look, not the algebra.
 
 ---
 
@@ -642,11 +684,18 @@ wiring.
   validated there — the RCC spin-adapt path disabled it for both correctness
   (CSE mislabels occ/vir on spatial spin-adapted terms) and compile time
   (`e0f3849`). UCC has strictly more terms.
-- **Do not conclude U4 is done because the emitter runs.** It emits a complete, correct-looking
-  UCC TU today and always has; the ERIs and Fock inside it all collapse onto one array. A
-  working emit is not evidence here — run `test_ucc_emit_distinct_blocks.py`, which is red
-  on purpose until U3 lands.
-- **Do not fix U3's emitter half by suffixing array names alone.** Two of the four
+- **Do not assume a rejected input proves which guard rejected it.** Two guards can reject
+  the same fixture; asserting only "it was rejected" then tests nothing in particular. Both
+  U4.0 fixture defects were of this shape. Assert on the guard's own message.
+- **Do not trust a `make <target>` that prints nothing.** It can exit 0 having built nothing
+  when the build directory is stale, and a mutation run against the previous binary reports
+  whatever the previous binary did. This invalidated one reported mutation result and made a
+  correct guard look broken. Use `make -B` before believing a mutation.
+- **Do not wire U5 by adding a keyword alone.** The three UCC C++ builders have no production
+  callers; `prepare_generated_arbitrary_order_state` still builds the RHF reference and RHF
+  block cache unconditionally. A keyword that reaches an unwired prepare path produces a
+  plausible RHF number under a UCC name.
+- **Do not fix a spin-routing emitter by suffixing array names alone** (U3.2's lesson). Two of the four
   `_ERI_SYMMETRY_PERMUTATIONS` are invalid for `abab` (they map it to `baba`), and **37 of
   142** mixed-block reads currently use them. Name-only routing sends those 37 to the right
   array with permuted indices — wrong, and quieter than what is there now. Land U3.0's
@@ -658,7 +707,7 @@ wiring.
   `(b|a)` pair orderings coincide, so a swapped mixed pair passes it. It needs an
   asymmetric-reference companion (`noa != nob`), for the same reason U2.1's fixture uses
   four distinct extents.
-- **Do not land U3's `MOBlockCache` half without the emitter half.** Spin-blocked arrays that
+- **Do not land a storage half without its emitter half** (U3's lesson, kept for the next such split). Spin-blocked arrays that
   no emitted kernel ever names change nothing, while making the step look finished and
   turning a loud absence into a silent wrong answer. They are one change.
 - **Do not make the generated runtime's reference a variant.** The scope originally called
