@@ -651,7 +651,10 @@ it exactly — no new enum member per rank and no new driver branch.
 **U5.0 — distinct symbol names for UCC kernels — LANDED.** Emits
 `compute_ucc_<method>_*` / `make_generated_ucc_<method>_kernels` into
 `{method}_ucc_planck_generated.cpp`. Gated at ranks 2 **and** 3 (rank 2 alone would miss
-`make_generated_*_kernels`); RCC emit byte-identical, SHA-256 unchanged.
+`make_generated_*_kernels`); RCC emit byte-identical, SHA-256 unchanged. Rank 4 verified clean
+out-of-band — zero collisions, factory `make_generated_ucc_ccsdtq_kernels` — but deliberately
+**not** in the gate: `ccsdtq` generation takes ~15 min, and ranks 2/3 already exercise the same
+naming path. If that path is ever made rank-dependent, add rank 4 to the gate.
 
 > **`method` is overloaded, which is the trap.** The obvious fix — prefix `method` once in
 > `emit_planck_translation_unit`, since `_kernel_name` and the factory both derive from it —
