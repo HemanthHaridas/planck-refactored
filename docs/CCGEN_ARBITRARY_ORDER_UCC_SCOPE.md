@@ -460,10 +460,16 @@ Verified numerically on random real orbitals, not just by tag algebra:
 **(3) The spin-blocked cache is not three copies of the RCC cache.** The spin lives on the
 **chemists' charge-density pair**, not on the physicist block. Physicist `oovv_abab` is
 chemists `(i_α a_α | j_β b_β)` — a *mixed* (α-pair | β-pair) transform, which is not
-`chem.ovov` of either pure spin. `rebind_physicist`
-(`generated_arbitrary_prepare.cpp:40`) already carries an `oovv`↔`ovov` cross-source, and
-that is exactly where this bites: the source must be chosen by pair spin, not by physicist
-tag.
+`chem.ovov` of either pure spin.
+
+> **This paragraph originally ended by claiming `rebind_physicist`'s `oovv`↔`ovov`
+> cross-source "must be chosen by pair spin, not by physicist tag". That conclusion is
+> WRONG and was retracted in U5.2a.** Measured there: the cross-source is the *same* slot
+> swap for every spin block, because U5.1a keys blocks by their physicist (space, spin)
+> while holding chemists-layout data — so the rebind transposes data and leaves the tag
+> alone. The finding above (that `oovv_abab` is a genuinely mixed *transform*) is correct
+> and is what U3.1 builds on; the over-reach was extending it to the rebind. Scoping U5.2
+> from it would have produced per-block source logic that is not needed.
 
 *Memory:* ~3× the RCC block footprint — three pair-spin variants, since `(a|b) ≡ (b|a)` by
 the chemists' bra↔ket swap. Exactly 3× only when `noa == nob`; it is not FLOPs but memory
@@ -605,7 +611,7 @@ over-relaxing a guard, a silent skip in the sector update that still returns suc
 > **name the guard** they intend to exercise. Where two guards can reject the same input, asserting
 > only "it was rejected" tests nothing in particular.
 
-### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0 + U5.1a landed**
+### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0, U5.1, U5.2a landed**
 
 > **Rescoped `~S` → `~M`.** The original text said "the solver loop is unchanged — it already
 > iterates tagged blocks", which is true and is not the work. Four measurements set the shape.
@@ -736,13 +742,51 @@ proves too heavy at rank 4, trim the **stored set by reference symmetry** — ne
 so the closed-set property survives. Trimming per method reintroduces exactly the coupling this
 step avoids.
 
-**U5.2 — `rebind_physicist` for spin blocks (~S/M, C++).** The mid-axis transpose is the same,
-but the **oovv↔ovov cross-source is spin-sensitive** (U3 measurement 3: physicist `oovv_abab`
-is chemists `(i_α a_α | j_β b_β)`), so it must be re-derived per block rather than copied.
+**U5.2 — `rebind_physicist` for spin blocks (~S/M, C++) — U5.2a LANDED.**
+
+> **What is spin-specific here is narrower than this doc said.** The earlier text claimed the
+> `oovv`↔`ovov` cross-source "is spin-sensitive… must be re-derived per block". Measured in
+> U5.2a: it is **not** — the cross-source is the same slot swap for every spin block, and the
+> spin tag is **not** permuted by the rebind (U5.1a keys blocks by *physicist* (space, spin)
+> while holding chemists-layout data). Verified numerically: `swap_mid(stored oovv_abab)`
+> equals the independently-built physicist `<oovv|` with spins `abab`.
+>
+> **A convincing wrong measurement sits next to this.** Probing the convention by applying the
+> tag to *chemists* slots reports that physicist `abab` "becomes" `aabb`. That is an artifact
+> of the probe, not the convention — it disappears when checked against the same-spin case,
+> where the RCC mapping is known correct. It survived several steps of reasoning before that
+> check.
+
+**U5.2a — `ucc_rebind_source(space, tag)` — LANDED.** Resolves a physicist block to the stored
+chemists block holding it, plus whether that source needs a bra↔ket transpose first. Physicist
+`<pq|rs>` = chemists `(pr|qs)`, so the source is the physicist pattern with slots 1 and 2
+swapped; if that is not stored for the tag, one bra↔ket hop — a symmetry of **every** spin
+block, unlike the particle swap — reaches one that is.
+
+*The real spin-specific fact, measured across all 24 blocks:* same-spin needs the hop **zero**
+times (its wider symmetry group already folds those patterns away); `abab` needs it exactly
+**three** times — `<oovo|` via `(ooov)`, `<vovo|` via `(oovv)`, `<vovv|` via `(ovvv)`. That
+asymmetry is why the RCC rebind cannot be reused with different names.
+
+*Gate:* every block resolves to a source that is **itself stored** (a map resolving to a block
+nobody built surfaces as an empty tensor, not an error); the hop count is exactly three and
+mixed-only; and the direct sources match the RCC mapping where they overlap — that mapping is
+validated by every landed RCC result, so a divergence there is the new code being wrong.
+
+**U5.2b — `rebind_physicist_ucc`** (next): applies `swap_mid_axes`, preceded by the bra↔ket
+transpose where the map says so, and **copies `spin_blocks`** — the omission that makes the RCC
+version unusable here (it builds a fresh cache from the seven named members, so calling it would
+silently discard all 24 UCC blocks and return something structurally valid).
 
 *Gate:* an RHF-degenerate reference ⇒ rebound UCC blocks equal the rebound RCC blocks. **Plus an
 asymmetric companion**: degeneracy cannot see a swapped mixed pair, the same vacuity that made
-U3.1's fixture load-bearing.
+U3.1's fixture load-bearing — now hit three times, so treat it as the default rather than a
+special case.
+
+**U5.2c — wire it into prepare** (next): replace the chemists passthrough and drop the "not yet
+usable by a solve" caveat from `prepare_generated_ucc_state`'s header. *Gate:* U3.4's MP2-limit
+check re-run against the **rebound** cache, which turns it into an end-to-end check that the
+rebind preserves the physics.
 
 **U5.3 — registry + keyword (~S).** `make_generated_ucc_kernels(int rank)` beside the RCC one;
 `ucc2` / `ucc4` in the keyword table; the driver's RHF-reference guard relaxed for them. This is
