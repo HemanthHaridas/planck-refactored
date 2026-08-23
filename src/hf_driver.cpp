@@ -533,6 +533,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         case HartreeFock::PostHF::RCCSDT:
         case HartreeFock::PostHF::UCCSDT:
         case HartreeFock::PostHF::RCCSDTQ:
+        case HartreeFock::PostHF::UCCGEN:
             break;
         }
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
@@ -1374,6 +1375,13 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             corr_tag = "RCCSDTQ :";
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Preparing generated restricted CCSDTQ infrastructure");
             corr_res = HartreeFock::Correlation::CC::run_rccsdtq(calculator, shellpairs);
+        }
+        else if (calculator._correlation == HartreeFock::PostHF::UCCGEN)
+        {
+            corr_tag = "UCC :";
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag,
+                                         "Preparing generated unrestricted CC infrastructure");
+            corr_res = HartreeFock::Correlation::CC::run_uccgen(calculator, shellpairs);
         }
         else if (calculator._correlation == HartreeFock::PostHF::CASSCF)
         {
