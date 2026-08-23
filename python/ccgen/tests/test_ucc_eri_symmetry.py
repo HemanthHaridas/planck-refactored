@@ -31,6 +31,7 @@ spin-blocked cache from this, not from "three copies of the RCC blocks".
 from __future__ import annotations
 
 import itertools
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -42,6 +43,8 @@ if str(ROOT) not in sys.path:
 from ccgen.emit.planck_tensor_cpp import (  # noqa: E402
     _CANONICAL_ERI_BLOCKS,
     _ERI_SYMMETRY_PERMUTATIONS,
+    _canonical_eri_blocks_for,
+    emit_planck_translation_unit,
     eri_permutation_preserves_block,
     eri_permutations_for_block,
 )
@@ -206,40 +209,136 @@ class CoverageConsequenceTests(unittest.TestCase):
                            "the mixed cache must be LARGER than the RCC one")
 
 
-class CurrentEmitterIsSpinBlindTests(unittest.TestCase):
-    """Pins the defect this predicate exists to fix. RED until U3.2 consumes it."""
+class EmitterConsumesThePredicateTests(unittest.TestCase):
+    """The U3.2 acceptance criterion: no emitted read uses an invalid permutation.
 
-    def test_thirty_seven_abab_reads_use_an_invalid_permutation(self):
+    THIS ASSERTS ON THE EMITTED TEXT, not on a re-derivation. The first version of
+    this gate re-implemented the routing inline against `_CANONICAL_ERI_BLOCKS` and
+    `_ERI_SYMMETRY_PERMUTATIONS`, which measured a SIMULATION of the old emitter --
+    so it stayed red at exactly 37 even after `_map_eri_tensor` was fixed, because
+    it never called the code it was supposedly gating. A gate that cannot observe
+    the fix cannot certify it.
+
+    Reading the emitted TU instead makes the assertion structural: every ERI read a
+    UCC kernel performs must name a per-block view, and every such view must be one
+    the block's own symmetry group can legitimately reach.
+    """
+
+    @staticmethod
+    def _ucc_tu(method: str = "ccsd") -> str:
+        eqs = ucc_adapt_equations(generate_cc_equations(method))
+        return emit_planck_translation_unit(
+            method, eqs, force_arbitrary=True, spin_adapted=True)
+
+    def test_every_eri_read_names_a_spin_blocked_view(self):
+        """No bare `mo_blocks.<space>(` read survives in a UCC kernel -- that form
+        is the array-name collapse, and it is what the whole step removes."""
+        tu = self._ucc_tu()
+        leftover = re.findall(r"mo_blocks\.[a-z]{4}\(", tu)
+        self.assertEqual(
+            leftover, [],
+            f"{len(leftover)} untagged mo_blocks reads remain in the UCC TU; each "
+            f"collapses three different UHF integrals onto one array")
+
+    def test_bound_views_are_reachable_within_each_block(self):
+        """Every bound view is a canonical block of ITS OWN tag's group.
+
+        This is the half that catches an invalid permutation: a read routed
+        through `particle`/`product` on a mixed block would have to name a block
+        outside `_canonical_eri_blocks_for("abab")` to be expressible at all.
+        """
+        tu = self._ucc_tu()
+        bound = set(re.findall(r'spin_block\("(\w+)", "(\w+)"\)', tu))
+        self.assertTrue(bound, "the UCC TU binds no spin-blocked ERI view at all")
+        for space, tag in bound:
+            with self.subTest(space=space, tag=tag):
+                self.assertIn(
+                    space, _canonical_eri_blocks_for(tag),
+                    f"{tag} binds '{space}', which is not a canonical block of its "
+                    f"own symmetry group -- it was reached by a permutation that "
+                    f"is not a symmetry of {tag}")
+
+    def test_every_read_view_was_actually_bound(self):
+        """A read of an unbound view would not compile; catch it here rather than
+        in a C++ build, since `_eri_read` and `_eri_view_bindings` are two halves
+        of one naming convention and can drift apart."""
+        tu = self._ucc_tu()
+        bound = {f"v_{tag}_{space}" for space, tag
+                 in re.findall(r'spin_block\("(\w+)", "(\w+)"\)', tu)}
+        read = set(re.findall(r"\b(v_[ab]+_[a-z]{4})\(", tu))
+        self.assertTrue(read, "the UCC TU reads no spin-blocked ERI at all")
+        self.assertEqual(
+            read - bound, set(),
+            "these ERI views are read but never bound (the emit would not compile)")
+
+    def test_every_read_is_the_one_the_valid_group_selects(self):
+        """The assertion that actually catches an invalid permutation.
+
+        MUTATION-DRIVEN. The other tests here check which arrays are BOUND, and a
+        mutation that restored the spin-blind permutation list survived all of
+        them: it still binds only legitimate blocks, because the per-tag block set
+        is wide enough to express its answer. What it changes is which array each
+        READ names and in what INDEX ORDER -- measured, 37 of 142 mixed reads move,
+        e.g.
+
+            valid-only : v_abab_vovv(a, j, b, c)
+            spin-blind : v_abab_ovvv(j, a, c, b)
+
+        Right-looking, wrong integral. Nothing that inspects the bound set can see
+        it, so this compares every emitted read against an independent replay of
+        the routing under the block's OWN symmetry group.
+        """
         import ccgen.emit.planck_tensor_cpp as emitter
 
         eqs = ucc_adapt_equations(generate_cc_equations("ccsd"))
-        invalid = total = 0
+        expected: list[str] = []
         for terms in eqs.values():
             for term in terms:
                 for factor in term.factors:
-                    if factor.name != "v_abab":
-                        continue
                     obj = emitter._source_tensor(factor)
+                    m = re.fullmatch(r"v_([ab]+)", obj.name)
+                    if not m:
+                        continue
+                    tag = m.group(1)
                     spaces = tuple(emitter._space_char(i) for i in obj.indices)
-                    for block_spaces in _CANONICAL_ERI_BLOCKS.values():
-                        chosen = next(
-                            (perm for perm, _ in _ERI_SYMMETRY_PERMUTATIONS
-                             if tuple(block_spaces[i] for i in perm) == spaces),
-                            None)
-                        if chosen is None:
-                            continue
-                        total += 1
-                        if not eri_permutation_preserves_block("abab", chosen):
-                            invalid += 1
-                        break
+                    names = [i.name for i in obj.indices]
+                    # Replay the search using ONLY this block's symmetries.
+                    chosen = None
+                    for block, block_spaces in _canonical_eri_blocks_for(tag).items():
+                        for perm, _sign in eri_permutations_for_block(tag):
+                            if tuple(block_spaces[i] for i in perm) == spaces:
+                                inverse = emitter._inverse_permutation(perm)
+                                chosen = (f"v_{tag}_{block}("
+                                          + ", ".join(names[i] for i in inverse) + ")")
+                                break
+                        if chosen:
+                            break
+                    self.assertIsNotNone(
+                        chosen, f"no valid routing for {''.join(spaces)} in {tag}")
+                    expected.append(chosen)
 
-        self.assertEqual(total, 142, "mixed-block read count changed")
+        self.assertTrue(expected, "no v_<tag> factors found; fixture drift")
+
+        tu = self._ucc_tu()
+        missing = sorted({e for e in expected if e not in tu})
         self.assertEqual(
-            invalid, 0,
-            f"{invalid} of {total} v_abab reads are routed through a permutation "
-            f"that is not a symmetry of `abab` (it maps to `baba`), so they read "
-            f"the right array with permuted indices. Expected 37 before U3.2 "
-            f"lands; this assertion is the U3.2 acceptance criterion.")
+            missing, [],
+            f"{len(missing)} ERI read(s) are not emitted in the form the block's "
+            f"own symmetry group selects, e.g. {missing[:3]}. A permutation that "
+            f"is not a symmetry of the block was used, so the read names the "
+            f"wrong array and/or a permuted index order.")
+
+    def test_the_mixed_block_needs_more_arrays_than_the_same_spin_ones(self):
+        """The measured consequence, asserted end-to-end rather than in the
+        abstract: 10 arrays for `abab`, 6 for each same-spin block."""
+        tu = self._ucc_tu()
+        bound = re.findall(r'spin_block\("(\w+)", "(\w+)"\)', tu)
+        per_tag: dict[str, set[str]] = {}
+        for space, tag in bound:
+            per_tag.setdefault(tag, set()).add(space)
+        self.assertEqual(len(per_tag["abab"]), 10)
+        self.assertEqual(len(per_tag["aaaa"]), 6)
+        self.assertEqual(len(per_tag["bbbb"]), 6)
 
 
 if __name__ == "__main__":

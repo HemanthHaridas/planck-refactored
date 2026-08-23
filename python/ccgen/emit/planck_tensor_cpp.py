@@ -13,6 +13,7 @@ implementation:
 from __future__ import annotations
 
 from fractions import Fraction
+import itertools
 import re
 from typing import Sequence, TYPE_CHECKING
 
@@ -200,7 +201,24 @@ def _access_indices(factor: Tensor | LoweredTensorFactor) -> tuple[Index, ...]:
     return _source_tensor(factor).indices
 
 
-def _map_eri_tensor(tensor: Tensor | LoweredTensorFactor) -> tuple[int, str]:
+def _map_eri_tensor(
+    tensor: Tensor | LoweredTensorFactor,
+    block_tag: str | None = None,
+) -> tuple[int, str]:
+    """Route an abstract `v` factor to a stored mo_blocks array.
+
+    `block_tag` (U3.2) is the UCC spin block (`"abab"`), or None on the RCC path
+    where a single spatial ERI tensor serves every read. It does two things, and
+    doing only the first is worse than doing neither:
+
+    1. Routes to the block's OWN array (`v_abab` -> `v_abab.oovv`), rather than
+       collapsing all three spin blocks onto `mo_blocks.oovv`.
+    2. Restricts the symmetry search to the permutations that are actually
+       symmetries of that block (U3.0). Two of the four map `abab` to `baba`, so
+       using them would read the right array with permuted indices -- a quieter
+       wrong answer than the name collapse, and one that fixing (1) alone would
+       have introduced.
+    """
     if isinstance(tensor, LoweredTensorFactor):
         if "g" in tensor.spatial_block:
             raise NotImplementedError(
@@ -209,7 +227,7 @@ def _map_eri_tensor(tensor: Tensor | LoweredTensorFactor) -> tuple[int, str]:
             )
         return (
             tensor.phase,
-            f"mo_blocks.{tensor.spatial_block}("
+            f"{_eri_read(block_tag, tensor.spatial_block)}("
             f"{', '.join(idx.name for idx in tensor.spatial_indices)})",
         )
 
@@ -221,20 +239,75 @@ def _map_eri_tensor(tensor: Tensor | LoweredTensorFactor) -> tuple[int, str]:
             f"{tensor_obj!r}"
         )
 
-    for block_name, block_spaces in _CANONICAL_ERI_BLOCKS.items():
-        for perm, sign in _ERI_SYMMETRY_PERMUTATIONS:
+    permutations = eri_permutations_for_block(block_tag)
+    for block_name, block_spaces in _canonical_eri_blocks_for(block_tag).items():
+        for perm, sign in permutations:
             transformed = tuple(block_spaces[i] for i in perm)
             if transformed != spaces:
                 continue
 
             inverse = _inverse_permutation(perm)
             reordered = [tensor_obj.indices[i].name for i in inverse]
-            return sign, f"mo_blocks.{block_name}({', '.join(reordered)})"
+            return sign, (
+                f"{_eri_read(block_tag, block_name)}"
+                f"({', '.join(reordered)})")
 
     raise NotImplementedError(
         f"No Planck ERI block mapping available for pattern "
-        f"{''.join(spaces)} in {tensor_obj!r}"
+        f"{''.join(spaces)}"
+        + (f" in spin block {block_tag!r}" if block_tag else "")
+        + f" in {tensor_obj!r}"
     )
+
+
+def _canonical_eri_blocks_for(block_tag: str | None) -> dict[str, tuple[str, ...]]:
+    """The stored canonical blocks available to `block_tag`.
+
+    U3.2. RCC uses the seven `_CANONICAL_ERI_BLOCKS`, whose 8-fold orbit reaches
+    all 16 o/v patterns. A UCC block cannot: two of the four permutations are not
+    its symmetries (U3.0), so its orbits are smaller and more of them are needed
+    to cover the same patterns. Measured on the CCSD UCC manifold, a mixed block
+    reaches only 11 of 16 patterns from the seven, and four of the five it misses
+    (`oovo`, `vooo`, `vovo`, `vovv`) are patterns the residuals actually read.
+
+    So the block set is DERIVED from the tag's own symmetry group rather than
+    shared: every four-index pattern is offered as a candidate, and the search in
+    `_map_eri_tensor` picks the first whose orbit contains the requested pattern.
+    That yields 6 stored arrays for a same-spin tag and 10 for a mixed one -- the
+    same counts `build_ucc_spin_block_cache` (U3.1) is driven with, and the same
+    counts `test_ucc_eri_symmetry` pins. The three sets must agree; they are one
+    fact on three sides of the codegen boundary.
+    """
+    if block_tag is None:
+        return _CANONICAL_ERI_BLOCKS
+
+    permutations = eri_permutations_for_block(block_tag)
+    blocks: dict[str, tuple[str, ...]] = {}
+    covered: set[tuple[str, ...]] = set()
+    # Deterministic order, and canonical members chosen occupied-first so the
+    # names stay recognizable (`oovv`, not `vvoo`).
+    for pattern in sorted(itertools.product("ov", repeat=4)):
+        spaces = tuple(pattern)
+        if spaces in covered:
+            continue
+        orbit = {tuple(spaces[i] for i in perm) for perm, _ in permutations}
+        covered |= orbit
+        blocks["".join(spaces)] = spaces
+    return blocks
+
+
+def _eri_read(block_tag: str | None, space: str) -> str:
+    """The C++ expression naming the stored ERI array for (space, spin block).
+
+    RCC reads the cache member directly (`mo_blocks.oovv`). UCC reads a per-block
+    view bound once at the top of the kernel (`v_abab_oovv`), mirroring how the
+    arbitrary-order amplitudes bind `t<rank>_<tag>` -- same mechanism, not a
+    parallel one. Must agree exactly with `_eri_view_bindings`, which declares
+    these names; they are the two halves of one convention.
+    """
+    if block_tag is None:
+        return f"mo_blocks.{space}"
+    return f"v_{block_tag}_{space}"
 
 
 def _map_factor(
@@ -250,15 +323,20 @@ def _map_factor(
     # the sector's own tensor.
     amplitude_match = re.fullmatch(r"t(\d+)(?:_([ab]+))?", tensor_obj.name)
 
-    # F2.0b: v/f may carry a UCC spin-block suffix (`v_abab`, `f_aa`). The tag
-    # routes STORAGE on the UCC path -- which stored array the factor reads --
-    # and does not change which space block it is, so the mapping below is
-    # unchanged once the suffix is stripped. RCC emits bare `v`/`f`, so this is a
-    # strict superset: `re.fullmatch(r"v(?:_([ab]+))?", "v")` matches with a None
-    # tag and takes exactly the old path. The amplitude branch above has accepted
-    # a suffix since R3.1.3c; this brings the integral branches into line.
+    # v/f may carry a UCC spin-block suffix (`v_abab`, `f_aa`). RCC emits bare
+    # `v`/`f`, so this is a strict superset: `re.fullmatch(r"v(?:_([ab]+))?", "v")`
+    # matches with a None tag and takes exactly the old path.
+    #
+    # U3.2: the tag is CARRIED, not stripped and discarded. F2.0b's comment here
+    # said it "does not change which space block it is, so the mapping below is
+    # unchanged once the suffix is stripped" -- right about the SPACE block
+    # (`oovv` stays `oovv`) and wrong about the ARRAY: under UHF <aa|aa>, <ab|ab>
+    # and <bb|bb> are three different integrals. It also selects which symmetries
+    # may be used to reach the block, since two of the four are not symmetries of
+    # a mixed block (U3.0). Both go through `_map_eri_tensor`.
     integral_match = re.fullmatch(r"([vf])(?:_([ab]+))?", tensor_obj.name)
     integral_root = integral_match.group(1) if integral_match else None
+    integral_tag = integral_match.group(2) if integral_match else None
 
     if integral_root == "f":
         left, right = indices
@@ -273,7 +351,7 @@ def _map_factor(
         raise NotImplementedError(f"Unsupported Fock block for {tensor_obj!r}")
 
     if integral_root == "v":
-        return _map_eri_tensor(tensor)
+        return _map_eri_tensor(tensor, integral_tag)
 
     if amplitude_match is not None:
         excitation_rank = int(amplitude_match.group(1))
@@ -446,6 +524,52 @@ def _amplitude_view_bindings(terms, indent: int = 4) -> list[str]:
     return lines
 
 
+def _eri_blocks_used(terms) -> list[tuple[str, str]]:
+    """Distinct (space pattern, spin tag) ERI blocks referenced across `terms`.
+
+    U3.2. Each becomes one bound view at the top of the kernel. The SPACE pattern
+    is the canonical block the symmetry search lands on -- not the factor's raw
+    index pattern -- so this resolves each factor exactly the way `_map_eri_tensor`
+    will, rather than re-deriving it and risking the two disagreeing.
+    """
+    used: set[tuple[str, str]] = set()
+    for term in terms:
+        for factor in term.factors:
+            obj = _source_tensor(factor)
+            m = re.fullmatch(r"v_([ab]+)", obj.name)
+            if not m:
+                continue
+            tag = m.group(1)
+            spaces = tuple(_space_char(idx) for idx in obj.indices)
+            for block_name, block_spaces in _canonical_eri_blocks_for(tag).items():
+                if any(tuple(block_spaces[i] for i in perm) == spaces
+                       for perm, _ in eri_permutations_for_block(tag)):
+                    used.add((block_name, tag))
+                    break
+    return sorted(used)
+
+
+def _eri_view_bindings(terms, indent: int = 4) -> list[str]:
+    """C++ lines binding one spin-blocked ERI view per (space, tag) used.
+
+    Mirrors `_amplitude_view_bindings` deliberately: the UCC block cache returns
+    `std::expected<const Tensor4D *>` from `spin_block`, so the pointer is
+    unwrapped once per kernel and the loops index it, exactly as the
+    arbitrary-order amplitudes bind `t<rank>_<tag>` once. Same mechanism, not a
+    parallel one.
+
+    Emits nothing on the RCC path, where every `v` is a bare `mo_blocks.<block>`
+    read and no view is needed -- which is what keeps the RCC emit byte-identical.
+    """
+    pad = " " * indent
+    lines: list[str] = []
+    for space, tag in _eri_blocks_used(terms):
+        lines.append(
+            f'{pad}const auto &v_{tag}_{space} = '
+            f'*mo_blocks.spin_block("{space}", "{tag}").value();')
+    return lines
+
+
 def _denominator_type(method: str, force_arbitrary: bool = False) -> str:
     max_rank = max(parse_cc_level(method), default=0)
     if force_arbitrary or max_rank >= 4:
@@ -578,7 +702,8 @@ def _emit_kernel(
             intermediate_names, arbitrary)
 
     if arbitrary:
-        bindings = _amplitude_view_bindings(emitted_terms)
+        bindings = (_amplitude_view_bindings(emitted_terms)
+                    + _eri_view_bindings(emitted_terms))
         if bindings:
             lines.append("")
             lines.extend(bindings)
@@ -633,7 +758,8 @@ def _emit_chunked_kernel(
                     f"    const auto {spec.name} = {_builder_symbol(method, spec.name)}("
                     "reference, mo_blocks, denominators, amplitudes);")
         if arbitrary:
-            bindings = _amplitude_view_bindings(chunk)
+            bindings = (_amplitude_view_bindings(chunk)
+                        + _eri_view_bindings(chunk))
             out.extend(bindings)
         for i, term in enumerate(chunk, start=1):
             out.append(emit_planck_term(
@@ -735,7 +861,8 @@ def _emit_intermediate_builder(
         # both reference the same leaf amplitudes, so bind from the definition.
         binding_terms = ([s for _, s in steps] if (factor_body and len(steps) > 1)
                          else lowered_definition_terms)
-        bindings = _amplitude_view_bindings(binding_terms)
+        bindings = (_amplitude_view_bindings(binding_terms)
+                    + _eri_view_bindings(binding_terms))
         if bindings:
             lines.extend(bindings)
             lines.append("")

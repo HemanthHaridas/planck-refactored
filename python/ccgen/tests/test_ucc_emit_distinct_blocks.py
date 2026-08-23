@@ -116,33 +116,64 @@ class DistinctArrayPerBlockTests(unittest.TestCase):
                 if re.fullmatch(rf"{root}_[ab]+", f.name)}
 
     def test_eri_blocks_reach_distinct_arrays(self):
-        """`v_aaaa`, `v_abab`, `v_bbbb` must not all collapse onto one array family.
+        """`v_aaaa`, `v_abab`, `v_bbbb` must each reach their own arrays.
 
-        Counted over the whole TU: the algebra names 3 distinct `v_*` tensors, and
-        each space block (`oovv`, `ovov`, ...) must therefore appear in 3 spin-routed
-        forms, not 1. Today every one of them emits as bare `mo_blocks.<block>`.
+        Post-U3.2 the emitted form is a per-block view (`v_abab_oovv`) bound from
+        `mo_blocks.spin_block("oovv", "abab")`, not a bare `mo_blocks.oovv`. The
+        earlier version of this assertion grepped for `mo_blocks\.<name>(` and,
+        once the emit changed, matched `spin_block(` itself -- grouping every read
+        under a phantom space block called "spin" and staying red for a reason
+        that had nothing to do with the defect. A gate keyed to the shape of the
+        code it is watching has to move when that shape does.
         """
         tu = _ucc_tu()
         expected = self._distinct_factor_names("v")
-        self.assertEqual(len(expected), 3, f"fixture drift: expected 3 v blocks, got {sorted(expected)}")
+        self.assertEqual(len(expected), 3,
+                         f"fixture drift: expected 3 v blocks, got {sorted(expected)}")
 
-        emitted = set(re.findall(r"mo_blocks\.([a-z_]+)\(", tu))
-        self.assertTrue(emitted, "the TU reads no ERI at all")
+        # No untagged read may survive: that form is the collapse itself.
+        self.assertEqual(
+            re.findall(r"mo_blocks\.[a-z]{4}\(", tu), [],
+            "untagged mo_blocks reads remain, collapsing three UHF integrals")
 
-        # Group emitted arrays by their space block; a spin-routed emit gives each
-        # space block more than one array, an unrouted one gives exactly one.
+        reads = set(re.findall(r"\b(v_([ab]+)_([a-z]{4}))\(", tu))
+        self.assertTrue(reads, "the TU reads no spin-blocked ERI at all")
+
+        # Group by SPACE block: each must be served by more than one array, since
+        # the algebra names three distinct spin blocks.
         by_space: dict[str, set[str]] = {}
-        for name in emitted:
-            space = name[:4]
-            by_space.setdefault(space, set()).add(name)
+        for full, _tag, space in reads:
+            by_space.setdefault(space, set()).add(full)
 
-        collapsed = sorted(sp for sp, names in by_space.items() if len(names) == 1)
-        self.assertFalse(
-            collapsed,
-            f"these ERI space blocks emit as a SINGLE array with no spin routing: "
-            f"{collapsed}. The algebra names {sorted(expected)} -- three different "
-            f"integrals under UHF -- so each space block must reach three arrays. "
-            f"The spin tag was stripped and discarded; see this module's docstring.")
+        # A space block served by ONE array is only a collapse if more than one
+        # spin block actually reads that space. Some spaces are legitimately
+        # single-tag: `oovo`/`vovo`/`vovv` exist only for the mixed block (no
+        # same-spin group needs them), and `ovvo` is reached only by the mixed
+        # block too, because for same-spin it folds into `ovov` under the particle
+        # swap -- a symmetry there and not for `abab`.
+        #
+        # Derived from the reads rather than hardcoded: a hardcoded exemption list
+        # would have to be re-guessed every time the manifold changes, and would
+        # quietly excuse a real collapse that happened to land on a listed name.
+        tags_per_space: dict[str, set[str]] = {}
+        for _full, tag, space in reads:
+            tags_per_space.setdefault(space, set()).add(tag)
+
+        collapsed = sorted(
+            space for space, names in by_space.items()
+            if len(names) == 1 and len(tags_per_space[space]) > 1)
+        self.assertEqual(
+            collapsed, [],
+            f"these ERI space blocks are read by MULTIPLE spin blocks yet emit as "
+            f"a SINGLE array: {collapsed}. The algebra names {sorted(expected)} -- "
+            f"three different integrals under UHF.")
+
+        # And the converse, so the exemption above cannot hide a total collapse:
+        # at least one space must genuinely be served by three arrays.
+        self.assertTrue(
+            any(len(names) == 3 for names in by_space.values()),
+            "no ERI space block is served by three arrays; the spin tag is not "
+            "routing storage at all")
 
     def test_fock_blocks_reach_distinct_arrays(self):
         """`f_aa` and `f_bb` must not both collapse onto `reference.f_ov`.
