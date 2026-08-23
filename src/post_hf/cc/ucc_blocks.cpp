@@ -63,39 +63,37 @@ namespace HartreeFock::Correlation::CC
         return true;
     }
 
-    std::expected<UccRebindSource, std::string> ucc_rebind_source(
-        const std::string &space,
-        const std::string &tag)
+    namespace
     {
-        if (space.size() != 4 || tag.size() != 4)
-            return std::unexpected(
-                "ucc_rebind_source: space and tag must each name four slots; got '" +
-                space + "', '" + tag + "'.");
+        // out(p,q,r,s) = c(p,r,q,s); dims (d1, d3, d2, d4). Same transform the RCC
+        // rebind uses -- duplicated rather than shared because that one lives in an
+        // anonymous namespace in the prepare TU, which drags in the Calculator.
+        Tensor4D ucc_swap_mid_axes(const Tensor4D &c)
+        {
+            Tensor4D out(c.dim1, c.dim3, c.dim2, c.dim4, 0.0);
+            for (int p = 0; p < c.dim1; ++p)
+                for (int q = 0; q < c.dim3; ++q)
+                    for (int r = 0; r < c.dim2; ++r)
+                        for (int s = 0; s < c.dim4; ++s)
+                            out(p, q, r, s) = c(p, r, q, s);
+            return out;
+        }
+    } // namespace
 
-        const auto stored = ucc_canonical_blocks();
-        const auto is_stored = [&](const std::string &candidate) {
-            for (const auto &[block_space, block_tag] : stored)
-                if (block_space == candidate && block_tag == tag)
-                    return true;
-            return false;
-        };
+    TensorCCBlockCache rebind_physicist_ucc(TensorCCBlockCache chem)
+    {
+        TensorCCBlockCache phys;
 
-        // physicist <pq|rs> = chemists (pr|qs)
-        const std::string chemists{space[0], space[2], space[1], space[3]};
-        if (is_stored(chemists))
-            return UccRebindSource{chemists, false};
+        // The named RCC members stay empty on a UCC cache; carrying them would
+        // hand a consumer a spin-free block alongside spin-resolved ones, which
+        // is the collapse this whole effort removes.
+        phys.spin_blocks.reserve(chem.spin_blocks.size());
+        for (auto &[key, block] : chem.spin_blocks)
+            phys.spin_blocks.push_back({key, ucc_swap_mid_axes(block)});
 
-        // Not stored: reach it by bra<->ket, which is a symmetry of every spin
-        // block (unlike the particle swap, which maps `abab` to `baba`).
-        const std::string swapped{
-            chemists[2], chemists[3], chemists[0], chemists[1]};
-        if (is_stored(swapped))
-            return UccRebindSource{swapped, true};
-
-        return std::unexpected(
-            "ucc_rebind_source: physicist block <" + space + "| in '" + tag +
-            "' needs chemists (" + chemists + "), which is not stored, and its "
-            "bra<->ket image (" + swapped + ") is not stored either.");
+        phys.memory_report = std::move(chem.memory_report);
+        phys.total_bytes = chem.total_bytes;
+        return phys;
     }
 
     std::vector<std::pair<std::string, std::string>> ucc_canonical_blocks()

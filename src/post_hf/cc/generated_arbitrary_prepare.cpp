@@ -154,21 +154,10 @@ namespace HartreeFock::Correlation::CC
         {
             ArbitraryOrderTensorCCState state{
                 .reference = std::move(*ref_res),
-                // CHEMISTS ORDER, NOT YET REBOUND -- U5.2 does that.
-                //
-                // The generated kernels index the physicist <pq|rs|, so this cache
-                // is not yet consumable by them. It is deliberately left unrebound
-                // rather than run through `rebind_physicist`: that function builds
-                // a fresh cache from the seven NAMED members and never copies
-                // `spin_blocks`, so calling it here would silently discard all 24
-                // UCC blocks and hand back an empty cache that still looks valid.
-                //
-                // The spin-aware rebind is genuinely its own step because the
-                // oovv<->ovov cross-source is spin-sensitive (U3 measurement 3):
-                // physicist `oovv_abab` is chemists (i_a a_a | j_b b_b), so the
-                // source block must be chosen per spin rather than copied from the
-                // RCC mapping.
-                .mo_blocks = std::move(*blocks_res),
+                // Rebound to the physicist <pq|rs| the generated kernels index.
+                // Every block is self-sourced: swap_mid_axes on the block stored
+                // under its own key. See rebind_physicist_ucc.
+                .mo_blocks = rebind_physicist_ucc(std::move(*blocks_res)),
                 .denominators = std::move(*denom_res),
                 // No amplitudes at all: `by_rank` stays empty (no privileged
                 // reference sector) and the sectors are filled by

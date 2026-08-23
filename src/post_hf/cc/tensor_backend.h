@@ -152,6 +152,27 @@ namespace HartreeFock::Correlation::CC
         const Eigen::MatrixXd &fock_alpha_mo,
         const Eigen::MatrixXd &fock_beta_mo);
 
+    // U5.2b: rebind a UCC (spin-blocked) chemists cache to the physicist <pq|rs|
+    // the generated kernels index.
+    //
+    // EVERY BLOCK IS SELF-SOURCED: `swap_mid_axes` applied to the block stored
+    // under its OWN (space, tag) key. No source map, no bra<->ket hop, and no
+    // permutation of the spin tag. Verified numerically on all 24 blocks with a
+    // non-degenerate reference (noa != nob != nva != nvb).
+    //
+    // That is simpler than it first appears, and the reason is worth stating:
+    // U3.1 keys blocks by the PHYSICIST (space, spin) and applies the chemists
+    // (p r | q s) pairing internally when building them. Treating a stored key as
+    // if it named a CHEMISTS pattern produces a convincing false picture -- three
+    // mixed blocks appear to need a source that is not stored, and the spin tag
+    // appears to need permuting (`abab` -> `aabb`). Both are artifacts of that
+    // misreading; neither survives a direct check against the physicist target.
+    //
+    // Unlike the RCC `rebind_physicist`, this copies `spin_blocks` -- that one
+    // builds a fresh cache from the seven NAMED members and would silently return
+    // a cache with all 24 UCC blocks discarded.
+    [[nodiscard]] TensorCCBlockCache rebind_physicist_ucc(TensorCCBlockCache chem);
+
     // U5.1a: the ERI spin blocks a UCC run stores, as (space pattern, spin tag).
     //
     // NO METHOD IS INVOLVED, and that is the design. RCC's
@@ -179,37 +200,6 @@ namespace HartreeFock::Correlation::CC
     // avoids.
     [[nodiscard]] std::vector<std::pair<std::string, std::string>>
     ucc_canonical_blocks();
-
-    // U5.2a: where a physicist UCC block reads its data from.
-    //
-    // `source_space` is the CHEMISTS block holding it, and `needs_bra_ket` says
-    // whether that source must first be transposed by <rs|pq> to land on a stored
-    // block. Derivation, per (space, tag):
-    //
-    //   1. physicist <pq|rs> = chemists (pr|qs), so the chemists pattern is the
-    //      physicist one with slots 1 and 2 swapped;
-    //   2. if that pattern is not in ucc_canonical_blocks() for this tag, apply
-    //      bra<->ket -- a valid symmetry of EVERY spin block -- and use that.
-    //
-    // Measured: same-spin never needs step 2 (its wider symmetry group already
-    // folds those patterns away), and `abab` needs it for exactly three blocks --
-    // <oovo| via (ooov), <vovo| via (oovv), <vovv| via (ovvv). That asymmetry is
-    // the whole reason the RCC rebind cannot simply be reused with different
-    // names.
-    //
-    // The SPIN TAG IS NOT PERMUTED. U5.1a keys blocks by their PHYSICIST (space,
-    // spin) while holding chemists-layout data, so the rebind transposes the data
-    // and leaves the key alone. Verified numerically: swap_mid(stored oovv_abab)
-    // equals the independently-built physicist <oovv| with spins abab.
-    struct UccRebindSource
-    {
-        std::string source_space;
-        bool needs_bra_ket = false;
-    };
-
-    [[nodiscard]] std::expected<UccRebindSource, std::string> ucc_rebind_source(
-        const std::string &space,
-        const std::string &tag);
 
     // Whether `perm` (a permutation of the four physicist slots) is a symmetry of
     // the spin block `tag` -- true iff it maps the tag to itself. The C++ mirror

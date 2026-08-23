@@ -23,6 +23,7 @@
 // load-bearing. The degeneracy check is kept as a separate case, clearly labelled
 // for what it can and cannot see.
 
+#include "post_hf/cc/generated_arbitrary_runtime.h"
 #include "post_hf/cc/tensor_backend.h"
 
 #include <algorithm>
@@ -37,7 +38,6 @@
 using HartreeFock::Correlation::CC::build_ucc_spin_block_cache_from_eri;
 using HartreeFock::Correlation::CC::eri_permutation_preserves_block;
 using HartreeFock::Correlation::CC::ucc_canonical_blocks;
-using HartreeFock::Correlation::CC::ucc_rebind_source;
 using HartreeFock::Correlation::CC::TensorCCBlockCache;
 using HartreeFock::Correlation::CC::UHFReference;
 
@@ -646,89 +646,94 @@ int main()
               "a malformed tag is rejected rather than silently accepted");
     }
 
-    // --- U5.2a: where each physicist block reads its data from --------------
+    // --- U5.2b: the physicist rebind ----------------------------------------
     //
-    // physicist <pq|rs> = chemists (pr|qs), so the source is the physicist
-    // pattern with slots 1 and 2 swapped -- and if that is not a stored block,
-    // one bra<->ket hop reaches one that is.
+    // Every block is SELF-SOURCED: swap_mid_axes on the block stored under its
+    // own (space, tag) key. No source map, no bra<->ket hop, no permuted tag.
     //
-    // THE SPIN TAG IS NOT PERMUTED, which is the thing to get right and the thing
-    // that looks wrong. U5.1a keys blocks by their PHYSICIST (space, spin) while
-    // holding chemists-layout data, so the rebind transposes data and leaves the
-    // key alone. Probing this the other way -- applying the tag to chemists slots
-    // -- says physicist `abab` "becomes" `aabb`, which is an artifact of the probe
-    // rather than the convention, and it is a very convincing artifact.
+    // GETTING HERE TOOK TWO WRONG TURNS, both from treating a stored key as if it
+    // named a CHEMISTS pattern. It does not -- U3.1 keys by the PHYSICIST (space,
+    // spin) and applies the (p r | q s) pairing internally. Under that misreading
+    // three mixed blocks appear to need a source that is not stored, and the spin
+    // tag appears to need permuting (`abab` -> `aabb`). Both are convincing and
+    // both are artifacts.
+    //
+    // WHY THEY SURVIVED: a same-spin check cannot tell the two hypotheses apart,
+    // because `aaaa` is invariant under the tag permutation. The mixed-block
+    // assertions below are the ones that discriminate, which is why they are here
+    // rather than a same-spin spot check.
     {
         const auto blocks = ucc_canonical_blocks();
-        int bra_ket_count = 0;
+        const auto chem = build_ucc_spin_block_cache_from_eri(
+            eri, NB, reference, blocks);
+        check(chem.has_value(), "chemists cache builds for the rebind");
 
-        for (const auto &[space, tag] : blocks)
+        if (chem)
         {
-            const auto source = ucc_rebind_source(space, tag);
-            check(source.has_value(),
-                  "<" + space + "| in '" + tag + "' resolves to a source");
-            if (!source)
-                continue;
+            const auto phys =
+                HartreeFock::Correlation::CC::rebind_physicist_ucc(*chem);
 
-            // Every source must itself be STORED -- a map that resolves to a
-            // block nobody built is the failure this step exists to prevent, and
-            // it would surface as an empty tensor rather than an error.
-            const bool stored = std::any_of(
-                blocks.begin(), blocks.end(),
-                [&](const auto &entry) {
-                    return entry.first == source->source_space && entry.second == tag;
-                });
-            check(stored, "source (" + source->source_space + ") for <" + space +
-                              "| in '" + tag + "' is itself stored");
+            // The omission that makes the RCC rebind unusable here: it builds a
+            // fresh cache from the seven NAMED members and never copies
+            // spin_blocks, so it would return an empty cache that still looks
+            // structurally valid.
+            check(phys.spin_blocks.size() == 24,
+                  "the rebind carries all 24 spin blocks");
 
-            if (source->needs_bra_ket)
-                ++bra_ket_count;
-        }
-
-        // Exactly three, all mixed. Same-spin never needs the hop because its
-        // wider symmetry group already folds those patterns away -- that asymmetry
-        // is why the RCC rebind cannot be reused with different names.
-        check(bra_ket_count == 3, "exactly three blocks need the bra<->ket hop");
-
-        for (const char *space : {"oovo", "vovo", "vovv"})
-        {
-            const auto source = ucc_rebind_source(space, "abab");
-            check(source.has_value() && source->needs_bra_ket,
-                  std::string("<") + space + "| in abab needs bra<->ket");
-        }
-        for (const char *tag : {"aaaa", "bbbb"})
-            for (const auto &[space, block_tag] : blocks)
+            for (const auto &[space, tag] : blocks)
             {
-                if (block_tag != tag)
+                const auto src = chem->spin_block(space, tag);
+                const auto out = phys.spin_block(space, tag);
+                if (!src || !out)
+                {
+                    check(false, "block " + space + "_" + tag + " survives the rebind");
                     continue;
-                const auto source = ucc_rebind_source(space, tag);
-                check(source.has_value() && !source->needs_bra_ket,
-                      "same-spin <" + space + "| in '" + tag + "' needs no hop");
+                }
+
+                // swap_mid_axes: out(p,q,r,s) = in(p,r,q,s), dims (d1,d3,d2,d4).
+                check((*out)->dim1 == (*src)->dim1 && (*out)->dim2 == (*src)->dim3 &&
+                          (*out)->dim3 == (*src)->dim2 && (*out)->dim4 == (*src)->dim4,
+                      "block " + space + "_" + tag + " has swapped middle dims");
+
+                for (int p = 0; p < (*out)->dim1; ++p)
+                    for (int q = 0; q < (*out)->dim2; ++q)
+                        for (int r = 0; r < (*out)->dim3; ++r)
+                            for (int t = 0; t < (*out)->dim4; ++t)
+                                if ((**out)(p, q, r, t) != (**src)(p, r, q, t))
+                                {
+                                    check(false, "block " + space + "_" + tag +
+                                                     " values follow swap_mid_axes");
+                                    p = (*out)->dim1;
+                                    q = (*out)->dim2;
+                                    r = (*out)->dim3;
+                                    break;
+                                }
             }
 
-        // The direct sources must match the RCC mapping exactly where they
-        // overlap -- that mapping is validated by every landed RCC result, so a
-        // divergence here is this code being wrong, not RCC.
-        const std::pair<const char *, const char *> rcc[] = {
-            {"oooo", "oooo"}, {"ooov", "ooov"}, {"oovv", "ovov"},
-            {"ovov", "oovv"}, {"ovvo", "ovvo"}, {"ovvv", "ovvv"},
-            {"vvvv", "vvvv"}};
-        for (const auto &[phys, chem] : rcc)
-        {
-            const auto source = ucc_rebind_source(phys, "aaaa");
-            check(source.has_value() && source->source_space == chem &&
-                      !source->needs_bra_ket,
-                  std::string("same-spin <") + phys + "| reads (" + chem +
-                      "), matching the RCC mapping");
-        }
+            // THE DISCRIMINATING ASSERTION. A mixed block's middle dims differ
+            // (noa != nob and nva != nvb in this fixture), so a rebind that
+            // permuted the spin tag -- or read a different block as its source --
+            // would produce the wrong SHAPE here, not merely wrong values. A
+            // same-spin block cannot show this: its dims are symmetric under the
+            // swap, which is exactly why the wrong hypothesis survived so long.
+            const auto mixed = phys.spin_block("oovv", "abab");
+            check(mixed.has_value(), "the mixed workhorse survives the rebind");
+            if (mixed)
+            {
+                check((*mixed)->dim1 == NOA && (*mixed)->dim2 == NOB &&
+                          (*mixed)->dim3 == NVA && (*mixed)->dim4 == NVB,
+                      "oovv_abab rebinds to (noa, nob, nva, nvb) -- physicist order");
+                check((*mixed)->dim2 != (*mixed)->dim3,
+                      "the fixture's mixed block has ASYMMETRIC middle dims, so a "
+                      "permuted tag would change its shape");
+            }
 
-        // Malformed input errors rather than resolving to something plausible.
-        check(!ucc_rebind_source("oov", "abab").has_value(),
-              "a three-slot space is rejected");
-        check(!ucc_rebind_source("oovv", "aba").has_value(),
-              "a three-slot tag is rejected");
-        check(!ucc_rebind_source("oovv", "baba").has_value(),
-              "an unstored spin tag is rejected");
+            // The three blocks that a chemists-key misreading says need a hop.
+            // They resolve from their own key like every other block.
+            for (const char *space : {"oovo", "vovo", "vovv"})
+                check(phys.spin_block(space, "abab").has_value(),
+                      std::string("<") + space + "|_abab rebinds from its own key");
+        }
     }
 
     if (failures == 0)
