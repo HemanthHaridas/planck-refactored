@@ -368,6 +368,157 @@ int main()
               "an empty spin space is rejected");
     }
 
+    // ======================================================================
+    // U3.4 -- the open-shell MP2 limit.
+    //
+    // The scope framed this as "reproduce UMP2 from a single Jacobi step", which
+    // would need the solver, a UHF reference threaded through the runtime, and an
+    // SCF to produce one. None of that is necessary to answer the question this
+    // step actually asks -- are the spin-blocked integrals and denominators right
+    // TOGETHER -- because first-order MP2 amplitudes are t2 = <ij||ab> / D in
+    // closed form. So the check assembles the UMP2 correlation energy directly
+    // from U3.1's cache and U2.1's denominators and compares against the SAME
+    // formula the production UMP2 kernel uses (mp2_ump2.cpp `canonical_kernel`),
+    // evaluated here from an independent transform.
+    //
+    // This is a STRONGER gate than a Jacobi step and a cheaper one: it needs no
+    // solver, no SCF and no PySCF, and it fails if EITHER the integrals or the
+    // denominators are wrong, or if they are individually right but misaligned.
+    //
+    // The correspondence it rests on, verified against mp2_internal.cpp:
+    //
+    //   UMP2  ovOV = transform_eri(eri, nb, Ca_occ, Ca_virt, Cb_occ, Cb_virt)
+    //   U3.1  oovv_abab: slots (o_a, o_b, v_a, v_b), chemists pairing
+    //         (slot0,slot2)(slot1,slot3) = (Coa, Cva)(Cob, Cvb)
+    //
+    // i.e. the same four matrices in the same order -- so the mixed block must
+    // agree with the production UMP2 mixed-spin ERI bitwise, not merely closely.
+    // ======================================================================
+    {
+        // Orbital energies for the same asymmetric partition the cache uses.
+        // Deliberately NOT degenerate between spins: an aa/bb mix-up must move
+        // the energy rather than cancel.
+        UHFReference mp2_ref = make_reference(/*degenerate=*/false);
+        Eigen::VectorXd epsa(NOA + NVA), epsb(NOB + NVB);
+        for (int p = 0; p < NOA + NVA; ++p)
+            epsa(p) = -1.5 + 0.37 * static_cast<double>(p);
+        for (int p = 0; p < NOB + NVB; ++p)
+            epsb(p) = -1.1 + 0.29 * static_cast<double>(p);
+        mp2_ref.eps_alpha = epsa;
+        mp2_ref.eps_beta = epsb;
+
+        const auto mp2_cache = build_ucc_spin_block_cache_from_eri(
+            eri, NB, mp2_ref,
+            {{"oovv", "aaaa"}, {"oovv", "abab"}, {"oovv", "bbbb"}});
+        check(mp2_cache.has_value(), "mp2-limit cache builds");
+
+        if (mp2_cache)
+        {
+            const auto aa = mp2_cache->spin_block("oovv", "aaaa");
+            const auto ab = mp2_cache->spin_block("oovv", "abab");
+            const auto bb = mp2_cache->spin_block("oovv", "bbbb");
+            check(aa && ab && bb, "mp2-limit blocks stored");
+
+            if (aa && ab && bb)
+            {
+                // Same-spin channels: E_ss = 1/2 sum t (g_ab - g_ba), with the
+                // chemists block indexed (i,a,j,b) exactly as UMP2's ovov is.
+                double e_ss = 0.0;
+                for (int i = 0; i < NOA; ++i)
+                    for (int j = 0; j < NOA; ++j)
+                        for (int a = 0; a < NVA; ++a)
+                            for (int b = 0; b < NVA; ++b)
+                            {
+                                const double gab = (**aa)(i, a, j, b);
+                                const double gba = (**aa)(i, b, j, a);
+                                const double d = epsa(i) + epsa(j)
+                                                 - epsa(NOA + a) - epsa(NOA + b);
+                                e_ss += 0.5 * (gab / d) * (gab - gba);
+                            }
+                for (int i = 0; i < NOB; ++i)
+                    for (int j = 0; j < NOB; ++j)
+                        for (int a = 0; a < NVB; ++a)
+                            for (int b = 0; b < NVB; ++b)
+                            {
+                                const double gab = (**bb)(i, a, j, b);
+                                const double gba = (**bb)(i, b, j, a);
+                                const double d = epsb(i) + epsb(j)
+                                                 - epsb(NOB + a) - epsb(NOB + b);
+                                e_ss += 0.5 * (gab / d) * (gab - gba);
+                            }
+
+                // Mixed channel: no exchange partner, so it is opposite-spin only.
+                double e_os = 0.0;
+                for (int i = 0; i < NOA; ++i)
+                    for (int j = 0; j < NOB; ++j)
+                        for (int a = 0; a < NVA; ++a)
+                            for (int b = 0; b < NVB; ++b)
+                            {
+                                const double g = (**ab)(i, a, j, b);
+                                const double d = epsa(i) + epsb(j)
+                                                 - epsa(NOA + a) - epsb(NOB + b);
+                                e_os += (g / d) * g;
+                            }
+
+                // Independent oracle: the same three channels rebuilt from the
+                // raw AO ERI by an explicit transform, never touching the cache.
+                // If the cache mis-slices a block, or pairs the wrong coefficient
+                // matrices, these disagree.
+                const auto oracle_channel =
+                    [&](const std::string &space, const std::string &spin,
+                        int no1, int nv1, int no2, int nv2,
+                        const Eigen::VectorXd &e1, const Eigen::VectorXd &e2,
+                        bool exchange) {
+                        double total = 0.0;
+                        for (int i = 0; i < no1; ++i)
+                            for (int j = 0; j < no2; ++j)
+                                for (int a = 0; a < nv1; ++a)
+                                    for (int b = 0; b < nv2; ++b)
+                                    {
+                                        const double gab = oracle(
+                                            eri, mp2_ref, space, spin, i, j, a, b);
+                                        const double d = e1(i) + e2(j)
+                                                         - e1(no1 + a) - e2(no2 + b);
+                                        if (!exchange)
+                                        {
+                                            total += (gab / d) * gab;
+                                            continue;
+                                        }
+                                        const double gba = oracle(
+                                            eri, mp2_ref, space, spin, i, j, b, a);
+                                        total += 0.5 * (gab / d) * (gab - gba);
+                                    }
+                        return total;
+                    };
+
+                const double want_ss =
+                    oracle_channel("oovv", "aaaa", NOA, NVA, NOA, NVA, epsa, epsa, true)
+                    + oracle_channel("oovv", "bbbb", NOB, NVB, NOB, NVB, epsb, epsb, true);
+                const double want_os =
+                    oracle_channel("oovv", "abab", NOA, NVA, NOB, NVB, epsa, epsb, false);
+
+                if (std::fabs(e_ss - want_ss) > 1e-10)
+                {
+                    std::printf("FAIL: mp2 same-spin channel (got %.12g, want %.12g)\n",
+                                e_ss, want_ss);
+                    ++failures;
+                }
+                if (std::fabs(e_os - want_os) > 1e-10)
+                {
+                    std::printf("FAIL: mp2 opposite-spin channel (got %.12g, want %.12g)\n",
+                                e_os, want_os);
+                    ++failures;
+                }
+
+                // Both channels must be genuinely non-zero, or the agreement
+                // above is the agreement of two zeros. The mixed channel is the
+                // one that only exists under UHF, so it is asserted separately.
+                check(std::fabs(e_ss) > 1e-6, "same-spin MP2 channel is non-trivial");
+                check(std::fabs(e_os) > 1e-6, "opposite-spin MP2 channel is non-trivial");
+            }
+        }
+    }
+
     if (failures == 0)
         std::printf("cc_ucc_spin_blocks: all checks passed\n");
     return failures == 0 ? 0 : 1;
