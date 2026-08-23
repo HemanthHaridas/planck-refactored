@@ -130,12 +130,12 @@ namespace HartreeFock::Correlation::CC
     // tags from ucc_amplitude_blocks(rank) -- both derived, both gated against
     // ccgen.
     //
-    // NOT YET USABLE BY A SOLVE: the ERI cache comes back in CHEMISTS order,
-    // because the spin-aware physicist rebind is U5.2. Running a solve on this
-    // state would read the wrong integrals. The RCC `rebind_physicist` cannot be
-    // reused as a stopgap -- it builds a fresh cache from the seven named members
-    // and never copies `spin_blocks`, so it would silently discard all 24 UCC
-    // blocks and return an empty cache that still looks structurally valid.
+    // U5.2c: the ERI cache is REBOUND to the physicist <pq|rs| the generated
+    // kernels index, so the state is consumable by a solve. (It was deliberately
+    // left in chemists order between U5.1b and U5.2b, because the RCC
+    // `rebind_physicist` cannot be reused here -- it builds a fresh cache from the
+    // seven named members and never copies `spin_blocks`, so it would silently
+    // discard all 24 UCC blocks.)
     //
     // The returned state has `by_rank` EMPTY on amplitudes and denominators (a
     // UCC method has no privileged reference sector) and NO amplitude sectors:

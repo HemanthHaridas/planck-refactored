@@ -38,6 +38,7 @@
 using HartreeFock::Correlation::CC::build_ucc_spin_block_cache_from_eri;
 using HartreeFock::Correlation::CC::eri_permutation_preserves_block;
 using HartreeFock::Correlation::CC::ucc_canonical_blocks;
+using HartreeFock::Correlation::CC::Tensor4D;
 using HartreeFock::Correlation::CC::TensorCCBlockCache;
 using HartreeFock::Correlation::CC::UHFReference;
 
@@ -733,6 +734,135 @@ int main()
             for (const char *space : {"oovo", "vovo", "vovv"})
                 check(phys.spin_block(space, "abab").has_value(),
                       std::string("<") + space + "|_abab rebinds from its own key");
+        }
+    }
+
+    // --- U5.2c: the MP2 limit survives the rebind ---------------------------
+    //
+    // U3.4 assembles the UMP2 correlation energy from the CHEMISTS cache, indexing
+    // (i,a,j,b). This re-assembles the SAME energy from the REBOUND cache, indexing
+    // physicist (i,j,a,b). The two index orders are different, the data is
+    // different (mid axes swapped), and the answer must be identical -- which is
+    // what "the rebind preserves the physics" means concretely.
+    //
+    // This is the first check that spans the whole U5.1/U5.2 chain: reference ->
+    // spin-blocked transform -> rebind. A rebind that moved the right bytes to the
+    // wrong key, or swapped the wrong axes, changes this number.
+    {
+        UHFReference mp2_ref = make_reference(/*degenerate=*/false);
+        Eigen::VectorXd epsa(NOA + NVA), epsb(NOB + NVB);
+        for (int p = 0; p < NOA + NVA; ++p)
+            epsa(p) = -1.5 + 0.37 * static_cast<double>(p);
+        for (int p = 0; p < NOB + NVB; ++p)
+            epsb(p) = -1.1 + 0.29 * static_cast<double>(p);
+        mp2_ref.eps_alpha = epsa;
+        mp2_ref.eps_beta = epsb;
+
+        const std::vector<std::pair<std::string, std::string>> mp2_blocks{
+            {"oovv", "aaaa"}, {"oovv", "abab"}, {"oovv", "bbbb"}};
+        const auto chem_cache =
+            build_ucc_spin_block_cache_from_eri(eri, NB, mp2_ref, mp2_blocks);
+        check(chem_cache.has_value(), "mp2 chemists cache builds");
+        if (!chem_cache)
+            return failures == 0 ? 0 : 1;
+
+        const auto phys_cache =
+            HartreeFock::Correlation::CC::rebind_physicist_ucc(*chem_cache);
+
+        // Same-spin channel from a CHEMISTS block, indexed (i,a,j,b).
+        const auto chem_ss = [&](const Tensor4D &g, int no, int nv,
+                                 const Eigen::VectorXd &eps) {
+            double total = 0.0;
+            for (int i = 0; i < no; ++i)
+                for (int j = 0; j < no; ++j)
+                    for (int a = 0; a < nv; ++a)
+                        for (int b = 0; b < nv; ++b)
+                        {
+                            const double gab = g(i, a, j, b);
+                            const double gba = g(i, b, j, a);
+                            const double d =
+                                eps(i) + eps(j) - eps(no + a) - eps(no + b);
+                            total += 0.5 * (gab / d) * (gab - gba);
+                        }
+            return total;
+        };
+        // The same channel from the REBOUND block, indexed physicist (i,j,a,b).
+        const auto phys_ss = [&](const Tensor4D &g, int no, int nv,
+                                 const Eigen::VectorXd &eps) {
+            double total = 0.0;
+            for (int i = 0; i < no; ++i)
+                for (int j = 0; j < no; ++j)
+                    for (int a = 0; a < nv; ++a)
+                        for (int b = 0; b < nv; ++b)
+                        {
+                            const double gab = g(i, j, a, b);
+                            const double gba = g(i, j, b, a);
+                            const double d =
+                                eps(i) + eps(j) - eps(no + a) - eps(no + b);
+                            total += 0.5 * (gab / d) * (gab - gba);
+                        }
+            return total;
+        };
+
+        const auto c_aa = chem_cache->spin_block("oovv", "aaaa");
+        const auto c_ab = chem_cache->spin_block("oovv", "abab");
+        const auto c_bb = chem_cache->spin_block("oovv", "bbbb");
+        const auto p_aa = phys_cache.spin_block("oovv", "aaaa");
+        const auto p_ab = phys_cache.spin_block("oovv", "abab");
+        const auto p_bb = phys_cache.spin_block("oovv", "bbbb");
+        check(c_aa && c_ab && c_bb && p_aa && p_ab && p_bb,
+              "both caches hold all three mp2 blocks");
+
+        if (c_aa && c_ab && c_bb && p_aa && p_ab && p_bb)
+        {
+            const double chem_total =
+                chem_ss(**c_aa, NOA, NVA, epsa) + chem_ss(**c_bb, NOB, NVB, epsb);
+            const double phys_total =
+                phys_ss(**p_aa, NOA, NVA, epsa) + phys_ss(**p_bb, NOB, NVB, epsb);
+            if (std::fabs(chem_total - phys_total) > 1e-10)
+            {
+                std::printf("FAIL: same-spin MP2 differs across the rebind "
+                            "(chemists %.12g, physicist %.12g)\n",
+                            chem_total, phys_total);
+                ++failures;
+            }
+
+            // The mixed channel, which is the one that only exists under UHF and
+            // the one a mis-keyed rebind would corrupt without changing shape on
+            // the same-spin blocks.
+            double chem_os = 0.0;
+            for (int i = 0; i < NOA; ++i)
+                for (int j = 0; j < NOB; ++j)
+                    for (int a = 0; a < NVA; ++a)
+                        for (int b = 0; b < NVB; ++b)
+                        {
+                            const double g = (**c_ab)(i, a, j, b);
+                            const double d = epsa(i) + epsb(j)
+                                             - epsa(NOA + a) - epsb(NOB + b);
+                            chem_os += (g / d) * g;
+                        }
+            double phys_os = 0.0;
+            for (int i = 0; i < NOA; ++i)
+                for (int j = 0; j < NOB; ++j)
+                    for (int a = 0; a < NVA; ++a)
+                        for (int b = 0; b < NVB; ++b)
+                        {
+                            const double g = (**p_ab)(i, j, a, b);
+                            const double d = epsa(i) + epsb(j)
+                                             - epsa(NOA + a) - epsb(NOB + b);
+                            phys_os += (g / d) * g;
+                        }
+            if (std::fabs(chem_os - phys_os) > 1e-10)
+            {
+                std::printf("FAIL: mixed MP2 differs across the rebind "
+                            "(chemists %.12g, physicist %.12g)\n",
+                            chem_os, phys_os);
+                ++failures;
+            }
+
+            // Non-trivial, or the agreement above is two zeros agreeing.
+            check(std::fabs(chem_total) > 1e-6, "the same-spin channel is non-trivial");
+            check(std::fabs(chem_os) > 1e-6, "the mixed channel is non-trivial");
         }
     }
 
