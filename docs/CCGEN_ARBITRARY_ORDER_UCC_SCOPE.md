@@ -19,7 +19,7 @@ that, not the keyword, is the work.
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
 | U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
 | U4 | **landed, U4.0–U4.3.** The runtime accepts an ALL-SECTORS bundle (no per-rank reference residual), and `--ucc` reaches it from the build. U4.1 turned out **not to be work** — the update loop already handled it; U4.2 fixed a real out-of-bounds read (segfault, not a wrong number) that U4.0 had made reachable |
-| U5 | not started, and **rescoped ~S → ~M**: `build_ucc_{spin_block_cache,fock_blocks,denominator_cache}` are called **only from tests**, so U5 is prepare-path wiring plus a UHF reference, not just a keyword |
+| U5 | **U5.0 landed** (distinct UCC symbols + filename; the two TUs now co-link). U5.1–U5.5 open. Rescoped ~S → ~M: `build_ucc_{spin_block_cache,fock_blocks,denominator_cache}` are called **only from tests**, so U5 is prepare-path wiring plus a UHF reference, not just a keyword |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -605,7 +605,7 @@ over-relaxing a guard, a silent skip in the sector update that still returns suc
 > **name the guard** they intend to exercise. Where two guards can reject the same input, asserting
 > only "it was rejected" tests nothing in particular.
 
-### U5 — driver routing + the end-to-end gate (~M, was ~S) — **the only step left**
+### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0 landed; U5.1–U5.5 open**
 
 > **Rescoped `~S` → `~M`.** The original text said "the solver loop is unchanged — it already
 > iterates tagged blocks", which is true and is not the work. Four measurements set the shape.
@@ -621,16 +621,22 @@ smallest part of it.
 **(2) The RCC and UCC TUs COLLIDE, and would overwrite each other.** Measured per method:
 
 ```
-ccsd   (RCC emits no bundle below the arbitrary floor)   1 colliding symbol
-       compute_ccsd_energy
-ccsdt  (bundles on both sides — the general case)        2 colliding symbols
-       compute_ccsdt_energy, make_generated_ccsdt_kernels
+ccsd    (RCC emits no bundle below the arbitrary floor)   1 colliding symbol
+        compute_ccsd_energy
+ccsdt   (bundles on both sides — the general case)        2 colliding symbols
+        compute_ccsdt_energy,  make_generated_ccsdt_kernels
+ccsdtq  (confirms the pattern, not a third case)          2 colliding symbols
+        compute_ccsdtq_energy, make_generated_ccsdtq_kernels
 ```
 
-and the generator writes **one filename per method** (`{method}_planck_generated.cpp`), so a
-UCC build today would overwrite the RCC TU *and then fail to link*. UCC therefore needs
-distinct kernel names **and** a distinct filename — not just a distinct flag. Rank 2
-understates this: check against a rank where both sides emit a bundle.
+Measured at three ranks rather than generalized from one: rank 2 is the outlier (one
+collision, because RCC emits no bundle there), and ranks 3 and 4 agree exactly — the energy
+kernel plus the bundle factory.
+
+and the generator wrote **one filename per method** (`{method}_planck_generated.cpp`), so a UCC
+build would have overwritten the RCC TU *before* the link could even fail. UCC therefore needed
+distinct kernel names **and** a distinct filename — not just a distinct flag. **Fixed in U5.0**;
+kept here because it is what ordered the steps.
 
 **(3) The registry is rank-keyed only.** `make_generated_rcc_kernels(int rank)` switches on
 rank behind `PLANCK_CC_MAXORDER` and has no notion of reference type, so UCC needs a sibling
@@ -642,16 +648,22 @@ it exactly — no new enum member per rank and no new driver branch.
 
 #### Steps
 
-**U5.0 — distinct symbol names for UCC kernels (~S, Python, no C++).** Emit
+**U5.0 — distinct symbol names for UCC kernels — LANDED.** Emits
 `compute_ucc_<method>_*` / `make_generated_ucc_<method>_kernels` into
-`{method}_ucc_planck_generated.cpp`.
+`{method}_ucc_planck_generated.cpp`. Gated at ranks 2 **and** 3 (rank 2 alone would miss
+`make_generated_*_kernels`); RCC emit byte-identical, SHA-256 unchanged.
 
-*Gate:* **zero** symbol overlap between the RCC and UCC TUs for the same method, asserted at a
-rank where both emit a bundle (rank 2 alone would miss `make_generated_*_kernels`). RCC output
-byte-identical — its SHA-256 is already pinned by `test_ucc_emit_flag`.
-
-*Why first:* until it lands, any build enabling both is broken in a way that presents as a link
-error rather than a design problem. It is also the cheapest step and unblocks the rest.
+> **`method` is overloaded, which is the trap.** The obvious fix — prefix `method` once in
+> `emit_planck_translation_unit`, since `_kernel_name` and the factory both derive from it —
+> fails, because `method` is *also* parsed for the excitation rank (`parse_cc_level`), which
+> requires a `cc` prefix and rejects `ucc_ccsd`. The prefix belongs on the emitted **name**
+> only.
+>
+> **And one measurement method to distrust:** `nm -g` on macOS reports weak/coalesced symbols
+> as `T`, so a naive shared-symbol diff between the two objects lists ~50 inline and template
+> instantiations the linker deduplicates by design. Grep the linker's own `duplicate symbol`
+> diagnostic instead of inferring from `nm`. (A bare link harness will also report *undefined*
+> `to_tensor_nd` — that is the runtime TU being absent, not a collision.)
 
 **U5.1 — a UCC prepare path (~M, C++).** `prepare_generated_arbitrary_order_state` gains a UCC
 branch: build a `UHFReference` (`build_uhf_reference` already exists), then drive the three UCC
