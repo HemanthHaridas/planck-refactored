@@ -37,6 +37,7 @@
 using HartreeFock::Correlation::CC::build_ucc_spin_block_cache_from_eri;
 using HartreeFock::Correlation::CC::eri_permutation_preserves_block;
 using HartreeFock::Correlation::CC::ucc_canonical_blocks;
+using HartreeFock::Correlation::CC::ucc_rebind_source;
 using HartreeFock::Correlation::CC::TensorCCBlockCache;
 using HartreeFock::Correlation::CC::UHFReference;
 
@@ -643,6 +644,91 @@ int main()
 
         check(!eri_permutation_preserves_block("aab", identity),
               "a malformed tag is rejected rather than silently accepted");
+    }
+
+    // --- U5.2a: where each physicist block reads its data from --------------
+    //
+    // physicist <pq|rs> = chemists (pr|qs), so the source is the physicist
+    // pattern with slots 1 and 2 swapped -- and if that is not a stored block,
+    // one bra<->ket hop reaches one that is.
+    //
+    // THE SPIN TAG IS NOT PERMUTED, which is the thing to get right and the thing
+    // that looks wrong. U5.1a keys blocks by their PHYSICIST (space, spin) while
+    // holding chemists-layout data, so the rebind transposes data and leaves the
+    // key alone. Probing this the other way -- applying the tag to chemists slots
+    // -- says physicist `abab` "becomes" `aabb`, which is an artifact of the probe
+    // rather than the convention, and it is a very convincing artifact.
+    {
+        const auto blocks = ucc_canonical_blocks();
+        int bra_ket_count = 0;
+
+        for (const auto &[space, tag] : blocks)
+        {
+            const auto source = ucc_rebind_source(space, tag);
+            check(source.has_value(),
+                  "<" + space + "| in '" + tag + "' resolves to a source");
+            if (!source)
+                continue;
+
+            // Every source must itself be STORED -- a map that resolves to a
+            // block nobody built is the failure this step exists to prevent, and
+            // it would surface as an empty tensor rather than an error.
+            const bool stored = std::any_of(
+                blocks.begin(), blocks.end(),
+                [&](const auto &entry) {
+                    return entry.first == source->source_space && entry.second == tag;
+                });
+            check(stored, "source (" + source->source_space + ") for <" + space +
+                              "| in '" + tag + "' is itself stored");
+
+            if (source->needs_bra_ket)
+                ++bra_ket_count;
+        }
+
+        // Exactly three, all mixed. Same-spin never needs the hop because its
+        // wider symmetry group already folds those patterns away -- that asymmetry
+        // is why the RCC rebind cannot be reused with different names.
+        check(bra_ket_count == 3, "exactly three blocks need the bra<->ket hop");
+
+        for (const char *space : {"oovo", "vovo", "vovv"})
+        {
+            const auto source = ucc_rebind_source(space, "abab");
+            check(source.has_value() && source->needs_bra_ket,
+                  std::string("<") + space + "| in abab needs bra<->ket");
+        }
+        for (const char *tag : {"aaaa", "bbbb"})
+            for (const auto &[space, block_tag] : blocks)
+            {
+                if (block_tag != tag)
+                    continue;
+                const auto source = ucc_rebind_source(space, tag);
+                check(source.has_value() && !source->needs_bra_ket,
+                      "same-spin <" + space + "| in '" + tag + "' needs no hop");
+            }
+
+        // The direct sources must match the RCC mapping exactly where they
+        // overlap -- that mapping is validated by every landed RCC result, so a
+        // divergence here is this code being wrong, not RCC.
+        const std::pair<const char *, const char *> rcc[] = {
+            {"oooo", "oooo"}, {"ooov", "ooov"}, {"oovv", "ovov"},
+            {"ovov", "oovv"}, {"ovvo", "ovvo"}, {"ovvv", "ovvv"},
+            {"vvvv", "vvvv"}};
+        for (const auto &[phys, chem] : rcc)
+        {
+            const auto source = ucc_rebind_source(phys, "aaaa");
+            check(source.has_value() && source->source_space == chem &&
+                      !source->needs_bra_ket,
+                  std::string("same-spin <") + phys + "| reads (" + chem +
+                      "), matching the RCC mapping");
+        }
+
+        // Malformed input errors rather than resolving to something plausible.
+        check(!ucc_rebind_source("oov", "abab").has_value(),
+              "a three-slot space is rejected");
+        check(!ucc_rebind_source("oovv", "aba").has_value(),
+              "a three-slot tag is rejected");
+        check(!ucc_rebind_source("oovv", "baba").has_value(),
+              "an unstored spin tag is rejected");
     }
 
     if (failures == 0)

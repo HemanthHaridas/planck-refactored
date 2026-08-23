@@ -63,6 +63,41 @@ namespace HartreeFock::Correlation::CC
         return true;
     }
 
+    std::expected<UccRebindSource, std::string> ucc_rebind_source(
+        const std::string &space,
+        const std::string &tag)
+    {
+        if (space.size() != 4 || tag.size() != 4)
+            return std::unexpected(
+                "ucc_rebind_source: space and tag must each name four slots; got '" +
+                space + "', '" + tag + "'.");
+
+        const auto stored = ucc_canonical_blocks();
+        const auto is_stored = [&](const std::string &candidate) {
+            for (const auto &[block_space, block_tag] : stored)
+                if (block_space == candidate && block_tag == tag)
+                    return true;
+            return false;
+        };
+
+        // physicist <pq|rs> = chemists (pr|qs)
+        const std::string chemists{space[0], space[2], space[1], space[3]};
+        if (is_stored(chemists))
+            return UccRebindSource{chemists, false};
+
+        // Not stored: reach it by bra<->ket, which is a symmetry of every spin
+        // block (unlike the particle swap, which maps `abab` to `baba`).
+        const std::string swapped{
+            chemists[2], chemists[3], chemists[0], chemists[1]};
+        if (is_stored(swapped))
+            return UccRebindSource{swapped, true};
+
+        return std::unexpected(
+            "ucc_rebind_source: physicist block <" + space + "| in '" + tag +
+            "' needs chemists (" + chemists + "), which is not stored, and its "
+            "bra<->ket image (" + swapped + ") is not stored either.");
+    }
+
     std::vector<std::pair<std::string, std::string>> ucc_canonical_blocks()
     {
         std::vector<std::pair<std::string, std::string>> blocks;
