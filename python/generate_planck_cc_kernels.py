@@ -162,9 +162,14 @@ def main() -> None:
             ),
         )
 
+    # U5.0: a UCC run writes its own file. Without this it would OVERWRITE the RCC
+    # TU for the same method -- the two are separate translation units, not
+    # variants of one, and both are meant to be linkable into the same binary.
+    suffix = "_ucc_planck_generated.cpp" if args.ucc else "_planck_generated.cpp"
+
     for method in args.methods:
         code = emit(method, force_arbitrary=False)
-        out_path = output_dir / f"{method.lower()}_planck_generated.cpp"
+        out_path = output_dir / f"{method.lower()}{suffix}"
         out_path.write_text(code + "\n", encoding="utf-8")
         print(out_path)
 
@@ -174,7 +179,10 @@ def main() -> None:
         from ccgen.cluster import parse_cc_level  # local: avoid import cost when unused
         if args.arbitrary_lower_ranks and max(parse_cc_level(method.lower()), default=0) < 4:
             arb_code = emit(method, force_arbitrary=True)
-            arb_path = output_dir / f"{method.lower()}_arbitrary_planck_generated.cpp"
+            arb_path = output_dir / (
+                f"{method.lower()}_arbitrary"
+                + ("_ucc" if args.ucc else "")
+                + "_planck_generated.cpp")
             arb_path.write_text(arb_code + "\n", encoding="utf-8")
             print(arb_path)
 

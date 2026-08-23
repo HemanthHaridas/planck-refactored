@@ -70,6 +70,42 @@ class UccSwitchTests(unittest.TestCase):
                      "ccsdt": "775e185b5ab27566"}[method],
                     f"the default {method} emit changed; --ucc must be inert when off")
 
+    def test_ucc_symbols_do_not_collide_with_rcc(self):
+        """U5.0: a UCC TU must be linkable ALONGSIDE the RCC one for the method.
+
+        MEASURED AT RANK 3, NOT RANK 2, and that distinction is the point. Before
+        this landed:
+
+            ccsd    1 collision   compute_ccsd_energy
+            ccsdt   2 collisions  compute_ccsdt_energy,
+                                  make_generated_ccsdt_kernels
+
+        Rank 2 understates it: RCC emits no kernel bundle below the arbitrary
+        floor, so `make_generated_*_kernels` exists on only one side there and a
+        rank-2-only check would have found half the collision and looked
+        conclusive. `force_arbitrary=True` puts a bundle on the RCC side too.
+        """
+        for method, rcc_kwargs in (("ccsd", {}), ("ccsdt", {"force_arbitrary": True})):
+            with self.subTest(method=method):
+                rcc = self._defined_symbols(print_cpp_planck(method, **rcc_kwargs))
+                ucc = self._defined_symbols(print_cpp_planck(method, ucc=True))
+                self.assertTrue(rcc and ucc, "a TU defined no symbols at all")
+                self.assertEqual(
+                    sorted(rcc & ucc), [],
+                    f"the {method} RCC and UCC translation units define the same "
+                    f"symbol(s); they would not link into one binary")
+
+    def test_ucc_bundle_factory_is_distinctly_named(self):
+        """The factory the registry will call must be reachable without ambiguity."""
+        ucc = self._defined_symbols(print_cpp_planck("ccsd", ucc=True))
+        self.assertIn("make_generated_ucc_ccsd_kernels", ucc)
+        self.assertNotIn("make_generated_ccsd_kernels", ucc)
+
+    @staticmethod
+    def _defined_symbols(tu: str) -> set[str]:
+        """Function definitions in an emitted TU (top-level, so column 0)."""
+        return set(re.findall(r"^\w[\w:<>&,* ]*? (\w+)\(", tu, re.M))
+
     def test_intermediates_are_forced_off_under_ucc(self):
         """CSE is unvalidated on spin-RESOLVED terms for the same reason it is on
         spatial ones, and UCC multiplies the term count by the block count, so the

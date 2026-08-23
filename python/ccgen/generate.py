@@ -1206,6 +1206,9 @@ def print_cpp_planck(
         # either -- and it would crash on the block-tagged target names.
         force_arbitrary=force_arbitrary or ucc,
         spin_adapted=spin_adapt or ucc,
+        # U5.0: prefix the emitted SYMBOLS so a UCC TU can coexist with the RCC
+        # one for the same method (they collide otherwise).
+        ucc=ucc,
     )
 
 

@@ -643,10 +643,26 @@ def _target_expr(lhs: str, indices: Sequence[Index]) -> str:
     return f"{lhs}({{{', '.join(idx.name for idx in indices)}}})"
 
 
-def _kernel_name(method: str, target: str) -> str:
+def _kernel_name(method: str, target: str, ucc: bool = False) -> str:
+    """The C++ name of one emitted kernel.
+
+    U5.0: `ucc=True` prefixes the symbol so a UCC translation unit does not
+    collide with the RCC one for the same method. Measured before this landed,
+    at a rank where both sides emit a bundle: `compute_ccsdt_energy` AND
+    `make_generated_ccsdt_kernels` were defined by both. (Rank 2 shows only the
+    first, because RCC emits no bundle below the arbitrary floor -- so measuring
+    there alone understates the collision.)
+
+    The prefix goes on the emitted NAME only, never on `method` itself:
+    `method` is also parsed for the excitation rank (`parse_cc_level`), which
+    requires a 'cc' prefix and rejects `ucc_ccsd`. Overloading one string for
+    both roles is what makes this look like a one-line change and then fail at
+    the rank parse.
+    """
+    prefix = "ucc_" if ucc else ""
     if target == "energy":
-        return f"compute_{method}_energy"
-    return f"compute_{method}_{target}_residual"
+        return f"compute_{prefix}{method}_energy"
+    return f"compute_{prefix}{method}_{target}_residual"
 
 
 def _target_rank(
@@ -693,6 +709,7 @@ def _emit_kernel(
     intermediates: Sequence[IntermediateSpec] | None = None,
     free_indices: Sequence[Index] | None = None,
     force_arbitrary: bool = False,
+    ucc: bool = False,
 ) -> str:
     lowered_terms = tuple(lowered_terms or ())
     if free_indices is None:
@@ -708,7 +725,7 @@ def _emit_kernel(
     intermediate_map = {spec.name: spec for spec in intermediates or ()}
 
     lines: list[str] = []
-    lines.append(f"{result_type} {_kernel_name(method, target)}(")
+    lines.append(f"{result_type} {_kernel_name(method, target, ucc)}(")
     lines.append("    const CanonicalRHFCCReference &reference,")
     lines.append("    const TensorCCBlockCache &mo_blocks,")
     lines.append(f"    const {denominator_type} &denominators,")
@@ -757,7 +774,7 @@ def _emit_kernel(
         return _emit_chunked_kernel(
             method, target, lines, emitted_terms, result_type, free_indices,
             denominator_type, amplitude_type, required_intermediates,
-            intermediate_names, arbitrary)
+            intermediate_names, arbitrary, ucc)
 
     if arbitrary:
         bindings = (_amplitude_view_bindings(emitted_terms)
@@ -789,13 +806,13 @@ _KERNEL_CHUNK_TERMS = 256
 def _emit_chunked_kernel(
     method, target, header_lines, emitted_terms, result_type, free_indices,
     denominator_type, amplitude_type, required_intermediates,
-    intermediate_names, arbitrary,
+    intermediate_names, arbitrary, ucc=False,
 ):
     """Emit a large residual kernel as `_partN` sub-functions accumulating into a
     by-reference `result`, plus the main kernel that allocates `result`, calls
     each part, and returns it. Keeps per-function body size bounded so any -O
     level compiles in ~linear time. See _emit_kernel for why."""
-    kernel = _kernel_name(method, target)
+    kernel = _kernel_name(method, target, ucc)
     n_parts = (len(emitted_terms) + _KERNEL_CHUNK_TERMS - 1) // _KERNEL_CHUNK_TERMS
 
     out: list[str] = []
@@ -957,6 +974,7 @@ def _emit_arbitrary_order_kernel_bundle(
     equations: dict[str, list[AlgebraTerm]],
     lowered_equations: dict[str, list[RestrictedClosedShellTerm]],
     force_arbitrary: bool = False,
+    ucc: bool = False,
 ) -> str:
     max_rank = max(parse_cc_level(method), default=0)
     if max_rank < 4 and not force_arbitrary:
@@ -990,16 +1008,17 @@ def _emit_arbitrary_order_kernel_bundle(
             f"{indent}    const ArbitraryOrderRCCAmplitudes &amplitudes) -> TensorND",
             f"{indent}{{",
             f"{indent}    return to_tensor_nd("
-            f"{_kernel_name(method, target)}(reference, mo_blocks, denominators, amplitudes));",
+            f"{_kernel_name(method, target, ucc)}(reference, mo_blocks, denominators, amplitudes));",
             f"{indent}}}",
         ]
 
     lines: list[str] = []
-    lines.append(f"GeneratedArbitraryOrderKernels make_generated_{method}_kernels()")
+    factory = f"make_generated_{'ucc_' if ucc else ''}{method}_kernels"
+    lines.append(f"GeneratedArbitraryOrderKernels {factory}()")
     lines.append("{")
     lines.append("    GeneratedArbitraryOrderKernels kernels;")
     lines.append(f"    kernels.max_excitation_rank = {max_rank};")
-    lines.append(f"    kernels.energy = {_kernel_name(method, 'energy')};")
+    lines.append(f"    kernels.energy = {_kernel_name(method, 'energy', ucc)};")
     lines.append(f"    kernels.residuals_by_rank.reserve({max_rank});")
     for rank, target in ranked_targets:
         lines.append("    kernels.residuals_by_rank.push_back(")
@@ -1024,6 +1043,7 @@ def emit_planck_translation_unit(
     factor_builder_bodies: bool = False,
     force_arbitrary: bool = False,
     spin_adapted: bool = False,
+    ucc: bool = False,
 ) -> str:
     """Emit a Planck-compatible C++ translation unit.
 
@@ -1080,6 +1100,7 @@ def emit_planck_translation_unit(
                 lowered_terms=lowered_equations.get(target),
                 intermediates=intermediates,
                 force_arbitrary=force_arbitrary,
+                ucc=ucc,
             )
         )
         lines.append("")
@@ -1089,6 +1110,7 @@ def emit_planck_translation_unit(
         equations,
         lowered_equations,
         force_arbitrary=force_arbitrary,
+        ucc=ucc,
     )
     if bundle_code:
         lines.append(bundle_code)
