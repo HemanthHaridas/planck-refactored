@@ -41,6 +41,16 @@ option(PLANCK_CC_INCLUDE_INTERMEDIATES
 # Gap B lands; opt in with -DPLANCK_CC_SPIN_ADAPT=ON.
 option(PLANCK_CC_SPIN_ADAPT
     "Emit spatial (spin-adapted) RCC kernels instead of the raw spin-orbital defect" OFF)
+# U5.3: also emit UNRESTRICTED (spin-block resolved) CC kernels alongside the
+# restricted ones, as <method>_ucc_planck_generated.cpp. They define distinct
+# symbols (U5.0) so both link into one binary, and are reached through
+# make_generated_ucc_kernels() rather than the RCC registry.
+#
+# Default OFF: the UCC TUs roughly triple the generated-kernel compile time (one
+# residual per spin block instead of one per rank) and nothing in the default
+# build reaches them. Opt in with -DPLANCK_CC_UCC=ON.
+option(PLANCK_CC_UCC
+    "Also emit unrestricted (spin-blocked) UCC kernels alongside the RCC ones" OFF)
 option(PLANCK_CC_ARBITRARY_LOWER_RANKS
     "Also emit rank<4 methods (ccsd/ccsdt) in arbitrary-order spatial form as \
 <method>_arbitrary_planck_generated.cpp, for cross-rank .ccamp restart seeds" OFF)
@@ -427,6 +437,13 @@ else()
 endif()
 target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
 
+if(PLANCK_CC_UCC)
+    set(_planck_cc_ucc 1)
+else()
+    set(_planck_cc_ucc 0)
+endif()
+target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_UCC=${_planck_cc_ucc})
+
 add_executable(planck-dft
     ${BASE_SRC}
     ${DFT_SRC}
@@ -486,6 +503,16 @@ if(Python3_Interpreter_FOUND)
         list(APPEND _ccgen_planck_kernel_args --dress-operators)
     endif()
 
+    # The UCC emit is a SECOND invocation, not a flag on the first: --ucc and
+    # --spin-adapt are mutually exclusive (they resolve spin in opposite
+    # directions), and the RCC translation units must still be emitted either way.
+    set(_ccgen_ucc_kernel_args
+        --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+        --methods ${PLANCK_CC_METHODS}
+        --engine ${PLANCK_CC_ENGINE}
+        --ucc
+    )
+
     add_custom_target(ccgen-planck-kernels
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
         COMMAND ${Python3_EXECUTABLE}
@@ -494,6 +521,19 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
         COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${PLANCK_CC_METHODS})"
     )
+
+    # A conditional COMMAND inside add_custom_target cannot be expressed with a
+    # generator expression: an empty $<...:COMMAND> expands to a bare newline and
+    # the shell fails to parse it. Append the UCC pass as a separate POST_BUILD
+    # step instead, which is also clearer about it being a second invocation.
+    if(PLANCK_CC_UCC)
+        add_custom_command(TARGET ccgen-planck-kernels POST_BUILD
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                    ${_ccgen_ucc_kernel_args}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+            COMMENT "Generating unrestricted (UCC) CC kernels with ccgen")
+    endif()
 
     message(STATUS "ccgen     : emitting Planck CC kernels up to rank ${PLANCK_CC_MAXORDER} [${PLANCK_CC_METHODS}] via ${PLANCK_CC_ENGINE} engine")
 endif()
