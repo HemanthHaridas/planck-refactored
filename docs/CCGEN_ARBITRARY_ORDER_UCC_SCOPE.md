@@ -665,15 +665,53 @@ it exactly — no new enum member per rank and no new driver branch.
 > diagnostic instead of inferring from `nm`. (A bare link harness will also report *undefined*
 > `to_tensor_nd` — that is the runtime TU being absent, not a collision.)
 
-**U5.1 — a UCC prepare path (~M, C++).** `prepare_generated_arbitrary_order_state` gains a UCC
-branch: build a `UHFReference` (`build_uhf_reference` already exists), then drive the three UCC
-builders instead of their RHF counterparts. The block vocabulary comes from the bundle's
-`sector_tags` rather than being enumerated again — one vocabulary, defined in ccgen, not two
-that can drift (the same reasoning U2.2 used).
+**U5.1 — a UCC prepare path (~M, C++).** A `prepare_generated_ucc_state` **sibling** of
+`prepare_generated_arbitrary_order_state`, not a branch inside it: all four steps differ (UHF
+reference, spin-blocked ERIs, per-block denominators, sector-only amplitudes), so sharing one
+function would mean a branch at every line.
 
-*Gate:* the prepared state has **zero** `by_rank` entries, and one amplitude block and one
-denominator per declared tag, each with its own shape. Buildable from a fixture reference, so
-no SCF is required.
+> **The ERI block vocabulary is NOT passed in — and checking how RCC does it is what
+> established that.** An earlier draft of this step said the vocabulary "comes from the
+> bundle's `sector_tags`", on the "one vocabulary, defined in ccgen" reasoning U2.2 used for
+> denominators. That was wrong twice over: `sector_tags` carry *amplitude* tags (`aa`,
+> `abab`), from which the (space, spin) ERI set is not derivable at all; and RCC does not
+> communicate a vocabulary in the first place.
+>
+> **`build_tensor_cc_block_cache` takes no block list.** The set *is* the struct's seven named
+> members, built unconditionally — and it deliberately **over-builds**: measured, both `ccsd`
+> and `ccsdt` read only 6 of the 7, with `ovvo` constructed and never touched. Nothing is
+> negotiated with the emitter, so nothing can drift.
+
+The UCC analogue is the same property one level up: for each spin tag, one stored array per
+**orbit of the 16 o/v patterns under that tag's own symmetry group** (U3.0's predicate). That
+is a closed set fixed by the *reference type*, not by the method:
+
+```
+aaaa   7 blocks
+abab  10 blocks   (its orbits are smaller — two of the four permutations are not its symmetries)
+bbbb   7 blocks
+      ──
+      24 stored arrays
+```
+
+Because the rule is the same one U3.0 already encodes, the C++ set and the emitter's set cannot
+disagree by construction — which is what the discarded "pass the vocabulary" design was trying
+to buy with coupling.
+
+- **U5.1a — `ucc_canonical_blocks()`**: the 24-block closed set in C++, derived from that orbit
+  rule rather than listed. *Gate:* matches `_canonical_eri_blocks_for` per tag exactly,
+  asserted against the Python side so drift is **caught** rather than assumed away.
+- **U5.1b — `prepare_generated_ucc_state`**: builds all 24 unconditionally, plus the UHF
+  reference (`build_uhf_reference` exists), the spin Fock blocks (`build_ucc_fock_blocks`, fed
+  from `_info._scf.{alpha,beta}.fock`, both persisted by SCF), and the per-block denominators.
+  No `blocks` parameter. *Gate:* `by_rank` **empty** on amplitudes and denominators; one
+  amplitude block and one denominator per sector tag, each with its own shape. Buildable from a
+  fixture reference, so no SCF is required.
+
+*Memory, now concrete:* 24 blocks is the ~3× footprint this doc flagged up front. If that
+proves too heavy at rank 4, trim the **stored set by reference symmetry** — never by method —
+so the closed-set property survives. Trimming per method reintroduces exactly the coupling this
+step avoids.
 
 **U5.2 — `rebind_physicist` for spin blocks (~S/M, C++).** The mid-axis transpose is the same,
 but the **oovv↔ovov cross-source is spin-sensitive** (U3 measurement 3: physicist `oovv_abab`
