@@ -47,7 +47,32 @@ namespace HartreeFock::Correlation::CC
 
         int max_excitation_rank = 0;
         EnergyKernel energy;
-        std::vector<ResidualKernel> residuals_by_rank; // rank r at [r-1]
+
+        // rank r at [r-1] -- the per-rank REFERENCE residual (RCC / CCSDTQ).
+        //
+        // U4.0: may be EMPTY, which declares an ALL-SECTORS bundle: every residual
+        // this method carries is block-tagged and lives in `sector_residuals`. That
+        // is the UCC case, where there is no privileged reference sector to occupy
+        // this slot -- `ucc_adapt_equations` tags every target (`doubles_aaaa`,
+        // never a bare `doubles`), so the emitter pushes nothing here.
+        //
+        // Promoting one block per rank into this vector was considered and does
+        // NOT work: the slot is sized by `rank_dims`, which yields one shape per
+        // rank, while UCC blocks of a single rank have DIFFERENT shapes under UHF
+        // (`aaaa` is (noa,noa,nva,nva), `abab` is (noa,nob,nva,nvb)). Promoting
+        // one would silently mis-size the others.
+        //
+        // A partially-filled vector is rejected: either every rank has a reference
+        // residual or none does. Half-filled means a bundle lost a kernel, which
+        // would otherwise evaluate as a silent zero contribution.
+        std::vector<ResidualKernel> residuals_by_rank;
+
+        // True when this bundle carries no per-rank reference residuals and drives
+        // every excitation through `sector_residuals` instead.
+        [[nodiscard]] bool is_all_sectors() const noexcept
+        {
+            return residuals_by_rank.empty();
+        }
 
         // The independent Sz sectors this method carries, (excitation_rank, tag).
         // Feeds make_zero_rcc_amplitudes so the state allocates the sector blocks

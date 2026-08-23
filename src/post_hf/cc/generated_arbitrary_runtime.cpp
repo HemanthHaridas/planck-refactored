@@ -21,16 +21,41 @@ namespace HartreeFock::Correlation::CC
                     "validate_kernel_bundle: kernel bundle and state must agree on max_excitation_rank.");
             if (!kernels.energy)
                 return std::unexpected("validate_kernel_bundle: energy kernel is missing.");
-            if (static_cast<int>(kernels.residuals_by_rank.size()) != kernels.max_excitation_rank)
+            // U4.0: an ALL-SECTORS bundle (UCC) carries no per-rank reference
+            // residuals -- every target is block-tagged. Accept an empty vector,
+            // but still require a FULL one otherwise: a partially-filled
+            // residuals_by_rank means a bundle lost a kernel, and that rank would
+            // otherwise contribute a silent zero.
+            if (!kernels.is_all_sectors() &&
+                static_cast<int>(kernels.residuals_by_rank.size()) != kernels.max_excitation_rank)
+            {
                 return std::unexpected(
-                    "validate_kernel_bundle: residual kernel count must match max_excitation_rank.");
-            if (state.denominators.max_rank() != state.max_excitation_rank ||
-                state.amplitudes.max_rank() != state.max_excitation_rank)
+                    "validate_kernel_bundle: residual kernel count must match max_excitation_rank "
+                    "(or be empty for an all-sectors bundle).");
+            }
+            // An all-sectors bundle with no sector residuals evaluates nothing at
+            // all and would converge instantly at the reference energy.
+            if (kernels.is_all_sectors() && kernels.sector_residuals.empty())
+            {
+                return std::unexpected(
+                    "validate_kernel_bundle: bundle declares no residual kernels of either kind "
+                    "(empty residuals_by_rank and empty sector_residuals).");
+            }
+            // U4.0: `max_rank()` counts the per-rank REFERENCE blocks, so an
+            // all-sectors state reports 0 by construction -- its excitations all
+            // live in `sectors`. Requiring coverage through max_excitation_rank
+            // is therefore an RCC-only invariant. The all-sectors equivalent (a
+            // stored amplitude block per declared sector) is enforced by the Gap
+            // B4 loop below, which is stricter: it checks per (rank, tag) rather
+            // than counting.
+            if (!kernels.is_all_sectors() &&
+                (state.denominators.max_rank() != state.max_excitation_rank ||
+                 state.amplitudes.max_rank() != state.max_excitation_rank))
             {
                 return std::unexpected(
                     "validate_kernel_bundle: amplitudes and denominators must be allocated through max_excitation_rank.");
             }
-            for (int rank = 1; rank <= kernels.max_excitation_rank; ++rank)
+            for (int rank = 1; !kernels.is_all_sectors() && rank <= kernels.max_excitation_rank; ++rank)
             {
                 if (!kernels.residuals_by_rank[static_cast<std::size_t>(rank - 1)])
                 {
@@ -140,8 +165,14 @@ namespace HartreeFock::Correlation::CC
             return std::unexpected(valid.error());
 
         ArbitraryOrderResiduals residuals;
-        residuals.by_rank.reserve(static_cast<std::size_t>(state.max_excitation_rank));
-        for (int rank = 1; rank <= state.max_excitation_rank; ++rank)
+        // U4.0: skipped entirely for an all-sectors bundle, which leaves
+        // `residuals.by_rank` empty to match the amplitudes it will be paired
+        // against. The sector loop below is then the whole evaluation.
+        residuals.by_rank.reserve(
+            kernels.is_all_sectors()
+                ? 0u
+                : static_cast<std::size_t>(state.max_excitation_rank));
+        for (int rank = 1; !kernels.is_all_sectors() && rank <= state.max_excitation_rank; ++rank)
         {
             const auto &kernel = kernels.residuals_by_rank[static_cast<std::size_t>(rank - 1)];
             TensorND tensor = kernel(
