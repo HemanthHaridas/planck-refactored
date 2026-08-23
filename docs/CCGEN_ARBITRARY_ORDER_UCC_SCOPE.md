@@ -463,13 +463,26 @@ chemists `(i_α a_α | j_β b_β)` — a *mixed* (α-pair | β-pair) transform, 
 `chem.ovov` of either pure spin.
 
 > **This paragraph originally ended by claiming `rebind_physicist`'s `oovv`↔`ovov`
-> cross-source "must be chosen by pair spin, not by physicist tag". That conclusion is
-> WRONG and was retracted in U5.2a.** Measured there: the cross-source is the *same* slot
-> swap for every spin block, because U5.1a keys blocks by their physicist (space, spin)
-> while holding chemists-layout data — so the rebind transposes data and leaves the tag
-> alone. The finding above (that `oovv_abab` is a genuinely mixed *transform*) is correct
-> and is what U3.1 builds on; the over-reach was extending it to the rebind. Scoping U5.2
-> from it would have produced per-block source logic that is not needed.
+> cross-source "must be chosen by pair spin, not by physicist tag". That is right about
+> the STORAGE and wrong about the REBIND, and it took two opposite errors to pin down.**
+>
+> Measured, all 24 blocks:
+>
+> ```
+> chem(swap(space), swap(tag))  ==  stored(space, tag)      <- the storage permutes
+> swap_mid(stored[key])         ==  physicist[key]          <- the rebind does not
+> ```
+>
+> The spin tag *is* permuted alongside the space pattern — but `build_ucc_spin_block_cache`
+> already does it, when it applies the chemists `(p r | q s)` pairing to a **physicist**-keyed
+> `(space, spin)`. So the block stored under `oovv_abab` is chemists `(i_α a_α | j_β b_β)`,
+> exactly as this paragraph says. The rebind must therefore **not** reapply the permutation:
+> it is `swap_mid_axes` on the block under its own key.
+>
+> **U5.2a got this backwards and retracted the claim outright; that retraction is itself
+> withdrawn.** It also built a `ucc_rebind_source` map (three mixed blocks "needing" a
+> bra↔ket hop) on the premise that a stored key names a chemists pattern. It does not, every
+> block is self-sourced, and U5.2b removed that function.
 
 *Memory:* ~3× the RCC block footprint — three pair-spin variants, since `(a|b) ≡ (b|a)` by
 the chemists' bra↔ket swap. Exactly 3× only when `noa == nob`; it is not FLOPs but memory
@@ -611,7 +624,7 @@ over-relaxing a guard, a silent skip in the sector update that still returns suc
 > **name the guard** they intend to exercise. Where two guards can reject the same input, asserting
 > only "it was rejected" tests nothing in particular.
 
-### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0, U5.1, U5.2a landed**
+### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0–U5.2 landed**
 
 > **Rescoped `~S` → `~M`.** The original text said "the solver loop is unchanged — it already
 > iterates tagged blocks", which is true and is not the work. Four measurements set the shape.
@@ -742,51 +755,47 @@ proves too heavy at rank 4, trim the **stored set by reference symmetry** — ne
 so the closed-set property survives. Trimming per method reintroduces exactly the coupling this
 step avoids.
 
-**U5.2 — `rebind_physicist` for spin blocks (~S/M, C++) — U5.2a LANDED.**
+**U5.2 — `rebind_physicist` for spin blocks (~S, C++) — LANDED, and simpler than scoped.**
 
-> **What is spin-specific here is narrower than this doc said.** The earlier text claimed the
-> `oovv`↔`ovov` cross-source "is spin-sensitive… must be re-derived per block". Measured in
-> U5.2a: it is **not** — the cross-source is the same slot swap for every spin block, and the
-> spin tag is **not** permuted by the rebind (U5.1a keys blocks by *physicist* (space, spin)
-> while holding chemists-layout data). Verified numerically: `swap_mid(stored oovv_abab)`
-> equals the independently-built physicist `<oovv|` with spins `abab`.
+`rebind_physicist_ucc` is `swap_mid_axes` on the block stored under its **own** `(space, tag)`
+key. No source map, no bra↔ket hop, no permutation of the spin tag. It copies `spin_blocks` —
+the omission that makes the RCC `rebind_physicist` unusable here, since that one builds a fresh
+cache from the seven named members and would silently return a cache with all 24 UCC blocks
+discarded.
+
+> **Two opposite wrong answers preceded this, and both were convincing.** U5.2a concluded the
+> spin tag is *not* permuted and retracted U3's cross-source claim; re-deriving it in U5.2b
+> first appeared to show the tag *is* permuted (`abab` → `aabb`), which would have made U3 right
+> and the retraction wrong. Both came from treating a stored key as a **chemists** pattern.
 >
-> **A convincing wrong measurement sits next to this.** Probing the convention by applying the
-> tag to *chemists* slots reports that physicist `abab` "becomes" `aabb`. That is an artifact
-> of the probe, not the convention — it disappears when checked against the same-spin case,
-> where the RCC mapping is known correct. It survived several steps of reasoning before that
-> check.
+> The measurement that settles it, all 24 blocks:
+>
+> ```
+> chem(swap(space), swap(tag))  ==  stored(space, tag)      <- storage permutes
+> swap_mid(stored[key])         ==  physicist[key]          <- rebind does not
+> ```
+>
+> The permutation is real and already applied by `build_ucc_spin_block_cache`, so the rebind
+> must not reapply it. U5.2a's `ucc_rebind_source` — which mapped three mixed blocks to a
+> bra↔ket hop — was built on the false premise and is **removed**; every block is self-sourced.
 
-**U5.2a — `ucc_rebind_source(space, tag)` — LANDED.** Resolves a physicist block to the stored
-chemists block holding it, plus whether that source needs a bra↔ket transpose first. Physicist
-`<pq|rs>` = chemists `(pr|qs)`, so the source is the physicist pattern with slots 1 and 2
-swapped; if that is not stored for the tag, one bra↔ket hop — a symmetry of **every** spin
-block, unlike the particle swap — reaches one that is.
+> **WHY BOTH ERRORS SURVIVED, and this is the reusable part.** A same-spin check cannot
+> discriminate between the two hypotheses: `aaaa` is invariant under the tag permutation, and
+> its dims are symmetric under the mid swap. Validating against same-spin — where the RCC
+> mapping is known correct — and reading the agreement as confirmation is what produced both
+> wrong answers.
+>
+> That is the RHF-degenerate vacuity this scope has now hit **four times** (U3.1's fixture,
+> U5.2's scoped gate, and both of these). It was hit *while writing the note warning about it*,
+> so the warning alone is demonstrably not enough. **Any assertion about spin routing must be
+> made on a MIXED block with asymmetric extents, where a wrong hypothesis changes the SHAPE
+> rather than only the values.** The gate's discriminating assertion is exactly that, and
+> mutation testing confirms a permuted tag fails only on `abab`, never on same-spin.
 
-*The real spin-specific fact, measured across all 24 blocks:* same-spin needs the hop **zero**
-times (its wider symmetry group already folds those patterns away); `abab` needs it exactly
-**three** times — `<oovo|` via `(ooov)`, `<vovo|` via `(oovv)`, `<vovv|` via `(ovvv)`. That
-asymmetry is why the RCC rebind cannot be reused with different names.
-
-*Gate:* every block resolves to a source that is **itself stored** (a map resolving to a block
-nobody built surfaces as an empty tensor, not an error); the hop count is exactly three and
-mixed-only; and the direct sources match the RCC mapping where they overlap — that mapping is
-validated by every landed RCC result, so a divergence there is the new code being wrong.
-
-**U5.2b — `rebind_physicist_ucc`** (next): applies `swap_mid_axes`, preceded by the bra↔ket
-transpose where the map says so, and **copies `spin_blocks`** — the omission that makes the RCC
-version unusable here (it builds a fresh cache from the seven named members, so calling it would
-silently discard all 24 UCC blocks and return something structurally valid).
-
-*Gate:* an RHF-degenerate reference ⇒ rebound UCC blocks equal the rebound RCC blocks. **Plus an
-asymmetric companion**: degeneracy cannot see a swapped mixed pair, the same vacuity that made
-U3.1's fixture load-bearing — now hit three times, so treat it as the default rather than a
-special case.
-
-**U5.2c — wire it into prepare** (next): replace the chemists passthrough and drop the "not yet
-usable by a solve" caveat from `prepare_generated_ucc_state`'s header. *Gate:* U3.4's MP2-limit
-check re-run against the **rebound** cache, which turns it into an end-to-end check that the
-rebind preserves the physics.
+*Gate:* all 24 blocks survive the rebind with swapped middle dims and `out(p,q,r,s) ==
+in(p,r,q,s)` element-wise; `oovv_abab` rebinds to `(noa, nob, nva, nvb)`; and the fixture's
+mixed middle dims are asserted **asymmetric**, so the shape check has teeth. Verified
+falsifiable against dropping `spin_blocks` and against permuting the tag.
 
 **U5.3 — registry + keyword (~S).** `make_generated_ucc_kernels(int rank)` beside the RCC one;
 `ucc2` / `ucc4` in the keyword table; the driver's RHF-reference guard relaxed for them. This is
@@ -883,10 +892,14 @@ wiring.
 - **Do not store a `baba` ERI family.** It is `abab` under the particle swap (verified
   numerically on real orbitals), so storing it buys ~33% more memory in exchange for
   avoiding one explicit swap in the emitter.
-- **Do not accept U3.1's RHF-degenerate gate on its own.** With `C_α == C_β` the `(a|b)` and
-  `(b|a)` pair orderings coincide, so a swapped mixed pair passes it. It needs an
-  asymmetric-reference companion (`noa != nob`), for the same reason U2.1's fixture uses
-  four distinct extents.
+- **Do not validate a spin-routing claim against a same-spin block.** `aaaa` is invariant
+  under the spin-tag permutation and its dims are symmetric under the mid-axis swap, so it
+  cannot discriminate between "the tag is permuted" and "it is not" — it agrees with both.
+  Every assertion about spin routing must be made on a MIXED block with asymmetric extents,
+  where a wrong hypothesis changes the SHAPE rather than only the values. This scope has hit
+  the degenerate-vacuity trap **four times** (U3.1's fixture, U5.2's scoped gate, and both of
+  U5.2a/U5.2b's wrong answers), including once *while writing the note warning about it* — so
+  treat the mixed-asymmetric fixture as the default, not the hardened case.
 - **Do not land a storage half without its emitter half** (U3's lesson, kept for the next such split). Spin-blocked arrays that
   no emitted kernel ever names change nothing, while making the step look finished and
   turning a loud absence into a silent wrong answer. They are one change.
