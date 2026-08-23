@@ -826,6 +826,30 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/cc/amplitudes.cpp
     )
 
+    # U3.1 spin-blocked ERI cache. ucc_blocks.cpp needs only transform_eri, but
+    # integrals.cpp shares a TU with ensure_eri/_compute_2e, so the integral and
+    # basis sources come along -- the same reason and the same list as
+    # planck-transform-eri above. tensor_backend_state.cpp supplies
+    # detail::append_block_memory.
+    add_executable(planck-cc-ucc-spin-blocks
+        ${CMAKE_SOURCE_DIR}/tests/cc_ucc_spin_blocks.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+        ${SRC_DIR}/post_hf/cc/amplitudes.cpp
+        ${SRC_DIR}/post_hf/cc/ucc_blocks.cpp
+        ${SRC_DIR}/post_hf/cc/tensor_backend_state.cpp
+        ${SRC_DIR}/post_hf/cc/mo_blocks.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     add_executable(planck-cc-amplitude-checkpoint
         ${CMAKE_SOURCE_DIR}/tests/cc_amplitude_checkpoint.cpp
         ${SRC_DIR}/post_hf/cc/common.cpp
@@ -1292,6 +1316,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-cc-ucc-spin-blocks PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-cc-amplitude-checkpoint PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -1511,6 +1540,18 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-cc-tensor-index PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-ucc-denominator PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-ucc-spin-blocks PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -1760,6 +1801,16 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-cc-tensor-index
         COMMAND planck-cc-tensor-index
+    )
+
+    add_test(
+        NAME planck-cc-ucc-denominator
+        COMMAND planck-cc-ucc-denominator
+    )
+
+    add_test(
+        NAME planck-cc-ucc-spin-blocks
+        COMMAND planck-cc-ucc-spin-blocks
     )
 
     add_test(
