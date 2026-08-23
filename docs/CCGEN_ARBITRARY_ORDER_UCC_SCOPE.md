@@ -19,7 +19,7 @@ that, not the keyword, is the work.
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
 | U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
 | U4 | **landed, U4.0–U4.3.** The runtime accepts an ALL-SECTORS bundle (no per-rank reference residual), and `--ucc` reaches it from the build. U4.1 turned out **not to be work** — the update loop already handled it; U4.2 fixed a real out-of-bounds read (segfault, not a wrong number) that U4.0 had made reachable |
-| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b (keyword), U5.4, U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller |
+| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b landed** (the `ucc2`/`ucc3`/`ucc4` keyword). **U5.3c (rename `ccsdtq.cpp` → `rccgen.cpp`), U5.4, U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -624,7 +624,7 @@ over-relaxing a guard, a silent skip in the sector update that still returns suc
 > **name the guard** they intend to exercise. Where two guards can reject the same input, asserting
 > only "it was rejected" tests nothing in particular.
 
-### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0–U5.3a landed**
+### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0–U5.3b landed**
 
 > **Rescoped `~S` → `~M`.** The original text said "the solver loop is unchanged — it already
 > iterates tagged blocks", which is true and is not the work. Four measurements set the shape.
@@ -850,6 +850,58 @@ new enum member per rank and no new driver branch); and the driver's RHF-referen
 relaxed for them.
 
 *Gate:* `correlation ucc2` reaches the solver and returns a number rather than an error.
+
+**U5.3c — `ccsdtq.cpp` becomes `rccgen.cpp` (~S, no behavior change at rank 4).**
+
+> **Raised as an architecture divergence, and the framing was better than the one I
+> proposed.** After U5.3b the *generated* CC path had two drivers — `ccsdtq.cpp` for RCC
+> and `uccgen.cpp` for UCC — performing the identical five steps (`prepare_*` →
+> `make_generated_*` → `ensure_amplitude_sectors` →
+> `run_generated_arbitrary_order_iterations` → set `_correlation_energy`) and differing
+> only in which two functions they name. My first proposal was to extract a shared driver
+> parameterised by a policy; that unifies two things by adding a third abstraction over
+> them.
+
+**The rename is the whole fix, because `ccsdtq.cpp` is already generic.** Measured: nothing
+in it is rank-4-specific — the only `4` is a floor, and `RCCSDTQ` appears purely in names and
+log strings. `cc3`, `cc5` and `cc6` all route through it today. It is **misnamed, not
+miswritten**, and renaming yields the symmetry with `uccgen.cpp` at **no new indirection**.
+
+*It also fixes a live cosmetic bug:* a `cc6` run currently logs `RCCSDTQ` **eight times**,
+including in the energy line the user reads.
+
+**Scope:**
+
+- `ccsdtq.{cpp,h}` → `rccgen.{cpp,h}`; `run_rccsdtq` → `run_rccgen` (6 call sites, 3
+  includers).
+- Internal log tags become rank-derived, so `cc6` stops announcing itself as `RCCSDTQ`.
+- `run_uccgen`'s tag becomes rank-derived too — otherwise RCC gains rank-correct tags while
+  UCC keeps a flat `UCC :`, which is a *new* asymmetry introduced by fixing the old one.
+
+**The energy label is rank-derived too, and the scheme is chosen so rank 4 does not move:**
+
+```
+cc3 -> Total RCCSDT Energy      cc5 -> Total RCC5 Energy
+cc4 -> Total RCCSDTQ Energy     cc6 -> Total RCC6 Energy
+```
+
+> **Why that matters more than it looks.** Three things parse `Total RCCSDTQ Energy`:
+> `run_regressions.py:33`, the `contains` assertion in `be_rccsdtq_sto3g`, and
+> `ccsdtq_fci_acceptance.py` — the CCSDTQ==FCI gate, the strongest in the whole ccgen
+> effort. All three exercise **rank 4 only**, so keeping rank 4's label leaves every one of
+> them untouched; only the ranks that are *currently wrong* change. A flat rename to
+> `Total RCCGEN Energy` would have broken all three for no gain.
+
+*Kept deliberately, not renamed:*
+
+- **`PostHF::RCCSDTQ`** — the enum reaches `types.h`, the driver, io and checkpoint paths.
+  Wide blast radius, no gain; a comment saying "all generated RCC ranks" is enough.
+- **`be_rccsdtq_sto3g`** — renaming the regression ID breaks continuity with every prior
+  result recorded in the vault, and the case genuinely *is* CCSDTQ.
+
+*Gate:* `be_rccsdtq_sto3g` unchanged at `-14.4036550465` and `ccsdtq_fci_acceptance.py`
+still passing (both rank 4, so both must be byte-identical); plus a `cc3` run asserted to
+announce `RCCSDT` rather than `RCCSDTQ`, which is the bug this step removes.
 
 **U5.4 — `ucc2` against hand-written UCCSD (~S, the first real number).** A radical cation,
 using the in-tree oracle. **Land this before the FCI gate**: it exercises the whole stack at the
