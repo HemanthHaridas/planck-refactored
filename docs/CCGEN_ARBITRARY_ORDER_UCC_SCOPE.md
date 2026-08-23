@@ -5,16 +5,17 @@ kernels (UCC) alongside the existing arbitrary-order RCC path** — so an
 open-shell reference can drive `ucc4`/`ucc5` the way a closed-shell reference
 drives `cc4`/`cc5` today.
 
-**Status, 2026-08-22.** **U0, U1 and U2 are landed and numerically validated. U3 is next, and it
-is bigger than this doc originally said — it spans the emitter as well as the C++. U4 is largely
-done *by accident*, which is a hazard rather than a head start. U5 is untouched.**
+**Status, 2026-08-23.** **U0–U3 are landed and numerically validated.** The remaining work is
+U4 (a `--ucc` switch, plus deciding whether an empty `residuals_by_rank` needs a solver guard) and
+U5 (driver routing and the FCI-limit gate). U4 is largely done *by accident* — that is a hazard
+rather than a head start; see its section.
 
 | step | state |
 |---|---|
 | U0 | landed — `ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_spin_flip=…)` |
 | U1 | **landed** — `ucc_adapt_equations` + `ucc_spinterm_to_algebraterm`, validated against PySCF UCCSD at rank 4 (~6e-16) and against GCC-sliced at rank 6 (1.6e-17). U1.3 turned out to be **dead**, not work: U1.1 designed its hazard out. Detail in `CCGEN_U1_UCC_ADAPT_SCOPE.md` |
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
-| U3 | not started; **scoped U3.0–U3.4**. Rescoped twice: it is C++ *and* emitter, and the emitter half carries a **second** defect — 2 of the 4 ERI permutations are invalid for `abab` and **37 of 142** mixed reads use them, so fixing only the array names leaves those wrong. Mixed blocks also need ~2× the space patterns (13 vs 7) and mixed-spin *transforms*, so the cache is not 3 copies of the RCC one |
+| U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
 | U4 | **~90% already done, by accident** — the emitter emits a complete UCC TU today with no error. That is the hazard, not the win; see U4 |
 | U5 | not started |
 
@@ -470,55 +471,74 @@ that caps the reachable rank.
 it costs ~33% more memory to avoid one explicit swap in the emitter. The emitter must apply
 that swap **knowingly**, which is what U3.0 exists to make possible.
 
-#### Steps
+#### Steps — all landed
 
-**U3.0 — pin the spin-aware ERI symmetry group (~S, Python, no codegen).** A predicate over
-(block tag, permutation): valid iff the permutation maps the tag to itself. Pure function;
-no emitter change yet.
+**U3.0 — the spin-aware ERI symmetry group** (`eri_permutation_preserves_block` /
+`eri_permutations_for_block`, `test_ucc_eri_symmetry`). A permutation is usable on a block
+iff it maps the tag to itself. Same-spin keeps all four; `abab` keeps identity and bra↔ket.
+Grounded numerically on random real orbitals, not tag algebra alone.
 
-*Gate:* `aaaa` and `bbbb` admit all four; `abab` admits exactly identity and bra↔ket, and
-the two rejected ones are asserted to map to `baba`. Seconds, no solve.
+**U3.1 — the spin-blocked ERI cache** (`TensorCCBlockCache::spin_blocks`,
+`build_ucc_spin_block_cache`, `planck-cc-ucc-spin-blocks`). Its own TU
+(`ucc_blocks.cpp`) so the block/transform logic links without `ensure_eri` dragging in the
+Calculator, AO engine, RI, basis parsing and symmetry.
 
-*Why first, and why not to skip it as obvious:* the 37 invalid reads are precisely what
-happens when this symmetry group is applied without such a predicate. U3.2 keys off it, and
-it is the one place a closed-shell symmetry assumption can leak back in.
+**U3.2 — the emitter routes ERIs by block** (`_map_eri_tensor` takes the tag;
+`_eri_view_bindings` binds one view per (space, tag), mirroring the amplitude sector views).
 
-**U3.1 — spin-blocked `TensorCCBlockCache` (~M, C++).** Blocks keyed (space pattern, pair
-spin), built by `Correlation::transform_eri` with per-pair coefficient matrices — it already
-takes four independent ones, so no new integral engine and the transform is already
-OpenMP-parallel. `rebind_physicist` becomes spin-aware, picking its source by charge-density
-pair spin (measurement 3).
+> **The scope missed a third change here, and the emitter failing loudly is what surfaced
+> it.** `_CANONICAL_ERI_BLOCKS` is spin-free and its 8-fold orbit reaches all 16 o/v
+> patterns; a mixed block's orbits are smaller and reach only 11. The first UCC emit after
+> restricting the permutations therefore raised `NotImplementedError` on `vovv` — exactly
+> the coverage loss U3.0 had measured, now actually firing. `_canonical_eri_blocks_for`
+> derives the stored set from each tag's own group: **6 same-spin, 10 mixed**, matching
+> U3.1's cache. Three sides of the codegen boundary, one fact.
 
-*Gate:* for an RHF-degenerate UHF reference (`C_α == C_β`), every spin block equals the RCC
-block bytewise. Free and exact, and it catches a transposed spin index immediately.
+**U3.3 — spin-resolved Fock blocks** (`CanonicalRHFCCReference::spin_blocks`,
+`build_ucc_fock_blocks`, `_fock_view_bindings`). Simpler by nature: the Fock is two-index,
+so both slots carry the same spin — no mixed block, no permutation question. `vo` still
+folds onto `ov` because the Fock is symmetric, and that reorder is spin-safe precisely
+because a two-index tag cannot mix spins the way `<ab|ab>` does. This is where the spin
+resolution **withdrawn from U2's reference-variant** belongs, and it costs no kernel-
+signature change.
 
-> **That gate is VACUOUS for the mixed block's pair ordering**, and this is the trap to
-> design against: with `C_α == C_β` the `(a|b)` and `(b|a)` orderings coincide, so a swapped
-> pair passes. Pair it with one asymmetric-reference check (`noa != nob`, distinct α/β
-> energies) — the same reasoning that made U2.1's `noa=4 nva=3 nob=2 nvb=5` fixture
-> load-bearing, and the same class as the `"abab"`-cannot-catch-it note recorded there.
+**U3.4 — the open-shell MP2 limit** (in `planck-cc-ucc-spin-blocks`).
 
-**U3.2 — thread the tag through `_map_eri_tensor` (~M, Python).** Two coupled changes, and
-either alone is worse than neither: route `v_<tag>` to the tagged array, **and** consult
-U3.0's predicate, emitting the explicit bra↔ket recovery for a permutation that would leave
-the block. Doing only the first is the 37-read defect above, now disguised by correct-looking
-array names.
+> **Scoped as "reproduce UMP2 from a single Jacobi step"; that is not what it needed to be,
+> and the difference matters for sequencing.** A Jacobi step needs the solver, a
+> `UHFReference` threaded through the generated runtime, and an SCF — i.e. it needs U5, so
+> as scoped U3.4 could not have closed before U5. But first-order MP2 amplitudes are
+> `t2 = <ij||ab>/D` in closed form, so the energy can be assembled directly from U3.1's
+> integrals and U2.1's denominators and compared against an independent transform. Stronger
+> (it fails if either half is wrong **or** if both are right but misaligned) and cheaper
+> (no solver, no SCF, no PySCF; runs in 0.01 s).
+>
+> The correspondence it rests on, verified against `mp2_internal.cpp` rather than assumed:
+> UMP2's `ovOV = transform_eri(eri, nb, Ca_occ, Ca_virt, Cb_occ, Cb_virt)` is the same four
+> matrices in the same order as U3.1's `oovv_abab`, so the mixed block must agree with the
+> production UMP2 mixed-spin ERI exactly.
+>
+> A closed-form gate like this invites one specific failure — two zeros agreeing — so both
+> channels are asserted non-trivially non-zero, and the spin orbital energies are
+> deliberately non-degenerate so an aa/bb mix-up moves the answer instead of cancelling.
 
-*Gate:* `test_ucc_emit_distinct_blocks.py` goes green — it is red for exactly this. Plus a
-new assertion that the invalid-permutation read count is **zero** (it is 37 today), which is
-the half the existing gate cannot see.
+##### Two gate defects found by mutation, worth keeping
 
-**U3.3 — the same fix for `f_aa` / `f_bb` (~S).** `CanonicalRHFCCReference` gains
-spin-resolved `f_oo`/`f_ov`/`f_vv`; same emitter branch, and no permutation question since
-the Fock is two-index. Small, but it is where the spin resolution withdrawn from U2's
-reference-variant actually belongs.
+Both would have certified a broken fix, and neither was visible by reading:
 
-*Gate:* the Fock half of the pre-gate goes green.
+- `test_ucc_eri_symmetry`'s original assertion **re-implemented the routing inline** against
+  the module constants instead of calling the emitter. It measured a simulation of the old
+  code and stayed red at exactly 37 even after `_map_eri_tensor` was fixed. *A gate that
+  cannot observe the fix cannot certify it.*
+- A mutation restoring the spin-blind permutation list **survived** the rewritten gate: it
+  still binds only legitimate blocks, because the per-tag block set is wide enough to
+  express its answer. What moves is which array each *read* names and in what *index order*
+  (`v_abab_vovv(a,j,b,c)` vs `v_abab_ovvv(j,a,c,b)`) — invisible to anything inspecting the
+  bound set. `test_every_read_is_the_one_the_valid_group_selects` replays the routing per
+  block and compares every emitted read.
 
-**U3.4 — the open-shell MP2-limit check (~S, the payoff).** The gate U2 deferred: the rank-2
-UCC denominators and integrals reproduce the existing UMP2 correlation energy from a single
-Jacobi step. First end-to-end UCC number, and it needs U3.1–U3.3 — a Jacobi step needs
-correct integrals as well as correct denominators.
+Also: once both `mo_blocks` and `reference` exposed `spin_block`, the ERI assertions began
+counting Fock views as ERI blocks. Anchor such regexes on the receiver.
 
 ### U4 — emit + registry for UCC blocks (~S given U1/U3) — **mostly done by accident**
 
