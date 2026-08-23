@@ -19,7 +19,7 @@ that, not the keyword, is the work.
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
 | U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
 | U4 | **landed, U4.0–U4.3.** The runtime accepts an ALL-SECTORS bundle (no per-rank reference residual), and `--ucc` reaches it from the build. U4.1 turned out **not to be work** — the update loop already handled it; U4.2 fixed a real out-of-bounds read (segfault, not a wrong number) that U4.0 had made reachable |
-| U5 | **U5.0 + U5.1a landed** — distinct UCC symbols + filename (the two TUs co-link), and the 24-block canonical set, gated against ccgen on both sides. U5.1b–U5.5 open. Rescoped ~S → ~M: `build_ucc_{spin_block_cache,fock_blocks,denominator_cache}` are called **only from tests**, so U5 is prepare-path wiring plus a UHF reference, not just a keyword |
+| U5 | **U5.0–U5.2 landed** — distinct UCC symbols + filename (the two TUs co-link), the 24-block canonical set gated against ccgen on both sides, a UCC prepare path, and the physicist rebind (validated by re-deriving the UMP2 energy through it). **U5.3–U5.5 open.** Rescoped ~S → ~M: `build_ucc_{spin_block_cache,fock_blocks,denominator_cache}` are called **only from tests**, so U5 is prepare-path wiring plus a UHF reference, not just a keyword |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -792,10 +792,25 @@ discarded.
 > rather than only the values.** The gate's discriminating assertion is exactly that, and
 > mutation testing confirms a permuted tag fails only on `abab`, never on same-spin.
 
-*Gate:* all 24 blocks survive the rebind with swapped middle dims and `out(p,q,r,s) ==
-in(p,r,q,s)` element-wise; `oovv_abab` rebinds to `(noa, nob, nva, nvb)`; and the fixture's
-mixed middle dims are asserted **asymmetric**, so the shape check has teeth. Verified
-falsifiable against dropping `spin_blocks` and against permuting the tag.
+*Gate (structural):* all 24 blocks survive the rebind with swapped middle dims and
+`out(p,q,r,s) == in(p,r,q,s)` element-wise; `oovv_abab` rebinds to `(noa, nob, nva, nvb)`; and
+the fixture's mixed middle dims are asserted **asymmetric**, so the shape check has teeth.
+Verified falsifiable against dropping `spin_blocks` and against permuting the tag.
+
+*Gate (physics), U5.2c:* U3.4 assembles the UMP2 correlation energy from the **chemists** cache
+indexing `(i,a,j,b)`; this re-assembles the same energy from the **rebound** cache indexing
+physicist `(i,j,a,b)`, and requires agreement. Different index order, different data, identical
+answer — the first check spanning the whole chain (UHF reference → spin-blocked transform →
+rebind).
+
+> **Why the physics gate is not redundant with the structural one.** A rebind that swaps the
+> wrong axes is caught structurally, before the energy is reached. A rebind that is a **no-op**
+> — data left in chemists order — is structurally plausible at every level (right block count,
+> right keys, right dims) and wrong only in the physics. It is caught by the energy assertions
+> alone, on both channels: same-spin `-0.0130` vs `-0.1001`, mixed `-0.1320` vs `-0.1248`.
+>
+> Both channels are asserted non-trivially non-zero, so the agreement cannot be two zeros
+> matching — the failure mode any "these two should agree" gate invites.
 
 **U5.3 — registry + keyword (~S).** `make_generated_ucc_kernels(int rank)` beside the RCC one;
 `ucc2` / `ucc4` in the keyword table; the driver's RHF-reference guard relaxed for them. This is
