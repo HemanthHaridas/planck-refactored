@@ -1030,6 +1030,7 @@ def print_cpp_planck(
     dress_operators: bool = False,
     force_arbitrary: bool = False,
     spin_adapt: bool = False,
+    ucc: bool = False,
     **kwargs: Any,
 ) -> str:
     """Generate Planck-compatible C++ tensor kernels.
@@ -1073,6 +1074,26 @@ def print_cpp_planck(
     else:
         eqs = generate_cc_equations(method, **kwargs)
 
+    if ucc and spin_adapt:
+        # Both resolve spin, in opposite directions: spin_adapt COLLAPSES the
+        # blocks into one spatial tensor per rank, ucc KEEPS them resolved. Running
+        # both would collapse and then attempt to re-resolve, which is not a
+        # composition -- raise rather than pick a winner, the same way
+        # dress_operators/factorize_tau do.
+        raise ValueError(
+            "ucc and spin_adapt are mutually exclusive: spin adaptation collapses "
+            "spin blocks into one spatial tensor per rank, while UCC keeps them "
+            "resolved. Pass only one.")
+
+    if ucc:
+        # U4: keep the spin blocks resolved instead of collapsing them, so an
+        # unrestricted reference drives one residual per stored block
+        # (`doubles_aaaa`, `doubles_abab`, ...). Every target is block-tagged, so
+        # the emitted bundle carries no per-rank reference residual at all -- an
+        # ALL-SECTORS bundle, which the runtime accepts as of U4.0.
+        from .spin import ucc_adapt_equations
+        eqs = ucc_adapt_equations(eqs)
+
     if spin_adapt:
         # R1.0: spin-adapt the GCC manifold to restricted (spatial) terms so the
         # emitted kernel is a genuine spatial contraction (2*(direct)-(exchange)),
@@ -1113,6 +1134,13 @@ def print_cpp_planck(
         # docs/CCGEN_CCSDTQ_MULTISECTOR.md.
         if include_intermediates:
             include_intermediates = False
+
+    if ucc and include_intermediates:
+        # Same reasoning as the spin_adapt force-off above: CSE was built for the
+        # raw occ-first spin-orbital layout and is not validated on spin-RESOLVED
+        # terms either, and UCC multiplies the term count by the block count, so
+        # the compile-time argument is strictly worse here.
+        include_intermediates = False
 
     # V1.2.4: same force-off under dressing. CSE and dressing both materialize through the
     # `intermediates` channel, so running both would need a merge the emitter has no
@@ -1173,8 +1201,11 @@ def print_cpp_planck(
         method,
         eqs,
         intermediates=intermediates,
-        force_arbitrary=force_arbitrary,
-        spin_adapted=spin_adapt,
+        # UCC terms are already resolved AlgebraTerms, exactly like spin-adapted
+        # ones, so the closed-shell relabel-only lowering must not run on them
+        # either -- and it would crash on the block-tagged target names.
+        force_arbitrary=force_arbitrary or ucc,
+        spin_adapted=spin_adapt or ucc,
     )
 
 

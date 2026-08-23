@@ -50,6 +50,19 @@ def main() -> None:
              "the historical (defective) emit.",
     )
     parser.add_argument(
+        "--ucc",
+        action="store_true",
+        help="Emit UNRESTRICTED (spin-block resolved) CC kernels: one residual "
+             "per stored block (doubles_aaaa / doubles_abab / doubles_bbbb) "
+             "instead of one per rank. Mutually exclusive with --spin-adapt, "
+             "which collapses the same blocks into a single spatial tensor -- "
+             "the opposite direction. Every UCC target is block-tagged, so the "
+             "emitted bundle carries no per-rank reference residual: an "
+             "all-sectors bundle, which the runtime accepts as of U4.0. Requires "
+             "a UHF reference at run time. Default off, so the default build is "
+             "byte-identical.",
+    )
+    parser.add_argument(
         "--engine",
         choices=["diagram", "wick"],
         default="diagram",
@@ -134,6 +147,7 @@ def main() -> None:
             factorize_tau=args.factorize_tau and not dress_operators,
             dress_operators=dress_operators,
             spin_adapt=args.spin_adapt,
+            ucc=args.ucc,
             force_arbitrary=force_arbitrary,
             intermediate_threshold=args.intermediate_threshold,
             intermediate_memory_budget_bytes=(
