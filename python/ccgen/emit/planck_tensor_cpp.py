@@ -260,6 +260,58 @@ def _map_eri_tensor(
     )
 
 
+def _fock_read(block_tag: str | None, space: str, *names: str) -> str:
+    """The C++ expression reading one Fock element.
+
+    RCC reads the reference member directly (`reference.f_ov(i, a)`). UCC reads a
+    per-spin view bound once per kernel (`f_aa_ov(i, a)`), the same shape as the
+    spin-blocked ERI reads and the amplitude sector views. Must agree with
+    `_fock_view_bindings`, which declares these names.
+    """
+    args = ", ".join(names)
+    if block_tag is None:
+        return f"reference.f_{space}({args})"
+    return f"f_{block_tag}_{space}({args})"
+
+
+def _fock_blocks_used(terms) -> list[tuple[str, str]]:
+    """Distinct (space, spin tag) Fock blocks referenced across `terms`.
+
+    `vo` is normalized to `ov` here exactly as `_map_factor` does, so the bound
+    set and the reads cannot disagree about whether a `vo` read needs its own
+    view (it does not -- the Fock is symmetric).
+    """
+    used: set[tuple[str, str]] = set()
+    for term in terms:
+        for factor in term.factors:
+            obj = _source_tensor(factor)
+            m = re.fullmatch(r"f_([ab]+)", obj.name)
+            if not m:
+                continue
+            spaces = tuple(_space_char(idx) for idx in obj.indices)
+            if spaces == ("o", "o"):
+                space = "oo"
+            elif spaces == ("v", "v"):
+                space = "vv"
+            else:
+                space = "ov"
+            used.add((space, m.group(1)))
+    return sorted(used)
+
+
+def _fock_view_bindings(terms, indent: int = 4) -> list[str]:
+    """C++ lines binding one spin-resolved Fock view per (space, tag) used.
+
+    Empty on the RCC path, where every `f` is a bare `reference.f_<space>` read.
+    """
+    pad = " " * indent
+    return [
+        f'{pad}const auto &f_{tag}_{space} = '
+        f'*reference.spin_block("{space}", "{tag}").value();'
+        for space, tag in _fock_blocks_used(terms)
+    ]
+
+
 def _canonical_eri_blocks_for(block_tag: str | None) -> dict[str, tuple[str, ...]]:
     """The stored canonical blocks available to `block_tag`.
 
@@ -339,15 +391,21 @@ def _map_factor(
     integral_tag = integral_match.group(2) if integral_match else None
 
     if integral_root == "f":
+        # U3.3: same tag routing as the ERIs, and simpler by nature. The Fock is
+        # two-index, so BOTH slots carry the same spin -- there is no mixed block,
+        # no permutation-validity question, and nothing to enumerate. Collapsing
+        # `vo` onto `ov` stays correct because the Fock is symmetric, and that
+        # reorder is spin-safe precisely because a two-index tag cannot mix spins
+        # the way <ab|ab> does.
         left, right = indices
         if left.space == "occ" and right.space == "occ":
-            return 1, f"reference.f_oo({left.name}, {right.name})"
+            return 1, _fock_read(integral_tag, "oo", left.name, right.name)
         if left.space == "vir" and right.space == "vir":
-            return 1, f"reference.f_vv({left.name}, {right.name})"
+            return 1, _fock_read(integral_tag, "vv", left.name, right.name)
         occ = next((idx for idx in indices if idx.space == "occ"), None)
         vir = next((idx for idx in indices if idx.space == "vir"), None)
         if occ is not None and vir is not None:
-            return 1, f"reference.f_ov({occ.name}, {vir.name})"
+            return 1, _fock_read(integral_tag, "ov", occ.name, vir.name)
         raise NotImplementedError(f"Unsupported Fock block for {tensor_obj!r}")
 
     if integral_root == "v":
@@ -703,7 +761,8 @@ def _emit_kernel(
 
     if arbitrary:
         bindings = (_amplitude_view_bindings(emitted_terms)
-                    + _eri_view_bindings(emitted_terms))
+                    + _eri_view_bindings(emitted_terms)
+                    + _fock_view_bindings(emitted_terms))
         if bindings:
             lines.append("")
             lines.extend(bindings)
@@ -759,7 +818,8 @@ def _emit_chunked_kernel(
                     "reference, mo_blocks, denominators, amplitudes);")
         if arbitrary:
             bindings = (_amplitude_view_bindings(chunk)
-                        + _eri_view_bindings(chunk))
+                        + _eri_view_bindings(chunk)
+                        + _fock_view_bindings(chunk))
             out.extend(bindings)
         for i, term in enumerate(chunk, start=1):
             out.append(emit_planck_term(
@@ -862,7 +922,8 @@ def _emit_intermediate_builder(
         binding_terms = ([s for _, s in steps] if (factor_body and len(steps) > 1)
                          else lowered_definition_terms)
         bindings = (_amplitude_view_bindings(binding_terms)
-                    + _eri_view_bindings(binding_terms))
+                    + _eri_view_bindings(binding_terms)
+                    + _fock_view_bindings(binding_terms))
         if bindings:
             lines.extend(bindings)
             lines.append("")

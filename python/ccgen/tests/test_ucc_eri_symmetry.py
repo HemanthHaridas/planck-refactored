@@ -248,7 +248,7 @@ class EmitterConsumesThePredicateTests(unittest.TestCase):
         outside `_canonical_eri_blocks_for("abab")` to be expressible at all.
         """
         tu = self._ucc_tu()
-        bound = set(re.findall(r'spin_block\("(\w+)", "(\w+)"\)', tu))
+        bound = set(re.findall(r'mo_blocks\.spin_block\("(\w+)", "(\w+)"\)', tu))
         self.assertTrue(bound, "the UCC TU binds no spin-blocked ERI view at all")
         for space, tag in bound:
             with self.subTest(space=space, tag=tag):
@@ -264,7 +264,7 @@ class EmitterConsumesThePredicateTests(unittest.TestCase):
         of one naming convention and can drift apart."""
         tu = self._ucc_tu()
         bound = {f"v_{tag}_{space}" for space, tag
-                 in re.findall(r'spin_block\("(\w+)", "(\w+)"\)', tu)}
+                 in re.findall(r'mo_blocks\.spin_block\("(\w+)", "(\w+)"\)', tu)}
         read = set(re.findall(r"\b(v_[ab]+_[a-z]{4})\(", tu))
         self.assertTrue(read, "the UCC TU reads no spin-blocked ERI at all")
         self.assertEqual(
@@ -332,7 +332,7 @@ class EmitterConsumesThePredicateTests(unittest.TestCase):
         """The measured consequence, asserted end-to-end rather than in the
         abstract: 10 arrays for `abab`, 6 for each same-spin block."""
         tu = self._ucc_tu()
-        bound = re.findall(r'spin_block\("(\w+)", "(\w+)"\)', tu)
+        bound = re.findall(r'mo_blocks\.spin_block\("(\w+)", "(\w+)"\)', tu)
         per_tag: dict[str, set[str]] = {}
         for space, tag in bound:
             per_tag.setdefault(tag, set()).add(space)

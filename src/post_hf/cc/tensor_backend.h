@@ -37,6 +37,32 @@ namespace HartreeFock::Correlation::CC
         Tensor2D f_oo;
         Tensor2D f_ov;
         Tensor2D f_vv;
+
+        // U3.3: spin-resolved Fock blocks for the UCC path, keyed (space, tag)
+        // where tag is "aa" or "bb". The three untagged members above stay the
+        // RCC storage and are untouched; a UCC build populates `spin_blocks`
+        // instead and leaves them empty.
+        //
+        // Simpler than the ERI case and deliberately so: the Fock is two-index,
+        // so both slots carry the SAME spin and there is no mixed block, no
+        // permutation-validity question, and no orbit to enumerate. `f_ov` and
+        // `f_vo` still collapse onto one stored block because the Fock is
+        // symmetric -- that reorder is spin-safe here precisely because a
+        // two-index tag cannot mix spins the way <ab|ab> does.
+        //
+        // This is where the spin resolution WITHDRAWN from U2's reference-variant
+        // belongs: the kernels only ever touch f_oo/f_ov/f_vv and
+        // orbital_partition, so resolving those three is the whole job, and it
+        // costs no kernel-signature change.
+        std::vector<std::pair<std::pair<std::string, std::string>, Tensor2D>> spin_blocks;
+
+        // The stored Fock block for (space, tag). No fallback to the untagged
+        // members, for the same reason TensorCCBlockCache::spin_block has none:
+        // on a UCC build they are empty, and on an RHF build they are the
+        // spin-free matrix, which is a different quantity.
+        [[nodiscard]] std::expected<const Tensor2D *, std::string> spin_block(
+            const std::string &space,
+            const std::string &tag) const;
     };
 
     // Unlike the teaching cache in mo_blocks.*, the production cache avoids the
@@ -113,6 +139,17 @@ namespace HartreeFock::Correlation::CC
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const CanonicalRHFCCReference &reference,
         const std::string &tag);
+
+    // U3.3: the spin-resolved Fock blocks for the UCC path. Takes the MO-basis
+    // alpha and beta Fock matrices (Ct F C, each in its own spin's MO order,
+    // occupied columns first) and slices the oo/ov/vv blocks per spin.
+    //
+    // Deliberately takes the MO matrices rather than a Calculator: the slicing is
+    // the part that can be wrong, and it is gateable without an SCF.
+    std::expected<CanonicalRHFCCReference, std::string> build_ucc_fock_blocks(
+        const UHFReference &reference,
+        const Eigen::MatrixXd &fock_alpha_mo,
+        const Eigen::MatrixXd &fock_beta_mo);
 
     // U3.1 core: build the spin-blocked cache from an ALREADY-MATERIALIZED AO ERI
     // vector. Split out from build_ucc_spin_block_cache so the block/transform

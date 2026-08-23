@@ -176,28 +176,41 @@ class DistinctArrayPerBlockTests(unittest.TestCase):
             "routing storage at all")
 
     def test_fock_blocks_reach_distinct_arrays(self):
-        """`f_aa` and `f_bb` must not both collapse onto `reference.f_ov`.
+        """`f_aa` and `f_bb` must reach their own matrices, not one `reference.f_ov`.
 
-        Same counting argument. NOT a per-kernel comparison -- see the class comment:
-        both singles kernels legitimately reference both spin Fock blocks.
+        Post-U3.3 the emitted form is a per-spin view (`f_aa_ov`) bound from
+        `reference.spin_block("ov", "aa")`. Same shape update as the ERI
+        assertion above, for the same reason.
+
+        Still counted per factor, never compared per kernel: measured, both
+        singles kernels legitimately reference `f_aa` AND `f_bb`, so a correct
+        emit gives them identical accessor sets and a per-kernel difference
+        assertion would be permanently red. That was caught by a falsifiability
+        probe before this gate first landed and is the reason it is written this
+        way.
         """
         tu = _ucc_tu()
         expected = self._distinct_factor_names("f")
-        self.assertEqual(len(expected), 2, f"fixture drift: expected 2 f blocks, got {sorted(expected)}")
+        self.assertEqual(len(expected), 2,
+                         f"fixture drift: expected 2 f blocks, got {sorted(expected)}")
 
-        emitted = set(re.findall(r"reference\.(f_[a-z]+)\(", tu))
-        self.assertTrue(emitted, "the TU reads no Fock element at all")
+        self.assertEqual(
+            re.findall(r"reference\.f_[ov]{2}\(", tu), [],
+            "untagged reference.f_* reads remain, collapsing f^alpha and f^beta")
+
+        reads = set(re.findall(r"\b(f_([ab]+)_([ov]{2}))\(", tu))
+        self.assertTrue(reads, "the TU reads no spin-resolved Fock element at all")
 
         by_space: dict[str, set[str]] = {}
-        for name in emitted:
-            by_space.setdefault(name[:4], set()).add(name)
+        for full, _tag, space in reads:
+            by_space.setdefault(space, set()).add(full)
 
         collapsed = sorted(sp for sp, names in by_space.items() if len(names) == 1)
-        self.assertFalse(
-            collapsed,
-            f"these Fock space blocks emit as a SINGLE accessor with no spin routing: "
-            f"{collapsed}. The algebra names {sorted(expected)} -- f^alpha and f^beta "
-            f"are different matrices under UHF.")
+        self.assertEqual(
+            collapsed, [],
+            f"these Fock space blocks emit as a SINGLE accessor: {collapsed}. "
+            f"The algebra names {sorted(expected)} -- f^alpha and f^beta are "
+            f"different matrices under UHF.")
 
 
 if __name__ == "__main__":

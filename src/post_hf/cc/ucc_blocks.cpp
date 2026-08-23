@@ -36,6 +36,75 @@ namespace HartreeFock::Correlation::CC
             ", " + tag + ")");
     }
 
+    std::expected<const Tensor2D *, std::string> CanonicalRHFCCReference::spin_block(
+        const std::string &space,
+        const std::string &tag) const
+    {
+        for (const auto &entry : spin_blocks)
+            if (entry.first.first == space && entry.first.second == tag)
+                return &entry.second;
+        return std::unexpected(
+            "CanonicalRHFCCReference::spin_block: no stored Fock block for (" +
+            space + ", " + tag + ")");
+    }
+
+    std::expected<CanonicalRHFCCReference, std::string> build_ucc_fock_blocks(
+        const UHFReference &reference,
+        const Eigen::MatrixXd &fock_alpha_mo,
+        const Eigen::MatrixXd &fock_beta_mo)
+    {
+        CanonicalRHFCCReference out;
+
+        struct SpinSpec
+        {
+            const char *tag;
+            int n_occ;
+            int n_virt;
+            const Eigen::MatrixXd *fock;
+        };
+        const SpinSpec spins[2] = {
+            {"aa", reference.n_occ_alpha, reference.n_virt_alpha, &fock_alpha_mo},
+            {"bb", reference.n_occ_beta, reference.n_virt_beta, &fock_beta_mo},
+        };
+
+        for (const auto &spin : spins)
+        {
+            const int no = spin.n_occ;
+            const int nv = spin.n_virt;
+            if (no <= 0 || nv <= 0)
+                return std::unexpected(std::format(
+                    "build_ucc_fock_blocks: spin '{}' has an empty space "
+                    "(n_occ={} n_virt={}).", spin.tag, no, nv));
+            if (spin.fock->rows() < no + nv || spin.fock->cols() < no + nv)
+                return std::unexpected(std::format(
+                    "build_ucc_fock_blocks: the MO Fock matrix for spin '{}' is "
+                    "{}x{} but the partition needs at least {}x{}.",
+                    spin.tag, spin.fock->rows(), spin.fock->cols(),
+                    no + nv, no + nv));
+
+            Tensor2D f_oo(no, no, 0.0);
+            for (int i = 0; i < no; ++i)
+                for (int j = 0; j < no; ++j)
+                    f_oo(i, j) = (*spin.fock)(i, j);
+
+            Tensor2D f_ov(no, nv, 0.0);
+            for (int i = 0; i < no; ++i)
+                for (int a = 0; a < nv; ++a)
+                    f_ov(i, a) = (*spin.fock)(i, no + a);
+
+            Tensor2D f_vv(nv, nv, 0.0);
+            for (int a = 0; a < nv; ++a)
+                for (int b = 0; b < nv; ++b)
+                    f_vv(a, b) = (*spin.fock)(no + a, no + b);
+
+            out.spin_blocks.push_back({{"oo", spin.tag}, std::move(f_oo)});
+            out.spin_blocks.push_back({{"ov", spin.tag}, std::move(f_ov)});
+            out.spin_blocks.push_back({{"vv", spin.tag}, std::move(f_vv)});
+        }
+
+        return out;
+    }
+
     std::expected<TensorCCBlockCache, std::string> build_ucc_spin_block_cache_from_eri(
         const std::vector<double> &eri,
         std::size_t nb,
