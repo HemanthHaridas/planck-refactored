@@ -19,7 +19,7 @@ that, not the keyword, is the work.
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
 | U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
 | U4 | **landed, U4.0–U4.3.** The runtime accepts an ALL-SECTORS bundle (no per-rank reference residual), and `--ucc` reaches it from the build. U4.1 turned out **not to be work** — the update loop already handled it; U4.2 fixed a real out-of-bounds read (segfault, not a wrong number) that U4.0 had made reachable |
-| U5 | **U5.0–U5.2 landed** — distinct UCC symbols + filename (the two TUs co-link), the 24-block canonical set gated against ccgen on both sides, a UCC prepare path, and the physicist rebind (validated by re-deriving the UMP2 energy through it). **U5.3–U5.5 open.** Rescoped ~S → ~M: `build_ucc_{spin_block_cache,fock_blocks,denominator_cache}` are called **only from tests**, so U5 is prepare-path wiring plus a UHF reference, not just a keyword |
+| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b (keyword), U5.4, U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -624,7 +624,7 @@ over-relaxing a guard, a silent skip in the sector update that still returns suc
 > **name the guard** they intend to exercise. Where two guards can reject the same input, asserting
 > only "it was rejected" tests nothing in particular.
 
-### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0–U5.2 landed**
+### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0–U5.3a landed**
 
 > **Rescoped `~S` → `~M`.** The original text said "the solver loop is unchanged — it already
 > iterates tagged blocks", which is true and is not the work. Four measurements set the shape.
@@ -812,10 +812,42 @@ rebind).
 > Both channels are asserted non-trivially non-zero, so the agreement cannot be two zeros
 > matching — the failure mode any "these two should agree" gate invites.
 
-**U5.3 — registry + keyword (~S).** `make_generated_ucc_kernels(int rank)` beside the RCC one;
-`ucc2` / `ucc4` in the keyword table; the driver's RHF-reference guard relaxed for them. This is
-also where a `PLANCK_CC_UCC` CMake option belongs — **not earlier**: a build flag that emits a
-TU nothing can reach is a flag that cannot be tested.
+**U5.3 — registry + keyword (~S) — U5.3a LANDED, U5.3b next.**
+
+**U5.3a — registry and build option — LANDED.** `make_generated_ucc_kernels(int rank)` beside
+the RCC one, plus `generated_ucc_kernels_available()` so a caller can tell *not built* from
+*built but this rank is out of range*. A **sibling**, not a flag on the RCC lookup: the two
+return bundles of different **shape** — RCC carries one reference residual per rank in
+`residuals_by_rank`, UCC carries none and drives everything through `sector_residuals`.
+
+Without the UCC TUs the lookup **errors** naming the reconfigure, rather than falling back to
+the RCC bundle. That fallback would run a restricted kernel against an unrestricted reference:
+compiles, runs, plausible wrong number.
+
+The `PLANCK_CC_UCC` option lands here and **not earlier**, as scoped — a flag emitting a TU
+nothing can reach cannot be tested. It became testable once U5.1's prepare path and U5.2's
+rebind existed. Default OFF; the UCC TUs roughly triple generated-kernel compile time.
+
+> **This is the first end-to-end validation of U5.0's naming work.** Until now the collision fix
+> was gated only on emitted *text*. A tree configured with `-DPLANCK_CC_UCC=ON` emits both TUs
+> and links `hartree-fock` with **both kernel sets in one binary** — `compute_ccsdt_energy` and
+> `compute_ucc_ccsdt_energy` both present, zero duplicate-symbol errors.
+>
+> *Scope of that check, because it is easy to overstate:* the scratch tree has an unconfigured
+> basis path and cannot run inputs, so it validates **linking only**. Runtime stays with the
+> main tree, where the default path is verified unchanged and no UCC TU is emitted at all.
+
+> **One CMake trap.** A conditional `COMMAND` inside `add_custom_target` cannot be written with
+> a generator expression: an empty `$<...:COMMAND>` expands to a bare newline and the shell
+> fails with ``syntax error near unexpected token `newline'`` — which reads like a CMake bug
+> rather than a misuse. The UCC pass is a `POST_BUILD` step instead, which is also clearer about
+> it being a **second** generator invocation (`--ucc` and `--spin-adapt` are mutually exclusive,
+> and the RCC TUs must be emitted either way).
+
+**U5.3b — the keyword** (next): `ucc2` / `ucc4` in the keyword table, following the `cc3`…`cc6`
+precedent (one enum value, excitation rank carried on `OptionsSCF::_cc_generated_rank`, so no
+new enum member per rank and no new driver branch); and the driver's RHF-reference guard
+relaxed for them.
 
 *Gate:* `correlation ucc2` reaches the solver and returns a number rather than an error.
 
