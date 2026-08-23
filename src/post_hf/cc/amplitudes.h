@@ -127,6 +127,18 @@ namespace HartreeFock::Correlation::CC
     //
     // Each slot draws its orbital energy from its own spin's set, so a mixed
     // block's denominator is genuinely spin-resolved rather than a relabeling.
+    // U5.1b: the UCC amplitude blocks of one excitation rank, as occ-half-first
+    // spin tags. A rank-n block has n+1 independent alpha-count sectors and no
+    // a<->b fold is available (alpha and beta are different orbitals), so rank 1
+    // gives {aa, bb} and rank 2 gives {aaaa, abab, bbbb}.
+    //
+    // The C++ mirror of ccgen's `ucc_independent_blocks`, and derivable from the
+    // rank alone -- which is what lets `prepare_generated_ucc_state` build the
+    // denominators BEFORE the kernel bundle is known. That ordering is forced:
+    // `ensure_amplitude_sectors` sizes each amplitude block from its own
+    // denominator (U2.2), so the denominators must already be there.
+    [[nodiscard]] std::vector<std::string> ucc_amplitude_blocks(int excitation_rank);
+
     // U2.2: the whole UCC denominator cache, one entry per (rank, tag) block the
     // kernel bundle declares. Drives build_ucc_block_denominator over `blocks`.
     //

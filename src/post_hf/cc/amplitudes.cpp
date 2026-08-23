@@ -305,6 +305,31 @@ namespace HartreeFock::Correlation::CC
         }
     }
 
+    std::vector<std::string> ucc_amplitude_blocks(int excitation_rank)
+    {
+        std::vector<std::string> blocks;
+        if (excitation_rank < 1)
+            return blocks;
+
+        // Sector k has k alpha slots and (rank - k) beta slots in EACH half, and
+        // the tag is alpha-before-beta per half (the within-half antisymmetry
+        // folds slot permutations, so only the count matters). Both halves carry
+        // the same string, hence the doubling.
+        //
+        // Every k from 0..rank is independent: unlike the closed-shell case there
+        // is no global a<->b flip to fold k against rank-k, because alpha and beta
+        // are different orbitals.
+        blocks.reserve(static_cast<std::size_t>(excitation_rank) + 1);
+        for (int alpha_count = excitation_rank; alpha_count >= 0; --alpha_count)
+        {
+            const std::string half =
+                std::string(static_cast<std::size_t>(alpha_count), 'a') +
+                std::string(static_cast<std::size_t>(excitation_rank - alpha_count), 'b');
+            blocks.push_back(half + half);
+        }
+        return blocks;
+    }
+
     std::expected<ArbitraryOrderDenominatorCache, std::string>
     build_ucc_denominator_cache(
         const UHFReference &reference,

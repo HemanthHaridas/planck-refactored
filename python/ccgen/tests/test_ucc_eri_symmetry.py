@@ -391,6 +391,45 @@ class CppAgreesWithPythonTests(unittest.TestCase):
                     f"ccgen's block count for {tag} changed; the C++ "
                     f"ucc_canonical_blocks() and its gate must move with it")
 
+    def test_cpp_amplitude_blocks_match_ucc_independent_blocks(self):
+        """U5.1b: the C++ amplitude vocabulary must equal ccgen's per rank.
+
+        `ucc_amplitude_blocks(rank)` in amplitudes.cpp is what
+        `prepare_generated_ucc_state` builds denominators from, and the kernel
+        bundle's `sector_tags` are what the solver later drives. If the two
+        disagree, prepare allocates denominators for blocks the kernels never ask
+        about -- and, worse, misses ones they do, which
+        `ensure_amplitude_sectors` then skips silently because an all-sectors
+        state has no reference rank to fall back to.
+
+        Checked by REPLAYING the C++ construction rule against ccgen's output
+        rather than parsing a literal: the C++ builds the tags from a loop over
+        alpha-count, so there is no table to read.
+        """
+        from ccgen.spin import ucc_independent_blocks
+
+        for rank in range(1, 7):
+            with self.subTest(rank=rank):
+                # The C++ rule: alpha_count from rank down to 0; each half is
+                # 'a'*k + 'b'*(rank-k); the tag is that half twice.
+                cpp = [("a" * k + "b" * (rank - k)) * 2
+                       for k in range(rank, -1, -1)]
+                self.assertEqual(
+                    cpp, ucc_independent_blocks(2 * rank),
+                    f"the C++ amplitude-block rule and ucc_independent_blocks "
+                    f"disagree at rank {rank}")
+
+    def test_amplitude_block_count_has_no_spin_flip_fold(self):
+        """n+1 sectors, never fewer. A fold of k against rank-k is the closed-shell
+        assumption and would silently halve the count -- the single easiest way to
+        introduce a wrong answer here (the scope doc calls it out for
+        `_amplitude_block_tag` for the same reason)."""
+        from ccgen.spin import ucc_independent_blocks
+
+        for rank in range(1, 7):
+            with self.subTest(rank=rank):
+                self.assertEqual(len(ucc_independent_blocks(2 * rank)), rank + 1)
+
     def test_the_mixed_block_is_the_one_that_differs(self):
         """States the reason the counts differ, so a future edit that "tidies"
         them to be equal has to confront it: two of the four symmetries are not

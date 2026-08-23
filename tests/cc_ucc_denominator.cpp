@@ -26,6 +26,7 @@ using HartreeFock::Correlation::CC::ArbitraryOrderDenominatorCache;
 using HartreeFock::Correlation::CC::build_arbitrary_order_denominator_cache;
 using HartreeFock::Correlation::CC::build_ucc_block_denominator;
 using HartreeFock::Correlation::CC::build_ucc_denominator_cache;
+using HartreeFock::Correlation::CC::ucc_amplitude_blocks;
 using HartreeFock::Correlation::CC::RHFReference;
 using HartreeFock::Correlation::CC::UHFReference;
 
@@ -361,6 +362,68 @@ int main()
               "a non-positive rank is rejected");
         check(!build_ucc_denominator_cache(reference, {{2, "abax"}}).has_value(),
               "a malformed tag propagates the builder's rejection");
+    }
+
+    // ======================================================================
+    // U5.1b -- the amplitude block vocabulary, and the ordering it forces.
+    //
+    // `prepare_generated_ucc_state` must build denominators for every (rank, tag)
+    // BEFORE the kernel bundle is known, because `ensure_amplitude_sectors` sizes
+    // each amplitude block from its own denominator (U2.2). With the denominators
+    // missing it finds no reference rank to fall back to either -- an all-sectors
+    // state has none -- and skips the block silently. So this vocabulary has to be
+    // derivable from the RANK alone, which is what is asserted here.
+    // ======================================================================
+    {
+        check(ucc_amplitude_blocks(1) == std::vector<std::string>{"aa", "bb"},
+              "rank 1 gives {aa, bb}");
+        check(ucc_amplitude_blocks(2) ==
+                  std::vector<std::string>{"aaaa", "abab", "bbbb"},
+              "rank 2 gives {aaaa, abab, bbbb}");
+        check(ucc_amplitude_blocks(3) ==
+                  std::vector<std::string>{"aaaaaa", "aabaab", "abbabb", "bbbbbb"},
+              "rank 3 gives four sectors");
+
+        // n+1 sectors per rank, with NO a<->b fold: unlike the closed-shell case,
+        // alpha and beta are different orbitals so k and rank-k are independent.
+        // A fold would silently halve the count, which is why this is asserted
+        // across ranks rather than at one.
+        for (int rank = 1; rank <= 6; ++rank)
+        {
+            check(static_cast<int>(ucc_amplitude_blocks(rank).size()) == rank + 1,
+                  "rank " + std::to_string(rank) + " has rank+1 sectors");
+        }
+
+        check(ucc_amplitude_blocks(0).empty(), "rank 0 yields nothing");
+        check(ucc_amplitude_blocks(-1).empty(), "a negative rank yields nothing");
+
+        // Each tag is 2*rank slots, occ half then vir half, and the two halves are
+        // the SAME string -- the layout `build_ucc_block_denominator` documents.
+        for (int rank = 1; rank <= 4; ++rank)
+            for (const auto &tag : ucc_amplitude_blocks(rank))
+            {
+                check(static_cast<int>(tag.size()) == 2 * rank,
+                      "tag '" + tag + "' has 2*rank slots");
+                check(tag.substr(0, static_cast<std::size_t>(rank)) ==
+                          tag.substr(static_cast<std::size_t>(rank)),
+                      "tag '" + tag + "' repeats its half");
+            }
+
+        // The ordering contract itself: every tag this vocabulary names must build
+        // a denominator against a real reference. If it named a block the builder
+        // rejects, prepare would fail at run time on a state that looked fine.
+        for (int rank = 1; rank <= 3; ++rank)
+        {
+            std::vector<std::pair<int, std::string>> blocks;
+            for (const auto &tag : ucc_amplitude_blocks(rank))
+                blocks.push_back({rank, tag});
+            const auto cache = build_ucc_denominator_cache(reference, blocks);
+            check(cache.has_value(),
+                  "every rank-" + std::to_string(rank) + " tag builds a denominator");
+            if (cache)
+                check(cache->sectors.size() == blocks.size(),
+                      "rank-" + std::to_string(rank) + " cache is complete");
+        }
     }
 
     if (failures == 0)

@@ -114,6 +114,42 @@ namespace HartreeFock::Correlation::CC
         int max_excitation_rank,
         const std::string &tag = "CC[GENERATED] :");
 
+    // U5.1b: prepare an ALL-SECTORS (UCC) state from an unrestricted reference.
+    //
+    // A SIBLING of prepare_generated_arbitrary_order_state, not a flag on it:
+    // every one of its four steps differs (UHF reference, spin-blocked ERIs,
+    // per-block denominators, sector-only amplitudes), so sharing one function
+    // would mean a branch at every line.
+    //
+    // NO BLOCK VOCABULARY IS PASSED, matching how RCC does it:
+    // build_tensor_cc_block_cache takes no block list either -- its set IS the
+    // struct's seven named members, built unconditionally, and it over-builds
+    // (measured: ccsd and ccsdt read 6 of the 7, `ovvo` never touched). Nothing
+    // is negotiated with the emitter, so nothing can drift. The UCC ERI set comes
+    // from ucc_canonical_blocks() (24 arrays, U5.1a) and the amplitude/denominator
+    // tags from ucc_amplitude_blocks(rank) -- both derived, both gated against
+    // ccgen.
+    //
+    // NOT YET USABLE BY A SOLVE: the ERI cache comes back in CHEMISTS order,
+    // because the spin-aware physicist rebind is U5.2. Running a solve on this
+    // state would read the wrong integrals. The RCC `rebind_physicist` cannot be
+    // reused as a stopgap -- it builds a fresh cache from the seven named members
+    // and never copies `spin_blocks`, so it would silently discard all 24 UCC
+    // blocks and return an empty cache that still looks structurally valid.
+    //
+    // The returned state has `by_rank` EMPTY on amplitudes and denominators (a
+    // UCC method has no privileged reference sector) and NO amplitude sectors:
+    // like the RCC path, prepare runs before the kernel bundle is known, so
+    // `ensure_amplitude_sectors` fills those afterwards. It can, because the
+    // denominators ARE already populated here and it sizes each amplitude block
+    // from its own denominator (U2.2) -- that ordering is forced, not incidental.
+    std::expected<ArbitraryOrderTensorCCState, std::string>
+    prepare_generated_ucc_state(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        int max_excitation_rank,
+        const std::string &tag = "UCC[GENERATED] :");
+
     // Warm-start seed (W6.0): overwrite the lowest `seed.by_rank.size()` ranks of
     // the state's zero amplitudes with converged lower-rank amplitudes. Ranks not
     // covered by the seed stay zero. Each seeded rank's dims must match the state's

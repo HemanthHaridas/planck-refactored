@@ -101,6 +101,90 @@ namespace HartreeFock::Correlation::CC
         }
     }
 
+    std::expected<ArbitraryOrderTensorCCState, std::string>
+    prepare_generated_ucc_state(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        int max_excitation_rank,
+        const std::string &tag)
+    {
+        if (max_excitation_rank < 1)
+        {
+            return std::unexpected(
+                "prepare_generated_ucc_state: max_excitation_rank must be at least 1.");
+        }
+
+        auto uhf_res = build_uhf_reference(calculator);
+        if (!uhf_res)
+            return std::unexpected(uhf_res.error());
+        const UHFReference &uhf = *uhf_res;
+
+        // The MO-basis spin Fock matrices. Both AO Fock matrices are persisted by
+        // the SCF (`_info._scf.{alpha,beta}.fock`), so this is a transform, not a
+        // rebuild. Each spin uses ITS OWN coefficients: for a UHF reference the
+        // two MO bases differ, which is the whole reason the blocks are split.
+        const Eigen::MatrixXd fock_alpha_mo =
+            uhf.C_alpha.transpose() * calculator._info._scf.alpha.fock * uhf.C_alpha;
+        const Eigen::MatrixXd fock_beta_mo =
+            uhf.C_beta.transpose() * calculator._info._scf.beta.fock * uhf.C_beta;
+
+        auto ref_res = build_ucc_fock_blocks(uhf, fock_alpha_mo, fock_beta_mo);
+        if (!ref_res)
+            return std::unexpected(ref_res.error());
+
+        auto blocks_res = build_ucc_spin_block_cache(
+            calculator, shell_pairs, uhf, ucc_canonical_blocks(), tag);
+        if (!blocks_res)
+            return std::unexpected(blocks_res.error());
+
+        // Denominators for every (rank, tag) up to max_excitation_rank. Built
+        // HERE and not later because ensure_amplitude_sectors sizes each amplitude
+        // block from its own denominator (U2.2); with these missing it would find
+        // no reference rank to fall back to either and skip the block silently.
+        std::vector<std::pair<int, std::string>> denominator_blocks;
+        for (int rank = 1; rank <= max_excitation_rank; ++rank)
+            for (const auto &block_tag : ucc_amplitude_blocks(rank))
+                denominator_blocks.push_back({rank, block_tag});
+
+        auto denom_res = build_ucc_denominator_cache(uhf, denominator_blocks);
+        if (!denom_res)
+            return std::unexpected(denom_res.error());
+
+        try
+        {
+            ArbitraryOrderTensorCCState state{
+                .reference = std::move(*ref_res),
+                // CHEMISTS ORDER, NOT YET REBOUND -- U5.2 does that.
+                //
+                // The generated kernels index the physicist <pq|rs|, so this cache
+                // is not yet consumable by them. It is deliberately left unrebound
+                // rather than run through `rebind_physicist`: that function builds
+                // a fresh cache from the seven NAMED members and never copies
+                // `spin_blocks`, so calling it here would silently discard all 24
+                // UCC blocks and hand back an empty cache that still looks valid.
+                //
+                // The spin-aware rebind is genuinely its own step because the
+                // oovv<->ovov cross-source is spin-sensitive (U3 measurement 3):
+                // physicist `oovv_abab` is chemists (i_a a_a | j_b b_b), so the
+                // source block must be chosen per spin rather than copied from the
+                // RCC mapping.
+                .mo_blocks = std::move(*blocks_res),
+                .denominators = std::move(*denom_res),
+                // No amplitudes at all: `by_rank` stays empty (no privileged
+                // reference sector) and the sectors are filled by
+                // ensure_amplitude_sectors once the bundle is known.
+                .amplitudes = ArbitraryOrderRCCAmplitudes{},
+                .max_excitation_rank = max_excitation_rank,
+            };
+            return state;
+        }
+        catch (const std::exception &ex)
+        {
+            return std::unexpected(
+                "prepare_generated_ucc_state: " + std::string(ex.what()));
+        }
+    }
+
     std::expected<void, std::string>
     seed_arbitrary_order_amplitudes(
         ArbitraryOrderTensorCCState &state,
