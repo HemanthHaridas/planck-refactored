@@ -608,44 +608,100 @@ over-relaxing a guard, a silent skip in the sector update that still returns suc
 ### U5 — driver routing + the end-to-end gate (~M, was ~S) — **the only step left**
 
 > **Rescoped `~S` → `~M`.** The original text said "the solver loop is unchanged — it already
-> iterates tagged blocks", which is true and is not the work. **The three UCC C++ builders
-> U2–U3 added have no production callers at all** — measured: `build_ucc_denominator_cache`,
-> `build_ucc_spin_block_cache` and `build_ucc_fock_blocks` are referenced only from
-> `tests/`. `prepare_generated_arbitrary_order_state` still calls
-> `build_canonical_rhf_cc_reference` and `build_tensor_cc_block_cache`, i.e. the RHF path,
-> unconditionally.
+> iterates tagged blocks", which is true and is not the work. Four measurements set the shape.
 
-So U5 is **prepare-path wiring**, not a keyword:
+#### The four measurements
 
-- `prepare_generated_arbitrary_order_state` needs a UCC branch that builds a `UHFReference`,
-  then drives `build_ucc_fock_blocks`, `build_ucc_spin_block_cache` and
-  `build_ucc_denominator_cache` instead of their RHF counterparts. The block vocabulary it
-  passes must come from the bundle's `sector_tags`, not be enumerated separately — same
-  reasoning as U2.2: one vocabulary, defined in ccgen, rather than two that can drift.
-- The `rebind_physicist` step needs its UCC counterpart. U3.1 stores the mixed blocks in
-  chemists order like the RCC ones, so the transpose is the same, but the **oovv↔ovov
-  cross-source is spin-sensitive** (see U3's measurement 3) and must be re-derived per block
-  rather than copied.
-- A `correlation ucc2` / `ucc4` keyword, and the driver's existing "post-HF needs an RHF
-  reference" guard relaxed for it.
+**(1) The three UCC C++ builders have no production callers.** `build_ucc_denominator_cache`,
+`build_ucc_spin_block_cache` and `build_ucc_fock_blocks` are referenced only from `tests/`.
+`prepare_generated_arbitrary_order_state` still calls `build_canonical_rhf_cc_reference` and
+`build_tensor_cc_block_cache`, unconditionally. Wiring that is the work; the keyword is the
+smallest part of it.
 
-*Cheapest first gate, and it should be landed before the FCI one:* **`ucc2` against the
-existing hand-written UCCSD energy** on a radical cation. It exercises the whole stack at the
-smallest rank and reuses an in-tree oracle, so a failure localizes to the wiring rather than
-to the algebra — which U1–U4 have already gated independently.
+**(2) The RCC and UCC TUs COLLIDE, and would overwrite each other.** Measured per method:
 
-*Gate (the one that matters):* **open-shell UCCSDTQ == FCI.** The closed-shell analog is
-landed and is the strongest gate in the whole ccgen effort (`0970e21` / `ce03048`: Be CCSDTQ
-vs FCI, gap 6.4e-11). Pick a small open-shell system where UCC at rank = n_elec is the full
-CI limit — the Li atom or BeH. **Check the system is not vacuous first**: U1.5 found that
-Li/STO-3G makes `t3` worth 0, so a broken T3 passes there; LiH⁺/6-31g was used instead
-because it makes the triples worth 8.1e-8. The same trap applies at rank 4.
+```
+ccsd   (RCC emits no bundle below the arbitrary floor)   1 colliding symbol
+       compute_ccsd_energy
+ccsdt  (bundles on both sides — the general case)        2 colliding symbols
+       compute_ccsdt_energy, make_generated_ccsdt_kernels
+```
 
-**What U5 does NOT need**, because it is already done and gated independently: the spin
-algebra (U1, PySCF-validated to ~6e-16), the denominators (U2), the integrals and their
-emitter routing (U3), and the runtime's ability to accept, evaluate, update and allocate an
-all-sectors bundle (U4). If the first `ucc2` run disagrees with hand-written UCCSD, the
-wiring is the first place to look, not the algebra.
+and the generator writes **one filename per method** (`{method}_planck_generated.cpp`), so a
+UCC build today would overwrite the RCC TU *and then fail to link*. UCC therefore needs
+distinct kernel names **and** a distinct filename — not just a distinct flag. Rank 2
+understates this: check against a rank where both sides emit a bundle.
+
+**(3) The registry is rank-keyed only.** `make_generated_rcc_kernels(int rank)` switches on
+rank behind `PLANCK_CC_MAXORDER` and has no notion of reference type, so UCC needs a sibling
+entry point rather than an extra `case`.
+
+**(4) The keyword path has a clean precedent.** `cc3`…`cc6` all map to one enum value with the
+excitation rank carried separately on `OptionsSCF::_cc_generated_rank`. `ucc2` / `ucc4` follow
+it exactly — no new enum member per rank and no new driver branch.
+
+#### Steps
+
+**U5.0 — distinct symbol names for UCC kernels (~S, Python, no C++).** Emit
+`compute_ucc_<method>_*` / `make_generated_ucc_<method>_kernels` into
+`{method}_ucc_planck_generated.cpp`.
+
+*Gate:* **zero** symbol overlap between the RCC and UCC TUs for the same method, asserted at a
+rank where both emit a bundle (rank 2 alone would miss `make_generated_*_kernels`). RCC output
+byte-identical — its SHA-256 is already pinned by `test_ucc_emit_flag`.
+
+*Why first:* until it lands, any build enabling both is broken in a way that presents as a link
+error rather than a design problem. It is also the cheapest step and unblocks the rest.
+
+**U5.1 — a UCC prepare path (~M, C++).** `prepare_generated_arbitrary_order_state` gains a UCC
+branch: build a `UHFReference` (`build_uhf_reference` already exists), then drive the three UCC
+builders instead of their RHF counterparts. The block vocabulary comes from the bundle's
+`sector_tags` rather than being enumerated again — one vocabulary, defined in ccgen, not two
+that can drift (the same reasoning U2.2 used).
+
+*Gate:* the prepared state has **zero** `by_rank` entries, and one amplitude block and one
+denominator per declared tag, each with its own shape. Buildable from a fixture reference, so
+no SCF is required.
+
+**U5.2 — `rebind_physicist` for spin blocks (~S/M, C++).** The mid-axis transpose is the same,
+but the **oovv↔ovov cross-source is spin-sensitive** (U3 measurement 3: physicist `oovv_abab`
+is chemists `(i_α a_α | j_β b_β)`), so it must be re-derived per block rather than copied.
+
+*Gate:* an RHF-degenerate reference ⇒ rebound UCC blocks equal the rebound RCC blocks. **Plus an
+asymmetric companion**: degeneracy cannot see a swapped mixed pair, the same vacuity that made
+U3.1's fixture load-bearing.
+
+**U5.3 — registry + keyword (~S).** `make_generated_ucc_kernels(int rank)` beside the RCC one;
+`ucc2` / `ucc4` in the keyword table; the driver's RHF-reference guard relaxed for them. This is
+also where a `PLANCK_CC_UCC` CMake option belongs — **not earlier**: a build flag that emits a
+TU nothing can reach is a flag that cannot be tested.
+
+*Gate:* `correlation ucc2` reaches the solver and returns a number rather than an error.
+
+**U5.4 — `ucc2` against hand-written UCCSD (~S, the first real number).** A radical cation,
+using the in-tree oracle. **Land this before the FCI gate**: it exercises the whole stack at the
+smallest rank, so a failure localizes to the wiring rather than the algebra — which U1–U4 have
+already gated independently.
+
+**U5.5 — open-shell UCCSDTQ == FCI (~M, the one that matters).** The closed-shell analog is the
+strongest gate in the whole ccgen effort (`0970e21` / `ce03048`: Be CCSDTQ vs FCI, 6.4e-11).
+
+> **Check the system is not vacuous before trusting a pass.** U1.5 found Li/STO-3G makes `t3`
+> worth 0, so a broken T3 passes there; LiH⁺/6-31g was used instead because it makes the triples
+> worth 8.1e-8. The same trap applies at rank 4 — verify the highest amplitude is worth something
+> first.
+
+#### What U5 does NOT need
+
+Already done and gated independently: the spin algebra (U1, PySCF-validated to ~6e-16), the
+denominators (U2), the integrals and their emitter routing (U3), and the runtime's ability to
+accept, evaluate, update and allocate an all-sectors bundle (U4). **If the first `ucc2` run
+disagrees with hand-written UCCSD, look at the wiring before the algebra.**
+
+One coverage note: every UCC gate so far has run through the **diagram** engine
+(`PLANCK_CC_ENGINE` defaults to `diagram`, as does the generator). `wick` is selectable and the
+two are documented residual-equal, but no UCC gate pins that — worth one assertion rather than
+an assumption.
 
 ---
 
