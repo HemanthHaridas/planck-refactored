@@ -19,7 +19,7 @@ that, not the keyword, is the work.
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
 | U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
 | U4 | **landed, U4.0–U4.3.** The runtime accepts an ALL-SECTORS bundle (no per-rank reference residual), and `--ucc` reaches it from the build. U4.1 turned out **not to be work** — the update loop already handled it; U4.2 fixed a real out-of-bounds read (segfault, not a wrong number) that U4.0 had made reachable |
-| U5 | **U5.0 landed** (distinct UCC symbols + filename; the two TUs now co-link). U5.1–U5.5 open. Rescoped ~S → ~M: `build_ucc_{spin_block_cache,fock_blocks,denominator_cache}` are called **only from tests**, so U5 is prepare-path wiring plus a UHF reference, not just a keyword |
+| U5 | **U5.0 + U5.1a landed** — distinct UCC symbols + filename (the two TUs co-link), and the 24-block canonical set, gated against ccgen on both sides. U5.1b–U5.5 open. Rescoped ~S → ~M: `build_ucc_{spin_block_cache,fock_blocks,denominator_cache}` are called **only from tests**, so U5 is prepare-path wiring plus a UHF reference, not just a keyword |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -605,7 +605,7 @@ over-relaxing a guard, a silent skip in the sector update that still returns suc
 > **name the guard** they intend to exercise. Where two guards can reject the same input, asserting
 > only "it was rejected" tests nothing in particular.
 
-### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0 landed; U5.1–U5.5 open**
+### U5 — driver routing + the end-to-end gate (~M, was ~S) — **U5.0 + U5.1a landed**
 
 > **Rescoped `~S` → `~M`.** The original text said "the solver loop is unchanged — it already
 > iterates tagged blocks", which is true and is not the work. Four measurements set the shape.
@@ -701,15 +701,35 @@ Because the rule is the same one U3.0 already encodes, the C++ set and the emitt
 disagree by construction — which is what the discarded "pass the vocabulary" design was trying
 to buy with coupling.
 
-- **U5.1a — `ucc_canonical_blocks()`**: the 24-block closed set in C++, derived from that orbit
-  rule rather than listed. *Gate:* matches `_canonical_eri_blocks_for` per tag exactly,
-  asserted against the Python side so drift is **caught** rather than assumed away.
-- **U5.1b — `prepare_generated_ucc_state`**: builds all 24 unconditionally, plus the UHF
+- **U5.1a — `ucc_canonical_blocks()` — LANDED.** The 24-block closed set in C++
+  (`ucc_blocks.cpp`), derived from that orbit rule rather than listed, alongside a C++
+  `eri_permutation_preserves_block` mirroring U3.0's predicate.
+
+  *Gated on both sides, because two independent derivations of one rule are only cheaper than
+  coupling if something checks they agree.* The C++ gate executes the rule (counts 7/10/7;
+  `baba` absent; **every one of the sixteen patterns reachable per tag**; each canonical member
+  the lexicographic minimum of its orbit; every block actually buildable from a reference). The
+  Python gate parses the C++ spin tags and permutation table out of `ucc_blocks.cpp` and
+  compares them against ccgen's — parsed rather than executed, since running it would need the
+  whole CC link. Together they cover *the rule is right* and *both sides implement it*.
+
+  Verified falsifiable in **three** directions: C++ storing an extra `baba` block (caught by
+  both gates), C++ folding orbits spin-blindly (caught by the reachability assertion, which
+  sees a wrong orbit rule directly rather than through a count), and the **Python** table
+  drifting (caught by the pin).
+
+  > **One assertion was wrong first, and the wrong version looks right.** It assumed canonical
+  > members are occupied-first, and failed on `vovo` / `vovv`. Those *are* canonical — alone in
+  > their orbit under `abab`'s reduced group, so there is no occupied-first member to prefer.
+  > The assertion now states the actual rule (lexicographic minimum of the orbit).
+
+- **U5.1b — `prepare_generated_ucc_state`** (next): builds all 24 unconditionally, plus the UHF
   reference (`build_uhf_reference` exists), the spin Fock blocks (`build_ucc_fock_blocks`, fed
-  from `_info._scf.{alpha,beta}.fock`, both persisted by SCF), and the per-block denominators.
-  No `blocks` parameter. *Gate:* `by_rank` **empty** on amplitudes and denominators; one
-  amplitude block and one denominator per sector tag, each with its own shape. Buildable from a
-  fixture reference, so no SCF is required.
+  from `_info._scf.{alpha,beta}.fock` — both persisted by SCF, verified), and the per-block
+  denominators. A **sibling** of `prepare_generated_arbitrary_order_state`, not a branch inside
+  it, and with no `blocks` parameter. *Gate:* `by_rank` **empty** on amplitudes and
+  denominators; one amplitude block and one denominator per sector tag, each with its own
+  shape. Buildable from a fixture reference, so no SCF is required.
 
 *Memory, now concrete:* 24 blocks is the ~3× footprint this doc flagged up front. If that
 proves too heavy at rank 4, trim the **stored set by reference symmetry** — never by method —
@@ -796,6 +816,13 @@ wiring.
 - **Do not assume a rejected input proves which guard rejected it.** Two guards can reject
   the same fixture; asserting only "it was rejected" then tests nothing in particular. Both
   U4.0 fixture defects were of this shape. Assert on the guard's own message.
+- **Do not read `Terminated: 15` from `cc1plus` as a compile error.** It is SIGTERM — the
+  compiler was killed (an interrupt, or the OOM killer), not a defect in the code being
+  compiled. It surfaces on `generated_kernel_registry.cpp`, the slow `-O1`-pinned TU, and
+  reading it as a real error sends you debugging a change that is fine.
+- **Do not treat a green `ctest` as evidence that `hartree-fock` builds.** The CC unit binaries
+  do not link it, so they pass either way. A build failure and a 6/6 ctest run can appear side
+  by side and the ctest result says nothing about the failure.
 - **Do not trust a `make <target>` that prints nothing.** It can exit 0 having built nothing
   when the build directory is stale, and a mutation run against the previous binary reports
   whatever the previous binary did. This invalidated one reported mutation result and made a
