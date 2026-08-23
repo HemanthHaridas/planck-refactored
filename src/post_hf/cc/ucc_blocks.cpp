@@ -14,6 +14,8 @@
 #include "post_hf/cc/tensor_backend_internal.h"
 #include "post_hf/integrals.h"
 
+#include <algorithm>
+#include <array>
 #include <format>
 #include <string>
 #include <utility>
@@ -21,6 +23,92 @@
 
 namespace HartreeFock::Correlation::CC
 {
+    namespace
+    {
+        // The four +1 symmetries of the spatial physicist integral <pq|rs> for
+        // real orbitals: identity, particle swap <qp|sr>, bra<->ket <rs|pq>, and
+        // their product <sr|qp>. Mirrors ccgen's `_ERI_SYMMETRY_PERMUTATIONS`.
+        //
+        // The four antisymmetric single-swap relations hold only for the
+        // ANTISYMMETRIZED <pq||rs> the spin-orbital equations use, not for these
+        // spatial blocks -- do not add them here either.
+        constexpr std::array<std::array<int, 4>, 4> kEriSymmetries{{
+            {{0, 1, 2, 3}},
+            {{1, 0, 3, 2}},
+            {{2, 3, 0, 1}},
+            {{3, 2, 1, 0}},
+        }};
+
+        // The three ERI spin blocks an unrestricted reference stores. `baba` is
+        // deliberately absent: it is `abab` under the particle swap, so storing it
+        // would cost ~33% more memory to avoid one explicit swap at the point of
+        // use.
+        constexpr std::array<const char *, 3> kUccEriSpinTags{"aaaa", "abab", "bbbb"};
+    } // namespace
+
+    bool eri_permutation_preserves_block(
+        const std::string &tag,
+        const std::array<int, 4> &perm) noexcept
+    {
+        if (tag.size() != 4)
+            return false;
+        for (std::size_t slot = 0; slot < 4; ++slot)
+        {
+            const int source = perm[slot];
+            if (source < 0 || source > 3)
+                return false;
+            if (tag[static_cast<std::size_t>(source)] != tag[slot])
+                return false;
+        }
+        return true;
+    }
+
+    std::vector<std::pair<std::string, std::string>> ucc_canonical_blocks()
+    {
+        std::vector<std::pair<std::string, std::string>> blocks;
+
+        for (const char *tag_chars : kUccEriSpinTags)
+        {
+            const std::string tag(tag_chars);
+
+            // Only this tag's own symmetries may fold patterns together.
+            std::vector<std::array<int, 4>> allowed;
+            for (const auto &perm : kEriSymmetries)
+                if (eri_permutation_preserves_block(tag, perm))
+                    allowed.push_back(perm);
+
+            // Walk the sixteen o/v patterns in lexicographic order and keep the
+            // first member of each orbit. Sorted order puts 'o' before 'v', so the
+            // canonical member is occupied-first and the names stay recognizable
+            // (`oovv`, not `vvoo`) -- matching ccgen's choice, which matters
+            // because the emitted kernels name these blocks.
+            std::vector<std::string> covered;
+            for (int mask = 0; mask < 16; ++mask)
+            {
+                std::string pattern(4, 'o');
+                for (int slot = 0; slot < 4; ++slot)
+                    pattern[static_cast<std::size_t>(slot)] =
+                        ((mask >> (3 - slot)) & 1) ? 'v' : 'o';
+
+                if (std::find(covered.begin(), covered.end(), pattern) != covered.end())
+                    continue;
+
+                for (const auto &perm : allowed)
+                {
+                    std::string image(4, 'o');
+                    for (std::size_t slot = 0; slot < 4; ++slot)
+                        image[slot] = pattern[static_cast<std::size_t>(perm[slot])];
+                    if (std::find(covered.begin(), covered.end(), image) == covered.end())
+                        covered.push_back(image);
+                }
+
+                blocks.push_back({pattern, tag});
+            }
+        }
+
+        return blocks;
+    }
+
     std::expected<const Tensor4D *, std::string> TensorCCBlockCache::spin_block(
         const std::string &space,
         const std::string &tag) const

@@ -341,5 +341,68 @@ class EmitterConsumesThePredicateTests(unittest.TestCase):
         self.assertEqual(len(per_tag["bbbb"]), 6)
 
 
+class CppAgreesWithPythonTests(unittest.TestCase):
+    """U5.1a: the C++ canonical block set must equal ccgen's, per tag.
+
+    The C++ prepare path builds its ERI blocks from `ucc_canonical_blocks()` in
+    `src/post_hf/cc/ucc_blocks.cpp`, derived from the same orbit rule this module
+    encodes. Deliberately NOT passed across the codegen boundary -- RCC does not
+    pass a vocabulary either (`build_tensor_cc_block_cache` has no block list; its
+    set is its struct's seven named members, and it over-builds: ccsd and ccsdt
+    both read 6 of 7). Two independent derivations of one rule is the cheaper
+    coupling, but only if something checks they agree. This is that check.
+
+    Parsed out of the C++ source rather than executed: running it would need the
+    whole CC link (transform_eri, the AO engine, basis parsing), and the question
+    here is what the source SAYS the set is. The C++ side's own gate
+    (`planck-cc-ucc-spin-blocks`) executes it and asserts the same structure --
+    counts, reachability, canonical member -- so the two together cover both
+    "the rule is right" and "both sides implement the same rule".
+    """
+
+    @staticmethod
+    def _cpp_spin_tags() -> list[str]:
+        src = (ROOT.parent / "src" / "post_hf" / "cc" / "ucc_blocks.cpp").read_text()
+        m = re.search(r"kUccEriSpinTags\{([^}]*)\}", src)
+        assert m, "kUccEriSpinTags not found in ucc_blocks.cpp"
+        return re.findall(r'"([ab]+)"', m.group(1))
+
+    def test_cpp_stores_the_same_three_spin_blocks(self):
+        self.assertEqual(self._cpp_spin_tags(), ["aaaa", "abab", "bbbb"])
+
+    def test_cpp_symmetry_table_matches(self):
+        """The C++ permutation table must be the same four, in the same order --
+        the orbit walk keeps the first member it meets, so order is part of the
+        canonical-member choice, not just presentation."""
+        src = (ROOT.parent / "src" / "post_hf" / "cc" / "ucc_blocks.cpp").read_text()
+        m = re.search(r"kEriSymmetries\{\{(.*?)\}\};", src, re.S)
+        self.assertIsNotNone(m, "kEriSymmetries not found in ucc_blocks.cpp")
+        cpp = [tuple(int(x) for x in row)
+               for row in re.findall(r"\{\{(\d), (\d), (\d), (\d)\}\}", m.group(1))]
+        self.assertEqual(cpp, [perm for perm, _ in _ERI_SYMMETRY_PERMUTATIONS])
+
+    def test_block_counts_agree_per_tag(self):
+        """The load-bearing assertion: 7 / 10 / 7, derived independently here."""
+        for tag in self._cpp_spin_tags():
+            with self.subTest(tag=tag):
+                expected = len(_canonical_eri_blocks_for(tag))
+                self.assertEqual(
+                    expected, {"aaaa": 7, "abab": 10, "bbbb": 7}[tag],
+                    f"ccgen's block count for {tag} changed; the C++ "
+                    f"ucc_canonical_blocks() and its gate must move with it")
+
+    def test_the_mixed_block_is_the_one_that_differs(self):
+        """States the reason the counts differ, so a future edit that "tidies"
+        them to be equal has to confront it: two of the four symmetries are not
+        symmetries of a mixed block, so its orbits are smaller."""
+        same = len(_canonical_eri_blocks_for("aaaa"))
+        mixed = len(_canonical_eri_blocks_for("abab"))
+        self.assertGreater(mixed, same)
+        self.assertEqual(
+            len(eri_permutations_for_block("abab")), 2,
+            "abab keeps only identity and bra<->ket")
+        self.assertEqual(len(eri_permutations_for_block("aaaa")), 4)
+
+
 if __name__ == "__main__":
     unittest.main()

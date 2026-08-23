@@ -25,12 +25,18 @@
 
 #include "post_hf/cc/tensor_backend.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
 using HartreeFock::Correlation::CC::build_ucc_spin_block_cache_from_eri;
+using HartreeFock::Correlation::CC::eri_permutation_preserves_block;
+using HartreeFock::Correlation::CC::ucc_canonical_blocks;
 using HartreeFock::Correlation::CC::TensorCCBlockCache;
 using HartreeFock::Correlation::CC::UHFReference;
 
@@ -517,6 +523,126 @@ int main()
                 check(std::fabs(e_os) > 1e-6, "opposite-spin MP2 channel is non-trivial");
             }
         }
+    }
+
+    // --- U5.1a: the canonical UCC block set ---------------------------------
+    //
+    // NO METHOD IS INVOLVED, which is the design and the reason this is a closed
+    // set rather than a vocabulary passed in from ccgen. RCC's
+    // build_tensor_cc_block_cache takes no block list either -- the set IS its
+    // struct's seven named members, built unconditionally, and it OVER-BUILDS
+    // (measured: ccsd and ccsdt both read 6 of the 7; `ovvo` is never touched).
+    // Nothing is negotiated with the emitter, so nothing can drift.
+    //
+    // The exact set is pinned against ccgen's `_canonical_eri_blocks_for` in
+    // test_ucc_eri_symmetry.py, which is where a C++/Python divergence would be
+    // caught. What is asserted HERE is the structure that makes the two agree:
+    // the orbit rule, the counts it produces, and the canonical-member choice.
+    {
+        const auto blocks = ucc_canonical_blocks();
+        check(blocks.size() == 24, "the canonical set is 24 stored arrays");
+
+        std::map<std::string, std::vector<std::string>> by_tag;
+        for (const auto &[space, tag] : blocks)
+            by_tag[tag].push_back(space);
+
+        // 7 / 10 / 7. The mixed block needs MORE because two of the four
+        // physicist symmetries are not its symmetries (they map `abab` to
+        // `baba`), so its orbits are smaller and more of them are needed to
+        // cover the same sixteen patterns.
+        check(by_tag.size() == 3, "exactly three ERI spin blocks are stored");
+        check(by_tag["aaaa"].size() == 7, "aaaa folds sixteen patterns into 7");
+        check(by_tag["bbbb"].size() == 7, "bbbb folds sixteen patterns into 7");
+        check(by_tag["abab"].size() == 10, "abab folds sixteen patterns into 10");
+
+        // `baba` must NOT be stored: it is `abab` under the particle swap, so
+        // storing it costs ~33% more memory to avoid one explicit swap.
+        check(!by_tag.contains("baba"), "baba is not stored (it is abab swapped)");
+
+        // Every one of the sixteen o/v patterns must be REACHABLE in each tag,
+        // or a kernel would ask for a block that was never built. This is the
+        // property the counts above are a consequence of -- asserted directly so
+        // a wrong count and a wrong orbit rule cannot cancel out.
+        for (const auto &[tag, spaces] : by_tag)
+        {
+            std::set<std::string> reachable;
+            for (const auto &space : spaces)
+                for (const auto &perm : std::array<std::array<int, 4>, 4>{{
+                         {{0, 1, 2, 3}}, {{1, 0, 3, 2}}, {{2, 3, 0, 1}}, {{3, 2, 1, 0}}}})
+                {
+                    if (!eri_permutation_preserves_block(tag, perm))
+                        continue;
+                    std::string image(4, 'o');
+                    for (std::size_t slot = 0; slot < 4; ++slot)
+                        image[slot] = space[static_cast<std::size_t>(perm[slot])];
+                    reachable.insert(image);
+                }
+            check(reachable.size() == 16,
+                  "every o/v pattern is reachable in block '" + tag + "'");
+        }
+
+        // The canonical member of each orbit is its LEXICOGRAPHIC MINIMUM ('o'
+        // sorts before 'v'). The emitted kernels name these blocks, so the choice
+        // is interface, not cosmetics -- ccgen picks the same member by walking
+        // the patterns in sorted order, and if the two ever disagree the emitted
+        // reads would name arrays the cache never built.
+        //
+        // Note this does NOT mean every member starts with 'o': `vovo` and `vovv`
+        // are canonical because they are ALONE in their orbit under abab's
+        // reduced symmetry group. An earlier version of this assertion assumed
+        // occupied-first and failed on exactly those two -- the assumption was
+        // wrong, not the code.
+        for (const auto &[space, tag] : blocks)
+        {
+            std::string minimum = space;
+            for (const auto &perm : std::array<std::array<int, 4>, 4>{{
+                     {{0, 1, 2, 3}}, {{1, 0, 3, 2}}, {{2, 3, 0, 1}}, {{3, 2, 1, 0}}}})
+            {
+                if (!eri_permutation_preserves_block(tag, perm))
+                    continue;
+                std::string image(4, 'o');
+                for (std::size_t slot = 0; slot < 4; ++slot)
+                    image[slot] = space[static_cast<std::size_t>(perm[slot])];
+                minimum = std::min(minimum, image);
+            }
+            check(space == minimum,
+                  "'" + space + "' is the lexicographic minimum of its orbit in " + tag);
+        }
+
+        // Every block must be buildable from a real reference -- a set naming a
+        // block the builder rejects would be a vocabulary that cannot be used.
+        const auto full = build_ucc_spin_block_cache_from_eri(
+            eri, NB, reference, blocks);
+        check(full.has_value(), "every canonical block builds from a reference");
+        if (full)
+            check(full->spin_blocks.size() == 24, "all 24 are materialized");
+    }
+
+    // --- the permutation predicate mirrors ccgen's ---------------------------
+    {
+        constexpr std::array<int, 4> identity{{0, 1, 2, 3}};
+        constexpr std::array<int, 4> particle{{1, 0, 3, 2}};
+        constexpr std::array<int, 4> bra_ket{{2, 3, 0, 1}};
+        constexpr std::array<int, 4> product{{3, 2, 1, 0}};
+
+        for (const char *tag : {"aaaa", "bbbb"})
+        {
+            check(eri_permutation_preserves_block(tag, identity) &&
+                      eri_permutation_preserves_block(tag, particle) &&
+                      eri_permutation_preserves_block(tag, bra_ket) &&
+                      eri_permutation_preserves_block(tag, product),
+                  std::string("same-spin block '") + tag + "' keeps all four symmetries");
+        }
+
+        check(eri_permutation_preserves_block("abab", identity), "abab keeps identity");
+        check(eri_permutation_preserves_block("abab", bra_ket), "abab keeps bra<->ket");
+        check(!eri_permutation_preserves_block("abab", particle),
+              "abab does NOT keep the particle swap (it maps to baba)");
+        check(!eri_permutation_preserves_block("abab", product),
+              "abab does NOT keep the product (it maps to baba)");
+
+        check(!eri_permutation_preserves_block("aab", identity),
+              "a malformed tag is rejected rather than silently accepted");
     }
 
     if (failures == 0)
