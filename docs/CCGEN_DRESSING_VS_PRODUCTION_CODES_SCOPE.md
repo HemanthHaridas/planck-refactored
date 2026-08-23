@@ -176,11 +176,49 @@ serve all call sites of a name**.
 
 That reframes the earlier two shapes as *symptoms* of this, not independent mechanisms.
 
-**Not yet established:** whether per-term specs are exact across the whole manifold. The obvious
-next probe (evaluate every term against its own `identify_node` spec) needs the definition's
-internal indices alpha-renamed per call — the same capture the manifold probe needed — and the
-current probe raises `KeyError` on the nested case. That is a probe gap, not a finding, and it is
-recorded here rather than guessed at.
+#### The `KeyError` was not a probe gap — it is a second, sharper defect
+
+The per-term probe raised `KeyError: 'k'`, recorded initially as a probe gap. It is not.
+**A derived spec's definition can reference an index that is neither one of its slots nor one of its
+declared summed indices.** Measured:
+
+| manifold | spec definitions with an unbound index |
+|---|---|
+| GCC | **18 / 40** |
+| spatial | **25 / 65** |
+| manifold-level representatives | 0 |
+
+Affected operators are the same four in both bases: `W_t1t1v_oo`, `W_t1t1v_ooov`,
+`W_t1t1t1v_ooov`, `W_t1t2v_ooov`.
+
+`doubles[45]` shows the mechanism exactly:
+
+```
+parent term : t1(a,k) t1(b,l) t1(c,j) v(i,c,k,l)     free i,j,a,b   summed k,l,c
+child node  : t1(c,j) t1(a,k) v(i,c,k,l)             free i,j,l,a   summed c
+                            ^^^         ^^^
+                            k appears TWICE and is in NEITHER list
+```
+
+`k` is summed in the parent. The child node inherits factors that contract over it, but
+`node_to_term` does not promote `k` to the child's own summed list. The derived spec is therefore a
+contraction with a free-floating repeated index — and the `build_W` emitted for it has no loop over
+`k` at all. Whatever it computes, it is not the contraction the parent term needs.
+
+**This is upstream of the manifold-representative issue** and explains why that one resisted
+diagnosis: the per-term spec, which evaluated `doubles[44]` exactly, is itself malformed on 18 of 40
+GCC definitions. The two are not competing hypotheses — a node whose summed list is incomplete
+cannot have a well-defined single representative either.
+
+**`tree_preserves_term(doubles[45])` returns `True`.** The structural gate checks, at the *term*
+level, that each factor is one leaf and each summed index is consumed once. It never asks whether
+each *node's* own summed list is complete, so an incomplete one passes. That is the precise reason a
+47-test structural suite coexists with a route that does not preserve value.
+
+**Still open:** whether fixing `node_to_term` to promote inherited contracted indices makes the
+per-term specs exact manifold-wide. That is a code change to the factorizer, not another probe, and
+it should be gated by the numeric check this scope built rather than by the `Counter` comparison
+that missed it.
 
 #### Consequence for the retirement
 
