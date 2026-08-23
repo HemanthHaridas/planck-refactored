@@ -30,7 +30,9 @@
 // producing a wrong number if someone wires a solve too early.
 
 #include "post_hf/cc/generated_arbitrary_runtime.h"
+#include "post_hf/cc/solver_arbitrary.h"
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -241,6 +243,70 @@ int main()
                   "all-sectors residuals report max_rank 0 (no reference blocks)");
             check(state.amplitudes.max_rank() == 0,
                   "the all-sectors state likewise carries no reference amplitude ranks");
+        }
+    }
+
+    // --- U4.1: the Jacobi/DIIS update drives an all-sectors state ----------
+    //
+    // MEASURED, NOT BUILT. U4.1 was scoped as work -- make pack/unpack and the
+    // update loop tolerate an empty `by_rank`. Probing first showed they already
+    // do, for two independent reasons that happen to compose:
+    //
+    //   - pack_amplitudes / unpack_amplitudes / pack_residuals iterate `by_rank`
+    //     and then `sectors`. An empty `by_rank` simply contributes nothing, and
+    //     the sector region starts at offset 0 instead of after the reference
+    //     blocks. The packing is order-preserving either way.
+    //   - the update's per-rank loop runs `rank <= max_rank()`, which is 0, so it
+    //     is skipped entirely; the sector loop then does all the work, reading its
+    //     denominators through `sector_tensor` (U2.2).
+    //   - the rank-coverage guard compares 0 == 0 == 0 and passes.
+    //
+    // So the only thing that ever blocked an all-sectors solve was U4.0's
+    // validation. This section exists to PIN that, because "it already works" is
+    // exactly the kind of claim that silently stops being true.
+    {
+        auto state = make_all_sectors_state(UCC_BLOCKS);
+        const auto kernels = make_all_sectors_bundle(UCC_BLOCKS);
+        const auto residuals =
+            evaluate_generated_arbitrary_order_residuals(state, kernels);
+        check(residuals.has_value(), "all-sectors residuals evaluate for the update");
+
+        if (residuals)
+        {
+            // Packing must round-trip with no reference blocks present. If the
+            // offset bookkeeping assumed a non-empty `by_rank`, the sector region
+            // would be written at the wrong place and this would not survive.
+            const Eigen::VectorXd packed =
+                HartreeFock::Correlation::CC::pack_amplitudes(state.amplitudes);
+            std::size_t expected_elements = 0;
+            for (const auto &[key, block] : state.amplitudes.sectors)
+                expected_elements += block.size();
+            check(static_cast<std::size_t>(packed.size()) == expected_elements,
+                  "packing an all-sectors state covers exactly the sector blocks");
+
+            HartreeFock::Correlation::CC::AmplitudeDIIS diis(8);
+            const auto metrics =
+                HartreeFock::Correlation::CC::update_amplitudes_with_jacobi_diis(
+                    state.amplitudes, *residuals, state.denominators,
+                    diis, 1.0, /*use_diis=*/false);
+            check(metrics.has_value(), "the Jacobi update drives an all-sectors state");
+            if (!metrics)
+                std::printf("  error: %s\n", metrics.error().c_str());
+
+            // EVERY block must have moved, and to its own value. The fixture uses
+            // R = 0.25 and D = -1 throughout, so one undamped Jacobi step gives
+            // t = R/D = -0.25. A block left at zero would mean the update silently
+            // skipped it -- the failure mode an empty `by_rank` invites, since the
+            // per-rank loop is what normally does the work.
+            for (const auto &[key, block] : state.amplitudes.sectors)
+            {
+                bool all_stepped = !block.data.empty();
+                for (const double value : block.data)
+                    if (std::fabs(value - (-0.25)) > 1e-12)
+                        all_stepped = false;
+                check(all_stepped,
+                      "sector '" + key.second + "' took its Jacobi step (t = R/D)");
+            }
         }
     }
 
