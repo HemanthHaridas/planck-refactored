@@ -1076,10 +1076,47 @@ gets exactly one spin.
 
 *Then U5.4 becomes what it was scoped to be:* a number, not a shape error.
 
-**U5.4 — `ucc2` against hand-written UCCSD (~S, the first real number).** A radical cation,
-using the in-tree oracle. **Land this before the FCI gate**: it exercises the whole stack at the
-smallest rank, so a failure localizes to the wiring rather than the algebra — which U1–U4 have
-already gated independently.
+**U5.4 — `ucc2` against hand-written UCCSD — RUN, and it FAILS on a convention mismatch
+(~S → ~M).** The stack runs end-to-end for the first time: keyword → prepare → UHF reference →
+spin-blocked ERIs → rebind → registry → solver → a converged number. No shape error; U3b.2 did
+its job. **But the number is wrong**, and the cause is found and localized.
+
+*Fixture (B/STO-3G doublet, `b_ucc2_sto3g.hfinp`, byte-identical to `b_uccsd_sto3g.hfinp` apart
+from the one keyword, so any difference is the solver).* Checked non-vacuous before being
+trusted: `noa=3, nob=2, nva=2, nvb=3` — both spin-asymmetric, so a spin-blind bound or a
+collapsed block changes the SHAPE — and `E_corr` is worth −0.0403 Eh, so agreement cannot be two
+near-zeros matching.
+
+```
+hand-written UCCSD   E_corr = -0.0402694793   (13 iters, converged)
+generated ucc2       E_corr = -0.0705299626   (plateaus ~6e-10, hits the 100-iter cap)
+ratio 1.7515 — no clean factor, so NOT a simple double-count
+```
+
+**THE DEFECT: `v_aaaa` means `<ij||ab>` to ccgen and `<ij|ab>` to the C++ cache.** Both sides are
+individually correct and self-consistent; the convention between them was never pinned.
+
+- ccgen's UCC energy manifold emits **one** same-spin term at coefficient `1/4` with **no
+  exchange partner** (`1/4 t2_aaaa v_aaaa`), and `ucc_integrate_term_antisym`'s own docstring
+  says it integrates "for REAL ANTISYMMETRIC tensors". That is the antisymmetrized convention.
+- `build_ucc_spin_block_cache_from_eri` (`ucc_blocks.cpp:~336`) does a plain `transform_eri` into
+  chemists order plus a mid-axis swap. **No antisymmetrization anywhere.**
+- **U3.4's own MP2-limit test proves the C++ side is deliberately plain**: it writes the exchange
+  by hand as `0.5 * (gab/d) * (gab - gba)`. It is right, and it is why nothing caught this — it
+  never consumed a generated kernel.
+
+*Consistent with the symptom:* the `abab` channel needs no exchange partner and is unaffected,
+while both same-spin channels are wrong — which is why the ratio is not a clean factor of 2.
+
+**Not fixed here, because it is a design choice, not a patch.** Either the cache antisymmetrizes
+same-spin blocks at build time (changes what every existing C++ consumer sees, including U3.4's
+test and U5.2c's UMP2 gate), or the emitter emits explicit exchange terms for same-spin blocks
+(changes generated text only, leaves the C++ contract alone). The second keeps one meaning per
+array and does not disturb landed gates; the first is fewer FLOPs but silently redefines a block
+that three landed tests already assert on. **Whichever is chosen, pin the convention in one place
+and gate it** — this is the B5 physicist-vs-chemists failure mode again, one layer up.
+
+*Then the gate this step was scoped to be:* `ucc2` E_corr matching `-0.0402694793`.
 
 **U5.5 — open-shell UCCSDTQ == FCI (~M, the one that matters).** The closed-shell analog is the
 strongest gate in the whole ccgen effort (`0970e21` / `ce03048`: Be CCSDTQ vs FCI, 6.4e-11).
