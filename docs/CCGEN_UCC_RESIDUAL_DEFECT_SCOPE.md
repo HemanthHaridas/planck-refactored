@@ -4,7 +4,16 @@ Scopes ONE question: **why does the generated `ucc2` correlation energy disagree
 hand-written UCCSD, after the ERI antisymmetrization fix (`fe744e6`) closed the larger
 half of the gap?**
 
-**Status, 2026-08-24. R0 and R1 DONE. The deficit is in the `abab` channel.** R0 showed the
+**Status, 2026-08-24. R0-R2 DONE. The first-order layer is CORRECT; the defect is in the
+higher-order terms.** R2 found that the exact `0.800000` R0 and R1 were chasing is the
+**`cc_damping` default of 0.8**, not a defect: with `cc_damping 1.0`, iteration 1 reproduces
+UMP2 to ten digits on both fixtures. That clears the stored ERI blocks, the per-block
+denominators, the rebind, the write-back and the energy coefficients — by measurement. **R4 is
+next**, and the amplitude-antisymmetry suspect is LIVE AGAIN, since R0 only ruled it out at
+first order.
+
+*Superseded status lines, for the record:* **R0 and R1 DONE. The deficit is in the `abab`
+channel.** R0 showed the
 first-order algebra is textbook-correct (so the defect is in the data, not the equations, and
 the amplitude-antisymmetry suspect is dead). R1 measured the three channels on two systems and
 found the ratio is **0.800000 on both** — structural — with the deficit in **`abab`**, not in
@@ -72,11 +81,11 @@ Do not re-derive these:
 
 ## The prime suspect, and why
 
-> **SUPERSEDED BY R0 — do not pursue this first.** The reasoning below is kept because it is
-> sound about the *convention* (nothing does enforce it, and that is a real latent gap), but R0
-> measured that the first-order algebra is exactly textbook UMP2, and a first-order energy built
-> from one ERI term per block cannot be affected by how permutational copies of `t2` combine.
-> This is not the cause of the 3.8%.
+> **LIVE AGAIN as of R2 — R0's dismissal was correct but narrower than it read.** R0 ruled this
+> out *at first order*, which is right and which R2 then confirmed by reproducing UMP2 exactly.
+> But R2 also showed the defect lives entirely in the HIGHER-ORDER terms — precisely where this
+> convention operates. Nothing enforces or checks it. Treat it as a leading suspect for R4, not
+> a closed question.
 
 **The amplitude-side antisymmetry convention, which is the exact analogue of the ERI one
 just fixed — one layer over.**
@@ -189,37 +198,69 @@ around that.**
 plan rather than silently deleted: it was wrong because it assumed the same-spin share was
 ~40%, and the measured shares are 0% and 5.7%.)*
 
-**R2 — find the `abab` deficit (~S/M) — NEXT, and R1 narrowed it sharply.**
+**R2 — find the `abab` deficit — DONE, and it dissolved the premise of R0 and R1.**
 
-`abab` is the simplest channel in the whole manifold: coefficient `1` in both the residual
-(`1 * v_abab`) and the energy (`1 * t2_abab * v_abab`), no exchange partner, no fractional
-weight. So a ~0.79–0.80 deficit there is one of exactly three things:
+**The exact 0.800000 was the DAMPING FACTOR.** `OptionsSCF::_cc_damping` defaults to `0.8`
+(`types.h:429`), and the Jacobi update applies `delta = damping * R/D`, so iteration 1 lands at
+exactly 80% of the MP2 amplitude. The probe caught it as `max rel |t - v/D| = 2.000e-01` on the
+mixed block — a ratio too exact to be physics.
 
-1. **The stored `oovv_abab` values.** Compare element-wise against the UMP2 path's own mixed
-   ERI, which `tests/cc_ucc_spin_blocks.cpp:397` documents as bitwise-identical in
-   construction (`ovOV = transform_eri(eri, nb, Ca_occ, Ca_virt, Cb_occ, Cb_virt)`). If they
-   differ, the transform or the rebind is the cause.
-2. **The `abab` denominator.** `build_ucc_block_denominator` reads the tag "occ half then vir
-   half"; for `abab` that is `eps_a(i) + eps_b(j) - eps_a(a) - eps_b(b)`. Verify against the
-   UMP2 kernel's mixed denominator directly — a swapped spin here changes the value without
-   changing any shape, so nothing structural would catch it.
-3. **The index convention between them.** `oovv_abab` has dims `(noa, nob, nva, nvb)`; if the
-   residual writes `(i,j,a,b)` while the block is stored `(i,j,b,a)` — or the denominator is
-   built in the other order — the contraction silently pairs the wrong elements. On a fixture
-   where `nva != nvb` this changes the shape and would have been caught; on one where they
-   happen to match, it would not. **Check `nva == nvb` before trusting any fixture here.**
+**With `cc_damping 1.0`, iteration 1 reproduces UMP2 to all ten digits, on both systems:**
 
-*Order: (2) then (1) then (3) — the denominator is a dozen numbers and can be printed and
-eyeballed; the ERI comparison needs a transform; the convention question only arises if both
-of those are clean.*
+```
+B/STO-3G     iter 1  -0.0190946435    UMP2  -0.0190946435    max rel |t - v/D| = 0.000e+00
+H2O+/STO-3G  iter 1  -0.0272204807    UMP2  -0.0272204807
+```
 
-*Note both systems give ~0.79-0.80 but NOT the same digits (0.790455 vs 0.800000), so
-whatever it is, it is not a single global constant on `abab` alone — the boron case has
-zero same-spin, so its 0.800000 is `abab`-only, while the water cation's 0.790 is `abab`
-against a total that includes correct same-spin. Consistent with one uniform cause; do not
-over-read the third digit.*
+**So the entire first-order layer is CORRECT and verified**: the stored `oovv` blocks (all three
+tags), the per-block denominators including `abab`'s spin assignment, the physicist rebind, the
+amplitude write-back, and the energy kernel's coefficients. None of R2's three candidate causes
+is the defect; all three are cleared by this measurement.
 
-**R3 — pin the convention, whichever way R2 lands (~S).**
+**Damping does not move the fixed point** — measured, `cc_damping 1.0` converges to the same
+`-0.0418041` as `0.8`. So the real defect is untouched by everything R0–R2 examined.
+
+> **WHAT WENT WRONG WITH R0 AND R1, because it is the reusable part.** R0 asserted "iteration 1
+> IS the first-order energy" from reading the loop (residuals from zero amplitudes → update →
+> report) and **never checked the update for a scale factor**. Every number R0 and R1 built on
+> was that damped value, and the "structural, exact 4/5 on two unrelated systems" conclusion was
+> exactly right about the *exactness* and entirely wrong about the *cause* — a solver knob, not
+> the algebra. The R1 channel split was still worth having (it is what proved the exchange fix
+> works on a C1 system), but its headline finding was an artifact.
+>
+> **The lesson: an exact rational ratio is evidence of a CONSTANT, and a constant is as likely
+> to be a configuration default as a coefficient bug. Grep the knobs before theorising about
+> the equations.**
+
+**R4 — the defect is in the HIGHER-ORDER terms (~M) — NEXT, and it is where the search
+actually starts.**
+
+R0-R2 cleared the whole first-order layer by measurement. What remains is everything that is
+zero at `t = 0`: the `t1`, `t2·v`, `t1·t1`, `t2·t2` … terms of the residuals. The converged
+`-0.0418041` vs `-0.0402695` is a **+3.81%** overshoot from those.
+
+Handles, cheapest first:
+
+1. **Second-order.** With `cc_damping 1.0` and DIIS off, iteration 2 adds exactly the terms
+   linear in the MP2 amplitude. Compare against the same quantity from the hand-written UCCSD
+   solver at its own iteration 2 (it is a different algorithm but the *first two* iterates of a
+   Jacobi CC solve from a zero start are convention-independent). A divergence at iteration 2
+   names a small set of terms; agreement pushes it to third order and beyond.
+2. **Per-block residual comparison at a FIXED amplitude.** The strongest instrument, and the one
+   that cracked B5: seed both solvers with the same `t`, evaluate one residual, and diff per
+   block. The generated and hand-written paths use different amplitude layouts, so this needs
+   the `(occ…,vir…)` vs `(vir…,occ…)` transpose recorded in
+   `CCGEN_UCC_NUMERIC_VALIDATION.md` — that doc's PySCF-interface lessons apply directly.
+3. **The amplitude-antisymmetry convention, now back on the table.** R0 correctly ruled it out
+   *at first order*; it governs exactly the higher-order terms that remain, and
+   `ucc_amplitude_blocks` still asserts it with nothing enforcing it. **It is a live suspect
+   again** — see the section above, which was marked SUPERSEDED for first-order reasons that no
+   longer apply to what is left.
+
+*Do not gate on the converged number.* Iteration 2 at `cc_damping 1.0` with DIIS off is
+deterministic, cheap, and localizes; the converged value confounds every term at once.
+
+**R3 — pin the convention, whichever way R4 lands (~S).**
 The ERI fix landed `_block_needs_explicit_exchange` as the single place that states its
 convention. The amplitude convention deserves the same treatment, plus a numeric gate. **A
 structural gate is not enough here** — that is precisely what let both of these through.
