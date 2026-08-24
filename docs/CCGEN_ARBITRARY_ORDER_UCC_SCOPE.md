@@ -851,57 +851,100 @@ relaxed for them.
 
 *Gate:* `correlation ucc2` reaches the solver and returns a number rather than an error.
 
-**U5.3c — `ccsdtq.cpp` becomes `rccgen.cpp` (~S, no behavior change at rank 4).**
+**U5.3c — make the two generated CC paths one architecture (~S/M, no behavior change at
+rank 4).** Two problems, raised in review, that are the same problem seen from two sides: the
+generated path has two drivers, and two keyword surfaces that do not line up.
 
-> **Raised as an architecture divergence, and the framing was better than the one I
-> proposed.** After U5.3b the *generated* CC path had two drivers — `ccsdtq.cpp` for RCC
-> and `uccgen.cpp` for UCC — performing the identical five steps (`prepare_*` →
-> `make_generated_*` → `ensure_amplitude_sectors` →
-> `run_generated_arbitrary_order_iterations` → set `_correlation_energy`) and differing
-> only in which two functions they name. My first proposal was to extract a shared driver
-> parameterised by a policy; that unifies two things by adding a third abstraction over
-> them.
+---
 
-**The rename is the whole fix, because `ccsdtq.cpp` is already generic.** Measured: nothing
-in it is rank-4-specific — the only `4` is a floor, and `RCCSDTQ` appears purely in names and
-log strings. `cc3`, `cc5` and `cc6` all route through it today. It is **misnamed, not
-miswritten**, and renaming yields the symmetry with `uccgen.cpp` at **no new indirection**.
+#### (i) `ccsdtq.cpp` → `rccgen.cpp` — the file is misnamed, not miswritten
 
-*It also fixes a live cosmetic bug:* a `cc6` run currently logs `RCCSDTQ` **eight times**,
-including in the energy line the user reads.
+After U5.3b the *generated* path had two drivers, `ccsdtq.cpp` (RCC) and `uccgen.cpp` (UCC),
+running the identical five steps — `prepare_*` → `make_generated_*` →
+`ensure_amplitude_sectors` → `run_generated_arbitrary_order_iterations` → set
+`_correlation_energy` — and differing only in which two functions they name.
 
-**Scope:**
+> **My first proposal was worse than the one raised in review.** I suggested extracting a
+> shared driver parameterised by a policy, which unifies two things by *adding a third*.
+> Measured, `ccsdtq.cpp` is **already** the generic generated-RCC driver: nothing in it is
+> rank-4-specific (the only `4` is a floor), and `cc3`, `cc5`, `cc6` all route through it
+> today. So the rename **is** the fix, with no new indirection.
 
-- `ccsdtq.{cpp,h}` → `rccgen.{cpp,h}`; `run_rccsdtq` → `run_rccgen` (6 call sites, 3
-  includers).
-- Internal log tags become rank-derived, so `cc6` stops announcing itself as `RCCSDTQ`.
-- `run_uccgen`'s tag becomes rank-derived too — otherwise RCC gains rank-correct tags while
-  UCC keeps a flat `UCC :`, which is a *new* asymmetry introduced by fixing the old one.
+*It also removes a live bug:* a `cc6` run currently logs `RCCSDTQ` **eight times**, including
+in the energy line users read.
 
-**The energy label is rank-derived too, and the scheme is chosen so rank 4 does not move:**
+- `ccsdtq.{cpp,h}` → `rccgen.{cpp,h}`; `run_rccsdtq` → `run_rccgen` (6 call sites, 3 includers).
+- Internal log tags become rank-derived; `run_uccgen`'s tag does too, or fixing the old
+  asymmetry introduces a new one (RCC rank-correct, UCC flat `UCC :`).
+
+**The energy label is rank-derived with rank 4 unchanged**, and that detail is load-bearing:
 
 ```
 cc3 -> Total RCCSDT Energy      cc5 -> Total RCC5 Energy
 cc4 -> Total RCCSDTQ Energy     cc6 -> Total RCC6 Energy
 ```
 
-> **Why that matters more than it looks.** Three things parse `Total RCCSDTQ Energy`:
-> `run_regressions.py:33`, the `contains` assertion in `be_rccsdtq_sto3g`, and
-> `ccsdtq_fci_acceptance.py` — the CCSDTQ==FCI gate, the strongest in the whole ccgen
-> effort. All three exercise **rank 4 only**, so keeping rank 4's label leaves every one of
-> them untouched; only the ranks that are *currently wrong* change. A flat rename to
-> `Total RCCGEN Energy` would have broken all three for no gain.
+> Three things parse `Total RCCSDTQ Energy`: `run_regressions.py:33`, `be_rccsdtq_sto3g`'s
+> `contains` assertion, and `ccsdtq_fci_acceptance.py` — the CCSDTQ==FCI gate, the strongest
+> in the whole ccgen effort. **All three exercise rank 4 only**, so keeping rank 4's label
+> leaves every one untouched and changes only the ranks that are currently *wrong*. A flat
+> rename to `Total RCCGEN Energy` would have broken all three for no gain.
 
-*Kept deliberately, not renamed:*
+*Kept deliberately:* `PostHF::RCCSDTQ` (reaches `types.h`, driver, io, checkpoint — wide blast
+radius, no gain; comment it instead) and the `be_rccsdtq_sto3g` regression ID (renaming breaks
+continuity with every prior result in the vault, and the case genuinely *is* CCSDTQ).
 
-- **`PostHF::RCCSDTQ`** — the enum reaches `types.h`, the driver, io and checkpoint paths.
-  Wide blast radius, no gain; a comment saying "all generated RCC ranks" is enough.
-- **`be_rccsdtq_sto3g`** — renaming the regression ID breaks continuity with every prior
-  result recorded in the vault, and the case genuinely *is* CCSDTQ.
+---
 
-*Gate:* `be_rccsdtq_sto3g` unchanged at `-14.4036550465` and `ccsdtq_fci_acceptance.py`
-still passing (both rank 4, so both must be byte-identical); plus a `cc3` run asserted to
-announce `RCCSDT` rather than `RCCSDTQ`, which is the bug this step removes.
+#### (ii) The keyword surface — the convention is consistent, the coverage is not
+
+> **A correction to my own earlier reading.** I described UCC as having "invented a parallel
+> vocabulary because `uccsd` was taken". That is wrong, and RCC does the same thing: `ccsd`
+> and `ccsdt` are the **hand-written** determinant solvers (`run_rccsd`, `run_rccsdt`), so the
+> generated RCC path also had to invent `cc3`…`cc6`. The naming *convention* — method names
+> for hand-written, `cc<N>` / `ucc<N>` for generated — is already symmetric on both sides.
+
+| | hand-written | generated |
+|---|---|---|
+| RCC | `ccsd`, `ccsdt` | `cc3`…`cc6`, + `ccsdt_gen`, `ccsdtq`, `ccsdtqp` |
+| UCC | `uccsd`, `uccsdt` | `ucc2`, `ucc3`, `ucc4`, + `uccsd_gen` |
+
+What is actually asymmetric is **coverage**, from three distinct causes — and only two are
+defects:
+
+1. **UCC has no method-named aliases at ranks 3–4.** RCC offers `ccsdt_gen` / `ccsdtq` /
+   `ccsdtqp` beside the numbers; UCC offers only `uccsd_gen`. A plain omission in the U5.3b
+   keyword table. **Fix:** add `uccsdt_gen` and `uccsdtq_gen`.
+2. **UCC stops at rank 4.** That ceiling is a hand-written `switch` in
+   `make_generated_ucc_kernels`, not a real limit — the emitter is rank-generic (verified:
+   `ucc_independent_blocks` returns 6 and 7 sectors at ranks 5 and 6). **Fix:** follow
+   `PLANCK_CC_MAXORDER` as the RCC registry does, and add `ucc5` / `ucc6`.
+3. **RCC has no rank-2 generated keyword while UCC has `ucc2`.** **Not a defect — leave it,
+   and say why.** RCC's `generated_floor` is 4 (3 with `PLANCK_CC_ARBITRARY_LOWER_RANKS`)
+   because the hand-written solvers already cover ranks 2–3, so a generated rank-2 RCC path
+   would have no consumer. UCC's `ucc2` exists because **U5.4 needs it**: it is the
+   comparison against hand-written UCCSD, the cheapest end-to-end check of the whole stack.
+   Documenting this stops it reading as an oversight later.
+
+---
+
+#### Not in scope, and why
+
+**Making `ccsdtq` polymorphic** — one keyword resolving to RCC or UCC from the converged
+reference — was raised as an option. It is a separate, larger question:
+
+- It cannot be decided at parse time. **Measured:** the keyword handlers are applied in
+  input-file order, and `correlation` before `scf_type` still runs UHF correctly. Resolving
+  the reference inside the `correlation` lambda would make `correlation ccsdtq` mean different
+  things depending on line order — a worse defect than the asymmetry it fixes. It would have
+  to happen at dispatch, in `hf_driver.cpp`, where the reference is known.
+- It would apply equally to `ccsd` / `ccsdt`, i.e. to the **hand-written** solvers, not just
+  the generated path — so it is not a generated-path cleanup at all.
+
+*Gate:* `be_rccsdtq_sto3g` unchanged at `-14.4036550465` and `ccsdtq_fci_acceptance.py` still
+passing (both rank 4, so both must be byte-identical); a `cc3` run asserted to announce
+`RCCSDT` rather than `RCCSDTQ`; and `ucc5` reaching the registry rather than an
+unrecognized-keyword error.
 
 **U5.4 — `ucc2` against hand-written UCCSD (~S, the first real number).** A radical cation,
 using the in-tree oracle. **Land this before the FCI gate**: it exercises the whole stack at the
