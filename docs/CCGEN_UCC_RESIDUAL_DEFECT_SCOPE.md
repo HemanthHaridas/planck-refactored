@@ -4,8 +4,12 @@ Scopes ONE question: **why does the generated `ucc2` correlation energy disagree
 hand-written UCCSD, after the ERI antisymmetrization fix (`fe744e6`) closed the larger
 half of the gap?**
 
-**Status, 2026-08-24.** Not started. The measurements below are the whole basis for the
-plan; every one is reproducible with the committed `build-ucc` tree and costs seconds.
+**Status, 2026-08-24. R0 DONE — and it killed the prime suspect.** The first-order algebra is
+textbook-correct, so the defect is in the **data** reaching the kernels (the stored `v` blocks,
+the per-block denominators, or the amplitude written back), **not** in the equations and **not**
+in the amplitude-antisymmetry convention this doc originally suspected. **R1 is next and is now
+the step that names it.** Every measurement below is reproducible with the committed `build-ucc`
+tree and costs seconds.
 
 ---
 
@@ -62,6 +66,12 @@ Do not re-derive these:
 
 ## The prime suspect, and why
 
+> **SUPERSEDED BY R0 — do not pursue this first.** The reasoning below is kept because it is
+> sound about the *convention* (nothing does enforce it, and that is a real latent gap), but R0
+> measured that the first-order algebra is exactly textbook UMP2, and a first-order energy built
+> from one ERI term per block cannot be affected by how permutational copies of `t2` combine.
+> This is not the cause of the 3.8%.
+
 **The amplitude-side antisymmetry convention, which is the exact analogue of the ERI one
 just fixed — one layer over.**
 
@@ -90,16 +100,37 @@ symmetry-packed representation and its restore step are one convention that cann
 
 ## Steps
 
-**R0 — reproduce the defect with no solver (~S, and it gates everything else).**
-Assemble the first-order UCC correlation energy directly from the generated kernels'
-inputs — the spin-blocked cache, the per-block denominators, `t2 = residual/D` from a zero
-amplitude — and require it to equal the hand-written UMP2 `-0.0190946435`. Today it gives
-`-0.0152757148`.
+**R0 — reproduce the defect with no solver — DONE, and it KILLED THE PRIME SUSPECT.**
 
-*Why first: it converts a 100-iteration solve into a single evaluation, removes DIIS and
-convergence from the picture entirely, and the answer is a known number rather than a
-tolerance.* Model it on U3.4's MP2-limit check (`tests/cc_ucc_spin_blocks.cpp:381`), which
-already does exactly this shape of assembly and is the reason that step needed no solver.
+Two findings, both cheap and both changing the plan.
+
+**(a) Iteration 1 IS the first-order energy — no probe needed.** `run_generated_arbitrary_order_iterations`
+evaluates residuals from the *current* amplitudes, updates, then reports; amplitudes start at
+zero (`make_zero_rcc_amplitudes`) and `run_uccgen` carries no warm start. So the already-printed
+iteration-1 number `-0.0152757148` is exactly `t = R(0)/D` — the MP2 limit. R0 needs no new code
+at all; the measurement was already on screen.
+
+**(b) THE FIRST-ORDER ALGEBRA IS CORRECT, so the defect is in the DATA, not the equations.**
+Measured on the manifold: at `t = 0` every doubles residual collapses to a single constant term —
+
+```
+doubles_aaaa   1 * v_aaaa        doubles_abab   1 * v_abab        doubles_bbbb   1 * v_bbbb
+```
+
+— and the energy's doubles terms are `1/4 t2_aaaa v_aaaa`, `1 t2_abab v_abab`, `1/4 t2_bbbb v_bbbb`.
+Substituting `t2 = v/D` gives `1/4 Σ|<ij||ab>|²/D` for same-spin and `Σ|<ij|ab>|²/D` for mixed —
+**textbook UMP2, exactly**. The singles contribute nothing at first order (their only constant
+term is `f_ov`, which is zero for a canonical UHF reference — see the `cc_canonical_fock_only`
+invariant).
+
+**This kills the amplitude-antisymmetry hypothesis for this defect.** That convention governs how
+permutational copies of `t2` combine in the *higher-order* terms; it cannot affect a first-order
+energy assembled from one ERI term per block. The suspect named in the parent scope is wrong, and
+should not be pursued first. (It may still be a real latent issue — nothing enforces it — but it
+is not *this* 3.8%.)
+
+*What remains, therefore:* the values reaching the kernels. Either the stored `v` blocks, the
+per-block denominators `D`, or the amplitude written back between them.
 
 **R1 — split the 0.8 by spin channel (~S).**
 Report the first-order energy per channel (`aaaa`, `abab`, `bbbb`) against the hand-written
@@ -107,10 +138,21 @@ UMP2's three channels. **This is the step that names the defect**: the total rat
 exact 4/5, so either one channel is scaled by a rational factor or one is absent, and three
 numbers distinguish those cases immediately.
 
-*Predicted (untested): `abab` is correct and the same-spin channels are wrong, since that
-was the shape of the ERI defect and `abab` carries no exchange partner. If `abab` is ALSO
-wrong, the amplitude-antisymmetry hypothesis is dead and the denominator or the transform
-is back in scope.*
+**A sharper, falsifiable prediction now that R0 has narrowed it.** If `abab` is correct and only
+the same-spin channels are scaled by a factor `k`, then `(k·E_ss + E_os)/(E_ss + E_os) = 0.8`
+pins `k` against the same-spin share:
+
+```
+E_ss share   0.30    0.35    0.40    0.45    0.50
+k            0.333   0.429   0.500   0.556   0.600
+```
+
+**A same-spin share near 40% gives k = 1/2 exactly** — a clean convention slip, and the most
+likely single cause. R1 measures the share and `k` together, so it either lands on an exact
+rational (naming the defect) or does not (falsifying the whole "one channel scaled" family and
+sending the search to the denominators).
+
+*If `abab` is ALSO wrong, the transform or the denominator is the cause, not a coefficient.*
 
 **R2 — test the amplitude-antisymmetry hypothesis directly (~S).**
 Take the converged `t2_aaaa` out of the solver and measure `t2(i,j,a,b) + t2(j,i,a,b)` and
