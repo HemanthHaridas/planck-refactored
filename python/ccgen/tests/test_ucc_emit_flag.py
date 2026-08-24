@@ -70,6 +70,51 @@ class UccSwitchTests(unittest.TestCase):
                      "ccsdt": "775e185b5ab27566"}[method],
                     f"the default {method} emit changed; --ucc must be inert when off")
 
+    def test_spin_adapted_emit_is_unchanged(self):
+        """The OTHER RCC path, and the one a UCC change is most likely to break.
+
+        The pin above covers `spin_adapt=False` only, and that gap shipped a
+        regression: U3b.2a keyed its spin map on "does this term have tagged
+        factors" rather than on `ucc`, which is true for the SPIN-ADAPTED path
+        too -- its rank-4 sector amplitudes are named `t4_aaabaaab`. Spin-adapted
+        kernels got `noa`/`nvb` loop bounds over a `no`/`nv` preamble and the TU
+        stopped compiling, while the pin above stayed green throughout.
+
+        Both engines, because they are not the same text: `engine="diagram"` and
+        the default differ by 2038 lines at rank 2 (identical byte length, which
+        is a coincidence and exactly why the length check alone is not enough).
+        The generator and every UCC gate use `diagram`; the flag matrix in
+        `test_emit_flag_matrix.py` pins the default. Neither covered the other.
+
+        RANK 4 IS THE ONE THAT MATTERS, and it is why this test is not just the
+        rank-2/3 pin extended. The `t4_aaabaaab` sector names that trigger the
+        defect do not exist below rank 4: measured, ranks 2 and 3 emit ZERO
+        spin-adapted terms with a non-empty spin map, so a ranks-2-and-3 version
+        of this test passes under the exact regression it exists to catch. That
+        was verified by mutation, not assumed -- and it is the third time in this
+        step that a gate written at a convenient rank turned out vacuous.
+        `ccsdtq` costs ~4s here, so there is no reason to leave it out.
+        """
+        import hashlib
+
+        expected = {
+            ("ccsd", None): "44705c8ad85f951c",
+            ("ccsd", "diagram"): "4d1ab40e5a75fb19",
+            ("ccsdt", None): "7d5dc96aeebb2141",
+            ("ccsdt", "diagram"): "792a73c904403849",
+            # The discriminating point: rank 4 is where the sector amplitudes live.
+            ("ccsdtq", "diagram"): "d6e0f38aba1e6961",
+        }
+        for (method, engine), digest in expected.items():
+            with self.subTest(method=method, engine=engine):
+                kwargs = {"spin_adapt": True}
+                if engine is not None:
+                    kwargs["engine"] = engine
+                text = print_cpp_planck(method, **kwargs)
+                self.assertEqual(
+                    hashlib.sha256(text.encode()).hexdigest()[:16], digest,
+                    f"the spin-adapted {method} emit (engine={engine}) changed")
+
     def test_ucc_symbols_do_not_collide_with_rcc(self):
         """U5.0: a UCC TU must be linkable ALONGSIDE the RCC one for the method.
 

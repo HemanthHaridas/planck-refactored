@@ -18,6 +18,20 @@ WHAT IS DELIBERATELY NOT PINNED. `dress_operators=True` combined with `spin_adap
 first), so there is no status quo to record. `test_dress_operators_currently_ignores_other_
 flags` pins the *observable consequence* of that unreachability instead, which is the thing
 V1.2.1 changes and V1.2.4 must guard.
+
+WHAT THIS MATRIX CANNOT SEE, and it shipped a regression (U3b.2, 2026-08-24). Every
+baseline here is `METHOD = "ccsd"` -- rank 2. A defect keyed to names that only exist at
+higher rank is invisible to the whole matrix. Concretely: the spin-adapted rank-4 sector
+amplitudes are named `t4_aaabaaab`, and an emitter change that keyed off that suffix broke
+spin-adapted `ccsdtq` while every combination above stayed green. Rank coverage for
+`spin_adapt` (ranks 2/3/4, both engines) lives in
+`test_ucc_emit_flag.test_spin_adapted_emit_is_unchanged`; if you add a flag here whose
+behaviour could vary with rank, pin it there too rather than assuming rank 2 is
+representative.
+
+Also rank-2-only and worth knowing: these baselines use the DEFAULT engine. `engine="diagram"`
+-- what the generator and every UCC gate actually use -- emits different text (2038 differing
+lines at rank 2, at identical byte length).
 """
 
 from __future__ import annotations

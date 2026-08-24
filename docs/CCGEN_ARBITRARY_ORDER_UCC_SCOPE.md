@@ -5,12 +5,17 @@ kernels (UCC) alongside the existing arbitrary-order RCC path** — so an
 open-shell reference can drive `ucc4`/`ucc5` the way a closed-shell reference
 drives `cc4`/`cc5` today.
 
-**Status, 2026-08-23.** **U0–U4 are landed and numerically validated.** The generator emits a
-runnable UCC translation unit behind `--ucc`, and the runtime accepts, evaluates, updates and
-allocates it. **U5 is all that remains, and it is bigger than this doc said** (`~S` → `~M`): the
-three UCC C++ builders U2–U3 added have **no production callers at all** — `prepare_generated_
-arbitrary_order_state` still builds a `CanonicalRHFCCReference` and the RCC block cache. Wiring
-that, not the keyword, is the work.
+**Status, 2026-08-24.** **U0–U4 and U3b are landed; the generated UCC translation unit
+COMPILES**, at rank 2 and rank 3. Every gate before U3b.2 inspected emitted *text* and none fed
+it to a compiler — which is exactly how the spin-blind loop bounds survived U3, U4 and
+U5.0–U5.3b and surfaced only at runtime as a shape mismatch. **U5.3c, U5.4 and U5.5 remain.**
+
+**The gate lesson this doc keeps re-learning, now with a fifth and sixth instance.** A gate
+written at a convenient rank or on a same-spin block is routinely *vacuous* — it passes under the
+exact mutation it exists to catch. U3b.2 hit this twice more, both caught by mutation testing
+rather than review: a spin-adapted compile gate written at rank 3 (the triggering
+`t4_aaabaaab` names do not exist below rank 4), and the extended SHA-256 pin written at ranks 2
+and 3 for the same reason. **Mutation-test every new gate here before trusting a pass.**
 
 | step | state |
 |---|---|
@@ -19,7 +24,7 @@ that, not the keyword, is the work.
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
 | U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
 | U4 | **landed, U4.0–U4.3.** The runtime accepts an ALL-SECTORS bundle (no per-rank reference residual), and `--ucc` reaches it from the build. U4.1 turned out **not to be work** — the update loop already handled it; U4.2 fixed a real out-of-bounds read (segfault, not a wrong number) that U4.0 had made reachable |
-| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b landed** (the `ucc2`/`ucc3`/`ucc4` keyword). **U3b is the BLOCKER** — running U5.4 showed every emitted kernel takes its loop bounds and result shape from the scalar `orbital_partition`, which is default-zero on a UCC state; a gap left when U3 was scoped. **U3b.0 + U3b.1 landed** (per-index spin map; four counts on the reference — both inert until U3b.2 connects them). **U3b.2, U5.3c, U5.4, U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller |
+| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b landed** (the `ucc2`/`ucc3`/`ucc4` keyword). **U3b was the blocker** — running U5.4 showed every emitted kernel takes its loop bounds and result shape from the scalar `orbital_partition`, which is default-zero on a UCC state; a gap left when U3 was scoped. **U3b is now COMPLETE** (U3b.0 per-index spin map, U3b.1 four counts on the reference, U3b.2 spin-aware bounds/counts/shapes) **and the emitted UCC TU compiles at ranks 2 and 3.** **U5.3c, U5.4, U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller.<br><br>**U3b.2 shipped a regression worth carrying:** keying the spin map on "the map came back empty" instead of on `ucc` also fires on the SPIN-ADAPTED path, whose rank-4 sector amplitudes are named `t4_aaabaaab`. **Neither RCC gate could see it** — the SHA-256 pin emits with `spin_adapt=False`, and `test_emit_flag_matrix.py` pins `spin_adapt` only at `METHOD = "ccsd"`, below the rank where those names exist. The pin now covers `spin_adapt` at ranks 2/3/**4** and both engines (`diagram` and the default differ by 2038 lines at rank 2 despite identical byte length) |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -1022,16 +1027,52 @@ gets exactly one spin.
   > `bbbb` — which is exactly the defect class U3b removes. Mutation-tested; that variant fails.
   > The accessors likewise **error** on a non-spin character rather than returning a plausible
   > count.
-- **U3b.2 — spin-aware bounds and allocations (~M, emitter) — NEXT, and the step that
-  unblocks U5.4.** Both landed pieces are inert until this connects them: the spin map has no
-  consumer, and the four counts are read by no kernel. Three emitter sites are still spin-blind
-  (`_loop_bound`, and the `const int no/nv` preamble emitted at three places). `_loop_bound` consults the map;
-  the three `const int no/nv` preambles become the four counts; result allocation derives from
-  the **target's** tag (`singles_aa` → `(noa, nva)`, `doubles_abab` → `(noa, nob, nva, nvb)`).
-  *Gate:* RCC emit byte-identical (SHA-256, already pinned); the UCC TU contains **zero**
-  spin-blind `< no` / `< nv` bounds; and `doubles_abab` allocates four *different* extents on a
-  fixture where `noa != nob != nva != nvb`, so a spin-blind bound changes the shape rather than
-  only the values.
+- **U3b.2 — spin-aware bounds and allocations — LANDED** (`be2b178`, `9e902ab`, `9de1c43`).
+  `_loop_bound` and `_dims_expr` take an optional spin; `emit_planck_term` recovers it per term
+  from U3b.0's map; the preamble declares the four counts from U3b.1. **The generated UCC TU now
+  compiles**, at rank 2 and rank 3 — the first time any UCC gate fed emitted text to a compiler,
+  and the reason the defect survived U3/U4/U5.0–U5.3b: every prior gate inspected *text*.
+
+  **The 2b/2c split in this doc was wrong — they are ONE atomic change, and the compiler proves
+  it.** 2b removes the `const int no/nv` declarations, so a tree carrying 2b without 2c emits a
+  TU that fails with `use of undeclared identifier 'no'` at every result allocation (16 errors on
+  the CCSD UCC TU). Scoping them as separate steps would have left the tree broken at the
+  boundary either way.
+
+  **Two structural corrections, both found by building it:**
+
+  1. **Only TWO emitter sites are reachable, not three.** `include_intermediates` is forced off
+     for `ucc` (`generate.py:1138`), so the intermediate-builder preamble and both `_dims_expr`
+     calls inside `_emit_intermediate_builder` are dead code on this path. Left untouched.
+  2. **The chunked `_partN` preamble is a site CCSD never reaches.** At rank 2 no kernel exceeds
+     the 256-term threshold; at rank 3 all four triples blocks do (597/486/486/597). A
+     CCSD-only gate passes with every `_part` preamble still spin-blind — so rank 3 is in the
+     gate deliberately.
+
+  **The counts are read off the four public members, not through `occupied_count('a')`.** Those
+  return `std::expected` and would need an unwrap at every preamble for an error path that cannot
+  fire — the emitter writes the spin literal itself. The accessors stay the checked entry point
+  for callers whose spin is *data*.
+
+  **"Allocation derives from the target's tag" needed one correction:** the energy kernel is
+  rank 0, so it has a preamble and no allocation, and its bounds still need spin. Free-index
+  order is occ-first, so `doubles_abab` → `(noa, nob, nva, nvb)`. Measured across all 14
+  block-tagged targets at ranks 2 and 3: every term of a target carries the same free-index
+  spins, equal to the target's tag — so the first term is representative, verified rather than
+  assumed.
+
+  > **THE REGRESSION THIS STEP SHIPPED, AND WHAT IT SAYS ABOUT THE PIN.** U3b.2a first keyed the
+  > spin map on *"did it come back empty"* rather than on `ucc`, reasoning that only UCC terms
+  > carry block-tagged factor names. **That is false for the SPIN-ADAPTED path**: its rank-4
+  > sector amplitudes are named `t4_aaabaaab`, matching the same `_[ab]+` suffix. 661 spin-adapted
+  > `ccsdtq` terms got spin-suffixed bounds over a `no`/`nv` preamble, and that TU stopped
+  > compiling.
+  >
+  > **The RCC SHA-256 pin cannot see this class of defect** — it emits with `spin_adapt=False`.
+  > Neither could `test_emit_flag_matrix.py`, which *does* pin `spin_adapt` but only at
+  > `METHOD = "ccsd"`, and the triggering names do not exist below rank 4. Two comprehensive-
+  > looking gates, blind to the same thing for two different reasons. Fixed in `9de1c43` by
+  > gating on `ucc`, and the pin extended (below).
 
 *Then U5.4 becomes what it was scoped to be:* a number, not a shape error.
 
