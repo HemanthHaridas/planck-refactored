@@ -1158,13 +1158,20 @@ trap that cost two investigation steps: `docs/CCGEN_UCC_ERI_ANTISYMMETRY.md`.**
 the runner has no build-option gating, so a `ucc2` case would fail in a default build. That
 plumbing is the remaining work.
 
-**U5.5 — open-shell UCCSDTQ == FCI (~M, the one that matters).** The closed-shell analog is the
-strongest gate in the whole ccgen effort (`0970e21` / `ce03048`: Be CCSDTQ vs FCI, 6.4e-11).
+**U5.5 — validating the UCC stack against exact diagonalization — RESCOPED, and the old form
+is IMPOSSIBLE.** "Open-shell UCCSDTQ == FCI" cannot be made non-vacuous: `== FCI` needs
+`n_elec ≤ 4` for CCSDTQ to be exact, a worthwhile T4 needs ≥ 2 electrons of **each** spin, and
+open shell needs `n_alpha ≠ n_beta` — and 4 electrons with 2 of each spin is a *closed* shell.
+Measured on triplet Be/STO-3G (4 e⁻, 3α/1β, `<S²>` exactly 2.000000): in-tree FCI and
+hand-written UCCSD are **identical to 1e-10**, so T3 and T4 both contribute nothing and a broken
+implementation of either passes.
 
-> **Check the system is not vacuous before trusting a pass.** U1.5 found Li/STO-3G makes `t3`
-> worth 0, so a broken T3 passes there; LiH⁺/6-31g was used instead because it makes the triples
-> worth 8.1e-8. The same trap applies at rank 4 — verify the highest amplitude is worth something
-> first.
+**Gate an interval on B/STO-3G instead** (5 e⁻, 3α/2β, so the `aabb` T4 sector is live): FCI
+`-24.1892649766` vs UCCSD `-24.1892581442`, a 6.8e-6 gap T3+T4 must recover. `ucc4` must land
+strictly between, near FCI. Both bounds bite — no contribution fails the lower, over-correction
+fails the upper (below FCI was the B5 signature).
+
+**Full scope, with the in-tree constraints it turns on: `docs/CCGEN_U55_UCC_FCI_SCOPE.md`.**
 
 #### What U5 does NOT need
 
