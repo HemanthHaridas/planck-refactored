@@ -1108,13 +1108,45 @@ individually correct and self-consistent; the convention between them was never 
 *Consistent with the symptom:* the `abab` channel needs no exchange partner and is unaffected,
 while both same-spin channels are wrong — which is why the ratio is not a clean factor of 2.
 
-**Not fixed here, because it is a design choice, not a patch.** Either the cache antisymmetrizes
-same-spin blocks at build time (changes what every existing C++ consumer sees, including U3.4's
-test and U5.2c's UMP2 gate), or the emitter emits explicit exchange terms for same-spin blocks
-(changes generated text only, leaves the C++ contract alone). The second keeps one meaning per
-array and does not disturb landed gates; the first is fewer FLOPs but silently redefines a block
-that three landed tests already assert on. **Whichever is chosen, pin the convention in one place
-and gate it** — this is the B5 physicist-vs-chemists failure mode again, one layer up.
+**FIXED on the emitter side, and the choice was architectural rather than cost-based.**
+
+Antisymmetrizing the cache was rejected on three counts, each independently sufficient:
+
+1. **It is not uniformly definable.** `<pq||rs> = <pq|rs> - <pq|sr>` needs slots 2 and 3
+   interchangeable, i.e. the same spin. For a mixed block the exchange partner is a different
+   *shape* — `oovv_abab` is `(noa,nob,nva,nvb)`, its partner `(noa,nob,nvb,nva)` — which the
+   array cannot hold. So it is a conditional over a subset (12 of the 28 blocks the rank-2 TU
+   reads), not one transform over a vocabulary, leaving one accessor with two meanings and no
+   marker saying which.
+2. **It contradicts a rule the file already states.** `ucc_blocks.cpp:32` says the antisymmetric
+   single-swap relations "hold only for the ANTISYMMETRIZED `<pq||rs>` … do not add them here
+   either", and `kEriSymmetries` is built on that premise — it would be invalid for exactly the
+   blocks that changed.
+3. **It silently redefines what three landed C++ gates assert on** (U3.4's MP2 limit, U5.2c's
+   UMP2 energy, the structural rebind gate). They would keep passing, having lost their meaning.
+
+The emitter already owns this knowledge — `ucc_integrate_term_antisym` → `_antisym_to_allowed`
+maps factors into allowed blocks and folds swap signs into coefficients — so emitting the
+exchange is that same mechanism one step further, not a new one. **`_block_needs_explicit_exchange`
+states the convention in one place**; `_map_eri_tensor` emits
+`(v_aaaa_oovv(i,j,a,b) - v_aaaa_oovv(i,j,b,a))` for same-spin blocks and leaves mixed and Fock
+reads alone. Measured on the rank-2 UCC TU: 90 exchange pairs per same-spin block, **zero** bare
+same-spin reads, **zero** on `abab`, **zero** on Fock. RCC emit byte-identical.
+Gated by `test_ucc_eri_convention.py`.
+
+**Result: `-0.0705299626` → `-0.0418040291` against the reference `-0.0402694793`.** The
+same-spin channels are now right; **a second, smaller defect remains at +3.8%**, and it is
+distinct from this one.
+
+*What is ruled out for that remaining gap, measured not assumed:* the emitter is complete (zero bare
+same-spin reads at either tag), and the denominator's "occ half then vir half" tag convention
+matches the amplitude free-index layout (`doubles_abab` → occ,occ,vir,vir with spins a,b,a,b →
+`abab`). The residual **plateaus at ~5e-8 rather than converging**, which points at an
+inconsistency inside the residual equations rather than in the energy expression — the energy
+kernel is now textbook-correct by inspection. Likely next suspects: the `-1/2 t2_aaaa v_aaaa`
+coefficients in the singles/doubles residuals assume an **antisymmetric `t2_aaaa`**, which is an
+AMPLITUDE-side convention separate from the ERI one, and nothing in `solver_arbitrary` enforces
+it.
 
 *Then the gate this step was scoped to be:* `ucc2` E_corr matching `-0.0402694793`.
 

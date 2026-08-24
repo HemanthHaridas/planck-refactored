@@ -261,6 +261,52 @@ def _access_indices(factor: Tensor | LoweredTensorFactor) -> tuple[Index, ...]:
     return _source_tensor(factor).indices
 
 
+def _block_needs_explicit_exchange(block_tag: str | None) -> bool:
+    """Does a `v` read on this spin block need an explicit exchange term?
+
+    U5.4. THE CONVENTION, stated in one place because having it implicit on both
+    sides is what let the two halves disagree:
+
+        every array in the UCC block cache stores the PLAIN <pq|rs>.
+
+    The UCC algebra means the ANTISYMMETRIZED <pq||rs> when it writes `v_aaaa` --
+    `ucc_integrate_term_antisym` is documented as integrating "for REAL
+    ANTISYMMETRIC tensors", and the energy manifold carries ONE same-spin term at
+    coefficient 1/4 with no exchange partner, which only balances for <pq||rs>.
+    So the exchange has to appear somewhere. It appears HERE, in the emitted text,
+    rather than being folded into the stored array.
+
+    WHY THIS SIDE, and not by antisymmetrizing the cache:
+
+    1. `<pq||rs> = <pq|rs> - <pq|sr>` requires slots 2 and 3 to be interchangeable,
+       which holds only when they carry the SAME spin. For a mixed block the
+       exchange partner is a different tensor SHAPE -- `oovv_abab` is
+       (noa, nob, nva, nvb) and its partner would be (noa, nob, nvb, nva), which
+       the array cannot even hold. So antisymmetrizing the cache is not one
+       transform over a vocabulary; it is a conditional applied to a subset,
+       leaving one accessor with two meanings and no marker saying which.
+    2. `ucc_blocks.cpp` already states the rule this would break: the four
+       antisymmetric single-swap relations "hold only for the ANTISYMMETRIZED
+       <pq||rs> ... do not add them here either". `kEriSymmetries` is built on
+       that premise and would be invalid for exactly the blocks that changed.
+    3. Three landed C++ gates assert on the plain blocks -- U3.4's MP2 limit
+       (which writes the exchange by hand as `gab - gba`), U5.2c's UMP2 energy,
+       and the structural rebind gate. Antisymmetrizing under them keeps them
+       passing while silently changing what they mean.
+
+    The 2-index Fock blocks are unaffected: they are plain on both sides already.
+    Mixed 4-index blocks are unaffected because the algebra gives them no exchange
+    partner -- `abab` appears at coefficient 1, not 1/4.
+
+    Returns False on the RCC path (`block_tag is None`), where a single spatial
+    ERI tensor serves every read and the closed-shell equations already carry
+    their own exchange structure.
+    """
+    if block_tag is None:
+        return False
+    return len(set(block_tag)) == 1
+
+
 def _map_eri_tensor(
     tensor: Tensor | LoweredTensorFactor,
     block_tag: str | None = None,
@@ -308,9 +354,17 @@ def _map_eri_tensor(
 
             inverse = _inverse_permutation(perm)
             reordered = [tensor_obj.indices[i].name for i in inverse]
-            return sign, (
-                f"{_eri_read(block_tag, block_name)}"
-                f"({', '.join(reordered)})")
+            read = _eri_read(block_tag, block_name)
+            if _block_needs_explicit_exchange(block_tag):
+                # U5.4: `v_aaaa` means the ANTISYMMETRIZED <pq||rs> to the UCC
+                # algebra, but the stored array is the plain <pq|rs>. Emit the
+                # exchange explicitly rather than antisymmetrizing the array.
+                # See `_block_needs_explicit_exchange` for why this side.
+                direct = ", ".join(reordered)
+                exchanged = ", ".join(
+                    [reordered[0], reordered[1], reordered[3], reordered[2]])
+                return sign, f"({read}({direct}) - {read}({exchanged}))"
+            return sign, f"{read}({', '.join(reordered)})"
 
     raise NotImplementedError(
         f"No Planck ERI block mapping available for pattern "
