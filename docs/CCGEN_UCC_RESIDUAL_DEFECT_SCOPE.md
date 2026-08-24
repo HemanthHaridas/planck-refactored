@@ -4,8 +4,17 @@ Scopes ONE question: **why does the generated `ucc2` correlation energy disagree
 hand-written UCCSD, after the ERI antisymmetrization fix (`fe744e6`) closed the larger
 half of the gap?**
 
-**Status, 2026-08-24. R0-R2 DONE. The first-order layer is CORRECT; the defect is in the
-higher-order terms.** R2 found that the exact `0.800000` R0 and R1 were chasing is the
+**Status, 2026-08-24. R0-R4 DONE — THE DEFECT IS FOUND, and it is the exchange fix I landed in
+`fe744e6`.** `_map_eri_tensor` applies the exchange by swapping the **last two slots**, which is
+the ket pair only for `oooo`/`oovv`/`vvvv`. On `ooov`/`ovov`/`ovvv` — 90 of the 180 emitted
+exchange pairs — it swaps an occupied index with a virtual one, reading a different space
+pattern out of the array. First order was clean because its only term is `oovv`, where the
+swap happens to be right. **`test_ucc_eri_convention.py` asserted the swap was "the LAST TWO
+slots only" — the gate encoded the bug.** Fix: derive the ket pair from the block's space
+pattern, not from position, and re-gate on an `ovov` term.
+
+*Superseded status lines, for the record:* **R0-R2 DONE. The first-order layer is CORRECT; the
+defect is in the higher-order terms.** R2 found that the exact `0.800000` R0 and R1 were chasing is the
 **`cc_damping` default of 0.8**, not a defect: with `cc_damping 1.0`, iteration 1 reproduces
 UMP2 to ten digits on both fixtures. That clears the stored ERI blocks, the per-block
 denominators, the rebind, the write-back and the energy coefficients — by measurement. **R4 is
@@ -232,33 +241,56 @@ is the defect; all three are cleared by this measurement.
 > to be a configuration default as a coefficient bug. Grep the knobs before theorising about
 > the equations.**
 
-**R4 — the defect is in the HIGHER-ORDER terms (~M) — NEXT, and it is where the search
-actually starts.**
+**R4 — DONE. The defect is MY EXCHANGE FIX: it swaps the wrong slots on five of the six
+space blocks.**
 
-R0-R2 cleared the whole first-order layer by measurement. What remains is everything that is
-zero at `t = 0`: the `t1`, `t2·v`, `t1·t1`, `t2·t2` … terms of the residuals. The converged
-`-0.0418041` vs `-0.0402695` is a **+3.81%** overshoot from those.
+**Localized by the cheap probe first.** With `cc_damping 1.0` and DIIS off, the generated and
+hand-written solvers agree *exactly* at iteration 1 and diverge at iteration 2 — so the defect
+is in the terms linear in the MP2 amplitude, not in the constant term:
 
-Handles, cheapest first:
+```
+iter    generated        hand-written       diff
+   1  -0.0190946435    -0.0190946435    +0.000e+00
+   2  -0.0251026330    -0.0252106915    +1.081e-04
+   3  -0.0304876742    -0.0295950340    -8.926e-04
+```
 
-1. **Second-order.** With `cc_damping 1.0` and DIIS off, iteration 2 adds exactly the terms
-   linear in the MP2 amplitude. Compare against the same quantity from the hand-written UCCSD
-   solver at its own iteration 2 (it is a different algorithm but the *first two* iterates of a
-   Jacobi CC solve from a zero start are convention-independent). A divergence at iteration 2
-   names a small set of terms; agreement pushes it to third order and beyond.
-2. **Per-block residual comparison at a FIXED amplitude.** The strongest instrument, and the one
-   that cracked B5: seed both solvers with the same `t`, evaluate one residual, and diff per
-   block. The generated and hand-written paths use different amplitude layouts, so this needs
-   the `(occ…,vir…)` vs `(vir…,occ…)` transpose recorded in
-   `CCGEN_UCC_NUMERIC_VALIDATION.md` — that doc's PySCF-interface lessons apply directly.
-3. **The amplitude-antisymmetry convention, now back on the table.** R0 correctly ruled it out
-   *at first order*; it governs exactly the higher-order terms that remain, and
-   `ucc_amplitude_blocks` still asserts it with nothing enforcing it. **It is a live suspect
-   again** — see the section above, which was marked SUPERSEDED for first-order reasons that no
-   longer apply to what is left.
+Same signature on the C1 fixture (identical at 1, `+7.07e-05` at 2). The sign flip between
+iterations 2 and 3 already rules out a single uniform scale factor.
 
-*Do not gate on the converged number.* Iteration 2 at `cc_damping 1.0` with DIIS off is
-deterministic, cheap, and localizes; the converged value confounds every term at once.
+**The amplitude-antisymmetry suspect is DEAD, measured this time.** Probed directly:
+`max|t(ijab) + t(jiab)|` and `max|t(ijab) + t(ijba)|` are `~1e-16` and `~0` for both `aaaa` and
+`bbbb`, at iterations 1 and 2. The amplitudes are antisymmetric to machine precision, so the
+convention `ucc_amplitude_blocks` asserts is in fact satisfied. It should now be closed as a
+suspect for this defect — though it remains unenforced and unchecked, which is worth a gate on
+its own terms.
+
+**THE ACTUAL DEFECT.** `_block_needs_explicit_exchange` correctly identifies *which spin blocks*
+need an exchange term, but `_map_eri_tensor` applies it with a **blind swap of the last two
+slots**, and that is only the ket pair for some space patterns. Measured across the rank-2 UCC
+TU, the exchange is emitted on all six:
+
+```
+oooo   4     oovv  80     vvvv   6      <- last-two swap stays within one space: OK
+ooov  32     ovov  20     ovvv  38      <- last-two swap crosses occ/vir: WRONG
+```
+
+Concretely, the `doubles_abab` term `-1 * t2_abab * v_aaaa` binds `v_aaaa` as
+`(i:occ, c:vir, k:occ, a:vir)` — an `ovov` read. My rule emits
+`v_aaaa_ovov(i,c,k,a) - v_aaaa_ovov(i,c,a,k)`, and the second read has pattern `(o,v,v,o)`: a
+different space block entirely, read out of the `ovov` array. Wrong values, and in-bounds only
+by luck when the occupied and virtual extents happen to be compatible.
+
+*This also explains why first order was clean:* the only constant term is `1 * v_aaaa` on
+`oovv`, where the last-two swap IS the ket swap. Every gate written for the exchange fix
+(`test_ucc_eri_convention.py`) asserted the swap was "the LAST TWO slots only" — which is what
+the code does, and the wrong thing to assert. **The gate encoded the bug.**
+
+**The fix must swap the two KET slots of the physicist integral, identified from the pattern,
+not from position.** The emitter already knows each block's space pattern
+(`_canonical_eri_blocks_for`) and the permutation used to reach it, so the ket pair is
+derivable there rather than assumed. Re-gate on a term whose `v` is `ovov`, not only on the
+`oovv` energy terms.
 
 **R3 — pin the convention, whichever way R4 lands (~S).**
 The ERI fix landed `_block_needs_explicit_exchange` as the single place that states its
