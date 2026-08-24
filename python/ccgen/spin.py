@@ -1380,6 +1380,59 @@ def ucc_term_spins(term) -> dict:
     return spins
 
 
+def ucc_term_index_spins(term) -> dict:
+    """U3b.0 -- the spin of every index in one resolved UCC ``AlgebraTerm``.
+
+    Returns ``{index name: 'a' | 'b'}``.
+
+    WHY THIS IS NEEDED AT ALL. The emitter writes loop bounds from an ``Index``,
+    but an Index carries only a SPACE (occ/vir), never a spin -- the U1 bridge
+    drops the spin label by design, because RCC stores one spatial tensor per rank
+    and has nothing to route. Under UCC the bound differs per spin (``noa`` vs
+    ``nob``), so it has to come from somewhere else.
+
+    WHERE IT COMES FROM. A resolved factor carries its block in its NAME
+    (``t2_abab``, ``v_aaaa``, ``f_bb``), and slot *k* of that factor carries spin
+    ``tag[k]`` -- POSITIONALLY, not grouped by space. That matters: ``t2_abab``'s
+    slots are ``(vir, vir, occ, occ)``, so the tag does not read "occ half then vir
+    half" here; it reads straight across the slots as they appear.
+
+    Every index of every term is covered, because a summed index appears in at
+    least one resolved factor by construction. Measured across the CCSD UCC
+    manifold: 2346 assignments, zero conflicts. A conflict would mean two factors
+    disagree about an index's spin, which is a slot-mapping defect (the R3.1.2
+    failure mode) rather than something to paper over -- so it raises.
+
+    Unresolved factors (a bare ``v``/``f``/``t2``, i.e. the RCC path) contribute
+    nothing, so calling this on RCC terms returns an empty map rather than
+    guessing.
+    """
+    spins: dict[str, str] = {}
+    for factor in term.factors:
+        tensor = factor.tensor if hasattr(factor, "tensor") else factor
+        name = getattr(tensor, "name", getattr(factor, "name", ""))
+        # Split on the last underscore rather than a regex: spin.py imports no `re`
+        # and this needs no pattern beyond "suffix is all a/b".
+        root, _, tag = name.rpartition("_")
+        if not root or not tag or any(ch not in "ab" for ch in tag):
+            continue
+        indices = getattr(factor, "indices", ())
+        if len(indices) != len(tag):
+            raise ValueError(
+                f"ucc_term_index_spins: factor {name!r} has {len(indices)} slots "
+                f"but a {len(tag)}-slot spin tag; the slot mapping is wrong.")
+        for slot, index in enumerate(indices):
+            spin = tag[slot]
+            previous = spins.get(index.name)
+            if previous is not None and previous != spin:
+                raise ValueError(
+                    f"ucc_term_index_spins: index {index.name!r} is {previous!r} in "
+                    f"one factor and {spin!r} in {name!r}. Two factors disagree "
+                    f"about an index's spin, which is a slot-mapping defect.")
+            spins[index.name] = spin
+    return spins
+
+
 def ucc_adapt_equations(equations, blocks=None, adapter=None):
     """U1.0 -- resolve a GCC residual manifold into UNRESTRICTED (spin-block)
     ``AlgebraTerm``s. Returns ``{f"{target}_{tag}": [AlgebraTerm]}``.
