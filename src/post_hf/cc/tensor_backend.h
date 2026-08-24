@@ -39,6 +39,31 @@ namespace HartreeFock::Correlation::CC
         Tensor2D f_ov;
         Tensor2D f_vv;
 
+        // U3b.1: the four spin-resolved orbital counts, for the UCC path.
+        //
+        // `orbital_partition` carries ONE (n_occ, n_virt) pair, which is all a
+        // restricted reference needs. A generated UCC kernel needs four: a loop
+        // over an alpha-occupied index runs to `n_occ_alpha` and a beta-occupied
+        // one to `n_occ_beta`, and under UHF those differ.
+        //
+        // Added ALONGSIDE `orbital_partition` rather than replacing it. The RCC
+        // kernels read `orbital_partition.n_occ` / `.n_virt` (measured: 6 reads
+        // each in the rank-3 TU) and must keep doing so byte-identically, so this
+        // is additive by construction. On an RCC reference the four stay 0 and
+        // nothing reads them; on a UCC reference they are set and
+        // `orbital_partition` stays default -- which is exactly the state that
+        // made every UCC kernel allocate a (0,0) result before this landed.
+        int n_occ_alpha = 0;
+        int n_occ_beta = 0;
+        int n_virt_alpha = 0;
+        int n_virt_beta = 0;
+
+        // The occupied/virtual count for one spin. `spin` is 'a' or 'b'; anything
+        // else is a caller bug and returns an error rather than a plausible count,
+        // because a silently-wrong bound is the defect U3b exists to remove.
+        [[nodiscard]] std::expected<int, std::string> occupied_count(char spin) const;
+        [[nodiscard]] std::expected<int, std::string> virtual_count(char spin) const;
+
         // U3.3: spin-resolved Fock blocks for the UCC path, keyed (space, tag)
         // where tag is "aa" or "bb". The three untagged members above stay the
         // RCC storage and are untouched; a UCC build populates `spin_blocks`

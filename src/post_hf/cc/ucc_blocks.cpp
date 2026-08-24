@@ -169,12 +169,43 @@ namespace HartreeFock::Correlation::CC
             space + ", " + tag + ")");
     }
 
+    std::expected<int, std::string> CanonicalRHFCCReference::occupied_count(char spin) const
+    {
+        if (spin == 'a')
+            return n_occ_alpha;
+        if (spin == 'b')
+            return n_occ_beta;
+        return std::unexpected(
+            std::string("CanonicalRHFCCReference::occupied_count: spin must be 'a' or "
+                        "'b'; got '") + spin + "'.");
+    }
+
+    std::expected<int, std::string> CanonicalRHFCCReference::virtual_count(char spin) const
+    {
+        if (spin == 'a')
+            return n_virt_alpha;
+        if (spin == 'b')
+            return n_virt_beta;
+        return std::unexpected(
+            std::string("CanonicalRHFCCReference::virtual_count: spin must be 'a' or "
+                        "'b'; got '") + spin + "'.");
+    }
+
     std::expected<CanonicalRHFCCReference, std::string> build_ucc_fock_blocks(
         const UHFReference &reference,
         const Eigen::MatrixXd &fock_alpha_mo,
         const Eigen::MatrixXd &fock_beta_mo)
     {
         CanonicalRHFCCReference out;
+
+        // U3b.1: the counts the generated kernels take their loop bounds from.
+        // `orbital_partition` is deliberately left default here -- it holds one
+        // (n_occ, n_virt) pair and cannot describe an unrestricted partition, so
+        // filling it with either spin's counts would be a plausible wrong answer.
+        out.n_occ_alpha = reference.n_occ_alpha;
+        out.n_occ_beta = reference.n_occ_beta;
+        out.n_virt_alpha = reference.n_virt_alpha;
+        out.n_virt_beta = reference.n_virt_beta;
 
         struct SpinSpec
         {

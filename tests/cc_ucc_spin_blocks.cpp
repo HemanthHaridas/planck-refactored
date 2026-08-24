@@ -35,6 +35,7 @@
 #include <string>
 #include <vector>
 
+using HartreeFock::Correlation::CC::build_ucc_fock_blocks;
 using HartreeFock::Correlation::CC::build_ucc_spin_block_cache_from_eri;
 using HartreeFock::Correlation::CC::eri_permutation_preserves_block;
 using HartreeFock::Correlation::CC::ucc_canonical_blocks;
@@ -863,6 +864,68 @@ int main()
             // Non-trivial, or the agreement above is two zeros agreeing.
             check(std::fabs(chem_total) > 1e-6, "the same-spin channel is non-trivial");
             check(std::fabs(chem_os) > 1e-6, "the mixed channel is non-trivial");
+        }
+    }
+
+    // --- U3b.1: the four spin-resolved orbital counts ------------------------
+    //
+    // Every generated kernel takes its loop bounds and result shape from the
+    // reference. Before this, a UCC reference carried only `orbital_partition` --
+    // one (n_occ, n_virt) pair, left DEFAULT by build_ucc_fock_blocks -- so every
+    // kernel allocated a (0,0) result and the first end-to-end `ucc2` run failed
+    // with "sector residual shape mismatch at (rank 1, tag aa)".
+    //
+    // The four counts are ADDITIVE: `orbital_partition` is untouched, because the
+    // RCC kernels read it (6 reads each of n_occ/n_virt in the rank-3 TU) and must
+    // keep doing so byte-identically.
+    {
+        const UHFReference source = make_reference(/*degenerate=*/false);
+        Eigen::MatrixXd fock_a = Eigen::MatrixXd::Zero(NOA + NVA, NOA + NVA);
+        Eigen::MatrixXd fock_b = Eigen::MatrixXd::Zero(NOB + NVB, NOB + NVB);
+        for (int p = 0; p < NOA + NVA; ++p)
+            fock_a(p, p) = 1.0 + static_cast<double>(p);
+        for (int p = 0; p < NOB + NVB; ++p)
+            fock_b(p, p) = 100.0 + static_cast<double>(p);
+
+        const auto ref = build_ucc_fock_blocks(source, fock_a, fock_b);
+        check(ref.has_value(), "the UCC reference builds");
+
+        if (ref)
+        {
+            check(ref->n_occ_alpha == NOA && ref->n_occ_beta == NOB &&
+                      ref->n_virt_alpha == NVA && ref->n_virt_beta == NVB,
+                  "the four counts come from the UHFReference");
+
+            // The fixture is deliberately asymmetric in all four extents, so a
+            // count wired to the wrong spin -- or to the wrong space -- changes
+            // the value rather than coinciding.
+            check(NOA != NOB && NVA != NVB && NOA != NVA,
+                  "the fixture's four extents are all distinct");
+
+            // Accessors, which is what the emitter will call per index.
+            const auto oa = ref->occupied_count('a');
+            const auto ob = ref->occupied_count('b');
+            const auto va = ref->virtual_count('a');
+            const auto vb = ref->virtual_count('b');
+            check(oa && *oa == NOA, "occupied_count('a')");
+            check(ob && *ob == NOB, "occupied_count('b')");
+            check(va && *va == NVA, "virtual_count('a')");
+            check(vb && *vb == NVB, "virtual_count('b')");
+
+            // A bad spin errors rather than returning a plausible count: a
+            // silently-wrong loop bound is precisely the defect U3b removes.
+            check(!ref->occupied_count('x').has_value(),
+                  "occupied_count rejects a non-spin character");
+            check(!ref->virtual_count('\0').has_value(),
+                  "virtual_count rejects a non-spin character");
+
+            // orbital_partition stays DEFAULT on a UCC reference. Filling it with
+            // either spin's counts would be a plausible wrong answer, and the
+            // emitter must be made to stop reading it (U3b.2) rather than be fed
+            // a value that happens to work for one spin.
+            check(ref->orbital_partition.n_occ == 0 &&
+                      ref->orbital_partition.n_virt == 0,
+                  "orbital_partition is left default on a UCC reference");
         }
     }
 
