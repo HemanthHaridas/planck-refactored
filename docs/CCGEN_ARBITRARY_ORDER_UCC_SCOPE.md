@@ -19,7 +19,7 @@ that, not the keyword, is the work.
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
 | U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
 | U4 | **landed, U4.0–U4.3.** The runtime accepts an ALL-SECTORS bundle (no per-rank reference residual), and `--ucc` reaches it from the build. U4.1 turned out **not to be work** — the update loop already handled it; U4.2 fixed a real out-of-bounds read (segfault, not a wrong number) that U4.0 had made reachable |
-| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b landed** (the `ucc2`/`ucc3`/`ucc4` keyword). **U5.3c (rename `ccsdtq.cpp` → `rccgen.cpp`), U5.4, U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller |
+| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b landed** (the `ucc2`/`ucc3`/`ucc4` keyword). **U3b is the BLOCKER** — running U5.4 showed every emitted kernel takes its loop bounds and result shape from the scalar `orbital_partition`, which is default-zero on a UCC state; a gap left when U3 was scoped. **U3b, U5.3c, U5.4, U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -945,6 +945,67 @@ reference — was raised as an option. It is a separate, larger question:
 passing (both rank 4, so both must be byte-identical); a `cc3` run asserted to announce
 `RCCSDT` rather than `RCCSDTQ`; and `ucc5` reaching the registry rather than an
 unrecognized-keyword error.
+
+### U3b — per-block loop bounds and result dimensions (~M, C++ *and* emitter) — **the blocker**
+
+> **Found by running U5.4, and it is a gap I left.** When U3 was first scoped I raised a third
+> defect verbally — "loop bounds and result allocation must come from the residual's own block
+> tag" — and it never reached the written scope, so it was never built. U3 landed as complete
+> having fixed ERI and Fock **routing**, which was real; **dimensions** were untouched.
+> Everything downstream (U4, U5.0–U5.3b) was gated structurally and never executed a kernel, so
+> nothing caught it until the first end-to-end run.
+
+**The symptom.** `correlation ucc2` gets the whole way through — keyword → prepare → UHF
+reference → spin-blocked ERIs → rebind → registry → solver — and fails at:
+
+```
+[INF] UCC : Running generated UCC tensor kernels (rank=2, 5 spin blocks).
+[ERR] UCC : Failed : sector residual shape mismatch at (rank 1, tag aa).
+```
+
+**The cause.** Every emitted kernel opens with
+
+```cpp
+const int no = reference.orbital_partition.n_occ;
+const int nv = reference.orbital_partition.n_virt;
+```
+
+and allocates `Tensor2D result(no, nv)`. `build_ucc_fock_blocks` never sets
+`orbital_partition`, so on a UCC state it is default-constructed and both counts are **0**.
+Measured in the emitted CCSD UCC TU: **1182** `< no` bounds, **1192** `< nv`, 12 partition
+reads, 5 result allocations — all spin-blind.
+
+> This is also the half of U2's withdrawn "reference variant" question that I got wrong. I
+> withdrew it on the grounds that kernels only read `f_oo`/`f_ov`/`f_vv` and
+> `orbital_partition`. That was right about the **Fock blocks** — U3.3 resolved those — and
+> wrong about `orbital_partition`, which is exactly what now bites.
+
+**What makes it tractable.** Indices carry no spin (the U1 bridge drops it by design), so the
+emitter cannot read spin off an `Index`. But it is recoverable from the **factors**: slot *k*
+of a factor named `t2_abab` / `v_aaaa` carries spin `tag[k]`. Verified across the whole CCSD
+UCC manifold — **2346 index-spin assignments, zero conflicts** — so every index in every term
+gets exactly one spin.
+
+**Steps:**
+
+- **U3b.0 — the per-index spin map (~S, Python, no emit change).** A function from a term to
+  `{index name: 'a'|'b'}`, built from its factors. *Gate:* no index receives two spins across
+  the whole manifold at ranks 2 and 3 (a conflict means the slot mapping is wrong, which is
+  the R3.1.2 failure mode); and every index of every term is assigned, since an unassigned one
+  would silently fall back to a spin-blind bound.
+- **U3b.1 — four counts on the reference (~S, C++).** The UCC reference carries
+  `noa/nob/nva/nvb` rather than one `(n_occ, n_virt)` pair. RCC keeps its scalar pair, so the
+  RCC emit stays byte-identical. *Gate:* a UCC-prepared state reports the four counts from the
+  `UHFReference` it was built from.
+- **U3b.2 — spin-aware bounds and allocations (~M, emitter).** `_loop_bound` consults the map;
+  the three `const int no/nv` preambles become the four counts; result allocation derives from
+  the **target's** tag (`singles_aa` → `(noa, nva)`, `doubles_abab` → `(noa, nob, nva, nvb)`).
+  *Gate:* RCC emit byte-identical (SHA-256, already pinned); the UCC TU contains **zero**
+  spin-blind `< no` / `< nv` bounds; and `doubles_abab` allocates four *different* extents on a
+  fixture where `noa != nob != nva != nvb`, so a spin-blind bound changes the shape rather than
+  only the values.
+
+*Then U5.4 becomes what it was scoped to be:* a number, not a shape error.
 
 **U5.4 — `ucc2` against hand-written UCCSD (~S, the first real number).** A radical cation,
 using the in-tree oracle. **Land this before the FCI gate**: it exercises the whole stack at the
