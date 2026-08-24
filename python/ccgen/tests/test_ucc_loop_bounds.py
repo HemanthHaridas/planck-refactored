@@ -1,4 +1,10 @@
-"""U3b.2a -- the emitted UCC kernels must take their loop bounds from the index's SPIN.
+"""U3b.2 -- the emitted UCC kernels must be spin-resolved in bounds, counts and shape.
+
+Covers U3b.2a (loop bounds), U3b.2b (the `const int` orbital-count preamble) and
+U3b.2c (result allocation). 2b and 2c are ONE atomic change and the compiler is
+what proves it: 2b removes the `const int no/nv` declarations, so a tree with 2b
+but not 2c emits a TU that fails with "use of undeclared identifier 'no'" at every
+result allocation (16 errors on the CCSD UCC TU). They cannot ship separately.
 
 THE DEFECT THIS CLOSES. Every emitted kernel opened with
 
@@ -36,7 +42,11 @@ the space-grouped variant raises a slot-mapping conflict.
 
 from __future__ import annotations
 
+import pathlib
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 from ccgen.generate import print_cpp_planck
@@ -118,6 +128,65 @@ class UccLoopBoundsAreSpinResolvedTests(unittest.TestCase):
         self.assertGreater(c["nvb"], 0)
 
 
+class UccPreambleAndShapeTests(unittest.TestCase):
+    """U3b.2b/U3b.2c -- the counts a UCC kernel declares, and the shape it allocates."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.src = print_cpp_planck("ccsd", ucc=True)
+
+    def test_no_orbital_partition_reads_remain(self):
+        """`orbital_partition` is DEFAULT on a UCC reference (U3b.1 keeps it so
+        deliberately), so any read of it is a zero-valued bound."""
+        self.assertEqual(self.src.count("orbital_partition"), 0)
+
+    def test_every_kernel_declares_the_four_counts(self):
+        for name in ("noa", "nob", "nva", "nvb"):
+            declared = len(re.findall(r"const int " + name + r" =", self.src))
+            self.assertEqual(declared, 6, f"{name} declared {declared} times, expected 6")
+
+    def test_mixed_block_allocates_four_distinct_extents(self):
+        """The assertion with teeth: `doubles_abab` is the block where a spin-blind
+        extent changes the SHAPE rather than only the values."""
+        self.assertIn("Tensor4D result(noa, nob, nva, nvb, 0.0);", self.src)
+
+    def test_same_spin_blocks_allocate_their_own_spin(self):
+        self.assertIn("Tensor4D result(noa, noa, nva, nva, 0.0);", self.src)
+        self.assertIn("Tensor4D result(nob, nob, nvb, nvb, 0.0);", self.src)
+        self.assertIn("Tensor2D result(noa, nva, 0.0);", self.src)
+        self.assertIn("Tensor2D result(nob, nvb, 0.0);", self.src)
+
+    def test_no_spin_blind_allocation_survives(self):
+        self.assertEqual(len(re.findall(r"result\((?:no|nv)[,)]", self.src)), 0)
+
+
+class UccChunkedKernelTests(unittest.TestCase):
+    """The `_partN` preamble is a SECOND emission site that CCSD never reaches.
+
+    At rank 2 no kernel exceeds the 256-term chunk threshold; at rank 3 all four
+    triples blocks do (597/486/486/597 terms). A CCSD-only gate therefore passes
+    with every `_part` preamble still spin-blind.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.src = print_cpp_planck("ccsdt", ucc=True)
+
+    def test_chunking_actually_fires(self):
+        """Guards the guard: if chunking stops firing, the assertions below go
+        vacuous rather than failing."""
+        self.assertGreater(len(re.findall(r"_part\d+\(", self.src)), 0)
+
+    def test_chunked_preamble_is_spin_resolved(self):
+        self.assertEqual(self.src.count("orbital_partition"), 0)
+        self.assertEqual(len(re.findall(r"< n[ov](?![ab])", self.src)), 0)
+        self.assertEqual(len(re.findall(r"\(void\)no;", self.src)), 0)
+
+    def test_mixed_triples_sector_allocates_its_own_shape(self):
+        """`aabaab` -- two alpha and one beta in each of occ and vir."""
+        self.assertIn("Tensor6D result(noa, noa, nob, nva, nva, nvb, 0.0);", self.src)
+
+
 class RccEmitIsUnchangedTests(unittest.TestCase):
     """The RCC path must not observe U3b.2a at all."""
 
@@ -131,3 +200,56 @@ class RccEmitIsUnchangedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UccTranslationUnitCompilesTests(unittest.TestCase):
+    """The generated UCC TU must actually COMPILE.
+
+    Every UCC gate before U3b.2 was structural -- they inspected emitted TEXT and
+    none of them ever fed it to a compiler, which is why the spin-blind bounds
+    survived U3/U4/U5.0-U5.3b and surfaced only at runtime as a shape mismatch.
+    This is the check that would have caught it at emit time, and it is what
+    established that 2b and 2c are inseparable (2b alone fails here with 16
+    "use of undeclared identifier 'no'" errors).
+
+    Skipped rather than failed when no compiler or Eigen tree is present, so it
+    stays runnable on a machine that has not configured a build.
+    """
+
+    @staticmethod
+    def _eigen_include(root):
+        for candidate in (
+            root / "build-ccgen-test" / "_deps" / "eigen-src",
+            root / "build" / "_deps" / "eigen-src",
+            root / "install" / "include" / "eigen3",
+        ):
+            if (candidate / "signature_of_eigen3_matrix_library").exists():
+                return candidate
+        return None
+
+    def _compile(self, method):
+        root = pathlib.Path(__file__).resolve().parents[3]
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if compiler is None:
+            self.skipTest("no C++ compiler on PATH")
+        eigen = self._eigen_include(root)
+        if eigen is None:
+            self.skipTest("no configured Eigen tree found")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / f"{method}_ucc.cpp"
+            path.write_text(print_cpp_planck(method, ucc=True))
+            proc = subprocess.run(
+                [compiler, "-std=c++23", "-fsyntax-only", "-w",
+                 "-I", str(root / "src"), "-I", str(eigen), str(path)],
+                capture_output=True, text=True)
+        self.assertEqual(
+            proc.returncode, 0,
+            f"generated UCC TU for {method} failed to compile:\n{proc.stderr[:4000]}")
+
+    def test_rank2_ucc_tu_compiles(self):
+        self._compile("ccsd")
+
+    def test_rank3_ucc_tu_compiles(self):
+        """Rank 3 exercises the chunked `_partN` path that rank 2 does not."""
+        self._compile("ccsdt")

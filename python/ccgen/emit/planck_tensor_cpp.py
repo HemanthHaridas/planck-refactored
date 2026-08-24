@@ -144,6 +144,36 @@ def _loop_bound(idx: Index, spin: str | None = None) -> str:
     return "n"
 
 
+def _orbital_count_preamble(ucc: bool) -> list[str]:
+    """The `const int` orbital-count declarations at the top of a kernel.
+
+    U3b.2b: RCC reads the single (n_occ, n_virt) pair off `orbital_partition`.
+    UCC cannot -- `build_ucc_fock_blocks` deliberately leaves `orbital_partition`
+    DEFAULT, because it holds one pair and an unrestricted partition needs four
+    (filling it with either spin's counts is the plausible-wrong-answer shortcut
+    U3b.1 explicitly rejects). So UCC declares the four spin-resolved counts that
+    U3b.2a's loop bounds and U3b.2c's allocations refer to.
+
+    The four public members are read directly rather than through
+    `occupied_count('a')` / `virtual_count('b')`. Those return
+    `std::expected<int, std::string>` and would need an unwrap at every kernel
+    preamble for an error path that cannot fire: the emitter writes the spin
+    literal itself, so a non-'a'/'b' spin is unreachable by construction. The
+    accessors stay the checked entry point for callers whose spin is data.
+    """
+    if not ucc:
+        return [
+            "    const int no = reference.orbital_partition.n_occ;",
+            "    const int nv = reference.orbital_partition.n_virt;",
+        ]
+    return [
+        "    const int noa = reference.n_occ_alpha;",
+        "    const int nob = reference.n_occ_beta;",
+        "    const int nva = reference.n_virt_alpha;",
+        "    const int nvb = reference.n_virt_beta;",
+    ]
+
+
 def _coeff_literal(coeff: Fraction) -> str:
     value = float(coeff)
     if value == int(value):
@@ -174,14 +204,34 @@ def _is_supported_tensor_rank(rank: int) -> bool:
     return rank >= 0
 
 
-def _dims_expr(indices: Sequence[Index], result_type: str | None = None) -> str:
+def _dims_expr(
+    indices: Sequence[Index],
+    result_type: str | None = None,
+    spins: dict[str, str] | None = None,
+) -> str:
+    """The extents for a result allocation.
+
+    U3b.2c: under UCC each extent is spin-resolved, so `doubles_abab` allocates
+    `(noa, nob, nva, nvb)` rather than four copies of one pair. `spins` maps index
+    name -> 'a'/'b' (from `ucc_term_index_spins`); absent or unmapped indices fall
+    back to the RCC `no`/`nv`, which is what keeps that emit byte-identical.
+
+    Folded in with U3b.2b rather than shipped separately: 2b removes the
+    `const int no/nv` declarations, so leaving the allocations spin-blind emits a
+    TU that does not compile ("use of undeclared identifier 'no'", 16 errors on
+    the CCSD UCC TU). The two are one atomic change.
+    """
     result_type = result_type or _tensor_type(len(indices))
+    spins = spins or {}
     dims: list[str] = []
     for idx in indices:
+        suffix = spins.get(idx.name, "")
+        if suffix not in ("a", "b"):
+            suffix = ""
         if idx.space == "occ":
-            dims.append("no")
+            dims.append("no" + suffix)
         elif idx.space == "vir":
-            dims.append("nv")
+            dims.append("nv" + suffix)
         else:
             raise ValueError(
                 "Planck emitter only supports occupied/virtual tensors, "
@@ -749,13 +799,18 @@ def _emit_kernel(
     lines.append(f"    const {denominator_type} &denominators,")
     lines.append(f"    const {amplitude_type} &amplitudes)")
     lines.append("{")
-    lines.append("    const int no = reference.orbital_partition.n_occ;")
-    lines.append("    const int nv = reference.orbital_partition.n_virt;")
+    lines.extend(_orbital_count_preamble(ucc))
+    # U3b.2c: the result's extents are per-spin under UCC. The spins come from the
+    # kernel's own terms -- every term of a block-tagged target carries the same
+    # free-index spins (measured across the CCSD UCC manifold: 352 terms, zero
+    # disagreements with the target's tag), so the first term is representative.
+    result_spins = ucc_term_index_spins(terms[0]) if (ucc and terms) else None
     if result_rank == 0:
         lines.append("    double result = 0.0;")
     else:
         lines.append(
-            f"    {result_type} result({_dims_expr(free_indices, result_type)});"
+            f"    {result_type} result("
+            f"{_dims_expr(free_indices, result_type, result_spins)});"
         )
     required_intermediates: list[IntermediateSpec] = []
     seen_intermediates: set[str] = set()
@@ -843,9 +898,11 @@ def _emit_chunked_kernel(
         out.append(f"    const {denominator_type} &denominators,")
         out.append(f"    const {amplitude_type} &amplitudes)")
         out.append("{")
-        out.append("    const int no = reference.orbital_partition.n_occ;")
-        out.append("    const int nv = reference.orbital_partition.n_virt;")
-        out.append("    (void)no; (void)nv;")
+        out.extend(_orbital_count_preamble(ucc))
+        if ucc:
+            out.append("    (void)noa; (void)nob; (void)nva; (void)nvb;")
+        else:
+            out.append("    (void)no; (void)nv;")
         if required_intermediates:
             for spec in required_intermediates:
                 out.append(
