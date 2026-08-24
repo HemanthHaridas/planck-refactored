@@ -4,8 +4,8 @@ Scopes ONE question: **what is the strongest end-to-end correctness gate the gen
 path can actually carry, and on what system?**
 
 **Status, 2026-08-24. Not started. The scope as previously written is IMPOSSIBLE and is
-rewritten here.** The measurements below are the whole basis for the plan; all are reproducible
-in seconds with the committed `build-ucc` tree.
+rewritten here.** The measurements below are the whole basis for the plan; all but the rank-4
+generation cost (~10 min) are reproducible in seconds with the committed `build-ucc` tree.
 
 ---
 
@@ -79,10 +79,24 @@ broken symmetry into a different state. Report `<S²>` alongside; triplet Be giv
 (`generated_kernel_registry.cpp:50`), and `PLANCK_CC_UCC` is default OFF. The committed
 `build-ucc` tree is configured at maxorder 3, so U5.5 needs a reconfigure.
 
-**3. Rank-4 UCC generation is the practical risk, and is unmeasured.** `ucc_adapt_equations` on
-`ccsdtq` had not completed after ~10 minutes when this scope was written. Rank 3 is 2598 terms
-across 9 sectors; rank 4 adds 5 sectors and the manifold grows steeply. **Time-box it before
-committing to rank 4**, and land the rank-3 gate first so the effort is not all-or-nothing.
+**3. Rank-4 generation costs ~10 minutes, and NONE of it is the UCC step.** Measured:
+
+```
+generate_cc_equations('ccsdtq')   579.1 s      <- the GCC manifold; the RCC path pays this too
+ucc_adapt_equations(...)            1.8 s      <- the UCC step itself
+total 18533 terms across 14 sectors (5 quadruples sectors: aaaaaaaa, aaabaaab,
+aabbaabb, abbbabbb, bbbbbbbb)
+```
+
+**So rank-4 UCC is not meaningfully more expensive than rank-4 RCC** — the adaptation is 0.3% of
+the cost. An earlier draft of this scope recorded it as "had not completed after ~10 minutes"
+and named it the practical risk; that was a `tail`-buffered probe misread as a hang, and the
+inference from it was wrong. The real cost is the GCC generation the build already does at
+`PLANCK_CC_MAXORDER=4`, and it is a one-time build cost, not a per-run one.
+
+The remaining rank-4 risk is therefore **compile time, not generation** — 18533 terms across 14
+kernels, against the `-O1` registry pin the RCC path already needs. Measure that before
+committing, not the generation.
 
 **4. `ucc4` prints "Total Correlated Energy", not a UCC-specific label.** `PostHF::UCCGEN` is
 absent from the `method_label` chain (`hf_driver.cpp:1463`). The closed-shell harness
@@ -99,8 +113,10 @@ is not UCC-specific.
 the whole stack at a rank that already generates. `uccsd < ucc3 <= fci`, with `ucc3` materially
 closer to FCI than UCCSD is.
 
-**U5.5b — the `ucc4` interval gate on boron (~M, gated on the cost probe).** Same shape, one
-rank up. Do the generation time-box first.
+**U5.5b — the `ucc4` interval gate on boron (~M).** Same shape, one rank up. The generation
+cost is measured and acceptable (~10 min, almost all of it the GCC step the RCC path already
+pays); **the open question is compile time** for 18533 terms across 14 kernels. Measure that
+first, not the generation.
 
 **U5.5c — register both as regression cases (~S/M).** Blocked on the same missing plumbing U5.4
 hit: the runner has **no build-option gating**, so any `ucc*` case fails in a default build
