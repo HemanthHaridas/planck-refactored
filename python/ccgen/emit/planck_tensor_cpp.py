@@ -546,6 +546,7 @@ def emit_planck_term(
     indent: int = 4,
     intermediate_names: frozenset[str] | None = None,
     arbitrary_amplitudes: bool = False,
+    ucc: bool = False,
 ) -> str:
     """Emit a single algebraic term using Planck tensor accessors.
 
@@ -556,10 +557,18 @@ def emit_planck_term(
     # U3b.2a: the per-index spin map, for spin-resolved loop bounds. An `Index`
     # carries only a space (occ/vir) -- the U1 bridge drops spin by design -- so
     # the spin has to come from the FACTORS, where slot k of `t2_abab` / `v_aaaa`
-    # carries `tag[k]`. Returns {} for RCC terms (no resolved factor names), which
-    # is what keeps the RCC emit byte-identical: `_loop_bound` then sees spin=None
-    # at every index and emits the same `no`/`nv` it always did.
-    index_spins = ucc_term_index_spins(term)
+    # carries `tag[k]`.
+    #
+    # GATED ON `ucc`, NOT on the map coming back empty. An earlier version relied
+    # on "non-UCC terms have no tagged factors", which is FALSE for the
+    # SPIN-ADAPTED path: its rank-4 sector amplitudes are named `t4_aaabaaab`,
+    # which matches the same `_[ab]+` suffix. That emitted `noa`/`nvb` bounds into
+    # a spin-adapted kernel whose preamble declares only `no`/`nv`, and the TU
+    # stopped compiling (caught by
+    # `test_spin_adapted_ccsdtq_compiles_with_sector_accessor`, not by the RCC
+    # SHA-256 pin -- that pin emits with spin_adapt=False and never sees this
+    # path).
+    index_spins = ucc_term_index_spins(term) if ucc else {}
 
     pad = " " * indent
     lines: list[str] = []
@@ -861,7 +870,7 @@ def _emit_kernel(
         lines.append(emit_planck_term(
             term, lhs="result", indent=4,
             intermediate_names=intermediate_names,
-            arbitrary_amplitudes=arbitrary))
+            arbitrary_amplitudes=arbitrary, ucc=ucc))
         lines.append("")
     lines.append("    return result;")
     lines.append("}")
@@ -917,7 +926,7 @@ def _emit_chunked_kernel(
             out.append(emit_planck_term(
                 term, lhs="result", indent=4,
                 intermediate_names=intermediate_names,
-                arbitrary_amplitudes=arbitrary))
+                arbitrary_amplitudes=arbitrary, ucc=ucc))
         out.append("}")
         out.append("")
 

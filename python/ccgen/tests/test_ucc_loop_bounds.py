@@ -236,16 +236,27 @@ class UccTranslationUnitCompilesTests(unittest.TestCase):
         if eigen is None:
             self.skipTest("no configured Eigen tree found")
 
+        self._compile_source(print_cpp_planck(method, ucc=True), f"UCC {method}")
+
+    def _compile_source(self, code, label):
+        root = pathlib.Path(__file__).resolve().parents[3]
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if compiler is None:
+            self.skipTest("no C++ compiler on PATH")
+        eigen = self._eigen_include(root)
+        if eigen is None:
+            self.skipTest("no configured Eigen tree found")
+
         with tempfile.TemporaryDirectory() as tmp:
-            path = pathlib.Path(tmp) / f"{method}_ucc.cpp"
-            path.write_text(print_cpp_planck(method, ucc=True))
+            path = pathlib.Path(tmp) / "tu.cpp"
+            path.write_text(code)
             proc = subprocess.run(
                 [compiler, "-std=c++23", "-fsyntax-only", "-w",
                  "-I", str(root / "src"), "-I", str(eigen), str(path)],
                 capture_output=True, text=True)
         self.assertEqual(
             proc.returncode, 0,
-            f"generated UCC TU for {method} failed to compile:\n{proc.stderr[:4000]}")
+            f"generated TU ({label}) failed to compile:\n{proc.stderr[:4000]}")
 
     def test_rank2_ucc_tu_compiles(self):
         self._compile("ccsd")
@@ -253,3 +264,32 @@ class UccTranslationUnitCompilesTests(unittest.TestCase):
     def test_rank3_ucc_tu_compiles(self):
         """Rank 3 exercises the chunked `_partN` path that rank 2 does not."""
         self._compile("ccsdt")
+
+    def test_spin_adapted_tu_still_compiles(self):
+        """The NEIGHBOUR path, and the one this step actually broke.
+
+        The first version of U3b.2a gated the spin map on "did it come back
+        empty" rather than on `ucc`, reasoning that only UCC terms carry
+        block-tagged factor names. That is FALSE for the spin-adapted RCC path:
+        its rank-4 sector amplitudes are named `t4_aaabaaab`, which matches the
+        same `_[ab]+` suffix. So a spin-adapted kernel got `noa` / `nvb` loop
+        bounds over a preamble declaring only `no` / `nv`, and stopped compiling.
+
+        The RCC SHA-256 pin did NOT catch it -- it emits with `spin_adapt=False`
+        and never reaches this path.
+
+        RANK 4, and that is load-bearing rather than thorough. The tagged factor
+        names that trigger the defect are the `t4_aaabaaab` sector amplitudes,
+        which do not exist below rank 4: measured, rank-3 spin-adapted emits ZERO
+        terms with a non-empty spin map, so a rank-3 version of this gate passes
+        under the exact mutation it exists to catch. It was written at rank 3
+        first and confirmed vacuous by mutation before being moved -- the same
+        RHF-degenerate vacuity this scope has hit repeatedly, met here while
+        writing the gate for a defect just found.
+
+        Costs a few minutes of rank-4 generation, which is why it is the only
+        rank-4 case in this file.
+        """
+        self._compile_source(
+            print_cpp_planck("ccsdtq", spin_adapt=True, engine="diagram"),
+            "spin-adapted ccsdtq")

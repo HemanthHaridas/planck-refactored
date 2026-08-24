@@ -3174,8 +3174,26 @@ class F20bBlockTaggedEriTests(unittest.TestCase):
                          f"RCC integral factor names changed: {sorted(seen)}")
 
     def test_emitter_accepts_a_tagged_eri_and_is_unchanged_on_bare(self):
-        """Both halves of the emitter gate: a tagged name must map, and a bare
-        name must map EXACTLY as before (byte-identical string)."""
+        """Both halves of the emitter gate: a bare name must map EXACTLY as
+        before, and a tagged one must reach its OWN array.
+
+        UPDATED FOR U3.2 (`8e4bb0c`). This test previously asserted that a tagged
+        `v` resolves to the same expression as a bare one -- "the tag routes
+        storage, it does not change the block". U3.2 deliberately inverted that:
+        under UHF `<aa|aa>`, `<ab|ab>` and `<bb|bb>` are three DIFFERENT
+        integrals, so `v_abab` must reach `v_abab_oovv`, bound per kernel from
+        `mo_blocks.spin_block("oovv", "abab")`. Collapsing them onto one array was
+        the defect U3.2 fixed, and U3.2's own commit message calls out the comment
+        carrying this belief -- but it never updated this assertion, which had been
+        failing ever since.
+
+        The bare half is unchanged and still pinned: the RCC path must not move.
+
+        The Fock half moved the same way, in U3.3: a tagged `f_aa` reaches
+        `f_aa_oo`, not `reference.f_oo`. Asserting otherwise was this test's
+        second stale claim, and it survived the first fix attempt because the
+        `v` assertion failed first and masked it.
+        """
         from ccgen.emit.planck_tensor_cpp import _map_factor
         from ccgen.tensors import Tensor, Index
         ijab = (Index("i", "occ"), Index("j", "occ"),
@@ -3185,14 +3203,17 @@ class F20bBlockTaggedEriTests(unittest.TestCase):
         self.assertEqual(expr_bare, "mo_blocks.oovv(i, j, a, b)",
                          "bare v no longer emits what it emitted before")
         self.assertEqual(sign_bare, sign_tag)
-        self.assertEqual(expr_bare, expr_tag,
-                         "tagged v must resolve to the same block expression; the "
-                         "tag routes storage, it does not change the block")
+        self.assertEqual(expr_tag, "v_abab_oovv(i, j, a, b)",
+                         "tagged v must reach its OWN array (U3.2); collapsing it "
+                         "onto the bare block is the three-integrals-as-one defect")
+        self.assertNotEqual(
+            expr_bare, expr_tag,
+            "a tagged and a bare v resolving to the same array IS the collapse")
         oo = (Index("i", "occ"), Index("j", "occ"))
         self.assertEqual(_map_factor(Tensor("f", oo), None, False)[1],
                          "reference.f_oo(i, j)")
         self.assertEqual(_map_factor(Tensor("f_aa", oo), None, False)[1],
-                         "reference.f_oo(i, j)")
+                         "f_aa_oo(i, j)")
 
 
 class F21FactorResolutionTests(unittest.TestCase):
