@@ -26,6 +26,7 @@ from ..lowering import (
     lower_term_restricted_closed_shell,
 )
 from ..project import AlgebraTerm
+from ..spin import ucc_term_index_spins
 from ..tensors import Tensor
 
 if TYPE_CHECKING:
@@ -126,11 +127,20 @@ def _space_char(idx: Index) -> str:
     return "g"
 
 
-def _loop_bound(idx: Index) -> str:
+def _loop_bound(idx: Index, spin: str | None = None) -> str:
+    """The C++ loop bound for one index.
+
+    U3b.2a: under UCC the bound is spin-resolved -- an alpha-occupied index runs
+    to ``noa`` and a beta-occupied one to ``nob``, and under UHF those differ.
+    ``spin`` is ``'a'``/``'b'`` (from ``ucc_term_index_spins``) or ``None`` on the
+    RCC path, where one (n_occ, n_virt) pair covers every index and the emitted
+    text must stay byte-identical.
+    """
+    suffix = spin if spin in ("a", "b") else ""
     if idx.space == "occ":
-        return "no"
+        return "no" + suffix
     if idx.space == "vir":
-        return "nv"
+        return "nv" + suffix
     return "n"
 
 
@@ -493,6 +503,14 @@ def emit_planck_term(
     kernel's specs) so their factors resolve as local references (D7.3).
     ``arbitrary_amplitudes`` routes t-amplitude accessors through
     ``.tensor(rank)(...)`` for the arbitrary-order runtime type (rank ≥ 4)."""
+    # U3b.2a: the per-index spin map, for spin-resolved loop bounds. An `Index`
+    # carries only a space (occ/vir) -- the U1 bridge drops spin by design -- so
+    # the spin has to come from the FACTORS, where slot k of `t2_abab` / `v_aaaa`
+    # carries `tag[k]`. Returns {} for RCC terms (no resolved factor names), which
+    # is what keeps the RCC emit byte-identical: `_loop_bound` then sees spin=None
+    # at every index and emits the same `no`/`nv` it always did.
+    index_spins = ucc_term_index_spins(term)
+
     pad = " " * indent
     lines: list[str] = []
 
@@ -507,7 +525,7 @@ def emit_planck_term(
 
     for idx in free:
         lines.append(
-            f"{pad}for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx)}; ++{idx.name})"
+            f"{pad}for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, index_spins.get(idx.name))}; ++{idx.name})"
         )
 
     lines.append(f"{pad}{{")
@@ -529,7 +547,7 @@ def emit_planck_term(
         lines.append(f"{pad}    double acc = 0.0;")
         for idx in summed:
             lines.append(
-                f"{pad}    for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx)}; ++{idx.name})"
+                f"{pad}    for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, index_spins.get(idx.name))}; ++{idx.name})"
             )
         lines.append(f"{pad}        acc += {_coeff_literal(coeff)}{product};")
         lines.append(f"{pad}    {target} += acc;")
