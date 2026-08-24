@@ -1138,6 +1138,13 @@ Gated by `test_ucc_eri_convention.py`.
 same-spin channels are now right; **a second, smaller defect remains at +3.8%**, and it is
 distinct from this one.
 
+**Scoped separately in `docs/CCGEN_UCC_RESIDUAL_DEFECT_SCOPE.md`**, because it turned out to
+have a much cheaper handle than the converged number: **the defect reproduces at FIRST ORDER,
+where no solver is involved.** `ucc2` iteration 1 from a zero start gives `-0.0152757148`
+against hand-written UMP2's `-0.0190946435` — **a ratio of exactly 0.800000**, i.e. a structural
+coefficient/channel defect rather than accumulated error. Prime suspect there: the amplitude-side
+antisymmetry convention, the exact analogue of the ERI one just fixed.
+
 *What is ruled out for that remaining gap, measured not assumed:* the emitter is complete (zero bare
 same-spin reads at either tag), and the denominator's "occ half then vir half" tag convention
 matches the amplitude free-index layout (`doubles_abab` → occ,occ,vir,vir with spins a,b,a,b →
