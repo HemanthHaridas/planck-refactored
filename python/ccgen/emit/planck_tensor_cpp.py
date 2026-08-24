@@ -307,6 +307,45 @@ def _block_needs_explicit_exchange(block_tag: str | None) -> bool:
     return len(set(block_tag)) == 1
 
 
+def _resolve_eri_block_name(
+    spaces: tuple[str, ...],
+    block_tag: str | None,
+) -> str | None:
+    """The stored block one o/v pattern resolves to, or None if unreachable.
+
+    Shares the search with `_resolve_eri_read` so the bound views and the emitted
+    reads cannot disagree about which arrays a kernel touches.
+    """
+    permutations = eri_permutations_for_block(block_tag)
+    for block_name, block_spaces in _canonical_eri_blocks_for(block_tag).items():
+        for perm, _sign in permutations:
+            if tuple(block_spaces[i] for i in perm) == tuple(spaces):
+                return block_name
+    return None
+
+
+def _resolve_eri_read(
+    spaces: tuple[str, ...],
+    names: Sequence[str],
+    block_tag: str | None,
+) -> tuple[int, str] | None:
+    """Resolve one o/v pattern to `(sign, "array(args)")`, or None if unreachable.
+
+    The block search, factored out of `_map_eri_tensor` so the antisymmetrization
+    partner can go through exactly the same routing as the direct read rather
+    than reusing the direct read's array and argument order.
+    """
+    permutations = eri_permutations_for_block(block_tag)
+    for block_name, block_spaces in _canonical_eri_blocks_for(block_tag).items():
+        for perm, sign in permutations:
+            if tuple(block_spaces[i] for i in perm) != tuple(spaces):
+                continue
+            inverse = _inverse_permutation(perm)
+            reordered = [names[i] for i in inverse]
+            return sign, f"{_eri_read(block_tag, block_name)}({', '.join(reordered)})"
+    return None
+
+
 def _map_eri_tensor(
     tensor: Tensor | LoweredTensorFactor,
     block_tag: str | None = None,
@@ -345,26 +384,41 @@ def _map_eri_tensor(
             f"{tensor_obj!r}"
         )
 
-    permutations = eri_permutations_for_block(block_tag)
-    for block_name, block_spaces in _canonical_eri_blocks_for(block_tag).items():
-        for perm, sign in permutations:
-            transformed = tuple(block_spaces[i] for i in perm)
-            if transformed != spaces:
-                continue
+    names = [idx.name for idx in tensor_obj.indices]
+    direct = _resolve_eri_read(spaces, names, block_tag)
+    if direct is not None:
+        sign, direct_expr = direct
+        if not _block_needs_explicit_exchange(block_tag):
+            return sign, direct_expr
 
-            inverse = _inverse_permutation(perm)
-            reordered = [tensor_obj.indices[i].name for i in inverse]
-            read = _eri_read(block_tag, block_name)
-            if _block_needs_explicit_exchange(block_tag):
-                # U5.4: `v_aaaa` means the ANTISYMMETRIZED <pq||rs> to the UCC
-                # algebra, but the stored array is the plain <pq|rs>. Emit the
-                # exchange explicitly rather than antisymmetrizing the array.
-                # See `_block_needs_explicit_exchange` for why this side.
-                direct = ", ".join(reordered)
-                exchanged = ", ".join(
-                    [reordered[0], reordered[1], reordered[3], reordered[2]])
-                return sign, f"({read}({direct}) - {read}({exchanged}))"
-            return sign, f"{read}({', '.join(reordered)})"
+        # U5.4 / R5: `v_aaaa` means the ANTISYMMETRIZED <pq||rs>, but the stored
+        # array holds the plain <pq|rs>, so the exchange is emitted here.
+        #
+        # `<pq||rs> = <pq|rs> - <pq|sr>` swaps the two KET slots of the PHYSICIST
+        # integral. The partner is then re-resolved through the SAME block search
+        # as the direct read, because the ket-swapped PATTERN is generally a
+        # DIFFERENT stored block reached by a DIFFERENT permutation.
+        #
+        # R4: the original fix swapped the last two ARGUMENT POSITIONS of the
+        # direct read instead. That coincides with the ket swap only when it
+        # stays inside one space (oooo/oovv/vvvv) and is wrong on
+        # ooov/ovov/ovvv, where it crosses occ/vir and indexes the wrong array --
+        # e.g. <ic|ka> (ovov) has ket-swapped partner <ic|ak> (ovvo), which the
+        # old code read out of `ovov`. Half the emitted exchange pairs were
+        # affected.
+        ex_spaces = (spaces[0], spaces[1], spaces[3], spaces[2])
+        ex_names = [names[0], names[1], names[3], names[2]]
+        partner = _resolve_eri_read(ex_spaces, ex_names, block_tag)
+        if partner is None:
+            raise NotImplementedError(
+                f"No Planck ERI block mapping for the exchange partner pattern "
+                f"{''.join(ex_spaces)} in spin block {block_tag!r} "
+                f"(direct pattern {''.join(spaces)})")
+        partner_sign, partner_expr = partner
+        # The partner carries its own permutation sign; fold it against the
+        # direct read's so the emitted subtraction has the right relative sign.
+        joiner = "-" if partner_sign * sign > 0 else "+"
+        return sign, f"({direct_expr} {joiner} {partner_expr})"
 
     raise NotImplementedError(
         f"No Planck ERI block mapping available for pattern "
@@ -730,11 +784,18 @@ def _eri_blocks_used(terms) -> list[tuple[str, str]]:
                 continue
             tag = m.group(1)
             spaces = tuple(_space_char(idx) for idx in obj.indices)
-            for block_name, block_spaces in _canonical_eri_blocks_for(tag).items():
-                if any(tuple(block_spaces[i] for i in perm) == spaces
-                       for perm, _ in eri_permutations_for_block(tag)):
-                    used.add((block_name, tag))
-                    break
+            patterns = [spaces]
+            if _block_needs_explicit_exchange(tag):
+                # R5: a same-spin read also emits its KET-SWAPPED partner, which
+                # generally lives in a DIFFERENT stored block (ovov -> ovvo), so
+                # that block needs a bound view too. Missing it is a compile
+                # error, not a wrong number -- which is how the omission was
+                # caught, and why this must stay in step with `_map_eri_tensor`.
+                patterns.append((spaces[0], spaces[1], spaces[3], spaces[2]))
+            for pattern in patterns:
+                block = _resolve_eri_block_name(pattern, tag)
+                if block is not None:
+                    used.add((block, tag))
     return sorted(used)
 
 

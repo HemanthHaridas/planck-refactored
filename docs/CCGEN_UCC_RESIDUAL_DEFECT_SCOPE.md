@@ -4,8 +4,25 @@ Scopes ONE question: **why does the generated `ucc2` correlation energy disagree
 hand-written UCCSD, after the ERI antisymmetrization fix (`fe744e6`) closed the larger
 half of the gap?**
 
-**Status, 2026-08-24. R0-R4 DONE — THE DEFECT IS FOUND, and it is the exchange fix I landed in
-`fe744e6`.** `_map_eri_tensor` applies the exchange by swapping the **last two slots**, which is
+**Status, 2026-08-24. FIXED AND VERIFIED. `ucc2` now reproduces hand-written UCCSD exactly.**
+
+```
+B/STO-3G     generated -0.0402694793   hand-written -0.0402694793   (12 iters, was 100-cap)
+H2O+/STO-3G  generated -0.0384280770   hand-written -0.0384280769   (1e-10, tolerance noise)
+```
+
+**R5 — the fix.** The exchange partner is now re-resolved through the SAME block search as the
+direct read, on the KET-SWAPPED abstract pattern, instead of reusing the direct read's array
+with its last two arguments transposed. `_resolve_eri_read` / `_resolve_eri_block_name` factor
+that search out so the emitted reads and the bound views cannot disagree.
+
+*Two things the compiler caught that reading would not have:* the new `ovvo` partner needed a
+bound view (`_eri_blocks_used` re-derived the search independently and so went out of step —
+its own docstring had warned against exactly that), and the partner's permutation carries its
+own sign, which must be folded against the direct read's rather than assumed to be `-`.
+
+*Superseded status line, for the record:* **R0-R4 DONE — THE DEFECT IS FOUND, and it is the
+exchange fix I landed in `fe744e6`.** `_map_eri_tensor` applies the exchange by swapping the **last two slots**, which is
 the ket pair only for `oooo`/`oovv`/`vvvv`. On `ooov`/`ovov`/`ovvv` — 90 of the 180 emitted
 exchange pairs — it swaps an occupied index with a virtual one, reading a different space
 pattern out of the array. First order was clean because its only term is `oovv`, where the

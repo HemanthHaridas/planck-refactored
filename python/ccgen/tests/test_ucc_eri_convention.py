@@ -30,6 +30,7 @@ landed C++ gates assert on.
 
 from __future__ import annotations
 
+import itertools
 import re
 import unittest
 
@@ -64,17 +65,67 @@ class EmittedExchangeTests(unittest.TestCase):
         cls.src = print_cpp_planck("ccsd", ucc=True)
 
     def test_same_spin_eri_reads_carry_an_exchange_partner(self):
+        """Every same-spin read is a two-term antisymmetrized pair.
+
+        Deliberately asserts only that the pair EXISTS and reads a real block.
+        The earlier version of this test asserted the partner's arguments were
+        the direct read's "LAST TWO slots" swapped, IN THE SAME ARRAY -- which
+        is what the buggy code did, so the gate passed with the bug and could
+        never have failed with it. See `test_ket_swap_routes_to_its_own_block`
+        for the assertion that actually encodes the contract.
+        """
         for tag in ("aaaa", "bbbb"):
             pairs = re.findall(
-                r"\(v_" + tag + r"_([a-z]{4})\(([^)]*)\) - v_" + tag + r"_\1\(([^)]*)\)",
+                r"\(v_" + tag + r"_[a-z]{4}\([^)]*\) [-+] v_" + tag + r"_([a-z]{4})\(",
                 self.src)
             self.assertGreater(len(pairs), 0, f"no exchange emitted for {tag}")
-            for _space, direct, exchanged in pairs:
-                d = [x.strip() for x in direct.split(",")]
-                e = [x.strip() for x in exchanged.split(",")]
-                self.assertEqual(
-                    e, [d[0], d[1], d[3], d[2]],
-                    "the exchange partner must swap the LAST TWO slots only")
+
+    def test_ket_swap_routes_to_its_own_block(self):
+        """THE CONTRACT: `<pq||rs> = <pq|rs> - <pq|sr>` swaps the two KET slots,
+        and the ket-swapped PATTERN is a different stored block whenever the swap
+        crosses occ/vir.
+
+        `ovov` is the discriminating case and the one the position-only swap got
+        wrong: `<ic|ka>` has ket-swapped partner `<ic|ak>`, pattern `ovvo`, which
+        must be read from the `ovvo` array -- not from `ovov` with permuted
+        arguments. Measured on the rank-2 UCC TU, half the emitted exchange pairs
+        (90 of 180) were on patterns where the two differ.
+
+        Asserted as a property of the ROUTING rather than of the emitted text, so
+        it cannot drift into re-describing the implementation the way its
+        predecessor did.
+        """
+        from ccgen.emit.planck_tensor_cpp import _resolve_eri_block_name
+
+        for tag in ("aaaa", "bbbb"):
+            for pattern in itertools.product("ov", repeat=4):
+                direct = _resolve_eri_block_name(tuple(pattern), tag)
+                if direct is None:
+                    continue
+                ket_swapped = (pattern[0], pattern[1], pattern[3], pattern[2])
+                partner = _resolve_eri_block_name(ket_swapped, tag)
+                self.assertIsNotNone(
+                    partner,
+                    f"{tag}: ket-swapped pattern {''.join(ket_swapped)} is "
+                    f"unreachable, so the exchange cannot be emitted")
+
+        # And the case that was actually wrong, pinned by name.
+        self.assertEqual(_resolve_eri_block_name(("o", "v", "v", "o"), "aaaa"),
+                         "ovvo")
+        self.assertNotEqual(
+            _resolve_eri_block_name(("o", "v", "o", "v"), "aaaa"),
+            _resolve_eri_block_name(("o", "v", "v", "o"), "aaaa"),
+            "ovov and ovvo are different stored blocks; reading one as the "
+            "other is the R4 defect")
+
+    def test_ovov_exchange_partner_reads_ovvo_in_the_emitted_text(self):
+        """The end-to-end form of the above, on the real TU."""
+        pairs = set(re.findall(
+            r"\(v_aaaa_([a-z]{4})\([^)]*\) [-+] v_aaaa_([a-z]{4})\(", self.src))
+        routing = dict(pairs)
+        self.assertEqual(
+            routing.get("ovov"), "ovvo",
+            f"ovov's exchange partner must come from ovvo; got {routing}")
 
     def test_mixed_eri_reads_carry_no_exchange(self):
         """The discriminating assertion: `abab` must be left alone. A rule applied
