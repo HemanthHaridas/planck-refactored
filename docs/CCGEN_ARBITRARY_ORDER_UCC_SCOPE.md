@@ -19,7 +19,7 @@ that, not the keyword, is the work.
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
 | U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
 | U4 | **landed, U4.0–U4.3.** The runtime accepts an ALL-SECTORS bundle (no per-rank reference residual), and `--ucc` reaches it from the build. U4.1 turned out **not to be work** — the update loop already handled it; U4.2 fixed a real out-of-bounds read (segfault, not a wrong number) that U4.0 had made reachable |
-| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b landed** (the `ucc2`/`ucc3`/`ucc4` keyword). **U3b is the BLOCKER** — running U5.4 showed every emitted kernel takes its loop bounds and result shape from the scalar `orbital_partition`, which is default-zero on a UCC state; a gap left when U3 was scoped. **U3b, U5.3c, U5.4, U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller |
+| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b landed** (the `ucc2`/`ucc3`/`ucc4` keyword). **U3b is the BLOCKER** — running U5.4 showed every emitted kernel takes its loop bounds and result shape from the scalar `orbital_partition`, which is default-zero on a UCC state; a gap left when U3 was scoped. **U3b.0 + U3b.1 landed** (per-index spin map; four counts on the reference — both inert until U3b.2 connects them). **U3b.2, U5.3c, U5.4, U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -988,16 +988,44 @@ gets exactly one spin.
 
 **Steps:**
 
-- **U3b.0 — the per-index spin map (~S, Python, no emit change).** A function from a term to
-  `{index name: 'a'|'b'}`, built from its factors. *Gate:* no index receives two spins across
-  the whole manifold at ranks 2 and 3 (a conflict means the slot mapping is wrong, which is
-  the R3.1.2 failure mode); and every index of every term is assigned, since an unassigned one
-  would silently fall back to a spin-blind bound.
-- **U3b.1 — four counts on the reference (~S, C++).** The UCC reference carries
-  `noa/nob/nva/nvb` rather than one `(n_occ, n_virt)` pair. RCC keeps its scalar pair, so the
-  RCC emit stays byte-identical. *Gate:* a UCC-prepared state reports the four counts from the
-  `UHFReference` it was built from.
-- **U3b.2 — spin-aware bounds and allocations (~M, emitter).** `_loop_bound` consults the map;
+- **U3b.0 — the per-index spin map — LANDED.** `ucc_term_index_spins(term)` →
+  `{index name: 'a'|'b'}`, built from the factors: slot *k* of `t2_abab` / `v_aaaa` / `f_bb`
+  carries spin `tag[k]`.
+
+  > **Read POSITIONALLY, not by space** — the detail most likely to be got wrong when
+  > re-deriving this. `t2_abab`'s slots are `(vir, vir, occ, occ)`, so the tag does not read
+  > "occ half then vir half" at the factor level. A space-grouped reading gives the **same**
+  > answer for `aaaa`/`bbbb` and a different one for `abab`, so a same-spin check cannot catch
+  > it — the fourth instance of that trap in this scope, and the first where the gate was
+  > written for it up front rather than after being caught. Mutation-tested: the space-grouped
+  > variant produces genuine conflicts and fails 5 assertions.
+
+  It **raises** on a conflict rather than picking a spin: a disagreement means the slot mapping
+  is wrong (the R3.1.2 failure mode, where a factor indexes the wrong slice and the residual
+  comes out near-zero rather than obviously broken), which is a far larger problem and far
+  cheaper to find on the symbolic manifold than in a C++ kernel. Also gated: every index of
+  every term is assigned (an unassigned one silently keeps a spin-blind bound), a slot-count
+  mismatch raises, and RCC terms yield an **empty** map rather than a guess. Count pinned at
+  2346 so manifold drift is visible.
+
+- **U3b.1 — four counts on the reference — LANDED.** `CanonicalRHFCCReference` gains
+  `n_occ_alpha` / `n_occ_beta` / `n_virt_alpha` / `n_virt_beta` and
+  `occupied_count(spin)` / `virtual_count(spin)`; `build_ucc_fock_blocks` populates them.
+
+  **Additive, not a replacement** — `orbital_partition` is untouched, because the RCC kernels
+  read it (measured: 6 reads each of `n_occ`/`n_virt` in the rank-3 TU) and must keep doing so
+  byte-identically.
+
+  > **`orbital_partition` is deliberately left DEFAULT on a UCC reference, and the gate asserts
+  > it.** Filling it with either spin's counts is the tempting shortcut and a bad one: it makes
+  > `ucc2` *appear* to work — correct for the `aaaa` block, silently wrong for `abab` and
+  > `bbbb` — which is exactly the defect class U3b removes. Mutation-tested; that variant fails.
+  > The accessors likewise **error** on a non-spin character rather than returning a plausible
+  > count.
+- **U3b.2 — spin-aware bounds and allocations (~M, emitter) — NEXT, and the step that
+  unblocks U5.4.** Both landed pieces are inert until this connects them: the spin map has no
+  consumer, and the four counts are read by no kernel. Three emitter sites are still spin-blind
+  (`_loop_bound`, and the `const int no/nv` preamble emitted at three places). `_loop_bound` consults the map;
   the three `const int no/nv` preambles become the four counts; result allocation derives from
   the **target's** tag (`singles_aa` → `(noa, nva)`, `doubles_abab` → `(noa, nob, nva, nvb)`).
   *Gate:* RCC emit byte-identical (SHA-256, already pinned); the UCC TU contains **zero**
