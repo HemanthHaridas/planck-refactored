@@ -1134,28 +1134,29 @@ reads alone. Measured on the rank-2 UCC TU: 90 exchange pairs per same-spin bloc
 same-spin reads, **zero** on `abab`, **zero** on Fock. RCC emit byte-identical.
 Gated by `test_ucc_eri_convention.py`.
 
-**Result: `-0.0705299626` → `-0.0418040291` against the reference `-0.0402694793`.** The
-same-spin channels are now right; **a second, smaller defect remains at +3.8%**, and it is
-distinct from this one.
+**U5.4 IS DONE: `ucc2` reproduces hand-written UCCSD exactly** — B/STO-3G `-0.0402694793`
+both, in 12 iterations; H2O⁺/STO-3G (C1) to 1e-10. It took two fixes, not one:
 
-**Scoped separately in `docs/CCGEN_UCC_RESIDUAL_DEFECT_SCOPE.md`**, because it turned out to
-have a much cheaper handle than the converged number: **the defect reproduces at FIRST ORDER,
-where no solver is involved.** `ucc2` iteration 1 from a zero start gives `-0.0152757148`
-against hand-written UMP2's `-0.0190946435` — **a ratio of exactly 0.800000**, i.e. a structural
-coefficient/channel defect rather than accumulated error. Prime suspect there: the amplitude-side
-antisymmetry convention, the exact analogue of the ERI one just fixed.
+1. **The convention** (`fe744e6`) — the exchange belongs in the emitter, because
+   antisymmetrizing the cache is undefinable for mixed blocks (the partner is a different
+   *shape*), contradicts a rule `ucc_blocks.cpp:32` already states, and would silently redefine
+   what three landed C++ gates assert on.
+2. **The routing** (`e33c09b`) — the first implementation swapped the last two *argument
+   positions* rather than the two *ket slots*. Those coincide only for `oooo`/`oovv`/`vvvv`; on
+   `ooov`/`ovov`/`ovvv` the swap crosses occ/vir and reads the wrong array. Half the emitted
+   exchange pairs were affected. The partner is now re-resolved through the same block search as
+   the direct read.
 
-*What is ruled out for that remaining gap, measured not assumed:* the emitter is complete (zero bare
-same-spin reads at either tag), and the denominator's "occ half then vir half" tag convention
-matches the amplitude free-index layout (`doubles_abab` → occ,occ,vir,vir with spins a,b,a,b →
-`abab`). The residual **plateaus at ~5e-8 rather than converging**, which points at an
-inconsistency inside the residual equations rather than in the energy expression — the energy
-kernel is now textbook-correct by inspection. Likely next suspects: the `-1/2 t2_aaaa v_aaaa`
-coefficients in the singles/doubles residuals assume an **antisymmetric `t2_aaaa`**, which is an
-AMPLITUDE-side convention separate from the ERI one, and nothing in `solver_arbitrary` enforces
-it.
+**`test_ucc_eri_convention.py` initially asserted the buggy behaviour** ("the partner swaps the
+LAST TWO slots") and so could never have failed with it — a gate written from the implementation
+rather than the contract. Now rewritten and mutation-verified.
 
-*Then the gate this step was scoped to be:* `ucc2` E_corr matching `-0.0402694793`.
+**Full answer, including how to localize a defect in this pipeline and the `cc_damping`
+trap that cost two investigation steps: `docs/CCGEN_UCC_ERI_ANTISYMMETRY.md`.**
+
+**Still open on U5.4: no regression case is registered.** `PLANCK_CC_UCC` is default OFF and
+the runner has no build-option gating, so a `ucc2` case would fail in a default build. That
+plumbing is the remaining work.
 
 **U5.5 — open-shell UCCSDTQ == FCI (~M, the one that matters).** The closed-shell analog is the
 strongest gate in the whole ccgen effort (`0970e21` / `ce03048`: Be CCSDTQ vs FCI, 6.4e-11).
