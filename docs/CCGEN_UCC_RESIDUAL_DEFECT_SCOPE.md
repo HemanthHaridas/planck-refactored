@@ -4,7 +4,13 @@ Scopes ONE question: **why does the generated `ucc2` correlation energy disagree
 hand-written UCCSD, after the ERI antisymmetrization fix (`fe744e6`) closed the larger
 half of the gap?**
 
-**Status, 2026-08-24. R0 DONE — and it killed the prime suspect.** The first-order algebra is
+**Status, 2026-08-24. R0 and R1 DONE. The deficit is in the `abab` channel.** R0 showed the
+first-order algebra is textbook-correct (so the defect is in the data, not the equations, and
+the amplitude-antisymmetry suspect is dead). R1 measured the three channels on two systems and
+found the ratio is **0.800000 on both** — structural — with the deficit in **`abab`**, not in
+the same-spin channels this doc predicted. **R2 is next**, rewritten around that.
+
+*Original status line, for the record:* **R0 DONE — and it killed the prime suspect.** The first-order algebra is
 textbook-correct, so the defect is in the **data** reaching the kernels (the stored `v` blocks,
 the per-block denominators, or the amplitude written back), **not** in the equations and **not**
 in the amplitude-antisymmetry convention this doc originally suspected. **R1 is next and is now
@@ -132,37 +138,86 @@ is not *this* 3.8%.)
 *What remains, therefore:* the values reaching the kernels. Either the stored `v` blocks, the
 per-block denominators `D`, or the amplitude written back between them.
 
-**R1 — split the 0.8 by spin channel (~S).**
-Report the first-order energy per channel (`aaaa`, `abab`, `bbbb`) against the hand-written
-UMP2's three channels. **This is the step that names the defect**: the total ratio is an
-exact 4/5, so either one channel is scaled by a rational factor or one is absent, and three
-numbers distinguish those cases immediately.
+**R1 — split the 0.8 by spin channel — DONE. The deficit is in `abab`, and BOTH predictions
+this doc made were falsified.**
 
-**A sharper, falsifiable prediction now that R0 has narrowed it.** If `abab` is correct and only
-the same-spin channels are scaled by a factor `k`, then `(k·E_ss + E_os)/(E_ss + E_os) = 0.8`
-pins `k` against the same-spin share:
+Measured with a temporary per-channel probe in the runtime loop (inserted, run, reverted —
+not committed), on **two** systems:
 
 ```
-E_ss share   0.30    0.35    0.40    0.45    0.50
-k            0.333   0.429   0.500   0.556   0.600
+                        aaaa          abab          bbbb        total      vs UMP2
+B/STO-3G          0.0000000000  -0.0152757148  0.0000000000  -0.01527571   0.800000
+H2O+/STO-3G (C1) -0.0005788702  -0.0205364423 -0.0006610720  -0.02177638   0.800000
 ```
 
-**A same-spin share near 40% gives k = 1/2 exactly** — a clean convention slip, and the most
-likely single cause. R1 measures the share and `k` together, so it either lands on an exact
-rational (naming the defect) or does not (falsifying the whole "one channel scaled" family and
-sending the search to the denominators).
+**The ratio is 0.800000 on both**, to six digits, on systems with nothing in common — which
+makes it structural rather than accidental, and rules out any system-specific cause.
 
-*If `abab` is ALSO wrong, the transform or the denominator is the cause, not a coefficient.*
+**Falsification 1 — "same-spin scaled by k" is dead.** The same-spin share is 0.0% on boron
+and 5.7% on the water cation, yet the ratio is identical. No scaling of the same-spin
+channels can produce the same total ratio at two such different shares. The `k = 1/2`
+prediction (from an assumed ~40% share) was wrong.
 
-**R2 — test the amplitude-antisymmetry hypothesis directly (~S).**
-Take the converged `t2_aaaa` out of the solver and measure `t2(i,j,a,b) + t2(j,i,a,b)` and
-`t2(i,j,a,b) + t2(i,j,b,a)`. Both must be zero for the 18 fractional-coefficient terms to
-be correct.
+**Falsification 2 — the boron zero was a FIXTURE ARTIFACT, not a defect.** On B/STO-3G the
+same-spin residuals are *exactly* zero and I briefly read that as the bug. It is not: the
+stored `oovv_aaaa` block satisfies `v(i,j,a,b) == v(i,j,b,a)` identically there, so the
+`<ij||ab>` exchange cancels — a real property of that high-symmetry atom with `nva = 2`
+degenerate 2p virtuals, not of the code. On the low-symmetry water cation
+`max|v(ijab) - v(ijba)| = 3.9e-2` and both same-spin residuals are non-zero. **The exchange
+fix works.**
 
-*If non-zero, the fix has the same two options the ERI one had, and the same reasoning
-should decide it: enforce the symmetry in the solver's update (one mechanism, one place),
-or emit the permutational copies explicitly (generated text only). **Prefer whichever keeps
-one meaning per stored array**; do not split the vocabulary.*
+> **This is the seventh instance of this scope's fixture-vacuity trap, and the first where
+> the fixture passed its own non-vacuity check.** `b_ucc2_sto3g` was verified to have
+> asymmetric counts (`noa=3,nob=2,nva=2,nvb=3`) and a non-trivial `E_corr` — both true, and
+> both insufficient: they say nothing about *degeneracy within a channel*. **Any assertion
+> about same-spin behaviour must run on a C1 system**; add
+> `noa=3,nob=2` to the list of things that does not make a fixture general.
+
+**Where the deficit actually is:** `abab` carries it, on both systems.
+
+```
+H2O+   abab measured -0.0205364423   needed (UMP2 - aa - bb) -0.0259805385   ratio 0.790
+B      abab measured -0.0152757148   needed (UMP2 total)     -0.0190946435   ratio 0.800
+```
+
+Since `abab` has no exchange partner and no fractional coefficient (`1 * t2_abab * v_abab`
+in both the residual and the energy), the candidates are narrow: the stored `oovv_abab`
+values, its denominator, or the index convention relating the two. **R2 is rewritten below
+around that.**
+
+*(The `k = 1/2` prediction that stood here was falsified by R1 — see above. Kept out of the
+plan rather than silently deleted: it was wrong because it assumed the same-spin share was
+~40%, and the measured shares are 0% and 5.7%.)*
+
+**R2 — find the `abab` deficit (~S/M) — NEXT, and R1 narrowed it sharply.**
+
+`abab` is the simplest channel in the whole manifold: coefficient `1` in both the residual
+(`1 * v_abab`) and the energy (`1 * t2_abab * v_abab`), no exchange partner, no fractional
+weight. So a ~0.79–0.80 deficit there is one of exactly three things:
+
+1. **The stored `oovv_abab` values.** Compare element-wise against the UMP2 path's own mixed
+   ERI, which `tests/cc_ucc_spin_blocks.cpp:397` documents as bitwise-identical in
+   construction (`ovOV = transform_eri(eri, nb, Ca_occ, Ca_virt, Cb_occ, Cb_virt)`). If they
+   differ, the transform or the rebind is the cause.
+2. **The `abab` denominator.** `build_ucc_block_denominator` reads the tag "occ half then vir
+   half"; for `abab` that is `eps_a(i) + eps_b(j) - eps_a(a) - eps_b(b)`. Verify against the
+   UMP2 kernel's mixed denominator directly — a swapped spin here changes the value without
+   changing any shape, so nothing structural would catch it.
+3. **The index convention between them.** `oovv_abab` has dims `(noa, nob, nva, nvb)`; if the
+   residual writes `(i,j,a,b)` while the block is stored `(i,j,b,a)` — or the denominator is
+   built in the other order — the contraction silently pairs the wrong elements. On a fixture
+   where `nva != nvb` this changes the shape and would have been caught; on one where they
+   happen to match, it would not. **Check `nva == nvb` before trusting any fixture here.**
+
+*Order: (2) then (1) then (3) — the denominator is a dozen numbers and can be printed and
+eyeballed; the ERI comparison needs a transform; the convention question only arises if both
+of those are clean.*
+
+*Note both systems give ~0.79-0.80 but NOT the same digits (0.790455 vs 0.800000), so
+whatever it is, it is not a single global constant on `abab` alone — the boron case has
+zero same-spin, so its 0.800000 is `abab`-only, while the water cation's 0.790 is `abab`
+against a total that includes correct same-spin. Consistent with one uniform cause; do not
+over-read the third digit.*
 
 **R3 — pin the convention, whichever way R2 lands (~S).**
 The ERI fix landed `_block_needs_explicit_exchange` as the single place that states its
@@ -171,10 +226,19 @@ structural gate is not enough here** — that is precisely what let both of thes
 
 ---
 
-## Fixture
+## Fixtures — use BOTH, and the second is not optional
 
-`b_ucc2_sto3g.hfinp` (B/STO-3G doublet), already committed. **Verified non-vacuous before
-use**, which matters given how often this scope has been burned by degenerate fixtures:
+**`h2o_cation_ucc2_sto3g.hfinp` (H2O+ doublet, C1) is the one to reason on.** Committed with
+R1. `noa=5, nob=4, nva=2, nvb=3`; all three channels non-zero; no degeneracy in the same-spin
+block (`max|v(ijab) - v(ijba)| = 3.9e-2`). Its UMP2 reference is `-0.0272204807`.
+
+**`b_ucc2_sto3g.hfinp` (B/STO-3G doublet) is kept, but it is DEGENERATE for same-spin
+questions** and R1 was briefly misled by it. Its `oovv_aaaa` block satisfies
+`v(i,j,a,b) == v(i,j,b,a)` identically, so both same-spin channels are exactly zero at first
+order and any same-spin assertion on it passes vacuously. Keep it as the *simplest* case and
+because its zero same-spin cleanly isolates `abab`; never conclude from it alone.
+
+Its non-vacuity check, for the record:
 
 - `noa=3, nob=2, nva=2, nvb=3` — every count differs, so a spin-blind bound or a collapsed
   block changes the SHAPE, not merely values.
