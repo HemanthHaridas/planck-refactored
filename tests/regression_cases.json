@@ -1628,6 +1628,60 @@
       ]
     },
     {
+      "id": "b_ucc2_sto3g",
+      "input": "tests/inputs/regression/post_hf/b_ucc2_sto3g.hfinp",
+      "tags": [
+        "extended",
+        "ucc"
+      ],
+      "requires_build_option": "PLANCK_CC_UCC",
+      "expected_exit_code": 0,
+      "contains": [
+        "UCC :",
+        "Total Correlated Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "correlated_total_energy",
+          "expected": -24.1892581442,
+          "atol": 1e-09
+        }
+      ]
+    },
+    {
+      "id": "b_ucc3_sto3g",
+      "input": "tests/inputs/regression/post_hf/b_ucc3_sto3g.hfinp",
+      "tags": [
+        "extended",
+        "ucc"
+      ],
+      "requires_build_option": "PLANCK_CC_UCC",
+      "expected_exit_code": 0,
+      "contains": [
+        "UCC :",
+        "Total Correlated Energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "correlated_total_energy",
+          "expected": -24.1892636163,
+          "atol": 1e-09
+        },
+        {
+          "type": "metric_le",
+          "metric": "correlated_total_energy",
+          "value": -24.1892581442
+        },
+        {
+          "type": "metric_ge",
+          "metric": "correlated_total_energy",
+          "value": -24.1892649766
+        }
+      ]
+    },
+    {
       "id": "b_uccsdt_sto3g",
       "input": "tests/inputs/regression/post_hf/b_uccsdt_sto3g.hfinp",
       "tags": [

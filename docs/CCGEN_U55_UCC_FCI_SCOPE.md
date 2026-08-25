@@ -3,7 +3,28 @@
 Scopes ONE question: **what is the strongest end-to-end correctness gate the generated UCC
 path can actually carry, and on what system?**
 
-**Status, 2026-08-24. Not started. The scope as previously written is IMPOSSIBLE and is
+**Status, 2026-08-25. U5.5a LANDED and the runner plumbing with it. U5.5b (rank 4) remains.**
+
+The `ucc3` interval gate is registered and green, and it behaves exactly as this scope predicted:
+
+```
+UCCSD (no T3)  -24.1892581442
+ucc3           -24.1892636163     <- strictly between, 80.1% of the gap recovered
+FCI            -24.1892649766        remaining to FCI: 1.36e-06
+```
+
+**T3 is doing real work**, so the gate is non-vacuous — the thing the old "== FCI" framing could
+not achieve on any system. Both bounds are mutation-verified: tightening the lower bound past the
+measured value fails (simulating a T3 that contributes nothing), and raising the upper bound
+above it fails (simulating over-correction past FCI).
+
+**The runner plumbing is done** — `requires_build_option` on a case, checked against the build
+tree's `CMakeCache.txt`, so a case needing `PLANCK_CC_UCC=ON` is SKIPPED (and reported as
+`[SKIP]`, never counted as a pass) in a default build rather than failing for a configuration
+reason. Verified in both directions: skips in `build/`, runs and passes in `build-ucc/`. That
+also unblocked U5.4's `b_ucc2_sto3g`, which is now registered.
+
+*Original status line:* **Not started. The scope as previously written is IMPOSSIBLE and is
 rewritten here.** The measurements below are the whole basis for the plan; all but the rank-4
 generation cost (~10 min) are reproducible in seconds with the committed `build-ucc` tree.
 
@@ -109,19 +130,21 @@ is not UCC-specific.
 
 ## Steps
 
-**U5.5a — the `ucc3` interval gate on boron (~S).** Cheapest real assertion, and it exercises
-the whole stack at a rank that already generates. `uccsd < ucc3 <= fci`, with `ucc3` materially
-closer to FCI than UCCSD is.
+**U5.5a — the `ucc3` interval gate on boron — LANDED.** `b_ucc3_sto3g`: a `metric_close` pin at
+`-24.1892636163` plus both interval bounds (`metric_le` at UCCSD, `metric_ge` at FCI). T3
+recovers 80.1% of the UCCSD→FCI gap, so the assertion is non-vacuous, and both bounds are
+mutation-verified.
 
 **U5.5b — the `ucc4` interval gate on boron (~M).** Same shape, one rank up. The generation
 cost is measured and acceptable (~10 min, almost all of it the GCC step the RCC path already
 pays); **the open question is compile time** for 18533 terms across 14 kernels. Measure that
 first, not the generation.
 
-**U5.5c — register both as regression cases (~S/M).** Blocked on the same missing plumbing U5.4
-hit: the runner has **no build-option gating**, so any `ucc*` case fails in a default build
-(`PLANCK_CC_UCC` OFF). That plumbing is shared with U5.4's unregistered case and should be done
-once, for both.
+**U5.5c — register both as regression cases — DONE for rank 3 (and for U5.4's rank 2).** The
+blocking plumbing is landed: `requires_build_option` on a case is checked against the build
+tree's `CMakeCache.txt`, so a case needing an opt-in feature skips rather than fails. Reading the
+cache is the only honest source — the option is a compile-time define, so a case would otherwise
+have to infer it from an error string. Rank 4 registers the same way once U5.5b lands.
 
 ---
 
