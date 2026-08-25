@@ -21,10 +21,18 @@ must be rewritten into an architecture answer as soon as that work lands and is 
 - `CCGEN_SPIN_ADAPTER_CONTRACT.md` — what does the spin adapter guarantee, and how do you check it?
 - `CCGEN_DRESSING_COST.md` — why does dressed-operator recognition cost what it costs?
 
+### Answered questions — unrestricted (open-shell) CC
+
+- `CCGEN_UNRESTRICTED_CC.md` — how does a spin-orbital CC manifold become a runnable
+  open-shell kernel set, and what has to stay spin-resolved all the way down?
+- `CCGEN_UCC_ERI_ANTISYMMETRY.md` — the equations want `<pq||rs>`, the cache stores `<pq|rs>`;
+  where does the exchange get added?
+- `CCGEN_UCC_NUMERIC_VALIDATION.md` — how do you check that a spin-block CC residual is right?
+
 ### In-progress scopes
 
-- `CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md` + `CCGEN_U1_UCC_ADAPT_SCOPE.md` — arbitrary-order UCC;
-  U0 landed, U1 scoped (U1.0–U1.5), U2–U5 ahead.
+- `CCGEN_U1_UCC_ADAPT_SCOPE.md` — the GCC→UCC adaptation. Landed and numerically validated;
+  due for rewrite into an architecture answer.
 
 To export it as a standalone static webpage:
 

@@ -158,7 +158,7 @@ long-term. Doing C3 is investing in the path being retired.
 
 ## C4 — UCC sidecar (~S, only once UCC lands)
 
-If arbitrary-order UCC lands (`CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md`), its
+If arbitrary-order UCC lands (`CCGEN_UNRESTRICTED_CC.md`), its
 amplitudes are stored in the **same** `(rank, tag)` sector machinery. So C0's
 sector-aware format covers UCC with no format change — only the metadata needs a
 reference-type field (`rhf` vs `uhf`) so an RCC sidecar cannot be seeded into a

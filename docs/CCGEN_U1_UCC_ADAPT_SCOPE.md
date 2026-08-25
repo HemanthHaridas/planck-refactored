@@ -38,7 +38,7 @@ U0 is landed (`ucc_independent_blocks`, `_ucc_block_tag`, `external_blocks(fold_
 > collapse**; U1 is the entry that *skips* that collapse and keeps blocks resolved. The filename and
 > the inherited `_adapt_on_block` naming say the opposite of what this step does. **UCC is
 > spin-block resolved, never spatial** — see the three-assumption audit in
-> `CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md`, one of which (`_canonicalize_amplitude_factor`) fires at
+> `CCGEN_UNRESTRICTED_CC.md`, one of which (`_canonicalize_amplitude_factor`) fires at
 > rank 2 and is not addressed by U1.1's naming fix alone.
 
 ---

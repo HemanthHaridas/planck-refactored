@@ -2906,7 +2906,7 @@ class U11BlockResolvedFactorNamesTests(unittest.TestCase):
     layer with its OWN name and its OWN slot order.
 
     Two mechanisms conspire against that, and both were measured on the tree
-    before this gate existed (see docs/CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md):
+    before this gate existed (see docs/CCGEN_UNRESTRICTED_CC.md):
 
     1. `_factor_tensor_name`'s gate is `len(block) >= 8`, so t1/t2/t3 can never
        receive a block tag -- `t2[aaaa]` and `t2[bbbb]` both emit as bare `t2`.

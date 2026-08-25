@@ -1036,7 +1036,7 @@ def ucc_spinterm_to_algebraterm(spinterm: SpinTerm, externals):
 
     Free-index ordering is shared with the RCC bridge (occ-first, then by base
     name) -- that contract is about matching the C++ runtime's `rank_dims`, not
-    about spin, so it applies unchanged. See docs/CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md.
+    about spin, so it applies unchanged. See docs/CCGEN_UNRESTRICTED_CC.md.
     """
     from fractions import Fraction
 

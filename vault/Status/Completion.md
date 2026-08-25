@@ -102,6 +102,30 @@ historical design context, but they are no longer the source of truth for
   `oh_casscf_rohf_sto3g`)
 - Coupled-cluster support for RCCSD, UCCSD, RCCSDT, UCCSDT, RCCSDTQ
 - Arbitrary-order RCC solver via ccgen-generated residuals
+- **Arbitrary-order UNRESTRICTED CC (UCC) from ccgen-generated residuals**, behind
+  `-DPLANCK_CC_UCC=ON` (default OFF, so the default build is unaffected and emits no
+  UCC translation unit). Keywords `ucc2`…`ucc6` plus `uccsd_gen`/`uccsdt_gen`/
+  `uccsdtq_gen`, routing through `PostHF::UCCGEN` → `run_uccgen`. Validated against
+  three independent references on B/STO-3G (doublet, 3α/2β):
+
+  ```
+  ucc2  -24.1892581442   == hand-written UCCSD, exactly
+  ucc3  -24.1892636163   T3 recovers 80.1% of the UCCSD->FCI gap
+  ucc4  -24.1892649766   == in-tree FCI, all ten digits
+  ```
+
+  `ucc4 == FCI` on an **open-shell** system is the strongest UCC gate: CCSDTQ is exact
+  there because T5 is unreachable in the basis (only 2 alpha virtuals for 3 alpha
+  electrons), not because the electron count is small. Gated by `b_ucc{2,3,4}_sto3g`,
+  which skip cleanly in a default build via the runner's `requires_build_option`.
+
+  UCC is RCC minus the spatial collapse — the same generator, bridge, runtime and
+  sector machinery, with the spin blocks kept resolved. What that costs is one
+  vocabulary per layer instead of one object: 24 ERI arrays (7 `aaaa` / 10 `abab` /
+  7 `bbbb`), per-block denominators (`abab` differs in *shape*), per-spin Fock blocks,
+  four orbital counts, and a distinct kernel namespace so both sets link into one
+  binary. See `docs/CCGEN_UNRESTRICTED_CC.md` and
+  `docs/CCGEN_UCC_ERI_ANTISYMMETRY.md`.
 - Tensor-backed and determinant-space coupled-cluster paths, including the
   optimized RCCSDT warm-start route
 - **Dressed ccgen CC kernels — RETIRED as a production route, deliberately.**
