@@ -3,7 +3,34 @@
 Scopes ONE question: **what is the strongest end-to-end correctness gate the generated UCC
 path can actually carry, and on what system?**
 
-**Status, 2026-08-25. U5.5a LANDED and the runner plumbing with it. U5.5b (rank 4) remains.**
+**Status, 2026-08-25. U5.5 COMPLETE. `ucc4` reproduces FCI EXACTLY on an open-shell system —
+which this doc had concluded was impossible.**
+
+```
+UCCSD (no T3/T4)  -24.1892581442
+ucc3              -24.1892636163     80.1% of the UCCSD->FCI gap
+ucc4              -24.1892649766     100.0%  -- identical to FCI, all ten digits
+FCI               -24.1892649766
+```
+
+**The "impossible" argument was right about its premise and wrong about its scope.** It assumed
+CCSDTQ is exact only when `n_elec <= 4`. That is the *general* bound; what matters is whether the
+next amplitude can exist **in the given basis**. For B/STO-3G (5 e-, 3a/2b, 5 orbitals) T5 needs
+five simultaneous excitations: at most 2 can be beta, so >= 3 must be alpha — and there are only
+**2 alpha virtuals** for 3 alpha electrons. **T5 is identically zero, so CCSDTQ is exact here.**
+
+So the interval framing was still the right instrument — it is what made `ucc3` a real gate, and
+it is what let `ucc4` demonstrate exactness rather than assume it — but the conclusion "no
+open-shell system can give `== FCI`" was too strong. **The correct statement: exactness needs the
+next excitation rank to be unreachable, which the ORBITAL COUNT can enforce even when the
+electron count does not.**
+
+Both `ucc3` and `ucc4` are registered with a `metric_close` pin plus both interval bounds, all
+mutation-verified. The runner plumbing (`requires_build_option`) landed with them and unblocked
+U5.4's case too.
+
+*Superseded status line:* **U5.5a LANDED and the runner plumbing with it. U5.5b (rank 4)
+remains.**
 
 The `ucc3` interval gate is registered and green, and it behaves exactly as this scope predicted:
 
@@ -40,13 +67,22 @@ the system is not vacuous.
 
 | requirement | needs |
 |---|---|
-| CCSDTQ is *exact* (so `== FCI` is the assertion) | `n_elec ≤ 4` |
+| CCSDTQ is *exact* (so `== FCI` is the assertion) | `n_elec ≤ 4` **in general** — but see below: the orbital count can enforce it at higher `n_elec` |
 | T4 is worth something (so a broken T4 fails) | ≥ 2 electrons of **each** spin |
 | open shell (so it tests the UCC path at all) | `n_alpha ≠ n_beta` |
 
 Four electrons with two of each spin is a **closed** shell. Open-shell with four electrons is
 3α/1β — and with one beta electron, beta can be excited at most once, so the `aabb` T4 sector
 is identically zero.
+
+> **CORRECTED BY U5.5b.** The table's first row is the *general* bound, and taking it as the only
+> route to exactness is what made this section conclude "impossible". Exactness actually needs the
+> **next** excitation rank to be unreachable, and the **orbital count** can enforce that at higher
+> electron counts: B/STO-3G has 5 electrons but only 2 alpha virtuals for 3 alpha electrons, so T5
+> cannot exist and CCSDTQ is exact. Measured — `ucc4` equals FCI to all ten digits.
+>
+> The rest of this section stands: the three requirements really do fight *at four electrons*, and
+> triplet Be really is vacuous. The error was generalising from that to every open-shell system.
 
 **Measured, not argued.** Triplet Be/STO-3G (4 electrons, 3α/1β, `<S²> = 2.000000` exactly, no
 spin contamination):
@@ -135,10 +171,15 @@ is not UCC-specific.
 recovers 80.1% of the UCCSD→FCI gap, so the assertion is non-vacuous, and both bounds are
 mutation-verified.
 
-**U5.5b — the `ucc4` interval gate on boron (~M).** Same shape, one rank up. The generation
-cost is measured and acceptable (~10 min, almost all of it the GCC step the RCC path already
-pays); **the open question is compile time** for 18533 terms across 14 kernels. Measure that
-first, not the generation.
+**U5.5b — the `ucc4` gate on boron — LANDED, and it is an EQUALITY, not an interval.**
+`ucc4 == FCI` to all ten digits (`-24.1892649766`), because T5 is unreachable in this basis.
+Registered with both interval bounds anyway — they are what proves T4 did the work rather than
+nothing, and both are mutation-verified.
+
+*Cost, for the record:* the full `-DPLANCK_CC_MAXORDER=4 -DPLANCK_CC_UCC=ON` configure+build took
+**~10 minutes end to end**, so compile time was NOT the risk this scope flagged — the `-O1`
+registry pin absorbed 18533 terms across 14 kernels without trouble. The case itself runs in
+~44 s, which is why it is `extended`-only.
 
 **U5.5c — register both as regression cases — DONE for rank 3 (and for U5.4's rank 2).** The
 blocking plumbing is landed: `requires_build_option` on a case is checked against the build
@@ -160,6 +201,10 @@ have to infer it from an error string. Rank 4 registers the same way once U5.5b 
   behind using an ROHF-reference FCI number.
 - `BASIS_PATH=$PWD/basis-sets` is required to run any input from a build tree; a failed `make`
   can still report exit code 0, so check for the binary.
+- **A UCC tree built with `make hartree-fock` alone cannot run the full `extended` suite** — the
+  DFT cases need `planck-dft`, and the runner dies with a bare `FileNotFoundError` rather than
+  reporting a missing binary. Run the UCC cases by `--case`, or build both targets. The suite as
+  a whole is validated in the default tree, where the UCC cases skip.
 
 ## Reference numbers (all in-tree, B/STO-3G doublet and Be/STO-3G triplet)
 
