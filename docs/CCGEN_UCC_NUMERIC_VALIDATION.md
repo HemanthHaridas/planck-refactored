@@ -106,6 +106,11 @@ PySCF's residual as `R = (t_new - t) * D`. All five blocks agree to ~6e-16.
 
 Three conventions this pinned, each of which cost a wrong conclusion first:
 
+- **The closed-shell oracle is a per-target PAIRING, not a block sum.** Collapsing a UCC manifold
+  to its restricted limit does not mean adding the blocks up: each spatial target is reproduced by
+  one specific combination of spin blocks, and which combination depends on the target. Summing
+  instead produces a number that is wrong by a factor which varies per target — plausible, and
+  hard to attribute.
 - **The amplitude mapping is a transpose, not a rename.** The names correspond
   one-for-one (`t2ab` ↔ `t2_abab`) but PySCF stores `(occ…, vir…)` and ccgen
   emits `(vir…, occ…)`. On `t2_bbbb`, which is square, this is invisible — so the
@@ -278,6 +283,7 @@ other implementation actually computes over anything you have to invert.
 | **the UCC FCI limit** | `U15UccReachesFciLimitTests`, `test_spin.py` |
 | GCC FCI-limit gates | `test_reference_vs_pyscf.py` (`*_reaches_fci_limit`) |
 | the evaluator | `ucc_residual_einsum`, `python/ccgen/tests/residual_eval.py` |
+| the fixture | `ucc_random_tensors`, `python/ccgen/tests/residual_eval.py` — symmetry-correct random tensors, so a comparison cannot be fooled by a fixture that violates `<pq||rs> = <rs||pq>` |
 | the adaptation | `ucc_adapt_equations`, `python/ccgen/spin.py` |
 
 PySCF lives in `tests/pyscf/.venv`; the gates skip cleanly without it. Run them

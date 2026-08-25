@@ -3674,7 +3674,7 @@ class U14RankSixSpinFlipSymmetryTests(unittest.TestCase):
     exhaustive 720-permutation search matched `bba` to `aab` and that match is
     real — but matching `aabaab` is not the same as BEING `abbabb`, and the search
     never checked the target block's symmetry. See the U1.4 section of
-    `docs/CCGEN_U1_UCC_ADAPT_SCOPE.md`.
+    `docs/CCGEN_GCC_TO_UCC_BRIDGE.md`.
     """
     NO, NV = 4, 3       # non-square
 

@@ -58,25 +58,21 @@ Remaining, deliberately deferred until the UCC work (U1–U5) lands:
 | `CCGEN_SPIN_ADAPTATION_SCOPE.md` | 892 | S0–S4 |
 | `CCGEN_KERNEL_WIRING_AND_BENCHMARK_SCOPE.md` | 331 | kernel wiring + benchmarks |
 
-**Four became due 2026-08-22.** The UCC numeric ladder completed (F1/F2/F3), and then U1 completed
-on top of it. `CCGEN_UCC_NUMERIC_FIXTURE_SCOPE.md`, `CCGEN_UCC_RESIDUAL_EVALUATOR_SCOPE.md` and
-`CCGEN_U1_UCC_ADAPT_SCOPE.md` are all finished work, so the scoping exemption has expired for each.
-(`CCGEN_UNRESTRICTED_CC.md` stays exempt — U2–U5 are genuinely in flight.
-The rank-6 gap closed, so that handoff has become
-`CCGEN_UCC_NUMERIC_VALIDATION.md` — the target the three older UCC scope docs should merge into.) They should merge into **one** answer — they are two halves of a single question, split by
-effort exactly as the CCSDTQ trio was:
+**The four that became due 2026-08-22 are DONE (2026-08-25).** All the UCC work landed, so the
+exemption expired for every doc scoping it, and the merge planned here has been carried out:
 
-- **`CCGEN_UCC_NUMERIC_VALIDATION.md`** — how do you check that a spin-block CC residual is right?
-  The U1 doc merges in here: its answer is the same question one layer up (how do you know the
-  GCC→UCC *adaptation* is right), and its four PySCF-interface defects belong with the fixture
-  lessons rather than in a step ladder.
+| retired | into |
+|---|---|
+| `CCGEN_ARBITRARY_ORDER_UCC_SCOPE.md` (1374 lines) | `CCGEN_UNRESTRICTED_CC.md` (204) |
+| `CCGEN_U55_UCC_FCI_SCOPE.md` (214) | same — deleted, its exactness lesson and the triplet-Be vacuity measurement carried over |
+| `CCGEN_U1_UCC_ADAPT_SCOPE.md` (446) | `CCGEN_GCC_TO_UCC_BRIDGE.md` (129) |
+| `CCGEN_UCC_NUMERIC_FIXTURE_SCOPE.md` + `CCGEN_UCC_RESIDUAL_EVALUATOR_SCOPE.md` | `CCGEN_UCC_NUMERIC_VALIDATION.md` — deleted, the per-target-pairing correction and the fixture name carried over first |
 
-Keep, because each cost real investigation: the per-target-pairing correction to the closed-shell
-oracle; the closure relations and why F1's fixture cannot serve it; the `(occ…,vir…)` vs
-`(vir…,occ…)` transpose; the `f_ov`-on-both-sides measurement table with the falsified first
-hypothesis; and both vacuous-pass traps (converged amplitudes, OH/STO-3G). Drop the F-numbering, the
-per-step *Verify:* lines, and the three-option F2.0 design table now that A is built and proven.
-Deferring only until U1.2 has consumed the evaluator, in case that surfaces more.
+Everything the plan said to keep was kept and re-verified against the tree rather than trusted:
+the per-target-pairing correction, the `(occ…,vir…)` vs `(vir…,occ…)` transpose, the
+`f_ov`-on-both-sides result, the β-majority folding table (checked empirically), and the
+fixture-vacuity traps. Dropped: the F/U step numbering, per-step *Verify:* lines, the design tables
+for options already built, and every hypothesis a later step falsified.
 
 `CCGEN_SPIN_ADAPTATION_SCOPE.md` is the reference U1 works against, so rewriting it now risks
 discarding scope still load-bearing for unstarted work. Target questions:
@@ -87,15 +83,15 @@ discarding scope still load-bearing for unstarted work. Target questions:
   it cost?
 
 When doing it: read `CCGEN_SPIN_ADAPTATION_SCOPE.md` in full first, and move any still-live UCC
-scope into `CCGEN_U1_UCC_ADAPT_SCOPE.md` rather than dropping it. Keep the measured numbers, the
+scope into `CCGEN_GCC_TO_UCC_BRIDGE.md` rather than dropping it. Keep the measured numbers, the
 ruled-out hypotheses and the wrong turns — they are part of each answer. Drop step numbering,
 gates-to-write and sequencing diagrams.
 
 Judged compliant in the same audit, for the record: `CCGEN_TEACHING_GUIDE`, `CCGEN_REPORT`,
 `CCGEN_GENERATION_AND_VALIDATION` (teaching/report); `CCGEN_HIGHER_OPERATOR_REUSE`,
 `CCGEN_DIAGRAM_REPRESENTATION_SCOPE`, `CCGEN_INTERMEDIATE_MEMORY_LOCALITY_SCOPE` (already
-question-shaped, work unstarted); `CCGEN_UNRESTRICTED_CC`, `CCGEN_U1_UCC_ADAPT_SCOPE`
-(genuine in-flight scope).
+question-shaped, work unstarted). `CCGEN_UNRESTRICTED_CC` and `CCGEN_GCC_TO_UCC_BRIDGE` were
+in-flight scope at the time and have since been rewritten as answers (2026-08-25).
 
 `CCGEN_DRESSED_KERNEL_VALIDATION_SCOPE` was in that list and has been **deleted** (2026-08-16): it
 scoped V2–V6 for the dressed route, which is **retired** (see Completion — dressing and spin
@@ -111,8 +107,8 @@ check first if dressing is ever revisited.
 
 | scope | state |
 |---|---|
-| `CCGEN_UNRESTRICTED_CC` + `CCGEN_U1_UCC_ADAPT_SCOPE` | **COMPLETE — U0 through U5.5 all landed and numerically validated.** `ucc2` == hand-written UCCSD exactly, `ucc3` recovers 80.1% of the UCCSD→FCI gap, `ucc4` == FCI to all ten digits on an OPEN-SHELL system. Three regression cases (`b_ucc{2,3,4}_sto3g`) behind `-DPLANCK_CC_UCC=ON`, skipping cleanly in a default build via the runner's new `requires_build_option`. The full record — the four defects, the eight fixture-vacuity instances, the two generalizable lessons, and the measured costs — is in **`docs/CCGEN_UNRESTRICTED_CC.md`** and **`docs/CCGEN_UCC_ERI_ANTISYMMETRY.md`**; see `vault/Status/Completion.md` for the landed summary. **Remaining, neither blocking:** `wick`-engine coverage for UCC (every gate ran `diagram`; the two are documented residual-equal but unpinned), and a gate on the amplitude-antisymmetry convention (`ucc_amplitude_blocks` asserts it, nothing enforces it; measured satisfied to ~1e-16) |
-| `CCGEN_UCC_NUMERIC_FIXTURE_SCOPE` + `CCGEN_UCC_RESIDUAL_EVALUATOR_SCOPE` | **COMPLETE — F1, F2.0–F2.4 and F3 all landed.** The UCC residuals are validated against PySCF UCCSD (CH3/STO-3G, all five blocks) to **~6e-16** — machine precision, gated at 1e-13 rather than the scoped 1e-10. Until this, every landed UCC residual was gated structurally only. Three scope claims were corrected by building it: the closed-shell oracle is a **per-target pairing, not a block sum**; the PySCF amplitude mapping is a **transpose, not a pure rename** (PySCF is `(occ…,vir…)`, ccgen is `(vir…,occ…)`); and **`f_ov` must be zeroed on BOTH sides** — one-sided zeroing is *worse* than neither (8e-9 → 9e-9 → 6e-17), since Planck CC kernels are canonical-Fock by construction while PySCF's `f_ov` is convergence noise that `update_amps` uses. Both vacuous-pass traps avoided and asserted. **U1.2 is unblocked; U1.3–U5 are the remaining UCC work** |
+| `CCGEN_UNRESTRICTED_CC` + `CCGEN_GCC_TO_UCC_BRIDGE` | **COMPLETE — U0 through U5.5 all landed and numerically validated.** `ucc2` == hand-written UCCSD exactly, `ucc3` recovers 80.1% of the UCCSD→FCI gap, `ucc4` == FCI to all ten digits on an OPEN-SHELL system. Three regression cases (`b_ucc{2,3,4}_sto3g`) behind `-DPLANCK_CC_UCC=ON`, skipping cleanly in a default build via the runner's new `requires_build_option`. The full record — the four defects, the eight fixture-vacuity instances, the two generalizable lessons, and the measured costs — is in **`docs/CCGEN_UNRESTRICTED_CC.md`** and **`docs/CCGEN_UCC_ERI_ANTISYMMETRY.md`**; see `vault/Status/Completion.md` for the landed summary. **Remaining, neither blocking:** `wick`-engine coverage for UCC (every gate ran `diagram`; the two are documented residual-equal but unpinned), and a gate on the amplitude-antisymmetry convention (`ucc_amplitude_blocks` asserts it, nothing enforces it; measured satisfied to ~1e-16) |
+| `CCGEN_UCC_NUMERIC_VALIDATION` | **COMPLETE.** The UCC residuals are validated against PySCF UCCSD (CH3/STO-3G, all five blocks) to **~6e-16** — machine precision. Until this, every landed UCC residual was gated structurally only. The three interface corrections that cost the most time (the closed-shell oracle is a per-target PAIRING not a block sum; the PySCF amplitude mapping is a TRANSPOSE not a rename; `f_ov` must be zeroed on BOTH sides, one-sided being worse than neither) are recorded in **`docs/CCGEN_UCC_NUMERIC_VALIDATION.md`**, which absorbed the two step ladders that scoped it |
 | `CCGEN_ARBITRARY_HARNESS_COST_SCOPE` | **research, not started** — H0 profile is blocking |
 | `CCGEN_DRESSING_VS_PRODUCTION_CODES_SCOPE` | **research, D0 answered** — opened by "CFOUR/MRCC ship dressing as their only route, why did ccgen's fail?". D0 found the *derivation* route (`factorize.py`) also fails value preservation, **on GCC**, where there is no spin adaptation to blame: 23/66 `ccsd` doubles terms do not reproduce their source (‖diff‖/‖R‖ = 3.73e-01). So the retirement's decision stands but its stated reason does not. **The factorizer has no numeric gate** — its 47 tests compare factor `Counter`s, which cannot see index order. D1–D3 open |
 | `CCGEN_KERNEL_SCALING_SCOPE` | **research, partly open** — H1 (memory-bound) untestable on the current ladder (tops out at 0.49 MiB `t3`); overlaps the cost scope, which hands off to it |
@@ -263,7 +259,7 @@ problem the *mechanism* rather than an obstacle. `dressing.py`/`dressed_equation
 the old `tau.py` exact-cover route is history.
 
 What remains open on the dressed path: **nothing in V1**. The follow-on is UCC
-(`docs/CCGEN_UNRESTRICTED_CC.md`, `docs/CCGEN_U1_UCC_ADAPT_SCOPE.md`) — U0 landed, U1
+(`docs/CCGEN_UNRESTRICTED_CC.md`, `docs/CCGEN_GCC_TO_UCC_BRIDGE.md`) — U0 landed, U1
 scoped as U1.0-U1.5, U2-U5 (the C++ side) ahead.
 
 ### ccgen parallel generation is not equivalence-safe (separate defect)

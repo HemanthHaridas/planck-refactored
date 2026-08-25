@@ -28,11 +28,8 @@ must be rewritten into an architecture answer as soon as that work lands and is 
 - `CCGEN_UCC_ERI_ANTISYMMETRY.md` — the equations want `<pq||rs>`, the cache stores `<pq|rs>`;
   where does the exchange get added?
 - `CCGEN_UCC_NUMERIC_VALIDATION.md` — how do you check that a spin-block CC residual is right?
-
-### In-progress scopes
-
-- `CCGEN_U1_UCC_ADAPT_SCOPE.md` — the GCC→UCC adaptation. Landed and numerically validated;
-  due for rewrite into an architecture answer.
+- `CCGEN_GCC_TO_UCC_BRIDGE.md` — how does a spin-orbital manifold become a spin-block-resolved
+  one, and how does that differ from the spatial collapse?
 
 To export it as a standalone static webpage:
 

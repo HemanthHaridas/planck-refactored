@@ -200,5 +200,5 @@ rank 3 is the floor. A UCC tree built with `make hartree-fock` alone cannot run 
 
 See `CCGEN_UCC_ERI_ANTISYMMETRY.md` (the ERI convention and its routing, in full),
 `CCGEN_UCC_NUMERIC_VALIDATION.md` (how a spin-block residual is checked against PySCF),
-`CCGEN_U1_UCC_ADAPT_SCOPE.md` (the GCC→UCC adaptation), and `CCGEN_CCSDTQ_MULTISECTOR.md`
+`CCGEN_GCC_TO_UCC_BRIDGE.md` (the GCC→UCC adaptation), and `CCGEN_CCSDTQ_MULTISECTOR.md`
 (the sector runtime UCC reuses wholesale).
