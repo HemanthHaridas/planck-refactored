@@ -8,7 +8,7 @@ drives `cc4`/`cc5` today.
 **Status, 2026-08-24.** **U0–U4 and U3b are landed; the generated UCC translation unit
 COMPILES**, at rank 2 and rank 3. Every gate before U3b.2 inspected emitted *text* and none fed
 it to a compiler — which is exactly how the spin-blind loop bounds survived U3, U4 and
-U5.0–U5.3b and surfaced only at runtime as a shape mismatch. **U5.3c, U5.4 and U5.5 remain.**
+U5.0–U5.3b and surfaced only at runtime as a shape mismatch. **U5.3c and U5.4 are now landed too; only U5.5 and the runner build-option plumbing remain.**
 
 **The gate lesson this doc keeps re-learning, now with a fifth and sixth instance.** A gate
 written at a convenient rank or on a same-spin block is routinely *vacuous* — it passes under the
@@ -24,7 +24,7 @@ and 3 for the same reason. **Mutation-test every new gate here before trusting a
 | U2 | **landed** — U2.1 `build_ucc_block_denominator`, U2.2 `build_ucc_denominator_cache` + `ArbitraryOrderDenominatorCache::{sectors,sector_tensor}`. RHF path bit-identical, measured. The one remaining item this doc used to name — a reference *variant* — is **withdrawn**; see U2 |
 | U3 | **landed, U3.0–U3.4.** Spin-blocked ERIs and Fock, emitter routing, and the open-shell MP2 limit. The emitted UCC TU now has ZERO untagged reads of either kind, and the U2.0 pre-gate is green. Two things the scope did not predict: the per-tag block set had to be **derived** (6 same-spin, 10 mixed) because a mixed block's orbits reach only 11 of 16 patterns, and U3.4 turned out to need **no solver at all** |
 | U4 | **landed, U4.0–U4.3.** The runtime accepts an ALL-SECTORS bundle (no per-rank reference residual), and `--ucc` reaches it from the build. U4.1 turned out **not to be work** — the update loop already handled it; U4.2 fixed a real out-of-bounds read (segfault, not a wrong number) that U4.0 had made reachable |
-| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b landed** (the `ucc2`/`ucc3`/`ucc4` keyword). **U3b was the blocker** — running U5.4 showed every emitted kernel takes its loop bounds and result shape from the scalar `orbital_partition`, which is default-zero on a UCC state; a gap left when U3 was scoped. **U3b is now COMPLETE** (U3b.0 per-index spin map, U3b.1 four counts on the reference, U3b.2 spin-aware bounds/counts/shapes) **and the emitted UCC TU compiles at ranks 2 and 3.** **U5.3c, U5.4, U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller.<br><br>**U3b.2 shipped a regression worth carrying:** keying the spin map on "the map came back empty" instead of on `ucc` also fires on the SPIN-ADAPTED path, whose rank-4 sector amplitudes are named `t4_aaabaaab`. **Neither RCC gate could see it** — the SHA-256 pin emits with `spin_adapt=False`, and `test_emit_flag_matrix.py` pins `spin_adapt` only at `METHOD = "ccsd"`, below the rank where those names exist. The pin now covers `spin_adapt` at ranks 2/3/**4** and both engines (`diagram` and the default differ by 2038 lines at rank 2 despite identical byte length) |
+| U5 | **U5.0–U5.3a landed** — distinct UCC symbols + filename, the 24-block canonical set, a UCC prepare path, the physicist rebind (validated by re-deriving the UMP2 energy through it), and the registry + `PLANCK_CC_UCC` option. A `-DPLANCK_CC_UCC=ON` tree links **both** kernel sets in one binary, zero duplicate symbols — the first real test of U5.0. **U5.3b landed** (the `ucc2`/`ucc3`/`ucc4` keyword). **U3b was the blocker** — running U5.4 showed every emitted kernel takes its loop bounds and result shape from the scalar `orbital_partition`, which is default-zero on a UCC state; a gap left when U3 was scoped. **U3b is now COMPLETE** (U3b.0 per-index spin map, U3b.1 four counts on the reference, U3b.2 spin-aware bounds/counts/shapes) **and the emitted UCC TU compiles at ranks 2 and 3.** **U5.3c and U5.4 landed; U5.5 open.** The original ~S estimate was wrong because the three UCC builders then had no production callers; `prepare_generated_ucc_state` (U5.1b) is now that caller.<br><br>**U3b.2 shipped a regression worth carrying:** keying the spin map on "the map came back empty" instead of on `ucc` also fires on the SPIN-ADAPTED path, whose rank-4 sector amplitudes are named `t4_aaabaaab`. **Neither RCC gate could see it** — the SHA-256 pin emits with `spin_adapt=False`, and `test_emit_flag_matrix.py` pins `spin_adapt` only at `METHOD = "ccsd"`, below the rank where those names exist. The pin now covers `spin_adapt` at ranks 2/3/**4** and both engines (`diagram` and the default differ by 2038 lines at rank 2 despite identical byte length) |
 
 **Read `docs/CCGEN_UCC_NUMERIC_VALIDATION.md` first** if you are touching the UCC validation
 story: it carries the three independent correctness routes, the interface conventions that cost the
@@ -855,6 +855,38 @@ new enum member per rank and no new driver branch); and the driver's RHF-referen
 relaxed for them.
 
 *Gate:* `correlation ucc2` reaches the solver and returns a number rather than an error.
+
+**U5.3c — LANDED. Rank 4 verified byte-identical.**
+
+The rename and the keyword surface both landed as scoped, and the scope's central claim held on
+inspection: nothing in `ccsdtq.cpp` is rank-4-specific (the only `4`s are the `generated_floor`),
+so it was misnamed, not miswritten, and the rename **is** the fix.
+
+*Verified before and after:* `be_rccsdtq_sto3g` → `-14.4036550465` with `Total RCCSDTQ Energy`,
+12 iterations, `RCCSDTQ :` tags — identical. `ccsdtq_fci_acceptance.py` (the CCSDTQ==FCI gate)
+passes with the same 6.160e-08 gap. Extended suite 107/107, smoke 35/35.
+
+*The live bug is fixed:* a `cc3` run announced itself as `RCCSDTQ` twice and a `cc6` run eight
+times. Now `RCCSDT` and `RCC6`. `rcc_method_label(rank)` is declared in `rccgen.h` so the
+solver's log tags and the driver's energy label share one rule rather than duplicating a switch,
+and `rcc_method_label(4) == "RCCSDTQ"` keeps the three string-parsing consumers untouched by
+construction.
+
+*Keyword surface:* added `uccsdt_gen` / `uccsdtq_gen` and `ucc5` / `ucc6`; the registry's
+rank-4 ceiling now follows `PLANCK_CC_MAXORDER` as the RCC side does. `PLANCK_CC_METHODS` is
+derived from `PLANCK_CC_MAXORDER` and drives **both** generator invocations, so the UCC
+translation units exist at ranks 5-6 exactly when the RCC ones do. All four new keywords reach
+the registry and error on the missing build option; `ucc9` still fails as "Invalid Correlation",
+so the check discriminates.
+
+*One correction worth carrying:* the emitter's rank-genericity was verified with
+`ucc_independent_blocks`, which takes the **amplitude** rank (twice the excitation rank) — 6 and
+7 spin sectors at excitation ranks 5 and 6. The counts in the original scope were right; the
+call as first written down was in the wrong units.
+
+---
+
+*Original scope text follows.*
 
 **U5.3c — make the two generated CC paths one architecture (~S/M, no behavior change at
 rank 4).** Two problems, raised in review, that are the same problem seen from two sides: the

@@ -37,7 +37,7 @@ namespace HartreeFock::Correlation::CC
     // "not built" from "built but this rank is out of range".
     [[nodiscard]] bool generated_ucc_kernels_available() noexcept;
 
-    // Rank-4 alias retained for the existing run_rccsdtq call site.
+    // Rank-4 alias retained for the existing run_rccgen call site.
     std::expected<GeneratedArbitraryOrderKernels, std::string>
     make_generated_rccsdtq_kernels();
 } // namespace HartreeFock::Correlation::CC

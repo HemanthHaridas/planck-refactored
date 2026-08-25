@@ -11,8 +11,8 @@
 #include <stdexcept>
 
 #include "io/logging.h"
-// run_rccsdtq: the arbitrary-order harness, where the generated kernels are correct.
-#include "post_hf/cc/ccsdtq.h"
+// run_rccgen: the arbitrary-order harness, where the generated kernels are correct.
+#include "post_hf/cc/rccgen.h"
 #include "post_hf/cc/determinant_space.h"
 #include "post_hf/cc/diis.h"
 // rebind_physicist: generated kernels index physicist <pq|rs> (T1b).
@@ -3180,7 +3180,7 @@ namespace HartreeFock::Correlation::CC
                 "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order "
                 "harness (the representation they are emitted for).");
             calculator._scf._cc_generated_rank = 3;
-            return run_rccsdtq(calculator, shell_pairs);
+            return run_rccgen(calculator, shell_pairs);
         }
     }
 } // namespace HartreeFock::Correlation::CC

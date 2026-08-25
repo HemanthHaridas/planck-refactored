@@ -1,4 +1,4 @@
-#include "post_hf/cc/ccsdtq.h"
+#include "post_hf/cc/rccgen.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -156,12 +156,29 @@ namespace HartreeFock::Correlation::CC
         }
     } // namespace
 
-    std::expected<void, std::string> run_rccsdtq(
+    std::string rcc_method_label(int rank)
+    {
+        switch (rank)
+        {
+        case 2:
+            return "RCCSD";
+        case 3:
+            return "RCCSDT";
+        case 4:
+            return "RCCSDTQ";
+        default:
+            return std::format("RCC{}", rank);
+        }
+    }
+
+    std::expected<void, std::string> run_rccgen(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs)
     {
         if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
-            return std::unexpected("run_rccsdtq: RCCSDTQ is currently available only for single-point calculations.");
+            return std::unexpected(
+                "run_rccgen: the generated RCC path is currently available only for "
+                "single-point calculations.");
 
         calculator._have_ccsd_reference_energy = false;
         calculator._ccsd_reference_correlation_energy = 0.0;
@@ -176,28 +193,33 @@ namespace HartreeFock::Correlation::CC
         const int rank = calculator._scf._cc_generated_rank;
         if (rank < generated_floor)
             return std::unexpected(std::format(
-                "run_rccsdtq: generated arbitrary-order RCC path requires rank >= {}, got {}.",
+                "run_rccgen: generated arbitrary-order RCC path requires rank >= {}, got {}.",
                 generated_floor, rank));
+
+        const std::string method = rcc_method_label(rank);
+        const std::string tag = method + " :";
 
         const bool warm_start = calculator._scf._cc_warm_start;
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
-            "RCCSDTQ :",
+            tag,
             std::format(
                 "Running generated arbitrary-order RCC tensor kernels (rank={}, warm_start={}).",
                 rank, warm_start ? "on" : "off"));
 
         auto solve_res = solve_generated_rcc(
-            calculator, shell_pairs, rank, warm_start, /*try_restart=*/true, "RCCSDTQ[TENSOR] :");
+            calculator, shell_pairs, rank, warm_start, /*try_restart=*/true,
+            method + "[TENSOR] :");
         if (!solve_res)
-            return std::unexpected("run_rccsdtq: " + solve_res.error());
+            return std::unexpected("run_rccgen: " + solve_res.error());
 
         HartreeFock::Logger::blank();
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
-            "RCCSDTQ :",
+            tag,
             std::format(
-                "Generated RCCSDTQ iterations ran {} steps, E_corr={:.10f}, dE={:+.3e}, rms(res)={:.3e}, rms(step)={:.3e}.",
+                "Generated {} iterations ran {} steps, E_corr={:.10f}, dE={:+.3e}, rms(res)={:.3e}, rms(step)={:.3e}.",
+                method,
                 solve_res->iterations,
                 solve_res->correlation_energy,
                 solve_res->energy_change,
@@ -208,7 +230,8 @@ namespace HartreeFock::Correlation::CC
         {
             return std::unexpected(
                 std::format(
-                    "Generated RCCSDTQ kernels did not converge within {} iterations (last dE={:+.3e}, rms(res)={:.3e}).",
+                    "Generated {} kernels did not converge within {} iterations (last dE={:+.3e}, rms(res)={:.3e}).",
+                    method,
                     solve_res->iterations,
                     solve_res->energy_change,
                     solve_res->metrics.residual_rms));
@@ -234,11 +257,11 @@ namespace HartreeFock::Correlation::CC
             auto saved = save_cc_amplitudes(ccamp_path, solve_res->state.amplitudes, meta);
             if (!saved)
                 HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Warning, "RCCSDTQ :",
+                    HartreeFock::LogLevel::Warning, tag,
                     std::format("Could not write CC amplitude checkpoint: {}", saved.error()));
             else
                 HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Info, "RCCSDTQ :",
+                    HartreeFock::LogLevel::Info, tag,
                     std::format("Wrote CC amplitude checkpoint '{}' (rank {}).", ccamp_path, rank));
         }
 

@@ -1372,9 +1372,12 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         }
         else if (calculator._correlation == HartreeFock::PostHF::RCCSDTQ)
         {
-            corr_tag = "RCCSDTQ :";
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag, "Preparing generated restricted CCSDTQ infrastructure");
-            corr_res = HartreeFock::Correlation::CC::run_rccsdtq(calculator, shellpairs);
+            // U5.3c: rank-derived; rank 4 still reads "RCCSDTQ :".
+            corr_tag = HartreeFock::Correlation::CC::rcc_method_label(
+                           calculator._scf._cc_generated_rank) + " :";
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag,
+                                         "Preparing generated restricted CC infrastructure");
+            corr_res = HartreeFock::Correlation::CC::run_rccgen(calculator, shellpairs);
         }
         else if (calculator._correlation == HartreeFock::PostHF::UCCGEN)
         {
@@ -1467,7 +1470,13 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                         : (calculator._correlation == HartreeFock::PostHF::UCCSD)   ? "UCCSD"
                         : (calculator._correlation == HartreeFock::PostHF::RCCSDT)  ? "RCCSDT"
                         : (calculator._correlation == HartreeFock::PostHF::UCCSDT)  ? "UCCSDT"
-                        : (calculator._correlation == HartreeFock::PostHF::RCCSDTQ) ? "RCCSDTQ"
+                        // U5.3c: rank-derived, so a cc5/cc6 run stops announcing
+                        // itself as RCCSDTQ. `rcc_method_label(4)` is "RCCSDTQ",
+                        // so rank 4 -- the only rank the three string-parsing
+                        // consumers exercise -- is unchanged.
+                        : (calculator._correlation == HartreeFock::PostHF::RCCSDTQ)
+                            ? HartreeFock::Correlation::CC::rcc_method_label(
+                                  calculator._scf._cc_generated_rank)
                         : (calculator._correlation == HartreeFock::PostHF::FCI)     ? "FCI"
                                                                                     : "Correlated";
                     HartreeFock::Logger::correlation_energy(
