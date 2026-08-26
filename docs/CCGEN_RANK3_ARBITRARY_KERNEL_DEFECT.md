@@ -96,14 +96,51 @@ that hole.
 
 Each step keeps the default build byte-identical; rank 4 there is the reference that must not move.
 
-### R1 — a gate that fails today (~S, BLOCKING)
+### R1 — LANDED (2026-08-26): the generated path is gated, pinned to its OBSERVED behaviour
 
-Before any fix, add a case that runs the **generated** rank-3 path and asserts the energy. Without
-it the next fix has the same blind spot as the last one.
+`ch4_rccsdt_generated_sto3g` runs the same input as `ch4_rccsdt_sto3g` but forces the generated
+path and asserts what it actually does.
 
-*Verify:* the new case is RED on the current tree, and its failure names the energy rather than a
-missing log string. Then correct `Completion.md:311`, which currently states a validated result
-that does not reproduce.
+It pins the **defect**, not the fix:
+
+```
+expected_exit_code: 1
+contains:
+  "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order harness"
+  "Running generated arbitrary-order RCC tensor kernels (rank=3"
+  "did not converge within 100 iterations"
+  "E_corr=-0.0565650696"
+```
+
+Pinning the observed value rather than the correct one is deliberate. A gate asserting
+`-39.8058445240` would fail today for three different reasons at once — wrong exit code, missing
+`CCSDT Energy` line, wrong number — and could not distinguish "converged to the wrong answer" from
+"did not converge". This one says exactly which behaviour is present, so a change in *any* of
+those is visible.
+
+**When the defect is fixed this case must FAIL**, and the JSON says so in a `known_failure` field:
+flip `expected_exit_code` to 0, drop the non-convergence strings, and assert
+`rccsdt_total_energy == -39.8058445240` to 1e-07. That inversion is the signal R1 exists to
+provide.
+
+Two mechanics were needed:
+
+- **Per-case `env`** (`run_regressions.py`). The generated path is reachable only via
+  `PLANCK_RCCSDT_BACKEND=optimized`; there is no input keyword. `subprocess.run` now takes
+  `env={**os.environ, **case["env"]}` when a case declares one, `None` otherwise — so every
+  existing case is unaffected (verified: `water_rccsdt_sto3g` still passes).
+- **`requires_build_option: PLANCK_CC_ARBITRARY_LOWER_RANKS`**, reusing the mechanism the UCC
+  cases added. In a default build it reports
+  `[SKIP] ch4_rccsdt_generated_sto3g (needs -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON)` rather than
+  failing.
+
+**Why the sibling case could not be extended instead:** `ch4_rccsdt_sto3g` asserts
+`kernels=hand-optimized`, and that assertion is correct for the hand-written path it guards. The
+two need different `contains` and different exit codes, so they are two cases over one input.
+
+*Verify:* the energy in `contains` is the value measured in W4.2a, and the run must log the
+routing line — a gate that passed without it would be pinning the hand-written path again, which
+is the exact failure this case exists to prevent.
 
 ### R2 — stop rank 3 from breaking rank 4 (~S)
 

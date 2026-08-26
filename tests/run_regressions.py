@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -299,12 +300,19 @@ def run_case(
         )
 
     try:
+        # A case may declare `env`: extra environment variables for this run only.
+        # Needed where a code path is reachable only by env override and has no
+        # input keyword -- PLANCK_RCCSDT_BACKEND being the case in point. Layered
+        # over the inherited environment so the basis path and toolchain survive.
+        case_env = case.get("env")
+        run_env = {**os.environ, **case_env} if case_env else None
         proc = subprocess.run(
             build_command(executable, input_path),
             cwd=repo_root,
             text=True,
             capture_output=True,
             timeout=timeout_s,
+            env=run_env,
         )
     except subprocess.TimeoutExpired as exc:
         duration_s = time.perf_counter() - start

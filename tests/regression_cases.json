@@ -1595,6 +1595,27 @@
       ]
     },
     {
+      "id": "ch4_rccsdt_generated_sto3g",
+      "input": "tests/inputs/regression/post_hf/ch4_rccsdt_sto3g.hfinp",
+      "tags": [
+        "extended",
+        "generated-kernel"
+      ],
+      "timeout_s": 900,
+      "requires_build_option": "PLANCK_CC_ARBITRARY_LOWER_RANKS",
+      "env": {
+        "PLANCK_RCCSDT_BACKEND": "optimized"
+      },
+      "expected_exit_code": 1,
+      "contains": [
+        "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order harness",
+        "Running generated arbitrary-order RCC tensor kernels (rank=3",
+        "did not converge within 100 iterations",
+        "E_corr=-0.0565650696"
+      ],
+      "known_failure": "R1 gate for docs/CCGEN_RANK3_ARBITRARY_KERNEL_DEFECT.md. The generated rank-3 kernel does NOT converge: it settles at E_corr=-0.0565650696 (total -39.7832978967) against the hand-written -0.0791116825 (total -39.8058445240), a 2.26e-02 gap, and hits the 100-iteration cap. This case pins that OBSERVED behaviour so the defect is gated rather than invisible -- ch4_rccsdt_sto3g asserts kernels=hand-optimized and has been green throughout while never running the generated kernel. When the defect is fixed THIS CASE MUST FAIL: flip expected_exit_code to 0, drop the non-convergence strings, and assert rccsdt_total_energy == -39.8058445240 to 1e-07."
+    },
+    {
       "id": "b_uccsd_sto3g",
       "input": "tests/inputs/regression/post_hf/b_uccsd_sto3g.hfinp",
       "tags": [
