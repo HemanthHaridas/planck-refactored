@@ -29,7 +29,7 @@ Everything is landed in `python/ccgen/optimization/factorize.py`, gated by
 > `_derived_name` builds a name from sorted factor names + output block signature, so
 > it is order-blind, and an i↔j exchange pair collapses onto one operator — but
 > neither predicate covers all the disagreements, so the mechanism is not yet fully
-> characterized. See `docs/CCGEN_DRESSING_VS_PRODUCTION_CODES_SCOPE.md` (D0).
+> characterized. See `docs/CCGEN_TWO_DRESSING_ROUTES.md` (D0).
 >
 > The rank-locality answer below is about which operators *appear*, and is unaffected.
 > What is unproven is that **hoisting them preserves the residual's value**.

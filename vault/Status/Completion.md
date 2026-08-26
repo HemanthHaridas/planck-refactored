@@ -173,7 +173,7 @@ historical design context, but they are no longer the source of truth for
   do not compose") is not what the second route demonstrates. The factorizer has
   **no numeric gate** — its 47 tests compare factor `Counter`s, which are blind
   to index order by construction. Full record and the three discarded
-  hypotheses: `docs/CCGEN_DRESSING_VS_PRODUCTION_CODES_SCOPE.md`.
+  hypotheses: `docs/CCGEN_TWO_DRESSING_ROUTES.md`.
 
   An earlier version of this entry claimed a verified rank-3 equivalence
   (`h2` 12/12, `lih` 16/16, `bh3` 26/26). That comparison never ran the

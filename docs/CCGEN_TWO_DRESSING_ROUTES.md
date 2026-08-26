@@ -1,197 +1,85 @@
-# Why does the dressed-operator route work in CFOUR and MRCC but fail in ccgen?
+# Why did ccgen's dressed-operator route fail when CFOUR and MRCC ship one?
 
-**Research scope. Not started.** Opened because the premise of ccgen's retirement decision is in
-tension with the field: CFOUR and MRCC both ship dressed intermediates as their **only** production
-route, at high rank, for years. So "dressing and spin adaptation do not compose" cannot be true as a
-general statement about coupled cluster — which means ccgen's retirement rests on something narrower
-than it currently claims, and the doc should say what.
+**Answer: ccgen has two dressing routes, and production was wired to the weaker one.**
 
-This is a **research** question, not a defect report. The retirement itself may well stand; what is
-unclear is *why it had to*.
+The route that was retired — matching six hand-seeded spin-orbital fingerprints — is genuinely
+broken and stays retired. The other route, deriving operators from each term's own contraction
+tree, was built a week later, already recognizes five of the same six operators *on spatial
+terms*, and turns out to be worth 2-7x. It was never wired to production, and nothing recorded a
+decision not to.
 
-## What ccgen measured
+So the question's premise — that ccgen tried what CFOUR/MRCC do and it did not work — is wrong.
+ccgen built it, gated it structurally, and left it disconnected.
 
-Recorded in `docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`, and re-verified while opening this scope:
+What follows is the evidence, the defect that made the derivation route unusable until it was
+fixed, and what is genuinely still unknown.
 
-| path | operator-free terms with changed coefficients | compensated? |
-|---|---|---|
-| GCC (`dress` only) | 2 | **yes** — valid rewrite |
-| `adapt → dress` | 8 | **no** — ‖diff‖ = 8.06e+02 vs ‖R‖ = 983.79 |
-| `dress → adapt` (production) | — | **no** — Be/STO-3G CCSDTQ 52 % short |
+---
 
-End-to-end: dressed `E_corr` = −0.0247182895 against an exact −0.0517746319.
+## The two routes
 
-And the structural fact underneath it, **re-measured on the current tree** (not taken from the doc):
+| route | operators from | where | status |
+|---|---|---|---|
+| **recognition** | 6 hand-seeded spin-orbital fingerprints | `dressing.py`, `dressed_equation.py` | **retired** — 52 % short on Be/STO-3G, five failed fix attempts |
+| **derivation** | each term's own contraction tree | `factorize.py` | works, value-gated, **not wired to production** |
 
-```
-GCC      v index-space patterns:  9   [oooo ooov oovv ovoo ovov ovvv vvoo vvov vvvv]
-SPATIAL  v index-space patterns: 13   [... ovvo voov vovo oovo vooo vovv ...]
-```
-
-`ovvo`, `ovov`, `voov`, `vovo` are **one object** in GCC — antisymmetry `<pq||rs>` relates them —
-and **four distinct objects** in the spatial basis, which has only the four `+1` symmetries of
-`<pq|rs>`.
-
-## The first hypothesis, and why it is WRONG
-
-The obvious explanation — *ccgen's operators are hand-seeded in the spin-orbital basis and it has no
-way to derive spatial ones* — was written into the first draft of this scope and is **refuted**.
-`seeded_operators()` does return exactly six hardcoded Stanton–Gauss spin-orbital fingerprints, but
-that is only the **recognition** route. ccgen also has a **derivation** route, and it is
-basis-agnostic. Measured on the current tree:
-
-```
-GCC      ccsd doubles -> derived_operators() -> 20 operators
-SPATIAL  ccsd doubles -> derived_operators() -> 20 operators
-identical sets: True        (W_ft2v_oovv, W_t1t1t2v_oovv, W_t1t2v_ooov, ...)
-```
-
-`factorize.py` derives operators from the **contraction structure of the terms it is given**, and
-does not care which basis they are in. So "ccgen cannot derive spatial operators" is false — it
-derives the same 20 either way, and the capability was demonstrated for GCC.
-
-**This kills the tidy version of the answer**, and it is recorded because it is the explanation a
-reader will reach for first.
-
-## The real question, restated
-
-ccgen has **two separate dressing routes** that do not share machinery:
-
-| route | operators from | where |
-|---|---|---|
-| **recognition** (retired, the 52 % failure) | 6 hand-seeded spin-orbital fingerprints | `dressing.py`, `dressed_equation.py` |
-| **derivation** (works, incl. on spatial terms) | the terms' own contraction trees | `factorize.py` |
-
-`grep` confirms the split: `dressing.py` has **zero** references to `derived_operators` or
-`contraction_tree`; `factorize.py` imports `seeded_operators` only to *avoid re-deriving* what is
+They share no machinery. `dressing.py` has zero references to `derived_operators` or
+`contraction_tree`; `factorize.py` imports `seeded_operators` only to avoid re-deriving what is
 already named.
 
-So the question is no longer "can ccgen derive spatial operators" (it can) but:
+### The recognition route was first, and the derivation route was deferred by its own author
 
-**Why was the RECOGNITION route the one wired to production, when the DERIVATION route is the one
-that survives spin adaptation — and is what CFOUR/MRCC's factorization actually resembles?**
-
-That reframes the retirement. What was retired is *recognition against hand-seeded spin-orbital
-fingerprints*. The doc generalizes that into "dressing and spin adaptation do not compose", which
-the derivation route contradicts on the same input.
-
-## What to establish
-
-### D0 — ANSWERED: the derivation route does NOT preserve value either, on GCC or spatial
-
-Run with the existing gate's fixture and evaluator, `savings_fraction=1.0` (every derived operator
-materialized):
-
-| manifold | doubles terms | rewritten | **disagree** | ‖diff‖ / ‖R‖ |
-|---|---|---|---|---|
-| **GCC** | 66 | 39 | **23** | 3.73e-01 |
-| **spatial** | 113 | 61 | **46** | 4.32e-01 |
-
-**The GCC number is the important one.** The derivation route is claimed to work there, and it is
-the control this probe needs: a value check that fails on the known-good case is measuring the
-probe, not the route. It fails on GCC — so this is not a spin-adaptation phenomenon at all, and the
-scope's framing ("derivation survives adaptation where recognition does not") is **refuted**.
-
-**Both routes fail value preservation, for different reasons**, which collapses the tidy
-"wire the other route" answer:
-
-| route | failure |
+| file | created |
 |---|---|
-| recognition | spin-orbital fingerprints matched against spatial terms — ‖diff‖ = 8.06e+02 |
-| derivation | rewrite does not reproduce the source term — ‖diff‖ = 2.06e+02 **on GCC** |
+| `dressing.py`, `dressed_equation.py` | 2026-07-27 |
+| `factorize.py` | 2026-08-04 |
 
-#### What is established about the mechanism, and what is not
+`factorize.py`'s commit (`f68f7e2`) says it "derives the dressed operators as the reused
+sub-contractions those trees expose", reports "5 of 6 CCSD reused", and ships
+`emit_factorized_translation_unit()` producing a TU that compiles. In the same message:
+**"CCSD dressing stays D7.3's job"** — D7.3 being the recognition route.
 
-Traced by hand on `doubles[17]` / `doubles[18]`, an **i↔j exchange pair** (coefficients −1 and +1):
+`emit_factorized_translation_unit` has **no production caller** to this day. The generator script
+exposes only `--dress-operators`, which routes to recognition. The derivation route's emit bridge
+was built and left unconnected on the strength of that one deferral.
 
-```
-t17: t1(b,k) t1(c,i) v(j,c,k,a)
-t18: t1(b,k) t1(c,j) v(i,c,k,a)
-both rewrite to:  t1(b,k) · W_t1v_ooov(i,j,k,a)      <- identical expression
-```
+This is the same shape as the rank-3 defect, where the kernel was correct and the harness around
+it was not.
 
-`_derived_name` (`factorize.py:373`) builds the name from **sorted factor names + output block
-signature** and discards slot order. Verified consequence: each name stores exactly one definition
-(0 names with multiple definitions), so a second contraction sharing a name is evaluated with the
-first one's definition.
+## What the derivation route actually does
 
-A second, related shape on `doubles[19]`: the spec's inner `v` has index-space pattern `vvoo` where
-the source term's has `ovov`. The name encodes the **output** signature (`ooov`), not the inner
-contraction's pattern, so specs and terms with different inner topology share a name.
+Measured on the current tree via `emittable_operators`:
 
-**But neither shape explains all of it, and this is stated rather than smoothed over:**
+| basis | reuse sites | derived sites | seeded operators recognized |
+|---|---|---|---|
+| GCC | 36 | 54 | Fme, Fmi, Fae, Wmnij, Wmbej |
+| **spatial** | **61** | 87 | the same five |
+| UCC | **0** | 370 | **none** — see the UCC section |
 
-| test | GCC | spatial |
-|---|---|---|
-| disagreeing terms | 23 | 46 |
-| ...in a name-collision group (>1 source term → same expression) | 4 | 40 |
-| ...whose inner `v` space-pattern differs from the spec's | 11 | 13 |
+It recognizes five of the six Stanton-Gauss operators **on spatial terms**, deriving them from
+contraction topology, so it never needed a spatial fingerprint set.
 
-Neither predicate covers the disagreements, and they are not nested. **19 of 23 GCC disagreements
-are not collisions**, and 12 of 23 have a matching `v` pattern. So "the operator name is
-order-blind" is a real defect with two demonstrated instances, **not** a complete characterization.
-Recording it as such: the next step is per-term diffing of the remaining cases, not another
-plausible-sounding hypothesis — this investigation has already discarded three.
+That contradicts the retirement's stated mechanism. `CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`
+argues a spatial `Wmbej` "is not a relabeled GCC `Wmbej`; it is several different operators", and
+concludes "deriving it is research, not porting". The antisymmetry claim is right — spatial has
+13 `v` index-space patterns against 9 in GCC — but the conclusion does not follow: deduped, the
+two bases give 18 and 19 operators, and the derivation never needed the antisymmetry.
 
-#### Why this was never caught
+**The retirement's decision still stands. Its stated reason does not.** Both routes failed value
+preservation, for different reasons, and the derivation route failed on GCC where there is no
+spin adaptation to blame.
 
-The derivation route has **no numeric validation at all**. Its gates check structure only:
+## The defect that made the derivation route unusable
 
-- `tree_preserves_term` — each factor is one leaf, each summed index consumed once
-- `test_budgeted_rewrite_is_exact` — the rewrite re-expands to the same factor **`Counter`**
+Run with the gate's fixture at `savings_fraction=1.0`, 23 of 66 GCC `ccsd` doubles terms did not
+reproduce their source (‖diff‖/‖R‖ = 3.73e-01). **The GCC number is the important one** — a value
+check failing on the known-good basis is measuring the probe, not the route.
 
-A `Counter` of factor names is blind to index order by construction, so it cannot see any of the
-above. This is the same defect shape the rest of this session kept finding: a structural gate
-standing in for a value gate, and the value gate never written.
+Two mechanisms, both now fixed.
 
-`docs/CCGEN_HIGHER_OPERATOR_REUSE.md` describes the factorizer as landed and gated — true
-structurally, and that doc should say the numeric gate is absent.
-
-#### The mechanism, narrowed by one decisive measurement
-
-Term `doubles[44]` fits neither earlier predicate (no collision, no `v`-pattern mismatch), and
-evaluating it **both ways** isolates the cause:
-
-```
-||orig - manifold-representative spec|| = 4.64            <- wrong
-||orig - per-term identify_node spec  || = 1.58e-13       <- exact
-```
-
-Same operator name, same call site, two definitions:
-
-| source | slots | definition |
-|---|---|---|
-| `manifold_operators` (one representative per name) | `[b, c]` | `t2(b,d,k,l) · v(c,d,k,l)` |
-| `identify_node` on this term's own tree node | `[a, d]` | `t2(a,c,k,l) · v(c,d,k,l)` |
-
-They are alpha-variants of the same contraction, but **not interchangeable at an arbitrary call
-site**: binding the representative positionally to this term's indices does not reproduce it.
-
-**So the defect is not "the name is order-blind" as such.** It is that a *single manifold-level
-representative is reused for every call site of that name*, while the rewrite was produced from
-each term's own tree node. The per-term spec is exact — the factorizer's tree really does
-reproduce its term, which is what `tree_preserves_term` asserts and why the structural gate passes.
-What is unproven is the step the structural gate never checks: that **one shared definition can
-serve all call sites of a name**.
-
-That reframes the earlier two shapes as *symptoms* of this, not independent mechanisms.
-
-#### The `KeyError` was not a probe gap — it is a second, sharper defect
-
-The per-term probe raised `KeyError: 'k'`, recorded initially as a probe gap. It is not.
-**A derived spec's definition can reference an index that is neither one of its slots nor one of its
-declared summed indices.** Measured:
-
-| manifold | spec definitions with an unbound index |
-|---|---|
-| GCC | **18 / 40** |
-| spatial | **25 / 65** |
-| manifold-level representatives | 0 |
-
-Affected operators are the same four in both bases: `W_t1t1v_oo`, `W_t1t1v_ooov`,
-`W_t1t1t1v_ooov`, `W_t1t2v_ooov`.
-
-`doubles[45]` shows the mechanism exactly:
+**Incomplete summed lists.** `node_to_term` recorded only `node.summed` — the indices consumed at
+*that* tree step — while its factors are the whole subtree's leaves, so inner contraction indices
+were bound to nothing. `doubles[45]`:
 
 ```
 parent term : t1(a,k) t1(b,l) t1(c,j) v(i,c,k,l)     free i,j,a,b   summed k,l,c
@@ -200,100 +88,147 @@ child node  : t1(c,j) t1(a,k) v(i,c,k,l)             free i,j,l,a   summed c
                             k appears TWICE and is in NEITHER list
 ```
 
-`k` is summed in the parent. The child node inherits factors that contract over it, but
-`node_to_term` does not promote `k` to the child's own summed list. The derived spec is therefore a
-contraction with a free-floating repeated index — and the `build_W` emitted for it has no loop over
-`k` at all. Whatever it computes, it is not the contraction the parent term needs.
+The emitted `build_W` had no loop over `k`. Fixed by completing the summation (`used − free`) at
+`node_to_term`, the single upstream source for `identify_node` / `node_key` / `block_signature` /
+`_derived_name`. Measured 20/52 → 0/50 malformed specs.
 
-**This is upstream of the manifold-representative issue** and explains why that one resisted
-diagnosis: the per-term spec, which evaluated `doubles[44]` exactly, is itself malformed on 18 of 40
-GCC definitions. The two are not competing hypotheses — a node whose summed list is incomplete
-cannot have a well-defined single representative either.
+**One name, several contractions.** `_derived_name` built names from sorted factor names plus a
+block signature, discarding slot order. `W_t2v_ooov(i,j,k,a)` denoted both `t2(a,c,j,l) v(i,c,k,l)`
+and `t2(c,d,i,j) v(c,d,k,a)` — different contractions, one `build_W`. Fixed by folding the
+contraction shape into the name. Three properties of that shape key were each isolated by a
+failing case:
 
-**`tree_preserves_term(doubles[45])` returns `True`.** The structural gate checks, at the *term*
-level, that each factor is one leaf and each summed index is consumed once. It never asks whether
-each *node's* own summed list is complete, so an incomplete one passes. That is the precise reason a
-47-test structural suite coexists with a route that does not preserve value.
+| property | without it |
+|---|---|
+| slot **position**, not merely free/summed | 21 → 13 disagreements |
+| positions, not index **names** | 13 → 6 |
+| same-tensor copies kept distinct | 6 → **0** |
 
-**Still open:** whether fixing `node_to_term` to promote inherited contracted indices makes the
-per-term specs exact manifold-wide. That is a code change to the factorizer, not another probe, and
-it should be gated by the numeric check this scope built rather than by the `Counter` comparison
-that missed it.
+### Why it was never caught
 
-#### Consequence for the retirement
+The route had **no numeric validation at all**. `tree_preserves_term` checks leaf and index
+bookkeeping; `test_budgeted_rewrite_is_exact` compares a factor `Counter`, blind to index order
+by construction. `tree_preserves_term(doubles[45])` returns `True` on a malformed node, because
+it asks the question at term level and the defect lives at node level.
 
-The retirement decision is **unaffected** — if anything it is better supported, since the alternative
-route it did not consider also fails. What needs correcting is the *reasoning*:
-"dressing and spin adaptation do not compose" is still not demonstrated, because the second route
-fails identically on GCC, where there is no adaptation to blame.
+That is the recurring failure in this work: **a structural gate standing in for a value gate**,
+which is also what let the 52 % recognition defect survive five fix attempts that each passed
+their gate and made the energy worse.
 
-### D1 — what CFOUR and MRCC actually do (~M, literature)
+## What it is worth
 
-Still worth answering, but its role has changed: it is no longer the blocking question, it is the
-**calibration**.
+Operator sharing — materialize once against rebuild at every reference site, with terms already
+tree-factored so this isolates dressing from ordinary binary factorization:
 
-- MRCC is string-based and automated at arbitrary rank. Does its factorization resemble ccgen's
-  *derivation* route (operators falling out of contraction-order optimization) rather than a fixed
-  operator list?
-- CFOUR's CCSD intermediates are the classic Stanton–Gauss set — **in which basis are its
-  production RHF kernels' intermediates defined**, and are they hand-derived per method?
+| manifold | before merging | **after** | retirement's estimate |
+|---|---|---|---|
+| GCC `ccsd` doubles | 1.97x | **2.58x** | 1.20-1.50x "actual" |
+| spatial `ccsd` doubles | 1.21x | **2.38x** | 1.9-2.8x "expected" |
+| `ccsdt` doubles | 2.00x | **2.04x** | — |
+| `ccsdt` triples | 3.26x | **7.11x** | — |
 
-*Verify:* a written answer per code with a citation, classifying each as
+**The payoff grows with rank.** The retirement measured only `ccsd`, observed the saving shrinks
+as `n_vir/n_occ` grows, and concluded it "pays least in the production regime". By rank it pays
+*most* there, and the production target is rank 3+.
+
+The merging referred to above is a separate finding with its own answer
+(`CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`): the shape key that fixed correctness also over-split
+operators that are one contraction up to a transpose. Merging them back is exact, costs nothing
+at the call site (operators are read by index inside the loop nest; no `W` is ever copied), and
+roughly doubles the spatial payoff.
+
+**Every figure here is a FLOP model** (`operator_savings` / `build_cost`). It does not price the
+emitter's contraction order, which `CCGEN_KERNEL_SCALING_SCOPE.md` measured as a scaling defect
+(21.8x → 50.1x, no plateau) that no current cost model predicts. These are ratios between
+comparable configurations, not predicted wall-clock.
+
+## The route is now gated
+
+`test_factorize_value_preservation` — the instrument the route never had:
+
+| | terms rewritten | disagreements |
+|---|---|---|
+| GCC `ccsd` singles+doubles | 34 | **0** |
+| spatial `ccsd` singles+doubles | 25 | **0** |
+| `ccsdt` triples | 345 | **0** |
+| `ccsdtq` quadruples | 2536 | **0** |
+
+Both `canonical_fock` settings, each basis on its matching fixture. Rank 4 is asserted separately
+because this codebase has twice shown rank 3 does not predict it.
+
+**Fixture trap, found while gating this.** `random_tensors` antisymmetrizes `t2` and `v` — correct
+for `<pq||rs>`, wrong for spatial, where neither is antisymmetric. Running a spatial check on it
+lets a result pass for a property of the fixture. Use `ucc_closed_shell_tensors(...)[1]` for
+spatial. Audited repo-wide: three other files evaluate spin-adapted terms through
+`random_tensors`, and all three are safe because they are A-vs-B comparisons of two writings of
+the same equation set — both sides see identical tensors, so an unphysical fixture cancels. The
+rule is that a fixture must match the basis when a check asserts a property *of the tensors* or
+compares against an independent oracle.
+
+## What this means for production
+
+**Wire the derivation route.** It is value-gated at ranks 2-4, it merges end to end into the
+emitted C++ (27 → 19 builders on `ccsd`, 254 → 69 at rank 4), and it is worth 2-7x. It is already
+the route `CCGEN_HIGHER_OPERATOR_REUSE.md` builds on. This is a wiring task, scoped in
+**`docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md`** (W1-W5).
+
+The gap is narrower than it sounds and wider than one flag: there are **two emitters** sharing
+exactly one parameter, and `emit_factorized_translation_unit` generates its own equations
+internally, so it cannot be handed a spin-adapted manifold. The machinery underneath has no such
+limit — it produces 31 merged operators on spatial input and 86 on UCC — so the fix is a
+signature change, not new algebra.
+
+**Leave recognition retired.** Nothing in this work touched it. It remains 52 % short on Be with
+five failed fix attempts behind it, and its seven `expectedFailure` gates stay as the tripwire —
+an unexpected pass still means someone fixed the composition.
+
+Do not read this document as un-retiring dressing. What is shown is that the *derivation* route
+works; what is not shown is that the *recognition* route is fixable.
+
+## What is still unknown
+
+**How CFOUR and MRCC actually factorize their intermediates.** This is the original question and
+it is **not answered here** — it needs literature the repo does not contain. What the repo does
+carry is a citation about *enumeration*, not factorization: MRCC/CFOUR enumerate diagram
+topologies canonical by construction rather than deduplicating algebraic terms (Kállay & Surján,
+JCP 113, 1359 (2000); JCP 115, 2945 (2001), cited in `ccgen/diagram.py`). Whether their
+intermediates are hand-derived per method or fall out of contraction-order optimization is the
+open half.
+
+It matters less than it did. The answer above stands on ccgen's own measurements, and the
+practical conclusion — wire the route that works — does not depend on what the other codes do.
+If someone does establish it, the useful form is a per-code classification:
 **fixed-operator-recognition** or **structure-derived**. If both are structure-derived, that is
-independent evidence that ccgen wired the wrong one of its own two routes.
+independent evidence ccgen wired the wrong one of its own two routes.
 
-### D2 — why was recognition the production route? (~S, archaeology)
+**Whether the operators are correct for UCC.** Recognition finds **zero** operators on UCC terms,
+because UCC factors are spin-tagged (`v_abab`, `t2_aaaa`) while the fingerprints key on bare
+`('t1','v')`. Making the match tag-blind recovers 152 reuse sites and is **unsound**: it collapses
+12 distinct spin-tagged contractions onto one `Wmbej`, and `t1_aa·v_aaaa` and `t1_aa·v_abab` are
+different arrays under UHF. Keyed properly the five names become 30 operator instances. Scoped as
+O6 in `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`. **Do not attempt tag-blind matching** — it is
+measured, it looks like it works, and it is the 52 % defect one level down.
 
-`grep` shows the two routes never shared machinery. `factorize.py` imports `seeded_operators` only
-to avoid re-deriving already-named operators, and `dressing.py` has no reference to the derivation
-machinery at all.
-
-Read the history: was recognition wired first and derivation added later for a different purpose
-(the `HIGHER_OPERATOR_REUSE` work), leaving the production path pointed at the older route by
-inertia rather than by decision?
-
-*Verify:* a one-paragraph answer with commit references. If it was inertia, that is the actual root
-cause of the 52 %, and it is a wiring defect rather than a theory result — the same shape as the
-rank-3 defect, where the kernel was correct and the harness around it was not.
-
-### D3 — re-examine the cost case (~S, only if D0 is positive)
-
-The retirement was justified on payoff as well as correctness: ~1.2–1.5× measured on spin-orbital,
-~1.9–2.8× bounded spatial. Both numbers assumed the operators had to be *derived as research*. If
-D0 shows the derivation route already produces working spatial operators, the cost side collapses to
-"wire the other route".
-
-The benefit side may also have been understated: `CCGEN_KERNEL_SCALING_SCOPE.md` has since measured
-the generated-vs-hand gap as a **scaling** defect (21.8× → 50.1×, no plateau) attributed to
-contraction order — which is exactly what a factorizer controls.
-
-*Verify:* payoff re-estimated with `contraction_tree_cost` against the *scaling* baseline, and an
-explicit statement of whether the retirement still holds.
-
-## What NOT to do
-
-- **Do not reopen the dressed route on the strength of this scope alone.** It is retired by a
-  recorded decision with five failed fix attempts behind it. D0 is a literature question; changing
-  the decision needs D1's numeric gate, not an argument.
-- **Do not confuse "CFOUR does it" with "ccgen can".** CFOUR's intermediates are hand-derived and
-  hand-coded for one method; ccgen generates at arbitrary rank. A spatial operator set that must be
-  hand-derived per rank is not obviously a win for a *generator*, and that asymmetry is part of the
-  answer.
-- **Do not treat the 52 % number as evidence about CFOUR/MRCC.** It measures ccgen's specific
-  composition, on ccgen's spin-orbital seeds.
-- The four `test_dressed_*` gates and three `test_intermediate_layout_agreement` gates are
-  `expectedFailure` as of this work — they encode the *current* defect. If D1 ever lands, they flip
-  to unexpected-pass, which is the intended signal.
+**Six selection-model gates need re-deriving.** They assert properties of the savings
+distribution, which the shape key changed. They are not correctness failures — the value gate is
+0/0 throughout — but three of the four distinct kinds need their *claim* restated rather than
+their constant loosened. Detail in `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` (O4.6).
 
 ## Key code locations
 
 | what | where |
 |---|---|
-| the six hand-seeded spin-orbital operators | `seeded_operators()`, `python/ccgen/optimization/dressing.py` |
-| recognition + assembly | `dressing.py`, `dressed_equation.py` |
-| the retirement answer this questions | `docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md` |
-| the scaling defect that may change the cost case | `docs/CCGEN_KERNEL_SCALING_SCOPE.md` |
-| xfail gates that would flip on success | `test_dressed_numeric_oracle.py`, `test_dressed_spatial_equivalence.py`, `test_intermediate_layout_agreement.py` |
+| derivation route | `manifold_operators`, `emittable_operators`, `identify_node`, `python/ccgen/optimization/factorize.py` |
+| its emit bridge (no production caller) | `emit_factorized_translation_unit`, same file |
+| the shape key | `_contraction_shape`, `_shape_tag`, same file |
+| transpose-equivalence and merging | `python/ccgen/optimization/operator_identity.py` |
+| **the value gate** | `python/ccgen/tests/test_factorize_value_preservation.py` |
+| recognition route (retired) | `seeded_operators()`, `dressing.py`; `dressed_equation.py` |
+| the bridge between the routes | `operator_to_intermediate_spec` (`dressing.py`), `seeded_fingerprints` (`factorize.py`) |
+| basis-matched fixtures | `random_tensors` (GCC) / `ucc_closed_shell_tensors(...)[1]` (spatial), `residual_eval.py` |
+| the retirement this questions | `docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md` |
+| operator granularity, UCC carry-over | `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` |
+| unmodelled cost | `docs/CCGEN_KERNEL_SCALING_SCOPE.md` |
 
 ---
 
