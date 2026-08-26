@@ -8,7 +8,7 @@
 %begin_scf
     scf_type    rhf
     correlation ccsdt
-    use_diis    .true.
+    use_diis    .false.
     diis_dim    8
     save_checkpoint .false.
     engine      os

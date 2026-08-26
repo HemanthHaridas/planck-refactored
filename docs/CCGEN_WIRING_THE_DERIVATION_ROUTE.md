@@ -288,6 +288,25 @@ could mean the derivation route is wrong, **or** that generated-undressed alread
 hand-written. Establishing the middle row first separates those two, and is cheaper than
 debugging them together.
 
+##### W4.2a — DONE (2026-08-26): the generated path does not converge; W4 is BLOCKED
+
+Ran with `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` and `PLANCK_RCCSDT_BACKEND=optimized`:
+
+| path | E_corr | outcome |
+|---|---|---|
+| hand-written tensor (W4.1 baseline) | −0.0791116825 | converged, 24 iters |
+| generated, arbitrary harness | **−0.0565650696** | **never converges** |
+
+Gap 2.26e-02 against a 1e-07 tolerance. Not DIIS (both settings reach it), not the iteration cap
+(`E_corr` is flat from iteration 45 while only the residual decays), and **not a regression** —
+commit `1986d0c`, which claimed this path works, reproduces the failure bit-identically.
+
+Rank 2 and rank 4 both work through the same harness, so the defect is local to the rank-3 kernel.
+Full record and the fix ladder: **`docs/CCGEN_RANK3_ARBITRARY_KERNEL_DEFECT.md`**.
+
+**W4.2b must not run until that is fixed** — dressing cannot be evaluated against a baseline path
+that does not converge.
+
 ##### W4.2 — split by W4.1 into two rebuilds, because there are two questions
 
 **W4.2a — reconfigure with `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` and rerun, undressed.**

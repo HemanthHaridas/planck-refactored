@@ -308,8 +308,17 @@ historical design context, but they are no longer the source of truth for
   `tensor_backend` converges correctly — hand r1/r2 + gen r3 gives −7.56e-05, all
   three generated gives +8.23e-05. Fixed by routing generated rank-3 to the
   arbitrary-order harness, the representation the kernels are emitted for:
-  `optimized` now lands at +1.44e-08 (5247× error reduction) and agrees with the
-  hand-written path to 1.0e-10; without
+  `optimized` was recorded as landing at +1.44e-08 (5247× error reduction), agreeing
+  with the hand-written path to 1.0e-10. **That does not reproduce (2026-08-26).**
+  Commit `1986d0c` was checked out, built with the same configuration and run on the
+  same input: `E_corr = -0.0565650696` against the hand-written `-0.0791116825`,
+  never converging within 100 iterations — **bit-identical to HEAD**, so this is not a
+  regression, the result was never reproducible. The gate that commit added,
+  `ch4_rccsdt_sto3g`, asserts `kernels=hand-optimized` and so has been green
+  throughout while never running the generated kernel it was added to protect.
+  Rank 2 and rank 4 both work through the same harness, localizing the defect to the
+  rank-3 kernel. Scoped in `docs/CCGEN_RANK3_ARBITRARY_KERNEL_DEFECT.md`; it blocks
+  W4 and therefore the derivation-route wiring. Without
   `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` it fails with an actionable message
   instead of a wrong number. The hand-written path is untouched and bitwise
   unchanged. **The rank-parity hypothesis is dead** — its premise (rank 3 is
