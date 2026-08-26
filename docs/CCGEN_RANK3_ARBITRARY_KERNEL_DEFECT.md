@@ -309,6 +309,45 @@ mis-fed. **Expect this to be the fiddly part of R4.2, not the probe.**
 < 1e-10). **If it is not, stop** — the fixture is not a fixed point and everything downstream
 measures nothing. This is the vacuity check the ladder cannot skip.
 
+**THE VACUITY CHECK FAILED (2026-08-26), and R4.2 is blocked on it.** At the amplitudes
+`ccgen_iterate_amps` returns for Be/STO-3G:
+
+| manifold | max abs residual |
+|---|---|
+| singles | 1.03e-15 |
+| **doubles** | **~9e-02** |
+| triples | 2.26e-17 |
+
+Singles and triples are at machine zero; doubles is not, by fourteen orders of magnitude.
+
+What was ruled out:
+
+- **Not the tensor set.** The solver's own closure is `{"v": v, "f": fock, **amps}`, byte-identical
+  to what the check passes.
+- **Not a step-vs-residual threshold artifact.** Convergence is tested on the step `|R/D|`, so a
+  large denominator could in principle hide a large residual — but `max|R/D| = 9.0e-02` too, so
+  the loop should not have stopped.
+- **Not non-convergence.** `E_corr` is stable to 12 digits at `maxiter` = 50, 200 and 500.
+- **Not equation-generation nondeterminism.** `generate_cc_equations("ccsdt")` gives 80 doubles /
+  417 triples terms on every call.
+
+What remains: the returned **amplitudes differ between calls** (measured doubles residual 9.7e-02,
+8.6e-02, 7.8e-02 across three runs) while the energy is stable to 12 digits. So the solve reaches a
+stationary *energy* without reaching a stationary *doubles amplitude*, and the returned `amps` are
+not a well-defined fixed point.
+
+**This matters beyond R4.2.** `ccgen_iterate_amps` is what
+`test_ccgen_ccsdt_reaches_fci_limit` — R4.1's decisive gate — is built on. That gate checks the
+energy, which is stable and correct; it never checks the residual. So R4.1's conclusion ("the
+equations are clean") rests on an energy that is right at amplitudes that are not stationary.
+**R4.1 should be re-read as "the equations reproduce FCI in energy", which is weaker than it
+sounded.**
+
+Next, before R4.2b: instrument the last iterations of `ccgen_iterate_amps` (per-manifold `|R|`
+and `|R/D|` per iteration) and find out why the doubles manifold stops moving while its residual
+is 9e-02. Either the loop's `delta` is not measuring what it should, or the doubles update is
+being computed against the wrong denominator.
+
 ###### R4.2b — an env-gated C++ probe that evaluates once (~M)
 
 `PLANCK_CC_FIXTURE_DIR=<dir>`: load the fixture, `seed_arbitrary_order_amplitudes` it into the
