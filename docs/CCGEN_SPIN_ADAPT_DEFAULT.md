@@ -164,6 +164,32 @@ single beta on the **last bra and last ket slot** — rank 2 `abab`, rank 3
 | `python/ccgen/tests/test_iterate_amps_fixed_point.py` | the fixture is a fixed point; Be's t1/t3 are inert |
 | `python/ccgen/tests/test_spatial_residual_vs_pyscf.py` | pins the **reference** side independently of C++ |
 
+## A second flag was left flipped, in a shared input
+
+Found and fixed while closing this out, and it is the same shape of mistake one
+layer down.
+
+`ch4_rccsdt_sto3g` failed on a clean tree — the **hand-written** tensor path
+diverging to `E_corr=nan` (`rms(R3)` growing 1.7e-03 → 6.1e-03 → 2.4e-02 over
+three iterations). W4.1's recorded baseline of `-39.8058445095` in 24 steps did
+not reproduce.
+
+**Cause:** commit `70a587d`, the W4.2a investigation, flipped `use_diis` to
+`.false.` in that input while testing whether DIIS mattered for the *generated*
+path, and left it flipped. The generated path is indifferent to the setting.
+**The hand-written restricted tensor CCSDT solver is not** — it diverges without
+DIIS on this system. Restoring `use_diis .true.` returns it to exactly W4.1's
+baseline: 24 steps, `-0.0791116825`.
+
+Two things worth carrying:
+
+- **The two cases share one input file.** Changing it to probe one path silently
+  broke the other. The input now carries a comment saying so, since the setting
+  reads like a default and is not one.
+- **"Not DIIS (both settings reach the same value)" was true of the generated
+  path only.** It was recorded as a general finding. When ruling a variable out,
+  record *which* path it was ruled out for.
+
 ## If a generated kernel looks wrong again
 
 1. **Check the build cache first** — `grep '^PLANCK_CC' <build>/CMakeCache.txt`,
@@ -184,6 +210,11 @@ cache.
 produce `-14.4036550465` — a 6.2e-08 gap that passes the 1e-07 tolerance. It is
 pre-existing and unrelated to the flag (both configurations give the same
 value), but the gate is one tightening away from failing.
+
+**Also worth knowing:** the hand-written restricted tensor CCSDT solver needs
+DIIS to converge on CH4 (see above). That is a real fragility in that solver, not
+just an input setting — bare Jacobi diverges. The generated path converges either
+way. Nobody has investigated why; it is recorded rather than fixed.
 
 ---
 
