@@ -508,8 +508,14 @@ if(Python3_Interpreter_FOUND)
     if(PLANCK_CC_SPIN_ADAPT)
         list(APPEND _ccgen_planck_kernel_args --spin-adapt)
     endif()
+    # W3.1: the emitter now takes one dressing axis with a value. The option name
+    # stays PLANCK_CC_DRESS_OPERATORS (an existing, documented switch), but the
+    # flag it passes is the current spelling -- `--dress-operators` still works as
+    # a deprecated alias, and passing it here would print that warning on every
+    # configure. `derived` (the factorizer route) is not selectable yet; it is
+    # refused by the emitter until W3.2 wires it.
     if(PLANCK_CC_DRESS_OPERATORS)
-        list(APPEND _ccgen_planck_kernel_args --dress-operators)
+        list(APPEND _ccgen_planck_kernel_args --dressing recognized)
     endif()
 
     # The UCC emit is a SECOND invocation, not a flag on the first: --ucc and

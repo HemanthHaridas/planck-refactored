@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from ccgen.generate import print_cpp_planck
@@ -86,16 +87,32 @@ def main() -> None:
              "plain <method>_planck_generated.cpp (tensor_backend types) is still "
              "emitted unchanged.",
     )
+    # W3.1: ONE dressing axis with a value, not a second boolean. ccgen has two
+    # routes that derive dressed operators -- recognition (hand-seeded
+    # fingerprints, retired) and derivation (from each term's contraction tree) --
+    # and they are alternatives, never combined. A `--derive-operators` boolean
+    # would make that a fourth dressing-ish axis on a function whose three
+    # existing ones already need prose to explain, and every pairwise combination
+    # becomes a question with no meaningful answer.
+    parser.add_argument(
+        "--dressing",
+        choices=("none", "recognized", "derived"),
+        default=None,
+        help="Which dressed-operator route to emit. 'none' (default) is the "
+             "undressed emit. 'recognized' rewrites the residual to reference the "
+             "recognized CC intermediates (Wmnij/Wabef/Wmbej + tau/tau_c) and "
+             "emits their build_<name> functions; it requires the diagram engine "
+             "+ canonical Fock (both forced), is mutually exclusive with "
+             "--factorize-tau (dressing already recognizes tau), forces "
+             "intermediates off (CSE and dressing share the same emission "
+             "channel), and adds ~9s at rank 3 / ~62s at rank 4. 'derived' is the "
+             "factorizer route (not yet wired -- W3.2).",
+    )
     parser.add_argument(
         "--dress-operators",
         action="store_true",
-        help="Rewrite the residual to reference the recognized CC intermediates "
-             "(Wmnij/Wabef/Wmbej + tau/tau_c) and emit their build_<name> "
-             "functions. Requires the diagram engine + canonical Fock (both "
-             "forced). Mutually exclusive with --factorize-tau (dressing already "
-             "recognizes tau) and forces intermediates off (CSE and dressing "
-             "share the same emission channel). Adds ~9s at rank 3 and ~62s at "
-             "rank 4 to generation.",
+        help="Deprecated alias for --dressing recognized. Kept so existing "
+             "invocations keep emitting the same kernels.",
     )
     parser.add_argument(
         "--intermediate-memory-budget-mb",
@@ -111,9 +128,28 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.dress_operators and args.factorize_tau:
+    # Resolve the alias onto the one axis before anything reads it, so there is a
+    # single source of truth for "which dressing".
+    if args.dress_operators and args.dressing is not None:
         parser.error(
-            "--dress-operators and --factorize-tau are mutually exclusive: dressing "
+            "--dress-operators is an alias for --dressing recognized; pass one or "
+            "the other, not both")
+    dressing = args.dressing
+    if dressing is None:
+        dressing = "recognized" if args.dress_operators else "none"
+    if args.dress_operators:
+        print("[ccgen] --dress-operators is deprecated; use --dressing recognized",
+              file=sys.stderr)
+    if dressing == "derived":
+        parser.error(
+            "--dressing derived is not yet wired (W3.2). The factorizer route is "
+            "value-gated and its emit bridge exists, but production still emits "
+            "through print_cpp_planck's recognition branch; see "
+            "docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md")
+
+    if dressing == "recognized" and args.factorize_tau:
+        parser.error(
+            "--dressing recognized and --factorize-tau are mutually exclusive: dressing "
             "already recognizes tau/tau_c, so factorize_tau would materialize it twice")
 
     output_dir = args.output_dir.resolve()
@@ -136,7 +172,7 @@ def main() -> None:
         # redefinitions). V1.3.2 removed that collision by method-suffixing every builder
         # (`build_tau_ccsdtq`), so the suppression now only prevents dressing from reaching
         # the one path that runs. Gated by test_dressed_tu_coinclusion.
-        dress_operators = args.dress_operators
+        dress_operators = dressing == "recognized"
         # `dress_operators` supersedes tau collapse and forces CSE off inside
         # print_cpp_planck; passing factorize_tau alongside it raises, so drop it here
         # (the CLI already rejects the combination outright).

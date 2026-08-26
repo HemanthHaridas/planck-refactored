@@ -1,6 +1,6 @@
 # How does the derivation route reach production?
 
-**Scope for in-flight work. W1-W2 landed; W4.2a and W4.5 landed 2026-08-26; W3, W4.2b-W4.4 and W5 open.**
+**Scope for in-flight work. W1-W2 and W3.1 landed; W4.2a and W4.5 landed 2026-08-26; W3.2-W3.3, W4.2b-W4.4 and W5 open.**
 **W4 is no longer blocked** — its blocker was `PLANCK_CC_SPIN_ADAPT=OFF`, not a kernel defect
 (`docs/CCGEN_SPIN_ADAPT_DEFAULT.md`); the flag now defaults ON and the generated undressed kernel
 matches the hand-written baseline to 3e-10. **What blocks the rest of W4 is W3**: `--dressing` is
@@ -200,9 +200,23 @@ fewer parameters than the sum of today's two.
 
 #### Steps
 
-- **W3.1** — add the `--dressing` enum with `--dress-operators` as an alias. No new emit path yet;
-  `derived` raises "not yet wired". *Verify:* every existing invocation byte-identical, including
-  `--dress-operators`.
+- **W3.1 — DONE (2026-08-26).** `--dressing {none,recognized,derived}` added to
+  `python/generate_planck_cc_kernels.py`, with `--dress-operators` kept as a deprecated alias that
+  resolves onto it before anything reads it (one source of truth for "which dressing"). `derived`
+  parses but is refused with a message naming W3.2, so the flag cannot silently no-op. Passing both
+  spellings is an error rather than a silent precedence rule, and the `--factorize-tau` mutual
+  exclusion is preserved on the new spelling.
+
+  `CMakeLists.txt:517` now passes `--dressing recognized` under the unchanged
+  `PLANCK_CC_DRESS_OPERATORS` option — the alias still works, but using it there would print the
+  deprecation on every configure.
+
+  *Verified byte-identical:* default vs explicit `--dressing none`; `--dress-operators` vs
+  `--dressing recognized`; and end to end through CMake, where a fresh default tree's
+  `ccsd_planck_generated.cpp` / `ccsdt_planck_generated.cpp` are `cmp`-identical to the existing
+  build's. Gated by `python/ccgen/tests/test_dressing_flag.py` (6 tests), which pins the alias
+  equality, the default, **that `recognized` actually changes the output** (so the enum cannot be
+  accepted and then ignored), and the three error paths.
 - **W3.2** — implement `derived` inside `print_cpp_planck`'s existing dressing branch, feeding the
   adapted manifold to `emit_factorized_from_equations`. *Verify:* value gate 0/0; spatial TU
   compiles (W2's gate, now through the production entry); the three interaction points behave as
