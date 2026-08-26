@@ -220,26 +220,55 @@ reachable inside the CCSDTQ run in the `ARBITRARY_LOWER_RANKS=ON` build.
 | Be hand-written CCSDT | **−0.0517702884** |
 | Be generated rank-3 | **−0.0139349127** |
 
-##### R4.1 — do the Python equations still reach FCI? (~S, BLOCKING)
+##### R4.1 — DONE (2026-08-26): the EQUATIONS are clean; the defect is below ccgen
 
-`test_ccgen_ccsdt_reaches_fci_limit` solves the generated CCSDT residual and requires
-`GHF + E_corr == FCI` to 8 places on H3/6-31g — a decisive triples-correctness gate with no
-per-diagram oracle. If that passes, layer **(a)** is clean and the defect is downstream of ccgen.
+PySCF lives in `tests/pyscf/.venv` (2.13.0), not in any conda env — that is why the gate skipped
+earlier and why the skip was not evidence of anything.
 
-**It cannot be run in every environment**: it skips with `pyscf not importable in this
-interpreter`, and it skipped here. Run it where PySCF is available before spending effort
-downstream.
+```
+$ tests/pyscf/.venv/bin/python -m unittest \
+    ccgen.tests.test_reference_vs_pyscf.ReferenceVsPyscfTests.test_ccgen_ccsdt_reaches_fci_limit
+ok    (10.6 s)
+```
 
-*Verify:* the test RAN (not skipped) and passed. A skip is not a pass — this whole defect exists
-because a green tick was read as coverage.
+**It RAN and passed** — the generated CCSDT residual solved in Python reaches the FCI total to 8
+places on H3/6-31g. All three CCSDT FCI gates ran (`ccgen`, `diagram_engine`,
+`diagram_weighted`), and the whole reference suite went from 20 skipped to **31/32 passing**.
+
+Layer **(a) equations is clean.** The defect is downstream of ccgen.
+
+**And the suite hands over the decisive comparison for free.**
+`test_ccsdt_spin_adapted_solves_between_ccsd_and_fci` solves the generated, spin-adapted CCSDT
+equations on **Be/STO-3G — the exact system R3 used**:
+
+| Be/STO-3G CCSDT `E_corr` | value | |
+|---|---|---|
+| generated equations, solved in **Python** | −0.0517702744 | |
+| **hand-written C++** | −0.0517702884 | agree to **1.40e-08** |
+| **generated kernel, C++** (arbitrary harness) | **−0.0139349127** | off by **3.78e-02** |
+
+The same equations that produce the right answer in Python produce a wrong one through the C++
+kernel. That narrows the defect to **(b) emission, (c) block binding, or (d) packing** — and
+since ranks 2 and 4 converge correctly through the same solver, (d)'s solver half is out too.
+
+This also settles `1986d0c`'s "BITWISE IDENTICAL across both harnesses at identical inputs" claim:
+the two harnesses demonstrably do not agree on Be. **Do not carry that claim forward.**
+
+*Environment note for whoever runs the rest of this ladder:* use
+`tests/pyscf/.venv/bin/python`, not the default interpreter. A `pyscf not importable` skip looks
+identical to a pass in the summary line.
 
 ##### R4.2 — compare the emitted kernel against the Python residual at identical amplitudes (~M)
 
-This is the decisive step and it isolates layers (b)+(c) from (a).
+R4.1 already gave the *energy*-level comparison (Python −0.0517702744 vs C++ −0.0139349127 on
+Be). This step goes one level down, to the residual, because an energy difference does not say
+which tensor element is wrong.
 
 Take one fixed, non-trivial amplitude set; evaluate the triples residual two ways — through
 `residual_eval.residual_einsum` on the generated Python terms, and through the emitted C++ kernel
-— and diff element-wise.
+— and diff element-wise. Use the **converged Python amplitudes** from R4.1's Be solve as the
+input, so both sides are evaluated at a point where the correct residual is known to be ~0: any
+non-zero element on the C++ side is then directly the defect, with no solver dynamics in the way.
 
 `1986d0c` claims these are "BITWISE IDENTICAL across both harnesses at identical inputs". **That
 claim is now suspect and must be re-measured, not inherited** — R3's converged-but-wrong result is
