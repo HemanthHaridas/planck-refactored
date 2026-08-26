@@ -969,11 +969,49 @@ def emit_factorized_translation_unit(method: str, engine: str = "diagram",
     - else `top_k` / `savings_fraction` (E1) under the optional `max_operator_bytes`
       per-operator guard (M1).
 
-    Non-selected operators inline via the E1 keep-set path. Returns the TU string."""
+    Non-selected operators inline via the E1 keep-set path. Returns the TU string.
+
+    Generates its own equations, so it can only emit the GCC manifold this call
+    produces. To factorize an ALREADY-ADAPTED manifold (spin-adapted or UCC),
+    call `emit_factorized_from_equations` directly — that is the entry the
+    production wiring needs (W1 in `docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md`).
+    """
     from ..generate import generate_cc_equations
+
+    return emit_factorized_from_equations(
+        method,
+        generate_cc_equations(method, engine=engine,
+                              canonical_fock=canonical_fock),
+        top_k=top_k, savings_fraction=savings_fraction,
+        max_operator_bytes=max_operator_bytes,
+        memory_budget_bytes=memory_budget_bytes,
+        factor_builder_bodies=factor_builder_bodies,
+        merge_transposes=merge_transposes, spatial=spatial,
+        n_occ=n_occ, n_vir=n_vir)
+
+
+def emit_factorized_from_equations(method: str, eqs, *,
+                                   top_k=None, savings_fraction=None,
+                                   max_operator_bytes=None,
+                                   memory_budget_bytes=None,
+                                   factor_builder_bodies=False,
+                                   merge_transposes=False, spatial=True,
+                                   n_occ=30, n_vir=100):
+    """W1: the factorize-and-emit pipeline, over equations the caller supplies.
+
+    Same body as `emit_factorized_translation_unit`, which is now a thin wrapper
+    that generates and delegates — split so an already-adapted manifold can be
+    factorized. `spin_adapt_equations(...)` and `ucc_adapt_equations(...)` output
+    both work: the factorizer keys on contraction structure and does not care how
+    a factor is named. Measured on adapted input, 31 merged operators on spatial
+    `ccsd` doubles and 86 on UCC `doubles_abab`.
+
+    `spatial` selects the symmetry table the transpose-equivalence uses; it is
+    about the ERI's symmetries, NOT about whether `eqs` is spin-adapted. Leave it
+    True unless the manifold is GCC-only — it is the smaller, always-sound set.
+    """
     from ..emit.planck_tensor_cpp import emit_planck_translation_unit
 
-    eqs = generate_cc_equations(method, engine=engine, canonical_fock=canonical_fock)
     substitutable = [
         t for m, terms in eqs.items()
         if m not in ("energy", "reference")

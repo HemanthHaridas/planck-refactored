@@ -656,6 +656,15 @@ as the UCC work found for ERIs (24 arrays: 7 `aaaa` / 10 `abab` / 7 `bbbb`) and 
   wrong. Recorded here so the next person measures the collapse instead of rediscovering it from
   a wrong energy.
 
+**A second, smaller symptom is already marked RED for O6.**
+`test_the_mixed_block_needs_more_arrays_than_the_same_spin_ones` is
+`expectedFailure` as of 2026-08-26: `abab` correctly emits 10 ERI arrays, but both same-spin tags
+emit **7** rather than 6. The extra is `ovvo`, which for a same-spin block folds into `ovov`
+under the particle swap (a symmetry there and not for `abab`, which is why `abab` legitimately
+carries both). Not a correctness defect — the redundant array holds the right values — but it is
+the same spin-blocked ERI question, and fixing it before O6 means guessing at the fold rule.
+Pre-existing at `b82fc69`. An unexpected pass means the fold landed.
+
 *Verify, when started:* a spin-resolved fingerprint set recognizing the seeded operators per
 block, with **zero** cases of one emitted name covering two spin-tagged contractions — the
 `test_one_name_one_contraction_shape` invariant extended to spin tags. No UCC numeric gate for

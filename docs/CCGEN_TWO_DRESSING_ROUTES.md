@@ -173,10 +173,16 @@ the route `CCGEN_HIGHER_OPERATOR_REUSE.md` builds on. This is a wiring task, sco
 **`docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md`** (W1-W5).
 
 The gap is narrower than it sounds and wider than one flag: there are **two emitters** sharing
-exactly one parameter, and `emit_factorized_translation_unit` generates its own equations
-internally, so it cannot be handed a spin-adapted manifold. The machinery underneath has no such
-limit — it produces 31 merged operators on spatial input and 86 on UCC — so the fix is a
-signature change, not new algebra.
+exactly one parameter, and production calls the other one.
+
+**W1-W2 have since landed.** The pipeline now takes equations rather than generating them
+(byte-identical over six configurations), and the spatial TU **compiles** against the real CC
+headers both merged and un-merged — 59 → 31 builders. So the technical blocker is gone; what
+remains is W3, which is a decision about the project's direction rather than a technical step.
+
+UCC is a separate matter: the *factorizer* handles UCC input fine (86 merged operators on
+`doubles_abab`), but the **emitter** rejects the spin-blocked manifold names, and the
+dressed-operator story there is unsound until O6 — see below.
 
 **Leave recognition retired.** Nothing in this work touched it. It remains 52 % short on Be with
 five failed fix attempts behind it, and its seven `expectedFailure` gates stay as the tripwire —

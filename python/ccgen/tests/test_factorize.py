@@ -862,6 +862,130 @@ class CostModelTests(unittest.TestCase):
                 f"{name} is not defined exactly once")
         self.assertEqual(merged.count("{"), merged.count("}"))
 
+    def test_emit_from_equations_is_byte_identical(self):
+        """W1: splitting the pipeline off `emit_factorized_translation_unit`
+        changed nothing. The wrapper generates and delegates; every existing
+        call must produce the same bytes."""
+        import hashlib
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.factorize import (
+            emit_factorized_from_equations, emit_factorized_translation_unit)
+
+        for method, kwargs in (
+            ("ccsd", {}),
+            ("ccsd", {"top_k": 8}),
+            ("ccsd", {"merge_transposes": True}),
+            ("ccsdt", {"top_k": 5}),
+        ):
+            with self.subTest(method=method, **kwargs):
+                viaw = emit_factorized_translation_unit(method, **kwargs)
+                direct = emit_factorized_from_equations(
+                    method,
+                    generate_cc_equations(method, engine="diagram",
+                                          canonical_fock=True),
+                    **kwargs)
+                self.assertEqual(hashlib.sha256(viaw.encode()).hexdigest(),
+                                 hashlib.sha256(direct.encode()).hexdigest())
+
+    def test_emit_from_equations_accepts_a_spin_adapted_manifold(self):
+        """W1's point: the pipeline can now be handed an ALREADY-ADAPTED
+        manifold. `emit_factorized_translation_unit` calls
+        `generate_cc_equations` internally and so could only ever emit GCC —
+        that was the structural blocker to wiring the derivation route into
+        production, which emits spatial kernels.
+
+        UCC is deliberately NOT covered: it fails on manifold naming
+        (`singles_aa`), and its dressed-operator story needs O6 first. See
+        `docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md`.
+        """
+        import re
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.factorize import emit_factorized_from_equations
+        from ccgen.spin import spin_adapt_equations
+
+        eqs = spin_adapt_equations(
+            generate_cc_equations("ccsd", engine="diagram", canonical_fock=True))
+        tu = emit_factorized_from_equations("ccsd", eqs, merge_transposes=True)
+        builders = set(re.findall(r"build_(W_\w+?)_ccsd\(", tu))
+        self.assertGreater(len(builders), 10, "spatial emit produced no builders")
+        self.assertEqual(tu.count("{"), tu.count("}"))
+        # each builder defined exactly once
+        for name in builders:
+            self.assertEqual(
+                len(re.findall(rf"^\w+ build_{re.escape(name)}_ccsd\(", tu, re.M)),
+                1, f"{name} is not defined exactly once")
+
+    def test_spatial_factorized_tu_compiles(self):
+        """W2: the spatial factorized TU is valid C++ against the real CC
+        headers, merged and un-merged.
+
+        The value gate evaluates the symbolic rewrite and never compiles
+        anything; W1's emit check counted builders and braces. Neither would
+        catch a TU that names a type or an accessor the headers do not have.
+        Skipped if a C++23 compiler or the Eigen fetch is absent."""
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        from ccgen.generate import generate_cc_equations
+        from ccgen.optimization.factorize import emit_factorized_from_equations
+        from ccgen.spin import spin_adapt_equations
+
+        cxx = os.environ.get("CXX", "c++")
+        if shutil.which(cxx) is None:
+            self.skipTest(f"{cxx} not available")
+        repo = Path(__file__).resolve().parents[3]
+        eigen = repo / "build" / "_deps" / "eigen-src"
+        if not eigen.is_dir():
+            self.skipTest("Eigen fetch not present (configure the build first)")
+
+        eqs = spin_adapt_equations(
+            generate_cc_equations("ccsd", engine="diagram", canonical_fock=True))
+        for merged in (False, True):
+            code = emit_factorized_from_equations(
+                "ccsd", eqs, merge_transposes=merged)
+            with tempfile.NamedTemporaryFile(
+                suffix=".cpp", mode="w", delete=False
+            ) as fh:
+                fh.write(code)
+                src = fh.name
+            try:
+                proc = subprocess.run(
+                    [cxx, "-std=c++23", "-fsyntax-only", "-w",
+                     "-I", str(repo / "src"), "-I", str(eigen), src],
+                    capture_output=True, text=True, timeout=300,
+                )
+                with self.subTest(merge_transposes=merged):
+                    self.assertEqual(
+                        proc.returncode, 0,
+                        f"spatial TU (merged={merged}) failed to compile:\n"
+                        f"{proc.stderr[-2000:]}")
+            finally:
+                os.unlink(src)
+
+    def test_emitter_folds_only_sign_preserving_eri_symmetries(self):
+        """W2: the emitter's ERI symmetry set is exactly the spatial contract.
+
+        `<pq|rs>` has four parity-`+1` symmetries; the antisymmetrized
+        `<pq||rs>` has eight, and the extra four hold only up to -1. Folding
+        those on spatial terms equates terms that are not equal — the blind spot
+        that let a 52 % energy defect pass every symbolic check, and the same one
+        that produced two false operator merges in O1.
+
+        Pinned here because the merge now runs inside the emit path, so this
+        contract is load-bearing for generated spatial kernels rather than only
+        for the verifier."""
+        from ccgen.emit.planck_tensor_cpp import _ERI_SYMMETRY_PERMUTATIONS
+        from ccgen.optimization.dressing import (
+            _ERI_PERMUTATIONS_SPATIAL, _perm_parity)
+
+        perms = tuple(p for p, _ in _ERI_SYMMETRY_PERMUTATIONS)
+        signs = tuple(sgn for _, sgn in _ERI_SYMMETRY_PERMUTATIONS)
+        self.assertEqual(set(perms), set(_ERI_PERMUTATIONS_SPATIAL))
+        self.assertTrue(all(sgn == 1 for sgn in signs))
+        self.assertTrue(all(_perm_parity(p) == 1 for p in perms))
+
     def test_emit_memory_budget_compiles(self):
         """M2.2 gate: the memory-budgeted CCSDT TU compiles against CC headers."""
         import os
