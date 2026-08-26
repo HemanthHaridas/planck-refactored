@@ -501,13 +501,25 @@ def missing_build_option(
     case: dict[str, Any],
     build_options: dict[str, str] | None,
 ) -> str | None:
-    """The build option this case needs but the tree does not have, if any."""
+    """The build option this case needs but the tree does not have, if any.
+
+    Accepts a string or a list: some cases need MORE than one option ON, and
+    depend on every one of them. `PLANCK_CC_SPIN_ADAPT` is the motivating case
+    -- the generated CC kernels are only correct with it ON (CMakeLists.txt
+    documents OFF as the ~4x-wrong historical emit), so a generated-kernel case
+    run without it silently measures the defective emit rather than the kernel
+    it means to gate. That cost a full investigation before it was noticed.
+    """
     required = case.get("requires_build_option")
     if not required:
         return None
     if build_options is None:
         return None
-    return None if build_options.get(required) == "ON" else required
+    names = [required] if isinstance(required, str) else list(required)
+    for name in names:
+        if build_options.get(name) != "ON":
+            return name
+    return None
 
 
 def should_run(case: dict[str, Any], suite: str, selected_cases: set[str]) -> bool:

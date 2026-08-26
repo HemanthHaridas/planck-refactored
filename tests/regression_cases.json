@@ -1321,7 +1321,7 @@
         "Zero-point energy :",
         "Converged :                   true"
       ],
-      "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |\u0394freq| 4.8 cm-1, \u0394E ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
+      "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |Δfreq| 4.8 cm-1, ΔE ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
     },
     {
       "id": "water_radical_cation_ump2_gradient_smoke",
@@ -1526,6 +1526,9 @@
           "left": "rccsdtq_total_energy",
           "right": "rhf_total_energy"
         }
+      ],
+      "requires_build_option": [
+        "PLANCK_CC_SPIN_ADAPT"
       ]
     },
     {
@@ -1602,18 +1605,27 @@
         "generated-kernel"
       ],
       "timeout_s": 900,
-      "requires_build_option": "PLANCK_CC_ARBITRARY_LOWER_RANKS",
+      "requires_build_option": [
+        "PLANCK_CC_ARBITRARY_LOWER_RANKS",
+        "PLANCK_CC_SPIN_ADAPT"
+      ],
       "env": {
         "PLANCK_RCCSDT_BACKEND": "optimized"
       },
-      "expected_exit_code": 1,
+      "expected_exit_code": 0,
       "contains": [
         "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order harness",
-        "Running generated arbitrary-order RCC tensor kernels (rank=3",
-        "did not converge within 100 iterations",
-        "E_corr=-0.0565650696"
+        "Running generated arbitrary-order RCC tensor kernels (rank=3"
       ],
-      "known_failure": "R1 gate for docs/CCGEN_RANK3_ARBITRARY_KERNEL_DEFECT.md. The generated rank-3 kernel does NOT converge: it settles at E_corr=-0.0565650696 (total -39.7832978967) against the hand-written -0.0791116825 (total -39.8058445240), a 2.26e-02 gap, and hits the 100-iteration cap. This case pins that OBSERVED behaviour so the defect is gated rather than invisible -- ch4_rccsdt_sto3g asserts kernels=hand-optimized and has been green throughout while never running the generated kernel. When the defect is fixed THIS CASE MUST FAIL: flip expected_exit_code to 0, drop the non-convergence strings, and assert rccsdt_total_energy == -39.8058445240 to 1e-07."
+      "_note": "R1 gate, INVERTED 2026-08-26 per its own known_failure instruction. It formerly pinned the OBSERVED broken behaviour (exit 1, non-convergence, E_corr=-0.0565650696); that failure was caused by PLANCK_CC_SPIN_ADAPT=OFF -- the historical spin-orbital emit CMakeLists.txt:33-42 documents as ~4x wrong -- not by the rank-3 kernel. With SPIN_ADAPT=ON the generated kernel converges in 35 steps to E_corr=-0.0791116827 (hand-written -0.0791116825, 2e-10) and total -39.8058445098 vs the PySCF reference -39.8058445240 (1.4e-08). requires_build_option now lists BOTH flags so this can never again run under the defective emit. See docs/CCGEN_SPIN_ADAPT_DEFAULT.md.",
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rccsdt_total_energy",
+          "expected": -39.805844524,
+          "atol": 1e-06
+        }
+      ]
     },
     {
       "id": "b_uccsd_sto3g",
@@ -2045,7 +2057,7 @@
       "contains": [
         "Point Group :                 C2v",
         "Vibrational Frequencies :",
-        "Mode    Symmetry    Frequency (cm\u207b\u00b9)",
+        "Mode    Symmetry    Frequency (cm⁻¹)",
         "1  A1",
         "2  A1",
         "3  B2",
@@ -2916,7 +2928,7 @@
         "Computing analytic nuclear gradient",
         "Nuclear Gradient (Ha/Bohr) :"
       ],
-      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water at the input geometry: E=-76.009125642007 Eh, gradient max|g|=1.47293665e-2 Ha/Bohr, rms|g|=6.9308072e-3 Ha/Bohr. Reference computed by tests/pyscf-style script; per-component values: O z = +0.0147293665, H y = \u00b10.0073107264, H z = -0.0073646832 Ha/Bohr.",
+      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water at the input geometry: E=-76.009125642007 Eh, gradient max|g|=1.47293665e-2 Ha/Bohr, rms|g|=6.9308072e-3 Ha/Bohr. Reference computed by tests/pyscf-style script; per-component values: O z = +0.0147293665, H y = ±0.0073107264, H z = -0.0073646832 Ha/Bohr.",
       "checks": [
         {
           "type": "metric_close",

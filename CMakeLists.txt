@@ -33,14 +33,23 @@ option(PLANCK_CC_INCLUDE_INTERMEDIATES
 # Emit genuine spatial (restricted) RCC kernels via the R1.0 spin-adaptation
 # instead of raw spin-orbital algebra bound to spatial storage. Without this the
 # generated energy carries the 0.25*t2*oovv defect and the correlation energy is
-# ~4x wrong (the Be-CCSDTQ defect). For CCSDT (rank 3, single Sz sector) the
-# spin-adapted path is complete and correct; for CCSDTQ (rank 4) it additionally
-# emits the t4 second-Sz-sector kernels, whose full multi-sector SOLVE is the
-# still-open runtime work (Gap B, docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md).
-# Default OFF for byte-compatibility with the historical (defective) emit until
-# Gap B lands; opt in with -DPLANCK_CC_SPIN_ADAPT=ON.
+# ~4x wrong (the Be-CCSDTQ defect).
+#
+# DEFAULT ON since 2026-08-26. It was OFF "for byte-compatibility with the
+# historical (defective) emit until Gap B lands" -- Gap B (the rank-4 multi-sector
+# t4 SOLVE) has landed and is gated end to end by `be_rccsdtq_sto3g`, so that
+# condition is satisfied and the old default only preserved a known-wrong emit.
+#
+# Leaving it OFF cost a full investigation: every generated-kernel measurement in
+# docs/CCGEN_SPIN_ADAPT_DEFAULT.md was taken under the defective emit
+# and read as a rank-3 kernel defect. With it ON the generated rank-3 CCSDT kernel
+# matches the hand-written path to all ten digits on Be, LiH and CH4. The
+# generated-kernel regression cases now require this option, so they skip rather
+# than silently measure the defective emit.
+#
+# Set -DPLANCK_CC_SPIN_ADAPT=OFF only to reproduce that historical emit.
 option(PLANCK_CC_SPIN_ADAPT
-    "Emit spatial (spin-adapted) RCC kernels instead of the raw spin-orbital defect" OFF)
+    "Emit spatial (spin-adapted) RCC kernels instead of the raw spin-orbital defect" ON)
 # U5.3: also emit UNRESTRICTED (spin-block resolved) CC kernels alongside the
 # restricted ones, as <method>_ucc_planck_generated.cpp. They define distinct
 # symbols (U5.0) so both link into one binary, and are reached through

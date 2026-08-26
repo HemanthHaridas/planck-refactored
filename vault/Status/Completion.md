@@ -317,7 +317,7 @@ historical design context, but they are no longer the source of truth for
   `ch4_rccsdt_sto3g`, asserts `kernels=hand-optimized` and so has been green
   throughout while never running the generated kernel it was added to protect.
   Rank 2 and rank 4 both work through the same harness, localizing the defect to the
-  rank-3 kernel. Scoped in `docs/CCGEN_RANK3_ARBITRARY_KERNEL_DEFECT.md`; it blocks
+  rank-3 kernel. Scoped in `docs/CCGEN_SPIN_ADAPT_DEFAULT.md`; it blocks
   W4 and therefore the derivation-route wiring. Without
   `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` it fails with an actionable message
   instead of a wrong number. The hand-written path is untouched and bitwise

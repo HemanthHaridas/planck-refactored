@@ -1,3 +1,12 @@
+> **SUPERSEDED 2026-08-26.** This remediation ladder is complete, and the fix it produced
+> shipped behind `PLANCK_CC_SPIN_ADAPT` — which then defaulted **OFF**, so the
+> defect described below remained the default build's behaviour for months and
+> cost a second full investigation. **The flag now defaults ON.**
+>
+> For what the defect was, why the default hid it, and what gates it now:
+> **`docs/CCGEN_SPIN_ADAPT_DEFAULT.md`**. Kept for the derivation history the
+> answer deliberately drops.
+
 # Remediation scope: generated-CC spin-adaptation defect
 
 Companion to `GENERATED_CC_SPIN_ADAPTATION_DEFECT.md` (the diagnosis). This scopes
