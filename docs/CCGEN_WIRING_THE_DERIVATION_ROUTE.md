@@ -10,10 +10,13 @@ It is not a research question: the algebra is gated, the merge is implemented, a
 exists. What is missing is that **there are two emitters** and production uses the other one.
 
 **Where it stands.** The technical blocker is gone — the pipeline now accepts adapted equations
-(W1) and the spatial TU compiles merged and un-merged, 59 → 31 builders (W2). What remains is
-**W3, a decision about the project's direction rather than a technical step**, and the two
-verification steps behind it: W4 (regression energies, the one that can still find a correctness
-defect) and W5 (wall-clock, which this route has never had).
+(W1) and the spatial TU compiles merged and un-merged, 59 → 31 builders (W2).
+
+W3 was a decision, and it has been taken under the constraint *"the code should not be
+spaghetti"*: **one `--dressing {none,recognized,derived}` axis, not a fourth boolean**, with the
+emitters merged afterwards as a deletion rather than beforehand as an accumulation. The earlier
+"new flag now, merge later" recommendation is withdrawn — see W3 for what the code itself says
+about that. W4 (regression energies) and W5 (wall-clock) still gate it.
 
 Retire this file when W1-W5 land; the answer belongs in `CCGEN_TWO_DRESSING_ROUTES.md`.
 
@@ -122,26 +125,91 @@ symbolic check, and the same one that produced two false operator merges in O1.
 
 Full suite: 126 tests, the same 6 selection-model failures. No new breakage.
 
-### W3 — decide what production calls, and remove the fork (~M, the real decision)
+### W3 — RESCOPED (2026-08-26) under "the code should not be spaghetti"
 
-Today `--dress-operators` routes to recognition. Options, in the order I would try them:
+The earlier framing offered three options and recommended "new flag now, merge later". **That
+recommendation is withdrawn.** The constraint rules it out, and the codebase already contains the
+evidence for why.
 
-1. **New flag** (`--derive-operators`), leaving `--dress-operators` on the retired route. Lowest
-   risk, but keeps two dressing paths alive indefinitely and invites someone to pick the broken
-   one.
-2. **Repoint `--dress-operators`** at the derivation route and delete the recognition emit path.
-   Honest, and matches the D8 recommendation — but it changes the meaning of an existing flag,
-   so anything reproducing an old run silently gets different kernels.
-3. **Merge the emitters**: `print_cpp_planck` gains the factorizer's selection knobs and calls
-   W1's entry. Most work, and the only option that ends with one emitter.
+#### What the code says about adding a fourth flag
 
-**This is a judgement call about the project's direction, not a technical one — do not pick it
-unilaterally.** My recommendation is 1 then 3: ship behind a new flag, prove it on the regression
-suite, then merge and delete. What must not happen is 1 with no follow-through, which is exactly
-how the route ended up disconnected the first time.
+`print_cpp_planck` carries **16 branches**, and `dress_operators` interacts at three separate
+points:
 
-*Verify:* a stated decision with its reason, and if not option 3, a recorded owner for the
-follow-up.
+| where | interaction |
+|---|---|
+| `generate.py:1052` | mutually exclusive with `factorize_tau` — raises |
+| `generate.py:1064` | overrides caller `engine` / `canonical_fock` kwargs |
+| `generate.py:1152` | silently forces `include_intermediates=False` |
+
+and the CLI carries a further comment reconciling the same pair. A `--derive-operators` flag adds
+a **fourth** dressing-ish axis to a function that already needs prose to explain the three it has.
+Every pairwise combination becomes a question someone has to answer, and most of them are
+meaningless.
+
+The decisive line is a comment already in the tree at `generate.py:1060`:
+
+> `spin_adapt / factorize_tau / force_arbitrary silently unreachable under dressing; composing
+> them is the point of V1.2, and **a second emit call site would fork the composition so V5 (UCC)
+> had to be wired twice**.`
+
+That is this exact mistake, already made once and already paid for. A parallel
+`--derive-operators` path is a second emit call site by construction.
+
+#### The shape that is not spaghetti
+
+**One dressing axis with a value, not two booleans.**
+
+```
+--dressing {none,recognized,derived}      default: none
+```
+
+- `none` — today's undressed emit, byte-identical.
+- `recognized` — what `--dress-operators` means now. Retired, kept only so old invocations
+  reproduce; can print a deprecation line.
+- `derived` — the factorizer route.
+
+One parameter, three values, mutually exclusive by construction. The interactions above stay
+exactly as many as they are today because there is still one dressing axis — `derived` inherits
+`recognized`'s answers to all three (diagram engine, canonical Fock, no CSE) since they are
+properties of *dressing*, not of which route derived the operators.
+
+Internally this is one call site, not two: `print_cpp_planck` chooses which operator set to hand
+the emitter and keeps a single composition path. The factorizer already exposes the right seam —
+`emit_factorized_from_equations` takes equations (W1), so it can be fed the same adapted manifold
+`print_cpp_planck` already builds.
+
+`--dress-operators` becomes an alias for `--dressing recognized`, so nothing that exists today
+changes meaning. That is what the earlier "repoint the flag" option got wrong: silently changing
+what an existing flag emits would make an old command line reproduce different kernels.
+
+#### Why not "merge the emitters" as a first step
+
+It is the right end state and the wrong first move. Merging means `print_cpp_planck` absorbs the
+factorizer's selection knobs (`top_k`, `savings_fraction`, `memory_budget_bytes`,
+`max_operator_bytes`, `merge_transposes`, `n_occ`, `n_vir`) — seven more parameters on a
+16-branch function, landed **before** W4 has shown the route produces correct energies.
+
+Do it after W4/W5, when the route has earned it, and do it as a deletion: `print_cpp_planck` calls
+`emit_factorized_from_equations` and `emit_factorized_translation_unit` goes away. One emitter,
+fewer parameters than the sum of today's two.
+
+#### Steps
+
+- **W3.1** — add the `--dressing` enum with `--dress-operators` as an alias. No new emit path yet;
+  `derived` raises "not yet wired". *Verify:* every existing invocation byte-identical, including
+  `--dress-operators`.
+- **W3.2** — implement `derived` inside `print_cpp_planck`'s existing dressing branch, feeding the
+  adapted manifold to `emit_factorized_from_equations`. *Verify:* value gate 0/0; spatial TU
+  compiles (W2's gate, now through the production entry); the three interaction points behave as
+  they do for `recognized`.
+- **W3.3** — *after W4/W5 pass:* delete `emit_factorized_translation_unit` and the recognition
+  emit path, leaving one emitter. *Verify:* net negative diff, and no parameter added to
+  `print_cpp_planck` that a caller does not use.
+
+**W3.3 is the step that keeps this honest.** W3.1 alone is "new flag with no follow-through",
+which is exactly how the derivation route was orphaned the first time. If W3.3 is not going to
+happen, do not start W3.1.
 
 ### W4 — the regression suite (~M)
 
