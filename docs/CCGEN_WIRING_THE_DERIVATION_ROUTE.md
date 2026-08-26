@@ -211,16 +211,85 @@ fewer parameters than the sum of today's two.
 which is exactly how the derivation route was orphaned the first time. If W3.3 is not going to
 happen, do not start W3.1.
 
-### W4 — the regression suite (~M)
+### W4 — do derivation-emitted kernels compute the right energies? (~M, five steps)
 
-The CC regression cases are the only end-to-end check that generated kernels compute the right
-energies. Run the affected ones with derivation-emitted kernels.
+**This is the step that can still find a correctness defect.** Everything before it is symbolic
+or syntactic: the value gate evaluates a rewrite and never compiles, W2 compiles but never runs.
+Nothing so far has executed a generated kernel and compared an energy.
 
-*Verify:* energies match the current kernels to the tolerance each case already asserts. Any
-disagreement is a **correctness** finding and outranks everything else in this doc — the value
-gate is symbolic and a kernel can still be wrong in ways it cannot see (that is the entire
-lesson of the rank-3 defect, where the kernel was correct and the harness was not; and of the
-52 % dressed defect, where five gates passed).
+Both prior CC defects on this branch were invisible to exactly the gates that precede W4 — the
+rank-3 kernel was correct while its *solver* was wrong, and the 52 % dressed defect passed five
+structural gates. Treat a W4 disagreement as outranking every performance claim in this document.
+
+#### The trap this step must not fall into
+
+Of the ten CC regression cases, **nine never reach a generated kernel.**
+`choose_determinant_backstop` (`tensor_backend.cpp:243`) routes `nso <= 16 && ndet <= 10000` to
+the determinant-space teaching backstop, which calls no generated code at all. Computed for
+STO-3G:
+
+| case | nso | ndet | path |
+|---|---|---|---|
+| `h2_rccsdt` | 4 | 6 | determinant |
+| `be_rccsdtq` | 10 | 210 | determinant |
+| `lih_rccsdt` | 12 | 495 | determinant |
+| `water_rccsdt` | 14 | 1001 | determinant — and it *asserts* the handoff |
+| **`ch4_rccsdt`** | **18** | **43758** | **tensor (generated)** |
+
+So a W4 that runs "the CC cases" and reports green has, for nine of ten, proven nothing about the
+derivation route. `ch4_rccsdt_sto3g` is the only in-tree case that exercises it — the same fact
+that left the hand-written tensor solver ungated for its entire life.
+
+#### Steps
+
+##### W4.1 — pin the baseline (~S)
+
+Record the current energies for the cases that reach the tensor path, with the kernels production
+emits today.
+
+Measured while scoping: `python tests/run_regressions.py --suite extended --case ch4_rccsdt_sto3g`
+→ **PASS in 1.00s**. Note the `--suite extended`: a bare `--case` selects nothing, silently
+("no cases selected"), which is its own small trap.
+
+*Verify:* baseline energies recorded to the case's own asserted precision, and the command that
+produced them written down.
+
+##### W4.2 — regenerate with `--dressing derived` and rebuild (~M)
+
+Kernels are generated at configure time (`CMakeLists.txt:519`). Rebuild with W3.2's flag set.
+
+*Verify:* the build succeeds and the generated TU actually changed — diff the emitted file, do
+not assume a flag took effect. A silently-ignored flag would make W4.3 pass vacuously, which is
+the failure mode this ladder keeps hitting.
+
+##### W4.3 — rerun and compare (~S, the gate)
+
+*Verify:* `ch4_rccsdt_sto3g` energy matches W4.1 to the tolerance the case already asserts. **Any
+disagreement is a correctness finding and stops the ladder** — it is not a tolerance to widen.
+
+##### W4.4 — prove the comparison was not vacuous (~S)
+
+W4.3 passing is only meaningful if the run actually used derivation-emitted kernels. Confirm it
+did: check the emitted TU contains the merged operator names (`W_..._<shape-tag>`, and builder
+count 19 rather than 27 on `ccsd`), and that the case did not silently take the determinant
+backstop.
+
+*Verify:* a positive identification of the code path taken, not an inference from a green tick.
+
+##### W4.5 — widen the ladder, or record that it cannot be widened (~M)
+
+One case is thin evidence for a production route. Options, in order of value:
+
+- a second rank-3 case above the backstop threshold (needs `nso > 16 || ndet > 10000`);
+- `be_rccsdtq_sto3g` — rank 4, but check the backstop first: at nso=10/ndet=210 it is *below* the
+  threshold, so it likely needs a larger system to be useful here;
+- `PLANCK_RCCSDT_BACKEND=tensor` (`ccsdt.cpp:22`) to force the tensor path on a case that would
+  otherwise take the backstop — cheapest way to widen coverage, and worth checking whether it
+  overrides the backstop or only the backend *within* the tensor path.
+
+*Verify:* either a second case exercising the route end to end, or a written statement of why the
+suite cannot currently provide one — which is itself a finding worth recording, since it means
+the production route rests on a single regression case.
 
 ### W5 — cost, measured rather than modelled (~M)
 
