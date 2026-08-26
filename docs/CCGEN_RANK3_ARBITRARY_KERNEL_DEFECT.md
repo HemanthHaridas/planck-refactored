@@ -151,34 +151,139 @@ converge.
 *Verify:* `be_rccsdtq_sto3g` passes in **both** builds. This is worth doing first — it is small,
 it is separable, and it stops one broken path from spreading.
 
-### R3 — is it the kernel or the seed? (~M)
+### R3 — ANSWERED (2026-08-26): the kernel is WRONG, not cold-started into a bad basin
 
-Rank 3 cold-starts even with `warm_start=on`, because `rank-1 >= generated_floor` is `2 >= 3`
-(`rccgen.cpp:116`, unchanged since `b35fae3` — this is not a regression). Iteration 1 begins at
-`E_corr = −0.0107`; the hand-written path begins from a converged RCCSD at −0.0789.
+R3 was scoped as "seed rank 3 from converged rank 2 and see". That turned out to be
+unimplementable from input files — **RCC has no rank-2 generated keyword**, deliberately
+(`io.cpp:675`: "a generated rank-2 RCC path would have no consumer", since hand-written covers
+ranks 2-3). Seeding from hand-written RCCSD would need an amplitude-type conversion, i.e. code.
 
-Seed the rank-3 solve from the converged rank-2 amplitudes and re-run.
+A better discriminator was already in the tree. **The Be CCSDTQ run performs a rank-3 sub-solve
+internally**, and on Be that sub-solve *converges*:
 
-- Converges to −0.0791116825 → the kernel is **correct** and the defect is the cold start plus a
-  basin the solver cannot escape. Fix is the seed.
-- Converges to −0.05656 again → the kernel is **wrong**, and R4 follows.
+```
+RCCSDTQ[TENSOR] :(rank 3) Iter : 12  E_corr=-0.0139349127  rms(res)=1.868e-12
+RCCSDTQ[TENSOR] : Warm-started rank 4 from converged rank 3 (seeded T1..T3).
+```
 
-*Verify:* a stated answer with the energy behind it. This is the cheapest discriminator and it
-should come before any kernel-level investigation.
+12 iterations, residual 1.9e-12. So the kernel is **not** universally non-convergent, and the
+CH4 non-convergence is not the primary defect.
 
-### R4 — only if R3 says the kernel is wrong (~L, research)
+But against the hand-written path on the same system:
 
-Compare the generated rank-3 residual against the hand-written one at **identical amplitudes**.
-`1986d0c` claims they are "BITWISE IDENTICAL across both harnesses at identical inputs" — that
-claim is now suspect too and must be re-measured, not inherited.
+| system | hand-written | generated rank-3 | gap |
+|---|---|---|---|
+| **Be** | −0.0517702884 | **−0.0139349127** (converged, res 1.9e-12) | **3.78e-02** |
+| CH4 | −0.0791116825 | −0.0565650696 (never converges) | 2.25e-02 |
 
-The instrument exists: `test_factorize_value_preservation` evaluates residuals symbolically, and
-`residual_eval.residual_einsum` can evaluate a term set numerically. A term-by-term diff between
-the generated rank-3 triples residual and the hand-written one localises the defect to specific
-terms, the way the factorizer's own value gate localised its two defects.
+**The kernel converges to a wrong answer.** A residual of 1.9e-12 alongside a 3.8e-02 energy
+error means it is driving a *different equation* to self-consistency — the residual it zeroes is
+not the CCSDT residual.
 
-*Verify:* the disagreeing terms named, or a statement that they agree — in which case the defect is
-in the packing/denominators for rank 3 specifically, and R3's answer was incomplete.
+That answers R3 against the benign branch: **not a seed problem, not a basin problem, not the
+iteration cap.** Non-convergence on CH4 is a second symptom of one defect, not the defect.
+
+Two consequences:
+
+- **R2 is more urgent than first scoped.** Rank 4 in the arbitrary build is seeded from amplitudes
+  that are *converged and wrong*, which is worse than unconverged ones — nothing downstream can
+  detect the difference.
+- **The vault claim is doubly refuted.** `1986d0c` states the residuals are "BITWISE IDENTICAL
+  across both harnesses at identical inputs". A converged-but-wrong solution on Be is direct
+  evidence against that, independent of the CH4 reproduction.
+
+### R4 — where does the wrongness enter? (~L, five steps)
+
+R3 established the kernel converges to a **wrong self-consistent answer**: on Be, `rms(res) =
+1.9e-12` at an energy 3.78e-02 from the hand-written result. The residual being driven to zero is
+not the CCSDT residual.
+
+There are four places that can happen, and they are separable. The ladder narrows in that order,
+cheapest first.
+
+```
+  (a) equations  ->  (b) emission  ->  (c) block binding  ->  (d) solver/denominators
+      ccgen           C++ codegen       mo_blocks feed        the harness
+```
+
+**(d) is already largely exonerated** — rank 2 and rank 4 converge correctly through the same
+solver, DIIS and denominators (see the localisation table above). Do not start there.
+
+#### Fixture: use Be, not CH4
+
+Be converges in 12 iterations at ~0.01 s; CH4 takes 100 at 3.4 s and never converges. A stable
+wrong value is a far better comparison target than a moving one. The Be rank-3 sub-solve is
+reachable inside the CCSDTQ run in the `ARBITRARY_LOWER_RANKS=ON` build.
+
+| | E_corr |
+|---|---|
+| Be hand-written CCSDT | **−0.0517702884** |
+| Be generated rank-3 | **−0.0139349127** |
+
+##### R4.1 — do the Python equations still reach FCI? (~S, BLOCKING)
+
+`test_ccgen_ccsdt_reaches_fci_limit` solves the generated CCSDT residual and requires
+`GHF + E_corr == FCI` to 8 places on H3/6-31g — a decisive triples-correctness gate with no
+per-diagram oracle. If that passes, layer **(a)** is clean and the defect is downstream of ccgen.
+
+**It cannot be run in every environment**: it skips with `pyscf not importable in this
+interpreter`, and it skipped here. Run it where PySCF is available before spending effort
+downstream.
+
+*Verify:* the test RAN (not skipped) and passed. A skip is not a pass — this whole defect exists
+because a green tick was read as coverage.
+
+##### R4.2 — compare the emitted kernel against the Python residual at identical amplitudes (~M)
+
+This is the decisive step and it isolates layers (b)+(c) from (a).
+
+Take one fixed, non-trivial amplitude set; evaluate the triples residual two ways — through
+`residual_eval.residual_einsum` on the generated Python terms, and through the emitted C++ kernel
+— and diff element-wise.
+
+`1986d0c` claims these are "BITWISE IDENTICAL across both harnesses at identical inputs". **That
+claim is now suspect and must be re-measured, not inherited** — R3's converged-but-wrong result is
+evidence against it.
+
+Precedent for the C++ side: `PLANCK_CC_T3_TIME` (`tensor_backend.cpp:2350`) already reaches into
+the residual evaluation behind an env var, and the B5 work used a "fixed-point probe" that
+injected known-correct amplitudes into live C++ state and evaluated once. Reuse that shape.
+
+*Verify:* either a maximum element-wise difference at machine precision (layers b+c clean, defect
+is elsewhere), or the disagreeing elements localised by index block.
+
+##### R4.3 — if they disagree, which BLOCK? (~M)
+
+The residual is built from ERI blocks (`oooo`, `ooov`, `oovv`, `ovov`, `ovvo`, `ovvv`, `vvvv`).
+Report the diff per block rather than as one norm.
+
+Two known-shaped hazards to check first, both of which have bitten this codebase:
+
+- **physicist vs chemists convention** — `rebind_physicist` exists precisely because generated
+  kernels index `<pq|rs>` while `mo_blocks` is chemists. A single un-rebound block gives exactly
+  this signature: self-consistent, converged, wrong.
+- **`ovvo` vs `ovov`** — O6 already found the same-spin fold is not applied in the UCC emitter.
+  Rank-3 RCC uses both blocks.
+
+*Verify:* the defect named as a block plus a convention, or an explicit statement that all blocks
+agree.
+
+##### R4.4 — if the blocks agree, check the amplitude packing (~M)
+
+If (b) and (c) are clean but the solve is still wrong, the remaining suspect is how amplitudes are
+packed into and out of the arbitrary-order state at rank 3 specifically — `1986d0c` changed
+exactly this (wedge-packed vs dense) and rank 3 is the only rank where both representations have
+ever been in play.
+
+*Verify:* round-trip a known amplitude set through `pack`/`unpack` at rank 3 and compare.
+
+##### R4.5 — write the gate, then fix (~S)
+
+Whatever R4.2-R4.4 names, add a unit-level gate at that layer before fixing it. R1 gates the
+end-to-end symptom; it will not tell a future reader *which* layer regressed.
+
+*Verify:* the new gate is red on the current tree, and `ch4_rccsdt_generated_sto3g` inverts as
+its `known_failure` field describes once the fix lands.
 
 ## What NOT to do
 
